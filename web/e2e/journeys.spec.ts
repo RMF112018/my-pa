@@ -10,9 +10,9 @@
 import { test, expect, type Page } from "@playwright/test";
 import { enableDiagnostics, expectState, openCaptureNote, pinInspector, SEARCH_SETTLED, signIn, syntheticNote, visibleCaptureButton } from "./fixtures";
 
-/** Chrome below the `lg` (1024) split: rail hidden, Knowledge lives in More. */
-function belowLgChrome(projectName: string): boolean {
-  return projectName === "mobile" || projectName === "tablet";
+/** Phone Chrome below `md` (768): Knowledge lives in More; tablet uses the compact rail. */
+function mobileChrome(projectName: string): boolean {
+  return projectName === "mobile";
 }
 
 /**
@@ -27,8 +27,8 @@ function belowLgChrome(projectName: string): boolean {
  * Since WP-TUX-07 something is: a Today Task card carries a disclosure named
  * `More actions for <task title>` (`task-operation-controls.tsx`), so a
  * populated Today puts one of those on the page per card and the bare locator
- * resolves to a dozen or more. Below `lg` the shell's own overflow joins them,
- * which is why this only ever bit tablet and mobile.
+ * resolves to a dozen or more. Below `md` the shell's own overflow joins them,
+ * which is why mobile navigation needs this exact scoping.
  *
  * Both halves of the fix state the intent rather than narrow the result: the
  * Primary landmark, because this is the *shell's* navigation and no Task card
@@ -173,7 +173,7 @@ test.describe("the signed-in surfaces", () => {
     await expect(page.getByRole("searchbox", { name: "Search your captures" })).toHaveValue(
       "synthetic",
     );
-    if (belowLgChrome(testInfo.project.name)) {
+    if (mobileChrome(testInfo.project.name)) {
       await navMoreButton(page).click();
     }
     await expect(page.getByRole("link", { name: "Knowledge" }).first()).toHaveAttribute(
@@ -185,7 +185,7 @@ test.describe("the signed-in surfaces", () => {
   test("Search palette and Inspector expose only the bounded shell behavior", async ({ page }, testInfo) => {
     await expect(page.getByRole("link", { name: "Review" }).first()).toBeVisible();
     await expect(page.getByRole("button", { name: /Commands/ })).toHaveCount(0);
-    if (belowLgChrome(testInfo.project.name)) {
+    if (mobileChrome(testInfo.project.name)) {
       const nav = page.getByRole("navigation", { name: "Primary" });
       await expect(nav.getByRole("link", { name: "Today" })).toBeVisible();
       await expect(nav.getByRole("link", { name: "Work" })).toBeVisible();
@@ -199,6 +199,21 @@ test.describe("the signed-in surfaces", () => {
       await expect(more.getByRole("link", { name: "Review", exact: true })).toBeVisible();
       await expect(more.getByRole("link", { name: "Search", exact: true })).toBeVisible();
       await page.getByRole("button", { name: "Close panel" }).click();
+    }
+
+    if (testInfo.project.name === "tablet") {
+      const rail = page.getByRole("navigation", { name: "Primary" });
+      await expect(rail).toBeVisible();
+      await expect(navMoreButton(page)).toHaveCount(0);
+      for (const [name, href] of [
+        ["Knowledge", "/knowledge"], ["Review", "/review"],
+        ["Search", "/search"], ["System", "/system"],
+      ]) {
+        const destination = rail.getByRole("link", { name, exact: true });
+        await expect(destination).toBeVisible();
+        await expect(destination).toHaveAttribute("href", href);
+      }
+      await expect(rail.getByRole("button", { name: "Collapse navigation" })).toHaveCount(0);
     }
 
     await page.keyboard.press("Control+K");
@@ -223,7 +238,7 @@ test.describe("the signed-in surfaces", () => {
     }
     await page.keyboard.press("Escape");
     await expect(search).toHaveCount(0);
-    if (belowLgChrome(testInfo.project.name)) {
+    if (mobileChrome(testInfo.project.name)) {
       await navMoreButton(page).click();
       await page.getByRole("dialog", { name: "More" }).getByRole("link", { name: "Knowledge" }).click();
     } else {
@@ -479,7 +494,7 @@ test.describe("keyboard-only navigation", () => {
     await expect(page).toHaveURL(/#main$/);
 
     // Every destination in the rail is reachable and activatable by keyboard.
-    if (belowLgChrome(testInfo.project.name)) {
+    if (mobileChrome(testInfo.project.name)) {
       await navMoreButton(page).focus();
       await page.keyboard.press("Enter");
     }

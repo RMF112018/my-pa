@@ -6,13 +6,36 @@ const newAction = (page: Page) => page.getByRole("banner").getByRole("button", {
 const visibleDialogCount = (page: Page) => page.getByRole("dialog").count();
 const noSideScroll = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
 
-test("WP02 shell keeps one main and Search separate from New, with legacy destinations", async ({ page }) => {
+test("WP02 shell keeps one main and Search separate from New, with legacy destinations", async ({ page }, testInfo) => {
   await signIn(page);
   await expect(page.getByRole("main")).toHaveCount(1);
   await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
   await expect(newAction(page)).toBeVisible();
   await expect(page.getByRole("link", { name: "Review" }).first()).toHaveAttribute("href", "/review");
-  await expect(page.getByRole("link", { name: "System" }).first()).toHaveAttribute("href", "/system");
+  const primary = page.getByRole("navigation", { name: "Primary" });
+  if (testInfo.project.name === "mobile") {
+    const moreButton = primary.getByRole("button", { name: "More", exact: true });
+    const more = page.getByRole("dialog", { name: "More", exact: true });
+    await expect(more).not.toBeVisible();
+    await expect(page.getByRole("link", { name: "System", exact: true })).toHaveCount(0);
+    await moreButton.focus();
+    await expect(moreButton).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(more).toBeVisible();
+    const system = more.getByRole("link", { name: "System", exact: true });
+    await expect(system).toBeVisible();
+    await expect(system).toHaveAttribute("href", "/system");
+    await system.focus();
+    await expect(system).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(more).not.toBeVisible();
+    await expect(page.getByRole("link", { name: "System", exact: true })).toHaveCount(0);
+    await expect(moreButton).toBeFocused();
+  } else {
+    const system = primary.getByRole("link", { name: "System", exact: true });
+    await expect(system).toBeVisible();
+    await expect(system).toHaveAttribute("href", "/system");
+  }
   expect((await new AxeBuilder({ page }).analyze()).violations.map(({ id, nodes }) => ({
     id, targets: nodes.map(({ target }) => target),
   }))).toEqual([]);

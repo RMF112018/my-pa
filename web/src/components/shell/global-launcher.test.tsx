@@ -164,6 +164,34 @@ describe("GlobalLauncher public contract", () => {
     expect(screen.getByRole("dialog", { name: "Capture" })).toBeInTheDocument();
   });
 
+  it("keeps Capture open when the offline Task dialog emits its controlled close event", async () => {
+    vi.spyOn(window.navigator, "onLine", "get").mockReturnValue(false);
+    render(<Harness initialMode="task" />);
+    const invoker = screen.getByRole("button", { name: "New" });
+    invoker.focus();
+    fireEvent.click(invoker);
+    const offlineTask = screen.getByRole("dialog", { name: "Create Task" });
+    fireEvent.click(screen.getByRole("button", { name: "Quick Capture" }));
+    // Browsers emit this native event after the controlled dialog closes.
+    // jsdom's fallback removes `open` without emitting it.
+    fireEvent(offlineTask, new Event("close"));
+    expect(screen.getByRole("dialog", { name: "Capture" })).toBeInTheDocument();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Close Capture" }));
+    await waitFor(() => expect(invoker).toHaveFocus());
+  });
+
+  it("still dismisses the active offline Task dialog and restores its invoker", async () => {
+    vi.spyOn(window.navigator, "onLine", "get").mockReturnValue(false);
+    render(<Harness initialMode="task" />);
+    const invoker = screen.getByRole("button", { name: "New" });
+    invoker.focus();
+    fireEvent.click(invoker);
+    fireEvent.click(screen.getByRole("button", { name: "Close dialog", exact: true }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await waitFor(() => expect(invoker).toHaveFocus());
+  });
+
   it("ignores delayed creator callbacks after the verified session changes", () => {
     const confirmed = vi.fn();
     const view = render(<Harness onConfirmed={confirmed} />);

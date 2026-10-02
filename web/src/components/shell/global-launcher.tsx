@@ -225,7 +225,11 @@ export function GlobalLauncher({
         onBack={backToCapture}
         onConfirmed={taskConfirmed}
       />
-      <Dialog open={open && mode === "task" && !online} onClose={close} title="Create Task">
+      <Dialog open={open && mode === "task" && !online} onClose={() => {
+        // A controlled handoff also emits native `close`; only the current
+        // offline Task dialog owns a user dismissal of this launcher.
+        if (open && mode === "task" && !online) close();
+      }} title="Create Task">
         <p className="text-sm text-text-secondary" role="status">
           Creating a Task requires a connection. Your Capture notes can still be held on this device.
         </p>

@@ -64,5 +64,6 @@ def test_sanitized_migration_environ_clears_legacy_import_variables() -> None:
         "postgresql+psycopg://my_pa@localhost:5432/my_pa_p_t_deadbeef_master"
     )
     assert updates["MY_PA_DATABASE_URL"].endswith("my_pa_p_t_deadbeef_master")
+    assert updates["MY_PA_MIGRATION_DATABASE_URL"].endswith("my_pa_p_t_deadbeef_master")
     for name in LEGACY_IMPORT_VARIABLES:
         assert updates[name] is None

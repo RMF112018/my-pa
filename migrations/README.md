@@ -2,9 +2,11 @@
 
 Alembic owns every schema change to the canonical `my_pa` PostgreSQL database.
 
-- `env.py` — the offline and online environments. The URL comes from
-  `MY_PA_DATABASE_URL` through the process settings, never from `alembic.ini`,
-  so no credential can reach the repository.
+- `env.py` — the offline and online environments. Online Alembic requires
+  `MY_PA_MIGRATION_DATABASE_URL` and does not fall back to
+  `MY_PA_DATABASE_URL`. Offline rendering uses a passwordless dialect URL.
+  Neither URL comes from `alembic.ini`, so no credential can reach the
+  repository. Application processes keep using `MY_PA_DATABASE_URL`.
 - `script.py.mako` — the template new revisions are generated from.
 - `versions/` — the revisions themselves, in dependency order.
 - `data/disposition_registry.json` — every legacy object with the target schema

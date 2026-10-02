@@ -9,10 +9,28 @@ database. The instance itself is defined by
 | Image | `postgres:17.10` |
 | Container | `my-pa-postgres` |
 | Database | `my_pa` |
-| Role | `my_pa` |
+| Role | `my_pa` (historical cluster superuser). Record Event authority is separate: `my_pa_owner`, `my_pa_migrator`, `my_pa_runtime`, all `NOLOGIN`, provisioned only by an operator. |
 | Host port | `5433` (container `5432`) |
 | Data volume | `my_pa_pgdata` |
 | Extensions | `pg_trgm`, `unaccent` |
+
+## Record Event roles
+
+`my_pa` remains the historical initdb superuser. Record Event runtime authority
+is a different principal. `ops/postgres/provision_record_event_roles.py` creates
+`my_pa_owner`, `my_pa_migrator`, and `my_pa_runtime` as `NOLOGIN` roles and,
+when the feed tables exist, transfers those two relations and their refusal
+functions to `my_pa_owner`. It embeds no password. `--apply` is required before
+it connects, and it reads `MY_PA_MIGRATION_DATABASE_URL` only.
+
+`ops/postgres/verify_record_event_privileges.py` connects with
+`MY_PA_DATABASE_URL` and exits non-zero unless that principal is `my_pa_runtime`
+with the feed privileges and both `BEFORE TRUNCATE` triggers enabled. Its
+positive feed proof is rolled back. Neither command was applied to a shared or
+production database by the change that added them. Schema migration remains a
+separate operator-gated Alembic run. The feed is uncommissioned until both
+checks pass on the deployed database. The truncate trigger does not replace
+the privilege split: the owner can drop it.
 | Encoding / locale | `UTF8` / `C.UTF-8` (see [Collation contract](#collation-contract)) |
 | Data checksums | enabled |
 

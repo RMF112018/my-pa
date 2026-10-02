@@ -942,8 +942,15 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
     source = os.environ if environ is None else environ
     values: dict[str, object] = {}
     unknown: list[str] = []
+    #: Migration authority is a separate contract. Application settings must not
+    #: store it, and a gateway must still start when only `MY_PA_DATABASE_URL`
+    #: is present. The value is skipped here and read only by
+    #: `bootstrap.migration_authority`.
+    not_application_settings = frozenset({f"{ENV_PREFIX}MIGRATION_DATABASE_URL"})
 
     for key, raw in source.items():
+        if key in not_application_settings:
+            continue
         if not key.startswith(ENV_PREFIX):
             continue
         name = key[len(ENV_PREFIX) :].lower()

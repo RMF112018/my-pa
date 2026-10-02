@@ -68,7 +68,7 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "b8e4d1a6c073"
 PULL_REVISION: Final = "6a2f9d1c4b80"
 PROMOTION_REVISION: Final = "a4d8e31b2c90"
-HEAD_REVISION: Final = "1d9b248e7f83"
+HEAD_REVISION: Final = "c8e4a1b70d35"
 CURRENT_HEAD_REVISION: Final = HEAD_REVISION
 GRAPH_REVISION: Final = "c3f8a1d07e94"
 #: What was head until `REVISION` stacked on it, and therefore the revision
@@ -441,7 +441,8 @@ def test_the_revision_is_the_single_head_and_revises_the_prior_head() -> None:
     # labels), then `de5ec1c65857` (WP-TUX-01). Every edge below is retained
     # and the new ones are asserted, so the chain is still checked link by
     # link rather than loosened.
-    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == "7d9a450dfd07"
+    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == "1d9b248e7f83"
+    assert script.get_revision("1d9b248e7f83").down_revision == "7d9a450dfd07"
     assert script.get_revision("7d9a450dfd07").down_revision == "6f6ead27d122"
     assert script.get_revision("6f6ead27d122").down_revision == "e6a4c2f91b73"
     assert script.get_revision("e6a4c2f91b73").down_revision == "c4f1a8e52d90"

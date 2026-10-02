@@ -651,13 +651,27 @@ events after that watermark; a refused cursor means it bootstraps again. The
 routing guide, the bootstrap contract, recovery and the residuals are in
 [`../specs/record-event-consumer-contract-v0.1.md`](../specs/record-event-consumer-contract-v0.1.md).
 
-**Nothing here is commissioned.** The migration `1d9b248e7f83` is proven on
-disposable databases only. The ChatLLM data profile `chatllm-data-v4`, which
-adds `record_events.list` as `DATA_REQUIRED`, is repository desire. Whether any
-persistent database carries the feed tables and whether any client holds the
-feed grant are runtime facts that no repository evidence establishes; applying
-the profile needs separate operator authority, as in
-`ops/runbooks/mcp-and-cli-operations.md`.
+**Nothing here is commissioned.** The migration `1d9b248e7f83` and the TRUNCATE
+refusal `c8e4a1b70d35` are proven on disposable databases only. The ChatLLM
+data profile `chatllm-data-v4`, which adds `record_events.list` as
+`DATA_REQUIRED`, is repository desire. Whether any persistent database carries
+the feed tables, the runtime role boundary, or a client feed grant are runtime
+facts that no repository evidence establishes; applying the profile needs
+separate operator authority, as in `ops/runbooks/mcp-and-cli-operations.md`.
+
+**TRUNCATE is a separate residual from the row trigger.** `1d9b248e7f83` refuses
+`UPDATE` and `DELETE` on `knowledge.record_events`. It does not refuse
+`TRUNCATE`. `c8e4a1b70d35` adds statement-level `BEFORE TRUNCATE` triggers on
+both Record Event relations. That trigger is defense in depth: a role that owns
+the table can drop it. The privilege boundary is the three `NOLOGIN` roles
+`my_pa_owner`, `my_pa_migrator`, and `my_pa_runtime`, provisioned by
+`ops/postgres/provision_record_event_roles.py` and checked by
+`ops/postgres/verify_record_event_privileges.py`. The repository contains no
+password for those roles, does not mutate a live cluster, and does not treat a
+checked-in script as a completed deployment. Online Alembic requires
+`MY_PA_MIGRATION_DATABASE_URL` and does not fall back to `MY_PA_DATABASE_URL`.
+Schema migration and role provisioning are separate operator-gated actions.
+Other relations remain owned by the historical migration role.
 
 Evidence: `src/my_pa/domain/record_events.py`, `src/my_pa/application/record_events.py`,
 `src/my_pa/contracts/v1/record_events.py`,

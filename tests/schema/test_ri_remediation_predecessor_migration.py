@@ -215,9 +215,10 @@ def _sha256(label: str) -> str:
 class Disposable:
     """One disposable database, and the Alembic runs pointed at it.
 
-    `command.upgrade` reads the URL from `MY_PA_DATABASE_URL` through
-    `migrations/env.py`, so driving two databases in one test means re-pointing
-    the variable before each run rather than holding two configs.
+    Online `command.upgrade` reads `MY_PA_MIGRATION_DATABASE_URL` through
+    `migrations/env.py` and does not fall back to `MY_PA_DATABASE_URL`, so
+    driving two databases in one test means re-pointing the migration URL
+    before each run rather than holding two configs.
     """
 
     name: str
@@ -227,6 +228,7 @@ class Disposable:
 
     def _aim_alembic_here(self) -> None:
         self.monkeypatch.setenv(f"{ENV_PREFIX}DATABASE_URL", self.url)
+        self.monkeypatch.setenv(f"{ENV_PREFIX}MIGRATION_DATABASE_URL", self.url)
 
     def upgrade(self, revision: str) -> None:
         """Online, in process. Never `--sql`: `8e1c4a7b2d90` fails closed offline."""

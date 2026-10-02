@@ -82,8 +82,8 @@ def run_migrations_online() -> None:
     server's own hint suggests, but it would leave the ceiling as a property of
     whichever machine the migration runs on rather than of the migration.
     """
-    # statement-timeout-exempt: a revision is the bounded unit and may rebuild indexes.
     database_url = load_migration_authority().parsed_database_url()
+    # statement-timeout-exempt: a revision is the bounded unit and may rebuild indexes.
     engine = create_database_engine(database_url, statement_timeout_ms=None)
     try:
         with engine.connect() as connection:

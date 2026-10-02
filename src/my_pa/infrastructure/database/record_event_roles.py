@@ -19,6 +19,11 @@ from typing import Final
 
 from sqlalchemy import Connection, text
 
+from my_pa.infrastructure.persistence.tables import (
+    relationship_memories,
+    relationship_memory_versions,
+)
+
 __all__ = [
     "FEED_READER_SELECT_TABLES",
     "MIGRATOR_ROLE",
@@ -62,8 +67,8 @@ FEED_READER_SELECT_TABLES: Final = (
     "entity_communication_methods",
     "entity_project_participations",
     "entity_person_organization_affiliations",
-    "relationship_memories",
-    "relationship_memory_versions",
+    relationship_memories.name,
+    relationship_memory_versions.name,
     "capture_versions",
 )
 

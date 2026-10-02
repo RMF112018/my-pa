@@ -187,7 +187,7 @@ describe("GlobalLauncher public contract", () => {
     const invoker = screen.getByRole("button", { name: "New" });
     invoker.focus();
     fireEvent.click(invoker);
-    fireEvent.click(screen.getByRole("button", { name: "Close dialog", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Close dialog" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     await waitFor(() => expect(invoker).toHaveFocus());
   });

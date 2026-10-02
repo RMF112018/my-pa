@@ -21,6 +21,7 @@ from tests.db.provisioning import (
     COUNTERS,
     DATABASE_URL_VARIABLE,
     EMPTY_KIND,
+    MIGRATION_DATABASE_URL_VARIABLE,
     TEMPLATE_KIND,
     WorkerHeadTemplate,
     clone_database,
@@ -203,6 +204,7 @@ def cloned_database_url(
     )
     url = url_for_database(configured, name)
     monkeypatch.setenv("MY_PA_DATABASE_URL", url)
+    monkeypatch.setenv(MIGRATION_DATABASE_URL_VARIABLE, url)
     try:
         yield url
     finally:
@@ -232,7 +234,7 @@ def module_cloned_database_url(
         protected=protected,
     )
     url = url_for_database(configured, name)
-    with restored_environ({DATABASE_URL_VARIABLE: url}):
+    with restored_environ({DATABASE_URL_VARIABLE: url, MIGRATION_DATABASE_URL_VARIABLE: url}):
         yield url
     force_drop_database(postgres_admin_engine, name, protected=protected)
 
@@ -285,6 +287,7 @@ def empty_database_url(
     create_empty_database(postgres_admin_engine, name, protected=protected)
     url = url_for_database(configured, name)
     monkeypatch.setenv("MY_PA_DATABASE_URL", url)
+    monkeypatch.setenv(MIGRATION_DATABASE_URL_VARIABLE, url)
     try:
         yield url
     finally:

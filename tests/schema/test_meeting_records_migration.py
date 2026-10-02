@@ -68,9 +68,10 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "7d9a450dfd07"
 PREVIOUS: Final = "6f6ead27d122"
-#: The chain head these tests run against. `1d9b248e7f83` (WP-RE-01, Record
-#: Events) is additive on `REVISION`, so `REVISION` is no longer the head.
-HEAD: Final = "1d9b248e7f83"
+#: The chain head these tests run against. `c8e4a1b70d35` (RE-DBH-01) is
+#: additive on `1d9b248e7f83` (WP-RE-01, Record Events), which is additive on
+#: `REVISION`, so `REVISION` is no longer the head.
+HEAD: Final = "c8e4a1b70d35"
 #: The revision that last stated `capability_is_known` and `purpose_is_known`,
 #: and therefore the only correct source for this revision's BEFORE literals.
 VOCABULARY_PREDECESSOR: Final = "e6a4c2f91b73"
@@ -148,13 +149,14 @@ def _offline(target: str, *, down: bool = False) -> str:
 def test_the_revision_is_the_single_head_directly_on_the_previous_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == REVISION
+    assert script.get_revision(HEAD).down_revision == "1d9b248e7f83"
+    assert script.get_revision("1d9b248e7f83").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == VOCABULARY_PREDECESSOR
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 109
+    assert len(list(MIGRATIONS.glob("*.py"))) == 110
 
 
 # ---- the freeze -------------------------------------------------------------

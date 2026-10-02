@@ -29,6 +29,9 @@ database_operator_image_id=$(sed -n \
 }
 PGPASSWORD=$MY_PA_DB_PASSWORD
 export PGPASSWORD
+# Alembic requires MY_PA_MIGRATION_DATABASE_URL and does not fall back.
+# The operator URL is passed explicitly. A distinct migrator login is an
+# operator binding; this repository does not create one.
 database_operator_with_url() {
   operator_database_url=$1
   shift
@@ -40,6 +43,7 @@ database_operator_with_url() {
     --security-opt no-new-privileges \
     --user 10001:10001 \
     --env MY_PA_DATABASE_URL="$operator_database_url" \
+    --env MY_PA_MIGRATION_DATABASE_URL="$operator_database_url" \
     --env MY_PA_AUTH_MODE=local_operator \
     --env MY_PA_REMOTE_INGRESS_ENABLED=false \
     --env MY_PA_REDACTION_ENABLED=true \

@@ -91,7 +91,7 @@ administer "CREATE DATABASE \"${DATABASE_NAME}\""
 
 echo "e2e: migrating it to head"
 setup_stage="database_migrate"
-( cd "${REPO_DIR}" && PYTHONPATH="${REPO_DIR}/src" MY_PA_DATABASE_URL="${DATABASE_URL}" "${PYTHON}" -m alembic upgrade head >/dev/null )
+( cd "${REPO_DIR}" && PYTHONPATH="${REPO_DIR}/src" MY_PA_DATABASE_URL="${DATABASE_URL}" MY_PA_MIGRATION_DATABASE_URL="${DATABASE_URL}" "${PYTHON}" -m alembic upgrade head >/dev/null )
 
 echo "e2e: seeding one Principal-scoped synthetic counterparty"
 setup_stage="seed_work"

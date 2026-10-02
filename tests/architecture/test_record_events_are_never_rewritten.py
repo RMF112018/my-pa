@@ -53,9 +53,7 @@ RAW_REWRITE: Final = re.compile(
 #: table reference: the negative lookahead keeps a vocabulary restatement from
 #: matching, and `record_event_sequences` has no such token. Raw SQL, a
 #: SQLAlchemy `Table` or `table()`, and `{SCHEMA}.record_events` still match.
-FEED_TABLE_REFERENCE: Final = re.compile(
-    r"\brecord_events\b(?!\.list)|\brecord_event_sequences\b"
-)
+FEED_TABLE_REFERENCE: Final = re.compile(r"\brecord_events\b(?!\.list)|\brecord_event_sequences\b")
 DROP_TRIGGER: Final = re.compile(r"DROP\s+TRIGGER\s+(IF\s+EXISTS\s+)?record_events_are_append_only")
 
 

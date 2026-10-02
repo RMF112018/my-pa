@@ -20,7 +20,6 @@ LIFECYCLE_WRITES: Final = frozenset(
 LIFECYCLE_READS: Final = frozenset({"lock_root", "receipt", "latest"})
 
 
-
 def _transition() -> ast.FunctionDef:
     tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
     found = [

@@ -253,10 +253,10 @@ def _roots_for(
                 context,
             )
         ).all()
-        found = {str(row.version_id): str(row.capture_id) for row in rows}
-        if strict and set(found) != set(version_ids):
+        found_versions = {str(row.version_id): str(row.capture_id) for row in rows}
+        if strict and set(found_versions) != set(version_ids):
             raise UnknownScopeError("the request names no stored capture")
-        roots |= set(found.values())
+        roots |= set(found_versions.values())
     if span_ids:
         rows = connection.execute(
             principal_scoped(
@@ -272,10 +272,10 @@ def _roots_for(
                 context,
             )
         ).all()
-        found = {str(row.span_id): str(row.capture_id) for row in rows}
-        if strict and set(found) != set(span_ids):
+        found_spans = {str(row.span_id): str(row.capture_id) for row in rows}
+        if strict and set(found_spans) != set(span_ids):
             raise UnknownScopeError("the request names no stored capture")
-        roots |= set(found.values())
+        roots |= set(found_spans.values())
     return roots
 
 
@@ -564,9 +564,7 @@ def capture_lifecycle_states(
         principal_scoped(
             select(captures.c.capture_id, latest.c.resulting_state)
             .select_from(
-                captures.outerjoin(
-                    latest, latest.c.event_capture_id == captures.c.capture_id
-                )
+                captures.outerjoin(latest, latest.c.event_capture_id == captures.c.capture_id)
             )
             .where(captures.c.capture_id.in_(wanted)),
             captures,

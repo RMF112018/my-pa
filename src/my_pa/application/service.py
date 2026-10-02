@@ -2694,9 +2694,7 @@ def _context_card_view(
             _relationship_view(edge, card.assembled_at) for edge in card.relationships
         ],
         "observations": [
-            _with_product_owned_lifecycle(
-                _observation_view(item), item, lifecycle_states or {}
-            )
+            _with_product_owned_lifecycle(_observation_view(item), item, lifecycle_states or {})
             for item in card.observations
         ],
         "memories": [
@@ -5387,9 +5385,7 @@ class ApplicationService:
                 if capture_ids
                 else {}
             )
-        lifecycle_by_capture = {
-            capture_id: state.value for capture_id, state in resolved.items()
-        }
+        lifecycle_by_capture = {capture_id: state.value for capture_id, state in resolved.items()}
         next_cursor = (
             _encode_review_cursor(
                 binding=binding,
@@ -7188,9 +7184,7 @@ class ApplicationService:
                 unit_of_work, authorization.principal.principal_id, card.observations
             )
         return _Result(
-            payload={
-                "context_card": _context_card_view(card, lifecycle_states=observation_states)
-            },
+            payload={"context_card": _context_card_view(card, lifecycle_states=observation_states)},
             disclosure=unenrolled_disclosure(
                 authorization.at,
                 trust_basis=_ENTITY_TRUST_BASIS,
@@ -9802,9 +9796,7 @@ class ApplicationService:
                     None if follow_up is None else follow_up.closure_evidence_ref,
                 ),
             )
-            public = _commitment_public_view(
-                unit_of_work, principal_id, commitment, states=states
-            )
+            public = _commitment_public_view(unit_of_work, principal_id, commitment, states=states)
             counterparty_options, counterparty_options_truncated = _counterparty_options(
                 unit_of_work, principal_id
             )
@@ -9939,9 +9931,7 @@ class ApplicationService:
                 ),
             )
             entries = [
-                _commitment_public_list_entry(
-                    unit_of_work, principal_id, item, states=states
-                )
+                _commitment_public_list_entry(unit_of_work, principal_id, item, states=states)
                 for item in page
             ]
             counterparty_options, counterparty_options_truncated = _counterparty_options(

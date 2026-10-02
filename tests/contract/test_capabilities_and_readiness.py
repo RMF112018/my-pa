@@ -83,6 +83,8 @@ def test_capability_names_match_the_published_contract() -> None:
         "capture.read",
         "capture.list",
         "capture.search",
+        "capture.archive",
+        "capture.restore",
         "review.list",
         "review.decide",
         "continuity.pulse",

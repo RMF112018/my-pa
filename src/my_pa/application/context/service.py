@@ -156,9 +156,7 @@ class ContextPreparationService:
                 replace(
                     item,
                     capture_lifecycle_state=(
-                        None
-                        if item.capture_id is None or item.capture_id not in resolved
-                        else resolved[item.capture_id].value
+                        None if item.capture_id not in resolved else resolved[item.capture_id].value
                     ),
                 )
                 if item.capture_id is not None

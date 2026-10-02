@@ -129,7 +129,7 @@ def test_tools_list_publishes_exactly_the_local_capability_set(
         for capability in HANDLER_CAPABILITIES
         if capability not in _AUTHENTICATED_CLIENT_CAPABILITIES
     ]
-    assert len(listed.tools) == 176
+    assert len(listed.tools) == 178
     assert all(tool.description for tool in listed.tools), "a tool has no description"
 
 

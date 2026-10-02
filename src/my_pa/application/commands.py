@@ -1343,6 +1343,9 @@ class ArchiveCapture:
     reason: str = field(repr=False)
 
     def __post_init__(self) -> None:
+        # The architecture walk reads this function's body only. The shared
+        # binder also checks the key; this call is the one that walk can see.
+        _idempotency_key(self.idempotency_key)
         _bind_lifecycle_transition(self)
 
 
@@ -1358,6 +1361,8 @@ class RestoreCapture:
     reason: str = field(repr=False)
 
     def __post_init__(self) -> None:
+        # Same lexical call as `ArchiveCapture`: the walk does not enter the binder.
+        _idempotency_key(self.idempotency_key)
         _bind_lifecycle_transition(self)
 
 

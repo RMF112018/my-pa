@@ -377,17 +377,13 @@ def test_read_surfaces_name_an_archived_root_without_rewriting_bytes(
     assert archived.payload["versions"][0]["capture_lifecycle_state"] == "archived"
     assert archived.payload["versions"][0]["version_id"] == version_id
     capture_cases = [
-        case
-        for case in listed.payload["review_cases"]
-        if case.get("capture_id") == capture_id
+        case for case in listed.payload["review_cases"] if case.get("capture_id") == capture_id
     ]
     assert capture_cases
     assert capture_cases[0]["capture_lifecycle_state"] == "archived"
     others = [case for case in listed.payload["review_cases"] if "capture_id" not in case]
     assert all("capture_lifecycle_state" not in case for case in others)
-    by_observation = {
-        row["observation_id"]: row for row in observations.payload["observations"]
-    }
+    by_observation = {row["observation_id"]: row for row in observations.payload["observations"]}
     assert by_observation[owned_observation]["capture_lifecycle_state"] == "archived"
     assert "capture_lifecycle_state" not in by_observation[configured_observation]
     by_mention = {row["observation_id"]: row for row in mentions.payload["mentions"]}
@@ -412,7 +408,5 @@ def test_read_surfaces_name_an_archived_root_without_rewriting_bytes(
     assert all(
         row["origin_evidence_capture_state"] == "archived" for row in history.payload["history"]
     )
-    waiting_rows = {
-        row["commitment_id"]: row for row in waiting.payload["waiting_on"]
-    }
+    waiting_rows = {row["commitment_id"]: row for row in waiting.payload["waiting_on"]}
     assert waiting_rows[commitment_id]["origin_evidence_capture_state"] == "archived"

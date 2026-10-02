@@ -107,6 +107,8 @@ from my_pa.domain.capture.review import (
     ReviewConflictError,
     ReviewNotFoundError,
 )
+from my_pa.domain.capture.span import OffsetBasis, SpanRole
+from my_pa.domain.capture.version import ProcessingPolicy, digest_of
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.relationship.entity import Entity, EntityStatus, EntityType
@@ -140,6 +142,11 @@ from my_pa.infrastructure.persistence.relationship_memory_review import (
     relationship_memory_review_cases,
 )
 from my_pa.infrastructure.persistence.tables import (
+    capture_spans as capture_span_rows,
+)
+from my_pa.infrastructure.persistence.tables import (
+    capture_versions,
+    captures,
     entities,
     relationship_memories,
     relationship_memory_proposal_evidence,
@@ -340,9 +347,57 @@ def _open_proposal(
                 created_at=WHEN,
             )
         )
-    for _ in range(capture_spans):
+    # C-17 shares the cited spans' roots. An evidence row that names a span
+    # never stored is an absent root, and the fence refuses it. The spans
+    # below are owned, active rows of this principal.
+    version_id: str | None = None
+    if capture_spans:
+        capture_id = issue_identifier(IdKind.CAPTURE)
+        version_id = issue_identifier(IdKind.CAPTURE_VERSION)
+        note = "x" * capture_spans
+        connection.execute(
+            insert(captures).values(
+                capture_id=capture_id, owner_principal_id=principal_id, created_at=WHEN
+            )
+        )
+        connection.execute(
+            insert(capture_versions).values(
+                version_id=version_id,
+                capture_id=capture_id,
+                version_number=1,
+                supersedes_version_id=None,
+                content=note,
+                content_sha256=digest_of(note),
+                owner_principal_id=principal_id,
+                classification=Classification.PRIVATE_LOCAL.value,
+                processing_policy=ProcessingPolicy.LOCAL_ONLY.value,
+                idempotency_key=f"span-seed-{version_id}",
+                correlation_id=issue_identifier(IdKind.CORRELATION),
+                audit_id=issue_identifier(IdKind.AUDIT),
+                server_received_at=WHEN,
+                accepted_at=WHEN,
+                recorded_at=WHEN,
+            )
+        )
+    for index in range(capture_spans):
         span_id = issue_identifier(IdKind.SPAN)
         spans.append(span_id)
+        assert version_id is not None
+        connection.execute(
+            insert(capture_span_rows).values(
+                span_id=span_id,
+                version_id=version_id,
+                start_offset=index,
+                end_offset=index + 1,
+                offset_basis=OffsetBasis.UNICODE_CODE_POINT_V1.value,
+                line_start=1,
+                column_start=index + 1,
+                line_end=1,
+                column_end=index + 2,
+                quoted_text_sha256=digest_of("x"),
+                span_role=SpanRole.DIRECT.value,
+            )
+        )
         connection.execute(
             insert(relationship_memory_proposal_evidence).values(
                 proposal_evidence_id=issue_identifier(IdKind.RELATIONSHIP_MEMORY_PROPOSAL_EVIDENCE),

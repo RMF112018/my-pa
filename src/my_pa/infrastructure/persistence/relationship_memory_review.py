@@ -878,7 +878,7 @@ def decide_relationship_memory_review(
     _, _, _, requested_context, _, _ = _promotion_content(preflight, request)
     # CRL-WP-03 C-17: accepting and reprocess dispositions share cited roots
     # before the entity locks. Reject and defer stay class 3.
-    if request.disposition in {*_ACCEPTING, Disposition.REPROCESS}:
+    if request.disposition in _ACCEPTING or request.disposition is Disposition.REPROCESS:
         spans = connection.execute(
             select(relationship_memory_proposal_evidence.c.capture_span_id)
             .select_from(

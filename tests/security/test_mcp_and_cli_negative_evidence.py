@@ -939,6 +939,8 @@ def test_neither_transport_routes_a_mutating_capability() -> None:
         "capture.read",
         "capture.list",
         "capture.search",
+        "capture.archive",
+        "capture.restore",
     }, "the exemption is exactly the capture family"
     # And the CLI routes by the same names: it declares no subcommand of its own
     # that could name an operation the capability set does not have.

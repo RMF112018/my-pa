@@ -30,7 +30,12 @@ def test_the_lifecycle_modules_are_the_census_delta_and_not_sinks() -> None:
 
 
 def test_the_capture_census_at_this_head_is_the_three_lifecycle_modules() -> None:
-    """Re-run of the section (c) census. Base was 56 modules; this head is 59."""
+    """Re-run of the section (c) census.
+
+    Base was 56 modules. The three lifecycle modules made 59. This head is 60
+    because `adapters/remote_request.py` names `capture_id` in its
+    idempotency-stamp comment. That module does not call the publication fence.
+    """
     import re
 
     pattern = re.compile(
@@ -42,8 +47,11 @@ def test_the_capture_census_at_this_head_is_the_three_lifecycle_modules() -> Non
         for path in (ROOT / "src").rglob("*.py")
         if pattern.search(path.read_text(encoding="utf-8"))
     )
-    assert len(hits) == 59
+    assert len(hits) == 60
     assert set(DELTA) <= set(hits)
+    assert "src/my_pa/adapters/remote_request.py" in hits
+    remote = (ROOT / "src/my_pa/adapters/remote_request.py").read_text(encoding="utf-8")
+    assert "require_active_capture_roots" not in remote
 
 
 def test_class_3_paths_do_not_call_the_publication_fence() -> None:

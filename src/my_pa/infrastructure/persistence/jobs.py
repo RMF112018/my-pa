@@ -442,6 +442,8 @@ def claim_job(
     # CRL-WP-03: a withdrawn capture job is never claimable. A policy pause is
     # claimable only once its backoff is due, so re-evaluation cannot spin.
     # The enrollment plane has no pause column and keeps the original predicate.
+    pause_ok: ColumnElement[bool]
+    policy_recheck: ColumnElement[bool]
     if plane.pause_cause is None:
         pause_ok = true()
         policy_recheck = false()

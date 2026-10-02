@@ -411,7 +411,6 @@ _REFUSE_DOWNGRADE: Final = """
     """
 
 
-
 def _restate_audit(capability: str, purpose: str) -> None:
     for name, expression in (("capability_is_known", capability), ("purpose_is_known", purpose)):
         op.drop_constraint(name, "audit_events", schema=SCHEMA, type_="check")

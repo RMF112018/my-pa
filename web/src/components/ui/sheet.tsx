@@ -61,6 +61,9 @@ export function Sheet({
   titleVisibility?: SheetTitleVisibility;
 }) {
   const contentRef = useRef<HTMLDivElement>(null);
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  const invoker = useRef<HTMLElement | null>(null);
+  const returnHeading = useRef<HTMLElement | null>(null);
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>
@@ -69,6 +72,30 @@ export function Sheet({
           ref={contentRef}
           className={PLACEMENT_CLASS[placement]}
           data-placement={placement}
+          onOpenAutoFocus={(event) => {
+            invoker.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+            returnHeading.current = invoker.current?.closest("main")?.querySelector<HTMLElement>("h1") ?? null;
+            event.preventDefault();
+            const input = contentRef.current?.querySelector<HTMLElement>('input:not([disabled]):not([type="hidden"]), textarea:not([disabled]), select:not([disabled])');
+            (input ?? titleRef.current)?.focus();
+          }}
+          onCloseAutoFocus={(event) => {
+            // Feature consumers can restore a surviving row before Radix's close
+            // callback. Preserve that deliberate outside focus when the opener
+            // disappeared instead of replacing it with the generic heading.
+            const active = document.activeElement;
+            if (!invoker.current?.isConnected && active instanceof HTMLElement
+              && active !== document.body && active !== document.documentElement
+              && !active.closest('dialog, [role="dialog"], [role="alertdialog"]')) {
+              event.preventDefault();
+              return;
+            }
+            const target = invoker.current?.isConnected ? invoker.current : returnHeading.current;
+            if (target?.isConnected) {
+              event.preventDefault();
+              target.focus();
+            }
+          }}
           onEscapeKeyDown={(event) => {
             // Inline alertdialog (Close confirmation) owns Escape.
             if (contentRef.current?.querySelector('[role="alertdialog"]')) {
@@ -77,6 +104,8 @@ export function Sheet({
           }}
         >
           <DialogPrimitive.Title
+            ref={titleRef}
+            tabIndex={-1}
             className={titleVisibility === "sr-only" ? "sr-only" : "text-lg font-semibold"}
           >
             {title}

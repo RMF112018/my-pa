@@ -158,6 +158,7 @@ CONSTRAINT_TABLES: Final[frozenset[str]] = frozenset(
 #: Fixed and written out, so the recurrence guard below is a bounded check over a
 #: named list rather than a repository-wide scan.
 HEAD_PIN_FILES: Final[tuple[str, ...]] = (
+    "tests/architecture/test_record_event_privilege_separation.py",
     "tests/database/test_cli_auth.py",
     "tests/database/test_entities_graph_vocabulary_migration.py",
     "tests/database/test_legacy_entity_backfill_migration.py",
@@ -172,7 +173,6 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_constraint_sync_migration.py",
     "tests/schema/test_continuity_projects_mutation_migration.py",
     "tests/schema/test_continuity_projects_read_capability_migration.py",
-    "tests/schema/test_extraction_schema_migration.py",
     "tests/schema/test_goodnotes_browser_contract_migration.py",
     "tests/schema/test_goodnotes_client_resume_migration.py",
     "tests/schema/test_goodnotes_content_and_durable_note_stages.py",
@@ -188,6 +188,7 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_goodnotes_semantic_proposal_migration.py",
     "tests/schema/test_legacy_direct_principal_task_origin_migration.py",
     "tests/schema/test_meeting_records_migration.py",
+    "tests/schema/test_record_event_truncate_refusal_migration.py",
     "tests/schema/test_record_events_migration.py",
     "tests/schema/test_oauth_refresh_migration.py",
     "tests/schema/test_project_controls_run01_integrity_migration.py",

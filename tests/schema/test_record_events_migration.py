@@ -126,11 +126,12 @@ def _offline(target: str, *, down: bool = False) -> str:
 # ---- the graph (RE-AC-082) -------------------------------------------------------
 
 
-def test_the_revision_is_the_single_head_directly_on_7d9a450dfd07() -> None:
+def test_the_revision_is_directly_on_7d9a450dfd07_under_one_later_head() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
+    assert script.get_heads() == [HEAD]
+    assert script.get_revision(HEAD).down_revision == "c8e4a1b70d35"
+    assert script.get_revision("c8e4a1b70d35").down_revision == REVISION
 
 
 # ---- the freeze (RE-AC-004) ------------------------------------------------------
@@ -384,8 +385,8 @@ def test_an_empty_database_upgrades_to_the_record_events_head(
     disposable_database: str, engine: Engine
 ) -> None:
     del disposable_database
-    command.upgrade(_config(), "head")
-    assert _version(engine) == HEAD
+    command.upgrade(_config(), REVISION)
+    assert _version(engine) == REVISION
     assert _tables(engine) >= TABLE_NAMES
     with engine.begin() as connection:
         _feed_row(connection)
@@ -443,7 +444,7 @@ def test_a_downgrade_refuses_while_a_record_event_exists(
     disposable_database: str, engine: Engine
 ) -> None:
     del disposable_database
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     with engine.begin() as connection:
         _feed_row(connection)
     with pytest.raises(DBAPIError) as refused:
@@ -458,7 +459,7 @@ def test_a_downgrade_refuses_while_a_sequence_row_exists(
     disposable_database: str, engine: Engine
 ) -> None:
     del disposable_database
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     with engine.begin() as connection:
         connection.execute(
             insert(record_event_sequences).values(principal_id=PRINCIPAL, next_sequence=1)
@@ -474,7 +475,7 @@ def test_a_downgrade_refuses_while_an_audit_event_names_the_record_event_vocabul
     disposable_database: str, engine: Engine
 ) -> None:
     del disposable_database
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     with engine.begin() as connection:
         _audit(
             connection,
@@ -515,5 +516,5 @@ def test_an_empty_downgrade_restores_the_meeting_head_vocabulary_and_drops_every
             ).scalars()
         )
     assert FUNCTION not in functions
-    command.upgrade(_config(), "head")
-    assert _version(engine) == HEAD
+    command.upgrade(_config(), REVISION)
+    assert _version(engine) == REVISION

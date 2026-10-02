@@ -660,6 +660,7 @@ jobs:
         shell: bash
         env:
           MY_PA_DATABASE_URL: postgresql+psycopg://my_pa@localhost:5432/my_pa_ci
+          MY_PA_MIGRATION_DATABASE_URL: postgresql+psycopg://my_pa@localhost:5432/my_pa_ci
           PGPASSWORD: ci_throwaway_not_a_secret
           PYTEST_PROVISIONING_REPORT: "1"
         run: >-
@@ -740,6 +741,7 @@ jobs:
         shell: bash
         env:
           MY_PA_DATABASE_URL: postgresql+psycopg://my_pa@localhost:5432/my_pa_ci
+          MY_PA_MIGRATION_DATABASE_URL: postgresql+psycopg://my_pa@localhost:5432/my_pa_ci
           PGPASSWORD: ci_throwaway_not_a_secret
         run: python -m pytest -m recovery
 
@@ -817,6 +819,7 @@ jobs:
         shell: bash
         env:
           MY_PA_DATABASE_URL: postgresql+psycopg://my_pa@localhost:5432/my_pa_ci
+          MY_PA_MIGRATION_DATABASE_URL: postgresql+psycopg://my_pa@localhost:5432/my_pa_ci
           PGPASSWORD: ci_throwaway_not_a_secret
         run: python -m pytest -m migration_empty_to_head
 
@@ -893,6 +896,7 @@ jobs:
         shell: bash
         env:
           MY_PA_DATABASE_URL: postgresql+psycopg://my_pa@localhost:5432/my_pa_ci
+          MY_PA_MIGRATION_DATABASE_URL: postgresql+psycopg://my_pa@localhost:5432/my_pa_ci
           PGPASSWORD: ci_throwaway_not_a_secret
         run: python -m pytest -m "migration_edge or migration"
 
@@ -969,6 +973,7 @@ jobs:
         shell: bash
         env:
           MY_PA_DATABASE_URL: postgresql+psycopg://my_pa@localhost:5432/my_pa_ci
+          MY_PA_MIGRATION_DATABASE_URL: postgresql+psycopg://my_pa@localhost:5432/my_pa_ci
           PGPASSWORD: ci_throwaway_not_a_secret
         run: python -m pytest -m e2e
 

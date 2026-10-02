@@ -21,3 +21,32 @@ body { margin: 0; background: var(--canvas); color: var(--text-primary); font-fa
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
+
+/* WP01 foundation. Feature rails/routes remain owned by later packages. */
+:root {
+  --workspace-max-width: 1600px;
+  --workspace-prose-max: 72ch;
+  --workspace-source-min: 320px;
+  --workspace-detail-min: 420px;
+  --workspace-detail-max: 560px;
+  --workspace-gap: 1rem;
+}
+.workspace-frame { width: 100%; min-width: 0; max-width: var(--workspace-max-width); margin-inline: auto; }
+.workspace-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--workspace-gap); margin-block-end: var(--workspace-gap); }
+.workspace-header h1 { min-width: 0; overflow-wrap: anywhere; }
+.workspace-actions { display: flex; flex-wrap: wrap; gap: .5rem; min-width: 0; max-width: 100%; }
+.workspace-body, .workspace-content, .workspace-detail { min-width: 0; overflow-wrap: anywhere; }
+.workspace-prose { max-width: var(--workspace-prose-max); }
+.workspace-with-detail { display: grid; grid-template-columns: minmax(0, 1fr) var(--workspace-detail-min); }
+.workspace-detail { border-inline-start: 1px solid var(--border-subtle); padding-inline-start: var(--workspace-gap); }
+@media (min-width: 1024px) {
+  .workspace-with-detail { grid-template-columns: minmax(0, 1fr) clamp(var(--workspace-detail-min), 44vw, var(--workspace-detail-max)); }
+}
+@media (pointer: coarse) {
+  .workspace-frame button, .workspace-frame input, .workspace-frame select { min-height: 44px; }
+  .workspace-frame button { min-width: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  dialog, [role="dialog"] { animation: none !important; transition-duration: 0s !important; }
+}

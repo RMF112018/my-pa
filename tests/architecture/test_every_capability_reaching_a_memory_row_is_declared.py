@@ -697,6 +697,12 @@ DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str
 #: how a write would come to be reported as a read.
 UNCLASSIFIED_TABLE_MENTIONS: Final[dict[tuple[str, str, str], str]] = {
     (
+        "infrastructure/persistence/record_events.py",
+        "feed_reader_memory_relation_names",
+        "return (relationship_memories.name, relationship_memory_versions.name)",
+    ): "the two relation names `_restricted_memory` already reads, returned so the "
+    "Record Event role provisioner can grant runtime SELECT without importing the tables",
+    (
         "infrastructure/persistence/relationship_memory.py",
         "page_for_entity",
         "current = relationship_memory_versions.alias('current')",

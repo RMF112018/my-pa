@@ -127,6 +127,7 @@ __all__ = [
     "RecordEventBuffer",
     "SqlRecordEventReader",
     "SqlRecordEventWriter",
+    "feed_reader_memory_relation_names",
     "flush_record_events",
 ]
 
@@ -136,6 +137,16 @@ _SEQUENCE_KEY: Final = (record_event_sequences.c.principal_id,)
 
 def _bound(table: Table, principal_id: str, values: dict[str, object]) -> dict[str, object]:
     return principal_bound_values(values, table, capture_context(principal_id))
+
+
+def feed_reader_memory_relation_names() -> tuple[str, str]:
+    """SQL names of the two memory relations `_restricted_memory` reaches.
+
+    The Record Event role provisioner grants runtime ``SELECT`` on these names.
+    The names stay here so that grant does not import the tables into the
+    control-plane module.
+    """
+    return (relationship_memories.name, relationship_memory_versions.name)
 
 
 class RecordEventBuffer(RecordEventStager):

@@ -264,6 +264,9 @@ export function CaptureDialog({
 
   /** Close, confirming first when there is unsent work to lose. */
   function requestClose() {
+    // The native dialog also fires `close` when the launcher deliberately
+    // switches to Task. That controlled close has no user dismissal to handle.
+    if (!open) return;
     if (savingRef.current) return;
     const dirty = session.noteDraft.trim() !== "" || session.conversationDraft.trim() !== "";
     // An in-flight or ambiguous submission is not a draft to discard: closing

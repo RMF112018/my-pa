@@ -77,20 +77,19 @@ transcripts do not. The restore rehearsal's figures are that run's.
 schemas and destroys 3,263,870 migrated rows.** They took two loads of the 4.4 GB
 legacy source to produce. There is no undo.
 
-The way this happens by accident is that Alembic takes its URL from
-`MY_PA_DATABASE_URL` through `my_pa.bootstrap.settings` — `alembic.ini`
-deliberately has no `sqlalchemy.url` key — and an **unset** variable falls back
-to the default, which is canonical `my_pa`. So a `downgrade` intended for a
-disposable database silently hits the real one when the export is missing from
-the shell you are actually in.
+Online Alembic reads `MY_PA_MIGRATION_DATABASE_URL` only. It does not fall
+back to `MY_PA_DATABASE_URL`, and `alembic.ini` has no `sqlalchemy.url`. An
+unset migration URL refuses to run. It does not silently open canonical
+`my_pa`.
 
 Check before every destructive Alembic command, in the same shell:
 
 ```sh
-echo "${MY_PA_DATABASE_URL:?MY_PA_DATABASE_URL is unset - refusing}"
+echo "${MY_PA_MIGRATION_DATABASE_URL:?MY_PA_MIGRATION_DATABASE_URL is unset - refusing}"
 ```
 
 It must print a URL ending in your disposable database name, not `/my_pa`.
+Do not paste that output into a ticket or log: the URL can carry a credential.
 
 The `:?` form fails the shell with that message when the variable is unset,
 rather than printing an empty line you might miss.

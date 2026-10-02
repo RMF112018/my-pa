@@ -52,7 +52,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "f7a2c9d51e64"
-CURRENT_HEAD: Final = "1d9b248e7f83"
+CURRENT_HEAD: Final = "c8e4a1b70d35"
 CAPTURE_LABELS: Final = "c1a8e4d70b29"
 WP_TUX_01: Final = "de5ec1c65857"
 WP_MCP_PROJ_01: Final = "9f2c8a1d4e70"
@@ -155,6 +155,7 @@ CONSTRAINT_TABLES: Final[frozenset[str]] = frozenset(
 #: Fixed and written out, so the recurrence guard below is a bounded check over a
 #: named list rather than a repository-wide scan.
 HEAD_PIN_FILES: Final[tuple[str, ...]] = (
+    "tests/architecture/test_record_event_privilege_separation.py",
     "tests/database/test_cli_auth.py",
     "tests/database/test_entities_graph_vocabulary_migration.py",
     "tests/database/test_legacy_entity_backfill_migration.py",
@@ -167,7 +168,6 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_constraint_sync_migration.py",
     "tests/schema/test_continuity_projects_mutation_migration.py",
     "tests/schema/test_continuity_projects_read_capability_migration.py",
-    "tests/schema/test_extraction_schema_migration.py",
     "tests/schema/test_goodnotes_browser_contract_migration.py",
     "tests/schema/test_goodnotes_client_resume_migration.py",
     "tests/schema/test_goodnotes_content_and_durable_note_stages.py",
@@ -183,6 +183,7 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_goodnotes_semantic_proposal_migration.py",
     "tests/schema/test_legacy_direct_principal_task_origin_migration.py",
     "tests/schema/test_meeting_records_migration.py",
+    "tests/schema/test_record_event_truncate_refusal_migration.py",
     "tests/schema/test_record_events_migration.py",
     "tests/schema/test_oauth_refresh_migration.py",
     "tests/schema/test_project_controls_run01_integrity_migration.py",
@@ -267,7 +268,8 @@ def _literals(block: str) -> list[str]:
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [CURRENT_HEAD]
-    assert script.get_revision(CURRENT_HEAD).down_revision == "7d9a450dfd07"
+    assert script.get_revision(CURRENT_HEAD).down_revision == "1d9b248e7f83"
+    assert script.get_revision("1d9b248e7f83").down_revision == "7d9a450dfd07"
     assert script.get_revision("7d9a450dfd07").down_revision == "6f6ead27d122"
     assert script.get_revision("6f6ead27d122").down_revision == "e6a4c2f91b73"
     assert script.get_revision("e6a4c2f91b73").down_revision == "c4f1a8e52d90"
@@ -281,7 +283,7 @@ def test_revision_is_the_only_linear_head() -> None:
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 109
+    assert len(list(MIGRATIONS.glob("*.py"))) == 110
 
 
 # ---- the freeze -------------------------------------------------------------

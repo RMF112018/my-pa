@@ -1215,6 +1215,12 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             # WP-RE-01. The Record Event revision installs the feed's append-only
             # guard over its own function; name it so the equality stays one.
             "record_events_are_append_only",
+            # RE-DBH-01. The TRUNCATE-refusal revision adds one statement-level
+            # BEFORE TRUNCATE refusal on each Record Event relation. They are
+            # defense in depth beside the privilege boundary, and this inventory
+            # names them so the equality stays an equality.
+            "record_events_refuse_truncate",
+            "record_event_sequences_refuse_truncate",
         }
         for name in ("a_proposal_cites_at_least_one_span", "a_span_link_leaves_its_proposal_cited"):
             assert "CONSTRAINT TRIGGER" in triggers[name]

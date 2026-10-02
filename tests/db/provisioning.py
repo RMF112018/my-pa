@@ -26,6 +26,10 @@ from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 DATABASE_URL_VARIABLE: Final = f"{ENV_PREFIX}DATABASE_URL"
+#: Explicit migration-authority URL for Alembic. Set to the same disposable
+#: catalog by the harness; `migrations/env.py` does not infer it from the
+#: application URL.
+MIGRATION_DATABASE_URL_VARIABLE: Final = f"{ENV_PREFIX}MIGRATION_DATABASE_URL"
 
 #: Disposable names this helper is allowed to create or drop. Anything else is
 #: treated as a canonical or foreign catalog and refused.
@@ -297,7 +301,10 @@ def restored_environ(
 def sanitized_migration_environ(database_url: str) -> dict[str, str | None]:
     """Point Alembic at ``database_url`` and clear accidental legacy-import opts."""
 
-    updates: dict[str, str | None] = {DATABASE_URL_VARIABLE: database_url}
+    updates: dict[str, str | None] = {
+        DATABASE_URL_VARIABLE: database_url,
+        MIGRATION_DATABASE_URL_VARIABLE: database_url,
+    }
     for name in LEGACY_IMPORT_VARIABLES:
         updates[name] = None
     return updates

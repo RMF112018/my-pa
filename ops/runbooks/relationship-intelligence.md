@@ -385,18 +385,21 @@ candidate is the honest answer.
   `knowledge.entity_proposal_review_decisions`, and it is real — a trigger of
   this kind fires for superusers, so an `UPDATE` or `DELETE` against a decided
   review row is refused at the server. What it does not do is constrain the role
-  this repository runs as. There is exactly **one** database role, `my_pa`,
-  created by initdb from `POSTGRES_USER` (`ops/compose/postgres.yml`,
-  `ops/nas/compose.example.yml`); it is cluster superuser and the owner of schema
-  `knowledge`; and there are **zero** `GRANT`, `REVOKE`, `CREATE ROLE`,
-  `CREATE USER` or `ALTER ROLE` statements anywhere in this repository. That role
-  can `ALTER TABLE … DISABLE TRIGGER`, `SET session_replication_role = 'replica'`
-  or `DROP TRIGGER`. The trigger stops the accident and the ordinary mistake; it
-  does not stop the operator. Reducing that privilege was evaluated during the RI
-  remediation campaign and **deliberately deferred**: there is no role, grant or
-  ownership statement anywhere to extend, so it is net-new design with zero
-  repository precedent, and `AGENTS.md` sections 2 and 3 put that outside a
-  remediation's authority. Recorded, not closed.
+  this repository runs as. At the RI remediation there was exactly **one**
+  database role, `my_pa`, created by initdb from `POSTGRES_USER`
+  (`ops/compose/postgres.yml`, `ops/nas/compose.example.yml`); it is cluster
+  superuser and the owner of schema `knowledge`. That description is the state
+  recorded for the remediation, not the current Record Event contract.
+  RE-DBH-01 adds `ops/postgres/provision_record_event_roles.py`, which creates
+  `my_pa_owner`, `my_pa_migrator`, and `my_pa_runtime` without a password and
+  grants only the Record Event runtime privileges. Alembic revisions still do
+  not create roles. Applying that provisioner is an operator action and was
+  not performed by this runbook. The historical `my_pa` role can still
+  `ALTER TABLE … DISABLE TRIGGER`, `SET session_replication_role = 'replica'`
+  or `DROP TRIGGER` on objects it owns. The Record Event trigger stops the
+  accident; it does not replace the runtime privilege boundary. Reducing the
+  general single-role posture for every other relation remains open. Recorded,
+  not closed for the rest of the schema.
 - **Split ambiguity discovery covers five of the effect families and refuses the
   rest.** Discovery and disposition reach `alias`, `identifier`, `assignment`,
   `relationship` and `observation` — the families whose rows name an entity in a

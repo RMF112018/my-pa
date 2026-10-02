@@ -270,6 +270,8 @@ delete a row merely to satisfy the gate.
 set -a
 . /volume1/my-pa/secrets/mcp-remote.env
 set +a
+# Online Alembic reads MY_PA_MIGRATION_DATABASE_URL and does not fall back
+# to MY_PA_DATABASE_URL. Set the migration URL in this shell before upgrading.
 python -m alembic upgrade head
 docker compose --env-file /volume1/my-pa/config/remote-compose.env \
   -f ops/nas/remote/compose.yml --profile remote-edge pull

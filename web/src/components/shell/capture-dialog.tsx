@@ -228,11 +228,10 @@ export function CaptureDialog({
   */
   useEffect(() => {
     if (!open) return;
-    const t = setTimeout(() => {
-      if (stage === "entry") fieldRef.current?.focus();
-      else firstChoiceRef.current?.focus();
-    }, 0);
-    return () => clearTimeout(t);
+    // Establish stage focus in this effect, without another task that can run
+    // after the person has already moved to the next control.
+    if (stage === "entry") fieldRef.current?.focus();
+    else firstChoiceRef.current?.focus();
   }, [open, stage]);
 
   /** Enter the unchanged capture branch with the chosen kind already selected. */

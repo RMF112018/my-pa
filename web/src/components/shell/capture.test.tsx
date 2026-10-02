@@ -46,7 +46,7 @@ vi.mock("@/components/diagnostics/diagnostics-provider", async (importOriginal) 
       diagnostics.enabled ? children : null,
   };
 });
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useReducer, type ComponentProps } from "react";
 import { contentSha256 } from "@/lib/capture/receipt";
@@ -531,5 +531,39 @@ describe("the chooser in front of capture", () => {
     await user.click(screen.getByTestId("capture-entry-back"));
     expect(await screen.findByTestId("capture-chooser")).toBeInTheDocument();
     expect(screen.queryByTestId("capture-field")).toBeNull();
+  });
+});
+
+
+describe("Capture focus ownership", () => {
+  it("focuses the initial chooser before navigation and cannot reclaim a later choice", () => {
+    vi.useFakeTimers();
+    try {
+      respond({});
+      render(<CaptureHarness open onClose={() => undefined} principalId={PRINCIPAL_ID} />);
+      expect(screen.getByTestId("capture-choice-create_task")).toHaveFocus();
+      const nextChoice = screen.getByTestId("capture-choice-quick_note");
+      nextChoice.focus();
+      act(() => vi.runOnlyPendingTimers());
+      expect(nextChoice).toHaveFocus();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cannot steal Project focus after the entry stage has mounted", () => {
+    vi.useFakeTimers();
+    try {
+      respond({});
+      render(<CaptureHarness open onClose={() => undefined} principalId={PRINCIPAL_ID} />);
+      act(() => vi.runOnlyPendingTimers());
+      fireEvent.click(screen.getByTestId("capture-choice-quick_note"));
+      const project = screen.getByTestId("capture-project-select");
+      project.focus();
+      act(() => vi.runOnlyPendingTimers());
+      expect(project).toHaveFocus();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

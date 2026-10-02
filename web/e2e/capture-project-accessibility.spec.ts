@@ -41,20 +41,25 @@ test.describe("WP08 Capture Project accessibility", () => {
     await expect(select).toHaveValue("");
   });
 
-  test("the chooser is operable from the keyboard alone", async ({ page }) => {
+  test("the chooser is operable from the keyboard alone", async ({ page, browserName }) => {
     await signIn(page);
     await visibleCaptureButton(page).focus();
     await page.keyboard.press("Enter");
     await expect(page.getByTestId("capture-chooser")).toBeVisible();
 
-    // Tab to Quick note and enter the note branch without a pointer.
-    await page.keyboard.press("Tab");
+    await expect(page.getByTestId("capture-choice-create_task")).toBeFocused();
+    // macOS WebKit skips buttons with plain Tab by default. Option+Tab reaches
+    // every control; the invariant remains keyboard-only navigation.
+    const nextControlKey = browserName === "webkit" && process.platform === "darwin" ? "Alt+Tab" : "Tab";
+    await page.keyboard.press(nextControlKey);
+    await expect(page.getByTestId("capture-choice-quick_note")).toBeFocused();
     await page.keyboard.press("Enter");
     await expect(page.getByTestId("capture-field")).toBeVisible();
+    await expect(page.getByTestId("capture-field")).toBeFocused();
 
     // The Project control is reachable by keyboard from the field.
     const select = page.getByTestId("capture-project-select");
-    await select.focus();
+    await page.keyboard.press(nextControlKey);
     await expect(select).toBeFocused();
     await expect(page.getByLabel("Project")).toBeFocused();
   });

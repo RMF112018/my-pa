@@ -45,7 +45,14 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 AUTHORIZATION_ROOT: Final = "authorization.principal.principal_id"
 #: W5: the stored partition of a registered re-enrichment work row, written at
 #: registration from an Authorization.
-STORED_ROOTS: Final = frozenset({"work_partition(connection, work.work_id)"})
+STORED_ROOTS: Final = frozenset(
+    {
+        "work_partition(connection, work.work_id)",
+        # The privilege preflight appends one rolled-back probe event for the
+        # durable local operator. It does not mint a principal.
+        "capture_principal_id(LOCAL_OPERATOR_UUID)",
+    }
+)
 #: MR-10: the ONE enumerated argument-supplied root, named by path.
 ARGUMENT_ROOT: Final = ("apps/cli/tbr_import.py", "args.principal")
 
@@ -110,6 +117,11 @@ MINT_SITES: Final = frozenset(
         ),
         ("src/my_pa/bootstrap/gateway.py", "Principal", "client.principal_id"),
         ("src/my_pa/bootstrap/settings.py", "capture_principal_id", "LOCAL_OPERATOR_UUID"),
+        (
+            "src/my_pa/infrastructure/database/record_event_privilege_gate.py",
+            "capture_principal_id",
+            "LOCAL_OPERATOR_UUID",
+        ),
         (
             "src/my_pa/infrastructure/persistence/principal_scope.py",
             "PrincipalContext",

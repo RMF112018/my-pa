@@ -7,6 +7,7 @@ nothing and never includes a connection string in an error.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Final
 
@@ -15,6 +16,7 @@ from sqlalchemy.exc import DBAPIError
 
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.identity.binding import LOCAL_OPERATOR_UUID, capture_principal_id
 from my_pa.domain.record_events import (
     RecordEventActorClass,
     RecordEventDraft,
@@ -121,14 +123,23 @@ def _verify(connection: Connection) -> None:
         ).scalar_one_or_none()
         if enabled != "O":
             raise PrivilegeGateError(f"{trigger} is not an enabled origin trigger")
+    probe_principal = capture_principal_id(LOCAL_OPERATOR_UUID)
+    partition = {"principal_id": probe_principal}
     _expect_sqlstate(connection, "TRUNCATE TABLE knowledge.record_events", _INSUFFICIENT)
     _expect_sqlstate(connection, "TRUNCATE TABLE knowledge.record_event_sequences", _INSUFFICIENT)
     _expect_sqlstate(
         connection,
-        "UPDATE knowledge.record_events SET record_version = record_version",
+        "UPDATE knowledge.record_events SET record_version = record_version "
+        "WHERE record_events.principal_id = :principal_id",
         _INSUFFICIENT,
+        partition,
     )
-    _expect_sqlstate(connection, "DELETE FROM knowledge.record_events", _INSUFFICIENT)
+    _expect_sqlstate(
+        connection,
+        "DELETE FROM knowledge.record_events WHERE record_events.principal_id = :principal_id",
+        _INSUFFICIENT,
+        partition,
+    )
     _expect_sqlstate(
         connection,
         "CREATE TABLE knowledge.record_event_privilege_probe (id integer)",
@@ -186,10 +197,15 @@ def _require_table(connection: Connection, role: str, table: str, privilege: str
         raise PrivilegeGateError(f"{role} lacks {privilege} on {SCHEMA}.{table}")
 
 
-def _expect_sqlstate(connection: Connection, statement: str, sqlstate: str) -> None:
+def _expect_sqlstate(
+    connection: Connection,
+    statement: str,
+    sqlstate: str,
+    params: Mapping[str, object] | None = None,
+) -> None:
     connection.execute(text("SAVEPOINT record_event_privilege_probe"))
     try:
-        connection.execute(text(statement))
+        connection.execute(text(statement), dict(params or {}))
     except DBAPIError as exc:
         connection.execute(text("ROLLBACK TO SAVEPOINT record_event_privilege_probe"))
         observed = getattr(exc.orig, "sqlstate", None)
@@ -203,7 +219,7 @@ def _expect_sqlstate(connection: Connection, statement: str, sqlstate: str) -> N
 
 
 def _prove_product_path(connection: Connection) -> None:
-    principal_id = issue_identifier(IdKind.PRINCIPAL)
+    principal_id = capture_principal_id(LOCAL_OPERATOR_UUID)
     draft = RecordEventDraft.issue(
         principal_id=principal_id,
         record_family=RecordEventFamily.MEETING_SERIES,

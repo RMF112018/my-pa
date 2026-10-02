@@ -13,16 +13,21 @@ string scan:
    re-keyed -- and `insert(record_events)`. No `update`, `delete` or
    attribute-form `.update()`/`.delete()` on either.
 3. **Raw SQL.** No string literal in `src/`, `apps/`, `ops/` or `scripts/`
-   updates, deletes from or truncates either table. In `migrations/`, only the
-   Record Event revision names them; its downgrade's first statement is the
-   refusal; its append-only trigger is `BEFORE UPDATE OR DELETE` on
-   `record_events`; and no other revision drops that trigger.
+   updates, deletes from or truncates either table, except the Record Event
+   privilege gate. That gate's literals are arguments of `_expect_sqlstate`
+   and must come back `42501`. In `migrations/`, only the feed admission
+   revision and the TRUNCATE-refusal revision name the relations. The
+   admission revision's downgrade starts with its refusal and its append-only
+   trigger stays `BEFORE UPDATE OR DELETE` on `record_events`. No revision
+   drops that trigger. The refusal revision's downgrade starts with its own
+   row-preserving refusal.
 
 The database half is existing: the append-only trigger
-(`tests/database/test_record_event_persistence.py`) and the downgrade refusals
-(`tests/schema/test_record_events_migration.py`). `TRUNCATE` bypasses a row
-trigger; a statement-level guard is an operator residual (OD-W8-8), and this
-module refuses every `TRUNCATE` of the feed in code.
+(`tests/database/test_record_event_persistence.py`), the downgrade refusals
+(`tests/schema/test_record_events_migration.py`), and the executed TRUNCATE
+refusals (`tests/database/test_record_event_role_privileges.py`). A
+`TRUNCATE` literal outside the privilege gate's refusal probes still fails
+this module.
 """
 
 from __future__ import annotations
@@ -40,6 +45,16 @@ FEED_TABLES: Final = frozenset({"record_events", "record_event_sequences"})
 #: The SQLAlchemy write-statement constructors (reads are not rewrites).
 WRITE_BUILDERS: Final = frozenset({"insert", "pg_insert", "update", "delete"})
 OWNER: Final = "src/my_pa/infrastructure/persistence/record_events.py"
+GATE: Final = "src/my_pa/infrastructure/database/record_event_privilege_gate.py"
+REFUSAL_PROBES: Final = frozenset(
+    {
+        "TRUNCATE TABLE knowledge.record_events",
+        "TRUNCATE TABLE knowledge.record_event_sequences",
+        "UPDATE knowledge.record_events SET record_version = record_version "
+        "WHERE record_events.principal_id = :principal_id",
+        "DELETE FROM knowledge.record_events WHERE record_events.principal_id = :principal_id",
+    }
+)
 #: The Record Event revision is found by its content, not pinned by filename:
 #: naming the head here would make this a head-pin file for every later
 #: revision to edit.
@@ -145,23 +160,50 @@ def test_the_feed_module_builds_only_the_upsert_and_the_insert() -> None:
 # ---- 3. raw SQL --------------------------------------------------------------------
 
 
+def _refusal_probes(source: str) -> set[str]:
+    """String arguments of `_expect_sqlstate(..., _INSUFFICIENT)`."""
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+            continue
+        if node.func.id != "_expect_sqlstate" or len(node.args) < 3:
+            continue
+        statement, sqlstate = node.args[1], node.args[2]
+        if (
+            isinstance(statement, ast.Constant)
+            and isinstance(statement.value, str)
+            and isinstance(sqlstate, ast.Name)
+            and sqlstate.id == "_INSUFFICIENT"
+        ):
+            found.add(statement.value)
+    return found
+
+
 def test_no_code_path_updates_deletes_or_truncates_the_feed() -> None:
-    assert _raw_rewrites(_code_sources()) == []
+    sources = _code_sources()
+    gate = sources.pop(GATE)
+    assert _raw_rewrites(sources) == []
+    probes = _refusal_probes(gate)
+    assert probes >= REFUSAL_PROBES
+    assert {item[2] for item in _raw_rewrites({GATE: gate})} == {
+        statement[:80] for statement in probes if RAW_REWRITE.search(statement)
+    }
 
 
-def test_only_the_record_event_revision_names_the_feed_and_it_keeps_the_guards() -> None:
+def test_only_the_record_event_revisions_name_the_feed_and_keep_the_guards() -> None:
     revisions = {
         path.relative_to(ROOT).as_posix(): path.read_text(encoding="utf-8")
         for path in sorted((ROOT / "migrations" / "versions").glob("*.py"))
     }
     naming = {path for path, text in revisions.items() if "record_event" in text}
-    assert len(naming) == 1, sorted(naming)
-    (revision,) = naming
-    assert REVISION_DOCSTRING in revisions[revision]
+    admission = next(path for path, text in revisions.items() if REVISION_DOCSTRING in text)
+    refusal = next(
+        path for path, text in revisions.items() if "Refuse TRUNCATE of the Record Event" in text
+    )
+    assert naming == {admission, refusal}, sorted(naming)
     for path, text in revisions.items():
-        if path != revision:
-            assert not DROP_TRIGGER.search(text), path
-    tree = ast.parse(revisions[revision])
+        assert not DROP_TRIGGER.search(text), path
+    tree = ast.parse(revisions[admission])
     downgrade = next(
         node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "downgrade"
     )
@@ -169,7 +211,7 @@ def test_only_the_record_event_revision_names_the_feed_and_it_keeps_the_guards()
     assert (
         isinstance(first, ast.Expr) and ast.unparse(first.value) == "op.execute(_REFUSE_DOWNGRADE)"
     )
-    assert "BEFORE UPDATE OR DELETE ON {SCHEMA}.{table}" in revisions[revision]
+    assert "BEFORE UPDATE OR DELETE ON {SCHEMA}.{table}" in revisions[admission]
     append_only = next(
         node
         for node in tree.body
@@ -178,6 +220,21 @@ def test_only_the_record_event_revision_names_the_feed_and_it_keeps_the_guards()
         and node.target.id == "_APPEND_ONLY"
     )
     assert "'record_events'" in ast.unparse(append_only)
+    refusal_tree = ast.parse(revisions[refusal])
+    refusal_downgrade = next(
+        node
+        for node in refusal_tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "downgrade"
+    )
+    refusal_first = refusal_downgrade.body[0]
+    assert (
+        isinstance(refusal_first, ast.Expr)
+        and ast.unparse(refusal_first.value) == "op.execute(_REFUSE_DOWNGRADE)"
+    )
+    assert "BEFORE TRUNCATE ON {SCHEMA}.{table}" in revisions[refusal]
+    assert "DELETE FROM" not in revisions[refusal].upper()
+    assert "TRUNCATE TABLE" not in revisions[refusal].upper()
+    assert "TRUNCATE KNOWLEDGE" not in revisions[refusal].upper()
 
 
 # ---- controls ----------------------------------------------------------------------

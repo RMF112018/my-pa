@@ -48,6 +48,7 @@
  */
 import type { ReactNode } from "react";
 import { Card, CardTitle, CardBody } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { userErrorCopy } from "@/lib/ui/user-error";
 import {
@@ -64,8 +65,25 @@ import {
 // itself lives in that module, because it must be a client-side mount decision.
 export { DiagnosticsDetails };
 
-/** The four answers. There is deliberately no fifth and no default. */
-export type SurfaceStateKind = "empty" | "unavailable" | "degraded" | "not_implemented";
+/** Seven ordinary states; legacy backend provenance states remain readable. */
+/** Ordinary foundation vocabulary. Legacy provenance states remain distinct below. */
+export type SurfaceStateKind = "loading" | "empty" | "partial" | "unavailable" | "not_found" | "validation" | "conflict";
+type LegacySurfaceStateKind = "degraded" | "not_implemented";
+
+/** Closed product copy, never gateway prose. Existing safe error/diagnostic paths are retained. */
+export type SafeProductCopy =
+  | "Loading records."
+  | "No records were returned."
+  | "This answer is incomplete."
+  | "This could not be read. Try again."
+  | "This item is not available."
+  | "Correct the indicated field."
+  | "Your draft is preserved. Review the current record before trying again.";
+const SAFE_PRODUCT_COPY: Record<SurfaceStateKind, SafeProductCopy> = {
+  loading: "Loading records.", empty: "No records were returned.", partial: "This answer is incomplete.",
+  unavailable: "This could not be read. Try again.", not_found: "This item is not available.",
+  validation: "Correct the indicated field.", conflict: "Your draft is preserved. Review the current record before trying again.",
+};
 
 interface Presentation {
   readonly badge: string;
@@ -76,7 +94,12 @@ interface Presentation {
   readonly clarification: string;
 }
 
-const PRESENTATION: Record<SurfaceStateKind, Presentation> = {
+const PRESENTATION: Record<SurfaceStateKind | LegacySurfaceStateKind, Presentation> = {
+  loading: { badge: "Loading", tone: "neutral", role: "status", clarification: "The read is in progress. No result has been established." },
+  partial: { badge: "Partial", tone: "gold", role: "status", clarification: "This answer is incomplete. Keep the returned records and their disclosed limitations visible." },
+  not_found: { badge: "Not available", tone: "neutral", role: "status", clarification: "This item is not available. This is not an empty listing or a claim about access to other records." },
+  validation: { badge: "Check input", tone: "coral", role: "alert", clarification: "Correct the indicated field. No successful change is claimed." },
+  conflict: { badge: "Changed elsewhere", tone: "gold", role: "alert", clarification: "Your draft is preserved. Review the current record before trying again. A conflict is not a transient retry." },
   empty: {
     badge: "Empty",
     tone: "neutral",
@@ -112,7 +135,10 @@ const PRESENTATION: Record<SurfaceStateKind, Presentation> = {
 };
 
 export interface SurfaceStateProps {
-  readonly kind: SurfaceStateKind;
+  readonly kind: SurfaceStateKind | LegacySurfaceStateKind;
+  readonly message?: SafeProductCopy;
+  /** Explicit read retry/review only; never automatic mutation replay. */
+  readonly onRetry?: () => void;
   /** The heading. Distinct per state per surface; it is the accessible name. */
   readonly title: string;
   /** User-facing one sentence. Not raw transport. */
@@ -142,8 +168,8 @@ export interface SurfaceStateProps {
   readonly testId?: string;
 }
 
-function compactKind(kind: SurfaceStateKind): boolean {
-  return kind === "empty" || kind === "not_implemented";
+function compactKind(kind: SurfaceStateKind | LegacySurfaceStateKind): boolean {
+  return kind === "empty" || kind === "not_implemented" || kind === "loading" || kind === "not_found";
 }
 
 function StateDetails({
@@ -176,6 +202,8 @@ function StateDetails({
 export function SurfaceState({
   kind,
   title,
+  message,
+  onRetry,
   detail,
   diagnostic,
   error,
@@ -189,7 +217,11 @@ export function SurfaceState({
   // so the product sentence survives without the raw failure being handed over
   // a second time.
   const presented = error !== undefined ? userErrorCopy(error.kind) : null;
-  const level1 = detail ?? presented?.message ?? null;
+  // Validate new copy at runtime as well as compile time. Legacy detail remains
+  // source-compatible; governed error/diagnostic records still use their gate.
+  const copyKind = kind === "degraded" ? "partial" : kind;
+  const productMessage = copyKind !== "not_implemented" && message === SAFE_PRODUCT_COPY[copyKind] ? message : null;
+  const level1 = productMessage ?? detail ?? presented?.message ?? null;
   const diagnosticDetail = diagnostic ?? error ?? null;
   const compact = compactKind(kind);
   const frameClass = compact
@@ -208,6 +240,11 @@ export function SurfaceState({
       <CardBody>
         {level1 ? <p data-testid="surface-state-detail">{level1}</p> : null}
         {children}
+        {onRetry && kind !== "empty" && kind !== "loading" && kind !== "validation" && kind !== "not_implemented" ? (
+          <Button variant="secondary" className="mt-2 min-h-11" onClick={onRetry}>
+            {kind === "conflict" ? "Review current" : "Try again"}
+          </Button>
+        ) : null}
         <StateDetails
           clarification={presentation.clarification}
           limitations={limitations}
@@ -220,6 +257,7 @@ export function SurfaceState({
     role: presentation.role,
     "aria-labelledby": headingId,
     "data-state": kind,
+    "aria-busy": kind === "loading" || undefined,
     "data-testid": testId ?? `state-${kind}`,
     className: frameClass,
   } as const;

@@ -20,7 +20,10 @@ test("WP02 shell keeps one main and Search separate from New, with legacy destin
   await page.keyboard.press("ControlOrMeta+k");
   await expect(page.getByRole("dialog", { name: "Search" })).toBeVisible();
   await expect(page.getByRole("searchbox", { name: "Search" })).toBeFocused();
-  await expect(page.getByTestId("capture-chooser")).toHaveCount(0);
+  await expect(page.getByTestId("capture-chooser")).not.toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Capture", includeHidden: true })).not.toBeVisible();
+  await expect(page.locator('dialog[open][aria-label="Capture"]')).toHaveCount(0);
+  await expect(page.locator("dialog[open]")).toHaveCount(1);
   await page.keyboard.press("Escape");
   await newAction(page).focus();
   await page.keyboard.press("Enter");

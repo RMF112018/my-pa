@@ -32,6 +32,7 @@ test("dark shell captures responsive navigation and Inspector states", async ({ 
   await page.getByRole("button", { name: "Close panel" }).click();
 
   await pinInspector(page);
+  await stableFrame(page);
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   if (testInfo.project.name === "mobile") {
     await expect(page.getByRole("dialog", { name: "Inspector" })).toBeVisible();

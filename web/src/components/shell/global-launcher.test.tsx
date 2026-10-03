@@ -44,8 +44,11 @@ vi.mock("@/components/tasks/task-create-sheet", () => ({
     context?: { projectId?: string };
   }) => {
     delayed.task = () => onConfirmed(taskReceipt);
+    // The real Task sheet stays mounted while closed; keep its editable state
+    // here so a close/reopen cannot accidentally pass by remounting the mock.
+    const [title, setTitle] = useState("");
     return open ? <section role="dialog" aria-label="Create task">
-    <form data-testid="task-create-sheet"><label>Title<input aria-label="Title" /></label></form>
+    <form data-testid="task-create-sheet"><label>Title<input aria-label="Title" value={title} onChange={(event) => setTitle(event.target.value)} /></label></form>
     <span data-testid="task-project">{context?.projectId ?? "No Project"}</span>
     <button onClick={() => onBack({ projectId: context?.projectId ?? null })}>Back to Capture</button>
     <button onClick={() => onConfirmed(taskReceipt)}>Confirm Task</button>
@@ -152,6 +155,21 @@ describe("GlobalLauncher public contract", () => {
     confirm.mockReturnValue(true);
     fireEvent.click(screen.getByRole("button", { name: "Close Task" }));
     await waitFor(() => expect(newButton).toHaveFocus());
+  });
+
+  it("keeps a canceled Task discard but starts fresh after accepted discard", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(<Harness initialMode="task" />);
+    fireEvent.click(screen.getByRole("button", { name: "New" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Title" }), { target: { value: "Synthetic discarded Task" } });
+    fireEvent.click(screen.getByRole("button", { name: "Close Task" }));
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(screen.getByRole("textbox", { name: "Title" })).toHaveValue("Synthetic discarded Task");
+    confirm.mockReturnValue(true);
+    fireEvent.click(screen.getByRole("button", { name: "Close Task" }));
+    expect(screen.queryByRole("dialog", { name: "Create task" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "New" }));
+    expect(screen.getByRole("textbox", { name: "Title" })).toHaveValue("");
   });
 
   it("keeps offline Task unavailable while offering Capture", async () => {

@@ -79,6 +79,7 @@ export function GlobalLauncher({
   const [mode, setMode] = useState<"capture" | "task" | "confirmed">("capture");
   const [captureStartStage, setCaptureStartStage] = useState<"choose" | "entry">("choose");
   const [taskProjectId, setTaskProjectId] = useState<string | null>(null);
+  const [taskGeneration, setTaskGeneration] = useState(0);
   const [confirmedTask, setConfirmedTask] = useState<TaskCreateReceipt | null>(null);
   const invoker = useRef<HTMLElement | null>(null);
   const fallbackHeading = useRef<HTMLElement | null>(null);
@@ -181,8 +182,13 @@ export function GlobalLauncher({
     // when dismissal is cancelled; pending work cannot be dismissed.
     const form = document.querySelector<HTMLFormElement>('[data-testid="task-create-sheet"]');
     if (form?.getAttribute("aria-busy") === "true") return;
-    if (taskFormHasUnsentDraft(taskProjectId) &&
-        !window.confirm("Discard the unsent Task draft?")) return;
+    if (taskFormHasUnsentDraft(taskProjectId)) {
+      if (!window.confirm("Discard the unsent Task draft?")) return;
+      // The canonical sheet remains mounted while closed. Replace its local
+      // editable form only after the Principal accepted discard; unresolved
+      // create intents live in the shared runtime and resume on the next open.
+      setTaskGeneration((generation) => generation + 1);
+    }
     close();
   }
 
@@ -216,6 +222,7 @@ export function GlobalLauncher({
         initialStage={captureStartStage}
       />
       <TaskCreateSheet
+        key={taskGeneration}
         open={open && mode === "task" && online}
         onOpenChange={taskOpenChange}
         entry="capture"

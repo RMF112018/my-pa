@@ -93,6 +93,52 @@ test("WP02 preserves separate drafts, guards Escape, and restores the actual New
   await expect(invoker).toBeFocused();
 });
 
+test("WP02 accepted Task discard starts a fresh editable Task while canceled discard preserves it", async ({ page }) => {
+  await signIn(page);
+  await newAction(page).click();
+  await page.getByTestId("capture-choice-create_task").click();
+  const title = page.getByRole("textbox", { name: "Title" });
+  await title.fill("Synthetic WP02 discarded draft");
+  const firstPrompt = page.waitForEvent("dialog");
+  const firstClose = page.getByRole("button", { name: "Close panel" }).click();
+  await (await firstPrompt).dismiss();
+  await firstClose;
+  await expect(title).toHaveValue("Synthetic WP02 discarded draft");
+  const secondPrompt = page.waitForEvent("dialog");
+  const secondClose = page.getByRole("button", { name: "Close panel" }).click();
+  await (await secondPrompt).accept();
+  await secondClose;
+  await expect(page.getByRole("dialog", { name: "Create task" })).not.toBeVisible();
+  await newAction(page).click();
+  await page.getByTestId("capture-choice-create_task").click();
+  await expect(page.getByRole("textbox", { name: "Title" })).toHaveValue("");
+});
+
+test("WP02 Search shortcut waits for Capture ownership and works after Capture closes", async ({ page }) => {
+  await signIn(page);
+  await newAction(page).click();
+  await page.getByTestId("capture-chooser").getByRole("button", { name: "Quick note" }).click();
+  const note = syntheticNote("wp02-search-arbitration");
+  await page.getByTestId("capture-field").fill(note);
+  await page.keyboard.press("ControlOrMeta+k");
+  await expect(page.getByRole("dialog", { name: "Search" })).not.toBeVisible();
+  await expect(page.getByRole("dialog")).toHaveCount(1);
+  await expect(page.getByRole("dialog", { name: "Capture" })).toBeVisible();
+  await expect(page.getByTestId("capture-field")).toHaveValue(note);
+  const prompt = page.waitForEvent("dialog");
+  const close = page.keyboard.press("Escape");
+  await (await prompt).accept();
+  await close;
+  await expect(page.getByRole("dialog", { name: "Capture" })).not.toBeVisible();
+  await page.keyboard.press("ControlOrMeta+k");
+  await expect(page.getByRole("dialog", { name: "Search" })).toBeVisible();
+  await expect(page.getByRole("searchbox", { name: "Search" })).toBeFocused();
+  await newAction(page).click();
+  await expect(page.getByRole("dialog", { name: "Search" })).not.toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Capture" })).toBeVisible();
+  await expect(page.getByRole("dialog")).toHaveCount(1);
+});
+
 test("WP02 Task confirmation offers Open Task with exactly one result", async ({ page }) => {
   await signIn(page);
   await newAction(page).click();

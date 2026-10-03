@@ -109,7 +109,10 @@ function AppShellBody({ principal, children }: { principal: PrincipalSession; ch
           </div>
           <MobileNav onCapture={openCapture} />
           <GlobalLauncher open={launcherOpen} onOpenChange={setLauncherOpen} onConfirmed={() => {}} />
-          <CommandPalette open={searchOpen} onOpenChange={setSearchOpen} onCapture={openCapture} />
+          <CommandPalette open={searchOpen} onOpenChange={(next) => {
+            if (next && launcherOpen) return;
+            setSearchOpen(next);
+          }} onCapture={openCapture} />
           <OfflineQueueStatus principalId={principal.principalId} />
         </div>
       </InspectorSelectionProvider>

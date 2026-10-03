@@ -467,6 +467,16 @@ class SafeDetail(StrEnum):
     #: empty, named an unknown family or repeated one. `CURSOR` and `PAGE_SIZE`
     #: are reused for the feed's other two fields.
     RECORD_FAMILIES = "record_families"
+    #: The Capture root lifecycle plane (CRL-WP-03). `EXPECTED_LIFECYCLE_REVISION`
+    #: names the precondition field: under `invalid_request` it was malformed,
+    #: under `conflict` it was well-formed and no longer current -- never which
+    #: revision is current. `CAPTURE_WITHDRAWN` is the `denied` subject when a
+    #: new derivation names an archived Capture the caller owns (MR-C17); a
+    #: foreign or absent Capture is still `not_found`, so this token can only
+    #: ever describe the caller's own root. `LIFECYCLE` (the list/search
+    #: selector), `REASON` and `IDEMPOTENCY_KEY` are reused, not redeclared.
+    EXPECTED_LIFECYCLE_REVISION = "expected_lifecycle_revision"
+    CAPTURE_WITHDRAWN = "capture_withdrawn"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

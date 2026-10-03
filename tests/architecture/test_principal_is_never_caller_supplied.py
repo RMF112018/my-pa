@@ -285,7 +285,10 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # more to acquire the Entity mutation scope before any identifier read.
     # WP-RE-04: one more, stamping the same partition onto the Record Events
     # seam S-A stages (`_outcome_events`).
-    "infrastructure/persistence/entity_authoring.py": (("request", "principal_id"),) * 24,
+    # CRL-WP-03 C-14: one more, the same field passed to `capture_context`
+    # before the fact-evidence link. It scopes the lifecycle fence; it does
+    # not choose a Principal from the payload.
+    "infrastructure/persistence/entity_authoring.py": (("request", "principal_id"),) * 25,
     "application/intelligence.py": (
         ("artifact", "principal_id"),
         ("artifact", "principal_id"),
@@ -654,6 +657,9 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("proposal", "principal_id"),
         ("proposal", "principal_id"),
         ("proposal", "principal_id"),
+        # CRL-WP-03 C-16: the proposal's server-composed partition is handed to
+        # `capture_context` before the proposal insert. Same field, same record.
+        ("proposal", "principal_id"),
     ),
     # The eight new `request` reads acquire Entity mutation scopes and revalidate
     # current subject/context rows for create, revise, archive, and restore. A
@@ -722,6 +728,10 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        # CRL-WP-03 C-17: `_mine` on the proposal preflight, and `capture_context`
+        # before the cited-root fence. Same authenticated field.
         ("request", "principal_id"),
         ("request", "principal_id"),
     ),

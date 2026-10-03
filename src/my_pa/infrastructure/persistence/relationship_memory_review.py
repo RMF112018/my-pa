@@ -127,6 +127,7 @@ from my_pa.domain.relationship.memory import (
     validate_structured_value,
 )
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.infrastructure.persistence.capture_lifecycle import require_active_capture_roots
 from my_pa.infrastructure.persistence.identifier_claim_lock import lock_entity_mutation_scopes
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
@@ -875,6 +876,29 @@ def decide_relationship_memory_review(
     if preflight is None:
         raise ReviewNotFoundError("the request names no stored review case")
     _, _, _, requested_context, _, _ = _promotion_content(preflight, request)
+    # CRL-WP-03 C-17: accepting and reprocess dispositions share cited roots
+    # before the entity locks. Reject and defer stay class 3.
+    if request.disposition in _ACCEPTING or request.disposition is Disposition.REPROCESS:
+        spans = connection.execute(
+            select(relationship_memory_proposal_evidence.c.capture_span_id)
+            .select_from(
+                relationship_memory_proposal_evidence.join(
+                    relationship_memory_proposals,
+                    relationship_memory_proposals.c.memory_proposal_id
+                    == relationship_memory_proposal_evidence.c.memory_proposal_id,
+                )
+            )
+            .where(
+                relationship_memory_proposals.c.review_case_id == request.review_case_id,
+                _mine(relationship_memory_proposals, request.principal_id),
+                relationship_memory_proposal_evidence.c.capture_span_id.is_not(None),
+            )
+        ).scalars()
+        require_active_capture_roots(
+            connection,
+            capture_context(request.principal_id),
+            span_ids=tuple(str(span_id) for span_id in spans if span_id is not None),
+        )
     # Entity serialization precedes the proposal row lock. Merge takes the
     # Entity lock before it analyses and invalidates proposals, so reversing
     # these two locks here would create a proposal-row/Entity-lock deadlock.

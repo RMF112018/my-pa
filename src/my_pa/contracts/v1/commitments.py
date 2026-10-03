@@ -45,6 +45,8 @@ class CommitmentView:
     closure_evidence_ref: str | None
     accepted_by_review_decision_id: str | None
     closed_at: str | None
+    origin_evidence_capture_state: str | None = None
+    closure_evidence_capture_state: str | None = None
 
     def to_canonical_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -64,6 +66,8 @@ class CommitmentListEntry:
     created_at: str
     updated_at: str
     version: int
+    origin_evidence_capture_state: str | None = None
+    closure_evidence_capture_state: str | None = None
 
     def to_canonical_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -86,6 +90,8 @@ class WaitingOnEntry:
     follow_up_task_id: str | None
     follow_up_task_title: str | None
     follow_up_task_state: str | None
+    origin_evidence_capture_state: str | None = None
+    closure_evidence_capture_state: str | None = None
 
     def to_canonical_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -104,6 +110,8 @@ class CommitmentHistoryEntryView:
     after_version: int
     occurred_at: str
     recorded_at: str
+    origin_evidence_capture_state: str | None = None
+    closure_evidence_capture_state: str | None = None
 
     def to_canonical_dict(self) -> dict[str, object]:
         return asdict(self)

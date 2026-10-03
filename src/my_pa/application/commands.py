@@ -52,6 +52,13 @@ from my_pa.application.record_events import (
 )
 from my_pa.domain.capture.display_label import normalize_display_label
 from my_pa.domain.capture.errors import CaptureBoundsError, CaptureError
+from my_pa.domain.capture.lifecycle import (
+    CaptureLifecycleReasonError,
+    CaptureLifecycleRevisionError,
+    CaptureLifecycleSelector,
+    normalize_reason,
+    validate_expected_revision,
+)
 from my_pa.domain.capture.proposal import MAX_NORMALIZED_VALUE_CHARACTERS, ProposalState
 from my_pa.domain.capture.review import (
     REVIEW_REASON_LIMIT,
@@ -254,6 +261,7 @@ from my_pa.domain.task.role import TaskRole
 __all__ = [
     "AddEntityAlias",
     "AddProjectCommand",
+    "ArchiveCapture",
     "ArchiveEntity",
     "ArchiveManagedDocument",
     "ArchiveManagedDocumentCommand",
@@ -334,6 +342,7 @@ __all__ = [
     "RecordTask",
     "Representation",
     "ResolveIntelligenceSet",
+    "RestoreCapture",
     "RestoreEntity",
     "RestoreManagedDocument",
     "RestoreManagedDocumentCommand",
@@ -512,6 +521,38 @@ def _positive(value: int | None, detail: SafeDetail) -> int | None:
     if value < 1:
         raise InvalidRequestError(detail)
     return value
+
+
+def _lifecycle_selector(value: object) -> CaptureLifecycleSelector:
+    """A Capture lifecycle selector from the closed vocabulary, or a refusal.
+
+    A transport hands the value over as the bare string; anything outside
+    `active`/`archived`/`all` is refused naming the field, never echoing it.
+    """
+    if isinstance(value, CaptureLifecycleSelector):
+        return value
+    if isinstance(value, str):
+        try:
+            return CaptureLifecycleSelector(value)
+        except ValueError:
+            pass
+    raise InvalidRequestError(SafeDetail.LIFECYCLE)
+
+
+def _expected_lifecycle_revision(value: object) -> int:
+    """A lifecycle precondition is a non-negative int, and a bool is not an int."""
+    try:
+        return validate_expected_revision(value)
+    except CaptureLifecycleRevisionError:
+        raise InvalidRequestError(SafeDetail.EXPECTED_LIFECYCLE_REVISION) from None
+
+
+def _lifecycle_reason(value: object) -> str:
+    """Trim a lifecycle reason and refuse a blank or over-long one, without echoing it."""
+    try:
+        return normalize_reason(value)
+    except CaptureLifecycleReasonError:
+        raise InvalidRequestError(SafeDetail.REASON) from None
 
 
 def _idempotency_key(value: object) -> str:
@@ -1273,6 +1314,58 @@ class ReviseCapture:
         _moment(self.occurred_at, SafeDetail.OCCURRED_AT)
 
 
+def _bind_lifecycle_transition(command: ArchiveCapture | RestoreCapture) -> None:
+    """The shared bounds of `capture.archive` and `capture.restore`.
+
+    No principal, no capture text, no content version, no timestamp and no
+    delete alias. The reason is trimmed here and stored without its boundary
+    whitespace; `repr` omits it.
+    """
+    _identifier(command.capture_id, IdKind.CAPTURE, SafeDetail.CAPTURE_ID)
+    object.__setattr__(
+        command,
+        "expected_lifecycle_revision",
+        _expected_lifecycle_revision(command.expected_lifecycle_revision),
+    )
+    _idempotency_key(command.idempotency_key)
+    object.__setattr__(command, "reason", _lifecycle_reason(command.reason))
+
+
+@dataclass(frozen=True, slots=True)
+class ArchiveCapture:
+    """`capture.archive`: withdraw one owned root. Versions stay retrievable."""
+
+    capability: ClassVar[Capability] = Capability.CAPTURE_ARCHIVE
+
+    capture_id: str
+    expected_lifecycle_revision: int
+    idempotency_key: str
+    reason: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        # The architecture walk reads this function's body only. The shared
+        # binder also checks the key; this call is the one that walk can see.
+        _idempotency_key(self.idempotency_key)
+        _bind_lifecycle_transition(self)
+
+
+@dataclass(frozen=True, slots=True)
+class RestoreCapture:
+    """`capture.restore`: return one owned root under then-current policy."""
+
+    capability: ClassVar[Capability] = Capability.CAPTURE_RESTORE
+
+    capture_id: str
+    expected_lifecycle_revision: int
+    idempotency_key: str
+    reason: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        # Same lexical call as `ArchiveCapture`: the walk does not enter the binder.
+        _idempotency_key(self.idempotency_key)
+        _bind_lifecycle_transition(self)
+
+
 @dataclass(frozen=True, slots=True)
 class ReadCapture:
     """`capture.read`: one stored version of one capture, exactly as written.
@@ -1291,11 +1384,17 @@ class ReadCapture:
 
     capture_id: str
     version_id: str | None = None
+    #: CRL-WP-03 (D-4, MR-C04): opt into the root's lifecycle history, bounded
+    #: and disclosed as truncated past the bound. Off by default; the current
+    #: lifecycle state, revision and archive time are always on the answer.
+    include_lifecycle_history: bool = False
 
     def __post_init__(self) -> None:
         _identifier(self.capture_id, IdKind.CAPTURE, SafeDetail.CAPTURE_ID)
         if self.version_id is not None:
             _identifier(self.version_id, IdKind.CAPTURE_VERSION, SafeDetail.VERSION_ID)
+        if not isinstance(self.include_lifecycle_history, bool):
+            raise InvalidRequestError(SafeDetail.LIFECYCLE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1310,9 +1409,12 @@ class ListCaptures:
     capability: ClassVar[Capability] = Capability.CAPTURE_LIST
 
     page_size: int | None = None
+    #: CRL-WP-03 (CW-012): `active` (the default), `archived` or `all`.
+    lifecycle: CaptureLifecycleSelector = CaptureLifecycleSelector.ACTIVE
 
     def __post_init__(self) -> None:
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        object.__setattr__(self, "lifecycle", _lifecycle_selector(self.lifecycle))
 
 
 @dataclass(frozen=True, slots=True)
@@ -1343,11 +1445,14 @@ class SearchCaptures:
 
     query: str = field(repr=False)
     page_size: int | None = None
+    #: CRL-WP-03 (CW-012): `active` (the default), `archived` or `all`.
+    lifecycle: CaptureLifecycleSelector = CaptureLifecycleSelector.ACTIVE
 
     def __post_init__(self) -> None:
         if not isinstance(self.query, str):
             raise InvalidRequestError(SafeDetail.QUERY)
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        object.__setattr__(self, "lifecycle", _lifecycle_selector(self.lifecycle))
 
 
 #: The dispositions section 13 states a reason for, and the two that cannot be
@@ -10535,6 +10640,8 @@ type Command = (
     | ReadCapture
     | ListCaptures
     | SearchCaptures
+    | ArchiveCapture
+    | RestoreCapture
     | ListReviewCases
     | DecideReviewCase
     | GetPulse

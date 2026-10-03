@@ -28,6 +28,7 @@ from my_pa.domain.capture.review import (
 from my_pa.domain.capture.version import digest_of
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.infrastructure.persistence.capture_lifecycle import require_active_capture_roots
 from my_pa.infrastructure.persistence.principal_scope import (
     PrincipalContext,
     capture_context,
@@ -96,6 +97,14 @@ def open_review_case(connection: Connection, proposal_id: str) -> str | None:
     ).one()
     if not routes_to_review(ProposalType(row.proposal_type), RiskClass(row.risk_class)):
         return None
+    # CRL-WP-03 C-5: the proposal's version root, shared before the case insert.
+    # The pipeline caller may already hold this SHARE; taking it again does not
+    # conflict with itself. An archived root opens no case.
+    require_active_capture_roots(
+        connection,
+        capture_context(str(row.owner_principal_id)),
+        capture_ids=(str(row.capture_id),),
+    )
     review_case_id = issue_identifier(IdKind.REVIEW_CASE)
     inserted = connection.execute(
         pg_insert(capture_review_cases)
@@ -231,6 +240,20 @@ def decide_review(connection: Connection, request: ReviewDecisionRequest) -> Rev
     case was opened under, because both derive from the same capture.
     """
     context = capture_context(request.principal_id)
+    # CRL-WP-03 C-6: accepting dispositions share the root before the case lock.
+    # Reject, defer and mark-unresolved are class 3 and are not fenced (C-7).
+    if request.disposition in {Disposition.ACCEPT, Disposition.CORRECT_AND_ACCEPT}:
+        cited = connection.execute(
+            principal_scoped(
+                select(capture_review_cases.c.version_id).where(
+                    capture_review_cases.c.review_case_id == request.review_case_id,
+                ),
+                capture_review_cases,
+                context,
+            )
+        ).scalar_one_or_none()
+        if cited is not None:
+            require_active_capture_roots(connection, context, version_ids=(str(cited),))
     case = connection.execute(
         select(
             capture_review_cases.c.proposal_id,

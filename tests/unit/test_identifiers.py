@@ -221,6 +221,12 @@ def test_contract_prefixes_are_stable() -> None:
         # WP-RE-01: one committed Record Event. `rcev` crosses the wire as the
         # `event_id` of every `record_events.list` item (WP-RE-06).
         "rcev",
+        # CRL-WP-03: the Capture root lifecycle plane. `clrcpt` crosses the wire
+        # as the receipt of every `capture.archive` / `capture.restore` answer
+        # and as a capture lifecycle Record Event's `source_receipt_id`; `clev`
+        # names the lifecycle event a receipt and the opt-in history cite.
+        "clev",
+        "clrcpt",
     }
 
 

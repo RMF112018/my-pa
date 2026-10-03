@@ -222,7 +222,7 @@ def test_full_plane_effective_target_is_one_hundred_forty_nine() -> None:
     """
     composed = composed_capabilities(IMPLEMENTED, _FULL_PLANES)
     desired = desired_effective_capabilities(composed)
-    assert len(desired) == 160
+    assert len(desired) == 162
     assert Capability.PROJECT_CONTROLS_CONFIGURE in desired
     assert Capability.PROJECT_CONTROLS_STATUS in desired
     assert Capability.REPORTS_BEGIN_CYCLE in desired
@@ -238,7 +238,7 @@ def test_default_plane_effective_target_is_eighty_three() -> None:
     # The six Meeting capabilities need no plane flag, so they are in the
     # default-plane target too (re-measured from the live derivation), and so
     # does WP-RE-06's `record_events.list`.
-    assert len(desired) == 94
+    assert len(desired) == 96
     assert Capability.RECORD_EVENTS_LIST in desired
     assert desired >= _MEETINGS
     assert Capability.DOCUMENTS_READ not in desired
@@ -435,7 +435,7 @@ def test_no_path_grants_every_capability_enum_member() -> None:
     assert Capability.SOURCES_ENROLL not in desired
     assert Capability.GSQS_START not in desired
     assert Capability.CONTINUITY_TASKS_CREATE not in desired
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v4"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v5"
 
 
 def test_mismatched_purpose_or_write_is_add_not_noop() -> None:
@@ -689,7 +689,7 @@ def test_a_v2_converged_client_plans_exactly_the_six_meeting_adds() -> None:
         scope=SCOPE,
     )
     assert not diff.is_healthy()
-    assert diff.profile_version == "chatllm-data-v4"
+    assert diff.profile_version == "chatllm-data-v5"
     assert diff.add == _MEETINGS
     assert diff.renew == frozenset()
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
@@ -712,7 +712,7 @@ def test_a_v3_converged_client_plans_exactly_the_record_events_add() -> None:
         scope=SCOPE,
     )
     assert not diff.is_healthy()
-    assert diff.profile_version == "chatllm-data-v4"
+    assert diff.profile_version == "chatllm-data-v5"
     assert diff.add == feed
     assert diff.renew == frozenset()
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
@@ -722,6 +722,32 @@ def test_a_v3_converged_client_plans_exactly_the_record_events_add() -> None:
     assert added.purpose is Purpose.RECORD_EVENT_READ
     assert added.is_write is False
     assert chatllm_grant_purpose(Capability.RECORD_EVENTS_LIST) is Purpose.RECORD_EVENT_READ
+
+
+def test_a_v4_converged_client_plans_exactly_the_capture_lifecycle_adds() -> None:
+    """CRL-WP-03: a client converged on v4 needs exactly the two lifecycle grants."""
+    composed = composed_capabilities(IMPLEMENTED, _FULL_PLANES)
+    desired = desired_effective_capabilities(composed)
+    lifecycle = frozenset({Capability.CAPTURE_ARCHIVE, Capability.CAPTURE_RESTORE})
+    grants = tuple(_grant(capability) for capability in desired - lifecycle)
+    diff = diff_chatllm_data_profile(
+        implemented=IMPLEMENTED,
+        composed=composed,
+        grants=grants,
+        now=NOW,
+        resource=RESOURCE,
+        scope=SCOPE,
+    )
+    assert not diff.is_healthy()
+    assert diff.profile_version == "chatllm-data-v5"
+    assert diff.add == lifecycle
+    assert diff.renew == frozenset()
+    actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
+    added = [action for action in actions if action.kind != "noop"]
+    assert {action.capability for action in added} == lifecycle
+    assert {action.kind for action in added} == {"add"}
+    assert {action.purpose for action in added} == {Purpose.CAPTURE_AUTHORING}
+    assert {action.is_write for action in added} == {True}
 
 
 def test_mismatched_meeting_grants_plan_as_add() -> None:

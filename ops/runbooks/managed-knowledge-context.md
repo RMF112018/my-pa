@@ -61,12 +61,12 @@ returns a complete no-match or empty package and must not fabricate evidence.
 ChatLLM is a **full MY-PA application data manager**, not a system
 administrator. The machine-readable policy is
 `src/my_pa/domain/identity/chatllm_capability_policy.py` at profile version
-`chatllm-data-v4`. Do not grant every `Capability` enum member.
+`chatllm-data-v5`. Do not grant every `Capability` enum member.
 
-On the current head, the derived **effective** ChatLLM catalog is 160 names
+On the current head, the derived **effective** ChatLLM catalog is 162 names
 when documents, relationship intelligence (with writes), relationship memory,
-and constraints are composed, and 94 in the default composition. The
-policy-data target is the same 160: every data-management name (70
+and constraints are composed, and 96 in the default composition. The
+policy-data target is the same 162: every data-management name (72
 `DATA_REQUIRED` and 90 `DATA_CONDITIONAL`) now has a handler, the Run-01 Project
 Controls names included, so none is `not_implemented`. `gsqs.start` / `gsqs.status` stay omitted pending a separate
 reclassification. Report-cycle writes (`reports.begin_cycle`,
@@ -85,14 +85,14 @@ Inspect and (operator-gated) reconcile with:
 ```bash
 python apps/cli/remote_mcp.py profile-diff \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v4
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v5
 python apps/cli/remote_mcp.py profile-plan \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v4
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v5
 # operator-gated; never run against production from this runbook alone
 python apps/cli/remote_mcp.py profile-apply \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v4 \
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v5 \
   --apply
 ```
 
@@ -132,13 +132,13 @@ steps require a separate operator decision.
    ```bash
    python apps/cli/remote_mcp.py profile-diff \
      --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v4
+     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v5
    python apps/cli/remote_mcp.py profile-plan \
      --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v4
+     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v5
    python apps/cli/remote_mcp.py profile-apply \
      --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v4 \
+     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v5 \
      --apply
    ```
 

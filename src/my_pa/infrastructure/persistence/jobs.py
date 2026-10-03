@@ -80,10 +80,27 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Final, NamedTuple
 
-from sqlalchemy import Connection, Row, Table, and_, case, func, or_, select, true
+from sqlalchemy import (
+    BigInteger,
+    Column,
+    Connection,
+    MetaData,
+    Row,
+    Table,
+    Text,
+    and_,
+    case,
+    column,
+    false,
+    func,
+    or_,
+    select,
+    true,
+)
 from sqlalchemy.sql.elements import ColumnElement
 
 from my_pa.contracts.v1.errors import ErrorCode
+from my_pa.domain.capture.lifecycle import CapturePauseCause
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence.principal_scope import (
@@ -145,6 +162,11 @@ class JobPlane:
     owner_table: Table
     owner_key: str
     owner_column: str
+    #: Capture-plane overlay (CRL-WP-03). `None` on the enrollment plane, which
+    #: has neither column. Naming them here is what keeps `claim_job` from
+    #: mentioning a column the enrollment table does not have.
+    lease_generation: str | None = None
+    pause_cause: str | None = None
 
 
 #: Work an accepted enrollment authorizes. The default everywhere, because it is
@@ -169,7 +191,26 @@ CAPTURE_JOBS: Final = JobPlane(
     owner_table=capture_versions,
     owner_key="version_id",
     owner_column="owner_principal_id",
+    lease_generation="lease_generation",
+    pause_cause="pause_cause",
 )
+
+
+def _capture_jobs_overlay() -> Table:
+    """A metadata-free copy of `capture_jobs` that can name the lifecycle columns.
+
+    Historical revision `1a4c9e77b2d5` creates `capture_jobs` from the live
+    declaration, so `lease_generation` and `pause_cause` stay off that Table
+    (MR-C05). Claim and the lease match still have to read and write them.
+    The copy shares the name and schema and is never asked to emit DDL.
+    """
+    copy = capture_jobs.to_metadata(MetaData())
+    copy.append_column(Column("lease_generation", BigInteger, nullable=False))
+    copy.append_column(Column("pause_cause", Text))
+    return copy
+
+
+_CAPTURE_JOBS_OVERLAY: Final = _capture_jobs_overlay()
 
 
 class UnownedJobSubjectError(Exception):
@@ -222,13 +263,18 @@ class JobRecord(NamedTuple):
 
 
 class LeasedJob(NamedTuple):
-    """A claim on one job: what to do, which attempt this is, and until when."""
+    """A claim on one job: what to do, which attempt this is, and until when.
+
+    `generation` is the capture-plane lease generation this claim observed.
+    `None` on the enrollment plane, which has no generation column.
+    """
 
     operation_id: str
     subject_id: str
     principal_id: str
     attempt: int
     lease_expires_at: datetime
+    generation: int | None = None
 
 
 def _validate_owner(owner: str) -> str:
@@ -372,7 +418,13 @@ def claim_job(
     reap_abandoned_jobs(connection, principal_id=principal_id, plane=plane)
 
     table = plane.table
-    retry_due = table.c.next_attempt_at <= func.now() if respect_retry_schedule else true()
+    # `target = table` keeps the partition scan's alias. The capture plane then
+    # points `target` at the overlay so the claim can clear `pause_cause` and
+    # advance `lease_generation`, columns the shared declaration cannot name.
+    target = table
+    if plane.lease_generation is not None:
+        target = _CAPTURE_JOBS_OVERLAY
+    retry_due = target.c.next_attempt_at <= func.now() if respect_retry_schedule else true()
     # In local mode both halves carry the partition. The subquery therefore
     # locks one of that Principal's rows rather than a foreign oldest row. In
     # Entra worker mode both halves deliberately carry `true()`, and the trusted
@@ -385,50 +437,79 @@ def claim_job(
     mine = (
         true()
         if principal_id is None
-        else partition_criterion(table, capture_context(principal_id))
+        else partition_criterion(target, capture_context(principal_id))
     )
+    # CRL-WP-03: a withdrawn capture job is never claimable. A policy pause is
+    # claimable only once its backoff is due, so re-evaluation cannot spin.
+    # The enrollment plane has no pause column and keeps the original predicate.
+    pause_ok: ColumnElement[bool]
+    policy_recheck: ColumnElement[bool]
+    if plane.pause_cause is None:
+        pause_ok = true()
+        policy_recheck = false()
+    else:
+        pause = target.c.pause_cause
+        pause_ok = pause.is_(None)
+        policy_recheck = and_(
+            pause == CapturePauseCause.CURRENT_POLICY_INELIGIBLE.value,
+            target.c.next_attempt_at <= func.now(),
+        )
+    claimable_terms = [
+        and_(
+            target.c.state == JobState.QUEUED.value,
+            retry_due,
+            pause_ok,
+        ),
+        and_(
+            target.c.state == JobState.RUNNING.value,
+            target.c.lease_expires_at <= func.now(),
+            pause_ok,
+        ),
+    ]
+    if plane.pause_cause is not None:
+        claimable_terms.append(
+            and_(
+                target.c.state == JobState.QUEUED.value,
+                policy_recheck,
+            )
+        )
     claimable = (
-        select(table.c.operation_id)
+        select(target.c.operation_id)
         .where(
             mine,
-            or_(
-                and_(
-                    table.c.state == JobState.QUEUED.value,
-                    retry_due,
-                ),
-                and_(
-                    table.c.state == JobState.RUNNING.value,
-                    table.c.lease_expires_at <= func.now(),
-                ),
-            ),
-            table.c.attempt_count < table.c.max_attempts,
+            or_(*claimable_terms),
+            target.c.attempt_count < target.c.max_attempts,
         )
-        .order_by(table.c.next_attempt_at, table.c.created_at, table.c.operation_id)
+        .order_by(target.c.next_attempt_at, target.c.created_at, target.c.operation_id)
         .limit(1)
         .with_for_update(skip_locked=True)
         .scalar_subquery()
     )
+    claimed_values: dict[str, object] = {
+        "state": JobState.RUNNING.value,
+        "lease_owner": owner,
+        "lease_expires_at": func.now() + func.make_interval(0, 0, 0, 0, 0, 0, lease_seconds),
+        "attempt_count": target.c.attempt_count + 1,
+        "updated_at": func.now(),
+    }
+    returning = [
+        target.c.operation_id,
+        target.c[plane.subject],
+        target.c.principal_id,
+        target.c.attempt_count,
+        target.c.lease_expires_at,
+    ]
+    if plane.lease_generation is not None:
+        claimed_values["lease_generation"] = _CAPTURE_JOBS_OVERLAY.c.lease_generation + 1
+        claimed_values["pause_cause"] = None
+        returning.append(_CAPTURE_JOBS_OVERLAY.c.lease_generation)
     statement = (
-        table.update()
-        .where(mine, table.c.operation_id == claimable)
-        .values(
-            state=JobState.RUNNING.value,
-            lease_owner=owner,
-            lease_expires_at=func.now() + func.make_interval(0, 0, 0, 0, 0, 0, lease_seconds),
-            attempt_count=table.c.attempt_count + 1,
-            updated_at=func.now(),
-        )
-        .returning(
-            table.c.operation_id,
-            table.c[plane.subject],
-            table.c.principal_id,
-            table.c.attempt_count,
-            table.c.lease_expires_at,
-        )
+        target.update()
+        .where(mine, target.c.operation_id == claimable)
+        .values(**claimed_values)
+        .returning(*returning)
     )
-    row: Row[tuple[str, str, str, int, datetime]] | None = connection.execute(
-        statement
-    ).one_or_none()
+    row = connection.execute(statement).one_or_none()
     if row is None:
         return None
     return LeasedJob(
@@ -437,6 +518,7 @@ def claim_job(
         principal_id=str(row[2]),
         attempt=int(row[3]),
         lease_expires_at=row[4],
+        generation=None if plane.lease_generation is None else int(row[5]),
     )
 
 
@@ -446,6 +528,7 @@ def hold_lease(
     *,
     owner: str,
     plane: JobPlane = ENROLLMENT_JOBS,
+    generation: int | None = None,
 ) -> bool:
     """Lock the job row and report whether `owner` still holds a live lease.
 
@@ -478,15 +561,16 @@ def hold_lease(
     validate_identifier(operation_id, IdKind.OPERATION)
     _validate_owner(owner)
     table = plane.table
+    held_by = [
+        table.c.operation_id == operation_id,
+        table.c.state == JobState.RUNNING.value,
+        table.c.lease_owner == owner,
+        table.c.lease_expires_at > func.now(),
+    ]
+    if generation is not None and plane.lease_generation is not None:
+        held_by.append(column(plane.lease_generation) == generation)
     held = connection.execute(
-        select(table.c.operation_id)
-        .where(
-            table.c.operation_id == operation_id,
-            table.c.state == JobState.RUNNING.value,
-            table.c.lease_owner == owner,
-            table.c.lease_expires_at > func.now(),
-        )
-        .with_for_update()
+        select(table.c.operation_id).where(*held_by).with_for_update()
     ).scalar_one_or_none()
     return held is not None
 
@@ -497,18 +581,22 @@ def complete_job(
     *,
     owner: str,
     plane: JobPlane = ENROLLMENT_JOBS,
+    generation: int | None = None,
 ) -> bool:
     """Mark a job succeeded. Returns false when `owner` no longer holds the lease."""
     validate_identifier(operation_id, IdKind.OPERATION)
     _validate_owner(owner)
     table = plane.table
+    held_by = [
+        table.c.operation_id == operation_id,
+        table.c.state == JobState.RUNNING.value,
+        table.c.lease_owner == owner,
+    ]
+    if generation is not None and plane.lease_generation is not None:
+        held_by.append(column(plane.lease_generation) == generation)
     statement = (
         table.update()
-        .where(
-            table.c.operation_id == operation_id,
-            table.c.state == JobState.RUNNING.value,
-            table.c.lease_owner == owner,
-        )
+        .where(*held_by)
         .values(
             state=JobState.SUCCEEDED.value,
             lease_owner=None,
@@ -528,6 +616,7 @@ def release_job(
     owner: str,
     error_code: ErrorCode,
     plane: JobPlane = ENROLLMENT_JOBS,
+    generation: int | None = None,
 ) -> JobState | None:
     """End a failed attempt, and report the state the job is now in.
 
@@ -542,13 +631,16 @@ def release_job(
     table = plane.table
     exhausted = table.c.attempt_count >= table.c.max_attempts
     retry_seconds = func.least(300, func.power(2, table.c.attempt_count - 1))
+    held_by = [
+        table.c.operation_id == operation_id,
+        table.c.state == JobState.RUNNING.value,
+        table.c.lease_owner == owner,
+    ]
+    if generation is not None and plane.lease_generation is not None:
+        held_by.append(column(plane.lease_generation) == generation)
     statement = (
         table.update()
-        .where(
-            table.c.operation_id == operation_id,
-            table.c.state == JobState.RUNNING.value,
-            table.c.lease_owner == owner,
-        )
+        .where(*held_by)
         .values(
             state=case(
                 (exhausted, JobState.FAILED.value),

@@ -485,6 +485,11 @@ _ORDINAL_UNITS = (
     # WP-RE-06's `record_events.list` takes the public set to one hundred and
     # seventy-nine, so the plant now indexes the one hundred and eightieth.
     "hundred-eightieth",
+    # CRL-WP-03 adds `capture.archive` and `capture.restore` and takes the
+    # public set to one hundred and eighty-one. The plant indexes the next
+    # ordinal, so this table stays dense through a hundred-eighty-second.
+    "hundred-eighty-first",
+    "hundred-eighty-second",
 )
 
 

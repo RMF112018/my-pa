@@ -109,7 +109,7 @@ import hashlib
 import hmac
 import json
 import sys
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, is_dataclass, replace
 from datetime import UTC, date, datetime, timedelta
@@ -122,6 +122,7 @@ from zoneinfo import ZoneInfo
 from my_pa.application import goodnotes_browse
 from my_pa.application.authorization import Authorization, authorize
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
+from my_pa.application.capture_lifecycle import transition_capture
 from my_pa.application.commands import (
     AcknowledgeConstraintSync,
     AddEntityAddress,
@@ -129,6 +130,7 @@ from my_pa.application.commands import (
     AddEntityCommunicationMethod,
     AddEntityName,
     ApplyConstraintSync,
+    ArchiveCapture,
     ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveManagedDocumentCommand,
@@ -261,6 +263,7 @@ from my_pa.application.commands import (
     ResolveEntity,
     ResolveIntelligenceSet,
     ResolveUnresolvedMention,
+    RestoreCapture,
     RestoreEntity,
     RestoreManagedDocument,
     RestoreManagedDocumentCommand,
@@ -518,7 +521,13 @@ from my_pa.contracts.v1.canvas_workspace import (
     CanvasWorkspaceView,
 )
 from my_pa.contracts.v1.capabilities import EffectiveLimits, ReadinessReport, ReadinessState
-from my_pa.contracts.v1.capture import CaptureListEntry, CaptureReceiptView, CaptureVersionView
+from my_pa.contracts.v1.capture import (
+    CaptureLifecycleEventView,
+    CaptureLifecycleReceiptView,
+    CaptureListEntry,
+    CaptureReceiptView,
+    CaptureVersionView,
+)
 from my_pa.contracts.v1.commitments import (
     CommitmentHistoryEntryView,
     CommitmentListEntry,
@@ -548,6 +557,14 @@ from my_pa.domain.capture.errors import (
     CaptureError,
     EmptyCaptureError,
 )
+from my_pa.domain.capture.lifecycle import (
+    MAX_LIFECYCLE_HISTORY,
+    CaptureLifecycleEvent,
+    CaptureLifecycleOperation,
+    CaptureLifecycleProjection,
+    CaptureLifecycleSelector,
+    CaptureWithdrawnError,
+)
 from my_pa.domain.capture.proposal import ProposalState
 from my_pa.domain.capture.reveal import EvidenceState
 from my_pa.domain.capture.review import (
@@ -565,7 +582,13 @@ from my_pa.domain.capture.submission import CaptureKind, CaptureTransport
 from my_pa.domain.capture.version import CaptureContent, CaptureVersion, ProcessingPolicy
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.coverage import CoverageState
-from my_pa.domain.common.identifiers import IdKind, InvalidIdentifierError, validate_identifier
+from my_pa.domain.common.identifiers import (
+    IdKind,
+    InvalidIdentifierError,
+    make_identifier,
+    parse_identifier,
+    validate_identifier,
+)
 from my_pa.domain.common.provenance import TrustLevel
 from my_pa.domain.common.time import format_rfc3339, utc_now
 from my_pa.domain.documents.managed import (
@@ -664,6 +687,7 @@ from my_pa.domain.relationship.governance import (
     EntityProposalMethod,
     EvidenceRole,
     ObservationAuthorityError,
+    ObservationOrigin,
     ObservationTimeError,
     StaleResolutionVersionError,
     origin_of,
@@ -810,6 +834,8 @@ def _memory_translated() -> Iterator[None]:
         raise InvalidRequestError(SafeDetail.STATEMENT) from None
     except RelationshipMemoryError:
         raise InvalidRequestError(SafeDetail.SUBJECT) from None
+    except CaptureWithdrawnError:
+        raise DeniedError(SafeDetail.CAPTURE_WITHDRAWN) from None
 
 
 def _memory_links(links: tuple[dict[str, object], ...]) -> tuple[dict[str, str], ...]:
@@ -1018,6 +1044,8 @@ def _review_case_payload(
     | GoodNotesSemanticReviewCase
     | RelationshipMemoryReviewCase
     | EntityProposalReviewCase,
+    *,
+    lifecycle_by_capture: Mapping[str, str],
 ) -> dict[str, Any]:
     """One review case as the contract may disclose it, whatever its subject kind.
 
@@ -1105,6 +1133,7 @@ def _review_case_payload(
         "capture_id": case.capture_id,
         "version_id": case.version_id,
         "proposal_type": case.proposal_type.value,
+        "capture_lifecycle_state": lifecycle_by_capture.get(case.capture_id),
     }
 
 
@@ -1299,14 +1328,48 @@ def _capture_content(text: str) -> CaptureContent:
     raise failure
 
 
-def _capture_version_view(version: CaptureVersion, *, is_current: bool) -> CaptureVersionView:
+def _capture_version_view(
+    version: CaptureVersion,
+    *,
+    is_current: bool,
+    lifecycle: CaptureLifecycleProjection | None = None,
+    history: tuple[CaptureLifecycleEvent, ...] | None = None,
+) -> CaptureVersionView:
     """One stored version as the contract publishes it.
 
     `is_current` is passed in rather than read off the version, because there is
     no column that says so: the current version is the greatest version number
     the capture holds, and the use case is what has read both.
+
+    `lifecycle` is the root's current lifecycle (CRL-WP-03), and `history` the
+    opt-in bounded event list (the most recent events, oldest first). Revisions
+    are contiguous from one, so the history is truncated exactly when its
+    oldest event is not revision one.
     """
+    lifecycle_fields: dict[str, object] = {}
+    if lifecycle is not None:
+        lifecycle_fields = {
+            "lifecycle_state": lifecycle.state,
+            "lifecycle_revision": lifecycle.revision,
+            "archived_at": lifecycle.archived_at,
+        }
+        if history is not None:
+            lifecycle_fields["lifecycle_history"] = tuple(
+                CaptureLifecycleEventView(
+                    event_id=event.event_id,
+                    lifecycle_revision=event.lifecycle_revision,
+                    operation=event.operation,
+                    resulting_state=event.resulting_state,
+                    transitioned_at=event.transitioned_at,
+                    reason_category=event.reason_category,
+                )
+                for event in history
+            )
+            lifecycle_fields["lifecycle_history_truncated"] = (
+                bool(history) and history[0].lifecycle_revision > 1
+            )
     return CaptureVersionView(
+        **lifecycle_fields,  # type: ignore[arg-type]
         capture_id=version.capture_id,
         version_id=version.version_id,
         version_number=version.version_number,
@@ -1327,7 +1390,28 @@ def _capture_version_view(version: CaptureVersion, *, is_current: bool) -> Captu
     )
 
 
-def _task_view(task: TaskManagementTask) -> TaskView:
+def _ref_state(states: Mapping[str, str], reference: str | None) -> str | None:
+    if reference is None:
+        return None
+    return states.get(reference)
+
+
+def _evidence_capture_states(
+    unit_of_work: UnitOfWork, principal_id: str, references: Iterable[str | None]
+) -> Mapping[str, str]:
+    """One batch over the page's `cap_` and `asrt_` refs. Other prefixes are omitted."""
+    wanted = tuple(dict.fromkeys(reference for reference in references if reference))
+    if not wanted:
+        return {}
+    return unit_of_work.captures.evidence_lifecycle_states(principal_id, wanted)
+
+
+def _task_view(
+    task: TaskManagementTask,
+    *,
+    origin_evidence_capture_state: str | None = None,
+    closure_evidence_capture_state: str | None = None,
+) -> TaskView:
     """One task, in full, as `tasks.read` publishes it. No owner (WP-TM-03)."""
     return TaskView(
         task_id=task.task_id,
@@ -1355,10 +1439,17 @@ def _task_view(task: TaskManagementTask) -> TaskView:
         updated_at=task.updated_at,
         commitment_id=task.commitment_id,
         role=task.role.value if task.role is not None else None,
+        origin_evidence_capture_state=origin_evidence_capture_state,
+        closure_evidence_capture_state=closure_evidence_capture_state,
     )
 
 
-def _task_list_entry(task: TaskManagementTask) -> TaskListEntry:
+def _task_list_entry(
+    task: TaskManagementTask,
+    *,
+    origin_evidence_capture_state: str | None = None,
+    closure_evidence_capture_state: str | None = None,
+) -> TaskListEntry:
     """One task, as a page row, as `tasks.list`/`tasks.search` publish it."""
     return TaskListEntry(
         task_id=task.task_id,
@@ -1373,6 +1464,8 @@ def _task_list_entry(task: TaskManagementTask) -> TaskListEntry:
         updated_at=task.updated_at,
         version=task.version,
         project_id=task.project_id,
+        origin_evidence_capture_state=origin_evidence_capture_state,
+        closure_evidence_capture_state=closure_evidence_capture_state,
     )
 
 
@@ -1408,7 +1501,12 @@ def _task_history_view(entry: TaskManagementHistoryEntry) -> TaskHistoryEntryVie
     )
 
 
-def _commitment_view(commitment: Commitment) -> CommitmentView:
+def _commitment_view(
+    commitment: Commitment,
+    *,
+    origin_evidence_capture_state: str | None = None,
+    closure_evidence_capture_state: str | None = None,
+) -> CommitmentView:
     return CommitmentView(
         commitment_id=commitment.commitment_id,
         direction=commitment.direction.value,
@@ -1425,10 +1523,17 @@ def _commitment_view(commitment: Commitment) -> CommitmentView:
         closure_evidence_ref=commitment.closure_evidence_ref,
         accepted_by_review_decision_id=commitment.accepted_by_review_decision_id,
         closed_at=commitment.closed_at.isoformat() if commitment.closed_at is not None else None,
+        origin_evidence_capture_state=origin_evidence_capture_state,
+        closure_evidence_capture_state=closure_evidence_capture_state,
     )
 
 
-def _commitment_list_entry(commitment: Commitment) -> CommitmentListEntry:
+def _commitment_list_entry(
+    commitment: Commitment,
+    *,
+    origin_evidence_capture_state: str | None = None,
+    closure_evidence_capture_state: str | None = None,
+) -> CommitmentListEntry:
     return CommitmentListEntry(
         commitment_id=commitment.commitment_id,
         direction=commitment.direction.value,
@@ -1440,6 +1545,8 @@ def _commitment_list_entry(commitment: Commitment) -> CommitmentListEntry:
         created_at=commitment.created_at.isoformat(),
         updated_at=commitment.updated_at.isoformat(),
         version=commitment.version,
+        origin_evidence_capture_state=origin_evidence_capture_state,
+        closure_evidence_capture_state=closure_evidence_capture_state,
     )
 
 
@@ -1472,9 +1579,18 @@ def _counterparty_options(
 
 
 def _commitment_public_view(
-    unit_of_work: UnitOfWork, principal_id: str, commitment: Commitment
+    unit_of_work: UnitOfWork,
+    principal_id: str,
+    commitment: Commitment,
+    *,
+    states: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
-    result = _commitment_view(commitment).to_canonical_dict()
+    resolved = {} if states is None else states
+    result = _commitment_view(
+        commitment,
+        origin_evidence_capture_state=_ref_state(resolved, commitment.origin_evidence_ref),
+        closure_evidence_capture_state=_ref_state(resolved, commitment.closure_evidence_ref),
+    ).to_canonical_dict()
     result["counterparty"] = _counterparty_projection(
         unit_of_work, principal_id, commitment.counterparty_person_id
     )
@@ -1482,9 +1598,18 @@ def _commitment_public_view(
 
 
 def _commitment_public_list_entry(
-    unit_of_work: UnitOfWork, principal_id: str, commitment: Commitment
+    unit_of_work: UnitOfWork,
+    principal_id: str,
+    commitment: Commitment,
+    *,
+    states: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
-    result = _commitment_list_entry(commitment).to_canonical_dict()
+    resolved = {} if states is None else states
+    result = _commitment_list_entry(
+        commitment,
+        origin_evidence_capture_state=_ref_state(resolved, commitment.origin_evidence_ref),
+        closure_evidence_capture_state=_ref_state(resolved, commitment.closure_evidence_ref),
+    ).to_canonical_dict()
     result["counterparty"] = _counterparty_projection(
         unit_of_work, principal_id, commitment.counterparty_person_id
     )
@@ -1779,7 +1904,12 @@ def _validate_task_commitment_state(
         raise NotFoundError(SafeDetail.COMMITMENT_ID)
 
 
-def _commitment_history_view(entry: CommitmentHistoryEntry) -> CommitmentHistoryEntryView:
+def _commitment_history_view(
+    entry: CommitmentHistoryEntry,
+    *,
+    origin_evidence_capture_state: str | None = None,
+    closure_evidence_capture_state: str | None = None,
+) -> CommitmentHistoryEntryView:
     return CommitmentHistoryEntryView(
         history_id=entry.history_id,
         commitment_id=entry.commitment_id,
@@ -1790,6 +1920,8 @@ def _commitment_history_view(entry: CommitmentHistoryEntry) -> CommitmentHistory
         after_version=entry.after_version,
         occurred_at=entry.occurred_at.isoformat(),
         recorded_at=entry.recorded_at.isoformat(),
+        origin_evidence_capture_state=origin_evidence_capture_state,
+        closure_evidence_capture_state=closure_evidence_capture_state,
     )
 
 
@@ -1946,6 +2078,8 @@ def _entity_authoring_translated() -> Iterator[None]:
         failure = ConflictError(SafeDetail.DUPLICATE_FACT)
     except EntityEvidenceError:
         failure = InvalidRequestError(SafeDetail.EVIDENCE_INVALID)
+    except CaptureWithdrawnError:
+        failure = DeniedError(SafeDetail.CAPTURE_WITHDRAWN)
     except NormalizationError:
         failure = InvalidRequestError(SafeDetail.DISPLAY_VALUE)
     if failure is not None:
@@ -1986,6 +2120,8 @@ def _directed_translated() -> Iterator[None]:
         yield
     except UnknownScopeError:
         failure = NotFoundError(SafeDetail.SUBJECT)
+    except CaptureWithdrawnError:
+        failure = DeniedError(SafeDetail.CAPTURE_WITHDRAWN)
     except StaleDirectedVersionError:
         failure = ConflictError(SafeDetail.EXPECTED_VERSION)
     except DuplicateDirectedFactError:
@@ -2142,6 +2278,8 @@ def _entity_governance_translated() -> Iterator[None]:
         failure = InvalidRequestError(SafeDetail.OBSERVED_AT)
     except ObservationAuthorityError:
         failure = InvalidRequestError(SafeDetail.OBSERVATION_AUTHORITY)
+    except CaptureWithdrawnError:
+        failure = DeniedError(SafeDetail.CAPTURE_WITHDRAWN)
     except ProposalPayloadError:
         # `WP-RI-B-05`. A payload that names a field its kind's command does not
         # take, omits one the kind requires, carries a server-owned name, or
@@ -2506,7 +2644,9 @@ def _resolution_view(answer: EntityResolution) -> dict[str, object]:
     }
 
 
-def _context_card_view(card: EntityContextCard) -> dict[str, object]:
+def _context_card_view(
+    card: EntityContextCard, *, lifecycle_states: Mapping[str, str] | None = None
+) -> dict[str, object]:
     """One context card as the wire sees it.
 
     `coverage` and `limitations` come before the records in reading order for the
@@ -2553,7 +2693,10 @@ def _context_card_view(card: EntityContextCard) -> dict[str, object]:
         "relationships": [
             _relationship_view(edge, card.assembled_at) for edge in card.relationships
         ],
-        "observations": [_observation_view(item) for item in card.observations],
+        "observations": [
+            _with_product_owned_lifecycle(_observation_view(item), item, lifecycle_states or {})
+            for item in card.observations
+        ],
         "memories": [
             {
                 "memory_id": held.memory.memory_id,
@@ -2569,6 +2712,45 @@ def _context_card_view(card: EntityContextCard) -> dict[str, object]:
             for held in card.memories
         ],
     }
+
+
+def _product_owned_capture_id(observation: EntityObservation) -> str | None:
+    """The capture root a product-owned observation points at, or None."""
+    if origin_of(observation.source_id) is not ObservationOrigin.PRODUCT_OWNED_CAPTURE:
+        return None
+    try:
+        kind, suffix = parse_identifier(observation.source_object_id)
+    except InvalidIdentifierError:
+        return None
+    if kind is not IdKind.SOURCE_OBJECT:
+        return None
+    return make_identifier(IdKind.CAPTURE, suffix)
+
+
+def _observation_lifecycle_states(
+    unit_of_work: UnitOfWork, principal_id: str, observations: Iterable[EntityObservation]
+) -> Mapping[str, str]:
+    capture_ids = tuple(
+        dict.fromkeys(
+            capture_id
+            for item in observations
+            if (capture_id := _product_owned_capture_id(item)) is not None
+        )
+    )
+    if not capture_ids:
+        return {}
+    found = unit_of_work.captures.lifecycle_states(principal_id, capture_ids)
+    return {capture_id: state.value for capture_id, state in found.items()}
+
+
+def _with_product_owned_lifecycle(
+    view: dict[str, object], observation: EntityObservation, states: Mapping[str, str]
+) -> dict[str, object]:
+    capture_id = _product_owned_capture_id(observation)
+    if capture_id is None:
+        return view
+    view["capture_lifecycle_state"] = states.get(capture_id)
+    return view
 
 
 def _observation_view(observation: EntityObservation) -> dict[str, object]:
@@ -4015,10 +4197,13 @@ class ApplicationService:
         layer receives one boolean and therefore cannot accidentally expose
         capture or assertion content in a Work response or error.
         """
-        with _translated():
-            valid = unit_of_work.captures.accepts_work_evidence_reference(
-                reference, principal_id=principal_id
-            )
+        try:
+            with _translated():
+                valid = unit_of_work.captures.accepts_work_evidence_reference(
+                    reference, principal_id=principal_id
+                )
+        except CaptureWithdrawnError:
+            raise DeniedError(SafeDetail.CAPTURE_WITHDRAWN) from None
         if not valid:
             raise InvalidRequestError(SafeDetail.INVALID_EVIDENCE_REFERENCE)
 
@@ -4674,6 +4859,64 @@ class ApplicationService:
             display_label=command.display_label,
         )
 
+    def _capture_transition(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ArchiveCapture | RestoreCapture,
+        operation: CaptureLifecycleOperation,
+    ) -> _Result:
+        """Archive or restore one owned root and answer with the original receipt.
+
+        The use case owns the lock, the receipt and the Record Event. A foreign
+        root and an absent one are both `not_found`. The reason stays on the
+        command and does not enter the public payload.
+        """
+        with _translated():
+            result = transition_capture(
+                unit_of_work,
+                authorization,
+                operation=operation,
+                capture_id=command.capture_id,
+                expected_lifecycle_revision=command.expected_lifecycle_revision,
+                reason=command.reason,
+                idempotency_key=command.idempotency_key,
+                now=self._clock(),
+            )
+        receipt = result.receipt
+        return _Result(
+            payload=CaptureLifecycleReceiptView(
+                receipt_id=receipt.receipt_id,
+                capture_id=receipt.capture_id,
+                owner_principal_id=receipt.owner_principal_id,
+                operation=receipt.operation,
+                outcome=receipt.outcome,
+                expected_lifecycle_revision=receipt.expected_lifecycle_revision,
+                resulting_lifecycle_revision=receipt.resulting_lifecycle_revision,
+                event_id=receipt.event_id,
+                issued_at=receipt.issued_at,
+                correlation_id=receipt.correlation_id,
+                audit_id=receipt.audit_id,
+                idempotency_key=receipt.idempotency_key,
+                replayed=result.replayed,
+            ).to_canonical_dict(),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_CAPTURE_TRUST_BASIS),
+        )
+
+    def _capture_archive(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ArchiveCapture
+    ) -> _Result:
+        return self._capture_transition(
+            unit_of_work, authorization, command, CaptureLifecycleOperation.ARCHIVE
+        )
+
+    def _capture_restore(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: RestoreCapture
+    ) -> _Result:
+        return self._capture_transition(
+            unit_of_work, authorization, command, CaptureLifecycleOperation.RESTORE
+        )
+
     def _capture_revise(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReviseCapture
     ) -> _Result:
@@ -4723,9 +4966,31 @@ class ApplicationService:
             current = unit_of_work.captures.version(command.capture_id, principal_id=principal_id)
         if version is None or current is None:
             raise NotFoundError(SafeDetail.CAPTURE_ID)
-        view = _capture_version_view(version, is_current=version.version_id == current.version_id)
+        # CRL-WP-03 (D-4, CW-013): the root's *current* lifecycle, whichever
+        # version was named, and the bounded history only when asked for.
+        history: tuple[CaptureLifecycleEvent, ...] | None = None
+        with _translated():
+            lifecycle = unit_of_work.capture_lifecycle.latest(
+                command.capture_id, principal_id=principal_id
+            )
+            if command.include_lifecycle_history:
+                history = unit_of_work.capture_lifecycle.history(
+                    command.capture_id,
+                    principal_id=principal_id,
+                    limit=MAX_LIFECYCLE_HISTORY,
+                )
+        view = _capture_version_view(
+            version,
+            is_current=version.version_id == current.version_id,
+            lifecycle=lifecycle,
+            history=history,
+        )
+        payload = view.to_canonical_dict()
+        if history is None:
+            payload.pop("lifecycle_history", None)
+            payload.pop("lifecycle_history_truncated", None)
         return _Result(
-            payload=view.to_canonical_dict(),
+            payload=payload,
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_CAPTURE_TRUST_BASIS),
         )
 
@@ -4740,12 +5005,18 @@ class ApplicationService:
         than a guess, exactly as `sources.list` does it.
         """
         page_size = self._page_size(command.page_size)
+        principal_id = authorization.principal.principal_id
         with _translated():
             found = unit_of_work.captures.captures(
-                limit=page_size + 1, principal_id=authorization.principal.principal_id
+                limit=page_size + 1, principal_id=principal_id, lifecycle=command.lifecycle
             )
         truncated = len(found) > page_size
         page = found[:page_size]
+        # CRL-WP-03 (D-4): the page's current lifecycle, in one statement.
+        with _translated():
+            states = unit_of_work.capture_lifecycle.latest_many(
+                tuple(summary.capture_id for summary in page), principal_id=principal_id
+            )
         return _Result(
             payload={
                 "captures": [
@@ -4759,6 +5030,9 @@ class ApplicationService:
                         latest_recorded_at=summary.latest_recorded_at,
                         display_label=summary.display_label,
                         project_id=summary.project_id,
+                        lifecycle_state=states[summary.capture_id].state,
+                        lifecycle_revision=states[summary.capture_id].revision,
+                        archived_at=states[summary.capture_id].archived_at,
                     ).to_canonical_dict()
                     for summary in page
                 ]
@@ -4814,7 +5088,9 @@ class ApplicationService:
         request: CaptureSearchRequest | None = None
         failure: ApplicationError | None = None
         try:
-            request = CaptureSearchRequest(query=SearchQuery(command.query), limit=page_size)
+            request = CaptureSearchRequest(
+                query=SearchQuery(command.query), limit=page_size, lifecycle=command.lifecycle
+            )
         except EmptySearchQueryError:
             # The query normalized to terms but yielded no lexemes — a different
             # answer from "the search found nothing", which section 9.7 forbids
@@ -4837,6 +5113,15 @@ class ApplicationService:
         if outcome is None:  # pragma: no cover - `_translated` raises or the call returns
             raise InternalError()
 
+        # CRL-WP-03 (P-3): a match's current lifecycle is published only when the
+        # caller opted beyond the active default, where it can differ per match.
+        states: Mapping[str, CaptureLifecycleProjection] = {}
+        if command.lifecycle is not CaptureLifecycleSelector.ACTIVE:
+            with _translated():
+                states = unit_of_work.capture_lifecycle.latest_many(
+                    tuple(match.capture_id for match in outcome.matches),
+                    principal_id=authorization.principal.principal_id,
+                )
         limitations: tuple[Limitation, ...] = (Limitation.CAPTURE_SEARCH_DOES_NOT_STEM,)
         if outcome.searchable_versions != outcome.stored_versions:
             limitations = (*limitations, Limitation.CAPTURE_SEARCH_EXCLUDES_SUPERSEDED)
@@ -4853,6 +5138,11 @@ class ApplicationService:
                         "recorded_at": format_rfc3339(match.recorded_at),
                         "display_label": match.display_label,
                         "project_id": match.project_id,
+                        **(
+                            {"lifecycle_state": states[match.capture_id].state.value}
+                            if states
+                            else {}
+                        ),
                     }
                     for match in outcome.matches
                 ],
@@ -5014,6 +5304,21 @@ class ApplicationService:
         if reveal is None:
             raise NotFoundError(SafeDetail.SUBJECT)
         view = RevealView.of(reveal)
+        if reveal.capture_id is not None:
+            with _translated():
+                resolved = unit_of_work.captures.lifecycle_states(
+                    authorization.principal.principal_id, (reveal.capture_id,)
+                )
+            label = None if reveal.capture_id not in resolved else resolved[reveal.capture_id].value
+            view = view.model_copy(
+                update={
+                    "capture_lifecycle_state": label,
+                    "versions": tuple(
+                        version.model_copy(update={"capture_lifecycle_state": label})
+                        for version in view.versions
+                    ),
+                }
+            )
         if reveal.state is EvidenceState.UNAVAILABLE:
             assert reveal.gap is not None  # noqa: S101 - `Reveal` refuses the other shape
             return _Result(
@@ -5071,6 +5376,16 @@ class ApplicationService:
             )
         truncated = len(found) > page_size
         page = found[:page_size]
+        capture_ids = tuple(
+            dict.fromkeys(case.capture_id for case in page if isinstance(case, ReviewCase))
+        )
+        with _translated():
+            resolved = (
+                unit_of_work.captures.lifecycle_states(principal_id, capture_ids)
+                if capture_ids
+                else {}
+            )
+        lifecycle_by_capture = {capture_id: state.value for capture_id, state in resolved.items()}
         next_cursor = (
             _encode_review_cursor(
                 binding=binding,
@@ -5081,7 +5396,12 @@ class ApplicationService:
             else None
         )
         return _Result(
-            payload={"review_cases": [_review_case_payload(case) for case in page]},
+            payload={
+                "review_cases": [
+                    _review_case_payload(case, lifecycle_by_capture=lifecycle_by_capture)
+                    for case in page
+                ]
+            },
             disclosure=unenrolled_disclosure(
                 authorization.at,
                 trust_basis=("review_policy",),
@@ -5164,6 +5484,7 @@ class ApplicationService:
         unsupported = False
         denied = False
         invalid = False
+        withdrawn = False
         entity_case: EntityProposalReviewCase | None = None
         with _translated(), _entity_governance_translated():
             try:
@@ -5247,12 +5568,16 @@ class ApplicationService:
                 denied = True
             except ReviewCorrectionError:
                 invalid = True
+            except CaptureWithdrawnError:
+                withdrawn = True
         if conflict:
             raise ConflictError(SafeDetail.EXPECTED_REVIEW_VERSION)
         if unsupported:
             raise UnsupportedError(SafeDetail.DISPOSITION)
         if denied:
             raise DeniedError(SafeDetail.DISPOSITION)
+        if withdrawn:
+            raise DeniedError(SafeDetail.CAPTURE_WITHDRAWN)
         if invalid:
             raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
         if missing:
@@ -6854,8 +7179,12 @@ class ApplicationService:
             )
         if card is None:
             raise NotFoundError(SafeDetail.TARGET_ID)
+        with _translated():
+            observation_states = _observation_lifecycle_states(
+                unit_of_work, authorization.principal.principal_id, card.observations
+            )
         return _Result(
-            payload={"context_card": _context_card_view(card)},
+            payload={"context_card": _context_card_view(card, lifecycle_states=observation_states)},
             disclosure=unenrolled_disclosure(
                 authorization.at,
                 trust_basis=_ENTITY_TRUST_BASIS,
@@ -6924,8 +7253,17 @@ class ApplicationService:
             )
         truncated = len(found) > page_size
         page = found[:page_size]
+        with _translated():
+            observation_states = _observation_lifecycle_states(unit_of_work, principal_id, page)
         return _Result(
-            payload={"mentions": [_unresolved_mention_view(item) for item in page]},
+            payload={
+                "mentions": [
+                    _with_product_owned_lifecycle(
+                        _unresolved_mention_view(item), item, observation_states
+                    )
+                    for item in page
+                ]
+            },
             disclosure=unenrolled_disclosure(
                 authorization.at,
                 trust_basis=_ENTITY_TRUST_BASIS,
@@ -6973,8 +7311,17 @@ class ApplicationService:
             )
         truncated = len(found) > page_size
         page = found[:page_size]
+        with _translated():
+            observation_states = _observation_lifecycle_states(unit_of_work, principal_id, page)
         return _Result(
-            payload={"observations": [_recorded_observation_view(item) for item in page]},
+            payload={
+                "observations": [
+                    _with_product_owned_lifecycle(
+                        _recorded_observation_view(item), item, observation_states
+                    )
+                    for item in page
+                ]
+            },
             disclosure=unenrolled_disclosure(
                 authorization.at,
                 trust_basis=_ENTITY_TRUST_BASIS,
@@ -8683,7 +9030,17 @@ class ApplicationService:
             task = unit_of_work.tasks.get(authorization.principal.principal_id, command.task_id)
         if task is None:
             raise NotFoundError(SafeDetail.TASK_ID)
-        task_payload = _task_view(task).to_canonical_dict()
+        with _translated():
+            states = _evidence_capture_states(
+                unit_of_work,
+                authorization.principal.principal_id,
+                (task.origin_evidence_ref, task.closure_evidence_ref),
+            )
+        task_payload = _task_view(
+            task,
+            origin_evidence_capture_state=_ref_state(states, task.origin_evidence_ref),
+            closure_evidence_capture_state=_ref_state(states, task.closure_evidence_ref),
+        ).to_canonical_dict()
         if task.closure_evidence_ref is not None:
             with _translated():
                 closure = unit_of_work.tasks.latest_applied_terminal_history(
@@ -8733,7 +9090,24 @@ class ApplicationService:
             )
         truncated = len(found) > page_size
         page = found[:page_size]
-        entries = [_task_list_entry(task).to_canonical_dict() for task in page]
+        with _translated():
+            states = _evidence_capture_states(
+                unit_of_work,
+                authorization.principal.principal_id,
+                (
+                    reference
+                    for task in page
+                    for reference in (task.origin_evidence_ref, task.closure_evidence_ref)
+                ),
+            )
+        entries = [
+            _task_list_entry(
+                task,
+                origin_evidence_capture_state=_ref_state(states, task.origin_evidence_ref),
+                closure_evidence_capture_state=_ref_state(states, task.closure_evidence_ref),
+            ).to_canonical_dict()
+            for task in page
+        ]
         return _Result(
             payload={"tasks": entries},
             disclosure=unenrolled_disclosure(
@@ -8783,7 +9157,24 @@ class ApplicationService:
             )
         truncated = len(found) > page_size
         page = found[:page_size]
-        entries = [_task_list_entry(task).to_canonical_dict() for task in page]
+        with _translated():
+            states = _evidence_capture_states(
+                unit_of_work,
+                authorization.principal.principal_id,
+                (
+                    reference
+                    for task in page
+                    for reference in (task.origin_evidence_ref, task.closure_evidence_ref)
+                ),
+            )
+        entries = [
+            _task_list_entry(
+                task,
+                origin_evidence_capture_state=_ref_state(states, task.origin_evidence_ref),
+                closure_evidence_capture_state=_ref_state(states, task.closure_evidence_ref),
+            ).to_canonical_dict()
+            for task in page
+        ]
         return _Result(
             payload={"tasks": entries},
             disclosure=unenrolled_disclosure(
@@ -8905,9 +9296,23 @@ class ApplicationService:
                 )
         except TaskIdempotencyConflictError:
             raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
+        with _translated():
+            states = _evidence_capture_states(
+                unit_of_work,
+                principal_id,
+                (receipt.task.origin_evidence_ref, receipt.task.closure_evidence_ref),
+            )
         return _Result(
             payload={
-                "task": _task_view(receipt.task).to_canonical_dict(),
+                "task": _task_view(
+                    receipt.task,
+                    origin_evidence_capture_state=_ref_state(
+                        states, receipt.task.origin_evidence_ref
+                    ),
+                    closure_evidence_capture_state=_ref_state(
+                        states, receipt.task.closure_evidence_ref
+                    ),
+                ).to_canonical_dict(),
                 "history": _task_history_view(receipt.history).to_canonical_dict(),
                 "replayed": receipt.replayed,
             },
@@ -8995,9 +9400,23 @@ class ApplicationService:
                 raise InternalError() from None
             raise _CommitRejectedConflictError(ConflictError(SafeDetail.TASK_ID)) from None
 
+        with _translated():
+            states = _evidence_capture_states(
+                unit_of_work,
+                principal_id,
+                (receipt.task.origin_evidence_ref, receipt.task.closure_evidence_ref),
+            )
         return _Result(
             payload={
-                "task": _task_view(receipt.task).to_canonical_dict(),
+                "task": _task_view(
+                    receipt.task,
+                    origin_evidence_capture_state=_ref_state(
+                        states, receipt.task.origin_evidence_ref
+                    ),
+                    closure_evidence_capture_state=_ref_state(
+                        states, receipt.task.closure_evidence_ref
+                    ),
+                ).to_canonical_dict(),
                 "history": _task_history_view(receipt.history).to_canonical_dict(),
                 "replayed": receipt.replayed,
             },
@@ -9065,9 +9484,23 @@ class ApplicationService:
         except TaskIdempotencyConflictError:
             raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
 
+        with _translated():
+            states = _evidence_capture_states(
+                unit_of_work,
+                principal_id,
+                (receipt.task.origin_evidence_ref, receipt.task.closure_evidence_ref),
+            )
         return _Result(
             payload={
-                "task": _task_view(receipt.task).to_canonical_dict(),
+                "task": _task_view(
+                    receipt.task,
+                    origin_evidence_capture_state=_ref_state(
+                        states, receipt.task.origin_evidence_ref
+                    ),
+                    closure_evidence_capture_state=_ref_state(
+                        states, receipt.task.closure_evidence_ref
+                    ),
+                ).to_canonical_dict(),
                 "history": _task_history_view(receipt.history).to_canonical_dict(),
                 "replayed": receipt.replayed,
             },
@@ -9392,10 +9825,20 @@ class ApplicationService:
         if commitment is None:
             raise NotFoundError(SafeDetail.COMMITMENT_ID)
         with _translated():
-            public = _commitment_public_view(unit_of_work, principal_id, commitment)
             follow_up = unit_of_work.tasks.get_follow_up_for_commitment(
                 principal_id, command.commitment_id
             )
+            states = _evidence_capture_states(
+                unit_of_work,
+                principal_id,
+                (
+                    commitment.origin_evidence_ref,
+                    commitment.closure_evidence_ref,
+                    None if follow_up is None else follow_up.origin_evidence_ref,
+                    None if follow_up is None else follow_up.closure_evidence_ref,
+                ),
+            )
+            public = _commitment_public_view(unit_of_work, principal_id, commitment, states=states)
             counterparty_options, counterparty_options_truncated = _counterparty_options(
                 unit_of_work, principal_id
             )
@@ -9403,7 +9846,17 @@ class ApplicationService:
             payload={
                 "commitment": public,
                 "follow_up_task": (
-                    None if follow_up is None else _task_list_entry(follow_up).to_canonical_dict()
+                    None
+                    if follow_up is None
+                    else _task_list_entry(
+                        follow_up,
+                        origin_evidence_capture_state=_ref_state(
+                            states, follow_up.origin_evidence_ref
+                        ),
+                        closure_evidence_capture_state=_ref_state(
+                            states, follow_up.closure_evidence_ref
+                        ),
+                    ).to_canonical_dict()
                 ),
                 "counterparty_options": counterparty_options,
                 "counterparty_options_truncated": counterparty_options_truncated,
@@ -9449,7 +9902,19 @@ class ApplicationService:
         truncated = len(found) > page_size
         page = found[:page_size]
         with _translated():
-            entries = [_commitment_public_list_entry(unit_of_work, principal_id, c) for c in page]
+            states = _evidence_capture_states(
+                unit_of_work,
+                principal_id,
+                (
+                    reference
+                    for item in page
+                    for reference in (item.origin_evidence_ref, item.closure_evidence_ref)
+                ),
+            )
+            entries = [
+                _commitment_public_list_entry(unit_of_work, principal_id, c, states=states)
+                for c in page
+            ]
             counterparty_options, counterparty_options_truncated = _counterparty_options(
                 unit_of_work, principal_id
             )
@@ -9498,8 +9963,18 @@ class ApplicationService:
         truncated = len(found) > page_size
         page = found[:page_size]
         with _translated():
+            states = _evidence_capture_states(
+                unit_of_work,
+                principal_id,
+                (
+                    reference
+                    for item in page
+                    for reference in (item.origin_evidence_ref, item.closure_evidence_ref)
+                ),
+            )
             entries = [
-                _commitment_public_list_entry(unit_of_work, principal_id, item) for item in page
+                _commitment_public_list_entry(unit_of_work, principal_id, item, states=states)
+                for item in page
             ]
             counterparty_options, counterparty_options_truncated = _counterparty_options(
                 unit_of_work, principal_id
@@ -9539,9 +10014,24 @@ class ApplicationService:
             )
         truncated = len(found) > page_size
         page = found[:page_size]
+        with _translated():
+            states = _evidence_capture_states(
+                unit_of_work,
+                principal_id,
+                (commitment.origin_evidence_ref, commitment.closure_evidence_ref),
+            )
+        origin_state = _ref_state(states, commitment.origin_evidence_ref)
+        closure_state = _ref_state(states, commitment.closure_evidence_ref)
         return _Result(
             payload={
-                "history": [_commitment_history_view(item).to_canonical_dict() for item in page]
+                "history": [
+                    _commitment_history_view(
+                        item,
+                        origin_evidence_capture_state=origin_state,
+                        closure_evidence_capture_state=closure_state,
+                    ).to_canonical_dict()
+                    for item in page
+                ]
             },
             disclosure=unenrolled_disclosure(
                 authorization.at,
@@ -9575,8 +10065,19 @@ class ApplicationService:
                 limit=page_size + 1,
             )
         truncated = len(commitments) > page_size
+        page = commitments[:page_size]
+        with _translated():
+            states = _evidence_capture_states(
+                unit_of_work,
+                principal_id,
+                (
+                    reference
+                    for item in page
+                    for reference in (item.origin_evidence_ref, item.closure_evidence_ref)
+                ),
+            )
         entries: list[dict[str, object]] = []
-        for c in commitments[:page_size]:
+        for c in page:
             follow_up_task_id: str | None = None
             follow_up_task_title: str | None = None
             follow_up_task_state: str | None = None
@@ -9597,6 +10098,8 @@ class ApplicationService:
                 follow_up_task_id=follow_up_task_id,
                 follow_up_task_title=follow_up_task_title,
                 follow_up_task_state=follow_up_task_state,
+                origin_evidence_capture_state=_ref_state(states, c.origin_evidence_ref),
+                closure_evidence_capture_state=_ref_state(states, c.closure_evidence_ref),
             ).to_canonical_dict()
             with _translated():
                 entry["counterparty"] = _counterparty_projection(
@@ -9653,7 +10156,14 @@ class ApplicationService:
         except CommitmentIdempotencyConflictError:
             raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
         with _translated():
-            public = _commitment_public_view(unit_of_work, principal_id, receipt.commitment)
+            states = _evidence_capture_states(
+                unit_of_work,
+                principal_id,
+                (receipt.commitment.origin_evidence_ref, receipt.commitment.closure_evidence_ref),
+            )
+            public = _commitment_public_view(
+                unit_of_work, principal_id, receipt.commitment, states=states
+            )
         return _Result(
             payload={
                 "commitment": public,
@@ -9708,7 +10218,14 @@ class ApplicationService:
         except CommitmentIdempotencyConflictError:
             raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
         with _translated():
-            public = _commitment_public_view(unit_of_work, principal_id, receipt.commitment)
+            states = _evidence_capture_states(
+                unit_of_work,
+                principal_id,
+                (receipt.commitment.origin_evidence_ref, receipt.commitment.closure_evidence_ref),
+            )
+            public = _commitment_public_view(
+                unit_of_work, principal_id, receipt.commitment, states=states
+            )
         return _Result(
             payload={
                 "commitment": public,
@@ -9775,7 +10292,14 @@ class ApplicationService:
         except CommitmentIdempotencyConflictError:
             raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
         with _translated():
-            public = _commitment_public_view(unit_of_work, principal_id, receipt.commitment)
+            states = _evidence_capture_states(
+                unit_of_work,
+                principal_id,
+                (receipt.commitment.origin_evidence_ref, receipt.commitment.closure_evidence_ref),
+            )
+            public = _commitment_public_view(
+                unit_of_work, principal_id, receipt.commitment, states=states
+            )
         return _Result(
             payload={
                 "commitment": public,
@@ -11781,6 +12305,12 @@ class ApplicationService:
                 # request to whoever guessed the key. The raise is outside the
                 # handler for the usual reason.
                 conflict = ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+            except CaptureWithdrawnError:
+                # CRL-WP-03 C-1 (MR-C17): a revise of the caller's own archived
+                # Capture. Ownership was decided first by the store, so a foreign
+                # or absent root is still `not_found`; this names only the
+                # caller's own root.
+                conflict = DeniedError(SafeDetail.CAPTURE_WITHDRAWN)
         if conflict is not None:
             raise conflict
         if admission is None:
@@ -13455,6 +13985,8 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.CAPTURE_READ: ApplicationService._capture_read,
         Capability.CAPTURE_LIST: ApplicationService._capture_list,
         Capability.CAPTURE_SEARCH: ApplicationService._capture_search,
+        Capability.CAPTURE_ARCHIVE: ApplicationService._capture_archive,
+        Capability.CAPTURE_RESTORE: ApplicationService._capture_restore,
         Capability.CANVAS_WORKSPACE_GET: ApplicationService._canvas_workspace_get,
         Capability.CANVAS_WORKSPACE_PUT: ApplicationService._canvas_workspace_put,
         Capability.REVIEW_LIST: ApplicationService._review_list,

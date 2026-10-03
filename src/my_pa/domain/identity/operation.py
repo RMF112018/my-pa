@@ -86,6 +86,13 @@ class Capability(StrEnum):
     # (`docs/specs/quick-capture/18_PROPOSED_API_AND_CONTRACT_PACKAGE.md:334`),
     # and two segments of `noun.verb` is the rule the four above follow.
     CAPTURE_SEARCH = "capture.search"
+    # CRL-WP-03. Archive withdraws an owned root without deleting it; restore
+    # returns it under then-current policy. Both are `capture_authoring` writes
+    # and neither is additive, so the generated MCP tool carries
+    # `destructive_hint`. The audit check that admits these capability tokens is restated
+    # in place in revision `0641c354ca85` (MR-C20).
+    CAPTURE_ARCHIVE = "capture.archive"
+    CAPTURE_RESTORE = "capture.restore"
     # `review.list` and `review.decide` are the fourteenth and fifteenth, and
     # `3c8f1e2a5b74` already carries the forward `ALTER` that admits them — the
     # freeze is written before the members, because a member with no `ALTER`
@@ -1047,6 +1054,10 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         # would separate nothing — it would map to exactly one capability — while
         # costing another frozen-constraint `ALTER` on `purpose_is_known`.
         Capability.CAPTURE_SEARCH: frozenset({Purpose.CAPTURE_REVIEW}),
+        # Archive and restore are authoring of a root the Principal already
+        # owns. No new purpose: `capture_authoring` already admits the write.
+        Capability.CAPTURE_ARCHIVE: frozenset({Purpose.CAPTURE_AUTHORING}),
+        Capability.CAPTURE_RESTORE: frozenset({Purpose.CAPTURE_AUTHORING}),
         # `review.list` maps to `CAPTURE_REVIEW` and `review.decide` to a purpose
         # of its own; both land with the capabilities themselves, for the reason
         # the enum above records.
@@ -1449,6 +1460,8 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.SOURCES_ENROLL,
         Capability.CAPTURE_CREATE,
         Capability.CAPTURE_REVISE,
+        Capability.CAPTURE_ARCHIVE,
+        Capability.CAPTURE_RESTORE,
         Capability.REVIEW_DECIDE,
         Capability.CONTINUITY_PROJECTS_CREATE,
         Capability.CONTINUITY_PROJECTS_UPDATE,

@@ -26,7 +26,7 @@ from my_pa.infrastructure.persistence.tables import project_entity_links, projec
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "9f2c8a1d4e70"
-CURRENT_HEAD: Final = "c8e4a1b70d35"
+CURRENT_HEAD: Final = "0641c354ca85"
 PREVIOUS_REVISION: Final = "de5ec1c65857"
 MIGRATION: Final = (
     ROOT / "migrations" / "versions" / "20260913_9f2c8a1d4e70_project_version_and_entity_bridge.py"

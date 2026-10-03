@@ -102,6 +102,12 @@ from my_pa.domain.capture.context import (
     ContextLinkTarget,
 )
 from my_pa.domain.capture.display_label import MAX_DISPLAY_LABEL_CHARACTERS
+from my_pa.domain.capture.lifecycle import (
+    CaptureLifecycleOperation,
+    CaptureLifecycleOutcome,
+    CaptureLifecycleState,
+    CaptureReasonCategory,
+)
 from my_pa.domain.capture.pipeline import (
     MAX_PIPELINE_VERSION_CHARACTERS,
     PipelineStage,
@@ -1030,8 +1036,15 @@ audit_events = Table(
 #: chain whose whole guarantee is that it has no mutation path. The current
 #: version is `max(version_number)` over `capture_versions` for this capture — a
 #: read of the rows themselves, which cannot disagree with them. Withdrawal and
-#: archive (`ADR-003` clause 3) are out of scope for this package and are absent
-#: rather than declared and unreachable.
+#: archive (`ADR-003` clause 3, CRL-WP-03) keep the same rule: the root's
+#: lifecycle is not a column here but a projection of the append-only
+#: `capture_lifecycle_events` history declared below, exactly as the current
+#: version is a projection of the version chain. Revision `0641c354ca85` adds
+#: one database-only constraint to this table -- `UNIQUE (capture_id,
+#: owner_principal_id)`, the target of the lifecycle tables' same-owner foreign
+#: keys -- by ALTER, and deliberately not here: historical revision
+#: `1a4c9e77b2d5` builds this table from this declaration, so declaring it here
+#: would change what that revision emits.
 #:
 #: `owner_principal_id` is stored because `ADR-003` clause 6 requires every
 #: stored record to bind its owning principal. It is the Principal partition
@@ -1371,6 +1384,221 @@ capture_jobs = Table(
         "state",
         "next_attempt_at",
         "created_at",
+    ),
+)
+
+# --- CRL-WP-03: the Capture root lifecycle (archive / restore) ------------------
+#
+# Two append-only tables, created by revision `0641c354ca85` with the
+# append-only triggers a `Table` cannot declare. A root with no event is active
+# at lifecycle revision 0; every event increments the revision by one, and the
+# alternation (odd revisions archive, even ones restore, from active/0) is
+# declared rather than trusted to the writer. `domain.capture.lifecycle`
+# restates every rule here so the two can be compared.
+#
+# Same-owner protection is declarative: both tables reference
+# `captures (capture_id, owner_principal_id)`, a UNIQUE the revision adds to
+# `captures` by ALTER (see the `captures` comment for why it is not declared
+# there), so no lifecycle row can name a root under another Principal.
+#
+# The same revision also adds two database-only columns to `capture_jobs` --
+# `lease_generation` and `pause_cause` -- by ALTER (MR-C05). They are not
+# declared on `capture_jobs` above because historical revision `1a4c9e77b2d5`
+# creates that table from its live declaration; the lifecycle repository reaches
+# them through a metadata-free runtime projection instead.
+#
+# Neither table stores a reason: the caller's reason is bound by `intent_digest`
+# and recorded only as the single category `owner_stated` (MR-C10, CW-018).
+
+capture_lifecycle_events = Table(
+    "capture_lifecycle_events",
+    METADATA,
+    Column("event_id", Text, primary_key=True),
+    Column("owner_principal_id", Text, nullable=False),
+    Column("capture_id", Text, nullable=False),
+    Column("lifecycle_revision", Integer, nullable=False),
+    Column("operation", Text, nullable=False),
+    Column("resulting_state", Text, nullable=False),
+    Column("predecessor_event_id", Text),
+    Column("predecessor_revision", Integer),
+    Column("transitioned_at", DateTime(timezone=True), nullable=False),
+    Column("intent_digest", Text, nullable=False),
+    Column("correlation_id", Text, nullable=False),
+    Column("audit_id", Text, nullable=False),
+    Column("reason_category", Text, nullable=False),
+    _is_identifier("event_id", IdKind.CAPTURE_LIFECYCLE_EVENT),
+    _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
+    _is_identifier("capture_id", IdKind.CAPTURE),
+    _is_identifier("predecessor_event_id", IdKind.CAPTURE_LIFECYCLE_EVENT),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    _is_identifier("audit_id", IdKind.AUDIT),
+    _one_of("operation", CaptureLifecycleOperation, name="a_capture_lifecycle_operation_is_known"),
+    _one_of("resulting_state", CaptureLifecycleState, name="a_capture_lifecycle_state_is_known"),
+    _one_of(
+        "reason_category",
+        CaptureReasonCategory,
+        name="a_capture_lifecycle_reason_category_is_known",
+    ),
+    _matches(
+        "intent_digest", DIGEST_PATTERN.pattern, name="a_capture_lifecycle_intent_is_a_digest"
+    ),
+    CheckConstraint("lifecycle_revision >= 1", name="a_capture_lifecycle_revision_is_positive"),
+    # Both halves of the predecessor or neither. The self-reference below is
+    # MATCH SIMPLE, so a half-null predecessor would escape it.
+    CheckConstraint(
+        "(predecessor_event_id IS NULL) = (predecessor_revision IS NULL)",
+        name="a_capture_lifecycle_predecessor_is_whole",
+    ),
+    CheckConstraint(
+        "(lifecycle_revision = 1) = (predecessor_event_id IS NULL)",
+        name="only_the_first_capture_lifecycle_event_has_no_predecessor",
+    ),
+    CheckConstraint(
+        "predecessor_revision IS NULL OR predecessor_revision = lifecycle_revision - 1",
+        name="a_capture_lifecycle_predecessor_is_the_prior_revision",
+    ),
+    CheckConstraint(
+        "(lifecycle_revision % 2 = 1) = (operation = 'archive')",
+        name="odd_capture_lifecycle_revisions_archive",
+    ),
+    CheckConstraint(
+        "(operation = 'archive') = (resulting_state = 'archived')",
+        name="a_capture_archive_results_in_archived",
+    ),
+    UniqueConstraint(
+        "owner_principal_id",
+        "capture_id",
+        "lifecycle_revision",
+        name="one_capture_lifecycle_event_per_revision",
+    ),
+    UniqueConstraint(
+        "event_id",
+        "owner_principal_id",
+        "capture_id",
+        "lifecycle_revision",
+        name="a_capture_lifecycle_event_is_identified_within_its_root",
+    ),
+    UniqueConstraint(
+        "event_id",
+        "owner_principal_id",
+        "capture_id",
+        "lifecycle_revision",
+        "operation",
+        name="a_capture_lifecycle_event_is_identified_with_its_operation",
+    ),
+    ForeignKeyConstraint(
+        ["predecessor_event_id", "owner_principal_id", "capture_id", "predecessor_revision"],
+        [
+            f"{SCHEMA}.capture_lifecycle_events.event_id",
+            f"{SCHEMA}.capture_lifecycle_events.owner_principal_id",
+            f"{SCHEMA}.capture_lifecycle_events.capture_id",
+            f"{SCHEMA}.capture_lifecycle_events.lifecycle_revision",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="a_capture_lifecycle_predecessor_is_an_event_of_its_root",
+    ),
+    ForeignKeyConstraint(
+        ["capture_id", "owner_principal_id"],
+        [f"{SCHEMA}.captures.capture_id", f"{SCHEMA}.captures.owner_principal_id"],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="a_capture_lifecycle_event_names_a_capture_of_its_owner",
+    ),
+)
+
+#: One row per idempotency key: the original outcome of one archive or restore
+#: request. A replay returns this row; it is never rewritten (CW-008). The
+#: honest-outcome CHECKs make a fabricated mutation unrepresentable: APPLIED
+#: moves the revision by exactly one and names its event, NO_OP moves nothing
+#: and names the latest event of its own operation except at revision 0.
+capture_lifecycle_receipts = Table(
+    "capture_lifecycle_receipts",
+    METADATA,
+    Column("receipt_id", Text, primary_key=True),
+    Column("owner_principal_id", Text, nullable=False),
+    Column("idempotency_key", Text, nullable=False),
+    Column("capture_id", Text, nullable=False),
+    Column("operation", Text, nullable=False),
+    Column("intent_digest", Text, nullable=False),
+    Column("expected_lifecycle_revision", Integer, nullable=False),
+    Column("resulting_lifecycle_revision", Integer, nullable=False),
+    Column("outcome", Text, nullable=False),
+    Column("event_id", Text),
+    Column("issued_at", DateTime(timezone=True), nullable=False),
+    Column("correlation_id", Text, nullable=False),
+    Column("audit_id", Text, nullable=False),
+    _is_identifier("receipt_id", IdKind.CAPTURE_LIFECYCLE_RECEIPT),
+    _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
+    _is_identifier("capture_id", IdKind.CAPTURE),
+    _is_identifier("event_id", IdKind.CAPTURE_LIFECYCLE_EVENT),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    _is_identifier("audit_id", IdKind.AUDIT),
+    _one_of(
+        "operation",
+        CaptureLifecycleOperation,
+        name="a_capture_lifecycle_receipt_operation_is_known",
+    ),
+    _one_of("outcome", CaptureLifecycleOutcome, name="a_capture_lifecycle_outcome_is_known"),
+    _matches(
+        "intent_digest",
+        DIGEST_PATTERN.pattern,
+        name="a_capture_lifecycle_receipt_intent_is_a_digest",
+    ),
+    CheckConstraint(
+        f"length(idempotency_key) BETWEEN 1 AND {MAX_IDEMPOTENCY_KEY_CHARACTERS}",
+        name="a_capture_lifecycle_receipt_records_a_bounded_key",
+    ),
+    CheckConstraint(
+        "expected_lifecycle_revision >= 0 AND resulting_lifecycle_revision >= 0",
+        name="capture_lifecycle_receipt_revisions_are_not_negative",
+    ),
+    CheckConstraint(
+        "(outcome = 'applied') = (resulting_lifecycle_revision = expected_lifecycle_revision + 1)",
+        name="an_applied_capture_lifecycle_receipt_moves_the_revision_by_one",
+    ),
+    CheckConstraint(
+        "outcome <> 'no_op' OR resulting_lifecycle_revision = expected_lifecycle_revision",
+        name="a_no_op_capture_lifecycle_receipt_moves_nothing",
+    ),
+    CheckConstraint(
+        "outcome <> 'applied' OR event_id IS NOT NULL",
+        name="an_applied_capture_lifecycle_receipt_names_its_event",
+    ),
+    CheckConstraint(
+        "outcome <> 'no_op' OR ((expected_lifecycle_revision = 0) = (event_id IS NULL))",
+        name="a_no_op_capture_lifecycle_receipt_names_the_latest_event",
+    ),
+    UniqueConstraint(
+        "owner_principal_id",
+        "idempotency_key",
+        name="a_capture_lifecycle_key_admits_one_request_per_principal",
+    ),
+    ForeignKeyConstraint(
+        ["capture_id", "owner_principal_id"],
+        [f"{SCHEMA}.captures.capture_id", f"{SCHEMA}.captures.owner_principal_id"],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="a_capture_lifecycle_receipt_names_a_capture_of_its_owner",
+    ),
+    ForeignKeyConstraint(
+        [
+            "event_id",
+            "owner_principal_id",
+            "capture_id",
+            "resulting_lifecycle_revision",
+            "operation",
+        ],
+        [
+            f"{SCHEMA}.capture_lifecycle_events.event_id",
+            f"{SCHEMA}.capture_lifecycle_events.owner_principal_id",
+            f"{SCHEMA}.capture_lifecycle_events.capture_id",
+            f"{SCHEMA}.capture_lifecycle_events.lifecycle_revision",
+            f"{SCHEMA}.capture_lifecycle_events.operation",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="a_capture_lifecycle_receipt_names_its_root_event",
     ),
 )
 

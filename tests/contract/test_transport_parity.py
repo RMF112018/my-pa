@@ -977,6 +977,18 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         },
         Capability.CAPTURE_LIST: {"page_size": 10},
         Capability.CAPTURE_SEARCH: {"query": "synthetic", "page_size": 10},
+        Capability.CAPTURE_RESTORE: {
+            "capture_id": capture.capture_id,
+            "expected_lifecycle_revision": 0,
+            "idempotency_key": "parity-capture-restore-0001",
+            "reason": "Synthetic lifecycle withdrawal",
+        },
+        Capability.CAPTURE_ARCHIVE: {
+            "capture_id": capture.capture_id,
+            "expected_lifecycle_revision": 0,
+            "idempotency_key": "parity-capture-archive-0001",
+            "reason": "Synthetic lifecycle withdrawal",
+        },
         # The staged capture, whose derivation has not run in this world, so
         # every transport answers the same `unavailable` reveal rather than
         # the same empty one — which is the parity claim that matters here.
@@ -2037,7 +2049,7 @@ def test_there_are_three_transports_to_compare() -> None:
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
     # The command union and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 180, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 182, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -2782,7 +2794,7 @@ def test_declared_unwired_capabilities_stay_separate_from_positive_parity(
     from my_pa.application.errors import UnsupportedError
 
     assert set(Capability) - set(_HANDLERS) == FUTURE_CAPABILITIES
-    assert len(IMPLEMENTED_CAPABILITIES) == 179
+    assert len(IMPLEMENTED_CAPABILITIES) == 181
     assert set(_BUILDERS) == set(IMPLEMENTED_CAPABILITIES)
     assert {Capability(tool.name) for tool in TOOLS} == set(IMPLEMENTED_CAPABILITIES)
 

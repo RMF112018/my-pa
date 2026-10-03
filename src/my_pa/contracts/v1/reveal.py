@@ -63,6 +63,11 @@ _DIGEST = Field(
 )
 
 
+def _require_lifecycle_label(value: str | None) -> None:
+    if value not in (None, "active", "archived"):
+        raise ValueError("a capture lifecycle state is active, archived, or absent")
+
+
 class RevealSpanView(StrictModel):
     """One exact citation into one stored capture version. Never the quote."""
 
@@ -108,6 +113,7 @@ class RevealVersionView(StrictModel):
     recorded_at: UtcDatetime
     derivation_state: ProcessingState | None = None
     derivation_is_complete: bool
+    capture_lifecycle_state: str | None = None
 
     @model_validator(mode="after")
     def _check(self) -> RevealVersionView:
@@ -115,6 +121,7 @@ class RevealVersionView(StrictModel):
         validate_identifier(self.capture_id, IdKind.CAPTURE)
         if self.derivation_is_complete is not (self.derivation_state is ProcessingState.COMPLETE):
             raise ValueError("a derivation is complete exactly when its stage says so")
+        _require_lifecycle_label(self.capture_lifecycle_state)
         return self
 
 
@@ -216,6 +223,7 @@ class RevealView(StrictModel):
     proposed: tuple[RevealProposalView, ...] = ()
     accepted: tuple[RevealAssertionView, ...] = ()
     versions_with_completed_derivation: int = Field(default=0, ge=0)
+    capture_lifecycle_state: str | None = None
 
     @model_validator(mode="after")
     def _check(self) -> RevealView:
@@ -232,6 +240,7 @@ class RevealView(StrictModel):
             raise ValueError("a reveal claiming no evidence carries none")
         if self.versions_with_completed_derivation > len(self.versions):
             raise ValueError("more versions cannot be derived than exist")
+        _require_lifecycle_label(self.capture_lifecycle_state)
         return self
 
     @classmethod

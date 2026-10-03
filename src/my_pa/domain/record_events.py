@@ -720,6 +720,15 @@ CAPTURE_HEAD_FIELDS: Final = field_set(
     "latest_version_id", "latest_version_number", "supersedes_version_id", "version_count"
 )
 
+#: What every APPLIED capture archive or restore names (CRL-WP-03, plan (b.3)):
+#: the three current-lifecycle read fields, all of which an actual transition
+#: moves -- the state flips, the revision increments, and `archived_at` opens
+#: or closes the archived interval. Never `reason` (narrative, MR-11), a digest
+#: or a key. A NO_OP, replay or refusal stages no event. Create events do not
+#: name these (MR-C03): a new root's active/0/null lifecycle is derived from
+#: the absence of events, the `is_current` precedent above.
+CAPTURE_LIFECYCLE_FIELDS: Final = field_set("archived_at", "lifecycle_revision", "lifecycle_state")
+
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CaptureVersionFacts:
@@ -799,12 +808,21 @@ def capture_record_event(
     receipt_id: str,
     correlation_id: str | None,
 ) -> RecordEventDraft:
-    """The one draft a created capture version stages (E-CAP-1/E-CAP-2).
+    """The one draft a capture write stages (E-CAP-1/E-CAP-2, CRL-WP-03).
 
-    `classification` is the committed version's (OD-W8-5, amending G1-EM-009):
-    a capture event, like a memory event, carries the classification of the
-    version it announces. Every capture admission is the authenticated
-    Principal's own, and no capture plane records an authority.
+    Two writes stage through it. A created capture version (create or revise)
+    stages `created`/`updated` with its own `version_number`. An APPLIED
+    capture archive or restore stages `state_changed` with
+    `changed_fields=CAPTURE_LIFECYCLE_FIELDS`, the lifecycle receipt as
+    `receipt_id`, and the root's *current head* `version_number`, which the
+    transition does not move (MR-C02): `record_version` on a capture
+    `state_changed` event therefore repeats the head's and is not a dedup key.
+
+    `classification` is the announced version's (OD-W8-5, amending
+    G1-EM-009): a capture event, like a memory event, carries the
+    classification of the version it announces -- for a lifecycle event, the
+    current head's. Every capture write is the authenticated Principal's own,
+    and no capture plane records an authority.
     """
     return RecordEventDraft.issue(
         principal_id=principal_id,

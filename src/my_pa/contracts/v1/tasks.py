@@ -55,6 +55,11 @@ __all__ = [
 ]
 
 
+def _require_lifecycle_label(value: str | None) -> None:
+    if value not in (None, "active", "archived"):
+        raise ValueError("a capture lifecycle state is active, archived, or absent")
+
+
 class TaskView(StrictModel):
     """One task, exactly as `tasks.read` answers it: the caller's own copy in full."""
 
@@ -84,6 +89,8 @@ class TaskView(StrictModel):
     updated_at: UtcDatetime
     commitment_id: str | None = None
     role: str | None = None
+    origin_evidence_capture_state: str | None = None
+    closure_evidence_capture_state: str | None = None
 
     @model_validator(mode="after")
     def _check(self) -> TaskView:
@@ -105,6 +112,8 @@ class TaskView(StrictModel):
             validate_identifier(self.accepted_by_review_decision_id, IdKind.REVIEW_DECISION)
         if self.closure_history_id is not None:
             validate_identifier(self.closure_history_id, IdKind.TASK_HISTORY)
+        _require_lifecycle_label(self.origin_evidence_capture_state)
+        _require_lifecycle_label(self.closure_evidence_capture_state)
         return self
 
 
@@ -133,12 +142,16 @@ class TaskListEntry(StrictModel):
     updated_at: UtcDatetime
     version: int = Field(ge=1)
     project_id: str | None = None
+    origin_evidence_capture_state: str | None = None
+    closure_evidence_capture_state: str | None = None
 
     @model_validator(mode="after")
     def _check(self) -> TaskListEntry:
         validate_identifier(self.task_id, IdKind.TASK)
         if self.project_id is not None:
             validate_identifier(self.project_id, IdKind.PROJECT)
+        _require_lifecycle_label(self.origin_evidence_capture_state)
+        _require_lifecycle_label(self.closure_evidence_capture_state)
         return self
 
 

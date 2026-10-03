@@ -132,7 +132,13 @@ from my_pa.contracts.ports import (
     RelationshipWriteRequest,
     UnknownScopeError,
 )
-from my_pa.domain.common.identifiers import IdKind, InvalidIdentifierError, validate_identifier
+from my_pa.domain.common.identifiers import (
+    IdKind,
+    InvalidIdentifierError,
+    make_identifier,
+    parse_identifier,
+    validate_identifier,
+)
 from my_pa.domain.common.time import ensure_utc
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.record_events import (
@@ -195,6 +201,7 @@ from my_pa.domain.relationship.entity import (
 )
 from my_pa.domain.relationship.governance import (
     ACCEPTED_PROPOSAL_STATES,
+    PRODUCT_OWNED_CAPTURE_SOURCE_ID,
     UNDECIDED_PROPOSAL_STATES,
     ActorClass,
     AssertionStatus,
@@ -236,6 +243,7 @@ from my_pa.domain.relationship.normalization import (
     is_normalized_name,
 )
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.infrastructure.persistence.capture_lifecycle import require_active_capture_roots
 from my_pa.infrastructure.persistence.entity_authoring import (
     ACTIVE_ALIAS_INDEX,
     ACTIVE_BINDING_INDEX,
@@ -355,6 +363,30 @@ def _mine(table: Table, principal_id: str) -> ColumnElement[bool]:
 def _bound(table: Table, principal_id: str, **values: object) -> dict[str, object]:
     """``values`` stamped with the given Principal for ``table``."""
     return principal_bound_values(dict(values), table, capture_context(principal_id))
+
+
+def _refuse_withdrawn_spans(
+    connection: Connection, principal_id: str, span_ids: tuple[str, ...]
+) -> None:
+    """C-10/C-11/C-14/C-15: share the spans' roots before any entity scope lock."""
+    if not span_ids:
+        return
+    require_active_capture_roots(
+        connection, capture_context(principal_id), span_ids=tuple(dict.fromkeys(span_ids))
+    )
+
+
+def _product_owned_capture_id(source_id: str, source_object_id: str) -> str | None:
+    """The capture root a product-owned observation triple names, or None."""
+    if source_id != PRODUCT_OWNED_CAPTURE_SOURCE_ID:
+        return None
+    try:
+        kind, suffix = parse_identifier(source_object_id)
+    except InvalidIdentifierError:
+        raise UnknownScopeError("the request names no stored capture") from None
+    if kind is not IdKind.SOURCE_OBJECT:
+        raise UnknownScopeError("the request names no stored capture")
+    return make_identifier(IdKind.CAPTURE, suffix)
 
 
 def _optional(criterion: ColumnElement[bool] | None) -> ColumnElement[bool]:
@@ -3914,6 +3946,12 @@ class SqlEntityRepository(EntitiesRepository):
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         if observation.principal_id != principal_id:
             raise ValueError("an observation belongs to the acting Principal")
+        # CRL-WP-03 C-9: a product-owned origin is fenced before the entity lock.
+        cited = _product_owned_capture_id(observation.source_id, observation.source_object_id)
+        if cited is not None:
+            require_active_capture_roots(
+                self._connection, capture_context(principal_id), capture_ids=(cited,)
+            )
         # This was the one write on the plane that constrained no form. It no
         # longer feeds anything the queue publishes: `f3a8c1d7e592` moved the
         # disclosure to `mention_display_name`, and this column is now internal
@@ -4345,6 +4383,8 @@ class SqlEntityRepository(EntitiesRepository):
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         if link.principal_id != principal_id:
             raise ValueError("an evidence link belongs to the acting Principal")
+        if link.capture_span_id is not None:
+            _refuse_withdrawn_spans(self._connection, principal_id, (link.capture_span_id,))
         # Same-Principal is structural for the fact half -- every target column
         # carries a composite `(id, principal_id)` reference -- and is proved
         # here for the entity, because a foreign key that refuses the write is a
@@ -4574,6 +4614,8 @@ class SqlEntityRepository(EntitiesRepository):
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         if evidence.principal_id != principal_id:
             raise ValueError("assertion evidence belongs to the acting Principal")
+        if evidence.capture_span_id is not None:
+            _refuse_withdrawn_spans(self._connection, principal_id, (evidence.capture_span_id,))
         self._connection.execute(
             insert(entity_assertion_evidence).values(
                 _bound(
@@ -5102,6 +5144,8 @@ class SqlEntityRepository(EntitiesRepository):
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         if link.principal_id != principal_id:
             raise ValueError("proposal evidence belongs to the acting Principal")
+        if link.capture_span_id is not None:
+            _refuse_withdrawn_spans(self._connection, principal_id, (link.capture_span_id,))
         self._require_open_proposal_evidence_scope(principal_id, link.proposal_id)
         if link.entity_observation_id is not None:
             owned = self._connection.execute(
@@ -5184,6 +5228,12 @@ class SqlEntityRepository(EntitiesRepository):
     ) -> list[EntityProposalEvidenceLink]:
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         validate_identifier(proposal_id, IdKind.ENTITY_PROPOSAL)
+        pending = tuple(evidence)
+        _refuse_withdrawn_spans(
+            self._connection,
+            principal_id,
+            tuple(link.capture_span_id for link in pending if link.capture_span_id is not None),
+        )
         self._require_open_proposal_evidence_scope(principal_id, proposal_id)
         stored = self.proposal_evidence_links(principal_id, proposal_id)
 
@@ -5193,7 +5243,7 @@ class SqlEntityRepository(EntitiesRepository):
 
         known = {identity(link) for link in stored}
         sequence = len(stored)
-        for offered in evidence:
+        for offered in pending:
             if identity(offered) in known:
                 continue
             sequence += 1

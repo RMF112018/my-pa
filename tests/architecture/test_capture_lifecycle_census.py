@@ -32,9 +32,11 @@ def test_the_lifecycle_modules_are_the_census_delta_and_not_sinks() -> None:
 def test_the_capture_census_at_this_head_is_the_three_lifecycle_modules() -> None:
     """Re-run of the section (c) census.
 
-    Base was 56 modules. The three lifecycle modules made 59. This head is 60
-    because `adapters/remote_request.py` names `capture_id` in its
-    idempotency-stamp comment. That module does not call the publication fence.
+    Base was 56 modules. The three lifecycle modules made 59. This head is 61:
+    `adapters/remote_request.py` names `capture_id` in its idempotency-stamp
+    comment, and RE-DBH-01 `infrastructure/database/record_event_roles.py`
+    names `capture_versions` in its bounded runtime read inventory. Neither
+    module calls the publication fence.
     """
     import re
 
@@ -47,9 +49,14 @@ def test_the_capture_census_at_this_head_is_the_three_lifecycle_modules() -> Non
         for path in (ROOT / "src").rglob("*.py")
         if pattern.search(path.read_text(encoding="utf-8"))
     )
-    assert len(hits) == 60
+    assert len(hits) == 61
     assert set(DELTA) <= set(hits)
     assert "src/my_pa/adapters/remote_request.py" in hits
+    assert "src/my_pa/infrastructure/database/record_event_roles.py" in hits
+    roles = (ROOT / "src/my_pa/infrastructure/database/record_event_roles.py").read_text(
+        encoding="utf-8"
+    )
+    assert "require_active_capture_roots" not in roles
     remote = (ROOT / "src/my_pa/adapters/remote_request.py").read_text(encoding="utf-8")
     assert "require_active_capture_roots" not in remote
 

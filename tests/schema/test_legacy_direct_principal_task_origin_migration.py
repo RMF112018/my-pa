@@ -171,11 +171,12 @@ def _origin_rows(engine: Engine) -> dict[str, tuple[str, str | None]]:
 
 
 def test_the_revision_is_in_the_chain() -> None:
-    """Unique head `0641c354ca85`, on `1d9b248e7f83`, on `7d9a450dfd07`, on `6f6ead27d122`."""
+    """The sole Capture head follows TRUNCATE refusal, Record Events, then this revision."""
     script = ScriptDirectory.from_config(_config())
     assert len(list(script.get_heads())) == 1
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "1d9b248e7f83"
+    assert script.get_revision(HEAD).down_revision == "c8e4a1b70d35"
+    assert script.get_revision("c8e4a1b70d35").down_revision == "1d9b248e7f83"
     assert script.get_revision("1d9b248e7f83").down_revision == "7d9a450dfd07"
     assert script.get_revision("7d9a450dfd07").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS

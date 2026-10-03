@@ -102,11 +102,11 @@ def _enabled(engine: Engine, table: str, trigger: str) -> str | None:
 
 @pytest.mark.database
 @pytest.mark.migration_empty_to_head
-def test_an_empty_database_upgrades_to_the_truncate_refusal_head(
+def test_an_empty_database_upgrades_to_the_truncate_refusal_revision(
     disposable_database: str, engine: Engine
 ) -> None:
     del disposable_database
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     assert _version(engine) == REVISION
     for table, trigger in TRIGGERS:
         assert _enabled(engine, table, trigger) == "O"
@@ -115,12 +115,12 @@ def test_an_empty_database_upgrades_to_the_truncate_refusal_head(
 
 @pytest.mark.database
 @pytest.mark.migration_edge
-def test_the_record_event_head_upgrades_to_the_truncate_refusal_head(
+def test_the_record_event_revision_upgrades_to_the_truncate_refusal_revision(
     disposable_database: str, engine: Engine
 ) -> None:
     del disposable_database
     command.upgrade(_config(), PREVIOUS)
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     assert _version(engine) == REVISION
     for table, trigger in TRIGGERS:
         assert _enabled(engine, table, trigger) == "O"

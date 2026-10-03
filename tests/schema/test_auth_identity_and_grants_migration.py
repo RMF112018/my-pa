@@ -137,7 +137,8 @@ def test_the_chain_has_exactly_one_head_and_this_revision_is_beneath_it() -> Non
     """
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "1d9b248e7f83"
+    assert script.get_revision(HEAD).down_revision == "c8e4a1b70d35"
+    assert script.get_revision("c8e4a1b70d35").down_revision == "1d9b248e7f83"
     assert script.get_revision("1d9b248e7f83").down_revision == "7d9a450dfd07"
     assert script.get_revision("7d9a450dfd07").down_revision == "6f6ead27d122"
     assert script.get_revision("6f6ead27d122").down_revision == "e6a4c2f91b73"
@@ -150,7 +151,7 @@ def test_the_chain_has_exactly_one_head_and_this_revision_is_beneath_it() -> Non
     assert script.get_revision(CONSTRAINT_SYNC).down_revision == SUCCESSOR
     assert script.get_revision(SUCCESSOR).down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 110
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 111
 
 
 def test_revision_imports_no_domain_or_persistence_modules() -> None:

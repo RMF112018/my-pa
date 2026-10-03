@@ -122,7 +122,8 @@ def _literals(block: str) -> list[str]:
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [CURRENT_HEAD]
-    assert script.get_revision(CURRENT_HEAD).down_revision == "1d9b248e7f83"
+    assert script.get_revision(CURRENT_HEAD).down_revision == "c8e4a1b70d35"
+    assert script.get_revision("c8e4a1b70d35").down_revision == "1d9b248e7f83"
     assert script.get_revision("1d9b248e7f83").down_revision == "7d9a450dfd07"
     assert script.get_revision("7d9a450dfd07").down_revision == "6f6ead27d122"
     assert script.get_revision("6f6ead27d122").down_revision == "e6a4c2f91b73"
@@ -131,7 +132,7 @@ def test_revision_is_the_only_linear_head() -> None:
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 110
+    assert len(list(MIGRATIONS.glob("*.py"))) == 111
 
 
 def test_revision_is_frozen_and_does_not_import_live_schema_or_enums() -> None:

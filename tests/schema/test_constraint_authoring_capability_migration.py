@@ -158,7 +158,6 @@ CONSTRAINT_TABLES: Final[frozenset[str]] = frozenset(
 #: Fixed and written out, so the recurrence guard below is a bounded check over a
 #: named list rather than a repository-wide scan.
 HEAD_PIN_FILES: Final[tuple[str, ...]] = (
-    "tests/architecture/test_record_event_privilege_separation.py",
     "tests/database/test_cli_auth.py",
     "tests/database/test_entities_graph_vocabulary_migration.py",
     "tests/database/test_legacy_entity_backfill_migration.py",
@@ -173,6 +172,7 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_constraint_sync_migration.py",
     "tests/schema/test_continuity_projects_mutation_migration.py",
     "tests/schema/test_continuity_projects_read_capability_migration.py",
+    "tests/schema/test_extraction_schema_migration.py",
     "tests/schema/test_goodnotes_browser_contract_migration.py",
     "tests/schema/test_goodnotes_client_resume_migration.py",
     "tests/schema/test_goodnotes_content_and_durable_note_stages.py",
@@ -273,7 +273,8 @@ def _literals(block: str) -> list[str]:
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [CURRENT_HEAD]
-    assert script.get_revision(CURRENT_HEAD).down_revision == "1d9b248e7f83"
+    assert script.get_revision(CURRENT_HEAD).down_revision == "c8e4a1b70d35"
+    assert script.get_revision("c8e4a1b70d35").down_revision == "1d9b248e7f83"
     assert script.get_revision("1d9b248e7f83").down_revision == "7d9a450dfd07"
     assert script.get_revision("7d9a450dfd07").down_revision == "6f6ead27d122"
     assert script.get_revision("6f6ead27d122").down_revision == "e6a4c2f91b73"
@@ -288,7 +289,7 @@ def test_revision_is_the_only_linear_head() -> None:
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 110
+    assert len(list(MIGRATIONS.glob("*.py"))) == 111
 
 
 # ---- the freeze -------------------------------------------------------------

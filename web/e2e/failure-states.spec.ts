@@ -219,7 +219,7 @@ test("a capture against a dead gateway is never rendered as saved", async ({ pag
   // `unavailable`: nothing stored, note kept in the field, retry is meaningful.
   const unavailable = page.getByTestId("capture-unavailable");
   await expect(unavailable).toBeVisible();
-  await expect(unavailable).toContainText(/Not saved/i);
+  await expect(unavailable).toContainText(/Save unconfirmed/i);
   await expect(unavailable).toContainText(/still in the field/i);
   await expect(page.getByTestId("capture-durable")).toHaveCount(0);
   // The note really is still there — this is the difference between a stated

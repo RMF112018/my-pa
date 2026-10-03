@@ -101,6 +101,69 @@ describe("phone launcher canonical session lifetime", () => {
     expect(await screen.findByTestId("capture-unavailable")).toBeInTheDocument();
   });
 
+  it("does not admit a second synthetic record after an attempted edit of an ambiguous Capture", async () => {
+    const committed = new Map<string, string>();
+    const requests = interceptCapture(async (sent) => {
+      const key = String(sent.idempotencyKey);
+      if (!committed.has(key)) committed.set(key, `synthetic-record-${committed.size + 1}`);
+      // The first write committed, but the client receives an ambiguous response.
+      return requests.length === 1 ? unavailable() : persisted(sent);
+    });
+    render(<Harness />);
+    openNote();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByTestId("capture-unavailable");
+    const originalRecord = committed.get(String(requests[0].idempotencyKey));
+    fireEvent.change(screen.getByTestId("capture-field"), { target: { value: "Synthetic attempted replacement" } });
+    expect(screen.getByTestId("capture-field")).toHaveValue(NOTE);
+    await taskRoundtrip();
+    expect.soft(screen.getByTestId("capture-entry-back")).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(requests).toHaveLength(2));
+    expect.soft(requests[1]).toEqual(requests[0]);
+    expect.soft(committed.size).toBe(1);
+    expect.soft(committed.get(String(requests[1].idempotencyKey))).toBe(originalRecord);
+    await screen.findByTestId("capture-durable");
+  });
+
+  it("freezes ambiguous Capture controls and states save uncertainty truthfully", async () => {
+    interceptCapture(unavailable);
+    render(<Harness />);
+    openNote();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    const notice = await screen.findByTestId("capture-unavailable");
+    expect.soft(screen.getByTestId("capture-field")).toBeDisabled();
+    expect.soft(screen.getByTestId("capture-project-select")).toBeDisabled();
+    expect.soft(screen.getByTestId("capture-kind-quick_note")).toBeDisabled();
+    expect.soft(screen.getByTestId("capture-kind-conversation_log")).toBeDisabled();
+    expect.soft(notice).toHaveTextContent("Save unconfirmed");
+    expect.soft(notice).toHaveTextContent("the server may have saved this note");
+    expect.soft(notice).toHaveTextContent("retrying resubmits the same attempt");
+    expect.soft(notice).not.toHaveTextContent("Not saved");
+    expect.soft(notice).not.toHaveTextContent("Synthetic service unavailable");
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+  });
+
+  it("allows a new edited attempt after a terminal Capture refusal", async () => {
+    const requests = interceptCapture(async () => new Response(JSON.stringify({
+      error: { errorClass: "validation", code: "synthetic_invalid", message: "Synthetic terminal refusal" },
+    }), { status: 422 }));
+    render(<Harness />);
+    openNote();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByTestId("capture-refused");
+    expect(screen.getByTestId("capture-field")).toBeEnabled();
+    expect(screen.getByTestId("capture-project-select")).toBeEnabled();
+    expect(screen.getByTestId("capture-kind-conversation_log")).toBeEnabled();
+    fireEvent.click(screen.getByTestId("capture-kind-conversation_log"));
+    fireEvent.change(screen.getByTestId("capture-field"), { target: { value: "Synthetic intentional new attempt" } });
+    fireEvent.change(screen.getByTestId("capture-project-select"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(requests).toHaveLength(2));
+    expect(requests[1]).toMatchObject({ text: "Synthetic intentional new attempt", captureKind: "conversation_log", projectId: null });
+    expect(requests[1].idempotencyKey).not.toBe(requests[0].idempotencyKey);
+  });
+
   it("keeps the pending Capture submit mutex after Task roundtrip", async () => {
     let resolve!: (response: Response) => void;
     const requests = interceptCapture(() => new Promise((done) => { resolve = done; }));
@@ -108,6 +171,7 @@ describe("phone launcher canonical session lifetime", () => {
     openNote();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await taskRoundtrip();
+    expect(screen.getByTestId("capture-entry-back")).toHaveFocus();
     const save = screen.getByRole("button", { name: /^(Save|Saving…)$/ });
     fireEvent.click(save);
     expect(requests).toHaveLength(1);

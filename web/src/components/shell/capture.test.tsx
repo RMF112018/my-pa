@@ -311,7 +311,8 @@ describe("an unreachable backend", () => {
     const user = await saveOnce();
 
     const alert = await screen.findByTestId("capture-unavailable");
-    expect(alert).toHaveTextContent("could not be reached");
+    expect(alert).toHaveTextContent("Save unconfirmed");
+    expect(alert).toHaveTextContent("server may have saved this note");
     expect(screen.queryByTestId("capture-refused")).toBeNull();
     expect(screen.queryByTestId("capture-durable")).toBeNull();
     expect(screen.getByTestId("capture-field")).toHaveValue(NOTE);

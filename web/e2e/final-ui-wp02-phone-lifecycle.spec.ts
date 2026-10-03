@@ -117,6 +117,31 @@ test("WP02 phone Capture keeps its pending mutex and ambiguous frozen attempt th
       releaseFirst();
       await expect(page.getByTestId("capture-unavailable")).toBeVisible();
     });
+    const expectFrozenCapture = async () => {
+      await expect(page.getByTestId("capture-field")).toBeDisabled();
+      await expect(page.getByTestId("capture-project-select")).toBeDisabled();
+      await expect(page.getByTestId("capture-kind-quick_note")).toBeDisabled();
+      await expect(page.getByTestId("capture-kind-conversation_log")).toBeDisabled();
+      await expect(page.getByTestId("capture-field")).not.toBeFocused();
+      const focusOwner = overlays(page).locator(":focus");
+      await expect(focusOwner).toHaveCount(1);
+      await expect(focusOwner).toBeVisible();
+      await expect(focusOwner).toBeEnabled();
+    };
+    await test.step("CAPTURE_AMBIGUOUS_ATTEMPTED_EDIT", async () => {
+      await expectFrozenCapture();
+      await page.getByTestId("capture-field").evaluate((field) => (field as HTMLElement).focus());
+      await expect(page.getByTestId("capture-field")).not.toBeFocused();
+      await page.keyboard.insertText("Synthetic attempted edit");
+      await page.getByTestId("capture-kind-conversation_log").evaluate((kind) => (kind as HTMLElement).click());
+      await page.getByTestId("capture-project-select").evaluate((project) => (project as HTMLElement).click());
+      await expect(page.getByTestId("capture-field")).toHaveValue(note);
+      await expect(page.getByTestId("capture-project-select")).toHaveValue(projectId!);
+      await expect(page.getByTestId("capture-kind-quick_note")).toBeChecked();
+      await expect(page.getByTestId("capture-unavailable")).toBeVisible();
+      expect(attempts.length).toBe(1);
+      await expect(overlays(page)).toHaveCount(1);
+    });
     await test.step("CAPTURE_AMBIGUOUS_TASK_ROUNDTRIP", async () => {
       await page.getByTestId("capture-entry-back").click();
       await launcher(page).getByRole("button", { name: "Create Task", exact: true }).click();
@@ -127,6 +152,7 @@ test("WP02 phone Capture keeps its pending mutex and ambiguous frozen attempt th
       await expect(page.getByTestId("capture-field")).toHaveValue(note);
       await expect(page.getByTestId("capture-project-select")).toHaveValue(projectId!);
       await expect(page.getByTestId("capture-kind-quick_note")).toBeChecked();
+      await expectFrozenCapture();
     });
     await test.step("CAPTURE_RETRY_SAME_FROZEN_ATTEMPT", async () => {
       const [retry] = await Promise.all([
@@ -137,10 +163,19 @@ test("WP02 phone Capture keeps its pending mutex and ambiguous frozen attempt th
       const ack = await retry.json() as { status?: string; created?: boolean;
         receipt?: { captureId?: string; receiptId?: string } };
       expect(ack.status).toBe("persisted");
+      // Wait for product delivery so the test binding has recorded the retry tuple.
+      await expect(page.getByTestId("capture-durable")).toBeVisible();
+      console.log("WP02_DIAGNOSTIC_JSON " + JSON.stringify({
+        event: "task_observation", stage: "CAPTURE_AMBIGUOUS_EDIT_RETRY",
+        retry_created: typeof ack.created === "boolean" ? ack.created : "UNKNOWN",
+        key_equal: attempts[1]?.idempotencyKey === attempts[0]?.idempotencyKey,
+        capture_id_equal: ack.receipt?.captureId === firstReceipt!.captureId,
+        receipt_id_equal: ack.receipt?.receiptId === firstReceipt!.receiptId,
+        first_response_held: true, retry_status: retry.status() === 200 ? 200 : "OTHER",
+      }));
       expect(ack.created).toBe(false);
       expect(ack.receipt?.captureId).toBe(firstReceipt!.captureId);
       expect(ack.receipt?.receiptId).toBe(firstReceipt!.receiptId);
-      await expect(page.getByTestId("capture-durable")).toBeVisible();
       await expect(page.getByTestId("capture-durable")).toContainText("Already saved");
       const libraryResponse = await page.request.get("/api/library");
       expect(libraryResponse.status()).toBe(200);

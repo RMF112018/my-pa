@@ -11,7 +11,8 @@
  * **Every submission attempt carries a stable idempotency key**, minted when the
  * attempt starts and kept across retries of the same text, so a network-level
  * replay returns the original receipt instead of admitting a duplicate. Editing
- * the text starts a new attempt with a new key. The route scopes the key to the
+ * editable text starts a new attempt with a new key; unresolved attempts keep
+ * their text, kind and Project frozen. The route scopes the key to the
  * authenticated principal (`ADR-005`, `PKL-MYPA-D-WP03-001`).
  *
  * **The six outcomes below are six different things, and this component keeps
@@ -29,11 +30,10 @@
  * * **refused** — validation, conflict, authorization, policy. Nothing was
  *   stored, the note stays in the field, and the reason is shown rather than a
  *   generic failure.
- * * **unavailable** — the server answered that it could not serve. Also nothing
- *   stored, but a different instruction: retrying is worth doing, and the retry
- *   reuses the same attempt key so it cannot become a second capture. This is
- *   the *reachable* backend saying no; a request that never arrived is the next
- *   state, not this one.
+ * * **unavailable** — the save is unconfirmed: the server may have committed,
+ *   but its receipt could not be verified. The frozen retry uses the same
+ *   attempt key so it cannot become a second capture. A request that never
+ *   arrived is the next state, not this one.
  * * **queued offline** — the request never reached the server and the note is
  *   held, encrypted, in this browser's own storage. It is **not** a save and is
  *   never rendered as one: nothing on the server knows the note exists, and the
@@ -70,7 +70,7 @@ import { TextField } from "@/components/ui/field";
 import { CaptureProjectSelector } from "@/components/capture/capture-project-selector";
 import { apiPost } from "@/lib/api/client";
 import { verifyCaptureReceipt } from "@/lib/capture/receipt";
-import { freezeCaptureIntent, type CaptureSessionEvent, type CaptureSessionState } from "@/lib/capture/session";
+import { freezeCaptureIntent, isEditable, type CaptureSessionEvent, type CaptureSessionState } from "@/lib/capture/session";
 import { CaptureQueueProtocolError } from "@/lib/offline/capture-intent-codec";
 import { CaptureQueueUnavailableError } from "@/lib/offline/coordinator";
 import { OfflineKeyUnavailableError } from "@/lib/offline/key";
@@ -197,6 +197,7 @@ export function CaptureDialog({
   const [outcome, setOutcome] = useState<Outcome>({ kind: "idle" });
   const [previousOpen, setPreviousOpen] = useState(open);
   const fieldRef = useRef<HTMLTextAreaElement>(null);
+  const entryBackRef = useRef<HTMLButtonElement>(null);
   const firstChoiceRef = useRef<HTMLButtonElement>(null);
   const projectFieldId = useId();
   // One idempotency key per submission attempt: minted at first save, kept
@@ -222,6 +223,7 @@ export function CaptureDialog({
   const kind: CaptureKind = session.form;
   const text = kind === "quick_note" ? session.noteDraft : session.conversationDraft;
   const projectId = session.projectId;
+  const entryFrozen = outcome.kind === "saving" || !isEditable(session);
 
   // Guarded render-time adjustment handles an externally controlled reopen
   // before focus effects run. No deferred callback can steal focus after a
@@ -249,8 +251,11 @@ export function CaptureDialog({
     if (!open) return;
     // Establish stage focus in this effect, without another task that can run
     // after the person has already moved to the next control.
-    if (stage === "entry") fieldRef.current?.focus();
-    else firstChoiceRef.current?.focus();
+    if (stage === "entry") {
+      // An unresolved attempt keeps its fields frozen. Back remains a safe,
+      // enabled entry target when a branch return cannot focus the text field.
+      (fieldRef.current?.disabled ? entryBackRef.current : fieldRef.current)?.focus();
+    } else firstChoiceRef.current?.focus();
   }, [open, stage]);
 
   /** Enter the unchanged capture branch with the chosen kind already selected. */
@@ -442,8 +447,11 @@ export function CaptureDialog({
           label="What happened?"
           hint="One field is enough. Captured items are held for review — nothing is asserted on your behalf."
           value={text}
-          disabled={outcome.kind === "saving"}
+          disabled={entryFrozen}
           onChange={(e) => {
+            // The reducer ignores edits to an unresolved intent. Preserve the
+            // same attempt key too, even if an event reaches a disabled field.
+            if (entryFrozen) return;
             dispatch({ type: "edit_draft", form: kind, text: e.target.value });
             // Edited text is a new submission attempt, not a retry.
             attemptKeyRef.current = null;
@@ -453,9 +461,9 @@ export function CaptureDialog({
         <CaptureProjectSelector
           id={projectFieldId}
           value={projectId}
-          /* Frozen while a submission is in flight: the Project that was sent is
+          /* Frozen while submitting or ambiguous: the Project that was sent is
              what the receipt will be compared against. */
-          disabled={outcome.kind === "saving"}
+          disabled={entryFrozen}
           onChange={(next) => dispatch({ type: "select_project", projectId: next })}
           principalId={principalId}
           sessionEpoch={session.sessionEpoch}
@@ -469,7 +477,7 @@ export function CaptureDialog({
                 name="capture-kind"
                 value={option.value}
                 checked={kind === option.value}
-                disabled={outcome.kind === "saving"}
+                disabled={entryFrozen}
                 onChange={() => dispatch({ type: "select_form", form: option.value })}
                 data-testid={`capture-kind-${option.value}`}
               />
@@ -534,8 +542,9 @@ export function CaptureDialog({
         ) : null}
         {outcome.kind === "unavailable" ? (
           <p role="alert" data-testid="capture-unavailable" className="text-sm text-destructive">
-            Not saved — the service could not be reached. Your note is still in the field, and
-            retrying resubmits the same attempt rather than capturing it twice.
+            Save unconfirmed — the server may have saved this note, but its receipt could not
+            be verified. Your note is still in the field; retrying resubmits the same attempt
+            rather than capturing it twice.
             <WhenDiagnostics>
               <span className="ml-1">{outcome.reason}</span>
             </WhenDiagnostics>
@@ -545,6 +554,7 @@ export function CaptureDialog({
           <Button
             variant="ghost"
             data-testid="capture-entry-back"
+            ref={entryBackRef}
             onClick={() => {
               if (embedded) onBack?.();
               else setStage("choose");

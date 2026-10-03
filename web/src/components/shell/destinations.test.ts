@@ -29,13 +29,13 @@ describe("IA destination registry", () => {
       "Knowledge",
       "Map",
       "Review",
-      "Search",
       "System",
     ]);
   });
 
-  it("places Search, Review, and Map in desktop global, not mobile tabs", () => {
-    expect(DESKTOP_GLOBAL.map(({ label }) => label)).toEqual(["Search", "Review", "Map"]);
+  it("keeps Review and Map in desktop global while Search is launcher-only", () => {
+    expect(DESKTOP_GLOBAL.map(({ label }) => label)).toEqual(["Review", "Map"]);
+    expect(MOBILE_MORE.map(({ label }) => label)).not.toContain("Search");
     expect(DESKTOP_PRIMARY.map(({ href }) => href)).not.toContain("/review");
     expect(DESKTOP_PRIMARY.map(({ href }) => href)).not.toContain("/search");
     expect(DESKTOP_PRIMARY.map(({ href }) => href)).not.toContain("/canvas");
@@ -44,7 +44,7 @@ describe("IA destination registry", () => {
     expect(MOBILE_PRIMARY.map(({ href }) => href)).not.toContain("/canvas");
   });
 
-  it("keeps every canonical href command-reachable under current names", () => {
+  it("keeps safe legacy destinations reachable without publishing Search navigation", () => {
     const hrefs = COMMAND_DESTINATIONS.map(({ href }) => href);
     for (const href of [
       "/today",
@@ -53,7 +53,6 @@ describe("IA destination registry", () => {
       "/knowledge",
       "/intelligence",
       "/review",
-      "/search",
       "/canvas",
       "/system",
     ]) {
@@ -61,6 +60,11 @@ describe("IA destination registry", () => {
     }
     expect(DESTINATIONS.map(({ label }) => label)).not.toContain("Library");
     expect(DESTINATIONS.map(({ label }) => label)).not.toContain("Briefings");
+    expect(DESTINATIONS.map(({ href }) => href)).not.toContain("/search");
+    expect(activeFor("/search", "/search")).toBe(true);
+    for (const forbidden of ["/home", "/tasks", "/projects", "/utilities"]) {
+      expect(DESTINATIONS.map(({ href }) => href)).not.toContain(forbidden);
+    }
   });
 
   it.each([

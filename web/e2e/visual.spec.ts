@@ -32,11 +32,21 @@ test("dark shell captures responsive navigation and Inspector states", async ({ 
   await page.getByRole("button", { name: "Close panel" }).click();
 
   await pinInspector(page);
+  await stableFrame(page);
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   if (testInfo.project.name === "mobile") {
     await expect(page.getByRole("dialog", { name: "Inspector" })).toBeVisible();
   } else {
-    await page.getByRole("button", { name: "Collapse navigation" }).click();
+    if ((page.viewportSize()?.width ?? 0) >= 1024) {
+      const toggle = page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: /^(Collapse|Expand) navigation$/ });
+      await expect(toggle).toHaveCount(1);
+      await expect(toggle).toBeVisible();
+      if (await toggle.getAttribute("aria-label") === "Collapse navigation") await toggle.click();
+      await expect(page.getByRole("button", { name: "Expand navigation" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Collapse navigation" })).toHaveCount(0);
+    } else {
+      await expect(page.getByRole("button", { name: "Collapse navigation" })).toHaveCount(0);
+    }
     await expect(page.getByRole("complementary", { name: "Utility region" })).toBeVisible();
   }
 
@@ -46,9 +56,12 @@ test("dark shell captures responsive navigation and Inspector states", async ({ 
   });
 });
 
-test("command overlay has a deterministic reduced-motion state", async ({ page }) => {
-  await page.keyboard.press("Control+K");
-  await expect(page.getByRole("dialog", { name: "Search" })).toBeVisible();
+test("unified launcher has a deterministic reduced-motion initial state", async ({ page }) => {
+  await page.keyboard.press("ControlOrMeta+k");
+  const launcher = page.getByRole("dialog", { name: "Search or create" });
+  await expect(launcher).toBeVisible();
+  await expect(launcher.getByRole("group", { name: "Search or New" }).getByRole("button")).toHaveText(["Search", "New"]);
+  await expect(launcher.getByRole("button", { name: "Search", exact: true })).toBeFocused();
   await expect(page).toHaveScreenshot("shell-command-menu.png", {
     animations: "disabled",
     fullPage: true,
@@ -71,14 +84,9 @@ test("the shell reflows at 200 percent without horizontal loss", async ({ page }
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
   );
   expect(overflow).toBeLessThanOrEqual(1);
-  // `visibility` preserves inline width: normalize the 141.125px runtime text
-  // to the fixed 134.03125px one-digit-hour form behind the reviewed anchor.
-  await page.locator('[data-visual-dynamic="freshness"]').evaluate((node) => {
-    node.textContent = "8/22/2026, 9:00:00 AM";
-  });
-  await page.addStyleTag({
-    content: '[data-visual-dynamic="freshness"] { visibility: hidden !important; }',
-  });
+  // Work disclosure/freshness is diagnostic-only in the default product view.
+  await expect(page.getByRole("complementary", { name: "Work answer disclosure" })).toHaveCount(0);
+  await expect(page.locator('[data-visual-dynamic="freshness"]')).toHaveCount(0);
   await expect(page).toHaveScreenshot("shell-zoom-200.png", {
     animations: "disabled",
     fullPage: false,

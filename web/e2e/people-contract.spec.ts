@@ -30,7 +30,9 @@ test("People search, profile, and resolve keep ambiguity visible", async ({ page
   await expect(page.getByTestId("people-search-hits")).toHaveCount(0);
 
   await page.getByRole("searchbox", { name: "Find a person" }).fill("Pat Synthetic");
-  await page.getByRole("button", { name: "Search" }).click();
+  const search = page.getByRole("button", { name: "Search", exact: true });
+  await expect(search).toHaveCount(1);
+  await search.click();
   await expect(page.getByTestId("people-search-hits")).toBeVisible();
   await expect(page.getByRole("link", { name: "Pat Synthetic" })).toBeVisible();
 
@@ -106,7 +108,9 @@ test("People search and profile reflow at a narrow viewport", async ({ page }) =
   await expect(page.getByRole("searchbox", { name: "Find a person" })).toBeVisible();
   await expect(page.getByTestId("people-resolve-advanced")).toBeVisible();
   await page.getByRole("searchbox", { name: "Find a person" }).fill("Pat Synthetic");
-  await page.getByRole("button", { name: "Search" }).click();
+  const search = page.getByRole("button", { name: "Search", exact: true });
+  await expect(search).toHaveCount(1);
+  await search.click();
   await page.getByRole("link", { name: "Pat Synthetic" }).click();
   await expect(page.getByTestId("people-profile")).toBeVisible();
   const profile = page.getByTestId("people-profile");

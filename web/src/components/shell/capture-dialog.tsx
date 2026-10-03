@@ -62,7 +62,7 @@
  * proposals appear in Review when they exist — it does not claim a degradation it
  * cannot observe.
  */
-import { useEffect, useId, useRef, useState, type Dispatch } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type Dispatch } from "react";
 import { Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { WhenDiagnostics } from "@/components/diagnostics/diagnostics-provider";
@@ -76,6 +76,7 @@ import { CaptureQueueUnavailableError } from "@/lib/offline/coordinator";
 import { OfflineKeyUnavailableError } from "@/lib/offline/key";
 import { OfflineQueueFullError } from "@/lib/offline/queue";
 import { queueCaptureOffline } from "@/lib/offline/capture-queue";
+import type { PersistedCaptureAck } from "@/lib/capture/contract";
 
 /**
  * The fixed confirmation for discarding unsent drafts.
@@ -158,6 +159,10 @@ export function CaptureDialog({
   session,
   dispatch,
   onCreateTask,
+  onConfirmed,
+  initialStage = "choose",
+  embedded = false,
+  onBack,
 }: {
   open: boolean;
   onClose: () => void;
@@ -181,9 +186,16 @@ export function CaptureDialog({
    * nullable Project travels as an explicit argument rather than being re-read.
    */
   onCreateTask?: (projectId: string | null) => void;
+  /** Fired only for a verified durable server acknowledgement. */
+  onConfirmed?: (receipt: PersistedCaptureAck) => void;
+  initialStage?: "choose" | "entry";
+  /** Reuse the canonical entry form inside the unified launcher. */
+  embedded?: boolean;
+  onBack?: () => void;
 }) {
-  const [stage, setStage] = useState<Stage>("choose");
+  const [stage, setStage] = useState<Stage>(initialStage);
   const [outcome, setOutcome] = useState<Outcome>({ kind: "idle" });
+  const [previousOpen, setPreviousOpen] = useState(open);
   const fieldRef = useRef<HTMLTextAreaElement>(null);
   const firstChoiceRef = useRef<HTMLButtonElement>(null);
   const projectFieldId = useId();
@@ -199,6 +211,10 @@ export function CaptureDialog({
    * captures for one intent.
    */
   const savingRef = useRef(false);
+  const currentSession = useRef(session);
+  useLayoutEffect(() => {
+    currentSession.current = session;
+  }, [session]);
 
   // The draft, the kind and the Project all live in the shell's experience.
   // This component reads them and dispatches; it stores none of them, so a close
@@ -207,15 +223,18 @@ export function CaptureDialog({
   const text = kind === "quick_note" ? session.noteDraft : session.conversationDraft;
   const projectId = session.projectId;
 
-  // A newly opened dialog starts at the chooser, with no prior outcome showing.
-  useEffect(() => {
-    if (!open) return;
-    const t = setTimeout(() => {
-      setStage("choose");
-      setOutcome({ kind: "idle" });
-    }, 0);
-    return () => clearTimeout(t);
-  }, [open]);
+  // Guarded render-time adjustment handles an externally controlled reopen
+  // before focus effects run. No deferred callback can steal focus after a
+  // chooser selection.
+  if (previousOpen !== open) {
+    setPreviousOpen(open);
+    if (open) {
+      setStage(initialStage);
+      if (session.outcome !== "ambiguous" && session.outcome !== "submitting") {
+        setOutcome({ kind: "idle" });
+      }
+    }
+  }
 
   /*
     Move focus into the dialog on open, at whichever stage is showing.
@@ -252,12 +271,22 @@ export function CaptureDialog({
 
   /** Close, confirming first when there is unsent work to lose. */
   function requestClose() {
+    // The native dialog also fires `close` when the launcher deliberately
+    // switches to Task. That controlled close has no user dismissal to handle.
+    if (!open) return;
+    if (savingRef.current) return;
+    if (embedded) {
+      onClose();
+      return;
+    }
     const dirty = session.noteDraft.trim() !== "" || session.conversationDraft.trim() !== "";
     // An in-flight or ambiguous submission is not a draft to discard: closing
     // does not cancel a request the server may already have committed.
     const unresolved = outcome.kind === "saving" || outcome.kind === "unavailable";
-    if (dirty && !unresolved && !confirmDiscardUnsent()) return;
+    if (!embedded && dirty && !unresolved && !confirmDiscardUnsent()) return;
     if (dirty && !unresolved) dispatch({ type: "discard_unsent" });
+    setStage("choose");
+    setOutcome({ kind: "idle" });
     onClose();
   }
 
@@ -273,6 +302,10 @@ export function CaptureDialog({
     const intent = freezeCaptureIntent(session, attemptKeyRef.current);
     const experienceId = session.experienceId;
     const epoch = session.sessionEpoch;
+    const isCurrent = () =>
+      currentSession.current.experienceId === experienceId &&
+      currentSession.current.sessionEpoch === epoch &&
+      currentSession.current.principalId === principalId;
     setOutcome({ kind: "saving" });
     dispatch({ type: "freeze", intent });
     try {
@@ -284,10 +317,12 @@ export function CaptureDialog({
         // explicit form so the receipt's Project can be compared against it.
         projectId: intent.projectId,
       });
+      if (!isCurrent()) return;
       if (result.ok && result.data) {
         // The browser repeats the whole check independently. A nominal success
         // this tier cannot verify is ambiguous, never a save.
         const verdict = await verifyCaptureReceipt(result.data, intent);
+        if (!isCurrent()) return;
         if (!verdict.ok) {
           if (verdict.reason === "not_persisted") {
             setOutcome({ kind: "acknowledged", receiptId: result.data.receiptId ?? null });
@@ -305,6 +340,7 @@ export function CaptureDialog({
         });
         dispatch({ type: "result", experienceId, sessionEpoch: epoch, outcome: "persisted" });
         attemptKeyRef.current = null;
+        onConfirmed?.(verdict.ack);
         return;
       }
       const reason = result.error ?? "the request did not complete";
@@ -318,6 +354,7 @@ export function CaptureDialog({
       setOutcome({ kind: "refused", reason });
       dispatch({ type: "result", experienceId, sessionEpoch: epoch, outcome: "refused" });
     } catch {
+      if (!isCurrent()) return;
       // The request never reached the server, so nothing on the far side knows
       // this note exists. Hold it on this device rather than telling someone to
       // retry a note they may close the tab on.
@@ -364,7 +401,7 @@ export function CaptureDialog({
   // The chooser is its own render: the capture branch below is untouched.
   if (stage === "choose") {
     return (
-      <Dialog open={open} onClose={onClose} title="Capture">
+      <Dialog open={open} onClose={requestClose} title="Capture">
         <div
           role="group"
           aria-label="What are you capturing?"
@@ -375,7 +412,11 @@ export function CaptureDialog({
             ref={firstChoiceRef}
             variant="ghost"
             data-testid="capture-choice-create_task"
-            onClick={() => onCreateTask?.(projectId)}
+            onClick={() => {
+              setStage("choose");
+              setOutcome({ kind: "idle" });
+              onCreateTask?.(projectId);
+            }}
           >
             Create Task
           </Button>
@@ -394,8 +435,7 @@ export function CaptureDialog({
     );
   }
 
-  return (
-    <Dialog open={open} onClose={onClose} title="Capture">
+  const entry = (
       <div className="flex flex-col gap-3">
         <TextField
           ref={fieldRef}
@@ -505,7 +545,10 @@ export function CaptureDialog({
           <Button
             variant="ghost"
             data-testid="capture-entry-back"
-            onClick={() => setStage("choose")}
+            onClick={() => {
+              if (embedded) onBack?.();
+              else setStage("choose");
+            }}
           >
             Back
           </Button>
@@ -517,6 +560,8 @@ export function CaptureDialog({
           </Button>
         </div>
       </div>
-    </Dialog>
+  );
+  return embedded ? (open ? entry : null) : (
+    <Dialog open={open} onClose={requestClose} title="Capture">{entry}</Dialog>
   );
 }

@@ -60,26 +60,28 @@ export async function signIn(page: Page, origin?: string): Promise<void> {
   await expect(visibleCaptureButton(page)).toBeVisible();
 }
 
-/** Desktop rail and mobile tab both expose Capture; only one is in the viewport. */
+/** Compatibility helper: Capture now opens through the visible Search or create launcher. */
 export function visibleCaptureButton(page: Page) {
   return page
-    .locator('[data-testid="capture-button-desktop"], [data-testid="capture-button-mobile"]')
+    .locator('[data-testid="launcher-button-desktop"], [data-testid="launcher-button-mobile"]')
     .filter({ visible: true });
 }
 
 /**
- * Open Capture and enter the note branch.
- *
- * WP-TUX-04 put an action chooser in front of Capture so a Task can be created
- * from the same entry point. Quick note and Conversation log still reach the
- * capture field they always did; they are now one deliberate choice away.
+ * Open the requested Capture note through Search or create → New.
+ * Retain the legacy helper labels used by existing journeys.
  */
 export async function openCaptureNote(
   page: Page,
   kind: "Quick note" | "Conversation log" = "Quick note",
 ): Promise<void> {
   await visibleCaptureButton(page).click();
-  await page.getByTestId("capture-chooser").getByRole("button", { name: kind }).click();
+  const launcher = page.getByRole("dialog", { name: "Search or create" });
+  await launcher.getByRole("button", { name: "New", exact: true }).click();
+  await launcher.getByRole("button", {
+    name: kind === "Quick note" ? "Quick Note" : "Conversation Log",
+    exact: true,
+  }).click();
   await expect(page.getByTestId("capture-field")).toBeVisible();
 }
 

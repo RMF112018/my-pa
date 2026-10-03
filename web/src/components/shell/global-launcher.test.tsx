@@ -118,6 +118,26 @@ afterEach(() => {
 });
 
 describe("GlobalLauncher hardened contract", () => {
+  it("uses the canonical phone menu Sheet with one overlay and branch Escape", async () => {
+    vi.stubGlobal("matchMedia", () => ({
+      matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn(),
+    }));
+    try {
+      render(<Harness />);
+      const launcher = openLauncher();
+      expect(launcher).toHaveAttribute("data-placement", "menu");
+      expect(screen.getAllByRole("dialog")).toHaveLength(1);
+      await waitFor(() => expect(within(launcher).getByRole("button", { name: "Search" })).toHaveFocus());
+      fireEvent.click(within(launcher).getByRole("button", { name: "New" }));
+      fireEvent.keyDown(screen.getByRole("button", { name: "Create Task" }), { key: "Escape" });
+      expect(screen.getByRole("button", { name: "New" })).toHaveFocus();
+      fireEvent.click(screen.getByRole("button", { name: "Close panel" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("starts with exactly Search and New, focuses Search, and reuses canonical Search without creation rows", () => {
     render(<Harness />);
     const launcher = openLauncher();
@@ -150,6 +170,44 @@ describe("GlobalLauncher hardened contract", () => {
       "Create Task", "Quick Note", "Conversation Log",
     ]);
     expect(within(launcher).getByRole("button", { name: "Create Task" })).toHaveFocus();
+  });
+
+  it("wraps New menu arrow keys and leaves Tab to normal navigation", () => {
+    render(<Harness />);
+    const menu = within(openNew()).getByRole("group", { name: "Create new" });
+    const choices = within(menu).getAllByRole("button");
+    fireEvent.keyDown(choices[0], { key: "ArrowUp" });
+    expect(choices[2]).toHaveFocus();
+    fireEvent.keyDown(choices[2], { key: "ArrowDown" });
+    expect(choices[0]).toHaveFocus();
+    fireEvent.keyDown(choices[0], { key: "ArrowDown" });
+    expect(choices[1]).toHaveFocus();
+    const tab = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    choices[1].dispatchEvent(tab);
+    expect(tab.defaultPrevented).toBe(false);
+  });
+
+  it("closes the whole clean experience from New rather than returning to Initial", async () => {
+    render(<Harness />);
+    const launcher = openNew();
+    fireEvent.click(within(launcher).getByRole("button", { name: "Close dialog" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("guards explicit Close on a dirty Capture branch while Escape retains its Back meaning", async () => {
+    render(<Harness />);
+    const launcher = openNew();
+    fireEvent.click(within(launcher).getByRole("button", { name: "Quick Note" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Capture text" }), { target: { value: "Synthetic retained draft" } });
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Capture text" }), { key: "Escape" });
+    expect(screen.getByRole("group", { name: "Create new" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Quick Note" }));
+    expect(screen.getByRole("textbox", { name: "Capture text" })).toHaveValue("Synthetic retained draft");
+    fireEvent.click(within(launcher).getByRole("button", { name: "Close dialog" }));
+    expect(screen.getByRole("alertdialog", { name: "Discard drafts" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Keep editing" })).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+    expect(screen.getByRole("textbox", { name: "Capture text" })).toHaveValue("Synthetic retained draft");
   });
 
   it("keeps Task's open-time Project seed independent of Capture's explicit selection", async () => {
@@ -239,6 +297,59 @@ describe("GlobalLauncher hardened contract", () => {
     openLauncher();
     fireEvent.keyDown(screen.getByRole("dialog", { name: "Search or create" }), { key: "Escape" });
     await waitFor(() => expect(screen.getByRole("button", { name: "Search or create" })).toHaveFocus());
+  });
+
+  it("retains both Capture drafts after Task confirmation and reopening", async () => {
+    render(<Harness />);
+    fireEvent.click(within(openNew()).getByRole("button", { name: "Quick Note" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Capture text" }), { target: { value: "Synthetic note draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(screen.getByRole("button", { name: "Conversation Log" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Capture text" }), { target: { value: "Synthetic conversation draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Task" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm Task" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    fireEvent.click(within(openNew()).getByRole("button", { name: "Quick Note" }));
+    expect(screen.getByRole("textbox", { name: "Capture text" })).toHaveValue("Synthetic note draft");
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(screen.getByRole("button", { name: "Conversation Log" }));
+    expect(screen.getByRole("textbox", { name: "Capture text" })).toHaveValue("Synthetic conversation draft");
+  });
+
+  it("returns Escape from Task to New retaining the canonical draft", async () => {
+    render(<Harness />);
+    fireEvent.click(within(openNew()).getByRole("button", { name: "Create Task" }));
+    const title = await screen.findByRole("textbox", { name: "Title" });
+    fireEvent.change(title, { target: { value: "Synthetic retained Task" } });
+    fireEvent.keyDown(title, { key: "Escape" });
+    expect(await screen.findByRole("group", { name: "Create new" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create Task" })).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "Create Task" }));
+    expect(await screen.findByRole("textbox", { name: "Title" })).toHaveValue("Synthetic retained Task");
+  });
+
+  it.each(["Quick Note", "Conversation Log"])("returns Capture Back to its originating %s choice", (label) => {
+    render(<Harness />);
+    fireEvent.click(within(openNew()).getByRole("button", { name: label }));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.getByRole("button", { name: label })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole("button", { name: label }), { key: "Escape" });
+    expect(screen.getByRole("button", { name: "New" })).toHaveFocus();
+  });
+
+  it("does not replace deliberate outside focus during scheduled close restoration", () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => { frames.push(callback); return frames.length; });
+    render(<Harness />);
+    const invoker = screen.getByRole("button", { name: "Invoker" });
+    invoker.focus();
+    openLauncher();
+    fireEvent.keyDown(screen.getByRole("dialog", { name: "Search or create" }), { key: "Escape" });
+    const outside = screen.getByRole("button", { name: "Remove invoker" });
+    outside.focus();
+    frames.forEach((callback) => callback(0));
+    expect(outside).toHaveFocus();
   });
 
   it("closes on Task confirmation, stays on the origin, and offers no Open Task", async () => {

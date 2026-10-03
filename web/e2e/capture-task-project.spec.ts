@@ -56,10 +56,12 @@ async function createAndReadTask(page: Page) {
   return (await response.json()) as { task: { task_id: string; project_id: string | null } };
 }
 
-/** Open Capture and take the Create Task branch. */
+/** Open the unified launcher and take New → Create Task. */
 async function openTaskFromCapture(page: Page): Promise<void> {
   await visibleCaptureButton(page).click();
-  await page.getByTestId("capture-chooser").getByRole("button", { name: "Create Task" }).click();
+  const launcher = page.getByRole("dialog", { name: "Search or create" });
+  await launcher.getByRole("button", { name: "New", exact: true }).click();
+  await launcher.getByRole("group", { name: "Create new", exact: true }).getByRole("button", { name: "Create Task", exact: true }).click();
   await expect(page.getByTestId("task-create-sheet")).toBeVisible();
 }
 
@@ -147,14 +149,12 @@ test.describe("WP08 Capture to Task Project, real stack", () => {
       timeout: 20_000,
     });
     await page.getByTestId("task-create-back").click();
-    await expect(page.getByTestId("capture-chooser")).toBeVisible();
-    await page
-      .getByTestId("capture-chooser")
-      .getByRole("button", { name: "Quick note" })
-      .click();
+    const launcher = page.getByRole("dialog", { name: "Search or create" });
+    await expect(launcher.getByRole("button", { name: "Create Task", exact: true })).toBeFocused();
+    await launcher.getByRole("button", { name: "Quick Note", exact: true }).click();
     await page.getByTestId("capture-project-select").selectOption(projectB!);
     await page.getByTestId("capture-entry-back").click();
-    await page.getByTestId("capture-chooser").getByRole("button", { name: "Create Task" }).click();
+    await launcher.getByRole("button", { name: "Create Task", exact: true }).click();
 
     // The resumed surface shows A, disabled, and offers the same retry.
     const select = page.getByTestId("capture-project-select");
@@ -183,7 +183,7 @@ test.describe("WP08 Capture to Task Project, real stack", () => {
     expect((await canonicalTask(page, produced.task.task_id))?.project_id).toBe(projectA);
   });
 
-  test("Back returns to Capture with the Project the sheet held", async ({ page }) => {
+  test("Back retains independent Capture and Task Project selections", async ({ page }) => {
     await signIn(page);
     const projects = await authorizedProjects(page);
     test.skip(projects.length === 0, "this stack seeds no Project for the synthetic Principal");
@@ -193,12 +193,16 @@ test.describe("WP08 Capture to Task Project, real stack", () => {
     await page.getByTestId("capture-project-select").selectOption(chosen);
     await page.getByTestId("task-create-back").click();
 
-    await expect(page.getByTestId("capture-chooser")).toBeVisible();
-    await page.getByTestId("capture-chooser").getByRole("button", { name: "Quick note" }).click();
-    // Capture adopted what Task actually held.
-    await expect(page.getByTestId("capture-project-select")).toHaveValue(chosen);
-    // Focus is inside the reopened surface, not on the page behind it.
+    const launcher = page.getByRole("dialog", { name: "Search or create" });
+    await expect(launcher.getByRole("button", { name: "Create Task", exact: true })).toBeFocused();
+    await launcher.getByRole("button", { name: "Quick Note", exact: true }).click();
+    // Capture keeps its own No Project seed; Task selection never overwrites it.
+    await expect(page.getByTestId("capture-project-select")).toHaveValue("");
     await expect(page.getByTestId("capture-field")).toBeFocused();
+    await page.getByTestId("capture-entry-back").click();
+    await expect(launcher.getByRole("button", { name: "Quick Note", exact: true })).toBeFocused();
+    await launcher.getByRole("button", { name: "Create Task", exact: true }).click();
+    await expect(page.getByTestId("capture-project-select")).toHaveValue(chosen);
   });
 
   test("the Capture to Task path captures nothing", async ({ page }) => {

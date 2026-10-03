@@ -69,6 +69,11 @@ test("WP02 New keeps independent Capture and Task drafts and guards only whole c
     "Create Task", "Quick Note", "Conversation Log",
   ]);
   await expect(dialog.getByRole("button", { name: "Close dialog", exact: true })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Create Task", exact: true })).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await expect(dialog.getByRole("button", { name: "Conversation Log", exact: true })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(dialog.getByRole("button", { name: "Create Task", exact: true })).toBeFocused();
   await dialog.getByRole("button", { name: "Quick Note" }).click();
   const note = syntheticNote("wp02-independent-note");
   await page.getByTestId("capture-field").fill(note);
@@ -81,8 +86,9 @@ test("WP02 New keeps independent Capture and Task drafts and guards only whole c
   const title = page.getByRole("textbox", { name: "Title" });
   await title.fill("Synthetic WP02 retained task draft");
   await expect(activeOverlays(page)).toHaveCount(1);
-  await page.getByTestId("task-create-back").click();
+  await page.keyboard.press("Escape");
   await expect(dialog.getByRole("button", { name: "Create Task" })).toBeFocused();
+  await expect(activeOverlays(page)).toHaveCount(1);
   await dialog.getByRole("button", { name: "Quick Note" }).click();
   await expect(page.getByTestId("capture-field")).toHaveValue(note);
   await page.getByTestId("capture-entry-back").click();
@@ -106,7 +112,13 @@ test("WP02 New keeps independent Capture and Task drafts and guards only whole c
 test("WP02 confirmed Task closes on its origin and adds no Open Task action", async ({ page }) => {
   await signIn(page);
   const origin = page.url();
-  await (await openNew(page)).getByRole("button", { name: "Create Task" }).click();
+  const dialog = await openNew(page);
+  const retainedNote = syntheticNote("wp02-note-retained-after-task");
+  await dialog.getByRole("button", { name: "Quick Note", exact: true }).click();
+  await page.getByTestId("capture-field").fill(retainedNote);
+  await page.getByTestId("capture-entry-back").click();
+  await expect(dialog.getByRole("button", { name: "Quick Note", exact: true })).toBeFocused();
+  await dialog.getByRole("button", { name: "Create Task", exact: true }).click();
   const taskTitle = `Synthetic WP02 confirmed task ${Date.now()}`;
   await page.getByRole("textbox", { name: "Title" }).fill(taskTitle);
   const [response] = await Promise.all([
@@ -118,6 +130,13 @@ test("WP02 confirmed Task closes on its origin and adds no Open Task action", as
   await expect(launcher(page)).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Open Task" })).toHaveCount(0);
   expect(page.url()).toBe(origin);
+  await (await openNew(page)).getByRole("button", { name: "Quick Note", exact: true }).click();
+  await expect(page.getByTestId("capture-field")).toHaveValue(retainedNote);
+  await launcher(page).getByRole("button", { name: "Close dialog", exact: true }).click();
+  const discard = page.getByRole("alertdialog", { name: "Discard drafts", exact: true });
+  await expect(discard.getByRole("button", { name: "Keep editing" })).toBeFocused();
+  await discard.getByRole("button", { name: "Discard drafts" }).click();
+  await expect(launcher(page)).toHaveCount(0);
 });
 
 test("WP02 offline Task is not queued while Quick Note can be held", async ({ page, context }) => {

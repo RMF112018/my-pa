@@ -37,7 +37,12 @@ test("dark shell captures responsive navigation and Inspector states", async ({ 
     await expect(page.getByRole("dialog", { name: "Inspector" })).toBeVisible();
   } else {
     if ((page.viewportSize()?.width ?? 0) >= 1024) {
-      await page.getByRole("button", { name: "Collapse navigation" }).click();
+      const toggle = page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: /^(Collapse|Expand) navigation$/ });
+      await expect(toggle).toHaveCount(1);
+      await expect(toggle).toBeVisible();
+      if (await toggle.getAttribute("aria-label") === "Collapse navigation") await toggle.click();
+      await expect(page.getByRole("button", { name: "Expand navigation" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Collapse navigation" })).toHaveCount(0);
     } else {
       await expect(page.getByRole("button", { name: "Collapse navigation" })).toHaveCount(0);
     }
@@ -78,14 +83,9 @@ test("the shell reflows at 200 percent without horizontal loss", async ({ page }
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
   );
   expect(overflow).toBeLessThanOrEqual(1);
-  // `visibility` preserves inline width: normalize the 141.125px runtime text
-  // to the fixed 134.03125px one-digit-hour form behind the reviewed anchor.
-  await page.locator('[data-visual-dynamic="freshness"]').evaluate((node) => {
-    node.textContent = "8/22/2026, 9:00:00 AM";
-  });
-  await page.addStyleTag({
-    content: '[data-visual-dynamic="freshness"] { visibility: hidden !important; }',
-  });
+  // Work disclosure/freshness is diagnostic-only in the default product view.
+  await expect(page.getByRole("complementary", { name: "Work answer disclosure" })).toHaveCount(0);
+  await expect(page.locator('[data-visual-dynamic="freshness"]')).toHaveCount(0);
   await expect(page).toHaveScreenshot("shell-zoom-200.png", {
     animations: "disabled",
     fullPage: false,

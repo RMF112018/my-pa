@@ -1,17 +1,31 @@
 "use client";
 
-import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { CaptureDialog } from "@/components/shell/capture-dialog";
 import { SearchCommandPanel } from "@/components/shell/command-palette";
 import { TaskCreateSheet } from "@/components/tasks/task-create-sheet";
 import { TaskCompactSheet } from "@/components/tasks/task-compact-sheet";
 import { Dialog } from "@/components/ui/dialog";
+import { Sheet } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { useProjectScope } from "@/components/shell/project-scope-provider";
 import { beginCaptureExperience, captureSessionReducer, hasUnresolvedIntent } from "@/lib/capture/session";
 import type { CaptureProjectId } from "@/lib/capture/contract";
 import type { PresentedTaskActivation } from "@/lib/search/presentation";
+
+const PHONE_QUERY = "(max-width: 767px)";
+
+function subscribeToPhoneViewport(onChange: () => void) {
+  if (typeof window.matchMedia !== "function") return () => undefined;
+  const query = window.matchMedia(PHONE_QUERY);
+  query.addEventListener("change", onChange);
+  return () => query.removeEventListener("change", onChange);
+}
+
+function phoneViewportSnapshot() {
+  return typeof window.matchMedia === "function" && window.matchMedia(PHONE_QUERY).matches;
+}
 
 export type ProjectId = NonNullable<CaptureProjectId>;
 type Mode = "initial" | "search" | "new" | "quick_note" | "conversation_log" | "task";
@@ -52,6 +66,7 @@ export function GlobalLauncher({ open, onOpenChange, initialMode = "initial", pr
   const { principalId } = principal;
   const sessionIdentity = `${principal.principalId}:${principal.sessionEpoch}`;
   const router = useRouter();
+  const phone = useSyncExternalStore(subscribeToPhoneViewport, phoneViewportSnapshot, () => false);
   const scope = useProjectScope();
   const scopeProjectId = scope.resolution.scope.kind === "PROJECT" ? scope.resolution.scope.projectId : null;
   const [capture, dispatchCapture] = useReducer(
@@ -85,9 +100,12 @@ export function GlobalLauncher({ open, onOpenChange, initialMode = "initial", pr
   const searchChoice = useRef<HTMLButtonElement>(null);
   const searchTaskTrigger = useRef<HTMLElement | null>(null);
   const newChoice = useRef<HTMLButtonElement>(null);
+  const quickNoteChoice = useRef<HTMLButtonElement>(null);
+  const conversationChoice = useRef<HTMLButtonElement>(null);
+  const initialReturnChoice = useRef<"search" | "new">("search");
+  const newReturnChoice = useRef<"task" | "quick_note" | "conversation_log">("task");
   const keepEditing = useRef<HTMLButtonElement>(null);
   const mounted = useRef(true);
-  const requestCloseRef = useRef<() => void>(() => undefined);
   const taskContext = useMemo(() => taskProjectId ? { projectId: taskProjectId } : undefined, [taskProjectId]);
   const captureDirty = capture.noteDraft.trim() !== "" || capture.conversationDraft.trim() !== "";
   const hasDrafts = captureDirty || taskDirty;
@@ -95,7 +113,6 @@ export function GlobalLauncher({ open, onOpenChange, initialMode = "initial", pr
 
   useLayoutEffect(() => { openRef.current = open; }, [open]);
   useLayoutEffect(() => { currentSessionIdentity.current = sessionIdentity; }, [sessionIdentity]);
-  useLayoutEffect(() => { requestCloseRef.current = requestClose; });
   useEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; };
@@ -117,7 +134,10 @@ export function GlobalLauncher({ open, onOpenChange, initialMode = "initial", pr
       return;
     }
     wasOpen.current = true;
+    const sameSession = openedSessionIdentity.current === sessionIdentity;
     openedSessionIdentity.current = sessionIdentity;
+    initialReturnChoice.current = "search";
+    newReturnChoice.current = "task";
     focusGeneration.current += 1;
     const active = document.activeElement;
     // WebKit pointer clicks can leave the document body focused. It is not a
@@ -140,7 +160,7 @@ export function GlobalLauncher({ open, onOpenChange, initialMode = "initial", pr
     setTaskReady(false);
     setTaskDirty(false);
     confirmedClose.current = false;
-    if (hasUnresolvedIntent(capture)) dispatchCapture({ type: "reopen" });
+    if (hasUnresolvedIntent(capture) || (sameSession && captureDirty)) dispatchCapture({ type: "reopen" });
     else dispatchCapture({
       type: "open",
       experienceId: `capture-${crypto.randomUUID()}`,
@@ -148,9 +168,9 @@ export function GlobalLauncher({ open, onOpenChange, initialMode = "initial", pr
       sessionEpoch: scope.epoch,
       projectId: proposedProject,
     });
-  }, [open, initialMode, principalId, projectId, scope.epoch, scopeProjectId, sessionIdentity, capture]);
+  }, [open, initialMode, principalId, projectId, scope.epoch, scopeProjectId, sessionIdentity, capture, captureDirty]);
 
-  // The native Dialog closes its trap in its effect. Only a later commit opens
+  // The launcher overlay closes its trap first. Only a later commit opens
   // the canonical Task sheet, so the two traps never overlap.
   useEffect(() => {
     if (!open || mode !== "task" || !online || confirmDiscard || pendingTaskClose || taskReady) return;
@@ -178,16 +198,23 @@ export function GlobalLauncher({ open, onOpenChange, initialMode = "initial", pr
     });
     return () => cancelAnimationFrame(frame);
   }, [pendingTaskClose, taskReady]);
-  useEffect(() => {
-    if (!dialogOpen) return;
+  const focusDialogEntry = useCallback(() => {
     if (confirmDiscard) keepEditing.current?.focus();
-    else if (mode === "initial") searchChoice.current?.focus();
-    else if (mode === "new") newChoice.current?.focus();
+    else if (mode === "initial") (initialReturnChoice.current === "new" ? newChoice : searchChoice).current?.focus();
+    else if (mode === "new") {
+      const target = newReturnChoice.current === "quick_note" ? quickNoteChoice
+        : newReturnChoice.current === "conversation_log" ? conversationChoice : newChoice;
+      target.current?.focus();
+    }
     else if (mode === "search" && searchTaskTrigger.current?.isConnected) {
       searchTaskTrigger.current.focus();
       searchTaskTrigger.current = null;
     }
-  }, [dialogOpen, mode, confirmDiscard]);
+  }, [mode, confirmDiscard]);
+
+  useEffect(() => {
+    if (dialogOpen) focusDialogEntry();
+  }, [dialogOpen, focusDialogEntry]);
   useEffect(() => {
     if (!open || mode !== "task") return;
     const update = () => setTaskDirty(taskFormHasUnsentDraft(taskProjectId));
@@ -202,13 +229,15 @@ export function GlobalLauncher({ open, onOpenChange, initialMode = "initial", pr
     };
   }, [open, mode, taskProjectId]);
   useEffect(() => {
-    if (!open || mode !== "initial" || confirmDiscard) return;
+    if (!open || !dialogOpen) return;
     const onKey = (event: globalThis.KeyboardEvent) => {
       if (event.altKey || event.ctrlKey || event.metaKey) return;
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
-        requestCloseRef.current();
+        escapeFromDialog();
+      } else if (mode !== "initial" || confirmDiscard) {
+        return;
       } else if (event.key.length === 1 && !event.isComposing) {
         event.preventDefault();
         setSearchSeed(event.key);
@@ -221,7 +250,22 @@ export function GlobalLauncher({ open, onOpenChange, initialMode = "initial", pr
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [open, mode, confirmDiscard]);
+  });
+
+  useEffect(() => {
+    if (!open || mode !== "task" || !taskReady || confirmDiscard) return;
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      const back = document.querySelector<HTMLButtonElement>('[data-testid="task-create-back"]');
+      if (!back || back.disabled) return;
+      event.preventDefault();
+      event.stopPropagation();
+      // Let the canonical Back action retain its editable/frozen Project.
+      back.click();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open, mode, taskReady, confirmDiscard]);
 
   function finishClose(discard: boolean) {
     if (discard) {
@@ -237,6 +281,9 @@ export function GlobalLauncher({ open, onOpenChange, initialMode = "initial", pr
     const generation = ++focusGeneration.current;
     requestAnimationFrame(() => {
       if (generation !== focusGeneration.current || openRef.current) return;
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && active !== document.body && active !== document.documentElement
+        && active !== invoker.current && !active.closest('dialog, [role="dialog"], [role="alertdialog"]')) return;
       const launcherControls = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="launcher-button-desktop"], [data-testid="launcher-button-mobile"]'));
       const fallback = launcherControls.find((control) => control.getClientRects().length > 0) ?? launcherControls[0]
         ?? Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.trim() === "Search or create")
@@ -277,11 +324,13 @@ export function GlobalLauncher({ open, onOpenChange, initialMode = "initial", pr
   }
 
   function chooseNote(kind: "quick_note" | "conversation_log") {
+    newReturnChoice.current = kind;
     dispatchCapture({ type: "select_form", form: kind });
     setMode(kind);
   }
 
   function toTask() {
+    newReturnChoice.current = "task";
     setTaskReady(false);
     // Task's editable Project starts from the launcher-open snapshot. Capture
     // keeps its own selection; Back preserves any later Task selection below.
@@ -311,18 +360,26 @@ export function GlobalLauncher({ open, onOpenChange, initialMode = "initial", pr
     finishClose(false);
   }
 
-  return <>
-    <div hidden={!dialogOpen} className="[&_dialog]:max-w-[680px] md:[&_dialog]:w-[80vw] max-md:[&_dialog]:max-h-[92dvh] max-md:[&_dialog]:w-full max-md:[&_dialog]:rounded-b-none max-md:[&_dialog]:rounded-t-2xl max-md:[&_dialog]:bottom-0 max-md:[&_dialog]:top-auto max-md:[&_dialog]:mb-0">
-    <Dialog open={dialogOpen} onClose={() => {
-      // Controlled branch changes also emit a native close event.
-      if (!dialogOpen || searchTask) return;
-      if (confirmDiscard) { setConfirmDiscard(false); return; }
-      if (mode === "search") { setMode("initial"); return; }
-      if (mode === "new") { setMode("initial"); return; }
-      if (mode === "quick_note" || mode === "conversation_log") { setMode("new"); return; }
-      requestClose();
-    }} title="Search or create">
-      {confirmDiscard ? <div role="alertdialog" aria-label="Discard drafts">
+  function escapeFromDialog() {
+    if (!dialogOpen || searchTask) return;
+    if (confirmDiscard) { setConfirmDiscard(false); return; }
+    if (mode === "search" || mode === "new") {
+      initialReturnChoice.current = mode;
+      setMode("initial");
+      return;
+    }
+    if (mode === "quick_note" || mode === "conversation_log") { setMode("new"); return; }
+    requestClose();
+  }
+
+  function closeLauncherDialog() {
+    // Controlled branch changes also emit a native close event.
+    if (!dialogOpen || searchTask) return;
+    if (confirmDiscard) { setConfirmDiscard(false); return; }
+    requestClose();
+  }
+
+  const launcherContent = confirmDiscard ? <div role="alertdialog" aria-label="Discard drafts">
         <p>Discard unsent drafts? Held offline notes are not deleted.</p>
         <div className="mt-4 flex flex-wrap gap-2">
           <Button ref={keepEditing} onClick={() => { setPendingNavigation(null); setConfirmDiscard(false); if (mode === "task") setTaskReady(true); }}>Keep editing</Button>
@@ -344,10 +401,18 @@ export function GlobalLauncher({ open, onOpenChange, initialMode = "initial", pr
             setSearchTaskReady(false);
             setSearchTask(task);
           }} /> : null}
-        {mode === "new" ? <div role="group" aria-label="Create new" className="flex flex-col gap-2">
+        {mode === "new" ? <div role="group" aria-label="Create new" className="flex flex-col gap-2"
+          onKeyDown={(event) => {
+            if (event.altKey || event.ctrlKey || event.metaKey || (event.key !== "ArrowDown" && event.key !== "ArrowUp")) return;
+            const choices = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button"));
+            const current = choices.findIndex((choice) => choice === document.activeElement);
+            event.preventDefault();
+            const step = event.key === "ArrowDown" ? 1 : -1;
+            choices[(current + step + choices.length) % choices.length]?.focus();
+          }}>
           <Button ref={newChoice} variant="ghost" onClick={toTask}>Create Task</Button>
-          <Button variant="ghost" onClick={() => chooseNote("quick_note")}>Quick Note</Button>
-          <Button variant="ghost" onClick={() => chooseNote("conversation_log")}>Conversation Log</Button>
+          <Button ref={quickNoteChoice} variant="ghost" onClick={() => chooseNote("quick_note")}>Quick Note</Button>
+          <Button ref={conversationChoice} variant="ghost" onClick={() => chooseNote("conversation_log")}>Conversation Log</Button>
         </div> : null}
         <CaptureDialog embedded open={mode === "quick_note" || mode === "conversation_log"}
           onClose={requestClose} onBack={() => setMode("new")}
@@ -356,8 +421,26 @@ export function GlobalLauncher({ open, onOpenChange, initialMode = "initial", pr
           <p>Tasks can’t be created offline. Keep this draft open and try again when you’re online.</p>
           <Button variant="secondary" onClick={() => setMode("new")}>Back</Button>
         </div> : null}
-      </div>}
-    </Dialog>
+      </div>;
+
+  return <>
+    <div hidden={!dialogOpen}
+      onFocusCapture={(event) => {
+        // The canonical phone Sheet mounts its portal after the launcher effect
+        // and defaults to its title. Choose this feature's stage synchronously.
+        if (phone && event.target instanceof HTMLElement && event.target.tagName === "H2") focusDialogEntry();
+      }}
+      onKeyDownCapture={(event) => {
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        event.stopPropagation();
+        escapeFromDialog();
+      }}
+      className="[&_dialog]:max-w-[680px] [&_dialog]:w-[80vw] [&_dialog]:max-h-[80vh]">
+    {phone ? <Sheet open={dialogOpen} onOpenChange={(next) => { if (!next) closeLauncherDialog(); }}
+      title="Search or create" placement="menu">{launcherContent}</Sheet>
+      : <Dialog open={dialogOpen} onClose={closeLauncherDialog} title="Search or create">{launcherContent}</Dialog>}
+
     </div>
     {searchTask ? <TaskCompactSheet taskId={searchTask.taskId} seed={searchTask.seed}
       open={searchTaskReady} onOpenChange={(next) => {

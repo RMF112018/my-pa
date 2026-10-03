@@ -443,6 +443,128 @@ def test_protected_file_rejects_symlink_hardlink_mode_and_owner(tmp_path, monkey
         GATE._trusted_file(original, os.getuid(), stop=root)
 
 
+def _source_index_fixture(tmp_path, index_size=300 * 1024):
+    root = _directory(tmp_path / "trusted")
+    source = _directory(root / "source")
+    git_dir = _directory(source / ".git")
+    for member in ("config", "HEAD"):
+        _file(git_dir / member, "synthetic\n", 0o600)
+    index = _file(git_dir / "index", b"", 0o600)
+    with index.open("r+b") as stream:
+        stream.truncate(index_size)
+    calls = []
+    responses = {
+        "--show-toplevel": str(source).encode(),
+        "HEAD": NEW_COMMIT.encode(),
+        "HEAD^{tree}": NEW_TREE.encode(),
+        "--untracked-files=all": b"",
+    }
+
+    def runner(argv):
+        assert argv[0] == GATE.GIT
+        assert argv[argv.index("-C") + 1] == str(source)
+        calls.append(argv)
+        return responses[argv[-1]]
+
+    return root, source, index, runner, calls, responses
+
+
+def test_source_accepts_repository_sized_git_index(tmp_path):
+    root, source, index, runner, calls, _ = _source_index_fixture(tmp_path)
+    # Independently establish that every existing filesystem control accepts
+    # this synthetic index when only the generic size limit is lifted.
+    assert len(GATE._trusted_file(index, os.getuid(), mode=0o600, limit=300 * 1024, stop=root)) == (
+        300 * 1024
+    )
+    GATE._source(source, NEW_COMMIT, NEW_TREE, os.getuid(), runner, root)
+    assert [argv[-1] for argv in calls] == [
+        "--show-toplevel",
+        "HEAD",
+        "HEAD^{tree}",
+        "--untracked-files=all",
+    ]
+
+
+@pytest.mark.parametrize("member", ["config", "HEAD", "ordinary"])
+def test_source_small_control_files_keep_generic_size_bound(tmp_path, member):
+    root, source, _, runner, calls, _ = _source_index_fixture(tmp_path)
+    oversized = _file(source / ".git" / member, b"x" * 65537, 0o600)
+    assert len(GATE._trusted_file(oversized, os.getuid(), mode=0o600, limit=65537, stop=root)) == (
+        65537
+    )
+    with pytest.raises(GATE.RefusalError):
+        if member == "ordinary":
+            GATE._trusted_file(oversized, os.getuid(), mode=0o600, stop=root)
+        else:
+            GATE._source(source, NEW_COMMIT, NEW_TREE, os.getuid(), runner, root)
+    assert calls == []
+
+
+@pytest.mark.parametrize("extra_byte", [0, 1])
+def test_source_git_index_has_finite_size_boundary(tmp_path, extra_byte):
+    # truncate constructs both sides of the boundary without allocating a
+    # large fixture buffer; the helper must read the accepted boundary fully.
+    root, source, index, runner, calls, _ = _source_index_fixture(
+        tmp_path, GATE.GIT_INDEX_MAX_BYTES + extra_byte
+    )
+    assert index.stat().st_size == GATE.GIT_INDEX_MAX_BYTES + extra_byte
+    if extra_byte:
+        with pytest.raises(GATE.RefusalError):
+            GATE._source(source, NEW_COMMIT, NEW_TREE, os.getuid(), runner, root)
+        assert calls == []
+    else:
+        GATE._source(source, NEW_COMMIT, NEW_TREE, os.getuid(), runner, root)
+        assert len(calls) == 4
+
+
+@pytest.mark.parametrize("mutation", ["symlink", "hardlink", "owner", "mode"])
+def test_source_large_git_index_preserves_filesystem_protections(tmp_path, monkeypatch, mutation):
+    root, source, index, runner, calls, _ = _source_index_fixture(tmp_path)
+    if mutation == "symlink":
+        target = index.with_name("physical-index")
+        index.rename(target)
+        index.symlink_to(target)
+    elif mutation == "hardlink":
+        os.link(index, index.with_name("linked-index"))
+    elif mutation == "owner":
+        original_lstat = Path.lstat
+
+        def wrong_index_owner(path):
+            metadata = original_lstat(path)
+            if path == index:
+                fields = list(metadata)
+                fields[4] = os.getuid() + 1
+                return os.stat_result(fields)
+            return metadata
+
+        monkeypatch.setattr(Path, "lstat", wrong_index_owner)
+    else:
+        index.chmod(0o666)
+    with pytest.raises(GATE.RefusalError):
+        GATE._source(source, NEW_COMMIT, NEW_TREE, os.getuid(), runner, root)
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("semantic_check", "wrong_value", "expected_call_count"),
+    [
+        ("--show-toplevel", b"/unexpected/source", 1),
+        ("HEAD", OLD_COMMIT.encode(), 2),
+        ("HEAD^{tree}", OLD_TREE.encode(), 3),
+        ("--untracked-files=all", b"?? unexpected.txt\n", 4),
+    ],
+)
+def test_source_large_git_index_preserves_semantic_binding(
+    tmp_path, semantic_check, wrong_value, expected_call_count
+):
+    root, source, _, runner, calls, responses = _source_index_fixture(tmp_path)
+    responses[semantic_check] = wrong_value
+    with pytest.raises(GATE.RefusalError):
+        GATE._source(source, NEW_COMMIT, NEW_TREE, os.getuid(), runner, root)
+    assert len(calls) == expected_call_count
+    assert calls[-1][-1] == semantic_check
+
+
 def test_fixed_success_only_invokes_read_only_identities_and_old_status(tmp_path):
     new, old, paths, calls, *_ = _fixture(tmp_path)
     GATE.verify(new, NEW_COMMIT, NEW_TREE, old, **paths)

@@ -90,10 +90,11 @@ export function NavRail({
         className="mb-3 w-full"
         onClick={onCapture}
         aria-haspopup="dialog"
-        data-testid="capture-button-desktop"
+        data-testid="launcher-button-desktop"
+        aria-label="Search or create"
       >
         <Plus size={18} />
-        <span className={collapsed ? "sr-only" : "max-lg:sr-only"}>Capture</span>
+        <span className={collapsed ? "sr-only" : "max-lg:sr-only"}>Search / New</span>
       </Button>
       <div className="space-y-1">
         {DESKTOP_PRIMARY.map((item) => (
@@ -166,13 +167,14 @@ export function MobileNav({ onCapture }: { onCapture: () => void }) {
           type="button"
           className="flex min-h-14 flex-1 flex-col items-center justify-center gap-1 text-[11px] text-text-muted"
           aria-haspopup="dialog"
-          data-testid="capture-button-mobile"
+          data-testid="launcher-button-mobile"
+          aria-label="Search or create"
           onClick={onCapture}
         >
           <span className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-accent text-on-brand-accent">
             <Plus size={20} />
           </span>
-          Capture
+          Search / New
         </button>
         {right.map((item) => {
           const active = activeFor(pathname, item.href);

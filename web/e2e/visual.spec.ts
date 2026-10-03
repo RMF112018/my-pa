@@ -36,7 +36,11 @@ test("dark shell captures responsive navigation and Inspector states", async ({ 
   if (testInfo.project.name === "mobile") {
     await expect(page.getByRole("dialog", { name: "Inspector" })).toBeVisible();
   } else {
-    await page.getByRole("button", { name: "Collapse navigation" }).click();
+    if ((page.viewportSize()?.width ?? 0) >= 1024) {
+      await page.getByRole("button", { name: "Collapse navigation" }).click();
+    } else {
+      await expect(page.getByRole("button", { name: "Collapse navigation" })).toHaveCount(0);
+    }
     await expect(page.getByRole("complementary", { name: "Utility region" })).toBeVisible();
   }
 
@@ -46,9 +50,12 @@ test("dark shell captures responsive navigation and Inspector states", async ({ 
   });
 });
 
-test("command overlay has a deterministic reduced-motion state", async ({ page }) => {
-  await page.keyboard.press("Control+K");
-  await expect(page.getByRole("dialog", { name: "Search" })).toBeVisible();
+test("unified launcher has a deterministic reduced-motion initial state", async ({ page }) => {
+  await page.keyboard.press("ControlOrMeta+k");
+  const launcher = page.getByRole("dialog", { name: "Search or create" });
+  await expect(launcher).toBeVisible();
+  await expect(launcher.getByRole("group", { name: "Search or New" }).getByRole("button")).toHaveText(["Search", "New"]);
+  await expect(launcher.getByRole("button", { name: "Search", exact: true })).toBeFocused();
   await expect(page).toHaveScreenshot("shell-command-menu.png", {
     animations: "disabled",
     fullPage: true,

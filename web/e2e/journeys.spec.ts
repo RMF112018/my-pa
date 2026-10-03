@@ -182,7 +182,7 @@ test.describe("the signed-in surfaces", () => {
     );
   });
 
-  test("Search palette and Inspector expose only the bounded shell behavior", async ({ page }, testInfo) => {
+  test("unified launcher and Inspector expose only the bounded shell behavior", async ({ page }, testInfo) => {
     await expect(page.getByRole("link", { name: "Review" }).first()).toBeVisible();
     await expect(page.getByRole("button", { name: /Commands/ })).toHaveCount(0);
     if (mobileChrome(testInfo.project.name)) {
@@ -197,7 +197,7 @@ test.describe("the signed-in surfaces", () => {
       const more = page.getByRole("dialog", { name: "More" });
       await expect(more).toBeVisible();
       await expect(more.getByRole("link", { name: "Review", exact: true })).toBeVisible();
-      await expect(more.getByRole("link", { name: "Search", exact: true })).toBeVisible();
+      await expect(more.getByRole("link", { name: "Search", exact: true })).toHaveCount(0);
       await page.getByRole("button", { name: "Close panel" }).click();
     }
 
@@ -207,7 +207,7 @@ test.describe("the signed-in surfaces", () => {
       await expect(navMoreButton(page)).toHaveCount(0);
       for (const [name, href] of [
         ["Knowledge", "/knowledge"], ["Review", "/review"],
-        ["Search", "/search"], ["System", "/system"],
+        ["System", "/system"],
       ]) {
         const destination = rail.getByRole("link", { name, exact: true });
         await expect(destination).toBeVisible();
@@ -216,9 +216,12 @@ test.describe("the signed-in surfaces", () => {
       await expect(rail.getByRole("button", { name: "Collapse navigation" })).toHaveCount(0);
     }
 
-    await page.keyboard.press("Control+K");
-    const search = page.getByRole("dialog", { name: "Search" });
+    await expect(page.getByRole("link", { name: "Search", exact: true })).toHaveCount(0);
+    await page.keyboard.press("ControlOrMeta+k");
+    const search = page.getByRole("dialog", { name: "Search or create" });
     await expect(search).toBeVisible();
+    await expect(search.getByRole("button", { name: "Search", exact: true })).toBeFocused();
+    await search.getByRole("button", { name: "Search", exact: true }).click();
     await expect(search).not.toContainText(/cross-feature search is not available/i);
     await expect(search).toContainText("Start typing to search.");
     await expect(search.getByRole("button", { name: "Knowledge" })).toHaveCount(0);
@@ -236,6 +239,8 @@ test.describe("the signed-in surfaces", () => {
     if ((await incomplete.count()) > 0) {
       await expect(incomplete).toContainText(/may be incomplete/i);
     }
+    await page.keyboard.press("Escape");
+    await expect(search.getByRole("button", { name: "Search", exact: true })).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(search).toHaveCount(0);
     if (mobileChrome(testInfo.project.name)) {
@@ -367,14 +372,11 @@ test.describe("the signed-in surfaces", () => {
   test("focus returns to the capture button when the dialog closes", async ({ page }) => {
     const opener = visibleCaptureButton(page);
     await opener.click();
-    // WP-TUX-04. Capture opens on its action chooser, so focus lands on the
-    // chooser's first action rather than the note field. Asserting focus — not
-    // mere visibility — is the point: a native <dialog> restores focus to its
-    // invoker on close by itself, so the closing assertion below would pass even
-    // if focus had never entered the dialog at all.
-    await expect(page.getByTestId("capture-choice-create_task")).toBeFocused();
+    // The unified initial choice takes focus before Escape restores its invoker.
+    const launcher = page.getByRole("dialog", { name: "Search or create" });
+    await expect(launcher.getByRole("button", { name: "Search", exact: true })).toBeFocused();
     await page.keyboard.press("Escape");
-    await expect(page.getByTestId("capture-chooser")).toBeHidden();
+    await expect(launcher).toHaveCount(0);
     await expect(opener).toBeFocused();
   });
 
@@ -384,6 +386,12 @@ test.describe("the signed-in surfaces", () => {
     await expect(page.getByTestId("capture-field")).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("capture-field")).toBeHidden();
+    const launcher = page.getByRole("dialog", { name: "Search or create" });
+    await expect(launcher.getByRole("button", { name: "Create Task", exact: true })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(launcher.getByRole("button", { name: "Search", exact: true })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(launcher).toHaveCount(0);
     await expect(opener).toBeFocused();
   });
 
@@ -503,14 +511,13 @@ test.describe("keyboard-only navigation", () => {
     await page.waitForURL("**/knowledge");
     await expect(page.getByRole("heading", { name: "Knowledge", level: 1 })).toBeVisible();
 
-    // And the capture dialog opens, takes focus, and closes on Escape. The
-    // chooser is the dialog's first stop, so that is where focus must land for a
-    // keyboard-only user; reaching the note field is one choice further in.
+    // The unified launcher opens with Search focused and closes on Escape.
     await visibleCaptureButton(page).focus();
     await page.keyboard.press("Enter");
-    await expect(page.getByTestId("capture-choice-create_task")).toBeFocused();
+    const launcher = page.getByRole("dialog", { name: "Search or create" });
+    await expect(launcher.getByRole("button", { name: "Search", exact: true })).toBeFocused();
     await page.keyboard.press("Escape");
-    await expect(page.getByTestId("capture-chooser")).toBeHidden();
+    await expect(launcher).toHaveCount(0);
   });
 
   test("the focused element is always visibly focused", async ({ page }) => {

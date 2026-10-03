@@ -2,147 +2,111 @@ import { expect, test, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { signIn, syntheticNote } from "./fixtures";
 
-const newAction = (page: Page) => page.getByRole("banner").getByRole("button", { name: "New" });
-const visibleDialogCount = (page: Page) => page.getByRole("dialog").count();
+const launcherControl = (page: Page) => page.getByRole("button", { name: "Search or create" }).filter({ visible: true });
+const launcher = (page: Page) => page.getByRole("dialog", { name: "Search or create" });
+const activeOverlays = (page: Page) => page.locator('dialog[open], [role="dialog"][data-state="open"]');
 const noSideScroll = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
 
-test("WP02 shell keeps one main and Search separate from New, with legacy destinations", async ({ page }, testInfo) => {
+async function openNew(page: Page) {
+  await launcherControl(page).click();
+  await launcher(page).getByRole("button", { name: "New", exact: true }).click();
+  return launcher(page);
+}
+
+test("WP02 exposes one Search or create launcher and safe transitional destinations", async ({ page }, testInfo) => {
   await signIn(page);
   await expect(page.getByRole("main")).toHaveCount(1);
   await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
-  await expect(newAction(page)).toBeVisible();
+  await expect(launcherControl(page)).toHaveCount(1);
+  await expect(page.getByRole("link", { name: "Search", exact: true })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Review" }).first()).toHaveAttribute("href", "/review");
-  const primary = page.getByRole("navigation", { name: "Primary" });
-  if (testInfo.project.name === "mobile") {
-    const moreButton = primary.getByRole("button", { name: "More", exact: true });
-    const more = page.getByRole("dialog", { name: "More", exact: true });
-    await expect(more).not.toBeVisible();
-    await expect(page.getByRole("link", { name: "System", exact: true })).toHaveCount(0);
-    await moreButton.focus();
-    await expect(moreButton).toBeFocused();
-    await page.keyboard.press("Enter");
-    await expect(more).toBeVisible();
-    const system = more.getByRole("link", { name: "System", exact: true });
-    await expect(system).toBeVisible();
-    await expect(system).toHaveAttribute("href", "/system");
-    await system.focus();
-    await expect(system).toBeFocused();
-    await page.keyboard.press("Escape");
-    await expect(more).not.toBeVisible();
-    await expect(page.getByRole("link", { name: "System", exact: true })).toHaveCount(0);
-    await expect(moreButton).toBeFocused();
-  } else {
-    const system = primary.getByRole("link", { name: "System", exact: true });
-    await expect(system).toBeVisible();
-    await expect(system).toHaveAttribute("href", "/system");
+  for (const target of ["/home", "/tasks", "/projects", "/utilities"]) {
+    await expect(page.locator(`a[href="${target}"]`)).toHaveCount(0);
   }
-  expect((await new AxeBuilder({ page }).analyze()).violations.map(({ id, nodes }) => ({
-    id, targets: nodes.map(({ target }) => target),
-  }))).toEqual([]);
-
+  if (testInfo.project.name === "mobile") {
+    const moreButton = page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "More" });
+    await moreButton.click();
+    const more = page.getByRole("dialog", { name: "More" });
+    for (const name of ["Intelligence", "Knowledge", "Map", "Review", "System"]) {
+      await expect(more.getByRole("link", { name, exact: true })).toBeVisible();
+    }
+    await expect(more.getByRole("link", { name: "Search" })).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(moreButton).toBeFocused();
+  }
   await page.keyboard.press("ControlOrMeta+k");
-  await expect(page.getByRole("dialog", { name: "Search" })).toBeVisible();
-  await expect(page.getByRole("searchbox", { name: "Search" })).toBeFocused();
-  await expect(page.getByTestId("capture-chooser")).not.toBeVisible();
-  await expect(page.getByRole("dialog", { name: "Capture", includeHidden: true })).not.toBeVisible();
-  await expect(page.locator('dialog[open][aria-label="Capture"]')).toHaveCount(0);
-  await expect(page.locator("dialog[open]")).toHaveCount(1);
-  await page.keyboard.press("Escape");
-  await newAction(page).focus();
-  await page.keyboard.press("Enter");
-  await expect(page.getByTestId("capture-chooser")).toBeVisible();
-  expect(await visibleDialogCount(page)).toBe(1);
-  await expect(page.getByTestId("capture-choice-create_task")).toBeFocused();
+  await expect(launcher(page)).toBeVisible();
+  await expect(launcher(page).getByRole("button", { name: "Search" })).toBeFocused();
+  await expect(launcher(page).getByRole("button", { name: "New", exact: true })).toBeVisible();
+  await expect(activeOverlays(page)).toHaveCount(1);
   expect((await new AxeBuilder({ page }).analyze()).violations.map(({ id }) => id)).toEqual([]);
 });
 
-test("WP02 preserves separate drafts, guards Escape, and restores the actual New invoker", async ({ page }) => {
+test("WP02 Search reuses canonical read results, seeds typed input, and Escape steps back", async ({ page }) => {
   await signIn(page);
-  const invoker = newAction(page);
+  await launcherControl(page).click();
+  await page.keyboard.type("morning");
+  const dialog = launcher(page);
+  const searchbox = dialog.getByRole("searchbox", { name: "Search" });
+  await expect(searchbox).toBeFocused();
+  await expect(searchbox).toHaveValue("morning");
+  await expect(dialog.getByTestId("search-command-list")).toBeVisible();
+  await expect(dialog.getByRole("button", { name: /Create Task|Quick Note|Conversation Log/ })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(dialog.getByRole("button", { name: "Search" })).toBeFocused();
+  await expect(dialog.getByRole("button", { name: "New", exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(launcherControl(page)).toBeFocused();
+});
+
+test("WP02 New keeps independent Capture and Task drafts and guards only whole close", async ({ page }) => {
+  await signIn(page);
+  const invoker = launcherControl(page);
   await invoker.focus();
-  await page.keyboard.press("Enter");
-  await page.getByTestId("capture-chooser").getByRole("button", { name: "Quick note" }).click();
-  const note = syntheticNote("wp02-separate-drafts");
+  const dialog = await openNew(page);
+  expect(await dialog.getByRole("group", { name: "Create new", exact: true }).getByRole("button").allTextContents()).toEqual([
+    "Create Task", "Quick Note", "Conversation Log",
+  ]);
+  await expect(dialog.getByRole("button", { name: "Close dialog", exact: true })).toBeVisible();
+  await dialog.getByRole("button", { name: "Quick Note" }).click();
+  const note = syntheticNote("wp02-independent-note");
   await page.getByTestId("capture-field").fill(note);
   await page.getByTestId("capture-entry-back").click();
-  await page.getByTestId("capture-choice-create_task").click();
+  await dialog.getByRole("button", { name: "Conversation Log" }).click();
+  const conversation = syntheticNote("wp02-independent-conversation");
+  await page.getByTestId("capture-field").fill(conversation);
+  await page.getByTestId("capture-entry-back").click();
+  await dialog.getByRole("button", { name: "Create Task" }).click();
   const title = page.getByRole("textbox", { name: "Title" });
-  await expect(title).toBeFocused();
-  await title.fill("Synthetic WP02 task draft");
-  expect(await visibleDialogCount(page)).toBe(1);
+  await title.fill("Synthetic WP02 retained task draft");
+  await expect(activeOverlays(page)).toHaveCount(1);
   await page.getByTestId("task-create-back").click();
-  await page.getByTestId("capture-chooser").getByRole("button", { name: "Quick note" }).click();
+  await expect(dialog.getByRole("button", { name: "Create Task" })).toBeFocused();
+  await dialog.getByRole("button", { name: "Quick Note" }).click();
   await expect(page.getByTestId("capture-field")).toHaveValue(note);
   await page.getByTestId("capture-entry-back").click();
-  await page.getByTestId("capture-choice-create_task").click();
-  await expect(page.getByRole("textbox", { name: "Title" })).toHaveValue("Synthetic WP02 task draft");
-  await page.getByTestId("task-create-back").click();
-  await page.getByTestId("capture-chooser").getByRole("button", { name: "Quick note" }).click();
-  const prompt = page.waitForEvent("dialog");
-  const press = page.keyboard.press("Escape");
-  const browserDialog = await prompt;
-  expect(browserDialog.type()).toBe("confirm");
-  await browserDialog.dismiss();
-  await press;
-  await expect(page.getByTestId("capture-field")).toHaveValue(note);
-  const secondPrompt = page.waitForEvent("dialog");
-  const secondPress = page.keyboard.press("Escape");
-  await (await secondPrompt).accept();
-  await secondPress;
-  await expect(page.getByRole("dialog", { name: "Capture" })).not.toBeVisible();
+  await dialog.getByRole("button", { name: "Conversation Log" }).click();
+  await expect(page.getByTestId("capture-field")).toHaveValue(conversation);
+  await page.getByTestId("capture-entry-back").click();
+  await dialog.getByRole("button", { name: "Create Task" }).click();
+  await expect(page.getByRole("textbox", { name: "Title" })).toHaveValue("Synthetic WP02 retained task draft");
+  await page.getByRole("button", { name: "Close panel" }).click();
+  const discard = page.getByRole("alertdialog", { name: "Discard drafts", exact: true });
+  await expect(discard).toContainText("Held offline notes are not deleted.");
+  await expect(discard.getByRole("button", { name: "Keep editing" })).toBeFocused();
+  await discard.getByRole("button", { name: "Keep editing" }).click();
+  await expect(page.getByRole("textbox", { name: "Title" })).toHaveValue("Synthetic WP02 retained task draft");
+  await page.getByRole("button", { name: "Close panel" }).click();
+  await discard.getByRole("button", { name: "Discard drafts" }).click();
+  await expect(launcher(page)).toHaveCount(0);
   await expect(invoker).toBeFocused();
 });
 
-test("WP02 accepted Task discard starts a fresh editable Task while canceled discard preserves it", async ({ page }) => {
+test("WP02 confirmed Task closes on its origin and adds no Open Task action", async ({ page }) => {
   await signIn(page);
-  await newAction(page).click();
-  await page.getByTestId("capture-choice-create_task").click();
-  const title = page.getByRole("textbox", { name: "Title" });
-  await title.fill("Synthetic WP02 discarded draft");
-  const firstPrompt = page.waitForEvent("dialog");
-  const firstClose = page.getByRole("button", { name: "Close panel" }).click();
-  await (await firstPrompt).dismiss();
-  await firstClose;
-  await expect(title).toHaveValue("Synthetic WP02 discarded draft");
-  const secondPrompt = page.waitForEvent("dialog");
-  const secondClose = page.getByRole("button", { name: "Close panel" }).click();
-  await (await secondPrompt).accept();
-  await secondClose;
-  await expect(page.getByRole("dialog", { name: "Create task" })).not.toBeVisible();
-  await newAction(page).click();
-  await page.getByTestId("capture-choice-create_task").click();
-  await expect(page.getByRole("textbox", { name: "Title" })).toHaveValue("");
-});
-
-test("WP02 Search shortcut waits for Capture ownership and works after Capture closes", async ({ page }) => {
-  await signIn(page);
-  await newAction(page).click();
-  await page.getByTestId("capture-chooser").getByRole("button", { name: "Quick note" }).click();
-  const note = syntheticNote("wp02-search-arbitration");
-  await page.getByTestId("capture-field").fill(note);
-  await page.keyboard.press("ControlOrMeta+k");
-  await expect(page.getByRole("dialog", { name: "Search" })).not.toBeVisible();
-  await expect(page.getByRole("dialog")).toHaveCount(1);
-  await expect(page.getByRole("dialog", { name: "Capture" })).toBeVisible();
-  await expect(page.getByTestId("capture-field")).toHaveValue(note);
-  const prompt = page.waitForEvent("dialog");
-  const close = page.keyboard.press("Escape");
-  await (await prompt).accept();
-  await close;
-  await expect(page.getByRole("dialog", { name: "Capture" })).not.toBeVisible();
-  await page.keyboard.press("ControlOrMeta+k");
-  await expect(page.getByRole("dialog", { name: "Search" })).toBeVisible();
-  await expect(page.getByRole("searchbox", { name: "Search" })).toBeFocused();
-  await newAction(page).click();
-  await expect(page.getByRole("dialog", { name: "Search" })).not.toBeVisible();
-  await expect(page.getByRole("dialog", { name: "Capture" })).toBeVisible();
-  await expect(page.getByRole("dialog")).toHaveCount(1);
-});
-
-test("WP02 Task confirmation offers Open Task with exactly one result", async ({ page }) => {
-  await signIn(page);
-  await newAction(page).click();
-  await page.getByTestId("capture-choice-create_task").click();
+  const origin = page.url();
+  await (await openNew(page)).getByRole("button", { name: "Create Task" }).click();
   const taskTitle = `Synthetic WP02 confirmed task ${Date.now()}`;
   await page.getByRole("textbox", { name: "Title" }).fill(taskTitle);
   const [response] = await Promise.all([
@@ -150,65 +114,52 @@ test("WP02 Task confirmation offers Open Task with exactly one result", async ({
     page.getByRole("button", { name: "Create", exact: true }).click(),
   ]);
   expect(response.status()).toBe(200);
-  const result = await response.json() as { task: { task_id: string } };
-  await expect(page.getByRole("dialog", { name: "Task created" })).toBeVisible();
   await expect(page.getByRole("status").filter({ hasText: `Task created: ${taskTitle}` })).toHaveCount(1);
-  expect(await visibleDialogCount(page)).toBe(1);
-  await expect(page.getByRole("button", { name: "Open Task" })).toBeVisible();
-  await page.getByRole("button", { name: "Open Task" }).click();
-  await expect(page).toHaveURL(new RegExp(`/work/tasks/${result.task.task_id}$`));
-  await expect(page.getByRole("heading", { name: taskTitle })).toBeVisible();
+  await expect(launcher(page)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Open Task" })).toHaveCount(0);
+  expect(page.url()).toBe(origin);
 });
 
-test("WP02 offline Task explains the boundary while Capture remains available", async ({ page, context }) => {
+test("WP02 offline Task is not queued while Quick Note can be held", async ({ page, context }) => {
   await signIn(page);
   await context.setOffline(true);
-  await newAction(page).click();
-  await page.getByTestId("capture-choice-create_task").click();
-  const offline = page.getByRole("dialog", { name: "Create Task" });
-  await expect(offline).toContainText("requires a connection");
+  await (await openNew(page)).getByRole("button", { name: "Create Task" }).click();
+  await expect(launcher(page).getByRole("status").locator("p")).toHaveText("Tasks can’t be created offline. Keep this draft open and try again when you’re online.");
+  await expect(activeOverlays(page)).toHaveCount(1);
   await expect(page.getByTestId("task-create-sheet")).toHaveCount(0);
-  expect((await new AxeBuilder({ page }).analyze()).violations.map(({ id }) => id)).toEqual([]);
-  await offline.getByRole("button", { name: "Quick Capture" }).click();
-  await page.getByTestId("capture-chooser").getByRole("button", { name: "Quick note" }).click();
+  await expect(page.getByTestId("capture-queued")).toHaveCount(0);
+  await launcher(page).getByRole("button", { name: "Back", exact: true }).click();
+  await expect(launcher(page).getByRole("button", { name: "Create Task", exact: true })).toBeFocused();
+  await launcher(page).getByRole("button", { name: "Quick Note" }).click();
   await page.getByTestId("capture-field").fill(syntheticNote("wp02-offline-held"));
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByTestId("capture-queued")).toContainText("Held on this device only");
   await expect(page.getByTestId("capture-durable")).toHaveCount(0);
-  expect(await visibleDialogCount(page)).toBe(1);
 });
 
 for (const width of [320, 390, 768, 1024, 1440]) {
-  test(`WP02 New and essential creator content reflow at ${width}px`, async ({ page }) => {
+  test(`WP02 launcher and canonical Task controls reflow at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await signIn(page);
-    await expect(page.getByRole("main")).toHaveCount(1);
-    await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
     await expect.poll(() => noSideScroll(page)).toBe(true);
-    await newAction(page).click();
-    await expect(page.getByTestId("capture-choice-create_task")).toBeVisible();
-    await expect(page.getByTestId("capture-choice-quick_note")).toBeVisible();
-    await expect.poll(() => noSideScroll(page)).toBe(true);
-    await page.getByTestId("capture-choice-create_task").click();
+    await (await openNew(page)).getByRole("button", { name: "Create Task" }).click();
     await expect(page.getByRole("textbox", { name: "Title" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Create", exact: true })).toBeVisible();
-    expect(await visibleDialogCount(page)).toBe(1);
+    await expect(activeOverlays(page)).toHaveCount(1);
     await expect.poll(() => noSideScroll(page)).toBe(true);
     if (width <= 390) {
-      const target = page.getByRole("button", { name: "Create", exact: true });
-      const box = await target.boundingBox();
+      const box = await page.getByRole("button", { name: "Create", exact: true }).boundingBox();
       expect(box?.height).toBeGreaterThanOrEqual(44);
       expect(box?.width).toBeGreaterThanOrEqual(44);
     }
   });
 }
 
-test("WP02 at 200-percent-equivalent width keeps essential controls and no side scroll", async ({ page }) => {
+test("WP02 at 200-percent-equivalent width retains controls with reduced motion", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 900 });
   await page.emulateMedia({ reducedMotion: "reduce" });
   await signIn(page);
-  await newAction(page).click();
-  await page.getByTestId("capture-choice-create_task").click();
+  await (await openNew(page)).getByRole("button", { name: "Create Task" }).click();
   await expect(page.getByRole("textbox", { name: "Title" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Create", exact: true })).toBeVisible();
   await expect.poll(() => noSideScroll(page)).toBe(true);

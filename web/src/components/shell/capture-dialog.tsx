@@ -161,6 +161,8 @@ export function CaptureDialog({
   onCreateTask,
   onConfirmed,
   initialStage = "choose",
+  embedded = false,
+  onBack,
 }: {
   open: boolean;
   onClose: () => void;
@@ -187,6 +189,9 @@ export function CaptureDialog({
   /** Fired only for a verified durable server acknowledgement. */
   onConfirmed?: (receipt: PersistedCaptureAck) => void;
   initialStage?: "choose" | "entry";
+  /** Reuse the canonical entry form inside the unified launcher. */
+  embedded?: boolean;
+  onBack?: () => void;
 }) {
   const [stage, setStage] = useState<Stage>(initialStage);
   const [outcome, setOutcome] = useState<Outcome>({ kind: "idle" });
@@ -225,7 +230,9 @@ export function CaptureDialog({
     setPreviousOpen(open);
     if (open) {
       setStage(initialStage);
-      setOutcome({ kind: "idle" });
+      if (session.outcome !== "ambiguous" && session.outcome !== "submitting") {
+        setOutcome({ kind: "idle" });
+      }
     }
   }
 
@@ -268,11 +275,15 @@ export function CaptureDialog({
     // switches to Task. That controlled close has no user dismissal to handle.
     if (!open) return;
     if (savingRef.current) return;
+    if (embedded) {
+      onClose();
+      return;
+    }
     const dirty = session.noteDraft.trim() !== "" || session.conversationDraft.trim() !== "";
     // An in-flight or ambiguous submission is not a draft to discard: closing
     // does not cancel a request the server may already have committed.
     const unresolved = outcome.kind === "saving" || outcome.kind === "unavailable";
-    if (dirty && !unresolved && !confirmDiscardUnsent()) return;
+    if (!embedded && dirty && !unresolved && !confirmDiscardUnsent()) return;
     if (dirty && !unresolved) dispatch({ type: "discard_unsent" });
     setStage("choose");
     setOutcome({ kind: "idle" });
@@ -424,8 +435,7 @@ export function CaptureDialog({
     );
   }
 
-  return (
-    <Dialog open={open} onClose={requestClose} title="Capture">
+  const entry = (
       <div className="flex flex-col gap-3">
         <TextField
           ref={fieldRef}
@@ -535,7 +545,10 @@ export function CaptureDialog({
           <Button
             variant="ghost"
             data-testid="capture-entry-back"
-            onClick={() => setStage("choose")}
+            onClick={() => {
+              if (embedded) onBack?.();
+              else setStage("choose");
+            }}
           >
             Back
           </Button>
@@ -547,6 +560,8 @@ export function CaptureDialog({
           </Button>
         </div>
       </div>
-    </Dialog>
+  );
+  return embedded ? (open ? entry : null) : (
+    <Dialog open={open} onClose={requestClose} title="Capture">{entry}</Dialog>
   );
 }

@@ -71,7 +71,6 @@ describe("app shell", () => {
       "Knowledge",
       "Map",
       "Review",
-      "Search",
       "System",
     ]);
     expect(DESTINATIONS.map(({ label }) => label)).toEqual([
@@ -82,7 +81,6 @@ describe("app shell", () => {
       "Intelligence",
       "Map",
       "Review",
-      "Search",
     ]);
     const header = screen.getByRole("banner");
     expect(header).not.toHaveClass("lg:hidden");
@@ -98,7 +96,6 @@ describe("app shell", () => {
       "People",
       "Knowledge",
       "Intelligence",
-      "Search",
       "Review",
       "Map",
       "System",
@@ -107,15 +104,8 @@ describe("app shell", () => {
     const mobileLabels = within(navs[1]!).getAllByRole("link").map((el) => el.textContent?.trim());
     expect(mobileLabels).toEqual(["Today", "Work", "People"]);
     expect(screen.getAllByRole("link", { name: "Review" })[0]).toHaveAttribute("href", "/review");
-    expect(screen.getByTestId("capture-button-desktop")).toBeTruthy();
-    const mobileCapture = screen.getByTestId("capture-button-mobile");
-    expect(mobileCapture).toHaveClass("text-text-muted");
-    expect(mobileCapture).not.toHaveClass("text-on-brand-accent");
-    expect(mobileCapture.querySelector("span")).toHaveClass(
-      "bg-brand-accent",
-      "text-on-brand-accent",
-    );
-    expect(screen.queryByTestId("capture-button")).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Search or create" })).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "Capture" })).toBeNull();
   });
 
   it("groups More into Workspaces, Global, and Utilities", async () => {
@@ -130,7 +120,7 @@ describe("app shell", () => {
       expect(within(more).getByRole("link", { name: label })).toBeTruthy();
     }
     expect(within(more).getByRole("link", { name: "Review" })).toBeTruthy();
-    expect(within(more).getByRole("link", { name: "Search" })).toBeTruthy();
+    expect(within(more).queryByRole("link", { name: "Search" })).toBeNull();
     expect(within(more).getByRole("link", { name: "System" })).toBeTruthy();
     expect(within(more).queryByRole("link", { name: "Today" })).toBeNull();
     expect(within(more).queryByRole("link", { name: "People" })).toBeNull();
@@ -163,34 +153,31 @@ describe("app shell", () => {
     expect(todayLinks.some((l) => l.getAttribute("aria-current") === "page")).toBe(true);
   });
 
-  it("opens Search from the keyboard with idle copy, not a destination launcher", async () => {
+  it("opens one Search or create launcher from Cmd/Ctrl+K and returns Search through initial", async () => {
     render(<AppShell principal={PRINCIPAL} sessionEpoch={SESSION_EPOCH}>content</AppShell>);
-
     fireEvent.keyDown(window, { key: "k", metaKey: true });
-    const dialog = await screen.findByRole("dialog", { name: "Search" });
-    expect(dialog).toBeInTheDocument();
-    expect(dialog).not.toHaveTextContent(/cross-feature search is not available/i);
-    expect(screen.getByRole("searchbox", { name: "Search" })).toBeInTheDocument();
-    expect(dialog).toHaveTextContent("Start typing to search.");
-    expect(within(dialog).queryByRole("link", { name: "Knowledge" })).toBeNull();
-    expect(within(dialog).queryByRole("button", { name: "Knowledge" })).toBeNull();
-    expect(screen.queryByRole("button", { name: /Commands/ })).toBeNull();
+    const launcher = await screen.findByRole("dialog", { name: "Search or create" });
+    expect(within(launcher).getAllByRole("button").map((button) => button.textContent?.trim())).toEqual(
+      expect.arrayContaining(["Search", "New"]),
+    );
+    expect(within(launcher).getByRole("button", { name: "Search" })).toHaveFocus();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    fireEvent.click(within(launcher).getByRole("button", { name: "Search" }));
+    expect(within(launcher).getByTestId("search-command-input")).toBeInTheDocument();
+    expect(within(launcher).queryByRole("button", { name: /Create Task|Quick Note|Conversation Log/ })).toBeNull();
+    fireEvent.keyDown(within(launcher).getByRole("searchbox", { name: "Search" }), { key: "Escape" });
+    expect(within(launcher).getByRole("button", { name: "Search" })).toHaveFocus();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Search or create" })).toBeNull();
   });
 
-  it("closes Search on Escape even when the query field is not empty", async () => {
-    const user = userEvent.setup();
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ shape: "backend", query: "morning brief", hits: [], coverage: [] }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
-    render(<AppShell principal={PRINCIPAL} sessionEpoch={SESSION_EPOCH}>content</AppShell>);
-    fireEvent.keyDown(window, { key: "k", metaKey: true });
-    await screen.findByRole("dialog", { name: "Search" });
-    await user.type(screen.getByRole("searchbox", { name: "Search" }), "morning brief");
-    await user.keyboard("{Escape}");
-    expect(screen.queryByRole("dialog", { name: "Search" })).toBeNull();
+  it("publishes one accessible launcher control and no visible Search destination", () => {
+    render(<AppShell principal={PRINCIPAL} sessionEpoch={SESSION_EPOCH}><h1>Today</h1></AppShell>);
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Search or create" })).toHaveLength(2);
+    for (const nav of screen.getAllByRole("navigation", { name: "Primary" })) {
+      expect(within(nav).queryByRole("link", { name: "Search" })).toBeNull();
+    }
   });
 
   it("keeps Appearance inside Account and collapses the rail from System", async () => {
@@ -256,15 +243,16 @@ describe("app shell", () => {
 
     render(<AppShell principal={PRINCIPAL} sessionEpoch={SESSION_EPOCH}>content</AppShell>);
     fireEvent.keyDown(window, { key: "k", metaKey: true });
-    await screen.findByRole("dialog", { name: "Search" });
-    await user.type(screen.getByRole("searchbox", { name: "Search" }), "morning");
+    const launcher = await screen.findByRole("dialog", { name: "Search or create" });
+    await user.click(within(launcher).getByRole("button", { name: "Search" }));
+    await user.type(within(launcher).getByRole("searchbox", { name: "Search" }), "morning");
 
     expect(await screen.findByTestId("search-group-tasks")).toHaveTextContent("Morning task");
     expect(screen.getByTestId("search-coverage")).toHaveTextContent("goodnotes: searched");
     expect(screen.getByTestId("search-coverage")).not.toHaveTextContent("goodnotes: omitted");
     expect(screen.getByTestId("search-coverage")).not.toHaveTextContent("goodnotes_not_activated");
     expect(screen.getByTestId("search-coverage")).toHaveTextContent("knowledge_not_enrolled");
-    expect(screen.getByRole("dialog", { name: "Search" })).not.toHaveTextContent(
+    expect(screen.getByRole("dialog", { name: "Search or create" })).not.toHaveTextContent(
       /cross-feature search is not available/i,
     );
     expect(fetchSpy).toHaveBeenCalledWith(
@@ -291,8 +279,9 @@ describe("app shell", () => {
 
     render(<AppShell principal={PRINCIPAL} sessionEpoch={SESSION_EPOCH}>content</AppShell>);
     fireEvent.keyDown(window, { key: "k", metaKey: true });
-    await screen.findByRole("dialog", { name: "Search" });
-    await user.type(screen.getByRole("searchbox", { name: "Search" }), "morning");
+    const launcher = await screen.findByRole("dialog", { name: "Search or create" });
+    await user.click(within(launcher).getByRole("button", { name: "Search" }));
+    await user.type(within(launcher).getByRole("searchbox", { name: "Search" }), "morning");
 
     expect(await screen.findByTestId("search-not-implemented")).toBeInTheDocument();
     expect(screen.queryByTestId("search-empty")).toBeNull();
@@ -333,10 +322,11 @@ describe("app shell", () => {
     });
 
     render(<AppShell principal={PRINCIPAL} sessionEpoch={SESSION_EPOCH}>content</AppShell>);
-    await user.click(screen.getByTestId("capture-button-desktop"));
+    await user.click(screen.getAllByRole("button", { name: "Search or create" })[0]!);
+    await user.click(screen.getByRole("button", { name: "New" }));
 
-    // Capture opens on the chooser; Quick note enters the unchanged note branch.
-    await user.click(await screen.findByTestId("capture-choice-quick_note"));
+    // New enters the canonical Quick Note Capture branch.
+    await user.click(screen.getByRole("button", { name: "Quick Note" }));
     const field = screen.getByTestId("capture-field");
     await waitFor(() => expect(field).toHaveFocus());
 
@@ -371,7 +361,7 @@ describe("app shell", () => {
   it("opens Capture from the mobile tab", async () => {
     const user = userEvent.setup();
     render(<AppShell principal={PRINCIPAL} sessionEpoch={SESSION_EPOCH}>content</AppShell>);
-    await user.click(screen.getByTestId("capture-button-mobile"));
-    expect(screen.getByRole("dialog", { name: "Capture" })).toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: "Search or create" }).at(-1)!);
+    expect(screen.getByRole("dialog", { name: "Search or create" })).toBeInTheDocument();
   });
 });

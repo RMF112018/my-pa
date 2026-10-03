@@ -1,13 +1,12 @@
 "use client";
 
 /** Persistent signed-in shell with one main landmark and one launcher owner. */
-import { createContext, useContext, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import type { PrincipalSession } from "@/contracts/identity";
 import { ContextHeader } from "@/components/shell/context-header";
 import { NavRail, MobileNav } from "@/components/shell/nav";
 import { GlobalLauncher, LauncherPrincipalProvider } from "@/components/shell/global-launcher";
 import { OfflineQueueStatus } from "@/components/offline/offline-queue-status";
-import { CommandPalette } from "@/components/shell/command-palette";
 import { UtilityRegion } from "@/components/shell/utility-region";
 import { InspectorSelectionProvider } from "@/components/shell/inspector-selection";
 import { useShellPreferences } from "@/components/shell/shell-preferences";
@@ -52,14 +51,22 @@ export function AppShell({
 
 function AppShellBody({ principal, children }: { principal: PrincipalSession; children: ReactNode }) {
   const [launcherOpen, setLauncherOpen] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
   const [utilityOpen, setUtilityOpen] = useState(false);
   const { preferences, update } = useShellPreferences();
 
   const openCapture = () => {
-    setSearchOpen(false);
     setLauncherOpen(true);
   };
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setLauncherOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const account = {
     principal,
     theme: preferences.theme,
@@ -79,7 +86,6 @@ function AppShellBody({ principal, children }: { principal: PrincipalSession; ch
             density={account.density}
             onToggleTheme={account.onToggleTheme}
             onToggleDensity={account.onToggleDensity}
-            onNew={openCapture}
           />
           <div className="flex flex-1">
             <NavRail
@@ -108,11 +114,7 @@ function AppShellBody({ principal, children }: { principal: PrincipalSession; ch
             ) : null}
           </div>
           <MobileNav onCapture={openCapture} />
-          <GlobalLauncher open={launcherOpen} onOpenChange={setLauncherOpen} onConfirmed={() => {}} />
-          <CommandPalette open={searchOpen} onOpenChange={(next) => {
-            if (next && launcherOpen) return;
-            setSearchOpen(next);
-          }} onCapture={openCapture} />
+          <GlobalLauncher open={launcherOpen} onOpenChange={setLauncherOpen} />
           <OfflineQueueStatus principalId={principal.principalId} />
         </div>
       </InspectorSelectionProvider>

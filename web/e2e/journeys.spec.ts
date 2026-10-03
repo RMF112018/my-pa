@@ -387,9 +387,9 @@ test.describe("the signed-in surfaces", () => {
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("capture-field")).toBeHidden();
     const launcher = page.getByRole("dialog", { name: "Search or create" });
-    await expect(launcher.getByRole("button", { name: "Create Task", exact: true })).toBeFocused();
+    await expect(launcher.getByRole("button", { name: "Quick Note", exact: true })).toBeFocused();
     await page.keyboard.press("Escape");
-    await expect(launcher.getByRole("button", { name: "Search", exact: true })).toBeFocused();
+    await expect(launcher.getByRole("button", { name: "New", exact: true })).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(launcher).toHaveCount(0);
     await expect(opener).toBeFocused();

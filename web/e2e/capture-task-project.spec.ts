@@ -6,13 +6,12 @@
  *
  * * the Project a Capture-launched Task was created with is the Project the
  *   canonical row holds afterwards; and
- * * **FINDING-08** — the C08 precedence, isolated. Phase 3's unit test could
- *   only turn red when *both* enforcement mechanisms were removed, because the
- *   resume path always runs both. Here the isolation comes from the network
- *   rather than from the code: an ambiguous create is left unresolved, Capture
- *   is relaunched proposing a different Project, and the request that finally
- *   reaches the server is inspected. Whichever mechanism produced it, the wire
- *   says which Project won — and that is the claim the precedence rule makes.
+ * * **FINDING-08 regression** — an ambiguous Task create remains frozen against
+ *   A while the independent Capture draft selects B. Reopening Task retains A,
+ *   and the actual retry carries the same Project and idempotency key. Capture
+ *   selection is not a proposed replacement Task context in the unified launcher;
+ *   this protects draft independence and frozen retry rather than claiming to
+ *   isolate displacement between competing Task contexts.
  */
 import { expect, test } from "@playwright/test";
 import { signIn, syntheticNote, visibleCaptureButton } from "./fixtures";
@@ -107,7 +106,7 @@ test.describe("WP08 Capture to Task Project, real stack", () => {
     expect((await canonicalTask(page, created.task.task_id))?.project_id ?? null).toBeNull();
   });
 
-  test("FINDING-08: a frozen create against A is not moved by a relaunch proposing B", async ({
+  test("FINDING-08: a frozen Task against A survives independent Capture selection B", async ({
     page,
   }) => {
     await signIn(page);
@@ -144,7 +143,7 @@ test.describe("WP08 Capture to Task Project, real stack", () => {
     const first = JSON.parse(posts[0]!) as Record<string, unknown>;
     expect(first.projectId).toBe(projectA);
 
-    // The create is now ambiguous. Relaunch Capture proposing B.
+    // The create is now ambiguous. Select B for the independent Capture draft.
     await expect(page.getByRole("button", { name: "Retry same create" })).toBeVisible({
       timeout: 20_000,
     });
@@ -160,10 +159,12 @@ test.describe("WP08 Capture to Task Project, real stack", () => {
     const select = page.getByTestId("capture-project-select");
     await expect(select).toHaveValue(projectA!);
     await expect(select).toBeDisabled();
-    await expect(page.getByTestId("task-create-frozen-project")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Retry same create" })).toBeVisible();
+    // Capture B never proposes a replacement Project for the frozen Task A.
+    await expect(page.getByTestId("task-create-frozen-project")).toHaveCount(0);
 
     // The retry goes out. Whatever produced it, the wire names A and carries the
-    // original key — the isolation this finding asked for.
+    // original key — the frozen retry contract.
     const [retried] = await Promise.all([
       page.waitForResponse(
         (candidate) =>

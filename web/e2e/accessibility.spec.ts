@@ -874,8 +874,12 @@ test.describe("People search, warnings, and profile extras", () => {
     await page.goto("/people");
     await page.getByRole("searchbox", { name: "Find a person" }).fill("Pat Synthetic");
     await page.getByRole("button", { name: "Search" }).click();
-    await page.getByRole("link", { name: "Pat Synthetic" }).click();
-    await expect(page).toHaveURL(/\/people\/ent_/);
+    const target = page.getByTestId("people-search-hits")
+      .getByRole("link", { name: "Pat Synthetic", exact: true })
+      .and(page.locator('a[href="/people/ent_e2ewp13pat000001"]'));
+    await expect(target).toHaveCount(1);
+    await target.click();
+    await expect(page).toHaveURL(/\/people\/ent_e2ewp13pat000001$/);
     await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
     await expect(page.getByTestId("people-profile")).toBeVisible();
     expect(await scan(page), "/people/ detail accessibility violations").toEqual([]);

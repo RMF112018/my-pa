@@ -4,6 +4,7 @@ import { signIn, syntheticNote } from "./fixtures";
 
 const launcherControl = (page: Page) => page.getByRole("button", { name: "Search or create" }).filter({ visible: true });
 const launcher = (page: Page) => page.getByRole("dialog", { name: "Search or create" });
+const launcherClose = (page: Page) => launcher(page).getByRole("button", { name: /^Close (dialog|panel)$/ }).filter({ visible: true });
 const activeOverlays = (page: Page) => page.locator('dialog[open], [role="dialog"][data-state="open"]');
 const noSideScroll = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
 
@@ -68,7 +69,8 @@ test("WP02 New keeps independent Capture and Task drafts and guards only whole c
   expect(await dialog.getByRole("group", { name: "Create new", exact: true }).getByRole("button").allTextContents()).toEqual([
     "Create Task", "Quick Note", "Conversation Log",
   ]);
-  await expect(dialog.getByRole("button", { name: "Close dialog", exact: true })).toBeVisible();
+  await expect(launcherClose(page)).toHaveCount(1);
+  await expect(launcherClose(page)).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Create Task", exact: true })).toBeFocused();
   await page.keyboard.press("ArrowUp");
   await expect(dialog.getByRole("button", { name: "Conversation Log", exact: true })).toBeFocused();
@@ -132,7 +134,8 @@ test("WP02 confirmed Task closes on its origin and adds no Open Task action", as
   expect(page.url()).toBe(origin);
   await (await openNew(page)).getByRole("button", { name: "Quick Note", exact: true }).click();
   await expect(page.getByTestId("capture-field")).toHaveValue(retainedNote);
-  await launcher(page).getByRole("button", { name: "Close dialog", exact: true }).click();
+  await expect(launcherClose(page)).toHaveCount(1);
+  await launcherClose(page).click();
   const discard = page.getByRole("alertdialog", { name: "Discard drafts", exact: true });
   await expect(discard.getByRole("button", { name: "Keep editing" })).toBeFocused();
   await discard.getByRole("button", { name: "Discard drafts" }).click();
@@ -161,7 +164,35 @@ for (const width of [320, 390, 768, 1024, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     await signIn(page);
     await expect.poll(() => noSideScroll(page)).toBe(true);
-    await (await openNew(page)).getByRole("button", { name: "Create Task" }).click();
+    const dialog = await openNew(page);
+    const menu = dialog.getByRole("group", { name: "Create new", exact: true });
+    await expect(menu.getByRole("button")).toHaveText(["Create Task", "Quick Note", "Conversation Log"]);
+    for (const name of ["Create Task", "Quick Note", "Conversation Log"]) {
+      await expect(menu.getByRole("button", { name, exact: true })).toBeVisible();
+    }
+    await expect(launcherClose(page)).toHaveCount(1);
+    await expect(launcherClose(page)).toBeVisible();
+    await launcherClose(page).focus();
+    await expect(launcherClose(page)).toBeFocused();
+    await expect(activeOverlays(page)).toHaveCount(1);
+    const box = await dialog.boundingBox();
+    expect(box, "the active launcher has measurable geometry").not.toBeNull();
+    if (width <= 767) {
+      await expect(launcherClose(page)).toHaveAccessibleName("Close panel");
+      expect(Math.abs(box!.x)).toBeLessThanOrEqual(1);
+      expect(Math.abs(box!.width - width)).toBeLessThanOrEqual(1);
+      expect(Math.abs(box!.y + box!.height - 900)).toBeLessThanOrEqual(1);
+      expect(box!.height).toBeLessThanOrEqual(900 * 0.92);
+    } else if (width < 1024) {
+      expect(box!.width).toBeGreaterThanOrEqual(width * 0.70);
+      expect(box!.width).toBeLessThanOrEqual(width * 0.85);
+    } else {
+      expect(box!.width).toBeGreaterThanOrEqual(640);
+      expect(box!.width).toBeLessThanOrEqual(720);
+      expect(box!.height).toBeLessThanOrEqual(900 * 0.80);
+    }
+    await expect.poll(() => noSideScroll(page)).toBe(true);
+    await menu.getByRole("button", { name: "Create Task", exact: true }).click();
     await expect(page.getByRole("textbox", { name: "Title" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Create", exact: true })).toBeVisible();
     await expect(activeOverlays(page)).toHaveCount(1);

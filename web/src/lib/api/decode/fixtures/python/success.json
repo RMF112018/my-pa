@@ -21,7 +21,10 @@
         "latest_version_number": 1,
         "latest_recorded_at": "2026-08-09T12:00:00.000Z",
         "display_label": null,
-        "project_id": null
+        "project_id": null,
+        "lifecycle_state": "active",
+        "lifecycle_revision": 0,
+        "archived_at": null
       }
     ]
   },
@@ -43,7 +46,12 @@
     "server_received_at": "2026-08-09T12:00:00.000Z",
     "occurred_at": null,
     "accepted_at": "2026-08-09T12:00:00.000Z",
-    "recorded_at": "2026-08-09T12:00:00.000Z"
+    "recorded_at": "2026-08-09T12:00:00.000Z",
+    "lifecycle_state": "active",
+    "lifecycle_revision": 0,
+    "archived_at": null,
+    "lifecycle_history": null,
+    "lifecycle_history_truncated": null
   },
   "capture.search": {
     "matches": [
@@ -87,7 +95,9 @@
       "created_at": "2026-01-01T00:00:00.000Z",
       "updated_at": "2026-01-01T00:00:00.000Z",
       "commitment_id": null,
-      "role": null
+      "role": null,
+      "origin_evidence_capture_state": null,
+      "closure_evidence_capture_state": null
     }
   },
   "tasks.list": {
@@ -104,7 +114,9 @@
         "created_at": "2026-01-01T00:00:00.000Z",
         "updated_at": "2026-01-01T00:00:00.000Z",
         "version": 1,
-        "project_id": null
+        "project_id": null,
+        "origin_evidence_capture_state": null,
+        "closure_evidence_capture_state": null
       }
     ]
   },
@@ -122,7 +134,9 @@
         "created_at": "2026-01-01T00:00:00.000Z",
         "updated_at": "2026-01-01T00:00:00.000Z",
         "version": 1,
-        "project_id": null
+        "project_id": null,
+        "origin_evidence_capture_state": null,
+        "closure_evidence_capture_state": null
       }
     ]
   },
@@ -191,7 +205,9 @@
       "created_at": "2026-01-01T00:00:00.000Z",
       "updated_at": "2026-01-01T00:00:00.000Z",
       "commitment_id": null,
-      "role": null
+      "role": null,
+      "origin_evidence_capture_state": null,
+      "closure_evidence_capture_state": null
     },
     "history": {
       "history_id": "thst_aaaa0001aaaa0001aaaa0001",
@@ -233,7 +249,9 @@
       "created_at": "2026-01-01T00:00:00.000Z",
       "updated_at": "2026-01-01T00:00:00.000Z",
       "commitment_id": null,
-      "role": null
+      "role": null,
+      "origin_evidence_capture_state": null,
+      "closure_evidence_capture_state": null
     },
     "history": {
       "history_id": "thst_aaaa0001aaaa0001aaaa0001",
@@ -275,7 +293,9 @@
       "created_at": "2026-01-01T00:00:00.000Z",
       "updated_at": "2026-01-01T00:00:00.000Z",
       "commitment_id": null,
-      "role": null
+      "role": null,
+      "origin_evidence_capture_state": null,
+      "closure_evidence_capture_state": null
     },
     "history": {
       "history_id": "thst_aaaa0001aaaa0001aaaa0001",
@@ -350,7 +370,8 @@
     "spans": [],
     "proposed": [],
     "accepted": [],
-    "versions_with_completed_derivation": 0
+    "versions_with_completed_derivation": 0,
+    "capture_lifecycle_state": null
   },
   "continuity.pulse": {
     "pulse_items": [
@@ -433,7 +454,8 @@
         "subject_kind": "capture_proposal",
         "capture_id": "cap_aaaaaaaa11111111",
         "version_id": "capver_aaaaaaaa11111111",
-        "proposal_type": "commitment"
+        "proposal_type": "commitment",
+        "capture_lifecycle_state": null
       }
     ]
   },
@@ -531,6 +553,18 @@
         },
         {
           "name": "capture.search",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "capture.archive",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "capture.restore",
           "version": "v1",
           "availability": "available",
           "operator_only": false
@@ -1550,8 +1584,8 @@
     "readiness": {
       "state": "degraded",
       "contract_version": "v1",
-      "implemented_capabilities": 179,
-      "total_capabilities": 179,
+      "implemented_capabilities": 181,
+      "total_capabilities": 181,
       "limitations": [
         "Content types awaiting an operator decision: application/pdf. They are reported rather than silently skipped.",
         "Listings stop at the page size; truncation is disclosed. These issue a continuation cursor: commitments.history, commitments.list, commitments.search, commitments.waiting_on, constraint_sync.conflicts, constraint_sync.delta, constraints.history, constraints.list, constraints.portfolio_list, constraints.portfolio_search, constraints.search, continuity.projects, entities.addresses.list, entities.aliases.list, entities.assignments.list, entities.communication.list, entities.graph, entities.identifiers.list, entities.identity_history, entities.names.list, entities.observations.list, entities.participations.list, entities.relationships, entities.search, entities.unresolved_mentions, goodnotes.notebooks.list, goodnotes.pages.list, goodnotes.pull, goodnotes.runs.list, goodnotes.search, knowledge.search, meetings.list, meetings.search, record_events.list, relationship_memory.history, relationship_memory.list, relationship_memory.search, reports.list, review.list, tasks.comments.list, tasks.history, tasks.list, tasks.search. Every other listing does not, so a caller cannot ask for the next page.",
@@ -1593,6 +1627,8 @@
       "closure_evidence_ref": null,
       "accepted_by_review_decision_id": null,
       "closed_at": null,
+      "origin_evidence_capture_state": null,
+      "closure_evidence_capture_state": null,
       "counterparty": {
         "person_id": "per_aaaa0001aaaa0001aaaa0001",
         "display_name": "Synthetic B"
@@ -1620,6 +1656,8 @@
         "created_at": "2026-01-01T00:00:00+00:00",
         "updated_at": "2026-01-01T00:00:00+00:00",
         "version": 1,
+        "origin_evidence_capture_state": null,
+        "closure_evidence_capture_state": null,
         "counterparty": {
           "person_id": "per_aaaa0001aaaa0001aaaa0001",
           "display_name": "Synthetic B"
@@ -1647,6 +1685,8 @@
         "created_at": "2026-01-01T00:00:00+00:00",
         "updated_at": "2026-01-01T00:00:00+00:00",
         "version": 1,
+        "origin_evidence_capture_state": null,
+        "closure_evidence_capture_state": null,
         "counterparty": {
           "person_id": "per_aaaa0001aaaa0001aaaa0001",
           "display_name": "Synthetic B"
@@ -1672,7 +1712,9 @@
         "before_version": 0,
         "after_version": 1,
         "occurred_at": "2026-01-01T00:00:00+00:00",
-        "recorded_at": "2026-01-01T00:00:00+00:00"
+        "recorded_at": "2026-01-01T00:00:00+00:00",
+        "origin_evidence_capture_state": null,
+        "closure_evidence_capture_state": null
       }
     ]
   },
@@ -1687,6 +1729,8 @@
         "follow_up_task_id": "tsk_aaaa0001aaaa0001aaaa0001",
         "follow_up_task_title": "Check the pour",
         "follow_up_task_state": "open",
+        "origin_evidence_capture_state": null,
+        "closure_evidence_capture_state": null,
         "counterparty": {
           "person_id": "per_aaaa0001aaaa0001aaaa0001",
           "display_name": "Synthetic B"
@@ -1711,6 +1755,8 @@
       "closure_evidence_ref": null,
       "accepted_by_review_decision_id": null,
       "closed_at": null,
+      "origin_evidence_capture_state": null,
+      "closure_evidence_capture_state": null,
       "counterparty": {
         "person_id": "per_aaaa0001aaaa0001aaaa0001",
         "display_name": "Synthetic B"
@@ -1735,6 +1781,8 @@
       "closure_evidence_ref": null,
       "accepted_by_review_decision_id": null,
       "closed_at": null,
+      "origin_evidence_capture_state": null,
+      "closure_evidence_capture_state": null,
       "counterparty": {
         "person_id": "per_aaaa0001aaaa0001aaaa0001",
         "display_name": "Synthetic B"
@@ -1749,7 +1797,9 @@
       "before_version": 1,
       "after_version": 2,
       "occurred_at": "2026-01-01T00:00:00+00:00",
-      "recorded_at": "2026-01-01T00:00:00+00:00"
+      "recorded_at": "2026-01-01T00:00:00+00:00",
+      "origin_evidence_capture_state": null,
+      "closure_evidence_capture_state": null
     },
     "replayed": false
   },
@@ -1770,6 +1820,8 @@
       "closure_evidence_ref": "asr_aaaa0001aaaa0001aaaa0001",
       "accepted_by_review_decision_id": null,
       "closed_at": "2026-01-02T00:00:00+00:00",
+      "origin_evidence_capture_state": null,
+      "closure_evidence_capture_state": null,
       "counterparty": {
         "person_id": "per_aaaa0001aaaa0001aaaa0001",
         "display_name": "Synthetic B"

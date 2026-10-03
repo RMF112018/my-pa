@@ -495,6 +495,8 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
     # WP-RE-01's Record Event feed: the per-Principal allocator row and the
     # append-only feed.
     "1d9b248e7f83": frozenset({"record_event_sequences", "record_events"}),
+    # CRL-WP-03's Capture root lifecycle: the append-only events and receipts.
+    "0641c354ca85": frozenset({"capture_lifecycle_events", "capture_lifecycle_receipts"}),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

@@ -75,6 +75,11 @@ from my_pa.contracts.ports import (
 from my_pa.domain.capture.context import ContextLinkAuthority, ContextLinkRole, ContextLinkTarget
 from my_pa.domain.capture.display_label import normalize_display_label
 from my_pa.domain.capture.errors import CaptureConflictError
+from my_pa.domain.capture.lifecycle import (
+    CaptureLifecycleSelector,
+    CaptureLifecycleState,
+    CaptureWithdrawnError,
+)
 from my_pa.domain.capture.submission import (
     AdmissionResult,
     CaptureKind,
@@ -90,6 +95,12 @@ from my_pa.domain.identity.user_account import CallerSuppliedPrincipalError
 from my_pa.domain.record_events import CaptureVersionFacts, capture_changed_fields
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence import conflicting_row
+from my_pa.infrastructure.persistence.capture_lifecycle import (
+    latest_lifecycle,
+    lifecycle_selected,
+    require_active_capture_roots,
+    share_capture_root,
+)
 from my_pa.infrastructure.persistence.jobs import CAPTURE_JOBS, enqueue_job
 from my_pa.infrastructure.persistence.principal_scope import (
     PrincipalContext,
@@ -235,6 +246,9 @@ def append_capture_label(
     ).one_or_none()
     if owned is None:
         raise UnknownScopeError("the request names no stored capture")
+    # CRL-WP-03 C-3: a label is a new derivation on the root. Ownership was
+    # decided above, so only this caller's archived root is withdrawn.
+    require_active_capture_roots(connection, context, capture_ids=(capture_id,))
     _insert_label(connection, capture_id=capture_id, owner_principal_id=owner, display_label=label)
     return label
 
@@ -529,6 +543,19 @@ def _chain(
         version_number, supersedes, prior = 1, None, None
     else:
         capture_id = validate_identifier(request.capture_id, IdKind.CAPTURE)
+        # CRL-WP-03 C-1: the revise fence. The root is taken `FOR SHARE` first,
+        # so a revise and an archive (`FOR NO KEY UPDATE`) serialize on it in
+        # arrival order, while two revises still share it and race on the
+        # version index exactly as before (T-21). Ownership is decided first:
+        # a foreign or absent root is the same `UnknownScopeError` as ever, and
+        # only the caller's own archived root is refused as withdrawn (MR-C17).
+        if not share_capture_root(connection, capture_id, context=context):
+            raise UnknownScopeError("the request names no stored capture")
+        if (
+            latest_lifecycle(connection, capture_id, context=context).state
+            is CaptureLifecycleState.ARCHIVED
+        ):
+            raise CaptureWithdrawnError("an archived capture accepts no revision")
         head = _head(connection, capture_id, context=context)
         if head is None:
             # No such capture, one with no version (which cannot exist: a
@@ -642,7 +669,11 @@ def capture_version(
 
 
 def capture_page(
-    connection: Connection, *, limit: int, context: PrincipalContext
+    connection: Connection,
+    *,
+    limit: int,
+    context: PrincipalContext,
+    lifecycle: CaptureLifecycleSelector = CaptureLifecycleSelector.ACTIVE,
 ) -> tuple[CaptureSummary, ...]:
     """One bounded page of the context Principal's captures, newest first.
 
@@ -651,36 +682,42 @@ def capture_page(
     be reported with a version count from one snapshot and a head from another.
     The page is scoped before it is limited, so another Principal's captures do
     not occupy slots in this one's page any more than they appear in it.
+
+    `lifecycle` (CRL-WP-03, CW-012) selects active, archived or all roots, and
+    is applied in the same WHERE as the partition -- before the LIMIT -- so an
+    excluded root never takes a slot or moves the page boundary.
     """
     if limit < 1:
         raise ValueError("a page holds at least one capture")
     latest_number = func.max(capture_versions.c.version_number)
-    rows = connection.execute(
-        principal_scoped(
-            select(
-                _capture_roots.c.capture_id,
-                _capture_roots.c.owner_principal_id,
-                _capture_roots.c.created_at,
-                _capture_roots.c.project_id,
-                func.count().label("version_count"),
-                latest_number.label("latest_version_number"),
-                current_display_label(_capture_roots.c.capture_id).label("display_label"),
-            )
-            .join(
-                capture_versions,
-                capture_versions.c.capture_id == _capture_roots.c.capture_id,
-            )
-            .group_by(
-                _capture_roots.c.capture_id,
-                _capture_roots.c.owner_principal_id,
-                _capture_roots.c.created_at,
-                _capture_roots.c.project_id,
-            )
-            .order_by(_capture_roots.c.created_at.desc(), _capture_roots.c.capture_id)
-            .limit(limit),
-            cast(Table, _capture_roots),
-            context,
+    selected = lifecycle_selected(_capture_roots.c.capture_id, lifecycle, context=context)
+    statement = (
+        select(
+            _capture_roots.c.capture_id,
+            _capture_roots.c.owner_principal_id,
+            _capture_roots.c.created_at,
+            _capture_roots.c.project_id,
+            func.count().label("version_count"),
+            latest_number.label("latest_version_number"),
+            current_display_label(_capture_roots.c.capture_id).label("display_label"),
         )
+        .join(
+            capture_versions,
+            capture_versions.c.capture_id == _capture_roots.c.capture_id,
+        )
+        .group_by(
+            _capture_roots.c.capture_id,
+            _capture_roots.c.owner_principal_id,
+            _capture_roots.c.created_at,
+            _capture_roots.c.project_id,
+        )
+        .order_by(_capture_roots.c.created_at.desc(), _capture_roots.c.capture_id)
+        .limit(limit)
+    )
+    if selected is not None:
+        statement = statement.where(selected)
+    rows = connection.execute(
+        principal_scoped(statement, cast(Table, _capture_roots), context)
     ).all()
     return tuple(_summary(connection, row) for row in rows)
 

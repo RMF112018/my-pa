@@ -15,7 +15,7 @@ from typing import Final
 
 from my_pa.domain.identity.operation import Capability
 
-CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v4"
+CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v5"
 
 
 class ChatLLMCapabilityClass(StrEnum):
@@ -55,6 +55,10 @@ _DATA_REQUIRED: Final[frozenset[Capability]] = frozenset(
         Capability.CAPTURE_READ,
         Capability.CAPTURE_REVISE,
         Capability.CAPTURE_SEARCH,
+        # CRL-WP-03. Archive and restore are capture authoring the Principal
+        # already holds. Repository classification only; no live profile rollout.
+        Capability.CAPTURE_ARCHIVE,
+        Capability.CAPTURE_RESTORE,
         Capability.COMMITMENTS_CLOSE,
         Capability.COMMITMENTS_CREATE,
         Capability.COMMITMENTS_HISTORY,

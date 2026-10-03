@@ -5,8 +5,10 @@ would have to be written by a revise, and an `UPDATE` on the identity row is a
 mutation path on a chain whose whole point is that it has none. The current
 version of a capture is the greatest `version_number` it holds, which is a read
 rather than a stored fact that could disagree with the rows it summarises.
-Withdrawal and archive (ADR-003 clause 3) are out of scope here and are absent
-rather than declared and unreachable.
+Withdrawal and archive (ADR-003 clause 3, CRL-WP-03) follow the same rule: a
+root's lifecycle is not a field here but a projection of its append-only
+lifecycle events (`domain.capture.lifecycle`), exactly as the current version
+is a projection of the version chain.
 
 **Five timestamps, none derived from another.**
 `docs/specs/quick-capture/20_TESTING_EVALUATION_AND_ACCEPTANCE.md:191` requires

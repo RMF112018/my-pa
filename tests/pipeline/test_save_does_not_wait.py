@@ -57,6 +57,8 @@ from my_pa.infrastructure.persistence.tables import (
     capture_conversations,
     capture_entity_mentions,
     capture_labels,
+    capture_lifecycle_events,
+    capture_lifecycle_receipts,
     capture_processing_text,
     capture_promotion_receipts,
     capture_proposal_spans,
@@ -127,6 +129,12 @@ SYNCHRONOUS_CAPTURE_METADATA: tuple[Table, ...] = (
 #: collapses two different reasons stops explaining either.
 OPERATOR_OWNED_CONTROL_PLANE: tuple[Table, ...] = (capture_clients,)
 
+#: The root lifecycle ledger (CRL-WP-03): written only by an owner's archive or
+#: restore, never by a save. A fourth category for the same reason the control
+#: plane is a third: it is empty after a save because no save can write it, not
+#: because the pipeline has not run yet.
+ROOT_LIFECYCLE_LEDGER: tuple[Table, ...] = (capture_lifecycle_events, capture_lifecycle_receipts)
+
 #: The first persisted evidence that a pipeline stage has begun. Locking only
 #: this table makes an accidental inline worker wait at its first observable
 #: downstream boundary without locking `capture_spans` or `capture_review_cases`,
@@ -155,7 +163,7 @@ def test_the_save_transaction_commits_no_downstream_output(engine: Engine) -> No
                 f"{table.name} is empty after a save, so the emptiness asserted below "
                 "would be the emptiness of a store nothing wrote to"
             )
-        for table in DOWNSTREAM_OUTPUTS:
+        for table in (*DOWNSTREAM_OUTPUTS, *ROOT_LIFECYCLE_LEDGER):
             assert _rows(connection, table) == 0, (
                 f"{table.name} holds a row committed by the save transaction. "
                 "`QC-AC-002` says the acknowledgment does not wait for extraction or "
@@ -381,6 +389,7 @@ def test_the_pipeline_tables_this_test_covers_are_all_of_them(engine: Engine) ->
             *DOWNSTREAM_OUTPUTS,
             *SYNCHRONOUS_CAPTURE_METADATA,
             *OPERATOR_OWNED_CONTROL_PLANE,
+            *ROOT_LIFECYCLE_LEDGER,
         )
     }
     assert derived == recorded, (

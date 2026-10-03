@@ -440,6 +440,19 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
         Capability.CAPTURE_READ: {"capture_id": capture.capture_id},
         Capability.CAPTURE_LIST: {},
         Capability.CAPTURE_SEARCH: {"query": "synthetic"},
+        # Restore precedes archive so one shared scene still expects revision 0.
+        Capability.CAPTURE_RESTORE: {
+            "capture_id": capture.capture_id,
+            "expected_lifecycle_revision": 0,
+            "idempotency_key": "wire-capture-restore-0001",
+            "reason": MARKER_CONTENT,
+        },
+        Capability.CAPTURE_ARCHIVE: {
+            "capture_id": capture.capture_id,
+            "expected_lifecycle_revision": 0,
+            "idempotency_key": "wire-capture-archive-0001",
+            "reason": MARKER_CONTENT,
+        },
         Capability.KNOWLEDGE_REVEAL: {"subject_id": capture.capture_id},
         Capability.REVIEW_LIST: {},
         Capability.CONTINUITY_PULSE: {},
@@ -1703,6 +1716,8 @@ SCOPED_CAPABILITIES = [
         Capability.CAPTURE_READ,
         Capability.CAPTURE_LIST,
         Capability.CAPTURE_SEARCH,
+        Capability.CAPTURE_ARCHIVE,
+        Capability.CAPTURE_RESTORE,
         Capability.KNOWLEDGE_REVEAL,
         Capability.REVIEW_LIST,
         Capability.REVIEW_DECIDE,
@@ -2287,6 +2302,8 @@ def test_the_transport_routes_no_mutating_capability() -> None:
         "capture.read",
         "capture.list",
         "capture.search",
+        "capture.archive",
+        "capture.restore",
     }, "the exemption is exactly the capture family"
 
 

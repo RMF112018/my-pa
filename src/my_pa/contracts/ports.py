@@ -60,6 +60,15 @@ from my_pa.contracts.v1.meetings import (
 )
 from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.domain.audit.events import AuditEvent
+from my_pa.domain.capture.lifecycle import (
+    CaptureLifecycleEvent,
+    CaptureLifecycleProjection,
+    CaptureLifecycleReceipt,
+    CaptureLifecycleSelector,
+    CaptureLifecycleState,
+    CaptureProcessingEligibility,
+    CaptureProcessingSubject,
+)
 from my_pa.domain.capture.proposal import MAX_NORMALIZED_VALUE_CHARACTERS, ProposalState
 from my_pa.domain.capture.reveal import Reveal
 from my_pa.domain.capture.review import (
@@ -322,6 +331,8 @@ __all__ = [
     "CanvasWorkspaceRepository",
     "CaptureAdmission",
     "CaptureAdmissionRequest",
+    "CaptureLifecycleJobResumption",
+    "CaptureLifecycleRepository",
     "CaptureRepository",
     "CaptureSearchMatch",
     "CaptureSearchOutcome",
@@ -3782,10 +3793,15 @@ class CaptureSearchRequest:
 
     query: SearchQuery
     limit: int
+    #: CRL-WP-03 (CW-012): which roots the search considers. Active by default;
+    #: applied before totals and the limit.
+    lifecycle: CaptureLifecycleSelector = CaptureLifecycleSelector.ACTIVE
 
     def __post_init__(self) -> None:
         if not isinstance(self.query, SearchQuery):
             raise ValueError("a capture search carries a normalized SearchQuery")
+        if not isinstance(self.lifecycle, CaptureLifecycleSelector):
+            raise ValueError("a capture search names one lifecycle selector")
         if isinstance(self.limit, bool) or self.limit < 1:
             raise ValueError("a capture search page holds at least one capture")
 
@@ -3910,8 +3926,18 @@ class CaptureRepository(ABC):
         """
 
     @abstractmethod
-    def captures(self, *, limit: int, principal_id: str) -> tuple[CaptureSummary, ...]:
-        """One bounded page of the Principal's own captures, newest first."""
+    def captures(
+        self,
+        *,
+        limit: int,
+        principal_id: str,
+        lifecycle: CaptureLifecycleSelector = CaptureLifecycleSelector.ACTIVE,
+    ) -> tuple[CaptureSummary, ...]:
+        """One bounded page of the Principal's own captures, newest first.
+
+        `lifecycle` (CRL-WP-03, CW-012) selects active (the default), archived
+        or all roots, applied before the limit.
+        """
 
     @abstractmethod
     def search(self, request: CaptureSearchRequest, *, principal_id: str) -> CaptureSearchOutcome:
@@ -3957,8 +3983,117 @@ class CaptureRepository(ABC):
         Capture (``cap_...``), or an accepted, non-superseded assertion
         (``asrt_...``).  The operation deliberately exposes neither evidence
         content nor whether a differently-owned reference exists.
+
+        An owned archived ``cap_...`` raises `CaptureWithdrawnError` (C-21).
+        ``asrt_...`` stays class 3 and is not withdrawn by archive.
         """
         raise NotImplementedError
+
+    def retained_publication_roots(
+        self, principal_id: str, capture_ids: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        """Roots among `capture_ids` that are still active for publication.
+
+        The default keeps every cited id. The SQL adapter shares the roots and
+        omits archived ones (CRL-WP-03 C-18). A fake with no lifecycle store
+        has nothing archived to drop.
+        """
+        del principal_id
+        return tuple(dict.fromkeys(capture_ids))
+
+    def lifecycle_states(
+        self, principal_id: str, capture_ids: tuple[str, ...]
+    ) -> Mapping[str, CaptureLifecycleState]:
+        """Owned capture roots mapped to their current lifecycle state.
+
+        The default is empty: a fake with no lifecycle store discloses nothing.
+        Absent and foreign ids stay omitted, so a caller renders them as
+        unavailable rather than active.
+        """
+        del principal_id, capture_ids
+        return {}
+
+    def evidence_lifecycle_states(
+        self, principal_id: str, references: tuple[str, ...]
+    ) -> Mapping[str, str]:
+        """`active` or `archived` for owned `cap_` and owned `asrt_` references.
+
+        The default is empty. Other prefixes are not capture provenance.
+        """
+        del principal_id, references
+        return {}
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureLifecycleJobResumption:
+    """What a restore did to a root's withdrawn work (MR-C12)."""
+
+    resumed: int
+    still_paused: int
+
+
+class CaptureLifecycleRepository(ABC):
+    """The Capture root lifecycle plane (CRL-WP-03), inside one transaction.
+
+    Every method takes the authenticated Principal (`prn_…`) and answers only
+    within that partition: another Principal's root, event or receipt is the
+    same answer as an absent one. Events and receipts are append-only; the port
+    offers no update or delete for either.
+
+    The use case calls these in one fixed order inside one unit of work: lock
+    the root, look up the key, read the current lifecycle, then write the event,
+    the receipt and the job effects (plan (h)).
+    """
+
+    @abstractmethod
+    def lock_root(self, capture_id: str, *, principal_id: str) -> bool:
+        """Take the root `FOR NO KEY UPDATE`; False for a foreign or absent root."""
+
+    @abstractmethod
+    def latest(self, capture_id: str, *, principal_id: str) -> CaptureLifecycleProjection:
+        """The root's current lifecycle (active/0 when it has no event)."""
+
+    @abstractmethod
+    def latest_many(
+        self, capture_ids: tuple[str, ...], *, principal_id: str
+    ) -> Mapping[str, CaptureLifecycleProjection]:
+        """The current lifecycle of each named root, read in one statement."""
+
+    @abstractmethod
+    def history(
+        self, capture_id: str, *, principal_id: str, limit: int
+    ) -> tuple[CaptureLifecycleEvent, ...]:
+        """The root's most recent `limit` events, oldest first."""
+
+    @abstractmethod
+    def receipt(self, idempotency_key: str, *, principal_id: str) -> CaptureLifecycleReceipt | None:
+        """The receipt this Principal's key is bound to, or `None`."""
+
+    @abstractmethod
+    def record_event(self, event: CaptureLifecycleEvent, *, principal_id: str) -> None:
+        """Append one lifecycle event."""
+
+    @abstractmethod
+    def record_receipt(self, receipt: CaptureLifecycleReceipt, *, principal_id: str) -> None:
+        """Append one receipt.
+
+        Raises `domain.capture.lifecycle.CaptureLifecycleKeyConflictError` when
+        the Principal's key is already bound to another request.
+        """
+
+    @abstractmethod
+    def suspend_jobs(self, capture_id: str, *, principal_id: str) -> int:
+        """Withdraw the root's unfinished work; returns how many rows paused."""
+
+    @abstractmethod
+    def resume_jobs(
+        self,
+        capture_id: str,
+        *,
+        principal_id: str,
+        eligibility: Callable[[CaptureProcessingSubject], CaptureProcessingEligibility],
+    ) -> CaptureLifecycleJobResumption:
+        """Re-expose withdrawn work under then-current eligibility."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -5044,6 +5179,16 @@ class UnitOfWork(ABC):
     @property
     def write_requests(self) -> WriteRequestRepository:
         """Server-bound proposal and Review replay ledger in this transaction."""
+        raise NotImplementedError
+
+    @property
+    def capture_lifecycle(self) -> CaptureLifecycleRepository:
+        """The Capture root lifecycle plane in this transaction (CRL-WP-03).
+
+        Not abstract, for the reason `reenrichment` is not: only the SQL unit
+        of work and the test fake serve it, and every other implementation
+        refuses rather than silently answering.
+        """
         raise NotImplementedError
 
     @property

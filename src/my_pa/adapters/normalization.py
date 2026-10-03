@@ -64,6 +64,7 @@ from my_pa.application.commands import (
     AddEntityCommunicationMethod,
     AddEntityName,
     ApplyConstraintSync,
+    ArchiveCapture,
     ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
@@ -193,6 +194,7 @@ from my_pa.application.commands import (
     ResolveEntity,
     ResolveIntelligenceSet,
     ResolveUnresolvedMention,
+    RestoreCapture,
     RestoreEntity,
     RestoreManagedDocument,
     RestoreRelationshipMemory,
@@ -540,6 +542,14 @@ def _list_captures(payload: Mapping[str, Any]) -> Command:
 
 def _search_captures(payload: Mapping[str, Any]) -> Command:
     return SearchCaptures(**payload)
+
+
+def _archive_capture(payload: Mapping[str, Any]) -> Command:
+    return ArchiveCapture(**payload)
+
+
+def _restore_capture(payload: Mapping[str, Any]) -> Command:
+    return RestoreCapture(**payload)
 
 
 def _reveal_subject(payload: Mapping[str, Any]) -> Command:
@@ -2422,6 +2432,8 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.CAPTURE_READ: _read_capture,
         Capability.CAPTURE_LIST: _list_captures,
         Capability.CAPTURE_SEARCH: _search_captures,
+        Capability.CAPTURE_ARCHIVE: _archive_capture,
+        Capability.CAPTURE_RESTORE: _restore_capture,
         Capability.REVIEW_LIST: _list_review_cases,
         Capability.REVIEW_DECIDE: _decide_review_case,
         Capability.CONTINUITY_PULSE: _get_pulse,

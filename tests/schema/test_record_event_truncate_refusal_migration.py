@@ -39,9 +39,10 @@ def _config(buffer: io.StringIO | None = None) -> Config:
     return Config(str(ROOT / "alembic.ini"), output_buffer=buffer)
 
 
-def test_the_revision_is_the_single_head_on_the_record_event_revision() -> None:
+def test_the_revision_is_on_the_record_event_revision_under_the_capture_head() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [REVISION]
+    assert script.get_heads() == ["0641c354ca85"]
+    assert script.get_revision("0641c354ca85").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
 
 
@@ -101,11 +102,11 @@ def _enabled(engine: Engine, table: str, trigger: str) -> str | None:
 
 @pytest.mark.database
 @pytest.mark.migration_empty_to_head
-def test_an_empty_database_upgrades_to_the_truncate_refusal_head(
+def test_an_empty_database_upgrades_to_the_truncate_refusal_revision(
     disposable_database: str, engine: Engine
 ) -> None:
     del disposable_database
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     assert _version(engine) == REVISION
     for table, trigger in TRIGGERS:
         assert _enabled(engine, table, trigger) == "O"
@@ -114,12 +115,12 @@ def test_an_empty_database_upgrades_to_the_truncate_refusal_head(
 
 @pytest.mark.database
 @pytest.mark.migration_edge
-def test_the_record_event_head_upgrades_to_the_truncate_refusal_head(
+def test_the_record_event_revision_upgrades_to_the_truncate_refusal_revision(
     disposable_database: str, engine: Engine
 ) -> None:
     del disposable_database
     command.upgrade(_config(), PREVIOUS)
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     assert _version(engine) == REVISION
     for table, trigger in TRIGGERS:
         assert _enabled(engine, table, trigger) == "O"

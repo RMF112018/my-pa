@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import Connection, func, select
+from sqlalchemy import Connection, column, func, select
 from sqlalchemy.dialects.postgresql import insert
 
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
@@ -82,13 +82,14 @@ def worker_plane_health(
         raise ValueError("unknown worker plane")
     plane = planes[plane_name]
     mine = partition_criterion(plane.table, capture_context(principal_id))
+    # A paused capture job is not backlog (D-13): withdrawn and policy-paused
+    # rows wait on the owner or on bounded re-evaluation, and counting them
+    # would report a worker as behind for work it must not claim.
+    outstanding = [mine, plane.table.c.state.in_([JobState.QUEUED.value, JobState.RUNNING.value])]
+    if plane.pause_cause is not None:
+        outstanding.append(column(plane.pause_cause).is_(None))
     backlog = int(
-        connection.scalar(
-            select(func.count())
-            .select_from(plane.table)
-            .where(mine, plane.table.c.state.in_([JobState.QUEUED.value, JobState.RUNNING.value]))
-        )
-        or 0
+        connection.scalar(select(func.count()).select_from(plane.table).where(*outstanding)) or 0
     )
     dead = int(
         connection.scalar(

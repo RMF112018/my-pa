@@ -63,6 +63,12 @@ RAW_REWRITE: Final = re.compile(
     r"\b(UPDATE|DELETE\s+FROM|TRUNCATE(\s+TABLE)?)\s+(ONLY\s+)?(\w+\.)?record_event(s|_sequences)\b",
     re.IGNORECASE,
 )
+#: MR-C20 (operator ruling on D-1, 2026-10-01). A revision names the feed when it
+#: refers to either table. The capability token `record_events.list` is not a
+#: table reference: the negative lookahead keeps a vocabulary restatement from
+#: matching, and `record_event_sequences` has no such token. Raw SQL, a
+#: SQLAlchemy `Table` or `table()`, and `{SCHEMA}.record_events` still match.
+FEED_TABLE_REFERENCE: Final = re.compile(r"\brecord_events\b(?!\.list)|\brecord_event_sequences\b")
 DROP_TRIGGER: Final = re.compile(r"DROP\s+TRIGGER\s+(IF\s+EXISTS\s+)?record_events_are_append_only")
 
 
@@ -195,7 +201,7 @@ def test_only_the_record_event_revisions_name_the_feed_and_keep_the_guards() -> 
         path.relative_to(ROOT).as_posix(): path.read_text(encoding="utf-8")
         for path in sorted((ROOT / "migrations" / "versions").glob("*.py"))
     }
-    naming = {path for path, text in revisions.items() if "record_event" in text}
+    naming = {path for path, text in revisions.items() if FEED_TABLE_REFERENCE.search(text)}
     admission = next(path for path, text in revisions.items() if REVISION_DOCSTRING in text)
     refusal = next(
         path for path, text in revisions.items() if "Refuse TRUNCATE of the Record Event" in text
@@ -277,3 +283,27 @@ def test_the_upsert_scan_sees_a_rekey() -> None:
 def test_the_importer_scan_sees_a_second_importer() -> None:
     planted = {"src/other.py": f"from {TABLES_MODULE} import record_events\n"}
     assert _importers(planted) == {"src/other.py"}
+
+
+# ---- MR-C20 controls ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "planted",
+    [
+        'op.execute("CREATE TABLE knowledge.record_events (event_id TEXT)")',
+        'op.execute("ALTER TABLE knowledge.record_event_sequences ADD COLUMN x INT")',
+        "record_events = Table('record_events', metadata)",
+        "table('record_event_sequences')",
+        "{SCHEMA}.record_events",
+    ],
+)
+def test_a_feed_table_reference_is_detected(planted: str) -> None:
+    """MR-C20 control (i): raw SQL and a table object still name the feed."""
+    assert FEED_TABLE_REFERENCE.search(planted)
+
+
+def test_a_capability_token_is_not_a_feed_table_reference() -> None:
+    """MR-C20 control (ii): the vocabulary literal is not a table reference."""
+    planted = "capability IN ('record_events.list')"
+    assert FEED_TABLE_REFERENCE.search(planted) is None

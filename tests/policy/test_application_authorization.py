@@ -58,6 +58,7 @@ from my_pa.application.commands import (
     AddEntityCommunicationMethod,
     AddEntityName,
     ApplyConstraintSync,
+    ArchiveCapture,
     ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
@@ -185,6 +186,7 @@ from my_pa.application.commands import (
     ResolveEntity,
     ResolveIntelligenceSet,
     ResolveUnresolvedMention,
+    RestoreCapture,
     RestoreEntity,
     RestoreManagedDocument,
     RestoreRelationshipMemory,
@@ -342,6 +344,21 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         Capability.CAPTURE_READ: ReadCapture(capture_id=issue_identifier(IdKind.CAPTURE)),
         Capability.CAPTURE_LIST: ListCaptures(),
         Capability.CAPTURE_SEARCH: SearchCaptures(query="synthetic"),
+        # Restore precedes archive. A full-matrix success walk shares one
+        # capture: restore of an active root is a receipted no-op at revision
+        # 0, and the archive that follows still expects that revision.
+        Capability.CAPTURE_RESTORE: RestoreCapture(
+            capture_id=issue_identifier(IdKind.CAPTURE),
+            expected_lifecycle_revision=0,
+            idempotency_key="denial-probe-capture-restore",
+            reason="Synthetic lifecycle withdrawal",
+        ),
+        Capability.CAPTURE_ARCHIVE: ArchiveCapture(
+            capture_id=issue_identifier(IdKind.CAPTURE),
+            expected_lifecycle_revision=0,
+            idempotency_key="denial-probe-capture-archive",
+            reason="Synthetic lifecycle withdrawal",
+        ),
         # A minted `cap_` for the same reason: the refusal happens before any
         # handler, so what the subject names is irrelevant and its shape is not.
         Capability.KNOWLEDGE_REVEAL: RevealSubject(subject_id=issue_identifier(IdKind.CAPTURE)),
@@ -1320,7 +1337,7 @@ def test_every_capability_refuses_a_purpose_it_does_not_permit(
 #: the operator-only check instead, which has its own row below.
 #:
 #: The rest carry no source scope at all: `capabilities.get` describes the
-#: interface, and the four capture capabilities read and write a product-owned
+#: interface, and the capture capabilities read and write a product-owned
 #: record that `ADR-003` makes a third authority class — it belongs to no
 #: configured source and to no enrollment. **This set widens as capture is
 #: added; it does not weaken**, because every excluded capability is excluded by
@@ -1338,6 +1355,8 @@ SCOPED_CAPABILITIES = [
         Capability.CAPTURE_READ,
         Capability.CAPTURE_LIST,
         Capability.CAPTURE_SEARCH,
+        Capability.CAPTURE_ARCHIVE,
+        Capability.CAPTURE_RESTORE,
         Capability.KNOWLEDGE_REVEAL,
         Capability.REVIEW_LIST,
         Capability.REVIEW_DECIDE,
@@ -1631,6 +1650,8 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.CAPTURE_READ,
         Capability.CAPTURE_LIST,
         Capability.CAPTURE_SEARCH,
+        Capability.CAPTURE_ARCHIVE,
+        Capability.CAPTURE_RESTORE,
         Capability.KNOWLEDGE_REVEAL,
         Capability.REVIEW_LIST,
         Capability.REVIEW_DECIDE,
@@ -2096,6 +2117,18 @@ def test_no_capability_calls_anything_but_the_read_only_provider_methods(
             idempotency_key="read-only-probe-capture-0001",
         ),
         Capability.CAPTURE_READ: ReadCapture(capture_id=staged.capture_id),
+        Capability.CAPTURE_RESTORE: RestoreCapture(
+            capture_id=staged.capture_id,
+            expected_lifecycle_revision=0,
+            idempotency_key="read-only-probe-capture-restore",
+            reason="Synthetic lifecycle withdrawal",
+        ),
+        Capability.CAPTURE_ARCHIVE: ArchiveCapture(
+            capture_id=staged.capture_id,
+            expected_lifecycle_revision=0,
+            idempotency_key="read-only-probe-capture-archive",
+            reason="Synthetic lifecycle withdrawal",
+        ),
     }
     for capability, command in commands.items():
         answer = invoke(

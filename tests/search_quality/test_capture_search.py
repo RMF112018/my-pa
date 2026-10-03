@@ -288,8 +288,10 @@ def test_the_capture_search_uses_the_functional_index_and_not_a_sequential_scan(
     )
     with engine.connect() as connection:
         connection.execute(text("SET LOCAL enable_seqscan = off"))
+        # `text()` doubles `%`, and the lifecycle predicate is `revision % 2`.
+        # The driver call sends that operator through unchanged.
         plan = "\n".join(
-            str(row[0]) for row in connection.execute(text(f"EXPLAIN {compiled}")).all()
+            str(row[0]) for row in connection.exec_driver_sql(f"EXPLAIN {compiled}").all()
         )
     # WP-03: principal-scoped queries may use capture_versions_by_principal first
     # when the planner estimates principal_id is more selective than the text

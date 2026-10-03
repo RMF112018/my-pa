@@ -56,6 +56,7 @@ from my_pa.domain.relationship.memory import (
     proposal_context_links_from_storage,
 )
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.infrastructure.persistence.capture_lifecycle import require_active_capture_roots
 from my_pa.infrastructure.persistence.identifier_claim_lock import lock_entity_mutation_scopes
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
@@ -196,6 +197,16 @@ class SqlRelationshipMemoryProposalRepository(RelationshipMemoryProposalReposito
             if owned is None:
                 raise UnknownScopeError("proposal evidence cites a record outside this scope")
 
+        # CRL-WP-03 C-16: the spans are owned. Share their roots before the
+        # proposal insert. The entity scope lock above is the plane's existing
+        # order; archive does not take it, so the two do not cycle.
+        require_active_capture_roots(
+            self._connection,
+            capture_context(proposal.principal_id),
+            span_ids=tuple(
+                link.capture_span_id for link in evidence if link.capture_span_id is not None
+            ),
+        )
         created = True
         try:
             with self._connection.begin_nested():

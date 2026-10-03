@@ -344,6 +344,9 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         # WP-RE-01's Record Event feed.
         "record_event_sequences",
         "record_events",
+        # CRL-WP-03. The Capture lifecycle revision stacks its two tables.
+        "capture_lifecycle_events",
+        "capture_lifecycle_receipts",
     }
 )
 

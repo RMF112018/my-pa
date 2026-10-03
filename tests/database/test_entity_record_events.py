@@ -29,7 +29,7 @@ from datetime import UTC, datetime
 from typing import Any, Final
 
 import pytest
-from sqlalchemy import Engine, select
+from sqlalchemy import Engine, insert, select
 
 from my_pa.application.commands import (
     AddEntityAddress,
@@ -53,6 +53,8 @@ from my_pa.application.entity_governance import (
 )
 from my_pa.application.entity_resolution import EntityResolutionService, ResolutionRequest
 from my_pa.contracts.ports import AssignmentWriteRequest, RelationshipWriteRequest
+from my_pa.domain.capture.version import ProcessingPolicy, digest_of
+from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.record_events import EntityEventShape, RecordEventKind
 from my_pa.domain.relationship.authoring import CallerNamespace
@@ -90,6 +92,8 @@ from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.entity import SqlEntityRepository
 from my_pa.infrastructure.persistence.tables import (
+    capture_versions,
+    captures,
     entities,
     entity_mutation_events,
     entity_observations,
@@ -952,9 +956,47 @@ def test_every_observation_event_satisfies_the_feed_floor(mentioned: Engine) -> 
     assert all(e["record_version"] >= _resolution_version(mentioned) + 1 for e in events)
 
 
+def _stage_active_capture(engine: Engine, capture_id: str, version_id: str) -> None:
+    """A stored active root the product-owned observation origin can name.
+
+    C-9 refuses an origin whose capture was never stored. The feed assertions
+    below still cover only the observation event: this insert writes no record
+    event.
+    """
+    note = "Synthetic observation origin."
+    with engine.begin() as connection:
+        connection.execute(
+            insert(captures).values(
+                capture_id=capture_id, owner_principal_id=PRINCIPAL, created_at=WHEN
+            )
+        )
+        connection.execute(
+            insert(capture_versions).values(
+                version_id=version_id,
+                capture_id=capture_id,
+                version_number=1,
+                supersedes_version_id=None,
+                content=note,
+                content_sha256=digest_of(note),
+                owner_principal_id=PRINCIPAL,
+                classification=Classification.PRIVATE_LOCAL.value,
+                processing_policy=ProcessingPolicy.LOCAL_ONLY.value,
+                idempotency_key=f"observe-origin-{version_id}",
+                correlation_id=issue_identifier(IdKind.CORRELATION),
+                audit_id=issue_identifier(IdKind.AUDIT),
+                server_received_at=WHEN,
+                accepted_at=WHEN,
+                recorded_at=WHEN,
+            )
+        )
+
+
 def test_an_ingested_observation_commits_created_at_its_feed_version(staged: Engine) -> None:
     """E17 (G1-EM-003): the ledger says `new_version=1` while the canonical
     `resolution_version` is 0; the event carries the feed version, 0 + 1."""
+    capture_id = issue_identifier(IdKind.CAPTURE)
+    version_id = issue_identifier(IdKind.CAPTURE_VERSION)
+    _stage_active_capture(staged, capture_id, version_id)
     with unit(staged) as uow:
         admitted = EntityGovernanceService(uow.entities).ingest(
             ObserveCommand(
@@ -964,8 +1006,8 @@ def test_an_ingested_observation_commits_created_at_its_feed_version(staged: Eng
                 observed_value="Someone Stated",
                 observed_at=WHEN,
                 idempotency_key="rcev-wp04-observe-0001",
-                capture_id=issue_identifier(IdKind.CAPTURE),
-                capture_version_id=issue_identifier(IdKind.CAPTURE_VERSION),
+                capture_id=capture_id,
+                capture_version_id=version_id,
             ),
             sources=uow.sources,
             at=WHEN,

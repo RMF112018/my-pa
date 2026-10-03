@@ -48,6 +48,7 @@ def test_review_list_returns_case_metadata_without_capture_content(scene: Scene)
             "capture_id": case.capture_id,
             "version_id": case.version_id,
             "proposal_type": "commitment",
+            "capture_lifecycle_state": None,
             "proposal_state": "needs_review",
             "risk_class": "moderate",
             "opened_at": "2026-08-02T12:00:00.000Z",

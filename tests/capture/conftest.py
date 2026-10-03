@@ -74,6 +74,8 @@ _EMPTIED: Final = (
     "knowledge.capture_promotion_receipts",
     "knowledge.capture_context_links",
     "knowledge.capture_conversations",
+    "knowledge.capture_lifecycle_events",
+    "knowledge.capture_lifecycle_receipts",
     "knowledge.audit_events",
 )
 

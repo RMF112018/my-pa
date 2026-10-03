@@ -52,7 +52,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "f7a2c9d51e64"
-CURRENT_HEAD: Final = "c8e4a1b70d35"
+CURRENT_HEAD: Final = "0641c354ca85"
 CAPTURE_LABELS: Final = "c1a8e4d70b29"
 WP_TUX_01: Final = "de5ec1c65857"
 WP_MCP_PROJ_01: Final = "9f2c8a1d4e70"
@@ -86,6 +86,9 @@ MEETING_RECORDS_MIGRATION: Final = MIGRATIONS / "20260927_7d9a450dfd07_meeting_r
 #: WP-RE-01's additive head (`1d9b248e7f83`, Record Events), registered on the
 #: same precedent.
 RECORD_EVENTS_MIGRATION: Final = MIGRATIONS / "20260929_1d9b248e7f83_record_events.py"
+#: CRL-WP-03's additive head (`0641c354ca85`, Capture lifecycle), registered on
+#: the same precedent.
+CAPTURE_LIFECYCLE_MIGRATION: Final = MIGRATIONS / "20261001_0641c354ca85_capture_lifecycle.py"
 #: The one sanctioned edit to a historical revision (operator ruling
 #: OPERATOR_RULING_WP04_A_to_E.md section E). Like D-48, the Meeting-records
 #: work freezes `a_managed_document_is_identified_within_its_owner` out of
@@ -155,7 +158,6 @@ CONSTRAINT_TABLES: Final[frozenset[str]] = frozenset(
 #: Fixed and written out, so the recurrence guard below is a bounded check over a
 #: named list rather than a repository-wide scan.
 HEAD_PIN_FILES: Final[tuple[str, ...]] = (
-    "tests/architecture/test_record_event_privilege_separation.py",
     "tests/database/test_cli_auth.py",
     "tests/database/test_entities_graph_vocabulary_migration.py",
     "tests/database/test_legacy_entity_backfill_migration.py",
@@ -163,11 +165,14 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/database/test_ri_ent_wp_10_11_vocabulary_migration.py",
     "tests/schema/test_auth_identity_and_grants_migration.py",
     "tests/schema/test_canvas_workspace_migration.py",
+    "tests/schema/test_capture_lifecycle_migration.py",
+    "tests/schema/test_capture_schema_migration.py",
     "tests/schema/test_constraint_management_migration.py",
     "tests/schema/test_constraint_read_capability_migration.py",
     "tests/schema/test_constraint_sync_migration.py",
     "tests/schema/test_continuity_projects_mutation_migration.py",
     "tests/schema/test_continuity_projects_read_capability_migration.py",
+    "tests/schema/test_extraction_schema_migration.py",
     "tests/schema/test_goodnotes_browser_contract_migration.py",
     "tests/schema/test_goodnotes_client_resume_migration.py",
     "tests/schema/test_goodnotes_content_and_durable_note_stages.py",
@@ -268,7 +273,8 @@ def _literals(block: str) -> list[str]:
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [CURRENT_HEAD]
-    assert script.get_revision(CURRENT_HEAD).down_revision == "1d9b248e7f83"
+    assert script.get_revision(CURRENT_HEAD).down_revision == "c8e4a1b70d35"
+    assert script.get_revision("c8e4a1b70d35").down_revision == "1d9b248e7f83"
     assert script.get_revision("1d9b248e7f83").down_revision == "7d9a450dfd07"
     assert script.get_revision("7d9a450dfd07").down_revision == "6f6ead27d122"
     assert script.get_revision("6f6ead27d122").down_revision == "e6a4c2f91b73"
@@ -283,7 +289,7 @@ def test_revision_is_the_only_linear_head() -> None:
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 110
+    assert len(list(MIGRATIONS.glob("*.py"))) == 111
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -428,6 +434,7 @@ def test_no_historical_revision_was_edited() -> None:
         WP_MCP_PROJ_01_MIGRATION.relative_to(ROOT).as_posix(),
         MEETING_RECORDS_MIGRATION.relative_to(ROOT).as_posix(),
         RECORD_EVENTS_MIGRATION.relative_to(ROOT).as_posix(),
+        CAPTURE_LIFECYCLE_MIGRATION.relative_to(ROOT).as_posix(),
         # Not an additive head: the one sanctioned historical edit (see
         # `SANCTIONED_HISTORICAL_EDIT`; operator ruling section E).
         SANCTIONED_HISTORICAL_EDIT.relative_to(ROOT).as_posix(),

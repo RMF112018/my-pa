@@ -86,6 +86,7 @@ from my_pa.domain.relationship.governance import (
     EvidenceRole,
     MutationRecordFamily,
 )
+from my_pa.infrastructure.persistence.capture_lifecycle import require_active_capture_roots
 from my_pa.infrastructure.persistence.identifier_claim_lock import (
     lock_entity_mutation_scopes,
     lock_identifier_claim_keys,
@@ -1349,6 +1350,11 @@ def _record_evidence(
         ).first()
         if owned is None:
             raise EntityEvidenceError("an entity write cites evidence outside this scope")
+        # CRL-WP-03 C-14: the root is shared after ownership is decided and
+        # before the fact link is written. A missing span stays the evidence error.
+        require_active_capture_roots(
+            connection, capture_context(request.principal_id), span_ids=(reference,)
+        )
         connection.execute(
             insert(entity_fact_evidence_links).values(
                 _bound(

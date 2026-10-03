@@ -60,17 +60,17 @@
     },
     "capture.read": {
       "purpose": "capture_review",
-      "payloadFields": ["capture_id", "version_id"],
+      "payloadFields": ["capture_id", "version_id", "include_lifecycle_history"],
       "probe": { "capture_id": "cap_aaaaaaaa11111111" }
     },
     "capture.list": {
       "purpose": "capture_review",
-      "payloadFields": ["page_size"],
+      "payloadFields": ["page_size", "lifecycle"],
       "probe": { "page_size": 25 }
     },
     "capture.search": {
       "purpose": "capture_review",
-      "payloadFields": ["query", "page_size"],
+      "payloadFields": ["query", "page_size", "lifecycle"],
       "probe": { "query": "concrete pour", "page_size": 25 }
     },
     "review.list": {

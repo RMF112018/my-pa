@@ -28,6 +28,9 @@ from pathlib import Path
 from typing import Any
 
 GIT = "/usr/bin/git"
+# Indexes scale with tracked paths: 8 MiB allows over 25 times a 300 KiB
+# repository index while bounding the trusted read and its transient copies.
+GIT_INDEX_MAX_BYTES = 8 * 1024 * 1024
 GIT_ALIAS_TARGET = Path("/var/packages/Git/target/bin/git")
 GIT_STORE_ALIAS = Path("/var/packages/Git/target")
 GIT_STORE_TARGET = Path("/volume1/@appstore/Git")
@@ -581,8 +584,15 @@ def _source(
     _trusted_directory(source, uid, stop=stop)
     git_dir = source / ".git"
     _trusted_ancestors(git_dir, uid, stop=stop)
-    for member in ("config", "HEAD", "index"):
+    for member in ("config", "HEAD"):
         _trusted_file(git_dir / member, uid, mode=(0o400, 0o600, 0o644), stop=stop)
+    _trusted_file(
+        git_dir / "index",
+        uid,
+        mode=(0o400, 0o600, 0o644),
+        limit=GIT_INDEX_MAX_BYTES,
+        stop=stop,
+    )
     _require(_git(source, ["rev-parse", "--show-toplevel"], runner) == str(source))
     _require(_git(source, ["rev-parse", "HEAD"], runner) == expected_commit)
     _require(_git(source, ["rev-parse", "HEAD^{tree}"], runner) == expected_tree)

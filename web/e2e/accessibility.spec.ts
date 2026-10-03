@@ -873,7 +873,9 @@ test.describe("People search, warnings, and profile extras", () => {
     test.setTimeout(180_000);
     await page.goto("/people");
     await page.getByRole("searchbox", { name: "Find a person" }).fill("Pat Synthetic");
-    await page.getByRole("button", { name: "Search" }).click();
+    const search = page.getByRole("button", { name: "Search", exact: true });
+    await expect(search).toHaveCount(1);
+    await search.click();
     const target = page.getByTestId("people-search-hits")
       .getByRole("link", { name: "Pat Synthetic", exact: true })
       .and(page.locator('a[href="/people/ent_e2ewp13pat000001"]'));

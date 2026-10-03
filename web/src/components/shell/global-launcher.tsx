@@ -362,7 +362,7 @@ export function GlobalLauncher({ open, onOpenChange, initialMode = "initial", pr
 
   function escapeFromDialog() {
     if (!dialogOpen || searchTask) return;
-    if (confirmDiscard) { setConfirmDiscard(false); return; }
+    if (confirmDiscard) { setPendingNavigation(null); setConfirmDiscard(false); return; }
     if (mode === "search" || mode === "new") {
       initialReturnChoice.current = mode;
       setMode("initial");
@@ -375,7 +375,7 @@ export function GlobalLauncher({ open, onOpenChange, initialMode = "initial", pr
   function closeLauncherDialog() {
     // Controlled branch changes also emit a native close event.
     if (!dialogOpen || searchTask) return;
-    if (confirmDiscard) { setConfirmDiscard(false); return; }
+    if (confirmDiscard) { setPendingNavigation(null); setConfirmDiscard(false); return; }
     requestClose();
   }
 

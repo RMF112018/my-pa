@@ -251,6 +251,30 @@ describe("GlobalLauncher hardened contract", () => {
     expect(navigation.push).toHaveBeenCalledExactlyOnceWith("/review");
   });
 
+  it.each(["Escape", "Close"])("cancels pending Search navigation with %s before a later whole close", async (cancel) => {
+    render(<Harness />);
+    const launcher = openNew();
+    fireEvent.click(within(launcher).getByRole("button", { name: "Quick Note" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Capture text" }), { target: { value: "Synthetic retained draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.keyDown(launcher, { key: "Escape" });
+    fireEvent.click(within(launcher).getByRole("button", { name: "Search" }));
+    fireEvent.click(within(launcher).getByRole("button", { name: "Open read result" }));
+    expect(screen.getByRole("alertdialog", { name: "Discard drafts" })).toBeInTheDocument();
+    if (cancel === "Escape") fireEvent.keyDown(screen.getByRole("button", { name: "Keep editing" }), { key: "Escape" });
+    else fireEvent.click(within(launcher).getByRole("button", { name: "Close dialog" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(navigation.push).not.toHaveBeenCalled();
+    fireEvent.keyDown(screen.getByRole("searchbox", { name: "Search" }), { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "New" }));
+    fireEvent.click(screen.getByRole("button", { name: "Quick Note" }));
+    expect(screen.getByRole("textbox", { name: "Capture text" })).toHaveValue("Synthetic retained draft");
+    fireEvent.click(within(launcher).getByRole("button", { name: "Close dialog" }));
+    fireEvent.click(screen.getByRole("button", { name: "Discard drafts" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(navigation.push).not.toHaveBeenCalled();
+  });
+
   it("navigates a clean Search result once without a discard prompt", async () => {
     render(<Harness />);
     const launcher = openLauncher();

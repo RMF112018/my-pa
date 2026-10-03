@@ -51,16 +51,23 @@ export function AppShell({
 
 function AppShellBody({ principal, children }: { principal: PrincipalSession; children: ReactNode }) {
   const [launcherOpen, setLauncherOpen] = useState(false);
+  const [launcherInitialMode, setLauncherInitialMode] = useState<"initial" | "new">("initial");
   const [utilityOpen, setUtilityOpen] = useState(false);
   const { preferences, update } = useShellPreferences();
 
   const openCapture = () => {
+    setLauncherInitialMode("new");
+    setLauncherOpen(true);
+  };
+  const openLauncher = () => {
+    setLauncherInitialMode("initial");
     setLauncherOpen(true);
   };
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
+        setLauncherInitialMode("initial");
         setLauncherOpen(true);
       }
     };
@@ -91,7 +98,7 @@ function AppShellBody({ principal, children }: { principal: PrincipalSession; ch
             <NavRail
               collapsed={preferences.navCollapsed}
               onCollapsedChange={(navCollapsed) => update({ navCollapsed })}
-              onCapture={openCapture}
+              onCapture={openLauncher}
               account={account}
             />
             <div className="min-w-0 flex-1">
@@ -113,8 +120,8 @@ function AppShellBody({ principal, children }: { principal: PrincipalSession; ch
               />
             ) : null}
           </div>
-          <MobileNav onCapture={openCapture} />
-          <GlobalLauncher open={launcherOpen} onOpenChange={setLauncherOpen} />
+          <MobileNav onCapture={openLauncher} />
+          <GlobalLauncher open={launcherOpen} onOpenChange={setLauncherOpen} initialMode={launcherInitialMode} />
           <OfflineQueueStatus principalId={principal.principalId} />
         </div>
       </InspectorSelectionProvider>

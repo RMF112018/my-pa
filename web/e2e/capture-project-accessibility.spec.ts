@@ -45,14 +45,21 @@ test.describe("WP08 Capture Project accessibility", () => {
     await signIn(page);
     await visibleCaptureButton(page).focus();
     await page.keyboard.press("Enter");
-    await expect(page.getByTestId("capture-chooser")).toBeVisible();
-
-    await expect(page.getByTestId("capture-choice-create_task")).toBeFocused();
+    const launcher = page.getByRole("dialog", { name: "Search or create" });
+    const initial = launcher.getByRole("group", { name: "Search or New", exact: true });
+    await expect(initial.getByRole("button")).toHaveText(["Search", "New"]);
+    await expect(initial.getByRole("button", { name: "Search", exact: true })).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(initial.getByRole("button", { name: "New", exact: true })).toBeFocused();
+    await page.keyboard.press("Enter");
+    const choices = launcher.getByRole("group", { name: "Create new", exact: true });
+    await expect(choices.getByRole("button")).toHaveText(["Create Task", "Quick Note", "Conversation Log"]);
+    await expect(choices.getByRole("button", { name: "Create Task", exact: true })).toBeFocused();
     // macOS WebKit skips buttons with plain Tab by default. Option+Tab reaches
     // every control; the invariant remains keyboard-only navigation.
     const nextControlKey = browserName === "webkit" && process.platform === "darwin" ? "Alt+Tab" : "Tab";
     await page.keyboard.press(nextControlKey);
-    await expect(page.getByTestId("capture-choice-quick_note")).toBeFocused();
+    await expect(choices.getByRole("button", { name: "Quick Note", exact: true })).toBeFocused();
     await page.keyboard.press("Enter");
     await expect(page.getByTestId("capture-field")).toBeVisible();
     await expect(page.getByTestId("capture-field")).toBeFocused();
@@ -85,8 +92,8 @@ test.describe("WP08 Capture Project accessibility", () => {
     await expect(page.getByTestId("capture-project-select")).toBeVisible();
 
     const results = await new AxeBuilder({ page })
-      // A native `<dialog>`, which carries its own implicit role.
-      .include("dialog[open]")
+      // Scan the active canonical Dialog or phone Sheet.
+      .include('dialog[open], [role="dialog"][data-state="open"]')
       .withTags(["wcag2a", "wcag2aa"])
       .analyze();
     expect(results.violations).toEqual([]);
@@ -107,14 +114,18 @@ test.describe("WP08 Capture Project accessibility", () => {
   test("focus returns to Capture after the Task handoff and back", async ({ page }) => {
     await signIn(page);
     await visibleCaptureButton(page).click();
-    await page.getByTestId("capture-chooser").getByRole("button", { name: "Create Task" }).click();
+    const launcher = page.getByRole("dialog", { name: "Search or create" });
+    await expect(launcher.getByRole("button", { name: "Search", exact: true })).toBeFocused();
+    await launcher.getByRole("button", { name: "New", exact: true }).click();
+    await launcher.getByRole("button", { name: "Create Task", exact: true }).click();
     await expect(page.getByTestId("task-create-sheet")).toBeVisible();
 
     await page.getByTestId("task-create-back").click();
-    await expect(page.getByTestId("capture-chooser")).toBeVisible();
-    // There is exactly one overlay: Capture is resumed, not stacked under Task.
+    await expect(launcher.getByRole("group", { name: "Create new", exact: true })).toBeVisible();
+    await expect(launcher.getByRole("button", { name: "Create Task", exact: true })).toBeFocused();
+    // There is exactly one overlay: New is resumed, not stacked under Task.
     await expect(page.getByTestId("task-create-sheet")).toHaveCount(0);
-    await expect(page.locator("dialog[open]").filter({ visible: true })).toHaveCount(1);
+    await expect(page.locator('dialog[open], [role="dialog"][data-state="open"]').filter({ visible: true })).toHaveCount(1);
   });
 
   test("WP08 Capture Project opened controls preserve focus and width", async ({ page }) => {

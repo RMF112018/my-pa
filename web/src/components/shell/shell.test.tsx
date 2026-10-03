@@ -21,7 +21,7 @@ vi.mock("@/components/diagnostics/diagnostics-provider", async (importOriginal) 
 });
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { AppShell } from "@/components/shell/app-shell";
+import { AppShell, useOpenCapture } from "@/components/shell/app-shell";
 import {
   DESKTOP_PRIMARY,
   DESTINATIONS,
@@ -54,6 +54,11 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
 });
+
+function ContextualCapture() {
+  const openCapture = useOpenCapture();
+  return <button onClick={openCapture}>Contextual Capture</button>;
+}
 
 describe("app shell", () => {
   it("renders desktop workspaces and mobile primary Today, Work, People", () => {
@@ -151,6 +156,40 @@ describe("app shell", () => {
     render(<AppShell principal={PRINCIPAL} sessionEpoch={SESSION_EPOCH}>content</AppShell>);
     const todayLinks = screen.getAllByRole("link", { name: "Today" });
     expect(todayLinks.some((l) => l.getAttribute("aria-current") === "page")).toBe(true);
+  });
+
+  it("opens the unified New chooser through the contextual Capture compatibility hook", async () => {
+    render(<AppShell principal={PRINCIPAL} sessionEpoch={SESSION_EPOCH}><ContextualCapture /></AppShell>);
+    fireEvent.click(screen.getByRole("button", { name: "Contextual Capture" }));
+    const launcher = await screen.findByRole("dialog", { name: "Search or create" });
+    const menu = within(launcher).getByRole("group", { name: "Create new" });
+    expect(within(menu).getAllByRole("button").map((button) => button.textContent?.trim())).toEqual([
+      "Create Task", "Quick Note", "Conversation Log",
+    ]);
+    expect(within(menu).getByRole("button", { name: "Create Task" })).toHaveFocus();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(screen.queryByTestId("capture-field")).toBeNull();
+  });
+
+  it.each(["launcher-button-desktop", "launcher-button-mobile"])("keeps %s at Initial after contextual Capture closes", async (trigger) => {
+    render(<AppShell principal={PRINCIPAL} sessionEpoch={SESSION_EPOCH}><ContextualCapture /></AppShell>);
+    fireEvent.click(screen.getByRole("button", { name: "Contextual Capture" }));
+    fireEvent.click(within(await screen.findByRole("dialog", { name: "Search or create" })).getByRole("button", { name: "Close dialog" }));
+    fireEvent.click(screen.getByTestId(trigger));
+    const launcher = await screen.findByRole("dialog", { name: "Search or create" });
+    expect(within(launcher).getByRole("group", { name: "Search or New" })).toBeInTheDocument();
+    expect(within(launcher).getByRole("button", { name: "Search" })).toHaveFocus();
+    expect(within(launcher).queryByRole("group", { name: "Create new" })).toBeNull();
+  });
+
+  it.each(["metaKey", "ctrlKey"])("keeps %s+K at Initial after contextual Capture closes", async (modifier) => {
+    render(<AppShell principal={PRINCIPAL} sessionEpoch={SESSION_EPOCH}><ContextualCapture /></AppShell>);
+    fireEvent.click(screen.getByRole("button", { name: "Contextual Capture" }));
+    fireEvent.click(within(await screen.findByRole("dialog", { name: "Search or create" })).getByRole("button", { name: "Close dialog" }));
+    fireEvent.keyDown(window, { key: "k", [modifier]: true });
+    const launcher = await screen.findByRole("dialog", { name: "Search or create" });
+    expect(within(launcher).getByRole("group", { name: "Search or New" })).toBeInTheDocument();
+    expect(within(launcher).getByRole("button", { name: "Search" })).toHaveFocus();
   });
 
   it("opens one Search or create launcher from Cmd/Ctrl+K and returns Search through initial", async () => {

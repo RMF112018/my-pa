@@ -71,7 +71,7 @@
  */
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-import { signIn } from "./fixtures";
+import { openCaptureNote, signIn, visibleCaptureButton } from "./fixtures";
 
 /** `src/lib/tasks/presentation.ts`. Read, not guessed. */
 const TASK_DUE_FIELD_LABEL = "Due";
@@ -195,11 +195,7 @@ test.describe("coarse-pointer control sizing", () => {
     // primitives measured above, and `task-status-control.test.tsx` guards the
     // Status select's sizing contract in the blocking unit job.
     await page.goto("/today");
-    await page
-      .locator('[data-testid="capture-button-desktop"], [data-testid="capture-button-mobile"]')
-      .filter({ visible: true })
-      .click();
-    await page.getByTestId("capture-chooser").getByRole("button", { name: "Quick note" }).click();
+    await openCaptureNote(page);
     const field = page.getByTestId("capture-field");
     await expect(field).toBeVisible();
     const fontPx = await field.evaluate((node) =>
@@ -586,13 +582,12 @@ async function controlsOutsideSheet(
   return offenders;
 }
 
-/** Open Create Task through the Capture chooser, the launcher that shows Back. */
+/** Open Create Task through unified New, preserving the canonical Back entry. */
 async function openCreateTaskSheetFromCapture(page: Page) {
-  await page
-    .locator('[data-testid="capture-button-desktop"], [data-testid="capture-button-mobile"]')
-    .filter({ visible: true })
-    .click();
-  await page.getByTestId("capture-chooser").getByRole("button", { name: "Create Task" }).click();
+  await visibleCaptureButton(page).click();
+  const launcher = page.getByRole("dialog", { name: "Search or create" });
+  await launcher.getByRole("button", { name: "New", exact: true }).click();
+  await launcher.getByRole("button", { name: "Create Task", exact: true }).click();
   const sheet = page.getByTestId("task-create-sheet");
   await expect(sheet).toBeVisible();
   await expect(sheet.getByRole("button", { name: "Back", exact: true })).toBeVisible();

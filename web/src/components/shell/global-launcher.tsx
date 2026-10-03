@@ -1,31 +1,17 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { CaptureDialog } from "@/components/shell/capture-dialog";
 import { SearchCommandPanel } from "@/components/shell/command-palette";
 import { TaskCreateSheet } from "@/components/tasks/task-create-sheet";
 import { TaskCompactSheet } from "@/components/tasks/task-compact-sheet";
 import { Dialog } from "@/components/ui/dialog";
-import { Sheet } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { useProjectScope } from "@/components/shell/project-scope-provider";
 import { beginCaptureExperience, captureSessionReducer, hasUnresolvedIntent } from "@/lib/capture/session";
 import type { CaptureProjectId } from "@/lib/capture/contract";
 import type { PresentedTaskActivation } from "@/lib/search/presentation";
-
-const PHONE_QUERY = "(max-width: 767px)";
-
-function subscribeToPhoneViewport(onChange: () => void) {
-  if (typeof window.matchMedia !== "function") return () => undefined;
-  const query = window.matchMedia(PHONE_QUERY);
-  query.addEventListener("change", onChange);
-  return () => query.removeEventListener("change", onChange);
-}
-
-function phoneViewportSnapshot() {
-  return typeof window.matchMedia === "function" && window.matchMedia(PHONE_QUERY).matches;
-}
 
 export type ProjectId = NonNullable<CaptureProjectId>;
 type Mode = "initial" | "search" | "new" | "quick_note" | "conversation_log" | "task";
@@ -66,7 +52,6 @@ export function GlobalLauncher({ open, onOpenChange, initialMode = "initial", pr
   const { principalId } = principal;
   const sessionIdentity = `${principal.principalId}:${principal.sessionEpoch}`;
   const router = useRouter();
-  const phone = useSyncExternalStore(subscribeToPhoneViewport, phoneViewportSnapshot, () => false);
   const scope = useProjectScope();
   const scopeProjectId = scope.resolution.scope.kind === "PROJECT" ? scope.resolution.scope.projectId : null;
   const [capture, dispatchCapture] = useReducer(
@@ -425,21 +410,16 @@ export function GlobalLauncher({ open, onOpenChange, initialMode = "initial", pr
 
   return <>
     <div hidden={!dialogOpen}
-      onFocusCapture={(event) => {
-        // The canonical phone Sheet mounts its portal after the launcher effect
-        // and defaults to its title. Choose this feature's stage synchronously.
-        if (phone && event.target instanceof HTMLElement && event.target.tagName === "H2") focusDialogEntry();
-      }}
       onKeyDownCapture={(event) => {
         if (event.key !== "Escape") return;
         event.preventDefault();
         event.stopPropagation();
         escapeFromDialog();
       }}
-      className="[&_dialog]:max-w-[680px] [&_dialog]:w-[80vw] [&_dialog]:max-h-[80vh]">
-    {phone ? <Sheet open={dialogOpen} onOpenChange={(next) => { if (!next) closeLauncherDialog(); }}
-      title="Search or create" placement="menu">{launcherContent}</Sheet>
-      : <Dialog open={dialogOpen} onClose={closeLauncherDialog} title="Search or create">{launcherContent}</Dialog>}
+      className="md:[&_dialog]:max-w-[680px] md:[&_dialog]:w-[80vw] md:[&_dialog]:max-h-[80vh] max-md:[&_dialog]:max-w-none max-md:[&_dialog]:w-full max-md:[&_dialog]:max-h-[92dvh] max-md:[&_dialog]:rounded-b-none max-md:[&_dialog]:rounded-t-[var(--radius-lg)] max-md:[&_dialog]:bottom-0 max-md:[&_dialog]:top-auto max-md:[&_dialog]:mb-0 max-md:[&_dialog>div]:pl-[max(1rem,env(safe-area-inset-left))] max-md:[&_dialog>div]:pr-[max(1rem,env(safe-area-inset-right))] max-md:[&_dialog>div:last-child]:pb-[max(1rem,env(safe-area-inset-bottom))]">
+    {/* Native Dialog retains the canonical Capture/Search instances while its
+        trap is closed for Task handoff. Unmounting them loses retry ownership. */}
+    <Dialog open={dialogOpen} onClose={closeLauncherDialog} title="Search or create">{launcherContent}</Dialog>
 
     </div>
     {searchTask ? <TaskCompactSheet taskId={searchTask.taskId} seed={searchTask.seed}

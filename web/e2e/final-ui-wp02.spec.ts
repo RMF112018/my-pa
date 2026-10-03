@@ -4,7 +4,7 @@ import { signIn, syntheticNote } from "./fixtures";
 
 const launcherControl = (page: Page) => page.getByRole("button", { name: "Search or create" }).filter({ visible: true });
 const launcher = (page: Page) => page.getByRole("dialog", { name: "Search or create" });
-const launcherClose = (page: Page) => launcher(page).getByRole("button", { name: /^Close (dialog|panel)$/ }).filter({ visible: true });
+const launcherClose = (page: Page) => launcher(page).getByRole("button", { name: "Close dialog", exact: true }).filter({ visible: true });
 const activeOverlays = (page: Page) => page.locator('dialog[open], [role="dialog"][data-state="open"]');
 const noSideScroll = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
 
@@ -178,7 +178,7 @@ for (const width of [320, 390, 768, 1024, 1440]) {
     const box = await dialog.boundingBox();
     expect(box, "the active launcher has measurable geometry").not.toBeNull();
     if (width <= 767) {
-      await expect(launcherClose(page)).toHaveAccessibleName("Close panel");
+      await expect(launcherClose(page)).toHaveAccessibleName("Close dialog");
       expect(Math.abs(box!.x)).toBeLessThanOrEqual(1);
       expect(Math.abs(box!.width - width)).toBeLessThanOrEqual(1);
       expect(Math.abs(box!.y + box!.height - 900)).toBeLessThanOrEqual(1);

@@ -118,20 +118,20 @@ afterEach(() => {
 });
 
 describe("GlobalLauncher hardened contract", () => {
-  it("uses the canonical phone menu Sheet with one overlay and branch Escape", async () => {
+  it("keeps one persistent phone launcher overlay with branch Escape", async () => {
     vi.stubGlobal("matchMedia", () => ({
       matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn(),
     }));
     try {
       render(<Harness />);
       const launcher = openLauncher();
-      expect(launcher).toHaveAttribute("data-placement", "menu");
+      expect(launcher.tagName).toBe("DIALOG");
       expect(screen.getAllByRole("dialog")).toHaveLength(1);
       await waitFor(() => expect(within(launcher).getByRole("button", { name: "Search" })).toHaveFocus());
       fireEvent.click(within(launcher).getByRole("button", { name: "New" }));
       fireEvent.keyDown(screen.getByRole("button", { name: "Create Task" }), { key: "Escape" });
       expect(screen.getByRole("button", { name: "New" })).toHaveFocus();
-      fireEvent.click(screen.getByRole("button", { name: "Close panel" }));
+      fireEvent.click(screen.getByRole("button", { name: "Close dialog" }));
       await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     } finally {
       vi.unstubAllGlobals();

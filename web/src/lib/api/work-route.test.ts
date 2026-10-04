@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest, NextResponse } from "next/server";
 import { POST as signInRoute } from "@/app/api/session/route";
-import { workPost, type AdmissionContext } from "@/lib/api/work-route";
+import { workGet, workPost, isAwareRfc3339, isCanonicalId, isCanonicalTimezoneKey, type AdmissionContext } from "@/lib/api/work-route";
 import {
   CATEGORY_REORDER_FIELDS,
   CONSTRAINT_CREATE_DRAFT_FIELDS,
@@ -475,5 +475,135 @@ describe("the pre-dispatch admit hook", () => {
     expect(response.status).toBe(501);
     expect(admit).not.toHaveBeenCalled();
     expect(sent).toEqual([]);
+  });
+});
+
+describe("WP03B closed shared request validation", () => {
+  it.each([
+    [{}, { text: { gateway: "text", type: "string", required: true } }],
+    [{ toString: "untrusted" }, {}],
+    [{ text: null }, { text: { gateway: "text", type: "string" } }],
+    [{ text: " " }, { text: { gateway: "text", type: "string", nonBlank: true } }],
+    [{ key: "short" }, { key: { gateway: "idempotency_key", type: "string", minLength: 8 } }],
+    [{ version: Number.MAX_SAFE_INTEGER + 1 }, { version: { gateway: "expected_version", type: "integer" } }],
+    [{ version: 101 }, { version: { gateway: "expected_version", type: "integer", maximum: 100 } }],
+    [{ enabled: "true" }, { enabled: { gateway: "enabled", type: "boolean" } }],
+    [{ at: "2026-02-30T12:00:00Z" }, { at: { gateway: "start_at", type: "string", format: "timestamp" } }],
+    [{ at: "2026-01-01T12:00:00" }, { at: { gateway: "start_at", type: "string", format: "timestamp" } }],
+    [{ id: "cap_aaaaaaaa11111111" }, { id: { gateway: "project_id", type: "string", pattern: /^prj_[A-Za-z0-9]{8,64}$/ } }],
+    [{ ids: ["mdoc_aaaaaaaa11111111", "mdoc_aaaaaaaa11111111"] }, { ids: { gateway: "ids", type: "string-array", uniqueItems: true } }],
+  ] as const)("refuses invalid closed input before dispatch (%j)", async (payload, fields) => {
+    const session = await cookie();
+    const { sent } = stubGateway();
+    const response = await workPost(post(session, payload), "validation", "capture.create", fields);
+    await expectRefused(response, sent);
+  });
+
+  it.each([
+    [{ displayName: "Synthetic", unexpected: true }],
+    [{ displayName: "   " }],
+    [{ email: "one@example.invalid", isOrganizer: "true" }],
+    [{ entityId: "prj_aaaaaaaa11111111" }],
+    [{ displayName: "Same" }, { displayName: " Same " }],
+    [{ email: "STRASSE@example.invalid" }, { email: "straße@example.invalid" }],
+    [{ email: "οσ@example.invalid" }, { email: "ος@example.invalid" }],
+    [{ displayName: "One", isOrganizer: true }, { displayName: "Two", isOrganizer: true }],
+    [{ entityId: "ent_aaaaaaaa11111111" }, { entityId: "ent_aaaaaaaa11111111" }],
+  ])("refuses invalid nested/set-level attendees (%j)", async (...members) => {
+    const session = await cookie();
+    const { sent } = stubGateway();
+    const response = await workPost(post(session, { attendees: members }), "attendees", "meetings.update", {
+      attendees: { gateway: "attendees_replace", type: "attendee-array", maxItems: 100 },
+    });
+    await expectRefused(response, sent);
+  });
+
+  it("rejects query input on strict writes before dispatch", async () => {
+    const session = await cookie();
+    const { sent } = stubGateway();
+    const request = new NextRequest(`${ORIGIN}/api/capture?principalId=untrusted`, {
+      method: "POST", headers: { origin: ORIGIN, "content-type": "application/json" }, body: "{}",
+    });
+    request.cookies.set(SESSION_COOKIE_NAME, session);
+    await expectRefused(await workPost(request, "strict", "capture.create", {}, {}, { strictQuery: true }), sent);
+  });
+
+  it("preserves omission and explicit nullable values separately", async () => {
+    const session = await cookie();
+    const { sent } = stubGateway();
+    const fields = {
+      text: { gateway: "text", type: "string", required: true },
+      idempotencyKey: { gateway: "idempotency_key", type: "string", required: true },
+      occurredAt: { gateway: "occurred_at", type: "string", nullable: true, format: "timestamp" },
+    } as const;
+    const response = await workPost(post(session, { text: "Synthetic", idempotencyKey: "key-00000001", occurredAt: null }), "nullable", "capture.create", fields);
+    expect(response.status).toBe(200);
+    expect(sent[0].document.payload).toEqual({ text: "Synthetic", idempotency_key: "key-00000001", occurred_at: null });
+    const omitted = await workPost(post(session, { text: "Synthetic", idempotencyKey: "key-00000002" }), "nullable", "capture.create", fields);
+    expect(omitted.status).toBe(200);
+    expect(sent[1].document.payload).not.toHaveProperty("occurred_at");
+  });
+
+  it("applies a safe request-bound result projection without changing canonical input", async () => {
+    const session = await cookie();
+    const { sent } = stubGateway();
+    const response = await workPost(post(session, { text: "Synthetic", idempotencyKey: "key-00000001" }), "projection", "capture.create", {
+      text: { gateway: "text", type: "string" }, idempotencyKey: { gateway: "idempotency_key", type: "string" },
+    }, {}, { project: (result) => Object.fromEntries(Object.entries(result).filter(([key]) => key !== "idempotency_key")) });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(await response.json()).not.toHaveProperty("idempotency_key");
+    expect((sent[0].document.payload as Record<string, unknown>).idempotency_key).toBe("key-00000001");
+  });
+});
+
+
+describe("WP03B scalar query and instant boundaries", () => {
+  it.each(["2026-02-30T12:00:00Z", "2025-02-29T12:00:00Z", "2026-01-01T24:00:00Z", "2026-01-01T00:60:00Z", "2026-01-01T00:00:60Z", "2026-01-01T00:00:00+24:00", "2026-01-01T00:00:00+01:60", "0000-01-01T00:00:00Z", "2026-01-01T12:00:00"])("rejects invalid instant %s", (value) => {
+    expect(isAwareRfc3339(value)).toBe(false);
+  });
+  it.each(["2024-02-29T12:00:00Z", "2026-01-01T12:00:00.123456+05:30"])("accepts aware valid instant %s", (value) => {
+    expect(isAwareRfc3339(value)).toBe(true);
+  });
+  it("uses exact identifier kind and suffix bounds", () => {
+    expect(isCanonicalId("prj_aaaaaaaa11111111", "prj")).toBe(true);
+    expect(isCanonicalId("cap_aaaaaaaa11111111", "prj")).toBe(false);
+    expect(isCanonicalId("prj_short", "prj")).toBe(false);
+    expect(isCanonicalId("prj_aaaaaaaa11111111\n", "prj")).toBe(false);
+    expect(isCanonicalId("prj_aaaaaaaa_11111111", "prj")).toBe(false);
+  });
+  it.each(["pageSize=25&pageSize=25", "unknown=value", "pageSize=null", "pageSize=9007199254740992"])("rejects strict query %s", async (query) => {
+    const session = await cookie();
+    const { sent } = stubGateway();
+    const request = new NextRequest(`${ORIGIN}/api/capture?${query}`);
+    request.cookies.set(SESSION_COOKIE_NAME, session);
+    const response = await workGet(request, "query", "capture.list", {
+      pageSize: { gateway: "page_size", type: "integer", minimum: 1, maximum: 100 },
+    }, {}, { strictQuery: true });
+    await expectRefused(response, sent);
+  });
+});
+
+
+describe("WP03B canonical timezone key boundary", () => {
+  it.each(["UTC", "Factory", "posix/UTC", "America/New_York", "Etc/GMT+5", "Well_Shaped/Unknown_Zone"])("admits safe host-dependent key %s", (value) => {
+    expect(isCanonicalTimezoneKey(value)).toBe(true);
+  });
+  it.each([null, 1, "", " UTC", "UTC\n", "\u0085UTC", "UTC\u001c", "/UTC", "../UTC", "posix/../UTC", "./UTC", "posix//UTC", "UTC/", "posix\\\\UTC", "UTC\u0000", "a".repeat(65)])("rejects malformed key %j", (value) => {
+    expect(isCanonicalTimezoneKey(value)).toBe(false);
+  });
+  it("counts Python code points and does not consult an Intl semantic registry", () => {
+    expect(isCanonicalTimezoneKey("😀".repeat(64))).toBe(true);
+    expect(isCanonicalTimezoneKey("😀".repeat(65))).toBe(false);
+  });
+  it.each(["Factory", "posix/UTC", "Well_Shaped/Unknown_Zone"])("forwards %s unchanged for canonical backend validation", async (timezoneName) => {
+    const session = await cookie();
+    const { sent } = stubGateway();
+    const response = await workPost(post(session, { timezoneName }), "timezone", "meetings.update", {
+      timezoneName: { gateway: "timezone_name", type: "string", format: "timezone" },
+    });
+    expect(response.status).toBe(200);
+    expect(sent).toHaveLength(1);
+    expect((sent[0].document.payload as Record<string, unknown>).timezone_name).toBe(timezoneName);
   });
 });

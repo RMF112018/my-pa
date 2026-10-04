@@ -4,6 +4,18 @@
  * Workers C and D replace files under `capabilities/` only. This module wires
  * the imports so those workers do not need to edit the registry.
  */
+import { decodeContinuityProjectsCreate } from "./capabilities/continuity.projects.create";
+import { decodeContinuityProjectsUpdate } from "./capabilities/continuity.projects.update";
+import { decodeContinuityProjectsClose } from "./capabilities/continuity.projects.close";
+import { decodeCaptureRevise } from "./capabilities/capture.revise";
+import { decodeMeetingsRead } from "./capabilities/meetings.read";
+import { decodeMeetingsList } from "./capabilities/meetings.list";
+import { decodeMeetingsSearch } from "./capabilities/meetings.search";
+import { decodeMeetingsUpdate } from "./capabilities/meetings.update";
+import { decodeMeetingsSeriesUpdate } from "./capabilities/meetings.series.update";
+import { decodeDocumentsRead } from "./capabilities/documents.read";
+import { decodeDocumentsArchive } from "./capabilities/documents.archive";
+import { decodeDocumentsRestore } from "./capabilities/documents.restore";
 import { decodeCapabilitiesGet } from "./capabilities/capabilities.get";
 import { decodeKnowledgeSearch } from "./capabilities/knowledge.search";
 import { decodeKnowledgeRead } from "./capabilities/knowledge.read";
@@ -105,6 +117,18 @@ export { decodeEnvelope } from "./envelope";
 export { decodeProblem } from "./problem";
 
 export const DECODERS = {
+  "continuity.projects.create": decodeContinuityProjectsCreate,
+  "continuity.projects.update": decodeContinuityProjectsUpdate,
+  "continuity.projects.close": decodeContinuityProjectsClose,
+  "capture.revise": decodeCaptureRevise,
+  "meetings.read": decodeMeetingsRead,
+  "meetings.list": decodeMeetingsList,
+  "meetings.search": decodeMeetingsSearch,
+  "meetings.update": decodeMeetingsUpdate,
+  "meetings.series.update": decodeMeetingsSeriesUpdate,
+  "documents.read": decodeDocumentsRead,
+  "documents.archive": decodeDocumentsArchive,
+  "documents.restore": decodeDocumentsRestore,
   "capabilities.get": decodeCapabilitiesGet,
   "knowledge.search": decodeKnowledgeSearch,
   "knowledge.read": decodeKnowledgeRead,

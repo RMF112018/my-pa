@@ -809,6 +809,185 @@
         "expected_versions": [1],
         "idempotency_key": "idk_aaaaaaaa11111111"
       }
+    },
+    "continuity.projects.create": {
+      "purpose": "continuity_authoring",
+      "payloadFields": [
+        "name",
+        "idempotency_key",
+        "description"
+      ],
+      "probe": {
+        "name": "Synthetic project",
+        "idempotency_key": "wp03b-project-1"
+      }
+    },
+    "continuity.projects.update": {
+      "purpose": "continuity_authoring",
+      "payloadFields": [
+        "project_id",
+        "expected_version",
+        "idempotency_key",
+        "name",
+        "description",
+        "state"
+      ],
+      "probe": {
+        "project_id": "prj_aaaaaaaa11111111",
+        "expected_version": 1,
+        "idempotency_key": "wp03b-project-2",
+        "name": "Synthetic updated project"
+      }
+    },
+    "continuity.projects.close": {
+      "purpose": "continuity_authoring",
+      "payloadFields": [
+        "project_id",
+        "expected_version",
+        "idempotency_key"
+      ],
+      "probe": {
+        "project_id": "prj_aaaaaaaa11111111",
+        "expected_version": 1,
+        "idempotency_key": "wp03b-project-3"
+      }
+    },
+    "capture.revise": {
+      "purpose": "capture_authoring",
+      "payloadFields": [
+        "capture_id",
+        "text",
+        "idempotency_key",
+        "client_created_at",
+        "occurred_at"
+      ],
+      "probe": {
+        "capture_id": "cap_aaaaaaaa11111111",
+        "text": "Synthetic revision",
+        "idempotency_key": "wp03b-revise-1"
+      }
+    },
+    "meetings.read": {
+      "purpose": "meeting_read",
+      "payloadFields": [
+        "meeting_id"
+      ],
+      "probe": {
+        "meeting_id": "mtg_aaaaaaaa11111111"
+      }
+    },
+    "meetings.list": {
+      "purpose": "meeting_read",
+      "payloadFields": [
+        "meeting_series_id",
+        "project_id",
+        "start_at_from",
+        "start_at_before",
+        "attendee_entity_id",
+        "attendee_email",
+        "status",
+        "time_scope",
+        "sort_direction",
+        "page_size",
+        "after"
+      ],
+      "probe": {
+        "page_size": 25
+      }
+    },
+    "meetings.search": {
+      "purpose": "meeting_read",
+      "payloadFields": [
+        "query",
+        "meeting_series_id",
+        "project_id",
+        "start_at_from",
+        "start_at_before",
+        "attendee_entity_id",
+        "attendee_email",
+        "status",
+        "time_scope",
+        "sort_direction",
+        "page_size",
+        "after"
+      ],
+      "probe": {
+        "query": "Synthetic",
+        "page_size": 25
+      }
+    },
+    "meetings.update": {
+      "purpose": "meeting_authoring",
+      "payloadFields": [
+        "meeting_id",
+        "expected_version",
+        "idempotency_key",
+        "title",
+        "start_at",
+        "end_at",
+        "timezone_name",
+        "status",
+        "location_text",
+        "virtual_meeting_url",
+        "description",
+        "project_id",
+        "clear_fields",
+        "attendees_replace",
+        "attachment_add_document_ids",
+        "attachment_remove_ids",
+        "notes_mode",
+        "notes_markdown"
+      ],
+      "probe": {
+        "meeting_id": "mtg_aaaaaaaa11111111",
+        "expected_version": 1,
+        "idempotency_key": "m",
+        "title": "Synthetic updated meeting"
+      }
+    },
+    "meetings.series.update": {
+      "purpose": "meeting_authoring",
+      "payloadFields": [
+        "meeting_series_id",
+        "expected_version",
+        "idempotency_key",
+        "title"
+      ],
+      "probe": {
+        "meeting_series_id": "mser_aaaaaaaa11111111",
+        "expected_version": 1,
+        "idempotency_key": "s",
+        "title": "Synthetic updated series"
+      }
+    },
+    "documents.read": {
+      "purpose": "document_read",
+      "payloadFields": [
+        "document_id",
+        "version_id",
+        "include_bytes"
+      ],
+      "probe": {
+        "document_id": "mdoc_aaaaaaaa11111111"
+      }
+    },
+    "documents.archive": {
+      "purpose": "document_authoring",
+      "payloadFields": [
+        "document_id"
+      ],
+      "probe": {
+        "document_id": "mdoc_aaaaaaaa11111111"
+      }
+    },
+    "documents.restore": {
+      "purpose": "document_authoring",
+      "payloadFields": [
+        "document_id"
+      ],
+      "probe": {
+        "document_id": "mdoc_aaaaaaaa11111111"
+      }
     }
   },
   "_dispositionComment": [

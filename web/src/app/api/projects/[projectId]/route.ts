@@ -1,5 +1,6 @@
 /** Exact Principal-scoped Project read over the canonical gateway capability. */
 import { NextResponse, type NextRequest } from "next/server";
+import { workPost, isCanonicalId, invalidWorkRequest } from "@/lib/api/work-route";
 import { requirePrincipal } from "@/lib/api/guard";
 import { backendDisclosure, invokeGateway, transportLimitations } from "@/lib/api/gateway";
 import { gatewayRefusal, resolveServing } from "@/lib/api/serving";
@@ -62,5 +63,28 @@ export async function GET(
     shape: "backend",
     project: outcome.result,
     disclosure: backendDisclosure(scope, outcome.disclosure, transportLimitations()),
+  });
+}
+
+export async function PATCH(
+  request: NextRequest,
+  context: { params: Promise<{ projectId: string }> },
+) {
+  const { projectId } = await context.params;
+  if (!isCanonicalId(projectId, "prj")) return invalidWorkRequest("projectId was malformed");
+  return workPost(request, `project:${projectId}`, "continuity.projects.update", {
+    expectedVersion: { gateway: "expected_version", type: "integer", required: true, minimum: 1 },
+    idempotencyKey: {
+      gateway: "idempotency_key", type: "string", required: true,
+      minLength: 8, maxLength: 128, pattern: /^[A-Za-z0-9_-]{8,128}$/,
+    },
+    name: { gateway: "name", type: "string", nullable: true, nonBlank: true },
+    description: { gateway: "description", type: "string", nullable: true },
+    state: { gateway: "state", type: "string", nullable: true, values: ["active", "on_hold"] },
+  }, { project_id: projectId }, {
+    strictQuery: true,
+    validate: (payload) => [payload.name, payload.description, payload.state].some(
+      (value) => value !== undefined && value !== null,
+    ) ? null : "at least one mutable Project value is required",
   });
 }

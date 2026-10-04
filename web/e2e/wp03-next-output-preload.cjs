@@ -1,5 +1,7 @@
 "use strict";
 
+/* eslint-disable @typescript-eslint/no-require-imports -- Node --require must load this preload as CommonJS. */
+
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");

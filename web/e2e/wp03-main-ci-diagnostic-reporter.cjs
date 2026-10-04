@@ -1,5 +1,7 @@
 "use strict";
 
+/* eslint-disable @typescript-eslint/no-require-imports -- Node --require and Playwright load this helper as CommonJS. */
+
 const fs = require("node:fs");
 const path = require("node:path");
 const SINK = path.resolve(__dirname, "../.wp03-main-ci-diagnostic-v1.jsonl");
@@ -199,17 +201,14 @@ function cli(args) {
   }
   if (args.length !== 2 || args[0] !== "--summary" || !/^(0|[1-9]\d{0,2})$/.test(args[1]) || !integer(Number(args[1]), 0, 255)) fail();
   // Validate the entire file before the first provider annotation is emitted.
-  const counts = new Map();
-  for (const event of events) {
-    const detail = event.event === "ERROR" ? event.error : event.event === "SOCKET" ? (event.reusedSocket ? "REUSED" : "NEW") :
-      ["PROCESS", "LISTENER", "READINESS"].includes(event.event) ? (event.alive ? "ALIVE" : "ABSENT") : "OBSERVED";
-    const key = `${event.role}/${event.phase}/${event.event}/${detail}`;
-    counts.set(key, (counts.get(key) || 0) + 1);
+  process.stdout.write(`::notice title=WP03_DIAGNOSTIC::SCHEMA_VALID version=1 events=${events.length} stack_exit=${Number(args[1])} CLIENT_HOOK_OBSERVED=${events.some((event) => event.event === "SOCKET")}\n`);
+  for (const role of ROLES) {
+    const owned = events.filter((event) => event.role === role);
+    const resets = owned.filter((event) => event.event === "ERROR" && event.error === "ECONNRESET").length;
+    const reused = owned.filter((event) => event.event === "SOCKET" && event.reusedSocket).length;
+    const exit77 = owned.filter((event) => event.event === "EXIT77_INTENT").length;
+    process.stdout.write(`::notice title=WP03_DIAGNOSTIC::role=${role} events=${owned.length} resets=${resets} reused=${reused} exit77=${exit77}\n`);
   }
-  process.stdout.write(`::notice title=WP03_DIAGNOSTIC::SCHEMA_VALID version=1 events=${events.length} stack_exit=${Number(args[1])}\n`);
-  for (const [key, count] of [...counts].sort()) process.stdout.write(`::notice title=WP03_DIAGNOSTIC::${key} count=${count}\n`);
-  for (const event of events) process.stdout.write(`::notice title=WP03_DIAGNOSTIC_EVENT::${JSON.stringify(event)}\n`);
-  process.stdout.write(`::notice title=WP03_DIAGNOSTIC::CLIENT_HOOK_OBSERVED=${events.some((event) => event.event === "SOCKET")}\n`);
   process.stdout.write("::notice title=WP03_DIAGNOSTIC::CORRELATION_ONLY ORIGINAL_MAIN_FAILURE_UNRESOLVED\n");
 }
 module.exports = Reporter;

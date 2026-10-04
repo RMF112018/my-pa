@@ -71,6 +71,7 @@ Authenticated basis: `main@3e6f7218b424f8f7dc6c5bac78956dfffe0cb8ae`; tree SHA a
 | Job/operation state | `canonical` execution record | PostgreSQL | Application/worker state machine | work ID, lease, attempts, request/idempotency | Active |
 | Connector observation | `observed` | Future PostgreSQL record | Connector ingestion | provider/account/container/item/version | Fixture only; live personal-source access excluded |
 | Person/entity record | `canonical` only after governed resolution | PostgreSQL | Governed identity workflow | source observations, merge/split lineage, review | Active; merge and split are review-required and reversible |
+| Knowledge Assertion (KLP) | `canonical` for the admitted typed fact; evidence rows `observed`; open proposals `proposed` | PostgreSQL (schema-ahead: tables arrive in KLP-WP-02) | Explicit create by the owning Principal, autonomous submit by an allowlisted discovery client under a closed predicate registry, or Review promotion; append-only mutation receipts | principal, subject, registered predicate code/version, one typed value, evidence identity with content hash, classification (rank-monotonic), submission and causal root/depth, request digest and fingerprint v1 | Not implemented; contract only under [ADR-014](../decisions/ADR-014-knowledge-assertion-layer.md) |
 | Relationship insight | `proposed/inferred` | Future PostgreSQL record | Future analysis/review | sources, method/model, confidence, restrictions | Read-only profiles active; synthesis, scoring, and inference excluded |
 | Runtime configuration | Process authority | Validated config + nonsecret defaults | Operator/deployment authority | version, source, validation | Docs only |
 | Secrets/credentials | External secret authority | Runtime secret mechanism | Operator only | never in product records/logs | Excluded |
@@ -110,6 +111,19 @@ it. ADR-003 gives it its own class, and the rules that follow from it are:
 - It is `source_authoritative` for what the user wrote and for nothing else. It does not make the user's statements true, and anything derived from it stays `derived`, `proposed`, or `inferred` under the rules above.
 - It is not a managed-document write. No separate store, no filesystem root, no restore workflow, and no reuse of a source-provider handle.
 - The read-only source-provider port gains nothing. A user-authored record never travels through it.
+
+
+### Knowledge Assertions
+
+
+[ADR-014](../decisions/ADR-014-knowledge-assertion-layer.md) adds a product-owned plane for small typed facts with evidence. Its authority rules, stated here ahead of the schema (the tables arrive in KLP-WP-02; nothing is implemented or live at KLP-WP-01):
+
+
+- An admitted assertion is `canonical` for exactly its typed value about its subject under its registered predicate. It never overrides source evidence, and it never shadows a fact another plane owns: domain-owned predicates route to that plane's writer or are not taken in.
+- Evidence rows are `observed`. One canonical row exists per source identity; the excerpt is redact-only and hashes are immutable. Unavailable evidence hides the assertion from remote readers; it is not removed at rest.
+- Proposals are `proposed` until Review decides them. Operator-required facts are accepted only under server-derived operator authority (a stamped CLI or HTTP-gateway operator surface on local transport, or an allowlisted operator-review client); `principal.is_operator` alone never suffices.
+- Classification only rises. Effective class is the rank-max over the assertion, its predecessor and all linked evidence, including every same-origin external sibling across all source profiles. A caller is remote, and withheld rows are excluded for it, whenever `transport is REMOTE_CLIENT` or `capability_grants is not None`.
+- Every change is an append-only mutation receipt tied to a submission with a causal root and a depth of at most 4.
 
 
 ### Derived records
@@ -310,5 +324,6 @@ Material change to ADR-002, structured authority, source/managed-write boundarie
 - [`../specs/mcv-read-only-vertical-slice.md`](../specs/mcv-read-only-vertical-slice.md)
 - [`system-context.md`](system-context.md)
 - [`module-boundaries.md`](module-boundaries.md)
+- [`../decisions/ADR-014-knowledge-assertion-layer.md`](../decisions/ADR-014-knowledge-assertion-layer.md)
 - [`../security/threat-model.md`](../security/threat-model.md)
 - [`../../PHASE-00-OPEN-DECISION-LEDGER.md`](../../PHASE-00-OPEN-DECISION-LEDGER.md)

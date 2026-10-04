@@ -57,7 +57,7 @@ from typing import Any, Final
 
 from my_pa.domain.capture.proposal import ProposalState, RiskClass
 from my_pa.domain.capture.review import Disposition
-from my_pa.domain.common.classification import Classification
+from my_pa.domain.common.classification import CLASSIFICATION_RANK, Classification
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import ensure_utc
 from my_pa.domain.relationship.entity import EntityType
@@ -496,11 +496,10 @@ def classification_floor_for(kind: MemoryKind) -> Classification:
 
 #: Which classifications are at least as restrictive as which, as a rank. Used to
 #: check the floor without enumerating pairs; a higher rank is more restrictive.
-_CLASSIFICATION_RANK: Final[dict[Classification, int]] = {
-    Classification.SYNTHETIC_TEST: 0,
-    Classification.PRIVATE_LOCAL: 1,
-    Classification.RESTRICTED_LOCAL: 2,
-}
+#: An alias of the public `domain.common.classification.CLASSIFICATION_RANK`
+#: (KLP-WP-01), kept under its historical private name so behaviour and every
+#: existing reference are unchanged.
+_CLASSIFICATION_RANK: Final[Mapping[Classification, int]] = CLASSIFICATION_RANK
 
 
 def satisfies_floor(classification: Classification, kind: MemoryKind) -> bool:

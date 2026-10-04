@@ -211,8 +211,8 @@ export default defineConfig({
       env: {
         ...baseEnv,
         MYPA_GATEWAY_URL: "http://127.0.0.1:1",
-        MYPA_SESSION_SERVICE_URL: mainDiagnostic ? "http://127.0.0.1:9099" : GATEWAY_URL,
-        ...(mainDiagnostic ? { NODE_OPTIONS: "", CI_WP03_DIAGNOSTIC_ROLE: "DEAD_NEXT" } : {}),
+        MYPA_SESSION_SERVICE_URL: GATEWAY_URL,
+        ...(mainDiagnostic ? { MYPA_SESSION_SERVICE_URL: "http://127.0.0.1:9099", NODE_OPTIONS: "", CI_WP03_DIAGNOSTIC_ROLE: "DEAD_NEXT" } : {}),
         MYPA_CANONICAL_ORIGIN: DEAD_GATEWAY_URL,
         MYPA_NEXT_DIST_DIR: ".next/e2e-dead",
       },

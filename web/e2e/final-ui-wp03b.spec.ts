@@ -77,7 +77,7 @@ test("real synthetic stack: authenticated success for all twelve admissions, con
   test.setTimeout(180_000);
   await signIn(page);
   const project = success(await api(page, "/api/projects", "POST", {
-    name: "WP03B synthetic Project", idempotencyKey: key(),
+    name: `WP03B synthetic Project ${key()}`, idempotencyKey: key(),
   }));
   const projectId = project.project_id as string;
   expect(project.version).toBe(1);

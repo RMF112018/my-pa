@@ -107,12 +107,20 @@ function heldEnrollment(explicit?: string): string | undefined {
 export function SearchCommandPanel({
   onCapture,
   onDismiss,
+  onNavigate,
+  onTaskSheetChange,
+  onTaskActivate,
+  includeCapture = true,
   autoFocus = false,
   initialQuery = "",
   enrollmentId,
 }: {
   onCapture: () => void;
   onDismiss?: () => void;
+  onNavigate?: (href: string) => void;
+  onTaskSheetChange?: (open: boolean) => void;
+  onTaskActivate?: (task: PresentedTaskActivation, trigger: HTMLElement | null) => void;
+  includeCapture?: boolean;
   autoFocus?: boolean;
   initialQuery?: string;
   enrollmentId?: string;
@@ -208,9 +216,9 @@ export function SearchCommandPanel({
               : { kind: "href" as const, href: hit.href as string, label: hit.label },
           ),
       ),
-      { kind: "capture" as const, label: "Quick Capture" },
+      ...(includeCapture ? [{ kind: "capture" as const, label: "Quick Capture" }] : []),
     ];
-  }, [idle, groups]);
+  }, [idle, groups, includeCapture]);
 
   const hitOptionIndex = useMemo(() => {
     const indices = new Map<string, number>();
@@ -229,6 +237,10 @@ export function SearchCommandPanel({
     activatable.length === 0 ? 0 : ((activeIndex % activatable.length) + activatable.length) % activatable.length;
 
   function go(href: string) {
+    if (onNavigate) {
+      onNavigate(href);
+      return;
+    }
     router.push(href);
     onDismiss?.();
   }
@@ -247,11 +259,16 @@ export function SearchCommandPanel({
 
   const openTask = useCallback(
     (task: PresentedTaskActivation, index: number, trigger: HTMLElement | null) => {
+      if (onTaskActivate) {
+        onTaskActivate(task, trigger);
+        return;
+      }
       taskTrigger.current = trigger ?? resultElements()[index] ?? null;
       taskTriggerIndex.current = index;
+      onTaskSheetChange?.(true);
       setActiveTask(task);
     },
-    [resultElements],
+    [resultElements, onTaskSheetChange, onTaskActivate],
   );
 
   /**
@@ -261,6 +278,7 @@ export function SearchCommandPanel({
    */
   const closeTask = useCallback(() => {
     setActiveTask(null);
+    onTaskSheetChange?.(false);
     requestAnimationFrame(() => {
       const trigger = taskTrigger.current;
       const index = taskTriggerIndex.current;
@@ -273,7 +291,7 @@ export function SearchCommandPanel({
       const fallback = results[index] ?? results[index - 1] ?? inputRef.current;
       fallback?.focus();
     });
-  }, [resultElements]);
+  }, [resultElements, onTaskSheetChange]);
 
   function activate(index: number, event?: ReactMouseEvent<HTMLElement>) {
     const item = activatable[index];
@@ -290,6 +308,7 @@ export function SearchCommandPanel({
       openTask(item.task, index, trigger);
       return;
     }
+    event?.preventDefault();
     go(item.href);
   }
 
@@ -483,7 +502,7 @@ export function SearchCommandPanel({
               </section>
             ))
           : null}
-        {!idle ? (
+        {!idle && includeCapture ? (
           <button type="button" {...optionProps(hitOptionIndex.captureIndex, "font-medium text-interactive")}>
             Quick Capture
           </button>

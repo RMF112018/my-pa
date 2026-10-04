@@ -22,7 +22,7 @@
  *   remains and the bytes sealed by the first are still readable.
  */
 import { expect, test } from "@playwright/test";
-import { openCaptureNote, signIn, syntheticNote } from "./fixtures";
+import { openCaptureNote, signIn, syntheticNote, visibleCaptureButton } from "./fixtures";
 
 const LOCK = "mypa-offline-capture";
 
@@ -120,7 +120,7 @@ test.describe("WP08 offline Capture Project", () => {
     // Reconnect and reload: the mount-driven drain replays it.
     await context.setOffline(false);
     await page.reload();
-    await expect(page.locator('[data-testid="capture-button-desktop"]')).toBeVisible();
+    await expect(visibleCaptureButton(page)).toBeVisible();
 
     await expect(async () => {
       const added = await capturesAddedSince(page, before);
@@ -155,7 +155,7 @@ test.describe("WP08 offline Capture Project", () => {
     await context.setOffline(false);
     await page.goto(`/work/projects/${second!.projectId}/constraints`).catch(() => undefined);
     await page.goto("/today");
-    await expect(page.locator('[data-testid="capture-button-desktop"]')).toBeVisible();
+    await expect(visibleCaptureButton(page)).toBeVisible();
 
     await expect(async () => {
       const added = await capturesAddedSince(page, before);
@@ -170,7 +170,7 @@ test.describe("WP08 offline Capture Project", () => {
     const second = await context.newPage();
     await signIn(first);
     await second.goto("/today");
-    await expect(second.locator('[data-testid="capture-button-desktop"]')).toBeVisible();
+    await expect(visibleCaptureButton(second)).toBeVisible();
 
     // Tab one takes the origin-wide lock and holds it until released.
     const held = first.evaluate(
@@ -230,7 +230,7 @@ test.describe("WP08 offline Capture Project", () => {
     // network fails, which `public/sw.js` says it does and does not claim otherwise.
     const other = await context.newPage();
     await other.goto("/today");
-    await expect(other.locator('[data-testid="capture-button-desktop"]')).toBeVisible();
+    await expect(visibleCaptureButton(other)).toBeVisible();
 
     // Tab one seals a payload under whatever key it establishes.
     await openCaptureNote(page);
@@ -257,7 +257,7 @@ test.describe("WP08 offline Capture Project", () => {
     // under the one surviving key.
     await context.setOffline(false);
     await page.reload();
-    await expect(page.locator('[data-testid="capture-button-desktop"]')).toBeVisible();
+    await expect(visibleCaptureButton(page)).toBeVisible();
     await expect(async () => {
       const added = await capturesAddedSince(page, before);
       // Both notes reached durable storage, which is only possible if both were

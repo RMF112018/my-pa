@@ -1,7 +1,8 @@
 /**
- * Capture hands Task creation off; it never captures a Task.
+ * The unified launcher hands Task creation to the canonical Task sheet; it
+ * never captures a Task.
  *
- * The chooser added in front of Capture routes to two different kinds of thing,
+ * The New menu routes to two different kinds of thing,
  * and the whole risk of that design lives in the difference between them. A note
  * is a capture: a request, an attempt key, and — when the network is gone — an
  * encrypted row in this browser's queue that is replayed as `POST /api/capture`
@@ -10,10 +11,10 @@
  * as a note, so every case below asserts the *absence* of capture work as
  * directly as it asserts the presence of the Task sheet.
  *
- * The second invariant is overlay ownership. Capture is a native `<dialog>` and
- * the Task sheet is a Radix sheet; stacking them would leave two focus traps and
- * two Escape owners on screen at once. The shell closes Capture before it opens
- * the sheet, and "the Capture dialog is gone" is asserted rather than assumed.
+ * The second invariant is overlay ownership. The launcher is a native
+ * `<dialog>` and the Task sheet is a Radix sheet; stacking them would leave two
+ * focus traps and two Escape owners. The launcher trap closes before the sheet
+ * opens, and that transition is asserted rather than assumed.
  *
  * Everything here is synthetic.
  */
@@ -75,16 +76,20 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** Open Capture from the desktop control and return the chooser. */
-async function openCapture() {
+/** Traverse the real shell control through Initial → New. */
+async function openNew() {
   const user = userEvent.setup();
   const fetchSpy = vi
     .spyOn(globalThis, "fetch")
     .mockResolvedValue(new Response("{}", { status: 200 }));
   render(<AppShell principal={PRINCIPAL} sessionEpoch={SESSION_EPOCH}>content</AppShell>);
-  await user.click(screen.getByTestId("capture-button-desktop"));
-  const chooser = await screen.findByTestId("capture-chooser");
-  return { user, chooser, fetchSpy };
+  const invoker = screen.getByTestId("launcher-button-desktop");
+  await user.click(invoker);
+  const launcher = await screen.findByRole("dialog", { name: "Search or create" });
+  expect(within(launcher).getByRole("button", { name: "Search" })).toHaveFocus();
+  await user.click(within(launcher).getByRole("button", { name: "New" }));
+  const menu = await screen.findByRole("group", { name: "Create new" });
+  return { user, launcher, menu, invoker, fetchSpy };
 }
 
 /** Every `/api/capture` call the stub saw, whatever else the shell fetched. */
@@ -92,38 +97,42 @@ function captureCalls(fetchSpy: { readonly mock: { readonly calls: readonly unkn
   return fetchSpy.mock.calls.filter((call) => String(call[0]).includes("/api/capture"));
 }
 
-describe("the Capture chooser", () => {
-  it("offers exactly Create Task, Quick note and Conversation log", async () => {
-    const { chooser } = await openCapture();
-    expect(within(chooser).getAllByRole("button").map((button) => button.textContent)).toEqual([
+describe("the unified launcher New menu", () => {
+  it("offers exactly Create Task, Quick Note and Conversation Log", async () => {
+    const { menu } = await openNew();
+    expect(within(menu).getAllByRole("button").map((button) => button.textContent)).toEqual([
       "Create Task",
-      "Quick note",
-      "Conversation log",
+      "Quick Note",
+      "Conversation Log",
     ]);
   });
 
-  it("routes Quick note into the capture branch the shell already had", async () => {
-    const { user, chooser } = await openCapture();
-    await user.click(within(chooser).getByText("Quick note"));
+  it("routes Quick Note into the canonical Capture composition", async () => {
+    const { user, menu, fetchSpy } = await openNew();
+    await user.click(within(menu).getByRole("button", { name: "Quick Note" }));
     expect(screen.getByTestId("capture-kind-quick_note")).toBeChecked();
     await waitFor(() => expect(screen.getByTestId("capture-field")).toHaveFocus());
     expect(screen.queryByTestId("task-create-sheet")).toBeNull();
+    expect(captureCalls(fetchSpy)).toHaveLength(0);
+    expect(offline.queueCaptureOffline).not.toHaveBeenCalled();
   });
 
-  it("routes Conversation log into the same branch", async () => {
-    const { user, chooser } = await openCapture();
-    await user.click(within(chooser).getByText("Conversation log"));
+  it("routes Conversation Log into the canonical Capture composition", async () => {
+    const { user, menu, fetchSpy } = await openNew();
+    await user.click(within(menu).getByRole("button", { name: "Conversation Log" }));
     expect(screen.getByTestId("capture-kind-conversation_log")).toBeChecked();
     expect(screen.getByTestId("capture-field")).toBeInTheDocument();
     expect(screen.queryByTestId("task-create-sheet")).toBeNull();
+    expect(captureCalls(fetchSpy)).toHaveLength(0);
+    expect(offline.queueCaptureOffline).not.toHaveBeenCalled();
   });
 });
 
-describe("Create Task from Capture", () => {
+describe("Create Task from the unified launcher", () => {
   it("opens the canonical Task sheet and captures nothing on the way", async () => {
-    const { user, chooser, fetchSpy } = await openCapture();
+    const { user, menu, fetchSpy } = await openNew();
 
-    await user.click(within(chooser).getByText("Create Task"));
+    await user.click(within(menu).getByRole("button", { name: "Create Task" }));
 
     // The canonical create surface — the same component Work opens.
     expect(await screen.findByTestId("task-create-sheet")).toBeInTheDocument();
@@ -135,67 +144,85 @@ describe("Create Task from Capture", () => {
     expect(screen.queryByTestId("capture-queued")).toBeNull();
   });
 
-  it("leaves exactly one overlay on screen — Capture is gone, not stacked", async () => {
-    const { user, chooser } = await openCapture();
-    expect(screen.getByRole("dialog", { name: "Capture" })).toBeInTheDocument();
+  it("leaves exactly one active overlay after the launcher trap closes", async () => {
+    const { user, menu, launcher } = await openNew();
+    expect(launcher).toBeInTheDocument();
 
-    await user.click(within(chooser).getByText("Create Task"));
+    await user.click(within(menu).getByRole("button", { name: "Create Task" }));
 
     await screen.findByTestId("task-create-sheet");
-    // Capture's native <dialog> is closed, so neither it nor its chooser is
-    // exposed any more, and the Task sheet is the only dialog on screen.
-    expect(screen.queryByRole("dialog", { name: "Capture" })).toBeNull();
-    expect(screen.queryByRole("group", { name: "What are you capturing?" })).toBeNull();
+    // The launcher trap is closed before the Task sheet becomes active.
+    expect(screen.queryByRole("dialog", { name: "Search or create" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Create new" })).toBeNull();
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
   });
 
-  it("comes back to the Capture chooser on Back, with no capture made", async () => {
-    const { user, chooser, fetchSpy } = await openCapture();
-    await user.click(within(chooser).getByText("Create Task"));
+  it("comes back to New on Back with the same Task draft and no capture made", async () => {
+    const { user, menu, fetchSpy } = await openNew();
+    await user.click(within(menu).getByRole("button", { name: "Create Task" }));
     await screen.findByTestId("task-create-sheet");
+    await user.type(screen.getByRole("textbox", { name: "Title" }), "Synthetic draft stays here");
 
-    await user.click(screen.getByRole("button", { name: "Back" }));
+    await user.click(screen.getByTestId("task-create-back"));
 
-    expect(await screen.findByTestId("capture-chooser")).toBeInTheDocument();
+    const reopened = await screen.findByRole("group", { name: "Create new" });
     expect(screen.queryByTestId("task-create-sheet")).toBeNull();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    await user.click(within(reopened).getByRole("button", { name: "Create Task" }));
+    expect(await screen.findByRole("textbox", { name: "Title" })).toHaveValue("Synthetic draft stays here");
     expect(captureCalls(fetchSpy)).toHaveLength(0);
     expect(offline.queueCaptureOffline).not.toHaveBeenCalled();
   });
 
-  it("puts focus back inside the reopened chooser on Back, not on the page behind it", async () => {
-    // WP02-AC-038. Returning to the chooser is not the same as being able to
+  it("puts focus on Create Task in reopened New after Back", async () => {
+    // WP02-AC-020. Returning to New is not the same as being able to
     // carry on from it: Back dismisses a focus-trapping sheet, and if focus fell
     // to the body a keyboard or screen-reader Principal would be dropped out of
     // the flow they are still in the middle of.
-    const { user, chooser } = await openCapture();
-    await user.click(within(chooser).getByText("Create Task"));
+    const { user, menu } = await openNew();
+    await user.click(within(menu).getByRole("button", { name: "Create Task" }));
     await screen.findByTestId("task-create-sheet");
 
-    await user.click(screen.getByRole("button", { name: "Back" }));
+    await user.click(screen.getByTestId("task-create-back"));
 
-    const reopened = await screen.findByTestId("capture-chooser");
+    const reopened = await screen.findByRole("group", { name: "Create new" });
     await waitFor(() => {
       const active = document.activeElement;
       expect(active).not.toBe(document.body);
-      expect(reopened.contains(active)).toBe(true);
+      expect(within(reopened).getByRole("button", { name: "Create Task" })).toHaveFocus();
     });
   });
 
-  it("returns focus to the control that opened Capture when the sheet closes", async () => {
-    const { user, chooser } = await openCapture();
-    const invoker = screen.getByTestId("capture-button-desktop");
-    await user.click(within(chooser).getByText("Create Task"));
+  it("returns focus to the exact shell launcher invoker when the sheet closes", async () => {
+    const { user, menu, invoker, fetchSpy } = await openNew();
+    await user.click(within(menu).getByRole("button", { name: "Create Task" }));
     await screen.findByTestId("task-create-sheet");
 
     await user.click(screen.getByRole("button", { name: "Close panel" }));
 
     await waitFor(() => expect(screen.queryByTestId("task-create-sheet")).toBeNull());
     await waitFor(() => expect(invoker).toHaveFocus());
+    expect(captureCalls(fetchSpy)).toHaveLength(0);
+    expect(offline.queueCaptureOffline).not.toHaveBeenCalled();
+  });
+
+  it("uses the stable shell launcher fallback when the exact invoker disappears", async () => {
+    const { user, menu, invoker, fetchSpy } = await openNew();
+    await user.click(within(menu).getByRole("button", { name: "Create Task" }));
+    await screen.findByTestId("task-create-sheet");
+    invoker.remove();
+
+    await user.click(screen.getByRole("button", { name: "Close panel" }));
+
+    await waitFor(() => expect(screen.queryByTestId("task-create-sheet")).toBeNull());
+    await waitFor(() => expect(screen.getByTestId("launcher-button-mobile")).toHaveFocus());
+    expect(captureCalls(fetchSpy)).toHaveLength(0);
+    expect(offline.queueCaptureOffline).not.toHaveBeenCalled();
   });
 });
 
 /**
- * A Capture-launched create must reconcile mounted Task queries.
+ * A launcher-created Task must reconcile mounted Task queries.
  *
  * Work forwards nothing here: the canonical create notifies the session-scoped
  * runtime seam itself. That is the only reason a Task created from the shell —
@@ -203,7 +230,7 @@ describe("Create Task from Capture", () => {
  * already on screen. Wiring reconciliation into each launcher instead would
  * leave exactly this path silently unreconciled, so it is asserted directly.
  */
-describe("a Capture-launched create reconciles active Task queries", () => {
+describe("a launcher-created Task reconciles active Task queries", () => {
   function Probe({ onRevalidate }: { onRevalidate: () => void }) {
     const runtime = useTaskRuntime();
     useEffect(
@@ -235,9 +262,11 @@ describe("a Capture-launched create reconciles active Task queries", () => {
       </AppShell>,
     );
 
-    await user.click(screen.getByTestId("capture-button-desktop"));
-    const chooser = await screen.findByTestId("capture-chooser");
-    await user.click(within(chooser).getByText("Create Task"));
+    await user.click(screen.getByTestId("launcher-button-desktop"));
+    const launcher = await screen.findByRole("dialog", { name: "Search or create" });
+    await user.click(within(launcher).getByRole("button", { name: "New" }));
+    const menu = await screen.findByRole("group", { name: "Create new" });
+    await user.click(within(menu).getByRole("button", { name: "Create Task" }));
 
     const sheet = await screen.findByTestId("task-create-sheet");
     await user.type(within(sheet).getByLabelText("Title"), "Synthetic shell task");
@@ -247,12 +276,10 @@ describe("a Capture-launched create reconciles active Task queries", () => {
 
     await waitFor(() => expect(revalidate).toHaveBeenCalledTimes(1));
     // The Task was created, and nothing was captured on the way.
-    expect(
-      fetchSpy.mock.calls.some(
-        ([input, init]) =>
-          String(input) === "/api/tasks" && String(init?.method).toUpperCase() === "POST",
-      ),
-    ).toBe(true);
+    expect(fetchSpy.mock.calls.filter(
+      ([input, init]) =>
+        String(input) === "/api/tasks" && String(init?.method).toUpperCase() === "POST",
+    )).toHaveLength(1);
     expect(captureCalls(fetchSpy)).toHaveLength(0);
     expect(offline.queueCaptureOffline).not.toHaveBeenCalled();
   });

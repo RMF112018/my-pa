@@ -4,7 +4,6 @@ import {
   ClipboardCheck,
   Home,
   Map,
-  Search as SearchIcon,
   Settings,
   Users,
   Workflow,
@@ -44,12 +43,6 @@ const REVIEW: Destination = {
   icon: ClipboardCheck,
   group: "global",
 };
-const SEARCH: Destination = {
-  href: "/search",
-  label: "Search",
-  icon: SearchIcon,
-  group: "global",
-};
 const SYSTEM: Destination = { href: "/system", label: "System", icon: Settings, utility: true, group: "utility" };
 
 /** Desktop primary rail. Explicit — not the command-palette union. */
@@ -61,7 +54,7 @@ export const DESKTOP_PRIMARY: readonly Destination[] = [
   INTELLIGENCE,
 ] as const;
 
-export const DESKTOP_GLOBAL: readonly Destination[] = [SEARCH, REVIEW, MAP] as const;
+export const DESKTOP_GLOBAL: readonly Destination[] = [REVIEW, MAP] as const;
 
 export const UTILITY_DESTINATIONS: readonly Destination[] = [SYSTEM] as const;
 
@@ -74,7 +67,6 @@ export const MOBILE_MORE: readonly Destination[] = [
   KNOWLEDGE,
   MAP,
   REVIEW,
-  SEARCH,
   SYSTEM,
 ] as const;
 
@@ -87,7 +79,6 @@ export const DESTINATIONS: readonly Destination[] = [
   INTELLIGENCE,
   MAP,
   REVIEW,
-  SEARCH,
 ] as const;
 
 export const COMMAND_DESTINATIONS: readonly Destination[] = [

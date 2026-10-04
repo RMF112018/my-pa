@@ -472,12 +472,15 @@ test.describe("axe-core, in Chromium, against the rendered page", () => {
 
   test("the capture dialog, open, has no detectable violation", async ({ page }) => {
     await signIn(page);
-    // Both stages are scanned: the WP-TUX-04 chooser and the note branch behind it.
+    // Scan the unified initial choice, New menu and canonical note branch.
     await visibleCaptureButton(page).click();
-    await expect(page.getByTestId("capture-choice-create_task")).toBeFocused();
-    expect(await scan(page), "capture chooser accessibility violations").toEqual([]);
-
-    await page.getByTestId("capture-chooser").getByRole("button", { name: "Quick note" }).click();
+    const launcher = page.getByRole("dialog", { name: "Search or create" });
+    await expect(launcher.getByRole("button", { name: "Search", exact: true })).toBeFocused();
+    expect(await scan(page), "launcher initial accessibility violations").toEqual([]);
+    await launcher.getByRole("button", { name: "New", exact: true }).click();
+    await expect(launcher.getByRole("button", { name: "Create Task", exact: true })).toBeFocused();
+    expect(await scan(page), "New menu accessibility violations").toEqual([]);
+    await launcher.getByRole("button", { name: "Quick Note", exact: true }).click();
     await expect(page.getByTestId("capture-field")).toBeFocused();
     expect(await scan(page), "capture dialog accessibility violations").toEqual([]);
   });
@@ -556,19 +559,23 @@ test.describe("what axe cannot decide", () => {
     }
   });
 
-  test("command palette search takes focus and restores it on Escape", async ({ page }) => {
+  test("launcher Search steps back before restoring focus on Escape", async ({ page }) => {
     const opener = page.getByRole("button", { name: "Account" });
     await opener.focus();
     await page.keyboard.press("Control+K");
-    const dialog = page.getByRole("dialog", { name: "Search" });
+    const dialog = page.getByRole("dialog", { name: "Search or create" });
     await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Search", exact: true })).toBeFocused();
+    await dialog.getByRole("button", { name: "Search", exact: true }).click();
     await expect(dialog.getByRole("searchbox", { name: "Search" })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(dialog.getByRole("button", { name: "Search", exact: true })).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
     await expect(opener).toBeFocused();
   });
 
-  test("Search Cmd/K dialog restores focus on close", async ({ page }) => {
+  test("launcher Cmd/K initial choice restores focus on close", async ({ page }) => {
     // Native <dialog> returns focus to the invoking element. Control+K is the
     // chord the overlay listens for (meta or ctrl); this is not screen-reader
     // proof and does not claim WCAG 2.2 AA.
@@ -576,9 +583,9 @@ test.describe("what axe cannot decide", () => {
     await opener.focus();
     await expect(opener).toBeFocused();
     await page.keyboard.press("Control+K");
-    const dialog = page.getByRole("dialog", { name: "Search" });
+    const dialog = page.getByRole("dialog", { name: "Search or create" });
     await expect(dialog).toBeVisible();
-    await expect(dialog.getByRole("searchbox", { name: "Search" })).toBeFocused();
+    await expect(dialog.getByRole("button", { name: "Search", exact: true })).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
     await expect(opener).toBeFocused();
@@ -586,14 +593,14 @@ test.describe("what axe cannot decide", () => {
 
   test("shell dialogs expose an accessible name", async ({ page }) => {
     await visibleCaptureButton(page).click();
-    await expect(page.getByRole("dialog", { name: "Capture" })).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Search or create" })).toBeVisible();
     await page.keyboard.press("Escape");
-    await expect(page.getByRole("dialog", { name: "Capture" })).toHaveCount(0);
+    await expect(page.getByRole("dialog", { name: "Search or create" })).toHaveCount(0);
 
     await page.keyboard.press("Control+K");
-    await expect(page.getByRole("dialog", { name: "Search" })).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Search or create" })).toBeVisible();
     await page.keyboard.press("Escape");
-    await expect(page.getByRole("dialog", { name: "Search" })).toHaveCount(0);
+    await expect(page.getByRole("dialog", { name: "Search or create" })).toHaveCount(0);
   });
 
   test("icon-only shell chrome and collapsed destinations have accessible names", async ({
@@ -614,7 +621,7 @@ test.describe("what axe cannot decide", () => {
     for (const name of SHELL_DESTINATIONS) {
       await expect(rail.getByRole("link", { name })).toBeVisible();
     }
-    await expect(rail.getByRole("link", { name: "Search" })).toBeVisible();
+    await expect(rail.getByRole("link", { name: "Search" })).toHaveCount(0);
     await expect(rail.getByRole("link", { name: "Review" })).toBeVisible();
     await expect(rail.getByRole("link", { name: "Map" })).toBeVisible();
   });
@@ -866,9 +873,15 @@ test.describe("People search, warnings, and profile extras", () => {
     test.setTimeout(180_000);
     await page.goto("/people");
     await page.getByRole("searchbox", { name: "Find a person" }).fill("Pat Synthetic");
-    await page.getByRole("button", { name: "Search" }).click();
-    await page.getByRole("link", { name: "Pat Synthetic" }).click();
-    await expect(page).toHaveURL(/\/people\/ent_/);
+    const search = page.getByRole("button", { name: "Search", exact: true });
+    await expect(search).toHaveCount(1);
+    await search.click();
+    const target = page.getByTestId("people-search-hits")
+      .getByRole("link", { name: "Pat Synthetic", exact: true })
+      .and(page.locator('a[href="/people/ent_e2ewp13pat000001"]'));
+    await expect(target).toHaveCount(1);
+    await target.click();
+    await expect(page).toHaveURL(/\/people\/ent_e2ewp13pat000001$/);
     await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
     await expect(page.getByTestId("people-profile")).toBeVisible();
     expect(await scan(page), "/people/ detail accessibility violations").toEqual([]);

@@ -11,7 +11,8 @@
  * **Every submission attempt carries a stable idempotency key**, minted when the
  * attempt starts and kept across retries of the same text, so a network-level
  * replay returns the original receipt instead of admitting a duplicate. Editing
- * the text starts a new attempt with a new key. The route scopes the key to the
+ * editable text starts a new attempt with a new key; unresolved attempts keep
+ * their text, kind and Project frozen. The route scopes the key to the
  * authenticated principal (`ADR-005`, `PKL-MYPA-D-WP03-001`).
  *
  * **The six outcomes below are six different things, and this component keeps
@@ -29,11 +30,10 @@
  * * **refused** — validation, conflict, authorization, policy. Nothing was
  *   stored, the note stays in the field, and the reason is shown rather than a
  *   generic failure.
- * * **unavailable** — the server answered that it could not serve. Also nothing
- *   stored, but a different instruction: retrying is worth doing, and the retry
- *   reuses the same attempt key so it cannot become a second capture. This is
- *   the *reachable* backend saying no; a request that never arrived is the next
- *   state, not this one.
+ * * **unavailable** — the save is unconfirmed: the server may have committed,
+ *   but its receipt could not be verified. The frozen retry uses the same
+ *   attempt key so it cannot become a second capture. A request that never
+ *   arrived is the next state, not this one.
  * * **queued offline** — the request never reached the server and the note is
  *   held, encrypted, in this browser's own storage. It is **not** a save and is
  *   never rendered as one: nothing on the server knows the note exists, and the
@@ -62,7 +62,7 @@
  * proposals appear in Review when they exist — it does not claim a degradation it
  * cannot observe.
  */
-import { useEffect, useId, useRef, useState, type Dispatch } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type Dispatch } from "react";
 import { Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { WhenDiagnostics } from "@/components/diagnostics/diagnostics-provider";
@@ -70,12 +70,13 @@ import { TextField } from "@/components/ui/field";
 import { CaptureProjectSelector } from "@/components/capture/capture-project-selector";
 import { apiPost } from "@/lib/api/client";
 import { verifyCaptureReceipt } from "@/lib/capture/receipt";
-import { freezeCaptureIntent, type CaptureSessionEvent, type CaptureSessionState } from "@/lib/capture/session";
+import { freezeCaptureIntent, isEditable, type CaptureSessionEvent, type CaptureSessionState } from "@/lib/capture/session";
 import { CaptureQueueProtocolError } from "@/lib/offline/capture-intent-codec";
 import { CaptureQueueUnavailableError } from "@/lib/offline/coordinator";
 import { OfflineKeyUnavailableError } from "@/lib/offline/key";
 import { OfflineQueueFullError } from "@/lib/offline/queue";
 import { queueCaptureOffline } from "@/lib/offline/capture-queue";
+import type { PersistedCaptureAck } from "@/lib/capture/contract";
 
 /**
  * The fixed confirmation for discarding unsent drafts.
@@ -158,6 +159,10 @@ export function CaptureDialog({
   session,
   dispatch,
   onCreateTask,
+  onConfirmed,
+  initialStage = "choose",
+  embedded = false,
+  onBack,
 }: {
   open: boolean;
   onClose: () => void;
@@ -181,10 +186,18 @@ export function CaptureDialog({
    * nullable Project travels as an explicit argument rather than being re-read.
    */
   onCreateTask?: (projectId: string | null) => void;
+  /** Fired only for a verified durable server acknowledgement. */
+  onConfirmed?: (receipt: PersistedCaptureAck) => void;
+  initialStage?: "choose" | "entry";
+  /** Reuse the canonical entry form inside the unified launcher. */
+  embedded?: boolean;
+  onBack?: () => void;
 }) {
-  const [stage, setStage] = useState<Stage>("choose");
+  const [stage, setStage] = useState<Stage>(initialStage);
   const [outcome, setOutcome] = useState<Outcome>({ kind: "idle" });
+  const [previousOpen, setPreviousOpen] = useState(open);
   const fieldRef = useRef<HTMLTextAreaElement>(null);
+  const entryBackRef = useRef<HTMLButtonElement>(null);
   const firstChoiceRef = useRef<HTMLButtonElement>(null);
   const projectFieldId = useId();
   // One idempotency key per submission attempt: minted at first save, kept
@@ -199,6 +212,10 @@ export function CaptureDialog({
    * captures for one intent.
    */
   const savingRef = useRef(false);
+  const currentSession = useRef(session);
+  useLayoutEffect(() => {
+    currentSession.current = session;
+  }, [session]);
 
   // The draft, the kind and the Project all live in the shell's experience.
   // This component reads them and dispatches; it stores none of them, so a close
@@ -206,16 +223,20 @@ export function CaptureDialog({
   const kind: CaptureKind = session.form;
   const text = kind === "quick_note" ? session.noteDraft : session.conversationDraft;
   const projectId = session.projectId;
+  const entryFrozen = outcome.kind === "saving" || !isEditable(session);
 
-  // A newly opened dialog starts at the chooser, with no prior outcome showing.
-  useEffect(() => {
-    if (!open) return;
-    const t = setTimeout(() => {
-      setStage("choose");
-      setOutcome({ kind: "idle" });
-    }, 0);
-    return () => clearTimeout(t);
-  }, [open]);
+  // Guarded render-time adjustment handles an externally controlled reopen
+  // before focus effects run. No deferred callback can steal focus after a
+  // chooser selection.
+  if (previousOpen !== open) {
+    setPreviousOpen(open);
+    if (open) {
+      setStage(initialStage);
+      if (session.outcome !== "ambiguous" && session.outcome !== "submitting") {
+        setOutcome({ kind: "idle" });
+      }
+    }
+  }
 
   /*
     Move focus into the dialog on open, at whichever stage is showing.
@@ -230,8 +251,11 @@ export function CaptureDialog({
     if (!open) return;
     // Establish stage focus in this effect, without another task that can run
     // after the person has already moved to the next control.
-    if (stage === "entry") fieldRef.current?.focus();
-    else firstChoiceRef.current?.focus();
+    if (stage === "entry") {
+      // An unresolved attempt keeps its fields frozen. Back remains a safe,
+      // enabled entry target when a branch return cannot focus the text field.
+      (fieldRef.current?.disabled ? entryBackRef.current : fieldRef.current)?.focus();
+    } else firstChoiceRef.current?.focus();
   }, [open, stage]);
 
   /** Enter the unchanged capture branch with the chosen kind already selected. */
@@ -252,12 +276,22 @@ export function CaptureDialog({
 
   /** Close, confirming first when there is unsent work to lose. */
   function requestClose() {
+    // The native dialog also fires `close` when the launcher deliberately
+    // switches to Task. That controlled close has no user dismissal to handle.
+    if (!open) return;
+    if (savingRef.current) return;
+    if (embedded) {
+      onClose();
+      return;
+    }
     const dirty = session.noteDraft.trim() !== "" || session.conversationDraft.trim() !== "";
     // An in-flight or ambiguous submission is not a draft to discard: closing
     // does not cancel a request the server may already have committed.
     const unresolved = outcome.kind === "saving" || outcome.kind === "unavailable";
-    if (dirty && !unresolved && !confirmDiscardUnsent()) return;
+    if (!embedded && dirty && !unresolved && !confirmDiscardUnsent()) return;
     if (dirty && !unresolved) dispatch({ type: "discard_unsent" });
+    setStage("choose");
+    setOutcome({ kind: "idle" });
     onClose();
   }
 
@@ -273,6 +307,10 @@ export function CaptureDialog({
     const intent = freezeCaptureIntent(session, attemptKeyRef.current);
     const experienceId = session.experienceId;
     const epoch = session.sessionEpoch;
+    const isCurrent = () =>
+      currentSession.current.experienceId === experienceId &&
+      currentSession.current.sessionEpoch === epoch &&
+      currentSession.current.principalId === principalId;
     setOutcome({ kind: "saving" });
     dispatch({ type: "freeze", intent });
     try {
@@ -284,10 +322,12 @@ export function CaptureDialog({
         // explicit form so the receipt's Project can be compared against it.
         projectId: intent.projectId,
       });
+      if (!isCurrent()) return;
       if (result.ok && result.data) {
         // The browser repeats the whole check independently. A nominal success
         // this tier cannot verify is ambiguous, never a save.
         const verdict = await verifyCaptureReceipt(result.data, intent);
+        if (!isCurrent()) return;
         if (!verdict.ok) {
           if (verdict.reason === "not_persisted") {
             setOutcome({ kind: "acknowledged", receiptId: result.data.receiptId ?? null });
@@ -305,6 +345,7 @@ export function CaptureDialog({
         });
         dispatch({ type: "result", experienceId, sessionEpoch: epoch, outcome: "persisted" });
         attemptKeyRef.current = null;
+        onConfirmed?.(verdict.ack);
         return;
       }
       const reason = result.error ?? "the request did not complete";
@@ -318,6 +359,7 @@ export function CaptureDialog({
       setOutcome({ kind: "refused", reason });
       dispatch({ type: "result", experienceId, sessionEpoch: epoch, outcome: "refused" });
     } catch {
+      if (!isCurrent()) return;
       // The request never reached the server, so nothing on the far side knows
       // this note exists. Hold it on this device rather than telling someone to
       // retry a note they may close the tab on.
@@ -364,7 +406,7 @@ export function CaptureDialog({
   // The chooser is its own render: the capture branch below is untouched.
   if (stage === "choose") {
     return (
-      <Dialog open={open} onClose={onClose} title="Capture">
+      <Dialog open={open} onClose={requestClose} title="Capture">
         <div
           role="group"
           aria-label="What are you capturing?"
@@ -375,7 +417,11 @@ export function CaptureDialog({
             ref={firstChoiceRef}
             variant="ghost"
             data-testid="capture-choice-create_task"
-            onClick={() => onCreateTask?.(projectId)}
+            onClick={() => {
+              setStage("choose");
+              setOutcome({ kind: "idle" });
+              onCreateTask?.(projectId);
+            }}
           >
             Create Task
           </Button>
@@ -394,16 +440,18 @@ export function CaptureDialog({
     );
   }
 
-  return (
-    <Dialog open={open} onClose={onClose} title="Capture">
+  const entry = (
       <div className="flex flex-col gap-3">
         <TextField
           ref={fieldRef}
           label="What happened?"
           hint="One field is enough. Captured items are held for review — nothing is asserted on your behalf."
           value={text}
-          disabled={outcome.kind === "saving"}
+          disabled={entryFrozen}
           onChange={(e) => {
+            // The reducer ignores edits to an unresolved intent. Preserve the
+            // same attempt key too, even if an event reaches a disabled field.
+            if (entryFrozen) return;
             dispatch({ type: "edit_draft", form: kind, text: e.target.value });
             // Edited text is a new submission attempt, not a retry.
             attemptKeyRef.current = null;
@@ -413,9 +461,9 @@ export function CaptureDialog({
         <CaptureProjectSelector
           id={projectFieldId}
           value={projectId}
-          /* Frozen while a submission is in flight: the Project that was sent is
+          /* Frozen while submitting or ambiguous: the Project that was sent is
              what the receipt will be compared against. */
-          disabled={outcome.kind === "saving"}
+          disabled={entryFrozen}
           onChange={(next) => dispatch({ type: "select_project", projectId: next })}
           principalId={principalId}
           sessionEpoch={session.sessionEpoch}
@@ -429,7 +477,7 @@ export function CaptureDialog({
                 name="capture-kind"
                 value={option.value}
                 checked={kind === option.value}
-                disabled={outcome.kind === "saving"}
+                disabled={entryFrozen}
                 onChange={() => dispatch({ type: "select_form", form: option.value })}
                 data-testid={`capture-kind-${option.value}`}
               />
@@ -494,8 +542,9 @@ export function CaptureDialog({
         ) : null}
         {outcome.kind === "unavailable" ? (
           <p role="alert" data-testid="capture-unavailable" className="text-sm text-destructive">
-            Not saved — the service could not be reached. Your note is still in the field, and
-            retrying resubmits the same attempt rather than capturing it twice.
+            Save unconfirmed — the server may have saved this note, but its receipt could not
+            be verified. Your note is still in the field; retrying resubmits the same attempt
+            rather than capturing it twice.
             <WhenDiagnostics>
               <span className="ml-1">{outcome.reason}</span>
             </WhenDiagnostics>
@@ -505,7 +554,11 @@ export function CaptureDialog({
           <Button
             variant="ghost"
             data-testid="capture-entry-back"
-            onClick={() => setStage("choose")}
+            ref={entryBackRef}
+            onClick={() => {
+              if (embedded) onBack?.();
+              else setStage("choose");
+            }}
           >
             Back
           </Button>
@@ -517,6 +570,8 @@ export function CaptureDialog({
           </Button>
         </div>
       </div>
-    </Dialog>
+  );
+  return embedded ? (open ? entry : null) : (
+    <Dialog open={open} onClose={requestClose} title="Capture">{entry}</Dialog>
   );
 }

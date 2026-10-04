@@ -158,12 +158,16 @@ function federatedSearchBody(query: string, hits: unknown[], coverage: unknown[]
   };
 }
 
-test("Cmd/Ctrl+K opens the same SearchCommandPanel as /search", async ({ page }) => {
+test("Cmd/Ctrl+K opens Search/New before reusing the same SearchCommandPanel as /search", async ({ page }) => {
   test.setTimeout(180_000);
   await page.locator("body").click();
   await page.keyboard.press("ControlOrMeta+k");
-  const palette = page.getByRole("dialog", { name: "Search" });
+  const palette = page.getByRole("dialog", { name: "Search or create" });
   await expect(palette).toBeVisible();
+  const choices = palette.getByRole("group", { name: "Search or New", exact: true });
+  await expect(choices.getByRole("button")).toHaveText(["Search", "New"]);
+  await expect(choices.getByRole("button", { name: "Search", exact: true })).toBeFocused();
+  await choices.getByRole("button", { name: "Search", exact: true }).click();
   await expect(palette.getByTestId("search-command-input")).toBeVisible();
   await expect(palette.getByTestId("search-command-list")).toBeVisible();
   await expect(palette.getByRole("searchbox", { name: "Search" })).toBeFocused();
@@ -173,6 +177,9 @@ test("Cmd/Ctrl+K opens the same SearchCommandPanel as /search", async ({ page })
   expect(paletteIdle).not.toMatch(/Knowledge/);
   expect(paletteIdle).not.toMatch(RESURRECTED_SURFACES);
 
+  await expect(palette.getByRole("button", { name: /Create Task|Quick Note|Conversation Log/ })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(choices.getByRole("button", { name: "Search", exact: true })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(palette).toHaveCount(0);
 

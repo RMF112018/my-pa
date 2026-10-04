@@ -10,9 +10,9 @@
 import { test, expect, type Page } from "@playwright/test";
 import { enableDiagnostics, expectState, openCaptureNote, pinInspector, SEARCH_SETTLED, signIn, syntheticNote, visibleCaptureButton } from "./fixtures";
 
-/** Chrome below the `lg` (1024) split: rail hidden, Knowledge lives in More. */
-function belowLgChrome(projectName: string): boolean {
-  return projectName === "mobile" || projectName === "tablet";
+/** Phone Chrome below `md` (768): Knowledge lives in More; tablet uses the compact rail. */
+function mobileChrome(projectName: string): boolean {
+  return projectName === "mobile";
 }
 
 /**
@@ -27,8 +27,8 @@ function belowLgChrome(projectName: string): boolean {
  * Since WP-TUX-07 something is: a Today Task card carries a disclosure named
  * `More actions for <task title>` (`task-operation-controls.tsx`), so a
  * populated Today puts one of those on the page per card and the bare locator
- * resolves to a dozen or more. Below `lg` the shell's own overflow joins them,
- * which is why this only ever bit tablet and mobile.
+ * resolves to a dozen or more. Below `md` the shell's own overflow joins them,
+ * which is why mobile navigation needs this exact scoping.
  *
  * Both halves of the fix state the intent rather than narrow the result: the
  * Primary landmark, because this is the *shell's* navigation and no Task card
@@ -173,7 +173,7 @@ test.describe("the signed-in surfaces", () => {
     await expect(page.getByRole("searchbox", { name: "Search your captures" })).toHaveValue(
       "synthetic",
     );
-    if (belowLgChrome(testInfo.project.name)) {
+    if (mobileChrome(testInfo.project.name)) {
       await navMoreButton(page).click();
     }
     await expect(page.getByRole("link", { name: "Knowledge" }).first()).toHaveAttribute(
@@ -182,10 +182,10 @@ test.describe("the signed-in surfaces", () => {
     );
   });
 
-  test("Search palette and Inspector expose only the bounded shell behavior", async ({ page }, testInfo) => {
+  test("unified launcher and Inspector expose only the bounded shell behavior", async ({ page }, testInfo) => {
     await expect(page.getByRole("link", { name: "Review" }).first()).toBeVisible();
     await expect(page.getByRole("button", { name: /Commands/ })).toHaveCount(0);
-    if (belowLgChrome(testInfo.project.name)) {
+    if (mobileChrome(testInfo.project.name)) {
       const nav = page.getByRole("navigation", { name: "Primary" });
       await expect(nav.getByRole("link", { name: "Today" })).toBeVisible();
       await expect(nav.getByRole("link", { name: "Work" })).toBeVisible();
@@ -197,13 +197,31 @@ test.describe("the signed-in surfaces", () => {
       const more = page.getByRole("dialog", { name: "More" });
       await expect(more).toBeVisible();
       await expect(more.getByRole("link", { name: "Review", exact: true })).toBeVisible();
-      await expect(more.getByRole("link", { name: "Search", exact: true })).toBeVisible();
+      await expect(more.getByRole("link", { name: "Search", exact: true })).toHaveCount(0);
       await page.getByRole("button", { name: "Close panel" }).click();
     }
 
-    await page.keyboard.press("Control+K");
-    const search = page.getByRole("dialog", { name: "Search" });
+    if (testInfo.project.name === "tablet") {
+      const rail = page.getByRole("navigation", { name: "Primary" });
+      await expect(rail).toBeVisible();
+      await expect(navMoreButton(page)).toHaveCount(0);
+      for (const [name, href] of [
+        ["Knowledge", "/knowledge"], ["Review", "/review"],
+        ["System", "/system"],
+      ]) {
+        const destination = rail.getByRole("link", { name, exact: true });
+        await expect(destination).toBeVisible();
+        await expect(destination).toHaveAttribute("href", href);
+      }
+      await expect(rail.getByRole("button", { name: "Collapse navigation" })).toHaveCount(0);
+    }
+
+    await expect(page.getByRole("link", { name: "Search", exact: true })).toHaveCount(0);
+    await page.keyboard.press("ControlOrMeta+k");
+    const search = page.getByRole("dialog", { name: "Search or create" });
     await expect(search).toBeVisible();
+    await expect(search.getByRole("button", { name: "Search", exact: true })).toBeFocused();
+    await search.getByRole("button", { name: "Search", exact: true }).click();
     await expect(search).not.toContainText(/cross-feature search is not available/i);
     await expect(search).toContainText("Start typing to search.");
     await expect(search.getByRole("button", { name: "Knowledge" })).toHaveCount(0);
@@ -222,8 +240,10 @@ test.describe("the signed-in surfaces", () => {
       await expect(incomplete).toContainText(/may be incomplete/i);
     }
     await page.keyboard.press("Escape");
+    await expect(search.getByRole("button", { name: "Search", exact: true })).toBeFocused();
+    await page.keyboard.press("Escape");
     await expect(search).toHaveCount(0);
-    if (belowLgChrome(testInfo.project.name)) {
+    if (mobileChrome(testInfo.project.name)) {
       await navMoreButton(page).click();
       await page.getByRole("dialog", { name: "More" }).getByRole("link", { name: "Knowledge" }).click();
     } else {
@@ -352,14 +372,11 @@ test.describe("the signed-in surfaces", () => {
   test("focus returns to the capture button when the dialog closes", async ({ page }) => {
     const opener = visibleCaptureButton(page);
     await opener.click();
-    // WP-TUX-04. Capture opens on its action chooser, so focus lands on the
-    // chooser's first action rather than the note field. Asserting focus — not
-    // mere visibility — is the point: a native <dialog> restores focus to its
-    // invoker on close by itself, so the closing assertion below would pass even
-    // if focus had never entered the dialog at all.
-    await expect(page.getByTestId("capture-choice-create_task")).toBeFocused();
+    // The unified initial choice takes focus before Escape restores its invoker.
+    const launcher = page.getByRole("dialog", { name: "Search or create" });
+    await expect(launcher.getByRole("button", { name: "Search", exact: true })).toBeFocused();
     await page.keyboard.press("Escape");
-    await expect(page.getByTestId("capture-chooser")).toBeHidden();
+    await expect(launcher).toHaveCount(0);
     await expect(opener).toBeFocused();
   });
 
@@ -369,6 +386,12 @@ test.describe("the signed-in surfaces", () => {
     await expect(page.getByTestId("capture-field")).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("capture-field")).toBeHidden();
+    const launcher = page.getByRole("dialog", { name: "Search or create" });
+    await expect(launcher.getByRole("button", { name: "Quick Note", exact: true })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(launcher.getByRole("button", { name: "New", exact: true })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(launcher).toHaveCount(0);
     await expect(opener).toBeFocused();
   });
 
@@ -479,7 +502,7 @@ test.describe("keyboard-only navigation", () => {
     await expect(page).toHaveURL(/#main$/);
 
     // Every destination in the rail is reachable and activatable by keyboard.
-    if (belowLgChrome(testInfo.project.name)) {
+    if (mobileChrome(testInfo.project.name)) {
       await navMoreButton(page).focus();
       await page.keyboard.press("Enter");
     }
@@ -488,14 +511,13 @@ test.describe("keyboard-only navigation", () => {
     await page.waitForURL("**/knowledge");
     await expect(page.getByRole("heading", { name: "Knowledge", level: 1 })).toBeVisible();
 
-    // And the capture dialog opens, takes focus, and closes on Escape. The
-    // chooser is the dialog's first stop, so that is where focus must land for a
-    // keyboard-only user; reaching the note field is one choice further in.
+    // The unified launcher opens with Search focused and closes on Escape.
     await visibleCaptureButton(page).focus();
     await page.keyboard.press("Enter");
-    await expect(page.getByTestId("capture-choice-create_task")).toBeFocused();
+    const launcher = page.getByRole("dialog", { name: "Search or create" });
+    await expect(launcher.getByRole("button", { name: "Search", exact: true })).toBeFocused();
     await page.keyboard.press("Escape");
-    await expect(page.getByTestId("capture-chooser")).toBeHidden();
+    await expect(launcher).toHaveCount(0);
   });
 
   test("the focused element is always visibly focused", async ({ page }) => {

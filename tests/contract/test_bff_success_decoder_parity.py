@@ -21,8 +21,9 @@ from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Final
+from typing import Any, Final, cast
 
+from my_pa.application.authorization import Authorization
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
 from my_pa.application.constraint_management import (
     ConstraintCategoryMutationResult,
@@ -49,7 +50,12 @@ from my_pa.application.service import (
     _project_controls_configuration_payload,
     _project_controls_status_payload,
 )
-from my_pa.contracts.ports import CaptureSearchMatch, DirectedReceipt, MutationRecordFamily
+from my_pa.contracts.ports import (
+    CaptureSearchMatch,
+    DirectedReceipt,
+    MutationRecordFamily,
+    UnitOfWork,
+)
 from my_pa.contracts.v1.canvas_workspace import (
     CanvasPointView,
     CanvasWorkspaceReceiptView,
@@ -91,6 +97,14 @@ from my_pa.domain.documents.managed import DocumentState
 from my_pa.domain.extraction.text import EXTRACTOR, EXTRACTOR_VERSION
 from my_pa.domain.goodnotes.models import GoodNotesPageRaster, GoodNotesPageWork
 from my_pa.domain.identity.operation import Capability
+from my_pa.domain.meeting.model import (
+    AttendeeResponseStatus,
+    MeetingActor,
+    MeetingAttachmentAvailability,
+    MeetingHistoryAction,
+    MeetingOutcome,
+    MeetingStatus,
+)
 from my_pa.domain.modeling.gate import ModelRoutePolicy
 from my_pa.domain.project_controls.category import ConstraintCategory, ConstraintCategoryState
 from my_pa.domain.project_controls.constraint import (
@@ -1374,7 +1388,8 @@ def _wp03b_success_payloads() -> dict[str, dict[str, Any]]:
     composition, database or connector is opened.
     """
     service = object.__new__(ApplicationService)
-    authorization = SimpleNamespace(at=AT)
+    # Pure projections consume only at; this synthetic fake is not full authority.
+    authorization = cast(Authorization, SimpleNamespace(at=AT))
     project = Project(
         project_id="prj_aaaaaaaa11111111",
         principal_id="prn_aaaaaaaa11111111",
@@ -1385,7 +1400,11 @@ def _wp03b_success_payloads() -> dict[str, dict[str, Any]]:
         updated_at=AT,
         version=2,
     )
-    uow = SimpleNamespace(projects=SimpleNamespace(get_project_entity_link=lambda *_: None))
+    # Only the public projection's in-memory collaborator is exercised here.
+    uow = cast(
+        UnitOfWork,
+        SimpleNamespace(projects=SimpleNamespace(get_project_entity_link=lambda *_: None)),
+    )
     project_update = service._continuity_project_payload(uow, project)
     project_update["replayed"] = False
     closed = replace(project, state=ProjectState.CLOSED, closed_at=AT, version=3)
@@ -1404,7 +1423,7 @@ def _wp03b_success_payloads() -> dict[str, dict[str, Any]]:
         series_title=series.title,
         series_version=series.version,
         title="Synthetic occurrence",
-        status="scheduled",
+        status=MeetingStatus.SCHEDULED,
         start_at=AT,
         timezone_name="UTC",
         version=2,
@@ -1416,7 +1435,7 @@ def _wp03b_success_payloads() -> dict[str, dict[str, Any]]:
                 display_name="Synthetic attendee",
                 email="synthetic@example.invalid",
                 is_organizer=True,
-                response_status="accepted",
+                response_status=AttendeeResponseStatus.ACCEPTED,
                 added_at=AT,
             ),
         ),
@@ -1424,7 +1443,7 @@ def _wp03b_success_payloads() -> dict[str, dict[str, Any]]:
             MeetingAttachmentView(
                 attachment_id="matc_aaaaaaaa11111111",
                 document_id="mdoc_aaaaaaaa11111111",
-                availability="active",
+                availability=MeetingAttachmentAvailability.ACTIVE,
                 title="Synthetic document",
                 media_type="text/plain",
                 added_at=AT,
@@ -1440,9 +1459,9 @@ def _wp03b_success_payloads() -> dict[str, dict[str, Any]]:
     history = MeetingHistoryView(
         history_id="mhst_aaaaaaaa11111111",
         meeting_id=meeting.meeting_id,
-        action="update",
-        actor="principal",
-        outcome="applied",
+        action=MeetingHistoryAction.UPDATE,
+        actor=MeetingActor.PRINCIPAL,
+        outcome=MeetingOutcome.APPLIED,
         before_version=1,
         after_version=2,
         occurred_at=AT,
@@ -1451,15 +1470,17 @@ def _wp03b_success_payloads() -> dict[str, dict[str, Any]]:
     series_history = MeetingSeriesHistoryView(
         series_history_id="mshst_aaaaaaaa11111111",
         meeting_series_id=series.meeting_series_id,
-        action="update",
-        actor="principal",
-        outcome="applied",
+        action=MeetingHistoryAction.UPDATE,
+        actor=MeetingActor.PRINCIPAL,
+        outcome=MeetingOutcome.APPLIED,
         before_version=1,
         after_version=2,
         occurred_at=AT,
         recorded_at=AT,
     )
-    meeting_uow = SimpleNamespace(meetings=SimpleNamespace(read_owned_series=lambda *_: series))
+    meeting_uow = cast(
+        UnitOfWork, SimpleNamespace(meetings=SimpleNamespace(read_owned_series=lambda *_: series))
+    )
     row = MeetingListEntry(
         **{
             name: getattr(meeting, name)

@@ -94,7 +94,9 @@ test("real synthetic stack: authenticated success for all twelve admissions, con
 
   const capture = await api(page, "/api/capture", "POST", { text: "WP03B synthetic original", idempotencyKey: key() });
   expect(capture.status).toBe(200);
-  const revised = success(await api(page, `/api/capture/${capture.body.captureId}`, "PATCH", {
+  const captureId = (capture.body.receipt as { captureId: string }).captureId;
+  expect(captureId).toMatch(/^cap_/);
+  const revised = success(await api(page, `/api/capture/${captureId}`, "PATCH", {
     text: "WP03B synthetic successor", idempotencyKey: key(), occurredAt: "2026-10-04T12:00:00Z",
   }));
   expect(revised.version_number).toBe(2);
@@ -124,6 +126,16 @@ test("real synthetic stack: authenticated success for all twelve admissions, con
   const meetingUpdated = success(await api(page, `/api/meetings/${meeting.meeting_id}`, "PATCH", meetingPatch));
   expect(meetingUpdated.meeting).toMatchObject({ title: meetingPatch.title, version: 2 });
   refused(await api(page, `/api/meetings/${meeting.meeting_id}`, "PATCH", { ...meetingPatch, idempotencyKey: key() }), 409, "conflict");
+  // Transport admits safe ZoneInfo key shape; the canonical backend owns lookup.
+  refused(await api(page, `/api/meetings/${meeting.meeting_id}`, "PATCH", {
+    timezoneName: "Etc/WP03B_Not_A_Zone", expectedVersion: 2, idempotencyKey: key(),
+  }), 400, "validation");
+  expect(success(await api(page, `/api/meetings/${meeting.meeting_id}`)).meeting).toMatchObject({ version: 2 });
+  for (const [timezoneName, expectedVersion] of [["Factory", 2], ["posix/UTC", 3]] as const) {
+    expect(success(await api(page, `/api/meetings/${meeting.meeting_id}`, "PATCH", {
+      timezoneName, expectedVersion, idempotencyKey: key(),
+    })).meeting).toMatchObject({ timezone_name: timezoneName, version: expectedVersion + 1 });
+  }
   const series = seeded.series as { meeting_series_id: string; version: number };
   expect(success(await api(page, `/api/meetings/series/${series.meeting_series_id}`, "PATCH", {
     title: "WP03B synthetic renamed series", expectedVersion: series.version, idempotencyKey: key(),
@@ -147,8 +159,17 @@ test("real synthetic stack: authenticated success for all twelve admissions, con
 
 test("real synthetic stack: invalid, unknown and duplicate inputs fail closed", async ({ page }) => {
   await signIn(page);
+  // The existing identity guard's safe400 contract names its code, not class.
+  const identityRefusal = await api(page, "/api/projects", "POST", {
+    name: "synthetic", idempotencyKey: key(), principalId: "caller-forbidden",
+  });
+  expect(identityRefusal.status).toBe(400);
+  expect(identityRefusal.body.error).toMatchObject({ code: "caller_supplied_principal" });
+  expect(identityRefusal.body.shape).toBeUndefined();
+  expect(identityRefusal.body.created).toBeUndefined();
+  expect(identityRefusal.cacheControl).toContain("private");
+  expect(identityRefusal.cacheControl).toContain("no-store");
   for (const [path, method, body] of [
-    ["/api/projects", "POST", { name: "synthetic", idempotencyKey: key(), principalId: "caller-forbidden" }],
     ["/api/capture/cap_bad", "PATCH", { text: "synthetic", idempotencyKey: key() }],
     ["/api/meetings?pageSize=1&pageSize=2", "GET", undefined],
     ["/api/meetings?unknown=1", "GET", undefined],
@@ -163,17 +184,20 @@ test("real synthetic stack: archived Capture exact replay, changed-key conflict,
   await signIn(page);
   const original = await api(page, "/api/capture", "POST", { text: "WP03B synthetic lifecycle root", idempotencyKey: key() });
   expect(original.status).toBe(200);
-  const captureId = original.body.captureId as string;
+  const captureId = (original.body.receipt as { captureId: string }).captureId;
+  expect(captureId).toMatch(/^cap_/);
   const request = { text: "WP03B synthetic bound revision", idempotencyKey: key(), occurredAt: "2026-10-04T12:00:00Z" };
   const accepted = success(await api(page, `/api/capture/${captureId}`, "PATCH", request));
-  await arrange("capture.archive", { capture_id: captureId, expected_lifecycle_revision: 1, idempotency_key: key(), reason: "WP03B synthetic fixture" });
+  await arrange("capture.archive", { capture_id: captureId, expected_lifecycle_revision: 0, idempotency_key: key(), reason: "WP03B synthetic fixture" });
   const replay = success(await api(page, `/api/capture/${captureId}`, "PATCH", request));
   expect(replay.created).toBe(false);
   for (const field of ["receipt_id", "capture_id", "version_id", "version_number"]) expect(replay[field]).toBe(accepted[field]);
   refused(await api(page, `/api/capture/${captureId}`, "PATCH", { ...request, text: "WP03B synthetic changed intent" }), 409, "conflict");
   refused(await api(page, `/api/capture/${captureId}`, "PATCH", { ...request, idempotencyKey: key() }), 403, "authorization");
-  refused(await api(page, "/api/capture/cap_absent00000001", "PATCH", request), 404, "not_found");
-  await arrange("capture.restore", { capture_id: captureId, expected_lifecycle_revision: 2, idempotency_key: key(), reason: "WP03B synthetic restore" });
+  // A new key reaches ownership lookup; changing captureId under a bound key
+  // would correctly conflict before lookup and would not be an absence probe.
+  refused(await api(page, "/api/capture/cap_absent00000001", "PATCH", { ...request, idempotencyKey: key() }), 404, "not_found");
+  await arrange("capture.restore", { capture_id: captureId, expected_lifecycle_revision: 1, idempotency_key: key(), reason: "WP03B synthetic restore" });
   expect(success(await api(page, `/api/capture/${captureId}`, "PATCH", { ...request, idempotencyKey: key() })).version_number).toBe(3);
 });
 
@@ -237,6 +261,7 @@ test("synthetic intercepted transport: shipped Task UI presents ambiguous mutati
   await expect(sheet).toContainText("Create may still have succeeded");
   await expect(sheet.getByRole("button", { name: "Retry same create", exact: true })).toBeVisible();
   await expect(sheet.getByLabel("Title", { exact: true })).toHaveAttribute("readonly", "");
-  await expect(page.getByTestId("mutation-feedback-region")).not.toContainText("Task created:");
+  await expect(page.getByText("Task created: WP03B synthetic ambiguous Task", { exact: true })).toHaveCount(0);
+  await expect(sheet).toBeVisible();
   expect(calls).toBe(1);
 });

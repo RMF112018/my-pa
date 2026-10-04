@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildTaskQueryKey } from "@/lib/task/query-key";
-import { TaskReadCoordinator } from "@/lib/task/read-coordinator";
+import { buildTaskQueryKey, serializeTaskQueryKey } from "@/lib/task/query-key";
+import { TaskReadCoordinator, createTaskReadCoordinator } from "@/lib/task/read-coordinator";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -154,6 +154,60 @@ describe("TaskReadCoordinator cleanup", () => {
     expect(aborted.silent).toBe(true);
     expect(aborted.outcome).toBe("aborted");
     await expect(second).resolves.toMatchObject({ outcome: "applied", data: "new" });
+    coordinator.dispose();
+  });
+});
+
+describe("TaskReadCoordinator extraction parity", () => {
+  it("retains exact snapshot/context shape, key bytes, timestamp override and factory", async () => {
+    const coordinator = createTaskReadCoordinator<string>();
+    expect(coordinator.retain(KEY)).toEqual({
+      key: KEY, keyId: serializeTaskQueryKey(KEY), freshness: "idle", lastConfirmed: undefined,
+      lastSuccessfulAt: null, requestSequence: 0, lastAppliedSequence: 0, mutationBarrier: 0,
+      inFlight: false, refCount: 1,
+    });
+    await coordinator.read(KEY, async (context) => {
+      expect(Object.keys(context)).toEqual(["signal", "sequence", "key", "force"]);
+      expect(context.key).toBe(KEY);
+      expect(context.force).toBe(false);
+      return "read";
+    });
+    expect(coordinator.applyConfirmed(KEY, "confirmed", { at: 456, entityId: "task-one" }))
+      .toMatchObject({ lastConfirmed: "confirmed", lastSuccessfulAt: 456, mutationBarrier: 1 });
+    coordinator.release(KEY);
+    coordinator.release(KEY);
+    expect(coordinator.getSnapshot(KEY)).toMatchObject({ refCount: 0, lastConfirmed: "confirmed" });
+    coordinator.dispose();
+    expect(() => coordinator.read(KEY, async () => "late")).toThrow("TaskReadCoordinator has been disposed");
+  });
+
+  it("preserves legacy entity revisions without adding cross-key Task blocking", async () => {
+    const coordinator = new TaskReadCoordinator<string>();
+    const otherKey = buildTaskQueryKey({ ...KEY, mode: "detail", taskId: "one" });
+    const pending = deferred<string>();
+    const read = coordinator.read(otherKey, async () => pending.promise);
+    expect(coordinator.raiseMutationBarrier(KEY, { entityId: "one" })).toBe(1);
+    expect(coordinator.raiseMutationBarrier(KEY, { entityId: "one" })).toBe(2);
+    pending.resolve("legacy-applies");
+    await expect(read).resolves.toMatchObject({ outcome: "applied" });
+    expect(coordinator.raiseMutationBarrier(otherKey, { entityId: "one" })).toBe(3);
+    expect(coordinator.raiseMutationBarrier(otherKey, { entityId: "" })).toBe(4);
+    coordinator.dispose();
+  });
+
+  it("retains confirmed values on failure and preserves suspended first-load policy", async () => {
+    const coordinator = new TaskReadCoordinator<string>();
+    coordinator.applyConfirmed(KEY, "confirmed", { at: 42 });
+    await expect(coordinator.read(KEY, async () => { throw new Error("synthetic"); }))
+      .resolves.toMatchObject({ outcome: "failed", silent: false });
+    expect(coordinator.getSnapshot(KEY)).toMatchObject({ lastConfirmed: "confirmed", lastSuccessfulAt: 42, freshness: "stale" });
+    const empty = buildTaskQueryKey({ ...KEY, mode: "detail", taskId: "empty" });
+    coordinator.retain(empty);
+    coordinator.markSuspended(empty);
+    await coordinator.read(empty, async () => { throw new Error("synthetic"); });
+    expect(coordinator.getSnapshot(empty)).toMatchObject({ lastConfirmed: undefined, freshness: "suspended" });
+    coordinator.markFresh(empty);
+    expect(coordinator.getSnapshot(empty)?.freshness).toBe("suspended");
     coordinator.dispose();
   });
 });

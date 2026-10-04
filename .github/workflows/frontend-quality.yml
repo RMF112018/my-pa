@@ -1,6 +1,21 @@
 name: frontend-quality
 
 on:
+  workflow_dispatch:
+    inputs:
+      wp03_main_diagnostic:
+        description: Explicitly authorize the separately approved single investigation
+        type: boolean
+        default: false
+        required: true
+      expected_head:
+        description: Exact approved commit SHA
+        type: string
+        required: true
+      expected_tree:
+        description: Exact approved tree SHA
+        type: string
+        required: true
   pull_request:
     branches: [main]
   push:
@@ -10,7 +25,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: frontend-quality-${{ github.workflow }}-${{ github.ref }}
+  group: frontend-quality-${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && format('-diagnostic-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 jobs:
@@ -33,8 +48,20 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PUSH_BEFORE: ${{ github.event.before }}
           PUSH_AFTER: ${{ github.event.after }}
+          DIAGNOSTIC: ${{ inputs.wp03_main_diagnostic }}
+          EXPECTED_HEAD: ${{ inputs.expected_head }}
+          EXPECTED_TREE: ${{ inputs.expected_tree }}
+          EVENT_HEAD: ${{ github.sha }}
+          EVENT_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
+          if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            [[ "${EVENT_REPOSITORY}" == "RMF112018/my-pa" ]] || exit 1
+            [[ "${DIAGNOSTIC}" == "true" && "${EXPECTED_HEAD}" =~ ^[0-9a-f]{40}$ && "${EXPECTED_TREE}" =~ ^[0-9a-f]{40}$ ]] || exit 1
+            [[ "${EVENT_HEAD}" == "${EXPECTED_HEAD}" && "$(git rev-parse HEAD)" == "${EXPECTED_HEAD}" && "$(git rev-parse HEAD^{tree})" == "${EXPECTED_TREE}" ]] || exit 1
+            echo "applicable=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # F023. The comparison uses the event's own immutable identities.
           # Comparing a fetched `origin/main` to `HEAD` was wrong for a push to
           # `main`: after the push those are the same commit, the diff is empty
@@ -76,6 +103,362 @@ jobs:
           else
             echo "applicable=false" >> "$GITHUB_OUTPUT"
           fi
+
+  wp03-main-diagnostic:
+    name: frontend / WP03 investigation (not required PASS)
+    needs: classify
+    if: github.event_name == 'workflow_dispatch' && inputs.wp03_main_diagnostic == true && needs.classify.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: web
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: my_pa
+          POSTGRES_PASSWORD: ci_throwaway_not_a_secret
+          POSTGRES_DB: my_pa_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --username my_pa --dbname my_pa_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]" >/dev/null 2>&1
+        working-directory: .
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
+      - run: npm ci >/dev/null 2>&1
+      - run: npx playwright install chromium >/dev/null 2>&1
+      - name: ONE curated desktop investigation with validated output and owned cleanup
+        id: investigation
+        env:
+          EXPECTED_HEAD: ${{ inputs.expected_head }}
+          EXPECTED_TREE: ${{ inputs.expected_tree }}
+          EVENT_HEAD: ${{ github.sha }}
+          EVENT_REPOSITORY: ${{ github.repository }}
+          DIAGNOSTIC: ${{ inputs.wp03_main_diagnostic }}
+          DIAGNOSTIC_RUN: ${{ github.run_id }}
+          DIAGNOSTIC_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import shutil
+          import signal
+          import subprocess
+          import sys
+          import time
+
+          import sqlalchemy as sa
+
+          web = Path.cwd()
+          repo = web.parent
+          helper = web / "e2e/wp03-main-ci-diagnostic-reporter.cjs"
+          preload = web / "e2e/wp03-next-output-preload.cjs"
+          sink = web / ".wp03-main-ci-diagnostic-v1.jsonl"
+          gateway = web / ".e2e-gateway.log"
+          temporary = web / ".wp03-main-ci-temp"
+          outputs = [web / ".next", web / "test-results", web / "playwright-report", temporary]
+          specs = "webauthn auth-public browser-security work-mutations review-decisions journeys reports-contract people-contract intelligence-journey search-contract goodnotes canvas system diagnostics-visibility constraints-read-plane project-controls-settings capture-project capture-task-project".split()
+          database = "my_pa_wp03_main_ci_diag_20261004"
+          admin = "postgresql+psycopg://my_pa:ci_throwaway_not_a_secret@127.0.0.1:5432/postgres"
+          env = {
+              "PATH": os.environ["PATH"], "CI": "true", "GITHUB_EVENT_NAME": "workflow_dispatch",
+              "CI_WP03_MAIN_DIAGNOSTIC": "1", "NEXT_TELEMETRY_DISABLED": "1",
+              "MYPA_E2E_PYTHON": sys.executable, "MYPA_E2E_DATABASE": database,
+              "MYPA_E2E_ADMIN_URL": admin,
+              "MYPA_E2E_DATABASE_URL": admin.removesuffix("postgres") + database,
+              "MYPA_E2E_GATEWAY_PORT": "9099",
+              "TMPDIR": str(temporary),
+              "NPM_CONFIG_USERCONFIG": "/dev/null", "NPM_CONFIG_GLOBALCONFIG": "/dev/null",
+              "NPM_CONFIG_CACHE": str(temporary / "npm-cache"),
+              "MYPA_SESSION_SERVICE_SECRET": "synthetic-e2e-session-service-secret-00",
+              "MYPA_WEBAUTHN_BFF_SECRET": "synthetic-e2e-webauthn-bff-secret-0000",
+          }
+          original = 1
+          cancellation = 0
+          cleanup_ok = True
+          summary_ok = False
+          writers_stopped = False
+          writers = []
+          created_sink = False
+          created_gateway = False
+          created_temporary = False
+          invocation = None
+          group = None
+          owned = {}
+          started = False
+          identity = {}
+
+          def run(args, *, child_env=env, capture=False):
+              return subprocess.run(args, env=child_env, stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, check=True, text=True)
+
+          def process_info(pid):
+              try:
+                  fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+                  return ((int(fields[2]), int(fields[3]), int(fields[19])), int(fields[1]))
+              except FileNotFoundError:
+                  return None
+
+          def metadata(pid):
+              info = process_info(pid)
+              return info[0] if info else None
+
+          def collect_group():
+              if group is None:
+                  return
+              leader = metadata(group)
+              if leader is not None and group in owned and leader != owned[group]:
+                  raise ValueError()
+              snapshot = {}
+              for entry in Path("/proc").iterdir():
+                  if entry.name.isdecimal():
+                      pid = int(entry.name)
+                      info = process_info(pid)
+                      if info:
+                          snapshot[pid] = info
+              valid = {pid for pid, record in owned.items() if pid in snapshot and snapshot[pid][0] == record}
+              pending = True
+              while pending:
+                  pending = False
+                  for pid, (record, parent) in snapshot.items():
+                      if pid in valid:
+                          continue
+                      # Same owned invocation session, or observed numeric parent lineage.
+                      if record[:2] != (group, group) and not (parent in valid and record[2] >= snapshot[parent][0][2]):
+                          continue
+                      prior = owned.get(pid)
+                      if prior is not None and prior != record:
+                          raise ValueError()
+                      owned[pid] = record
+                      valid.add(pid)
+                      pending = True
+
+          def cancelled(signum, frame):
+              global cancellation
+              cancellation = 128 + signum
+
+          signal.signal(signal.SIGTERM, cancelled)
+          signal.signal(signal.SIGINT, cancelled)
+
+          def supervisor_status(now, deadline, cancellation):
+              return cancellation or (124 if now >= deadline else 0)
+
+          def stopped(pid):
+              try:
+                  return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] == "Z"
+              except FileNotFoundError:
+                  return True
+
+          def ports_free():
+              # Kernel listener metadata only: no request, process args or environment.
+              for table in ("/proc/net/tcp", "/proc/net/tcp6"):
+                  for line in Path(table).read_text().splitlines()[1:]:
+                      fields = line.split()
+                      if fields[3] == "0A" and int(fields[1].rsplit(":", 1)[1], 16) in (3100, 3101, 9099):
+                          return False
+              return True
+
+          def database_absent():
+              with sa.create_engine(admin).connect() as connection:
+                  return connection.execute(sa.text("SELECT count(*) FROM pg_database WHERE datname = :name"), {"name": database}).scalar_one() == 0
+
+          def terminate(pid, record):
+              if metadata(pid) != record:
+                  if metadata(pid) is None:
+                      return
+                  raise ValueError()
+              try:
+                  fd = os.pidfd_open(pid)
+              except ProcessLookupError:
+                  return
+              try:
+                  if metadata(pid) != record:
+                      raise ValueError()
+                  signal.pidfd_send_signal(fd, signal.SIGTERM)
+              finally:
+                  os.close(fd)
+
+          try:
+              head, tree = os.environ["EXPECTED_HEAD"], os.environ["EXPECTED_TREE"]
+              if os.environ["EVENT_REPOSITORY"] != "RMF112018/my-pa":
+                  raise ValueError()
+              if os.environ["DIAGNOSTIC"] != "true" or any(not re.fullmatch("[0-9a-f]{40}", item) for item in (head, tree)):
+                  raise ValueError()
+              if os.environ["EVENT_HEAD"] != head or run(["git", "rev-parse", "HEAD"], capture=True).stdout.strip() != head or run(["git", "rev-parse", "HEAD^{tree}"], capture=True).stdout.strip() != tree:
+                  raise ValueError()
+              for key in ("DIAGNOSTIC_RUN", "DIAGNOSTIC_ATTEMPT"):
+                  if not re.fullmatch("[1-9][0-9]{0,19}", os.environ[key]):
+                      raise ValueError()
+              if any(os.path.lexists(item) for item in [sink, gateway, *outputs]) or not ports_free() or not database_absent():
+                  raise ValueError()
+              identity = {"repository": "RMF112018/my-pa", "run": int(os.environ["DIAGNOSTIC_RUN"]), "attempt": int(os.environ["DIAGNOSTIC_ATTEMPT"]), "job": "wp03-main-diagnostic", "head": head, "tree": tree, "specs": specs}
+              for item in (helper, preload):
+                  identity[item.name] = hashlib.sha256(item.read_bytes()).hexdigest()
+              pin_env = {**env, "CI_WP03_MAIN_DIAGNOSTIC": "0"}
+              pins = json.loads(run(["node", "-e", "const p=require('./e2e/wp03-next-output-preload.cjs');p.verify();process.stdout.write(JSON.stringify(p.HASHES))"], child_env=pin_env, capture=True).stdout)
+              if len(pins) != 8 or any(not re.fullmatch("[0-9a-f]{64}", value) for value in pins.values()):
+                  raise ValueError()
+              identity["modules"] = pins
+              run(["node", str(helper), "--init"])
+              created_sink = True
+              gateway.symlink_to("/dev/null")
+              created_gateway = True
+              temporary.mkdir(mode=0o700)
+              created_temporary = True
+              stack_env = {**env, "NODE_OPTIONS": "--require=" + json.dumps(str(preload)), "CI_WP03_DIAGNOSTIC_ROLE": "PW_HTTP_CLIENT"}
+              invocation = subprocess.Popen(["bash", "e2e/stack.sh", *[f"e2e/{spec}.spec.ts" for spec in specs], "--project=desktop"], env=stack_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+              started = True
+              group = invocation.pid
+              record = metadata(group)
+              if record is None or record[:2] != (group, group):
+                  raise ValueError()
+              owned[group] = record
+              # 900s supervisor: 2.8x authenticated same-lane 325s maximum.
+              deadline = time.monotonic() + 900
+              while invocation.poll() is None:
+                  collect_group()
+                  stopped_status = supervisor_status(time.monotonic(), deadline, cancellation)
+                  if stopped_status:
+                      original = stopped_status
+                      raise RuntimeError()
+                  time.sleep(0.25)
+              original = invocation.returncode if invocation.returncode >= 0 else 128 - invocation.returncode
+          except Exception:
+              original = original if original != 0 else 1
+          finally:
+              try:
+                  collect_group()
+              except Exception:
+                  cleanup_ok = False
+              try:
+                  if created_sink:
+                      run(["node", str(helper), "--check"])
+                      registry = json.loads(run(["node", "-e", "const s=require('./e2e/wp03-main-ci-diagnostic-reporter.cjs');const e=s.readEvents();process.stdout.write(JSON.stringify({registered:s.registered(e).map(r=>({pid:r.pid,start:r.start})),writers:[...new Set(e.map(r=>r.pid))]}))"], capture=True).stdout)
+                      if set(registry) != {"registered", "writers"}:
+                          raise ValueError()
+                      writers = registry["writers"]
+                      if any(type(pid) is not int or not 1 <= pid <= 2147483647 for pid in writers):
+                          raise ValueError()
+                      for registered in registry["registered"]:
+                          if set(registered) != {"pid", "start"} or not all(type(value) is int and value > 0 for value in registered.values()):
+                              raise ValueError()
+                          pid = registered["pid"]
+                          current = metadata(pid)
+                          if current is not None:
+                              if current[2] != registered["start"]:
+                                  raise ValueError()
+                              owned[pid] = current
+              except Exception:
+                  cleanup_ok = False
+              try:
+                  for pid, record in owned.items():
+                      try:
+                          terminate(pid, record)
+                      except Exception:
+                          cleanup_ok = False
+                  if invocation is not None:
+                      invocation.wait(timeout=10)
+                  deadline = time.monotonic() + 10
+                  while (not ports_free() or not all(stopped(pid) for pid in set(writers) | set(owned))) and time.monotonic() < deadline:
+                      time.sleep(0.05)
+                  if started and not database_absent():
+                      # Only this fresh isolated service's previously absent fixed target.
+                      with sa.create_engine(admin).connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+                          connection.execute(sa.text('DROP DATABASE "my_pa_wp03_main_ci_diag_20261004"'))
+                  if not ports_free() or not database_absent():
+                      raise ValueError()
+              except Exception:
+                  cleanup_ok = False
+              try:
+                  if created_sink:
+                      # A zombie cannot write. Every live observed writer must be gone.
+                      writers_stopped = all(stopped(pid) for pid in set(writers) | set(owned)) and (invocation is None or invocation.poll() is not None)
+                      if not writers_stopped:
+                          raise ValueError()
+                      original = cancellation if cancellation and original == 0 else original
+                      result = subprocess.run(["node", str(helper), "--summary", str(original)], env=env, stderr=subprocess.DEVNULL)
+                      summary_ok = result.returncode == 0
+                  if created_gateway:
+                      if not gateway.is_symlink() or os.readlink(gateway) != "/dev/null":
+                          raise ValueError()
+                      gateway.unlink()
+                  if started or created_temporary:
+                      for output in outputs:
+                          if not started and output != temporary:
+                              continue
+                          if os.path.lexists(output):
+                              if output.is_symlink() or not output.is_dir():
+                                  raise ValueError()
+                              shutil.rmtree(output)
+                  if created_sink and not (summary_ok and writers_stopped):
+                      sink.unlink()
+              except Exception:
+                  cleanup_ok = False
+          if identity and summary_ok:
+              print("::notice title=WP03_DIAGNOSTIC_IDENTITY::" + json.dumps(identity, separators=(",", ":")))
+              digest = hashlib.sha256(sink.read_bytes()).hexdigest()
+              size = sink.stat().st_size
+              artifact = f"wp03-main-diagnostic-{identity['run']}-{identity['attempt']}-{identity['head']}"
+              print(f"::notice title=WP03_DIAGNOSTIC_ARTIFACT::bytes={size} sha256={digest} artifact={artifact} retention_days=1")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+                  output.write(f"safe_evidence=true\nartifact_name={artifact}\nsha256={digest}\nbytes={size}\n")
+          original = cancellation if cancellation and original == 0 else original
+          print(f"::notice title=WP03_DIAGNOSTIC_RESULT::stack_exit={original} cleanup_ok={str(cleanup_ok).lower()} summary_ok={str(summary_ok).lower()} ORIGINAL_MAIN_FAILURE_UNRESOLVED")
+          sys.exit(original if original else (0 if cleanup_ok and summary_ok else 1))
+          PY
+      - name: Preserve only quiescent schema-validated diagnostic evidence (one day)
+        id: evidence
+        if: always() && steps.investigation.outputs.safe_evidence == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ steps.investigation.outputs.artifact_name }}
+          path: web/.wp03-main-ci-diagnostic-v1.jsonl
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+      - name: Bind provider artifact identity and remove owned safe sink
+        if: always() && steps.investigation.outputs.safe_evidence == 'true'
+        env:
+          ARTIFACT_ID: ${{ steps.evidence.outputs.artifact-id }}
+          EXPECTED_SHA256: ${{ steps.investigation.outputs.sha256 }}
+        run: |
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          import re
+          import stat
+          sink = Path(".wp03-main-ci-diagnostic-v1.jsonl")
+          info = sink.lstat()
+          if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o600:
+              raise SystemExit(1)
+          digest = hashlib.sha256(sink.read_bytes()).hexdigest()
+          if digest != os.environ["EXPECTED_SHA256"]:
+              raise SystemExit(1)
+          sink.unlink()
+          artifact_id = os.environ["ARTIFACT_ID"]
+          if not re.fullmatch("[1-9][0-9]{0,19}", artifact_id):
+              raise SystemExit(1)
+          print(f"::notice title=WP03_DIAGNOSTIC_ARTIFACT::provider_id={artifact_id} sha256={digest}")
+          PY
 
   static:
     name: frontend / static

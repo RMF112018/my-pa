@@ -42,6 +42,13 @@
  * command that needs a database and a gateway.
  */
 import { defineConfig, devices } from "@playwright/test";
+import * as path from "node:path";
+
+const mainDiagnostic = process.env.CI_WP03_MAIN_DIAGNOSTIC === "1";
+if (mainDiagnostic && (process.env.CI !== "true" || process.env.GITHUB_EVENT_NAME !== "workflow_dispatch" || process.env.NODE_ENV === "production")) {
+  throw new Error("WP03_DIAGNOSTIC_INVALID");
+}
+const diagnosticPreload = path.resolve(__dirname, "e2e/wp03-next-output-preload.cjs");
 
 /** The Next server wired to the real Python gateway. */
 export const LIVE_PORT = 3100;
@@ -64,9 +71,9 @@ const GATEWAY_URL = process.env.MYPA_E2E_GATEWAY_URL ?? "http://127.0.0.1:9099";
  * acquire one.
  */
 const SESSION_SERVICE_SECRET =
-  process.env.MYPA_SESSION_SERVICE_SECRET ?? "synthetic-e2e-session-service-secret-00";
+  mainDiagnostic ? "synthetic-e2e-session-service-secret-00" : process.env.MYPA_SESSION_SERVICE_SECRET ?? "synthetic-e2e-session-service-secret-00";
 const WEBAUTHN_BFF_SECRET =
-  process.env.MYPA_WEBAUTHN_BFF_SECRET ?? "synthetic-e2e-webauthn-bff-secret-0000";
+  mainDiagnostic ? "synthetic-e2e-webauthn-bff-secret-0000" : process.env.MYPA_WEBAUTHN_BFF_SECRET ?? "synthetic-e2e-webauthn-bff-secret-0000";
 
 const baseEnv = {
   MYPA_SESSION_SERVICE_SECRET: SESSION_SERVICE_SECRET,
@@ -93,7 +100,7 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: 0,
   reporter:
-    process.env.CI && process.env.CI_CONSTRAINT_DIAGNOSTIC === "1"
+    mainDiagnostic ? [["./e2e/wp03-main-ci-diagnostic-reporter.cjs"]] : process.env.CI && process.env.CI_CONSTRAINT_DIAGNOSTIC === "1"
       ? [["list"], ["html", { open: "never" }], ["./e2e/ci-constraint-reporter.ts"]]
       : process.env.CI && process.env.CI_RESPONSIVE_DIAGNOSTIC === "1"
         ? [["list"], ["html", { open: "never" }], ["./e2e/ci-responsive-reporter.ts"]]
@@ -104,8 +111,9 @@ export default defineConfig({
   expect: { timeout: 10_000 },
   use: {
     baseURL: LIVE_URL,
-    trace: "retain-on-failure",
-    screenshot: "only-on-failure",
+    trace: mainDiagnostic ? "off" : "retain-on-failure",
+    screenshot: mainDiagnostic ? "off" : "only-on-failure",
+    ...(mainDiagnostic ? { video: "off" as const } : {}),
     // Service workers must be allowed to register: the PWA install criteria are
     // part of what this suite measures, so blocking them would measure nothing.
     serviceWorkers: "allow",
@@ -178,29 +186,33 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: `npx next dev --turbopack --port ${LIVE_PORT}`,
+      command: mainDiagnostic ? `node ${JSON.stringify(diagnosticPreload)} LIVE_NEXT dev --turbopack --port ${LIVE_PORT}` : `npx next dev --turbopack --port ${LIVE_PORT}`,
       url: `${LIVE_URL}/sign-in`,
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
-      stderr: "pipe",
+      stderr: mainDiagnostic ? "ignore" : "pipe",
+      ...(mainDiagnostic ? { stdout: "ignore" as const } : {}),
       env: {
         ...baseEnv,
-        MYPA_GATEWAY_URL: GATEWAY_URL,
+        MYPA_GATEWAY_URL: mainDiagnostic ? "http://127.0.0.1:9099" : GATEWAY_URL,
+        ...(mainDiagnostic ? { NODE_OPTIONS: "", CI_WP03_DIAGNOSTIC_ROLE: "LIVE_NEXT" } : {}),
         MYPA_NEXT_DIST_DIR: ".next/e2e-live",
       },
     },
     {
-      command: `npx next dev --turbopack --port ${DEAD_GATEWAY_PORT}`,
+      command: mainDiagnostic ? `node ${JSON.stringify(diagnosticPreload)} DEAD_NEXT dev --turbopack --port ${DEAD_GATEWAY_PORT}` : `npx next dev --turbopack --port ${DEAD_GATEWAY_PORT}`,
       url: `${DEAD_GATEWAY_URL}/sign-in`,
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
-      stderr: "pipe",
+      stderr: mainDiagnostic ? "ignore" : "pipe",
+      ...(mainDiagnostic ? { stdout: "ignore" as const } : {}),
       // Port 1 on loopback. Nothing listens there, so every gateway call takes
       // the genuine connect-refused path through the real transport.
       env: {
         ...baseEnv,
         MYPA_GATEWAY_URL: "http://127.0.0.1:1",
         MYPA_SESSION_SERVICE_URL: GATEWAY_URL,
+        ...(mainDiagnostic ? { MYPA_SESSION_SERVICE_URL: "http://127.0.0.1:9099", NODE_OPTIONS: "", CI_WP03_DIAGNOSTIC_ROLE: "DEAD_NEXT" } : {}),
         MYPA_CANONICAL_ORIGIN: DEAD_GATEWAY_URL,
         MYPA_NEXT_DIST_DIR: ".next/e2e-dead",
       },

@@ -42,7 +42,7 @@
  * command that needs a database and a gateway.
  */
 import { defineConfig, devices } from "@playwright/test";
-import path from "node:path";
+import * as path from "node:path";
 
 const mainDiagnostic = process.env.CI_WP03_MAIN_DIAGNOSTIC === "1";
 if (mainDiagnostic && (process.env.CI !== "true" || process.env.GITHUB_EVENT_NAME !== "workflow_dispatch" || process.env.NODE_ENV === "production")) {

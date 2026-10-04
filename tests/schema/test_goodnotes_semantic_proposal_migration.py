@@ -20,6 +20,7 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import IntegrityError
+from tests.schema.knowledge_schema_ahead_contract import admitted_ahead
 
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
@@ -96,7 +97,7 @@ PHASE_B_START: Final = "c7a1f04b9e63"
 #: renames the seeded `entity_relationship_types` row `design_coordinates_with` to
 #: `design_coordination_with`; that in turn stacked on `1cda4d536268` (RI-ENT-WP-07).
 #: Written out rather than derived so chain drift fails here rather than passing.
-HEAD_REVISION: Final = "0641c354ca85"
+HEAD_REVISION: Final = "6734f039f7a6"
 PREVIOUS: Final = "c9e2b6a4d813"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260816_d7e1a4c8b926_admit_goodnotes_work_and_propose.py"
@@ -227,7 +228,7 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     # and RI-ENT-WP-12's integration counted 89 from the merged tree rather
     # than adding one to either side (RULING-M2).
     # R8 adds one receipt migration on the previous 91-revision chain.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 111
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 112
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:
@@ -286,8 +287,10 @@ def test_empty_to_head_and_prior_to_head_admit_the_new_names(disposable_database
         declared = {member.value for member in Capability} | {
             member.value for member in NativeSourceCapability
         }
-        assert _admitted(engine, "capability_is_known") == declared
-        assert _admitted(engine, "purpose_is_known") == {member.value for member in Purpose}
+        assert _admitted(engine, "capability_is_known") == declared | admitted_ahead("capability")
+        assert _admitted(engine, "purpose_is_known") == {
+            member.value for member in Purpose
+        } | admitted_ahead("purpose")
         assert "goodnotes.work" in _admitted(engine, "capability_is_known")
         assert "goodnotes.propose" in _admitted(engine, "capability_is_known")
         assert "knowledge.search" in _admitted(engine, "capability_is_known")

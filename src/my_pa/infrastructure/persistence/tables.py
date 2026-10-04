@@ -76,6 +76,7 @@ from sqlalchemy import (
     MetaData,
     Numeric,
     PrimaryKeyConstraint,
+    SmallInteger,
     String,
     Table,
     Text,
@@ -9732,6 +9733,11 @@ context_run_items = Table(
     Column("managed_document_version_id", Text),
     Column("span_start", Integer),
     Column("span_end", Integer),
+    # KLP-WP-02 A6: the Knowledge Assertion context identity, added by
+    # `6734f039f7a6`. The plane and authority CHECKs below are enum-derived and
+    # so lag the database's frozen literals by exactly the schema-ahead gap of
+    # `tests/schema/knowledge_schema_ahead_contract.py` until KLP-WP-06.
+    Column("knowledge_assertion_id", Text),
     PrimaryKeyConstraint(
         "context_manifest_id", "position", name="one_item_per_context_run_position"
     ),
@@ -9769,7 +9775,25 @@ context_run_items = Table(
         "(span_start IS NULL) = (span_end IS NULL)",
         name="context_run_item_span_has_both_ends",
     ),
+    CheckConstraint(
+        "knowledge_assertion_id IS NULL OR knowledge_assertion_id ~ '^kasr_[A-Za-z0-9]{8,64}$'",
+        name="context_run_item_knowledge_assertion_is_opaque",
+    ),
+    CheckConstraint(
+        "((authority_class = 'product_owned_knowledge_assertion') = "
+        "(knowledge_assertion_id IS NOT NULL)) AND ((plane = 'knowledge_assertion') = "
+        "(authority_class = 'product_owned_knowledge_assertion')) AND (authority_class <> "
+        "'product_owned_knowledge_assertion' OR (source_id IS NULL AND knowledge_id IS NULL AND "
+        "capture_id IS NULL AND product_id IS NULL AND managed_document_id IS NULL))",
+        name="context_run_item_knowledge_assertion_identity",
+    ),
     Index("context_run_items_by_principal", "principal_id"),
+    Index(
+        "context_run_items_by_knowledge_assertion",
+        "principal_id",
+        "knowledge_assertion_id",
+        postgresql_where=text("knowledge_assertion_id IS NOT NULL"),
+    ),
 )
 
 #: Append-only retrieval-preference events. Reversal appends; nothing deletes.
@@ -14012,5 +14036,2128 @@ record_events = Table(
         "record_family",
         "record_id",
         text("sequence_number DESC"),
+    ),
+)
+
+
+# --- KLP-WP-02: the Knowledge Assertion layer ----------------------------------
+#
+# Fourteen tables, declared with the names, columns, constraints and indexes the
+# single Knowledge revision `6734f039f7a6` creates (R6 plan amendment section 11,
+# matrix `schema_contract`). The CHECK texts are the revision's frozen literals,
+# not enum derivations: the database is the authority for the Knowledge closed
+# sets, and `tests/schema/test_knowledge_assertion_migration.py` holds these
+# declarations, the revision, the matrix and the WP-01 enums equal. Triggers,
+# trigger functions, the `relationship_memories` uniqueness (A7) and the eight
+# predicate seed rows exist only in the database; a `Table` cannot declare them.
+# The four `knowledge_assertion_submissions` result foreign keys close a cycle
+# and are declared `use_alter`, as the revision adds them after all fourteen
+# tables exist.
+
+#: Global migration-owned vocabulary; no principal_id; registered in
+#: tests/architecture/test_user_owned_tables_are_partitioned.py
+#: UNPARTITIONED_USER_OWNED.
+knowledge_assertion_predicates = Table(
+    "knowledge_assertion_predicates",
+    METADATA,
+    Column("predicate_code", Text, nullable=False),
+    Column("predicate_version", Integer, nullable=False),
+    Column("admission_state", Text, nullable=False),
+    Column("value_type", Text, nullable=False),
+    Column("cardinality", Text, nullable=False),
+    Column("temporal_semantics", Text, nullable=False),
+    Column("qualifier_rule", Text, nullable=False),
+    Column("allowed_subject_kinds", ARRAY(Text), nullable=False),
+    Column(
+        "allowed_entity_types", ARRAY(Text), nullable=False, server_default=text("'{}'::text[]")
+    ),
+    Column("canonical_owner", Text, nullable=False),
+    Column("autonomous_admission_policy", Text, nullable=False),
+    Column("review_requirement", Text, nullable=False),
+    Column("consequential_class", Text, nullable=False),
+    Column("normalization_rule", Text, nullable=False),
+    Column("classification_floor", Text, nullable=False),
+    Column("conflict_rule", Text, nullable=False),
+    Column("minimum_evidence_authority", Text, nullable=False),
+    Column("fingerprint_version", SmallInteger, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=text("now()")),
+    PrimaryKeyConstraint(
+        "predicate_code", "predicate_version", name="knowledge_predicate_version_is_identified"
+    ),
+    UniqueConstraint(
+        "predicate_code",
+        "predicate_version",
+        "value_type",
+        "cardinality",
+        "temporal_semantics",
+        "qualifier_rule",
+        name="knowledge_predicate_structure_is_identified",
+    ),
+    CheckConstraint(
+        "predicate_code ~ '^[a-z][a-z_]{0,30}[.][a-z][a-z_]{0,30}$'",
+        name="knowledge_predicate_code_is_bounded",
+    ),
+    CheckConstraint(
+        "predicate_version >= 1",
+        name="knowledge_predicate_version_is_positive",
+    ),
+    CheckConstraint(
+        "admission_state IN ('active', 'retired')",
+        name="knowledge_predicate_admission_state_is_known",
+    ),
+    CheckConstraint(
+        "value_type IN ('text', 'datetime')",
+        name="knowledge_predicate_value_type_is_known",
+    ),
+    CheckConstraint(
+        "cardinality IN ('single_current', 'multi_value')",
+        name="knowledge_predicate_cardinality_is_known",
+    ),
+    CheckConstraint(
+        "temporal_semantics IN ('atemporal', 'observed_state', 'historical')",
+        name="knowledge_predicate_temporal_semantics_is_known",
+    ),
+    CheckConstraint(
+        "qualifier_rule IN ('none', 'date_kind')",
+        name="knowledge_predicate_qualifier_rule_is_known",
+    ),
+    CheckConstraint(
+        (
+            "cardinality(allowed_subject_kinds) BETWEEN 1 AND 5 AND allowed_subject_kinds <@ "
+            "ARRAY['principal', 'entity', 'project', 'managed_document', 'evidence_ref']::text[]"
+        ),
+        name="knowledge_predicate_subject_kinds_are_known",
+    ),
+    CheckConstraint(
+        (
+            "allowed_entity_types <@ ARRAY['person', 'organization', 'program', 'project', "
+            "'work_package', 'team_or_group', 'location']::text[]"
+        ),
+        name="knowledge_predicate_entity_types_are_known",
+    ),
+    CheckConstraint(
+        "(cardinality(allowed_entity_types) > 0) = ('entity' = ANY (allowed_subject_kinds))",
+        name="knowledge_predicate_entity_types_follow_subjects",
+    ),
+    CheckConstraint(
+        (
+            "canonical_owner IN ('knowledge_assertion', 'continuity_decision', "
+            "'relationship_memory', 'entity', 'constraints', 'tasks', 'commitments', 'meetings', "
+            "'managed_document')"
+        ),
+        name="knowledge_predicate_canonical_owner_is_known",
+    ),
+    CheckConstraint(
+        "autonomous_admission_policy IN ('never', 'authoritative_source')",
+        name="knowledge_predicate_admission_policy_is_known",
+    ),
+    CheckConstraint(
+        "review_requirement IN ('requires_review', 'requires_operator')",
+        name="knowledge_predicate_review_requirement_is_known",
+    ),
+    CheckConstraint(
+        "consequential_class IN ('none', 'financial_fact', 'decision', 'critical_date')",
+        name="knowledge_predicate_consequential_class_is_known",
+    ),
+    CheckConstraint(
+        "normalization_rule IN ('text_nfc_trim_collapse_whitespace', 'datetime_utc_microsecond')",
+        name="knowledge_predicate_normalization_rule_is_known",
+    ),
+    CheckConstraint(
+        "classification_floor IN ('private_local', 'restricted_local')",
+        name="knowledge_predicate_classification_floor_is_known",
+    ),
+    CheckConstraint(
+        "conflict_rule IN ('review_on_difference', 'coexist')",
+        name="knowledge_predicate_conflict_rule_is_known",
+    ),
+    CheckConstraint(
+        "minimum_evidence_authority IN ('observed_source', 'authoritative_source')",
+        name="knowledge_predicate_minimum_authority_is_known",
+    ),
+    CheckConstraint(
+        "fingerprint_version = 1",
+        name="knowledge_predicate_fingerprint_version_is_one",
+    ),
+    CheckConstraint(
+        (
+            "cardinality <> 'single_current' OR (temporal_semantics IN ('atemporal', "
+            "'observed_state') AND qualifier_rule = 'none')"
+        ),
+        name="knowledge_predicate_single_current_is_unqualified_state",
+    ),
+    CheckConstraint(
+        "(cardinality = 'single_current') = (conflict_rule = 'review_on_difference')",
+        name="knowledge_predicate_conflict_rule_follows_cardinality",
+    ),
+    CheckConstraint(
+        (
+            "(value_type = 'text' AND normalization_rule = 'text_nfc_trim_collapse_whitespace') "
+            "OR (value_type = 'datetime' AND normalization_rule = 'datetime_utc_microsecond')"
+        ),
+        name="knowledge_predicate_normalization_follows_value_type",
+    ),
+    CheckConstraint(
+        "qualifier_rule <> 'date_kind' OR value_type = 'datetime'",
+        name="knowledge_predicate_date_kind_is_datetime",
+    ),
+    CheckConstraint(
+        "consequential_class = 'none' OR autonomous_admission_policy = 'never'",
+        name="knowledge_predicate_consequential_never_direct_admits",
+    ),
+    CheckConstraint(
+        "canonical_owner = 'knowledge_assertion' OR autonomous_admission_policy = 'never'",
+        name="knowledge_predicate_domain_owned_never_direct_admits",
+    ),
+)
+
+#: Principal-bound, server-owned commissioning state; written only by the guarded
+#: apps/cli provisioner.
+knowledge_discovery_source_profiles = Table(
+    "knowledge_discovery_source_profiles",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("source_profile_id", Text, nullable=False),
+    Column("authenticated_client_id", Text, nullable=False),
+    Column("origin_system", Text, nullable=False),
+    Column("scope_digest", Text, nullable=False),
+    Column("authority_ceiling", Text, nullable=False),
+    Column("direct_admission_enabled", Boolean, nullable=False, server_default=text("false")),
+    Column("read_only_proof_state", Text, nullable=False),
+    Column("is_synthetic", Boolean, nullable=False),
+    Column("profile_version", Integer, nullable=False, server_default=text("1")),
+    Column("disabled_at", DateTime(timezone=True)),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint("source_profile_id", name="knowledge_profile_is_identified"),
+    UniqueConstraint(
+        "principal_id", "source_profile_id", name="knowledge_profile_is_principal_scoped"
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "source_profile_id",
+        "authenticated_client_id",
+        "scope_digest",
+        name="knowledge_profile_binding_is_identified",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "source_profile_id",
+        "is_synthetic",
+        name="knowledge_profile_synthetic_is_identified",
+    ),
+    CheckConstraint(
+        "principal_id ~ '^prn_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_profile_principal_is_opaque",
+    ),
+    CheckConstraint(
+        "source_profile_id ~ '^kdsp_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_profile_id_is_opaque",
+    ),
+    CheckConstraint(
+        "char_length(authenticated_client_id) BETWEEN 1 AND 256",
+        name="knowledge_profile_client_is_bounded",
+    ),
+    CheckConstraint(
+        (
+            "origin_system IN ('outlook_mail', 'sharepoint_documents', 'teams_messages', "
+            "'public_web', 'synthetic')"
+        ),
+        name="knowledge_profile_origin_system_is_known",
+    ),
+    CheckConstraint(
+        "scope_digest ~ '^[0-9a-f]{64}$'",
+        name="knowledge_profile_scope_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "authority_ceiling IN ('observed_source', 'authoritative_source')",
+        name="knowledge_profile_authority_ceiling_is_known",
+    ),
+    CheckConstraint(
+        "read_only_proof_state IN ('unproven', 'proven', 'revoked')",
+        name="knowledge_profile_proof_state_is_known",
+    ),
+    CheckConstraint(
+        "(origin_system = 'synthetic') = is_synthetic",
+        name="knowledge_profile_synthetic_follows_origin",
+    ),
+    CheckConstraint(
+        (
+            "NOT direct_admission_enabled OR (read_only_proof_state = 'proven' AND "
+            "authority_ceiling = 'authoritative_source' AND disabled_at IS NULL)"
+        ),
+        name="knowledge_profile_direct_admission_needs_proof",
+    ),
+    CheckConstraint(
+        "profile_version >= 1",
+        name="knowledge_profile_version_is_positive",
+    ),
+    CheckConstraint(
+        "updated_at >= created_at",
+        name="knowledge_profile_is_not_updated_before_created",
+    ),
+    Index(
+        "knowledge_profile_one_active_scope",
+        "principal_id",
+        "authenticated_client_id",
+        "origin_system",
+        "scope_digest",
+        unique=True,
+        postgresql_where=text("disabled_at IS NULL"),
+    ),
+)
+
+#: Principal replay/reservation ledger for explicit_create and autonomous_submit (C1).
+knowledge_assertion_submissions = Table(
+    "knowledge_assertion_submissions",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("submission_id", Text, nullable=False),
+    Column("origin", Text, nullable=False),
+    Column("authenticated_client_id", Text),
+    Column("idempotency_key", Text),
+    Column("source_profile_id", Text),
+    Column("scope_digest", Text),
+    Column("origin_is_synthetic", Boolean, nullable=False),
+    Column("external_run_id", Text),
+    Column("external_candidate_id", Text),
+    Column("subject_kind", Text, nullable=False),
+    Column("subject_id", Text, nullable=False),
+    Column("predicate_code", Text, nullable=False),
+    Column("owner_ref_kind", Text),
+    Column("owner_ref_id", Text),
+    Column("request_digest", Text, nullable=False),
+    Column("submission_state", Text, nullable=False),
+    Column("causal_depth", SmallInteger),
+    Column("causal_root_submission_id", Text),
+    Column("outcome", Text),
+    Column("reason", Text),
+    Column("result_assertion_id", Text),
+    Column("result_assertion_version", Integer),
+    Column("result_mutation_id", Text),
+    Column("result_superseded_assertion_id", Text),
+    Column("result_proposal_id", Text),
+    Column("result_review_case_id", Text),
+    Column("result_canonical_owner", Text),
+    Column("result_routed_record_id", Text),
+    Column("result_digest", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("completed_at", DateTime(timezone=True)),
+    PrimaryKeyConstraint("submission_id", name="knowledge_submission_is_identified"),
+    UniqueConstraint(
+        "principal_id", "submission_id", name="knowledge_submission_is_principal_scoped"
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "submission_id",
+        "origin_is_synthetic",
+        name="knowledge_submission_synthetic_is_identified",
+    ),
+    CheckConstraint(
+        "principal_id ~ '^prn_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_submission_principal_is_opaque",
+    ),
+    CheckConstraint(
+        "submission_id ~ '^kasub_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_submission_id_is_opaque",
+    ),
+    CheckConstraint(
+        "origin IN ('explicit_create', 'autonomous_submit')",
+        name="knowledge_submission_origin_is_known",
+    ),
+    CheckConstraint(
+        (
+            "authenticated_client_id IS NULL OR char_length(authenticated_client_id) BETWEEN 1 "
+            "AND 256"
+        ),
+        name="knowledge_submission_client_is_bounded",
+    ),
+    CheckConstraint(
+        "idempotency_key IS NULL OR char_length(idempotency_key) BETWEEN 1 AND 128",
+        name="knowledge_submission_key_is_bounded",
+    ),
+    CheckConstraint(
+        "source_profile_id IS NULL OR source_profile_id ~ '^kdsp_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_submission_profile_is_opaque",
+    ),
+    CheckConstraint(
+        "scope_digest IS NULL OR scope_digest ~ '^[0-9a-f]{64}$'",
+        name="knowledge_submission_scope_digest_is_sha256",
+    ),
+    CheckConstraint(
+        (
+            "(external_run_id IS NULL OR char_length(external_run_id) BETWEEN 1 AND 200) AND "
+            "(external_candidate_id IS NULL OR char_length(external_candidate_id) BETWEEN 1 AND "
+            "200)"
+        ),
+        name="knowledge_submission_run_ids_are_bounded",
+    ),
+    CheckConstraint(
+        (
+            "(origin = 'explicit_create' AND idempotency_key IS NOT NULL AND source_profile_id "
+            "IS NULL AND scope_digest IS NULL AND external_run_id IS NULL AND "
+            "external_candidate_id IS NULL AND NOT origin_is_synthetic) OR (origin = "
+            "'autonomous_submit' AND authenticated_client_id IS NOT NULL AND source_profile_id "
+            "IS NOT NULL AND scope_digest IS NOT NULL AND external_run_id IS NOT NULL AND "
+            "external_candidate_id IS NOT NULL AND idempotency_key IS NULL)"
+        ),
+        name="knowledge_submission_origin_shape",
+    ),
+    CheckConstraint(
+        "subject_kind IN ('principal', 'entity', 'project', 'managed_document', 'evidence_ref')",
+        name="knowledge_submission_subject_kind_is_known",
+    ),
+    CheckConstraint(
+        (
+            "(subject_kind = 'principal' AND subject_id ~ '^prn_[A-Za-z0-9]{8,64}$') OR "
+            "(subject_kind = 'entity' AND subject_id ~ '^ent_[A-Za-z0-9]{8,64}$') OR "
+            "(subject_kind = 'project' AND subject_id ~ '^prj_[A-Za-z0-9]{8,64}$') OR "
+            "(subject_kind = 'managed_document' AND subject_id ~ '^mdoc_[A-Za-z0-9]{8,64}$') OR "
+            "(subject_kind = 'evidence_ref' AND subject_id ~ '^kaevd_[A-Za-z0-9]{8,64}$')"
+        ),
+        name="knowledge_submission_subject_id_matches_kind",
+    ),
+    CheckConstraint(
+        "predicate_code ~ '^[a-z][a-z_]{0,30}[.][a-z][a-z_]{0,30}$'",
+        name="knowledge_submission_predicate_code_is_bounded",
+    ),
+    CheckConstraint(
+        (
+            "(owner_ref_kind IS NULL AND owner_ref_id IS NULL) OR (owner_ref_kind = 'task' AND "
+            "owner_ref_id ~ '^tsk_[A-Za-z0-9]{8,64}$') OR (owner_ref_kind = 'commitment' AND "
+            "owner_ref_id ~ '^cmt_[A-Za-z0-9]{8,64}$') OR (owner_ref_kind = 'constraint' AND "
+            "owner_ref_id ~ '^cst_[A-Za-z0-9]{8,64}$') OR (owner_ref_kind = 'meeting' AND "
+            "owner_ref_id ~ '^mtg_[A-Za-z0-9]{8,64}$')"
+        ),
+        name="knowledge_submission_owner_ref_is_typed",
+    ),
+    CheckConstraint(
+        "request_digest ~ '^[0-9a-f]{64}$'",
+        name="knowledge_submission_request_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "submission_state IN ('reserved', 'completed')",
+        name="knowledge_submission_state_is_known",
+    ),
+    CheckConstraint(
+        "causal_depth IS NULL OR causal_depth BETWEEN 0 AND 4",
+        name="knowledge_submission_depth_is_bounded",
+    ),
+    CheckConstraint(
+        (
+            "causal_root_submission_id IS NULL OR causal_root_submission_id ~ "
+            "'^kasub_[A-Za-z0-9]{8,64}$'"
+        ),
+        name="knowledge_submission_root_is_opaque",
+    ),
+    CheckConstraint(
+        (
+            "((causal_depth IS NULL) = (causal_root_submission_id IS NULL)) AND (causal_depth IS "
+            "NOT NULL OR (outcome = 'refused' AND reason IN ('causal_depth_exceeded', "
+            "'causal_root_ambiguous', 'causal_repeat')))"
+        ),
+        name="knowledge_submission_causal_shape",
+    ),
+    CheckConstraint(
+        (
+            "causal_depth IS NULL OR ((causal_depth = 0) = (causal_root_submission_id = "
+            "submission_id))"
+        ),
+        name="knowledge_submission_root_is_self_at_depth_zero",
+    ),
+    CheckConstraint(
+        (
+            "origin <> 'explicit_create' OR (causal_depth = 0 AND causal_root_submission_id = "
+            "submission_id)"
+        ),
+        name="knowledge_submission_explicit_create_is_a_root",
+    ),
+    CheckConstraint(
+        (
+            "outcome IS NULL OR outcome IN ('direct_created', 'direct_superseded', "
+            "'review_queued', 'duplicate_existing', 'duplicate_enriched', "
+            "'duplicate_pending_review', 'domain_owned_routed', 'domain_owned_no_intake', "
+            "'conflict', 'refused')"
+        ),
+        name="knowledge_submission_outcome_is_known",
+    ),
+    CheckConstraint(
+        (
+            "reason IS NULL OR reason IN ('created', 'superseded', 'requires_review', "
+            "'requires_operator', 'exact_duplicate', 'evidence_enriched', "
+            "'pending_review_exists', 'canonical_owner', 'canonical_owner_no_intake', "
+            "'incompatible_current_fact', 'source_profile_inactive', "
+            "'source_authority_insufficient', 'capture_archived', 'subject_not_canonical', "
+            "'owner_ref_invalid', 'causal_depth_exceeded', 'causal_root_ambiguous', "
+            "'causal_repeat', 'causal_rate_exceeded', 'classification_refused')"
+        ),
+        name="knowledge_submission_reason_is_known",
+    ),
+    CheckConstraint(
+        (
+            "outcome IS NULL OR (outcome = 'direct_created' AND reason IN ('created')) OR "
+            "(outcome = 'direct_superseded' AND reason IN ('superseded')) OR (outcome = "
+            "'review_queued' AND reason IN ('requires_review', 'requires_operator')) OR (outcome "
+            "= 'duplicate_existing' AND reason IN ('exact_duplicate')) OR (outcome = "
+            "'duplicate_enriched' AND reason IN ('evidence_enriched')) OR (outcome = "
+            "'duplicate_pending_review' AND reason IN ('pending_review_exists')) OR (outcome = "
+            "'domain_owned_routed' AND reason IN ('canonical_owner')) OR (outcome = "
+            "'domain_owned_no_intake' AND reason IN ('canonical_owner_no_intake')) OR (outcome = "
+            "'conflict' AND reason IN ('incompatible_current_fact')) OR (outcome = 'refused' AND "
+            "reason IN ('source_profile_inactive', 'source_authority_insufficient', "
+            "'capture_archived', 'subject_not_canonical', 'owner_ref_invalid', "
+            "'causal_depth_exceeded', 'causal_root_ambiguous', 'causal_repeat', "
+            "'causal_rate_exceeded', 'classification_refused'))"
+        ),
+        name="knowledge_submission_reason_matches_outcome",
+    ),
+    CheckConstraint(
+        "result_assertion_id IS NULL OR result_assertion_id ~ '^kasr_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_submission_result_assertion_is_opaque",
+    ),
+    CheckConstraint(
+        "result_assertion_version IS NULL OR result_assertion_version >= 1",
+        name="knowledge_submission_result_version_is_positive",
+    ),
+    CheckConstraint(
+        "result_mutation_id IS NULL OR result_mutation_id ~ '^kamut_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_submission_result_mutation_is_opaque",
+    ),
+    CheckConstraint(
+        (
+            "result_superseded_assertion_id IS NULL OR result_superseded_assertion_id ~ "
+            "'^kasr_[A-Za-z0-9]{8,64}$'"
+        ),
+        name="knowledge_submission_result_superseded_is_opaque",
+    ),
+    CheckConstraint(
+        "result_proposal_id IS NULL OR result_proposal_id ~ '^kaprp_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_submission_result_proposal_is_opaque",
+    ),
+    CheckConstraint(
+        "result_review_case_id IS NULL OR result_review_case_id ~ '^rvw_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_submission_result_case_is_opaque",
+    ),
+    CheckConstraint(
+        (
+            "result_canonical_owner IS NULL OR result_canonical_owner IN ('knowledge_assertion', "
+            "'continuity_decision', 'relationship_memory', 'entity', 'constraints', 'tasks', "
+            "'commitments', 'meetings', 'managed_document')"
+        ),
+        name="knowledge_submission_result_owner_is_known",
+    ),
+    CheckConstraint(
+        (
+            "result_routed_record_id IS NULL OR result_routed_record_id ~ "
+            "'^[a-z]+_[A-Za-z0-9]{8,64}$'"
+        ),
+        name="knowledge_submission_routed_record_is_opaque",
+    ),
+    CheckConstraint(
+        "result_digest IS NULL OR result_digest ~ '^[0-9a-f]{64}$'",
+        name="knowledge_submission_result_digest_is_sha256",
+    ),
+    CheckConstraint(
+        (
+            "submission_state <> 'reserved' OR (outcome IS NULL AND reason IS NULL AND "
+            "result_assertion_id IS NULL AND result_assertion_version IS NULL AND "
+            "result_mutation_id IS NULL AND result_superseded_assertion_id IS NULL AND "
+            "result_proposal_id IS NULL AND result_review_case_id IS NULL AND "
+            "result_canonical_owner IS NULL AND result_routed_record_id IS NULL AND "
+            "result_digest IS NULL AND completed_at IS NULL)"
+        ),
+        name="knowledge_submission_reserved_has_no_result",
+    ),
+    CheckConstraint(
+        (
+            "submission_state <> 'completed' OR (outcome IS NOT NULL AND reason IS NOT NULL AND "
+            "result_digest IS NOT NULL AND completed_at IS NOT NULL AND completed_at >= "
+            "created_at)"
+        ),
+        name="knowledge_submission_completed_has_outcome",
+    ),
+    CheckConstraint(
+        (
+            "outcome IS NULL OR (outcome IN ('direct_created', 'duplicate_enriched') AND "
+            "result_assertion_id IS NOT NULL AND result_assertion_version IS NOT NULL AND "
+            "result_mutation_id IS NOT NULL AND result_superseded_assertion_id IS NULL AND "
+            "result_proposal_id IS NULL AND result_review_case_id IS NULL AND "
+            "result_canonical_owner = 'knowledge_assertion' AND result_routed_record_id IS NULL) "
+            "OR (outcome = 'direct_superseded' AND result_assertion_id IS NOT NULL AND "
+            "result_assertion_version IS NOT NULL AND result_mutation_id IS NOT NULL AND "
+            "result_superseded_assertion_id IS NOT NULL AND result_proposal_id IS NULL AND "
+            "result_review_case_id IS NULL AND result_canonical_owner = 'knowledge_assertion' "
+            "AND result_routed_record_id IS NULL) OR (outcome = 'duplicate_existing' AND "
+            "result_assertion_id IS NOT NULL AND result_assertion_version IS NOT NULL AND "
+            "result_mutation_id IS NULL AND result_superseded_assertion_id IS NULL AND "
+            "result_proposal_id IS NULL AND result_review_case_id IS NULL AND "
+            "result_canonical_owner = 'knowledge_assertion' AND result_routed_record_id IS NULL) "
+            "OR (outcome IN ('review_queued', 'duplicate_pending_review') AND result_proposal_id "
+            "IS NOT NULL AND result_review_case_id IS NOT NULL AND result_assertion_id IS NULL "
+            "AND result_assertion_version IS NULL AND result_mutation_id IS NULL AND "
+            "result_superseded_assertion_id IS NULL AND result_canonical_owner = "
+            "'knowledge_assertion' AND result_routed_record_id IS NULL) OR (outcome = "
+            "'domain_owned_routed' AND result_routed_record_id IS NOT NULL AND "
+            "result_canonical_owner IS NOT NULL AND result_canonical_owner <> "
+            "'knowledge_assertion' AND result_assertion_id IS NULL AND result_mutation_id IS "
+            "NULL AND result_proposal_id IS NULL) OR (outcome = 'domain_owned_no_intake' AND "
+            "result_routed_record_id IS NULL AND result_canonical_owner IS NOT NULL AND "
+            "result_canonical_owner <> 'knowledge_assertion' AND result_assertion_id IS NULL AND "
+            "result_mutation_id IS NULL AND result_proposal_id IS NULL) OR (outcome IN "
+            "('conflict', 'refused') AND result_assertion_id IS NULL AND "
+            "result_assertion_version IS NULL AND result_mutation_id IS NULL AND "
+            "result_superseded_assertion_id IS NULL AND result_proposal_id IS NULL AND "
+            "result_review_case_id IS NULL AND result_routed_record_id IS NULL)"
+        ),
+        name="knowledge_submission_result_matches_outcome",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "source_profile_id", "authenticated_client_id", "scope_digest"],
+        [
+            f"{SCHEMA}.knowledge_discovery_source_profiles.principal_id",
+            f"{SCHEMA}.knowledge_discovery_source_profiles.source_profile_id",
+            f"{SCHEMA}.knowledge_discovery_source_profiles.authenticated_client_id",
+            f"{SCHEMA}.knowledge_discovery_source_profiles.scope_digest",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="knowledge_submission_binds_profile_client_scope",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "source_profile_id", "origin_is_synthetic"],
+        [
+            f"{SCHEMA}.knowledge_discovery_source_profiles.principal_id",
+            f"{SCHEMA}.knowledge_discovery_source_profiles.source_profile_id",
+            f"{SCHEMA}.knowledge_discovery_source_profiles.is_synthetic",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="knowledge_submission_carries_profile_synthetic",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "causal_root_submission_id"],
+        [
+            f"{SCHEMA}.knowledge_assertion_submissions.principal_id",
+            f"{SCHEMA}.knowledge_assertion_submissions.submission_id",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="knowledge_submission_root_is_owned",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "result_assertion_id"],
+        [
+            f"{SCHEMA}.knowledge_assertions.principal_id",
+            f"{SCHEMA}.knowledge_assertions.assertion_id",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        use_alter=True,
+        name="knowledge_submission_result_assertion_is_owned",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "result_assertion_id", "result_mutation_id"],
+        [
+            f"{SCHEMA}.knowledge_assertion_mutations.principal_id",
+            f"{SCHEMA}.knowledge_assertion_mutations.assertion_id",
+            f"{SCHEMA}.knowledge_assertion_mutations.mutation_id",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        use_alter=True,
+        name="knowledge_submission_result_mutation_is_of_assertion",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "result_superseded_assertion_id"],
+        [
+            f"{SCHEMA}.knowledge_assertions.principal_id",
+            f"{SCHEMA}.knowledge_assertions.assertion_id",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        use_alter=True,
+        name="knowledge_submission_result_superseded_is_owned",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "result_proposal_id", "result_review_case_id"],
+        [
+            f"{SCHEMA}.knowledge_assertion_proposals.principal_id",
+            f"{SCHEMA}.knowledge_assertion_proposals.proposal_id",
+            f"{SCHEMA}.knowledge_assertion_proposals.review_case_id",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        use_alter=True,
+        name="knowledge_submission_result_proposal_case_pair",
+    ),
+    Index(
+        "knowledge_submission_explicit_key",
+        "principal_id",
+        "idempotency_key",
+        unique=True,
+        postgresql_where=text("origin = 'explicit_create'"),
+    ),
+    Index(
+        "knowledge_submission_autonomous_candidate",
+        "principal_id",
+        "authenticated_client_id",
+        "source_profile_id",
+        "external_run_id",
+        "external_candidate_id",
+        unique=True,
+        postgresql_where=text("origin = 'autonomous_submit'"),
+    ),
+    Index(
+        "knowledge_submission_by_client_run_subject",
+        "principal_id",
+        "authenticated_client_id",
+        "external_run_id",
+        "subject_kind",
+        "subject_id",
+        "predicate_code",
+        postgresql_where=text("origin = 'autonomous_submit'"),
+    ),
+    Index(
+        "knowledge_submission_by_root",
+        "principal_id",
+        "causal_root_submission_id",
+        postgresql_where=text("causal_root_submission_id IS NOT NULL"),
+    ),
+)
+
+#: Principal-partitioned canonical evidence identity; one row per source object identity
+#: (KLP-R6A-W2-002).
+knowledge_evidence_refs = Table(
+    "knowledge_evidence_refs",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("evidence_ref_id", Text, nullable=False),
+    Column("identity_kind", Text, nullable=False),
+    Column("source_profile_id", Text),
+    Column("source_is_synthetic", Boolean),
+    Column("capture_id", Text),
+    Column("relationship_memory_id", Text),
+    Column("external_object_id", Text),
+    Column("external_version_id", Text),
+    Column("content_hash", Text, nullable=False),
+    Column("excerpt", Text),
+    Column("excerpt_sha256", Text),
+    Column("content_origin", Text, nullable=False),
+    Column("source_classification", Text, nullable=False),
+    Column("availability_state", Text, nullable=False, server_default=text("'available'")),
+    Column(
+        "availability_revalidation_pending", Boolean, nullable=False, server_default=text("false")
+    ),
+    Column("access_last_verified_at", DateTime(timezone=True)),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint("evidence_ref_id", name="knowledge_evidence_ref_is_identified"),
+    UniqueConstraint(
+        "principal_id", "evidence_ref_id", name="knowledge_evidence_ref_is_principal_scoped"
+    ),
+    CheckConstraint(
+        "principal_id ~ '^prn_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_evidence_ref_principal_is_opaque",
+    ),
+    CheckConstraint(
+        "evidence_ref_id ~ '^kaevd_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_evidence_ref_id_is_opaque",
+    ),
+    CheckConstraint(
+        "identity_kind IN ('external_object', 'capture', 'relationship_memory')",
+        name="knowledge_evidence_ref_identity_kind_is_known",
+    ),
+    CheckConstraint(
+        "source_profile_id IS NULL OR source_profile_id ~ '^kdsp_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_evidence_ref_profile_is_opaque",
+    ),
+    CheckConstraint(
+        "capture_id IS NULL OR capture_id ~ '^cap_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_evidence_ref_capture_is_opaque",
+    ),
+    CheckConstraint(
+        "relationship_memory_id IS NULL OR relationship_memory_id ~ '^mem_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_evidence_ref_memory_is_opaque",
+    ),
+    CheckConstraint(
+        (
+            "(external_object_id IS NULL OR (char_length(external_object_id) BETWEEN 1 AND 512 "
+            "AND external_object_id !~ '[[:cntrl:]]')) AND (external_version_id IS NULL OR "
+            "(char_length(external_version_id) BETWEEN 1 AND 512 AND external_version_id !~ "
+            "'[[:cntrl:]]'))"
+        ),
+        name="knowledge_evidence_ref_external_ids_are_bounded",
+    ),
+    CheckConstraint(
+        "content_hash ~ '^[0-9a-f]{64}$'",
+        name="knowledge_evidence_ref_content_hash_is_sha256",
+    ),
+    CheckConstraint(
+        "excerpt IS NULL OR char_length(excerpt) BETWEEN 1 AND 2048",
+        name="knowledge_evidence_ref_excerpt_is_bounded",
+    ),
+    CheckConstraint(
+        "excerpt_sha256 IS NULL OR excerpt_sha256 ~ '^[0-9a-f]{64}$'",
+        name="knowledge_evidence_ref_excerpt_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "excerpt IS NULL OR excerpt_sha256 IS NOT NULL",
+        name="knowledge_evidence_ref_excerpt_has_digest",
+    ),
+    CheckConstraint(
+        (
+            "content_origin IN ('external_source', 'synthetic_source', 'capture', "
+            "'relationship_memory')"
+        ),
+        name="knowledge_evidence_ref_content_origin_is_known",
+    ),
+    CheckConstraint(
+        "source_classification IN ('synthetic_test', 'private_local', 'restricted_local')",
+        name="knowledge_evidence_ref_classification_is_known",
+    ),
+    CheckConstraint(
+        "availability_state IN ('available', 'permission_lost', 'deleted')",
+        name="knowledge_evidence_ref_availability_is_known",
+    ),
+    CheckConstraint(
+        (
+            "(identity_kind = 'external_object' AND source_profile_id IS NOT NULL AND "
+            "source_is_synthetic IS NOT NULL AND external_object_id IS NOT NULL AND capture_id "
+            "IS NULL AND relationship_memory_id IS NULL AND content_origin IN "
+            "('external_source', 'synthetic_source')) OR (identity_kind = 'capture' AND "
+            "capture_id IS NOT NULL AND source_profile_id IS NULL AND source_is_synthetic IS "
+            "NULL AND external_object_id IS NULL AND external_version_id IS NULL AND "
+            "relationship_memory_id IS NULL AND content_origin = 'capture') OR (identity_kind = "
+            "'relationship_memory' AND relationship_memory_id IS NOT NULL AND source_profile_id "
+            "IS NULL AND source_is_synthetic IS NULL AND external_object_id IS NULL AND "
+            "external_version_id IS NULL AND capture_id IS NULL AND content_origin = "
+            "'relationship_memory')"
+        ),
+        name="knowledge_evidence_ref_has_one_identity_shape",
+    ),
+    CheckConstraint(
+        (
+            "identity_kind <> 'external_object' OR ((content_origin = 'synthetic_source') = "
+            "source_is_synthetic)"
+        ),
+        name="knowledge_evidence_ref_synthetic_origin_follows_profile",
+    ),
+    CheckConstraint(
+        (
+            "source_classification <> 'synthetic_test' OR identity_kind <> 'external_object' OR "
+            "source_is_synthetic"
+        ),
+        name="knowledge_evidence_ref_synthetic_class_needs_synthetic_source",
+    ),
+    CheckConstraint(
+        "source_classification <> 'restricted_local' OR excerpt IS NULL",
+        name="knowledge_evidence_ref_restricted_has_no_excerpt",
+    ),
+    CheckConstraint(
+        (
+            "identity_kind = 'external_object' OR (availability_state = 'available' AND NOT "
+            "availability_revalidation_pending AND access_last_verified_at IS NULL)"
+        ),
+        name="knowledge_evidence_ref_product_shapes_store_no_availability",
+    ),
+    CheckConstraint(
+        "updated_at >= created_at",
+        name="knowledge_evidence_ref_is_not_updated_before_created",
+    ),
+    ForeignKeyConstraint(
+        ["capture_id", "principal_id"],
+        [f"{SCHEMA}.captures.capture_id", f"{SCHEMA}.captures.owner_principal_id"],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="knowledge_evidence_ref_cites_owned_capture",
+    ),
+    ForeignKeyConstraint(
+        ["relationship_memory_id", "principal_id"],
+        [
+            f"{SCHEMA}.relationship_memories.memory_id",
+            f"{SCHEMA}.relationship_memories.principal_id",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="knowledge_evidence_ref_cites_owned_memory",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "source_profile_id", "source_is_synthetic"],
+        [
+            f"{SCHEMA}.knowledge_discovery_source_profiles.principal_id",
+            f"{SCHEMA}.knowledge_discovery_source_profiles.source_profile_id",
+            f"{SCHEMA}.knowledge_discovery_source_profiles.is_synthetic",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="knowledge_evidence_ref_cites_profile",
+    ),
+    Index(
+        "knowledge_evidence_external_identity",
+        "principal_id",
+        "source_profile_id",
+        "external_object_id",
+        text("COALESCE(external_version_id, '')"),
+        "content_hash",
+        unique=True,
+        postgresql_where=text("identity_kind = 'external_object'"),
+    ),
+    Index(
+        "knowledge_evidence_capture_identity",
+        "principal_id",
+        "capture_id",
+        "content_hash",
+        unique=True,
+        postgresql_where=text("identity_kind = 'capture'"),
+    ),
+    Index(
+        "knowledge_evidence_memory_identity",
+        "principal_id",
+        "relationship_memory_id",
+        "content_hash",
+        unique=True,
+        postgresql_where=text("identity_kind = 'relationship_memory'"),
+    ),
+    Index(
+        "knowledge_evidence_by_external_object",
+        "principal_id",
+        "external_object_id",
+        postgresql_where=text("identity_kind = 'external_object'"),
+    ),
+    Index(
+        "knowledge_evidence_pending_revalidation",
+        "principal_id",
+        "evidence_ref_id",
+        postgresql_where=text("availability_revalidation_pending"),
+    ),
+)
+
+#: Principal operational serialization rows (C6); never deleted.
+knowledge_assertion_subject_locks = Table(
+    "knowledge_assertion_subject_locks",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("subject_kind", Text, nullable=False),
+    Column("subject_id", Text, nullable=False),
+    Column("predicate_code", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=text("now()")),
+    PrimaryKeyConstraint(
+        "principal_id",
+        "subject_kind",
+        "subject_id",
+        "predicate_code",
+        name="knowledge_subject_lock_is_identified",
+    ),
+    CheckConstraint(
+        "principal_id ~ '^prn_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_subject_lock_principal_is_opaque",
+    ),
+    CheckConstraint(
+        "subject_kind IN ('principal', 'entity', 'project', 'managed_document', 'evidence_ref')",
+        name="knowledge_subject_lock_subject_kind_is_known",
+    ),
+    CheckConstraint(
+        (
+            "(subject_kind = 'principal' AND subject_id ~ '^prn_[A-Za-z0-9]{8,64}$') OR "
+            "(subject_kind = 'entity' AND subject_id ~ '^ent_[A-Za-z0-9]{8,64}$') OR "
+            "(subject_kind = 'project' AND subject_id ~ '^prj_[A-Za-z0-9]{8,64}$') OR "
+            "(subject_kind = 'managed_document' AND subject_id ~ '^mdoc_[A-Za-z0-9]{8,64}$') OR "
+            "(subject_kind = 'evidence_ref' AND subject_id ~ '^kaevd_[A-Za-z0-9]{8,64}$')"
+        ),
+        name="knowledge_subject_lock_subject_id_matches_kind",
+    ),
+    CheckConstraint(
+        "predicate_code ~ '^[a-z][a-z_]{0,30}[.][a-z][a-z_]{0,30}$'",
+        name="knowledge_subject_lock_predicate_code_is_bounded",
+    ),
+)
+
+#: Principal governed Review candidates; review_case_id is proposal-local (no
+#: capture_review_cases row).
+knowledge_assertion_proposals = Table(
+    "knowledge_assertion_proposals",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("proposal_id", Text, nullable=False),
+    Column("review_case_id", Text, nullable=False),
+    Column("origin_submission_id", Text, nullable=False),
+    Column("origin_is_synthetic", Boolean, nullable=False),
+    Column("subject_kind", Text, nullable=False),
+    Column("subject_id", Text, nullable=False),
+    Column("predicate_code", Text, nullable=False),
+    Column("predicate_version", Integer, nullable=False),
+    Column("value_type", Text, nullable=False),
+    Column("cardinality", Text, nullable=False),
+    Column("temporal_semantics", Text, nullable=False),
+    Column("qualifier_rule", Text, nullable=False),
+    Column("value_text", Text),
+    Column("value_datetime", DateTime(timezone=True)),
+    Column("qualifier_json", JSONB),
+    Column("effective_from", DateTime(timezone=True)),
+    Column("effective_to", DateTime(timezone=True)),
+    Column("normalized_value_sha256", Text, nullable=False),
+    Column("fingerprint_version", SmallInteger, nullable=False),
+    Column("proposal_fingerprint", Text, nullable=False),
+    Column("classification", Text, nullable=False),
+    Column("risk_class", Text, nullable=False),
+    Column("review_requirement", Text, nullable=False),
+    Column("state", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint("proposal_id", name="knowledge_proposal_is_identified"),
+    UniqueConstraint("principal_id", "proposal_id", name="knowledge_proposal_is_principal_scoped"),
+    UniqueConstraint(
+        "principal_id", "review_case_id", name="knowledge_proposal_case_is_principal_scoped"
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "proposal_id",
+        "review_case_id",
+        name="knowledge_proposal_case_pair_is_identified",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "proposal_id",
+        "review_case_id",
+        "review_requirement",
+        name="knowledge_proposal_requirement_is_identified",
+    ),
+    CheckConstraint(
+        "principal_id ~ '^prn_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_proposal_principal_is_opaque",
+    ),
+    CheckConstraint(
+        "proposal_id ~ '^kaprp_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_proposal_id_is_opaque",
+    ),
+    CheckConstraint(
+        "review_case_id ~ '^rvw_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_proposal_case_is_opaque",
+    ),
+    CheckConstraint(
+        "origin_submission_id ~ '^kasub_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_proposal_origin_is_opaque",
+    ),
+    CheckConstraint(
+        "subject_kind IN ('principal', 'entity', 'project', 'managed_document', 'evidence_ref')",
+        name="knowledge_proposal_subject_kind_is_known",
+    ),
+    CheckConstraint(
+        (
+            "(subject_kind = 'principal' AND subject_id ~ '^prn_[A-Za-z0-9]{8,64}$') OR "
+            "(subject_kind = 'entity' AND subject_id ~ '^ent_[A-Za-z0-9]{8,64}$') OR "
+            "(subject_kind = 'project' AND subject_id ~ '^prj_[A-Za-z0-9]{8,64}$') OR "
+            "(subject_kind = 'managed_document' AND subject_id ~ '^mdoc_[A-Za-z0-9]{8,64}$') OR "
+            "(subject_kind = 'evidence_ref' AND subject_id ~ '^kaevd_[A-Za-z0-9]{8,64}$')"
+        ),
+        name="knowledge_proposal_subject_id_matches_kind",
+    ),
+    CheckConstraint(
+        (
+            "(value_type = 'text' AND value_text IS NOT NULL AND value_datetime IS NULL) OR "
+            "(value_type = 'datetime' AND value_datetime IS NOT NULL AND value_text IS NULL)"
+        ),
+        name="knowledge_proposal_value_follows_type",
+    ),
+    CheckConstraint(
+        "value_text IS NULL OR char_length(value_text) BETWEEN 1 AND 4000",
+        name="knowledge_proposal_text_is_bounded",
+    ),
+    CheckConstraint(
+        (
+            "(qualifier_rule = 'none' AND qualifier_json IS NULL) OR (qualifier_rule = "
+            "'date_kind' AND qualifier_json IS NOT NULL AND jsonb_typeof(qualifier_json) = "
+            "'object' AND (qualifier_json - 'date_kind') = '{}'::jsonb AND (qualifier_json ->> "
+            "'date_kind') IN ('milestone', 'deadline', 'inspection', 'delivery', 'expiry'))"
+        ),
+        name="knowledge_proposal_qualifier_follows_rule",
+    ),
+    CheckConstraint(
+        "effective_from IS NULL OR effective_to IS NULL OR effective_to > effective_from",
+        name="knowledge_proposal_interval_is_ordered",
+    ),
+    CheckConstraint(
+        "normalized_value_sha256 ~ '^[0-9a-f]{64}$'",
+        name="knowledge_proposal_value_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "fingerprint_version = 1",
+        name="knowledge_proposal_fingerprint_version_is_one",
+    ),
+    CheckConstraint(
+        "proposal_fingerprint ~ '^[0-9a-f]{64}$'",
+        name="knowledge_proposal_fingerprint_is_sha256",
+    ),
+    CheckConstraint(
+        "classification IN ('synthetic_test', 'private_local', 'restricted_local')",
+        name="knowledge_proposal_classification_is_known",
+    ),
+    CheckConstraint(
+        "classification <> 'synthetic_test' OR origin_is_synthetic",
+        name="knowledge_proposal_synthetic_needs_synthetic_origin",
+    ),
+    CheckConstraint(
+        "risk_class IN ('low', 'moderate', 'high', 'critical')",
+        name="knowledge_proposal_risk_class_is_known",
+    ),
+    CheckConstraint(
+        "review_requirement IN ('requires_review', 'requires_operator')",
+        name="knowledge_proposal_review_requirement_is_known",
+    ),
+    CheckConstraint(
+        (
+            "state IN ('needs_review', 'deferred', 'unresolved', 'accepted', "
+            "'corrected_accepted', 'rejected', 'invalidated', 'superseded')"
+        ),
+        name="knowledge_proposal_state_is_known",
+    ),
+    CheckConstraint(
+        "updated_at >= created_at",
+        name="knowledge_proposal_is_not_updated_before_created",
+    ),
+    ForeignKeyConstraint(
+        [
+            "predicate_code",
+            "predicate_version",
+            "value_type",
+            "cardinality",
+            "temporal_semantics",
+            "qualifier_rule",
+        ],
+        [
+            f"{SCHEMA}.knowledge_assertion_predicates.predicate_code",
+            f"{SCHEMA}.knowledge_assertion_predicates.predicate_version",
+            f"{SCHEMA}.knowledge_assertion_predicates.value_type",
+            f"{SCHEMA}.knowledge_assertion_predicates.cardinality",
+            f"{SCHEMA}.knowledge_assertion_predicates.temporal_semantics",
+            f"{SCHEMA}.knowledge_assertion_predicates.qualifier_rule",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="knowledge_proposal_uses_registered_structure",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "origin_submission_id", "origin_is_synthetic"],
+        [
+            f"{SCHEMA}.knowledge_assertion_submissions.principal_id",
+            f"{SCHEMA}.knowledge_assertion_submissions.submission_id",
+            f"{SCHEMA}.knowledge_assertion_submissions.origin_is_synthetic",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="knowledge_proposal_has_origin_submission",
+    ),
+    Index(
+        "knowledge_proposal_open_fingerprint",
+        "principal_id",
+        "fingerprint_version",
+        "proposal_fingerprint",
+        unique=True,
+        postgresql_where=text("state IN ('needs_review', 'deferred', 'unresolved')"),
+    ),
+    Index(
+        "knowledge_proposal_by_state_recency", "principal_id", "state", "updated_at", "proposal_id"
+    ),
+)
+
+#: Principal append-only Knowledge decision detail (inserted before any mutation that
+#: references it).
+knowledge_assertion_review_decisions = Table(
+    "knowledge_assertion_review_decisions",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("decision_id", Text, nullable=False),
+    Column("review_case_id", Text, nullable=False),
+    Column("proposal_id", Text, nullable=False),
+    Column("review_requirement", Text, nullable=False),
+    Column("decision_sequence", Integer, nullable=False),
+    Column("disposition", Text, nullable=False),
+    Column("reason", Text),
+    Column("correction_patch", JSONB),
+    Column("authenticated_client_id", Text),
+    Column("decision_channel", Text, nullable=False),
+    Column("operator_authority_class", Text, nullable=False),
+    Column("external_feedback_ref_hash", Text),
+    Column("correlation_id", Text, nullable=False),
+    Column("audit_id", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint("decision_id", name="knowledge_decision_is_identified"),
+    UniqueConstraint("principal_id", "decision_id", name="knowledge_decision_is_principal_scoped"),
+    UniqueConstraint(
+        "principal_id",
+        "review_case_id",
+        "decision_sequence",
+        name="knowledge_decision_sequence_is_unique",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "decision_id",
+        "proposal_id",
+        "review_case_id",
+        name="knowledge_decision_case_binding_is_identified",
+    ),
+    CheckConstraint(
+        "principal_id ~ '^prn_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_decision_principal_is_opaque",
+    ),
+    CheckConstraint(
+        "decision_id ~ '^kadec_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_decision_id_is_opaque",
+    ),
+    CheckConstraint(
+        "review_case_id ~ '^rvw_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_decision_case_is_opaque",
+    ),
+    CheckConstraint(
+        "proposal_id ~ '^kaprp_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_decision_proposal_is_opaque",
+    ),
+    CheckConstraint(
+        "review_requirement IN ('requires_review', 'requires_operator')",
+        name="knowledge_decision_requirement_is_known",
+    ),
+    CheckConstraint(
+        "decision_sequence >= 1",
+        name="knowledge_decision_sequence_is_positive",
+    ),
+    CheckConstraint(
+        (
+            "disposition IN ('accept', 'correct_and_accept', 'reject', 'defer', "
+            "'mark_unresolved', 'invalidate')"
+        ),
+        name="knowledge_decision_disposition_is_known",
+    ),
+    CheckConstraint(
+        "reason IS NULL OR char_length(reason) BETWEEN 1 AND 1000",
+        name="knowledge_decision_reason_is_bounded",
+    ),
+    CheckConstraint(
+        (
+            "(disposition = 'correct_and_accept') = (correction_patch IS NOT NULL) AND "
+            "(correction_patch IS NULL OR (jsonb_typeof(correction_patch) = 'object' AND "
+            "octet_length(correction_patch::text) <= 8192))"
+        ),
+        name="knowledge_decision_patch_follows_disposition",
+    ),
+    CheckConstraint(
+        (
+            "authenticated_client_id IS NULL OR char_length(authenticated_client_id) BETWEEN 1 "
+            "AND 256"
+        ),
+        name="knowledge_decision_client_is_bounded",
+    ),
+    CheckConstraint(
+        (
+            "decision_channel IN ('local_cli', 'local_web', 'local_unattested', "
+            "'remote_interactive', 'remote_operator_review')"
+        ),
+        name="knowledge_decision_channel_is_known",
+    ),
+    CheckConstraint(
+        (
+            "operator_authority_class IN ('ordinary_reviewer', 'local_operator', "
+            "'remote_operator_attested')"
+        ),
+        name="knowledge_decision_authority_class_is_known",
+    ),
+    CheckConstraint(
+        (
+            "(operator_authority_class = 'local_operator' AND decision_channel IN ('local_cli', "
+            "'local_web') AND authenticated_client_id IS NULL) OR (operator_authority_class = "
+            "'remote_operator_attested' AND decision_channel = 'remote_operator_review' AND "
+            "authenticated_client_id IS NOT NULL) OR (operator_authority_class = "
+            "'ordinary_reviewer' AND ((decision_channel = 'local_unattested' AND "
+            "authenticated_client_id IS NULL) OR (decision_channel = 'remote_interactive' AND "
+            "authenticated_client_id IS NOT NULL)))"
+        ),
+        name="knowledge_decision_channel_matches_authority",
+    ),
+    CheckConstraint(
+        (
+            "NOT (review_requirement = 'requires_operator' AND disposition IN ('accept', "
+            "'correct_and_accept') AND operator_authority_class = 'ordinary_reviewer')"
+        ),
+        name="knowledge_decision_operator_rule_holds",
+    ),
+    CheckConstraint(
+        "external_feedback_ref_hash IS NULL OR external_feedback_ref_hash ~ '^[0-9a-f]{64}$'",
+        name="knowledge_decision_feedback_ref_is_sha256",
+    ),
+    CheckConstraint(
+        "correlation_id ~ '^corr_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_decision_correlation_is_opaque",
+    ),
+    CheckConstraint(
+        "audit_id ~ '^audit_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_decision_audit_is_opaque",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "proposal_id", "review_case_id", "review_requirement"],
+        [
+            f"{SCHEMA}.knowledge_assertion_proposals.principal_id",
+            f"{SCHEMA}.knowledge_assertion_proposals.proposal_id",
+            f"{SCHEMA}.knowledge_assertion_proposals.review_case_id",
+            f"{SCHEMA}.knowledge_assertion_proposals.review_requirement",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="knowledge_decision_names_proposal_case",
+    ),
+)
+
+#: Principal-partitioned canonical Knowledge facts.
+knowledge_assertions = Table(
+    "knowledge_assertions",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("assertion_id", Text, nullable=False),
+    Column("subject_kind", Text, nullable=False),
+    Column("subject_id", Text, nullable=False),
+    Column("predicate_code", Text, nullable=False),
+    Column("predicate_version", Integer, nullable=False),
+    Column("value_type", Text, nullable=False),
+    Column("cardinality", Text, nullable=False),
+    Column("temporal_semantics", Text, nullable=False),
+    Column("qualifier_rule", Text, nullable=False),
+    Column("value_text", Text),
+    Column("value_datetime", DateTime(timezone=True)),
+    Column("qualifier_json", JSONB),
+    Column("effective_from", DateTime(timezone=True)),
+    Column("effective_to", DateTime(timezone=True)),
+    Column("normalized_value_sha256", Text, nullable=False),
+    Column("fingerprint_version", SmallInteger, nullable=False),
+    Column("assertion_fingerprint", Text, nullable=False),
+    Column("epistemic_status", Text, nullable=False),
+    Column("classification", Text, nullable=False),
+    Column("origin_is_synthetic", Boolean, nullable=False),
+    Column("lifecycle", Text, nullable=False),
+    Column("version", Integer, nullable=False, server_default=text("1")),
+    Column("origin_submission_id", Text, nullable=False),
+    Column("supersedes_assertion_id", Text),
+    Column("accepted_review_case_id", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint("assertion_id", name="knowledge_assertion_is_identified"),
+    UniqueConstraint(
+        "principal_id", "assertion_id", name="knowledge_assertion_is_principal_scoped"
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "assertion_id",
+        "subject_kind",
+        "subject_id",
+        "predicate_code",
+        name="knowledge_assertion_key_is_identified",
+    ),
+    CheckConstraint(
+        "principal_id ~ '^prn_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_assertion_principal_is_opaque",
+    ),
+    CheckConstraint(
+        "assertion_id ~ '^kasr_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_assertion_id_is_opaque",
+    ),
+    CheckConstraint(
+        "subject_kind IN ('principal', 'entity', 'project', 'managed_document', 'evidence_ref')",
+        name="knowledge_assertion_subject_kind_is_known",
+    ),
+    CheckConstraint(
+        (
+            "(subject_kind = 'principal' AND subject_id ~ '^prn_[A-Za-z0-9]{8,64}$') OR "
+            "(subject_kind = 'entity' AND subject_id ~ '^ent_[A-Za-z0-9]{8,64}$') OR "
+            "(subject_kind = 'project' AND subject_id ~ '^prj_[A-Za-z0-9]{8,64}$') OR "
+            "(subject_kind = 'managed_document' AND subject_id ~ '^mdoc_[A-Za-z0-9]{8,64}$') OR "
+            "(subject_kind = 'evidence_ref' AND subject_id ~ '^kaevd_[A-Za-z0-9]{8,64}$')"
+        ),
+        name="knowledge_assertion_subject_id_matches_kind",
+    ),
+    CheckConstraint(
+        (
+            "(value_type = 'text' AND value_text IS NOT NULL AND value_datetime IS NULL) OR "
+            "(value_type = 'datetime' AND value_datetime IS NOT NULL AND value_text IS NULL)"
+        ),
+        name="knowledge_assertion_value_follows_type",
+    ),
+    CheckConstraint(
+        "value_text IS NULL OR char_length(value_text) BETWEEN 1 AND 4000",
+        name="knowledge_assertion_text_is_bounded",
+    ),
+    CheckConstraint(
+        (
+            "(qualifier_rule = 'none' AND qualifier_json IS NULL) OR (qualifier_rule = "
+            "'date_kind' AND qualifier_json IS NOT NULL AND jsonb_typeof(qualifier_json) = "
+            "'object' AND (qualifier_json - 'date_kind') = '{}'::jsonb AND (qualifier_json ->> "
+            "'date_kind') IN ('milestone', 'deadline', 'inspection', 'delivery', 'expiry'))"
+        ),
+        name="knowledge_assertion_qualifier_follows_rule",
+    ),
+    CheckConstraint(
+        "effective_from IS NULL OR effective_to IS NULL OR effective_to > effective_from",
+        name="knowledge_assertion_interval_is_ordered",
+    ),
+    CheckConstraint(
+        "normalized_value_sha256 ~ '^[0-9a-f]{64}$'",
+        name="knowledge_assertion_value_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "fingerprint_version = 1",
+        name="knowledge_assertion_fingerprint_version_is_one",
+    ),
+    CheckConstraint(
+        "assertion_fingerprint ~ '^[0-9a-f]{64}$'",
+        name="knowledge_assertion_fingerprint_is_sha256",
+    ),
+    CheckConstraint(
+        (
+            "epistemic_status IN ('source_observed', 'principal_asserted', 'review_accepted', "
+            "'contested')"
+        ),
+        name="knowledge_assertion_epistemic_status_is_known",
+    ),
+    CheckConstraint(
+        "classification IN ('synthetic_test', 'private_local', 'restricted_local')",
+        name="knowledge_assertion_classification_is_known",
+    ),
+    CheckConstraint(
+        "classification <> 'synthetic_test' OR origin_is_synthetic",
+        name="knowledge_assertion_synthetic_needs_synthetic_origin",
+    ),
+    CheckConstraint(
+        "lifecycle IN ('active', 'revalidation_required', 'superseded', 'archived')",
+        name="knowledge_assertion_lifecycle_is_known",
+    ),
+    CheckConstraint(
+        "version >= 1",
+        name="knowledge_assertion_version_is_positive",
+    ),
+    CheckConstraint(
+        "origin_submission_id ~ '^kasub_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_assertion_origin_is_opaque",
+    ),
+    CheckConstraint(
+        (
+            "supersedes_assertion_id IS NULL OR (supersedes_assertion_id ~ "
+            "'^kasr_[A-Za-z0-9]{8,64}$' AND supersedes_assertion_id <> assertion_id)"
+        ),
+        name="knowledge_assertion_predecessor_is_another_assertion",
+    ),
+    CheckConstraint(
+        "accepted_review_case_id IS NULL OR accepted_review_case_id ~ '^rvw_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_assertion_case_is_opaque",
+    ),
+    CheckConstraint(
+        "updated_at >= created_at",
+        name="knowledge_assertion_is_not_updated_before_created",
+    ),
+    ForeignKeyConstraint(
+        [
+            "predicate_code",
+            "predicate_version",
+            "value_type",
+            "cardinality",
+            "temporal_semantics",
+            "qualifier_rule",
+        ],
+        [
+            f"{SCHEMA}.knowledge_assertion_predicates.predicate_code",
+            f"{SCHEMA}.knowledge_assertion_predicates.predicate_version",
+            f"{SCHEMA}.knowledge_assertion_predicates.value_type",
+            f"{SCHEMA}.knowledge_assertion_predicates.cardinality",
+            f"{SCHEMA}.knowledge_assertion_predicates.temporal_semantics",
+            f"{SCHEMA}.knowledge_assertion_predicates.qualifier_rule",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="knowledge_assertion_uses_registered_structure",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "supersedes_assertion_id", "subject_kind", "subject_id", "predicate_code"],
+        [
+            f"{SCHEMA}.knowledge_assertions.principal_id",
+            f"{SCHEMA}.knowledge_assertions.assertion_id",
+            f"{SCHEMA}.knowledge_assertions.subject_kind",
+            f"{SCHEMA}.knowledge_assertions.subject_id",
+            f"{SCHEMA}.knowledge_assertions.predicate_code",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="knowledge_assertion_supersedes_same_key",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "origin_submission_id", "origin_is_synthetic"],
+        [
+            f"{SCHEMA}.knowledge_assertion_submissions.principal_id",
+            f"{SCHEMA}.knowledge_assertion_submissions.submission_id",
+            f"{SCHEMA}.knowledge_assertion_submissions.origin_is_synthetic",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="knowledge_assertion_has_origin_submission",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "accepted_review_case_id"],
+        [
+            f"{SCHEMA}.knowledge_assertion_proposals.principal_id",
+            f"{SCHEMA}.knowledge_assertion_proposals.review_case_id",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="knowledge_assertion_accepted_via_case",
+    ),
+    Index(
+        "knowledge_assertion_single_current_slot",
+        "principal_id",
+        "subject_kind",
+        "subject_id",
+        "predicate_code",
+        unique=True,
+        postgresql_where=text(
+            "cardinality = 'single_current' AND lifecycle IN ('active', 'revalidation_required')"
+        ),
+    ),
+    Index(
+        "knowledge_assertion_live_fingerprint",
+        "principal_id",
+        "fingerprint_version",
+        "assertion_fingerprint",
+        unique=True,
+        postgresql_where=text("lifecycle IN ('active', 'revalidation_required')"),
+    ),
+    Index(
+        "knowledge_assertion_supersedes_once",
+        "principal_id",
+        "supersedes_assertion_id",
+        unique=True,
+        postgresql_where=text("supersedes_assertion_id IS NOT NULL"),
+    ),
+    Index(
+        "knowledge_assertion_by_subject",
+        "principal_id",
+        "subject_kind",
+        "subject_id",
+        "predicate_code",
+        "lifecycle",
+    ),
+    Index(
+        "knowledge_assertion_by_recency", "principal_id", "lifecycle", "updated_at", "assertion_id"
+    ),
+)
+
+#: Principal append-only receipts; Record Event source_receipt_id = mutation_id.
+knowledge_assertion_mutations = Table(
+    "knowledge_assertion_mutations",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("mutation_id", Text, nullable=False),
+    Column("assertion_id", Text, nullable=False),
+    Column("mutation_kind", Text, nullable=False),
+    Column("prior_version", Integer, nullable=False),
+    Column("new_version", Integer, nullable=False),
+    Column("submission_id", Text),
+    Column("proposal_id", Text),
+    Column("review_case_id", Text),
+    Column("review_decision_id", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint("mutation_id", name="knowledge_mutation_is_identified"),
+    UniqueConstraint("principal_id", "mutation_id", name="knowledge_mutation_is_principal_scoped"),
+    UniqueConstraint(
+        "principal_id", "assertion_id", "mutation_id", name="knowledge_mutation_is_assertion_scoped"
+    ),
+    UniqueConstraint(
+        "principal_id", "assertion_id", "new_version", name="knowledge_mutation_version_is_unique"
+    ),
+    CheckConstraint(
+        "principal_id ~ '^prn_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_mutation_principal_is_opaque",
+    ),
+    CheckConstraint(
+        "mutation_id ~ '^kamut_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_mutation_id_is_opaque",
+    ),
+    CheckConstraint(
+        "assertion_id ~ '^kasr_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_mutation_assertion_is_opaque",
+    ),
+    CheckConstraint(
+        (
+            "mutation_kind IN ('create', 'review_accept', 'review_correct', "
+            "'supersede_successor', 'supersede_predecessor', 'evidence_enrich', 'classify', "
+            "'revalidation_required', 'revalidation_cleared', 'archive')"
+        ),
+        name="knowledge_mutation_kind_is_known",
+    ),
+    CheckConstraint(
+        "prior_version >= 0 AND new_version = prior_version + 1",
+        name="knowledge_mutation_version_is_contiguous",
+    ),
+    CheckConstraint(
+        (
+            "(mutation_kind IN ('create', 'review_accept', 'review_correct', "
+            "'supersede_successor')) = (prior_version = 0)"
+        ),
+        name="knowledge_mutation_creation_starts_at_zero",
+    ),
+    CheckConstraint(
+        "submission_id IS NULL OR submission_id ~ '^kasub_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_mutation_submission_is_opaque",
+    ),
+    CheckConstraint(
+        "proposal_id IS NULL OR proposal_id ~ '^kaprp_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_mutation_proposal_is_opaque",
+    ),
+    CheckConstraint(
+        "review_case_id IS NULL OR review_case_id ~ '^rvw_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_mutation_case_is_opaque",
+    ),
+    CheckConstraint(
+        "review_decision_id IS NULL OR review_decision_id ~ '^kadec_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_mutation_decision_is_opaque",
+    ),
+    CheckConstraint(
+        (
+            "mutation_kind IN ('classify', 'revalidation_required', 'revalidation_cleared', "
+            "'archive') OR submission_id IS NOT NULL"
+        ),
+        name="knowledge_mutation_submission_presence",
+    ),
+    CheckConstraint(
+        (
+            "(review_decision_id IS NULL) = (review_case_id IS NULL) AND (review_case_id IS "
+            "NULL) = (proposal_id IS NULL)"
+        ),
+        name="knowledge_mutation_review_fields_travel_together",
+    ),
+    CheckConstraint(
+        (
+            "mutation_kind NOT IN ('review_accept', 'review_correct') OR review_decision_id IS "
+            "NOT NULL"
+        ),
+        name="knowledge_mutation_review_kinds_cite_a_decision",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "assertion_id"],
+        [
+            f"{SCHEMA}.knowledge_assertions.principal_id",
+            f"{SCHEMA}.knowledge_assertions.assertion_id",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="knowledge_mutation_names_owned_assertion",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "submission_id"],
+        [
+            f"{SCHEMA}.knowledge_assertion_submissions.principal_id",
+            f"{SCHEMA}.knowledge_assertion_submissions.submission_id",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="knowledge_mutation_cites_owned_submission",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "proposal_id", "review_case_id"],
+        [
+            f"{SCHEMA}.knowledge_assertion_proposals.principal_id",
+            f"{SCHEMA}.knowledge_assertion_proposals.proposal_id",
+            f"{SCHEMA}.knowledge_assertion_proposals.review_case_id",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="knowledge_mutation_cites_proposal_case_pair",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "review_decision_id", "proposal_id", "review_case_id"],
+        [
+            f"{SCHEMA}.knowledge_assertion_review_decisions.principal_id",
+            f"{SCHEMA}.knowledge_assertion_review_decisions.decision_id",
+            f"{SCHEMA}.knowledge_assertion_review_decisions.proposal_id",
+            f"{SCHEMA}.knowledge_assertion_review_decisions.review_case_id",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="knowledge_mutation_cites_decision_of_case",
+    ),
+    Index(
+        "knowledge_mutation_by_submission",
+        "principal_id",
+        "submission_id",
+        postgresql_where=text("submission_id IS NOT NULL"),
+    ),
+)
+
+#: Principal append-only assertion <-> evidence links.
+knowledge_assertion_evidence_links = Table(
+    "knowledge_assertion_evidence_links",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("assertion_id", Text, nullable=False),
+    Column("evidence_ref_id", Text, nullable=False),
+    Column("evidence_role", Text, nullable=False),
+    Column("linked_by_mutation_id", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint(
+        "principal_id",
+        "assertion_id",
+        "evidence_ref_id",
+        "evidence_role",
+        name="knowledge_evidence_link_is_identified",
+    ),
+    CheckConstraint(
+        "principal_id ~ '^prn_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_evidence_link_principal_is_opaque",
+    ),
+    CheckConstraint(
+        "evidence_role IN ('direct', 'supporting', 'counterevidence')",
+        name="knowledge_evidence_link_role_is_known",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "assertion_id"],
+        [
+            f"{SCHEMA}.knowledge_assertions.principal_id",
+            f"{SCHEMA}.knowledge_assertions.assertion_id",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="knowledge_evidence_link_names_owned_assertion",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "evidence_ref_id"],
+        [
+            f"{SCHEMA}.knowledge_evidence_refs.principal_id",
+            f"{SCHEMA}.knowledge_evidence_refs.evidence_ref_id",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="knowledge_evidence_link_names_owned_evidence",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "assertion_id", "linked_by_mutation_id"],
+        [
+            f"{SCHEMA}.knowledge_assertion_mutations.principal_id",
+            f"{SCHEMA}.knowledge_assertion_mutations.assertion_id",
+            f"{SCHEMA}.knowledge_assertion_mutations.mutation_id",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="knowledge_evidence_link_made_by_mutation_of_assertion",
+    ),
+    Index("knowledge_evidence_link_by_evidence", "principal_id", "evidence_ref_id", "assertion_id"),
+)
+
+#: Principal append-only evidence set of a submission (canonical sort is independent of
+#: insert order).
+knowledge_submission_evidence = Table(
+    "knowledge_submission_evidence",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("submission_id", Text, nullable=False),
+    Column("evidence_ref_id", Text, nullable=False),
+    Column("evidence_role", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint(
+        "principal_id",
+        "submission_id",
+        "evidence_ref_id",
+        "evidence_role",
+        name="knowledge_submission_evidence_is_identified",
+    ),
+    CheckConstraint(
+        "principal_id ~ '^prn_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_submission_evidence_principal_is_opaque",
+    ),
+    CheckConstraint(
+        "evidence_role IN ('direct', 'supporting', 'counterevidence')",
+        name="knowledge_submission_evidence_role_is_known",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "submission_id"],
+        [
+            f"{SCHEMA}.knowledge_assertion_submissions.principal_id",
+            f"{SCHEMA}.knowledge_assertion_submissions.submission_id",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="knowledge_submission_evidence_names_submission",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "evidence_ref_id"],
+        [
+            f"{SCHEMA}.knowledge_evidence_refs.principal_id",
+            f"{SCHEMA}.knowledge_evidence_refs.evidence_ref_id",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="knowledge_submission_evidence_names_evidence",
+    ),
+    Index("knowledge_submission_evidence_by_evidence", "principal_id", "evidence_ref_id"),
+)
+
+#: Principal append-only, server-derived causal snapshot of each cited trigger event.
+knowledge_submission_trigger_events = Table(
+    "knowledge_submission_trigger_events",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("submission_id", Text, nullable=False),
+    Column("trigger_event_id", Text, nullable=False),
+    Column("parent_submission_id", Text),
+    Column("parent_causal_root_submission_id", Text),
+    Column("parent_causal_depth", SmallInteger),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint(
+        "principal_id",
+        "submission_id",
+        "trigger_event_id",
+        name="knowledge_trigger_event_is_identified",
+    ),
+    CheckConstraint(
+        "principal_id ~ '^prn_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_trigger_event_principal_is_opaque",
+    ),
+    CheckConstraint(
+        "trigger_event_id ~ '^rcev_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_trigger_event_id_is_opaque",
+    ),
+    CheckConstraint(
+        (
+            "(parent_submission_id IS NULL) = (parent_causal_root_submission_id IS NULL) AND "
+            "(parent_submission_id IS NULL) = (parent_causal_depth IS NULL)"
+        ),
+        name="knowledge_trigger_event_parent_triple_travels_together",
+    ),
+    CheckConstraint(
+        "parent_causal_depth IS NULL OR parent_causal_depth BETWEEN 0 AND 4",
+        name="knowledge_trigger_event_parent_depth_is_bounded",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "submission_id"],
+        [
+            f"{SCHEMA}.knowledge_assertion_submissions.principal_id",
+            f"{SCHEMA}.knowledge_assertion_submissions.submission_id",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="knowledge_trigger_event_names_submission",
+    ),
+    ForeignKeyConstraint(
+        ["trigger_event_id", "principal_id"],
+        [f"{SCHEMA}.record_events.event_id", f"{SCHEMA}.record_events.principal_id"],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="knowledge_trigger_event_cites_owned_event",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "parent_submission_id"],
+        [
+            f"{SCHEMA}.knowledge_assertion_submissions.principal_id",
+            f"{SCHEMA}.knowledge_assertion_submissions.submission_id",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="knowledge_trigger_event_parent_is_owned",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "parent_causal_root_submission_id"],
+        [
+            f"{SCHEMA}.knowledge_assertion_submissions.principal_id",
+            f"{SCHEMA}.knowledge_assertion_submissions.submission_id",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="knowledge_trigger_event_parent_root_is_owned",
+    ),
+    Index(
+        "knowledge_trigger_event_by_parent",
+        "principal_id",
+        "parent_submission_id",
+        postgresql_where=text("parent_submission_id IS NOT NULL"),
+    ),
+)
+
+#: Principal + bound discovery client operational state; one row per (profile, client,
+#: scope).
+knowledge_discovery_checkpoints = Table(
+    "knowledge_discovery_checkpoints",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("checkpoint_id", Text, nullable=False),
+    Column("source_profile_id", Text, nullable=False),
+    Column("authenticated_client_id", Text, nullable=False),
+    Column("scope_digest", Text, nullable=False),
+    Column("version", Integer, nullable=False),
+    Column("checkpoint_kind", Text, nullable=False),
+    Column("private_envelope", Text, nullable=False),
+    Column("seal_version", SmallInteger, nullable=False),
+    Column("envelope_mac", Text, nullable=False),
+    Column("external_run_id", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint("checkpoint_id", name="knowledge_checkpoint_is_identified"),
+    UniqueConstraint(
+        "principal_id", "checkpoint_id", name="knowledge_checkpoint_is_principal_scoped"
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "source_profile_id",
+        "authenticated_client_id",
+        "scope_digest",
+        name="knowledge_checkpoint_scope_is_unique",
+    ),
+    CheckConstraint(
+        "principal_id ~ '^prn_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_checkpoint_principal_is_opaque",
+    ),
+    CheckConstraint(
+        "checkpoint_id ~ '^kdcp_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_checkpoint_id_is_opaque",
+    ),
+    CheckConstraint(
+        "source_profile_id ~ '^kdsp_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_checkpoint_profile_is_opaque",
+    ),
+    CheckConstraint(
+        "char_length(authenticated_client_id) BETWEEN 1 AND 256",
+        name="knowledge_checkpoint_client_is_bounded",
+    ),
+    CheckConstraint(
+        "scope_digest ~ '^[0-9a-f]{64}$'",
+        name="knowledge_checkpoint_scope_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "version >= 1",
+        name="knowledge_checkpoint_version_is_positive",
+    ),
+    CheckConstraint(
+        "checkpoint_kind IN ('delta_token', 'page_cursor', 'synthetic')",
+        name="knowledge_checkpoint_kind_is_known",
+    ),
+    CheckConstraint(
+        "octet_length(private_envelope) BETWEEN 1 AND 4096",
+        name="knowledge_checkpoint_envelope_is_bounded",
+    ),
+    CheckConstraint(
+        "seal_version >= 1",
+        name="knowledge_checkpoint_seal_version_is_positive",
+    ),
+    CheckConstraint(
+        "envelope_mac ~ '^[0-9a-f]{64}$'",
+        name="knowledge_checkpoint_mac_is_hmac_sha256_hex",
+    ),
+    CheckConstraint(
+        "char_length(external_run_id) BETWEEN 1 AND 200",
+        name="knowledge_checkpoint_run_is_bounded",
+    ),
+    CheckConstraint(
+        "updated_at >= created_at",
+        name="knowledge_checkpoint_is_not_updated_before_created",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "source_profile_id", "authenticated_client_id", "scope_digest"],
+        [
+            f"{SCHEMA}.knowledge_discovery_source_profiles.principal_id",
+            f"{SCHEMA}.knowledge_discovery_source_profiles.source_profile_id",
+            f"{SCHEMA}.knowledge_discovery_source_profiles.authenticated_client_id",
+            f"{SCHEMA}.knowledge_discovery_source_profiles.scope_digest",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="knowledge_checkpoint_binds_profile_client_scope",
+    ),
+)
+
+#: Principal replay ledger for knowledge.discovery.checkpoint.
+knowledge_discovery_checkpoint_requests = Table(
+    "knowledge_discovery_checkpoint_requests",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("checkpoint_request_id", Text, nullable=False),
+    Column("authenticated_client_id", Text, nullable=False),
+    Column("source_profile_id", Text, nullable=False),
+    Column("scope_digest", Text, nullable=False),
+    Column("external_run_id", Text, nullable=False),
+    Column("submitted_candidate_count", Integer, nullable=False),
+    Column("expected_version", Integer, nullable=False),
+    Column("idempotency_key", Text, nullable=False),
+    Column("request_digest", Text, nullable=False),
+    Column("state", Text, nullable=False),
+    Column("result_outcome", Text),
+    Column("result_reason", Text),
+    Column("result_checkpoint_id", Text),
+    Column("result_checkpoint_version", Integer),
+    Column("result_checkpoint_kind", Text),
+    Column("result_private_envelope", Text),
+    Column("result_seal_version", SmallInteger),
+    Column("result_envelope_mac", Text),
+    Column("private_token_redacted", Boolean, nullable=False, server_default=text("false")),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("completed_at", DateTime(timezone=True)),
+    PrimaryKeyConstraint(
+        "checkpoint_request_id", name="knowledge_checkpoint_request_is_identified"
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "checkpoint_request_id",
+        name="knowledge_checkpoint_request_is_principal_scoped",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "authenticated_client_id",
+        "idempotency_key",
+        name="knowledge_checkpoint_request_key_is_unique",
+    ),
+    CheckConstraint(
+        "principal_id ~ '^prn_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_checkpoint_request_principal_is_opaque",
+    ),
+    CheckConstraint(
+        "checkpoint_request_id ~ '^kdcpr_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_checkpoint_request_id_is_opaque",
+    ),
+    CheckConstraint(
+        "char_length(authenticated_client_id) BETWEEN 1 AND 256",
+        name="knowledge_checkpoint_request_client_is_bounded",
+    ),
+    CheckConstraint(
+        "source_profile_id ~ '^kdsp_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_checkpoint_request_profile_is_opaque",
+    ),
+    CheckConstraint(
+        "scope_digest ~ '^[0-9a-f]{64}$'",
+        name="knowledge_checkpoint_request_scope_is_sha256",
+    ),
+    CheckConstraint(
+        "char_length(external_run_id) BETWEEN 1 AND 200",
+        name="knowledge_checkpoint_request_run_is_bounded",
+    ),
+    CheckConstraint(
+        "submitted_candidate_count BETWEEN 0 AND 100000",
+        name="knowledge_checkpoint_request_count_is_bounded",
+    ),
+    CheckConstraint(
+        "expected_version >= 0",
+        name="knowledge_checkpoint_request_expected_version_is_valid",
+    ),
+    CheckConstraint(
+        "char_length(idempotency_key) BETWEEN 1 AND 128",
+        name="knowledge_checkpoint_request_key_is_bounded",
+    ),
+    CheckConstraint(
+        "request_digest ~ '^[0-9a-f]{64}$'",
+        name="knowledge_checkpoint_request_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "state IN ('reserved', 'completed')",
+        name="knowledge_checkpoint_request_state_is_known",
+    ),
+    CheckConstraint(
+        (
+            "result_outcome IS NULL OR result_outcome IN ('advanced', 'checkpoint_conflict', "
+            "'refused')"
+        ),
+        name="knowledge_checkpoint_request_outcome_is_known",
+    ),
+    CheckConstraint(
+        (
+            "result_outcome IS NULL OR (result_outcome = 'advanced' AND result_reason = "
+            "'advanced') OR (result_outcome = 'checkpoint_conflict' AND result_reason IN "
+            "('stale_expected_version', 'envelope_unverifiable')) OR (result_outcome = 'refused' "
+            "AND result_reason IN ('source_profile_inactive', 'candidate_count_mismatch'))"
+        ),
+        name="knowledge_checkpoint_request_reason_matches_outcome",
+    ),
+    CheckConstraint(
+        "result_checkpoint_id IS NULL OR result_checkpoint_id ~ '^kdcp_[A-Za-z0-9]{8,64}$'",
+        name="knowledge_checkpoint_request_result_id_is_opaque",
+    ),
+    CheckConstraint(
+        "result_checkpoint_version IS NULL OR result_checkpoint_version >= 1",
+        name="knowledge_checkpoint_request_result_version_is_positive",
+    ),
+    CheckConstraint(
+        (
+            "result_checkpoint_kind IS NULL OR result_checkpoint_kind IN ('delta_token', "
+            "'page_cursor', 'synthetic')"
+        ),
+        name="knowledge_checkpoint_request_result_kind_is_known",
+    ),
+    CheckConstraint(
+        (
+            "result_private_envelope IS NULL OR octet_length(result_private_envelope) BETWEEN 1 "
+            "AND 4096"
+        ),
+        name="knowledge_checkpoint_request_envelope_is_bounded",
+    ),
+    CheckConstraint(
+        "result_envelope_mac IS NULL OR result_envelope_mac ~ '^[0-9a-f]{64}$'",
+        name="knowledge_checkpoint_request_mac_is_hmac_sha256_hex",
+    ),
+    CheckConstraint(
+        (
+            "(result_private_envelope IS NULL) = (result_envelope_mac IS NULL) AND "
+            "(result_private_envelope IS NULL OR result_seal_version IS NOT NULL)"
+        ),
+        name="knowledge_checkpoint_request_envelope_travels_with_mac",
+    ),
+    CheckConstraint(
+        "NOT private_token_redacted OR result_private_envelope IS NULL",
+        name="knowledge_checkpoint_request_redacted_has_no_envelope",
+    ),
+    CheckConstraint(
+        (
+            "state <> 'reserved' OR (result_outcome IS NULL AND result_reason IS NULL AND "
+            "result_checkpoint_id IS NULL AND result_checkpoint_version IS NULL AND "
+            "result_checkpoint_kind IS NULL AND result_private_envelope IS NULL AND "
+            "result_seal_version IS NULL AND result_envelope_mac IS NULL AND NOT "
+            "private_token_redacted AND completed_at IS NULL)"
+        ),
+        name="knowledge_checkpoint_request_reserved_has_no_result",
+    ),
+    CheckConstraint(
+        (
+            "state <> 'completed' OR (result_outcome IS NOT NULL AND result_reason IS NOT NULL "
+            "AND completed_at IS NOT NULL)"
+        ),
+        name="knowledge_checkpoint_request_completed_has_outcome",
+    ),
+    CheckConstraint(
+        (
+            "result_outcome IS DISTINCT FROM 'advanced' OR (result_checkpoint_id IS NOT NULL AND "
+            "result_checkpoint_version IS NOT NULL AND result_checkpoint_kind IS NOT NULL)"
+        ),
+        name="knowledge_checkpoint_request_advanced_names_checkpoint",
+    ),
+    CheckConstraint(
+        "result_outcome IS DISTINCT FROM 'refused' OR result_private_envelope IS NULL",
+        name="knowledge_checkpoint_request_refusal_has_no_envelope",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "source_profile_id", "authenticated_client_id", "scope_digest"],
+        [
+            f"{SCHEMA}.knowledge_discovery_source_profiles.principal_id",
+            f"{SCHEMA}.knowledge_discovery_source_profiles.source_profile_id",
+            f"{SCHEMA}.knowledge_discovery_source_profiles.authenticated_client_id",
+            f"{SCHEMA}.knowledge_discovery_source_profiles.scope_digest",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="knowledge_checkpoint_request_binds_profile_client_scope",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "result_checkpoint_id"],
+        [
+            f"{SCHEMA}.knowledge_discovery_checkpoints.principal_id",
+            f"{SCHEMA}.knowledge_discovery_checkpoints.checkpoint_id",
+        ],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="knowledge_checkpoint_request_result_is_owned",
+    ),
+    Index(
+        "knowledge_checkpoint_request_unredacted_by_scope",
+        "principal_id",
+        "source_profile_id",
+        "authenticated_client_id",
+        "scope_digest",
+        "result_checkpoint_version",
+        postgresql_where=text("result_private_envelope IS NOT NULL"),
     ),
 )

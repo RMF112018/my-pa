@@ -67,6 +67,11 @@ from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, text
+from tests.schema.knowledge_schema_ahead_contract import (
+    GAP_ROWS,
+    KNOWLEDGE_WP_HEAD,
+    admitted_ahead,
+)
 
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.audit.events import AuditOutcome
@@ -435,6 +440,20 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         # admits the two Capture lifecycle names. No new purpose.
         "capture.archive",
         "capture.restore",
+        # KLP-WP-02. `6734f039f7a6` restates `capability_is_known` in place and
+        # admits all nine Knowledge and provenance names at once, ahead of the
+        # domain (`tests/schema/knowledge_schema_ahead_contract.py`). Spelled,
+        # not imported: this set is the stored difference, which the domain's
+        # progress through WP-03 to WP-05 does not move.
+        "knowledge.assertions.read",
+        "knowledge.assertions.list",
+        "knowledge.assertions.search",
+        "knowledge.assertions.history",
+        "knowledge.assertions.reveal",
+        "knowledge.assertions.create",
+        "knowledge.assertions.submit",
+        "knowledge.discovery.checkpoint",
+        "record_events.provenance",
     }
 )
 
@@ -508,14 +527,45 @@ IMMUTABILITY_TRIGGER = "capture_versions_are_append_only"
 #: wider than the constraint is the failure `D-69` exists to prevent, and the
 #: equality in `CHECKED_VOCABULARY` still catches it, because a member added with
 #: no `ALTER` would be in the left side and not the right.
-CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN: Final[frozenset[str]] = frozenset()
+#:
+#: KLP-WP-02 reopens the gap for the Knowledge layer, deliberately and in one
+#: place: the single Knowledge revision `6734f039f7a6` admits every Knowledge
+#: capability and Purpose while WP-03 to WP-05 declare them. Both constants are
+#: the current row of `tests/schema/knowledge_schema_ahead_contract.py`, the one
+#: home of that gap table, never a spelled set (R6 section 12.1, KLP-AC-124).
+CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN: Final[frozenset[str]] = admitted_ahead("capability")
 
-PURPOSES_ADMITTED_AHEAD_OF_THE_DOMAIN: Final[frozenset[str]] = frozenset()
+PURPOSES_ADMITTED_AHEAD_OF_THE_DOMAIN: Final[frozenset[str]] = admitted_ahead("purpose")
 
 HEAD_CAPABILITIES_DECLARED_BY_DOMAIN: Final[frozenset[str]] = frozenset(
     capability.value
     for capability_type in (Capability, NativeSourceCapability)
     for capability in capability_type
+)
+
+#: The nineteen triggers the Knowledge revision `6734f039f7a6` installs (KLP-WP-02).
+KNOWLEDGE_TRIGGERS: Final[frozenset[str]] = frozenset(
+    {
+        "knowledge_predicate_is_insert_only",
+        "knowledge_predicate_version_preserves_structure",
+        "knowledge_profile_mutates_controls_only",
+        "knowledge_submission_lifecycle",
+        "knowledge_submission_is_never_left_reserved",
+        "knowledge_evidence_ref_governed_controls",
+        "knowledge_subject_lock_is_insert_only",
+        "knowledge_proposal_mutates_controls_only",
+        "knowledge_decision_is_append_only",
+        "knowledge_assertion_uses_active_predicate_head",
+        "knowledge_assertion_is_not_less_restrictive",
+        "knowledge_assertion_mutates_controls_only",
+        "knowledge_mutation_is_append_only",
+        "knowledge_evidence_link_is_append_only",
+        "knowledge_submission_evidence_is_append_only",
+        "knowledge_trigger_event_is_append_only",
+        "knowledge_checkpoint_advances_only",
+        "knowledge_checkpoint_request_lifecycle",
+        "knowledge_checkpoint_request_is_never_left_reserved",
+    }
 )
 
 #: The thirteen triggers `3c8f1e2a5b74` installs. Four sit on tables it does not
@@ -768,7 +818,11 @@ CHECKED_VOCABULARY: Final[tuple[tuple[str, str, frozenset[str]], ...]] = (
     # G1-MG-013: the five closed sets the Record Event revision freezes on the
     # feed, on the same terms: each is a literal in that revision, so a later
     # enum member without a forward `ALTER` is caught here.
-    ("record_events", "a_record_event_family_is_known", frozenset(RecordEventFamily)),
+    (
+        "record_events",
+        "a_record_event_family_is_known",
+        frozenset(RecordEventFamily) | admitted_ahead("record_event_family"),
+    ),
     ("record_events", "a_record_event_kind_is_known", frozenset(RecordEventKind)),
     ("record_events", "a_record_event_actor_class_is_known", frozenset(RecordEventActorClass)),
     ("record_events", "a_record_event_classification_is_known", frozenset(Classification)),
@@ -802,16 +856,47 @@ def test_the_frozen_vocabulary_is_a_strict_subset_of_the_domains() -> None:
     assert len(FROZEN_PURPOSES) == 7
 
 
-def test_the_schema_ahead_gap_closed_when_wp8_declared_its_three_names() -> None:
-    """The `D-81` ordering gap is empty now that WP-8 declares all three names.
+def test_the_schema_ahead_gap_matches_the_knowledge_wp_head() -> None:
+    """The `D-81` gap is exactly the Knowledge contract's current row (KLP-AC-124/132).
 
-    `3c8f1e2a5b74` carried the forward `ALTER` first. Emptying these constants
-    restores plain head equality; a later schema-ahead change must deliberately
-    reopen and explain the gap rather than inheriting WP-8's exception.
+    WP-8 emptied the gap; KLP-WP-02 reopens it deliberately, and only through
+    `tests/schema/knowledge_schema_ahead_contract.py`. The two constants above are
+    that row, the row is disjoint from the domain (a name the domain declares is
+    not "ahead" of it), and it is empty once the head reaches `wp06`.
     """
-    assert frozenset() == CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN
-    assert frozenset() == PURPOSES_ADMITTED_AHEAD_OF_THE_DOMAIN
+    row = GAP_ROWS[KNOWLEDGE_WP_HEAD]
+    assert row["capability"] == CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN
+    assert row["purpose"] == PURPOSES_ADMITTED_AHEAD_OF_THE_DOMAIN
+    assert not CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN & HEAD_CAPABILITIES_DECLARED_BY_DOMAIN
+    assert not PURPOSES_ADMITTED_AHEAD_OF_THE_DOMAIN & {p.value for p in Purpose}
+    assert all(not values for values in GAP_ROWS["wp06"].values())
     assert {c.value for c in Capability} and {p.value for p in Purpose}
+    # The row is measured, not merely restated: what the chain's latest audit
+    # restatement freezes, minus what the domain declares, is exactly the row.
+    # Bumping `KNOWLEDGE_WP_HEAD` before the domain declares the members its next
+    # row drops (or declaring them without the bump) reddens here, in FAST.
+    frozen_capabilities, frozen_purposes = _latest_frozen_audit_vocabulary()
+    assert frozen_capabilities - HEAD_CAPABILITIES_DECLARED_BY_DOMAIN == row["capability"]
+    assert frozen_purposes - {p.value for p in Purpose} == row["purpose"]
+
+
+def _latest_frozen_audit_vocabulary() -> tuple[frozenset[str], frozenset[str]]:
+    """The AT literals of the head-most revision that restates both audit sets."""
+    script = ScriptDirectory.from_config(_config())
+    for entry in script.walk_revisions():
+        source = Path(str(entry.path)).read_text(encoding="utf-8")
+        literals = {}
+        for constant in ("_CAPABILITIES_AT_THIS_REVISION", "_PURPOSES_AT_THIS_REVISION"):
+            found = re.search(rf"^{constant}: Final = \((.*?)^\)", source, re.M | re.S)
+            if found is None:
+                break
+            literals[constant] = frozenset(re.findall(r"'([^']+)'", found.group(1)))
+        else:
+            return (
+                literals["_CAPABILITIES_AT_THIS_REVISION"],
+                literals["_PURPOSES_AT_THIS_REVISION"],
+            )
+    raise AssertionError("no revision restates both audit vocabularies")
 
 
 def _admitted(engine: Engine, constraint: str, table: str = "audit_events") -> frozenset[str]:
@@ -1229,6 +1314,10 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             # names them so the equality stays an equality.
             "record_events_refuse_truncate",
             "record_event_sequences_refuse_truncate",
+            # KLP-WP-02. The Knowledge revision `6734f039f7a6` installs nineteen
+            # triggers over the fourteen `knowledge_*` tables, two of them
+            # deferred constraint triggers; name them so the equality stays one.
+            *KNOWLEDGE_TRIGGERS,
         }
         for name in ("a_proposal_cites_at_least_one_span", "a_span_link_leaves_its_proposal_cited"):
             assert "CONSTRAINT TRIGGER" in triggers[name]

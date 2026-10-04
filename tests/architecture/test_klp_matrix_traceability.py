@@ -47,12 +47,28 @@ MATRIX_SHA256: Final = "ee2f2f8fc81a3e5e3f73e618a18fbf296ecd2a752d50499bf2e725e2
 #: Repository basis of the R6 contract.
 R6_BASIS_COMMIT: Final = "3f575c02570c8fa733ecdc7bf0284fedc3c1d980"
 
+#: The KLP work packages that have landed: their NEW paths must exist.
+LANDED_WPS: Final = frozenset({"KLP-WP-01", "KLP-WP-02"})
+
 #: The slow/skip/xfail census of every EXISTS test module a KLP WP edits, taken
 #: at `R6_BASIS_COMMIT`. A WP may lower a count but never raise one (AC-080:
 #: "no existing test gains a slow/skip marker"). Modules absent here had none.
+#: A module a WP edits that the matrix does not list (a pin the plan's grep
+#: missed) is added here with its basis count -- zero entries included -- so the
+#: no-new-skip check covers it too (`git show 3f575c02:<path>`).
 BASIS_SKIP_CENSUS: Final[dict[str, int]] = {
     "tests/schema/test_constraint_authoring_capability_migration.py": 1,
     "tests/schema/test_constraint_read_capability_migration.py": 2,
+    # KLP-WP-02 edits outside the matrix path lists (pins the plan's grep missed).
+    "tests/architecture/test_capture_project_binding.py": 0,
+    "tests/architecture/test_record_events_are_never_rewritten.py": 0,
+    "tests/schema/test_capture_lifecycle_migration.py": 0,
+    "tests/database/test_record_event_role_privileges.py": 0,
+    "tests/schema/test_audit_schema_migration.py": 0,
+    "tests/schema/test_enrollment_objects_migration.py": 0,
+    "tests/schema/test_entity_assertion_provenance_migration.py": 0,
+    "tests/schema/test_entity_relationship_types_migration.py": 0,
+    "tests/schema/test_entity_schema_migration.py": 0,
 }
 _SKIP_PATTERN: Final = re.compile(
     r"pytest\.mark\.(?:slow|skip|skipif|xfail)\b|pytest\.(?:skip|xfail)\(|importorskip\("
@@ -198,16 +214,21 @@ def test_wp_tests_are_owned_paths_with_lane_rows() -> None:
     ),
 )
 def test_path_status_is_consistent_with_the_repository(wp: str, path: str, status: str) -> None:
-    """EXISTS paths exist; KLP-WP-01's NEW paths exist now that WP-01 has landed.
+    """EXISTS paths exist; the NEW paths of every landed KLP WP exist.
 
     A later WP's NEW path may or may not exist, depending on whether that WP has
-    landed; the WP that creates it is the one that proves it.
+    landed; the WP that creates it is the one that proves it. KLP-WP-01 and
+    KLP-WP-02 have landed. A NEW_GENERATED path stays a template; once its WP has
+    landed, exactly one file matches it (the one generated revision).
     """
     assert status in {"EXISTS", "NEW", "NEW_GENERATED"}
-    if status == "EXISTS" or (status == "NEW" and wp == "KLP-WP-01"):
+    if status == "EXISTS" or (status == "NEW" and wp in LANDED_WPS):
         assert (ROOT / path).exists(), f"{wp}: {status} path {path} is missing"
     if status == "NEW_GENERATED":
         assert "<" in path, "a generated path is a template, never a literal file name"
+        if wp in LANDED_WPS:
+            pattern = re.sub(r"<[^>]+>", "*", path)
+            assert len(list(ROOT.glob(pattern))) == 1, f"{wp}: {pattern} must match one file"
 
 
 def _existing_test_modules() -> list[str]:
@@ -223,7 +244,12 @@ def _existing_test_modules() -> list[str]:
     )
 
 
-@pytest.mark.parametrize("path", _existing_test_modules())
+def _censused_test_modules() -> list[str]:
+    """The matrix's EXISTS test modules plus every census key (matrix-unlisted edits)."""
+    return sorted(set(_existing_test_modules()) | set(BASIS_SKIP_CENSUS))
+
+
+@pytest.mark.parametrize("path", _censused_test_modules())
 def test_no_existing_klp_edited_test_module_gains_a_slow_or_skip_marker(path: str) -> None:
     count = len(_SKIP_PATTERN.findall((ROOT / path).read_text(encoding="utf-8")))
     assert count <= BASIS_SKIP_CENSUS.get(path, 0), (
@@ -233,13 +259,16 @@ def test_no_existing_klp_edited_test_module_gains_a_slow_or_skip_marker(path: st
 
 
 def test_the_new_klp_modules_carry_no_slow_or_skip_marker() -> None:
-    """KLP-WP-01's own new test modules are FAST and unconditionally collected."""
-    wp01 = _packages()["KLP-WP-01"]
-    for row in wp01["path_verification"]:
-        if (
-            row["status"] == "NEW"
+    """Every landed WP's own new test modules are FAST/unconditionally collected."""
+    for wp in sorted(LANDED_WPS):
+        rows = [
+            row
+            for row in _packages()[wp]["path_verification"]
+            if row["status"] == "NEW"
             and row["path"].endswith(".py")
             and row["path"].startswith("tests/")
-        ):
+        ]
+        assert rows, wp
+        for row in rows:
             text = (ROOT / row["path"]).read_text(encoding="utf-8")
-            assert not _SKIP_PATTERN.findall(text), row["path"]
+            assert not _SKIP_PATTERN.findall(text), (wp, row["path"])

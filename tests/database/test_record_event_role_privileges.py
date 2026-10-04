@@ -28,6 +28,7 @@ from my_pa.infrastructure.database.record_event_roles import (
 pytestmark = pytest.mark.database
 
 RESTRICT_VIOLATION: Final = "23001"
+FEATURE_NOT_SUPPORTED: Final = "0A000"
 INSUFFICIENT: Final = "42501"
 
 
@@ -163,10 +164,23 @@ def test_owner_truncate_and_mutation_reach_the_refusal_triggers(provisioned: Eng
         )
     )
     admin.execute(text("RESET SESSION AUTHORIZATION"))
+    # Test-local, on this disposable clone: the owner owns only the feed, so it is
+    # granted TRUNCATE on the one Knowledge table that references it, which lets a
+    # combined TRUNCATE get past the foreign-key refusal to the feed's trigger.
+    admin.execute(
+        text(f"GRANT TRUNCATE ON knowledge.knowledge_submission_trigger_events TO {OWNER_ROLE}")
+    )
     admin.execute(text(f"SET SESSION AUTHORIZATION {OWNER_ROLE}"))
     try:
+        # KLP-WP-02: `knowledge_submission_trigger_events` now cites the feed by a
+        # foreign key, so a bare TRUNCATE of `record_events` is refused one step
+        # earlier, by the server (0A000), before its refusal trigger is reached.
+        # Truncating the referencing table with it reaches the trigger, as before.
+        with pytest.raises(DBAPIError) as referenced:
+            admin.execute(text("TRUNCATE TABLE knowledge.record_events"))
+        assert _sqlstate(referenced.value) == FEATURE_NOT_SUPPORTED, str(referenced.value)
         for statement in (
-            "TRUNCATE TABLE knowledge.record_events",
+            "TRUNCATE TABLE knowledge.record_events, knowledge.knowledge_submission_trigger_events",
             "TRUNCATE TABLE knowledge.record_event_sequences",
             "UPDATE knowledge.record_events SET record_version = 2 "
             "WHERE event_id = 'rcev_truncpriv0001event'",

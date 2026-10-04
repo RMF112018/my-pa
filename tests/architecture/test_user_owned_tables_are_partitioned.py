@@ -121,6 +121,15 @@ UNPARTITIONED_USER_OWNED: Final = {
         "no write path lets a Principal add, change, or read one row as if "
         "it were their own."
     ),
+    # --- the KLP-WP-02 Knowledge Assertion plane ------------------------------
+    "knowledge_assertion_predicates": (
+        "the global, migration-owned predicate registry -- shared vocabulary "
+        "like `entity_relationship_types`, not user-owned data. Its only rows "
+        "are the eight seeds the single Knowledge revision inserts; a "
+        "trigger refuses every UPDATE and DELETE and no runtime module writes "
+        "it (`test_knowledge_registry_has_no_runtime_writer.py`). The other "
+        "thirteen `knowledge_*` tables all carry `principal_id`."
+    ),
 }
 
 NATIVE_PARTITIONED: Final = frozenset(
@@ -233,6 +242,27 @@ def test_the_native_owned_plane_is_principal_partitioned() -> None:
         assert "principal_id" not in METADATA.tables[f"knowledge.{name}"].c
     assert "operator-registered" in UNPARTITIONED_USER_OWNED["source_objects"]
     assert "same" in UNPARTITIONED_USER_OWNED["source_object_versions"]
+
+
+def test_the_knowledge_assertion_plane_is_partitioned_but_for_its_global_registry() -> None:
+    """KLP-AC-110 / AC-014: thirteen `knowledge_*` tables carry a required Principal.
+
+    The predicate registry is the one deliberate exception -- global vocabulary,
+    seeded by its migration and written by nothing else -- and it must stay the
+    only one, so the split is asserted by name in both directions.
+    """
+    knowledge = {
+        name.removeprefix("knowledge."): table
+        for name, table in METADATA.tables.items()
+        if name.startswith("knowledge.knowledge_")
+    }
+    assert len(knowledge) == 14
+    unpartitioned = {name for name, table in knowledge.items() if "principal_id" not in table.c}
+    assert unpartitioned == {"knowledge_assertion_predicates"}
+    assert unpartitioned <= set(UNPARTITIONED_USER_OWNED)
+    for name, table in knowledge.items():
+        if name not in unpartitioned:
+            assert table.c.principal_id.nullable is False, name
 
 
 def test_the_native_source_advisory_lock_namespace_is_principal_scoped() -> None:

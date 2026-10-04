@@ -55,6 +55,10 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "0641c354ca85"
 PREVIOUS: Final = "c8e4a1b70d35"
+#: The chain's head since KLP-WP-02, directly on this revision. The refusal and
+#: round-trip tests below upgrade to this revision rather than to the head, so
+#: they keep measuring this revision's own downgrade.
+HEAD: Final = "6734f039f7a6"
 MIGRATION: Final = ROOT / "migrations" / "versions" / "20261001_0641c354ca85_capture_lifecycle.py"
 TABLE_NAMES: Final = frozenset({"capture_lifecycle_events", "capture_lifecycle_receipts"})
 TRIGGERS: Final = frozenset(
@@ -100,8 +104,9 @@ def _offline(target: str, *, down: bool = False) -> str:
 
 def test_the_revision_is_the_single_head_directly_on_c8e4a1b70d35() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [REVISION]
+    assert script.get_heads() == [HEAD]
     assert script.get_revision(REVISION).down_revision == PREVIOUS
+    assert script.get_revision(HEAD).down_revision == REVISION
 
 
 # ---- the freeze -----------------------------------------------------------------------
@@ -340,7 +345,7 @@ def test_an_empty_database_upgrades_to_the_capture_lifecycle_head(
 ) -> None:
     del disposable_database
     command.upgrade(_config(), "head")
-    assert _version(engine) == REVISION
+    assert _version(engine) == HEAD
     assert _tables(engine) >= TABLE_NAMES
     assert {"lease_generation", "pause_cause"} <= _job_columns(engine)
     assert {ROOT_UNIQUE} | JOB_CONSTRAINTS <= _constraints(engine)
@@ -377,7 +382,7 @@ def test_a_downgrade_refuses_while_a_lifecycle_event_exists(
     disposable_database: str, engine: Engine
 ) -> None:
     del disposable_database
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     with engine.begin() as connection:
         _seed_root(connection)
         _archive_event(connection)
@@ -393,7 +398,7 @@ def test_a_downgrade_refuses_while_a_lifecycle_receipt_exists(
     disposable_database: str, engine: Engine
 ) -> None:
     del disposable_database
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     with engine.begin() as connection:
         _seed_root(connection)
         connection.execute(
@@ -423,7 +428,7 @@ def test_a_downgrade_refuses_while_a_capture_job_is_paused(
     disposable_database: str, engine: Engine
 ) -> None:
     del disposable_database
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     with engine.begin() as connection:
         _seed_root(connection)
         connection.execute(
@@ -445,7 +450,7 @@ def test_an_empty_downgrade_unwinds_everything_and_upgrades_again(
     disposable_database: str, engine: Engine
 ) -> None:
     del disposable_database
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     with engine.begin() as connection:
         _seed_root(connection)
     command.downgrade(_config(), PREVIOUS)
@@ -466,5 +471,5 @@ def test_an_empty_downgrade_unwinds_everything_and_upgrades_again(
     assert not functions & FUNCTIONS
     # The synthetic root, version and jobs survive the round trip.
     assert _scalar(engine, "SELECT count(*) FROM knowledge.capture_jobs") == 2
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     assert _version(engine) == REVISION

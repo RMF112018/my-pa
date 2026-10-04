@@ -497,6 +497,25 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
     "1d9b248e7f83": frozenset({"record_event_sequences", "record_events"}),
     # CRL-WP-03's Capture root lifecycle: the append-only events and receipts.
     "0641c354ca85": frozenset({"capture_lifecycle_events", "capture_lifecycle_receipts"}),
+    # KLP-WP-02's Knowledge Assertion layer: the fourteen `knowledge_*` tables.
+    "6734f039f7a6": frozenset(
+        {
+            "knowledge_assertion_predicates",
+            "knowledge_discovery_source_profiles",
+            "knowledge_assertion_submissions",
+            "knowledge_evidence_refs",
+            "knowledge_assertion_subject_locks",
+            "knowledge_assertion_proposals",
+            "knowledge_assertion_review_decisions",
+            "knowledge_assertions",
+            "knowledge_assertion_mutations",
+            "knowledge_assertion_evidence_links",
+            "knowledge_submission_evidence",
+            "knowledge_submission_trigger_events",
+            "knowledge_discovery_checkpoints",
+            "knowledge_discovery_checkpoint_requests",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

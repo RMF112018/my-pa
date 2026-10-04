@@ -20,6 +20,27 @@ test.use({ trace: "off", video: "off", screenshot: "off" });
 
 function key(): string { return `wp03b-${crypto.randomUUID()}`; }
 
+async function syntheticQueueCounts(page: Page): Promise<number[]> {
+  // Count only synthetic queue stores; never inspect key, payload or event values.
+  return page.evaluate(async () => {
+    const databases = await indexedDB.databases();
+    if (!databases.some((entry) => entry.name === "mypa-offline")) return [0, 0];
+    return new Promise<number[]>((resolve, reject) => {
+      const open = indexedDB.open("mypa-offline");
+      open.onerror = () => reject(new Error("synthetic queue count unavailable"));
+      open.onsuccess = async () => {
+        const db = open.result;
+        const result = await Promise.all(["events", "payloads"].map((name) => new Promise<number>((resolve, reject) => {
+          const count = db.transaction(name, "readonly").objectStore(name).count();
+          count.onsuccess = () => resolve(count.result);
+          count.onerror = () => reject(new Error("synthetic queue count failed"));
+        })));
+        db.close(); resolve(result);
+      };
+    });
+  });
+}
+
 async function api(page: Page, path: string, method = "GET", body?: Body): Promise<Answer> {
   return page.evaluate(async ({ path, method, body }) => {
     const response = await fetch(path, {
@@ -128,13 +149,31 @@ test("real synthetic stack: authenticated success for all twelve admissions, con
   refused(await api(page, `/api/meetings/${meeting.meeting_id}`, "PATCH", { ...meetingPatch, idempotencyKey: key() }), 409, "conflict");
   // Transport admits safe ZoneInfo key shape; the canonical backend owns lookup.
   refused(await api(page, `/api/meetings/${meeting.meeting_id}`, "PATCH", {
-    timezoneName: "Etc/WP03B_Not_A_Zone", expectedVersion: 2, idempotencyKey: key(),
+    timezoneName: `Etc/WP03B_${crypto.randomUUID().replaceAll("-", "_")}`, expectedVersion: 2, idempotencyKey: key(),
   }), 400, "validation");
   expect(success(await api(page, `/api/meetings/${meeting.meeting_id}`)).meeting).toMatchObject({ version: 2 });
-  for (const [timezoneName, expectedVersion] of [["Factory", 2], ["posix/UTC", 3]] as const) {
-    expect(success(await api(page, `/api/meetings/${meeting.meeting_id}`, "PATCH", {
-      timezoneName, expectedVersion, idempotencyKey: key(),
-    })).meeting).toMatchObject({ timezone_name: timezoneName, version: expectedVersion + 1 });
+  expect(success(await api(page, `/api/meetings/${meeting.meeting_id}`, "PATCH", {
+    timezoneName: "Factory", expectedVersion: 2, idempotencyKey: key(),
+  })).meeting).toMatchObject({ meeting_id: meeting.meeting_id, timezone_name: "Factory", version: 3 });
+  // Safe shape is admitted; installed canonical ZoneInfo data decides semantics.
+  const queueBefore = await syntheticQueueCounts(page);
+  const alias = await api(page, `/api/meetings/${meeting.meeting_id}`, "PATCH", {
+    timezoneName: "posix/UTC", expectedVersion: 3, idempotencyKey: key(),
+  });
+  if (alias.status === 200) {
+    const accepted = success(alias);
+    expect(accepted.meeting).toMatchObject({ meeting_id: meeting.meeting_id, timezone_name: "posix/UTC", version: 4 });
+    expect(accepted.history).toMatchObject({ meeting_id: meeting.meeting_id, action: "update", outcome: "applied", before_version: 3, after_version: 4 });
+    expect(accepted.replayed).toBe(false);
+    expect(success(await api(page, `/api/meetings/${meeting.meeting_id}`)).meeting).toMatchObject({ version: 4, timezone_name: "posix/UTC" });
+  } else {
+    refused(alias, 400, "validation");
+    expect(alias.body.error).toMatchObject({ code: "invalid_request" });
+    expect(alias.body.meeting).toBeUndefined();
+    expect(alias.body.history).toBeUndefined();
+    expect(success(await api(page, `/api/meetings/${meeting.meeting_id}`)).meeting).toMatchObject({ version: 3, timezone_name: "Factory" });
+    expect(await syntheticQueueCounts(page)).toEqual(queueBefore);
+    await expect(page.getByTestId("capture-queued")).toHaveCount(0);
   }
   const series = seeded.series as { meeting_series_id: string; version: number };
   expect(success(await api(page, `/api/meetings/series/${series.meeting_series_id}`, "PATCH", {
@@ -203,25 +242,7 @@ test("real synthetic stack: archived Capture exact replay, changed-key conflict,
 
 test("real browser offline: Capture revise fails transport and never adds a Capture-create queue entry", async ({ page, context }) => {
   await signIn(page);
-  // Count only synthetic queue stores; never inspect key, payload or event values.
-  const counts = () => page.evaluate(async () => {
-    const databases = await indexedDB.databases();
-    if (!databases.some((entry) => entry.name === "mypa-offline")) return [0, 0];
-    return new Promise<number[]>((resolve, reject) => {
-      const open = indexedDB.open("mypa-offline");
-      open.onerror = () => reject(new Error("synthetic queue count unavailable"));
-      open.onsuccess = async () => {
-        const db = open.result;
-        const result = await Promise.all(["events", "payloads"].map((name) => new Promise<number>((resolve, reject) => {
-          const count = db.transaction(name, "readonly").objectStore(name).count();
-          count.onsuccess = () => resolve(count.result);
-          count.onerror = () => reject(new Error("synthetic queue count failed"));
-        })));
-        db.close(); resolve(result);
-      };
-    });
-  });
-  const before = await counts();
+  const before = await syntheticQueueCounts(page);
   await context.setOffline(true);
   const failed = await page.evaluate(async () => {
     try {
@@ -230,7 +251,7 @@ test("real browser offline: Capture revise fails transport and never adds a Capt
     } catch { return true; }
   });
   expect(failed).toBe(true);
-  expect(await counts()).toEqual(before);
+  expect(await syntheticQueueCounts(page)).toEqual(before);
   await expect(page.getByTestId("capture-queued")).toHaveCount(0);
   await context.setOffline(false);
 });

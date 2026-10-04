@@ -13,6 +13,10 @@
   `174876621c880312ee3f4e32f649520fab04aa9d`.
 - **Companion:** [`record-event-consumer-contract-v0.1.md`](record-event-consumer-contract-v0.1.md),
   which is implemented and governs how a consumer reads the feed today.
+- **Reconciled 2026-10-04** with the Knowledge Assertion layer
+  ([ADR-014](../decisions/ADR-014-knowledge-assertion-layer.md); R5 CORR-006 as
+  amended by R6 section 9) in section 10. The reconciliation is still a design
+  record: nothing in section 10 is implemented yet either.
 
 ## 1. Authority, scope and non-goals
 
@@ -141,3 +145,51 @@ provenance.
 - Does a provenance read need its own purpose, or does it ride on the feed's?
 - How does a split or merge that moves a promoted record re-point its
   provenance, given that routing follows the current owner?
+
+## 10. Reconciliation with the Knowledge Assertion layer (ADR-014)
+
+The Knowledge Assertion layer (KLP) is the first plane to carry the chain of
+section 3, with a proposing discovery client in the consumer's role. It answers
+several section 9 questions for that plane. Not implemented: the schema is
+KLP-WP-02, submit and Review KLP-WP-04, the provenance read KLP-WP-05.
+
+- **`causation_event_id` is unchanged.** It keeps its same-transaction meaning
+  and its remote nulling (section 2). Option 1 of section 5 stays rejected.
+- **Cross-run provenance is a new metadata read** (option 3 of section 5). Every
+  Knowledge Assertion Record Event names its `kamut_` mutation as
+  `source_receipt_id`; the mutation names its `kasub_` submission and, for a
+  Review promotion, its Review decision. Event -> mutation -> submission is the
+  canonical join, and the submission holds the bounded tuple of section 4:
+  trigger event ids, external run and candidate ids, correlation, causal root
+  and depth. The tuple lives on the submission, not on the event, so events stay
+  metadata only.
+- **Disclosure (section 8, made concrete).** External run and candidate ids are
+  disclosed only to the authenticated client that supplied them, or locally to
+  the owning Principal. A provenance read never names a trigger event the caller
+  cannot see. A caller is remote whenever `transport is REMOTE_CLIENT` or
+  `capability_grants is not None`, so any grant-ceilinged composition gets the
+  remote rules even over local transport.
+- **Frozen Record Event mapping.** create, Review accept or correct, and a
+  supersession successor -> `created`; evidence-only enrichment -> `updated`;
+  classification raise, revalidation, supersession of the predecessor and
+  archive -> `state_changed`, with closed changed-field tokens. Actor class:
+  remote discovery `assistant`, local explicit create `principal`, Review
+  promotion `review_promotion`, server maintenance `system`. Authority: the
+  existing `source_backed_assertion`, `user_confirmed_assertion`,
+  `review_accepted` and `system_deterministic` tokens. No new actor or authority
+  token is added. The table is published as pure data in
+  `src/my_pa/domain/knowledge_assertion/provenance.py`.
+- **One depth ceiling: 4** (answers "global or per rule": global). No
+  Knowledge-parent trigger -> a new root at depth 0; exactly one distinct root ->
+  inherit it at depth 1 + max(parent depth); more than one root -> refuse
+  `causal_root_ambiguous`; depth above 4 -> refuse `causal_depth_exceeded`; a
+  repeated (authenticated client, subject kind, subject id, predicate) anywhere
+  in the ancestor lineage -> refuse `causal_repeat`, whatever the external run.
+  Non-Knowledge triggers are visible trigger evidence but start a new root.
+  Review promotion inherits its proposal's origin submission, so `review.decide`
+  does not reset depth. Explicit create is always a root.
+- **Loop guards (section 7).** Idempotent intake is the frozen request digest
+  (ADR-014 decision 6) keyed by client, source profile, run and candidate; the
+  depth counter is the causal depth above; the self-trigger guard is the lineage
+  repeat refusal, plus a soft per-client, per-run rate bound for submissions
+  that cite no trigger.

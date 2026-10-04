@@ -36,7 +36,10 @@ def test_the_capture_census_at_this_head_is_the_three_lifecycle_modules() -> Non
     `adapters/remote_request.py` names `capture_id` in its idempotency-stamp
     comment, and RE-DBH-01 `infrastructure/database/record_event_roles.py`
     names `capture_versions` in its bounded runtime read inventory. Neither
-    module calls the publication fence.
+    module calls the publication fence. KLP-WP-01 makes it 62:
+    `domain/knowledge_assertion/evidence.py` declares the `capture_id` of a
+    capture-shaped Knowledge evidence identity (a pure value object; it reads
+    no Capture row and calls no fence).
     """
     import re
 
@@ -49,10 +52,11 @@ def test_the_capture_census_at_this_head_is_the_three_lifecycle_modules() -> Non
         for path in (ROOT / "src").rglob("*.py")
         if pattern.search(path.read_text(encoding="utf-8"))
     )
-    assert len(hits) == 61
+    assert len(hits) == 62
     assert set(DELTA) <= set(hits)
     assert "src/my_pa/adapters/remote_request.py" in hits
     assert "src/my_pa/infrastructure/database/record_event_roles.py" in hits
+    assert "src/my_pa/domain/knowledge_assertion/evidence.py" in hits
     roles = (ROOT / "src/my_pa/infrastructure/database/record_event_roles.py").read_text(
         encoding="utf-8"
     )

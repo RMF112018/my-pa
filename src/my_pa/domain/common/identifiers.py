@@ -464,6 +464,30 @@ class IdKind(StrEnum):
     #: (`clbl` / `clink` / `lce` / `rcpt` differ).
     CAPTURE_LIFECYCLE_EVENT = "clev"
     CAPTURE_LIFECYCLE_RECEIPT = "clrcpt"
+    #: KLP-WP-01: the Knowledge Assertion plane (R6 matrix `id_kinds`). Nine
+    #: prefixes, one per record a stored reference has to name: the canonical
+    #: assertion, its append-only mutation receipt, the unified submission
+    #: ledger row, an open Review proposal, one canonical evidence row, a
+    #: Review decision, a discovery checkpoint, a checkpoint request and a
+    #: discovery source profile. None reuses a Capture or Entity prefix:
+    #: `asrt` (capture assertion), `sub` (capture submission), `prop` (capture
+    #: proposal), `rdec` (capture review decision) and `east` (entity
+    #: assertion) name different planes, and a Knowledge id that parsed as one
+    #: of them would let `knowledge.reveal` and `knowledge.assertions.reveal`
+    #: confuse each other's records (AC-001, AC-107). Declared here ahead of
+    #: the WP-02 tables that issue them, because WP-02's frozen regex CHECKs
+    #: restate these prefixes. Checked against every prior member of this
+    #: enum before use (a grep of each quoted value over this file, and the
+    #: uniqueness assertion in `tests/unit/test_identifiers.py`).
+    KNOWLEDGE_ASSERTION = "kasr"
+    KNOWLEDGE_ASSERTION_MUTATION = "kamut"
+    KNOWLEDGE_ASSERTION_SUBMISSION = "kasub"
+    KNOWLEDGE_ASSERTION_PROPOSAL = "kaprp"
+    KNOWLEDGE_EVIDENCE_REF = "kaevd"
+    KNOWLEDGE_ASSERTION_REVIEW_DECISION = "kadec"
+    KNOWLEDGE_DISCOVERY_CHECKPOINT = "kdcp"
+    KNOWLEDGE_DISCOVERY_CHECKPOINT_REQUEST = "kdcpr"
+    KNOWLEDGE_DISCOVERY_SOURCE_PROFILE = "kdsp"
 
 
 class InvalidIdentifierError(ValueError):

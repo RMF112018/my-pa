@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import re
+from pathlib import Path
+
 import pytest
 
 from my_pa.domain.common.identifiers import (
@@ -227,6 +231,19 @@ def test_contract_prefixes_are_stable() -> None:
         # names the lifecycle event a receipt and the opt-in history cite.
         "clev",
         "clrcpt",
+        # KLP-WP-01: the Knowledge Assertion plane's nine prefixes (R6 matrix
+        # `id_kinds`). Declared ahead of the WP-02 tables that issue them
+        # because WP-02's frozen regex CHECKs restate them; `kasr`, `kasub` and
+        # `kaevd` cross the wire from WP-03 on.
+        "kasr",
+        "kamut",
+        "kasub",
+        "kaprp",
+        "kaevd",
+        "kadec",
+        "kdcp",
+        "kdcpr",
+        "kdsp",
     }
 
 
@@ -344,3 +361,53 @@ def test_project_controls_identifiers_round_trip_and_reject_wrong_kind(kind: IdK
         make_identifier(kind, "short")
     with pytest.raises(InvalidIdentifierError):
         make_identifier(kind, "abc-123-def-456")
+
+
+# --- KLP-AC-107 (WP-01 slice) ------------------------------------------------
+
+_KLP_MATRIX = (
+    Path(__file__).resolve().parents[1] / "architecture" / "klp_implementation_matrix_r6.json"
+)
+#: The planes a Knowledge id must never be confused with (AC-107).
+_FORBIDDEN_KNOWLEDGE_PREFIXES = frozenset({"asrt", "sub", "prop", "rdec", "east"})
+#: The repository regex the WP-02 CHECKs restate per prefix (R6 plan 11.1).
+_OPAQUE_ID_SHAPE = re.compile(r"\A[a-z]+_[A-Za-z0-9]{8,64}\Z")
+
+
+def _klp_id_kinds() -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = json.loads(_KLP_MATRIX.read_text(encoding="utf-8"))["id_kinds"]
+    return rows
+
+
+def test_the_knowledge_id_kinds_equal_the_r6_matrix() -> None:
+    rows = _klp_id_kinds()
+    assert len(rows) == 9
+    for row in rows:
+        assert IdKind[row["name"]].value == row["prefix"]
+
+
+def test_knowledge_prefixes_are_disjoint_from_every_other_prefix_and_the_forbidden_set() -> None:
+    knowledge = {row["prefix"] for row in _klp_id_kinds()}
+    others = {kind.value for kind in IdKind} - knowledge
+    assert len(others) == len(IdKind) - 9
+    assert not knowledge & others
+    assert not knowledge & _FORBIDDEN_KNOWLEDGE_PREFIXES
+    # No Knowledge prefix is a prefix-with-underscore of another kind either, so
+    # a `^kasr_` CHECK can never admit another plane's identifier.
+    for prefix in knowledge:
+        for other in others:
+            assert not f"{other}_".startswith(f"{prefix}_")
+
+
+@pytest.mark.parametrize("row", _klp_id_kinds(), ids=lambda row: row["prefix"])
+def test_knowledge_identifiers_have_the_frozen_regex_shape(row: dict[str, str]) -> None:
+    kind = IdKind[row["name"]]
+    value = make_identifier(kind, "A1b2C3d4")
+    assert _OPAQUE_ID_SHAPE.fullmatch(value)
+    assert re.fullmatch(rf"\A{row['prefix']}_[A-Za-z0-9]{{8,64}}\Z", value)
+    assert parse_identifier(value) == (kind, "A1b2C3d4")
+    for forbidden in sorted(_FORBIDDEN_KNOWLEDGE_PREFIXES):
+        with pytest.raises(InvalidIdentifierError):
+            validate_identifier(f"{forbidden}_A1b2C3d4", kind)
+    with pytest.raises(InvalidIdentifierError):
+        make_identifier(kind, "short")

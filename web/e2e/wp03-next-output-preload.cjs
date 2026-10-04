@@ -79,7 +79,7 @@ function suppressWriters() {
   logger.FileLogger.prototype.initialize = function () {};
   logger.FileLogger.prototype.isEnabled = function () { return false; };
   for (const file of ["next/dist/trace/report/to-json.js", "next/dist/trace/report/to-json-build.js"]) {
-    const id = path.join(ROOT, file);
+    const id = require.resolve(path.join(ROOT, file));
     require.cache[id] = { id, filename: id, loaded: true, exports: { __esModule: true,
       default: { report() {}, async flushAll() {} },
       createJsonReporter() { return { report() {}, async flushAll() {} }; } } };

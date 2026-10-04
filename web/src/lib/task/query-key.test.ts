@@ -16,6 +16,23 @@ const BASE: TaskQueryKeyInput = {
 };
 
 describe("buildTaskQueryKey equality", () => {
+  it("preserves the original serialized field order and bytes", () => {
+    expect(serializeTaskQueryKey(buildTaskQueryKey(BASE))).toBe(
+      '["tasks","list","today","2026-09-11","America/New_York",null,"exclude",null,null,null,null,null,"epoch-1"]',
+    );
+  });
+
+  it("preserves Task-specific trimming and fractional number truncation", () => {
+    expect(serializeTaskQueryKey(buildTaskQueryKey({
+      mode: "comments", taskId: " item ", q: " search ", cursor: " cursor ",
+      page: 2.9, sessionEpoch: 7.9,
+    }))).toBe('["tasks","comments",null,null,null,"search",null,null,null,"cursor","2","item","7"]');
+    expect(buildTaskQueryKey({ ...BASE, page: " 02 ", sessionEpoch: " 7.9 " }).page).toBe("02");
+    expect(buildTaskQueryKey({ ...BASE, page: Infinity }).page).toBeNull();
+    expect(buildTaskQueryKey({ ...BASE, sessionEpoch: " 7.9 " }).sessionEpoch).toBe("7.9");
+    expect(buildTaskQueryKey({ ...BASE, sessionEpoch: Number.MAX_SAFE_INTEGER + 1 }).sessionEpoch).toBe("9007199254740992");
+  });
+
   it("produces equal keys for equal semantic inputs including empty-vs-undefined normalization", () => {
     const a = buildTaskQueryKey({
       ...BASE,

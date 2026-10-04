@@ -10,6 +10,8 @@
  * server-derived. `sessionEpoch` is an internal client isolation token only.
  */
 
+import { buildResourceKey } from "@/lib/workspace/query-key";
+
 export const TASK_QUERY_RESOURCE = "tasks" as const;
 
 export const TASK_QUERY_MODES = ["list", "search", "detail", "comments"] as const;
@@ -88,6 +90,13 @@ export function buildTaskQueryKey(input: TaskQueryKeyInput): TaskQueryKey {
   if (!TASK_QUERY_MODES.includes(input.mode)) {
     throw new TypeError(`unsupported Task query mode: ${String(input.mode)}`);
   }
+  const resourceKey = buildResourceKey({
+    family: TASK_QUERY_RESOURCE,
+    mode: input.mode,
+    identity: normalizeOptionalString(input.taskId),
+    cursor: normalizeOptionalString(input.cursor),
+    sessionEpoch: normalizeSessionEpoch(input.sessionEpoch),
+  });
   return {
     resource: TASK_QUERY_RESOURCE,
     mode: input.mode,
@@ -98,10 +107,10 @@ export function buildTaskQueryKey(input: TaskQueryKeyInput): TaskQueryKey {
     archiveMode: normalizeOptionalString(input.archiveMode),
     lifecycle: normalizeOptionalString(input.lifecycle),
     priority: normalizeOptionalString(input.priority),
-    cursor: normalizeOptionalString(input.cursor),
+    cursor: resourceKey.cursor,
     page: normalizePage(input.page),
-    taskId: normalizeOptionalString(input.taskId),
-    sessionEpoch: normalizeSessionEpoch(input.sessionEpoch),
+    taskId: resourceKey.identity,
+    sessionEpoch: resourceKey.sessionEpoch,
   };
 }
 

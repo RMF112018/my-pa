@@ -3823,5 +3823,255 @@
         "safe_failure_reason": null
       }
     ]
+  },
+  "continuity.projects.create": {
+    "project_id": "prj_aaaaaaaa11111111",
+    "name": "Synthetic project",
+    "state": "active",
+    "description": null,
+    "replayed": false,
+    "version": 1
+  },
+  "continuity.projects.update": {
+    "project_id": "prj_aaaaaaaa11111111",
+    "name": "Synthetic project",
+    "state": "active",
+    "description": null,
+    "participants": [],
+    "canonical_participations": [],
+    "opened_at": "2026-08-09T12:00:00.000Z",
+    "closed_at": null,
+    "created_at": "2026-08-09T12:00:00.000Z",
+    "updated_at": "2026-08-09T12:00:00.000Z",
+    "version": 2,
+    "replayed": false
+  },
+  "continuity.projects.close": {
+    "project_id": "prj_aaaaaaaa11111111",
+    "name": "Synthetic project",
+    "state": "closed",
+    "description": null,
+    "participants": [],
+    "canonical_participations": [],
+    "opened_at": "2026-08-09T12:00:00.000Z",
+    "closed_at": "2026-08-09T12:00:00.000Z",
+    "created_at": "2026-08-09T12:00:00.000Z",
+    "updated_at": "2026-08-09T12:00:00.000Z",
+    "version": 3,
+    "replayed": false
+  },
+  "capture.revise": {
+    "receipt_id": "rcpt_bbbbbbbb22222222",
+    "capture_id": "cap_aaaaaaaa11111111",
+    "version_id": "capver_bbbbbbbb22222222",
+    "version_number": 2,
+    "idempotency_key": "wp03b-revise-1",
+    "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "project_id": null,
+    "issued_at": "2026-08-09T12:00:00.000Z",
+    "created": true
+  },
+  "meetings.read": {
+    "meeting": {
+      "meeting_id": "mtg_aaaaaaaa11111111",
+      "meeting_series_id": "mser_aaaaaaaa11111111",
+      "series_title": "Synthetic series",
+      "series_version": 2,
+      "title": "Synthetic occurrence",
+      "status": "scheduled",
+      "start_at": "2026-08-09T12:00:00.000Z",
+      "end_at": null,
+      "timezone_name": "UTC",
+      "location_text": null,
+      "virtual_meeting_url": null,
+      "description": null,
+      "project_id": null,
+      "version": 2,
+      "created_at": "2026-08-09T12:00:00.000Z",
+      "updated_at": "2026-08-09T12:00:00.000Z",
+      "cancelled_at": null,
+      "attendees": [
+        {
+          "attendee_id": "matt_aaaaaaaa11111111",
+          "entity_id": null,
+          "display_name": "Synthetic attendee",
+          "email": "synthetic@example.invalid",
+          "is_organizer": true,
+          "response_status": "accepted",
+          "added_at": "2026-08-09T12:00:00.000Z"
+        }
+      ],
+      "attachments": [
+        {
+          "attachment_id": "matc_aaaaaaaa11111111",
+          "document_id": "mdoc_aaaaaaaa11111111",
+          "availability": "active",
+          "title": "Synthetic document",
+          "media_type": "text/plain",
+          "added_at": "2026-08-09T12:00:00.000Z"
+        }
+      ],
+      "notes": {
+        "note_version_id": "mnote_aaaaaaaa11111111",
+        "version_number": 1,
+        "body_markdown": "Synthetic notes",
+        "recorded_at": "2026-08-09T12:00:00.000Z"
+      }
+    }
+  },
+  "meetings.list": {
+    "meetings": [
+      {
+        "meeting_id": "mtg_aaaaaaaa11111111",
+        "meeting_series_id": "mser_aaaaaaaa11111111",
+        "series_title": "Synthetic series",
+        "series_version": 2,
+        "title": "Synthetic occurrence",
+        "status": "scheduled",
+        "start_at": "2026-08-09T12:00:00.000Z",
+        "end_at": null,
+        "timezone_name": "UTC",
+        "location_text": null,
+        "project_id": null,
+        "version": 2,
+        "attendee_count": 1,
+        "attachment_count": 1,
+        "updated_at": "2026-08-09T12:00:00.000Z"
+      }
+    ]
+  },
+  "meetings.search": {
+    "meetings": [
+      {
+        "meeting_id": "mtg_aaaaaaaa11111111",
+        "meeting_series_id": "mser_aaaaaaaa11111111",
+        "series_title": "Synthetic series",
+        "series_version": 2,
+        "title": "Synthetic occurrence",
+        "status": "scheduled",
+        "start_at": "2026-08-09T12:00:00.000Z",
+        "end_at": null,
+        "timezone_name": "UTC",
+        "location_text": null,
+        "project_id": null,
+        "version": 2,
+        "attendee_count": 1,
+        "attachment_count": 1,
+        "updated_at": "2026-08-09T12:00:00.000Z"
+      }
+    ]
+  },
+  "meetings.update": {
+    "meeting": {
+      "meeting_id": "mtg_aaaaaaaa11111111",
+      "meeting_series_id": "mser_aaaaaaaa11111111",
+      "series_title": "Synthetic series",
+      "series_version": 2,
+      "title": "Synthetic occurrence",
+      "status": "scheduled",
+      "start_at": "2026-08-09T12:00:00.000Z",
+      "end_at": null,
+      "timezone_name": "UTC",
+      "location_text": null,
+      "virtual_meeting_url": null,
+      "description": null,
+      "project_id": null,
+      "version": 2,
+      "created_at": "2026-08-09T12:00:00.000Z",
+      "updated_at": "2026-08-09T12:00:00.000Z",
+      "cancelled_at": null,
+      "attendees": [
+        {
+          "attendee_id": "matt_aaaaaaaa11111111",
+          "entity_id": null,
+          "display_name": "Synthetic attendee",
+          "email": "synthetic@example.invalid",
+          "is_organizer": true,
+          "response_status": "accepted",
+          "added_at": "2026-08-09T12:00:00.000Z"
+        }
+      ],
+      "attachments": [
+        {
+          "attachment_id": "matc_aaaaaaaa11111111",
+          "document_id": "mdoc_aaaaaaaa11111111",
+          "availability": "active",
+          "title": "Synthetic document",
+          "media_type": "text/plain",
+          "added_at": "2026-08-09T12:00:00.000Z"
+        }
+      ],
+      "notes": {
+        "note_version_id": "mnote_aaaaaaaa11111111",
+        "version_number": 1,
+        "body_markdown": "Synthetic notes",
+        "recorded_at": "2026-08-09T12:00:00.000Z"
+      }
+    },
+    "history": {
+      "history_id": "mhst_aaaaaaaa11111111",
+      "meeting_id": "mtg_aaaaaaaa11111111",
+      "action": "update",
+      "actor": "principal",
+      "outcome": "applied",
+      "before_version": 1,
+      "after_version": 2,
+      "occurred_at": "2026-08-09T12:00:00.000Z",
+      "recorded_at": "2026-08-09T12:00:00.000Z"
+    },
+    "series": {
+      "meeting_series_id": "mser_aaaaaaaa11111111",
+      "title": "Synthetic series",
+      "version": 2,
+      "created_at": "2026-08-09T12:00:00.000Z",
+      "updated_at": "2026-08-09T12:00:00.000Z"
+    },
+    "series_history": null,
+    "replayed": false
+  },
+  "meetings.series.update": {
+    "series": {
+      "meeting_series_id": "mser_aaaaaaaa11111111",
+      "title": "Synthetic series",
+      "version": 2,
+      "created_at": "2026-08-09T12:00:00.000Z",
+      "updated_at": "2026-08-09T12:00:00.000Z"
+    },
+    "history": {
+      "series_history_id": "mshst_aaaaaaaa11111111",
+      "meeting_series_id": "mser_aaaaaaaa11111111",
+      "action": "update",
+      "actor": "principal",
+      "outcome": "applied",
+      "before_version": 1,
+      "after_version": 2,
+      "occurred_at": "2026-08-09T12:00:00.000Z",
+      "recorded_at": "2026-08-09T12:00:00.000Z"
+    },
+    "replayed": false
+  },
+  "documents.read": {
+    "version": {
+      "document_id": "mdoc_aaaaaaaa11111111",
+      "version_id": "mdver_aaaaaaaa11111111",
+      "version_number": 1,
+      "supersedes_version_id": null,
+      "title": "Synthetic document",
+      "media_type": "text/plain",
+      "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "byte_size": 9,
+      "recorded_at": "2026-08-09T12:00:00.000Z",
+      "is_current": true,
+      "state": "active",
+      "content_base64": null
+    }
+  },
+  "documents.archive": {
+    "state": "archived",
+    "changed": true
+  },
+  "documents.restore": {
+    "state": "active",
+    "changed": false
   }
 }

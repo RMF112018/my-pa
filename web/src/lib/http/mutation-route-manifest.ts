@@ -18,6 +18,46 @@ export type MutationRouteManifestEntry = {
 export const MUTATION_ROUTE_MANIFEST: readonly MutationRouteManifestEntry[] = [
   {
     method: "POST",
+    path: "src/app/api/projects/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "PATCH",
+    path: "src/app/api/projects/[projectId]/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "POST",
+    path: "src/app/api/projects/[projectId]/close/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "PATCH",
+    path: "src/app/api/capture/[captureId]/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "PATCH",
+    path: "src/app/api/meetings/[meetingId]/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "PATCH",
+    path: "src/app/api/meetings/series/[meetingSeriesId]/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "POST",
+    path: "src/app/api/documents/[documentId]/archive/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "POST",
+    path: "src/app/api/documents/[documentId]/restore/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "POST",
     path: "src/app/api/capture/route.ts",
     classification: "AUTHENTICATED_BROWSER_MUTATION",
   },

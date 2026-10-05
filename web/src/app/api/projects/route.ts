@@ -10,6 +10,7 @@
  * person (`§22`), and there is no field one could go in.
  */
 import { NextResponse, type NextRequest } from "next/server";
+import { workPost } from "@/lib/api/work-route";
 import { requirePrincipal } from "@/lib/api/guard";
 import { backendDisclosure, invokeGateway, transportLimitations } from "@/lib/api/gateway";
 import { gatewayRefusal, resolveServing } from "@/lib/api/serving";
@@ -123,4 +124,16 @@ export async function GET(request: NextRequest) {
     nextCursor,
     disclosure: backendDisclosure(SCOPE, outcome.disclosure, transportLimitations()),
   });
+}
+
+/** Browser authoring over the existing canonical Project capability. */
+export async function POST(request: NextRequest) {
+  return workPost(request, SCOPE, "continuity.projects.create", {
+    name: { gateway: "name", type: "string", required: true, nonBlank: true },
+    description: { gateway: "description", type: "string", nullable: true },
+    idempotencyKey: {
+      gateway: "idempotency_key", type: "string", required: true,
+      minLength: 8, maxLength: 128, pattern: /^[A-Za-z0-9_-]{8,128}$/,
+    },
+  }, {}, { strictQuery: true });
 }

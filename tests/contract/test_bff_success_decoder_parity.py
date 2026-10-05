@@ -20,8 +20,10 @@ import zlib
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any, Final
+from types import SimpleNamespace
+from typing import Any, Final, cast
 
+from my_pa.application.authorization import Authorization
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
 from my_pa.application.constraint_management import (
     ConstraintCategoryMutationResult,
@@ -38,14 +40,22 @@ from my_pa.application.constraint_settings import (
 )
 from my_pa.application.goodnotes_content import content_payload
 from my_pa.application.goodnotes_semantics import work_payload
+from my_pa.application.meetings import MeetingSeriesWriteResult, MeetingWriteResult
 from my_pa.application.service import (
     _HANDLERS,
     ApplicationService,
     _constraint_payload,
+    _meeting_series_write_payload,
+    _meeting_write_payload,
     _project_controls_configuration_payload,
     _project_controls_status_payload,
 )
-from my_pa.contracts.ports import CaptureSearchMatch, DirectedReceipt, MutationRecordFamily
+from my_pa.contracts.ports import (
+    CaptureSearchMatch,
+    DirectedReceipt,
+    MutationRecordFamily,
+    UnitOfWork,
+)
 from my_pa.contracts.v1.canvas_workspace import (
     CanvasPointView,
     CanvasWorkspaceReceiptView,
@@ -58,6 +68,17 @@ from my_pa.contracts.v1.commitments import (
     CommitmentListEntry,
     CommitmentView,
     WaitingOnEntry,
+)
+from my_pa.contracts.v1.documents import ManagedDocumentVersionView
+from my_pa.contracts.v1.meetings import (
+    MeetingAttachmentView,
+    MeetingAttendeeView,
+    MeetingHistoryView,
+    MeetingListEntry,
+    MeetingNoteView,
+    MeetingSeriesHistoryView,
+    MeetingSeriesView,
+    MeetingView,
 )
 from my_pa.contracts.v1.reveal import RevealView
 from my_pa.contracts.v1.tasks import (
@@ -72,9 +93,18 @@ from my_pa.domain.capture.review import ReviewCase, ReviewSubjectKind
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.provenance import Provenance, TrustLevel
 from my_pa.domain.common.time import format_rfc3339
+from my_pa.domain.documents.managed import DocumentState
 from my_pa.domain.extraction.text import EXTRACTOR, EXTRACTOR_VERSION
 from my_pa.domain.goodnotes.models import GoodNotesPageRaster, GoodNotesPageWork
 from my_pa.domain.identity.operation import Capability
+from my_pa.domain.meeting.model import (
+    AttendeeResponseStatus,
+    MeetingActor,
+    MeetingAttachmentAvailability,
+    MeetingHistoryAction,
+    MeetingOutcome,
+    MeetingStatus,
+)
 from my_pa.domain.modeling.gate import ModelRoutePolicy
 from my_pa.domain.project_controls.category import ConstraintCategory, ConstraintCategoryState
 from my_pa.domain.project_controls.constraint import (
@@ -116,6 +146,7 @@ from my_pa.domain.project_controls.settings import ConstraintProjectSettings
 from my_pa.domain.relationship.entity import RelationshipState
 from my_pa.domain.search.query import RankCategory, SearchMatch, label_for_media_type
 from my_pa.domain.situation.continuity import ContinuityAcceptanceKind, ContinuityEvidenceState
+from my_pa.domain.situation.situation import Project, ProjectState
 from my_pa.domain.task.history import TaskMutationAction, TaskMutationActor, TaskMutationOutcome
 from my_pa.domain.task.lifecycle import TaskLifecycleState, TaskOriginKind, TaskPriority
 
@@ -1349,10 +1380,169 @@ def _entity_context_card_payload() -> dict[str, Any]:
     }
 
 
+def _wp03b_success_payloads() -> dict[str, dict[str, Any]]:
+    """The twelve admitted results through canonical models/runtime serializers.
+
+    The uninitialized service supplies only pure public projection methods. Its
+    synthetic collaborators return explicit in-memory values; no application
+    composition, database or connector is opened.
+    """
+    service = object.__new__(ApplicationService)
+    # Pure projections consume only at; this synthetic fake is not full authority.
+    authorization = cast(Authorization, SimpleNamespace(at=AT))
+    project = Project(
+        project_id="prj_aaaaaaaa11111111",
+        principal_id="prn_aaaaaaaa11111111",
+        name="Synthetic project",
+        state=ProjectState.ACTIVE,
+        opened_at=AT,
+        created_at=AT,
+        updated_at=AT,
+        version=2,
+    )
+    # Only the public projection's in-memory collaborator is exercised here.
+    uow = cast(
+        UnitOfWork,
+        SimpleNamespace(projects=SimpleNamespace(get_project_entity_link=lambda *_: None)),
+    )
+    project_update = service._continuity_project_payload(uow, project)
+    project_update["replayed"] = False
+    closed = replace(project, state=ProjectState.CLOSED, closed_at=AT, version=3)
+    project_close = service._continuity_project_payload(uow, closed)
+    project_close["replayed"] = False
+    series = MeetingSeriesView(
+        meeting_series_id="mser_aaaaaaaa11111111",
+        title="Synthetic series",
+        version=2,
+        created_at=AT,
+        updated_at=AT,
+    )
+    meeting = MeetingView(
+        meeting_id="mtg_aaaaaaaa11111111",
+        meeting_series_id=series.meeting_series_id,
+        series_title=series.title,
+        series_version=series.version,
+        title="Synthetic occurrence",
+        status=MeetingStatus.SCHEDULED,
+        start_at=AT,
+        timezone_name="UTC",
+        version=2,
+        created_at=AT,
+        updated_at=AT,
+        attendees=(
+            MeetingAttendeeView(
+                attendee_id="matt_aaaaaaaa11111111",
+                display_name="Synthetic attendee",
+                email="synthetic@example.invalid",
+                is_organizer=True,
+                response_status=AttendeeResponseStatus.ACCEPTED,
+                added_at=AT,
+            ),
+        ),
+        attachments=(
+            MeetingAttachmentView(
+                attachment_id="matc_aaaaaaaa11111111",
+                document_id="mdoc_aaaaaaaa11111111",
+                availability=MeetingAttachmentAvailability.ACTIVE,
+                title="Synthetic document",
+                media_type="text/plain",
+                added_at=AT,
+            ),
+        ),
+        notes=MeetingNoteView(
+            note_version_id="mnote_aaaaaaaa11111111",
+            version_number=1,
+            body_markdown="Synthetic notes",
+            recorded_at=AT,
+        ),
+    )
+    history = MeetingHistoryView(
+        history_id="mhst_aaaaaaaa11111111",
+        meeting_id=meeting.meeting_id,
+        action=MeetingHistoryAction.UPDATE,
+        actor=MeetingActor.PRINCIPAL,
+        outcome=MeetingOutcome.APPLIED,
+        before_version=1,
+        after_version=2,
+        occurred_at=AT,
+        recorded_at=AT,
+    )
+    series_history = MeetingSeriesHistoryView(
+        series_history_id="mshst_aaaaaaaa11111111",
+        meeting_series_id=series.meeting_series_id,
+        action=MeetingHistoryAction.UPDATE,
+        actor=MeetingActor.PRINCIPAL,
+        outcome=MeetingOutcome.APPLIED,
+        before_version=1,
+        after_version=2,
+        occurred_at=AT,
+        recorded_at=AT,
+    )
+    meeting_uow = cast(
+        UnitOfWork, SimpleNamespace(meetings=SimpleNamespace(read_owned_series=lambda *_: series))
+    )
+    row = MeetingListEntry(
+        **{
+            name: getattr(meeting, name)
+            for name in MeetingListEntry.model_fields
+            if name not in {"attendee_count", "attachment_count"}
+        },
+        attendee_count=len(meeting.attendees),
+        attachment_count=len(meeting.attachments),
+    ).to_canonical_dict()
+    document = ManagedDocumentVersionView(
+        document_id="mdoc_aaaaaaaa11111111",
+        version_id="mdver_aaaaaaaa11111111",
+        version_number=1,
+        title="Synthetic document",
+        media_type="text/plain",
+        content_sha256=DIGEST,
+        byte_size=9,
+        recorded_at=AT,
+        is_current=True,
+        state=DocumentState.ACTIVE,
+    )
+    return {
+        "continuity.projects.create": service._project_authoring_result(
+            authorization, replace(project, version=1), replayed=False
+        ).payload,
+        "continuity.projects.update": project_update,
+        "continuity.projects.close": project_close,
+        "capture.revise": CaptureReceiptView(
+            receipt_id="rcpt_bbbbbbbb22222222",
+            capture_id="cap_aaaaaaaa11111111",
+            version_id="capver_bbbbbbbb22222222",
+            version_number=2,
+            idempotency_key="wp03b-revise-1",
+            content_sha256=DIGEST,
+            project_id=None,
+            issued_at=AT,
+            created=True,
+        ).model_dump(mode="json"),
+        "meetings.read": {"meeting": meeting.to_canonical_dict()},
+        "meetings.list": {"meetings": [row]},
+        "meetings.search": {"meetings": [row]},
+        "meetings.update": _meeting_write_payload(
+            meeting_uow, "prn_aaaaaaaa11111111", MeetingWriteResult(meeting, history, False)
+        ),
+        "meetings.series.update": _meeting_series_write_payload(
+            MeetingSeriesWriteResult(series, series_history, False)
+        ),
+        "documents.read": {"version": document.model_dump(mode="json")},
+        "documents.archive": service._managed_transition(
+            authorization, DocumentState.ARCHIVED, changed=True
+        ).payload,
+        "documents.restore": service._managed_transition(
+            authorization, DocumentState.ACTIVE, changed=False
+        ).payload,
+    }
+
+
 def python_success_payloads() -> dict[str, dict[str, Any]]:
     """Capability name → gateway `result` dict the matching Vitest decoder must accept."""
     entity_id = _entity_id()
     return {
+        **_wp03b_success_payloads(),
         "capture.create": _capture_create(),
         "capture.list": _capture_list(),
         "capture.read": _capture_read(),

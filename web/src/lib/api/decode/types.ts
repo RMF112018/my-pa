@@ -5,6 +5,18 @@
  * A placeholder `unknown` per key is forbidden: that would re-open generic
  * success authority after `invokeGateway`.
  */
+import type { ContinuityProjectsCreateResult } from "./capabilities/continuity.projects.create";
+import type { ContinuityProjectsUpdateResult } from "./capabilities/continuity.projects.update";
+import type { ContinuityProjectsCloseResult } from "./capabilities/continuity.projects.close";
+import type { CaptureReviseResult } from "./capabilities/capture.revise";
+import type { MeetingsReadResult } from "./capabilities/meetings.read";
+import type { MeetingsListResult } from "./capabilities/meetings.list";
+import type { MeetingsSearchResult } from "./capabilities/meetings.search";
+import type { MeetingsUpdateResult } from "./capabilities/meetings.update";
+import type { MeetingsSeriesUpdateResult } from "./capabilities/meetings.series.update";
+import type { DocumentsReadResult } from "./capabilities/documents.read";
+import type { DocumentsArchiveResult } from "./capabilities/documents.archive";
+import type { DocumentsRestoreResult } from "./capabilities/documents.restore";
 import contract from "@/contracts/gateway.json";
 import type { CanvasWorkspaceGetResult } from "./capabilities/canvas.workspace.get";
 import type { CanvasWorkspacePutResult } from "./capabilities/canvas.workspace.put";
@@ -108,6 +120,18 @@ export type Decoder<T> = (input: unknown) => DecodeResult<T>;
 export type GatewayCapability = keyof typeof contract.capabilities;
 
 export type CapabilityResults = {
+  readonly "continuity.projects.create": ContinuityProjectsCreateResult;
+  readonly "continuity.projects.update": ContinuityProjectsUpdateResult;
+  readonly "continuity.projects.close": ContinuityProjectsCloseResult;
+  readonly "capture.revise": CaptureReviseResult;
+  readonly "meetings.read": MeetingsReadResult;
+  readonly "meetings.list": MeetingsListResult;
+  readonly "meetings.search": MeetingsSearchResult;
+  readonly "meetings.update": MeetingsUpdateResult;
+  readonly "meetings.series.update": MeetingsSeriesUpdateResult;
+  readonly "documents.read": DocumentsReadResult;
+  readonly "documents.archive": DocumentsArchiveResult;
+  readonly "documents.restore": DocumentsRestoreResult;
   readonly "canvas.workspace.get": CanvasWorkspaceGetResult;
   readonly "canvas.workspace.put": CanvasWorkspacePutResult;
   readonly "capabilities.get": CapabilitiesGetResult;

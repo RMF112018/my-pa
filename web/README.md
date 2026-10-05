@@ -21,8 +21,9 @@ availability, instead of restating an availability count in this tier. Six of
 those names are the managed-document lifecycle (`documents.create`,
 `documents.revise`, `documents.read`, `documents.list`, `documents.archive`, and
 `documents.restore`). They are implemented in the Python application and become
-available only when the gateway composition has a managed root; this web package
-does not currently expose a managed-document screen or API route.
+available only when the gateway composition has a managed root. This web package
+exposes the document read, archive, and restore API routes mapped below; it does
+not currently expose a managed-document screen.
 Browser routing remains an explicitly mapped subset: the seven
 `constraint_sync.*` backend and MCP capabilities have no browser route here.
 
@@ -37,6 +38,18 @@ All application pages require a verified session. `/sign-in`, `/setup`, and
 | `/today`, `GET /api/pulse` | `continuity.pulse` | Ranked accepted commitments, tasks, decisions, and current obligations |
 | `/situations`, `GET /api/situations` | `continuity.situations` | Principal-scoped Situation list and relationship events |
 | `GET /api/projects` | `continuity.projects`, `continuity.projects.read` | Principal-scoped Project list via `continuity.projects`; exact Project validation and read via `continuity.projects.read` |
+| `POST /api/projects` | `continuity.projects.create` | Creates a Principal-owned Project with backend idempotency |
+| `PATCH /api/projects/:projectId` | `continuity.projects.update` | Applies an expected-version Project update |
+| `POST /api/projects/:projectId/close` | `continuity.projects.close` | Closes one Project with an expected version |
+| `PATCH /api/capture/:captureId` | `capture.revise` | Appends a revision to one Principal-owned Capture with backend idempotency |
+| `GET /api/meetings` | `meetings.list` | Lists Principal-owned Meetings with admitted filters and opaque continuation |
+| `GET /api/meetings/search` | `meetings.search` | Searches Principal-owned Meetings with admitted filters |
+| `GET /api/meetings/:meetingId` | `meetings.read` | Reads one Principal-owned Meeting |
+| `PATCH /api/meetings/:meetingId` | `meetings.update` | Applies an expected-version Meeting update |
+| `PATCH /api/meetings/series/:meetingSeriesId` | `meetings.series.update` | Applies an expected-version Meeting Series title update |
+| `GET /api/documents/:documentId` | `documents.read` | Reads one Principal-owned document version; bytes require explicit `includeBytes=true` |
+| `POST /api/documents/:documentId/archive` | `documents.archive` | Archives one Principal-owned managed document |
+| `POST /api/documents/:documentId/restore` | `documents.restore` | Restores one Principal-owned managed document |
 | `/relationships/:personId`, `GET /api/relationships/:personId/timeline` | `continuity.situations` | Filters the accepted relationship events returned by the continuity read model for that person |
 | `/library`, `GET /api/library` | `knowledge.read`, `knowledge.search`, `capture.search`, or `capture.list` | Chooses one capability from the request shape; no synthetic Library fixture is invented |
 | `GET /api/goodnotes/notebooks` | `goodnotes.notebooks.list` | Principal-scoped notebook catalog; no filesystem paths |

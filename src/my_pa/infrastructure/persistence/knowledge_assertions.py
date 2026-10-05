@@ -1119,6 +1119,16 @@ class SqlKnowledgeAssertionRepository(KnowledgeAssertionRepository):
                 }
             )
         )
+        # The read-only `current_lifecycle`, read as the remote caller sees it
+        # (F2: `None` while the result assertion is `withheld_remote`).
+        result = replace(
+            result,
+            current_lifecycle=_translated(
+                lambda: _current_lifecycle(
+                    self._connection, principal_id, result.assertion_id, remote=True
+                )
+            ),
+        )
         for staged in transaction.staged:
             # C9: exactly the mapped event per mutation, metadata only (KLP-AC-042).
             _stage_knowledge_event(
@@ -2790,7 +2800,11 @@ class _AutonomousSubmit:
         if decision.path is AdmissionPath.REFUSE:
             assert decision.reason is not None  # noqa: S101 - a refusal always names one
             return self._complete(_refused(submission_id, decision.reason))
-        if live is not None and self._nothing_new(live.assertion_id, existing):
+        if (
+            live is not None
+            and self._nothing_new(live.assertion_id, existing)
+            and not self._raise_due(product, existing)
+        ):
             # Exact live duplicate citing nothing new: only this row is written.
             result = self._complete(
                 _result(
@@ -2816,6 +2830,23 @@ class _AutonomousSubmit:
         # C6: the subject lock, even when no assertion exists (KLP-AC-091).
         self._lock_subject()
         return self._decide_under_lock(submission_id, decision, live, holder, locked, evidence_ids)
+
+    def _raise_due(
+        self,
+        product: Mapping[tuple[str, ...], Classification],
+        existing: Mapping[tuple[str, ...], Row[Any]],
+    ) -> bool:
+        """Whether a cited row's observed class now exceeds its stored class (R6 5.1 step 3).
+
+        A re-observation of a row whose object was restricted since must go
+        through C4b to raise (and redact, KLP-R6V-201) it, even for a duplicate.
+        """
+        observed = self._observed(product, self._sibling_rows())
+        return any(
+            CLASSIFICATION_RANK[observed[identity]]
+            > CLASSIFICATION_RANK[Classification(row.source_classification)]
+            for identity, row in existing.items()
+        )
 
     def _nothing_new(self, assertion_id: str, existing: Mapping[tuple[str, ...], Row[Any]]) -> bool:
         """Every cited identity is already linked to `assertion_id` in the same role."""

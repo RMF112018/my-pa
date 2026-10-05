@@ -30,12 +30,24 @@ assertion lifecycle/classification control updates (WP-04 maintenance). The
 assertions themselves, capture/memory evidence, the restricted memory version
 (`relationship_memory.revise` to `sensitivity`) and the archived capture root
 (`capture.archive`) all come from the production writers.
+
+KLP-WP-04 slice B2 (carried WP-03 follow-ups F2 and N1):
+
+* **F2** -- a remote create or submit answering `duplicate_existing` for an
+  assertion that is now `withheld_remote` returns `current_lifecycle = None`
+  (and only the fields the stored-result CHECK requires); a local caller
+  still sees the lifecycle.
+* **N1** -- remote `history` masks a withheld supersession neighbour: after a
+  production supersession (submit `direct_superseded`), a predecessor withheld
+  by its own evidence is not named as the visible successor's predecessor
+  remotely, and a withheld successor is not named from the predecessor.
 """
 
 from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterator
+from datetime import timedelta
 from typing import Any, Final
 
 import pytest
@@ -46,6 +58,11 @@ from tests.database.test_knowledge_assertion_repository import (
     capture_evidence,
     memory_evidence,
     new_principal,
+)
+from tests.database.test_knowledge_assertion_submissions import (
+    PAYMENT,
+    add_direct_payment_head,
+    external,
 )
 
 from my_pa.application.commands import (
@@ -631,3 +648,162 @@ def test_a_knowledge_event_naming_no_assertion_is_withheld_remotely(
     assert set(orphans.values()) <= local_ids
     assert not set(orphans.values()) & remote_ids
     assert control["assertion_id"] in remote_ids
+
+
+# ---- KLP-WP-04 slice B2: F2 and N1 ------------------------------------------------------
+
+
+@pytest.fixture
+def submitter(disposable_database: str) -> Iterator[Any]:
+    from tests.database.test_knowledge_assertion_submissions import SubmitRuntime
+
+    composed = SubmitRuntime(disposable_database)
+    try:
+        yield composed
+    finally:
+        composed.close()
+
+
+_CREATE_REMOTE: Final[dict[str, Any]] = {
+    "transport": CaptureTransport.REMOTE_CLIENT,
+    "grants": frozenset(
+        {(Capability.KNOWLEDGE_ASSERTIONS_CREATE, Purpose.KNOWLEDGE_ASSERTION_AUTHORING)}
+    ),
+    "client_id": "klp03-remote-client",
+}
+
+
+def test_f2_a_remote_create_duplicate_of_a_withheld_assertion_hides_its_lifecycle(
+    submitter: Any,  # noqa: ANN401
+) -> None:
+    from tests.database.test_knowledge_assertion_repository import create_command
+
+    principal = new_principal()
+    capture_id, digest = submitter.capture(principal, "f2-create")
+    first = submitter.create(
+        principal, "klp04-f2-a", evidence=(capture_evidence(capture_id, digest),)
+    )
+    submitter.ok(
+        ArchiveCapture(
+            capture_id=capture_id,
+            expected_lifecycle_revision=0,
+            idempotency_key="klp04-f2-archive",
+            reason="Synthetic withholding",
+        ),
+        principal_id=principal,
+    )
+    remote = submitter.ok(
+        create_command("klp04-f2-b", subject_id=principal), principal_id=principal, **_CREATE_REMOTE
+    )
+    assert remote["outcome"] == "duplicate_existing"
+    assert remote["assertion_id"] == first["assertion_id"]
+    assert remote["current_lifecycle"] is None
+    local = submitter.create(principal, "klp04-f2-c")
+    assert local["outcome"] == "duplicate_existing"
+    assert local["current_lifecycle"] == "active"
+    # The remote replay of the same key stays masked.
+    replay = submitter.ok(
+        create_command("klp04-f2-b", subject_id=principal), principal_id=principal, **_CREATE_REMOTE
+    )
+    assert replay == remote
+
+
+def test_f2_a_submit_duplicate_of_a_withheld_assertion_hides_its_lifecycle(
+    submitter: Any,  # noqa: ANN401
+) -> None:
+    principal = new_principal()
+    profile = submitter.profile(principal)
+    org = submitter.entity(principal, "f2-submit")
+    first = submitter.submit(principal, profile, subject_id=org, evidence=(external("doc-f2"),))
+    assert first["current_lifecycle"] == "active"
+    other = submitter.profile(principal, scope="scope-b")
+    seed_external(
+        submitter.engine,
+        principal,
+        other,
+        object_id="doc-f2",
+        version="v9",
+        classification="restricted_local",
+    )
+    again = submitter.submit(
+        principal, profile, subject_id=org, candidate="c-again", evidence=(external("doc-f2"),)
+    )
+    assert again["outcome"] == "duplicate_existing"
+    assert again["assertion_id"] == first["assertion_id"]
+    assert again["assertion_version"] is not None  # the stored-result CHECK keeps it
+    assert again["current_lifecycle"] is None
+    # The replay of the first submit is masked the same way.
+    replay = submitter.submit(principal, profile, subject_id=org, evidence=(external("doc-f2"),))
+    assert replay["current_lifecycle"] is None
+
+
+def _superseded_pair(submitter: Any) -> tuple[str, str, str, str]:  # noqa: ANN401
+    """A production supersession: (principal, other profile, older id, newer id)."""
+    principal = new_principal()
+    add_direct_payment_head(submitter.engine)
+    profile = submitter.profile(principal)
+    org = submitter.entity(principal, "n1")
+    older = submitter.submit(
+        principal,
+        profile,
+        subject_id=org,
+        predicate=PAYMENT,
+        value="Net 30",
+        candidate="n1-a",
+        effective_from=WHEN - timedelta(days=9),
+        evidence=(external("doc-old"),),
+    )
+    newer = submitter.submit(
+        principal,
+        profile,
+        subject_id=org,
+        predicate=PAYMENT,
+        value="Net 45",
+        candidate="n1-b",
+        effective_from=WHEN - timedelta(days=1),
+        evidence=(external("doc-new"),),
+    )
+    assert newer["outcome"] == "direct_superseded"
+    other = submitter.profile(principal, scope="scope-b")
+    return principal, other, older["assertion_id"], newer["assertion_id"]
+
+
+_HISTORY_REMOTE: Final[dict[str, Any]] = {
+    **REMOTE,
+    "grants": frozenset(
+        {(Capability.KNOWLEDGE_ASSERTIONS_HISTORY, Purpose.KNOWLEDGE_ASSERTION_READ)}
+    ),
+}
+
+
+def _restrict_object(submitter: Any, principal: str, profile: str, object_id: str) -> None:  # noqa: ANN401
+    seed_external(
+        submitter.engine,
+        principal,
+        profile,
+        object_id=object_id,
+        version="v9",
+        classification="restricted_local",
+    )
+
+
+def test_n1_remote_history_masks_a_withheld_predecessor(submitter: Any) -> None:  # noqa: ANN401
+    principal, other, older, newer = _superseded_pair(submitter)
+    _restrict_object(submitter, principal, other, "doc-old")
+    read = GetKnowledgeAssertionHistory(assertion_id=newer)
+    remote = submitter.ok(read, principal_id=principal, **_HISTORY_REMOTE)
+    assert remote["predecessor_assertion_id"] is None
+    assert submitter.ok(read, principal_id=principal)["predecessor_assertion_id"] == older
+    hidden = submitter.invoke(
+        GetKnowledgeAssertionHistory(assertion_id=older), principal_id=principal, **_HISTORY_REMOTE
+    )
+    assert hidden.error is not None and hidden.error.code.value == "not_found"
+
+
+def test_n1_remote_history_masks_a_withheld_successor(submitter: Any) -> None:  # noqa: ANN401
+    principal, other, older, newer = _superseded_pair(submitter)
+    _restrict_object(submitter, principal, other, "doc-new")
+    read = GetKnowledgeAssertionHistory(assertion_id=older)
+    remote = submitter.ok(read, principal_id=principal, **_HISTORY_REMOTE)
+    assert remote["successor_assertion_id"] is None
+    assert submitter.ok(read, principal_id=principal)["successor_assertion_id"] == newer

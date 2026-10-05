@@ -16,6 +16,20 @@ slice B1) the KLP-R6V-201 / KLP-R6V-202 cases of KLP-AC-152. Marked
   linked through *another* profile of the same `origin_system`, with no
   mutation fan-out; a new external version cannot launder it either.
 
+KLP-WP-04 slice B2 adds the submit / successor cases (KLP-AC-095, 116, 138):
+
+* a successor supersedes a restricted predecessor and is stored no less
+  restrictive (rank-max with the predecessor floor); a raw successor insert
+  below its predecessor is refused by the BEFORE INSERT trigger (23514);
+* a submit through a synthetic profile carries `origin_is_synthetic` to the
+  submission, evidence and assertion, while the predicate floor keeps the
+  stored class at `private_local` (never `synthetic_test` above the floor);
+* a submit-linked assertion is withheld remotely once a sibling of its object
+  is restricted under another profile of the same origin system, with no
+  mutation fan-out;
+* KLP-R6V-201 at submit: re-citing an existing private external row whose
+  object became restricted raises it and nulls its excerpt in the same UPDATE.
+
 Direct SQL is used only for rows WP-03 has no writer for (source profiles,
 external evidence, proposals) and for the refused writes themselves.
 """
@@ -24,6 +38,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterator
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -36,10 +51,18 @@ from my_pa.domain.common.classification import Classification, is_cloud_eligible
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence.tables import knowledge_assertions, knowledge_evidence_refs
+from my_pa.infrastructure.persistence.unit_of_work import knowledge_maintenance_transaction
 from tests.database.test_knowledge_assertion_repository import (
+    WHEN,
     KnowledgeRuntime,
     capture_evidence,
     new_principal,
+)
+from tests.database.test_knowledge_assertion_submissions import (
+    PAYMENT,
+    SubmitRuntime,
+    add_direct_payment_head,
+    external,
 )
 from tests.database.test_knowledge_evidence_availability import EXCERPT as _EXCERPT_B1
 from tests.database.test_knowledge_evidence_availability import seed_external_excerpt
@@ -370,3 +393,171 @@ def test_classify_evidence_raises_and_redacts_every_existing_sibling_in_one_run(
         row = _row(engine, untouched)
         assert (row["source_classification"], row["excerpt"]) == ("private_local", _EXCERPT_B1)
     assert _class_of(runtime, via_sibling["assertion_id"]) == "restricted_local"
+
+
+# ---- KLP-WP-04 slice B2: submit / successor cases ---------------------------------------
+
+
+@pytest.fixture
+def submitter(disposable_database: str) -> Iterator[SubmitRuntime]:
+    composed = SubmitRuntime(disposable_database)
+    try:
+        yield composed
+    finally:
+        composed.close()
+
+
+def test_a_successor_of_a_restricted_predecessor_is_never_less_restrictive(
+    submitter: SubmitRuntime,
+) -> None:
+    principal = new_principal()
+    add_direct_payment_head(submitter.engine)
+    profile = submitter.profile(principal)
+    org = submitter.entity(principal, "floor")
+    first = submitter.submit(
+        principal,
+        profile,
+        subject_id=org,
+        predicate=PAYMENT,
+        value="Net 30",
+        candidate="f1",
+        effective_from=WHEN - timedelta(days=9),
+        evidence=(external("inv-f1"),),
+    )
+    with submitter.engine.connect() as connection:
+        evidence = connection.execute(
+            select(knowledge_evidence_refs.c.evidence_ref_id).where(
+                knowledge_evidence_refs.c.principal_id == principal
+            )
+        ).scalar_one()
+    with knowledge_maintenance_transaction(submitter.engine) as repository:
+        repository.classify_evidence_restricted(principal, evidence, at=WHEN)
+    second = submitter.submit(
+        principal,
+        profile,
+        subject_id=org,
+        predicate=PAYMENT,
+        value="Net 45",
+        candidate="f2",
+        effective_from=WHEN - timedelta(days=1),
+        evidence=(external("inv-f2"),),
+    )
+    assert second["outcome"] == "direct_superseded", second
+    assert _class_of(submitter, second["assertion_id"]) == "restricted_local"
+    # The trigger refuses a raw successor below its (superseded) predecessor.
+    with pytest.raises(IntegrityError), submitter.engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO knowledge.knowledge_assertions (principal_id, assertion_id, "
+                "subject_kind, subject_id, predicate_code, predicate_version, value_type, "
+                "cardinality, temporal_semantics, qualifier_rule, value_text, "
+                "normalized_value_sha256, fingerprint_version, assertion_fingerprint, "
+                "epistemic_status, classification, origin_is_synthetic, lifecycle, version, "
+                "origin_submission_id, supersedes_assertion_id, created_at, updated_at) "
+                "SELECT principal_id, :n, subject_kind, subject_id, predicate_code, "
+                "predicate_version, value_type, cardinality, temporal_semantics, "
+                "qualifier_rule, 'Net 99', normalized_value_sha256, 1, :f, epistemic_status, "
+                "'private_local', origin_is_synthetic, 'active', 1, origin_submission_id, "
+                "assertion_id, now(), now() FROM knowledge.knowledge_assertions "
+                "WHERE assertion_id = :a"
+            ),
+            {
+                "n": issue_identifier(IdKind.KNOWLEDGE_ASSERTION),
+                "f": "c" * 64,
+                "a": first["assertion_id"],
+            },
+        )
+
+
+def test_a_synthetic_profile_carries_the_synthetic_origin_above_the_floor(
+    submitter: SubmitRuntime,
+) -> None:
+    principal = new_principal()
+    profile = submitter.profile(principal, origin="synthetic")
+    org = submitter.entity(principal, "synthetic")
+    created = submitter.submit(principal, profile, subject_id=org)
+    assert created["outcome"] == "direct_created", created
+    with submitter.engine.connect() as connection:
+        assertion = connection.execute(
+            select(
+                knowledge_assertions.c.origin_is_synthetic, knowledge_assertions.c.classification
+            ).where(knowledge_assertions.c.assertion_id == created["assertion_id"])
+        ).one()
+        evidence = connection.execute(
+            select(
+                knowledge_evidence_refs.c.source_is_synthetic,
+                knowledge_evidence_refs.c.content_origin,
+                knowledge_evidence_refs.c.source_classification,
+            ).where(knowledge_evidence_refs.c.principal_id == principal)
+        ).one()
+    assert tuple(assertion) == (True, "private_local")
+    assert tuple(evidence) == (True, "synthetic_source", "synthetic_test")
+
+
+def test_a_submit_linked_assertion_is_withheld_by_another_profiles_restriction(
+    submitter: SubmitRuntime,
+) -> None:
+    principal = new_principal()
+    profile = submitter.profile(principal)
+    org = submitter.entity(principal, "cross-submit")
+    created = submitter.submit(principal, profile, subject_id=org, evidence=(external("doc-7"),))
+    read = ReadKnowledgeAssertion(assertion_id=created["assertion_id"])
+    assert submitter.invoke(read, principal_id=principal, **REMOTE).error is None
+    other = submitter.profile(principal, scope="scope-b")
+    seed_external(
+        submitter.engine,
+        principal,
+        other,
+        object_id="doc-7",
+        version="v9",
+        classification="restricted_local",
+    )
+    before = _class_of(submitter, created["assertion_id"])
+    withheld = submitter.invoke(read, principal_id=principal, **REMOTE)
+    assert withheld.error is not None and withheld.error.code.value == "not_found"
+    assert _class_of(submitter, created["assertion_id"]) == before == "private_local"
+    assert submitter.invoke(read, principal_id=principal).error is None
+
+
+def test_a_submit_re_citing_a_now_restricted_object_raises_and_redacts(
+    submitter: SubmitRuntime,
+) -> None:
+    """KLP-R6V-201 (i) at submit: one UPDATE raises the row and nulls its excerpt."""
+    principal = new_principal()
+    profile = submitter.profile(principal)
+    org = submitter.entity(principal, "recite")
+    first = submitter.submit(
+        principal, profile, subject_id=org, evidence=(external("doc-r", excerpt="Kept excerpt."),)
+    )
+    other = submitter.profile(principal, scope="scope-b")
+    seed_external(
+        submitter.engine,
+        principal,
+        other,
+        object_id="doc-r",
+        version="v2",
+        classification="restricted_local",
+    )
+    again = submitter.submit(
+        principal,
+        profile,
+        subject_id=org,
+        candidate="cand-again",
+        evidence=(external("doc-r", excerpt="Kept excerpt."),),
+    )
+    assert again["outcome"] == "duplicate_existing"
+    with submitter.engine.connect() as connection:
+        row = connection.execute(
+            select(
+                knowledge_evidence_refs.c.source_classification,
+                knowledge_evidence_refs.c.excerpt,
+                knowledge_evidence_refs.c.excerpt_sha256,
+            ).where(
+                knowledge_evidence_refs.c.principal_id == principal,
+                knowledge_evidence_refs.c.source_profile_id == profile,
+            )
+        ).one()
+    assert row.source_classification == "restricted_local"
+    assert row.excerpt is None
+    assert row.excerpt_sha256 == hashlib.sha256(b"Kept excerpt.").hexdigest()
+    del first

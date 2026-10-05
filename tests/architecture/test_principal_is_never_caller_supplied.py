@@ -2015,11 +2015,5 @@ def test_no_knowledge_command_carries_a_principal_or_a_server_derived_field() ->
         "_knowledge_discovery_checkpoint",
     ):
         body = service.split(f"def {handler}(", 1)[1].split("\n    def ", 1)[0]
-        # KLP-WP-04 slice A: the discovery pair's bodies are gated placeholders
-        # that read no partition yet; slices B2/B3 bring the principal read.
-        assert (
-            "authorization.principal.principal_id" in body
-            or "_knowledge_page(" in body
-            or "_knowledge_discovery_gate(" in body
-        )
+        assert "authorization.principal.principal_id" in body or "_knowledge_page(" in body, handler
         assert "command.principal_id" not in body

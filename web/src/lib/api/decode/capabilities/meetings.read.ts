@@ -53,7 +53,8 @@ const httpsUrl = checked(text(1,2048), (value) => {
     if (tail && !tail.startsWith(":")) return false;
     port = tail ? tail.slice(1) : "";
     if (hostname.startsWith("v")) {
-      if (!/^v[0-9a-fA-F]+\..+$/.test(hostname)) return false;
+      // Python dot accepts U+2028/U+2029; the global control guard already refuses CR/LF.
+      if (!/^v[0-9a-fA-F]+\.[^\n]+$/.test(hostname)) return false;
     } else if (!meetingIpv6Host(hostname)) return false;
   } else {
     const colon = netloc.indexOf(":");

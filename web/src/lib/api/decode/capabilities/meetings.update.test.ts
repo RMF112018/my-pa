@@ -90,8 +90,42 @@ const canonicalMeetingUrls = [
   ["unicode_codepoint_limit", "https://example.invalid/" + "\ud83d\ude00".repeat(2024), true],
 ] as const;
 
+// F4: source-derived Python 3.12 urllib boundary cases; accepted raw text is retained.
+const canonicalSeparatorUrls = [
+  ["ipvfuture_ls_only", "https://[v1.\u2028]/", true],
+  ["ipvfuture_ls_prefix", "https://[v1.\u2028ab]/", true],
+  ["ipvfuture_ls_middle", "https://[v1.a\u2028b]/", true],
+  ["ipvfuture_ls_suffix", "https://[v1.ab\u2028]/", true],
+  ["ipvfuture_ps_only", "https://[v1.\u2029]/", true],
+  ["ipvfuture_ps_prefix", "https://[v1.\u2029ab]/", true],
+  ["ipvfuture_ps_middle", "https://[v1.a\u2029b]/", true],
+  ["ipvfuture_ps_suffix", "https://[v1.ab\u2029]/", true],
+  ["ipvfuture_cr_only", "https://[v1.\r]/", false],
+  ["ipvfuture_cr_prefix", "https://[v1.\rab]/", false],
+  ["ipvfuture_cr_middle", "https://[v1.a\rb]/", false],
+  ["ipvfuture_cr_suffix", "https://[v1.ab\r]/", false],
+  ["ipvfuture_lf_only", "https://[v1.\n]/", false],
+  ["ipvfuture_lf_prefix", "https://[v1.\nab]/", false],
+  ["ipvfuture_lf_middle", "https://[v1.a\nb]/", false],
+  ["ipvfuture_lf_suffix", "https://[v1.ab\n]/", false],
+  ["ipvfuture_ls_version", "https://[v\u20281.ab]/", false],
+  ["ipvfuture_ls_before_dot", "https://[v1\u2028.ab]/", false],
+  ["url_ls_trailing", "https://[v1.ab]/\u2028", false],
+  ["url_ls_path_internal", "https://[v1.ab]/a\u2028b", true],
+  ["ipvfuture_ps_version", "https://[v\u20291.ab]/", false],
+  ["ipvfuture_ps_before_dot", "https://[v1\u2029.ab]/", false],
+  ["url_ps_trailing", "https://[v1.ab]/\u2029", false],
+  ["url_ps_path_internal", "https://[v1.ab]/a\u2029b", true],
+] as const;
+
 describe("meetings.update strict canonical success", () => {
   it.each(canonicalMeetingUrls)("matches canonical URL case %s and preserves accepted text", (_case, url, accepted) => {
+    const value = replace(payload(), ["meeting", "virtual_meeting_url"], url);
+    const result = decode(value);
+    expect(result.ok).toBe(accepted);
+    if (accepted) expect(result).toEqual({ok:true,value});
+  });
+  it.each(canonicalSeparatorUrls)("matches canonical separator case %s and preserves accepted text", (_case, url, accepted) => {
     const value = replace(payload(), ["meeting", "virtual_meeting_url"], url);
     const result = decode(value);
     expect(result.ok).toBe(accepted);

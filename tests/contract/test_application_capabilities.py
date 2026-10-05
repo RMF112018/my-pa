@@ -74,7 +74,6 @@ from my_pa.application.commands import (
 )
 from my_pa.application.disclosure import Limitation
 from my_pa.application.service import _HANDLERS, ApplicationService
-from my_pa.domain.identity.chatllm_capability_policy import KNOWLEDGE_ASSERTION_DATA_NAMES
 from my_pa.contracts.ports import KnowledgeRecord
 from my_pa.contracts.v1.capabilities import Availability, EffectiveLimits, ReadinessState
 from my_pa.contracts.v1.envelope import ResponseEnvelope
@@ -86,6 +85,7 @@ from my_pa.domain.common.provenance import Provenance, TrustLevel
 from my_pa.domain.context.preference import ContextPreferenceAction
 from my_pa.domain.extraction.coverage import AggregateLimitation, LimitationReason
 from my_pa.domain.extraction.text import ExtractionStatus
+from my_pa.domain.identity.chatllm_capability_policy import KNOWLEDGE_ASSERTION_DATA_NAMES
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.project_controls.constraint import ConstraintLifecycleState

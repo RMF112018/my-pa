@@ -16,7 +16,15 @@ from typing import Final
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 PACKAGE: Final = ROOT / "src" / "my_pa"
-REPOSITORIES: Final = frozenset({"SqlEntityRepository", "SqlRelationshipMemoryRepository"})
+REPOSITORIES: Final = frozenset(
+    {
+        "SqlEntityRepository",
+        "SqlRelationshipMemoryRepository",
+        # KLP-WP-03 (KLP-AC-123): the Knowledge Assertion repository stages the
+        # explicit create's event into the buffer it was built with.
+        "SqlKnowledgeAssertionRepository",
+    }
+)
 #: A construction used for exactly one of these calls, inline, writes nothing.
 LOCK_ONLY_CALLS: Final = frozenset(
     {"serialize_entity_proposal_scope", "serialize_entity_proposals_scope"}
@@ -100,3 +108,30 @@ def test_every_identity_correction_service_in_src_is_given_the_units_stager() ->
                 )
     assert len(found) == 4, found
     assert all(staged for _, staged in found), found
+
+
+def test_the_knowledge_repository_cannot_be_built_without_a_stager() -> None:
+    """KLP-AC-123: `stager` is keyword-only and has no default, so the type itself refuses."""
+    import inspect
+
+    from my_pa.infrastructure.persistence.knowledge_assertions import (
+        SqlKnowledgeAssertionRepository,
+    )
+
+    parameter = inspect.signature(SqlKnowledgeAssertionRepository).parameters["stager"]
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    assert parameter.default is inspect.Parameter.empty
+
+
+def test_every_knowledge_repository_construction_in_src_is_counted() -> None:
+    """The scan above sees the one production construction (the unit of work's)."""
+    found = [
+        (path.relative_to(ROOT).as_posix(), stager)
+        for path in sorted(PACKAGE.rglob("*.py"))
+        for node in ast.walk(ast.parse(path.read_text("utf-8")))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "SqlKnowledgeAssertionRepository"
+        for stager in [any(keyword.arg == "stager" for keyword in node.keywords)]
+    ]
+    assert found == [("src/my_pa/infrastructure/persistence/unit_of_work.py", True)]

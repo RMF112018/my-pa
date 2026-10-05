@@ -854,3 +854,114 @@ def test_the_committed_capture_feed_carries_no_text_label_digest_or_key(
         assert set(row) == METADATA_COLUMNS
         assert all(token.fullmatch(name) for name in row["changed_fields"])
         assert not set(row["changed_fields"]) & NARRATIVE_FIELDS
+
+
+# ---- KLP-WP-03 (KLP-AC-044): Knowledge Assertion events are metadata only ---------
+
+#: Knowledge columns that hold a value, an excerpt or a digest of either. None is
+#: ever a token, and none reaches the explicit-create event builder.
+KNOWLEDGE_NARRATIVE: Final = frozenset(
+    {
+        "value_text",
+        "value_datetime",
+        "qualifier_json",
+        "normalized_value_sha256",
+        "assertion_fingerprint",
+        "excerpt",
+        "excerpt_sha256",
+        "content_hash",
+        "request_digest",
+        "idempotency_key",
+    }
+)
+KNOWLEDGE_SENTINEL: Final = "KNOWLEDGE-SENTINEL-VALUE-zq81"
+
+
+def test_the_knowledge_mapping_tokens_are_names_and_never_narrative() -> None:
+    from my_pa.domain.knowledge_assertion.provenance import KNOWLEDGE_MUTATION_EVENTS
+
+    for event in KNOWLEDGE_MUTATION_EVENTS.values():
+        for token in event.changed_fields:
+            assert CHANGED_FIELD_PATTERN.fullmatch(token), token
+            assert token not in NARRATIVE_FIELDS | KNOWLEDGE_NARRATIVE, token
+
+
+def _knowledge_draft_attributes(source: str) -> set[str]:
+    """Every attribute name read inside the module's `RecordEventDraft.issue` calls."""
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "issue"
+        ):
+            names.update(inner.attr for inner in ast.walk(node) if isinstance(inner, ast.Attribute))
+    return names
+
+
+def test_the_knowledge_event_builder_reads_no_value_or_excerpt() -> None:
+    source = (PACKAGE / "infrastructure" / "persistence" / "knowledge_assertions.py").read_text(
+        encoding="utf-8"
+    )
+    read = _knowledge_draft_attributes(source)
+    assert read, "the scan found no Knowledge event builder"
+    assert not read & KNOWLEDGE_NARRATIVE, sorted(read & KNOWLEDGE_NARRATIVE)
+
+
+def test_the_knowledge_builder_scan_sees_a_value_read() -> None:
+    """The control: a planted value read inside a draft is reported."""
+    planted = "RecordEventDraft.issue(record_id=created.assertion_id, x=request.value_text)\n"
+    assert "value_text" in _knowledge_draft_attributes(planted)
+
+
+@pytest.mark.database
+def test_the_committed_knowledge_feed_carries_no_value(disposable_database: str) -> None:
+    from tests.database.test_knowledge_assertion_repository import (
+        KnowledgeRuntime,
+        capture_evidence,
+        new_principal,
+    )
+
+    runtime = KnowledgeRuntime(disposable_database)
+    try:
+        principal = new_principal()
+        capture_id, digest = runtime.capture(principal, "nopayload")
+        created = runtime.create(
+            principal,
+            "klp03-nopayload",
+            value=f"Requirement {KNOWLEDGE_SENTINEL}",
+            evidence=(capture_evidence(capture_id, digest),),
+        )
+        with runtime.engine.connect() as connection:
+            rows = [
+                str(row)
+                for row in connection.execute(
+                    text(
+                        "SELECT row_to_json(e)::text FROM knowledge.record_events e "
+                        "WHERE principal_id = :p AND record_family = 'knowledge_assertion'"
+                    ),
+                    {"p": principal},
+                ).scalars()
+            ]
+            normalized = connection.execute(
+                text(
+                    "SELECT normalized_value_sha256, assertion_fingerprint "
+                    "FROM knowledge.knowledge_assertions WHERE assertion_id = :a"
+                ),
+                {"a": created["assertion_id"]},
+            ).one()
+    finally:
+        runtime.close()
+    assert len(rows) == 1
+    for forbidden in (
+        KNOWLEDGE_SENTINEL,
+        digest,
+        normalized[0],
+        normalized[1],
+        "klp03-nopayload",
+        hashlib.sha256(KNOWLEDGE_SENTINEL.encode()).hexdigest(),
+    ):
+        assert forbidden not in rows[0]
+    event = json.loads(rows[0])
+    assert event["changed_fields"] == ["classification", "epistemic_status", "lifecycle", "value"]
+    assert event["source_receipt_id"] == created["mutation_id"]

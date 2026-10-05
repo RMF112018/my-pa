@@ -490,3 +490,34 @@ def test_the_dormant_writers_have_no_production_caller() -> None:
     calls them. A caller appearing is a writer with no
     emitter, so it fails here."""
     assert _dormant_calls() == UNRELATED_CALLS
+
+
+# ---- KLP-WP-03 (KLP-AC-045): the Knowledge plane keeps the same discipline ---------
+
+
+def _knowledge_source() -> str:
+    return (PACKAGE / "infrastructure" / "persistence" / "knowledge_assertions.py").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_the_knowledge_repository_stages_once_and_never_flushes() -> None:
+    """It stages its one event into the unit of work's buffer; the exit flushes it.
+
+    `causation_event_id` keeps its same-transaction meaning: an explicit create
+    is a root write and names no cause, so the staged draft passes none.
+    """
+    tree = ast.parse(_knowledge_source())
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+    called = [
+        node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
+        for node in calls
+    ]
+    assert "flush_record_events" not in called
+    assert called.count("stage") == 1
+    issued = [
+        node for node in calls if isinstance(node.func, ast.Attribute) and node.func.attr == "issue"
+    ]
+    assert len(issued) == 1
+    assert "causation_event_id" not in {keyword.arg for keyword in issued[0].keywords}
+    assert "begin_nested" not in _knowledge_source()

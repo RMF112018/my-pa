@@ -15,6 +15,12 @@ FAST, pure. `derive_knowledge_review_authority` against matrix
   local_cli / local_web.
 
 KLP-AC-039 / KLP-AC-114: derivation half (the decide wiring is slice C's).
+
+Slice C adds KLP-AC-115: every derivable pair, with the client stored only on a
+remote channel (as the service stores it), satisfies the frozen CHECK
+`knowledge_decision_channel_matches_authority` (restated and pinned to the
+matrix expression), and there is no feedback-relay role among the five
+channels and three classes.
 """
 
 from __future__ import annotations
@@ -261,3 +267,96 @@ def test_d_a_surface_with_a_remote_composition_cannot_be_built(
 @pytest.mark.parametrize("surface", list(OperatorSurface))
 def test_d_control_a_surface_on_a_local_composition_is_built(surface: OperatorSurface) -> None:
     assert _authorization(operator_surface=surface).operator_surface is surface
+
+
+# ---- KLP-AC-115 (slice C): what a decision row may carry ---------------------------
+
+
+def _check_holds(
+    authority: KnowledgeReviewAuthorityClass, channel: KnowledgeDecisionChannel, client: str | None
+) -> bool:
+    """CHECK `knowledge_decision_channel_matches_authority`, restated over Python values."""
+    if authority is KnowledgeReviewAuthorityClass.LOCAL_OPERATOR:
+        return channel.value in {"local_cli", "local_web"} and client is None
+    if authority is KnowledgeReviewAuthorityClass.REMOTE_OPERATOR_ATTESTED:
+        return channel.value == "remote_operator_review" and client is not None
+    return (channel.value == "local_unattested" and client is None) or (
+        channel.value == "remote_interactive" and client is not None
+    )
+
+
+def test_the_restated_check_is_the_frozen_ddl_expression() -> None:
+    checks = _decision_checks()
+    expression = checks["knowledge_decision_channel_matches_authority"]
+    for fragment in (
+        "operator_authority_class = 'local_operator' AND decision_channel IN ('local_cli', "
+        "'local_web') AND authenticated_client_id IS NULL",
+        "operator_authority_class = 'remote_operator_attested' AND decision_channel = "
+        "'remote_operator_review' AND authenticated_client_id IS NOT NULL",
+        "decision_channel = 'local_unattested' AND authenticated_client_id IS NULL",
+        "decision_channel = 'remote_interactive' AND authenticated_client_id IS NOT NULL",
+    ):
+        assert fragment in expression
+
+
+def _decision_checks() -> dict[str, str]:
+    found: dict[str, str] = {}
+
+    def walk(node: object) -> None:
+        if isinstance(node, dict):
+            if node.get("kind") == "check" and str(node.get("name", "")).startswith(
+                "knowledge_decision_"
+            ):
+                found[str(node["name"])] = str(node["expression"])
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(MATRIX)
+    return found
+
+
+@pytest.mark.parametrize(
+    ("surface", "transport", "client", "grants"),
+    [
+        (OperatorSurface.CLI, LOCAL, None, False),
+        (OperatorSurface.HTTP_GATEWAY, LOCAL, None, False),
+        (None, LOCAL, None, False),
+        (None, LOCAL, None, True),
+        (None, LOCAL, REVIEWER, False),
+        (None, REMOTE, REVIEWER, False),
+        (None, REMOTE, CHAT, True),
+        (None, REMOTE, DISCOVERY, True),
+    ],
+)
+def test_every_derivable_pair_with_the_stored_client_satisfies_the_check(
+    surface: OperatorSurface | None,
+    transport: CaptureTransport,
+    client: str | None,
+    grants: bool,
+) -> None:
+    """The service stores the client only on a remote channel (AC-115 "remote only")."""
+    authority, channel = _derive(surface=surface, transport=transport, client=client, grants=grants)
+    stored = client if channel.value in {"remote_interactive", "remote_operator_review"} else None
+    assert _check_holds(authority, channel, stored)
+    if transport is LOCAL:
+        assert stored is None
+
+
+def test_there_is_no_feedback_relay_role() -> None:
+    """R5's `remote_feedback` channel is gone: only the five channels and three classes exist."""
+    assert {member.value for member in KnowledgeDecisionChannel} == {
+        "local_cli",
+        "local_web",
+        "local_unattested",
+        "remote_interactive",
+        "remote_operator_review",
+    }
+    assert {member.value for member in KnowledgeReviewAuthorityClass} == {
+        "ordinary_reviewer",
+        "local_operator",
+        "remote_operator_attested",
+    }
+    assert not [member for member in KnowledgeDecisionChannel if "feedback" in member.value]

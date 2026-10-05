@@ -53,7 +53,10 @@ from tests.database.test_knowledge_assertion_submissions import (
     live_assertions,
 )
 
+from my_pa.application.commands import DecideReviewCase
+from my_pa.domain.capture.review import Disposition
 from my_pa.domain.capture.submission import CaptureTransport
+from my_pa.domain.identity.operator_surface import OperatorSurface
 from my_pa.domain.knowledge_assertion.vocabulary import KnowledgeSubjectKind
 from my_pa.infrastructure.persistence.tables import knowledge_assertion_proposals
 
@@ -272,102 +275,101 @@ def test_an_equivalent_open_proposal_is_pending_review_and_unchanged(
     assert _proposal(runtime.engine, queued["proposal_id"]) == before
 
 
-def _hold_proposal(holder: Connection, proposal_id: str) -> None:
-    holder.execute(
-        text(
-            "SELECT 1 FROM knowledge.knowledge_assertion_proposals WHERE proposal_id = :p "
-            "FOR UPDATE"
-        ),
-        {"p": proposal_id},
-    ).one()
-
-
-def _accept(holder: Connection, proposal_id: str) -> None:
-    """Stand-in for Review accept (slice C): the proposal's own fact goes live."""
-    holder.execute(
-        text(
-            "INSERT INTO knowledge.knowledge_assertions (principal_id, assertion_id, "
-            "subject_kind, subject_id, predicate_code, predicate_version, value_type, "
-            "cardinality, temporal_semantics, qualifier_rule, value_text, value_datetime, "
-            "qualifier_json, effective_from, effective_to, normalized_value_sha256, "
-            "fingerprint_version, assertion_fingerprint, epistemic_status, classification, "
-            "origin_is_synthetic, lifecycle, version, origin_submission_id, "
-            "accepted_review_case_id, created_at, updated_at) SELECT principal_id, "
-            "'kasr_' || substr(md5(proposal_id), 1, 24), subject_kind, subject_id, "
-            "predicate_code, predicate_version, value_type, cardinality, temporal_semantics, "
-            "qualifier_rule, value_text, value_datetime, qualifier_json, effective_from, "
-            "effective_to, normalized_value_sha256, fingerprint_version, proposal_fingerprint, "
-            "'review_accepted', classification, origin_is_synthetic, 'active', 1, "
-            "origin_submission_id, review_case_id, now(), now() FROM "
-            "knowledge.knowledge_assertion_proposals WHERE proposal_id = :p"
-        ),
-        {"p": proposal_id},
-    )
-    holder.execute(
-        text(
-            "UPDATE knowledge.knowledge_assertion_proposals SET state = 'accepted', "
-            "updated_at = now() WHERE proposal_id = :p"
-        ),
-        {"p": proposal_id},
-    )
-    holder.commit()
-
-
-def _reject(holder: Connection, proposal_id: str) -> None:
-    holder.execute(
-        text(
-            "UPDATE knowledge.knowledge_assertion_proposals SET state = 'rejected', "
-            "updated_at = now() WHERE proposal_id = :p"
-        ),
-        {"p": proposal_id},
-    )
-    holder.commit()
-
-
-def _race14a(
-    runtime: SubmitRuntime, terminal: Callable[[Connection, str], None]
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+def _queue_financial(runtime: SubmitRuntime, key: str) -> tuple[str, str, str, dict[str, Any]]:
+    """(principal, profile, project, queued) for one requires_operator project proposal."""
     principal = new_principal()
     profile = runtime.profile(principal)
-    org = runtime.entity(principal, f"race14a-{terminal.__name__}")
-    queued = _queue(runtime, principal, profile, org)
-    engine = runtime.engine
-    with engine.connect() as holder:
-        _hold_proposal(holder, queued["proposal_id"])
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            waiting = pool.submit(
-                runtime.submit,
-                principal,
-                profile,
-                subject_id=org,
-                predicate=PAYMENT,
-                candidate="p-late",
-                evidence=(external("obj-late"),),
-            )
-            # The submit waits at C5 on the proposal row the holder keeps.
-            _wait_for_waiters(engine, 1, waiting)
-            terminal(holder, queued["proposal_id"])
-            result = waiting.result(timeout=DEADLINE_SECONDS)
-    return queued, result, _proposal(engine, queued["proposal_id"])
+    project = runtime.project(principal, key)
+    queued = submit_envelope(
+        runtime,
+        principal,
+        profile,
+        subject_kind=KnowledgeSubjectKind.PROJECT,
+        subject_id=project,
+        predicate=FINANCIAL,
+        value="Synthetic budget fact",
+        candidate="p0",
+    )
+    assert queued.error is None and queued.result["outcome"] == "review_queued"
+    return principal, profile, project, dict(queued.result)
+
+
+def _late_submit(runtime: SubmitRuntime, principal: str, profile: str, project: str) -> Any:  # noqa: ANN401
+    """The same fact under a new candidate with new evidence (an enrichment if live)."""
+    return submit_envelope(
+        runtime,
+        principal,
+        profile,
+        subject_kind=KnowledgeSubjectKind.PROJECT,
+        subject_id=project,
+        predicate=FINANCIAL,
+        value="Synthetic budget fact",
+        candidate="p-late",
+        evidence=(external("obj-late"),),
+    )
+
+
+def _decide(runtime: SubmitRuntime, principal: str, case: str, disposition: Disposition) -> Any:  # noqa: ANN401
+    """A real Knowledge `review.decide` from the CLI operator surface (slice C)."""
+    return runtime.invoke(
+        DecideReviewCase(review_case_id=case, expected_review_version=0, disposition=disposition),
+        principal_id=principal,
+        operator_surface=OperatorSurface.CLI,
+    )
 
 
 def test_race_14a_accepted_after_the_c5_wait_enriches_the_live_assertion(
     runtime: SubmitRuntime,
 ) -> None:
-    queued, result, older = _race14a(runtime, _accept)
-    assert result["outcome"] == "duplicate_enriched", result
-    assert result["assertion_version"] == 2
-    assert older["state"] == "accepted"
-    assert queued["proposal_id"] != result["proposal_id"]
+    """A real accept holds C5 and waits at C6; the late submit waits at C5 behind it.
+
+    Releasing the C6 key lets the accept commit; the submit then takes C5, finds
+    the proposal `accepted` and its fact live, and enriches it.
+    """
+    principal, profile, project, queued = _queue_financial(runtime, "race14a-accept")
+    engine = runtime.engine
+    commit_lock_row(engine, principal, "project", project, FINANCIAL)
+    accepted, late = race(
+        engine,
+        lambda holder: hold_subject_lock(holder, principal, "project", project, FINANCIAL),
+        lambda: _decide(runtime, principal, queued["review_case_id"], Disposition.ACCEPT),
+        lambda: _late_submit(runtime, principal, profile, project),
+    )
+    assert accepted.error is None, accepted.error
+    assert late.error is None, late.error
+    assert late.result["outcome"] == "duplicate_enriched", late.result
+    assert late.result["assertion_id"] == accepted.result["assertion_id"]
+    assert late.result["assertion_version"] == 2
+    assert _proposal(engine, queued["proposal_id"])["state"] == "accepted"
 
 
 def test_race_14a_rejected_after_the_c5_wait_queues_a_new_proposal(
     runtime: SubmitRuntime,
 ) -> None:
-    queued, result, older = _race14a(runtime, _reject)
-    assert result["outcome"] == "review_queued", result
-    assert result["proposal_id"] != queued["proposal_id"]
-    assert older["state"] == "rejected"
+    """The late submit has seen the proposal open (C2) and waits at C4a; a real reject
+    completes meanwhile; the submit then takes C5, finds it `rejected`, and queues a new
+    proposal -- the old one is unchanged."""
+    principal, profile, project, queued = _queue_financial(runtime, "race14a-reject")
+    engine = runtime.engine
+    with engine.connect() as holder:
+        holder.execute(
+            text(
+                "SELECT 1 FROM knowledge.knowledge_discovery_source_profiles "
+                "WHERE source_profile_id = :p FOR NO KEY UPDATE"
+            ),
+            {"p": profile},
+        ).one()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            waiting = pool.submit(_late_submit, runtime, principal, profile, project)
+            _wait_for_waiters(engine, 1, waiting)
+            rejected = _decide(runtime, principal, queued["review_case_id"], Disposition.REJECT)
+            assert rejected.error is None, rejected.error
+            holder.rollback()
+            late = waiting.result(timeout=DEADLINE_SECONDS)
+    assert late.error is None, late.error
+    assert late.result["outcome"] == "review_queued", late.result
+    assert late.result["proposal_id"] != queued["proposal_id"]
+    assert _proposal(engine, queued["proposal_id"])["state"] == "rejected"
 
 
 def test_race_14b_a_proposal_first_seen_after_c6_is_a_retryable_conflict(

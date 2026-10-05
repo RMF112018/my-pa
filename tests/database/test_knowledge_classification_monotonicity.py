@@ -16,6 +16,11 @@ slice B1) the KLP-R6V-201 / KLP-R6V-202 cases of KLP-AC-152. Marked
   linked through *another* profile of the same `origin_system`, with no
   mutation fan-out; a new external version cannot launder it either.
 
+KLP-WP-04 slice C adds the Review cases (KLP-AC-095, 116): an accepted or
+corrected fact is stored no less restrictive than its proposal (raised after
+intake) or than evidence restricted after intake, and the BEFORE INSERT trigger
+refuses a raw `accepted_review_case_id` insert below its proposal (23514).
+
 KLP-WP-04 slice B2 adds the submit / successor cases (KLP-AC-095, 116, 138):
 
 * a successor supersedes a restricted predecessor and is stored no less
@@ -47,6 +52,7 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
 from my_pa.application.commands import ReadKnowledgeAssertion
+from my_pa.domain.capture.review import Disposition
 from my_pa.domain.common.classification import Classification, is_cloud_eligible
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.source.registry import issue_identifier
@@ -58,6 +64,7 @@ from tests.database.test_knowledge_assertion_repository import (
     capture_evidence,
     new_principal,
 )
+from tests.database.test_knowledge_assertion_review import ReviewRuntime
 from tests.database.test_knowledge_assertion_submissions import (
     PAYMENT,
     SubmitRuntime,
@@ -561,3 +568,94 @@ def test_a_submit_re_citing_a_now_restricted_object_raises_and_redacts(
     assert row.excerpt is None
     assert row.excerpt_sha256 == hashlib.sha256(b"Kept excerpt.").hexdigest()
     del first
+
+
+# ---- KLP-WP-04 slice C: a Review-accepted or corrected fact (KLP-AC-095, 116) ---------
+
+
+@pytest.fixture
+def reviewer(disposable_database: str) -> Iterator[ReviewRuntime]:
+    composed = ReviewRuntime(disposable_database)
+    try:
+        yield composed
+    finally:
+        composed.close()
+
+
+def _raise_proposal(reviewer: ReviewRuntime, case: str) -> None:
+    """Raise the proposal's stored class (a permitted, monotonic control change)."""
+    with reviewer.engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE knowledge.knowledge_assertion_proposals SET classification = "
+                "'restricted_local' WHERE review_case_id = :c"
+            ),
+            {"c": case},
+        )
+
+
+@pytest.mark.parametrize(
+    ("disposition", "patch"),
+    [
+        (Disposition.ACCEPT, None),
+        (Disposition.CORRECT_AND_ACCEPT, {"value": "Synthetic net 45 terms"}),
+    ],
+    ids=["accepted", "corrected"],
+)
+def test_a_promoted_fact_is_never_less_restrictive_than_its_proposal(
+    reviewer: ReviewRuntime, disposition: Disposition, patch: dict[str, object] | None
+) -> None:
+    principal = new_principal()
+    profile = reviewer.profile(principal)
+    org = reviewer.entity(principal, "review-floor")
+    case = str(reviewer.queue(principal, profile, org)["review_case_id"])
+    _raise_proposal(reviewer, case)
+    decided = reviewer.decide(principal, case, disposition, patch=patch)
+    assert _class_of(reviewer, str(decided["assertion_id"])) == "restricted_local"
+
+
+def test_a_promoted_fact_carries_evidence_restricted_after_intake(
+    reviewer: ReviewRuntime,
+) -> None:
+    principal = new_principal()
+    profile = reviewer.profile(principal)
+    org = reviewer.entity(principal, "review-evidence")
+    case = str(reviewer.queue(principal, profile, org)["review_case_id"])
+    with reviewer.engine.connect() as connection:
+        evidence = connection.execute(
+            select(knowledge_evidence_refs.c.evidence_ref_id).where(
+                knowledge_evidence_refs.c.principal_id == principal
+            )
+        ).scalar_one()
+    with knowledge_maintenance_transaction(reviewer.engine) as repository:
+        repository.classify_evidence_restricted(principal, evidence, at=WHEN)
+    decided = reviewer.decide(principal, case)
+    assert _class_of(reviewer, str(decided["assertion_id"])) == "restricted_local"
+
+
+def test_the_trigger_refuses_a_corrected_insert_below_its_proposal(
+    reviewer: ReviewRuntime,
+) -> None:
+    principal = new_principal()
+    profile = reviewer.profile(principal)
+    org = reviewer.entity(principal, "review-trigger")
+    case = str(reviewer.queue(principal, profile, org)["review_case_id"])
+    _raise_proposal(reviewer, case)
+    with pytest.raises(IntegrityError), reviewer.engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO knowledge.knowledge_assertions (principal_id, assertion_id, "
+                "subject_kind, subject_id, predicate_code, predicate_version, value_type, "
+                "cardinality, temporal_semantics, qualifier_rule, value_text, "
+                "normalized_value_sha256, fingerprint_version, assertion_fingerprint, "
+                "epistemic_status, classification, origin_is_synthetic, lifecycle, version, "
+                "origin_submission_id, accepted_review_case_id, created_at, updated_at) "
+                "SELECT principal_id, :n, subject_kind, subject_id, predicate_code, "
+                "predicate_version, value_type, cardinality, temporal_semantics, "
+                "qualifier_rule, 'Synthetic corrected', normalized_value_sha256, 1, :f, "
+                "'review_accepted', 'private_local', origin_is_synthetic, 'active', 1, "
+                "origin_submission_id, review_case_id, now(), now() "
+                "FROM knowledge.knowledge_assertion_proposals WHERE review_case_id = :c"
+            ),
+            {"n": issue_identifier(IdKind.KNOWLEDGE_ASSERTION), "f": "d" * 64, "c": case},
+        )

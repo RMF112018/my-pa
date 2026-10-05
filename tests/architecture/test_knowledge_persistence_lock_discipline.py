@@ -21,6 +21,12 @@ Over `src/my_pa/infrastructure/persistence/knowledge_assertions.py`:
   lock or re-locks evidence;
 * the C4b `SELECT` is one statement whose mode is chosen once
   (`with_for_update()` vs `with_for_update(read=True)`), never upgraded later.
+
+Slice C adds the Knowledge Review body (`_ReviewDecision`, KLP-AC-099 Review
+order): C3 (`lock_entity_mutation_scopes`, once) -> `_lock_evidence` (C4b, one
+sorted `FOR SHARE` SELECT) -> `_capture_fence` (C4c, once) -> `_proposal(lock=True)`
+(C5) -> `_lock_subjects` (C6, once), and nothing after C6 (`_insert_decision`,
+`_mutation`, `_promote`) takes a C3-C5 lock or re-locks evidence or the proposal.
 """
 
 from __future__ import annotations
@@ -85,7 +91,12 @@ def test_no_greatest_or_max_over_classification_text() -> None:
 
 
 def test_the_entity_scope_is_taken_once_per_write_body_and_never_by_maintenance() -> None:
-    for body, expected in (("_ExplicitCreate", 1), ("_AutonomousSubmit", 1), ("_Maintenance", 0)):
+    for body, expected in (
+        ("_ExplicitCreate", 1),
+        ("_AutonomousSubmit", 1),
+        ("_ReviewDecision", 1),
+        ("_Maintenance", 0),
+    ):
         calls = [name for _l, name, _c in _called(_class(body))]
         assert calls.count("lock_entity_mutation_scopes") == expected, body
 
@@ -93,7 +104,7 @@ def test_the_entity_scope_is_taken_once_per_write_body_and_never_by_maintenance(
 def test_the_capture_fence_has_one_call_site_called_once_per_write_body() -> None:
     text = MODULE.read_text(encoding="utf-8")
     assert text.count("require_active_capture_roots(") == 1
-    for body in ("_ExplicitCreate", "_AutonomousSubmit"):
+    for body in ("_ExplicitCreate", "_AutonomousSubmit", "_ReviewDecision"):
         calls = [name for _l, name, _c in _called(_class(body))]
         assert calls.count("_capture_fence") == 1, body
     assert "_capture_fence" not in [name for _l, name, _c in _called(_class("_Maintenance"))]
@@ -135,4 +146,51 @@ def test_the_c4b_lock_mode_is_chosen_once_in_one_statement() -> None:
     assert len(modes) == 2
     assert {_keyword(call, "read") for call in modes} == {None, True}
     source = ast.get_source_segment(MODULE.read_text(encoding="utf-8"), resolve) or ""
+    assert source.count(".order_by(e.c.evidence_ref_id)") == 1
+
+
+def test_the_review_promotion_takes_c3_to_c6_in_the_global_order() -> None:
+    run = _method(_class("_ReviewDecision"), "run")
+    order: list[str] = []
+    for _line, name, call in _called(run):
+        if name in {"lock_entity_mutation_scopes", "_lock_evidence", "_capture_fence"}:
+            order.append(name)
+        elif name == "_proposal" and _keyword(call, "lock") is True:
+            order.append("C5")
+        elif name == "_lock_subjects":
+            order.append(name)
+    assert order == [
+        "lock_entity_mutation_scopes",
+        "_lock_evidence",
+        "_capture_fence",
+        "C5",
+        "_lock_subjects",
+    ]
+
+
+def test_nothing_after_the_review_c6_acquires_a_c3_to_c5_lock() -> None:
+    body = _class("_ReviewDecision")
+    forbidden = {"lock_entity_mutation_scopes", "_lock_evidence", "_capture_fence"}
+    for name in ("_insert_decision", "_mutation", "_promote"):
+        for _line, called, call in _called(_method(body, name)):
+            assert called not in forbidden, f"{name} calls {called} after C6"
+            assert called != "_lock_subjects", f"{name} re-locks subjects after C6"
+            if called == "_proposal":
+                assert _keyword(call, "lock") is not True, f"{name} re-locks the proposal"
+            assert called != "with_for_update", f"{name} takes a row lock after C6"
+    run = _method(body, "run")
+    c6 = next(line for line, name, _c in _called(run) if name == "_lock_subjects")
+    for line, name, call in _called(run):
+        if line > c6:
+            assert name not in forbidden, f"run calls {name} after C6"
+            if name == "_proposal":
+                assert _keyword(call, "lock") is not True
+
+
+def test_the_review_evidence_lock_is_one_sorted_share_select() -> None:
+    lock = _method(_class("_ReviewDecision"), "_lock_evidence")
+    modes = [call for _l, name, call in _called(lock) if name == "with_for_update"]
+    assert len(modes) == 1
+    assert _keyword(modes[0], "read") is True
+    source = ast.get_source_segment(MODULE.read_text(encoding="utf-8"), lock) or ""
     assert source.count(".order_by(e.c.evidence_ref_id)") == 1

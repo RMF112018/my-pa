@@ -28,6 +28,10 @@ version the frozen seeds lack (the registry has no runtime writer).
   Entity refused `denied(subject)`.
 * State machine: reject/defer/mark_unresolved/invalidate move the proposal and
   write nothing canonical; a terminal proposal and a stale version conflict.
+* KLP-AC-114 (database half): CHECK `knowledge_decision_operator_rule_holds`
+  refuses an `ordinary_reviewer` accept / correct_and_accept of a
+  `requires_operator` case, and `knowledge_decision_channel_matches_authority`
+  refuses a channel, class and client that do not travel together.
 
 This module also holds the Review harness the other slice C modules import.
 Every identity here is synthetic.
@@ -41,6 +45,7 @@ from typing import Any, Final
 
 import pytest
 from sqlalchemy import Engine, func, select, text
+from sqlalchemy.exc import IntegrityError
 
 from my_pa.application.commands import (
     ArchiveEntity,
@@ -871,3 +876,66 @@ def test_a_foreign_case_is_not_found_exactly_as_an_unknown_one(review: ReviewRun
     assert foreign["safe_details"] == ["review_case_id"]
     assert decisions_of(review.engine, case) == []
     assert review.knowledge_cases(stranger) == []
+
+
+# ---- KLP-AC-114 (database half): the CHECKs behind the service rule -------------------
+
+
+@pytest.mark.parametrize(
+    ("authority", "channel", "client", "disposition", "refused"),
+    [
+        ("ordinary_reviewer", "local_unattested", None, "accept", True),
+        ("ordinary_reviewer", "remote_interactive", CHATLLM_CLIENT, "correct_and_accept", True),
+        ("ordinary_reviewer", "remote_interactive", CHATLLM_CLIENT, "reject", False),
+        ("local_operator", "remote_interactive", None, "reject", True),
+        ("remote_operator_attested", "remote_operator_review", None, "reject", True),
+        ("ordinary_reviewer", "local_unattested", CHATLLM_CLIENT, "defer", True),
+        ("local_operator", "local_cli", None, "accept", False),
+    ],
+    ids=[
+        "ordinary-accept",
+        "ordinary-correct",
+        "ordinary-reject-control",
+        "operator-remote-channel",
+        "attested-without-client",
+        "unattested-with-client",
+        "operator-accept-control",
+    ],
+)
+def test_the_decision_checks_refuse_an_ordinary_acceptance_and_a_mismatched_channel(
+    review: ReviewRuntime,
+    authority: str,
+    channel: str,
+    client: str | None,
+    disposition: str,
+    refused: bool,
+) -> None:
+    _principal, _entity, case = _queued(review)
+    insert = text(
+        "INSERT INTO knowledge.knowledge_assertion_review_decisions (principal_id, "
+        "decision_id, review_case_id, proposal_id, review_requirement, decision_sequence, "
+        "disposition, correction_patch, authenticated_client_id, decision_channel, "
+        "operator_authority_class, correlation_id, audit_id, created_at) SELECT principal_id, "
+        ":d, review_case_id, proposal_id, review_requirement, 1, :disposition, "
+        "CAST(:patch AS jsonb), :client, :channel, :authority, :corr, :audit, now() "
+        "FROM knowledge.knowledge_assertion_proposals WHERE review_case_id = :c"
+    )
+    values = {
+        "d": issue_identifier(IdKind.KNOWLEDGE_ASSERTION_REVIEW_DECISION),
+        "disposition": disposition,
+        "patch": '{"value": "x"}' if disposition == "correct_and_accept" else None,
+        "client": client,
+        "channel": channel,
+        "authority": authority,
+        "corr": issue_identifier(IdKind.CORRELATION),
+        "audit": issue_identifier(IdKind.AUDIT),
+        "c": case,
+    }
+    if refused:
+        with pytest.raises(IntegrityError), review.engine.begin() as connection:
+            connection.execute(insert, values)
+        assert decisions_of(review.engine, case) == []
+    else:
+        with review.engine.begin() as connection:
+            connection.execute(insert, values)
+        assert len(decisions_of(review.engine, case)) == 1

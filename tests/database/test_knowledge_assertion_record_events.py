@@ -30,6 +30,14 @@ KLP-AC-043):
 * The revalidation kind is staged by the availability ingress, whose event is
   proven in `tests/database/test_knowledge_evidence_availability.py`; submit
   carries no availability report in this build (slice B2 residual).
+
+KLP-WP-04 slice C adds the Review promotion kinds (KLP-AC-042 review half,
+KLP-AC-043): `review_accept` and `review_correct` -> `created`, and a superseded
+single-current holder -> `state_changed(lifecycle)` first, each with actor
+`review_promotion`, authority `review_accepted`, `source_capability`
+`review.decide` and its `kamut_` receipt; a proposal and every non-promoting
+decision (defer, mark_unresolved, reject, invalidate) commit no event and
+advance no sequence.
 """
 
 from __future__ import annotations
@@ -41,6 +49,7 @@ import pytest
 from sqlalchemy import select, text
 
 from my_pa.application.commands import ListRecordEvents
+from my_pa.domain.capture.review import Disposition
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.knowledge_assertion.provenance import (
     KNOWLEDGE_EVENT_ACTOR_CLASSES,
@@ -66,6 +75,7 @@ from tests.database.test_knowledge_assertion_repository import (
     knowledge_events,
     new_principal,
 )
+from tests.database.test_knowledge_assertion_review import ReviewRuntime
 from tests.database.test_knowledge_assertion_submissions import (
     PAYMENT,
     SubmitRuntime,
@@ -355,3 +365,84 @@ def test_proposals_alone_emit_no_canonical_event(submitter: SubmitRuntime) -> No
     assert pending["proposal_id"] == queued["proposal_id"]
     assert knowledge_events(submitter.engine, principal) == []
     assert next_sequence(submitter.engine, principal) == before
+
+
+# ---- KLP-WP-04 slice C: Review promotion kinds (KLP-AC-042 review half, AC-043) ---------
+
+
+@pytest.fixture
+def reviewer(disposable_database: str) -> Iterator[ReviewRuntime]:
+    composed = ReviewRuntime(disposable_database)
+    try:
+        yield composed
+    finally:
+        composed.close()
+
+
+def _assert_review_event(event: dict[str, object], kind: KnowledgeMutationKind) -> None:
+    mapped = KNOWLEDGE_MUTATION_EVENTS[kind]
+    origin = KnowledgeEventOrigin.REVIEW_PROMOTION
+    assert event["event_kind"] == mapped.kind.value
+    assert tuple(event["changed_fields"]) == mapped.changed_fields  # type: ignore[arg-type]
+    assert event["actor_class"] == KNOWLEDGE_EVENT_ACTOR_CLASSES[origin].value
+    assert event["authority"] == KNOWLEDGE_EVENT_AUTHORITIES[origin].value
+    assert event["source_capability"] == "review.decide"
+    assert str(event["source_receipt_id"]).startswith("kamut_")
+    assert event["causation_event_id"] is None
+
+
+def test_review_accept_correct_and_supersede_stage_exactly_the_mapped_events(
+    reviewer: ReviewRuntime,
+) -> None:
+    principal = new_principal()
+    profile = reviewer.profile(principal)
+    org = reviewer.entity(principal, "review-events")
+    first = reviewer.queue(principal, profile, org, candidate="r1", value="Synthetic net 30")
+    accepted = reviewer.decide(principal, str(first["review_case_id"]))
+    (created,) = knowledge_events(reviewer.engine, principal)
+    _assert_review_event(created, KnowledgeMutationKind.REVIEW_ACCEPT)
+    assert created["record_id"] == accepted["assertion_id"]
+    assert created["source_receipt_id"] == accepted["receipt_id"]
+    assert created["record_version"] == 1
+    # A second, different value for the single-current key: correct-and-accept
+    # supersedes the accepted fact (predecessor state change, then creation).
+    second = reviewer.queue(
+        principal,
+        profile,
+        org,
+        candidate="r2",
+        value="Synthetic net 60",
+        evidence=(external("obj-r2"),),
+    )
+    corrected = reviewer.decide(
+        principal,
+        str(second["review_case_id"]),
+        Disposition.CORRECT_AND_ACCEPT,
+        patch={"value": "Synthetic net 75"},
+    )
+    events = knowledge_events(reviewer.engine, principal)
+    assert len(events) == 3
+    _assert_review_event(events[1], KnowledgeMutationKind.SUPERSEDE_PREDECESSOR)
+    assert events[1]["record_id"] == accepted["assertion_id"]
+    assert events[1]["record_version"] == 2
+    _assert_review_event(events[2], KnowledgeMutationKind.REVIEW_CORRECT)
+    assert events[2]["record_id"] == corrected["assertion_id"]
+
+
+def test_proposals_and_non_promoting_decisions_emit_no_canonical_event(
+    reviewer: ReviewRuntime,
+) -> None:
+    principal = new_principal()
+    profile = reviewer.profile(principal)
+    org = reviewer.entity(principal, "review-quiet")
+    sequence = next_sequence(reviewer.engine, principal)
+    queued = reviewer.queue(principal, profile, org)
+    case = str(queued["review_case_id"])
+    for version, disposition in enumerate(
+        (Disposition.DEFER, Disposition.MARK_UNRESOLVED, Disposition.REJECT)
+    ):
+        reviewer.decide(principal, case, disposition, version=version)
+    other = reviewer.queue(principal, profile, org, candidate="c2", value="Synthetic other")
+    reviewer.decide(principal, str(other["review_case_id"]), Disposition.INVALIDATE)
+    assert knowledge_events(reviewer.engine, principal) == []
+    assert next_sequence(reviewer.engine, principal) == sequence

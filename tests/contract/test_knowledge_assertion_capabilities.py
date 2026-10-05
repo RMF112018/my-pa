@@ -396,6 +396,26 @@ def test_the_two_purposes_are_declared_and_used_only_by_the_six() -> None:
     assert users == KNOWLEDGE
 
 
+def test_submit_checkpoint_and_provenance_are_not_declared_by_wp03() -> None:
+    """At the KLP-WP-03 head the three names were admitted ahead of the domain.
+
+    The node id is kept from KLP-WP-03 (KLP-AC-080). Its claim is about the WP-03
+    head, which the schema-ahead gap row for `wp03` records: the database admitted
+    submit, checkpoint and provenance (and their purposes) that the WP-03 domain
+    did not declare; KLP-WP-04 declared the first two (`wp04` keeps provenance).
+    """
+    from tests.schema import knowledge_schema_ahead_contract as contract
+
+    wp03 = contract.GAP_ROWS["wp03"]
+    assert {
+        "knowledge.assertions.submit",
+        "knowledge.discovery.checkpoint",
+        "record_events.provenance",
+    } <= wp03["capability"]
+    assert {"knowledge_assertion_observation", "record_event_provenance_read"} <= wp03["purpose"]
+    assert contract.GAP_ROWS["wp04"]["capability"] == frozenset({"record_events.provenance"})
+
+
 def test_provenance_is_not_declared_before_wp05() -> None:
     """KLP-WP-04 declared submit and checkpoint; `record_events.provenance` is WP-05's."""
     values = {capability.value for capability in Capability}

@@ -857,6 +857,30 @@ def test_v6_demands_the_knowledge_grants_only_when_the_plane_is_composed() -> No
         )
 
 
+def test_v6_publishes_no_submit_or_checkpoint_control_plane_name() -> None:
+    """What `chatllm-data-v6` held stays true under v7, for every composition.
+
+    The node id is kept from KLP-WP-03 (KLP-AC-080: no collected node disappears
+    without a matrix replacement). v6 published neither name because neither was
+    declared; v7 declares both and still publishes neither: across all sixty-four
+    plane compositions the ordinary desired catalog never holds them.
+    """
+    discovery = {Capability.KNOWLEDGE_ASSERTIONS_SUBMIT, Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT}
+    for bits in range(64):
+        planes = ChatLLMCompositionPlanes(
+            managed_documents=bool(bits & 1),
+            relationship_intelligence=bool(bits & 2),
+            relationship_intelligence_writes=bool(bits & 4),
+            relationship_memory=bool(bits & 8),
+            constraints=bool(bits & 16),
+            knowledge_assertions=bool(bits & 32),
+        )
+        desired = desired_effective_capabilities(
+            composed_capabilities(frozenset(Capability), planes)
+        )
+        assert not discovery & desired, planes
+
+
 def test_v7_excludes_submit_and_checkpoint_from_the_ordinary_profile() -> None:
     """KLP-WP-04 (KLP-AC-019/106): declared, and never data management or desired."""
     for capability in (

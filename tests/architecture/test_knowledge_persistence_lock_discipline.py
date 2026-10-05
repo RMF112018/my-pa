@@ -27,6 +27,20 @@ order): C3 (`lock_entity_mutation_scopes`, once) -> `_lock_evidence` (C4b, one
 sorted `FOR SHARE` SELECT) -> `_capture_fence` (C4c, once) -> `_proposal(lock=True)`
 (C5) -> `_lock_subjects` (C6, once), and nothing after C6 (`_insert_decision`,
 `_mutation`, `_promote`) takes a C3-C5 lock or re-locks evidence or the proposal.
+
+Slice E (finalisation) closes the static half over every transaction body:
+
+* every row lock on `knowledge_evidence_refs` is taken by exactly one method per
+  body (`_resolve_evidence` for explicit create and submit, `_lock_evidence`
+  for Review and maintenance), in the one mode the body needs: create/submit
+  choose FOR UPDATE vs FOR SHARE once in one conditional expression, Review
+  only shares, maintenance only takes FOR UPDATE; no other method that reads
+  the evidence table locks it, and no method calls its body's evidence-lock
+  method twice -- so FOR UPDATE never follows FOR SHARE on an evidence row in
+  one path;
+* the checkpoint body takes no C3 and no evidence lock;
+* no Knowledge module (domain, application, persistence, the operator CLI)
+  spells `GREATEST`/`MAX` over classification text.
 """
 
 from __future__ import annotations
@@ -83,11 +97,108 @@ def _keyword(call: ast.Call, name: str) -> object:
     return None
 
 
+KNOWLEDGE_MODULES: Final = (
+    MODULE,
+    ROOT / "src/my_pa/application/knowledge_assertions.py",
+    ROOT / "apps/cli/knowledge_source_profiles.py",
+    *sorted((ROOT / "src/my_pa/domain/knowledge_assertion").glob("*.py")),
+)
+_GREATEST: Final = re.compile(r"(?i:GREATEST\s*\(|func\.greatest|func\.max\()|\bMAX\s*\(")
+#: Body -> (the one evidence-lock method, the lock modes it may use).
+EVIDENCE_LOCKS: Final = {
+    "_ExplicitCreate": ("_resolve_evidence", frozenset({None, True})),
+    "_AutonomousSubmit": ("_resolve_evidence", frozenset({None, True})),
+    "_ReviewDecision": ("_lock_evidence", frozenset({True})),
+    "_Maintenance": ("_lock_evidence", frozenset({None})),
+}
+EVIDENCE_NAMES: Final = frozenset({"knowledge_evidence_refs", "_EVIDENCE", "_SIBLING"})
+
+
+def _python_max_over_classification(text: str) -> list[int]:
+    """Lines where builtin `max`/`min` ranges over a classification (lexical, not rank)."""
+    lines: list[int] = []
+    for node in ast.walk(ast.parse(text)):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in {"max", "min"}
+            and "classification" in (ast.get_source_segment(text, node) or "").lower()
+            and not any(keyword.arg == "key" for keyword in node.keywords)
+        ):
+            lines.append(node.lineno)
+    return lines
+
+
 def test_no_greatest_or_max_over_classification_text() -> None:
-    text = MODULE.read_text(encoding="utf-8")
-    assert not re.search(r"GREATEST\s*\(", text, re.IGNORECASE)
-    assert "func.greatest" not in text
-    assert "func.max(" not in text
+    for path in KNOWLEDGE_MODULES:
+        text = path.read_text(encoding="utf-8")
+        assert not _GREATEST.search(text), path.relative_to(ROOT).as_posix()
+        assert _python_max_over_classification(text) == [], path.relative_to(ROOT).as_posix()
+
+
+def test_the_greatest_detector_is_not_vacuous() -> None:
+    assert len(KNOWLEDGE_MODULES) > 5
+    for planted in (
+        "GREATEST(a.classification, b.classification)",
+        "func.greatest(x, y)",
+        "func.max(e.c.source_classification)",
+        "SELECT MAX(source_classification) FROM e",
+    ):
+        assert _GREATEST.search(planted), planted
+    assert _python_max_over_classification("x = max(a.classification, b.classification)\n")
+    assert not _python_max_over_classification(
+        "x = max(classes, key=CLASSIFICATION_RANK.__getitem__)\n"
+    )
+    assert not _GREATEST.search("knowledge.knowledge_classification_rank(classification)")
+
+
+def _reads_evidence(method: ast.FunctionDef) -> bool:
+    return any(
+        isinstance(node, ast.Name) and node.id in EVIDENCE_NAMES for node in ast.walk(method)
+    )
+
+
+def _lock_modes(method: ast.FunctionDef) -> list[object]:
+    return [
+        _keyword(call, "read") for _l, name, call in _called(method) if name == "with_for_update"
+    ]
+
+
+def test_each_body_locks_evidence_in_one_method_and_one_chosen_mode() -> None:
+    for body_name, (locker, modes) in EVIDENCE_LOCKS.items():
+        body = _class(body_name)
+        lockers = [
+            method.name
+            for method in body.body
+            if isinstance(method, ast.FunctionDef)
+            and _reads_evidence(method)
+            and _lock_modes(method)
+        ]
+        assert lockers == [locker], (body_name, lockers)
+        method = _method(body, locker)
+        assert set(_lock_modes(method)) == modes, body_name
+        if len(modes) == 2:
+            # Both modes sit in one conditional expression: chosen once, never upgraded.
+            choices = [node for node in ast.walk(method) if isinstance(node, ast.IfExp)]
+            assert any(
+                {name for _l, name, _c in _called(choice)} >= {"with_for_update"}
+                and len([1 for _l, n, _c in _called(choice) if n == "with_for_update"]) == 2
+                for choice in choices
+            ), body_name
+        for caller in body.body:
+            if isinstance(caller, ast.FunctionDef):
+                count = [name for _l, name, _c in _called(caller)].count(locker)
+                assert count <= 1, f"{body_name}.{caller.name} locks evidence {count} times"
+
+
+def test_the_checkpoint_body_takes_no_entity_scope_and_no_evidence_lock() -> None:
+    body = _class("_CheckpointAdvance")
+    calls = [name for _l, name, _c in _called(body)]
+    assert "lock_entity_mutation_scopes" not in calls
+    assert "_capture_fence" not in calls
+    for method in body.body:
+        if isinstance(method, ast.FunctionDef):
+            assert not _reads_evidence(method), method.name
 
 
 def test_the_entity_scope_is_taken_once_per_write_body_and_never_by_maintenance() -> None:

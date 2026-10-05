@@ -49,8 +49,8 @@ TRUNCATE_TRIGGERS: Final = {
 }
 
 #: Tables the feed reader names besides the two Record Event relations.
-#: ``page`` plans every routing branch and, for a remote read, the capture and
-#: memory predicates, so runtime listing needs ``SELECT`` on each of them.
+#: ``page`` plans every routing branch and, for a remote read, the capture,
+#: memory and Knowledge predicates, so runtime listing needs ``SELECT`` on each.
 FEED_READER_SELECT_TABLES: Final = (
     "task_comments",
     "constraint_categories",
@@ -66,6 +66,14 @@ FEED_READER_SELECT_TABLES: Final = (
     "entity_person_organization_affiliations",
     *feed_reader_memory_relation_names(),
     "capture_versions",
+    # KLP-WP-03: the remote Knowledge term (`knowledge_event_withheld_remote`,
+    # planned only for a page over the Knowledge family) reads these, and its
+    # archived-capture-root term reads the capture lifecycle ledger.
+    "knowledge_assertions",
+    "knowledge_assertion_evidence_links",
+    "knowledge_evidence_refs",
+    "knowledge_discovery_source_profiles",
+    "capture_lifecycle_events",
 )
 
 _ROLE_NAME: Final = re.compile(r"^[a-z][a-z0-9_]{0,62}$")

@@ -219,3 +219,62 @@ def test_runtime_role_attributes_are_not_privileged(provisioned: Engine) -> None
             )
         ).scalar_one()
     assert owner == OWNER_ROLE
+
+
+def test_runtime_pages_the_remote_knowledge_family_with_withholding(
+    provisioned: Engine, cloned_database_url: str
+) -> None:
+    """KLP-WP-03 (DEV-13): the restricted runtime role executes the Knowledge feed term.
+
+    A remote page over `knowledge_assertion` plans the Knowledge withholding
+    term, which names the Knowledge relations and the capture lifecycle ledger.
+    Run as the provisioned runtime session, the page must succeed, carry the
+    permitted assertion's event and withhold the restricted one.
+    """
+    from my_pa.domain.record_events import RecordEventFamily
+    from my_pa.infrastructure.persistence.record_events import SqlRecordEventReader
+    from tests.database.test_knowledge_assertion_repository import (
+        KnowledgeRuntime,
+        new_principal,
+    )
+    from tests.security.test_knowledge_assertion_disclosure import restrict_assertion
+
+    runtime = KnowledgeRuntime(cloned_database_url)
+    try:
+        principal = new_principal()
+        permitted = runtime.create(principal, "klp03-role-permitted", value="Permitted value")
+        withheld = runtime.create(principal, "klp03-role-withheld", value="Withheld value")
+        restrict_assertion(runtime.engine, principal, withheld["assertion_id"])
+    finally:
+        runtime.close()
+    families = frozenset({RecordEventFamily.KNOWLEDGE_ASSERTION})
+    with provisioned.connect() as connection:
+        connection.execute(text(f"SET SESSION AUTHORIZATION {RUNTIME_ROLE}"))
+        connection.commit()
+        try:
+            assert connection.execute(text("SELECT session_user")).scalar_one() == RUNTIME_ROLE
+            reader = SqlRecordEventReader(connection)
+            remote = reader.page(
+                principal_id=principal,
+                after_sequence=0,
+                families=families,
+                include_restricted_memory=False,
+                limit=10,
+            )
+            local = reader.page(
+                principal_id=principal,
+                after_sequence=0,
+                families=families,
+                include_restricted_memory=True,
+                limit=10,
+            )
+            connection.rollback()
+        finally:
+            connection.execute(text("RESET SESSION AUTHORIZATION"))
+            connection.commit()
+    assert {row.record_id for row in remote.rows} == {permitted["assertion_id"]}
+    assert {row.record_id for row in local.rows} == {
+        permitted["assertion_id"],
+        withheld["assertion_id"],
+    }
+    assert remote.high_watermark_event_id == remote.rows[-1].event_id

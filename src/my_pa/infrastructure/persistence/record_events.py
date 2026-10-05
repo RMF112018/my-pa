@@ -33,8 +33,10 @@ COMMITTED both see one snapshot and the watermark can never pass an event the
 page did not see (G1-TX-004, plan D-01). Every predicate is scoped through
 `partition_criterion`, and a remote read (`include_restricted_memory=False`)
 appends the OD-8 restricted-memory predicate -- the stored classification *or*
-the memory's current version -- and its WP-RE-08 capture analogue (the stored
-classification *or* the capture's current version) to both subqueries, so a withheld event cannot
+the memory's current version -- its WP-RE-08 capture analogue (the stored
+classification *or* the capture's current version) and the KLP-WP-03 Knowledge
+Assertion predicate (the stored classification *or* the assertion's current
+`withheld_remote`) to both subqueries, so a withheld event cannot
 reach a row, a truncation flag or the watermark. The sequence number orders the
 page and never leaves this module.
 
@@ -98,6 +100,9 @@ from my_pa.domain.record_events import (
     RecordEventKind,
 )
 from my_pa.infrastructure.persistence import IsolationLevelError
+from my_pa.infrastructure.persistence.knowledge_assertions import (
+    knowledge_event_withheld_remote,
+)
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
     partition_criterion,
@@ -451,9 +456,27 @@ def _restricted_capture(event: Table, principal_id: str) -> ColumnElement[bool]:
     )
 
 
-def _withheld_remotely(event: Table, principal_id: str) -> ColumnElement[bool]:
-    """Everything a remote caller must not see: the memory and capture predicates."""
-    return or_(_restricted_memory(event, principal_id), _restricted_capture(event, principal_id))
+def _withheld_remotely(
+    event: Table, principal_id: str, families: frozenset[RecordEventFamily]
+) -> ColumnElement[bool]:
+    """Everything a remote caller must not see: the memory, capture and Knowledge predicates.
+
+    KLP-WP-03: a `knowledge_assertion` event is withheld when its stored class
+    is `restricted_local` or the assertion it names is `withheld_remote` now
+    (R6 section 5.2, every lifecycle), in the same statement as the page, so a
+    withheld event never reaches a row, the truncation flag or the watermark.
+    The Knowledge term is planned only when the request's families include the
+    Knowledge family: it is false for every other family anyway, and a page
+    over other families then names no Knowledge relation at all (the runtime
+    role's feed grants, `record_event_roles.FEED_READER_SELECT_TABLES`).
+    """
+    terms = [
+        _restricted_memory(event, principal_id),
+        _restricted_capture(event, principal_id),
+    ]
+    if RecordEventFamily.KNOWLEDGE_ASSERTION in families:
+        terms.append(knowledge_event_withheld_remote(event, principal_id))
+    return or_(*terms)
 
 
 def _visible(
@@ -472,7 +495,7 @@ def _visible(
         event.c.record_family.in_(sorted(family.value for family in families)),
     ]
     if not include_restricted_memory:
-        criteria.append(not_(_withheld_remotely(event, principal_id)))
+        criteria.append(not_(_withheld_remotely(event, principal_id, families)))
     return criteria
 
 

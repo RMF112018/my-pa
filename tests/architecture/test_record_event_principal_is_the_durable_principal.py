@@ -83,6 +83,10 @@ NOT_A_CALLER: Final = frozenset(
     {
         # `MeetingRepository.update_meeting`, not `MeetingApplication.update_meeting`.
         ("src/my_pa/application/meetings.py", "update_meeting", "meetings"),
+        # `EntityAuthoringService.create`, not `SqlKnowledgeAssertionRepository.create`
+        # (KLP-WP-03): the Knowledge create's one production caller is the
+        # `knowledge.assertions.create` handler, typed `KnowledgeAssertionRepository`.
+        ("src/my_pa/application/entity_governance.py", "create", "self._authoring"),
     }
 )
 

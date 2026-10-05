@@ -347,6 +347,17 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         # partition and carries no `source_id` or `enrollment_id`. Capability,
         # purpose, the partition and the family grants still decide it.
         Capability.RECORD_EVENTS_LIST,
+        # The six Knowledge Assertion names (KLP-WP-03, KLP-AC-104) are
+        # scopeless for the reason the Meeting plane is: an assertion, its
+        # submission ledger, mutations and evidence links are product-owned rows
+        # in the acting Principal's own partition and carry no `source_id` or
+        # `enrollment_id` a scope could be compared against.
+        Capability.KNOWLEDGE_ASSERTIONS_READ,
+        Capability.KNOWLEDGE_ASSERTIONS_LIST,
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH,
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE,
         # `context.feedback` names a ranking preference, not a source. The rows
         # it writes belong to the acting Principal's partition and carry no
         # `enrollment_id` and no grant a scope could be compared against.

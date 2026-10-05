@@ -105,7 +105,7 @@ def test_the_population_is_the_handler_backed_remote_tool_set() -> None:
     assert population, "there are no capabilities, so nothing below proves anything"
     assert population >= PHASE_B_CAPABILITIES
     assert population == command_backed
-    assert len(population) == 181
+    assert len(population) == 187
     assert set(Capability) - population == HANDLER_UNWIRED_CAPABILITIES
     assert not population & HANDLER_UNWIRED_CAPABILITIES
     assert population | HANDLER_UNWIRED_CAPABILITIES == set(Capability)
@@ -209,3 +209,48 @@ def test_phase_b_publishes_no_schema_naming_a_field_the_server_owns(
     payload = schema["properties"]["payload"]
     assert not REMOTE_OWNED_PAYLOAD_FIELDS & set(payload.get("properties", {}))
     assert "idempotency_key" not in payload.get("required", [])
+
+
+#: KLP-WP-03 (KLP-AC-018): the six Knowledge Assertion names.
+KNOWLEDGE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.KNOWLEDGE_ASSERTIONS_READ,
+        Capability.KNOWLEDGE_ASSERTIONS_LIST,
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH,
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE,
+    }
+)
+#: The fields a Knowledge command never carries: each is derived server-side
+#: from the authorization (and, for discovery, the source profile).
+KNOWLEDGE_DERIVED_FIELDS: Final = (
+    "principal_id",
+    "actor_class",
+    "authority",
+    "authority_class",
+    "source_classification",
+    "classification",
+    "independence_key",
+    "epistemic_status",
+)
+
+
+@pytest.mark.parametrize("field", KNOWLEDGE_DERIVED_FIELDS)
+def test_no_knowledge_command_declares_a_server_derived_field(field: str) -> None:
+    from dataclasses import fields
+
+    commands = {member.capability: member for member in get_args(Command.__value__)}
+    for capability in KNOWLEDGE_CAPABILITIES:
+        names = {item.name for item in fields(commands[capability])}
+        assert field not in names, (capability.value, field)
+        published = remote_tool_schema(input_schema_for(commands[capability]))
+        assert field not in published["properties"]["payload"]["properties"]
+
+
+@pytest.mark.parametrize("field", KNOWLEDGE_DERIVED_FIELDS)
+def test_every_knowledge_capability_refuses_a_server_derived_payload_field(field: str) -> None:
+    for capability in KNOWLEDGE_CAPABILITIES:
+        _compose(capability, {"payload": {}})  # the control composes
+        with pytest.raises(InvalidRequestError):
+            _compose(capability, {"payload": {field: "forged"}})

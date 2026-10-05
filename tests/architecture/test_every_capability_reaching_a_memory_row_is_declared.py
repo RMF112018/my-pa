@@ -307,6 +307,12 @@ MEMORY_SQL_MODULES: Final = frozenset(
         # one column -- inside an `EXISTS`, to withhold every event of a
         # currently restricted memory. It selects no memory column into a row.
         "infrastructure/persistence/record_events.py",
+        # KLP-WP-03: the Knowledge Assertion plane reads
+        # `relationship_memory_versions.classification` (keys and that one
+        # column) -- inside the remote `withheld_remote` EXISTS, and on an
+        # explicit create to verify a cited memory version's digest and take the
+        # rank-max class. It selects no memory text and writes no memory row.
+        "infrastructure/persistence/knowledge_assertions.py",
         "infrastructure/persistence/relationship_memory.py",
         "infrastructure/persistence/relationship_memory_proposals.py",
         "infrastructure/persistence/relationship_memory_review.py",
@@ -348,6 +354,14 @@ DECLARED: Final = frozenset(
         # `WP-RE-06`: the Record Event feed's remote restricted-memory predicate
         # (OD-8 (i)) reads a memory's current classification to withhold it.
         Capability.RECORD_EVENTS_LIST,
+        # KLP-WP-03: the Knowledge Assertion plane's remote withholding term and
+        # the explicit create's citation check read memory version classes.
+        Capability.KNOWLEDGE_ASSERTIONS_READ,
+        Capability.KNOWLEDGE_ASSERTIONS_LIST,
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH,
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE,
     }
 )
 
@@ -364,6 +378,48 @@ DECLARED: Final = frozenset(
 #: in a reason is written in the `N of the eight (…)` form on purpose: that form
 #: is what `_claims_in()` reads, and anything written another way is prose again.
 BEYOND_THE_NINE: Final = {
+    Capability.KNOWLEDGE_ASSERTIONS_READ: (
+        "purpose `knowledge_assertion_read`. `knowledge.assertions.read` reads one of the eight "
+        "(`relationship_memory_versions`) and writes none of the eight, and only for a "
+        "remote caller: inside the KLP-WP-03 `withheld_remote` EXISTS it compares the "
+        "`classification` of every version of a cited memory, under the Principal "
+        "partition, to withhold the assertion. No memory column enters a returned row."
+    ),
+    Capability.KNOWLEDGE_ASSERTIONS_LIST: (
+        "purpose `knowledge_assertion_read`. `knowledge.assertions.list` reads one of the eight "
+        "(`relationship_memory_versions`) and writes none of the eight, and only for a "
+        "remote caller: inside the KLP-WP-03 `withheld_remote` EXISTS it compares the "
+        "`classification` of every version of a cited memory, under the Principal "
+        "partition, to withhold the assertion. No memory column enters a returned row."
+    ),
+    Capability.KNOWLEDGE_ASSERTIONS_SEARCH: (
+        "purpose `knowledge_assertion_read`. `knowledge.assertions.search` reads one of the eight "
+        "(`relationship_memory_versions`) and writes none of the eight, and only for a "
+        "remote caller: inside the KLP-WP-03 `withheld_remote` EXISTS it compares the "
+        "`classification` of every version of a cited memory, under the Principal "
+        "partition, to withhold the assertion. No memory column enters a returned row."
+    ),
+    Capability.KNOWLEDGE_ASSERTIONS_HISTORY: (
+        "purpose `knowledge_assertion_read`. `knowledge.assertions.history` reads one of the eight "
+        "(`relationship_memory_versions`) and writes none of the eight, and only for a "
+        "remote caller: inside the KLP-WP-03 `withheld_remote` EXISTS it compares the "
+        "`classification` of every version of a cited memory, under the Principal "
+        "partition, to withhold the assertion. No memory column enters a returned row."
+    ),
+    Capability.KNOWLEDGE_ASSERTIONS_REVEAL: (
+        "purpose `knowledge_assertion_read`. `knowledge.assertions.reveal` reads one of the eight "
+        "(`relationship_memory_versions`) and writes none of the eight, and only for a "
+        "remote caller: inside the KLP-WP-03 `withheld_remote` EXISTS it compares the "
+        "`classification` of every version of a cited memory, under the Principal "
+        "partition, to withhold the assertion. No memory column enters a returned row."
+    ),
+    Capability.KNOWLEDGE_ASSERTIONS_CREATE: (
+        "purpose `knowledge_assertion_authoring`. `knowledge.assertions.create` reads one "
+        "of the eight (`relationship_memory_versions`) and writes none of the eight: for a "
+        "cited memory it reads each version's `statement_sha256` and `classification` under "
+        "the Principal partition, to verify the cited digest and take the rank-max class "
+        "onto the Knowledge evidence row. It reads no memory text."
+    ),
     Capability.RECORD_EVENTS_LIST: (
         "purpose `record_event_read`. `record_events.list` reads two of the eight "
         "(`relationship_memories`, `relationship_memory_versions`) and writes none of the "
@@ -471,6 +527,31 @@ BEYOND_THE_NINE: Final = {
 #: is a bound and not an itinerary — see this module's docstring on
 #: `relationship_memory.archive`.
 DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str]]]] = {
+    # KLP-WP-03: version classes (and, for create, the cited digest) only.
+    Capability.KNOWLEDGE_ASSERTIONS_READ: (
+        frozenset({"relationship_memory_versions"}),
+        frozenset(),
+    ),
+    Capability.KNOWLEDGE_ASSERTIONS_LIST: (
+        frozenset({"relationship_memory_versions"}),
+        frozenset(),
+    ),
+    Capability.KNOWLEDGE_ASSERTIONS_SEARCH: (
+        frozenset({"relationship_memory_versions"}),
+        frozenset(),
+    ),
+    Capability.KNOWLEDGE_ASSERTIONS_HISTORY: (
+        frozenset({"relationship_memory_versions"}),
+        frozenset(),
+    ),
+    Capability.KNOWLEDGE_ASSERTIONS_REVEAL: (
+        frozenset({"relationship_memory_versions"}),
+        frozenset(),
+    ),
+    Capability.KNOWLEDGE_ASSERTIONS_CREATE: (
+        frozenset({"relationship_memory_versions"}),
+        frozenset(),
+    ),
     # `WP-RE-06` (OD-8 (i)): keys, `current_version_id` and `classification` only,
     # inside the remote predicate's `EXISTS`; nothing is written.
     Capability.RECORD_EVENTS_LIST: (
@@ -3074,6 +3155,7 @@ def test_the_port_crossings_that_reach_a_memory_row_are_the_two_planes() -> None
     """
     crossings = _memory_reaching_port_methods()
     assert set(crossings) == {
+        "KnowledgeAssertionRepository",
         "RecordEventReader",
         "RelationshipMemoryProposalRepository",
         "RelationshipMemoryRepository",
@@ -3091,6 +3173,13 @@ def test_the_port_crossings_that_reach_a_memory_row_are_the_two_planes() -> None
         "the Record Event feed's crossings are now "
         f"{sorted(crossings['RecordEventReader'])}; only the two reads that apply the "
         "OD-8 restricted-memory predicate may reach a memory row"
+    )
+    assert crossings["KnowledgeAssertionRepository"] == frozenset(
+        {"create", "history", "page", "read_assertion", "reveal"}
+    ), (
+        "the Knowledge plane's crossings are now "
+        f"{sorted(crossings['KnowledgeAssertionRepository'])}; only the reads that apply "
+        "the remote withholding term and the create's citation check may reach a memory row"
     )
     assert crossings["ReviewRepository"] == frozenset({"cases", "decide"}), (
         f"the review-plane crossings are now {sorted(crossings['ReviewRepository'])}; "

@@ -67,6 +67,9 @@ class ChatLLMCompositionPlanes:
     relationship_intelligence_writes: bool
     relationship_memory: bool
     constraints: bool
+    #: KLP-WP-03: `MY_PA_KNOWLEDGE_ASSERTIONS_ENABLED` (which requires the
+    #: Relationship Intelligence plane). Default off, as the switch is.
+    knowledge_assertions: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,21 +127,38 @@ def composed_capabilities(
     for capability, policy in CHATLLM_CAPABILITY_POLICY.items():
         if capability not in composed:
             continue
-        prerequisite = policy.composition_prerequisite
-        if prerequisite is ChatLLMCompositionPrerequisite.MANAGED_DOCUMENTS:
-            if not planes.managed_documents:
-                composed.discard(capability)
-        elif prerequisite is ChatLLMCompositionPrerequisite.RELATIONSHIP_INTELLIGENCE:
-            if not planes.relationship_intelligence or (
-                is_write_capability(capability) and not planes.relationship_intelligence_writes
-            ):
-                composed.discard(capability)
-        elif prerequisite is ChatLLMCompositionPrerequisite.RELATIONSHIP_MEMORY:
-            if not (planes.relationship_intelligence and planes.relationship_memory):
-                composed.discard(capability)
-        elif prerequisite is ChatLLMCompositionPrerequisite.CONSTRAINTS and not planes.constraints:
+        if not _prerequisite_holds(policy.composition_prerequisite, capability, planes):
             composed.discard(capability)
     return frozenset(composed)
+
+
+def _prerequisite_holds(
+    prerequisite: ChatLLMCompositionPrerequisite,
+    capability: Capability,
+    planes: ChatLLMCompositionPlanes,
+) -> bool:
+    """Whether `planes` compose a capability with `prerequisite`.
+
+    Exhaustive: a prerequisite this function does not know raises rather than
+    defaulting to composed (KLP-AC-105), so a new plane cannot silently publish.
+    """
+    if prerequisite in (ChatLLMCompositionPrerequisite.ALWAYS, ChatLLMCompositionPrerequisite.NONE):
+        return True
+    if prerequisite is ChatLLMCompositionPrerequisite.MANAGED_DOCUMENTS:
+        return planes.managed_documents
+    if prerequisite is ChatLLMCompositionPrerequisite.RELATIONSHIP_INTELLIGENCE:
+        return planes.relationship_intelligence and (
+            not is_write_capability(capability) or planes.relationship_intelligence_writes
+        )
+    if prerequisite is ChatLLMCompositionPrerequisite.RELATIONSHIP_MEMORY:
+        return planes.relationship_intelligence and planes.relationship_memory
+    if prerequisite is ChatLLMCompositionPrerequisite.CONSTRAINTS:
+        return planes.constraints
+    if prerequisite is ChatLLMCompositionPrerequisite.KNOWLEDGE_ASSERTIONS:
+        # The plane requires Relationship Intelligence (`Settings._check`); the
+        # conjunction is restated so a hand-built plane set cannot compose it alone.
+        return planes.knowledge_assertions and planes.relationship_intelligence
+    raise RuntimeError(f"unknown ChatLLM composition prerequisite: {prerequisite!r}")
 
 
 def desired_effective_capabilities(composed: frozenset[Capability]) -> frozenset[Capability]:

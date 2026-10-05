@@ -10199,6 +10199,7 @@ def build_service(
     relationship_memory_enabled: bool = True,
     relationship_identity_correction_enabled: bool = True,
     producer_origins: ProducerOriginRegistry | None = None,
+    knowledge_assertions_enabled: bool = False,
     constraint_management_unit_of_work: (
         Callable[[], ConstraintManagementUnitOfWork] | None
     ) = _COMPOSE_CONSTRAINTS,
@@ -10292,6 +10293,16 @@ def build_service(
             ProducerOriginRegistry(world.producer_origins)
             if producer_origins is None
             else producer_origins
+        ),
+        # KLP-WP-03. **Off by default, unlike the planes above**, and the
+        # difference is deliberate: this `World` has no Knowledge Assertion
+        # repository, so a composed plane here could only crash. The plane's
+        # behaviour is proved against a real server (`tests/database/
+        # test_knowledge_*`); a FAST test about publication or routing passes
+        # `True` and says so, and a sweep over `Capability` treats the Knowledge names
+        # as uncomposed (`tests/contract/test_transport_parity.UNCOMPOSED_HERE`).
+        knowledge_assertions_enabled=(
+            relationship_intelligence_enabled and knowledge_assertions_enabled
         ),
         gsqs_b0_ports=WorkflowPorts(
             session_factory=lambda rasters: DiskContentSession(rasters),

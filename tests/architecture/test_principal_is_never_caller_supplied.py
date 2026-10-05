@@ -1964,3 +1964,53 @@ def test_the_continuity_detector_accepts_a_derived_principal_and_refuses_a_state
         "guard covers "
         f"{sorted(PRINCIPAL_BEARING_COMMANDS)}"
     )
+
+
+# ---- KLP-WP-03 (KLP-AC-018 WP-03 slice) -------------------------------------------
+
+
+def test_no_knowledge_command_carries_a_principal_or_a_server_derived_field() -> None:
+    """The six Knowledge commands name no identity, authority or classification.
+
+    The handlers derive all of them from `authorization` (the explicit create's
+    epistemic status, class, actor and authority are server constants), so a
+    Knowledge request can only ever run in the authenticated caller's partition.
+    """
+    import dataclasses
+    from typing import get_args
+
+    from my_pa.application.commands import Command
+
+    knowledge = {
+        member
+        for member in get_args(Command.__value__)
+        if member.capability.value.startswith("knowledge.assertions.")
+    }
+    assert len(knowledge) == 6
+    forbidden = {
+        "principal_id",
+        "owner_principal_id",
+        "actor_class",
+        "authority",
+        "authority_class",
+        "source_classification",
+        "classification",
+        "independence_key",
+        "epistemic_status",
+        "authenticated_client_id",
+    }
+    for command in knowledge:
+        names = {field.name for field in dataclasses.fields(command)}
+        assert not names & forbidden, (command.__name__, sorted(names & forbidden))
+    service = (ROOT / "src" / "my_pa" / "application" / "service.py").read_text(encoding="utf-8")
+    for handler in (
+        "_knowledge_assertions_read",
+        "_knowledge_assertions_list",
+        "_knowledge_assertions_search",
+        "_knowledge_assertions_history",
+        "_knowledge_assertions_reveal",
+        "_knowledge_assertions_create",
+    ):
+        body = service.split(f"def {handler}(", 1)[1].split("\n    def ", 1)[0]
+        assert "authorization.principal.principal_id" in body or "_knowledge_page(" in body
+        assert "command.principal_id" not in body

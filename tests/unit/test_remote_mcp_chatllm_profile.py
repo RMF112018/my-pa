@@ -208,6 +208,9 @@ _FULL_PLANE_SETTINGS = SimpleNamespace(
     relationship_intelligence_enabled=True,
     relationship_intelligence_writes_enabled=True,
     relationship_memory_enabled=True,
+    # KLP-WP-03: the Knowledge plane off, its default; the profile then
+    # neither composes nor demands the six Knowledge grants.
+    knowledge_assertions_enabled=False,
 )
 
 
@@ -273,7 +276,7 @@ def test_profile_apply_adds_the_meeting_grants_once_and_then_converges(
         desired = _grant_v2_catalog(repository)
         code, plan = _profile(repository, "profile-plan", capsys)
         assert code == 1
-        assert plan["profile_version"] == "chatllm-data-v5"
+        assert plan["profile_version"] == "chatllm-data-v6"
         assert plan["healthy"] is False
         assert plan["actions"] == [
             {
@@ -325,6 +328,59 @@ def test_profile_commands_refuse_the_previous_profile_version(
         with pytest.raises(SystemExit) as raised:
             _profile(repository, "profile-apply", capsys, profile_version="chatllm-data-v3")
         assert raised.value.code == 2
-        assert "profile version must be chatllm-data-v5" in capsys.readouterr().err
+        assert "profile version must be chatllm-data-v6" in capsys.readouterr().err
         rows = repository.list_capability_grants(remote_client_id=CLIENT_UUID)
         assert not any(row.capability.startswith("meetings.") for row in rows)
+
+
+# ---- KLP-WP-03 (chatllm-data-v6, KLP-AC-106 WP-03 slice) --------------------------
+
+
+def test_v6_profile_apply_adds_the_knowledge_grants_only_with_the_plane_on(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """With the plane off the converged client is healthy; on, exactly six adds."""
+    knowledge = {
+        Capability.KNOWLEDGE_ASSERTIONS_READ: (Purpose.KNOWLEDGE_ASSERTION_READ, False),
+        Capability.KNOWLEDGE_ASSERTIONS_LIST: (Purpose.KNOWLEDGE_ASSERTION_READ, False),
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH: (Purpose.KNOWLEDGE_ASSERTION_READ, False),
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY: (Purpose.KNOWLEDGE_ASSERTION_READ, False),
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL: (Purpose.KNOWLEDGE_ASSERTION_READ, False),
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE: (Purpose.KNOWLEDGE_ASSERTION_AUTHORING, True),
+    }
+    with _repository() as (_, repository):
+        _grant_v2_catalog(repository)
+        _profile(repository, "profile-apply", capsys)
+        code, off = _profile(repository, "profile-diff", capsys)
+        assert code == 0 and off["healthy"] is True
+        settings = SimpleNamespace(
+            **{**vars(_FULL_PLANE_SETTINGS), "knowledge_assertions_enabled": True}
+        )
+        args = argparse.Namespace(
+            command="profile-plan",
+            oauth_client_id=CLIENT_ID,
+            scope=SCOPE,
+            resource=RESOURCE,
+            profile_version=CHATLLM_DATA_PROFILE_VERSION,
+            apply=False,
+        )
+        code = _run_profile_command(
+            argparse.ArgumentParser(prog="remote_mcp"),
+            args,
+            repository,
+            settings,  # type: ignore[arg-type]
+            WHEN,
+        )
+        plan = json.loads(capsys.readouterr().out)
+    assert code == 1
+    assert plan["profile_version"] == "chatllm-data-v6"
+    assert plan["actions"] == [
+        {
+            "kind": "add",
+            "capability": capability.value,
+            "purpose": purpose.value,
+            "write": write,
+            "grant_id": None,
+        }
+        for capability, (purpose, write) in sorted(knowledge.items(), key=lambda i: i[0].value)
+    ]

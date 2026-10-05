@@ -547,6 +547,13 @@ SCOPED_CAPABILITIES = [
         # WP-RE-06: `record_events.list` names only the acting Principal's own
         # change feed and no `src_...` or `enr_...`; also in `_SCOPELESS`.
         Capability.RECORD_EVENTS_LIST,
+        # KLP-WP-03: the six Knowledge Assertion names, also in `_SCOPELESS`.
+        Capability.KNOWLEDGE_ASSERTIONS_READ,
+        Capability.KNOWLEDGE_ASSERTIONS_LIST,
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH,
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE,
     }
 ]
 
@@ -898,6 +905,11 @@ MEETING_AUTHORING_EXEMPTION = frozenset(
     }
 )
 
+#: KLP-WP-03's one write the substring proxy refuses -- `knowledge.assertions.create`
+#: -- on the same reading: it writes the acting Principal's own Knowledge
+#: Assertion rows and reaches no source provider and no enrollment.
+KNOWLEDGE_AUTHORING_EXEMPTION = frozenset({Capability.KNOWLEDGE_ASSERTIONS_CREATE})
+
 
 def test_neither_transport_routes_a_mutating_capability() -> None:
     """The tool list and the CLI's positional, and no name that mutates a *source*.
@@ -928,6 +940,7 @@ def test_neither_transport_routes_a_mutating_capability() -> None:
         | CANVAS_WORKSPACE_EXEMPTION
         | CONSTRAINT_AUTHORING_EXEMPTION
         | MEETING_AUTHORING_EXEMPTION
+        | KNOWLEDGE_AUTHORING_EXEMPTION
     )
     checked = [c for c in IMPLEMENTED_CAPABILITIES if c not in exempt]
     assert len(checked) == len(IMPLEMENTED_CAPABILITIES) - len(exempt)

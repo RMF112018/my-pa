@@ -422,6 +422,14 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.MEETINGS_UPDATE, Purpose.MEETING_AUTHORING),
         (Capability.MEETINGS_SERIES_UPDATE, Purpose.MEETING_AUTHORING),
         (Capability.RECORD_EVENTS_LIST, Purpose.RECORD_EVENT_READ),
+        # KLP-WP-03: five Knowledge reads under `knowledge_assertion_read` and the
+        # explicit create under `knowledge_assertion_authoring`, nothing else.
+        (Capability.KNOWLEDGE_ASSERTIONS_READ, Purpose.KNOWLEDGE_ASSERTION_READ),
+        (Capability.KNOWLEDGE_ASSERTIONS_LIST, Purpose.KNOWLEDGE_ASSERTION_READ),
+        (Capability.KNOWLEDGE_ASSERTIONS_SEARCH, Purpose.KNOWLEDGE_ASSERTION_READ),
+        (Capability.KNOWLEDGE_ASSERTIONS_HISTORY, Purpose.KNOWLEDGE_ASSERTION_READ),
+        (Capability.KNOWLEDGE_ASSERTIONS_REVEAL, Purpose.KNOWLEDGE_ASSERTION_READ),
+        (Capability.KNOWLEDGE_ASSERTIONS_CREATE, Purpose.KNOWLEDGE_ASSERTION_AUTHORING),
     }
 )
 
@@ -497,9 +505,11 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # WP-MTG-04 adds six Meeting names and the `meeting_read`/`meeting_authoring`
     # purpose pair, each name mapped to exactly one of the pair, so six pairs.
     # WP-RE-06 adds `record_events.list` and its own `record_event_read`, one pair.
-    # Unioned: 181 capabilities, 48 purposes, 183 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 183
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 183 == 8505
+    # KLP-WP-03 adds the six Knowledge Assertion names and the
+    # `knowledge_assertion_read`/`knowledge_assertion_authoring` pair, six pairs.
+    # Unioned: 187 capabilities, 50 purposes, 189 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 189
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 189 == 9161
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

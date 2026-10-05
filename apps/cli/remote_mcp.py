@@ -32,6 +32,40 @@ from my_pa.infrastructure.persistence.remote_identity import (
     remote_security_controls,
 )
 
+#: KLP-WP-03 (KLP-AC-146 WP-03 slice): the Knowledge Assertion names raw `grant`
+#: governs. An explicit name set, never a `knowledge.` prefix, so the extraction
+#: plane's `knowledge.search`/`read`/`reveal`/`coverage` grants are unaffected.
+#: KLP-WP-04 adds submit and checkpoint to both sets.
+KNOWLEDGE_GRANT_CAPABILITIES: frozenset[Capability] = frozenset(
+    {
+        Capability.KNOWLEDGE_ASSERTIONS_READ,
+        Capability.KNOWLEDGE_ASSERTIONS_LIST,
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH,
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE,
+    }
+)
+#: Knowledge writes only profile tooling (`profile-apply`) may install.
+KNOWLEDGE_WRITE_GRANT_CAPABILITIES: frozenset[Capability] = frozenset(
+    {Capability.KNOWLEDGE_ASSERTIONS_CREATE}
+)
+
+
+def raw_grant_refusal(capability: Capability, purpose: Purpose | None) -> str | None:
+    """Why raw `grant` refuses this pair, or `None` when it may proceed.
+
+    Evaluated before any connection is opened, so a refusal writes no row.
+    """
+    if capability in KNOWLEDGE_WRITE_GRANT_CAPABILITIES:
+        return (
+            f"raw grant refuses the Knowledge write {capability.value}; "
+            "install it through profile-apply"
+        )
+    if capability in KNOWLEDGE_GRANT_CAPABILITIES and purpose is None:
+        return f"raw grant refuses a Knowledge grant without a purpose ({capability.value})"
+    return None
+
 
 def _uuid(value: str) -> UUID:
     return UUID(value)
@@ -62,6 +96,9 @@ def _planes_from_settings(settings: Settings) -> ChatLLMCompositionPlanes:
         relationship_intelligence_writes=settings.relationship_intelligence_writes_enabled,
         relationship_memory=settings.relationship_memory_enabled,
         constraints=True,
+        knowledge_assertions=(
+            settings.knowledge_assertions_enabled and settings.relationship_intelligence_enabled
+        ),
     )
 
 
@@ -216,6 +253,10 @@ def main(argv: list[str] | None = None) -> int:
     _add_profile_arguments(profile_apply)
     profile_apply.add_argument("--apply", action="store_true")
     args = parser.parse_args(argv)
+    if args.command == "grant":
+        refusal = raw_grant_refusal(args.capability, args.purpose)
+        if refusal is not None:
+            parser.error(refusal)
 
     settings = load_settings()
     engine = create_database_engine(settings.parsed_database_url(), statement_timeout_ms=30_000)

@@ -455,6 +455,18 @@ class Settings(StrictModel):
     #: are one decision, and an operator who wants entity reads should not have
     #: to accept memory authoring to get them.
     relationship_memory_enabled: bool = False
+    #: Process-local gate for the Knowledge Assertion plane (KLP-WP-03). Default
+    #: off, and it requires `relationship_intelligence_enabled`: an assertion's
+    #: subject may be an Entity, and the plane proves ownership of that subject by
+    #: reading the entity tables, so serving it without the plane that owns those
+    #: subjects would be serving writes it cannot validate. Off withholds all six
+    #: `knowledge.assertions.*` names from `capabilities.get`, the MCP tool list
+    #: and the ChatLLM profile, and removes the `knowledge_assertion` family from
+    #: `record_events.list` (KLP-AC-083, KLP-AC-141). **Turning it on is a Record
+    #: Event cursor-reset condition**: the visible family set is in every cursor
+    #: binding, so a consumer's prior cursor answers `conflict(cursor)` and the
+    #: consumer re-bootstraps (`ops/runbooks/gateway-operations.md`).
+    knowledge_assertions_enabled: bool = False
     #: Process-local gate for governed identity merge and split (WP-RI-06). Default
     #: off, and it requires **both** switches above it: identity correction is
     #: unavailable unless every lower gate is enabled (operator §18). `_check`
@@ -690,6 +702,16 @@ class Settings(StrictModel):
                 "inference: a governed merge rewrites the records the entity plane's "
                 "writes maintain, and a process that does not serve those writes does "
                 "not serve the operation that rewrites them"
+            )
+        if self.knowledge_assertions_enabled and not self.relationship_intelligence_enabled:
+            # The `RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED requires ...` precedent:
+            # refuse to start rather than serve a plane whose Entity subjects this
+            # process cannot validate, or silently ignore the switch.
+            raise SettingsError(
+                f"{ENV_PREFIX}KNOWLEDGE_ASSERTIONS_ENABLED requires "
+                f"{ENV_PREFIX}RELATIONSHIP_INTELLIGENCE_ENABLED. There is no inference: "
+                "the Knowledge Assertion plane is not served by a process that does not "
+                "serve the entity plane its subjects belong to"
             )
         if not self.redaction_enabled:
             raise SettingsError(

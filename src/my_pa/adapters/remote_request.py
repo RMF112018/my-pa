@@ -34,6 +34,7 @@ from my_pa.domain.source.registry import issue_identifier
 
 __all__ = [
     "CANONICAL_REMOTE_PURPOSES",
+    "KNOWLEDGE_SERVER_OWNED_FIELDS",
     "REMOTE_OWNED_PAYLOAD_FIELDS",
     "SERVER_OWNED_REMOTE_FIELDS",
     "compose_remote_arguments",
@@ -99,11 +100,39 @@ _GOODNOTES_PULL_SERVER_FIELDS: Final[frozenset[str]] = frozenset(
         "idempotency_key",
     }
 )
+#: KLP-WP-03 (KLP-AC-018): the Knowledge Assertion fields only the server
+#: derives -- from the authorization and, for discovery, the source profile. A
+#: remote caller that states one is refused before a Purpose is chosen, at the
+#: top level and inside `payload`, so a model can never declare who asserted a
+#: fact, under what authority or how restricted it is.
+KNOWLEDGE_SERVER_OWNED_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "principal_id",
+        "actor_class",
+        "authority",
+        "authority_class",
+        "source_classification",
+        "classification",
+        "independence_key",
+        "epistemic_status",
+    }
+)
+_KNOWLEDGE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.KNOWLEDGE_ASSERTIONS_READ,
+        Capability.KNOWLEDGE_ASSERTIONS_LIST,
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH,
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE,
+    }
+)
 _CAPABILITY_OWNED_PAYLOAD_FIELDS: Final[Mapping[Capability, frozenset[str]]] = MappingProxyType(
     {
         Capability.GOODNOTES_PULL: _GOODNOTES_PULL_SERVER_FIELDS,
         Capability.GOODNOTES_COMPLETE: _GOODNOTES_PULL_SERVER_FIELDS,
         Capability.GOODNOTES_STATUS: _GOODNOTES_PULL_SERVER_FIELDS,
+        **dict.fromkeys(_KNOWLEDGE_CAPABILITIES, KNOWLEDGE_SERVER_OWNED_FIELDS),
     }
 )
 
@@ -238,6 +267,11 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.MEETINGS_CREATE,
         Capability.MEETINGS_UPDATE,
         Capability.MEETINGS_SERIES_UPDATE,
+        # KLP-WP-03 (R6 6.3). The remote explicit-create key is this set's
+        # server-stamped payload hash, so an identical retry replays its stored
+        # result permanently and a changed request hashes to a new key. The
+        # application's frozen request digest stays the same-key discriminator.
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE,
         # **No keyless proposal or identity-correction write is here, and the reason is this set's
         # mechanism rather than a judgement about how replayable they are.**
         # Membership makes `compose_remote_arguments` derive a key and *insert it

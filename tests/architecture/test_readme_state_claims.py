@@ -36,6 +36,7 @@ from my_pa.application.service import (
 from my_pa.bootstrap.gateway import build_gateway_runtime
 from my_pa.bootstrap.settings import DATABASE_URL_SCHEME, Settings
 from my_pa.contracts.v1.capabilities import Availability, ReadinessState
+from my_pa.domain.identity.chatllm_capability_policy import KNOWLEDGE_ASSERTION_DATA_NAMES
 from my_pa.domain.identity.operation import Capability
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -440,6 +441,14 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     179: "One hundred and seventy-nine",
     180: "One hundred and eighty",
     181: "One hundred and eighty-one",
+    # Extended at KLP-WP-03, whose six Knowledge Assertion names took the public
+    # set to a hundred and eighty-seven.
+    182: "One hundred and eighty-two",
+    183: "One hundred and eighty-three",
+    184: "One hundred and eighty-four",
+    185: "One hundred and eighty-five",
+    186: "One hundred and eighty-six",
+    187: "One hundred and eighty-seven",
 }
 
 
@@ -566,11 +575,14 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
         capability
         for capability in _HANDLERS
         if capability.value.startswith(("documents.", "entities.", "relationship_memory."))
+        # KLP-WP-03: the Knowledge Assertion plane, an explicit name set behind
+        # `MY_PA_KNOWLEDGE_ASSERTIONS_ENABLED` (default off), never a prefix.
+        or capability in KNOWLEDGE_ASSERTION_DATA_NAMES
     }
     default = len(frozenset(_HANDLERS) - withheld_families)
     withheld = total - default
-    assert implemented == 181
-    assert len(withheld_families) == 70
+    assert implemented == 187
+    assert len(withheld_families) == 76
     assert unwired == set()
     # Phase B's additions all arrived on the withheld side; GSQS B0's pair is
     # composed by default, and `RI-ENT-WP-10`'s five record-family reads arrived
@@ -597,7 +609,10 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # empty for the first time in this campaign.
     # WP-MTG-04's six Meeting names are core and in none of the three withheld
     # families, so the default grows by six and the withheld figure is unchanged.
-    assert default == 111 and total == 181 and withheld == 70
+    # KLP-WP-03's six Knowledge Assertion names are a fourth withheld family
+    # (default-off switch), so the default is unchanged and the withheld figure
+    # grows by six.
+    assert default == 111 and total == 187 and withheld == 76
 
     # Exercise the same application and MCP publication composition that owns
     # the current 91-tool measurement. GoodNotes pull is part of that measured
@@ -692,7 +707,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     system_context_text = SYSTEM_CONTEXT.read_text(encoding="utf-8")
     assert f"wires {implemented} through HTTP, MCP, and CLI composition" in system_context_text
     system_context = system_context_text.lower()
-    assert "one hundred and eighty-one capabilities" in system_context
+    assert "one hundred and eighty-seven capabilities" in system_context
     assert f"exposes {default} of them" in system_context
 
     architecture_index = (ROOT / "docs/architecture/00_ARCHITECTURE_INDEX.md").read_text(
@@ -701,7 +716,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     runbook = (ROOT / "ops/runbooks/mcp-and-cli-operations.md").read_text(encoding="utf-8")
     gateway_runbook = (ROOT / "ops/runbooks/gateway-operations.md").read_text(encoding="utf-8")
     assert f"default composition serves {default} of" in architecture_index
-    assert "one hundred and eighty-one capabilities" in architecture_index
+    assert "one hundred and eighty-seven capabilities" in architecture_index
     assert f"**{default} application-available capabilities**" in runbook
     assert f"publishes **{default - 3} tools**" in runbook
     assert f"unconfigured local stdio: {default - 3}" in runbook
@@ -752,7 +767,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert completion_unwired_claim in normalized_completion_state
 
     module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
-    assert "one hundred and eighty-one capabilities" in module_boundaries
+    assert "one hundred and eighty-seven capabilities" in module_boundaries
 
 
 def test_readme_declares_apple_first_personal_data_ingestion() -> None:
@@ -888,3 +903,19 @@ def test_readme_declares_graph_off_by_default_and_entra_separate_from_activation
         "The README's frontend paragraph no longer states that Entra "
         "authentication is a separate concern from Graph connector activation."
     )
+
+
+def test_the_knowledge_plane_switch_and_its_cursor_reset_are_documented() -> None:
+    """KLP-AC-083 / KLP-AC-141: default off, needs the entity plane, resets cursors."""
+    from my_pa.bootstrap.settings import Settings
+
+    assert Settings.model_fields["knowledge_assertions_enabled"].default is False
+    readme = README.read_text(encoding="utf-8")
+    gateway_runbook = (ROOT / "ops/runbooks/gateway-operations.md").read_text(encoding="utf-8")
+    assert "MY_PA_KNOWLEDGE_ASSERTIONS_ENABLED" in readme
+    normalized = " ".join(gateway_runbook.split())
+    assert (
+        "Enabling the Knowledge Assertion plane is a Record Event cursor-reset condition"
+        in normalized
+    )
+    assert "MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` is on too" in normalized

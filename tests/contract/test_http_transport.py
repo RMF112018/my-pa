@@ -119,6 +119,7 @@ from my_pa.application.commands import (
     CreateEntityParticipation,
     CreateEntityProposal,
     CreateEntityRelationship,
+    CreateKnowledgeAssertion,
     CreateManagedDocument,
     CreateMeeting,
     CreateProject,
@@ -149,6 +150,7 @@ from my_pa.application.commands import (
     GetGoodNotesPullStatus,
     GetGoodNotesWork,
     GetGsqsB0Status,
+    GetKnowledgeAssertionHistory,
     GetLatestIntelligenceArtifact,
     GetPulse,
     GetRelationshipMemory,
@@ -173,6 +175,7 @@ from my_pa.application.commands import (
     ListGoodNotesPages,
     ListGoodNotesRuns,
     ListIntelligenceArtifacts,
+    ListKnowledgeAssertions,
     ListManagedDocuments,
     ListMeetings,
     ListPortfolioConstraints,
@@ -205,6 +208,7 @@ from my_pa.application.commands import (
     ReadGoodNotes,
     ReadIntelligenceArtifact,
     ReadKnowledge,
+    ReadKnowledgeAssertion,
     ReadManagedDocument,
     ReadMeeting,
     ReadPortfolioConstraintOverview,
@@ -230,6 +234,7 @@ from my_pa.application.commands import (
     RetireEntityCommunicationMethod,
     RetireEntityIdentifier,
     RetireEntityName,
+    RevealKnowledgeAssertion,
     RevealSubject,
     ReviseCapture,
     ReviseEntityAddress,
@@ -247,6 +252,7 @@ from my_pa.application.commands import (
     SearchGoodNotes,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
+    SearchKnowledgeAssertions,
     SearchMeetings,
     SearchPortfolioConstraints,
     SearchRelationshipMemories,
@@ -293,6 +299,7 @@ from my_pa.domain.intelligence.catalog import (
     ResolverSetId,
     SourceLaneId,
 )
+from my_pa.domain.knowledge_assertion.vocabulary import KnowledgeSubjectKind
 from my_pa.domain.project_controls.constraint import ConstraintLifecycleState
 from my_pa.domain.project_controls.party import PartyKind, PartyRef
 from my_pa.domain.project_controls.sync import (
@@ -399,6 +406,15 @@ _UNCOMPOSED_CAPABILITIES = frozenset(
         Capability.GOODNOTES_PULL,
         Capability.GOODNOTES_COMPLETE,
         Capability.GOODNOTES_STATUS,
+        # KLP-WP-03: the Knowledge Assertion plane, withheld by its own default-off
+        # switch; this `World` has no Knowledge repository. The plane is proved
+        # against a real server in `tests/database/test_knowledge_*`.
+        Capability.KNOWLEDGE_ASSERTIONS_READ,
+        Capability.KNOWLEDGE_ASSERTIONS_LIST,
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH,
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE,
     }
 )
 
@@ -1471,6 +1487,18 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "title": "A synthetic meeting series, retitled",
         },
         Capability.RECORD_EVENTS_LIST: {"page_size": 10},
+        Capability.KNOWLEDGE_ASSERTIONS_READ: {"assertion_id": "kasr_httpknowledge000001"},
+        Capability.KNOWLEDGE_ASSERTIONS_LIST: {"page_size": 10},
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH: {"query": "synthetic", "page_size": 10},
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY: {"assertion_id": "kasr_httpknowledge000001"},
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL: {"assertion_id": "kasr_httpknowledge000001"},
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE: {
+            "subject_kind": "principal",
+            "subject_id": scene.principal.principal_id,
+            "predicate_code": "policy.requirement",
+            "value": "A synthetic knowledge value",
+            "idempotency_key": "http-knowledge-create-0001",
+        },
     }
 
 
@@ -2432,6 +2460,26 @@ def commands_for(
             title="A synthetic meeting series, retitled",
         ),
         Capability.RECORD_EVENTS_LIST: ListRecordEvents(page_size=10),
+        Capability.KNOWLEDGE_ASSERTIONS_READ: ReadKnowledgeAssertion(
+            assertion_id="kasr_httpknowledge000001"
+        ),
+        Capability.KNOWLEDGE_ASSERTIONS_LIST: ListKnowledgeAssertions(page_size=10),
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH: SearchKnowledgeAssertions(
+            query="synthetic", page_size=10
+        ),
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY: GetKnowledgeAssertionHistory(
+            assertion_id="kasr_httpknowledge000001"
+        ),
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL: RevealKnowledgeAssertion(
+            assertion_id="kasr_httpknowledge000001"
+        ),
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE: CreateKnowledgeAssertion(
+            subject_kind=KnowledgeSubjectKind.PRINCIPAL,
+            subject_id=scene.principal.principal_id,
+            predicate_code="policy.requirement",
+            value="A synthetic knowledge value",
+            idempotency_key="http-knowledge-create-0001",
+        ),
     }
 
 
@@ -2555,7 +2603,7 @@ def test_handler_unwired_capabilities_return_the_canonical_http_problem(
     capability: Capability, scene: Scene, wire: Wire
 ) -> None:
     assert set(Capability) - set(_HANDLERS) == _UNIMPLEMENTED_CAPABILITIES
-    assert len(HANDLER_CAPABILITIES) == 181
+    assert len(HANDLER_CAPABILITIES) == 187
     reply = wire.send(capability.value, document_for(capability, scene, {}))
     problem = ProblemDetail.model_validate(reply.document())
     assert reply.status == 501

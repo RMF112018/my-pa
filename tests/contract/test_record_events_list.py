@@ -133,7 +133,13 @@ def test_the_result_and_every_item_carry_exactly_their_public_fields(scene: Scen
         assert set(item) == ITEM_FIELDS
     assert result["next_cursor"] is None
     assert watermark(result) == mine[-1]
-    assert result["visible_families"] == sorted(family.value for family in RecordEventFamily)
+    # KLP-WP-03: the Knowledge plane is off in this world, so its family is not
+    # visible (KLP-AC-141); every other family is.
+    assert result["visible_families"] == sorted(
+        family.value
+        for family in RecordEventFamily
+        if family is not RecordEventFamily.KNOWLEDGE_ASSERTION
+    )
 
 
 def test_a_full_page_discloses_truncation_and_resumes(scene: Scene) -> None:
@@ -267,3 +273,51 @@ def test_routing_fields_are_validated() -> None:
             wrong_id = issue_identifier(_ROUTING_KINDS[other])
             assert _refused(family, routing_family=right_kind, routing_record_id=wrong_id)
             assert _refused(family, routing_family=right_kind, routing_record_id="Dana Synthetic")
+
+
+# ---- KLP-AC-141 (KLP-WP-03) ----------------------------------------------------------
+
+
+def _listed(
+    scene: Scene, *, knowledge: bool, command: ListRecordEvents | None = None
+) -> ResponseEnvelope:
+    return build_service(
+        scene.world, scene.providers, knowledge_assertions_enabled=knowledge
+    ).invoke(
+        metadata_for(Capability.RECORD_EVENTS_LIST, Purpose.RECORD_EVENT_READ, scene.principal),
+        command or ListRecordEvents(),
+        principal=scene.principal,
+    )
+
+
+def test_the_knowledge_family_is_visible_only_with_the_plane_on(scene: Scene) -> None:
+    knowledge = commit(scene, RecordEventFamily.KNOWLEDGE_ASSERTION)
+    task = commit(scene, RecordEventFamily.TASK)
+    off = _listed(scene, knowledge=False).result
+    on = _listed(scene, knowledge=True).result
+    assert off is not None and on is not None
+    assert "knowledge_assertion" not in off["visible_families"]
+    assert [item["event_id"] for item in off["events"]] == [task]
+    assert "knowledge_assertion" in on["visible_families"]
+    assert [item["event_id"] for item in on["events"]] == [knowledge, task]
+    narrowed = _listed(
+        scene,
+        knowledge=False,
+        command=ListRecordEvents(record_families=(RecordEventFamily.KNOWLEDGE_ASSERTION,)),
+    ).result
+    assert narrowed is not None
+    assert narrowed["events"] == []
+
+
+def test_enabling_the_plane_is_a_cursor_reset_condition(scene: Scene) -> None:
+    """A cursor issued with the plane off binds the smaller visible set: conflict."""
+    commit(scene, RecordEventFamily.TASK)
+    off = _listed(scene, knowledge=False).result
+    assert off is not None
+    resumed = _listed(
+        scene, knowledge=True, command=ListRecordEvents(cursor=off["high_watermark_cursor"])
+    )
+    assert resumed.error is not None
+    assert resumed.error.code is ErrorCode.CONFLICT
+    fresh = _listed(scene, knowledge=True).result
+    assert fresh is not None

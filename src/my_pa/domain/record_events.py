@@ -15,8 +15,9 @@ either has a sequence number (hardened package section 3.6).
 
 The closed vocabularies are:
 
-* `RecordEventFamily` -- the twenty-two canonical record families the feed
-  covers (WP-RE-08 added the Capture and Task-comment planes); a later family is
+* `RecordEventFamily` -- the twenty-three canonical record families the feed
+  covers (WP-RE-08 added the Capture and Task-comment planes, KLP-WP-03 the
+  Knowledge Assertion plane); a later family is
   an explicit enum, schema and migration change;
 * `RecordEventKind` -- `created`, `updated`, `state_changed`; the exact operation
   is `source_capability`, so no duplicate verb vocabulary exists here;
@@ -127,7 +128,7 @@ NON_MEMORY_CLASSIFICATION: Final = Classification.PRIVATE_LOCAL
 
 
 class RecordEventFamily(StrEnum):
-    """The twenty-two canonical record families the feed names (section 3.2).
+    """The twenty-three canonical record families the feed names (section 3.2).
 
     Closed: a free-form family name is refused, and a later family is an
     explicit enum, schema and migration change.
@@ -155,6 +156,10 @@ class RecordEventFamily(StrEnum):
     MEETING_SERIES = "meeting_series"
     CAPTURE = "capture"
     TASK_COMMENT = "task_comment"
+    #: KLP-WP-03: one Knowledge Assertion. `record_id` is the `kasr_` assertion,
+    #: `source_receipt_id` the `kamut_` mutation, and the classification the
+    #: assertion's stored class at the mutation.
+    KNOWLEDGE_ASSERTION = "knowledge_assertion"
 
 
 class RecordEventKind(StrEnum):
@@ -945,6 +950,14 @@ RECORD_EVENT_FAMILY_READS: Final[Mapping[RecordEventFamily, frozenset[Capability
         # now routes to its Task, a field `tasks.comments.list` already
         # discloses, so the ruling (no floor) stands.
         RecordEventFamily.TASK_COMMENT: frozenset({Capability.TASKS_COMMENTS_LIST}),
+        # KLP-WP-03. The two reads that return an assertion record. Composed only
+        # when the Knowledge plane switch is on, so with the plane off the family
+        # is never visible (KLP-AC-141). Search returns the same records but is
+        # narrower by query; history and reveal are keyed reads of one record,
+        # like `capture.read`, and are not separate disclosures of the family.
+        RecordEventFamily.KNOWLEDGE_ASSERTION: frozenset(
+            {Capability.KNOWLEDGE_ASSERTIONS_READ, Capability.KNOWLEDGE_ASSERTIONS_LIST}
+        ),
     }
 )
 

@@ -435,7 +435,7 @@ def test_no_path_grants_every_capability_enum_member() -> None:
     assert Capability.SOURCES_ENROLL not in desired
     assert Capability.GSQS_START not in desired
     assert Capability.CONTINUITY_TASKS_CREATE not in desired
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v5"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v6"
 
 
 def test_mismatched_purpose_or_write_is_add_not_noop() -> None:
@@ -689,7 +689,7 @@ def test_a_v2_converged_client_plans_exactly_the_six_meeting_adds() -> None:
         scope=SCOPE,
     )
     assert not diff.is_healthy()
-    assert diff.profile_version == "chatllm-data-v5"
+    assert diff.profile_version == "chatllm-data-v6"
     assert diff.add == _MEETINGS
     assert diff.renew == frozenset()
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
@@ -712,7 +712,7 @@ def test_a_v3_converged_client_plans_exactly_the_record_events_add() -> None:
         scope=SCOPE,
     )
     assert not diff.is_healthy()
-    assert diff.profile_version == "chatllm-data-v5"
+    assert diff.profile_version == "chatllm-data-v6"
     assert diff.add == feed
     assert diff.renew == frozenset()
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
@@ -739,7 +739,7 @@ def test_a_v4_converged_client_plans_exactly_the_capture_lifecycle_adds() -> Non
         scope=SCOPE,
     )
     assert not diff.is_healthy()
-    assert diff.profile_version == "chatllm-data-v5"
+    assert diff.profile_version == "chatllm-data-v6"
     assert diff.add == lifecycle
     assert diff.renew == frozenset()
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
@@ -809,3 +809,57 @@ def test_a_converged_profile_with_meeting_grants_is_a_noop() -> None:
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
     assert {action.kind for action in actions} == {"noop"}
     assert {action.capability for action in actions} >= _MEETINGS
+
+
+# ---- KLP-WP-03 (chatllm-data-v6; KLP-AC-019 / KLP-AC-106 WP-03 slice) -------------
+
+_KNOWLEDGE = frozenset(
+    {
+        Capability.KNOWLEDGE_ASSERTIONS_READ,
+        Capability.KNOWLEDGE_ASSERTIONS_LIST,
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH,
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE,
+    }
+)
+
+
+def test_v6_demands_the_knowledge_grants_only_when_the_plane_is_composed() -> None:
+    from dataclasses import replace
+
+    off = desired_effective_capabilities(composed_capabilities(IMPLEMENTED, _FULL_PLANES))
+    assert not off & _KNOWLEDGE
+    planes = replace(_FULL_PLANES, knowledge_assertions=True)
+    composed = composed_capabilities(IMPLEMENTED, planes)
+    on = desired_effective_capabilities(composed)
+    assert on - off == _KNOWLEDGE
+    grants = tuple(_grant(capability) for capability in off)
+    diff = diff_chatllm_data_profile(
+        implemented=IMPLEMENTED,
+        composed=composed,
+        grants=grants,
+        now=NOW,
+        resource=RESOURCE,
+        scope=SCOPE,
+    )
+    assert diff.profile_version == "chatllm-data-v6"
+    assert diff.add == _KNOWLEDGE
+    actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
+    added = {action.capability: action for action in actions if action.kind == "add"}
+    assert set(added) == _KNOWLEDGE
+    create = added[Capability.KNOWLEDGE_ASSERTIONS_CREATE]
+    assert (create.purpose, create.is_write) == (Purpose.KNOWLEDGE_ASSERTION_AUTHORING, True)
+    for capability in _KNOWLEDGE - {Capability.KNOWLEDGE_ASSERTIONS_CREATE}:
+        assert (added[capability].purpose, added[capability].is_write) == (
+            Purpose.KNOWLEDGE_ASSERTION_READ,
+            False,
+        )
+
+
+def test_v6_publishes_no_submit_or_checkpoint_control_plane_name() -> None:
+    values = {capability.value for capability in Capability}
+    assert "knowledge.assertions.submit" not in values
+    assert "knowledge.discovery.checkpoint" not in values
+    for capability in _KNOWLEDGE:
+        assert is_chatllm_data_management(capability)

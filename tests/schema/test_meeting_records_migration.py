@@ -247,9 +247,23 @@ def test_the_at_texts_add_exactly_the_meeting_vocabulary_and_stay_sorted() -> No
 #: What the next vocabulary restatement (`1d9b248e7f83`, WP-RE-06) admits; this
 #: revision's AT set is every name declared *before* it.
 ADMITTED_LATER_CAPABILITIES: Final = frozenset(
-    {"record_events.list", "capture.archive", "capture.restore"}
+    {
+        "record_events.list",
+        "capture.archive",
+        "capture.restore",
+        # KLP-WP-03: admitted by the Knowledge revision `6734f039f7a6` (KLP-WP-02)
+        # and declared since.
+        "knowledge.assertions.read",
+        "knowledge.assertions.list",
+        "knowledge.assertions.search",
+        "knowledge.assertions.history",
+        "knowledge.assertions.reveal",
+        "knowledge.assertions.create",
+    }
 )
-ADMITTED_LATER_PURPOSES: Final = frozenset({"record_event_read"})
+ADMITTED_LATER_PURPOSES: Final = frozenset(
+    {"record_event_read", "knowledge_assertion_read", "knowledge_assertion_authoring"}
+)
 
 
 def test_head_admits_every_declared_capability_and_purpose() -> None:

@@ -1914,6 +1914,19 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "title": "A parity meeting series, retitled",
         },
         Capability.RECORD_EVENTS_LIST: {"page_size": 10},
+        Capability.KNOWLEDGE_ASSERTIONS_READ: {"assertion_id": "kasr_parityknowledge0001"},
+        Capability.KNOWLEDGE_ASSERTIONS_LIST: {"page_size": 10, "lifecycle": "active"},
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH: {"query": "synthetic", "page_size": 5},
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY: {"assertion_id": "kasr_parityknowledge0001"},
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL: {"assertion_id": "kasr_parityknowledge0001"},
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE: {
+            "subject_kind": "principal",
+            "subject_id": scene.principal.principal_id,
+            "predicate_code": "policy.requirement",
+            "value": "A parity knowledge value",
+            "effective_from": "2026-10-01T00:00:00+00:00",
+            "idempotency_key": "parity-knowledge-create",
+        },
     }
 
 
@@ -2049,7 +2062,7 @@ def test_there_are_three_transports_to_compare() -> None:
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
     # The command union and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 182, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 188, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -2369,6 +2382,14 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         Capability.GOODNOTES_PULL,
         Capability.GOODNOTES_COMPLETE,
         Capability.GOODNOTES_STATUS,
+        # KLP-WP-03: the Knowledge plane is off in this harness (its `World`
+        # has no Knowledge repository); every transport refuses alike.
+        Capability.KNOWLEDGE_ASSERTIONS_READ,
+        Capability.KNOWLEDGE_ASSERTIONS_LIST,
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH,
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE,
     }
 )
 
@@ -2794,7 +2815,7 @@ def test_declared_unwired_capabilities_stay_separate_from_positive_parity(
     from my_pa.application.errors import UnsupportedError
 
     assert set(Capability) - set(_HANDLERS) == FUTURE_CAPABILITIES
-    assert len(IMPLEMENTED_CAPABILITIES) == 181
+    assert len(IMPLEMENTED_CAPABILITIES) == 187
     assert set(_BUILDERS) == set(IMPLEMENTED_CAPABILITIES)
     assert {Capability(tool.name) for tool in TOOLS} == set(IMPLEMENTED_CAPABILITIES)
 

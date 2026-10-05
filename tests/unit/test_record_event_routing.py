@@ -66,6 +66,8 @@ DIRECT_KEYS: Final = {
     F.MEETING: (Capability.MEETINGS_READ, "meeting_id"),
     F.MEETING_SERIES: (Capability.MEETINGS_LIST, "meeting_series_id"),
     F.CAPTURE: (Capability.CAPTURE_READ, "capture_id"),
+    # KLP-WP-03: an event's `record_id` is the `kasr_` assertion itself.
+    F.KNOWLEDGE_ASSERTION: (Capability.KNOWLEDGE_ASSERTIONS_READ, "assertion_id"),
 }
 
 
@@ -104,7 +106,7 @@ def test_the_routing_table_is_the_twelve_rows_written_out() -> None:
     }
     direct = set(F) - set(RECORD_EVENT_ROUTING)
     assert direct == set(DIRECT_KEYS)
-    assert len(direct) == 10
+    assert len(direct) == 11
 
 
 def test_the_reader_reads_one_owner_column_per_routed_family() -> None:

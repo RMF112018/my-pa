@@ -83,12 +83,18 @@ EXPECTED: Final[dict[RecordEventFamily, tuple[frozenset[Capability], Purpose]]] 
     # WP-RE-08 (Amendment 01; OD-W8-1 (i) no floor, OD-W8-11 both capture reads).
     F.CAPTURE: (frozenset({C.CAPTURE_READ, C.CAPTURE_LIST}), Purpose.CAPTURE_REVIEW),
     F.TASK_COMMENT: (frozenset({C.TASKS_COMMENTS_LIST}), Purpose.TASK_READ),
+    # KLP-WP-03: the two reads that return an assertion record.
+    F.KNOWLEDGE_ASSERTION: (
+        frozenset({C.KNOWLEDGE_ASSERTIONS_READ, C.KNOWLEDGE_ASSERTIONS_LIST}),
+        Purpose.KNOWLEDGE_ASSERTION_READ,
+    ),
 }
 
 
 def test_the_table_covers_exactly_the_twenty_two_families() -> None:
+    """Twenty-two at WP-RE-08; KLP-WP-03's `knowledge_assertion` makes twenty-three."""
     assert set(RECORD_EVENT_FAMILY_READS) == set(RecordEventFamily)
-    assert len(RECORD_EVENT_FAMILY_READS) == 22
+    assert len(RECORD_EVENT_FAMILY_READS) == 23
     assert all(RECORD_EVENT_FAMILY_READS.values())
 
 

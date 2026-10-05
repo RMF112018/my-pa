@@ -257,3 +257,36 @@ def test_a_malformed_subject_is_a_request_error_and_not_a_coverage_answer(
     with pytest.raises(InvalidRequestError) as raised:
         RevealSubject(subject_id="../../etc/passwd")
     assert raised.value.safe_details == (SafeDetail.SUBJECT,)
+
+
+# ---- KLP-AC-001 (KLP-WP-03) -------------------------------------------------------
+
+
+@pytest.mark.parametrize("kind", [IdKind.KNOWLEDGE_ASSERTION], ids=["kasr"])
+def test_a_knowledge_assertion_identifier_is_not_found_and_says_nothing_else(
+    scene: Scene, kind: IdKind
+) -> None:
+    """`knowledge.reveal` is the extraction plane's: a Knowledge Assertion is not its subject.
+
+    Answered exactly as an absent subject -- not as an uncovered subject kind,
+    which would tell a caller the identifier's plane exists here.
+    """
+    subject = issue_identifier(kind)
+    answer = _reveal(scene, subject)
+    assert answer.result is None
+    assert answer.error is not None
+    assert answer.error.code is ErrorCode.NOT_FOUND
+    assert answer.error.safe_details == ("subject",)
+    assert subject not in answer.to_canonical_json()
+    absent = _reveal(scene, issue_identifier(IdKind.CAPTURE))
+    assert absent.error is not None
+    assert absent.error.code is answer.error.code
+    assert absent.error.safe_details == answer.error.safe_details
+
+
+def test_the_extraction_reveal_keeps_its_name_command_and_purpose() -> None:
+    assert Capability.KNOWLEDGE_REVEAL.value == "knowledge.reveal"
+    assert RevealSubject.capability is Capability.KNOWLEDGE_REVEAL
+    from dataclasses import fields
+
+    assert {field.name for field in fields(RevealSubject)} == {"subject_id"}

@@ -541,3 +541,80 @@ def test_through_the_handler_the_entity_floor_and_family_grants_narrow(scene: An
     assert [item["record_family"] for item in floored["events"]] == ["entity_name", "entity"]
     tasks = _handler_result(scene, LIST_GRANT | grants(Capability.TASKS_READ))
     assert [item["record_family"] for item in tasks["events"]] == ["task"]
+
+
+# ---- KLP-WP-03 (KLP-AC-048 / KLP-AC-111, WP-03 slice) ----------------------------
+
+
+def test_the_knowledge_family_needs_its_own_read_grant() -> None:
+    """`knowledge_assertion` is disclosed only by `knowledge.assertions.read` or `.list`.
+
+    The extraction plane's `knowledge.read`/`search`, the Knowledge search and
+    history and reveal reads, and any other family's read disclose nothing of it.
+    """
+    family = RecordEventFamily.KNOWLEDGE_ASSERTION
+    assert visible_families(ALL, grants(Capability.KNOWLEDGE_ASSERTIONS_READ)) == {family}
+    assert visible_families(ALL, grants(Capability.KNOWLEDGE_ASSERTIONS_LIST)) == {family}
+    for other in (
+        Capability.KNOWLEDGE_READ,
+        Capability.KNOWLEDGE_SEARCH,
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH,
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE,
+        Capability.CAPTURE_READ,
+    ):
+        assert family not in visible_families(ALL, grants(other)), other
+    rows = (
+        item("rcev_grantnarrow0001", family),
+        item("rcev_grantnarrow0002", RecordEventFamily.TASK),
+    )
+    view = run(FakeReader(rows=rows), grants(Capability.TASKS_READ))
+    assert [event.event_id for event in view.events] == ["rcev_grantnarrow0002"]
+
+
+def test_the_knowledge_family_is_invisible_when_its_reads_are_not_composed() -> None:
+    composed = ALL - {Capability.KNOWLEDGE_ASSERTIONS_READ, Capability.KNOWLEDGE_ASSERTIONS_LIST}
+    family = RecordEventFamily.KNOWLEDGE_ASSERTION
+    assert family not in visible_families(composed, None)
+    assert family not in visible_families(
+        composed, grants(Capability.KNOWLEDGE_ASSERTIONS_READ, Capability.TASKS_READ)
+    )
+
+
+def test_a_remote_knowledge_read_asks_the_reader_to_withhold_restricted_events() -> None:
+    """Remote (a grant ceiling, or a REMOTE_CLIENT transport): the withholding flag is off.
+
+    The SQL reader applies the Knowledge `withheld_remote` predicate under that
+    flag (proved against a real database in `test_knowledge_assertion_disclosure`).
+    """
+    family = RecordEventFamily.KNOWLEDGE_ASSERTION
+    rows = (item("rcev_grantnarrow0001", family), item("rcev_grantnarrow0002", family))
+    for capability_grants, remote_transport, include_restricted in (
+        (grants(Capability.KNOWLEDGE_ASSERTIONS_READ), False, False),
+        (None, True, False),
+        (None, False, True),
+    ):
+        reader = FakeReader(rows=rows)
+        first = list_record_events(
+            reader,
+            principal_id=PRINCIPAL,
+            available_capabilities=ALL,
+            capability_grants=capability_grants,
+            record_families=None,
+            page_size=1,
+            cursor=None,
+            remote_transport=remote_transport,
+        )
+        list_record_events(
+            reader,
+            principal_id=PRINCIPAL,
+            available_capabilities=ALL,
+            capability_grants=capability_grants,
+            record_families=None,
+            page_size=1,
+            cursor=first.next_cursor,
+            remote_transport=remote_transport,
+        )
+        assert reader.visibility_calls
+        assert {call[2] for call in reader.visibility_calls} == {include_restricted}

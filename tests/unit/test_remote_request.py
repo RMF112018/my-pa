@@ -995,3 +995,50 @@ def test_the_meeting_writes_are_among_the_domain_only_remote_write_schemas() -> 
         payload = schema["properties"]["payload"]
         assert REMOTE_OWNED_PAYLOAD_FIELDS.isdisjoint(payload["properties"])
         assert "idempotency_key" not in payload["required"]
+
+
+# ---- KLP-WP-03 (KLP-AC-018 WP-03 slice) -------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "principal_id",
+        "actor_class",
+        "authority",
+        "authority_class",
+        "source_classification",
+        "classification",
+        "independence_key",
+        "epistemic_status",
+    ],
+)
+def test_compose_refuses_a_server_owned_knowledge_field(field: str) -> None:
+    from my_pa.adapters.remote_request import KNOWLEDGE_SERVER_OWNED_FIELDS
+
+    assert field in KNOWLEDGE_SERVER_OWNED_FIELDS
+    capability = Capability.KNOWLEDGE_ASSERTIONS_CREATE
+    grants = frozenset({(capability, Purpose.KNOWLEDGE_ASSERTION_AUTHORING)})
+    payload = {
+        "subject_kind": "principal",
+        "subject_id": "prn_remoterequest0001",
+        "predicate_code": "policy.requirement",
+        "value": "A remote value",
+    }
+    principal = Principal(
+        principal_id="prn_remoterequest0001", kind=PrincipalKind.OPERATOR, authenticated=True
+    )
+    composed = compose_remote_arguments(
+        capability_name=capability.value,
+        arguments={"payload": payload},
+        principal=principal,
+        grants=grants,
+    )
+    assert composed["payload"]["idempotency_key"].startswith("idk_")
+    with pytest.raises(InvalidRequestError):
+        compose_remote_arguments(
+            capability_name=capability.value,
+            arguments={"payload": {**payload, field: "forged"}},
+            principal=principal,
+            grants=grants,
+        )

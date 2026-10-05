@@ -927,6 +927,21 @@ class Capability(StrEnum):
     #: on every request (`application.record_events`), so the grant for this
     #: name alone discloses no family.
     RECORD_EVENTS_LIST = "record_events.list"
+    #: The Knowledge Assertion plane (KLP-WP-03): five reads and one explicit
+    #: create over `knowledge.knowledge_assertions`, the Principal's own registered
+    #: facts. Named one at a time and composed through an explicit name set, never
+    #: through a `knowledge.` prefix: the extraction plane's `knowledge.search`,
+    #: `knowledge.read`, `knowledge.reveal` and `knowledge.coverage` keep their
+    #: names, purposes, commands and results byte-identical (KLP-AC-001). None is
+    #: operator-only: a Knowledge Assertion is the Principal's own statement in
+    #: the Principal's own partition and widens no scope a later request is
+    #: evaluated against. Every one is scopeless for the same reason.
+    KNOWLEDGE_ASSERTIONS_READ = "knowledge.assertions.read"
+    KNOWLEDGE_ASSERTIONS_LIST = "knowledge.assertions.list"
+    KNOWLEDGE_ASSERTIONS_SEARCH = "knowledge.assertions.search"
+    KNOWLEDGE_ASSERTIONS_HISTORY = "knowledge.assertions.history"
+    KNOWLEDGE_ASSERTIONS_REVEAL = "knowledge.assertions.reveal"
+    KNOWLEDGE_ASSERTIONS_CREATE = "knowledge.assertions.create"
 
 
 class NativeSourceCapability(StrEnum):
@@ -1439,6 +1454,16 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.MEETINGS_SERIES_UPDATE: frozenset({Purpose.MEETING_AUTHORING}),
         # The Record Event feed (WP-RE-06): exactly one purpose of its own.
         Capability.RECORD_EVENTS_LIST: frozenset({Purpose.RECORD_EVENT_READ}),
+        # The Knowledge Assertion plane (KLP-WP-03): each name maps to exactly
+        # one purpose of the plane's read/authoring pair and never to both
+        # (KLP-AC-015). The five reads never write; the explicit create is the
+        # plane's only WP-03 write.
+        Capability.KNOWLEDGE_ASSERTIONS_READ: frozenset({Purpose.KNOWLEDGE_ASSERTION_READ}),
+        Capability.KNOWLEDGE_ASSERTIONS_LIST: frozenset({Purpose.KNOWLEDGE_ASSERTION_READ}),
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH: frozenset({Purpose.KNOWLEDGE_ASSERTION_READ}),
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY: frozenset({Purpose.KNOWLEDGE_ASSERTION_READ}),
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL: frozenset({Purpose.KNOWLEDGE_ASSERTION_READ}),
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE: frozenset({Purpose.KNOWLEDGE_ASSERTION_AUTHORING}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),
@@ -1586,6 +1611,11 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.MEETINGS_CREATE,
         Capability.MEETINGS_UPDATE,
         Capability.MEETINGS_SERIES_UPDATE,
+        # KLP-WP-03. The explicit Knowledge Assertion create persists a
+        # submission ledger row and, when admitted, an assertion, its mutation
+        # receipt and evidence links. The five Knowledge reads stay out, which
+        # keeps their generated MCP tools annotated `read_only_hint`.
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE,
     }
 )
 
@@ -1676,6 +1706,13 @@ _ADDITIVE_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         # `meetings.update` and `meetings.series.update` are deliberately
         # absent: each rewrites a row that already existed.
         Capability.MEETINGS_CREATE,
+        # KLP-WP-03 (KLP-AC-103, KLP-AC-148). Additive because its duplicate
+        # outcome writes nothing: an exact live duplicate returns
+        # `duplicate_existing` with the existing assertion and writes only its own
+        # completed submission row -- no evidence, link, version, classification
+        # mutation or Record Event. It never enriches, supersedes or transitions
+        # an existing assertion.
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE,
     }
 )
 

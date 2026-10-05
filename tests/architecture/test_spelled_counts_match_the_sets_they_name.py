@@ -490,6 +490,14 @@ _ORDINAL_UNITS = (
     # ordinal, so this table stays dense through a hundred-eighty-second.
     "hundred-eighty-first",
     "hundred-eighty-second",
+    # KLP-WP-03 adds the six `knowledge.assertions.` names and takes the public
+    # set to one hundred and eighty-seven; dense through a hundred-eighty-eighth.
+    "hundred-eighty-third",
+    "hundred-eighty-fourth",
+    "hundred-eighty-fifth",
+    "hundred-eighty-sixth",
+    "hundred-eighty-seventh",
+    "hundred-eighty-eighth",
 )
 
 

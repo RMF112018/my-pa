@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -107,6 +108,12 @@ from my_pa.domain.intelligence.catalog import (
     ProducerRunState,
     ResolverSetId,
     SourceLaneId,
+)
+from my_pa.domain.knowledge_assertion.vocabulary import (
+    KnowledgeAssertionLifecycle,
+    KnowledgeEvidenceIdentityKind,
+    KnowledgeEvidenceRole,
+    KnowledgeSubjectKind,
 )
 from my_pa.domain.meeting.model import (
     DEFAULT_MEETING_PAGE_SIZE,
@@ -10625,6 +10632,350 @@ class ListRecordEvents:
         requested_families(self.record_families)
 
 
+# --- KLP-WP-03: the Knowledge Assertion plane -------------------------------------
+#
+# Six commands. None carries a `principal_id`, an actor class, an authority, a
+# classification, an epistemic status or an independence key: every one of those
+# is derived server-side from the authorization (KLP-AC-018), and an unknown key
+# reaches the frozen dataclass as an unexpected keyword and is refused there.
+
+#: The published page cap of the three Knowledge listings.
+MAX_KNOWLEDGE_PAGE_SIZE: Final = 100
+#: At most this many cited versions on one explicit create.
+MAX_KNOWLEDGE_CREATE_EVIDENCE: Final = 16
+#: A Knowledge search string is at most this long.
+MAX_KNOWLEDGE_QUERY_CHARACTERS: Final = 256
+_KNOWLEDGE_PREDICATE_CODE: Final = re.compile(r"\A[a-z][a-z_]{0,30}[.][a-z][a-z_]{0,30}\Z")
+_KNOWLEDGE_SHA256: Final = re.compile(r"\A[0-9a-f]{64}\Z")
+_KNOWLEDGE_CREATE_EVIDENCE_KINDS: Final = frozenset(
+    {KnowledgeEvidenceIdentityKind.CAPTURE, KnowledgeEvidenceIdentityKind.RELATIONSHIP_MEMORY}
+)
+_KNOWLEDGE_CREATE_EVIDENCE_ROLES: Final = frozenset(
+    {KnowledgeEvidenceRole.DIRECT, KnowledgeEvidenceRole.SUPPORTING}
+)
+
+_KNOWLEDGE_FIELD_DOCS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType(
+    {
+        "assertion_id": {"description": "A `kasr_` Knowledge Assertion identifier."},
+        "subject_kind": {
+            "description": "What the assertion is about: principal, entity or project."
+        },
+        "subject_id": {
+            "description": (
+                "The subject's own identifier (`prn_`, `ent_` or `prj_`), never a name."
+            )
+        },
+        "predicate_code": {
+            "description": "A registered predicate code, for example `policy.requirement`."
+        },
+        "value": {
+            "description": (
+                "The asserted value: text, or an RFC 3339 instant for a datetime predicate."
+            )
+        },
+        "qualifier": {"description": "The predicate's closed qualifier object, or null."},
+        "effective_from": {"description": "When the fact starts to hold (RFC 3339), or null."},
+        "effective_to": {"description": "When the fact stops holding (RFC 3339), or null."},
+        "evidence": {
+            "description": (
+                "Cited Capture or Relationship Memory versions supporting the assertion."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "identity_kind": {
+                        "type": "string",
+                        "enum": ["capture", "relationship_memory"],
+                    },
+                    "capture_id": {"type": "string"},
+                    "relationship_memory_id": {"type": "string"},
+                    "content_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    "role": {"type": "string", "enum": ["direct", "supporting"]},
+                },
+                "required": ["identity_kind", "content_hash", "role"],
+                "additionalProperties": False,
+            },
+            "maxItems": MAX_KNOWLEDGE_CREATE_EVIDENCE,
+        },
+        "lifecycle": {"description": "One lifecycle to list; omitted lists live assertions only."},
+        "query": {"description": "Text to find inside text-valued assertions."},
+        "page_size": {"description": "At most this many assertions (cap 100)."},
+        "cursor": {"description": "A previous page's `next_cursor`."},
+        "idempotency_key": {"description": "One key per intended create (1-128 characters)."},
+    }
+)
+
+
+def _knowledge_docs(*names: str) -> Mapping[str, Mapping[str, object]]:
+    return MappingProxyType({name: _KNOWLEDGE_FIELD_DOCS[name] for name in names})
+
+
+def _knowledge_member[E: StrEnum](value: object, enum: type[E], detail: SafeDetail) -> E:
+    if isinstance(value, enum):
+        return value
+    if isinstance(value, str):
+        try:
+            return enum(value)
+        except ValueError:
+            pass
+    raise InvalidRequestError(detail)
+
+
+def _knowledge_predicate_code(value: object) -> str:
+    if not isinstance(value, str) or not _KNOWLEDGE_PREDICATE_CODE.fullmatch(value):
+        raise InvalidRequestError(SafeDetail.KINDS)
+    return value
+
+
+def _knowledge_page_size(value: int | None) -> int | None:
+    sized = _positive(value, SafeDetail.PAGE_SIZE)
+    if sized is not None and sized > MAX_KNOWLEDGE_PAGE_SIZE:
+        raise InvalidRequestError(SafeDetail.PAGE_SIZE)
+    return sized
+
+
+def _knowledge_evidence(value: object) -> tuple[dict[str, object], ...]:
+    """Cited capture or memory versions, refused unless exactly well-shaped.
+
+    External evidence needs a discovery source profile, which an explicit create
+    never has, and counterevidence would make a principal-asserted fact contested
+    on creation; both are refused (`invalid_request(evidence)`, no row written).
+    """
+    if not isinstance(value, tuple | list) or len(value) > MAX_KNOWLEDGE_CREATE_EVIDENCE:
+        raise InvalidRequestError(SafeDetail.EVIDENCE)
+    seen: set[tuple[object, ...]] = set()
+    for item in value:
+        if not isinstance(item, Mapping):
+            raise InvalidRequestError(SafeDetail.EVIDENCE)
+        kind = _knowledge_member(
+            item.get("identity_kind"), KnowledgeEvidenceIdentityKind, SafeDetail.EVIDENCE
+        )
+        role = _knowledge_member(item.get("role"), KnowledgeEvidenceRole, SafeDetail.EVIDENCE)
+        if kind not in _KNOWLEDGE_CREATE_EVIDENCE_KINDS or role not in (
+            _KNOWLEDGE_CREATE_EVIDENCE_ROLES
+        ):
+            raise InvalidRequestError(SafeDetail.EVIDENCE)
+        key_name, key_kind = (
+            ("capture_id", IdKind.CAPTURE)
+            if kind is KnowledgeEvidenceIdentityKind.CAPTURE
+            else ("relationship_memory_id", IdKind.RELATIONSHIP_MEMORY)
+        )
+        if set(item) != {"identity_kind", key_name, "content_hash", "role"}:
+            raise InvalidRequestError(SafeDetail.EVIDENCE)
+        key = item[key_name]
+        if not isinstance(key, str):
+            raise InvalidRequestError(SafeDetail.EVIDENCE)
+        _identifier(key, key_kind, SafeDetail.EVIDENCE)
+        content_hash = item["content_hash"]
+        if not isinstance(content_hash, str) or not _KNOWLEDGE_SHA256.fullmatch(content_hash):
+            raise InvalidRequestError(SafeDetail.EVIDENCE)
+        identity = (kind.value, key, content_hash, role.value)
+        if identity in seen:
+            raise InvalidRequestError(SafeDetail.EVIDENCE)
+        seen.add(identity)
+    return tuple(dict(item) for item in value)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadKnowledgeAssertion:
+    """Read one of your registered Knowledge Assertions by its `kasr_` identifier.
+
+    Returns its subject, predicate, typed value, qualifier, effective interval,
+    epistemic status, lifecycle and version. An assertion you cannot read
+    answers exactly as an absent one does.
+    """
+
+    capability: ClassVar[Capability] = Capability.KNOWLEDGE_ASSERTIONS_READ
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, object]]] = _knowledge_docs(
+        "assertion_id"
+    )
+
+    assertion_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.assertion_id, IdKind.KNOWLEDGE_ASSERTION, SafeDetail.SUBJECT)
+
+
+@dataclass(frozen=True, slots=True)
+class ListKnowledgeAssertions:
+    """List your Knowledge Assertions, newest first, optionally about one subject or predicate.
+
+    Live assertions only unless `lifecycle` names one. `subject_id` requires
+    `subject_kind`. Resume with the previous page's `next_cursor`.
+    """
+
+    capability: ClassVar[Capability] = Capability.KNOWLEDGE_ASSERTIONS_LIST
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, object]]] = _knowledge_docs(
+        "subject_kind", "subject_id", "predicate_code", "lifecycle", "page_size", "cursor"
+    )
+
+    subject_kind: KnowledgeSubjectKind | None = None
+    subject_id: str | None = None
+    predicate_code: str | None = None
+    lifecycle: KnowledgeAssertionLifecycle | None = None
+    page_size: int | None = None
+    cursor: str | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.subject_kind is not None:
+            object.__setattr__(
+                self,
+                "subject_kind",
+                _knowledge_member(self.subject_kind, KnowledgeSubjectKind, SafeDetail.SUBJECT),
+            )
+        if self.subject_id is not None:
+            if self.subject_kind is None:
+                raise InvalidRequestError(SafeDetail.SUBJECT)
+            _identifier(self.subject_id, None, SafeDetail.SUBJECT)
+        if self.predicate_code is not None:
+            _knowledge_predicate_code(self.predicate_code)
+        if self.lifecycle is not None:
+            object.__setattr__(
+                self,
+                "lifecycle",
+                _knowledge_member(
+                    self.lifecycle, KnowledgeAssertionLifecycle, SafeDetail.LIFECYCLE
+                ),
+            )
+        _knowledge_page_size(self.page_size)
+        _optional_cursor(self.cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class SearchKnowledgeAssertions:
+    """Find your text-valued Knowledge Assertions containing a phrase, newest first.
+
+    Live assertions only unless `lifecycle` names one; optionally narrowed to
+    one predicate. Resume with the previous page's `next_cursor`.
+    """
+
+    capability: ClassVar[Capability] = Capability.KNOWLEDGE_ASSERTIONS_SEARCH
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, object]]] = _knowledge_docs(
+        "query", "predicate_code", "lifecycle", "page_size", "cursor"
+    )
+
+    query: str = field(repr=False)
+    predicate_code: str | None = None
+    lifecycle: KnowledgeAssertionLifecycle | None = None
+    page_size: int | None = None
+    cursor: str | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        query: object = self.query
+        if (
+            not isinstance(query, str)
+            or not query.strip()
+            or len(query) > MAX_KNOWLEDGE_QUERY_CHARACTERS
+        ):
+            raise InvalidRequestError(SafeDetail.QUERY)
+        _bounded_query(self.query, SafeDetail.QUERY)
+        if self.predicate_code is not None:
+            _knowledge_predicate_code(self.predicate_code)
+        if self.lifecycle is not None:
+            object.__setattr__(
+                self,
+                "lifecycle",
+                _knowledge_member(
+                    self.lifecycle, KnowledgeAssertionLifecycle, SafeDetail.LIFECYCLE
+                ),
+            )
+        _knowledge_page_size(self.page_size)
+        _optional_cursor(self.cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class GetKnowledgeAssertionHistory:
+    """The version history of one Knowledge Assertion and its supersession neighbours."""
+
+    capability: ClassVar[Capability] = Capability.KNOWLEDGE_ASSERTIONS_HISTORY
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, object]]] = _knowledge_docs(
+        "assertion_id"
+    )
+
+    assertion_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.assertion_id, IdKind.KNOWLEDGE_ASSERTION, SafeDetail.SUBJECT)
+
+
+@dataclass(frozen=True, slots=True)
+class RevealKnowledgeAssertion:
+    """The provenance behind one Knowledge Assertion: its origin and the evidence it cites.
+
+    The identifier is validated for shape and not for kind; anything that is not
+    one of your Knowledge Assertions -- a capture-plane assertion included --
+    answers as not found.
+    """
+
+    capability: ClassVar[Capability] = Capability.KNOWLEDGE_ASSERTIONS_REVEAL
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, object]]] = _knowledge_docs(
+        "assertion_id"
+    )
+
+    assertion_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.assertion_id, None, SafeDetail.SUBJECT)
+
+
+@dataclass(frozen=True, slots=True)
+class CreateKnowledgeAssertion:
+    """Record one fact you state about yourself, a project or a resolved entity.
+
+    The fact is your own assertion under a registered predicate, stored with the
+    classification and epistemic status the server derives. An identical live
+    fact returns the existing assertion and writes nothing new. Predicates that
+    require operator review are refused here.
+    """
+
+    capability: ClassVar[Capability] = Capability.KNOWLEDGE_ASSERTIONS_CREATE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, object]]] = _knowledge_docs(
+        "subject_kind",
+        "subject_id",
+        "predicate_code",
+        "value",
+        "qualifier",
+        "effective_from",
+        "effective_to",
+        "evidence",
+        "idempotency_key",
+    )
+
+    subject_kind: KnowledgeSubjectKind
+    subject_id: str
+    predicate_code: str
+    value: str = field(repr=False)
+    idempotency_key: str
+    qualifier: dict[str, object] | None = None
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+    evidence: tuple[dict[str, object], ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "subject_kind",
+            _knowledge_member(self.subject_kind, KnowledgeSubjectKind, SafeDetail.SUBJECT),
+        )
+        _identifier(self.subject_id, None, SafeDetail.SUBJECT)
+        _knowledge_predicate_code(self.predicate_code)
+        value: object = self.value
+        if not isinstance(value, str) or not value.strip():
+            raise InvalidRequestError(SafeDetail.RAW_VALUE)
+        _idempotency_key(self.idempotency_key)
+        if self.qualifier is not None and not isinstance(self.qualifier, dict):
+            raise InvalidRequestError(SafeDetail.STRUCTURED_VALUE)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        object.__setattr__(self, "evidence", _knowledge_evidence(self.evidence))
+
+
 type Command = (
     GetCapabilities
     | ListSources
@@ -10807,6 +11158,12 @@ type Command = (
     | UpdateMeeting
     | UpdateMeetingSeries
     | ListRecordEvents
+    | ReadKnowledgeAssertion
+    | ListKnowledgeAssertions
+    | SearchKnowledgeAssertions
+    | GetKnowledgeAssertionHistory
+    | RevealKnowledgeAssertion
+    | CreateKnowledgeAssertion
 )
 
 

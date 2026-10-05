@@ -77,6 +77,7 @@ from my_pa.contracts.v1.envelope import ResponseEnvelope
 from my_pa.domain.common.provenance import Provenance, TrustLevel
 from my_pa.domain.extraction.quarantine import QuarantineReason
 from my_pa.domain.extraction.text import ExtractionOutcome, ExtractionStatus
+from my_pa.domain.identity.chatllm_capability_policy import KNOWLEDGE_ASSERTION_DATA_NAMES
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.infrastructure.persistence.tables import extractions
@@ -150,7 +151,15 @@ def test_the_family_this_guard_covers_is_the_domains_own() -> None:
     `knowledge.` family arrives here as a failing row instead of being silently
     unexamined — which is how one comes to return an unlabelled derived record.
     """
-    family = {capability for capability in Capability if capability.value.startswith("knowledge.")}
+    # KLP-WP-03: the Knowledge Assertion names share the `knowledge.` prefix and
+    # are not the extraction plane; they are an explicit name set (KLP-AC-001)
+    # and return the Principal's own registered facts, never a derived record.
+    family = {
+        capability
+        for capability in Capability
+        if capability.value.startswith("knowledge.")
+        and capability not in KNOWLEDGE_ASSERTION_DATA_NAMES
+    }
     assert set(EXPECTED_TRUST) == family
     assert set(PURPOSES) == family
     assert len(family) == 4

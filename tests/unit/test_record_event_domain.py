@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import dataclasses
 from datetime import UTC, datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Final
 
 import pytest
 
@@ -59,6 +59,7 @@ from my_pa.domain.record_events import (
     field_set,
     memory_source_capability,
     observation_feed_version,
+    validate_changed_fields,
 )
 from my_pa.domain.relationship.governance import (
     ActorClass,
@@ -282,7 +283,8 @@ def test_source_capability_is_a_bounded_operation_name(value: object) -> None:
 # ---- closed vocabularies ----------------------------------------------------
 
 
-def test_the_family_vocabulary_is_exactly_the_twenty_two_named_families() -> None:
+def test_the_family_vocabulary_is_exactly_the_twenty_three_named_families() -> None:
+    """Twenty-three: KLP-WP-03 adds `knowledge_assertion` to the twenty-two."""
     assert {member.value for member in RecordEventFamily} == {
         "task",
         "commitment",
@@ -306,8 +308,10 @@ def test_the_family_vocabulary_is_exactly_the_twenty_two_named_families() -> Non
         "meeting_series",
         "capture",
         "task_comment",
+        # KLP-WP-03 declares the one family WP-02 admitted schema-ahead.
+        "knowledge_assertion",
     }
-    assert len(RecordEventFamily) == 22
+    assert len(RecordEventFamily) == 23
 
 
 def test_the_kind_vocabulary_is_created_updated_state_changed() -> None:
@@ -599,3 +603,78 @@ def test_the_identity_effect_map_names_exactly_the_twelve_in_scope_families() ->
     for member, family in IDENTITY_EFFECT_RECORD_FAMILIES.items():
         if member.value in {item.value for item in MutationRecordFamily}:
             assert family is ENTITY_RECORD_FAMILIES[MutationRecordFamily(member.value)]
+
+
+# ---- KLP-WP-03: the frozen Knowledge Assertion mapping (KLP-AC-042) ----------------
+#
+# R5 CORR-006 / R6 section 9: the published Knowledge Record Event mapping, written
+# out as literals (WP-01 DEV-04) so a change to `domain.knowledge_assertion.
+# provenance` is a reviewed edit here and never a silent drift. Per mutation kind:
+# the event kind and the sorted `changed_fields` tokens. Per origin: the actor
+# class and the authority. KLP-WP-03 stages only `create` / explicit create.
+
+KNOWLEDGE_EVENT_TABLE: Final = {
+    "create": ("created", ("classification", "epistemic_status", "lifecycle", "value")),
+    "review_accept": ("created", ("classification", "epistemic_status", "lifecycle", "value")),
+    "review_correct": ("created", ("classification", "epistemic_status", "lifecycle", "value")),
+    "supersede_successor": (
+        "created",
+        ("classification", "epistemic_status", "lifecycle", "value"),
+    ),
+    "supersede_predecessor": ("state_changed", ("lifecycle",)),
+    "evidence_enrich": ("updated", ("evidence",)),
+    "classify": ("state_changed", ("classification",)),
+    "revalidation_required": ("state_changed", ("lifecycle",)),
+    "revalidation_cleared": ("state_changed", ("lifecycle",)),
+    "archive": ("state_changed", ("lifecycle",)),
+}
+KNOWLEDGE_ORIGIN_TABLE: Final = {
+    "autonomous_submit": ("assistant", "source_backed_assertion"),
+    "explicit_create": ("principal", "user_confirmed_assertion"),
+    "review_promotion": ("review_promotion", "review_accepted"),
+    "server_maintenance": ("system", "system_deterministic"),
+}
+
+
+def test_the_knowledge_mutation_event_table_is_frozen() -> None:
+    from my_pa.domain.knowledge_assertion.provenance import KNOWLEDGE_MUTATION_EVENTS
+
+    assert {
+        kind.value: (event.kind.value, event.changed_fields)
+        for kind, event in KNOWLEDGE_MUTATION_EVENTS.items()
+    } == KNOWLEDGE_EVENT_TABLE
+    for _kind, fields in KNOWLEDGE_EVENT_TABLE.values():
+        assert validate_changed_fields(fields) == fields
+
+
+def test_the_knowledge_origin_table_is_frozen() -> None:
+    from my_pa.domain.knowledge_assertion.provenance import (
+        KNOWLEDGE_EVENT_ACTOR_CLASSES,
+        KNOWLEDGE_EVENT_AUTHORITIES,
+    )
+
+    assert {
+        origin.value: (actor.value, KNOWLEDGE_EVENT_AUTHORITIES[origin].value)
+        for origin, actor in KNOWLEDGE_EVENT_ACTOR_CLASSES.items()
+    } == KNOWLEDGE_ORIGIN_TABLE
+    assert set(KNOWLEDGE_EVENT_AUTHORITIES) == set(KNOWLEDGE_EVENT_ACTOR_CLASSES)
+
+
+def test_an_explicit_create_event_is_a_valid_metadata_only_draft() -> None:
+    """The draft the WP-03 repository stages validates against the carrier."""
+    draft = RecordEventDraft.issue(
+        principal_id="prn_knowledgedomain0001",
+        record_family=RecordEventFamily.KNOWLEDGE_ASSERTION,
+        record_id="kasr_knowledgedomain0001",
+        event_kind=RecordEventKind.CREATED,
+        record_version=1,
+        changed_fields=KNOWLEDGE_EVENT_TABLE["create"][1],
+        source_capability="knowledge.assertions.create",
+        actor_class=RecordEventActorClass.PRINCIPAL,
+        classification=Classification.PRIVATE_LOCAL,
+        occurred_at=datetime(2026, 10, 4, tzinfo=UTC),
+        source_receipt_id="kamut_knowledgedomain0001",
+        authority=RecordEventAuthority.USER_CONFIRMED_ASSERTION,
+    )
+    assert draft.record_family is RecordEventFamily.KNOWLEDGE_ASSERTION
+    assert draft.source_receipt_id == "kamut_knowledgedomain0001"

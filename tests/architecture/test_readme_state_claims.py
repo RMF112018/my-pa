@@ -729,7 +729,9 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert f"**{default} application-available capabilities**" in runbook
     assert f"publishes **{default - 3} tools**" in runbook
     assert f"unconfigured local stdio: {default - 3}" in runbook
-    assert f"fully feature-composed local stdio: {implemented - 3}" in runbook
+    # KLP-WP-04: fully composed local stdio also withholds the two client-bound
+    # Knowledge discovery capabilities (three GoodNotes pull + two = five).
+    assert f"fully feature-composed local stdio: {implemented - 5}" in runbook
     assert f"{implemented} have application commands/handlers" in runbook
     assert f"all {implemented} implemented tools" in runbook
     normalized_runbook = " ".join(runbook.split()).lower()

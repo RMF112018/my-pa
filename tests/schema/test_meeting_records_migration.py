@@ -259,10 +259,18 @@ ADMITTED_LATER_CAPABILITIES: Final = frozenset(
         "knowledge.assertions.history",
         "knowledge.assertions.reveal",
         "knowledge.assertions.create",
+        # KLP-WP-04: the discovery pair, admitted by the same revision.
+        "knowledge.assertions.submit",
+        "knowledge.discovery.checkpoint",
     }
 )
 ADMITTED_LATER_PURPOSES: Final = frozenset(
-    {"record_event_read", "knowledge_assertion_read", "knowledge_assertion_authoring"}
+    {
+        "record_event_read",
+        "knowledge_assertion_read",
+        "knowledge_assertion_authoring",
+        "knowledge_assertion_observation",
+    }
 )
 
 

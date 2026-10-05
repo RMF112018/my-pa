@@ -227,7 +227,9 @@ Measured against a real child process — `.venv/bin/python apps/gateway.py mcp`
 (unconfigured local stdio: 108, with the three authenticated-client capabilities
 absent) and
 `::test_a_child_with_a_managed_root_publishes_every_locally_available_capability`
-(fully feature-composed local stdio: 184, again excluding exactly those three).
+(fully feature-composed local stdio: 184, excluding those three and the two
+KLP-WP-04 Knowledge discovery capabilities, which are served only to an
+authenticated remote client).
 
 **Current-state correction (2026-09-08):** earlier snapshots in this section
 mixed declared capability totals, application availability, feature-gated

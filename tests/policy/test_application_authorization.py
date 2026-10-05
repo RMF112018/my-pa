@@ -66,6 +66,7 @@ from my_pa.application.commands import (
     BindEntityIdentifier,
     BulkConfirmTasks,
     BulkPreviewTasks,
+    CheckpointKnowledgeDiscovery,
     CloseCommitment,
     CloseConstraint,
     CloseConstraintWithFollowUp,
@@ -225,6 +226,7 @@ from my_pa.application.commands import (
     SplitEntity,
     StartGsqsB0,
     SubmitGoodNotesProposal,
+    SubmitKnowledgeAssertion,
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
     SupersedeEntityName,
@@ -268,7 +270,10 @@ from my_pa.domain.intelligence.catalog import (
     ResolverSetId,
     SourceLaneId,
 )
-from my_pa.domain.knowledge_assertion.vocabulary import KnowledgeSubjectKind
+from my_pa.domain.knowledge_assertion.vocabulary import (
+    KnowledgeCheckpointKind,
+    KnowledgeSubjectKind,
+)
 from my_pa.domain.policy.decision import DenialReason
 from my_pa.domain.project_controls.constraint import ConstraintLifecycleState
 from my_pa.domain.project_controls.sync import (
@@ -1190,6 +1195,32 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             value="A policy knowledge value",
             idempotency_key="policy-knowledge-create",
         ),
+        Capability.KNOWLEDGE_ASSERTIONS_SUBMIT: SubmitKnowledgeAssertion(
+            source_profile_id="kdsp_policyknowledge0001",
+            external_run_id="policy-run",
+            external_candidate_id="policy-candidate",
+            subject_kind=KnowledgeSubjectKind.PRINCIPAL,
+            subject_id=scene.principal.principal_id,
+            predicate_code="policy.requirement",
+            value="A policy observed value",
+            evidence=(
+                {
+                    "identity_kind": "external_object",
+                    "external_object_id": "policy-object",
+                    "content_hash": "e" * 64,
+                    "role": "direct",
+                },
+            ),
+        ),
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT: CheckpointKnowledgeDiscovery(
+            source_profile_id="kdsp_policyknowledge0001",
+            expected_version=0,
+            external_run_id="policy-run",
+            submitted_candidate_count=1,
+            checkpoint_kind=KnowledgeCheckpointKind.SYNTHETIC,
+            private_envelope="policy-opaque-state",
+            idempotency_key="policy-knowledge-checkpoint",
+        ),
     }
 
 
@@ -1621,6 +1652,9 @@ SCOPED_CAPABILITIES = [
         Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
         Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
         Capability.KNOWLEDGE_ASSERTIONS_CREATE,
+        # KLP-WP-04: the discovery pair, also in `_SCOPELESS`.
+        Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
     }
 ]
 
@@ -1902,6 +1936,9 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
         Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
         Capability.KNOWLEDGE_ASSERTIONS_CREATE,
+        # KLP-WP-04: the discovery pair, also in `_SCOPELESS`.
+        Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

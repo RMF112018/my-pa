@@ -109,7 +109,14 @@ def new_principal() -> str:
 class KnowledgeRuntime:
     """`ApplicationService` over the production SQL unit of work, Knowledge plane on."""
 
-    def __init__(self, url: str, *, knowledge_enabled: bool = True) -> None:
+    def __init__(
+        self,
+        url: str,
+        *,
+        knowledge_enabled: bool = True,
+        discovery_client_ids: frozenset[str] = frozenset(),
+        relationship_intelligence: bool = True,
+    ) -> None:
         self.engine = create_database_engine(url)
         self.audit_engine = create_database_engine(url)
         audit = SqlAlchemyAuditSink(self.audit_engine)
@@ -126,10 +133,12 @@ class KnowledgeRuntime:
             unit_of_work=unit_of_work,
             limits=LIMITS,
             clock=lambda: WHEN,
-            relationship_intelligence_enabled=True,
+            relationship_intelligence_enabled=relationship_intelligence,
             relationship_intelligence_writes_enabled=True,
             relationship_memory_enabled=True,
             knowledge_assertions_enabled=knowledge_enabled,
+            # KLP-WP-04 slice B2: the autonomous-submit tests bind a discovery client.
+            knowledge_discovery_client_ids=discovery_client_ids,
         )
 
     def close(self) -> None:

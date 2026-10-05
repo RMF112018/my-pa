@@ -374,10 +374,16 @@ __all__ = [
     "KnowledgeEvidenceNotFoundError",
     "KnowledgeEvidenceRow",
     "KnowledgeIdempotencyConflictError",
+    "KnowledgeLedgerInvariantError",
     "KnowledgeMutationRow",
     "KnowledgeRecord",
     "KnowledgeRepository",
+    "KnowledgeSourceBinding",
+    "KnowledgeSourceProfileUnboundError",
     "KnowledgeSubmissionResult",
+    "KnowledgeSubmitEvidence",
+    "KnowledgeSubmitRequest",
+    "KnowledgeTriggerNotFoundError",
     "ManagedAdmission",
     "ManagedByteStore",
     "ManagedDocumentRepository",
@@ -5036,6 +5042,31 @@ class KnowledgeCaptureWithdrawnError(PortError):
     """A cited capture root was archived after the C2 read (the C4c fence)."""
 
 
+class KnowledgeSourceProfileUnboundError(PortError):
+    """KLP-WP-04: the named source profile is not bound to this client (or absent).
+
+    One answer for an absent, a foreign and another client's profile, raised
+    before any write: no submission row can name a binding it does not own
+    (FK `knowledge_submission_binds_profile_client_scope`).
+    """
+
+
+class KnowledgeTriggerNotFoundError(PortError):
+    """KLP-WP-04: a cited trigger event is absent, foreign or withheld from the caller."""
+
+
+class KnowledgeLedgerInvariantError(PortError):
+    """KLP-WP-04: a Knowledge ledger trigger refused a write (SQLSTATE 23514 / 23001).
+
+    The submission and checkpoint-request lifecycle triggers fire only when the
+    server itself broke a ledger invariant (a second completion, a reserved row
+    at COMMIT, a forbidden UPDATE/DELETE). Nothing a caller sends reaches them,
+    so the public answer is `internal_error`, never a retry hint. The one
+    (trigger function, SQLSTATE) table that maps to it is
+    `infrastructure.persistence.knowledge_assertions.KNOWLEDGE_LEDGER_TRIGGERS`.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class KnowledgeAssertionRow:
     """One stored assertion, as the plane's reads disclose it. No evidence text."""
@@ -5171,7 +5202,10 @@ class KnowledgeSubmissionResult:
     """The stored public result of one submission plus the read-only current lifecycle.
 
     Identical on the fresh call and on every replay of the same key (R6 6.3):
-    `current_lifecycle` is the one field read at response time.
+    `current_lifecycle` is the one field read at response time, and it is
+    `None` for a remote caller whenever the result assertion is now
+    `withheld_remote` (KLP-WP-04 F2). The four trailing fields are autonomous
+    submit's (KLP-WP-04); an explicit create never sets them.
     """
 
     submission_id: str
@@ -5182,6 +5216,93 @@ class KnowledgeSubmissionResult:
     mutation_id: str | None
     canonical_owner: str | None
     current_lifecycle: str | None
+    superseded_assertion_id: str | None = None
+    proposal_id: str | None = None
+    review_case_id: str | None = None
+    routed_record_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeSourceBinding:
+    """KLP-WP-04: the immutable binding columns of one source profile (a C2 read).
+
+    `disabled_at` is deliberately absent: it is mutable and re-read under the
+    C4a lock inside the submit transaction.
+    """
+
+    source_profile_id: str
+    authenticated_client_id: str
+    scope_digest: str
+    origin_system: str
+    is_synthetic: bool
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeSubmitEvidence:
+    """KLP-WP-04: one cited evidence identity of an autonomous submit.
+
+    External rows carry the *command's* source profile; `availability` is the
+    availability the client reports for that object (`None`: no report).
+    """
+
+    identity_kind: str
+    content_hash: str
+    role: str
+    capture_id: str | None = None
+    relationship_memory_id: str | None = None
+    source_profile_id: str | None = None
+    external_object_id: str | None = None
+    external_version_id: str | None = None
+    excerpt: str | None = field(default=None, repr=False)
+    excerpt_sha256: str | None = None
+    availability: str | None = None
+
+    @property
+    def identity(self) -> tuple[str, ...]:
+        """The canonical identity tuple (R6 6.2 / 5.1), content hash last."""
+        if self.identity_kind == "external_object":
+            return (
+                self.identity_kind,
+                str(self.source_profile_id),
+                str(self.external_object_id),
+                self.external_version_id or "",
+                self.content_hash,
+            )
+        key = self.capture_id if self.identity_kind == "capture" else self.relationship_memory_id
+        return (self.identity_kind, str(key), self.content_hash)
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeSubmitRequest:
+    """KLP-WP-04: everything one autonomous-submit transaction needs.
+
+    Derived by the application from the command, the immutable predicate head
+    (`predicate`, a `KnowledgePredicate`) and the C2 binding read; the request
+    digest (R6 6.2) and fingerprint (6.5) are already computed.
+    """
+
+    authenticated_client_id: str
+    source_profile_id: str
+    scope_digest: str
+    origin_system: str
+    origin_is_synthetic: bool
+    external_run_id: str
+    external_candidate_id: str
+    request_digest: str
+    predicate: Any
+    subject_kind: str
+    subject_id: str
+    value_text: str | None = field(repr=False)
+    value_datetime: datetime | None
+    normalized_value_sha256: str
+    qualifier: Mapping[str, object] | None
+    effective_from: datetime | None
+    effective_to: datetime | None
+    assertion_fingerprint: str
+    owner_ref_kind: str | None
+    owner_ref_id: str | None
+    trigger_event_ids: tuple[str, ...]
+    evidence: tuple[KnowledgeSubmitEvidence, ...]
 
 
 class KnowledgeAssertionRepository(ABC):
@@ -5233,8 +5354,56 @@ class KnowledgeAssertionRepository(ABC):
         *,
         at: datetime,
         correlation_id: str,
+        remote: bool = False,
     ) -> KnowledgeSubmissionResult:
-        """Run one explicit create under the R6 section 8.1 lock order, or replay it."""
+        """Run one explicit create under the R6 section 8.1 lock order, or replay it.
+
+        `remote` (KLP-WP-04 F2) masks a withheld result assertion's
+        `current_lifecycle` in the answer; the stored result is unchanged.
+        """
+
+    @abstractmethod
+    def replay_create(
+        self, principal_id: str, idempotency_key: str, request_digest: str, *, remote: bool
+    ) -> KnowledgeSubmissionResult | None:
+        """KLP-WP-04 (N2): the stored result bound to this key, before any admission check.
+
+        `None` when the key is unbound; `KnowledgeIdempotencyConflictError` when it
+        is bound to another digest. Writes nothing.
+        """
+
+    @abstractmethod
+    def source_binding(
+        self, principal_id: str, source_profile_id: str, authenticated_client_id: str
+    ) -> KnowledgeSourceBinding | None:
+        """KLP-WP-04: the profile's immutable binding when it is this client's, else `None`."""
+
+    @abstractmethod
+    def replay_submission(
+        self,
+        principal_id: str,
+        *,
+        authenticated_client_id: str,
+        source_profile_id: str,
+        external_run_id: str,
+        external_candidate_id: str,
+        request_digest: str,
+        remote: bool,
+    ) -> KnowledgeSubmissionResult | None:
+        """KLP-WP-04 (N2, R6 6.1): the stored result of this candidate identity, or `None`."""
+
+    @abstractmethod
+    def submit(
+        self,
+        principal_id: str,
+        request: KnowledgeSubmitRequest,
+        *,
+        at: datetime,
+        correlation_id: str,
+        relationship_intelligence_composed: bool,
+        relationship_memory_composed: bool,
+    ) -> KnowledgeSubmissionResult:
+        """KLP-WP-04: one autonomous submit under R6 sections 6, 8 and 9, or its replay."""
 
 
 class RecordEventStager(ABC):

@@ -32,6 +32,7 @@ import base64
 import binascii
 import json
 import re
+import unicodedata
 from datetime import datetime
 from typing import Any, Final
 
@@ -45,7 +46,10 @@ from my_pa.contracts.ports import (
     KnowledgeAssertionRow,
     KnowledgeCreateEvidence,
     KnowledgeCreateRequest,
+    KnowledgeSourceBinding,
     KnowledgeSubmissionResult,
+    KnowledgeSubmitEvidence,
+    KnowledgeSubmitRequest,
 )
 from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.knowledge_assertion.admission import AdmissionEvidence
@@ -59,8 +63,10 @@ from my_pa.domain.knowledge_assertion.assertion import (
 from my_pa.domain.knowledge_assertion.digest import (
     DigestEvidence,
     InvalidKnowledgeValueError,
+    OwnerRef,
     request_digest,
     request_digest_object,
+    sha256_hex,
 )
 from my_pa.domain.knowledge_assertion.predicate import KnowledgePredicate
 from my_pa.domain.knowledge_assertion.vocabulary import (
@@ -71,6 +77,7 @@ from my_pa.domain.knowledge_assertion.vocabulary import (
     KnowledgeEvidenceIdentityKind,
     KnowledgeEvidenceRole,
     KnowledgeOriginSystem,
+    KnowledgeOwnerRefKind,
     KnowledgeReviewRequirement,
     KnowledgeValueType,
 )
@@ -79,6 +86,7 @@ __all__ = [
     "DEFAULT_KNOWLEDGE_PAGE_SIZE",
     "KNOWLEDGE_TRUST_BASIS",
     "assertion_view",
+    "create_admission_refusal",
     "create_request",
     "decode_knowledge_cursor",
     "encode_knowledge_cursor",
@@ -89,6 +97,8 @@ __all__ = [
     "reveal_view",
     "submission_view",
     "submit_admission_evidence",
+    "submit_request",
+    "submit_view",
 ]
 
 #: The page size when the caller names none.
@@ -141,7 +151,7 @@ def _value(predicate: KnowledgePredicate, raw: str) -> KnowledgeValue:
 
 
 def _candidate(
-    command: CreateKnowledgeAssertion, predicate: KnowledgePredicate
+    command: CreateKnowledgeAssertion | SubmitKnowledgeAssertion, predicate: KnowledgePredicate
 ) -> KnowledgeAssertionCandidate:
     """The typed candidate, refusing each field by name and never echoing it."""
     if command.subject_kind not in predicate.allowed_subject_kinds:
@@ -193,6 +203,24 @@ def _evidence(command: CreateKnowledgeAssertion) -> tuple[KnowledgeCreateEvidenc
     return tuple(cited)
 
 
+def create_admission_refusal(predicate: KnowledgePredicate) -> InvalidRequestError | None:
+    """The explicit-create admissibility refusal of `predicate`, or `None`.
+
+    KLP-WP-04 (N2): applied *after* the replay lookup, so a same-key retry
+    returns its stored result even when the predicate head has since changed.
+    It still precedes every subject and evidence read and writes no row.
+    """
+    if not predicate.is_open_for_intake:
+        return InvalidRequestError(SafeDetail.KINDS)
+    domain_owned = predicate.canonical_owner is not KnowledgeCanonicalOwner.KNOWLEDGE_ASSERTION
+    if not domain_owned and (
+        predicate.consequential_class is not KnowledgeConsequentialClass.NONE
+        or predicate.review_requirement is not KnowledgeReviewRequirement.REQUIRES_REVIEW
+    ):
+        return InvalidRequestError(SafeDetail.REVIEW_REQUIRED)
+    return None
+
+
 def create_request(
     command: CreateKnowledgeAssertion,
     predicate: KnowledgePredicate | None,
@@ -202,16 +230,12 @@ def create_request(
     """Everything the create transaction needs, or a refusal that writes nothing.
 
     Every refusal here precedes any subject, evidence or ledger read, so none
-    of them can say whether a subject or a version exists.
+    of them can say whether a subject or a version exists. The admissibility
+    refusals are `create_admission_refusal`'s, applied after the replay lookup.
     """
-    if predicate is None or not predicate.is_open_for_intake:
+    if predicate is None:
         raise InvalidRequestError(SafeDetail.KINDS)
     domain_owned = predicate.canonical_owner is not KnowledgeCanonicalOwner.KNOWLEDGE_ASSERTION
-    if not domain_owned and (
-        predicate.consequential_class is not KnowledgeConsequentialClass.NONE
-        or predicate.review_requirement is not KnowledgeReviewRequirement.REQUIRES_REVIEW
-    ):
-        raise InvalidRequestError(SafeDetail.REVIEW_REQUIRED)
     candidate = _candidate(command, predicate)
     evidence = _evidence(command)
     digest = request_digest(
@@ -327,6 +351,129 @@ def submit_admission_evidence(
                 )
             )
     return tuple(facts)
+
+
+def excerpt_digest(excerpt: str) -> str:
+    """`excerpt_sha256`: SHA-256 hex of the NFC UTF-8 excerpt (R6 6.2, KLP-WP-04 DEV)."""
+    return sha256_hex(unicodedata.normalize("NFC", excerpt).encode("utf-8"))
+
+
+def _submit_evidence(command: SubmitKnowledgeAssertion) -> tuple[KnowledgeSubmitEvidence, ...]:
+    cited: list[KnowledgeSubmitEvidence] = []
+    for item in command.evidence:
+        kind = KnowledgeEvidenceIdentityKind(str(item["identity_kind"]))
+        role = KnowledgeEvidenceRole(str(item["role"])).value
+        content_hash = str(item["content_hash"])
+        if kind is KnowledgeEvidenceIdentityKind.EXTERNAL_OBJECT:
+            raw_version = item.get("external_version_id")
+            raw_excerpt = item.get("excerpt")
+            excerpt = None if raw_excerpt is None else str(raw_excerpt)
+            cited.append(
+                KnowledgeSubmitEvidence(
+                    identity_kind=kind.value,
+                    content_hash=content_hash,
+                    role=role,
+                    source_profile_id=command.source_profile_id,
+                    external_object_id=str(item["external_object_id"]),
+                    external_version_id=None if raw_version is None else str(raw_version),
+                    excerpt=excerpt,
+                    excerpt_sha256=None if excerpt is None else excerpt_digest(excerpt),
+                )
+            )
+        elif kind is KnowledgeEvidenceIdentityKind.CAPTURE:
+            cited.append(
+                KnowledgeSubmitEvidence(
+                    identity_kind=kind.value,
+                    content_hash=content_hash,
+                    role=role,
+                    capture_id=str(item["capture_id"]),
+                )
+            )
+        else:
+            cited.append(
+                KnowledgeSubmitEvidence(
+                    identity_kind=kind.value,
+                    content_hash=content_hash,
+                    role=role,
+                    relationship_memory_id=str(item["relationship_memory_id"]),
+                )
+            )
+    return tuple(cited)
+
+
+def submit_request(
+    command: SubmitKnowledgeAssertion,
+    predicate: KnowledgePredicate | None,
+    binding: KnowledgeSourceBinding,
+) -> KnowledgeSubmitRequest:
+    """Everything one autonomous-submit transaction needs (KLP-WP-04).
+
+    `predicate` is the immutable head read at C2 and `binding` the profile's
+    immutable binding (this client's, else the caller already refused). The
+    digest object is the frozen R6 6.2 encoding with the binding's profile and
+    scope digest; the fingerprint is the R6 6.5 object. A retired head still
+    yields a request -- it is refused only after the replay lookup (N2).
+    """
+    if predicate is None:
+        raise InvalidRequestError(SafeDetail.KINDS)
+    candidate = _candidate(command, predicate)
+    evidence = _submit_evidence(command)
+    owner = command.owner_ref
+    owner_ref = (
+        None
+        if owner is None
+        else OwnerRef(kind=KnowledgeOwnerRefKind(owner["kind"]), id=owner["id"])
+    )
+    digest = request_digest(
+        request_digest_object(
+            subject_kind=candidate.subject_kind.value,
+            subject_id=candidate.subject_id,
+            predicate_code=predicate.predicate_code,
+            value_type=candidate.value.value_type,
+            normalized_value=candidate.value.normalized,
+            qualifier=candidate.qualifier,
+            effective_from=candidate.effective_from,
+            effective_to=candidate.effective_to,
+            owner_ref=owner_ref,
+            source_profile_id=binding.source_profile_id,
+            scope_digest=binding.scope_digest,
+            trigger_event_ids=command.trigger_event_ids,
+            evidence=tuple(
+                DigestEvidence(
+                    identity_kind=KnowledgeEvidenceIdentityKind(item.identity_kind),
+                    identity=item.identity[1:-1],
+                    content_hash=item.content_hash,
+                    excerpt_sha256=item.excerpt_sha256,
+                    role=KnowledgeEvidenceRole(item.role),
+                )
+                for item in evidence
+            ),
+        )
+    )
+    return KnowledgeSubmitRequest(
+        authenticated_client_id=binding.authenticated_client_id,
+        source_profile_id=binding.source_profile_id,
+        scope_digest=binding.scope_digest,
+        origin_system=binding.origin_system,
+        origin_is_synthetic=binding.is_synthetic,
+        external_run_id=command.external_run_id,
+        external_candidate_id=command.external_candidate_id,
+        request_digest=digest,
+        predicate=predicate,
+        subject_kind=candidate.subject_kind.value,
+        subject_id=candidate.subject_id,
+        value_text=candidate.value.value_text,
+        value_datetime=candidate.value.value_datetime,
+        normalized_value_sha256=candidate.value.sha256,
+        qualifier=candidate.qualifier,
+        effective_from=candidate.effective_from,
+        effective_to=candidate.effective_to,
+        assertion_fingerprint=candidate.fingerprint(),
+        owner_ref_kind=None if owner is None else owner["kind"],
+        owner_ref_id=None if owner is None else owner["id"],
+        trigger_event_ids=tuple(sorted(command.trigger_event_ids)),
+        evidence=evidence,
+    )
 
 
 # --- cursors ---------------------------------------------------------------------
@@ -469,4 +616,15 @@ def submission_view(result: KnowledgeSubmissionResult) -> dict[str, object]:
         "mutation_id": result.mutation_id,
         "canonical_owner": result.canonical_owner,
         "current_lifecycle": result.current_lifecycle,
+    }
+
+
+def submit_view(result: KnowledgeSubmissionResult) -> dict[str, object]:
+    """Autonomous submit's public result: the create keys plus the Review/route ids."""
+    return {
+        **submission_view(result),
+        "superseded_assertion_id": result.superseded_assertion_id,
+        "proposal_id": result.proposal_id,
+        "review_case_id": result.review_case_id,
+        "routed_record_id": result.routed_record_id,
     }

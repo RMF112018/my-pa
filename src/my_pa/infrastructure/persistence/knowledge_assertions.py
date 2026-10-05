@@ -52,6 +52,7 @@ import json
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
+from types import MappingProxyType
 from typing import Any, Final, cast
 
 from sqlalchemy import (
@@ -90,8 +91,14 @@ from my_pa.contracts.ports import (
     KnowledgeEvidenceNotFoundError,
     KnowledgeEvidenceRow,
     KnowledgeIdempotencyConflictError,
+    KnowledgeLedgerInvariantError,
     KnowledgeMutationRow,
+    KnowledgeSourceBinding,
+    KnowledgeSourceProfileUnboundError,
     KnowledgeSubmissionResult,
+    KnowledgeSubmitEvidence,
+    KnowledgeSubmitRequest,
+    KnowledgeTriggerNotFoundError,
     PortError,
     RecordEventStager,
     RepositoryFailureError,
@@ -103,6 +110,7 @@ from my_pa.domain.capture.lifecycle import (
     CaptureLifecycleState,
     CaptureWithdrawnError,
 )
+from my_pa.domain.capture.proposal import RiskClass
 from my_pa.domain.common.classification import (
     CLASSIFICATION_RANK,
     Classification,
@@ -110,12 +118,29 @@ from my_pa.domain.common.classification import (
 )
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability
+from my_pa.domain.knowledge_assertion.admission import (
+    AdmissionDecision,
+    AdmissionEvidence,
+    AdmissionPath,
+    CurrentFact,
+    DirectAdmissionFacts,
+    SourceProfileFacts,
+    SubjectResolution,
+    decide_direct_admission,
+)
 from my_pa.domain.knowledge_assertion.predicate import KnowledgePredicate
 from my_pa.domain.knowledge_assertion.provenance import (
+    CAUSAL_RATE_COUNTED_OUTCOMES,
+    CAUSAL_RATE_LIMIT,
     KNOWLEDGE_EVENT_ACTOR_CLASSES,
     KNOWLEDGE_EVENT_AUTHORITIES,
     KNOWLEDGE_MUTATION_EVENTS,
+    CausalKey,
+    CausalParent,
+    CausalPosition,
+    CausalRefusal,
     KnowledgeEventOrigin,
+    resolve_causal_position,
 )
 from my_pa.domain.knowledge_assertion.vocabulary import (
     KnowledgeAssertionLifecycle,
@@ -124,14 +149,20 @@ from my_pa.domain.knowledge_assertion.vocabulary import (
     KnowledgeCardinality,
     KnowledgeConflictRule,
     KnowledgeConsequentialClass,
+    KnowledgeContentOrigin,
     KnowledgeEpistemicStatus,
     KnowledgeEvidenceAuthority,
     KnowledgeEvidenceAvailability,
     KnowledgeEvidenceIdentityKind,
+    KnowledgeEvidenceRole,
     KnowledgeMutationKind,
     KnowledgeNormalizationRule,
+    KnowledgeOriginSystem,
+    KnowledgeOwnerRefKind,
     KnowledgePredicateAdmissionState,
+    KnowledgeProposalState,
     KnowledgeQualifierRule,
+    KnowledgeReadOnlyProofState,
     KnowledgeReviewRequirement,
     KnowledgeSubjectKind,
     KnowledgeSubmissionOrigin,
@@ -159,10 +190,12 @@ from my_pa.infrastructure.persistence.principal_scope import (
 )
 from my_pa.infrastructure.persistence.tables import (
     capture_versions,
+    commitments,
     entities,
     knowledge_assertion_evidence_links,
     knowledge_assertion_mutations,
     knowledge_assertion_predicates,
+    knowledge_assertion_proposals,
     knowledge_assertion_subject_locks,
     knowledge_assertion_submissions,
     knowledge_assertions,
@@ -170,13 +203,20 @@ from my_pa.infrastructure.persistence.tables import (
     knowledge_discovery_source_profiles,
     knowledge_evidence_refs,
     knowledge_submission_evidence,
+    knowledge_submission_trigger_events,
+    meetings,
+    project_constraints,
     projects,
+    record_events,
     relationship_memory_versions,
+    tasks,
 )
 
 __all__ = [
     "KNOWLEDGE_CREATE_CAPABILITY",
+    "KNOWLEDGE_LEDGER_TRIGGERS",
     "KNOWLEDGE_MAINTENANCE_SOURCE",
+    "KNOWLEDGE_SUBMIT_CAPABILITY",
     "MAINTENANCE_BATCH",
     "KnowledgeMaintenanceResult",
     "KnowledgeSourceProfileChange",
@@ -186,6 +226,7 @@ __all__ = [
     "assertion_withheld_remote",
     "classification_rank",
     "knowledge_event_withheld_remote",
+    "knowledge_ledger_failure",
 ]
 
 #: The `source_capability` every explicit-create event names.
@@ -400,6 +441,46 @@ def _stage_knowledge_event(
     )
 
 
+#: KLP-WP-04 (WP-02 DEV-01, Manager ruling): the one table mapping a Knowledge
+#: ledger trigger's refusal -- (trigger function, SQLSTATE) -- to its typed port
+#: error. The submission lifecycle guard raises `check_violation` (23514) on an
+#: illegal INSERT and `restrict_violation` (23001) on DELETE or a second
+#: completion; the submission reserved-at-commit trigger raises 23514; both
+#: checkpoint-request triggers raise 23001. Each fires only on a server-side
+#: ledger bug, so each is `KnowledgeLedgerInvariantError` (public
+#: `internal_error`, no retry hint). Other 23514/23001 sources (CHECKs, the
+#: head guard, append-only refusals) keep the generic repository failure.
+KNOWLEDGE_LEDGER_TRIGGERS: Final[Mapping[tuple[str, str], type[PortError]]] = MappingProxyType(
+    {
+        ("knowledge_submission_lifecycle_guard", "23514"): KnowledgeLedgerInvariantError,
+        ("knowledge_submission_lifecycle_guard", "23001"): KnowledgeLedgerInvariantError,
+        ("knowledge_submission_reserved_at_commit", "23514"): KnowledgeLedgerInvariantError,
+        ("knowledge_checkpoint_request_lifecycle_guard", "23001"): KnowledgeLedgerInvariantError,
+        (
+            "knowledge_checkpoint_request_reserved_at_commit",
+            "23001",
+        ): KnowledgeLedgerInvariantError,
+    }
+)
+
+
+def knowledge_ledger_failure(error: BaseException) -> type[PortError] | None:
+    """The typed port error a ledger trigger's refusal maps to, or `None`.
+
+    Duck-typed on the driver error (`.orig` when wrapped): its `sqlstate` and
+    the PL/pgSQL `diag.context` line naming the raising function.
+    """
+    original = getattr(error, "orig", None) or error
+    sqlstate = getattr(original, "sqlstate", None)
+    context = getattr(getattr(original, "diag", None), "context", None)
+    if not isinstance(sqlstate, str) or not isinstance(context, str):
+        return None
+    for (function, state), failure in KNOWLEDGE_LEDGER_TRIGGERS.items():
+        if sqlstate == state and f"function knowledge.{function}()" in context:
+            return failure
+    return None
+
+
 def _translated[ResultT](work: Callable[[], ResultT]) -> ResultT:
     """Run one unit of SQL work, translating a store failure (the feed's rule)."""
     try:
@@ -409,8 +490,11 @@ def _translated[ResultT](work: Callable[[], ResultT]) -> ResultT:
     except DBAPIError as error:
         # R6 section 8.4: a deadlock or serialization victim is a retryable
         # conflict, checked before the OperationalError branch it falls into.
+        ledger = knowledge_ledger_failure(error)
         if is_transaction_conflict(error):
             failure: Exception = TransactionConflictError("the transaction lost a race")
+        elif ledger is not None:
+            failure = ledger("a Knowledge ledger invariant refused the write")
         elif isinstance(error, (OperationalError, InterfaceError)):
             failure = EvidenceUnavailableError("the store could not be read")
         else:
@@ -494,8 +578,10 @@ def _predicate(row: Row[Any]) -> KnowledgePredicate:
     )
 
 
-def _result_object(result: KnowledgeSubmissionResult) -> dict[str, object]:
-    return {
+def _result_object(
+    result: KnowledgeSubmissionResult, *, autonomous: bool = False
+) -> dict[str, object]:
+    stored: dict[str, object] = {
         "assertion_id": result.assertion_id,
         "assertion_version": result.assertion_version,
         "canonical_owner": result.canonical_owner,
@@ -504,12 +590,124 @@ def _result_object(result: KnowledgeSubmissionResult) -> dict[str, object]:
         "reason": result.reason,
         "submission_id": result.submission_id,
     }
+    if autonomous:
+        # Autonomous submit's stored result also names the Review and route ids
+        # (KLP-AC-051/120); explicit create's object is unchanged from WP-03.
+        stored.update(
+            proposal_id=result.proposal_id,
+            review_case_id=result.review_case_id,
+            routed_record_id=result.routed_record_id,
+            superseded_assertion_id=result.superseded_assertion_id,
+        )
+    return stored
 
 
-def _result_digest(result: KnowledgeSubmissionResult) -> str:
+def _result_digest(result: KnowledgeSubmissionResult, *, autonomous: bool = False) -> str:
     """SHA-256 of the canonical stored public result (`result_digest`)."""
-    encoded = json.dumps(_result_object(result), sort_keys=True, separators=(",", ":"))
+    encoded = json.dumps(
+        _result_object(result, autonomous=autonomous), sort_keys=True, separators=(",", ":")
+    )
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _current_lifecycle(
+    connection: Connection, principal_id: str, assertion_id: str | None, *, remote: bool
+) -> str | None:
+    """The read-only `current_lifecycle` of a result assertion (R6 6.3).
+
+    KLP-WP-04 F2: `None` for a remote caller whenever the assertion is now
+    `withheld_remote`, so a remote duplicate or replay discloses nothing of a
+    withheld fact beyond what the stored result already held.
+    """
+    if assertion_id is None:
+        return None
+    a = knowledge_assertions
+    criteria: list[ColumnElement[bool]] = [
+        partition_criterion(a, capture_context(principal_id)),
+        a.c.assertion_id == assertion_id,
+    ]
+    if remote:
+        criteria.append(not_(assertion_withheld_remote(a, principal_id)))
+    return connection.execute(select(a.c.lifecycle).where(*criteria)).scalar_one_or_none()
+
+
+def _stored_result(
+    connection: Connection, principal_id: str, row: Row[Any], *, remote: bool
+) -> KnowledgeSubmissionResult:
+    """A completed submission row as its stored public result (the replay)."""
+    if row.submission_state != "completed":  # pragma: no cover - deferred guard backstop
+        raise RepositoryFailureError("a reserved submission has no result")
+    return KnowledgeSubmissionResult(
+        submission_id=row.submission_id,
+        outcome=row.outcome,
+        reason=row.reason,
+        assertion_id=row.result_assertion_id,
+        assertion_version=row.result_assertion_version,
+        mutation_id=row.result_mutation_id,
+        canonical_owner=row.result_canonical_owner,
+        current_lifecycle=_current_lifecycle(
+            connection, principal_id, row.result_assertion_id, remote=remote
+        ),
+        superseded_assertion_id=row.result_superseded_assertion_id,
+        proposal_id=row.result_proposal_id,
+        review_case_id=row.result_review_case_id,
+        routed_record_id=row.result_routed_record_id,
+    )
+
+
+def _capture_fence(
+    connection: Connection, context: PrincipalContext, capture_ids: tuple[str, ...]
+) -> None:
+    """C4c: the one Capture-root share fence of a Knowledge write path (R6 8.1, AC-112).
+
+    The module's single `require_active_capture_roots` call site: explicit
+    create and autonomous submit each call this exactly once, after C3/C4b and
+    before C5/C6, so an archived root refuses the whole transaction.
+    """
+    try:
+        require_active_capture_roots(connection, context, capture_ids=capture_ids)
+    except CaptureWithdrawnError:
+        raise KnowledgeCaptureWithdrawnError("a cited capture was archived") from None
+
+
+def _product_classes[ItemT: (KnowledgeCreateEvidence, KnowledgeSubmitEvidence)](
+    connection: Connection, principal_id: str, items: Iterable[ItemT]
+) -> dict[ItemT, Classification]:
+    """Each cited Capture/RM version, owned and present, with its rank-max class (C2).
+
+    The cited version must exist in this partition with exactly the cited
+    digest; its class is the rank-max over *every* version of the capture or
+    memory (R6 S-3), read in one statement. An absent and a foreign citation
+    are the same `KnowledgeEvidenceNotFoundError`. External items are skipped.
+    """
+    context = capture_context(principal_id)
+    observed: dict[ItemT, Classification] = {}
+    for item in items:
+        if item.identity_kind == _CAPTURE:
+            rows = connection.execute(
+                select(capture_versions.c.classification, capture_versions.c.content_sha256).where(
+                    partition_criterion(capture_versions, context),
+                    capture_versions.c.capture_id == item.capture_id,
+                )
+            ).all()
+        elif item.identity_kind == _MEMORY:
+            rows = connection.execute(
+                select(
+                    relationship_memory_versions.c.classification,
+                    relationship_memory_versions.c.statement_sha256,
+                ).where(
+                    partition_criterion(relationship_memory_versions, context),
+                    relationship_memory_versions.c.memory_id == item.relationship_memory_id,
+                )
+            ).all()
+        else:
+            continue
+        if not any(row[1] == item.content_hash for row in rows):
+            raise KnowledgeEvidenceNotFoundError("a cited version is not this Principal's")
+        observed[item] = classification_max(
+            Classification.PRIVATE_LOCAL, *(Classification(row[0]) for row in rows)
+        )
+    return observed
 
 
 class SqlKnowledgeAssertionRepository(KnowledgeAssertionRepository):
@@ -767,41 +965,8 @@ class SqlKnowledgeAssertionRepository(KnowledgeAssertionRepository):
     def _verified_evidence(
         self, principal_id: str, request: KnowledgeCreateRequest
     ) -> dict[KnowledgeCreateEvidence, Classification]:
-        """Each cited version, owned and present, with its rank-max class (C2).
-
-        The cited version must exist in this partition with exactly the cited
-        digest; its class is the rank-max over *every* version of the capture or
-        memory (R6 S-3), read in one statement. An absent and a foreign citation
-        are the same `KnowledgeEvidenceNotFoundError`.
-        """
-        context = capture_context(principal_id)
-        observed: dict[KnowledgeCreateEvidence, Classification] = {}
-        for item in request.evidence:
-            if item.identity_kind == _CAPTURE:
-                rows = self._connection.execute(
-                    select(
-                        capture_versions.c.classification, capture_versions.c.content_sha256
-                    ).where(
-                        partition_criterion(capture_versions, context),
-                        capture_versions.c.capture_id == item.capture_id,
-                    )
-                ).all()
-            else:
-                rows = self._connection.execute(
-                    select(
-                        relationship_memory_versions.c.classification,
-                        relationship_memory_versions.c.statement_sha256,
-                    ).where(
-                        partition_criterion(relationship_memory_versions, context),
-                        relationship_memory_versions.c.memory_id == item.relationship_memory_id,
-                    )
-                ).all()
-            if not any(row[1] == item.content_hash for row in rows):
-                raise KnowledgeEvidenceNotFoundError("a cited version is not this Principal's")
-            observed[item] = classification_max(
-                Classification.PRIVATE_LOCAL, *(Classification(row[0]) for row in rows)
-            )
-        return observed
+        """Each cited version, owned and present, with its rank-max class (C2)."""
+        return _product_classes(self._connection, principal_id, request.evidence)
 
     def create(
         self,
@@ -810,8 +975,9 @@ class SqlKnowledgeAssertionRepository(KnowledgeAssertionRepository):
         *,
         at: datetime,
         correlation_id: str,
+        remote: bool = False,
     ) -> KnowledgeSubmissionResult:
-        transaction = _ExplicitCreate(self._connection, principal_id, request, at)
+        transaction = _ExplicitCreate(self._connection, principal_id, request, at, remote=remote)
         result = _translated(
             lambda: transaction.run(
                 lambda: (
@@ -834,6 +1000,135 @@ class SqlKnowledgeAssertionRepository(KnowledgeAssertionRepository):
                 source_capability=KNOWLEDGE_CREATE_CAPABILITY,
                 classification=created.classification,
                 mutation_id=created.mutation_id,
+                at=at,
+                correlation_id=correlation_id,
+            )
+        return result
+
+    def replay_create(
+        self, principal_id: str, idempotency_key: str, request_digest: str, *, remote: bool
+    ) -> KnowledgeSubmissionResult | None:
+        s = knowledge_assertion_submissions
+        row = _translated(
+            lambda: self._connection.execute(
+                select(s).where(
+                    partition_criterion(s, capture_context(principal_id)),
+                    s.c.origin == _EXPLICIT,
+                    s.c.idempotency_key == idempotency_key,
+                )
+            ).one_or_none()
+        )
+        if row is None:
+            return None
+        if row.request_digest != request_digest:
+            raise KnowledgeIdempotencyConflictError("the key is bound to another request")
+        return _translated(
+            lambda: _stored_result(self._connection, principal_id, row, remote=remote)
+        )
+
+    # ---- autonomous submit (KLP-WP-04 slice B2) -----------------------------
+
+    def source_binding(
+        self, principal_id: str, source_profile_id: str, authenticated_client_id: str
+    ) -> KnowledgeSourceBinding | None:
+        p = knowledge_discovery_source_profiles
+        row = _translated(
+            lambda: self._connection.execute(
+                select(
+                    p.c.source_profile_id,
+                    p.c.authenticated_client_id,
+                    p.c.scope_digest,
+                    p.c.origin_system,
+                    p.c.is_synthetic,
+                ).where(
+                    partition_criterion(p, capture_context(principal_id)),
+                    p.c.source_profile_id == source_profile_id,
+                    p.c.authenticated_client_id == authenticated_client_id,
+                )
+            ).one_or_none()
+        )
+        if row is None:
+            return None
+        return KnowledgeSourceBinding(
+            source_profile_id=row.source_profile_id,
+            authenticated_client_id=row.authenticated_client_id,
+            scope_digest=row.scope_digest,
+            origin_system=row.origin_system,
+            is_synthetic=bool(row.is_synthetic),
+        )
+
+    def replay_submission(
+        self,
+        principal_id: str,
+        *,
+        authenticated_client_id: str,
+        source_profile_id: str,
+        external_run_id: str,
+        external_candidate_id: str,
+        request_digest: str,
+        remote: bool,
+    ) -> KnowledgeSubmissionResult | None:
+        s = knowledge_assertion_submissions
+        row = _translated(
+            lambda: self._connection.execute(
+                select(s).where(
+                    partition_criterion(s, capture_context(principal_id)),
+                    s.c.origin == _AUTONOMOUS,
+                    s.c.authenticated_client_id == authenticated_client_id,
+                    s.c.source_profile_id == source_profile_id,
+                    s.c.external_run_id == external_run_id,
+                    s.c.external_candidate_id == external_candidate_id,
+                )
+            ).one_or_none()
+        )
+        if row is None:
+            return None
+        if row.request_digest != request_digest:
+            raise KnowledgeIdempotencyConflictError("the candidate is bound to another request")
+        return _translated(
+            lambda: _stored_result(self._connection, principal_id, row, remote=remote)
+        )
+
+    def submit(
+        self,
+        principal_id: str,
+        request: KnowledgeSubmitRequest,
+        *,
+        at: datetime,
+        correlation_id: str,
+        relationship_intelligence_composed: bool,
+        relationship_memory_composed: bool,
+    ) -> KnowledgeSubmissionResult:
+        transaction = _AutonomousSubmit(
+            self._connection,
+            principal_id,
+            request,
+            at,
+            relationship_intelligence_composed=relationship_intelligence_composed,
+            relationship_memory_composed=relationship_memory_composed,
+        )
+        result = _translated(
+            lambda: transaction.run(
+                lambda: {
+                    item.identity: observed
+                    for item, observed in _product_classes(
+                        self._connection, principal_id, request.evidence
+                    ).items()
+                }
+            )
+        )
+        for staged in transaction.staged:
+            # C9: exactly the mapped event per mutation, metadata only (KLP-AC-042).
+            _stage_knowledge_event(
+                self._record_events,
+                principal_id=principal_id,
+                assertion_id=staged.assertion_id,
+                mutation_kind=staged.mutation_kind,
+                record_version=staged.record_version,
+                origin=KnowledgeEventOrigin.AUTONOMOUS_SUBMIT,
+                source_capability=KNOWLEDGE_SUBMIT_CAPABILITY,
+                classification=staged.classification,
+                mutation_id=staged.mutation_id,
                 at=at,
                 correlation_id=correlation_id,
             )
@@ -936,11 +1231,14 @@ class _ExplicitCreate:
         principal_id: str,
         request: KnowledgeCreateRequest,
         at: datetime,
+        *,
+        remote: bool = False,
     ) -> None:
         self.connection = connection
         self.principal_id = principal_id
         self.request = request
         self.at = at
+        self.remote = remote
         self.context = capture_context(principal_id)
         self.created: _CreatedEvent | None = None
 
@@ -964,24 +1262,7 @@ class _ExplicitCreate:
             return None
         if row.request_digest != self.request.request_digest:
             raise KnowledgeIdempotencyConflictError("the key is bound to another request")
-        current = None
-        if row.result_assertion_id is not None:
-            current = self.connection.execute(
-                select(knowledge_assertions.c.lifecycle).where(
-                    partition_criterion(knowledge_assertions, self.context),
-                    knowledge_assertions.c.assertion_id == row.result_assertion_id,
-                )
-            ).scalar_one_or_none()
-        return KnowledgeSubmissionResult(
-            submission_id=row.submission_id,
-            outcome=row.outcome,
-            reason=row.reason,
-            assertion_id=row.result_assertion_id,
-            assertion_version=row.result_assertion_version,
-            mutation_id=row.result_mutation_id,
-            canonical_owner=row.result_canonical_owner,
-            current_lifecycle=current,
-        )
+        return _stored_result(self.connection, self.principal_id, row, remote=self.remote)
 
     def _insert_submission(
         self, submission_id: str, *, refused: KnowledgeSubmissionReason | None
@@ -1198,7 +1479,12 @@ class _ExplicitCreate:
                     current_lifecycle=None,
                 )
             )
-            return replace(result, current_lifecycle=self.lifecycle_of(duplicate.assertion_id))
+            return replace(
+                result,
+                current_lifecycle=_current_lifecycle(
+                    self.connection, self.principal_id, duplicate.assertion_id, remote=self.remote
+                ),
+            )
         if self._slot_taken():
             return self._complete(
                 KnowledgeSubmissionResult(
@@ -1234,12 +1520,7 @@ class _ExplicitCreate:
         # C4b: canonical-order upsert, then one sorted lock in the strongest mode.
         evidence_ids = self._resolve_evidence(observed)
         # C4c: exactly one publication fence over the cited Capture roots.
-        try:
-            require_active_capture_roots(
-                self.connection, self.context, capture_ids=self._captures()
-            )
-        except CaptureWithdrawnError:
-            raise KnowledgeCaptureWithdrawnError("a cited capture was archived") from None
+        _capture_fence(self.connection, self.context, self._captures())
         stored = self._stored_classes(evidence_ids.values())
         classification = classification_max(
             Classification.PRIVATE_LOCAL, self.request.classification_floor, *stored
@@ -1494,6 +1775,1485 @@ class _ExplicitCreate:
             )
             .with_for_update()
         ).all()
+
+    def lifecycle_of(self, assertion_id: str) -> str | None:
+        return self.connection.execute(
+            select(knowledge_assertions.c.lifecycle).where(
+                partition_criterion(knowledge_assertions, self.context),
+                knowledge_assertions.c.assertion_id == assertion_id,
+            )
+        ).scalar_one_or_none()
+
+
+# ---- autonomous submit (KLP-WP-04 slice B2) -------------------------------------------
+#
+# R6 sections 5.1-5.3, 6.1-6.5, 8.1-8.5, 9 and 10.4. One `_AutonomousSubmit` body per
+# transaction. The order is the global one: replay pre-read -> C2 immutable reads
+# (predicate head carried in the request, route, trigger events + causal snapshot,
+# Capture/RM version classes) -> C1 reservation (causal fields already computed) ->
+# routed outcomes stop here -> C3 one Entity call -> C4a profile FOR SHARE (re-read
+# `disabled_at`) -> C4b canonical-order upsert then ONE sorted lock over the cited
+# rows and every external sibling -> C4c one Capture fence -> C5 equivalent
+# proposals FOR UPDATE -> C6 the subject lock (even with zero assertions) -> C7/C8
+# -> C9 staged events. Nothing acquires C3-C5 or a stronger C4b lock after C6.
+
+_AUTONOMOUS: Final = KnowledgeSubmissionOrigin.AUTONOMOUS_SUBMIT.value
+#: The `source_capability` every autonomous-submit event names.
+KNOWLEDGE_SUBMIT_CAPABILITY: Final = Capability.KNOWLEDGE_ASSERTIONS_SUBMIT.value
+_OPEN_PROPOSAL: Final = (
+    KnowledgeProposalState.NEEDS_REVIEW.value,
+    KnowledgeProposalState.DEFERRED.value,
+    KnowledgeProposalState.UNRESOLVED.value,
+)
+#: The owner-ref kinds `project.critical_date` routes to (R6 section 13).
+_OWNER_TABLES: Final = {
+    KnowledgeOwnerRefKind.TASK.value: (tasks, "task_id", KnowledgeCanonicalOwner.TASKS),
+    KnowledgeOwnerRefKind.COMMITMENT.value: (
+        commitments,
+        "commitment_id",
+        KnowledgeCanonicalOwner.COMMITMENTS,
+    ),
+    KnowledgeOwnerRefKind.CONSTRAINT.value: (
+        project_constraints,
+        "constraint_id",
+        KnowledgeCanonicalOwner.CONSTRAINTS,
+    ),
+    KnowledgeOwnerRefKind.MEETING.value: (meetings, "meeting_id", KnowledgeCanonicalOwner.MEETINGS),
+}
+_CRITICAL_DATE: Final = "project.critical_date"
+_MAX_LINEAGE_LEVELS: Final = 4
+
+
+@dataclass(frozen=True, slots=True)
+class _StagedMutation:
+    """One `kamut_` receipt whose mapped Record Event the repository stages (C9)."""
+
+    assertion_id: str
+    mutation_kind: KnowledgeMutationKind
+    record_version: int
+    mutation_id: str
+    classification: Classification
+
+
+@dataclass(frozen=True, slots=True)
+class _TriggerSnapshot:
+    """The server-derived causal snapshot of one cited trigger event."""
+
+    trigger_event_id: str
+    parent_submission_id: str | None
+    parent_root_submission_id: str | None
+    parent_depth: int | None
+
+
+def _result(
+    submission_id: str,
+    outcome: KnowledgeSubmissionOutcome,
+    reason: KnowledgeSubmissionReason,
+    *,
+    owner: KnowledgeCanonicalOwner | str | None = KnowledgeCanonicalOwner.KNOWLEDGE_ASSERTION,
+    assertion_id: str | None = None,
+    assertion_version: int | None = None,
+    mutation_id: str | None = None,
+    superseded_assertion_id: str | None = None,
+    proposal_id: str | None = None,
+    review_case_id: str | None = None,
+    routed_record_id: str | None = None,
+) -> KnowledgeSubmissionResult:
+    return KnowledgeSubmissionResult(
+        submission_id=submission_id,
+        outcome=outcome.value,
+        reason=reason.value,
+        assertion_id=assertion_id,
+        assertion_version=assertion_version,
+        mutation_id=mutation_id,
+        canonical_owner=None if owner is None else str(owner),
+        current_lifecycle=None,
+        superseded_assertion_id=superseded_assertion_id,
+        proposal_id=proposal_id,
+        review_case_id=review_case_id,
+        routed_record_id=routed_record_id,
+    )
+
+
+def _refused(submission_id: str, reason: KnowledgeSubmissionReason) -> KnowledgeSubmissionResult:
+    return _result(submission_id, KnowledgeSubmissionOutcome.REFUSED, reason, owner=None)
+
+
+def _risk_class(predicate: KnowledgePredicate) -> RiskClass:
+    """Proposal risk: plan-silent, most restrictive (KLP-WP-04 DEV).
+
+    A consequential predicate or one that needs an operator is `high`; every
+    other review candidate is `moderate`. Nothing a client sends moves it.
+    """
+    if (
+        predicate.consequential_class is not KnowledgeConsequentialClass.NONE
+        or predicate.review_requirement is KnowledgeReviewRequirement.REQUIRES_OPERATOR
+    ):
+        return RiskClass.HIGH
+    return RiskClass.MODERATE
+
+
+class _AutonomousSubmit:
+    """One autonomous-submit transaction body (R6 sections 6, 8, 9, 10.4)."""
+
+    def __init__(
+        self,
+        connection: Connection,
+        principal_id: str,
+        request: KnowledgeSubmitRequest,
+        at: datetime,
+        *,
+        relationship_intelligence_composed: bool,
+        relationship_memory_composed: bool,
+    ) -> None:
+        self.connection = connection
+        self.principal_id = principal_id
+        self.request = request
+        self.predicate: KnowledgePredicate = request.predicate
+        self.at = at
+        self.context = capture_context(principal_id)
+        self.relationship_intelligence_composed = relationship_intelligence_composed
+        self.relationship_memory_composed = relationship_memory_composed
+        self.staged: list[_StagedMutation] = []
+
+    def _bound(self, table: Table, values: dict[str, object]) -> dict[str, object]:
+        return principal_bound_values(values, table, self.context)
+
+    @property
+    def _floor(self) -> Classification:
+        """The intake floor: `synthetic_test` only for a synthetic profile (R6 5.1, 5.3)."""
+        return (
+            Classification.SYNTHETIC_TEST
+            if self.request.origin_is_synthetic
+            else Classification.PRIVATE_LOCAL
+        )
+
+    # -- C1: the autonomous-candidate arbiter -----------------------------------
+
+    def winner(self, *, remote: bool) -> KnowledgeSubmissionResult | None:
+        """The stored result of this candidate identity, replayed, or `None` (R6 6.1)."""
+        s = knowledge_assertion_submissions
+        request = self.request
+        row = self.connection.execute(
+            select(s).where(
+                partition_criterion(s, self.context),
+                s.c.origin == _AUTONOMOUS,
+                s.c.authenticated_client_id == request.authenticated_client_id,
+                s.c.source_profile_id == request.source_profile_id,
+                s.c.external_run_id == request.external_run_id,
+                s.c.external_candidate_id == request.external_candidate_id,
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        if row.request_digest != request.request_digest:
+            raise KnowledgeIdempotencyConflictError("the candidate is bound to another request")
+        return _stored_result(self.connection, self.principal_id, row, remote=remote)
+
+    def _insert_submission(
+        self,
+        submission_id: str,
+        *,
+        depth: int | None,
+        root: str | None,
+        refused: KnowledgeSubmissionReason | None = None,
+    ) -> bool:
+        request = self.request
+        values: dict[str, object] = {
+            "submission_id": submission_id,
+            "origin": _AUTONOMOUS,
+            "authenticated_client_id": request.authenticated_client_id,
+            "source_profile_id": request.source_profile_id,
+            "scope_digest": request.scope_digest,
+            "origin_is_synthetic": request.origin_is_synthetic,
+            "external_run_id": request.external_run_id,
+            "external_candidate_id": request.external_candidate_id,
+            "subject_kind": request.subject_kind,
+            "subject_id": request.subject_id,
+            "predicate_code": self.predicate.predicate_code,
+            "owner_ref_kind": request.owner_ref_kind,
+            "owner_ref_id": request.owner_ref_id,
+            "request_digest": request.request_digest,
+            "causal_depth": depth,
+            "causal_root_submission_id": root,
+            "submission_state": "reserved",
+            "created_at": self.at,
+        }
+        if refused is not None:
+            result = _refused(submission_id, refused)
+            values.update(
+                submission_state="completed",
+                outcome=result.outcome,
+                reason=result.reason,
+                result_digest=_result_digest(result, autonomous=True),
+                completed_at=self.at,
+            )
+        statement = (
+            pg_insert(knowledge_assertion_submissions)
+            .values(**self._bound(knowledge_assertion_submissions, values))
+            .on_conflict_do_nothing(
+                index_elements=[
+                    "principal_id",
+                    "authenticated_client_id",
+                    "source_profile_id",
+                    "external_run_id",
+                    "external_candidate_id",
+                ],
+                index_where=sql_text(f"origin = '{_AUTONOMOUS}'"),
+            )
+            .returning(knowledge_assertion_submissions.c.submission_id)
+        )
+        return self.connection.execute(statement).scalar_one_or_none() is not None
+
+    def _complete(self, result: KnowledgeSubmissionResult) -> KnowledgeSubmissionResult:
+        s = knowledge_assertion_submissions
+        done = self.connection.execute(
+            update(s)
+            .where(
+                partition_criterion(s, self.context),
+                s.c.submission_id == result.submission_id,
+                s.c.submission_state == "reserved",
+            )
+            .values(
+                submission_state="completed",
+                outcome=result.outcome,
+                reason=result.reason,
+                result_assertion_id=result.assertion_id,
+                result_assertion_version=result.assertion_version,
+                result_mutation_id=result.mutation_id,
+                result_superseded_assertion_id=result.superseded_assertion_id,
+                result_proposal_id=result.proposal_id,
+                result_review_case_id=result.review_case_id,
+                result_canonical_owner=result.canonical_owner,
+                result_routed_record_id=result.routed_record_id,
+                result_digest=_result_digest(result, autonomous=True),
+                completed_at=self.at,
+            )
+        )
+        if done.rowcount != 1:
+            raise RepositoryFailureError("the reservation was not held")
+        return result
+
+    # -- C2: triggers and the causal position (R6 9.1) ------------------------------
+
+    def _triggers(self) -> list[_TriggerSnapshot]:
+        """Each cited event, owned and visible, with its Knowledge parent (if any).
+
+        A Knowledge trigger resolves `source_receipt_id = kamut_` ->
+        `mutation.submission_id`; a NULL submission (server maintenance) or a
+        non-Knowledge event contributes no parent. An absent, foreign or
+        remotely withheld event is one `KnowledgeTriggerNotFoundError`.
+        """
+        ids = list(self.request.trigger_event_ids)
+        if not ids:
+            return []
+        events = record_events
+        rows = {
+            row.event_id: row
+            for row in self.connection.execute(
+                select(
+                    events.c.event_id,
+                    events.c.record_family,
+                    events.c.source_receipt_id,
+                    not_(knowledge_event_withheld_remote(events, self.principal_id)).label(
+                        "visible"
+                    ),
+                ).where(partition_criterion(events, self.context), events.c.event_id.in_(ids))
+            )
+        }
+        snapshots: list[_TriggerSnapshot] = []
+        m, s = knowledge_assertion_mutations, knowledge_assertion_submissions
+        for event_id in sorted(ids):
+            row = rows.get(event_id)
+            if row is None or not row.visible:
+                raise KnowledgeTriggerNotFoundError("a cited trigger event is not this caller's")
+            parent = None
+            receipt = row.source_receipt_id
+            if row.record_family == RecordEventFamily.KNOWLEDGE_ASSERTION.value and (
+                isinstance(receipt, str)
+                and receipt.startswith(f"{IdKind.KNOWLEDGE_ASSERTION_MUTATION.value}_")
+            ):
+                parent = self.connection.execute(
+                    select(s.c.submission_id, s.c.causal_root_submission_id, s.c.causal_depth)
+                    .select_from(
+                        m.join(
+                            s,
+                            and_(
+                                matching_partition_criterion(s, m),
+                                s.c.submission_id == m.c.submission_id,
+                            ),
+                        )
+                    )
+                    .where(
+                        partition_criterion(m, self.context),
+                        partition_criterion(s, self.context),
+                        m.c.mutation_id == receipt,
+                    )
+                ).one_or_none()
+            if parent is None or parent.causal_depth is None:
+                snapshots.append(_TriggerSnapshot(event_id, None, None, None))
+            else:
+                snapshots.append(
+                    _TriggerSnapshot(
+                        event_id,
+                        parent.submission_id,
+                        parent.causal_root_submission_id,
+                        int(parent.causal_depth),
+                    )
+                )
+        return snapshots
+
+    def _ancestor_keys(self, parents: Sequence[str]) -> set[CausalKey]:
+        """The repeat keys of the parents and their ancestors, at most 4 levels (R6 9.1(d))."""
+        s, t = knowledge_assertion_submissions, knowledge_submission_trigger_events
+        keys: set[CausalKey] = set()
+        frontier = sorted(set(parents))
+        seen: set[str] = set()
+        for _level in range(_MAX_LINEAGE_LEVELS + 1):
+            frontier = [submission for submission in frontier if submission not in seen]
+            if not frontier:
+                break
+            seen.update(frontier)
+            for row in self.connection.execute(
+                select(
+                    s.c.authenticated_client_id,
+                    s.c.subject_kind,
+                    s.c.subject_id,
+                    s.c.predicate_code,
+                ).where(partition_criterion(s, self.context), s.c.submission_id.in_(frontier))
+            ):
+                keys.add(
+                    CausalKey(
+                        row.authenticated_client_id,
+                        row.subject_kind,
+                        row.subject_id,
+                        row.predicate_code,
+                    )
+                )
+            frontier = sorted(
+                {
+                    str(parent)
+                    for parent in self.connection.execute(
+                        select(t.c.parent_submission_id).where(
+                            partition_criterion(t, self.context),
+                            t.c.submission_id.in_(frontier),
+                            t.c.parent_submission_id.is_not(None),
+                        )
+                    ).scalars()
+                }
+            )
+        return keys
+
+    def _causal(
+        self, submission_id: str, snapshots: Sequence[_TriggerSnapshot]
+    ) -> CausalPosition | CausalRefusal:
+        parents = [
+            CausalParent(str(item.parent_root_submission_id), int(item.parent_depth))
+            for item in snapshots
+            if item.parent_submission_id is not None and item.parent_depth is not None
+        ]
+        ancestors = self._ancestor_keys(
+            [str(item.parent_submission_id) for item in snapshots if item.parent_submission_id]
+        )
+        return resolve_causal_position(
+            own_submission_id=submission_id,
+            own_key=CausalKey(
+                self.request.authenticated_client_id,
+                self.request.subject_kind,
+                self.request.subject_id,
+                self.predicate.predicate_code,
+            ),
+            parents=parents,
+            ancestor_keys=ancestors,
+        )
+
+    def _rate_exceeded(self) -> bool:
+        """R6 9.3: >= 16 admitted submissions of this client/run/subject. Unlocked, soft."""
+        s = knowledge_assertion_submissions
+        count = self.connection.execute(
+            select(func.count()).where(
+                partition_criterion(s, self.context),
+                s.c.origin == _AUTONOMOUS,
+                s.c.authenticated_client_id == self.request.authenticated_client_id,
+                s.c.external_run_id == self.request.external_run_id,
+                s.c.subject_kind == self.request.subject_kind,
+                s.c.subject_id == self.request.subject_id,
+                s.c.predicate_code == self.predicate.predicate_code,
+                s.c.submission_state == "completed",
+                s.c.outcome.in_(sorted(outcome.value for outcome in CAUSAL_RATE_COUNTED_OUTCOMES)),
+            )
+        ).scalar_one()
+        return int(count) >= CAUSAL_RATE_LIMIT
+
+    def _insert_snapshots(self, submission_id: str, snapshots: Sequence[_TriggerSnapshot]) -> None:
+        for item in snapshots:
+            self.connection.execute(
+                insert(knowledge_submission_trigger_events).values(
+                    **self._bound(
+                        knowledge_submission_trigger_events,
+                        {
+                            "submission_id": submission_id,
+                            "trigger_event_id": item.trigger_event_id,
+                            "parent_submission_id": item.parent_submission_id,
+                            "parent_causal_root_submission_id": item.parent_root_submission_id,
+                            "parent_causal_depth": item.parent_depth,
+                            "created_at": self.at,
+                        },
+                    )
+                )
+            )
+
+    # -- C2: the route (R6 8.5 / section 13) -------------------------------------
+
+    def _route(self, submission_id: str) -> KnowledgeSubmissionResult | None:
+        """The DOMAIN_OWNED completion decided from the immutable head, or `None`.
+
+        * `project.critical_date` with an owner ref: a resolving ref is
+          `domain_owned_routed` to that owner, an unresolvable one is refused
+          `owner_ref_invalid`; without one the candidate stays Knowledge's.
+        * an owner ref on any other predicate is refused `owner_ref_invalid`
+          (plan-silent, most restrictive: no other route reads it).
+        * a predicate owned outside the Knowledge plane completes
+          `domain_owned_no_intake` naming that owner. `relationship_memory` is
+          never routed here (KLP-WP-04 DEV): its proposal writer cites a
+          capture *span*, an entity observation or a knowledge record, and a
+          Knowledge citation names none of them, so nothing is transferable.
+        """
+        request = self.request
+        owner = self.predicate.canonical_owner
+        if request.owner_ref_kind is not None:
+            if self.predicate.predicate_code != _CRITICAL_DATE:
+                return _refused(submission_id, KnowledgeSubmissionReason.OWNER_REF_INVALID)
+            table, column, routed_owner = _OWNER_TABLES[request.owner_ref_kind]
+            found = self.connection.execute(
+                select(table.c[column]).where(
+                    partition_criterion(table, self.context),
+                    table.c[column] == request.owner_ref_id,
+                )
+            ).scalar_one_or_none()
+            if found is None:
+                return _refused(submission_id, KnowledgeSubmissionReason.OWNER_REF_INVALID)
+            return _result(
+                submission_id,
+                KnowledgeSubmissionOutcome.DOMAIN_OWNED_ROUTED,
+                KnowledgeSubmissionReason.CANONICAL_OWNER,
+                owner=routed_owner,
+                routed_record_id=str(request.owner_ref_id),
+            )
+        if owner is not KnowledgeCanonicalOwner.KNOWLEDGE_ASSERTION:
+            return _result(
+                submission_id,
+                KnowledgeSubmissionOutcome.DOMAIN_OWNED_NO_INTAKE,
+                KnowledgeSubmissionReason.CANONICAL_OWNER_NO_INTAKE,
+                owner=owner,
+            )
+        return None
+
+    # -- C2 / C3: subject and profile -----------------------------------------------
+
+    def _subject(self, *, lock: bool) -> SubjectResolution:
+        kind = self.request.subject_kind
+        subject_id = self.request.subject_id
+        if kind == KnowledgeSubjectKind.PRINCIPAL.value:
+            return (
+                SubjectResolution.CANONICAL
+                if subject_id == self.principal_id
+                else SubjectResolution.UNRESOLVED
+            )
+        if kind == KnowledgeSubjectKind.PROJECT.value:
+            found = self.connection.execute(
+                select(projects.c.project_id).where(
+                    partition_criterion(projects, self.context),
+                    projects.c.project_id == subject_id,
+                )
+            ).scalar_one_or_none()
+            return SubjectResolution.CANONICAL if found else SubjectResolution.UNRESOLVED
+        if kind == KnowledgeSubjectKind.ENTITY.value:
+            if not self.relationship_intelligence_composed:
+                return SubjectResolution.PLANE_NOT_COMPOSED
+            if lock:
+                # C3: the one call over the complete Entity set (R6 8.1, 8.2).
+                lock_entity_mutation_scopes(self.connection, self.principal_id, (subject_id,))
+            row = self.connection.execute(
+                select(entities.c.entity_type, entities.c.status).where(
+                    partition_criterion(entities, self.context),
+                    entities.c.entity_id == subject_id,
+                )
+            ).one_or_none()
+            if row is None or row.status != EntityStatus.ACTIVE.value:
+                return SubjectResolution.UNRESOLVED
+            if EntityType(row.entity_type) not in self.predicate.allowed_entity_types:
+                return SubjectResolution.ENTITY_TYPE_NOT_ALLOWED
+            return SubjectResolution.CANONICAL
+        return SubjectResolution.UNRESOLVED
+
+    def _profile(self, *, lock: bool) -> Row[Any]:
+        """The bound profile row; C4a `FOR SHARE` when `lock` (re-read `disabled_at`)."""
+        p = knowledge_discovery_source_profiles
+        statement = select(
+            p.c.source_profile_id,
+            p.c.origin_system,
+            p.c.authority_ceiling,
+            p.c.direct_admission_enabled,
+            p.c.read_only_proof_state,
+            p.c.is_synthetic,
+            p.c.disabled_at,
+        ).where(
+            partition_criterion(p, self.context),
+            p.c.source_profile_id == self.request.source_profile_id,
+            p.c.authenticated_client_id == self.request.authenticated_client_id,
+        )
+        if lock:
+            statement = statement.with_for_update(read=True)
+        row = self.connection.execute(statement).one_or_none()
+        if row is None:
+            raise KnowledgeSourceProfileUnboundError("the profile is not this client's")
+        return row
+
+    # -- evidence ----------------------------------------------------------------
+
+    def _product_items(self) -> list[KnowledgeSubmitEvidence]:
+        return [item for item in self.request.evidence if item.identity_kind != _EXTERNAL]
+
+    def _external_items(self) -> list[KnowledgeSubmitEvidence]:
+        return [item for item in self.request.evidence if item.identity_kind == _EXTERNAL]
+
+    def _captures(self) -> tuple[str, ...]:
+        return tuple(
+            sorted(
+                {
+                    str(item.capture_id)
+                    for item in self.request.evidence
+                    if item.identity_kind == _CAPTURE
+                }
+            )
+        )
+
+    def _identities(self) -> list[tuple[str, ...]]:
+        """Distinct cited identities in canonical order (R6 5.1, KLP-R6V-002)."""
+        return sorted({item.identity for item in self.request.evidence})
+
+    def _identity_criterion(self, identity: tuple[str, ...]) -> ColumnElement[bool]:
+        e = knowledge_evidence_refs
+        kind = identity[0]
+        if kind == _EXTERNAL:
+            _kind, profile, object_id, version, content_hash = identity
+            return and_(
+                e.c.identity_kind == _EXTERNAL,
+                e.c.source_profile_id == profile,
+                e.c.external_object_id == object_id,
+                func.coalesce(e.c.external_version_id, "") == version,
+                e.c.content_hash == content_hash,
+            )
+        _kind, key, content_hash = identity
+        column = e.c.capture_id if kind == _CAPTURE else e.c.relationship_memory_id
+        return and_(e.c.identity_kind == kind, column == key, e.c.content_hash == content_hash)
+
+    def _existing_rows(self) -> dict[tuple[str, ...], Row[Any]]:
+        """Already-stored rows of the cited identities (unlocked C2 read)."""
+        e = knowledge_evidence_refs
+        found: dict[tuple[str, ...], Row[Any]] = {}
+        for identity in self._identities():
+            row = self.connection.execute(
+                select(
+                    e.c.evidence_ref_id,
+                    e.c.source_classification,
+                    e.c.availability_state,
+                    e.c.availability_revalidation_pending,
+                ).where(partition_criterion(e, self.context), self._identity_criterion(identity))
+            ).one_or_none()
+            if row is not None:
+                found[identity] = row
+        return found
+
+    def _sibling_rows(self) -> dict[str, list[Row[Any]]]:
+        """Every stored external row of a cited object under the profile's origin system.
+
+        Keyed by `external_object_id`: same Principal, same object, any profile
+        of the same `origin_system`, any version (R6 5.1, KLP-R6V-005/202).
+        """
+        objects = sorted({str(item.external_object_id) for item in self._external_items()})
+        if not objects:
+            return {}
+        e, p = knowledge_evidence_refs, knowledge_discovery_source_profiles
+        rows = self.connection.execute(
+            select(e.c.evidence_ref_id, e.c.external_object_id, e.c.source_classification)
+            .select_from(
+                e.join(
+                    p,
+                    and_(
+                        matching_partition_criterion(p, e),
+                        p.c.source_profile_id == e.c.source_profile_id,
+                    ),
+                )
+            )
+            .where(
+                partition_criterion(e, self.context),
+                partition_criterion(p, self.context),
+                e.c.identity_kind == _EXTERNAL,
+                e.c.external_object_id.in_(objects),
+                p.c.origin_system == self.request.origin_system,
+            )
+        ).all()
+        grouped: dict[str, list[Row[Any]]] = {}
+        for row in rows:
+            grouped.setdefault(str(row.external_object_id), []).append(row)
+        return grouped
+
+    def _observed(
+        self,
+        product: Mapping[tuple[str, ...], Classification],
+        siblings: Mapping[str, Sequence[Row[Any]]],
+    ) -> dict[tuple[str, ...], Classification]:
+        """The observed class of each cited identity (R6 5.1 step 3).
+
+        External: rank-max(profile floor, sibling max); product shapes: the
+        rank-max over every version (read at C2). Callers declare no class.
+        """
+        observed = dict(product)
+        for item in self._external_items():
+            observed[item.identity] = classification_max(
+                self._floor,
+                *(
+                    Classification(row.source_classification)
+                    for row in siblings.get(str(item.external_object_id), ())
+                ),
+            )
+        return observed
+
+    def _resolve_evidence(
+        self, product: Mapping[tuple[str, ...], Classification]
+    ) -> dict[tuple[str, ...], str]:
+        """C4b: canonical-order upsert, then ONE sorted lock over cited rows and siblings.
+
+        KLP-R6V-202: every existing sibling row is in the one sorted SELECT, so a
+        concurrent restriction of any sibling is waited for *before* this
+        transaction decides its own rows' class; the sibling max is recomputed
+        under the lock and a restricted object raises (and redacts) this
+        transaction's own new row in the same transaction. KLP-R6V-201: every
+        raise to `restricted_local` nulls the excerpt in the same UPDATE. The
+        mode is `FOR UPDATE` whenever an observed class could exceed a stored
+        one (any sibling exists, or a raise is already due), else `FOR SHARE`.
+        """
+        e = knowledge_evidence_refs
+        siblings = self._sibling_rows()
+        observed = self._observed(product, siblings)
+        by_identity = {item.identity: item for item in self.request.evidence}
+        for identity in self._identities():
+            item = by_identity[identity]
+            target = observed[identity]
+            values: dict[str, object] = {
+                "evidence_ref_id": issue_identifier(IdKind.KNOWLEDGE_EVIDENCE_REF),
+                "identity_kind": item.identity_kind,
+                "content_hash": item.content_hash,
+                "source_classification": target.value,
+                "created_at": self.at,
+                "updated_at": self.at,
+            }
+            if item.identity_kind == _EXTERNAL:
+                values.update(
+                    source_profile_id=item.source_profile_id,
+                    source_is_synthetic=self.request.origin_is_synthetic,
+                    external_object_id=item.external_object_id,
+                    external_version_id=item.external_version_id,
+                    content_origin=(
+                        KnowledgeContentOrigin.SYNTHETIC_SOURCE.value
+                        if self.request.origin_is_synthetic
+                        else KnowledgeContentOrigin.EXTERNAL_SOURCE.value
+                    ),
+                    excerpt_sha256=item.excerpt_sha256,
+                    # KLP-R6V-103: a new row of an already-restricted object is born
+                    # restricted with no excerpt at rest.
+                    excerpt=None if target is Classification.RESTRICTED_LOCAL else item.excerpt,
+                )
+                statement = (
+                    pg_insert(e)
+                    .values(**self._bound(e, values))
+                    .on_conflict_do_nothing(
+                        index_elements=[
+                            e.c.principal_id,
+                            e.c.source_profile_id,
+                            e.c.external_object_id,
+                            func.coalesce(e.c.external_version_id, ""),
+                            e.c.content_hash,
+                        ],
+                        index_where=sql_text(f"identity_kind = '{_EXTERNAL}'"),
+                    )
+                )
+            else:
+                column = (
+                    "capture_id" if item.identity_kind == _CAPTURE else "relationship_memory_id"
+                )
+                values[column] = item.capture_id or item.relationship_memory_id
+                values["content_origin"] = item.identity_kind
+                statement = (
+                    pg_insert(e)
+                    .values(**self._bound(e, values))
+                    .on_conflict_do_nothing(
+                        index_elements=["principal_id", column, "content_hash"],
+                        index_where=sql_text(f"identity_kind = '{item.identity_kind}'"),
+                    )
+                )
+            self.connection.execute(statement)
+        own = self._existing_rows()
+        sibling_ids = {row.evidence_ref_id for rows in siblings.values() for row in rows}
+        ids = sorted({row.evidence_ref_id for row in own.values()} | sibling_ids)
+        needs_raise = bool(sibling_ids) or any(
+            CLASSIFICATION_RANK[observed[identity]]
+            > CLASSIFICATION_RANK[Classification(row.source_classification)]
+            for identity, row in own.items()
+        )
+        locked = (
+            select(
+                e.c.evidence_ref_id,
+                e.c.identity_kind,
+                e.c.external_object_id,
+                e.c.source_classification,
+            )
+            .where(partition_criterion(e, self.context), e.c.evidence_ref_id.in_(ids))
+            .order_by(e.c.evidence_ref_id)
+        )
+        locked = locked.with_for_update() if needs_raise else locked.with_for_update(read=True)
+        current = {row.evidence_ref_id: row for row in self.connection.execute(locked)}
+        # Recompute the sibling max under the lock (KLP-R6V-202), by object.
+        object_max: dict[str, Classification] = {}
+        for row in current.values():
+            if row.identity_kind == _EXTERNAL and row.evidence_ref_id in sibling_ids:
+                key = str(row.external_object_id)
+                object_max[key] = classification_max(
+                    object_max.get(key, Classification.SYNTHETIC_TEST),
+                    Classification(row.source_classification),
+                )
+        resolved: dict[tuple[str, ...], str] = {}
+        for identity, row in own.items():
+            item = by_identity[identity]
+            target = observed[identity]
+            if item.identity_kind == _EXTERNAL:
+                target = classification_max(
+                    self._floor,
+                    object_max.get(str(item.external_object_id), self._floor),
+                )
+            stored = Classification(current[row.evidence_ref_id].source_classification)
+            if CLASSIFICATION_RANK[target] > CLASSIFICATION_RANK[stored]:
+                if not needs_raise:  # pragma: no cover - the mode guard above
+                    raise RepositoryFailureError("an evidence lock would be upgraded")
+                redact = {"excerpt": None} if target is Classification.RESTRICTED_LOCAL else {}
+                self.connection.execute(
+                    update(e)
+                    .where(
+                        partition_criterion(e, self.context),
+                        e.c.evidence_ref_id == row.evidence_ref_id,
+                    )
+                    .values(
+                        source_classification=target.value,
+                        updated_at=_not_before(e.c.updated_at, self.at),
+                        **redact,
+                    )
+                )
+            resolved[identity] = row.evidence_ref_id
+        return resolved
+
+    def _stored_classes(self, evidence_ref_ids: Iterable[str]) -> list[Classification]:
+        ids = sorted(set(evidence_ref_ids))
+        if not ids:
+            return []
+        e = knowledge_evidence_refs
+        return [
+            Classification(value)
+            for value in self.connection.execute(
+                select(e.c.source_classification).where(
+                    partition_criterion(e, self.context), e.c.evidence_ref_id.in_(ids)
+                )
+            ).scalars()
+        ]
+
+    def _admission_evidence(
+        self, existing: Mapping[tuple[str, ...], Row[Any]]
+    ) -> tuple[AdmissionEvidence, ...]:
+        """Shape-only facts (KLP-AC-068/069): no excerpt, no retrieved_at, no class."""
+        facts: list[AdmissionEvidence] = []
+        for item in self.request.evidence:
+            kind = KnowledgeEvidenceIdentityKind(item.identity_kind)
+            role = KnowledgeEvidenceRole(item.role)
+            if kind is KnowledgeEvidenceIdentityKind.EXTERNAL_OBJECT:
+                stored = existing.get(item.identity)
+                available = stored is None or (
+                    stored.availability_state == KnowledgeEvidenceAvailability.AVAILABLE.value
+                    and not stored.availability_revalidation_pending
+                )
+                facts.append(
+                    AdmissionEvidence(
+                        identity_kind=kind,
+                        role=role,
+                        content_hash=item.content_hash,
+                        source_profile_id=item.source_profile_id,
+                        origin_system=KnowledgeOriginSystem(self.request.origin_system),
+                        external_object_id=item.external_object_id,
+                        external_version_id=item.external_version_id,
+                        available=available,
+                    )
+                )
+            else:
+                facts.append(
+                    AdmissionEvidence(
+                        identity_kind=kind,
+                        role=role,
+                        content_hash=item.content_hash,
+                        product_record_id=item.capture_id or item.relationship_memory_id,
+                    )
+                )
+        return tuple(facts)
+
+    # -- C2 / C6 reads of the subject key --------------------------------------------
+
+    def _live_duplicate(self) -> Row[Any] | None:
+        a = knowledge_assertions
+        return self.connection.execute(
+            select(a.c.assertion_id, a.c.version, a.c.classification).where(
+                partition_criterion(a, self.context),
+                a.c.fingerprint_version == 1,
+                a.c.assertion_fingerprint == self.request.assertion_fingerprint,
+                a.c.lifecycle.in_(_LIVE),
+            )
+        ).one_or_none()
+
+    def _slot_holder(self) -> Row[Any] | None:
+        """The live single-current fact of this key, any predicate version (KLP-AC-029)."""
+        if self.predicate.cardinality is not KnowledgeCardinality.SINGLE_CURRENT:
+            return None
+        a = knowledge_assertions
+        return self.connection.execute(
+            select(
+                a.c.assertion_id,
+                a.c.version,
+                a.c.effective_from,
+                a.c.classification,
+                a.c.assertion_fingerprint,
+            ).where(
+                partition_criterion(a, self.context),
+                a.c.subject_kind == self.request.subject_kind,
+                a.c.subject_id == self.request.subject_id,
+                a.c.predicate_code == self.predicate.predicate_code,
+                a.c.cardinality == KnowledgeCardinality.SINGLE_CURRENT.value,
+                a.c.lifecycle.in_(_LIVE),
+            )
+        ).one_or_none()
+
+    def _has_counterevidence(self, assertion_id: str) -> bool:
+        links = knowledge_assertion_evidence_links
+        return (
+            self.connection.execute(
+                select(links.c.evidence_ref_id).where(
+                    partition_criterion(links, self.context),
+                    links.c.assertion_id == assertion_id,
+                    links.c.evidence_role == KnowledgeEvidenceRole.COUNTEREVIDENCE.value,
+                )
+            ).first()
+            is not None
+        )
+
+    def _equivalent_proposals(self, *, lock: bool, ids: Sequence[str] = ()) -> list[Row[Any]]:
+        """Open proposals with this fingerprint; C5 `FOR UPDATE` by proposal_id when `lock`."""
+        p = knowledge_assertion_proposals
+        criteria: list[ColumnElement[bool]] = [partition_criterion(p, self.context)]
+        if lock:
+            criteria.append(p.c.proposal_id.in_(sorted(ids)))
+        else:
+            criteria.extend(
+                [
+                    p.c.fingerprint_version == 1,
+                    p.c.proposal_fingerprint == self.request.assertion_fingerprint,
+                    p.c.state.in_(_OPEN_PROPOSAL),
+                ]
+            )
+        statement = select(p.c.proposal_id, p.c.review_case_id, p.c.state).where(*criteria)
+        statement = statement.order_by(p.c.proposal_id)
+        if lock:
+            statement = statement.with_for_update()
+        return list(self.connection.execute(statement).all())
+
+    def _lock_subject(self) -> None:
+        """C6: upsert the key, then one sorted `FOR UPDATE` (KLP-AC-091)."""
+        locks = knowledge_assertion_subject_locks
+        key = {
+            "subject_kind": self.request.subject_kind,
+            "subject_id": self.request.subject_id,
+            "predicate_code": self.predicate.predicate_code,
+        }
+        self.connection.execute(
+            pg_insert(locks).values(**self._bound(locks, dict(key))).on_conflict_do_nothing()
+        )
+        self.connection.execute(
+            select(locks.c.predicate_code)
+            .where(
+                partition_criterion(locks, self.context),
+                locks.c.subject_kind == key["subject_kind"],
+                locks.c.subject_id == key["subject_id"],
+                locks.c.predicate_code == key["predicate_code"],
+            )
+            .order_by(
+                locks.c.principal_id,
+                locks.c.subject_kind,
+                locks.c.subject_id,
+                locks.c.predicate_code,
+            )
+            .with_for_update()
+        ).all()
+
+    # -- the transaction ------------------------------------------------------------
+
+    def run(
+        self, verify: Callable[[], dict[tuple[str, ...], Classification]]
+    ) -> KnowledgeSubmissionResult:
+        replay = self.winner(remote=True)
+        if replay is not None:
+            return replay
+        # C2: immutable reads. Capture/RM version classes, then triggers + causality.
+        product = verify()
+        snapshots = self._triggers()
+        submission_id = issue_identifier(IdKind.KNOWLEDGE_ASSERTION_SUBMISSION)
+        position = self._causal(submission_id, snapshots)
+        if isinstance(position, CausalRefusal):
+            # R6 9.1(c): born completed `refused`, NULL causal fields.
+            if not self._insert_submission(
+                submission_id, depth=None, root=None, refused=position.reason
+            ):
+                return self._lost_race()
+            self._insert_snapshots(submission_id, snapshots)
+            return _refused(submission_id, position.reason)
+        profile = self._profile(lock=False)
+        route = self._route(submission_id)
+        rate_exceeded = self._rate_exceeded()
+        # C1: the reservation, causal fields already computed (R6 9.1(a)).
+        if not self._insert_submission(
+            submission_id, depth=position.depth, root=position.root_submission_id
+        ):
+            return self._lost_race()
+        self._insert_snapshots(submission_id, snapshots)
+        if profile.disabled_at is not None:
+            return self._complete(
+                _refused(submission_id, KnowledgeSubmissionReason.SOURCE_PROFILE_INACTIVE)
+            )
+        if rate_exceeded:
+            return self._complete(
+                _refused(submission_id, KnowledgeSubmissionReason.CAUSAL_RATE_EXCEEDED)
+            )
+        if route is not None:
+            # A routed submission takes C1 and C2 only (R6 8.5, KLP-AC-128).
+            return self._complete(route)
+        return self._knowledge(submission_id, product)
+
+    def _lost_race(self) -> KnowledgeSubmissionResult:
+        winner = self.winner(remote=True)
+        if winner is None:
+            raise RepositoryFailureError("the candidate's winner could not be read")
+        return winner
+
+    def _knowledge(
+        self, submission_id: str, product: Mapping[tuple[str, ...], Classification]
+    ) -> KnowledgeSubmissionResult:
+        # C3: the Entity mutation scope (one call), the subject re-read under it.
+        subject = self._subject(lock=True)
+        # C4a: the profile FOR SHARE, `disabled_at` re-read under the lock.
+        profile = self._profile(lock=True)
+        if profile.disabled_at is not None:
+            return self._complete(
+                _refused(submission_id, KnowledgeSubmissionReason.SOURCE_PROFILE_INACTIVE)
+            )
+        existing = self._existing_rows()
+        live = self._live_duplicate()
+        holder = self._slot_holder()
+        current = None
+        if holder is not None and (live is None or holder.assertion_id != live.assertion_id):
+            current = CurrentFact(
+                assertion_id=holder.assertion_id,
+                effective_from=holder.effective_from,
+                unresolved_counterevidence=self._has_counterevidence(holder.assertion_id),
+            )
+        archived = any(
+            state is CaptureLifecycleState.ARCHIVED
+            for state in capture_lifecycle_states(
+                self.connection, self._captures(), context=self.context
+            ).values()
+        )
+        decision = decide_direct_admission(
+            DirectAdmissionFacts(
+                predicate=self.predicate,
+                profile=SourceProfileFacts(
+                    source_profile_id=profile.source_profile_id,
+                    origin_system=KnowledgeOriginSystem(profile.origin_system),
+                    authority_ceiling=KnowledgeEvidenceAuthority(profile.authority_ceiling),
+                    direct_admission_enabled=bool(profile.direct_admission_enabled),
+                    read_only_proof_state=KnowledgeReadOnlyProofState(
+                        profile.read_only_proof_state
+                    ),
+                    is_synthetic=bool(profile.is_synthetic),
+                    disabled=False,
+                ),
+                subject=subject,
+                evidence=self._admission_evidence(existing),
+                candidate_effective_from=self.request.effective_from,
+                now=self.at,
+                current=current,
+                capture_archived=archived,
+            )
+        )
+        if decision.path is AdmissionPath.REFUSE:
+            assert decision.reason is not None  # noqa: S101 - a refusal always names one
+            return self._complete(_refused(submission_id, decision.reason))
+        if live is not None and self._nothing_new(live.assertion_id, existing):
+            # Exact live duplicate citing nothing new: only this row is written.
+            result = self._complete(
+                _result(
+                    submission_id,
+                    KnowledgeSubmissionOutcome.DUPLICATE_EXISTING,
+                    KnowledgeSubmissionReason.EXACT_DUPLICATE,
+                    assertion_id=live.assertion_id,
+                    assertion_version=int(live.version),
+                )
+            )
+            return result
+        seen = self._equivalent_proposals(lock=False)
+        # C4b: canonical-order upsert, then one sorted lock (siblings included).
+        evidence_ids = self._resolve_evidence(product)
+        # C4c: exactly one publication fence over the cited Capture roots.
+        _capture_fence(self.connection, self.context, self._captures())
+        # C5: the equivalent proposals seen at C2, sorted, FOR UPDATE.
+        locked = (
+            self._equivalent_proposals(lock=True, ids=[row.proposal_id for row in seen])
+            if seen
+            else []
+        )
+        # C6: the subject lock, even when no assertion exists (KLP-AC-091).
+        self._lock_subject()
+        return self._decide_under_lock(submission_id, decision, live, holder, locked, evidence_ids)
+
+    def _nothing_new(self, assertion_id: str, existing: Mapping[tuple[str, ...], Row[Any]]) -> bool:
+        """Every cited identity is already linked to `assertion_id` in the same role."""
+        if any(item.identity not in existing for item in self.request.evidence):
+            return False
+        links = knowledge_assertion_evidence_links
+        linked = {
+            (row.evidence_ref_id, row.evidence_role)
+            for row in self.connection.execute(
+                select(links.c.evidence_ref_id, links.c.evidence_role).where(
+                    partition_criterion(links, self.context),
+                    links.c.assertion_id == assertion_id,
+                )
+            )
+        }
+        return all(
+            (existing[item.identity].evidence_ref_id, item.role) in linked
+            for item in self.request.evidence
+        )
+
+    def _decide_under_lock(
+        self,
+        submission_id: str,
+        decision: AdmissionDecision,
+        live: Row[Any] | None,
+        holder: Row[Any] | None,
+        locked: Sequence[Row[Any]],
+        evidence_ids: Mapping[tuple[str, ...], str],
+    ) -> KnowledgeSubmissionResult:
+        accepted = any(row.state == KnowledgeProposalState.ACCEPTED.value for row in locked)
+        live_now = self._live_duplicate()
+        appeared = live_now is not None and (
+            live is None or live_now.assertion_id != live.assertion_id
+        )
+        # Race 14 (a): an equivalent proposal accepted while we waited at C5 is the
+        # one way a live duplicate may appear under the lock.
+        if appeared and not accepted:
+            raise KnowledgeConcurrentDuplicateError("a concurrent write took this fact")
+        holder_now = self._slot_holder()
+        holder_id = None if holder is None else holder.assertion_id
+        holder_now_id = None if holder_now is None else holder_now.assertion_id
+        if holder_now_id != holder_id and not (
+            accepted and live_now is not None and holder_now_id == live_now.assertion_id
+        ):
+            raise KnowledgeConcurrentDuplicateError("the current slot changed under the lock")
+        locked_ids = {row.proposal_id for row in locked}
+        open_now = self._equivalent_proposals(lock=False)
+        if any(row.proposal_id not in locked_ids for row in open_now):
+            # Race 14 (b): an equivalent open proposal first seen after C6.
+            raise KnowledgeConcurrentDuplicateError("an equivalent proposal appeared late")
+        self._write_submission_evidence(submission_id, evidence_ids)
+        if live_now is not None:
+            return self._enrich(submission_id, live_now, evidence_ids)
+        still_open = [row for row in locked if row.state in _OPEN_PROPOSAL]
+        if still_open:
+            older = still_open[0]
+            # KLP-AC-151: the older proposal is never mutated.
+            return self._complete(
+                _result(
+                    submission_id,
+                    KnowledgeSubmissionOutcome.DUPLICATE_PENDING_REVIEW,
+                    KnowledgeSubmissionReason.PENDING_REVIEW_EXISTS,
+                    proposal_id=older.proposal_id,
+                    review_case_id=older.review_case_id,
+                )
+            )
+        if decision.path is AdmissionPath.REVIEW:
+            assert decision.reason is not None  # noqa: S101 - a review path names its reason
+            return self._propose(submission_id, decision.reason, evidence_ids)
+        if decision.path is AdmissionPath.DIRECT_SUPERSEDE:
+            assert holder_now is not None  # noqa: S101 - supersession needs the holder
+            return self._supersede(submission_id, holder_now, evidence_ids)
+        return self._create(submission_id, evidence_ids, predecessor=None)
+
+    # -- C7 / C8 writers --------------------------------------------------------------
+
+    def _write_submission_evidence(
+        self, submission_id: str, evidence_ids: Mapping[tuple[str, ...], str]
+    ) -> None:
+        for item in sorted(
+            self.request.evidence, key=lambda entry: (evidence_ids[entry.identity], entry.role)
+        ):
+            self.connection.execute(
+                insert(knowledge_submission_evidence).values(
+                    **self._bound(
+                        knowledge_submission_evidence,
+                        {
+                            "submission_id": submission_id,
+                            "evidence_ref_id": evidence_ids[item.identity],
+                            "evidence_role": item.role,
+                            "created_at": self.at,
+                        },
+                    )
+                )
+            )
+
+    def _classification(
+        self, evidence_ids: Mapping[tuple[str, ...], str], *extra: Classification
+    ) -> Classification:
+        return classification_max(
+            self._floor,
+            self.predicate.classification_floor,
+            *self._stored_classes(evidence_ids.values()),
+            *extra,
+        )
+
+    def _mutation(
+        self,
+        submission_id: str,
+        assertion_id: str,
+        kind: KnowledgeMutationKind,
+        new_version: int,
+        classification: Classification,
+    ) -> str:
+        mutation_id = issue_identifier(IdKind.KNOWLEDGE_ASSERTION_MUTATION)
+        self.connection.execute(
+            insert(knowledge_assertion_mutations).values(
+                **self._bound(
+                    knowledge_assertion_mutations,
+                    {
+                        "mutation_id": mutation_id,
+                        "assertion_id": assertion_id,
+                        "mutation_kind": kind.value,
+                        "prior_version": new_version - 1,
+                        "new_version": new_version,
+                        "submission_id": submission_id,
+                        "created_at": self.at,
+                    },
+                )
+            )
+        )
+        self.staged.append(
+            _StagedMutation(assertion_id, kind, new_version, mutation_id, classification)
+        )
+        return mutation_id
+
+    def _link(
+        self,
+        assertion_id: str,
+        mutation_id: str,
+        evidence_ids: Mapping[tuple[str, ...], str],
+        *,
+        skip: frozenset[tuple[str, str]] = frozenset(),
+    ) -> int:
+        written = 0
+        for item in sorted(
+            self.request.evidence, key=lambda entry: (evidence_ids[entry.identity], entry.role)
+        ):
+            key = (evidence_ids[item.identity], item.role)
+            if key in skip:
+                continue
+            self.connection.execute(
+                insert(knowledge_assertion_evidence_links).values(
+                    **self._bound(
+                        knowledge_assertion_evidence_links,
+                        {
+                            "assertion_id": assertion_id,
+                            "evidence_ref_id": key[0],
+                            "evidence_role": item.role,
+                            "linked_by_mutation_id": mutation_id,
+                            "created_at": self.at,
+                        },
+                    )
+                )
+            )
+            written += 1
+        return written
+
+    def _create(
+        self,
+        submission_id: str,
+        evidence_ids: Mapping[tuple[str, ...], str],
+        *,
+        predecessor: Row[Any] | None,
+    ) -> KnowledgeSubmissionResult:
+        request = self.request
+        predicate = self.predicate
+        extra = () if predecessor is None else (Classification(predecessor.classification),)
+        classification = self._classification(evidence_ids, *extra)
+        assertion_id = issue_identifier(IdKind.KNOWLEDGE_ASSERTION)
+        self.connection.execute(
+            insert(knowledge_assertions).values(
+                **self._bound(
+                    knowledge_assertions,
+                    {
+                        "assertion_id": assertion_id,
+                        "subject_kind": request.subject_kind,
+                        "subject_id": request.subject_id,
+                        "predicate_code": predicate.predicate_code,
+                        "predicate_version": predicate.predicate_version,
+                        "value_type": predicate.value_type.value,
+                        "cardinality": predicate.cardinality.value,
+                        "temporal_semantics": predicate.temporal_semantics.value,
+                        "qualifier_rule": predicate.qualifier_rule.value,
+                        "value_text": request.value_text,
+                        "value_datetime": request.value_datetime,
+                        "qualifier_json": null()
+                        if request.qualifier is None
+                        else dict(request.qualifier),
+                        "effective_from": request.effective_from,
+                        "effective_to": request.effective_to,
+                        "normalized_value_sha256": request.normalized_value_sha256,
+                        "fingerprint_version": 1,
+                        "assertion_fingerprint": request.assertion_fingerprint,
+                        "epistemic_status": KnowledgeEpistemicStatus.SOURCE_OBSERVED.value,
+                        "classification": classification.value,
+                        "origin_is_synthetic": request.origin_is_synthetic,
+                        "lifecycle": KnowledgeAssertionLifecycle.ACTIVE.value,
+                        "version": 1,
+                        "origin_submission_id": submission_id,
+                        "supersedes_assertion_id": None
+                        if predecessor is None
+                        else predecessor.assertion_id,
+                        "created_at": self.at,
+                        "updated_at": self.at,
+                    },
+                )
+            )
+        )
+        kind = (
+            KnowledgeMutationKind.CREATE
+            if predecessor is None
+            else KnowledgeMutationKind.SUPERSEDE_SUCCESSOR
+        )
+        mutation_id = self._mutation(submission_id, assertion_id, kind, 1, classification)
+        self._link(assertion_id, mutation_id, evidence_ids)
+        if predecessor is None:
+            outcome, reason = (
+                KnowledgeSubmissionOutcome.DIRECT_CREATED,
+                KnowledgeSubmissionReason.CREATED,
+            )
+        else:
+            outcome, reason = (
+                KnowledgeSubmissionOutcome.DIRECT_SUPERSEDED,
+                KnowledgeSubmissionReason.SUPERSEDED,
+            )
+        result = self._complete(
+            _result(
+                submission_id,
+                outcome,
+                reason,
+                assertion_id=assertion_id,
+                assertion_version=1,
+                mutation_id=mutation_id,
+                superseded_assertion_id=None if predecessor is None else predecessor.assertion_id,
+            )
+        )
+        return replace(result, current_lifecycle=KnowledgeAssertionLifecycle.ACTIVE.value)
+
+    def _supersede(
+        self,
+        submission_id: str,
+        predecessor: Row[Any],
+        evidence_ids: Mapping[tuple[str, ...], str],
+    ) -> KnowledgeSubmissionResult:
+        """KLP-AC-031/118: validated while live, predecessor demoted, then successor inserted."""
+        a = knowledge_assertions
+        demoted = self.connection.execute(
+            update(a)
+            .where(
+                partition_criterion(a, self.context),
+                a.c.assertion_id == predecessor.assertion_id,
+                a.c.version == predecessor.version,
+                a.c.lifecycle.in_(_LIVE),
+            )
+            .values(
+                lifecycle=KnowledgeAssertionLifecycle.SUPERSEDED.value,
+                version=a.c.version + 1,
+                updated_at=_not_before(a.c.updated_at, self.at),
+            )
+            .returning(a.c.version, a.c.classification)
+        ).one_or_none()
+        if demoted is None:
+            raise KnowledgeConcurrentDuplicateError("the predecessor changed under the lock")
+        self._mutation(
+            submission_id,
+            predecessor.assertion_id,
+            KnowledgeMutationKind.SUPERSEDE_PREDECESSOR,
+            int(demoted.version),
+            Classification(demoted.classification),
+        )
+        return self._create(submission_id, evidence_ids, predecessor=predecessor)
+
+    def _enrich(
+        self,
+        submission_id: str,
+        live: Row[Any],
+        evidence_ids: Mapping[tuple[str, ...], str],
+    ) -> KnowledgeSubmissionResult:
+        """KLP-AC-028: new evidence links + one version bump, no factual change.
+
+        When the newly linked evidence raises the assertion's stored class, a
+        second `classify` mutation (same submission) records the raise.
+        """
+        links = knowledge_assertion_evidence_links
+        already = frozenset(
+            (row.evidence_ref_id, row.evidence_role)
+            for row in self.connection.execute(
+                select(links.c.evidence_ref_id, links.c.evidence_role).where(
+                    partition_criterion(links, self.context),
+                    links.c.assertion_id == live.assertion_id,
+                )
+            )
+        )
+        fresh = {
+            (evidence_ids[item.identity], item.role) for item in self.request.evidence
+        } - already
+        if not fresh:
+            return self._complete(
+                _result(
+                    submission_id,
+                    KnowledgeSubmissionOutcome.DUPLICATE_EXISTING,
+                    KnowledgeSubmissionReason.EXACT_DUPLICATE,
+                    assertion_id=live.assertion_id,
+                    assertion_version=int(live.version),
+                )
+            )
+        a = knowledge_assertions
+        bumped = self.connection.execute(
+            update(a)
+            .where(
+                partition_criterion(a, self.context),
+                a.c.assertion_id == live.assertion_id,
+                a.c.lifecycle.in_(_LIVE),
+            )
+            .values(version=a.c.version + 1, updated_at=_not_before(a.c.updated_at, self.at))
+            .returning(a.c.version, a.c.classification)
+        ).one()
+        version = int(bumped.version)
+        stored = Classification(bumped.classification)
+        mutation_id = self._mutation(
+            submission_id, live.assertion_id, KnowledgeMutationKind.EVIDENCE_ENRICH, version, stored
+        )
+        self._link(live.assertion_id, mutation_id, evidence_ids, skip=already)
+        raised = classification_max(stored, *self._stored_classes(evidence_ids.values()))
+        if CLASSIFICATION_RANK[raised] > CLASSIFICATION_RANK[stored]:
+            classified = self.connection.execute(
+                update(a)
+                .where(partition_criterion(a, self.context), a.c.assertion_id == live.assertion_id)
+                .values(
+                    classification=raised.value,
+                    version=a.c.version + 1,
+                    updated_at=_not_before(a.c.updated_at, self.at),
+                )
+                .returning(a.c.version)
+            ).one()
+            version = int(classified.version)
+            self._mutation(
+                submission_id, live.assertion_id, KnowledgeMutationKind.CLASSIFY, version, raised
+            )
+        result = self._complete(
+            _result(
+                submission_id,
+                KnowledgeSubmissionOutcome.DUPLICATE_ENRICHED,
+                KnowledgeSubmissionReason.EVIDENCE_ENRICHED,
+                assertion_id=live.assertion_id,
+                assertion_version=version,
+                mutation_id=mutation_id,
+            )
+        )
+        return replace(result, current_lifecycle=self.lifecycle_of(live.assertion_id))
+
+    def _propose(
+        self,
+        submission_id: str,
+        reason: KnowledgeSubmissionReason,
+        evidence_ids: Mapping[tuple[str, ...], str],
+    ) -> KnowledgeSubmissionResult:
+        """A new open proposal; its class is R6 5.3's. Proposals emit no event (AC-043)."""
+        request = self.request
+        predicate = self.predicate
+        proposal_id = issue_identifier(IdKind.KNOWLEDGE_ASSERTION_PROPOSAL)
+        review_case_id = issue_identifier(IdKind.REVIEW_CASE)
+        requirement = (
+            KnowledgeReviewRequirement.REQUIRES_OPERATOR
+            if reason is KnowledgeSubmissionReason.REQUIRES_OPERATOR
+            else KnowledgeReviewRequirement.REQUIRES_REVIEW
+        )
+        classification = classification_max(
+            self._floor, *self._stored_classes(evidence_ids.values())
+        )
+        self.connection.execute(
+            insert(knowledge_assertion_proposals).values(
+                **self._bound(
+                    knowledge_assertion_proposals,
+                    {
+                        "proposal_id": proposal_id,
+                        "review_case_id": review_case_id,
+                        "origin_submission_id": submission_id,
+                        "origin_is_synthetic": request.origin_is_synthetic,
+                        "subject_kind": request.subject_kind,
+                        "subject_id": request.subject_id,
+                        "predicate_code": predicate.predicate_code,
+                        "predicate_version": predicate.predicate_version,
+                        "value_type": predicate.value_type.value,
+                        "cardinality": predicate.cardinality.value,
+                        "temporal_semantics": predicate.temporal_semantics.value,
+                        "qualifier_rule": predicate.qualifier_rule.value,
+                        "value_text": request.value_text,
+                        "value_datetime": request.value_datetime,
+                        "qualifier_json": null()
+                        if request.qualifier is None
+                        else dict(request.qualifier),
+                        "effective_from": request.effective_from,
+                        "effective_to": request.effective_to,
+                        "normalized_value_sha256": request.normalized_value_sha256,
+                        "fingerprint_version": 1,
+                        "proposal_fingerprint": request.assertion_fingerprint,
+                        "classification": classification.value,
+                        "risk_class": _risk_class(predicate).value,
+                        "review_requirement": requirement.value,
+                        "state": KnowledgeProposalState.NEEDS_REVIEW.value,
+                        "created_at": self.at,
+                        "updated_at": self.at,
+                    },
+                )
+            )
+        )
+        return self._complete(
+            _result(
+                submission_id,
+                KnowledgeSubmissionOutcome.REVIEW_QUEUED,
+                reason,
+                proposal_id=proposal_id,
+                review_case_id=review_case_id,
+            )
+        )
 
     def lifecycle_of(self, assertion_id: str) -> str | None:
         return self.connection.execute(

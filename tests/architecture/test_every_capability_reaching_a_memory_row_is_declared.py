@@ -362,6 +362,7 @@ DECLARED: Final = frozenset(
         Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
         Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
         Capability.KNOWLEDGE_ASSERTIONS_CREATE,
+        Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
     }
 )
 
@@ -419,6 +420,14 @@ BEYOND_THE_NINE: Final = {
         "cited memory it reads each version's `statement_sha256` and `classification` under "
         "the Principal partition, to verify the cited digest and take the rank-max class "
         "onto the Knowledge evidence row. It reads no memory text."
+    ),
+    Capability.KNOWLEDGE_ASSERTIONS_SUBMIT: (
+        "purpose `knowledge_assertion_observation`. `knowledge.assertions.submit` (KLP-WP-04) "
+        "reads one of the eight (`relationship_memory_versions`) and writes none of the eight: "
+        "for a cited memory it reads each version's `statement_sha256` and `classification` "
+        "under the Principal partition (digest check and rank-max class), and its trigger "
+        "visibility check reads version classes inside the withheld predicate. It reads no "
+        "memory text."
     ),
     Capability.RECORD_EVENTS_LIST: (
         "purpose `record_event_read`. `record_events.list` reads two of the eight "
@@ -549,6 +558,10 @@ DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str
         frozenset(),
     ),
     Capability.KNOWLEDGE_ASSERTIONS_CREATE: (
+        frozenset({"relationship_memory_versions"}),
+        frozenset(),
+    ),
+    Capability.KNOWLEDGE_ASSERTIONS_SUBMIT: (
         frozenset({"relationship_memory_versions"}),
         frozenset(),
     ),
@@ -3175,7 +3188,18 @@ def test_the_port_crossings_that_reach_a_memory_row_are_the_two_planes() -> None
         "OD-8 restricted-memory predicate may reach a memory row"
     )
     assert crossings["KnowledgeAssertionRepository"] == frozenset(
-        {"create", "history", "page", "read_assertion", "reveal"}
+        {
+            "create",
+            "history",
+            "page",
+            "read_assertion",
+            "reveal",
+            # KLP-WP-04 slice B2: autonomous submit's citation check and the
+            # replays' withheld `current_lifecycle` mask (F2).
+            "replay_create",
+            "replay_submission",
+            "submit",
+        }
     ), (
         "the Knowledge plane's crossings are now "
         f"{sorted(crossings['KnowledgeAssertionRepository'])}; only the reads that apply "

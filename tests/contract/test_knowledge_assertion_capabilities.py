@@ -24,8 +24,8 @@ KLP-WP-04 slice A adds the discovery pair:
   the WP-03 six the mapping is exhaustive over every Knowledge Assertion name.
 * **KLP-AC-104 (catalog slice)** -- both are in `_SCOPELESS` and the scopeless arm
   of `_requested_scope`; a granted invoke is *allowed* by policy (audited
-  `allowed`) and reaches the second service gate. End-to-end success is B2/B3's
-  (the handlers are slice-A placeholders that answer `unsupported`).
+  `allowed`) and reaches the second service gate; slice B2: a granted submit
+  succeeds end to end (checkpoint is still the slice-A placeholder until B3).
 * **R6 section 6.1 second gate** -- `unsupported` unless the remote transport and
   a client in the exact discovery allowlist; the plane switch withholds both.
 """
@@ -46,6 +46,7 @@ from tests.conftest import (
     build_service,
     metadata_for,
 )
+from tests.unit.test_knowledge_assertion_domain import SEEDS, _predicate_from_seed
 
 from my_pa.application import chatllm_data_profile
 from my_pa.application.authorization import Authorization, _requested_scope
@@ -76,7 +77,9 @@ from my_pa.contracts.ports import (
     KnowledgeAssertionReveal,
     KnowledgeAssertionRow,
     KnowledgeCreateRequest,
+    KnowledgeSourceBinding,
     KnowledgeSubmissionResult,
+    KnowledgeSubmitRequest,
 )
 from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.common.identifiers import IdKind
@@ -136,11 +139,16 @@ _ROW = KnowledgeAssertionRow(
 class _CannedKnowledge(KnowledgeAssertionRepository):
     """A canned plane: proves routing, authorization and presentation, not SQL."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, seeded: bool = False) -> None:
         self.calls: list[str] = []
+        self.seeded = seeded
 
     def predicate_head(self, predicate_code: str) -> object:
         self.calls.append("predicate_head")
+        # KLP-WP-04 slice B2: the frozen seed head for a seeded code, so a granted
+        # submit runs end to end; an unregistered code is still `None`.
+        if self.seeded and predicate_code in SEEDS:
+            return _predicate_from_seed(SEEDS[predicate_code])
         return None
 
     def read_assertion(
@@ -179,8 +187,50 @@ class _CannedKnowledge(KnowledgeAssertionRepository):
         *,
         at: datetime,
         correlation_id: str,
+        remote: bool = False,
     ) -> KnowledgeSubmissionResult:
         raise AssertionError("an unregistered predicate never reaches create")
+
+    def replay_create(
+        self, principal_id: str, idempotency_key: str, request_digest: str, *, remote: bool
+    ) -> KnowledgeSubmissionResult | None:
+        self.calls.append("replay_create")
+        return None
+
+    def source_binding(
+        self, principal_id: str, source_profile_id: str, authenticated_client_id: str
+    ) -> KnowledgeSourceBinding | None:
+        self.calls.append("source_binding")
+        return KnowledgeSourceBinding(
+            source_profile_id=source_profile_id,
+            authenticated_client_id=authenticated_client_id,
+            scope_digest="b" * 64,
+            origin_system="synthetic",
+            is_synthetic=True,
+        )
+
+    def replay_submission(  # type: ignore[override]
+        self, principal_id: str, **_: object
+    ) -> KnowledgeSubmissionResult | None:
+        self.calls.append("replay_submission")
+        return None
+
+    def submit(  # type: ignore[override]
+        self, principal_id: str, request: KnowledgeSubmitRequest, **_: object
+    ) -> KnowledgeSubmissionResult:
+        self.calls.append("submit")
+        return KnowledgeSubmissionResult(
+            submission_id="kasub_fastworld000002",
+            outcome="review_queued",
+            reason="requires_review",
+            assertion_id=None,
+            assertion_version=None,
+            mutation_id=None,
+            canonical_owner="knowledge_assertion",
+            current_lifecycle=None,
+            proposal_id="kaprp_fastworld000001",
+            review_case_id="rvw_fastworld000001",
+        )
 
 
 class _KnowledgeUnitOfWork(FakeUnitOfWork):
@@ -536,7 +586,7 @@ def _discovery_commands(principal_id: str) -> dict[Capability, object]:
 
 def _discovery_service(world: World, *, bound: frozenset[str]) -> ApplicationService:
     return ApplicationService(
-        unit_of_work=lambda: _KnowledgeUnitOfWork(world, _CannedKnowledge()),
+        unit_of_work=lambda: _KnowledgeUnitOfWork(world, _CannedKnowledge(seeded=True)),
         limits=DEFAULT_LIMITS,
         clock=lambda: WHEN,
         relationship_intelligence_enabled=True,
@@ -633,9 +683,12 @@ def test_a_granted_invoke_is_allowed_by_policy_and_reaches_the_service_gate(
     decisions = scene.world.audit[before:]
     assert [event.capability for event in decisions] == [capability]
     assert decisions[0].outcome.value == "allowed"
-    # KLP-WP-04-SLICE-A-PLACEHOLDER: the gated handler answers `unsupported`
-    # until slices B2/B3 land the behaviour.
-    assert code == "unsupported"
+    if capability is Capability.KNOWLEDGE_ASSERTIONS_SUBMIT:
+        # KLP-AC-104 (submit, slice B2): a granted submit succeeds end to end.
+        assert code is None
+    else:
+        # KLP-WP-04-SLICE-A-PLACEHOLDER: checkpoint answers `unsupported` until B3.
+        assert code == "unsupported"
 
 
 @pytest.mark.parametrize("capability", sorted(DISCOVERY), ids=lambda c: c.value)

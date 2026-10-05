@@ -57,3 +57,11 @@ none of the eight: for a cited memory
 it reads each version's `statement_sha256` and `classification` under the Principal partition,
 to verify the cited digest and take the rank-max class onto the Knowledge evidence row. No
 statement, structured value or evidence payload is read.
+
+**KLP-WP-04 slice B2 (autonomous submit, 2026-10-05):**
+`knowledge.assertions.submit` reads one of the eight (`relationship_memory_versions`) and writes
+none of the eight: for a cited memory it reads each version's `statement_sha256` and
+`classification` under the Principal partition (digest check, rank-max class onto the evidence
+row), and its trigger-visibility check and the replay's `current_lifecycle` mask compare version
+classes inside the R6 section 5.2 `withheld_remote` `EXISTS`. No statement, structured value or
+evidence payload is read.

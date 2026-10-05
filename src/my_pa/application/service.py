@@ -476,6 +476,9 @@ from my_pa.application.knowledge_assertions import (
     decode_knowledge_cursor,
 )
 from my_pa.application.knowledge_assertions import assertion_view as knowledge_assertion_view
+from my_pa.application.knowledge_assertions import (
+    create_admission_refusal as knowledge_create_admission_refusal,
+)
 from my_pa.application.knowledge_assertions import create_request as knowledge_create_request
 from my_pa.application.knowledge_assertions import history_view as knowledge_history_view
 from my_pa.application.knowledge_assertions import is_remote as knowledge_is_remote
@@ -483,6 +486,8 @@ from my_pa.application.knowledge_assertions import lifecycles_for as knowledge_l
 from my_pa.application.knowledge_assertions import page_view as knowledge_page_view
 from my_pa.application.knowledge_assertions import reveal_view as knowledge_reveal_view
 from my_pa.application.knowledge_assertions import submission_view as knowledge_submission_view
+from my_pa.application.knowledge_assertions import submit_request as knowledge_submit_request
+from my_pa.application.knowledge_assertions import submit_view as knowledge_submit_view
 from my_pa.application.managed_documents import ManagedDocumentService
 from my_pa.application.meetings import (
     MeetingApplication,
@@ -525,6 +530,9 @@ from my_pa.contracts.ports import (
     KnowledgeConcurrentDuplicateError,
     KnowledgeEvidenceNotFoundError,
     KnowledgeIdempotencyConflictError,
+    KnowledgeLedgerInvariantError,
+    KnowledgeSourceProfileUnboundError,
+    KnowledgeTriggerNotFoundError,
     ManagedByteStore,
     MeetingListPage,
     MemoryDetail,
@@ -1273,6 +1281,13 @@ def _port_failure(error: PortError) -> ApplicationError:
         return NotFoundError(SafeDetail.EVIDENCE)
     if isinstance(error, KnowledgeCaptureWithdrawnError):
         return DeniedError(SafeDetail.CAPTURE_WITHDRAWN)
+    # KLP-WP-04: autonomous submit's refusals that write nothing. An unbound
+    # profile and an unseen trigger are one `not_found(provenance)` each, so
+    # neither is an existence oracle; a ledger-trigger refusal is a server bug.
+    if isinstance(error, KnowledgeSourceProfileUnboundError | KnowledgeTriggerNotFoundError):
+        return NotFoundError(SafeDetail.PROVENANCE)
+    if isinstance(error, KnowledgeLedgerInvariantError):
+        return InternalError()
     if isinstance(error, EvidenceUnavailableError):
         return UnavailableError()
     return InternalError()
@@ -12771,6 +12786,8 @@ class ApplicationService:
         """
         self._knowledge_plane(authorization, command.capability)
         repository: KnowledgeAssertionRepository = unit_of_work.knowledge_assertions
+        principal_id = authorization.principal.principal_id
+        remote = knowledge_is_remote(authorization)
         with _translated():
             predicate = repository.predicate_head(command.predicate_code)
         request = knowledge_create_request(
@@ -12778,12 +12795,24 @@ class ApplicationService:
             predicate,
             authenticated_client_id=authorization.authenticated_client_id,
         )
+        # KLP-WP-04 N2: the replay lookup precedes every admissibility check, so a
+        # same-key retry returns its stored result even after the head changed.
+        with _translated():
+            replay = repository.replay_create(
+                principal_id, request.idempotency_key, request.request_digest, remote=remote
+            )
+        if replay is not None:
+            return self._knowledge_result(authorization, knowledge_submission_view(replay))
+        refusal = knowledge_create_admission_refusal(predicate)
+        if refusal is not None:
+            raise refusal
         with _translated():
             result = repository.create(
-                authorization.principal.principal_id,
+                principal_id,
                 request,
                 at=authorization.at,
                 correlation_id=authorization.correlation_id,
+                remote=remote,
             )
         return self._knowledge_result(authorization, knowledge_submission_view(result))
 
@@ -12813,12 +12842,53 @@ class ApplicationService:
         authorization: Authorization,
         command: SubmitKnowledgeAssertion,
     ) -> _Result:
-        """One autonomous submission from a bound discovery client (R6 sections 6, 8, 9)."""
+        """One autonomous submission from a bound discovery client (R6 sections 6, 8, 9).
+
+        The second gate first. Then C2 reads that need no lock: the profile's
+        immutable binding (this client's, else `not_found(provenance)` with no
+        write) and the predicate head; the frozen digest; the replay lookup on
+        the autonomous arbiter before any admission check (N2); and only then
+        the retired-head refusal and the transaction (`repository.submit`).
+        """
         self._knowledge_discovery_gate(authorization, command.capability)
-        del unit_of_work
-        # KLP-WP-04-SLICE-A-PLACEHOLDER: behaviour lands in slice B2. Until then a
-        # gated call is refused `unsupported` and writes nothing.
-        raise UnsupportedError()
+        repository: KnowledgeAssertionRepository = unit_of_work.knowledge_assertions
+        principal_id = authorization.principal.principal_id
+        client = authorization.authenticated_client_id
+        if client is None:  # pragma: no cover - the gate refused it
+            raise UnsupportedError()
+        with _translated():
+            binding = repository.source_binding(principal_id, command.source_profile_id, client)
+        if binding is None:
+            raise NotFoundError(SafeDetail.PROVENANCE)
+        with _translated():
+            predicate = repository.predicate_head(command.predicate_code)
+        request = knowledge_submit_request(command, predicate, binding)
+        with _translated():
+            replay = repository.replay_submission(
+                principal_id,
+                authenticated_client_id=client,
+                source_profile_id=binding.source_profile_id,
+                external_run_id=command.external_run_id,
+                external_candidate_id=command.external_candidate_id,
+                request_digest=request.request_digest,
+                remote=True,
+            )
+        if replay is not None:
+            return self._knowledge_result(authorization, knowledge_submit_view(replay))
+        if predicate is None or not predicate.is_open_for_intake:
+            raise InvalidRequestError(SafeDetail.KINDS)
+        with _translated():
+            result = repository.submit(
+                principal_id,
+                request,
+                at=authorization.at,
+                correlation_id=authorization.correlation_id,
+                relationship_intelligence_composed=self._relationship_intelligence_enabled,
+                relationship_memory_composed=(
+                    self._relationship_intelligence_enabled and self._relationship_memory_enabled
+                ),
+            )
+        return self._knowledge_result(authorization, knowledge_submit_view(result))
 
     def _knowledge_discovery_checkpoint(
         self,

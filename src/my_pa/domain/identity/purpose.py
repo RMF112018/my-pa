@@ -406,3 +406,11 @@ class Purpose(StrEnum):
     # a remote-write purpose (KLP-AC-016).
     KNOWLEDGE_ASSERTION_READ = "knowledge_assertion_read"
     KNOWLEDGE_ASSERTION_AUTHORING = "knowledge_assertion_authoring"
+    # KLP-WP-04, on `D-91`: would reuse widen the grant? `knowledge_assertion_
+    # authoring` would: it is the Principal's own explicit statement, and a
+    # discovery client's observation is a source's claim admitted only under a
+    # provisioned profile's ceiling. Sharing one purpose would let a grant
+    # issued to author by hand submit autonomous observations, and the reverse.
+    # A remote-write purpose of its own (KLP-AC-016), used by exactly
+    # `knowledge.assertions.submit` and `knowledge.discovery.checkpoint`.
+    KNOWLEDGE_ASSERTION_OBSERVATION = "knowledge_assertion_observation"

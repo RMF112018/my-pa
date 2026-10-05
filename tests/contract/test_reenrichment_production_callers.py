@@ -426,10 +426,20 @@ def test_entra_http_observes_each_authenticated_principal_before_application_dis
     invoke = service.invoke
 
     def recording_invoke(
-        metadata: RequestMetadata, command: Command, *, principal: Principal
+        metadata: RequestMetadata,
+        command: Command,
+        *,
+        principal: Principal,
+        operator_surface: object = None,
     ) -> ResponseEnvelope:
+        # KLP-WP-04: the HTTP `invoke` route stamps `operator_surface`.
         events.append(f"application:{principal.principal_id}")
-        return invoke(metadata, command, principal=principal)
+        return invoke(
+            metadata,
+            command,
+            principal=principal,
+            operator_surface=operator_surface,  # type: ignore[arg-type]
+        )
 
     monkeypatch.setattr(service, "invoke", recording_invoke)
 
@@ -670,6 +680,11 @@ def test_remote_mcp_observes_only_authenticated_request_principals_before_contex
         remote_writes_enabled=False,
         oauth_operator_secret=None,
         compact_publication_for_client=lambda _client_id: False,
+        # KLP-WP-04: `remote_access_context` reads the three Knowledge role
+        # allowlists for the deny overlay; none binds this client.
+        knowledge_discovery_oauth_client_id_set=frozenset,
+        knowledge_operator_review_oauth_client_id_set=frozenset,
+        chatllm_gateway_oauth_client_id_set=frozenset,
     )
     authenticated = SimpleNamespace(
         principal=scene.principal,

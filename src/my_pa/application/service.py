@@ -140,6 +140,7 @@ from my_pa.application.commands import (
     BindEntityIdentifier,
     BulkConfirmTasks,
     BulkPreviewTasks,
+    CheckpointKnowledgeDiscovery,
     CloseCommitment,
     CloseConstraint,
     CloseConstraintWithFollowUp,
@@ -305,6 +306,7 @@ from my_pa.application.commands import (
     SplitEntity,
     StartGsqsB0,
     SubmitGoodNotesProposal,
+    SubmitKnowledgeAssertion,
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
     SupersedeEntityName,
@@ -533,12 +535,14 @@ from my_pa.contracts.ports import (
     RelationshipMemoryRepository,
     ReviewDecisionRequest,
     SearchOutcome,
+    TransactionConflictError,
     UnitOfWork,
     UnknownScopeError,
     WorkCursorError,
     WriteRequestConflictError,
     WriteRequestEvidence,
     WriteRequestResult,
+    transaction_conflict_in_chain,
 )
 from my_pa.contracts.v1.canvas_workspace import (
     CanvasPointView,
@@ -629,6 +633,7 @@ from my_pa.domain.extraction.coverage import CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus, extract_text
 from my_pa.domain.goodnotes.models import GoodNotesReviewCase, GoodNotesSemanticReviewCase
 from my_pa.domain.identity.operation import Capability, granted_purposes
+from my_pa.domain.identity.operator_surface import OperatorSurface
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.knowledge_assertion.vocabulary import KnowledgeAssertionLifecycle
@@ -1253,6 +1258,11 @@ def _port_failure(error: PortError) -> ApplicationError:
     """The public error a port failure is, by classification and nothing else."""
     if isinstance(error, UnknownScopeError):
         return NotFoundError(SafeDetail.ENROLLMENT_ID)
+    # KLP-WP-04 (R6 section 8.4, KLP-AC-122): a deadlock or serialization victim
+    # is `conflict`, whose contract-fixed guidance is `after_refresh`. No detail
+    # token (no contract change) and no retry loop: the caller retries.
+    if isinstance(error, TransactionConflictError):
+        return ConflictError()
     # KLP-WP-03: the Knowledge plane's refusals. Each is raised before or under
     # the C6 lock and rolls the whole create back, so none leaves a row.
     if isinstance(error, KnowledgeIdempotencyConflictError):
@@ -3800,6 +3810,7 @@ class ApplicationService:
         relationship_intelligence_writes_enabled: bool = False,
         relationship_memory_enabled: bool = False,
         knowledge_assertions_enabled: bool = False,
+        knowledge_discovery_client_ids: frozenset[str] = frozenset(),
         relationship_identity_correction_enabled: bool = False,
         relationship_reenrichment_enabled: bool = False,
         producer_origins: ProducerOriginRegistry | None = None,
@@ -3843,6 +3854,10 @@ class ApplicationService:
         #: plane as well (`Settings._check` refuses the switch without it): an
         #: assertion's Entity subject is proven by reading the entity tables.
         self._knowledge_assertions_enabled = knowledge_assertions_enabled
+        #: KLP-WP-04 (R6 section 6.1): the exact discovery allowlist the second
+        #: service gate reads. Empty -- the default -- refuses every submit and
+        #: checkpoint, so an unconfigured build fails closed for the role.
+        self._knowledge_discovery_client_ids = frozenset(knowledge_discovery_client_ids)
         # The third gate, and it is the narrowest. `_identity_correction_plane`
         # is the floor every one of its handlers asks; `available_capabilities`
         # is what `capabilities.get` and the MCP tool list read. Default `False`
@@ -4040,6 +4055,7 @@ class ApplicationService:
         transport: CaptureTransport = CaptureTransport.LOCAL,
         capability_grants: frozenset[tuple[Capability, Purpose | None]] | None = None,
         authenticated_client_id: str | None = None,
+        operator_surface: OperatorSurface | None = None,
     ) -> ResponseEnvelope:
         """Execute one request and return the envelope describing what happened.
 
@@ -4064,6 +4080,12 @@ class ApplicationService:
         read from the request payload. `context.prepare` intersects it with
         per-plane read capabilities so a `context.prepare` grant does not
         implicitly search every plane the Principal can read.
+
+        `operator_surface` (KLP-WP-04, R6 section 3.2) is stamped only by the
+        CLI adapter and the HTTP gateway's `invoke` route. It reaches exactly
+        one rule, `derive_knowledge_review_authority`; together with a remote
+        transport, a client or a grant ceiling it is refused before anything is
+        recorded, and the request answers `internal_error`.
 
         **No exception leaves this method.** The first two handlers classify what
         this layer already understands. The third is a terminal catch, and it is
@@ -4102,6 +4124,7 @@ class ApplicationService:
                 transport=transport,
                 capability_grants=capability_grants,
                 authenticated_client_id=authenticated_client_id,
+                operator_surface=operator_surface,
             )
         except ApplicationError as error:
             failure = error
@@ -4109,11 +4132,22 @@ class ApplicationService:
             # A port failure raised outside a translated block — from the shared
             # authorization path's own reads, for instance — still has to reach
             # the caller as a classified public error rather than as a crash.
-            failure = _port_failure(error)
-        except Exception:
-            # Nothing that reaches here has been classified, so nothing about it
-            # is safe to report beyond that the request did not complete.
-            unclassified = True
+            # KLP-WP-04 (R6 section 8.4): a port error re-raised over a deadlock or
+            # serialization victim (kept in `__context__`) is that conflict.
+            failure = (
+                ConflictError() if transaction_conflict_in_chain(error) else _port_failure(error)
+            )
+        except Exception as error:
+            # KLP-WP-04 (R6 section 8.4): an unwrapped write port or the COMMIT
+            # itself can still surface a deadlock / serialization victim, directly
+            # or kept in `__context__` by a `raise ... from None`. That is a
+            # classified `conflict`; anything else here is not classified, so
+            # nothing about it is safe to report beyond that the request did not
+            # complete. Only the classification leaves this block.
+            if transaction_conflict_in_chain(error):
+                failure = ConflictError()
+            else:
+                unclassified = True
         if unclassified:
             failure = InternalError()
         if failure is not None:
@@ -4144,6 +4178,7 @@ class ApplicationService:
         transport: CaptureTransport = CaptureTransport.LOCAL,
         capability_grants: frozenset[tuple[Capability, Purpose | None]] | None = None,
         authenticated_client_id: str | None = None,
+        operator_surface: OperatorSurface | None = None,
     ) -> _Result:
         """Authorize, then execute, then commit — or refuse and still commit.
 
@@ -4197,6 +4232,7 @@ class ApplicationService:
                     transport=transport,
                     capability_grants=capability_grants,
                     authenticated_client_id=authenticated_client_id,
+                    operator_surface=operator_surface,
                 )
                 if authorization.allowed:
                     try:
@@ -12751,6 +12787,52 @@ class ApplicationService:
             )
         return self._knowledge_result(authorization, knowledge_submission_view(result))
 
+    def _knowledge_discovery_gate(
+        self, authorization: Authorization, capability: Capability
+    ) -> None:
+        """The plane floor plus the second service gate (R6 section 6.1).
+
+        Repeats the gateway's deny overlay: the call must have arrived on the
+        authenticated remote transport from a client in the exact discovery
+        allowlist. stdio MCP, the CLI, the HTTP gateway, the remote capture route
+        (remote transport, no client) and every unbound client are refused
+        `unsupported`, before any read. Precedent: `_goodnotes_pull_plane`.
+        """
+        self._knowledge_plane(authorization, capability)
+        client = authorization.authenticated_client_id
+        if (
+            authorization.transport is not CaptureTransport.REMOTE_CLIENT
+            or client is None
+            or client not in self._knowledge_discovery_client_ids
+        ):
+            raise UnsupportedError()
+
+    def _knowledge_assertions_submit(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: SubmitKnowledgeAssertion,
+    ) -> _Result:
+        """One autonomous submission from a bound discovery client (R6 sections 6, 8, 9)."""
+        self._knowledge_discovery_gate(authorization, command.capability)
+        del unit_of_work
+        # KLP-WP-04-SLICE-A-PLACEHOLDER: behaviour lands in slice B2. Until then a
+        # gated call is refused `unsupported` and writes nothing.
+        raise UnsupportedError()
+
+    def _knowledge_discovery_checkpoint(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: CheckpointKnowledgeDiscovery,
+    ) -> _Result:
+        """One checkpoint advance from a bound discovery client (R6 section 7)."""
+        self._knowledge_discovery_gate(authorization, command.capability)
+        del unit_of_work
+        # KLP-WP-04-SLICE-A-PLACEHOLDER: behaviour lands in slice B3. Until then a
+        # gated call is refused `unsupported` and writes nothing.
+        raise UnsupportedError()
+
     def _record_events_list(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListRecordEvents
     ) -> _Result:
@@ -14429,6 +14511,10 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.KNOWLEDGE_ASSERTIONS_HISTORY: ApplicationService._knowledge_assertions_history,
         Capability.KNOWLEDGE_ASSERTIONS_REVEAL: ApplicationService._knowledge_assertions_reveal,
         Capability.KNOWLEDGE_ASSERTIONS_CREATE: ApplicationService._knowledge_assertions_create,
+        Capability.KNOWLEDGE_ASSERTIONS_SUBMIT: ApplicationService._knowledge_assertions_submit,
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT: (
+            ApplicationService._knowledge_discovery_checkpoint
+        ),
     }
 )
 
@@ -14448,6 +14534,10 @@ def published_capabilities(
     served = service.available_capabilities
     if not authenticated_client_present:
         served -= _GOODNOTES_PULL_CAPABILITIES
+        # KLP-WP-04 (R6 section 6.1): the discovery pair is served only to an
+        # authenticated remote client, on the GoodNotes pull precedent; stdio MCP
+        # and every local surface would only ever be refused it.
+        served -= _KNOWLEDGE_DISCOVERY_CAPABILITIES
     return served
 
 
@@ -14537,6 +14627,20 @@ _KNOWLEDGE_ASSERTION_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
         Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
         Capability.KNOWLEDGE_ASSERTIONS_CREATE,
+        # KLP-WP-04: the discovery pair joins the plane's switch, so with
+        # `MY_PA_KNOWLEDGE_ASSERTIONS_ENABLED` off neither is served anywhere.
+        Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
+    }
+)
+
+#: KLP-WP-04: the bound discovery client's two writes. Withheld from every
+#: publication without an authenticated client and refused by the second
+#: service gate unless the client is in the exact discovery allowlist.
+_KNOWLEDGE_DISCOVERY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
     }
 )
 

@@ -52,7 +52,7 @@ from types import TracebackType
 from typing import assert_never
 
 from sqlalchemy import Connection, Engine, select
-from sqlalchemy.exc import InterfaceError, OperationalError, SQLAlchemyError
+from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError, SQLAlchemyError
 
 from my_pa.contracts.ports import (
     Acceptance,
@@ -97,11 +97,13 @@ from my_pa.contracts.ports import (
     SourceProviders,
     SourceRepository,
     TaskManagementRepository,
+    TransactionConflictError,
     UnitOfWork,
     UnknownScopeError,
     WorkerHealthRepository,
     WorkerPlaneStatus,
     WriteRequestRepository,
+    is_transaction_conflict,
 )
 from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.domain.capture.lifecycle import (
@@ -276,10 +278,18 @@ def _read[T](statement: Callable[[], T]) -> T:
     """
     try:
         return statement()
-    except (OperationalError, InterfaceError):
-        # The server is unreachable, the connection died, or a statement timeout
-        # fired. Conditionally retryable.
-        failure: Exception = EvidenceUnavailableError("the store could not be read")
+    except DBAPIError as error:
+        # KLP-WP-04 (R6 section 8.4): a deadlock or serialization victim is
+        # checked first, before the OperationalError branch it would otherwise
+        # fall into (both SQLSTATEs arrive as `OperationalError`).
+        if is_transaction_conflict(error):
+            failure: Exception = TransactionConflictError("the transaction lost a race")
+        elif isinstance(error, (OperationalError, InterfaceError)):
+            # The server is unreachable, the connection died, or a statement
+            # timeout fired. Conditionally retryable.
+            failure = EvidenceUnavailableError("the store could not be read")
+        else:
+            failure = RepositoryFailureError("the request could not be completed")
     except (SQLAlchemyError, IsolationLevelError):
         # A missing column, a type error, a row that vanished between two
         # statements. Retrying reads the same rows and fails the same way.

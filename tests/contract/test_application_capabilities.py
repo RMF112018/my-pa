@@ -619,7 +619,11 @@ _GOODNOTES_PULL_CAPABILITIES = frozenset(
 #: KLP-WP-03: the Knowledge Assertion plane is off in this world (its switch
 #: defaults off and the FAST `World` has no Knowledge repository), so its six
 #: names are withheld from the manifest exactly as the pull plane's are.
-_KNOWLEDGE_ASSERTION_CAPABILITIES: frozenset[Capability] = KNOWLEDGE_ASSERTION_DATA_NAMES
+_KNOWLEDGE_ASSERTION_CAPABILITIES: frozenset[Capability] = KNOWLEDGE_ASSERTION_DATA_NAMES | {
+    # KLP-WP-04: the discovery pair is withheld by the same switch.
+    Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
+    Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
+}
 
 _RUN01_UNWIRED_CAPABILITIES: frozenset[Capability] = frozenset(
     # `PC-CM-RUN01-WP07` wired `constraints.create_published`, which was the

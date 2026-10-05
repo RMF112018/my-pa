@@ -159,6 +159,9 @@ def test_the_family_this_guard_covers_is_the_domains_own() -> None:
         for capability in Capability
         if capability.value.startswith("knowledge.")
         and capability not in KNOWLEDGE_ASSERTION_DATA_NAMES
+        # KLP-WP-04: the discovery pair writes observations; it returns no record.
+        and capability
+        not in {Capability.KNOWLEDGE_ASSERTIONS_SUBMIT, Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT}
     }
     assert set(EXPECTED_TRUST) == family
     assert set(PURPOSES) == family

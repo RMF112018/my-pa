@@ -1,4 +1,4 @@
-"""KLP-WP-03: the Knowledge Assertion catalog, plane switch and scope (FAST).
+"""KLP-WP-03/04: the Knowledge Assertion catalog, plane switch and scope (FAST).
 
 * **KLP-AC-001** -- the extraction plane's `knowledge.search`/`read`/`reveal`/
   `coverage` keep their names, purposes and commands; `knowledge.reveal` answers
@@ -16,6 +16,18 @@
 * **KLP-AC-105** -- an explicit name set (never a `knowledge.` prefix) maps the
   six to the `KNOWLEDGE_ASSERTIONS` prerequisite, and `composed_capabilities`
   raises on an unknown prerequisite.
+
+KLP-WP-04 slice A adds the discovery pair:
+
+* **KLP-AC-015 (whole)** -- submit and checkpoint each map to exactly one
+  permitted Purpose, `knowledge_assertion_observation`, used by nothing else; with
+  the WP-03 six the mapping is exhaustive over every Knowledge Assertion name.
+* **KLP-AC-104 (catalog slice)** -- both are in `_SCOPELESS` and the scopeless arm
+  of `_requested_scope`; a granted invoke is *allowed* by policy (audited
+  `allowed`) and reaches the second service gate. End-to-end success is B2/B3's
+  (the handlers are slice-A placeholders that answer `unsupported`).
+* **R6 section 6.1 second gate** -- `unsupported` unless the remote transport and
+  a client in the exact discovery allowlist; the plane switch withholds both.
 """
 
 from __future__ import annotations
@@ -36,13 +48,14 @@ from tests.conftest import (
 )
 
 from my_pa.application import chatllm_data_profile
-from my_pa.application.authorization import _requested_scope
+from my_pa.application.authorization import Authorization, _requested_scope
 from my_pa.application.chatllm_data_profile import (
     ChatLLMCompositionPlanes,
     composed_capabilities,
     desired_effective_capabilities,
 )
 from my_pa.application.commands import (
+    CheckpointKnowledgeDiscovery,
     CreateKnowledgeAssertion,
     GetCapabilities,
     GetKnowledgeAssertionHistory,
@@ -51,8 +64,10 @@ from my_pa.application.commands import (
     RevealKnowledgeAssertion,
     RevealSubject,
     SearchKnowledgeAssertions,
+    SubmitKnowledgeAssertion,
 )
-from my_pa.application.service import ApplicationService
+from my_pa.application.errors import UnsupportedError
+from my_pa.application.service import ApplicationService, published_capabilities
 from my_pa.bootstrap.settings import Settings, SettingsError
 from my_pa.contracts.ports import (
     KnowledgeAssertionHistory,
@@ -63,6 +78,7 @@ from my_pa.contracts.ports import (
     KnowledgeCreateRequest,
     KnowledgeSubmissionResult,
 )
+from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.chatllm_capability_policy import (
     CHATLLM_CAPABILITY_POLICY,
@@ -71,8 +87,11 @@ from my_pa.domain.identity.chatllm_capability_policy import (
 )
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.purpose import Purpose
-from my_pa.domain.knowledge_assertion.vocabulary import KnowledgeSubjectKind
-from my_pa.domain.policy.decision import _SCOPELESS
+from my_pa.domain.knowledge_assertion.vocabulary import (
+    KnowledgeCheckpointKind,
+    KnowledgeSubjectKind,
+)
+from my_pa.domain.policy.decision import _SCOPELESS, POLICY_VERSION, PolicyDecision
 from my_pa.domain.source.registry import issue_identifier
 
 KNOWLEDGE_READS: Final = (
@@ -83,6 +102,9 @@ KNOWLEDGE_READS: Final = (
     Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
 )
 KNOWLEDGE: Final = frozenset({*KNOWLEDGE_READS, Capability.KNOWLEDGE_ASSERTIONS_CREATE})
+DISCOVERY: Final = frozenset(
+    {Capability.KNOWLEDGE_ASSERTIONS_SUBMIT, Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT}
+)
 EXTRACTION: Final = {
     Capability.KNOWLEDGE_SEARCH: "knowledge.search",
     Capability.KNOWLEDGE_READ: "knowledge.read",
@@ -275,13 +297,14 @@ def test_the_two_purposes_are_declared_and_used_only_by_the_six() -> None:
     assert users == KNOWLEDGE
 
 
-def test_submit_checkpoint_and_provenance_are_not_declared_by_wp03() -> None:
+def test_provenance_is_not_declared_before_wp05() -> None:
+    """KLP-WP-04 declared submit and checkpoint; `record_events.provenance` is WP-05's."""
     values = {capability.value for capability in Capability}
-    assert "knowledge.assertions.submit" not in values
-    assert "knowledge.discovery.checkpoint" not in values
+    assert "knowledge.assertions.submit" in values
+    assert "knowledge.discovery.checkpoint" in values
     assert "record_events.provenance" not in values
     purposes = {purpose.value for purpose in Purpose}
-    assert "knowledge_assertion_observation" not in purposes
+    assert "knowledge_assertion_observation" in purposes
     assert "record_event_provenance_read" not in purposes
 
 
@@ -448,7 +471,9 @@ def test_an_explicit_name_set_maps_exactly_the_six_to_the_knowledge_prerequisite
     prefixed = {
         capability for capability in Capability if capability.value.startswith("knowledge.")
     }
-    assert prefixed - mapped == set(EXTRACTION)
+    # KLP-WP-04: the discovery pair shares the prefix and is CONTROL_PLANE_EXCLUDED
+    # (prerequisite NONE); the service withholds it with the switch off instead.
+    assert prefixed - mapped == set(EXTRACTION) | DISCOVERY
 
 
 def test_composed_capabilities_raises_on_an_unknown_prerequisite(
@@ -471,3 +496,208 @@ def test_composed_capabilities_raises_on_an_unknown_prerequisite(
     )
     with pytest.raises(RuntimeError, match="unknown ChatLLM composition prerequisite"):
         composed_capabilities(frozenset(Capability), planes)
+
+
+# ---- KLP-WP-04: the discovery pair -------------------------------------------------
+
+_BOUND: Final = "synthetic-discovery-client"
+
+
+def _discovery_commands(principal_id: str) -> dict[Capability, object]:
+    return {
+        Capability.KNOWLEDGE_ASSERTIONS_SUBMIT: SubmitKnowledgeAssertion(
+            source_profile_id="kdsp_fastworld00000001",
+            external_run_id="run-1",
+            external_candidate_id="candidate-1",
+            subject_kind=KnowledgeSubjectKind.PRINCIPAL,
+            subject_id=principal_id,
+            predicate_code="policy.requirement",
+            value="Synthetic observed value",
+            evidence=(
+                {
+                    "identity_kind": "external_object",
+                    "external_object_id": "object-1",
+                    "content_hash": "a" * 64,
+                    "role": "direct",
+                },
+            ),
+        ),
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT: CheckpointKnowledgeDiscovery(
+            source_profile_id="kdsp_fastworld00000001",
+            expected_version=0,
+            external_run_id="run-1",
+            submitted_candidate_count=1,
+            checkpoint_kind=KnowledgeCheckpointKind.SYNTHETIC,
+            private_envelope="opaque",
+            idempotency_key="klp04-fast-checkpoint",
+        ),
+    }
+
+
+def _discovery_service(world: World, *, bound: frozenset[str]) -> ApplicationService:
+    return ApplicationService(
+        unit_of_work=lambda: _KnowledgeUnitOfWork(world, _CannedKnowledge()),
+        limits=DEFAULT_LIMITS,
+        clock=lambda: WHEN,
+        relationship_intelligence_enabled=True,
+        knowledge_assertions_enabled=True,
+        knowledge_discovery_client_ids=bound,
+    )
+
+
+@pytest.mark.parametrize("capability", sorted(DISCOVERY), ids=lambda c: c.value)
+def test_each_discovery_name_maps_to_the_observation_purpose_only(capability: Capability) -> None:
+    assert permitted_purposes(capability) == {Purpose.KNOWLEDGE_ASSERTION_OBSERVATION}
+
+
+def test_the_observation_purpose_is_used_only_by_the_discovery_pair() -> None:
+    assert Purpose.KNOWLEDGE_ASSERTION_OBSERVATION.value == "knowledge_assertion_observation"
+    users = {
+        capability
+        for capability in Capability
+        if Purpose.KNOWLEDGE_ASSERTION_OBSERVATION in permitted_purposes(capability)
+    }
+    assert users == DISCOVERY
+
+
+def test_every_knowledge_assertion_name_is_exhaustively_mapped_to_one_purpose() -> None:
+    """KLP-AC-015 over the matrix's capability rows that exist in this build."""
+    import json
+    from pathlib import Path
+
+    matrix = json.loads(
+        (
+            Path(__file__).parents[1] / "architecture" / "klp_implementation_matrix_r6.json"
+        ).read_text(encoding="utf-8")
+    )
+    declared = {capability.value for capability in Capability}
+    rows = [row for row in matrix["capabilities"] if row["name"] in declared]
+    assert {row["name"] for row in rows} == {c.value for c in KNOWLEDGE | DISCOVERY}
+    for row in rows:
+        assert permitted_purposes(Capability(row["name"])) == {Purpose(row["purpose"])}
+
+
+@pytest.mark.parametrize("capability", sorted(DISCOVERY), ids=lambda c: c.value)
+def test_the_discovery_pair_is_scopeless_and_requests_no_scope(
+    scene: Scene, capability: Capability
+) -> None:
+    assert capability in _SCOPELESS
+    command = _discovery_commands(scene.principal.principal_id)[capability]
+    with FakeUnitOfWork(scene.world) as unit_of_work:
+        requested = _requested_scope(
+            unit_of_work,
+            command,  # type: ignore[arg-type]
+            (),
+            principal_id=scene.principal.principal_id,
+        )
+    assert requested == frozenset()
+
+
+def test_the_switch_withholds_the_discovery_pair(scene: Scene) -> None:
+    off = build_service(scene.world, scene.providers)
+    assert not DISCOVERY & off.available_capabilities
+    on = build_service(scene.world, scene.providers, knowledge_assertions_enabled=True)
+    assert on.available_capabilities >= DISCOVERY
+    assert not DISCOVERY & published_capabilities(on, authenticated_client_present=False)
+    assert published_capabilities(on, authenticated_client_present=True) >= DISCOVERY
+
+
+def _invoke_discovery(
+    service: ApplicationService,
+    scene: Scene,
+    capability: Capability,
+    *,
+    transport: CaptureTransport,
+    client: str | None,
+) -> str | None:
+    response = service.invoke(
+        metadata_for(capability, Purpose.KNOWLEDGE_ASSERTION_OBSERVATION, scene.principal),
+        _discovery_commands(scene.principal.principal_id)[capability],  # type: ignore[arg-type]
+        principal=scene.principal,
+        transport=transport,
+        capability_grants=frozenset({(capability, Purpose.KNOWLEDGE_ASSERTION_OBSERVATION)}),
+        authenticated_client_id=client,
+    )
+    return None if response.error is None else response.error.code.value
+
+
+@pytest.mark.parametrize("capability", sorted(DISCOVERY), ids=lambda c: c.value)
+def test_a_granted_invoke_is_allowed_by_policy_and_reaches_the_service_gate(
+    scene: Scene, capability: Capability
+) -> None:
+    service = _discovery_service(scene.world, bound=frozenset({_BOUND}))
+    before = len(scene.world.audit)
+    code = _invoke_discovery(
+        service, scene, capability, transport=CaptureTransport.REMOTE_CLIENT, client=_BOUND
+    )
+    decisions = scene.world.audit[before:]
+    assert [event.capability for event in decisions] == [capability]
+    assert decisions[0].outcome.value == "allowed"
+    # KLP-WP-04-SLICE-A-PLACEHOLDER: the gated handler answers `unsupported`
+    # until slices B2/B3 land the behaviour.
+    assert code == "unsupported"
+
+
+@pytest.mark.parametrize("capability", sorted(DISCOVERY), ids=lambda c: c.value)
+@pytest.mark.parametrize(
+    ("transport", "client", "bound"),
+    [
+        (CaptureTransport.LOCAL, None, frozenset({_BOUND})),
+        (CaptureTransport.LOCAL, _BOUND, frozenset({_BOUND})),
+        (CaptureTransport.REMOTE_CLIENT, None, frozenset({_BOUND})),
+        (CaptureTransport.REMOTE_CLIENT, "synthetic-chatllm", frozenset({_BOUND})),
+        (CaptureTransport.REMOTE_CLIENT, _BOUND, frozenset()),
+        (CaptureTransport.REMOTE_CLIENT, f"{_BOUND}-x", frozenset({_BOUND})),
+    ],
+    ids=[
+        "local",
+        "local-with-client",
+        "remote-capture-route",
+        "unbound-client",
+        "empty-allowlist",
+        "prefix",
+    ],
+)
+def test_the_second_gate_refuses_every_unbound_composition(
+    scene: Scene,
+    capability: Capability,
+    transport: CaptureTransport,
+    client: str | None,
+    bound: frozenset[str],
+) -> None:
+    service = _discovery_service(scene.world, bound=bound)
+    authorization = _gate_authorization(scene, capability, transport=transport, client=client)
+    with pytest.raises(UnsupportedError):
+        service._knowledge_discovery_gate(authorization, capability)
+    code = _invoke_discovery(service, scene, capability, transport=transport, client=client)
+    assert code == "unsupported"
+
+
+@pytest.mark.parametrize("capability", sorted(DISCOVERY), ids=lambda c: c.value)
+def test_the_second_gate_admits_a_bound_remote_client(scene: Scene, capability: Capability) -> None:
+    """The control: the gate itself passes; only the placeholder refuses."""
+    service = _discovery_service(scene.world, bound=frozenset({_BOUND}))
+    authorization = _gate_authorization(
+        scene, capability, transport=CaptureTransport.REMOTE_CLIENT, client=_BOUND
+    )
+    service._knowledge_discovery_gate(authorization, capability)
+
+
+def _gate_authorization(
+    scene: Scene, capability: Capability, *, transport: CaptureTransport, client: str | None
+) -> Authorization:
+    return Authorization(
+        principal=scene.principal,
+        capability=capability,
+        purpose=Purpose.KNOWLEDGE_ASSERTION_OBSERVATION,
+        correlation_id="corr_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        request_id="req-klp04-gate",
+        audit_id="aud_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        at=WHEN,
+        decision=PolicyDecision(allowed=True, policy_version=POLICY_VERSION),
+        requested_source_ids=frozenset(),
+        enrollments=(),
+        transport=transport,
+        capability_grants=frozenset({(capability, Purpose.KNOWLEDGE_ASSERTION_OBSERVATION)}),
+        authenticated_client_id=client,
+    )

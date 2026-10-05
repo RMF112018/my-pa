@@ -942,6 +942,17 @@ class Capability(StrEnum):
     KNOWLEDGE_ASSERTIONS_HISTORY = "knowledge.assertions.history"
     KNOWLEDGE_ASSERTIONS_REVEAL = "knowledge.assertions.reveal"
     KNOWLEDGE_ASSERTIONS_CREATE = "knowledge.assertions.create"
+    #: KLP-WP-04: the bound discovery client's two writes. `submit` offers one
+    #: observed candidate fact under a provisioned source profile; `checkpoint`
+    #: advances that profile's opaque discovery checkpoint. Neither is
+    #: operator-only -- a discovery client is an OAuth client, never the
+    #: operator -- and neither is reachable by any client the exact Settings
+    #: allowlist `MY_PA_KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS` does not bind
+    #: (`bootstrap.knowledge_discovery_profiles`, R6 section 3.4), nor by any
+    #: local transport (the second service gate, R6 section 6.1). Scopeless for
+    #: the reason the rest of the plane is.
+    KNOWLEDGE_ASSERTIONS_SUBMIT = "knowledge.assertions.submit"
+    KNOWLEDGE_DISCOVERY_CHECKPOINT = "knowledge.discovery.checkpoint"
 
 
 class NativeSourceCapability(StrEnum):
@@ -1464,6 +1475,17 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.KNOWLEDGE_ASSERTIONS_HISTORY: frozenset({Purpose.KNOWLEDGE_ASSERTION_READ}),
         Capability.KNOWLEDGE_ASSERTIONS_REVEAL: frozenset({Purpose.KNOWLEDGE_ASSERTION_READ}),
         Capability.KNOWLEDGE_ASSERTIONS_CREATE: frozenset({Purpose.KNOWLEDGE_ASSERTION_AUTHORING}),
+        # KLP-WP-04 (KLP-AC-015/016): the discovery pair maps to exactly one
+        # purpose of its own, the remote-write `knowledge_assertion_observation`,
+        # and never to the explicit-create authoring purpose: a grant issued to
+        # author a fact by hand must never also submit observations, nor the
+        # reverse.
+        Capability.KNOWLEDGE_ASSERTIONS_SUBMIT: frozenset(
+            {Purpose.KNOWLEDGE_ASSERTION_OBSERVATION}
+        ),
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT: frozenset(
+            {Purpose.KNOWLEDGE_ASSERTION_OBSERVATION}
+        ),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),
@@ -1616,6 +1638,13 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         # receipt and evidence links. The five Knowledge reads stay out, which
         # keeps their generated MCP tools annotated `read_only_hint`.
         Capability.KNOWLEDGE_ASSERTIONS_CREATE,
+        # KLP-WP-04 (KLP-AC-103). Both discovery writes persist ledger rows and
+        # are deliberately NOT additive: a submit may supersede a current fact,
+        # enrich an existing one's evidence or raise a classification, and a
+        # checkpoint advance redacts every earlier request envelope of its scope.
+        # So both are destructive, and the matrix says the same.
+        Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
     }
 )
 

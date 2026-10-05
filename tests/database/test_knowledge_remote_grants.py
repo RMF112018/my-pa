@@ -1,4 +1,4 @@
-"""KLP-WP-03: Knowledge grants on the real remote-identity store (KLP-AC-017, KLP-AC-146).
+"""Knowledge grants on the real remote-identity store (KLP-WP-03, KLP-WP-04).
 
 Marked `database` (auto `database_clone`), routed to `database-current-head`.
 
@@ -10,6 +10,26 @@ Marked `database` (auto `database_clone`), routed to `database-current-head`.
   and any Knowledge grant with Purpose `None`: it exits non-zero and the grant
   table gains no row. `profile-apply` -- the profile tooling -- is what installs
   the create grant, with its authoring purpose and `is_write`.
+
+KLP-WP-04 slice A, on the same real store:
+
+* **KLP-AC-017 (DB half).** The submit and checkpoint grants are `is_write` and
+  dropped at grant resolution unless both write switches are on.
+* **KLP-AC-019 / KLP-AC-134.** `apps.gateway.remote_access_context` over a real
+  resolution intersects a discovery-bound client with its exact profile and an
+  operator-review client with `knowledge-operator-review-v1`, for capabilities
+  *and* purposes, even with conflicting grant rows; an unbound client loses
+  submit and checkpoint; a stray `tasks.read` yields no task-family events.
+* **KLP-AC-020 / KLP-AC-040.** A discovery or operator-review client is refused
+  `knowledge.assertions.create` at the remote boundary although a create grant
+  row exists; raw `grant` refuses a bound client anything outside its profile
+  (exit non-zero, no row); `knowledge-profile-apply` installs exactly the bound
+  profile and never `review.decide` or create; the ChatLLM profile tooling
+  refuses a bound client and writes no row.
+* **KLP-AC-146 (whole).** Raw `grant` refuses submit and checkpoint, no row.
+
+The remote boundary's refusal of an ungranted capability is `unsupported`
+(`compose_remote_arguments`), the vocabulary WP-03's create test already uses.
 """
 
 from __future__ import annotations
@@ -24,19 +44,33 @@ from uuid import UUID
 import pytest
 from apps.cli import remote_mcp
 from apps.cli.remote_mcp import _run_profile_command, main
+from apps.gateway import remote_access_context
 from sqlalchemy import Engine, func, select, update
 
+from my_pa.adapters.mcp.remote import RemoteAccessContext
 from my_pa.adapters.remote_request import compose_remote_arguments
 from my_pa.application.errors import UnsupportedError
-from my_pa.domain.identity.operation import Capability, permitted_purposes
+from my_pa.application.record_events import visible_families
+from my_pa.bootstrap.knowledge_discovery_profiles import (
+    DISCOVERY_PROFILE,
+    DISCOVERY_PROFILES,
+    KNOWLEDGE_CLIENT_PROFILES,
+    OPERATOR_REVIEW_PROFILE,
+    allowlist_fingerprint,
+    knowledge_allowlists,
+)
+from my_pa.bootstrap.settings import Settings, load_settings
+from my_pa.domain.identity.operation import Capability, is_write_capability, permitted_purposes
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.record_events import RecordEventFamily
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.remote_identity import (
     RemoteIdentityRepository,
     remote_capability_grants,
     remote_security_controls,
 )
+from tests.conftest import FakeProviders, World, build_service
 
 pytestmark = pytest.mark.database
 
@@ -239,6 +273,9 @@ def test_profile_apply_installs_the_create_grant_with_its_purpose(
         relationship_intelligence_writes_enabled=True,
         relationship_memory_enabled=True,
         knowledge_assertions_enabled=True,
+        knowledge_discovery_oauth_client_id_set=frozenset,
+        knowledge_operator_review_oauth_client_id_set=frozenset,
+        chatllm_gateway_oauth_client_id_set=frozenset,
     )
     args = argparse.Namespace(
         command="profile-apply",
@@ -266,3 +303,350 @@ def test_profile_apply_installs_the_create_grant_with_its_purpose(
         ).one()
     assert row.purpose == Purpose.KNOWLEDGE_ASSERTION_AUTHORING.value
     assert row.is_write is True
+
+
+# ---- KLP-WP-04 ----------------------------------------------------------------------
+
+DISCOVERY_CLIENT = "klp04-discovery"
+REVIEW_CLIENT = "klp04-operator-review"
+SUBMIT = Capability.KNOWLEDGE_ASSERTIONS_SUBMIT
+CHECKPOINT = Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT
+_ENVIRONMENT = {
+    "MY_PA_KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS": DISCOVERY_CLIENT,
+    "MY_PA_KNOWLEDGE_OPERATOR_REVIEW_OAUTH_CLIENT_IDS": REVIEW_CLIENT,
+    "MY_PA_KNOWLEDGE_CHECKPOINT_SIGNING_KEY": "s" * 32,
+}
+#: A deliberately over-granted client: every name a bound profile could hold and
+#: every conflicting name the overlay must strip.
+_CONFLICTING = (
+    (SUBMIT, Purpose.KNOWLEDGE_ASSERTION_OBSERVATION, True),
+    (CHECKPOINT, Purpose.KNOWLEDGE_ASSERTION_OBSERVATION, True),
+    (Capability.KNOWLEDGE_ASSERTIONS_READ, Purpose.KNOWLEDGE_ASSERTION_READ, False),
+    (Capability.KNOWLEDGE_ASSERTIONS_LIST, Purpose.KNOWLEDGE_ASSERTION_READ, False),
+    (CREATE, Purpose.KNOWLEDGE_ASSERTION_AUTHORING, True),
+    (Capability.RECORD_EVENTS_LIST, Purpose.RECORD_EVENT_READ, False),
+    (Capability.REVIEW_LIST, Purpose.CAPTURE_REVIEW, False),
+    (Capability.REVIEW_DECIDE, Purpose.REVIEW_DISPOSITION, True),
+    (Capability.TASKS_READ, Purpose.TASK_READ, False),
+)
+
+
+def _settings(database_url: str) -> Settings:
+    return load_settings({"MY_PA_DATABASE_URL": database_url, **_ENVIRONMENT})
+
+
+def _granted_client(engine: Engine, oauth_client_id: str) -> UUID:
+    with engine.begin() as connection:
+        repository = RemoteIdentityRepository(connection)
+        client = repository.register_client(
+            oauth_client_id=oauth_client_id,
+            client_name="synthetic Knowledge client",
+            redirect_uris='["https://client.example/callback"]',
+            registered_scopes=SCOPE,
+            now=WHEN,
+            writes_enabled=True,
+        )
+        for capability, purpose, is_write in _CONFLICTING:
+            repository.grant(
+                remote_client_id=client,
+                external_scope=SCOPE,
+                capability=capability,
+                now=WHEN,
+                is_write=is_write,
+                resource=RESOURCE,
+                purpose=purpose,
+            )
+    return client
+
+
+def _context(engine: Engine, database_url: str, oauth_client_id: str) -> RemoteAccessContext:
+    resolution = _resolve(engine, oauth_client_id, global_writes=True)
+    authenticated = SimpleNamespace(
+        principal=_PRINCIPAL,
+        client_id=oauth_client_id,
+        capabilities=resolution.capabilities,  # type: ignore[attr-defined]
+        capability_purposes=resolution.capability_purposes,  # type: ignore[attr-defined]
+        write_allowed=resolution.write_allowed,  # type: ignore[attr-defined]
+    )
+    service = build_service(World(), FakeProviders({}), knowledge_assertions_enabled=True)
+    return remote_access_context(_settings(database_url), service, authenticated)  # type: ignore[arg-type]
+
+
+_PRINCIPAL = Principal(
+    principal_id="prn_klp04remotegrant1", kind=PrincipalKind.OPERATOR, authenticated=True
+)
+
+
+@pytest.mark.parametrize(
+    ("global_writes", "client_writes", "kept"),
+    [(False, True, False), (True, False, False), (True, True, True)],
+    ids=["global-off", "client-off", "both-on"],
+)
+def test_the_discovery_write_grants_are_dropped_unless_writes_are_on(
+    engine: Engine, global_writes: bool, client_writes: bool, kept: bool
+) -> None:
+    oauth = f"klp04-writes-{global_writes}-{client_writes}"
+    with engine.begin() as connection:
+        repository = RemoteIdentityRepository(connection)
+        client = repository.register_client(
+            oauth_client_id=oauth,
+            client_name="synthetic discovery client",
+            redirect_uris='["https://client.example/callback"]',
+            registered_scopes=SCOPE,
+            now=WHEN,
+            writes_enabled=client_writes,
+        )
+        for capability in (SUBMIT, CHECKPOINT):
+            repository.grant(
+                remote_client_id=client,
+                external_scope=SCOPE,
+                capability=capability,
+                now=WHEN,
+                is_write=True,
+                resource=RESOURCE,
+                purpose=Purpose.KNOWLEDGE_ASSERTION_OBSERVATION,
+            )
+    resolution = _resolve(engine, oauth, global_writes=global_writes)
+    for capability in (SUBMIT, CHECKPOINT):
+        assert (capability in resolution.capabilities) is kept  # type: ignore[attr-defined]
+        pair = (capability, Purpose.KNOWLEDGE_ASSERTION_OBSERVATION)
+        assert (pair in resolution.capability_purposes) is kept  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    ("client", "expected"),
+    [
+        (DISCOVERY_CLIENT, DISCOVERY_PROFILES[DISCOVERY_PROFILE]),
+        (REVIEW_CLIENT, KNOWLEDGE_CLIENT_PROFILES[OPERATOR_REVIEW_PROFILE]),
+        ("klp04-unbound", frozenset(c for c, _, _ in _CONFLICTING) - {SUBMIT, CHECKPOINT}),
+    ],
+    ids=["discovery", "operator-review", "unbound"],
+)
+def test_gateway_resolution_overlays_capabilities_and_purposes(
+    engine: Engine, disposable_database: str, client: str, expected: frozenset[Capability]
+) -> None:
+    _granted_client(engine, client)
+    context = _context(engine, disposable_database, client)
+    assert context.allowed_capabilities == {capability.value for capability in expected}
+    assert context.capability_purposes is not None
+    assert {capability for capability, _ in context.capability_purposes} == expected
+
+
+def test_a_stray_tasks_grant_yields_no_task_events_for_a_discovery_client(
+    engine: Engine, disposable_database: str
+) -> None:
+    _granted_client(engine, DISCOVERY_CLIENT)
+    context = _context(engine, disposable_database, DISCOVERY_CLIENT)
+    families = visible_families(frozenset(Capability), context.capability_purposes)
+    assert RecordEventFamily.TASK not in families
+    assert RecordEventFamily.KNOWLEDGE_ASSERTION in families
+
+
+@pytest.mark.parametrize("client", [DISCOVERY_CLIENT, REVIEW_CLIENT])
+def test_a_bound_client_is_denied_create_although_a_grant_row_exists(
+    engine: Engine, disposable_database: str, client: str
+) -> None:
+    _granted_client(engine, client)
+    resolution = _resolve(engine, client, global_writes=True)
+    assert CREATE in resolution.capabilities  # type: ignore[attr-defined]
+    context = _context(engine, disposable_database, client)
+    assert CREATE.value not in (context.allowed_capabilities or frozenset())
+    with pytest.raises(UnsupportedError):
+        compose_remote_arguments(
+            capability_name=CREATE.value,
+            arguments={"payload": {}},
+            principal=_PRINCIPAL,
+            grants=context.capability_purposes,
+        )
+
+
+def test_a_discovery_client_never_receives_review_decide(
+    engine: Engine, disposable_database: str
+) -> None:
+    _granted_client(engine, DISCOVERY_CLIENT)
+    context = _context(engine, disposable_database, DISCOVERY_CLIENT)
+    assert Capability.REVIEW_DECIDE.value not in (context.allowed_capabilities or frozenset())
+    with pytest.raises(UnsupportedError):
+        compose_remote_arguments(
+            capability_name=Capability.REVIEW_DECIDE.value,
+            arguments={"payload": {}},
+            principal=_PRINCIPAL,
+            grants=context.capability_purposes,
+        )
+
+
+def _environment(monkeypatch: pytest.MonkeyPatch, database_url: str) -> None:
+    monkeypatch.setenv("MY_PA_DATABASE_URL", database_url)
+    for name, value in _ENVIRONMENT.items():
+        monkeypatch.setenv(name, value)
+
+
+def _raw_grant(oauth: str, capability: Capability, purpose: Purpose, *, write: bool) -> list[str]:
+    argv = [
+        "grant",
+        "--oauth-client-id",
+        oauth,
+        "--scope",
+        SCOPE,
+        "--capability",
+        capability.value,
+        "--purpose",
+        purpose.value,
+        "--resource",
+        RESOURCE,
+    ]
+    return [*argv, "--write"] if write else argv
+
+
+@pytest.mark.parametrize("capability", [SUBMIT, CHECKPOINT], ids=str)
+def test_raw_grant_refuses_the_discovery_writes_and_writes_no_row(
+    engine: Engine,
+    disposable_database: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capability: Capability,
+) -> None:
+    _client(engine, DISCOVERY_CLIENT, client_writes=True, create=False)
+    before = _grant_rows(engine)
+    _environment(monkeypatch, disposable_database)
+    with pytest.raises(SystemExit) as raised:
+        main(
+            _raw_grant(
+                DISCOVERY_CLIENT, capability, Purpose.KNOWLEDGE_ASSERTION_OBSERVATION, write=True
+            )
+        )
+    assert raised.value.code != 0
+    assert _grant_rows(engine) == before
+
+
+@pytest.mark.parametrize(
+    ("oauth", "capability", "purpose"),
+    [
+        (DISCOVERY_CLIENT, Capability.TASKS_READ, Purpose.TASK_READ),
+        (DISCOVERY_CLIENT, Capability.REVIEW_LIST, Purpose.CAPTURE_REVIEW),
+        (REVIEW_CLIENT, Capability.RECORD_EVENTS_LIST, Purpose.RECORD_EVENT_READ),
+    ],
+)
+def test_raw_grant_refuses_a_bound_client_anything_outside_its_profile(
+    engine: Engine,
+    disposable_database: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    oauth: str,
+    capability: Capability,
+    purpose: Purpose,
+) -> None:
+    _client(engine, oauth, client_writes=True, create=False)
+    before = _grant_rows(engine)
+    _environment(monkeypatch, disposable_database)
+    with pytest.raises(SystemExit) as raised:
+        main(_raw_grant(oauth, capability, purpose, write=False))
+    assert raised.value.code != 0
+    err = capsys.readouterr().err
+    expected = allowlist_fingerprint(knowledge_allowlists(_settings(disposable_database)))
+    assert f"allowlist_fingerprint {expected}" in err
+    assert _grant_rows(engine) == before
+
+
+def test_raw_grant_still_installs_an_in_profile_read_for_a_bound_client(
+    engine: Engine, disposable_database: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The control: the binding guard reaches the store for an in-profile grant."""
+    _client(engine, DISCOVERY_CLIENT, client_writes=True, create=False)
+    before = _grant_rows(engine)
+    _environment(monkeypatch, disposable_database)
+    assert main(
+        _raw_grant(
+            DISCOVERY_CLIENT,
+            Capability.RECORD_EVENTS_LIST,
+            Purpose.RECORD_EVENT_READ,
+            write=False,
+        )
+    ) in (0, None)
+    assert _grant_rows(engine) == before + 1
+
+
+def _client_rows(engine: Engine, client: UUID) -> set[tuple[str, str | None, bool]]:
+    with engine.connect() as connection:
+        rows = connection.execute(
+            select(remote_capability_grants).where(
+                remote_capability_grants.c.remote_client_id == client
+            )
+        ).all()
+    return {(row.capability, row.purpose, bool(row.is_write)) for row in rows}
+
+
+def _bare_client(engine: Engine, oauth: str) -> UUID:
+    with engine.begin() as connection:
+        return RemoteIdentityRepository(connection).register_client(
+            oauth_client_id=oauth,
+            client_name="synthetic Knowledge client",
+            redirect_uris='["https://client.example/callback"]',
+            registered_scopes=SCOPE,
+            now=WHEN,
+            writes_enabled=True,
+        )
+
+
+@pytest.mark.parametrize(
+    ("oauth", "profile"),
+    [(DISCOVERY_CLIENT, DISCOVERY_PROFILE), (REVIEW_CLIENT, OPERATOR_REVIEW_PROFILE)],
+)
+def test_knowledge_profile_apply_installs_exactly_the_bound_profile(
+    engine: Engine,
+    disposable_database: str,
+    monkeypatch: pytest.MonkeyPatch,
+    oauth: str,
+    profile: str,
+) -> None:
+    client = _bare_client(engine, oauth)
+    _environment(monkeypatch, disposable_database)
+    argv = [
+        "knowledge-profile-apply",
+        "--oauth-client-id",
+        oauth,
+        "--scope",
+        SCOPE,
+        "--resource",
+        RESOURCE,
+        "--profile",
+        profile,
+        "--apply",
+    ]
+    assert main(argv) == 0
+    installed = _client_rows(engine, client)
+    assert installed == {
+        (capability.value, purpose.value, is_write_capability(capability))
+        for capability in KNOWLEDGE_CLIENT_PROFILES[profile]
+        for purpose in permitted_purposes(capability)
+    }
+    if profile == DISCOVERY_PROFILE:
+        names = {capability for capability, _, _ in installed}
+        assert CREATE.value not in names
+        assert Capability.REVIEW_DECIDE.value not in names
+    assert main(argv) == 0
+    assert _client_rows(engine, client) == installed, "apply converges"
+
+
+@pytest.mark.parametrize("oauth", [DISCOVERY_CLIENT, REVIEW_CLIENT])
+def test_the_chatllm_profile_apply_refuses_a_bound_client_and_writes_no_row(
+    engine: Engine, disposable_database: str, monkeypatch: pytest.MonkeyPatch, oauth: str
+) -> None:
+    client = _bare_client(engine, oauth)
+    _environment(monkeypatch, disposable_database)
+    with pytest.raises(SystemExit) as raised:
+        main(
+            [
+                "profile-apply",
+                "--oauth-client-id",
+                oauth,
+                "--scope",
+                SCOPE,
+                "--resource",
+                RESOURCE,
+                "--profile-version",
+                remote_mcp.CHATLLM_DATA_PROFILE_VERSION,
+                "--apply",
+            ]
+        )
+    assert raised.value.code != 0
+    assert _client_rows(engine, client) == set()

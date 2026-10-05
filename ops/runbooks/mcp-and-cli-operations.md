@@ -76,9 +76,9 @@ All three transports call one function — `adapters.normalization.normalize` �
 and none of them can build a request value of its own. A request that HTTP
 refuses, MCP and the CLI refuse, with the same code, the same message, the same
 `safe_details`, and the same audit event. That is `SPEC-AC-001`, and
-The public vocabulary declares one hundred and eighty-seven capabilities.
+The public vocabulary declares one hundred and eighty-nine capabilities.
 `tests/contract/test_transport_parity.py` distinguishes that vocabulary from
-the one hundred and eighty-seven command-backed names and holds positive request
+the one hundred and eighty-nine command-backed names and holds positive request
 and response parity over the latter set. Its
 separate unwired contract is vacuous now that no declared name is left without one,
 without an MCP tool or command schema, while the generic HTTP/CLI name path
@@ -187,12 +187,12 @@ one declared capability, `tools`, and nothing else.
 ## The tool list
 
 `tools/list` returns the tools **this process can serve**, and that is not the
-same as the tools this build implements. The build declares **187** capability
-names; 187 have application commands/handlers and no declared name is left without one.
+same as the tools this build implements. The build declares **189** capability
+names; 189 have application commands/handlers and no declared name is left without one.
 The measured application composition with GoodNotes pull enabled has
-**111 application-available capabilities**: 187 implemented handlers less the six
-`documents.`, fifty-five `entities.`, nine `relationship_memory.`, and six
-`knowledge.assertions.` handlers
+**111 application-available capabilities**: 189 implemented handlers less the six
+`documents.`, fifty-five `entities.`, nine `relationship_memory.`, and the seven
+`knowledge.assertions.` and one `knowledge.discovery.checkpoint` handlers
 whose composition gates remain off. A local stdio MCP session has no authenticated
 client identity, so it additionally withholds the three client-bound GoodNotes
 pull operations and publishes **108 tools**. An authenticated MCP client against
@@ -213,9 +213,9 @@ gates behind `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` on exactly the same terms
 `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` beside it, so a process with
 the plane switch alone still withholds its write half — and the nine
 `relationship_memory.` names, which need the plane variable *and*
-`MY_PA_RELATIONSHIP_MEMORY_ENABLED`; and the six `knowledge.assertions.` names, which need
+`MY_PA_RELATIONSHIP_MEMORY_ENABLED`; and the seven `knowledge.assertions.` names and `knowledge.discovery.checkpoint`, which need
 `MY_PA_KNOWLEDGE_ASSERTIONS_ENABLED` and the plane variable; a fully composed authenticated child publishes
-all 187 implemented tools, every declared name now having a handler. An operator who expects `documents.create`
+all 189 implemented tools, every declared name now having a handler. An operator who expects `documents.create`
 on the list and does not find it should look at that variable first — it is the
 only thing that decides it. (Pointing the plane at real storage is `EXT-10` and
 remains operator-gated; `docs/operations/mcv-limitations.md` section 13 states
@@ -270,7 +270,7 @@ that names it again is refused.
 ## Calling a tool
 
 **Current-state correction (2026-08-28):** the tool list is derived from all
-**187** implemented capability commands from the **187** declared names, and the schema has
+**189** implemented capability commands from the **189** declared names, and the schema has
 **one hundred and twelve** revisions at head `6734f039f7a6` (`6734f039f7a6` is additive on `0641c354ca85` for KLP-WP-02 Knowledge Assertion layer; `0641c354ca85` is additive on `c8e4a1b70d35` for CRL-WP-03 Capture lifecycle; `c8e4a1b70d35` is additive on `1d9b248e7f83` for RE-DBH-01 Record Event TRUNCATE refusal; `1d9b248e7f83` is additive on `7d9a450dfd07` for WP-RE-01 Record Events; `7d9a450dfd07` is additive on `6f6ead27d122` for WP-MTG-04 Meeting records; `6f6ead27d122` is additive on `e6a4c2f91b73` for CCA-005 WP-TUX-01 legacy direct-Principal origin reconciliation; `e6a4c2f91b73` is additive on `c4f1a8e52d90` for R01-WP03 integrity; `c4f1a8e52d90` is additive on `b3e9d7a41c25` for WP-MCP-PROJ-03 continuity.projects.update/close and project_history; `b3e9d7a41c25` is additive on `9f2c8a1d4e70` for WP-MCP-PROJ-02 continuity.projects.read and the Project list keyset index; `9f2c8a1d4e70` is additive on `de5ec1c65857` for WP-MCP-PROJ-01 Project.version and the Continuity Project↔Entity bridge; `de5ec1c65857` is additive on `c1a8e4d70b29` for WP-TUX-01 task origin/closure/comments; `c1a8e4d70b29` is additive on `b8e4d6f20a11` for append-only `knowledge.capture_labels`; `b8e4d6f20a11` is additive on `f7a2c9d51e64` for the bounded Constraint synchronization backend; `f7a2c9d51e64` is additive on `4e9a1c7b2d60` and widens the two frozen `audit_events` closed sets to admit the twelve Constraint Management authoring capabilities together with the single `constraint_authoring` purpose, and no Constraint synchronisation vocabulary (PC-CM-IMP-WP07); `4e9a1c7b2d60` is additive on `c5b71e0a8d43` and normalizes account identity plus one-time digest-backed auth grants targeting the fixed local operator; `c5b71e0a8d43` is additive on `a1c9e4b72f80` and admits the six Constraint Management read capabilities `constraints.read`, `constraints.list`, `constraints.search`, `constraints.history`, `constraints.overview`, and `constraint_categories.list` together with the single `constraint_read` purpose, and no Constraint authoring or synchronisation vocabulary (PC-CM-IMP-WP04); `a1c9e4b72f80` is additive on `2774329487be` and admits `goodnotes.notebooks.list`, `goodnotes.pages.list`, `goodnotes.runs.list`, `goodnotes.read`, `goodnotes.search`, and `goodnotes.correct` together with `goodnotes_browse`, `goodnotes_read`, and `goodnotes_correction`; `2774329487be` is additive on `e8f2a6c9d104` and adds the fourteen-table Constraint-management plane (PC-CM-IMP-WP02); `e8f2a6c9d104` is additive on `d4e8b1c7a902` and adds immutable GoodNotes client lease policy and client-scoped attempt/completion uniqueness; `d4e8b1c7a902` is additive on `a4d8e31b2c90` and adds the Principal-partitioned canvas workspace overlay; `6a2f9d1c4b80` is additive on `c3f8a1d07e94` and adds five Principal-partitioned, content-free GoodNotes pull and semantic-review ledger tables while admitting `goodnotes.pull`, `goodnotes.complete`, and `goodnotes.status` to the frozen audit vocabulary; `c3f8a1d07e94` admits `entities.graph` on `b8e4d1a6c073`; corrected 2026-09-03 from
 eighty-eight at `16f05c46b8c3`, on which `b8e4d1a6c073` is additive and
 backfills one `display`-typed `entity_names` row per active `entities` row --
@@ -447,7 +447,7 @@ composition and in every MCP publication that composition produces.
   family, and each Meeting capability appears in it only for an authenticated
   client whose grants, purpose, capability version and write gates admit it.
 - **Desired ChatLLM profile.** The repository's ChatLLM data profile is
-  `chatllm-data-v6`. Since `chatllm-data-v3` it has classified the six
+  `chatllm-data-v7`. Since `chatllm-data-v3` it has classified the six
   `meetings.` names as `DATA_REQUIRED`: reads under `meeting_read`, writes under
   `meeting_authoring`; `chatllm-data-v4` adds `record_events.list` under
   `record_event_read`; `chatllm-data-v5` adds `capture.archive` and
@@ -455,7 +455,14 @@ composition and in every MCP publication that composition produces.
   the five `knowledge.assertions.` reads under `knowledge_assertion_read` and
   `knowledge.assertions.create` under `knowledge_assertion_authoring` as
   `DATA_CONDITIONAL` on `MY_PA_KNOWLEDGE_ASSERTIONS_ENABLED`, so a build with the
-  plane off neither composes nor demands those grants.
+  plane off neither composes nor demands those grants; `chatllm-data-v7`
+  (KLP-WP-04) classifies `knowledge.assertions.submit` and
+  `knowledge.discovery.checkpoint` as `CONTROL_PLANE_EXCLUDED`: they are never
+  part of the ordinary profile, the profile tooling refuses a client bound in
+  `MY_PA_KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS` or
+  `MY_PA_KNOWLEDGE_OPERATOR_REVIEW_OAUTH_CLIENT_IDS`, and only
+  `knowledge-profile-plan`/`knowledge-profile-apply` install a bound client's
+  exact profile.
   That is repository desire only. Whether any deployed client holds those
   grants is a runtime fact this document does not state.
 
@@ -539,10 +546,10 @@ python -m alembic heads
 python apps/cli/health.py
 python apps/cli/remote_mcp.py profile-diff \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v6
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v7
 python apps/cli/remote_mcp.py profile-plan \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v6
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v7
 ```
 
 `apps/cli/health.py` answers `not_at_head` for a database below `c8e4a1b70d35`,

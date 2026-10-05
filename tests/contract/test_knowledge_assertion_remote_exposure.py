@@ -1,4 +1,4 @@
-"""KLP-WP-03: how the six Knowledge names meet the remote transport (FAST).
+"""KLP-WP-03/04: how the Knowledge names meet the remote transport (FAST).
 
 * **KLP-AC-016 (WP-03 slice)** -- `knowledge_assertion_authoring` is a
   remote-write purpose; `knowledge_assertion_read` is not.
@@ -11,6 +11,18 @@
 * **KLP-AC-018 (WP-03 slice)** -- the remote boundary refuses every server-owned
   Knowledge field, at the top level and inside `payload`, before choosing a
   Purpose; the remote create key is the server-stamped payload hash.
+
+KLP-WP-04 slice A, the discovery pair:
+
+* **KLP-AC-016 (whole)** -- `knowledge_assertion_observation` is a remote-write
+  purpose too.
+* **KLP-AC-017 (FAST half)** -- with writes disabled submit and checkpoint are
+  absent from the remote tool list and refused through `my_pa.write`; with writes
+  enabled but no grant, each is denied at the remote boundary. (Grant dropping at
+  resolution is `tests/database/test_knowledge_remote_grants.py`.)
+* **KLP-AC-103 (whole)** -- both are writes and *not* additive (destructive, as
+  the matrix says); for all eight `is_write_capability == is_remote_write`, and
+  the MCP annotations and the compact describe agree.
 """
 
 from __future__ import annotations
@@ -35,7 +47,7 @@ from my_pa.adapters.remote_request import (
     KNOWLEDGE_SERVER_OWNED_FIELDS,
     compose_remote_arguments,
 )
-from my_pa.application.errors import InvalidRequestError
+from my_pa.application.errors import InvalidRequestError, UnsupportedError
 from my_pa.domain.identity.operation import (
     Capability,
     is_destructive_capability,
@@ -191,4 +203,83 @@ def test_the_remote_create_key_is_the_server_stamped_payload_hash() -> None:
             arguments={"payload": {**_PAYLOAD, "idempotency_key": "caller-chosen"}},
             principal=PRINCIPAL,
             grants=grants,
+        )
+
+
+# ---- KLP-WP-04: the discovery pair --------------------------------------------------
+
+DISCOVERY: Final = frozenset(
+    {Capability.KNOWLEDGE_ASSERTIONS_SUBMIT, Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT}
+)
+ALL_EIGHT: Final = KNOWLEDGE | DISCOVERY
+
+
+def test_observation_is_a_remote_write_purpose() -> None:
+    assert Purpose.KNOWLEDGE_ASSERTION_OBSERVATION in _WRITE_PURPOSES
+
+
+@pytest.mark.parametrize("capability", sorted(ALL_EIGHT), ids=lambda c: c.value)
+def test_for_all_eight_the_domain_and_remote_write_classifications_agree(
+    capability: Capability,
+) -> None:
+    assert is_write_capability(capability) == is_remote_write(capability)
+
+
+@pytest.mark.parametrize("capability", sorted(DISCOVERY), ids=lambda c: c.value)
+def test_the_discovery_pair_is_a_destructive_write_everywhere(capability: Capability) -> None:
+    assert is_write_capability(capability)
+    assert is_destructive_capability(capability)
+    tool = next(tool for tool in TOOLS if tool.name == capability.value)
+    assert tool.annotations is not None
+    assert tool.annotations.read_only_hint is False
+    assert tool.annotations.destructive_hint is True
+    assert facade_kind(capability) == "write"
+    assert feature_label(capability.value) == "knowledge"
+    described = json.loads(
+        render_describe(
+            {"capability": capability.value},
+            allowed_canonical=frozenset(c.value for c in DISCOVERY),
+        )
+    )
+    assert described["item"]["kind"] == "write"
+    assert described["item"]["feature"] == "knowledge"
+    assert described["item"]["destructive"] is True
+    assert described["annotations"]["read_only_hint"] is False
+    payload = described["input_schema"]["properties"]["payload"]["properties"]
+    assert "idempotency_key" not in payload
+    assert KNOWLEDGE_SERVER_OWNED_FIELDS.isdisjoint(payload)
+
+
+def test_writes_disabled_withholds_the_discovery_pair(scene: Scene) -> None:
+    service = build_service(scene.world, scene.providers, knowledge_assertions_enabled=True)
+    assert not {c.value for c in DISCOVERY} & remote_tool_names(service, writes_enabled=False)
+    assert {c.value for c in DISCOVERY} <= remote_tool_names(service, writes_enabled=True)
+    off = build_service(scene.world, scene.providers)
+    assert not {c.value for c in DISCOVERY} & remote_tool_names(off, writes_enabled=True)
+
+
+@pytest.mark.parametrize("capability", sorted(DISCOVERY), ids=lambda c: c.value)
+def test_my_pa_write_refuses_the_discovery_pair_when_not_eligible(capability: Capability) -> None:
+    wrapper = {"capability": capability.value, "arguments": {"payload": {}}}
+    reads_only = frozenset(c.value for c in READS)
+    with pytest.raises(Exception) as refused:
+        prepare_compact_call(WRITE_TOOL, wrapper, allowed_canonical=reads_only)
+    assert type(refused.value).__name__ == "UnsupportedError"
+    eligible = reads_only | {capability.value}
+    assert prepare_compact_call(WRITE_TOOL, wrapper, allowed_canonical=eligible)[0] == (
+        capability.value
+    )
+    with pytest.raises(InvalidRequestError):
+        prepare_compact_call(READ_TOOL, wrapper, allowed_canonical=eligible)
+
+
+@pytest.mark.parametrize("capability", sorted(DISCOVERY), ids=lambda c: c.value)
+def test_writes_enabled_without_a_grant_is_denied(capability: Capability) -> None:
+    other = frozenset({(CREATE, Purpose.KNOWLEDGE_ASSERTION_AUTHORING)})
+    with pytest.raises(UnsupportedError):
+        compose_remote_arguments(
+            capability_name=capability.value,
+            arguments={"payload": {}},
+            principal=PRINCIPAL,
+            grants=other,
         )

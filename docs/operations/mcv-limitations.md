@@ -658,8 +658,10 @@ does not. It remains an unverified caller string.
 
 **Nothing here is commissioned.** The migration `1d9b248e7f83` and the TRUNCATE
 refusal `c8e4a1b70d35` are proven on disposable databases only. The ChatLLM
-data profile `chatllm-data-v6`, which adds the six `knowledge.assertions.` names as
-`DATA_CONDITIONAL` (KLP-WP-03) on top of `chatllm-data-v5`'s `capture.archive` and
+data profile `chatllm-data-v7`, which classifies `knowledge.assertions.submit` and
+`knowledge.discovery.checkpoint` `CONTROL_PLANE_EXCLUDED` (KLP-WP-04) on top of
+`chatllm-data-v6`'s first six Knowledge Assertion names as
+`DATA_CONDITIONAL` (KLP-WP-03) and `chatllm-data-v5`'s `capture.archive` and
 `capture.restore` (`DATA_REQUIRED`) and `chatllm-data-v4`'s
 `record_events.list`, is repository desire. Whether any persistent database carries
 the feed tables, the runtime role boundary, or a client feed grant are runtime

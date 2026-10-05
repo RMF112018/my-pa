@@ -72,6 +72,7 @@ from my_pa.application.commands import (
     BindEntityIdentifier,
     BulkConfirmTasks,
     BulkPreviewTasks,
+    CheckpointKnowledgeDiscovery,
     CloseCommitment,
     CloseConstraint,
     CloseConstraintWithFollowUp,
@@ -233,6 +234,7 @@ from my_pa.application.commands import (
     SplitEntity,
     StartGsqsB0,
     SubmitGoodNotesProposal,
+    SubmitKnowledgeAssertion,
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
     SupersedeEntityName,
@@ -2436,6 +2438,37 @@ def _create_knowledge_assertion(payload: Mapping[str, Any]) -> Command:
     return CreateKnowledgeAssertion(**converted)
 
 
+def _submit_knowledge_assertion(payload: Mapping[str, Any]) -> Command:
+    """`knowledge.assertions.submit`: the create conversions plus the trigger tuple.
+
+    Shape conversion only. A server-owned field reaches the frozen dataclass as
+    an unexpected keyword and is refused there (KLP-AC-018).
+    """
+    converted = dict(payload)
+    for name, detail in (
+        ("effective_from", SafeDetail.EFFECTIVE_FROM),
+        ("effective_to", SafeDetail.EFFECTIVE_TO),
+    ):
+        supplied = converted.get(name)
+        if supplied is None:
+            continue
+        if not isinstance(supplied, str):
+            raise InvalidRequestError(detail)
+        parsed: datetime | None
+        try:
+            parsed = datetime.fromisoformat(supplied)
+        except ValueError:
+            parsed = None
+        if parsed is None:
+            raise InvalidRequestError(detail)
+        converted[name] = parsed
+    for name in ("evidence", "trigger_event_ids"):
+        supplied = converted.get(name)
+        if isinstance(supplied, list):
+            converted[name] = tuple(supplied)
+    return SubmitKnowledgeAssertion(**converted)
+
+
 def _list_meetings(payload: Mapping[str, Any]) -> Command:
     return ListMeetings(**_meeting_shapes(payload))
 
@@ -2645,6 +2678,10 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         ),
         Capability.KNOWLEDGE_ASSERTIONS_REVEAL: lambda payload: RevealKnowledgeAssertion(**payload),
         Capability.KNOWLEDGE_ASSERTIONS_CREATE: _create_knowledge_assertion,
+        Capability.KNOWLEDGE_ASSERTIONS_SUBMIT: _submit_knowledge_assertion,
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT: lambda payload: CheckpointKnowledgeDiscovery(
+            **payload
+        ),
     }
 )
 

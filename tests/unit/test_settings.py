@@ -343,6 +343,7 @@ def test_only_explicitly_admitted_settings_may_be_credential_bearing() -> None:
         "webauthn_bff_secret",
         "session_service_secret",
         "goodnotes_pull_cursor_signing_key",
+        "knowledge_checkpoint_signing_key",
     }
     for name in Settings.model_fields:
         if name in admitted:
@@ -354,6 +355,7 @@ def test_only_explicitly_admitted_settings_may_be_credential_bearing() -> None:
     assert Settings.model_fields["webauthn_bff_secret"].repr is False
     assert Settings.model_fields["session_service_secret"].repr is False
     assert Settings.model_fields["goodnotes_pull_cursor_signing_key"].repr is False
+    assert Settings.model_fields["knowledge_checkpoint_signing_key"].repr is False
 
 
 @pytest.mark.parametrize("size", [32, 128])
@@ -813,3 +815,101 @@ def test_all_three_switches_together_are_admitted() -> None:
         }
     )
     assert settings.relationship_identity_correction_enabled is True
+
+
+# ---- KLP-WP-04: Knowledge client role allowlists and the checkpoint seal ----------
+#
+# KLP-AC-147 (whole): the discovery, operator-review and ChatLLM gateway allowlists
+# are exact, empty by default and pairwise disjoint. KLP-AC-126 / KLP-AC-155
+# (Settings halves): the checkpoint signing key is 32-128 UTF-8 bytes, never
+# rendered, and required whenever the discovery list binds a client; the seal
+# version is an integer >= 1, default 1.
+
+_DISCOVERY = f"{ENV_PREFIX}KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS"
+_OPERATOR_REVIEW = f"{ENV_PREFIX}KNOWLEDGE_OPERATOR_REVIEW_OAUTH_CLIENT_IDS"
+_CHATLLM = f"{ENV_PREFIX}MCP_CHATLLM_GATEWAY_OAUTH_CLIENT_IDS"
+_SIGNING_KEY = f"{ENV_PREFIX}KNOWLEDGE_CHECKPOINT_SIGNING_KEY"
+_SEAL_VERSION = f"{ENV_PREFIX}KNOWLEDGE_CHECKPOINT_SEAL_VERSION"
+_A_KEY = "k" * 32
+
+
+def test_knowledge_role_allowlists_are_empty_by_default_and_fail_closed() -> None:
+    settings = load_settings({DATABASE_URL: _A_URL})
+    assert settings.knowledge_discovery_oauth_client_ids == ""
+    assert settings.knowledge_operator_review_oauth_client_ids == ""
+    assert settings.knowledge_discovery_oauth_client_id_set() == frozenset()
+    assert settings.knowledge_operator_review_oauth_client_id_set() == frozenset()
+    assert settings.knowledge_checkpoint_signing_key == ""
+    assert settings.knowledge_checkpoint_seal_version == 1
+
+
+def test_knowledge_role_allowlists_are_exact_comma_lists() -> None:
+    settings = load_settings(
+        {
+            DATABASE_URL: _A_URL,
+            _DISCOVERY: "disc-a, disc-b",
+            _OPERATOR_REVIEW: "review-a",
+            _SIGNING_KEY: _A_KEY,
+        }
+    )
+    assert settings.knowledge_discovery_oauth_client_id_set() == frozenset({"disc-a", "disc-b"})
+    assert settings.knowledge_operator_review_oauth_client_id_set() == frozenset({"review-a"})
+    # Exact membership: no prefix, suffix or substring admits a client.
+    assert "disc" not in settings.knowledge_discovery_oauth_client_id_set()
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [(_DISCOVERY, _OPERATOR_REVIEW), (_DISCOVERY, _CHATLLM), (_OPERATOR_REVIEW, _CHATLLM)],
+    ids=["discovery-review", "discovery-chatllm", "review-chatllm"],
+)
+def test_overlapping_knowledge_role_allowlists_refuse_to_start(first: str, second: str) -> None:
+    values = {DATABASE_URL: _A_URL, _SIGNING_KEY: _A_KEY, first: "shared, a", second: "b shared"}
+    with pytest.raises(SettingsError, match="disjoint"):
+        load_settings(values)
+
+
+def test_disjoint_knowledge_role_allowlists_start() -> None:
+    settings = load_settings(
+        {
+            DATABASE_URL: _A_URL,
+            _SIGNING_KEY: _A_KEY,
+            _DISCOVERY: "disc",
+            _OPERATOR_REVIEW: "review",
+            _CHATLLM: "chat",
+        }
+    )
+    assert settings.chatllm_gateway_oauth_client_id_set() == frozenset({"chat"})
+
+
+@pytest.mark.parametrize("key", ["", "k" * 31, "k" * 129, "é" * 65])
+def test_a_bound_discovery_client_requires_a_bounded_signing_key(key: str) -> None:
+    values = {DATABASE_URL: _A_URL, _DISCOVERY: "disc"}
+    if key:
+        values[_SIGNING_KEY] = key
+    with pytest.raises(SettingsError, match="KNOWLEDGE_CHECKPOINT_SIGNING_KEY"):
+        load_settings(values)
+
+
+@pytest.mark.parametrize("key", ["k" * 32, "k" * 128, "é" * 16, "é" * 64])
+def test_a_bounded_utf8_signing_key_is_accepted_and_never_rendered(key: str) -> None:
+    settings = load_settings({DATABASE_URL: _A_URL, _DISCOVERY: "disc", _SIGNING_KEY: key})
+    assert settings.knowledge_checkpoint_signing_key == key
+    assert key not in repr(settings)
+    assert key not in str(settings)
+
+
+def test_without_a_discovery_client_no_signing_key_is_required() -> None:
+    settings = load_settings({DATABASE_URL: _A_URL, _OPERATOR_REVIEW: "review"})
+    assert settings.knowledge_checkpoint_signing_key == ""
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "one"])
+def test_the_seal_version_is_a_positive_integer(value: str) -> None:
+    with pytest.raises(SettingsError):
+        load_settings({DATABASE_URL: _A_URL, _SEAL_VERSION: value})
+
+
+def test_the_seal_version_can_be_incremented() -> None:
+    settings = load_settings({DATABASE_URL: _A_URL, _SEAL_VERSION: "2"})
+    assert settings.knowledge_checkpoint_seal_version == 2

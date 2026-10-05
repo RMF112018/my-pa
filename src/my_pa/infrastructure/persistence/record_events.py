@@ -79,16 +79,19 @@ from sqlalchemy import (
     true,
 )
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.exc import InterfaceError, OperationalError, SQLAlchemyError
+from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError, SQLAlchemyError
 
 from my_pa.contracts.ports import (
     EvidenceUnavailableError,
+    PortError,
     RecordEventFeedItem,
     RecordEventPage,
     RecordEventReader,
     RecordEventStager,
     RecordEventWriter,
     RepositoryFailureError,
+    TransactionConflictError,
+    is_transaction_conflict,
 )
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.record_events import (
@@ -252,6 +255,19 @@ def _single_principal(drafts: Sequence[RecordEventDraft]) -> str:
     return next(iter(principals))
 
 
+def _classified(error: DBAPIError, unavailable: str) -> PortError:
+    """The port error one driver failure is: conflict, unavailable or this system's fault.
+
+    The transaction-conflict SQLSTATEs (`40P01`, `40001`) are checked before the
+    `OperationalError` branch they would otherwise fall into (KLP-AC-122).
+    """
+    if is_transaction_conflict(error):
+        return TransactionConflictError("the transaction lost a race")
+    if isinstance(error, (OperationalError, InterfaceError)):
+        return EvidenceUnavailableError(unavailable)
+    return RepositoryFailureError("the request could not be completed")
+
+
 def flush_record_events(writer: RecordEventWriter, drafts: Sequence[RecordEventDraft]) -> None:
     """Sequence `drafts` in one batch and insert them in stage order, translated.
 
@@ -265,8 +281,9 @@ def flush_record_events(writer: RecordEventWriter, drafts: Sequence[RecordEventD
     try:
         first = writer.allocate(principal_id, len(drafts))
         writer.insert(first, drafts)
-    except (OperationalError, InterfaceError):
-        failure: Exception = EvidenceUnavailableError("the store could not be written")
+    except DBAPIError as error:
+        # KLP-WP-04 (R6 section 8.4): a deadlock or serialization victim first.
+        failure: Exception = _classified(error, "the store could not be written")
     except (SQLAlchemyError, IsolationLevelError):
         failure = RepositoryFailureError("the request could not be completed")
     else:
@@ -527,8 +544,9 @@ def _translated[ResultT](work: Callable[[], ResultT]) -> ResultT:
     """Run one read, translating a store failure as `flush_record_events` does."""
     try:
         return work()
-    except (OperationalError, InterfaceError):
-        failure: Exception = EvidenceUnavailableError("the store could not be read")
+    except DBAPIError as error:
+        # KLP-WP-04 (R6 section 8.4): a deadlock or serialization victim first.
+        failure: Exception = _classified(error, "the store could not be read")
     except (SQLAlchemyError, IsolationLevelError):
         failure = RepositoryFailureError("the request could not be completed")
     raise failure

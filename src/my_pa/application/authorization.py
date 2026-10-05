@@ -63,6 +63,7 @@ from my_pa.application.commands import (
     BindEntityIdentifier,
     BulkConfirmTasks,
     BulkPreviewTasks,
+    CheckpointKnowledgeDiscovery,
     CloseCommitment,
     CloseConstraint,
     CloseConstraintWithFollowUp,
@@ -222,6 +223,7 @@ from my_pa.application.commands import (
     SplitEntity,
     StartGsqsB0,
     SubmitGoodNotesProposal,
+    SubmitKnowledgeAssertion,
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
     SupersedeEntityName,
@@ -244,6 +246,7 @@ from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.identity.operation import Capability
+from my_pa.domain.identity.operator_surface import OperatorSurface
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.policy.decision import PolicyDecision, PolicyRequest, evaluate
@@ -300,11 +303,15 @@ class Authorization:
     #: handing every handler the transport separately would be a second channel
     #: for something the request context already knows.
     #:
-    #: **It authorizes nothing.** `evaluate` never sees it and no branch below
-    #: reads it; it is provenance the capture plane stores, exactly as
-    #: `request_id` is correlation the capture plane stores. A future rule that
-    #: *did* decide on it would be a policy about transports, and it would
-    #: belong in `domain.policy.decision` with the rest of them.
+    #: **`evaluate` never sees it**, and it is provenance the capture plane
+    #: stores, exactly as `request_id` is correlation the capture plane stores.
+    #: KLP-WP-04 (R6 section 3.3) makes it, with `authenticated_client_id` and
+    #: `operator_surface`, an input to exactly one rule:
+    #: `domain.policy.knowledge_review_authority.derive_knowledge_review_authority`,
+    #: which decides who a Knowledge Review decision is made by. Its `LOCAL`
+    #: default carries no authority by itself: `local_operator` also requires an
+    #: explicitly stamped `operator_surface`, so an unset transport, surface or
+    #: client can never produce operator authority.
     transport: CaptureTransport = CaptureTransport.LOCAL
     #: Server-derived remote grant set, or `None` for local/unrestricted
     #: composition (CLI, stdio MCP, HTTP loopback). Never taken from the
@@ -313,8 +320,26 @@ class Authorization:
     #: omitted entirely rather than reported as denied.
     capability_grants: frozenset[tuple[Capability, Purpose | None]] | None = None
     #: Authenticated OAuth client identity stamped by remote composition.
-    #: It is handler provenance only: `evaluate` never receives or reads it.
+    #: `evaluate` never receives or reads it. It is handler provenance, and --
+    #: with `transport` and `operator_surface` -- an input to exactly one rule,
+    #: `derive_knowledge_review_authority` (KLP-WP-04, R6 section 3.3); the
+    #: Knowledge discovery gate (R6 section 6.1) compares it with the exact
+    #: discovery allowlist.
     authenticated_client_id: str | None = field(default=None, repr=False)
+    #: The local operator surface the request arrived on (KLP-WP-04, R6 section
+    #: 3.2). Stamped only by `adapters/cli/app.py` (`cli`) and the HTTP
+    #: gateway's `invoke` route (`http_gateway`); never by an MCP adapter, the
+    #: remote capture route or `apps/cli/gsqs_b0.py`. Python-only, never
+    #: persisted, and read by exactly one rule, `derive_knowledge_review_authority`.
+    operator_surface: OperatorSurface | None = None
+
+    def __post_init__(self) -> None:
+        refuse_inconsistent_operator_surface(
+            self.operator_surface,
+            transport=self.transport,
+            authenticated_client_id=self.authenticated_client_id,
+            capability_grants=self.capability_grants,
+        )
 
     @property
     def allowed(self) -> bool:
@@ -637,6 +662,11 @@ def _requested_scope(
             | GetKnowledgeAssertionHistory()
             | RevealKnowledgeAssertion()
             | CreateKnowledgeAssertion()
+            # KLP-WP-04 (KLP-AC-104): the discovery pair names a provisioned
+            # source profile, a product-owned commissioning row of the acting
+            # Principal, and never a configured source or an enrollment.
+            | SubmitKnowledgeAssertion()
+            | CheckpointKnowledgeDiscovery()
         ):
             return frozenset()
         case CreateCapture():
@@ -701,6 +731,32 @@ def _status_scope(
     return frozenset()
 
 
+def refuse_inconsistent_operator_surface(
+    operator_surface: OperatorSurface | None,
+    *,
+    transport: CaptureTransport,
+    authenticated_client_id: str | None,
+    capability_grants: frozenset[tuple[Capability, Purpose | None]] | None,
+) -> None:
+    """Raise `ValueError` when an operator surface accompanies a remote composition.
+
+    KLP-R6V-102: a grant-ceilinged, remote-transport or client-bearing caller is
+    never a local operator, so a composition that claims both is a programming
+    error, refused before any decision is recorded.
+    """
+    if operator_surface is None:
+        return
+    if (
+        transport is CaptureTransport.REMOTE_CLIENT
+        or authenticated_client_id is not None
+        or capability_grants is not None
+    ):
+        raise ValueError(
+            "operator_surface cannot accompany a remote transport, an authenticated "
+            "client or a capability grant ceiling"
+        )
+
+
 def authorize(
     unit_of_work: UnitOfWork,
     *,
@@ -714,6 +770,7 @@ def authorize(
     transport: CaptureTransport = CaptureTransport.LOCAL,
     capability_grants: frozenset[tuple[Capability, Purpose | None]] | None = None,
     authenticated_client_id: str | None = None,
+    operator_surface: OperatorSurface | None = None,
 ) -> Authorization:
     """Decide one request, record the decision, and return what was decided.
 
@@ -736,8 +793,11 @@ def authorize(
     reached this function at all.
 
     `transport` is carried through onto the `Authorization` and is read by
-    nothing in this module. See the field's own comment: it is provenance, not
-    authority, and the policy decision is computed without it.
+    nothing in this module. See the field's own comment: the policy decision is
+    computed without it, and it reaches exactly one later rule,
+    `derive_knowledge_review_authority`. `operator_surface` is carried the same
+    way; a surface together with a remote transport, client or grant ceiling is
+    refused (`ValueError`) before anything is read or recorded.
 
     `capability_grants` is the same shape of server-derived context. `evaluate`
     never sees it. Handlers that search across planes — today `context.prepare`
@@ -745,6 +805,14 @@ def authorize(
     composition and does not restrict planes.
     """
     validate_identifier(correlation_id, IdKind.CORRELATION)
+    # Before any read or audit record: an inconsistent composition reaches no
+    # decision at all (the same rule `Authorization.__post_init__` restates).
+    refuse_inconsistent_operator_surface(
+        operator_surface,
+        transport=transport,
+        authenticated_client_id=authenticated_client_id,
+        capability_grants=capability_grants,
+    )
     enrollments = unit_of_work.enrollments.for_principal(principal.principal_id)
     requested = _requested_scope(
         unit_of_work, command, enrollments, principal_id=principal.principal_id
@@ -790,4 +858,5 @@ def authorize(
         transport=transport,
         capability_grants=capability_grants,
         authenticated_client_id=authenticated_client_id,
+        operator_surface=operator_surface,
     )

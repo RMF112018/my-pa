@@ -47,7 +47,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from hashlib import sha256
 from types import TracebackType
-from typing import Any, ClassVar, Protocol
+from typing import Any, ClassVar, Final, Protocol
 
 from my_pa.contracts.v1.disclosure import Disclosure
 from my_pa.contracts.v1.meetings import (
@@ -321,6 +321,7 @@ class BulkIdempotencyConflictError(Exception):
 
 
 __all__ = [
+    "TRANSACTION_CONFLICT_SQLSTATES",
     "Acceptance",
     "AssignmentWriteRequest",
     "AuditSink",
@@ -415,6 +416,7 @@ __all__ = [
     "TaskManagementRepository",
     "TaskManagementUnitOfWork",
     "TraceRepository",
+    "TransactionConflictError",
     "UnitOfWork",
     "UnknownScopeError",
     "WorkerHealthRepository",
@@ -423,6 +425,8 @@ __all__ = [
     "WriteRequestEvidence",
     "WriteRequestRepository",
     "WriteRequestResult",
+    "is_transaction_conflict",
+    "transaction_conflict_in_chain",
 ]
 
 
@@ -3503,6 +3507,56 @@ class RepositoryFailureError(PortError):
     Separated from unavailability because telling a caller to retry a missing
     column would be a lie with a retry budget attached.
     """
+
+
+#: KLP-WP-04 (R6 section 8.4, KLP-AC-122): the PostgreSQL SQLSTATEs that mean
+#: "this transaction lost a race and may simply be retried" -- `40P01`
+#: (deadlock_detected) and `40001` (serialization_failure).
+TRANSACTION_CONFLICT_SQLSTATES: Final[frozenset[str]] = frozenset({"40P01", "40001"})
+
+
+class TransactionConflictError(PortError):
+    """The transaction was chosen as a deadlock or serialization victim. Retryable.
+
+    Carries nothing, like every port error: no statement, parameter or driver
+    text. The application maps it to `conflict` (retry after refresh); there is
+    no internal retry loop.
+    """
+
+
+def is_transaction_conflict(error: BaseException) -> bool:
+    """Whether `error` is a driver failure carrying a transaction-conflict SQLSTATE.
+
+    Duck-typed so neither side of the boundary imports the driver: a SQLAlchemy
+    `DBAPIError` exposes the driver exception as `.orig`, and the driver exception
+    (psycopg) exposes `.sqlstate` itself.
+    """
+    for candidate in (getattr(error, "orig", None), error):
+        if getattr(candidate, "sqlstate", None) in TRANSACTION_CONFLICT_SQLSTATES:
+            return True
+    return False
+
+
+def transaction_conflict_in_chain(error: BaseException) -> bool:
+    """Whether `error` or anything on its `__cause__`/`__context__` chain is a conflict.
+
+    Covers a failure that reached the caller unwrapped -- an untranslated write
+    port or the COMMIT itself -- and one re-raised with `from None`, which keeps
+    the original in `__context__`. Cycle-safe.
+    """
+    seen: set[int] = set()
+    pending: list[BaseException] = [error]
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, TransactionConflictError) or is_transaction_conflict(current):
+            return True
+        for linked in (current.__cause__, current.__context__):
+            if linked is not None:
+                pending.append(linked)
+    return False
 
 
 class WriteRequestConflictError(PortError):

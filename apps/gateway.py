@@ -80,13 +80,19 @@ from my_pa.adapters.http import REMOTE_CAPTURE_PATH, create_http_app
 from my_pa.adapters.http.oauth import build_origin_oauth_routes
 from my_pa.adapters.mcp import RemoteAccessContext, create_remote_mcp_app, serve_stdio
 from my_pa.adapters.mcp.server import SERVER_NAME
+from my_pa.application.service import ApplicationService
 from my_pa.bootstrap.gateway import GatewayRuntime, build_gateway_runtime
+from my_pa.bootstrap.knowledge_discovery_profiles import resolve_knowledge_client_overlay
 from my_pa.bootstrap.relationship_intelligence_profiles import RELATIONSHIP_GRANT_PROFILES
 from my_pa.bootstrap.settings import Settings, load_settings
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.source.registry import issue_identifier
-from my_pa.infrastructure.security import RemoteAuthenticationError, RemoteAuthenticator
+from my_pa.infrastructure.security import (
+    RemoteAuthContext,
+    RemoteAuthenticationError,
+    RemoteAuthenticator,
+)
 from my_pa.infrastructure.security.origin_authorization import OriginOAuthServer
 
 #: The safe default address. Container binding is a validated deployment mode,
@@ -262,6 +268,43 @@ def _mcp(args: argparse.Namespace) -> int:
     return 0
 
 
+def remote_access_context(
+    settings: Settings, service: ApplicationService, authenticated: RemoteAuthContext
+) -> RemoteAccessContext:
+    """The request's remote access context from its authenticated grant state.
+
+    KLP-WP-04 (R6 section 3.4, KLP-AC-019/134): the one Knowledge deny overlay is
+    applied to the capability set AND the purpose-bearing grant set together, so
+    the tool ceiling, the grant check at invoke and purpose-driven visibility
+    (`record_events.visible_families`) all follow it.
+    """
+    from my_pa.adapters.mcp.remote import remote_tool_names
+
+    overlaid_capabilities, overlaid_purposes = resolve_knowledge_client_overlay(
+        settings,
+        authenticated.client_id,
+        authenticated.capabilities,
+        authenticated.capability_purposes,
+    )
+    capabilities = frozenset(capability.value for capability in overlaid_capabilities)
+    if not authenticated.write_allowed:
+        # The transport's canonical read-only profile performs the final
+        # deterministic intersection, so no write name is recreated here.
+        capabilities &= remote_tool_names(service, writes_enabled=False)
+    compact = settings.compact_publication_for_client(authenticated.client_id)
+    return RemoteAccessContext(
+        principal=authenticated.principal,
+        authenticated_client_id=authenticated.client_id,
+        allowed_capabilities=capabilities,
+        capability_purposes=overlaid_purposes,
+        relationship_grant_profile=_remote_relationship_grant_profile(
+            overlaid_capabilities,
+            write_allowed=authenticated.write_allowed,
+        ),
+        compact_publication=compact,
+    )
+
+
 def _mcp_remote(args: argparse.Namespace) -> int:
     """Serve authenticated Streamable HTTP MCP; fail closed if auth is incomplete."""
     settings = load_settings()
@@ -290,25 +333,7 @@ def _mcp_remote(args: argparse.Namespace) -> int:
             authenticated.principal,
             cause=issue_identifier(IdKind.OPERATION),
         )
-        capabilities = frozenset(capability.value for capability in authenticated.capabilities)
-        if not authenticated.write_allowed:
-            # The transport's canonical read-only profile performs the final
-            # deterministic intersection, so no write name is recreated here.
-            capabilities &= remote_tool_names(runtime.service, writes_enabled=False)
-        compact = settings.compact_publication_for_client(authenticated.client_id)
-        return RemoteAccessContext(
-            principal=authenticated.principal,
-            authenticated_client_id=authenticated.client_id,
-            allowed_capabilities=capabilities,
-            capability_purposes=authenticated.capability_purposes,
-            relationship_grant_profile=_remote_relationship_grant_profile(
-                authenticated.capabilities,
-                write_allowed=authenticated.write_allowed,
-            ),
-            compact_publication=compact,
-        )
-
-    from my_pa.adapters.mcp.remote import remote_tool_names
+        return remote_access_context(settings, runtime.service, authenticated)
 
     def readiness() -> bool:
         with runtime.work_engine.connect() as connection:

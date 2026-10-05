@@ -111,8 +111,10 @@ from my_pa.domain.intelligence.catalog import (
 )
 from my_pa.domain.knowledge_assertion.vocabulary import (
     KnowledgeAssertionLifecycle,
+    KnowledgeCheckpointKind,
     KnowledgeEvidenceIdentityKind,
     KnowledgeEvidenceRole,
+    KnowledgeOwnerRefKind,
     KnowledgeSubjectKind,
 )
 from my_pa.domain.meeting.model import (
@@ -10976,6 +10978,419 @@ class CreateKnowledgeAssertion:
         object.__setattr__(self, "evidence", _knowledge_evidence(self.evidence))
 
 
+# --- KLP-WP-04: the bound discovery client's two writes ------------------------
+#
+# Frozen here so later slices implement behaviour only. Neither command carries
+# a `principal_id`, an authenticated client, a scope digest, a classification,
+# an epistemic status, an actor, an authority or an independence key: the
+# Principal and client come from the authorization, the scope digest, synthetic
+# flag and authority ceiling from the provisioned source profile, and every class
+# is server-derived (KLP-AC-018). An unknown key reaches the frozen dataclass as
+# an unexpected keyword and is refused there; `adapters.remote_request` refuses
+# the named server-owned fields before a Purpose is chosen.
+
+#: At most this many cited evidence entries on one autonomous submit.
+MAX_KNOWLEDGE_SUBMIT_EVIDENCE: Final = 16
+#: At most this many cited Record Event triggers on one autonomous submit.
+MAX_KNOWLEDGE_SUBMIT_TRIGGERS: Final = 16
+#: `external_run_id` / `external_candidate_id` bound (DDL
+#: `knowledge_submission_run_ids_are_bounded`, `knowledge_checkpoint_run_is_bounded`).
+MAX_KNOWLEDGE_EXTERNAL_RUN_CHARACTERS: Final = 200
+#: `external_object_id` / `external_version_id` bound (DDL
+#: `knowledge_evidence_ref_external_ids_are_bounded`).
+MAX_KNOWLEDGE_EXTERNAL_OBJECT_CHARACTERS: Final = 512
+#: A redact-only excerpt is at most this long (DDL `knowledge_evidence_ref_excerpt_is_bounded`).
+MAX_KNOWLEDGE_EXCERPT_CHARACTERS: Final = 2048
+#: The opaque checkpoint envelope bound in UTF-8 octets (DDL
+#: `knowledge_checkpoint_envelope_is_bounded`; the MAC is outside it, R6 section 7).
+MAX_KNOWLEDGE_CHECKPOINT_ENVELOPE_OCTETS: Final = 4096
+#: `submitted_candidate_count` bound (DDL `knowledge_checkpoint_request_count_is_bounded`).
+MAX_KNOWLEDGE_CHECKPOINT_CANDIDATES: Final = 100_000
+_KNOWLEDGE_CONTROL: Final = re.compile(r"[\x00-\x1f\x7f]")
+_KNOWLEDGE_OWNER_PREFIX: Final[Mapping[KnowledgeOwnerRefKind, IdKind]] = MappingProxyType(
+    {
+        KnowledgeOwnerRefKind.TASK: IdKind.TASK,
+        KnowledgeOwnerRefKind.COMMITMENT: IdKind.COMMITMENT,
+        KnowledgeOwnerRefKind.CONSTRAINT: IdKind.PROJECT_CONSTRAINT,
+        KnowledgeOwnerRefKind.MEETING: IdKind.MEETING,
+    }
+)
+
+_KNOWLEDGE_DISCOVERY_FIELD_DOCS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType(
+    {
+        "source_profile_id": {
+            "description": "The `kdsp_` source profile provisioned for this client and scope."
+        },
+        "external_run_id": {
+            "description": "The client's identifier for this discovery run (1-200 characters)."
+        },
+        "external_candidate_id": {
+            "description": (
+                "The client's identifier for this candidate within the run (1-200 characters); "
+                "a resubmission of the same candidate replays its stored result."
+            )
+        },
+        "owner_ref": {
+            "description": (
+                "The task, commitment, constraint or meeting the fact belongs to, or null."
+            ),
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": [member.value for member in KnowledgeOwnerRefKind],
+                },
+                "id": {"type": "string"},
+            },
+            "required": ["kind", "id"],
+            "additionalProperties": False,
+        },
+        "evidence": {
+            "description": (
+                "Observed source objects (or cited Capture / Relationship Memory versions) "
+                "supporting or contradicting the candidate."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "identity_kind": {
+                        "type": "string",
+                        "enum": [member.value for member in KnowledgeEvidenceIdentityKind],
+                    },
+                    "external_object_id": {"type": "string"},
+                    "external_version_id": {"type": "string"},
+                    "capture_id": {"type": "string"},
+                    "relationship_memory_id": {"type": "string"},
+                    "content_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    "excerpt": {"type": "string", "maxLength": MAX_KNOWLEDGE_EXCERPT_CHARACTERS},
+                    "retrieved_at": {"type": "string"},
+                    "role": {
+                        "type": "string",
+                        "enum": [member.value for member in KnowledgeEvidenceRole],
+                    },
+                },
+                "required": ["identity_kind", "content_hash", "role"],
+                "additionalProperties": False,
+            },
+            "minItems": 1,
+            "maxItems": MAX_KNOWLEDGE_SUBMIT_EVIDENCE,
+        },
+        "trigger_event_ids": {
+            "description": "The `rcev_` Record Events that prompted this candidate, if any.",
+            "maxItems": MAX_KNOWLEDGE_SUBMIT_TRIGGERS,
+        },
+        "expected_version": {
+            "description": (
+                "The checkpoint version this advance expects to replace (0 before the first)."
+            )
+        },
+        "submitted_candidate_count": {
+            "description": "How many candidates this run submitted before the checkpoint."
+        },
+        "checkpoint_kind": {
+            "description": "What the opaque envelope is: delta_token, page_cursor or synthetic."
+        },
+        "private_envelope": {
+            "description": (
+                "The opaque resume state (at most 4096 UTF-8 octets). Returned only to this "
+                "client, profile and scope; never logged or shown."
+            )
+        },
+    }
+)
+
+
+def _knowledge_discovery_docs(*names: str) -> Mapping[str, Mapping[str, object]]:
+    return MappingProxyType(
+        {
+            name: _KNOWLEDGE_DISCOVERY_FIELD_DOCS.get(name) or _KNOWLEDGE_FIELD_DOCS[name]
+            for name in names
+        }
+    )
+
+
+def _knowledge_external_token(value: object, detail: SafeDetail, *, maximum: int) -> str:
+    """A client-chosen external identifier: 1..`maximum` characters, no control character."""
+    if (
+        not isinstance(value, str)
+        or not 1 <= len(value) <= maximum
+        or _KNOWLEDGE_CONTROL.search(value)
+    ):
+        raise InvalidRequestError(detail)
+    return value
+
+
+def _knowledge_owner_ref(value: object) -> dict[str, str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping) or set(value) != {"kind", "id"}:
+        raise InvalidRequestError(SafeDetail.TARGET_ID)
+    kind = _knowledge_member(value["kind"], KnowledgeOwnerRefKind, SafeDetail.TARGET_ID)
+    owner_id = value["id"]
+    if not isinstance(owner_id, str):
+        raise InvalidRequestError(SafeDetail.TARGET_ID)
+    _identifier(owner_id, _KNOWLEDGE_OWNER_PREFIX[kind], SafeDetail.TARGET_ID)
+    return {"kind": kind.value, "id": owner_id}
+
+
+def _knowledge_submit_evidence(value: object) -> tuple[dict[str, object], ...]:
+    """One to sixteen well-shaped evidence entries, refused unless exact.
+
+    External entries name the object only; their source profile is the
+    command's, so a client can never cite another profile's object. Capture and
+    memory entries keep the explicit-create shape, which is what makes them
+    transferable to a domain owner (R6 section 8.5). Every role is admitted,
+    counterevidence included. No entry may state a class, an origin or an
+    excerpt digest: the server derives each (R6 sections 5.1, 6.2).
+    """
+    if not isinstance(value, tuple | list) or not 1 <= len(value) <= MAX_KNOWLEDGE_SUBMIT_EVIDENCE:
+        raise InvalidRequestError(SafeDetail.EVIDENCE)
+    seen: set[tuple[object, ...]] = set()
+    for item in value:
+        if not isinstance(item, Mapping):
+            raise InvalidRequestError(SafeDetail.EVIDENCE)
+        kind = _knowledge_member(
+            item.get("identity_kind"), KnowledgeEvidenceIdentityKind, SafeDetail.EVIDENCE
+        )
+        role = _knowledge_member(item.get("role"), KnowledgeEvidenceRole, SafeDetail.EVIDENCE)
+        content_hash = item.get("content_hash")
+        if not isinstance(content_hash, str) or not _KNOWLEDGE_SHA256.fullmatch(content_hash):
+            raise InvalidRequestError(SafeDetail.EVIDENCE)
+        identity: tuple[object, ...]
+        if kind is KnowledgeEvidenceIdentityKind.EXTERNAL_OBJECT:
+            allowed = {
+                "identity_kind",
+                "external_object_id",
+                "external_version_id",
+                "content_hash",
+                "excerpt",
+                "retrieved_at",
+                "role",
+            }
+            if not set(item) <= allowed or "external_object_id" not in item:
+                raise InvalidRequestError(SafeDetail.EVIDENCE)
+            object_id = _knowledge_external_token(
+                item["external_object_id"],
+                SafeDetail.EVIDENCE,
+                maximum=MAX_KNOWLEDGE_EXTERNAL_OBJECT_CHARACTERS,
+            )
+            version_id = item.get("external_version_id")
+            if version_id is not None:
+                _knowledge_external_token(
+                    version_id,
+                    SafeDetail.EVIDENCE,
+                    maximum=MAX_KNOWLEDGE_EXTERNAL_OBJECT_CHARACTERS,
+                )
+            excerpt = item.get("excerpt")
+            if excerpt is not None and (
+                not isinstance(excerpt, str)
+                or not excerpt.strip()
+                or len(excerpt) > MAX_KNOWLEDGE_EXCERPT_CHARACTERS
+            ):
+                raise InvalidRequestError(SafeDetail.EVIDENCE)
+            retrieved_at = item.get("retrieved_at")
+            if retrieved_at is not None:
+                _knowledge_instant(retrieved_at, SafeDetail.EVIDENCE)
+            identity = (kind.value, object_id, version_id or "", content_hash, role.value)
+        else:
+            key_name, key_kind = (
+                ("capture_id", IdKind.CAPTURE)
+                if kind is KnowledgeEvidenceIdentityKind.CAPTURE
+                else ("relationship_memory_id", IdKind.RELATIONSHIP_MEMORY)
+            )
+            if set(item) != {"identity_kind", key_name, "content_hash", "role"}:
+                raise InvalidRequestError(SafeDetail.EVIDENCE)
+            key = item[key_name]
+            if not isinstance(key, str):
+                raise InvalidRequestError(SafeDetail.EVIDENCE)
+            _identifier(key, key_kind, SafeDetail.EVIDENCE)
+            identity = (kind.value, key, content_hash, role.value)
+        if identity in seen:
+            raise InvalidRequestError(SafeDetail.EVIDENCE)
+        seen.add(identity)
+    return tuple(dict(item) for item in value)
+
+
+def _knowledge_instant(value: object, detail: SafeDetail) -> datetime:
+    """An RFC 3339 instant with an offset, refused rather than guessed (`_moment`'s rule)."""
+    parsed: datetime | None = None
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            parsed = None
+    if parsed is None or parsed.tzinfo is None:
+        raise InvalidRequestError(detail)
+    return parsed
+
+
+def _knowledge_trigger_events(value: object) -> tuple[str, ...]:
+    if not isinstance(value, tuple | list) or len(value) > MAX_KNOWLEDGE_SUBMIT_TRIGGERS:
+        raise InvalidRequestError(SafeDetail.PROVENANCE)
+    for event_id in value:
+        if not isinstance(event_id, str):
+            raise InvalidRequestError(SafeDetail.PROVENANCE)
+        _identifier(event_id, IdKind.RECORD_EVENT, SafeDetail.PROVENANCE)
+    if len(set(value)) != len(value):
+        raise InvalidRequestError(SafeDetail.PROVENANCE)
+    return tuple(value)
+
+
+@dataclass(frozen=True, slots=True)
+class SubmitKnowledgeAssertion:
+    """Offer one observed candidate fact from your provisioned discovery source.
+
+    Only a bound discovery client may call this. The server decides what the
+    candidate becomes -- a new or superseding assertion, a review case, a
+    duplicate, a route to the record's owning plane, or a refusal -- from the
+    predicate and the source profile's ceiling; nothing the client states
+    decides it. Resubmitting the same candidate of the same run replays the
+    stored result.
+    """
+
+    capability: ClassVar[Capability] = Capability.KNOWLEDGE_ASSERTIONS_SUBMIT
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, object]]] = (
+        _knowledge_discovery_docs(
+            "source_profile_id",
+            "external_run_id",
+            "external_candidate_id",
+            "subject_kind",
+            "subject_id",
+            "predicate_code",
+            "value",
+            "qualifier",
+            "effective_from",
+            "effective_to",
+            "owner_ref",
+            "evidence",
+            "trigger_event_ids",
+        )
+    )
+
+    source_profile_id: str
+    external_run_id: str
+    external_candidate_id: str
+    subject_kind: KnowledgeSubjectKind
+    subject_id: str
+    predicate_code: str
+    value: str = field(repr=False)
+    evidence: tuple[dict[str, object], ...] = field(repr=False)
+    qualifier: dict[str, object] | None = None
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+    owner_ref: dict[str, str] | None = None
+    trigger_event_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _identifier(
+            self.source_profile_id,
+            IdKind.KNOWLEDGE_DISCOVERY_SOURCE_PROFILE,
+            SafeDetail.PROVENANCE,
+        )
+        _knowledge_external_token(
+            self.external_run_id,
+            SafeDetail.RUN_ID,
+            maximum=MAX_KNOWLEDGE_EXTERNAL_RUN_CHARACTERS,
+        )
+        _knowledge_external_token(
+            self.external_candidate_id,
+            SafeDetail.OBSERVATION_ID,
+            maximum=MAX_KNOWLEDGE_EXTERNAL_RUN_CHARACTERS,
+        )
+        object.__setattr__(
+            self,
+            "subject_kind",
+            _knowledge_member(self.subject_kind, KnowledgeSubjectKind, SafeDetail.SUBJECT),
+        )
+        _identifier(self.subject_id, None, SafeDetail.SUBJECT)
+        _knowledge_predicate_code(self.predicate_code)
+        value: object = self.value
+        if not isinstance(value, str) or not value.strip():
+            raise InvalidRequestError(SafeDetail.RAW_VALUE)
+        if self.qualifier is not None and not isinstance(self.qualifier, dict):
+            raise InvalidRequestError(SafeDetail.STRUCTURED_VALUE)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        object.__setattr__(self, "owner_ref", _knowledge_owner_ref(self.owner_ref))
+        object.__setattr__(self, "evidence", _knowledge_submit_evidence(self.evidence))
+        object.__setattr__(
+            self, "trigger_event_ids", _knowledge_trigger_events(self.trigger_event_ids)
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CheckpointKnowledgeDiscovery:
+    """Advance your discovery checkpoint for one provisioned source profile.
+
+    Only a bound discovery client may call this. The advance succeeds only when
+    `expected_version` is the current version and the run's submitted candidate
+    count matches what the server recorded; otherwise the current checkpoint is
+    returned so the client can resume. The envelope is opaque to the server and
+    is returned only to the same client, profile and scope.
+    """
+
+    capability: ClassVar[Capability] = Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, object]]] = (
+        _knowledge_discovery_docs(
+            "source_profile_id",
+            "expected_version",
+            "external_run_id",
+            "submitted_candidate_count",
+            "checkpoint_kind",
+            "private_envelope",
+            "idempotency_key",
+        )
+    )
+
+    source_profile_id: str
+    expected_version: int
+    external_run_id: str
+    submitted_candidate_count: int
+    checkpoint_kind: KnowledgeCheckpointKind
+    private_envelope: str = field(repr=False)
+    idempotency_key: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        _identifier(
+            self.source_profile_id,
+            IdKind.KNOWLEDGE_DISCOVERY_SOURCE_PROFILE,
+            SafeDetail.PROVENANCE,
+        )
+        expected: object = self.expected_version
+        if isinstance(expected, bool) or not isinstance(expected, int) or expected < 0:
+            raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
+        _knowledge_external_token(
+            self.external_run_id,
+            SafeDetail.RUN_ID,
+            maximum=MAX_KNOWLEDGE_EXTERNAL_RUN_CHARACTERS,
+        )
+        count: object = self.submitted_candidate_count
+        if (
+            isinstance(count, bool)
+            or not isinstance(count, int)
+            or not 0 <= count <= MAX_KNOWLEDGE_CHECKPOINT_CANDIDATES
+        ):
+            raise InvalidRequestError(SafeDetail.LIMIT)
+        object.__setattr__(
+            self,
+            "checkpoint_kind",
+            _knowledge_member(
+                self.checkpoint_kind, KnowledgeCheckpointKind, SafeDetail.REPRESENTATION
+            ),
+        )
+        envelope: object = self.private_envelope
+        if (
+            not isinstance(envelope, str)
+            or not 1 <= len(envelope.encode("utf-8")) <= MAX_KNOWLEDGE_CHECKPOINT_ENVELOPE_OCTETS
+        ):
+            raise InvalidRequestError(SafeDetail.CONTENT)
+        _idempotency_key(self.idempotency_key)
+
+
 type Command = (
     GetCapabilities
     | ListSources
@@ -11164,6 +11579,8 @@ type Command = (
     | GetKnowledgeAssertionHistory
     | RevealKnowledgeAssertion
     | CreateKnowledgeAssertion
+    | SubmitKnowledgeAssertion
+    | CheckpointKnowledgeDiscovery
 )
 
 

@@ -467,6 +467,27 @@ class Settings(StrictModel):
     #: binding, so a consumer's prior cursor answers `conflict(cursor)` and the
     #: consumer re-bootstraps (`ops/runbooks/gateway-operations.md`).
     knowledge_assertions_enabled: bool = False
+    #: KLP-WP-04 (R6 section 3.4, KLP-AC-019). The exact OAuth client ids bound
+    #: as Knowledge discovery clients. Compared exactly, never by prefix; empty --
+    #: the default -- binds no client, so `knowledge.assertions.submit` and
+    #: `knowledge.discovery.checkpoint` are refused to everyone. A bound client
+    #: is overlaid with exactly its discovery profile
+    #: (`bootstrap.knowledge_discovery_profiles`).
+    knowledge_discovery_oauth_client_ids: str = ""
+    #: KLP-WP-04 (R6 section 3.4). The exact OAuth client ids bound as Knowledge
+    #: operator-review clients (`knowledge-operator-review-v1`). Empty by default;
+    #: populating it is operator decision KLP-OD-005. Empty means no client is
+    #: ever `remote_operator_attested`.
+    knowledge_operator_review_oauth_client_ids: str = ""
+    #: KLP-WP-04 (R6 section 7, KLP-AC-126). The HMAC-SHA256 key sealing every
+    #: discovery checkpoint envelope, 32-128 UTF-8 bytes, required whenever the
+    #: discovery allowlist is non-empty. Never rendered (`repr=False`); precedent
+    #: `goodnotes_pull_cursor_signing_key`.
+    knowledge_checkpoint_signing_key: str = Field(default="", repr=False)
+    #: KLP-WP-04 (R6 section 7, KLP-AC-155). The seal version every new envelope
+    #: carries; an envelope sealed under any other version is unverifiable. An
+    #: operator increments it together with a new key (seal rotation).
+    knowledge_checkpoint_seal_version: int = Field(default=1, ge=1, le=32767)
     #: Process-local gate for governed identity merge and split (WP-RI-06). Default
     #: off, and it requires **both** switches above it: identity correction is
     #: unavailable unless every lower gate is enabled (operator §18). `_check`
@@ -630,6 +651,7 @@ class Settings(StrictModel):
                 raise SettingsError(
                     "enabled GoodNotes pull requires a cursor signing key of 32 to 128 UTF-8 bytes"
                 )
+        self._check_knowledge_bindings()
         self._check_auth_mode()
         if self.remote_mcp_enabled and not all(
             (
@@ -725,6 +747,41 @@ class Settings(StrictModel):
         # at startup instead of at the first `capabilities.get`.
         self.effective_limits()
         return self
+
+    def _check_knowledge_bindings(self) -> None:
+        """KLP-AC-147 / KLP-AC-126: disjoint role allowlists and a sealing key.
+
+        A client id in two of the discovery, operator-review and ChatLLM gateway
+        allowlists would receive two incompatible overlays, so the process refuses
+        to start rather than pick one. The signing key is checked whenever the
+        discovery list binds anyone: an unsealed checkpoint is never served.
+        """
+        lists = {
+            f"{ENV_PREFIX}KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS": (
+                self.knowledge_discovery_oauth_client_id_set()
+            ),
+            f"{ENV_PREFIX}KNOWLEDGE_OPERATOR_REVIEW_OAUTH_CLIENT_IDS": (
+                self.knowledge_operator_review_oauth_client_id_set()
+            ),
+            f"{ENV_PREFIX}MCP_CHATLLM_GATEWAY_OAUTH_CLIENT_IDS": (
+                self.chatllm_gateway_oauth_client_id_set()
+            ),
+        }
+        names = sorted(lists)
+        for index, first in enumerate(names):
+            for second in names[index + 1 :]:
+                if lists[first] & lists[second]:
+                    raise SettingsError(
+                        f"{first} and {second} must be disjoint: one OAuth client cannot "
+                        "hold two Knowledge client roles"
+                    )
+        if self.knowledge_discovery_oauth_client_id_set():
+            key_bytes = self.knowledge_checkpoint_signing_key.encode("utf-8")
+            if not 32 <= len(key_bytes) <= 128:
+                raise SettingsError(
+                    f"a non-empty {ENV_PREFIX}KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS requires "
+                    f"{ENV_PREFIX}KNOWLEDGE_CHECKPOINT_SIGNING_KEY of 32 to 128 UTF-8 bytes"
+                )
 
     def _check_auth_mode(self) -> None:
         """`entra` mode without its configuration refuses to start.
@@ -822,6 +879,14 @@ class Settings(StrictModel):
         against the token-derived client identifier; there is no glob or prefix.
         """
         return frozenset(_split_allowlist(self.mcp_chatllm_gateway_oauth_client_ids))
+
+    def knowledge_discovery_oauth_client_id_set(self) -> frozenset[str]:
+        """Exact OAuth client ids bound as Knowledge discovery clients. Empty binds none."""
+        return frozenset(_split_allowlist(self.knowledge_discovery_oauth_client_ids))
+
+    def knowledge_operator_review_oauth_client_id_set(self) -> frozenset[str]:
+        """Exact OAuth client ids bound as Knowledge operator-review clients. Empty binds none."""
+        return frozenset(_split_allowlist(self.knowledge_operator_review_oauth_client_ids))
 
     def compact_publication_for_client(self, authenticated_client_id: str) -> bool:
         """Whether this process publishes the compact façade to `authenticated_client_id`."""

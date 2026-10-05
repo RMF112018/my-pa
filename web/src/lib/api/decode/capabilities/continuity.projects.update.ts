@@ -7,7 +7,7 @@ const participation = strictObject({
   participation_id: identifier("eppt"), state: enumeration(["active"]),
 });
 export const projectMutation = checked(strictObject({
-  project_id: identifier("prj"), name: checked(text(1), (value) => /[^\s\u001c-\u001f]/u.test(value)), state: enumeration(["active", "on_hold", "closed"]),
+  project_id: identifier("prj"), name: checked(text(1), (value) => /[^\u0009-\u000d\u001c-\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]/u.test(value)), state: enumeration(["active", "on_hold", "closed"]),
   description: nullable(text()), participants: arrayOf(text()), canonical_participations: arrayOf(participation),
   opened_at: timestamp, closed_at: nullable(timestamp), created_at: timestamp, updated_at: timestamp,
   version: integer(1), replayed: boolean,

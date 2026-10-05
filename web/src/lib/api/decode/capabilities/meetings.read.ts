@@ -2,7 +2,7 @@ import type { Decoder } from "../types";
 import { strictObject, nullable, arrayOf, checked, text, integer, boolean, enumeration, identifier, timestamp, type Decoded } from "./continuity.projects.create";
 
 export const mediaType = enumeration(["application/json", "application/octet-stream", "application/pdf", "text/markdown", "text/plain"]);
-const nonblank = (max: number) => checked(text(1,max), (value) => /[^\s\u001c-\u001f]/u.test(value));
+const nonblank = (max: number) => checked(text(1,max), (value) => /[^\u0009-\u000d\u001c-\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]/u.test(value));
 export const meetingTitle = nonblank(200);
 // Keep this small boundary local: importing work-route would create a cycle
 // through gateway -> registry -> decoder. Host ZoneInfo owns availability.
@@ -32,10 +32,16 @@ export const meetingCore = {
   location_text: nullable(text(0,500)), project_id: nullable(identifier("prj")), version: integer(1), updated_at: timestamp,
 };
 type Core = Decoded<ReturnType<typeof strictObject<typeof meetingCore>>>;
+// Canonical Python datetimes retain microseconds; Date.parse truncates them.
+function timestampMicros(value: string): bigint {
+  const fraction = /\.(\d+)(?=Z|[+-]\d{2}:\d{2}$)/.exec(value)?.[1] ?? "";
+  const seconds = value.replace(/\.\d+(?=Z|[+-]\d{2}:\d{2}$)/, "");
+  return BigInt(Date.parse(seconds)) * BigInt(1000) + BigInt(fraction.padEnd(6, "0").slice(0, 6));
+}
 export function validMeetingCore(value: Core): boolean {
   return (value.meeting_series_id === null) === (value.series_title === null) &&
     (value.meeting_series_id !== null || value.series_version === null) &&
-    (value.end_at === null || Date.parse(value.end_at) >= Date.parse(value.start_at));
+    (value.end_at === null || timestampMicros(value.end_at) >= timestampMicros(value.start_at));
 }
 export const meetingView = checked(strictObject({
   ...meetingCore, virtual_meeting_url: nullable(httpsUrl), description: nullable(text(0,100000)),

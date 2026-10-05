@@ -107,4 +107,43 @@ describe("meetings.update strict canonical success", () => {
     replace(noOp,["history","after_version"],1);
     expect(decode(noOp).ok).toBe(true);
   });
+  it("preserves canonical nonblank content and Python whitespace semantics", () => {
+    const paths: Path[] = [["meeting", "title"], ["meeting", "series_title"], ["meeting", "notes", "body_markdown"], ["series", "title"]];
+    // Python str.isspace includes NEL and C0 separators, and excludes FEFF.
+    const spaces = ["\u0009", "\u000a", "\u000b", "\u000c", "\u000d", "\u001c", "\u001d", "\u001e", "\u001f", " ", "\u0085", "\u00a0", "\u1680", ...Array.from({length:11}, (_, index) => String.fromCodePoint(0x2000+index)), "\u2028", "\u2029", "\u202f", "\u205f", "\u3000"];
+    for (const path of paths) {
+      for (const content of ["\ufeff", "\u0085\ufeff\u001c", "  retained content\u0085", "😀"]) {
+        const value = replace(payload(), path, content);
+        expect(decode(value), path.join(".")).toEqual({ok:true,value});
+      }
+      for (const content of ["", ...spaces, spaces.join("")]) {
+        expect(decode(replace(payload(), path, content)).ok, path.join(".")).toBe(false);
+      }
+    }
+  });
+  it("counts bounded titles and notes in Unicode code points", () => {
+    const bounds: {path: Path; maximum: number}[] = [{"path": ["meeting", "title"], "maximum": 200}, {"path": ["meeting", "series_title"], "maximum": 200}, {"path": ["meeting", "notes", "body_markdown"], "maximum": 100000}, {"path": ["series", "title"], "maximum": 200}];
+    for (const {path, maximum} of bounds) {
+      const value = replace(payload(), path, "😀".repeat(maximum));
+      expect(decode(value), path.join(".")).toEqual({ok:true,value});
+      expect(decode(replace(payload(), path, "😀".repeat(maximum+1))).ok, path.join(".")).toBe(false);
+    }
+  });
+  it("compares aware Meeting ranges at canonical microsecond precision", () => {
+    const start: Path = ["meeting", "start_at"];
+    const end: Path = ["meeting", "end_at"];
+    const cases = [
+      ["2026-08-09T12:00:00.000001Z", "2026-08-09T12:00:00.000002Z", true],
+      ["2026-08-09T12:00:00.000002Z", "2026-08-09T12:00:00.000001Z", false],
+      ["2026-08-09T12:00:00.000002Z", "2026-08-09T12:00:00.000002Z", true],
+      ["2026-08-09T12:00:00.000002Z", "2026-08-09T13:00:00.000002+01:00", true],
+      ["2026-08-09T12:00:00.000002Z", "2026-08-09T13:00:00.000001+01:00", false],
+      ["2026-08-09T11:00:00.000002-01:00", "2026-08-09T12:00:00.000003Z", true],
+    ] as const;
+    for (const [startAt, endAt, accepted] of cases) {
+      const value = replace(replace(payload(), start, startAt), end, endAt);
+      expect(decode(value).ok, `${startAt} -> ${endAt}`).toBe(accepted);
+      if (accepted) expect(decode(value)).toEqual({ok:true,value});
+    }
+  });
 });

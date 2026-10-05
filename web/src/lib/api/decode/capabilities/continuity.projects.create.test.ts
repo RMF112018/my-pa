@@ -78,4 +78,22 @@ describe("continuity.projects.create strict canonical success", () => {
     }
   });
 
+  it("preserves canonical nonblank content and Python whitespace semantics", () => {
+    const paths: Path[] = [["name"]];
+    // Python str.isspace includes NEL and C0 separators, and excludes FEFF.
+    const spaces = ["\u0009", "\u000a", "\u000b", "\u000c", "\u000d", "\u001c", "\u001d", "\u001e", "\u001f", " ", "\u0085", "\u00a0", "\u1680", ...Array.from({length:11}, (_, index) => String.fromCodePoint(0x2000+index)), "\u2028", "\u2029", "\u202f", "\u205f", "\u3000"];
+    for (const path of paths) {
+      for (const content of ["\ufeff", "\u0085\ufeff\u001c", "  retained content\u0085", "😀"]) {
+        const value = replace(payload(), path, content);
+        expect(decode(value), path.join(".")).toEqual({ok:true,value});
+      }
+      for (const content of ["", ...spaces, spaces.join("")]) {
+        expect(decode(replace(payload(), path, content)).ok, path.join(".")).toBe(false);
+      }
+    }
+  });
+  it("preserves unbounded canonical Project names in Unicode code points", () => {
+    const value = replace(payload(), ["name"], "😀".repeat(1000));
+    expect(decode(value)).toEqual({ok:true,value});
+  });
 });

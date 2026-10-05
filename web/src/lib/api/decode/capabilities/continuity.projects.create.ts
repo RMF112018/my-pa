@@ -83,7 +83,7 @@ export const timestamp: Decoder<string> = checked(text(), (value) => {
 });
 
 const projectCreate = strictObject({
-  project_id: identifier("prj"), name: checked(text(1), (value) => /[^\s\u001c-\u001f]/u.test(value)), state: enumeration(["active", "on_hold", "closed"]),
+  project_id: identifier("prj"), name: checked(text(1), (value) => /[^\u0009-\u000d\u001c-\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]/u.test(value)), state: enumeration(["active", "on_hold", "closed"]),
   description: nullable(text()), replayed: boolean, version: integer(1),
 });
 export type ContinuityProjectsCreateResult = Decoded<typeof projectCreate>;

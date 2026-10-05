@@ -324,20 +324,25 @@ def assertion_withheld_remote(assertion: Table, principal_id: str) -> ColumnElem
 def knowledge_event_withheld_remote(event: Table, principal_id: str) -> ColumnElement[bool]:
     """A `knowledge_assertion` Record Event a remote caller must not see.
 
-    Its stored class is `restricted_local`, or the assertion it names is
-    `withheld_remote` now -- in any lifecycle, so source tightening after
-    supersession or archive withholds old events without any fan-out.
+    Fails closed: a remote caller sees the event only when its stored class is
+    not `restricted_local` *and* there EXISTS an assertion of the same
+    Principal with the event's `record_id` that is not `withheld_remote` now --
+    in any lifecycle, so source tightening after supersession or archive
+    withholds old events without any fan-out, and an event naming no visible
+    assertion at all is withheld rather than shown.
     """
     context = capture_context(principal_id)
     return and_(
         event.c.record_family == RecordEventFamily.KNOWLEDGE_ASSERTION.value,
         or_(
             _restricted(event.c.classification),
-            exists(
-                select(literal(1)).where(
-                    partition_criterion(_A, context),
-                    _A.c.assertion_id == event.c.record_id,
-                    assertion_withheld_remote(_A, principal_id),
+            not_(
+                exists(
+                    select(literal(1)).where(
+                        partition_criterion(_A, context),
+                        _A.c.assertion_id == event.c.record_id,
+                        not_(assertion_withheld_remote(_A, principal_id)),
+                    )
                 )
             ),
         ),

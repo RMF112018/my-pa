@@ -41,6 +41,7 @@ from typing import Any, Final
 import pytest
 from sqlalchemy import Engine, text
 from tests.database.test_knowledge_assertion_repository import (
+    WHEN,
     KnowledgeRuntime,
     capture_evidence,
     memory_evidence,
@@ -301,9 +302,13 @@ def surfaces(
     query: str,
     *,
     remote: bool,
+    caller: dict[str, Any] | None = None,
 ) -> dict[str, bool]:
-    """Which of the six surfaces disclose `assertion_id` to this caller."""
-    extra = REMOTE if remote else {}
+    """Which of the six surfaces disclose `assertion_id` to this caller.
+
+    `caller` overrides the remote/local shape (the R6 section 5.2 halves).
+    """
+    extra = caller if caller is not None else (REMOTE if remote else {})
     state = KnowledgeAssertionLifecycle(lifecycle)
 
     def answered(command: Any) -> dict[str, Any] | None:  # noqa: ANN401 - a command
@@ -532,3 +537,97 @@ def test_a_remote_feed_page_of_n_is_n_permitted_events(runtime: KnowledgeRuntime
     assert page["next_cursor"] is None
     local = runtime.ok(ListRecordEvents(page_size=3), principal_id=principal)
     assert [item["record_id"] for item in local["events"]] == withheld
+
+
+# ---- R6 section 5.2: each half of the remote predicate alone withholds ----------
+
+#: A remote transport that attached no grant set, and a LOCAL transport that
+#: attached one (a gsqs_b0-style stdio composition). Each is remote on its own.
+HALF_REMOTE_CALLERS: Final[dict[str, dict[str, Any]]] = {
+    "remote_client_without_grants": {
+        "transport": CaptureTransport.REMOTE_CLIENT,
+        "client_id": "klp03-remote-client",
+    },
+    "local_transport_with_grants": {"grants": REMOTE_GRANTS},
+}
+
+
+@pytest.mark.parametrize("caller", sorted(HALF_REMOTE_CALLERS))
+@pytest.mark.parametrize(
+    "restriction", ["a_stored_class", "b_linked_evidence_raised", "f_revalidation_pending"]
+)
+def test_either_half_of_the_remote_predicate_withholds_on_every_surface(
+    runtime: KnowledgeRuntime, restriction: str, caller: str
+) -> None:
+    """Through the service wiring, not only the helper: all six surfaces."""
+    principal = new_principal()
+    query = f"klp03h{restriction.replace('_', '')}{caller.replace('_', '')}"
+    control = runtime.create(principal, f"{query}-control", value=f"Control {query}")
+    target = _target(runtime, principal, restriction, query)
+    shape = HALF_REMOTE_CALLERS[caller]
+    withheld = surfaces(
+        runtime, principal, target["assertion_id"], "active", query, remote=True, caller=shape
+    )
+    assert withheld == dict.fromkeys(SURFACES, False), withheld
+    permitted = surfaces(
+        runtime, principal, control["assertion_id"], "active", "Control", remote=True, caller=shape
+    )
+    assert permitted == dict.fromkeys(SURFACES, True), permitted
+    local = surfaces(runtime, principal, target["assertion_id"], "active", query, remote=False)
+    assert local == dict.fromkeys(SURFACES, True), local
+
+
+# ---- F5: the feed term fails closed ---------------------------------------------
+
+
+def test_a_knowledge_event_naming_no_assertion_is_withheld_remotely(
+    runtime: KnowledgeRuntime,
+) -> None:
+    """Shown remotely only if a same-Principal, non-withheld assertion is named."""
+    from my_pa.domain.common.classification import Classification
+    from my_pa.domain.knowledge_assertion.provenance import (
+        KNOWLEDGE_EVENT_ACTOR_CLASSES,
+        KNOWLEDGE_EVENT_AUTHORITIES,
+        KNOWLEDGE_MUTATION_EVENTS,
+        KnowledgeEventOrigin,
+    )
+    from my_pa.domain.knowledge_assertion.vocabulary import KnowledgeMutationKind
+    from my_pa.domain.record_events import RecordEventDraft, RecordEventFamily
+    from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
+    from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
+
+    principal, stranger = new_principal(), new_principal()
+    control = runtime.create(principal, "klp03-orphan-control", value="Orphan control")
+    foreign = runtime.create(stranger, "klp03-orphan-foreign", value="Foreign")
+    mapped = KNOWLEDGE_MUTATION_EVENTS[KnowledgeMutationKind.CREATE]
+    origin = KnowledgeEventOrigin.EXPLICIT_CREATE
+    orphans = {
+        "absent": issue_identifier(IdKind.KNOWLEDGE_ASSERTION),
+        "other_principal": foreign["assertion_id"],
+    }
+    for record_id in orphans.values():
+        draft = RecordEventDraft.issue(
+            principal_id=principal,
+            record_family=RecordEventFamily.KNOWLEDGE_ASSERTION,
+            record_id=record_id,
+            event_kind=mapped.kind,
+            record_version=1,
+            changed_fields=mapped.changed_fields,
+            source_capability=Capability.KNOWLEDGE_ASSERTIONS_CREATE.value,
+            actor_class=KNOWLEDGE_EVENT_ACTOR_CLASSES[origin],
+            classification=Classification.PRIVATE_LOCAL,
+            occurred_at=WHEN,
+            source_receipt_id=issue_identifier(IdKind.KNOWLEDGE_ASSERTION_MUTATION),
+            authority=KNOWLEDGE_EVENT_AUTHORITIES[origin],
+        )
+        with SqlAlchemyUnitOfWork(
+            runtime.engine, audit=SqlAlchemyAuditSink(runtime.audit_engine)
+        ) as uow:
+            uow.record_events.stage(draft)
+    local = runtime.ok(ListRecordEvents(page_size=100), principal_id=principal)
+    remote = runtime.ok(ListRecordEvents(page_size=100), principal_id=principal, **REMOTE)
+    local_ids = {item["record_id"] for item in local["events"]}
+    remote_ids = {item["record_id"] for item in remote["events"]}
+    assert set(orphans.values()) <= local_ids
+    assert not set(orphans.values()) & remote_ids
+    assert control["assertion_id"] in remote_ids

@@ -283,7 +283,8 @@ def test_source_capability_is_a_bounded_operation_name(value: object) -> None:
 # ---- closed vocabularies ----------------------------------------------------
 
 
-def test_the_family_vocabulary_is_exactly_the_twenty_two_named_families() -> None:
+def test_the_family_vocabulary_is_exactly_the_twenty_three_named_families() -> None:
+    """Twenty-three: KLP-WP-03 adds `knowledge_assertion` to the twenty-two."""
     assert {member.value for member in RecordEventFamily} == {
         "task",
         "commitment",

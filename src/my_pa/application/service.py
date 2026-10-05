@@ -14458,20 +14458,6 @@ def published_capabilities(
 #: it. Written out rather than derived from the `entities.` prefix, for the
 #: reason `_MANAGED_CAPABILITIES` is: admitting another is a decision here and
 #: not a spelling that happens to start the right way.
-#: KLP-WP-03: the Knowledge Assertion plane's names, written out one at a
-#: time and never selected by a `knowledge.` prefix -- the extraction plane's
-#: `knowledge.search`/`read`/`reveal`/`coverage` are not in it (KLP-AC-001).
-_KNOWLEDGE_ASSERTION_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
-    {
-        Capability.KNOWLEDGE_ASSERTIONS_READ,
-        Capability.KNOWLEDGE_ASSERTIONS_LIST,
-        Capability.KNOWLEDGE_ASSERTIONS_SEARCH,
-        Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
-        Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
-        Capability.KNOWLEDGE_ASSERTIONS_CREATE,
-    }
-)
-
 _ENTITY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     {
         Capability.ENTITIES_SEARCH,
@@ -14537,6 +14523,20 @@ _ENTITY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_AFFILIATIONS_CREATE,
         Capability.ENTITIES_AFFILIATIONS_REVISE,
         Capability.ENTITIES_AFFILIATIONS_END,
+    }
+)
+
+#: KLP-WP-03: the Knowledge Assertion plane's names, written out one at a
+#: time and never selected by a `knowledge.` prefix -- the extraction plane's
+#: `knowledge.search`/`read`/`reveal`/`coverage` are not in it (KLP-AC-001).
+_KNOWLEDGE_ASSERTION_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.KNOWLEDGE_ASSERTIONS_READ,
+        Capability.KNOWLEDGE_ASSERTIONS_LIST,
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH,
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE,
     }
 )
 

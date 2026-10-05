@@ -504,3 +504,115 @@ def test_disable_is_terminal_and_deletes_or_rewrites_no_knowledge_row(
     renewed = provision(engine, principal, tmp_path)
     assert renewed != profile
     assert [row["disabled_at"] is None for row in _rows(engine, principal)] == [False, True]
+
+
+# ---- seal rotation: redact-sealed (R6 section 7 step 3; end to end in slice B3) ------
+
+
+def _seal_request(
+    engine: Engine, principal: str, profile: str, *, seal: int, key: str, envelope: str
+) -> str:
+    """Setup only: one completed, advanced checkpoint request sealed at `seal`.
+
+    The checkpoint handler is slice B3; the ledger row is written the only way
+    the lifecycle trigger admits -- reserved, then completed -- in one
+    transaction.
+    """
+    row = next(r for r in _rows(engine, principal) if r["source_profile_id"] == profile)
+    request = f"kdcpr_Synthetic{key}"
+    checkpoint = f"kdcp_Synthetic{key}"
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO knowledge.knowledge_discovery_checkpoints (principal_id, "
+                "checkpoint_id, source_profile_id, authenticated_client_id, scope_digest, "
+                "version, checkpoint_kind, private_envelope, seal_version, envelope_mac, "
+                "external_run_id, created_at, updated_at) VALUES (:p, :cp, :s, :c, :d, 1, "
+                "'delta_token', :env, :seal, :mac, 'synthetic-run', now(), now())"
+            ),
+            {
+                "p": principal,
+                "cp": checkpoint,
+                "s": profile,
+                "c": row["authenticated_client_id"],
+                "d": row["scope_digest"],
+                "env": envelope,
+                "seal": seal,
+                "mac": "c" * 64,
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO knowledge.knowledge_discovery_checkpoint_requests (principal_id, "
+                "checkpoint_request_id, authenticated_client_id, source_profile_id, "
+                "scope_digest, external_run_id, submitted_candidate_count, expected_version, "
+                "idempotency_key, request_digest, state, created_at) VALUES (:p, :r, :c, :s, "
+                ":d, 'synthetic-run', 0, 0, :k, :rd, 'reserved', now())"
+            ),
+            {
+                "p": principal,
+                "r": request,
+                "c": row["authenticated_client_id"],
+                "s": profile,
+                "d": row["scope_digest"],
+                "k": f"synthetic-key-{key}",
+                "rd": "d" * 64,
+            },
+        )
+        connection.execute(
+            text(
+                "UPDATE knowledge.knowledge_discovery_checkpoint_requests SET state = "
+                "'completed', result_outcome = 'advanced', result_reason = 'advanced', "
+                "result_checkpoint_id = :cp, result_checkpoint_version = 1, "
+                "result_checkpoint_kind = 'delta_token', result_private_envelope = :env, "
+                "result_seal_version = :seal, result_envelope_mac = :mac, completed_at = now() "
+                "WHERE checkpoint_request_id = :r"
+            ),
+            {"cp": checkpoint, "env": envelope, "seal": seal, "mac": "e" * 64, "r": request},
+        )
+    return request
+
+
+def _request(engine: Engine, request: str) -> tuple[Any, ...]:
+    with engine.connect() as connection:
+        return tuple(
+            connection.execute(
+                text(
+                    "SELECT result_private_envelope, result_envelope_mac, private_token_redacted, "
+                    "result_seal_version, result_outcome FROM "
+                    "knowledge.knowledge_discovery_checkpoint_requests "
+                    "WHERE checkpoint_request_id = :r"
+                ),
+                {"r": request},
+            ).one()
+        )
+
+
+def test_redact_sealed_redacts_every_envelope_below_the_seal_and_only_those(
+    runtime: KnowledgeRuntime, tmp_path: Path
+) -> None:
+    principal, other = new_principal(), new_principal()
+    engine = runtime.engine
+    old_profile = provision(engine, principal, tmp_path, scope="synthetic-scope:old")
+    new_profile = provision(engine, principal, tmp_path, scope="synthetic-scope:new")
+    foreign_profile = provision(engine, other, tmp_path, scope="synthetic-scope:foreign")
+    old = _seal_request(
+        engine, principal, old_profile, seal=1, key="Old00001", envelope="synthetic-token-old"
+    )
+    current = _seal_request(
+        engine, principal, new_profile, seal=2, key="New00001", envelope="synthetic-token-new"
+    )
+    foreign = _seal_request(
+        engine, other, foreign_profile, seal=1, key="Foreign1", envelope="synthetic-token-other"
+    )
+
+    code, lines = run_cli(engine, principal, "redact-sealed", "--below-seal", "2")
+    assert (code, lines) == (EXIT_OK, ["redacted          1"])
+    assert _request(engine, old) == (None, None, True, 1, "advanced")
+    assert _request(engine, current) == ("synthetic-token-new", "e" * 64, False, 2, "advanced")
+    assert _request(engine, foreign)[0] == "synthetic-token-other"
+    # Idempotent, and it never prints a token.
+    code, lines = run_cli(engine, principal, "redact-sealed", "--below-seal", "2")
+    assert (code, lines) == (EXIT_OK, ["redacted          0"])
+    code, lines = run_cli(engine, principal, "redact-sealed", "--below-seal", "0")
+    assert code == EXIT_REFUSED

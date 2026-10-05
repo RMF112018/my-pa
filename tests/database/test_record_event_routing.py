@@ -61,6 +61,7 @@ from my_pa.application.commands import (
     CreateEntityAssignment,
     CreateEntityParticipation,
     CreateEntityRelationship,
+    CreateKnowledgeAssertion,
     CreateMeeting,
     CreateProject,
     CreateRelationshipMemory,
@@ -87,6 +88,7 @@ from my_pa.application.commands import (
     ReadCapture,
     ReadCommitment,
     ReadConstraint,
+    ReadKnowledgeAssertion,
     ReadMeeting,
     ReadProject,
     ReadProjectControlsStatus,
@@ -101,6 +103,7 @@ from my_pa.contracts.v1.record_events import RecordEventItemView, RecordEventLis
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.principal import Principal, PrincipalKind
+from my_pa.domain.knowledge_assertion.vocabulary import KnowledgeSubjectKind
 from my_pa.domain.record_events import (
     RECORD_EVENT_ROUTING,
     RecordEventFamily,
@@ -173,6 +176,8 @@ class Runtime:
             relationship_intelligence_writes_enabled=True,
             relationship_memory_enabled=True,
             relationship_identity_correction_enabled=True,
+            # KLP-WP-03: the Knowledge Assertion family is composed here too.
+            knowledge_assertions_enabled=True,
         )
 
     def close(self) -> None:
@@ -462,6 +467,17 @@ def build_world(rt: Runtime) -> World:
             )
         )["memory_id"]
     )
+    ids[F.KNOWLEDGE_ASSERTION] = str(
+        rt.ok(
+            CreateKnowledgeAssertion(
+                subject_kind=KnowledgeSubjectKind.PROJECT,
+                subject_id=project,
+                predicate_code="process.lesson_learned",
+                value="Closeout notes go out within a week.",
+                idempotency_key="recr-knowledge-0001",
+            )
+        )["assertion_id"]
+    )
     return World(
         ids=ids, person=person, organization=organization, project=project, capture=capture
     )
@@ -514,6 +530,10 @@ REREADS: Final[dict[RecordEventFamily, tuple[Callable[[str], Any], str]]] = {
     F.MEETING_SERIES: (lambda key: ListMeetings(meeting_series_id=key), "meeting_series_id"),
     F.CAPTURE: (lambda key: ReadCapture(capture_id=key), "capture_id"),
     F.TASK_COMMENT: (lambda key: ListTaskComments(task_id=key), "comment_id"),
+    F.KNOWLEDGE_ASSERTION: (
+        lambda key: ReadKnowledgeAssertion(assertion_id=key),
+        "assertion_id",
+    ),
 }
 
 

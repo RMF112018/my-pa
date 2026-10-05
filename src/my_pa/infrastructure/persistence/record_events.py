@@ -456,19 +456,27 @@ def _restricted_capture(event: Table, principal_id: str) -> ColumnElement[bool]:
     )
 
 
-def _withheld_remotely(event: Table, principal_id: str) -> ColumnElement[bool]:
+def _withheld_remotely(
+    event: Table, principal_id: str, families: frozenset[RecordEventFamily]
+) -> ColumnElement[bool]:
     """Everything a remote caller must not see: the memory, capture and Knowledge predicates.
 
     KLP-WP-03: a `knowledge_assertion` event is withheld when its stored class
     is `restricted_local` or the assertion it names is `withheld_remote` now
     (R6 section 5.2, every lifecycle), in the same statement as the page, so a
     withheld event never reaches a row, the truncation flag or the watermark.
+    The Knowledge term is planned only when the request's families include the
+    Knowledge family: it is false for every other family anyway, and a page
+    over other families then names no Knowledge relation at all (the runtime
+    role's feed grants, `record_event_roles.FEED_READER_SELECT_TABLES`).
     """
-    return or_(
+    terms = [
         _restricted_memory(event, principal_id),
         _restricted_capture(event, principal_id),
-        knowledge_event_withheld_remote(event, principal_id),
-    )
+    ]
+    if RecordEventFamily.KNOWLEDGE_ASSERTION in families:
+        terms.append(knowledge_event_withheld_remote(event, principal_id))
+    return or_(*terms)
 
 
 def _visible(
@@ -487,7 +495,7 @@ def _visible(
         event.c.record_family.in_(sorted(family.value for family in families)),
     ]
     if not include_restricted_memory:
-        criteria.append(not_(_withheld_remotely(event, principal_id)))
+        criteria.append(not_(_withheld_remotely(event, principal_id, families)))
     return criteria
 
 

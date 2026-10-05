@@ -78,6 +78,7 @@ BASIS_SKIP_CENSUS: Final[dict[str, int]] = {
     "tests/contract/test_a_derived_record_never_presents_as_source_evidence.py": 0,
     "tests/contract/test_application_capabilities.py": 0,
     "tests/contract/test_composed_child_names_every_switch.py": 0,
+    "tests/database/test_record_event_routing.py": 0,
     "tests/policy/test_application_authorization.py": 0,
     "tests/security/test_http_negative_evidence.py": 0,
     "tests/security/test_mcp_and_cli_negative_evidence.py": 0,

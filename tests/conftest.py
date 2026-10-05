@@ -10299,7 +10299,7 @@ def build_service(
         # repository, so a composed plane here could only crash. The plane's
         # behaviour is proved against a real server (`tests/database/
         # test_knowledge_*`); a FAST test about publication or routing passes
-        # `True` and says so, and a sweep over `Capability` treats the six names
+        # `True` and says so, and a sweep over `Capability` treats the Knowledge names
         # as uncomposed (`tests/contract/test_transport_parity.UNCOMPOSED_HERE`).
         knowledge_assertions_enabled=(
             relationship_intelligence_enabled and knowledge_assertions_enabled

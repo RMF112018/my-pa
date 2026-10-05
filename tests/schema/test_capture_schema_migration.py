@@ -28,8 +28,8 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with one hundred and eighty-one capabilities and
-forty-eight purposes now declared in the domain. If this reddens, the freeze has been undone
+emits what it emitted on the day it merged, with one hundred and eighty-seven capabilities and
+fifty purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
 

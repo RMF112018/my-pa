@@ -45,6 +45,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, insert, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
+from tests.schema.knowledge_schema_ahead_contract import current_gap
 from tests.schema.test_meeting_records_migration import _audit, _seed_meeting
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
@@ -65,7 +66,7 @@ HEAD: Final = "6734f039f7a6"
 PREVIOUS: Final = "7d9a450dfd07"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20260929_1d9b248e7f83_record_events.py"
-HEAD_MIGRATION: Final = MIGRATIONS / "20261001_0641c354ca85_capture_lifecycle.py"
+HEAD_MIGRATION: Final = MIGRATIONS / "20261004_6734f039f7a6_knowledge_assertion_layer.py"
 VOCABULARY_MIGRATION: Final = MIGRATIONS / "20260927_7d9a450dfd07_meeting_records.py"
 TABLE_NAMES: Final = frozenset({"record_event_sequences", "record_events"})
 TRIGGER: Final = "record_events_are_append_only"
@@ -211,8 +212,10 @@ def test_the_at_texts_add_exactly_the_record_event_vocabulary_and_stay_sorted() 
 def test_head_admits_every_declared_capability_and_purpose() -> None:
     """A subset, not equality: the audit set also holds the operator names.
 
-    The chain head is `0641c354ca85`, which restates the vocabulary in place.
-    This revision's own AT set is proven above and no longer is that head.
+    The chain head is the Knowledge revision `6734f039f7a6`, which restates the
+    vocabulary in place and admits the KLP names ahead of the domain. The names it
+    admits beyond `Capability` are the native-host names and exactly the current
+    KLP schema-ahead gap (`tests/schema/knowledge_schema_ahead_contract.py`).
     """
     source = HEAD_MIGRATION.read_text(encoding="utf-8")
     at = set(_literals(_constant(source, "_CAPABILITIES_AT_THIS_REVISION")))
@@ -220,7 +223,10 @@ def test_head_admits_every_declared_capability_and_purpose() -> None:
     declared = {capability.value for capability in Capability}
     assert declared <= at
     assert {purpose.value for purpose in Purpose} <= purposes_at
-    assert at - declared == {capability.value for capability in NativeSourceCapability}
+    assert at - declared == {capability.value for capability in NativeSourceCapability} | set(
+        current_gap()["capability"]
+    )
+    assert purposes_at - {purpose.value for purpose in Purpose} == set(current_gap()["purpose"])
 
 
 def test_the_downgrade_refusal_names_the_new_vocabulary() -> None:

@@ -48,7 +48,7 @@ MATRIX_SHA256: Final = "ee2f2f8fc81a3e5e3f73e618a18fbf296ecd2a752d50499bf2e725e2
 R6_BASIS_COMMIT: Final = "3f575c02570c8fa733ecdc7bf0284fedc3c1d980"
 
 #: The KLP work packages that have landed: their NEW paths must exist.
-LANDED_WPS: Final = frozenset({"KLP-WP-01", "KLP-WP-02"})
+LANDED_WPS: Final = frozenset({"KLP-WP-01", "KLP-WP-02", "KLP-WP-03"})
 
 #: The slow/skip/xfail census of every EXISTS test module a KLP WP edits, taken
 #: at `R6_BASIS_COMMIT`. A WP may lower a count but never raise one (AC-080:
@@ -69,6 +69,21 @@ BASIS_SKIP_CENSUS: Final[dict[str, int]] = {
     "tests/schema/test_entity_assertion_provenance_migration.py": 0,
     "tests/schema/test_entity_relationship_types_migration.py": 0,
     "tests/schema/test_entity_schema_migration.py": 0,
+    # KLP-WP-03 edits outside the matrix path lists (registries and pins the new
+    # capabilities, family and modules move; none adds a marker).
+    "tests/architecture/test_capture_lifecycle_census.py": 0,
+    "tests/architecture/test_every_capability_reaching_a_memory_row_is_declared.py": 0,
+    "tests/architecture/test_principal_partition_is_reached_through_the_guard.py": 0,
+    "tests/architecture/test_record_event_principal_is_the_durable_principal.py": 0,
+    "tests/contract/test_a_derived_record_never_presents_as_source_evidence.py": 0,
+    "tests/contract/test_application_capabilities.py": 0,
+    "tests/contract/test_composed_child_names_every_switch.py": 0,
+    "tests/policy/test_application_authorization.py": 0,
+    "tests/security/test_http_negative_evidence.py": 0,
+    "tests/security/test_mcp_and_cli_negative_evidence.py": 0,
+    "tests/unit/test_record_event_cursor.py": 0,
+    "tests/unit/test_record_event_family_reads.py": 0,
+    "tests/unit/test_record_event_routing.py": 0,
 }
 _SKIP_PATTERN: Final = re.compile(
     r"pytest\.mark\.(?:slow|skip|skipif|xfail)\b|pytest\.(?:skip|xfail)\(|importorskip\("
@@ -217,8 +232,8 @@ def test_path_status_is_consistent_with_the_repository(wp: str, path: str, statu
     """EXISTS paths exist; the NEW paths of every landed KLP WP exist.
 
     A later WP's NEW path may or may not exist, depending on whether that WP has
-    landed; the WP that creates it is the one that proves it. KLP-WP-01 and
-    KLP-WP-02 have landed. A NEW_GENERATED path stays a template; once its WP has
+    landed; the WP that creates it is the one that proves it. KLP-WP-01,
+    KLP-WP-02 and KLP-WP-03 have landed. A NEW_GENERATED path stays a template; once its WP has
     landed, exactly one file matches it (the one generated revision).
     """
     assert status in {"EXISTS", "NEW", "NEW_GENERATED"}

@@ -3992,7 +3992,7 @@ class ApplicationService:
         if not (self._relationship_intelligence_enabled and self._relationship_memory_enabled):
             served -= _RELATIONSHIP_MEMORY_CAPABILITIES
         # KLP-WP-03 (KLP-AC-083): the Knowledge plane's switch, conjoined with
-        # the entity plane its subjects belong to. Off withholds all six names
+        # the entity plane its subjects belong to. Off withholds every Knowledge Assertion name
         # from `capabilities.get`, the MCP tool list and -- because the
         # `knowledge_assertion` family's reads are among them -- the Record Event
         # feed's visible families (KLP-AC-141).
@@ -12555,7 +12555,7 @@ class ApplicationService:
         """Refuse unless the Knowledge plane is composed and, remotely, granted.
 
         The `_relationship_memory_plane` floor: `available_capabilities` withholds
-        the six names, and the HTTP transport routes by path segment straight
+        the Knowledge names, and the HTTP transport routes by path segment straight
         into `_HANDLERS`, so every handler asks again here. A grant ceiling is
         re-checked for the capability's own purpose, as `record_events.list`
         does, because `invoke` itself does not consult the grant set.
@@ -14458,7 +14458,7 @@ def published_capabilities(
 #: it. Written out rather than derived from the `entities.` prefix, for the
 #: reason `_MANAGED_CAPABILITIES` is: admitting another is a decision here and
 #: not a spelling that happens to start the right way.
-#: KLP-WP-03: the Knowledge Assertion plane's six names, written out one at a
+#: KLP-WP-03: the Knowledge Assertion plane's names, written out one at a
 #: time and never selected by a `knowledge.` prefix -- the extraction plane's
 #: `knowledge.search`/`read`/`reveal`/`coverage` are not in it (KLP-AC-001).
 _KNOWLEDGE_ASSERTION_CAPABILITIES: Final[frozenset[Capability]] = frozenset(

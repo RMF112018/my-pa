@@ -209,7 +209,6 @@ from my_pa.infrastructure.persistence.tables import (
     meetings,
     project_constraints,
     projects,
-    record_events,
     relationship_memory_versions,
     tasks,
 )
@@ -2051,20 +2050,13 @@ class _AutonomousSubmit:
         ids = list(self.request.trigger_event_ids)
         if not ids:
             return []
-        events = record_events
-        rows = {
-            row.event_id: row
-            for row in self.connection.execute(
-                select(
-                    events.c.event_id,
-                    events.c.record_family,
-                    events.c.source_receipt_id,
-                    not_(knowledge_event_withheld_remote(events, self.principal_id)).label(
-                        "visible"
-                    ),
-                ).where(partition_criterion(events, self.context), events.c.event_id.in_(ids))
-            )
-        }
+        # The feed module owns the feed tables; imported here, not at module
+        # level, because it imports this module's withholding predicate.
+        from my_pa.infrastructure.persistence.record_events import (
+            trigger_receipts,
+        )
+
+        rows = trigger_receipts(self.connection, self.principal_id, ids)
         snapshots: list[_TriggerSnapshot] = []
         m, s = knowledge_assertion_mutations, knowledge_assertion_submissions
         for event_id in sorted(ids):

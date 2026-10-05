@@ -59,6 +59,7 @@ statement runs.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import Any, Final, cast
 
 from sqlalchemy import (
@@ -135,8 +136,10 @@ __all__ = [
     "RecordEventBuffer",
     "SqlRecordEventReader",
     "SqlRecordEventWriter",
+    "TriggerReceipt",
     "feed_reader_memory_relation_names",
     "flush_record_events",
+    "trigger_receipts",
 ]
 
 #: The allocator's one conflict target: the Principal's own sequence row.
@@ -550,6 +553,49 @@ def _translated[ResultT](work: Callable[[], ResultT]) -> ResultT:
     except (SQLAlchemyError, IsolationLevelError):
         failure = RepositoryFailureError("the request could not be completed")
     raise failure
+
+
+@dataclass(frozen=True, slots=True)
+class TriggerReceipt:
+    """KLP-WP-04: one cited trigger event as autonomous submit's C2 read sees it."""
+
+    event_id: str
+    record_family: str
+    source_receipt_id: str | None
+    visible: bool
+
+
+def trigger_receipts(
+    connection: Connection, principal_id: str, event_ids: Sequence[str]
+) -> dict[str, TriggerReceipt]:
+    """KLP-WP-04 (R6 9.1): the cited events of this Principal and whether a remote caller sees them.
+
+    The feed module's own read (the only importer of the feed tables): family,
+    `source_receipt_id` and the full remote visibility predicate (restricted
+    memory, restricted capture and Knowledge withholding) for each owned event.
+    An absent or foreign id is simply missing from the answer.
+    """
+    if not event_ids:
+        return {}
+    families = frozenset(RecordEventFamily)
+    statement = select(
+        record_events.c.event_id,
+        record_events.c.record_family,
+        record_events.c.source_receipt_id,
+        not_(_withheld_remotely(record_events, principal_id, families)).label("visible"),
+    ).where(
+        partition_criterion(record_events, capture_context(principal_id)),
+        record_events.c.event_id.in_(sorted(set(event_ids))),
+    )
+    return {
+        row.event_id: TriggerReceipt(
+            event_id=row.event_id,
+            record_family=row.record_family,
+            source_receipt_id=row.source_receipt_id,
+            visible=bool(row.visible),
+        )
+        for row in connection.execute(statement)
+    }
 
 
 class SqlRecordEventReader(RecordEventReader):

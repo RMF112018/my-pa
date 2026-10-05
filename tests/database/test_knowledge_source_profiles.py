@@ -503,7 +503,12 @@ def test_disable_is_terminal_and_deletes_or_rewrites_no_knowledge_row(
     # Re-enabling means provisioning a new profile row for the same binding.
     renewed = provision(engine, principal, tmp_path)
     assert renewed != profile
-    assert [row["disabled_at"] is None for row in _rows(engine, principal)] == [False, True]
+    # Both rows share the fixed clock, so their listing order is by random id:
+    # compare the set of states, not their order (slice B2 de-flake).
+    states = {
+        row["source_profile_id"]: row["disabled_at"] is None for row in _rows(engine, principal)
+    }
+    assert states == {profile: False, renewed: True}
 
 
 # ---- seal rotation: redact-sealed (R6 section 7 step 3; end to end in slice B3) ------

@@ -423,11 +423,12 @@ BEYOND_THE_NINE: Final = {
     ),
     Capability.KNOWLEDGE_ASSERTIONS_SUBMIT: (
         "purpose `knowledge_assertion_observation`. `knowledge.assertions.submit` (KLP-WP-04) "
-        "reads one of the eight (`relationship_memory_versions`) and writes none of the eight: "
-        "for a cited memory it reads each version's `statement_sha256` and `classification` "
-        "under the Principal partition (digest check and rank-max class), and its trigger "
-        "visibility check reads version classes inside the withheld predicate. It reads no "
-        "memory text."
+        "reads two of the eight (`relationship_memories`, `relationship_memory_versions`) and "
+        "writes none of the eight: for a cited memory it reads each version's "
+        "`statement_sha256` and `classification` under the Principal partition (digest check "
+        "and rank-max class), and its trigger-visibility check applies the feed's remote "
+        "predicate, which reads a memory event's current version class. It reads no memory "
+        "text."
     ),
     Capability.RECORD_EVENTS_LIST: (
         "purpose `record_event_read`. `record_events.list` reads two of the eight "
@@ -562,7 +563,7 @@ DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str
         frozenset(),
     ),
     Capability.KNOWLEDGE_ASSERTIONS_SUBMIT: (
-        frozenset({"relationship_memory_versions"}),
+        frozenset({"relationship_memories", "relationship_memory_versions"}),
         frozenset(),
     ),
     # `WP-RE-06` (OD-8 (i)): keys, `current_version_id` and `classification` only,

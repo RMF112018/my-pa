@@ -85,6 +85,7 @@ from my_pa.application.commands import (
     CreateEntityParticipation,
     CreateEntityProposal,
     CreateEntityRelationship,
+    CreateKnowledgeAssertion,
     CreateManagedDocument,
     CreateMeeting,
     CreateProject,
@@ -115,6 +116,7 @@ from my_pa.application.commands import (
     GetGoodNotesPullStatus,
     GetGoodNotesWork,
     GetGsqsB0Status,
+    GetKnowledgeAssertionHistory,
     GetLatestIntelligenceArtifact,
     GetPulse,
     GetRelationshipMemory,
@@ -139,6 +141,7 @@ from my_pa.application.commands import (
     ListGoodNotesPages,
     ListGoodNotesRuns,
     ListIntelligenceArtifacts,
+    ListKnowledgeAssertions,
     ListManagedDocuments,
     ListMeetings,
     ListPortfolioConstraints,
@@ -171,6 +174,7 @@ from my_pa.application.commands import (
     ReadGoodNotes,
     ReadIntelligenceArtifact,
     ReadKnowledge,
+    ReadKnowledgeAssertion,
     ReadManagedDocument,
     ReadMeeting,
     ReadPortfolioConstraintOverview,
@@ -195,6 +199,7 @@ from my_pa.application.commands import (
     RetireEntityCommunicationMethod,
     RetireEntityIdentifier,
     RetireEntityName,
+    RevealKnowledgeAssertion,
     RevealSubject,
     ReviseCapture,
     ReviseEntityAddress,
@@ -212,6 +217,7 @@ from my_pa.application.commands import (
     SearchGoodNotes,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
+    SearchKnowledgeAssertions,
     SearchMeetings,
     SearchPortfolioConstraints,
     SearchRelationshipMemories,
@@ -262,6 +268,7 @@ from my_pa.domain.intelligence.catalog import (
     ResolverSetId,
     SourceLaneId,
 )
+from my_pa.domain.knowledge_assertion.vocabulary import KnowledgeSubjectKind
 from my_pa.domain.policy.decision import DenialReason
 from my_pa.domain.project_controls.constraint import ConstraintLifecycleState
 from my_pa.domain.project_controls.sync import (
@@ -1164,6 +1171,25 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             title="A policy meeting series, retitled",
         ),
         Capability.RECORD_EVENTS_LIST: ListRecordEvents(),
+        # KLP-WP-03: the six Knowledge Assertion names.
+        Capability.KNOWLEDGE_ASSERTIONS_READ: ReadKnowledgeAssertion(
+            assertion_id="kasr_policyknowledge0001"
+        ),
+        Capability.KNOWLEDGE_ASSERTIONS_LIST: ListKnowledgeAssertions(),
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH: SearchKnowledgeAssertions(query="synthetic"),
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY: GetKnowledgeAssertionHistory(
+            assertion_id="kasr_policyknowledge0001"
+        ),
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL: RevealKnowledgeAssertion(
+            assertion_id="kasr_policyknowledge0001"
+        ),
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE: CreateKnowledgeAssertion(
+            subject_kind=KnowledgeSubjectKind.PRINCIPAL,
+            subject_id=scene.principal.principal_id,
+            predicate_code="policy.requirement",
+            value="A policy knowledge value",
+            idempotency_key="policy-knowledge-create",
+        ),
     }
 
 
@@ -1588,6 +1614,13 @@ SCOPED_CAPABILITIES = [
         Capability.MEETINGS_SERIES_UPDATE,
         # WP-RE-06: the change feed, also in `_SCOPELESS`.
         Capability.RECORD_EVENTS_LIST,
+        # KLP-WP-03: the six Knowledge Assertion names, in `_SCOPELESS`.
+        Capability.KNOWLEDGE_ASSERTIONS_READ,
+        Capability.KNOWLEDGE_ASSERTIONS_LIST,
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH,
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE,
     }
 ]
 
@@ -1862,6 +1895,13 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.MEETINGS_SERIES_UPDATE,
         # WP-RE-06: the change feed carries no source scope either.
         Capability.RECORD_EVENTS_LIST,
+        # KLP-WP-03: the six Knowledge Assertion names, in `_SCOPELESS`.
+        Capability.KNOWLEDGE_ASSERTIONS_READ,
+        Capability.KNOWLEDGE_ASSERTIONS_LIST,
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH,
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

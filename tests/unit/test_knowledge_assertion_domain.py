@@ -146,13 +146,18 @@ def test_the_classification_floor_subset_equals_the_matrix() -> None:
 
 
 def test_the_later_wps_additions_are_not_declared_by_wp01() -> None:
-    """OperatorSurface and the '+1' members belong to WP-03/04/06."""
+    """OperatorSurface and the '+1' members belong to WP-03/04/06.
+
+    KLP-WP-03 has landed and declared `RecordEventFamily.KNOWLEDGE_ASSERTION`;
+    the WP-04 and WP-06 additions are still absent.
+    """
     from my_pa.domain.capture.review import ReviewSubjectKind
     from my_pa.domain.context.prepared import ContextPlane, SourceAuthorityClass
     from my_pa.domain.record_events import RecordEventFamily
 
     assert not hasattr(vocabulary, "OperatorSurface")
-    for enum_type in (ReviewSubjectKind, RecordEventFamily, ContextPlane):
+    assert RecordEventFamily.KNOWLEDGE_ASSERTION.value == "knowledge_assertion"
+    for enum_type in (ReviewSubjectKind, ContextPlane):
         assert "knowledge_assertion" not in {member.value for member in enum_type}
     assert "product_owned_knowledge_assertion" not in {m.value for m in SourceAuthorityClass}
 

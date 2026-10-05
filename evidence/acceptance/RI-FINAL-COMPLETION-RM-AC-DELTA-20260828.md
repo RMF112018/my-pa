@@ -40,3 +40,20 @@ that version's `classification`. No memory column enters a returned row -- a fee
 carries only the event's own metadata -- and no statement, structured value, evidence
 payload or any other memory or version column is read;
 `tests/security/test_record_events_carry_no_payload.py` holds the reader to those columns.
+
+**KLP-WP-03 (Knowledge Assertion plane, 2026-10-04):**
+`knowledge.assertions.read` reads one of the eight (`relationship_memory_versions`) and writes
+none of the eight; `knowledge.assertions.list` reads one of the eight
+(`relationship_memory_versions`) and writes none of the eight; `knowledge.assertions.search`
+reads one of the eight (`relationship_memory_versions`) and writes none of the eight;
+`knowledge.assertions.history` reads one of the eight (`relationship_memory_versions`) and
+writes none of the eight; `knowledge.assertions.reveal` reads one of the eight
+(`relationship_memory_versions`) and writes none of the eight. Each of those five reaches it
+only for a remote caller, inside the R6 section 5.2 `withheld_remote` `EXISTS`, comparing the
+`classification` of every version of a cited memory under the Principal partition to withhold
+the assertion; no memory column enters a returned row.
+`knowledge.assertions.create` reads one of the eight (`relationship_memory_versions`) and writes
+none of the eight: for a cited memory
+it reads each version's `statement_sha256` and `classification` under the Principal partition,
+to verify the cited digest and take the rank-max class onto the Knowledge evidence row. No
+statement, structured value or evidence payload is read.

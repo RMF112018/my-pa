@@ -457,9 +457,10 @@ def _resolved_app(
     *,
     process_writes: bool,
     oauth_client_id: str = _CLIENT_ID,
+    knowledge: bool = False,
 ) -> object:
     """The composition root's resolution (`apps/gateway.py`), over the synthetic store."""
-    service = build_service(scene.world, scene.providers)
+    service = build_service(scene.world, scene.providers, knowledge_assertions_enabled=knowledge)
     resolution = repository.authenticate(
         oauth_client_id=oauth_client_id,
         token_scopes=frozenset({_SCOPE}),
@@ -879,3 +880,106 @@ async def test_compact_task_archive_keeps_write_authorization_guards(
     )
     assert scene.world.tasks_v2 == [task]
     assert tuple(scene.world.task_history_v2) == before
+
+
+# ---- KLP-WP-03 (KLP-AC-022 WP-03 slice) -------------------------------------------
+
+KNOWLEDGE_READS: Final = frozenset(
+    {
+        Capability.KNOWLEDGE_ASSERTIONS_READ,
+        Capability.KNOWLEDGE_ASSERTIONS_LIST,
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH,
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
+    }
+)
+KNOWLEDGE: Final = KNOWLEDGE_READS | {Capability.KNOWLEDGE_ASSERTIONS_CREATE}
+
+
+def _knowledge_grants() -> tuple[tuple[Capability, Purpose, bool], ...]:
+    return (
+        *((capability, Purpose.KNOWLEDGE_ASSERTION_READ, False) for capability in KNOWLEDGE_READS),
+        (Capability.KNOWLEDGE_ASSERTIONS_CREATE, Purpose.KNOWLEDGE_ASSERTION_AUTHORING, True),
+    )
+
+
+def test_knowledge_facade_kind_and_feature_label() -> None:
+    """Five reads route to `my_pa.read`, create to `my_pa.write`; no new façade tool."""
+    for capability in KNOWLEDGE_READS:
+        assert facade_kind(capability) == "read"
+    assert facade_kind(Capability.KNOWLEDGE_ASSERTIONS_CREATE) == "write"
+    for capability in KNOWLEDGE:
+        assert feature_label(capability.value) == "knowledge"
+    everything = frozenset(capability.value for capability in KNOWLEDGE)
+    assert facade_tool_names(everything) == {DESCRIBE_TOOL, READ_TOOL, WRITE_TOOL}
+
+
+@pytest.mark.parametrize("capability", sorted(KNOWLEDGE), ids=lambda c: c.value)
+def test_a_knowledge_capability_on_the_wrong_wrapper_is_refused(capability: Capability) -> None:
+    allowed = frozenset(item.value for item in KNOWLEDGE)
+    wrapper = {"capability": capability.value, "arguments": {"payload": {}}}
+    write = capability is Capability.KNOWLEDGE_ASSERTIONS_CREATE
+    right, wrong = (WRITE_TOOL, READ_TOOL) if write else (READ_TOOL, WRITE_TOOL)
+    assert prepare_compact_call(right, wrapper, allowed_canonical=allowed)[0] == capability.value
+    with pytest.raises(InvalidRequestError):
+        prepare_compact_call(wrong, wrapper, allowed_canonical=allowed)
+
+
+@pytest.mark.anyio
+async def test_a_knowledge_read_through_my_pa_read_is_audited_by_its_canonical_name(
+    scene: Scene,
+) -> None:
+    """The façade adds no tool; the audit row names the canonical capability.
+
+    The reveal names a capture-plane `asrt_` identifier, which the handler answers
+    `not_found` before reaching the plane, so this FAST world needs no Knowledge
+    repository to prove the routing and the audit.
+    """
+    scene.world.audit.clear()
+
+    async def exercise(session: ClientSession) -> tuple[set[str], object, object]:
+        names = {tool.name for tool in (await session.list_tools()).tools}
+        described = await session.call_tool(DESCRIBE_TOOL, {"feature": "knowledge"})
+        revealed = await session.call_tool(
+            READ_TOOL,
+            {
+                "capability": Capability.KNOWLEDGE_ASSERTIONS_REVEAL.value,
+                "arguments": {"payload": {"assertion_id": "asrt_compactgateway0001"}},
+            },
+        )
+        return names, described, revealed
+
+    with _identity(
+        global_writes=False, client_writes=False, grants=_knowledge_grants()
+    ) as repository:
+        app = _resolved_app(scene, repository, process_writes=False, knowledge=True)
+        names, described, revealed = await _session(app, exercise)
+    assert names == {DESCRIBE_TOOL, READ_TOOL}
+    items = {str(item["capability"]) for item in _body(described)["items"]}
+    # Writes disabled: create is dropped at grant resolution, the reads remain.
+    assert items >= {capability.value for capability in KNOWLEDGE_READS}
+    assert Capability.KNOWLEDGE_ASSERTIONS_CREATE.value not in items
+    assert _body(revealed)["error"]["code"] == "not_found"
+    audited = [event.capability for event in scene.world.audit]
+    assert Capability.KNOWLEDGE_ASSERTIONS_REVEAL in audited
+
+
+@pytest.mark.anyio
+async def test_knowledge_create_needs_writes_on_and_its_write_grant(scene: Scene) -> None:
+    """AC-017 (WP-03 slice): writes off -> no write wrapper; on -> published."""
+
+    async def exercise(session: ClientSession) -> tuple[set[str], set[str]]:
+        names = {tool.name for tool in (await session.list_tools()).tools}
+        described = await session.call_tool(DESCRIBE_TOOL, {"feature": "knowledge"})
+        return names, {str(item["capability"]) for item in _body(described)["items"]}
+
+    with _identity(global_writes=True, client_writes=True, grants=_knowledge_grants()) as repo:
+        app = _resolved_app(scene, repo, process_writes=True, knowledge=True)
+        names, items = await _session(app, exercise)
+    assert names == {DESCRIBE_TOOL, READ_TOOL, WRITE_TOOL}
+    assert Capability.KNOWLEDGE_ASSERTIONS_CREATE.value in items
+    with _identity(global_writes=True, client_writes=True, grants=_knowledge_grants()) as repo:
+        app = _resolved_app(scene, repo, process_writes=False, knowledge=True)
+        names, items = await _session(app, exercise)
+    assert WRITE_TOOL not in names
+    assert Capability.KNOWLEDGE_ASSERTIONS_CREATE.value not in items

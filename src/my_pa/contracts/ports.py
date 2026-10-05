@@ -5138,7 +5138,7 @@ class KnowledgeAssertionRepository(ABC):
         """The head version of `predicate_code`, or `None` when it is unregistered."""
 
     @abstractmethod
-    def read(
+    def read_assertion(
         self, principal_id: str, assertion_id: str, *, remote: bool
     ) -> KnowledgeAssertionRow | None:
         """One assertion of this Principal, or `None` (absent, foreign or withheld)."""

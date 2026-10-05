@@ -435,7 +435,7 @@ def test_no_path_grants_every_capability_enum_member() -> None:
     assert Capability.SOURCES_ENROLL not in desired
     assert Capability.GSQS_START not in desired
     assert Capability.CONTINUITY_TASKS_CREATE not in desired
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v5"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v6"
 
 
 def test_mismatched_purpose_or_write_is_add_not_noop() -> None:
@@ -689,7 +689,7 @@ def test_a_v2_converged_client_plans_exactly_the_six_meeting_adds() -> None:
         scope=SCOPE,
     )
     assert not diff.is_healthy()
-    assert diff.profile_version == "chatllm-data-v5"
+    assert diff.profile_version == "chatllm-data-v6"
     assert diff.add == _MEETINGS
     assert diff.renew == frozenset()
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
@@ -712,7 +712,7 @@ def test_a_v3_converged_client_plans_exactly_the_record_events_add() -> None:
         scope=SCOPE,
     )
     assert not diff.is_healthy()
-    assert diff.profile_version == "chatllm-data-v5"
+    assert diff.profile_version == "chatllm-data-v6"
     assert diff.add == feed
     assert diff.renew == frozenset()
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
@@ -739,7 +739,7 @@ def test_a_v4_converged_client_plans_exactly_the_capture_lifecycle_adds() -> Non
         scope=SCOPE,
     )
     assert not diff.is_healthy()
-    assert diff.profile_version == "chatllm-data-v5"
+    assert diff.profile_version == "chatllm-data-v6"
     assert diff.add == lifecycle
     assert diff.renew == frozenset()
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)

@@ -208,6 +208,9 @@ _FULL_PLANE_SETTINGS = SimpleNamespace(
     relationship_intelligence_enabled=True,
     relationship_intelligence_writes_enabled=True,
     relationship_memory_enabled=True,
+    # KLP-WP-03: the Knowledge plane off, its default; the profile then
+    # neither composes nor demands the six Knowledge grants.
+    knowledge_assertions_enabled=False,
 )
 
 
@@ -273,7 +276,7 @@ def test_profile_apply_adds_the_meeting_grants_once_and_then_converges(
         desired = _grant_v2_catalog(repository)
         code, plan = _profile(repository, "profile-plan", capsys)
         assert code == 1
-        assert plan["profile_version"] == "chatllm-data-v5"
+        assert plan["profile_version"] == "chatllm-data-v6"
         assert plan["healthy"] is False
         assert plan["actions"] == [
             {
@@ -325,6 +328,6 @@ def test_profile_commands_refuse_the_previous_profile_version(
         with pytest.raises(SystemExit) as raised:
             _profile(repository, "profile-apply", capsys, profile_version="chatllm-data-v3")
         assert raised.value.code == 2
-        assert "profile version must be chatllm-data-v5" in capsys.readouterr().err
+        assert "profile version must be chatllm-data-v6" in capsys.readouterr().err
         rows = repository.list_capability_grants(remote_client_id=CLIENT_UUID)
         assert not any(row.capability.startswith("meetings.") for row in rows)

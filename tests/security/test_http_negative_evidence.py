@@ -269,6 +269,14 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         Capability.GOODNOTES_PULL,
         Capability.GOODNOTES_COMPLETE,
         Capability.GOODNOTES_STATUS,
+        # KLP-WP-03: the Knowledge plane is off in this harness (its `World`
+        # has no Knowledge repository); every transport refuses alike.
+        Capability.KNOWLEDGE_ASSERTIONS_READ,
+        Capability.KNOWLEDGE_ASSERTIONS_LIST,
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH,
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE,
     }
 )
 
@@ -1292,6 +1300,19 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "title": "A wire meeting series, retitled",
         },
         Capability.RECORD_EVENTS_LIST: {"page_size": 10},
+        # KLP-WP-03: uncomposed in this world; each still normalizes.
+        Capability.KNOWLEDGE_ASSERTIONS_READ: {"assertion_id": "kasr_wireknowledge00001"},
+        Capability.KNOWLEDGE_ASSERTIONS_LIST: {"page_size": 10},
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH: {"query": MARKER_QUERY},
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY: {"assertion_id": "kasr_wireknowledge00001"},
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL: {"assertion_id": "kasr_wireknowledge00001"},
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE: {
+            "subject_kind": "principal",
+            "subject_id": "prn_wireknowledge00001",
+            "predicate_code": "policy.requirement",
+            "value": "A wire knowledge value",
+            "idempotency_key": "wire-knowledge-create-0001",
+        },
     }
 
 
@@ -1957,6 +1978,13 @@ SCOPED_CAPABILITIES = [
         # WP-RE-06: `record_events.list` names only the acting Principal's own
         # change feed and no `src_...` or `enr_...`; also in `_SCOPELESS`.
         Capability.RECORD_EVENTS_LIST,
+        # KLP-WP-03: the six Knowledge Assertion names, also in `_SCOPELESS`.
+        Capability.KNOWLEDGE_ASSERTIONS_READ,
+        Capability.KNOWLEDGE_ASSERTIONS_LIST,
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH,
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE,
     }
 ]
 
@@ -2243,6 +2271,11 @@ MEETING_AUTHORING_EXEMPTION = frozenset(
     }
 )
 
+#: KLP-WP-03's one write the substring proxy refuses -- `knowledge.assertions.create`
+#: -- on the same reading: it writes the acting Principal's own Knowledge
+#: Assertion rows and reaches no source provider and no enrollment.
+KNOWLEDGE_AUTHORING_EXEMPTION = frozenset({Capability.KNOWLEDGE_ASSERTIONS_CREATE})
+
 
 def test_the_transport_routes_no_mutating_capability() -> None:
     """One route, one method, and no name that mutates a *source*.
@@ -2291,6 +2324,7 @@ def test_the_transport_routes_no_mutating_capability() -> None:
         | CANVAS_WORKSPACE_EXEMPTION
         | CONSTRAINT_AUTHORING_EXEMPTION
         | MEETING_AUTHORING_EXEMPTION
+        | KNOWLEDGE_AUTHORING_EXEMPTION
     )
     checked = [c for c in _BUILDERS if c not in exempt]
     assert len(checked) == len(IMPLEMENTED_CAPABILITIES) - len(exempt)

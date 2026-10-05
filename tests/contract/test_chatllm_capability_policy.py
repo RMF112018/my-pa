@@ -76,8 +76,8 @@ _MEETINGS = _MEETING_READS | _MEETING_WRITES
 
 def test_policy_covers_every_public_capability_exactly_once() -> None:
     assert set(CHATLLM_CAPABILITY_POLICY) == set(Capability)
-    assert len(CHATLLM_CAPABILITY_POLICY) == 181
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v5"
+    assert len(CHATLLM_CAPABILITY_POLICY) == 187
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v6"
 
 
 def test_classification_counts_match_the_approved_plan() -> None:
@@ -85,7 +85,8 @@ def test_classification_counts_match_the_approved_plan() -> None:
     for policy in CHATLLM_CAPABILITY_POLICY.values():
         counts[policy.classification] += 1
     assert counts[ChatLLMCapabilityClass.DATA_REQUIRED] == 72
-    assert counts[ChatLLMCapabilityClass.DATA_CONDITIONAL] == 90
+    # KLP-WP-03 (chatllm-data-v6): the six Knowledge Assertion names, 90 -> 96.
+    assert counts[ChatLLMCapabilityClass.DATA_CONDITIONAL] == 96
     assert counts[ChatLLMCapabilityClass.COMPATIBILITY_ONLY] == 2
     assert counts[ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED] == 15
     assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 2
@@ -209,3 +210,39 @@ def test_project_controls_configure_is_application_data_not_system_admin() -> No
     assert configure.family == "project_controls"
     assert is_write_capability(Capability.PROJECT_CONTROLS_CONFIGURE)
     assert not is_write_capability(Capability.PROJECT_CONTROLS_STATUS)
+
+
+# ---- KLP-WP-03 (KLP-AC-105) ---------------------------------------------------
+
+_KNOWLEDGE = frozenset(
+    {
+        Capability.KNOWLEDGE_ASSERTIONS_READ,
+        Capability.KNOWLEDGE_ASSERTIONS_LIST,
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH,
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE,
+    }
+)
+
+
+def test_the_knowledge_names_are_conditional_on_their_own_plane_by_explicit_name() -> None:
+    """An explicit name set, never a `knowledge.` prefix (KLP-AC-001, KLP-AC-105)."""
+    for capability in _KNOWLEDGE:
+        policy = CHATLLM_CAPABILITY_POLICY[capability]
+        assert policy.classification is ChatLLMCapabilityClass.DATA_CONDITIONAL
+        assert policy.composition_prerequisite is (
+            ChatLLMCompositionPrerequisite.KNOWLEDGE_ASSERTIONS
+        )
+    for capability in (
+        Capability.KNOWLEDGE_SEARCH,
+        Capability.KNOWLEDGE_READ,
+        Capability.KNOWLEDGE_REVEAL,
+        Capability.KNOWLEDGE_COVERAGE,
+    ):
+        assert CHATLLM_CAPABILITY_POLICY[capability].composition_prerequisite is (
+            ChatLLMCompositionPrerequisite.ALWAYS
+        )
+    values = {capability.value for capability in Capability}
+    assert "knowledge.assertions.submit" not in values
+    assert "knowledge.discovery.checkpoint" not in values

@@ -518,6 +518,7 @@ from my_pa.contracts.ports import (
     EntitySummary,
     EvidenceUnavailableError,
     GoodNotesPullRepositoryConflictError,
+    KnowledgeAssertionRepository,
     KnowledgeCaptureWithdrawnError,
     KnowledgeConcurrentDuplicateError,
     KnowledgeEvidenceNotFoundError,
@@ -12596,7 +12597,7 @@ class ApplicationService:
         """One assertion; absent, foreign and remotely withheld answer alike."""
         self._knowledge_plane(authorization, command.capability)
         with _translated():
-            row = unit_of_work.knowledge_assertions.read(
+            row = unit_of_work.knowledge_assertions.read_assertion(
                 authorization.principal.principal_id,
                 command.assertion_id,
                 remote=knowledge_is_remote(authorization),
@@ -12733,7 +12734,7 @@ class ApplicationService:
         `current_lifecycle`; a different digest is `conflict(idempotency_conflict)`.
         """
         self._knowledge_plane(authorization, command.capability)
-        repository = unit_of_work.knowledge_assertions
+        repository: KnowledgeAssertionRepository = unit_of_work.knowledge_assertions
         with _translated():
             predicate = repository.predicate_head(command.predicate_code)
         request = knowledge_create_request(

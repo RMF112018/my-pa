@@ -164,7 +164,7 @@ def test_the_derivation_finds_the_switches_the_published_surface_branches_on() -
     """
     variables = _switch_variables()
     assert variables, "no switch narrows the published surface, so this module proves nothing"
-    assert len(variables) == 5, (
+    assert len(variables) == 6, (
         "the published surface is narrowed by a different number of switches than "
         f"this guard knows about: {sorted(variables)}"
     )
@@ -174,6 +174,8 @@ def test_the_derivation_finds_the_switches_the_published_surface_branches_on() -
         "relationship_memory_enabled",
         "relationship_identity_correction_enabled",
         "goodnotes_pull_enabled",
+        # KLP-WP-03.
+        "knowledge_assertions_enabled",
     }
 
 

@@ -306,8 +306,10 @@ def test_the_family_vocabulary_is_exactly_the_twenty_two_named_families() -> Non
         "meeting_series",
         "capture",
         "task_comment",
+        # KLP-WP-03 declares the one family WP-02 admitted schema-ahead.
+        "knowledge_assertion",
     }
-    assert len(RecordEventFamily) == 22
+    assert len(RecordEventFamily) == 23
 
 
 def test_the_kind_vocabulary_is_created_updated_state_changed() -> None:

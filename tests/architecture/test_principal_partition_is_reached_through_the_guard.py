@@ -162,6 +162,13 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # `capture_versions` aliases of its capture analogue -- through
         # `partition_criterion`. It writes no hand-written partition comparison.
         "infrastructure/persistence/record_events.py",
+        # KLP-WP-03's Knowledge Assertion plane. Every SELECT and UPDATE scopes
+        # each table and alias it names through `partition_criterion`, every
+        # INSERT (including the `ON CONFLICT` reservation and evidence upserts)
+        # is stamped through `principal_bound_values`, and every join between two
+        # partitioned tables composes `matching_partition_criterion`. It writes no
+        # hand-written partition comparison.
+        "infrastructure/persistence/knowledge_assertions.py",
         "infrastructure/persistence/write_requests.py",
         # The same plane's governed write path (`WP-RI-A-02`), separated from the
         # module above because a guarded write is a transaction rather than a
@@ -404,6 +411,14 @@ STATEMENT_LEVEL: Final = frozenset(
 #: modules is reached only through an application path that has already resolved
 #: the Principal, which is the same argument the `QUARANTINED` entries make.
 PER_MODULE_ONLY: Final = {
+    "infrastructure/persistence/knowledge_assertions.py": (
+        "KLP-WP-03: every read, lock and control UPDATE composes `partition_criterion` "
+        "on each table and alias it names (the remote `withheld_remote` predicate "
+        "included), every insert and `ON CONFLICT` upsert composes `_bound` over "
+        "`principal_bound_values`, and joins compose `matching_partition_criterion`; "
+        "the predicate-head read is over the unpartitioned global registry. It has not "
+        "joined a dedicated statement-level scanner."
+    ),
     "infrastructure/persistence/record_events.py": (
         "the allocator upsert and the ordered event insert both compose `_bound`, a "
         "one-line wrapper over `principal_bound_values`; every read (the page, the "

@@ -173,7 +173,12 @@ def test_a_cursor_bound_to_the_twenty_family_set_conflicts() -> None:
     and is `conflict(cursor)` before its event is resolved. A fresh list from
     the start (no token) is the designed recovery and returns full history.
     """
-    new_families = {RecordEventFamily.CAPTURE, RecordEventFamily.TASK_COMMENT}
+    new_families = {
+        RecordEventFamily.CAPTURE,
+        RecordEventFamily.TASK_COMMENT,
+        # KLP-WP-03 added a third family after WP-RE-08.
+        RecordEventFamily.KNOWLEDGE_ASSERTION,
+    }
     twenty = frozenset(RecordEventFamily) - new_families
     assert len(twenty) == 20
     old_token = encode_cursor(

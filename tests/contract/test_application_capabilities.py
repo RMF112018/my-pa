@@ -74,6 +74,7 @@ from my_pa.application.commands import (
 )
 from my_pa.application.disclosure import Limitation
 from my_pa.application.service import _HANDLERS, ApplicationService
+from my_pa.domain.identity.chatllm_capability_policy import KNOWLEDGE_ASSERTION_DATA_NAMES
 from my_pa.contracts.ports import KnowledgeRecord
 from my_pa.contracts.v1.capabilities import Availability, EffectiveLimits, ReadinessState
 from my_pa.contracts.v1.envelope import ResponseEnvelope
@@ -615,6 +616,11 @@ _GOODNOTES_PULL_CAPABILITIES = frozenset(
         Capability.GOODNOTES_STATUS,
     }
 )
+#: KLP-WP-03: the Knowledge Assertion plane is off in this world (its switch
+#: defaults off and the FAST `World` has no Knowledge repository), so its six
+#: names are withheld from the manifest exactly as the pull plane's are.
+_KNOWLEDGE_ASSERTION_CAPABILITIES: frozenset[Capability] = KNOWLEDGE_ASSERTION_DATA_NAMES
+
 _RUN01_UNWIRED_CAPABILITIES: frozenset[Capability] = frozenset(
     # `PC-CM-RUN01-WP07` wired `constraints.create_published`, which was the
     # last declared name without a handler, so this set is empty. It stays a
@@ -641,7 +647,11 @@ def test_capabilities_get_reports_phase_a_pull_contracts_as_not_implemented(
     availability = {c["name"]: c["availability"] for c in manifest["capabilities"]}
     assert set(availability) == {c.value for c in Capability}
     assert set(Capability) - set(_HANDLERS) == _RUN01_UNWIRED_CAPABILITIES
-    contract_only = _GOODNOTES_PULL_CAPABILITIES | _RUN01_UNWIRED_CAPABILITIES
+    contract_only = (
+        _GOODNOTES_PULL_CAPABILITIES
+        | _RUN01_UNWIRED_CAPABILITIES
+        | _KNOWLEDGE_ASSERTION_CAPABILITIES
+    )
     assert {
         Capability(name)
         for name, state in availability.items()
@@ -671,7 +681,9 @@ def test_readiness_stops_reporting_contracts_only_because_the_manifest_is_derive
     readiness = result["readiness"]
     assert isinstance(readiness, dict)
     assert readiness["state"] == ReadinessState.DEGRADED.value
-    expected_available = set(_HANDLERS) - _GOODNOTES_PULL_CAPABILITIES
+    expected_available = (
+        set(_HANDLERS) - _GOODNOTES_PULL_CAPABILITIES - _KNOWLEDGE_ASSERTION_CAPABILITIES
+    )
     assert len(expected_available) == 178
     assert readiness["implemented_capabilities"] == len(expected_available)
     assert readiness["limitations"]

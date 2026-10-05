@@ -50,7 +50,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Final, cast
 
@@ -149,10 +149,11 @@ from my_pa.infrastructure.persistence.identifier_claim_lock import lock_entity_m
 from my_pa.infrastructure.persistence.principal_scope import (
     PrincipalContext,
     capture_context,
+    matching_partition_criterion,
     partition_criterion,
+    principal_bound_values,
 )
 from my_pa.infrastructure.persistence.tables import (
-    SCHEMA,
     capture_versions,
     entities,
     knowledge_assertion_evidence_links,
@@ -210,7 +211,7 @@ def classification_rank(value: ColumnElement[Any]) -> ColumnElement[int]:
     """`knowledge.knowledge_classification_rank(value)`: the one SQL rank (R6 11.2)."""
     return cast(
         "ColumnElement[int]",
-        getattr(func, SCHEMA).knowledge_classification_rank(value),
+        func.knowledge.knowledge_classification_rank(value),
     )
 
 
@@ -229,7 +230,7 @@ def _evidence_withheld(evidence: Table, context: PrincipalContext) -> ColumnElem
             _SIBLING.join(
                 _SIBLING_PROFILE,
                 and_(
-                    _SIBLING_PROFILE.c.principal_id == _SIBLING.c.principal_id,
+                    matching_partition_criterion(_SIBLING_PROFILE, _SIBLING),
                     _SIBLING_PROFILE.c.source_profile_id == _SIBLING.c.source_profile_id,
                 ),
             ).join(
@@ -301,7 +302,7 @@ def assertion_withheld_remote(assertion: Table, principal_id: str) -> ColumnElem
             _LINK.join(
                 _EVIDENCE,
                 and_(
-                    _EVIDENCE.c.principal_id == _LINK.c.principal_id,
+                    matching_partition_criterion(_EVIDENCE, _LINK),
                     _EVIDENCE.c.evidence_ref_id == _LINK.c.evidence_ref_id,
                 ),
             )
@@ -479,7 +480,7 @@ class SqlKnowledgeAssertionRepository(KnowledgeAssertionRepository):
             criteria.append(not_(assertion_withheld_remote(knowledge_assertions, principal_id)))
         return criteria
 
-    def read(
+    def read_assertion(
         self, principal_id: str, assertion_id: str, *, remote: bool
     ) -> KnowledgeAssertionRow | None:
         statement = select(*(knowledge_assertions.c[name] for name in _ASSERTION_COLUMNS)).where(
@@ -539,7 +540,7 @@ class SqlKnowledgeAssertionRepository(KnowledgeAssertionRepository):
     def history(
         self, principal_id: str, assertion_id: str, *, remote: bool
     ) -> KnowledgeAssertionHistory | None:
-        assertion = self.read(principal_id, assertion_id, remote=remote)
+        assertion = self.read_assertion(principal_id, assertion_id, remote=remote)
         if assertion is None:
             return None
         context = capture_context(principal_id)
@@ -610,8 +611,9 @@ class SqlKnowledgeAssertionRepository(KnowledgeAssertionRepository):
                 knowledge_assertions.join(
                     knowledge_assertion_submissions,
                     and_(
-                        knowledge_assertion_submissions.c.principal_id
-                        == knowledge_assertions.c.principal_id,
+                        matching_partition_criterion(
+                            knowledge_assertion_submissions, knowledge_assertions
+                        ),
                         knowledge_assertion_submissions.c.submission_id
                         == knowledge_assertions.c.origin_submission_id,
                     ),
@@ -651,7 +653,7 @@ class SqlKnowledgeAssertionRepository(KnowledgeAssertionRepository):
                     links.join(
                         evidence,
                         and_(
-                            evidence.c.principal_id == links.c.principal_id,
+                            matching_partition_criterion(evidence, links),
                             evidence.c.evidence_ref_id == links.c.evidence_ref_id,
                         ),
                     )
@@ -699,6 +701,45 @@ class SqlKnowledgeAssertionRepository(KnowledgeAssertionRepository):
 
     # ---- explicit create -------------------------------------------------
 
+    def _verified_evidence(
+        self, principal_id: str, request: KnowledgeCreateRequest
+    ) -> dict[KnowledgeCreateEvidence, Classification]:
+        """Each cited version, owned and present, with its rank-max class (C2).
+
+        The cited version must exist in this partition with exactly the cited
+        digest; its class is the rank-max over *every* version of the capture or
+        memory (R6 S-3), read in one statement. An absent and a foreign citation
+        are the same `KnowledgeEvidenceNotFoundError`.
+        """
+        context = capture_context(principal_id)
+        observed: dict[KnowledgeCreateEvidence, Classification] = {}
+        for item in request.evidence:
+            if item.identity_kind == _CAPTURE:
+                rows = self._connection.execute(
+                    select(
+                        capture_versions.c.classification, capture_versions.c.content_sha256
+                    ).where(
+                        partition_criterion(capture_versions, context),
+                        capture_versions.c.capture_id == item.capture_id,
+                    )
+                ).all()
+            else:
+                rows = self._connection.execute(
+                    select(
+                        relationship_memory_versions.c.classification,
+                        relationship_memory_versions.c.statement_sha256,
+                    ).where(
+                        partition_criterion(relationship_memory_versions, context),
+                        relationship_memory_versions.c.memory_id == item.relationship_memory_id,
+                    )
+                ).all()
+            if not any(row[1] == item.content_hash for row in rows):
+                raise KnowledgeEvidenceNotFoundError("a cited version is not this Principal's")
+            observed[item] = classification_max(
+                Classification.PRIVATE_LOCAL, *(Classification(row[0]) for row in rows)
+            )
+        return observed
+
     def create(
         self,
         principal_id: str,
@@ -707,11 +748,48 @@ class SqlKnowledgeAssertionRepository(KnowledgeAssertionRepository):
         at: datetime,
         correlation_id: str,
     ) -> KnowledgeSubmissionResult:
-        return _translated(
-            lambda: _ExplicitCreate(
-                self._connection, self._record_events, principal_id, request, at, correlation_id
-            ).run()
+        transaction = _ExplicitCreate(self._connection, principal_id, request, at)
+        result = _translated(
+            lambda: transaction.run(
+                lambda: (
+                    {} if request.domain_owned else self._verified_evidence(principal_id, request)
+                )
+            )
         )
+        created = transaction.created
+        if created is not None:
+            # C9: exactly the mapped event, metadata only (KLP-AC-042/044), with
+            # the `kamut_` mutation as its receipt. A replay, a duplicate, a
+            # domain-owned completion and a refusal stage nothing.
+            mapped = KNOWLEDGE_MUTATION_EVENTS[KnowledgeMutationKind.CREATE]
+            origin = KnowledgeEventOrigin.EXPLICIT_CREATE
+            self._record_events.stage(
+                RecordEventDraft.issue(
+                    principal_id=principal_id,
+                    record_family=RecordEventFamily.KNOWLEDGE_ASSERTION,
+                    record_id=created.assertion_id,
+                    event_kind=mapped.kind,
+                    record_version=1,
+                    changed_fields=mapped.changed_fields,
+                    source_capability=KNOWLEDGE_CREATE_CAPABILITY,
+                    actor_class=KNOWLEDGE_EVENT_ACTOR_CLASSES[origin],
+                    classification=created.classification,
+                    occurred_at=at,
+                    source_receipt_id=created.mutation_id,
+                    authority=KNOWLEDGE_EVENT_AUTHORITIES[origin],
+                    correlation_id=correlation_id,
+                )
+            )
+        return result
+
+
+@dataclass(frozen=True, slots=True)
+class _CreatedEvent:
+    """What the one Record Event of an admitted create names."""
+
+    assertion_id: str
+    mutation_id: str
+    classification: Classification
 
 
 class _ExplicitCreate:
@@ -720,19 +798,20 @@ class _ExplicitCreate:
     def __init__(
         self,
         connection: Connection,
-        stager: RecordEventStager,
         principal_id: str,
         request: KnowledgeCreateRequest,
         at: datetime,
-        correlation_id: str,
     ) -> None:
         self.connection = connection
-        self.stager = stager
         self.principal_id = principal_id
         self.request = request
         self.at = at
-        self.correlation_id = correlation_id
         self.context = capture_context(principal_id)
+        self.created: _CreatedEvent | None = None
+
+    def _bound(self, table: Table, values: dict[str, object]) -> dict[str, object]:
+        """`values` stamped with this Principal through the partition guard."""
+        return principal_bound_values(values, table, self.context)
 
     # -- C1: the explicit-key arbiter ---------------------------------------
 
@@ -774,7 +853,6 @@ class _ExplicitCreate:
     ) -> bool:
         """Reserve the key (or insert a born-completed refusal). False when another won."""
         values: dict[str, object] = {
-            "principal_id": self.principal_id,
             "submission_id": submission_id,
             "origin": _EXPLICIT,
             "authenticated_client_id": self.request.authenticated_client_id,
@@ -810,7 +888,7 @@ class _ExplicitCreate:
             )
         statement = (
             pg_insert(knowledge_assertion_submissions)
-            .values(**values)
+            .values(**self._bound(knowledge_assertion_submissions, values))
             .on_conflict_do_nothing(
                 index_elements=["principal_id", "idempotency_key"],
                 index_where=sql_text(f"origin = '{_EXPLICIT}'"),
@@ -879,43 +957,6 @@ class _ExplicitCreate:
         # managed_document / evidence_ref subjects have no WP-03 owner check.
         return False
 
-    def _verified_evidence(self) -> dict[KnowledgeCreateEvidence, Classification]:
-        """Each cited version, owned and present, with its rank-max class (C2)."""
-        observed: dict[KnowledgeCreateEvidence, Classification] = {}
-        for item in self.request.evidence:
-            if item.identity_kind == _CAPTURE:
-                versions = capture_versions
-                owner, key, digest = (
-                    versions.c.capture_id,
-                    item.capture_id,
-                    versions.c.content_sha256,
-                )
-            else:
-                versions = relationship_memory_versions
-                owner, key, digest = (
-                    versions.c.memory_id,
-                    item.relationship_memory_id,
-                    versions.c.statement_sha256,
-                )
-            cited = self.connection.execute(
-                select(literal(1)).where(
-                    partition_criterion(versions, self.context),
-                    owner == key,
-                    digest == item.content_hash,
-                )
-            ).first()
-            if cited is None:
-                raise KnowledgeEvidenceNotFoundError("a cited version is not this Principal's")
-            classes = self.connection.execute(
-                select(versions.c.classification).where(
-                    partition_criterion(versions, self.context), owner == key
-                )
-            ).scalars()
-            observed[item] = classification_max(
-                Classification.PRIVATE_LOCAL, *(Classification(value) for value in classes)
-            )
-        return observed
-
     def _captures(self) -> tuple[str, ...]:
         return tuple(
             sorted(
@@ -958,7 +999,9 @@ class _ExplicitCreate:
 
     # -- the transaction ----------------------------------------------------
 
-    def run(self) -> KnowledgeSubmissionResult:
+    def run(
+        self, verify: Callable[[], dict[KnowledgeCreateEvidence, Classification]]
+    ) -> KnowledgeSubmissionResult:
         replay = self._winner()
         if replay is not None:
             return replay
@@ -966,7 +1009,7 @@ class _ExplicitCreate:
         refusal: KnowledgeSubmissionReason | None = None
         observed: dict[KnowledgeCreateEvidence, Classification] = {}
         if not self.request.domain_owned:
-            observed = self._verified_evidence()
+            observed = verify()
             if not self._subject_is_canonical(lock=False):
                 refusal = KnowledgeSubmissionReason.SUBJECT_NOT_CANONICAL
             elif any(
@@ -1075,66 +1118,84 @@ class _ExplicitCreate:
         request = self.request
         self.connection.execute(
             insert(knowledge_assertions).values(
-                principal_id=self.principal_id,
-                assertion_id=assertion_id,
-                subject_kind=request.subject_kind,
-                subject_id=request.subject_id,
-                predicate_code=request.predicate_code,
-                predicate_version=request.predicate_version,
-                value_type=request.value_type,
-                cardinality=request.cardinality,
-                temporal_semantics=request.temporal_semantics,
-                qualifier_rule=request.qualifier_rule,
-                value_text=request.value_text,
-                value_datetime=request.value_datetime,
-                qualifier_json=null() if request.qualifier is None else dict(request.qualifier),
-                effective_from=request.effective_from,
-                effective_to=request.effective_to,
-                normalized_value_sha256=request.normalized_value_sha256,
-                fingerprint_version=1,
-                assertion_fingerprint=request.assertion_fingerprint,
-                epistemic_status=KnowledgeEpistemicStatus.PRINCIPAL_ASSERTED.value,
-                classification=classification.value,
-                origin_is_synthetic=False,
-                lifecycle=KnowledgeAssertionLifecycle.ACTIVE.value,
-                version=1,
-                origin_submission_id=submission_id,
-                created_at=self.at,
-                updated_at=self.at,
+                **self._bound(
+                    knowledge_assertions,
+                    {
+                        "assertion_id": assertion_id,
+                        "subject_kind": request.subject_kind,
+                        "subject_id": request.subject_id,
+                        "predicate_code": request.predicate_code,
+                        "predicate_version": request.predicate_version,
+                        "value_type": request.value_type,
+                        "cardinality": request.cardinality,
+                        "temporal_semantics": request.temporal_semantics,
+                        "qualifier_rule": request.qualifier_rule,
+                        "value_text": request.value_text,
+                        "value_datetime": request.value_datetime,
+                        "qualifier_json": null()
+                        if request.qualifier is None
+                        else dict(request.qualifier),
+                        "effective_from": request.effective_from,
+                        "effective_to": request.effective_to,
+                        "normalized_value_sha256": request.normalized_value_sha256,
+                        "fingerprint_version": 1,
+                        "assertion_fingerprint": request.assertion_fingerprint,
+                        "epistemic_status": KnowledgeEpistemicStatus.PRINCIPAL_ASSERTED.value,
+                        "classification": classification.value,
+                        "origin_is_synthetic": False,
+                        "lifecycle": KnowledgeAssertionLifecycle.ACTIVE.value,
+                        "version": 1,
+                        "origin_submission_id": submission_id,
+                        "created_at": self.at,
+                        "updated_at": self.at,
+                    },
+                )
             )
         )
         # C8: the mutation receipt, then the links and the submission's evidence.
         mutation_id = issue_identifier(IdKind.KNOWLEDGE_ASSERTION_MUTATION)
         self.connection.execute(
             insert(knowledge_assertion_mutations).values(
-                principal_id=self.principal_id,
-                mutation_id=mutation_id,
-                assertion_id=assertion_id,
-                mutation_kind=KnowledgeMutationKind.CREATE.value,
-                prior_version=0,
-                new_version=1,
-                submission_id=submission_id,
-                created_at=self.at,
+                **self._bound(
+                    knowledge_assertion_mutations,
+                    {
+                        "mutation_id": mutation_id,
+                        "assertion_id": assertion_id,
+                        "mutation_kind": KnowledgeMutationKind.CREATE.value,
+                        "prior_version": 0,
+                        "new_version": 1,
+                        "submission_id": submission_id,
+                        "created_at": self.at,
+                    },
+                )
             )
         )
         for item in sorted(request.evidence, key=lambda entry: (evidence_ids[entry], entry.role)):
             self.connection.execute(
                 insert(knowledge_submission_evidence).values(
-                    principal_id=self.principal_id,
-                    submission_id=submission_id,
-                    evidence_ref_id=evidence_ids[item],
-                    evidence_role=item.role,
-                    created_at=self.at,
+                    **self._bound(
+                        knowledge_submission_evidence,
+                        {
+                            "submission_id": submission_id,
+                            "evidence_ref_id": evidence_ids[item],
+                            "evidence_role": item.role,
+                            "created_at": self.at,
+                        },
+                    )
                 )
             )
             self.connection.execute(
                 insert(knowledge_assertion_evidence_links).values(
-                    principal_id=self.principal_id,
-                    assertion_id=assertion_id,
-                    evidence_ref_id=evidence_ids[item],
-                    evidence_role=item.role,
-                    linked_by_mutation_id=mutation_id,
-                    created_at=self.at,
+                    **self._bound(
+                        knowledge_assertion_evidence_links,
+                        {
+                            "assertion_id": assertion_id,
+                            "evidence_ref_id": evidence_ids[item],
+                            "evidence_role": item.role,
+                            "linked_by_mutation_id": mutation_id,
+                            "created_at": self.at,
+                        },
+                    )
                 )
             )
         result = self._complete(
@@ -1149,25 +1210,9 @@ class _ExplicitCreate:
                 current_lifecycle=None,
             )
         )
-        # C9: exactly the mapped event, metadata only (KLP-AC-042/044).
-        mapped = KNOWLEDGE_MUTATION_EVENTS[KnowledgeMutationKind.CREATE]
-        origin = KnowledgeEventOrigin.EXPLICIT_CREATE
-        self.stager.stage(
-            RecordEventDraft.issue(
-                principal_id=self.principal_id,
-                record_family=RecordEventFamily.KNOWLEDGE_ASSERTION,
-                record_id=assertion_id,
-                event_kind=mapped.kind,
-                record_version=1,
-                changed_fields=mapped.changed_fields,
-                source_capability=KNOWLEDGE_CREATE_CAPABILITY,
-                actor_class=KNOWLEDGE_EVENT_ACTOR_CLASSES[origin],
-                classification=classification,
-                occurred_at=self.at,
-                source_receipt_id=mutation_id,
-                authority=KNOWLEDGE_EVENT_AUTHORITIES[origin],
-                correlation_id=self.correlation_id,
-            )
+        # C9 is staged by the repository from this record (KLP-AC-042/044).
+        self.created = _CreatedEvent(
+            assertion_id=assertion_id, mutation_id=mutation_id, classification=classification
         )
         return KnowledgeSubmissionResult(
             submission_id=result.submission_id,
@@ -1198,7 +1243,6 @@ class _ExplicitCreate:
                 if identity(entry) == (kind, key, content_hash)
             )
             values: dict[str, object] = {
-                "principal_id": self.principal_id,
                 "evidence_ref_id": issue_identifier(IdKind.KNOWLEDGE_EVIDENCE_REF),
                 "identity_kind": kind,
                 "content_hash": content_hash,
@@ -1211,7 +1255,7 @@ class _ExplicitCreate:
             values[column] = key
             self.connection.execute(
                 pg_insert(e)
-                .values(**values)
+                .values(**self._bound(e, values))
                 .on_conflict_do_nothing(
                     index_elements=["principal_id", column, "content_hash"],
                     index_where=sql_text(f"identity_kind = '{kind}'"),
@@ -1292,12 +1336,13 @@ class _ExplicitCreate:
     def _lock_subject(self) -> None:
         locks = knowledge_assertion_subject_locks
         key = {
-            "principal_id": self.principal_id,
             "subject_kind": self.request.subject_kind,
             "subject_id": self.request.subject_id,
             "predicate_code": self.request.predicate_code,
         }
-        self.connection.execute(pg_insert(locks).values(**key).on_conflict_do_nothing())
+        self.connection.execute(
+            pg_insert(locks).values(**self._bound(locks, dict(key))).on_conflict_do_nothing()
+        )
         self.connection.execute(
             select(locks.c.predicate_code)
             .where(

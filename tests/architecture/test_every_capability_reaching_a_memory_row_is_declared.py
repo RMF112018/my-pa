@@ -466,10 +466,13 @@ BEYOND_THE_NINE: Final = {
         "the purpose name; `RM-API-AC-013` carries the card's own bound."
     ),
     Capability.REVIEW_LIST: (
-        "purpose `capture_review`. `review.list` reads two of the eight "
-        "(`relationship_memory_proposals`, `relationship_memory_review_decisions`) "
+        "purpose `capture_review`. `review.list` reads three of the eight "
+        "(`relationship_memory_proposals`, `relationship_memory_review_decisions`, "
+        "`relationship_memory_versions`) "
         "and writes none of the eight: `relationship_memory_review_cases` selects "
-        "the first with two correlated subqueries over the second, so the listing "
+        "the first with two correlated subqueries over the second, and (KLP-WP-04 "
+        "slice C) a remote Knowledge page compares the third's `classification` "
+        "inside the R6 section 5.3 withholding `EXISTS`, so the listing "
         "discloses a `subject_entity_id`, a `proposed_kind` and, once promoted, an "
         "`accepted_memory_id` and `accepted_memory_version_id` — for a subject "
         "the grant never named. It carries no statement text: "
@@ -479,9 +482,11 @@ BEYOND_THE_NINE: Final = {
     ),
     Capability.REVIEW_DECIDE: (
         "purpose `review_disposition`, and it reads as well as writes. "
-        "`review.decide` reads three of the eight "
+        "`review.decide` reads four of the eight "
         "(`relationship_memory_proposals`, `relationship_memory_review_decisions`, "
-        "`relationship_memory_proposal_evidence`) and writes seven of the eight "
+        "`relationship_memory_proposal_evidence`, `relationship_memory_versions`; the "
+        "last only as a version `classification` inside the remote Knowledge case "
+        "withholding `EXISTS`, KLP-WP-04 slice C) and writes seven of the eight "
         "(`relationship_memories`, `relationship_memory_versions`, "
         "`relationship_memory_context_links`, `relationship_memory_evidence_links`, "
         "`relationship_memory_review_decisions`, `relationship_memory_proposals`, "
@@ -757,8 +762,16 @@ DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str
         frozenset({"relationship_memories", "relationship_memory_versions"}),
         frozenset(),
     ),
+    # KLP-WP-04 slice C: `relationship_memory_versions` (keys + `classification`)
+    # is read only inside the remote Knowledge Review withholding `EXISTS`.
     Capability.REVIEW_LIST: (
-        frozenset({"relationship_memory_proposals", "relationship_memory_review_decisions"}),
+        frozenset(
+            {
+                "relationship_memory_proposals",
+                "relationship_memory_review_decisions",
+                "relationship_memory_versions",
+            }
+        ),
         frozenset(),
     ),
     Capability.REVIEW_DECIDE: (
@@ -767,6 +780,7 @@ DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str
                 "relationship_memory_proposal_evidence",
                 "relationship_memory_proposals",
                 "relationship_memory_review_decisions",
+                "relationship_memory_versions",
             }
         ),
         frozenset(
@@ -2767,6 +2781,20 @@ def _documents() -> list[tuple[str, str, str]]:
         "",
         row,
     )
+    # KLP-WP-04 slice C: the `review.list` / `review.decide` read sets are
+    # superseded by the delta's slice C section (one more read each:
+    # `relationship_memory_versions`, the remote Knowledge Review withholding term).
+    row = re.sub(
+        r"`review\.list` reads two of the eight \([^)]*\) and writes none of the eight\.",
+        "",
+        row,
+    )
+    row = re.sub(
+        r"`review\.decide` reads three of the eight \([^)]*\) and writes seven of the "
+        r"eight \([^)]*\)\.",
+        "",
+        row,
+    )
     row = f"{row} {IDENTITY_ACCESS_DELTA.read_text(encoding='utf-8')}"
     return [
         (f"{ACCEPTANCE.name}:{line}+{IDENTITY_ACCESS_DELTA.name}", row, ""),
@@ -3200,6 +3228,10 @@ def test_the_port_crossings_that_reach_a_memory_row_are_the_two_planes() -> None
             "replay_create",
             "replay_submission",
             "submit",
+            # KLP-WP-04 slice C: the Knowledge Review case reads, whose remote
+            # branch applies the R6 section 5.3 proposal-effective-class term.
+            "review_case",
+            "review_cases",
         }
     ), (
         "the Knowledge plane's crossings are now "

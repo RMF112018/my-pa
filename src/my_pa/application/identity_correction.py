@@ -3984,6 +3984,23 @@ class IdentityCorrectionService:
             MergeAffectedGroup(MergeFamily.DERIVED_CONTEXT, FamilyDisposition.NOT_BOUND, 0)
         )
         groups.append(MergeAffectedGroup(MergeFamily.RE_ENRICHMENT, FamilyDisposition.NOT_BOUND, 0))
+        # KLP-WP-04 (R6 section 8.6): a participant named by a live Knowledge
+        # assertion or an open Knowledge proposal blocks the merge. No family
+        # group is added (no MergeFamily member, KLP-AC-108) and nothing is
+        # reparented (KLP-AC-137); `apply` re-reads this under the participant
+        # mutation-scope lock, so a Knowledge write that won the lock first is
+        # seen and one arriving later waits.
+        participants = frozenset({survivor.entity_id, *merged_entity_ids})
+        conflicts.extend(
+            IdentityConflict(
+                kind=IdentityConflictKind.KNOWLEDGE_REFERENCE_PRESENT,
+                family=IdentityEffectFamily.ENTITY,
+                record_id=entity_id,
+            )
+            for entity_id in sorted(
+                self._entities.knowledge_referenced_entity_ids(principal_id, participants)
+            )
+        )
 
         affected = sum(group.record_count for group in groups)
         if affected > MAX_AFFECTED_RECORDS:

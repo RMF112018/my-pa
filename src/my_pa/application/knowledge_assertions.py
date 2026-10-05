@@ -33,6 +33,7 @@ import binascii
 import json
 import re
 import unicodedata
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, Final
 
@@ -50,14 +51,21 @@ from my_pa.contracts.ports import (
     KnowledgeAssertionRow,
     KnowledgeCheckpointRequest,
     KnowledgeCheckpointResult,
+    KnowledgeCorrectedCandidate,
     KnowledgeCreateEvidence,
     KnowledgeCreateRequest,
+    KnowledgeReviewCaseRow,
     KnowledgeSourceBinding,
     KnowledgeSubmissionResult,
     KnowledgeSubmitEvidence,
     KnowledgeSubmitRequest,
 )
+from my_pa.domain.capture.proposal import ProposalState, RiskClass
+from my_pa.domain.capture.review import ReviewSubjectKind
 from my_pa.domain.capture.submission import CaptureTransport
+from my_pa.domain.common.time import format_rfc3339
+from my_pa.domain.identity.operation import Capability, granted_purposes
+from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.knowledge_assertion.admission import AdmissionEvidence
 from my_pa.domain.knowledge_assertion.assertion import (
     InvalidKnowledgeAssertionError,
@@ -85,16 +93,24 @@ from my_pa.domain.knowledge_assertion.vocabulary import (
     KnowledgeEvidenceRole,
     KnowledgeOriginSystem,
     KnowledgeOwnerRefKind,
+    KnowledgeQualifierRule,
+    KnowledgeReviewDisposition,
     KnowledgeReviewRequirement,
+    KnowledgeSubjectKind,
     KnowledgeValueType,
 )
 
 __all__ = [
     "DEFAULT_KNOWLEDGE_PAGE_SIZE",
+    "KNOWLEDGE_CORRECTABLE_FIELDS",
+    "KNOWLEDGE_PATCH_OCTET_LIMIT",
+    "KNOWLEDGE_PROMOTING_DISPOSITIONS",
+    "KNOWLEDGE_REVIEW_DISPOSITIONS",
     "KNOWLEDGE_TRUST_BASIS",
     "assertion_view",
     "checkpoint_request",
     "checkpoint_view",
+    "corrected_candidate",
     "create_admission_refusal",
     "create_request",
     "decode_knowledge_cursor",
@@ -104,6 +120,8 @@ __all__ = [
     "lifecycles_for",
     "page_view",
     "reveal_view",
+    "review_case_view",
+    "review_read_granted",
     "submission_view",
     "submit_admission_evidence",
     "submit_request",
@@ -683,3 +701,151 @@ def submit_view(result: KnowledgeSubmissionResult) -> dict[str, object]:
         "review_case_id": result.review_case_id,
         "routed_record_id": result.routed_record_id,
     }
+
+
+# --- Knowledge Review (KLP-WP-04 slice C, R6 sections 3.2, 5.3, 10) ---------------
+
+#: The capture `Disposition` tokens a Knowledge case can take (matrix
+#: `knowledge_review_disposition`): `reprocess` and `escalate` have no Knowledge
+#: route and fail closed `unsupported` (KLP-AC-096).
+KNOWLEDGE_REVIEW_DISPOSITIONS: Final[frozenset[str]] = frozenset(
+    member.value for member in KnowledgeReviewDisposition
+)
+#: The dispositions that promote a proposal into a live assertion.
+KNOWLEDGE_PROMOTING_DISPOSITIONS: Final[frozenset[str]] = frozenset(
+    {
+        KnowledgeReviewDisposition.ACCEPT.value,
+        KnowledgeReviewDisposition.CORRECT_AND_ACCEPT.value,
+    }
+)
+#: The only fields a Knowledge correction patch may name (KLP-AC-037): the value
+#: branch and the effective bounds; `date_kind` only where the predicate's
+#: qualifier rule declares it. Subject, predicate, owner, Principal and source
+#: profile are not correctable, so naming them is `invalid_request`.
+KNOWLEDGE_CORRECTABLE_FIELDS: Final[frozenset[str]] = frozenset(
+    {"value", "effective_from", "effective_to"}
+)
+#: `knowledge_decision_patch_follows_disposition`: the stored patch's
+#: `jsonb::text` is at most 8192 octets.
+KNOWLEDGE_PATCH_OCTET_LIMIT: Final = 8192
+
+
+def review_read_granted(authorization: Authorization) -> bool:
+    """Whether a caller may see Knowledge Review cases at all (R6 sections 5.2, 10.3).
+
+    Local callers without a grant ceiling always may. A remote caller (a
+    `REMOTE_CLIENT` transport or any grant ceiling) must hold
+    `knowledge.assertions.read` for `knowledge_assertion_read`; a remote
+    transport with no grant set at all (the remote capture route) holds none,
+    so it fails closed.
+    """
+    if not is_remote(authorization):
+        return True
+    grants = authorization.capability_grants
+    if grants is None:
+        return False
+    return Purpose.KNOWLEDGE_ASSERTION_READ in granted_purposes(
+        Capability.KNOWLEDGE_ASSERTIONS_READ, grants
+    )
+
+
+def review_case_view(row: KnowledgeReviewCaseRow) -> dict[str, object]:
+    """One Knowledge `review.list` row: the common keys plus the frozen five (R6 10.1).
+
+    `risk_class` is a `RiskClass` token and `proposal_state` a capture
+    `ProposalState` token (the Knowledge vocabulary is a subset of both), so the
+    web decoder needs no new token. No value, qualifier or evidence content.
+    """
+    return {
+        "review_case_id": row.review_case_id,
+        "proposal_id": row.proposal_id,
+        "proposal_state": ProposalState(row.state).value,
+        "risk_class": RiskClass(row.risk_class).value,
+        "opened_at": format_rfc3339(row.opened_at),
+        "review_version": row.review_version,
+        "latest_disposition": row.latest_disposition,
+        "subject_kind": ReviewSubjectKind.KNOWLEDGE_ASSERTION.value,
+        "subject_kind_of_fact": KnowledgeSubjectKind(row.subject_kind).value,
+        "subject_id": row.subject_id,
+        "predicate_code": row.predicate_code,
+        "review_requirement": KnowledgeReviewRequirement(row.review_requirement).value,
+    }
+
+
+def _patch_instant(raw: object) -> datetime | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        raise InvalidRequestError(SafeDetail.CORRECTED_VALUE) from None
+    if parsed.tzinfo is None:
+        raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
+    return parsed
+
+
+def corrected_candidate(
+    case: KnowledgeReviewCaseRow, predicate: KnowledgePredicate, patch: Mapping[str, object]
+) -> KnowledgeCorrectedCandidate:
+    """The corrected fact of one `correct_and_accept`, or `invalid_request(corrected_value)`.
+
+    The patch names only correctable fields (KLP-AC-037); the corrected fact
+    then passes the same candidate validation a submit does (typed value,
+    closed qualifier, ordered effective interval) and is fingerprinted by
+    WP-01's frozen fingerprint object. The subject and predicate are the
+    proposal's own, so the corrected subject-key set equals the proposal's.
+    The refusal names the rule and never the value.
+    """
+    allowed = set(KNOWLEDGE_CORRECTABLE_FIELDS)
+    if predicate.qualifier_rule is KnowledgeQualifierRule.DATE_KIND:
+        allowed.add("date_kind")
+    if not patch or not set(patch) <= allowed:
+        raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
+    encoded = json.dumps(
+        dict(patch), sort_keys=True, ensure_ascii=False, separators=(", ", ": ")
+    ).encode("utf-8")
+    if len(encoded) > KNOWLEDGE_PATCH_OCTET_LIMIT:
+        raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
+    try:
+        if "value" in patch:
+            raw_value = patch["value"]
+            if not isinstance(raw_value, str):
+                raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
+            value = _value(predicate, raw_value)
+        elif predicate.value_type is KnowledgeValueType.TEXT:
+            value = KnowledgeValue.text(case.value_text)
+        else:
+            value = KnowledgeValue.instant(case.value_datetime)
+        qualifier: Mapping[str, object] | None = case.qualifier
+        if "date_kind" in patch:
+            qualifier = {"date_kind": patch["date_kind"]}
+        effective_from = (
+            _patch_instant(patch["effective_from"])
+            if "effective_from" in patch
+            else case.effective_from
+        )
+        effective_to = (
+            _patch_instant(patch["effective_to"]) if "effective_to" in patch else case.effective_to
+        )
+        candidate = KnowledgeAssertionCandidate(
+            subject_kind=KnowledgeSubjectKind(case.subject_kind),
+            subject_id=case.subject_id,
+            predicate=predicate,
+            value=value,
+            qualifier=qualifier,
+            effective_from=effective_from,
+            effective_to=effective_to,
+        )
+    except (InvalidKnowledgeAssertionError, InvalidKnowledgeValueError, InvalidRequestError):
+        raise InvalidRequestError(SafeDetail.CORRECTED_VALUE) from None
+    return KnowledgeCorrectedCandidate(
+        value_text=candidate.value.value_text,
+        value_datetime=candidate.value.value_datetime,
+        normalized_value_sha256=candidate.value.sha256,
+        qualifier=candidate.qualifier,
+        effective_from=candidate.effective_from,
+        effective_to=candidate.effective_to,
+        assertion_fingerprint=candidate.fingerprint(),
+    )

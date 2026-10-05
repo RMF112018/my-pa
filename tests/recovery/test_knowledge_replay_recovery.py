@@ -21,6 +21,11 @@ version and the exact committed envelope -- and writes no second request row,
 no second version and no Knowledge row or event. A changed request after the
 loss is the lost-response recovery (`stale_expected_version` with the current
 envelope).
+
+KLP-WP-04 slice C adds the Knowledge `review.decide` half: an acceptance lost
+after COMMIT replays from `relationship_write_requests` (`review_decision`)
+with the stored seven keys -- the same decision, assertion and receipt -- and
+writes no second decision, mutation or Record Event.
 """
 
 from __future__ import annotations
@@ -33,7 +38,11 @@ from typing import Any
 import pytest
 
 from my_pa.contracts.ports import UnitOfWork
+from my_pa.domain.capture.review import Disposition
 from my_pa.domain.capture.submission import CaptureTransport
+from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.identity.operator_surface import OperatorSurface
+from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 from tests.database.test_knowledge_assertion_repository import (
@@ -43,6 +52,11 @@ from tests.database.test_knowledge_assertion_repository import (
     create_command,
     knowledge_events,
     new_principal,
+)
+from tests.database.test_knowledge_assertion_review import (
+    ReviewRuntime,
+    _queued,
+    decisions_of,
 )
 from tests.database.test_knowledge_assertion_submissions import (
     CLIENT,
@@ -61,6 +75,8 @@ from tests.database.test_knowledge_checkpoint_idempotency_replay import (
 from tests.database.test_task_record_events import next_sequence
 
 pytestmark = [pytest.mark.database, pytest.mark.recovery]
+
+CLI_SURFACE = OperatorSurface.CLI
 
 
 class _LostResponseError(Exception):
@@ -268,3 +284,66 @@ def test_a_checkpoint_lost_after_commit_replays_the_exact_envelope(
         "stale_expected_version",
         "synthetic-token-v2",
     )
+
+
+# ---- KLP-WP-04 slice C: Knowledge review.decide lost after COMMIT -------------------
+
+
+@pytest.fixture
+def review_runtime(disposable_database: str) -> Iterator[tuple[ReviewRuntime, list[bool]]]:
+    composed = ReviewRuntime(disposable_database)
+    armed: list[bool] = []
+    audit = SqlAlchemyAuditSink(composed.audit_engine)
+
+    def unit_of_work() -> UnitOfWork:
+        work = _CommitThenLose(
+            composed.engine,
+            audit=audit,
+            relationship_memory_enabled=True,
+            relationship_intelligence_enabled=True,
+        )
+        work.armed = armed
+        return work
+
+    composed.service._unit_of_work = unit_of_work  # type: ignore[attr-defined]
+    try:
+        yield composed, armed
+    finally:
+        composed.close()
+
+
+def test_a_review_accept_lost_after_commit_replays_and_stages_no_second_event(
+    review_runtime: tuple[ReviewRuntime, list[bool]],
+) -> None:
+    """KLP-AC-139 (decide): the stored seven-key result, no second mutation or event."""
+    service, armed = review_runtime
+    principal, _entity, case = _queued(service)
+    command = service.decide_command(case, Disposition.ACCEPT)
+    request_id = issue_identifier(IdKind.CORRELATION)
+    armed.append(True)
+    lost = service.invoke_with_request_id(
+        command, principal_id=principal, request_id=request_id, operator_surface=CLI_SURFACE
+    )
+    assert lost.error is not None, "the injected loss must reach the caller as a failure"
+    committed = counts(service.engine, principal)
+    assert committed["knowledge_assertions"] == 1
+    sequence = next_sequence(service.engine, principal)
+    (event,) = knowledge_events(service.engine, principal)
+    (decision,) = decisions_of(service.engine, case)
+
+    retried = service.invoke_with_request_id(
+        command, principal_id=principal, request_id=request_id, operator_surface=CLI_SURFACE
+    )
+    assert retried.error is None, retried.error
+    assert retried.result is not None
+    assert retried.result["decision_id"] == decision["decision_id"]
+    assert retried.result["assertion_id"] == event["record_id"]
+    assert retried.result["receipt_id"] == event["source_receipt_id"]
+    assert retried.result["proposal_state"] == "accepted"
+    assert counts(service.engine, principal) == committed
+    assert next_sequence(service.engine, principal) == sequence
+    assert len(decisions_of(service.engine, case)) == 1
+    again = service.invoke_with_request_id(
+        command, principal_id=principal, request_id=request_id, operator_surface=CLI_SURFACE
+    )
+    assert again.result == retried.result

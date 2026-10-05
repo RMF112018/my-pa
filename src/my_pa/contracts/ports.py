@@ -372,6 +372,7 @@ __all__ = [
     "KnowledgeCheckpointRequest",
     "KnowledgeCheckpointResult",
     "KnowledgeConcurrentDuplicateError",
+    "KnowledgeCorrectedCandidate",
     "KnowledgeCreateEvidence",
     "KnowledgeCreateRequest",
     "KnowledgeEvidenceNotFoundError",
@@ -381,8 +382,12 @@ __all__ = [
     "KnowledgeMutationRow",
     "KnowledgeRecord",
     "KnowledgeRepository",
+    "KnowledgeReviewCaseRow",
+    "KnowledgeReviewDecisionRequest",
+    "KnowledgeReviewDecisionResult",
     "KnowledgeSourceBinding",
     "KnowledgeSourceProfileUnboundError",
+    "KnowledgeSubjectNotCanonicalError",
     "KnowledgeSubmissionResult",
     "KnowledgeSubmitEvidence",
     "KnowledgeSubmitRequest",
@@ -3185,6 +3190,21 @@ class EntitiesRepository(ABC):
         """Hold transaction locks for every state of these normalized claims."""
         return None
 
+    def knowledge_referenced_entity_ids(
+        self, principal_id: str, entity_ids: frozenset[str]
+    ) -> frozenset[str]:
+        """KLP-WP-04 (R6 section 8.6): which of `entity_ids` a live Knowledge fact names.
+
+        An Entity is referenced while any live (`active`/`revalidation_required`)
+        Knowledge assertion or open (`needs_review`/`deferred`/`unresolved`)
+        Knowledge proposal has it as its subject. Identity merge reports each
+        as a blocking `knowledge_reference_present` conflict and re-checks it
+        under the participant mutation-scope lock. In-memory repositories hold
+        no Knowledge plane and answer the empty set; PostgreSQL reads the
+        Knowledge tables.
+        """
+        return frozenset()
+
     def reparent_entity_reference(
         self,
         principal_id: str,
@@ -5080,6 +5100,108 @@ class KnowledgeCheckpointKindMismatchError(PortError):
     """
 
 
+class KnowledgeSubjectNotCanonicalError(PortError):
+    """KLP-WP-04 slice C: a Review promotion names a subject that is no longer canonical.
+
+    Re-checked under the C3 Entity mutation-scope lock: a merged-away (or
+    otherwise inactive) subject Entity refuses the acceptance rather than
+    creating a live fact on an identity the merge retired (R6 section 8.6,
+    KLP-AC-036). Nothing is written.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeReviewCaseRow:
+    """KLP-WP-04 slice C: one proposal-local Knowledge Review case (R6 section 10.1).
+
+    `review_version` is the count of decisions (= max `decision_sequence`) and
+    `latest_disposition` the disposition of the newest one. The factual fields
+    (`value_text` .. `effective_to`) travel to the decide path only, to build a
+    corrected candidate; the `review.list` row never renders them.
+    """
+
+    review_case_id: str
+    proposal_id: str
+    subject_kind: str
+    subject_id: str
+    predicate_code: str
+    predicate_version: int
+    review_requirement: str
+    risk_class: str
+    state: str
+    classification: str
+    opened_at: datetime
+    review_version: int
+    latest_disposition: str | None
+    value_text: str | None = field(default=None, repr=False)
+    value_datetime: datetime | None = field(default=None, repr=False)
+    qualifier: Mapping[str, object] | None = field(default=None, repr=False)
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeCorrectedCandidate:
+    """KLP-WP-04 slice C: the server-built corrected fact of one correct_and_accept.
+
+    Built by the application from the proposal and a validated correction
+    patch (value branch, effective bounds, correctable qualifier fields only);
+    the subject, predicate and owner are the proposal's and cannot be patched.
+    """
+
+    value_text: str | None = field(repr=False)
+    value_datetime: datetime | None = field(repr=False)
+    normalized_value_sha256: str
+    qualifier: Mapping[str, object] | None = field(repr=False)
+    effective_from: datetime | None
+    effective_to: datetime | None
+    assertion_fingerprint: str
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeReviewDecisionRequest:
+    """KLP-WP-04 slice C: one Knowledge `review.decide`, every authority field derived.
+
+    `operator_authority_class`, `decision_channel` and `authenticated_client_id`
+    come from `derive_knowledge_review_authority` and the authorization, never
+    from the payload; `authenticated_client_id` is set for remote channels only
+    (CHECK `knowledge_decision_channel_matches_authority`). `predicate` is the
+    active head (a promotion inserts at the head version, trigger
+    `knowledge_assertion_uses_active_predicate_head`).
+    """
+
+    review_case_id: str
+    expected_review_version: int
+    disposition: str
+    reason: str | None = field(repr=False)
+    correction_patch: Mapping[str, object] | None = field(repr=False)
+    corrected: KnowledgeCorrectedCandidate | None
+    operator_authority_class: str
+    decision_channel: str
+    authenticated_client_id: str | None
+    correlation_id: str
+    audit_id: str
+    predicate: Any = None  # domain.knowledge_assertion.predicate.KnowledgePredicate
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeReviewDecisionResult:
+    """KLP-WP-04 slice C: the one appended Knowledge decision and what it produced.
+
+    Exactly what the existing seven `review.decide` result keys need:
+    `decision_id` = `kadec_`, `assertion_id` = `kasr_` or `None`, `receipt_id`
+    = the promoting `kamut_` mutation or `None`.
+    """
+
+    decision_id: str
+    review_case_id: str
+    sequence: int
+    disposition: str
+    proposal_state: str
+    assertion_id: str | None = None
+    receipt_id: str | None = None
+
+
 @dataclass(frozen=True, slots=True)
 class KnowledgeAssertionRow:
     """One stored assertion, as the plane's reads disclose it. No evidence text."""
@@ -5490,6 +5612,43 @@ class KnowledgeAssertionRepository(ABC):
         seal: Any,  # noqa: ANN401 - domain.knowledge_assertion.checkpoint.CheckpointSeal
     ) -> KnowledgeCheckpointResult:
         """KLP-WP-04 slice B3: one checkpoint advance under R6 sections 6.1, 7 and 8.1."""
+
+    @abstractmethod
+    def review_cases(
+        self,
+        principal_id: str,
+        *,
+        remote: bool,
+        state: str | None,
+        entity_id: str | None,
+        after_opened_at: datetime | None,
+        after_review_case_id: str | None,
+        limit: int,
+    ) -> tuple[KnowledgeReviewCaseRow, ...]:
+        """KLP-WP-04 slice C: the oldest `limit` Knowledge cases after the keyset.
+
+        `remote` excludes every case whose proposal effective class (R6 5.3) is
+        withheld *in the statement*, before LIMIT (KLP-AC-033/136).
+        """
+
+    @abstractmethod
+    def review_case(
+        self, principal_id: str, review_case_id: str, *, remote: bool
+    ) -> KnowledgeReviewCaseRow | None:
+        """KLP-WP-04 slice C: one case of this Principal, or `None` (absent, foreign, withheld)."""
+
+    @abstractmethod
+    def decide_review(
+        self, principal_id: str, request: KnowledgeReviewDecisionRequest, *, at: datetime
+    ) -> KnowledgeReviewDecisionResult:
+        """KLP-WP-04 slice C: append one decision under the R6 section 8.1 lock order.
+
+        Raises `ReviewNotFoundError`, `ReviewConflictError` (stale version,
+        terminal proposal), `KnowledgeConcurrentDuplicateError` (an equal live
+        fact under C6), `KnowledgeCaptureWithdrawnError` (C4c),
+        `KnowledgeSubjectNotCanonicalError` (C3) or `TransactionConflictError`
+        (the promoted subject-key set changed after it was computed; KLP-AC-153).
+        """
 
 
 class RecordEventStager(ABC):

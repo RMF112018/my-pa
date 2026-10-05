@@ -9,7 +9,10 @@ gateway's `invoke` route in `adapters/http/app.py` with
 
 "Stamp" means a call passing `operator_surface=` anything other than a plain
 forward of a variable named `operator_surface` (the service's own
-`invoke -> _run -> authorize -> Authorization` plumbing). Measured over the AST of
+`invoke -> _run -> authorize -> Authorization` plumbing) or of the record's own
+field (`self.operator_surface`, `authorization.operator_surface` -- the latter
+is slice C's Knowledge decide handing the stamped value to
+`derive_knowledge_review_authority`). Measured over the AST of
 every production module, so a new stamp anywhere -- under any spelling of the
 value -- fails here.
 """
@@ -73,9 +76,12 @@ def _stamps() -> set[tuple[str, str, str]]:
                     isinstance(value, ast.Attribute)
                     and value.attr == "operator_surface"
                     and isinstance(value.value, ast.Name)
-                    and value.value.id == "self"
+                    and value.value.id in {"self", "authorization"}
                 ):
-                    continue  # a forward of the record's own field
+                    # A forward of the record's own field, or (KLP-WP-04 slice C)
+                    # the Knowledge decide reading the stamped field of its
+                    # `Authorization` into `derive_knowledge_review_authority`.
+                    continue
                 member = (
                     value.attr
                     if isinstance(value, ast.Attribute)

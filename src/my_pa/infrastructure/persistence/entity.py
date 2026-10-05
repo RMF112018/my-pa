@@ -296,6 +296,8 @@ from my_pa.infrastructure.persistence.tables import (
     entity_relationships,
     entity_resolution_decisions,
     extractions,
+    knowledge_assertion_proposals,
+    knowledge_assertions,
 )
 
 __all__ = ["SqlEntityRepository"]
@@ -5522,6 +5524,35 @@ class SqlEntityRepository(EntitiesRepository):
             )
         ).scalar_one()
         return int(counted)
+
+    def knowledge_referenced_entity_ids(
+        self, principal_id: str, entity_ids: frozenset[str]
+    ) -> frozenset[str]:
+        """KLP-WP-04 (R6 section 8.6): participants a live Knowledge fact names.
+
+        A live assertion (`active`/`revalidation_required`) or an open proposal
+        (`needs_review`/`deferred`/`unresolved`) whose subject is the Entity.
+        Read-only; merge calls it before and again under the participant
+        mutation-scope lock.
+        """
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        named = _validated_entity_set(entity_ids)
+        if not named:
+            return frozenset()
+        live = select(knowledge_assertions.c.subject_id).where(
+            _mine(knowledge_assertions, principal_id),
+            knowledge_assertions.c.subject_kind == "entity",
+            knowledge_assertions.c.subject_id.in_(named),
+            knowledge_assertions.c.lifecycle.in_(("active", "revalidation_required")),
+        )
+        proposed = select(knowledge_assertion_proposals.c.subject_id).where(
+            _mine(knowledge_assertion_proposals, principal_id),
+            knowledge_assertion_proposals.c.subject_kind == "entity",
+            knowledge_assertion_proposals.c.subject_id.in_(named),
+            knowledge_assertion_proposals.c.state.in_(("needs_review", "deferred", "unresolved")),
+        )
+        rows = self._connection.execute(live.union(proposed)).scalars().all()
+        return frozenset(str(row) for row in rows)
 
     def serialize_identifier_entity_scopes(
         self, principal_id: str, entity_ids: frozenset[str]

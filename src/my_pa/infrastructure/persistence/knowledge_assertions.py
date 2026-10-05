@@ -97,8 +97,12 @@ from my_pa.contracts.ports import (
     KnowledgeIdempotencyConflictError,
     KnowledgeLedgerInvariantError,
     KnowledgeMutationRow,
+    KnowledgeReviewCaseRow,
+    KnowledgeReviewDecisionRequest,
+    KnowledgeReviewDecisionResult,
     KnowledgeSourceBinding,
     KnowledgeSourceProfileUnboundError,
+    KnowledgeSubjectNotCanonicalError,
     KnowledgeSubmissionResult,
     KnowledgeSubmitEvidence,
     KnowledgeSubmitRequest,
@@ -115,6 +119,7 @@ from my_pa.domain.capture.lifecycle import (
     CaptureWithdrawnError,
 )
 from my_pa.domain.capture.proposal import RiskClass
+from my_pa.domain.capture.review import ReviewConflictError, ReviewNotFoundError
 from my_pa.domain.common.classification import (
     CLASSIFICATION_RANK,
     Classification,
@@ -171,6 +176,7 @@ from my_pa.domain.knowledge_assertion.vocabulary import (
     KnowledgeProposalState,
     KnowledgeQualifierRule,
     KnowledgeReadOnlyProofState,
+    KnowledgeReviewDisposition,
     KnowledgeReviewRequirement,
     KnowledgeSubjectKind,
     KnowledgeSubmissionOrigin,
@@ -204,6 +210,7 @@ from my_pa.infrastructure.persistence.tables import (
     knowledge_assertion_mutations,
     knowledge_assertion_predicates,
     knowledge_assertion_proposals,
+    knowledge_assertion_review_decisions,
     knowledge_assertion_subject_locks,
     knowledge_assertion_submissions,
     knowledge_assertions,
@@ -224,6 +231,7 @@ __all__ = [
     "KNOWLEDGE_CREATE_CAPABILITY",
     "KNOWLEDGE_LEDGER_TRIGGERS",
     "KNOWLEDGE_MAINTENANCE_SOURCE",
+    "KNOWLEDGE_REVIEW_CAPABILITY",
     "KNOWLEDGE_SUBMIT_CAPABILITY",
     "MAINTENANCE_BATCH",
     "KnowledgeMaintenanceResult",
@@ -235,6 +243,7 @@ __all__ = [
     "classification_rank",
     "knowledge_event_withheld_remote",
     "knowledge_ledger_failure",
+    "proposal_withheld_remote",
 ]
 
 #: The `source_capability` every explicit-create event names.
@@ -1193,6 +1202,78 @@ class SqlKnowledgeAssertionRepository(KnowledgeAssertionRepository):
         return _translated(transaction.run)
 
     # ---- source profiles and maintenance (KLP-WP-04 slice B1) ---------------
+
+    # ---- Knowledge Review (KLP-WP-04 slice C) ---------------------------------
+
+    def review_cases(
+        self,
+        principal_id: str,
+        *,
+        remote: bool,
+        state: str | None,
+        entity_id: str | None,
+        after_opened_at: datetime | None,
+        after_review_case_id: str | None,
+        limit: int,
+    ) -> tuple[KnowledgeReviewCaseRow, ...]:
+        if isinstance(limit, bool) or limit < 1:
+            raise ValueError("a page holds at least one case")
+        if (after_opened_at is None) != (after_review_case_id is None):
+            raise ValueError("a review cursor position is complete or absent")
+        p = knowledge_assertion_proposals
+        statement = _review_case_statement(principal_id, remote=remote)
+        if state is not None:
+            statement = statement.where(p.c.state == state)
+        if entity_id is not None:
+            statement = statement.where(
+                p.c.subject_kind == KnowledgeSubjectKind.ENTITY.value,
+                p.c.subject_id == entity_id,
+            )
+        if after_opened_at is not None and after_review_case_id is not None:
+            statement = statement.where(
+                or_(
+                    p.c.created_at > after_opened_at,
+                    and_(
+                        p.c.created_at == after_opened_at,
+                        p.c.review_case_id > after_review_case_id,
+                    ),
+                )
+            )
+        statement = statement.order_by(p.c.created_at, p.c.review_case_id).limit(limit)
+        rows = _translated(lambda: self._connection.execute(statement).all())
+        return tuple(_review_case_row(row) for row in rows)
+
+    def review_case(
+        self, principal_id: str, review_case_id: str, *, remote: bool
+    ) -> KnowledgeReviewCaseRow | None:
+        statement = _review_case_statement(principal_id, remote=remote).where(
+            knowledge_assertion_proposals.c.review_case_id == review_case_id
+        )
+        row = _translated(lambda: self._connection.execute(statement).one_or_none())
+        return None if row is None else _review_case_row(row)
+
+    def decide_review(
+        self, principal_id: str, request: KnowledgeReviewDecisionRequest, *, at: datetime
+    ) -> KnowledgeReviewDecisionResult:
+        transaction = _ReviewDecision(self._connection, principal_id, request, at)
+        result = _translated(transaction.run)
+        for staged in transaction.staged:
+            # C9: the mapped event of each promoting mutation (KLP-AC-042); a
+            # reject/defer/mark_unresolved/invalidate stages none (KLP-AC-043).
+            _stage_knowledge_event(
+                self._record_events,
+                principal_id=principal_id,
+                assertion_id=staged.assertion_id,
+                mutation_kind=staged.mutation_kind,
+                record_version=staged.record_version,
+                origin=KnowledgeEventOrigin.REVIEW_PROMOTION,
+                source_capability=KNOWLEDGE_REVIEW_CAPABILITY,
+                classification=staged.classification,
+                mutation_id=staged.mutation_id,
+                at=at,
+                correlation_id=request.correlation_id,
+            )
+        return result
 
     def _maintenance(self, principal_id: str, at: datetime) -> _Maintenance:
         return _Maintenance(self._connection, principal_id, self._record_events, at)
@@ -3321,6 +3402,602 @@ class _AutonomousSubmit:
                 knowledge_assertions.c.assertion_id == assertion_id,
             )
         ).scalar_one_or_none()
+
+
+# ---- Knowledge Review (KLP-WP-04 slice C, R6 sections 5.3, 8.1, 8.2, 10) ------------
+
+#: The `source_capability` every Review-promotion event names.
+KNOWLEDGE_REVIEW_CAPABILITY: Final = Capability.REVIEW_DECIDE.value
+_ACCEPT: Final = KnowledgeReviewDisposition.ACCEPT.value
+_CORRECT: Final = KnowledgeReviewDisposition.CORRECT_AND_ACCEPT.value
+#: The proposal state each Knowledge disposition leaves (matrix vocabularies).
+_STATE_AFTER: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        _ACCEPT: KnowledgeProposalState.ACCEPTED.value,
+        _CORRECT: KnowledgeProposalState.CORRECTED_ACCEPTED.value,
+        KnowledgeReviewDisposition.REJECT.value: KnowledgeProposalState.REJECTED.value,
+        KnowledgeReviewDisposition.DEFER.value: KnowledgeProposalState.DEFERRED.value,
+        KnowledgeReviewDisposition.MARK_UNRESOLVED.value: KnowledgeProposalState.UNRESOLVED.value,
+        KnowledgeReviewDisposition.INVALIDATE.value: KnowledgeProposalState.INVALIDATED.value,
+    }
+)
+_SUBMISSION_EVIDENCE: Final = cast(
+    Table, knowledge_submission_evidence.alias("ka_submission_evidence")
+)
+
+
+def proposal_withheld_remote(proposal: Table, principal_id: str) -> ColumnElement[bool]:
+    """The proposal effective class of R6 section 5.3, as a remote-withholding predicate.
+
+    The section 5.2 terms with "links" read as the origin submission's
+    evidence rows (`knowledge_submission_evidence`): the proposal's stored
+    class, or any cited row's own class, cross-profile sibling class, Capture
+    / Relationship Memory version class, availability or archived Capture
+    root. A correlated predicate over `proposal` (any alias of
+    `knowledge_assertion_proposals`), applied in the statement before LIMIT.
+    """
+    context = capture_context(principal_id)
+    evidence_withheld = exists(
+        select(literal(1))
+        .select_from(
+            _SUBMISSION_EVIDENCE.join(
+                _EVIDENCE,
+                and_(
+                    matching_partition_criterion(_EVIDENCE, _SUBMISSION_EVIDENCE),
+                    _EVIDENCE.c.evidence_ref_id == _SUBMISSION_EVIDENCE.c.evidence_ref_id,
+                ),
+            )
+        )
+        .where(
+            partition_criterion(_SUBMISSION_EVIDENCE, context),
+            partition_criterion(_EVIDENCE, context),
+            _SUBMISSION_EVIDENCE.c.submission_id == proposal.c.origin_submission_id,
+            _evidence_withheld(_EVIDENCE, context),
+        )
+    )
+    return or_(_restricted(proposal.c.classification), evidence_withheld)
+
+
+def _review_case_statement(principal_id: str, *, remote: bool) -> Any:  # noqa: ANN401
+    """One SELECT of cases with their review version and latest disposition."""
+    context = capture_context(principal_id)
+    p = knowledge_assertion_proposals
+    d = knowledge_assertion_review_decisions
+    version = (
+        select(func.count())
+        .select_from(d)
+        .where(partition_criterion(d, context), d.c.review_case_id == p.c.review_case_id)
+        .scalar_subquery()
+    )
+    latest = (
+        select(d.c.disposition)
+        .where(partition_criterion(d, context), d.c.review_case_id == p.c.review_case_id)
+        .order_by(d.c.decision_sequence.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
+    criteria: list[ColumnElement[bool]] = [partition_criterion(p, context)]
+    if remote:
+        criteria.append(not_(proposal_withheld_remote(p, principal_id)))
+    return select(
+        p.c.review_case_id,
+        p.c.proposal_id,
+        p.c.subject_kind,
+        p.c.subject_id,
+        p.c.predicate_code,
+        p.c.predicate_version,
+        p.c.review_requirement,
+        p.c.risk_class,
+        p.c.state,
+        p.c.classification,
+        p.c.created_at,
+        p.c.value_text,
+        p.c.value_datetime,
+        p.c.qualifier_json,
+        p.c.effective_from,
+        p.c.effective_to,
+        version.label("review_version"),
+        latest.label("latest_disposition"),
+    ).where(*criteria)
+
+
+def _review_case_row(row: Row[Any]) -> KnowledgeReviewCaseRow:
+    return KnowledgeReviewCaseRow(
+        review_case_id=row.review_case_id,
+        proposal_id=row.proposal_id,
+        subject_kind=row.subject_kind,
+        subject_id=row.subject_id,
+        predicate_code=row.predicate_code,
+        predicate_version=int(row.predicate_version),
+        review_requirement=row.review_requirement,
+        risk_class=row.risk_class,
+        state=row.state,
+        classification=row.classification,
+        opened_at=row.created_at,
+        review_version=int(row.review_version),
+        latest_disposition=row.latest_disposition,
+        value_text=row.value_text,
+        value_datetime=row.value_datetime,
+        qualifier=None if row.qualifier_json is None else dict(row.qualifier_json),
+        effective_from=row.effective_from,
+        effective_to=row.effective_to,
+    )
+
+
+class _ReviewDecision:
+    """One Knowledge `review.decide` transaction body (R6 sections 8.1, 8.2, 10).
+
+    C1 (the `relationship_write_requests` reservation) is the application's,
+    taken before this body runs. A promotion (accept / correct_and_accept) then
+    takes C3 -- one `lock_entity_mutation_scopes` call over the complete Entity
+    set (the subject; a correction cannot name another) -- and re-reads the
+    subject under it, C4b the origin submission's evidence rows in one sorted
+    `FOR SHARE` SELECT (it links them; it changes no control column), C4c the
+    one Capture fence, C5 the proposal `FOR UPDATE`, then C6 the complete
+    sorted subject-key set, re-running the duplicate and current-slot checks
+    under it. A key set that differs from the one computed before the locks is
+    a retryable conflict and never a late lock (KLP-AC-153). Every other
+    disposition takes C5 only: it creates no liveness (R6 8.2). C8 inserts the
+    decision before any mutation that cites it; proposals and decisions stage
+    no Record Event (KLP-AC-043), each promoting mutation stages its mapped one.
+    """
+
+    def __init__(
+        self,
+        connection: Connection,
+        principal_id: str,
+        request: KnowledgeReviewDecisionRequest,
+        at: datetime,
+    ) -> None:
+        self.connection = connection
+        self.principal_id = principal_id
+        self.request = request
+        self.at = at
+        self.context = capture_context(principal_id)
+        self.promoting = request.disposition in (_ACCEPT, _CORRECT)
+        self.staged: list[_StagedMutation] = []
+
+    def _bound(self, table: Table, values: dict[str, object]) -> dict[str, object]:
+        return principal_bound_values(values, table, self.context)
+
+    # -- reads ------------------------------------------------------------------
+
+    def _proposal(self, *, lock: bool) -> Row[Any] | None:
+        p = knowledge_assertion_proposals
+        statement = select(p).where(
+            partition_criterion(p, self.context),
+            p.c.review_case_id == self.request.review_case_id,
+        )
+        if lock:
+            statement = statement.with_for_update()
+        return self.connection.execute(statement).one_or_none()
+
+    def _subject_keys(self, proposal: Row[Any]) -> frozenset[tuple[str, str, str]]:
+        """The complete Knowledge subject-key set this decision would write (C6).
+
+        The proposal's own key: a correction patch can name no subject or
+        predicate (KLP-AC-037), so the corrected key equals it.
+        """
+        return frozenset({(proposal.subject_kind, proposal.subject_id, proposal.predicate_code)})
+
+    def _require_canonical(self, proposal: Row[Any]) -> None:
+        """The subject is still canonical, read under C3 (merged-away refused, AC-036)."""
+        kind, subject_id = proposal.subject_kind, proposal.subject_id
+        predicate: KnowledgePredicate = self.request.predicate
+        canonical = False
+        if kind == KnowledgeSubjectKind.PRINCIPAL.value:
+            canonical = subject_id == self.principal_id
+        elif kind == KnowledgeSubjectKind.PROJECT.value:
+            canonical = (
+                self.connection.execute(
+                    select(projects.c.project_id).where(
+                        partition_criterion(projects, self.context),
+                        projects.c.project_id == subject_id,
+                    )
+                ).scalar_one_or_none()
+                is not None
+            )
+        elif kind == KnowledgeSubjectKind.ENTITY.value:
+            row = self.connection.execute(
+                select(entities.c.entity_type, entities.c.status).where(
+                    partition_criterion(entities, self.context),
+                    entities.c.entity_id == subject_id,
+                )
+            ).one_or_none()
+            canonical = (
+                row is not None
+                and row.status == EntityStatus.ACTIVE.value
+                and EntityType(row.entity_type) in predicate.allowed_entity_types
+            )
+        if not canonical:
+            raise KnowledgeSubjectNotCanonicalError("the subject is no longer canonical")
+
+    def _lock_evidence(self, proposal: Row[Any]) -> tuple[list[Row[Any]], list[Row[Any]]]:
+        """C4b: the origin submission's evidence rows, one sorted `FOR SHARE` SELECT."""
+        se, e = knowledge_submission_evidence, knowledge_evidence_refs
+        cited = select(se.c.evidence_ref_id).where(
+            partition_criterion(se, self.context),
+            se.c.submission_id == proposal.origin_submission_id,
+        )
+        rows = list(
+            self.connection.execute(
+                select(
+                    e.c.evidence_ref_id,
+                    e.c.identity_kind,
+                    e.c.capture_id,
+                    e.c.source_classification,
+                )
+                .where(partition_criterion(e, self.context), e.c.evidence_ref_id.in_(cited))
+                .order_by(e.c.evidence_ref_id)
+                .with_for_update(read=True)
+            ).all()
+        )
+        roles = list(
+            self.connection.execute(
+                select(se.c.evidence_ref_id, se.c.evidence_role)
+                .where(
+                    partition_criterion(se, self.context),
+                    se.c.submission_id == proposal.origin_submission_id,
+                )
+                .order_by(se.c.evidence_ref_id, se.c.evidence_role)
+            ).all()
+        )
+        return rows, roles
+
+    def _review_version(self) -> int:
+        d = knowledge_assertion_review_decisions
+        return int(
+            self.connection.execute(
+                select(func.count())
+                .select_from(d)
+                .where(
+                    partition_criterion(d, self.context),
+                    d.c.review_case_id == self.request.review_case_id,
+                )
+            ).scalar_one()
+        )
+
+    def _lock_subjects(self, keys: frozenset[tuple[str, str, str]]) -> None:
+        """C6: upsert every key, then one sorted `SELECT ... FOR UPDATE`."""
+        locks = knowledge_assertion_subject_locks
+        ordered = sorted(keys)
+        for kind, subject_id, predicate_code in ordered:
+            self.connection.execute(
+                pg_insert(locks)
+                .values(
+                    **self._bound(
+                        locks,
+                        {
+                            "subject_kind": kind,
+                            "subject_id": subject_id,
+                            "predicate_code": predicate_code,
+                        },
+                    )
+                )
+                .on_conflict_do_nothing()
+            )
+        self.connection.execute(
+            select(locks.c.predicate_code)
+            .where(
+                partition_criterion(locks, self.context),
+                tuple_(locks.c.subject_kind, locks.c.subject_id, locks.c.predicate_code).in_(
+                    ordered
+                ),
+            )
+            .order_by(
+                locks.c.principal_id,
+                locks.c.subject_kind,
+                locks.c.subject_id,
+                locks.c.predicate_code,
+            )
+            .with_for_update()
+        ).all()
+
+    def _live_duplicate(self, fingerprint: str) -> bool:
+        a = knowledge_assertions
+        return (
+            self.connection.execute(
+                select(a.c.assertion_id).where(
+                    partition_criterion(a, self.context),
+                    a.c.fingerprint_version == 1,
+                    a.c.assertion_fingerprint == fingerprint,
+                    a.c.lifecycle.in_(_LIVE),
+                )
+            ).first()
+            is not None
+        )
+
+    def _slot_holder(self, proposal: Row[Any]) -> Row[Any] | None:
+        predicate: KnowledgePredicate = self.request.predicate
+        if predicate.cardinality is not KnowledgeCardinality.SINGLE_CURRENT:
+            return None
+        a = knowledge_assertions
+        return self.connection.execute(
+            select(a.c.assertion_id, a.c.version, a.c.classification).where(
+                partition_criterion(a, self.context),
+                a.c.subject_kind == proposal.subject_kind,
+                a.c.subject_id == proposal.subject_id,
+                a.c.predicate_code == proposal.predicate_code,
+                a.c.cardinality == KnowledgeCardinality.SINGLE_CURRENT.value,
+                a.c.lifecycle.in_(_LIVE),
+            )
+        ).one_or_none()
+
+    # -- the transaction ------------------------------------------------------------
+
+    def run(self) -> KnowledgeReviewDecisionResult:
+        request = self.request
+        proposal = self._proposal(lock=False)
+        if proposal is None:
+            raise ReviewNotFoundError("no Knowledge case of this Principal")
+        keys = self._subject_keys(proposal)
+        evidence: list[Row[Any]] = []
+        roles: list[Row[Any]] = []
+        if self.promoting:
+            entity_ids = sorted(
+                subject_id
+                for kind, subject_id, _code in keys
+                if kind == KnowledgeSubjectKind.ENTITY.value
+            )
+            if entity_ids:
+                # C3: ONE call over the complete Entity set, helper key order.
+                lock_entity_mutation_scopes(self.connection, self.principal_id, entity_ids)
+            self._require_canonical(proposal)
+            # C4b, then C4c: exactly one Capture fence.
+            evidence, roles = self._lock_evidence(proposal)
+            _capture_fence(
+                self.connection,
+                self.context,
+                tuple(
+                    sorted(
+                        {str(row.capture_id) for row in evidence if row.identity_kind == _CAPTURE}
+                    )
+                ),
+            )
+        # C5: the proposal FOR UPDATE; state and review version re-read under it.
+        locked = self._proposal(lock=True)
+        if locked is None:  # pragma: no cover - proposals are never deleted (trigger)
+            raise ReviewNotFoundError("no Knowledge case of this Principal")
+        if locked.state not in _OPEN_PROPOSAL:
+            raise ReviewConflictError("the proposal is already terminal")
+        version = self._review_version()
+        if version != request.expected_review_version:
+            raise ReviewConflictError("the review version is stale")
+        holder: Row[Any] | None = None
+        if self.promoting:
+            if self._subject_keys(locked) != keys:
+                # KLP-AC-153: the key set moved before C6 -- never a late C3-C6 lock.
+                raise TransactionConflictError("the subject-key set changed")
+            self._lock_subjects(keys)
+            if self._subject_keys(locked) != keys:
+                # KLP-AC-153: re-derived after C6; a change is retryable, not re-locked.
+                raise TransactionConflictError("the subject-key set changed")
+            fingerprint = (
+                locked.proposal_fingerprint
+                if request.corrected is None
+                else request.corrected.assertion_fingerprint
+            )
+            if self._live_duplicate(fingerprint):
+                raise KnowledgeConcurrentDuplicateError("an equal live fact exists")
+            holder = self._slot_holder(locked)
+        decision_id = self._insert_decision(locked, version + 1)
+        assertion_id: str | None = None
+        receipt_id: str | None = None
+        if self.promoting:
+            assertion_id, receipt_id = self._promote(locked, decision_id, evidence, roles, holder)
+        state = _STATE_AFTER[request.disposition]
+        p = knowledge_assertion_proposals
+        moved = self.connection.execute(
+            update(p)
+            .where(
+                partition_criterion(p, self.context),
+                p.c.proposal_id == locked.proposal_id,
+                p.c.state.in_(_OPEN_PROPOSAL),
+            )
+            .values(state=state, updated_at=_not_before(p.c.updated_at, self.at))
+        )
+        if moved.rowcount != 1:  # pragma: no cover - held FOR UPDATE since C5
+            raise ReviewConflictError("the proposal moved under the lock")
+        return KnowledgeReviewDecisionResult(
+            decision_id=decision_id,
+            review_case_id=locked.review_case_id,
+            sequence=version + 1,
+            disposition=request.disposition,
+            proposal_state=state,
+            assertion_id=assertion_id,
+            receipt_id=receipt_id,
+        )
+
+    # -- C7 / C8 writers --------------------------------------------------------------
+
+    def _insert_decision(self, proposal: Row[Any], sequence: int) -> str:
+        request = self.request
+        decision_id = issue_identifier(IdKind.KNOWLEDGE_ASSERTION_REVIEW_DECISION)
+        self.connection.execute(
+            insert(knowledge_assertion_review_decisions).values(
+                **self._bound(
+                    knowledge_assertion_review_decisions,
+                    {
+                        "decision_id": decision_id,
+                        "review_case_id": proposal.review_case_id,
+                        "proposal_id": proposal.proposal_id,
+                        "review_requirement": proposal.review_requirement,
+                        "decision_sequence": sequence,
+                        "disposition": request.disposition,
+                        "reason": request.reason,
+                        "correction_patch": null()
+                        if request.correction_patch is None
+                        else dict(request.correction_patch),
+                        "authenticated_client_id": request.authenticated_client_id,
+                        "decision_channel": request.decision_channel,
+                        "operator_authority_class": request.operator_authority_class,
+                        "external_feedback_ref_hash": None,
+                        "correlation_id": request.correlation_id,
+                        "audit_id": request.audit_id,
+                        "created_at": self.at,
+                    },
+                )
+            )
+        )
+        return decision_id
+
+    def _mutation(
+        self,
+        proposal: Row[Any],
+        decision_id: str,
+        assertion_id: str,
+        kind: KnowledgeMutationKind,
+        new_version: int,
+        classification: Classification,
+    ) -> str:
+        mutation_id = issue_identifier(IdKind.KNOWLEDGE_ASSERTION_MUTATION)
+        self.connection.execute(
+            insert(knowledge_assertion_mutations).values(
+                **self._bound(
+                    knowledge_assertion_mutations,
+                    {
+                        "mutation_id": mutation_id,
+                        "assertion_id": assertion_id,
+                        "mutation_kind": kind.value,
+                        "prior_version": new_version - 1,
+                        "new_version": new_version,
+                        "submission_id": proposal.origin_submission_id,
+                        "proposal_id": proposal.proposal_id,
+                        "review_case_id": proposal.review_case_id,
+                        "review_decision_id": decision_id,
+                        "created_at": self.at,
+                    },
+                )
+            )
+        )
+        self.staged.append(
+            _StagedMutation(assertion_id, kind, new_version, mutation_id, classification)
+        )
+        return mutation_id
+
+    def _promote(
+        self,
+        proposal: Row[Any],
+        decision_id: str,
+        evidence: Sequence[Row[Any]],
+        roles: Sequence[Row[Any]],
+        holder: Row[Any] | None,
+    ) -> tuple[str, str]:
+        """Insert the accepted (or corrected) fact; a single-current holder is superseded.
+
+        Its class is never below the proposal's (trigger
+        `knowledge_assertion_is_not_less_restrictive`, KLP-AC-095/116), the
+        predicate floor, any cited row's stored class or the superseded
+        holder's.
+        """
+        request = self.request
+        predicate: KnowledgePredicate = request.predicate
+        corrected = request.corrected
+        classification = classification_max(
+            Classification(proposal.classification),
+            predicate.classification_floor,
+            *(Classification(row.source_classification) for row in evidence),
+            *(() if holder is None else (Classification(holder.classification),)),
+        )
+        a = knowledge_assertions
+        if holder is not None:
+            demoted = self.connection.execute(
+                update(a)
+                .where(
+                    partition_criterion(a, self.context),
+                    a.c.assertion_id == holder.assertion_id,
+                    a.c.version == holder.version,
+                    a.c.lifecycle.in_(_LIVE),
+                )
+                .values(
+                    lifecycle=KnowledgeAssertionLifecycle.SUPERSEDED.value,
+                    version=a.c.version + 1,
+                    updated_at=_not_before(a.c.updated_at, self.at),
+                )
+                .returning(a.c.version, a.c.classification)
+            ).one_or_none()
+            if demoted is None:  # pragma: no cover - the C6 lock serializes the slot
+                raise KnowledgeConcurrentDuplicateError("the current fact changed under the lock")
+            self._mutation(
+                proposal,
+                decision_id,
+                holder.assertion_id,
+                KnowledgeMutationKind.SUPERSEDE_PREDECESSOR,
+                int(demoted.version),
+                Classification(demoted.classification),
+            )
+        assertion_id = issue_identifier(IdKind.KNOWLEDGE_ASSERTION)
+        if corrected is None:
+            value_text, value_datetime = proposal.value_text, proposal.value_datetime
+            qualifier = proposal.qualifier_json
+            effective_from, effective_to = proposal.effective_from, proposal.effective_to
+            digest, fingerprint = proposal.normalized_value_sha256, proposal.proposal_fingerprint
+        else:
+            value_text, value_datetime = corrected.value_text, corrected.value_datetime
+            qualifier = corrected.qualifier
+            effective_from, effective_to = corrected.effective_from, corrected.effective_to
+            digest, fingerprint = (
+                corrected.normalized_value_sha256,
+                corrected.assertion_fingerprint,
+            )
+        self.connection.execute(
+            insert(a).values(
+                **self._bound(
+                    a,
+                    {
+                        "assertion_id": assertion_id,
+                        "subject_kind": proposal.subject_kind,
+                        "subject_id": proposal.subject_id,
+                        "predicate_code": predicate.predicate_code,
+                        "predicate_version": predicate.predicate_version,
+                        "value_type": predicate.value_type.value,
+                        "cardinality": predicate.cardinality.value,
+                        "temporal_semantics": predicate.temporal_semantics.value,
+                        "qualifier_rule": predicate.qualifier_rule.value,
+                        "value_text": value_text,
+                        "value_datetime": value_datetime,
+                        "qualifier_json": null() if qualifier is None else dict(qualifier),
+                        "effective_from": effective_from,
+                        "effective_to": effective_to,
+                        "normalized_value_sha256": digest,
+                        "fingerprint_version": 1,
+                        "assertion_fingerprint": fingerprint,
+                        "epistemic_status": KnowledgeEpistemicStatus.REVIEW_ACCEPTED.value,
+                        "classification": classification.value,
+                        "origin_is_synthetic": proposal.origin_is_synthetic,
+                        "lifecycle": KnowledgeAssertionLifecycle.ACTIVE.value,
+                        "version": 1,
+                        "origin_submission_id": proposal.origin_submission_id,
+                        "supersedes_assertion_id": None if holder is None else holder.assertion_id,
+                        "accepted_review_case_id": proposal.review_case_id,
+                        "created_at": self.at,
+                        "updated_at": self.at,
+                    },
+                )
+            )
+        )
+        kind = (
+            KnowledgeMutationKind.REVIEW_ACCEPT
+            if corrected is None
+            else KnowledgeMutationKind.REVIEW_CORRECT
+        )
+        mutation_id = self._mutation(proposal, decision_id, assertion_id, kind, 1, classification)
+        for row in roles:
+            self.connection.execute(
+                insert(knowledge_assertion_evidence_links).values(
+                    **self._bound(
+                        knowledge_assertion_evidence_links,
+                        {
+                            "assertion_id": assertion_id,
+                            "evidence_ref_id": row.evidence_ref_id,
+                            "evidence_role": row.evidence_role,
+                            "linked_by_mutation_id": mutation_id,
+                            "created_at": self.at,
+                        },
+                    )
+                )
+            )
+        return assertion_id, mutation_id
 
 
 # ---- discovery checkpoint (KLP-WP-04 slice B3, R6 sections 6.1, 7, 8.1) ------------

@@ -213,6 +213,13 @@ class IdentityConflictKind(StrEnum):
     #: name scoped to organization profiles specifically would have to be
     #: widened rather than reused the day it does.
     SINGLETON_RECORD_CONFLICT = "singleton_record_conflict"
+    #: KLP-WP-04 (R6 section 8.6, KLP-R6A-W4-003). A participant Entity is the
+    #: subject of a live Knowledge assertion or an open Knowledge proposal.
+    #: Knowledge facts are never reparented (KLP-AC-137): there is no
+    #: `MergeFamily` member for them, deliberately, so the merge refuses
+    #: outright until the facts are archived/superseded and the proposals
+    #: decided. Python-only: no database CHECK persists this vocabulary.
+    KNOWLEDGE_REFERENCE_PRESENT = "knowledge_reference_present"
 
 
 #: Which conflict kinds refuse a merge outright, as against those the operator
@@ -223,6 +230,7 @@ _BLOCKS_BY_KIND: dict[IdentityConflictKind, bool] = {
     IdentityConflictKind.UNSUPPORTED_FAMILY: True,
     IdentityConflictKind.AMBIGUOUS_DISPOSITION: False,
     IdentityConflictKind.SINGLETON_RECORD_CONFLICT: True,
+    IdentityConflictKind.KNOWLEDGE_REFERENCE_PRESENT: True,
 }
 
 

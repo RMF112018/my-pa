@@ -66,3 +66,17 @@ rank-max class onto the evidence row); its trigger-visibility check applies the 
 predicate (a memory event's current version class, keys only), and the `current_lifecycle`
 mask compares version classes inside the R6 section 5.2 `withheld_remote` `EXISTS`. No
 statement, structured value or evidence payload is read.
+
+**KLP-WP-04 slice C (Knowledge Review, 2026-10-05):**
+`review.list` reads three of the eight (`relationship_memory_proposals`,
+`relationship_memory_review_decisions`, `relationship_memory_versions`) and writes
+none of the eight; `review.decide` reads four of the eight (`relationship_memory_proposals`,
+`relationship_memory_review_decisions`, `relationship_memory_proposal_evidence`,
+`relationship_memory_versions`) and writes seven of the eight (`relationship_memories`,
+`relationship_memory_versions`, `relationship_memory_context_links`,
+`relationship_memory_evidence_links`, `relationship_memory_review_decisions`,
+`relationship_memory_proposals`, `relationship_memory_proposal_evidence`). The one added read
+of each is `relationship_memory_versions.classification` (keys and that column only), inside
+the R6 section 5.3 proposal-effective-class `EXISTS` that withholds a Knowledge Review case
+from a remote caller before the page LIMIT and before any decide lock. No memory column enters
+a returned row; the memory branches are otherwise unchanged.

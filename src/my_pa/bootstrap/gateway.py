@@ -1114,6 +1114,11 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
             ),
             # KLP-WP-04 (R6 section 6.1): the second service gate's allowlist.
             knowledge_discovery_client_ids=settings.knowledge_discovery_oauth_client_id_set(),
+            # KLP-WP-04 slice C (R6 section 3.2): the operator-review allowlist the
+            # Knowledge `review.decide` authority derivation reads.
+            knowledge_operator_review_client_ids=(
+                settings.knowledge_operator_review_oauth_client_id_set()
+            ),
             # KLP-WP-04 slice B3 (R6 section 7): the checkpoint seal. `Settings._check`
             # requires the key whenever the discovery list binds a client; without
             # one the service refuses every checkpoint.

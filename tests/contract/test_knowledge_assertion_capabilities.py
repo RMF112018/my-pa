@@ -81,6 +81,9 @@ from my_pa.contracts.ports import (
     KnowledgeCheckpointRequest,
     KnowledgeCheckpointResult,
     KnowledgeCreateRequest,
+    KnowledgeReviewCaseRow,
+    KnowledgeReviewDecisionRequest,
+    KnowledgeReviewDecisionResult,
     KnowledgeSourceBinding,
     KnowledgeSubmissionResult,
     KnowledgeSubmitRequest,
@@ -258,6 +261,25 @@ class _CannedKnowledge(KnowledgeAssertionRepository):
             private_envelope=request.private_envelope,
             private_token_redacted=False,
         )
+
+    # KLP-WP-04 slice C: a canned Review plane (routing, not SQL) -- no case.
+
+    def review_cases(  # type: ignore[override]
+        self, principal_id: str, **_: object
+    ) -> tuple[KnowledgeReviewCaseRow, ...]:
+        self.calls.append("review_cases")
+        return ()
+
+    def review_case(
+        self, principal_id: str, review_case_id: str, *, remote: bool
+    ) -> KnowledgeReviewCaseRow | None:
+        self.calls.append("review_case")
+        return None
+
+    def decide_review(
+        self, principal_id: str, request: KnowledgeReviewDecisionRequest, *, at: datetime
+    ) -> KnowledgeReviewDecisionResult:
+        raise AssertionError("no canned case reaches decide_review")
 
 
 class _KnowledgeUnitOfWork(FakeUnitOfWork):

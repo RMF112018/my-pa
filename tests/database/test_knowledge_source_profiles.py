@@ -38,7 +38,7 @@ from apps.cli.knowledge_source_profiles import (
     EXIT_OK,
     EXIT_REFUSED,
     Runtime,
-    run,
+    run_knowledge_source_profiles,
     scope_digest_of,
 )
 from sqlalchemy import Engine, select, text
@@ -108,7 +108,9 @@ def cli_runtime(
 
 def run_cli(engine: Engine, principal: str, *argv: str) -> tuple[int, list[str]]:
     lines: list[str] = []
-    code = run(list(argv), cli_runtime(engine, principal), out=lines.append)
+    code = run_knowledge_source_profiles(
+        list(argv), cli_runtime(engine, principal), out=lines.append
+    )
     return code, lines
 
 

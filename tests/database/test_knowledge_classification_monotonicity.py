@@ -1,6 +1,7 @@
 """KLP-WP-03: Knowledge classification is server-derived, floored and monotonic (DB).
 
-KLP-AC-059 (closing) and the cross-profile case of KLP-AC-138. Marked
+KLP-AC-059 (closing), the cross-profile case of KLP-AC-138 and (KLP-WP-04
+slice B1) the KLP-R6V-201 / KLP-R6V-202 cases of KLP-AC-152. Marked
 `database` (auto `database_clone`), routed to `database-current-head`.
 
 * `Classification.is_cloud_eligible` is unchanged: only `synthetic_test`.
@@ -21,7 +22,10 @@ external evidence, proposals) and for the refused writes themselves.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
 
 import pytest
 from sqlalchemy import select, text
@@ -37,6 +41,9 @@ from tests.database.test_knowledge_assertion_repository import (
     capture_evidence,
     new_principal,
 )
+from tests.database.test_knowledge_evidence_availability import EXCERPT as _EXCERPT_B1
+from tests.database.test_knowledge_evidence_availability import seed_external_excerpt
+from tests.database.test_knowledge_source_profiles import provision, run_cli
 from tests.security.test_knowledge_assertion_disclosure import (
     REMOTE,
     link,
@@ -247,3 +254,119 @@ def test_a_restriction_through_another_profile_withholds_without_fan_out(
         ReadKnowledgeAssertion(assertion_id=created["assertion_id"]), principal_id=principal
     )
     assert local.error is None
+
+
+# ---- KLP-WP-04 slice B1: KLP-R6V-201 / KLP-R6V-202 (KLP-AC-152 slice) ----------------
+#
+# R6V-201 (ii) -- a capture-kind row for an already restricted capture is born
+# `restricted_local` with excerpt NULL -- is `test_a_create_takes_the_rank_max_of_
+# every_cited_version` above. The external re-citation case of (i) needs the
+# autonomous submit writer (slice B2); here its explicit-create analogue proves
+# the same statement: a re-observation that raises an existing row redacts it in
+# the same UPDATE instead of failing the CHECK.
+
+_EXCERPT = "Synthetic excerpt held by a private row."
+
+
+def _row(engine: Any, evidence_ref_id: str) -> dict[str, Any]:  # noqa: ANN401
+    with engine.connect() as connection:
+        return dict(
+            connection.execute(
+                select(knowledge_evidence_refs).where(
+                    knowledge_evidence_refs.c.evidence_ref_id == evidence_ref_id
+                )
+            )
+            .one()
+            ._mapping
+        )
+
+
+def test_a_re_citation_after_restriction_raises_and_redacts_without_error(
+    runtime: KnowledgeRuntime,
+) -> None:
+    principal = new_principal()
+    engine = runtime.engine
+    capture_id, digest = runtime.capture(principal, "recite")
+    evidence = issue_identifier(IdKind.KNOWLEDGE_EVIDENCE_REF)
+    excerpt_sha256 = hashlib.sha256(_EXCERPT.encode()).hexdigest()
+    # Setup only: an existing private canonical row for the cited version that
+    # still holds an excerpt (no slice-B1 writer stores one for a capture).
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO knowledge.knowledge_evidence_refs (principal_id, evidence_ref_id, "
+                "identity_kind, capture_id, content_hash, excerpt, excerpt_sha256, "
+                "content_origin, source_classification, created_at, updated_at) VALUES "
+                "(:p, :e, 'capture', :c, :h, :x, :xh, 'capture', 'private_local', now(), now())"
+            ),
+            {
+                "p": principal,
+                "e": evidence,
+                "c": capture_id,
+                "h": digest,
+                "x": _EXCERPT,
+                "xh": excerpt_sha256,
+            },
+        )
+    restricted_capture_version(engine, principal, capture_id)
+    created = runtime.create(
+        principal, "klp04-recite", evidence=(capture_evidence(capture_id, digest),)
+    )
+    assert created["outcome"] == "direct_created"
+    row = _row(engine, evidence)
+    assert (row["source_classification"], row["excerpt"]) == ("restricted_local", None)
+    assert (row["excerpt_sha256"], row["content_hash"]) == (excerpt_sha256, digest)
+    assert _class_of(runtime, created["assertion_id"]) == "restricted_local"
+    with engine.connect() as connection:
+        rows = connection.execute(
+            select(knowledge_evidence_refs.c.evidence_ref_id).where(
+                knowledge_evidence_refs.c.principal_id == principal
+            )
+        ).scalars()
+        assert list(rows) == [evidence], "a re-citation creates no second evidence row"
+
+
+def test_classify_evidence_raises_and_redacts_every_existing_sibling_in_one_run(
+    runtime: KnowledgeRuntime, tmp_path: Path
+) -> None:
+    """KLP-R6V-202 option A: siblings share the run and the sorted C4b set.
+
+    Siblings are the same Principal's rows of the same `external_object_id`
+    under any profile of the same `origin_system`, any version. Another origin
+    system's row of the same id, and another object, are untouched.
+    """
+    principal = new_principal()
+    engine = runtime.engine
+    profile_a = provision(engine, principal, tmp_path, scope="synthetic-mailbox:a")
+    profile_b = provision(engine, principal, tmp_path, scope="synthetic-mailbox:b")
+    profile_c = provision(
+        engine, principal, tmp_path, origin_system="teams_messages", scope="synthetic-team:c"
+    )
+    named = seed_external_excerpt(engine, principal, profile_a, object_id="synthetic-x")
+    sibling = seed_external_excerpt(
+        engine, principal, profile_b, object_id="synthetic-x", version="v2"
+    )
+    other_origin = seed_external_excerpt(engine, principal, profile_c, object_id="synthetic-x")
+    other_object = seed_external_excerpt(engine, principal, profile_a, object_id="synthetic-y")
+    via_sibling = runtime.create(principal, "klp04-via-sibling", value="Linked via sibling")
+    link(engine, principal, via_sibling, sibling)
+
+    code, lines = run_cli(
+        engine,
+        principal,
+        "classify-evidence",
+        "--evidence-ref",
+        named,
+        "--classification",
+        "restricted_local",
+    )
+    assert code == 0, lines
+    assert lines[0] == f"evidence_refs     {','.join(sorted([named, sibling]))}"
+    for raised in (named, sibling):
+        row = _row(engine, raised)
+        assert (row["source_classification"], row["excerpt"]) == ("restricted_local", None)
+        assert row["excerpt_sha256"] is not None
+    for untouched in (other_origin, other_object):
+        row = _row(engine, untouched)
+        assert (row["source_classification"], row["excerpt"]) == ("private_local", _EXCERPT_B1)
+    assert _class_of(runtime, via_sibling["assertion_id"]) == "restricted_local"

@@ -181,17 +181,15 @@ class AdmissionEvidence:
     origin_system: KnowledgeOriginSystem | None = None
     external_object_id: str | None = None
     external_version_id: str | None = None
-    capture_id: str | None = None
-    relationship_memory_id: str | None = None
+    #: The cited Capture's or Relationship Memory's identifier (product shapes).
+    product_record_id: str | None = None
     available: bool = True
 
     @property
     def native_identity(self) -> str:
         if self.identity_kind is KnowledgeEvidenceIdentityKind.EXTERNAL_OBJECT:
             return str(self.external_object_id)
-        if self.identity_kind is KnowledgeEvidenceIdentityKind.CAPTURE:
-            return str(self.capture_id)
-        return str(self.relationship_memory_id)
+        return str(self.product_record_id)
 
     @property
     def is_stable(self) -> bool:

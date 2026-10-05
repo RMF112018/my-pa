@@ -314,7 +314,7 @@ def submit_admission_evidence(
                     identity_kind=kind,
                     role=role,
                     content_hash=content_hash,
-                    capture_id=str(item["capture_id"]),
+                    product_record_id=str(item["capture_id"]),
                 )
             )
         else:
@@ -323,7 +323,7 @@ def submit_admission_evidence(
                     identity_kind=kind,
                     role=role,
                     content_hash=content_hash,
-                    relationship_memory_id=str(item["relationship_memory_id"]),
+                    product_record_id=str(item["relationship_memory_id"]),
                 )
             )
     return tuple(facts)

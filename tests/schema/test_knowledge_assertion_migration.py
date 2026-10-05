@@ -2396,6 +2396,25 @@ def test_each_check_refuses_its_minimal_violation_in_isolation(
         savepoint.rollback()
 
 
+@pytest.mark.database
+@pytest.mark.parametrize("origin", ["onedrive", "onedrive_files", "one_drive"])
+def test_a_onedrive_profile_is_unrepresentable(graph: Connection, origin: str) -> None:
+    """KLP-AC-065, DDL half (KLP-WP-04): no origin_system token admits OneDrive.
+
+    The provisioner refuses every OneDrive spelling before it writes
+    (`tests/unit/test_knowledge_source_profile_provisioner.py`); this is the
+    database backstop under it.
+    """
+    savepoint = graph.begin_nested()
+    try:
+        assert _refused(graph, table=_PR, **{**BASE[_PR], "origin_system": origin}) == (
+            CHECK_VIOLATION,
+            "knowledge_profile_origin_system_is_known",
+        )
+    finally:
+        savepoint.rollback()
+
+
 # ---- migration edge: triggers ----------------------------------------------------------
 
 

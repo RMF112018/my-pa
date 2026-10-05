@@ -98,7 +98,7 @@ def _capture(role: KnowledgeEvidenceRole = KnowledgeEvidenceRole.SUPPORTING) -> 
         identity_kind=KnowledgeEvidenceIdentityKind.CAPTURE,
         role=role,
         content_hash=HASH,
-        capture_id="cap_SyntheticCapture1",
+        product_record_id="cap_SyntheticCapture1",
     )
 
 

@@ -280,23 +280,6 @@ class Runtime:
     clock: Callable[[], datetime]
 
 
-def _runtime() -> Runtime:
-    settings = load_settings()
-    principal = settings.admissible_client_principal_id()
-    if principal is None:
-        raise ProfileRefusalError(
-            f"{ENV_PREFIX}AUTH_MODE authenticates each request and a shell carries no "
-            "credential, so there is no Principal to provision for. Run this from a "
-            "process configured for the local operator"
-        )
-    return Runtime(
-        engine=create_database_engine(settings.parsed_database_url(), statement_timeout_ms=30_000),
-        principal_id=principal,
-        allowlists=knowledge_allowlists(settings),
-        clock=lambda: datetime.now(UTC),
-    )
-
-
 def _fingerprint(runtime: Runtime, out: Callable[[str], None]) -> None:
     out(f"allowlist_fingerprint {allowlist_fingerprint(runtime.allowlists)}")
 
@@ -391,19 +374,6 @@ def _redact(args: argparse.Namespace, runtime: Runtime, out: Callable[[str], Non
     return EXIT_OK
 
 
-_HANDLERS: Final[
-    Mapping[str, Callable[[argparse.Namespace, Runtime, Callable[[str], None]], int]]
-] = {
-    "apply": _apply,
-    "provision": _apply,
-    "list": _list,
-    "disable": _disable,
-    "classify-evidence": _classify,
-    "drain-revalidation": _drain,
-    "redact-sealed": _redact,
-}
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="knowledge_source_profiles",
@@ -431,7 +401,25 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def run(
+def _dispatch(args: argparse.Namespace, runtime: Runtime, out: Callable[[str], None]) -> int:
+    match args.command:
+        case "apply" | "provision":
+            return _apply(args, runtime, out)
+        case "list":
+            return _list(args, runtime, out)
+        case "disable":
+            return _disable(args, runtime, out)
+        case "classify-evidence":
+            return _classify(args, runtime, out)
+        case "drain-revalidation":
+            return _drain(args, runtime, out)
+        case "redact-sealed":
+            return _redact(args, runtime, out)
+        case unknown:  # pragma: no cover - argparse rejects an unknown command first
+            raise SystemExit(f"unhandled command {unknown!r}")
+
+
+def run_knowledge_source_profiles(
     argv: Sequence[str],
     runtime: Runtime,
     *,
@@ -440,7 +428,7 @@ def run(
     """Parse and dispatch against `runtime`. A refusal is exit 1 and one line."""
     args = build_parser().parse_args(list(argv))
     try:
-        return _HANDLERS[args.command](args, runtime, out)
+        return _dispatch(args, runtime, out)
     except ValueError as refusal:
         out(f"refused           {refusal}")
         return EXIT_REFUSED
@@ -450,14 +438,31 @@ def run(
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Bind this process's durable Principal, or refuse, then run one subcommand.
+
+    The Principal is `admissible_client_principal_id()` -- the one local-operator
+    Principal this process serves (the `clients.py` binding). There is no
+    `--principal-id` flag: a profile or a maintenance write never acts for a
+    caller-named Principal.
+    """
     arguments = sys.argv[1:] if argv is None else argv
-    try:
-        runtime = _runtime()
-    except ProfileRefusalError as refusal:
-        print(f"refused           {refusal}")
+    settings = load_settings()
+    principal = settings.admissible_client_principal_id()
+    if principal is None:
+        print(
+            f"refused           {ENV_PREFIX}AUTH_MODE authenticates each request and a shell "
+            "carries no credential, so there is no Principal to act for. Run this from a "
+            "process configured for the local operator"
+        )
         return EXIT_REFUSED
+    runtime = Runtime(
+        engine=create_database_engine(settings.parsed_database_url(), statement_timeout_ms=30_000),
+        principal_id=principal,
+        allowlists=knowledge_allowlists(settings),
+        clock=lambda: datetime.now(UTC),
+    )
     try:
-        return run(arguments, runtime)
+        return run_knowledge_source_profiles(arguments, runtime)
     finally:
         runtime.engine.dispose()
 

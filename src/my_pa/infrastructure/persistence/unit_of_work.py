@@ -1548,4 +1548,7 @@ def knowledge_maintenance_transaction(engine: Engine) -> Iterator[SqlKnowledgeAs
     """
     unit = SqlAlchemyUnitOfWork(engine, audit=_MaintenanceWritesNoAudit())
     with unit:
-        yield SqlKnowledgeAssertionRepository(unit._open, stager=unit._record_events)
+        repository = unit.knowledge_assertions
+        if not isinstance(repository, SqlKnowledgeAssertionRepository):  # pragma: no cover
+            raise TypeError("the unit of work's Knowledge repository is the SQL one")
+        yield repository

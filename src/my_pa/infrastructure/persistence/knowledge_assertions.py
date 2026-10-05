@@ -886,7 +886,7 @@ class SqlKnowledgeAssertionRepository(KnowledgeAssertionRepository):
     ) -> KnowledgeMaintenanceResult:
         """The single source-classification ingress (R6 5.1, KLP-AC-164)."""
         body = self._maintenance(principal_id, at)
-        return _translated(lambda: body.classify_restricted(evidence_ref_id))
+        return _translated(lambda: body.classify_restricted(principal_id, evidence_ref_id))
 
     def record_evidence_availability(
         self,
@@ -900,14 +900,16 @@ class SqlKnowledgeAssertionRepository(KnowledgeAssertionRepository):
         """The single availability ingress (R6 5.4, KLP-AC-070/142)."""
         body = self._maintenance(principal_id, at)
         return _translated(
-            lambda: body.record_availability(evidence_ref_id, availability, verified_at=verified_at)
+            lambda: body.record_availability(
+                principal_id, evidence_ref_id, availability, verified_at=verified_at
+            )
         )
 
     def drain_availability_revalidation(
         self, principal_id: str, *, at: datetime
     ) -> KnowledgeMaintenanceResult:
         body = self._maintenance(principal_id, at)
-        return _translated(body.drain_revalidation)
+        return _translated(lambda: body.drain_revalidation(principal_id))
 
     def redact_sealed_checkpoint_requests(
         self, principal_id: str, *, below_seal: int, at: datetime
@@ -1588,7 +1590,7 @@ class _Maintenance:
         self, connection: Connection, principal_id: str, stager: RecordEventStager, at: datetime
     ) -> None:
         self.connection = connection
-        self.principal_id = principal_id
+        self._owner = principal_id
         self.context = capture_context(principal_id)
         self.stager = stager
         self.at = at
@@ -1809,13 +1811,21 @@ class _Maintenance:
 
     def _control_mutation(
         self,
+        principal_id: str,
         assertion_id: str,
         kind: KnowledgeMutationKind,
         *,
         guard: Sequence[ColumnElement[bool]],
         values: Mapping[str, object],
     ) -> bool:
-        """C7/C8/C9 for one control mutation: UPDATE, receipt, staged event."""
+        """C7/C8/C9 for one control mutation: UPDATE, receipt, staged event.
+
+        `principal_id` is passed down explicitly from the repository method (the
+        durable Principal the caller resolved), so the staged event's Principal
+        is traceable to its root (RE-AC-103); it must be this body's partition.
+        """
+        if principal_id != self._owner:
+            raise ValueError("a maintenance body writes only its own Principal's partition")
         a = knowledge_assertions
         row = self.connection.execute(
             update(a)
@@ -1852,7 +1862,7 @@ class _Maintenance:
         )
         _stage_knowledge_event(
             self.stager,
-            principal_id=self.principal_id,
+            principal_id=principal_id,
             assertion_id=assertion_id,
             mutation_kind=kind,
             record_version=version,
@@ -1865,11 +1875,12 @@ class _Maintenance:
         )
         return True
 
-    def _mark_revalidation(self, rows: Sequence[Row[Any]]) -> list[str]:
+    def _mark_revalidation(self, principal_id: str, rows: Sequence[Row[Any]]) -> list[str]:
         a = knowledge_assertions
         marked: list[str] = []
         for row in rows:
             if self._control_mutation(
+                principal_id,
                 row.assertion_id,
                 KnowledgeMutationKind.REVALIDATION_REQUIRED,
                 guard=(a.c.lifecycle == _ACTIVE,),
@@ -1930,7 +1941,9 @@ class _Maintenance:
         ).scalars()
         return sorted({named.evidence_ref_id, *siblings})
 
-    def classify_restricted(self, evidence_ref_id: str) -> KnowledgeMaintenanceResult:
+    def classify_restricted(
+        self, principal_id: str, evidence_ref_id: str
+    ) -> KnowledgeMaintenanceResult:
         """C4b FOR UPDATE -> one raise+redact UPDATE -> links -> C6 -> <=128 classify.
 
         Idempotent and resumable: the UPDATE is a no-op for rows already
@@ -1970,6 +1983,7 @@ class _Maintenance:
             for row in batch
             if row.assertion_id in current
             and self._control_mutation(
+                principal_id,
                 row.assertion_id,
                 KnowledgeMutationKind.CLASSIFY,
                 guard=(
@@ -1990,6 +2004,7 @@ class _Maintenance:
 
     def record_availability(
         self,
+        principal_id: str,
         evidence_ref_id: str,
         availability: KnowledgeEvidenceAvailability,
         *,
@@ -2038,7 +2053,9 @@ class _Maintenance:
         current = {
             row.assertion_id for row in self._linked([evidence_ref_id], lifecycles=(_ACTIVE,))
         }
-        marked = self._mark_revalidation([row for row in linked if row.assertion_id in current])
+        marked = self._mark_revalidation(
+            principal_id, [row for row in linked if row.assertion_id in current]
+        )
         return KnowledgeMaintenanceResult(
             evidence_ref_ids=(evidence_ref_id,),
             mutated_assertion_ids=tuple(marked),
@@ -2046,7 +2063,7 @@ class _Maintenance:
             pending=pending,
         )
 
-    def drain_revalidation(self) -> KnowledgeMaintenanceResult:
+    def drain_revalidation(self, principal_id: str) -> KnowledgeMaintenanceResult:
         """One pending row per run: <=128 marks, then clear the flag only when done.
 
         One evidence row per transaction, so the run never takes a C4b lock
@@ -2071,7 +2088,9 @@ class _Maintenance:
             batch = linked[:MAINTENANCE_BATCH]
             self._lock_subjects(batch)
             current = {row.assertion_id for row in self._linked([first], lifecycles=(_ACTIVE,))}
-            marked = self._mark_revalidation([row for row in batch if row.assertion_id in current])
+            marked = self._mark_revalidation(
+                principal_id, [row for row in batch if row.assertion_id in current]
+            )
             if not self._linked([first], lifecycles=(_ACTIVE,)):
                 self.connection.execute(
                     update(e)

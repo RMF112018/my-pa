@@ -14,6 +14,7 @@ Identifiers are synthetic and follow `IdKind` shape only.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import zlib
@@ -40,6 +41,7 @@ from my_pa.application.constraint_settings import (
 )
 from my_pa.application.goodnotes_content import content_payload
 from my_pa.application.goodnotes_semantics import work_payload
+from my_pa.application.knowledge_assertions import assertion_view, review_case_view
 from my_pa.application.meetings import MeetingSeriesWriteResult, MeetingWriteResult
 from my_pa.application.service import (
     _HANDLERS,
@@ -53,6 +55,9 @@ from my_pa.application.service import (
 from my_pa.contracts.ports import (
     CaptureSearchMatch,
     DirectedReceipt,
+    KnowledgeAssertionRow,
+    KnowledgeReviewCaseRow,
+    KnowledgeReviewDecisionResult,
     MutationRecordFamily,
     UnitOfWork,
 )
@@ -153,6 +158,12 @@ from my_pa.domain.task.lifecycle import TaskLifecycleState, TaskOriginKind, Task
 ROOT: Final = Path(__file__).resolve().parents[2]
 FIXTURE_DIR: Final = ROOT / "web" / "src" / "lib" / "api" / "decode" / "fixtures" / "python"
 SUCCESS_PATH: Final = FIXTURE_DIR / "success.json"
+#: KLP-WP-04 slice D: the Knowledge `review.decide` results. `success.json` is
+#: keyed one payload per gateway capability (both this module and Vitest
+#: `parity.test.ts` pin its key set to the gateway's), and `review.decide`
+#: already holds the capture decision, so the Knowledge variants live beside it.
+KNOWLEDGE_REVIEW_PATH: Final = FIXTURE_DIR / "review.knowledge.json"
+SERVICE_PATH: Final = ROOT / "src" / "my_pa" / "application" / "service.py"
 GATEWAY_PATH: Final = ROOT / "web" / "src" / "contracts" / "gateway.json"
 
 AT: Final = datetime(2026, 8, 9, 12, 0, 0, tzinfo=UTC)
@@ -581,7 +592,11 @@ def _knowledge_read() -> dict[str, Any]:
 
 
 def _review_list() -> dict[str, Any]:
-    """Handler-identical `_review_case_payload` for one capture-proposal case."""
+    """Handler-identical rows: one capture-proposal case, then one Knowledge case.
+
+    KLP-WP-04 slice D: the service merges Knowledge rows by `(opened_at,
+    review_case_id)`, so a mixed page lists the older capture case first.
+    """
     case = ReviewCase(
         review_case_id="rvw_aaaaaaaa11111111",
         proposal_id="prop_aaaaaaaa11111111",
@@ -612,8 +627,139 @@ def _review_list() -> dict[str, Any]:
                 "version_id": case.version_id,
                 "proposal_type": case.proposal_type.value,
                 "capture_lifecycle_state": None,
-            }
+            },
+            _knowledge_review_case_row(),
         ]
+    }
+
+
+#: KLP-WP-04 slice C's exact Python payload identities (synthetic ids).
+KNOWLEDGE_CASE_ID: Final = "rvw_aa77ff0d68d72af5b4771d736a0f789e"
+KNOWLEDGE_REJECT_CASE_ID: Final = "rvw_b24cd2339cf817a94035457dd685738a"
+KNOWLEDGE_ASSERTION_ID: Final = "kasr_284d7c980ceccde51e55e10874e1c270"
+KNOWLEDGE_SUBJECT_ID: Final = "ent_66fb736038ea9e42d480f6f466210679"
+KNOWLEDGE_OPENED_AT: Final = datetime(2026, 10, 4, 12, 0, 0, tzinfo=UTC)
+
+
+def _knowledge_review_case_row() -> dict[str, Any]:
+    """The production `review_case_view` over one open Knowledge proposal case (R6 10.1).
+
+    The factual columns (`value_text` ..) are set so the test also shows the
+    listing never renders them.
+    """
+    return review_case_view(
+        KnowledgeReviewCaseRow(
+            review_case_id=KNOWLEDGE_CASE_ID,
+            proposal_id="kaprp_7a88c3d12e4066cd1e9f007ebf89c4b0",
+            subject_kind="entity",
+            subject_id=KNOWLEDGE_SUBJECT_ID,
+            predicate_code="organization.payment_terms",
+            predicate_version=1,
+            review_requirement="requires_operator",
+            risk_class="high",
+            state="needs_review",
+            classification="private_local",
+            opened_at=KNOWLEDGE_OPENED_AT,
+            review_version=0,
+            latest_disposition=None,
+            value_text="net 30",
+        )
+    )
+
+
+def _knowledge_assertions_read() -> dict[str, Any]:
+    """`_knowledge_assertions_read`'s `{"assertion": assertion_view(row)}` for a promoted fact."""
+    return {
+        "assertion": assertion_view(
+            KnowledgeAssertionRow(
+                assertion_id=KNOWLEDGE_ASSERTION_ID,
+                subject_kind="entity",
+                subject_id=KNOWLEDGE_SUBJECT_ID,
+                predicate_code="organization.payment_terms",
+                predicate_version=1,
+                value_type="text",
+                value_text="net 30",
+                value_datetime=None,
+                qualifier=None,
+                effective_from=KNOWLEDGE_OPENED_AT,
+                effective_to=None,
+                epistemic_status="review_accepted",
+                classification="private_local",
+                lifecycle="active",
+                version=1,
+                supersedes_assertion_id=None,
+                created_at=KNOWLEDGE_OPENED_AT,
+                updated_at=KNOWLEDGE_OPENED_AT,
+            )
+        )
+    }
+
+
+def _knowledge_decide_payload_mapping() -> dict[str, str]:
+    """`_knowledge_review_decide`'s own `payload = {...}`: result key -> decision attribute.
+
+    Read from `service.py` by AST rather than restated, so the fixture below is
+    built by the handler's mapping and a renamed or added key is a failure here.
+    """
+    tree = ast.parse(SERVICE_PATH.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_knowledge_review_decide":
+            for inner in ast.walk(node):
+                if (
+                    isinstance(inner, ast.AnnAssign)
+                    and isinstance(inner.target, ast.Name)
+                    and inner.target.id == "payload"
+                    and isinstance(inner.value, ast.Dict)
+                ):
+                    mapping: dict[str, str] = {}
+                    for key, value in zip(inner.value.keys, inner.value.values, strict=True):
+                        assert isinstance(key, ast.Constant) and isinstance(key.value, str)
+                        assert isinstance(value, ast.Attribute)
+                        assert isinstance(value.value, ast.Name) and value.value.id == "decision"
+                        mapping[key.value] = value.attr
+                    return mapping
+    raise AssertionError("_knowledge_review_decide no longer builds a literal payload dict")
+
+
+def _knowledge_decide(decision: KnowledgeReviewDecisionResult) -> dict[str, Any]:
+    return {
+        key: getattr(decision, attribute)
+        for key, attribute in _knowledge_decide_payload_mapping().items()
+    }
+
+
+def knowledge_review_payloads() -> dict[str, dict[str, Any]]:
+    """The Knowledge `review.decide` variants slice C recorded from the database run."""
+    return {
+        "review.decide.accept": _knowledge_decide(
+            KnowledgeReviewDecisionResult(
+                decision_id="kadec_9adb6ea38eaeb5e05e1f635c96828236",
+                review_case_id=KNOWLEDGE_CASE_ID,
+                sequence=1,
+                disposition="accept",
+                proposal_state="accepted",
+                assertion_id=KNOWLEDGE_ASSERTION_ID,
+                receipt_id="kamut_3f7606c8c83bd6129e2301e3bac303ae",
+            )
+        ),
+        "review.decide.reject": _knowledge_decide(
+            KnowledgeReviewDecisionResult(
+                decision_id="kadec_684ff12d1835c13c10723164690ec4f9",
+                review_case_id=KNOWLEDGE_REJECT_CASE_ID,
+                sequence=1,
+                disposition="reject",
+                proposal_state="rejected",
+            )
+        ),
+        "review.decide.invalidate": _knowledge_decide(
+            KnowledgeReviewDecisionResult(
+                decision_id="kadec_0c1d2e3f405162738495a6b7c8d9eaf0",
+                review_case_id="rvw_c35e4f5061728394a5b6c7d8e9f0a1b2",
+                sequence=1,
+                disposition="invalidate",
+                proposal_state="invalidated",
+            )
+        ),
     }
 
 
@@ -1564,6 +1710,7 @@ def python_success_payloads() -> dict[str, dict[str, Any]]:
         "knowledge.search": _knowledge_search(),
         "knowledge.read": _knowledge_read(),
         "knowledge.reveal": _reveal_unavailable(),
+        "knowledge.assertions.read": _knowledge_assertions_read(),
         "continuity.pulse": _continuity_pulse(),
         "continuity.situations": _continuity_situations(),
         "continuity.projects": _continuity_projects(),
@@ -2467,3 +2614,70 @@ def test_dropping_a_required_array_is_not_the_committed_success() -> None:
     pulse.pop("pulse_items")
     assert pulse != committed["continuity.pulse"]
     assert "pulse_items" not in pulse
+
+
+def test_committed_knowledge_review_fixtures_match_live_payloads() -> None:
+    """KLP-AC-033/135: the Knowledge decide variants Vitest decodes are the live mapping."""
+    assert KNOWLEDGE_REVIEW_PATH.is_file(), (
+        f"Knowledge review fixtures missing at {KNOWLEDGE_REVIEW_PATH}"
+    )
+    committed = json.loads(KNOWLEDGE_REVIEW_PATH.read_text(encoding="utf-8"))
+    live = knowledge_review_payloads()
+    assert committed == live
+
+
+def test_knowledge_review_wire_shapes_are_the_frozen_ones() -> None:
+    """R6 section 10.1, checked on the committed bytes the web decoders read.
+
+    * The Knowledge `review.list` row is the capture common keys plus exactly
+      `subject_kind_of_fact`, `subject_id`, `predicate_code`,
+      `review_requirement`, with `subject_kind = "knowledge_assertion"`, and no
+      value, qualifier or evidence key.
+    * Every Knowledge `review.decide` result has exactly the capture result's
+      seven keys (no discriminator), with `kadec_` / `kasr_` / `kamut_` ids.
+    * The page mixes a capture and a Knowledge row (the decoder half is Vitest
+      `review.list.test.ts`).
+    """
+    committed = json.loads(SUCCESS_PATH.read_text(encoding="utf-8"))
+    rows = committed["review.list"]["review_cases"]
+    kinds = [row["subject_kind"] for row in rows]
+    assert kinds == [ReviewSubjectKind.CAPTURE_PROPOSAL.value, "knowledge_assertion"]
+    assert ReviewSubjectKind("knowledge_assertion") is ReviewSubjectKind.KNOWLEDGE_ASSERTION
+    common = {
+        "review_case_id",
+        "proposal_id",
+        "proposal_state",
+        "risk_class",
+        "opened_at",
+        "review_version",
+        "latest_disposition",
+        "subject_kind",
+    }
+    knowledge = rows[1]
+    assert set(knowledge) == common | {
+        "subject_kind_of_fact",
+        "subject_id",
+        "predicate_code",
+        "review_requirement",
+    }
+    assert ProposalState(knowledge["proposal_state"])
+    assert RiskClass(knowledge["risk_class"])
+    assert "net 30" not in json.dumps(knowledge)
+
+    capture_decide_keys = set(committed["review.decide"])
+    assert len(capture_decide_keys) == 7
+    variants = json.loads(KNOWLEDGE_REVIEW_PATH.read_text(encoding="utf-8"))
+    assert set(variants) == {
+        "review.decide.accept",
+        "review.decide.reject",
+        "review.decide.invalidate",
+    }
+    for name, payload in variants.items():
+        assert set(payload) == capture_decide_keys, name
+        assert payload["decision_id"].startswith("kadec_"), name
+        assert ProposalState(payload["proposal_state"]), name
+        if payload["assertion_id"] is None:
+            assert payload["receipt_id"] is None, name
+        else:
+            assert payload["assertion_id"].startswith("kasr_"), name
+            assert payload["receipt_id"].startswith("kamut_"), name

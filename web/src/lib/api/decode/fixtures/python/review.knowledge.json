@@ -1,0 +1,29 @@
+{
+  "review.decide.accept": {
+    "review_case_id": "rvw_aa77ff0d68d72af5b4771d736a0f789e",
+    "decision_id": "kadec_9adb6ea38eaeb5e05e1f635c96828236",
+    "review_version": 1,
+    "disposition": "accept",
+    "proposal_state": "accepted",
+    "assertion_id": "kasr_284d7c980ceccde51e55e10874e1c270",
+    "receipt_id": "kamut_3f7606c8c83bd6129e2301e3bac303ae"
+  },
+  "review.decide.reject": {
+    "review_case_id": "rvw_b24cd2339cf817a94035457dd685738a",
+    "decision_id": "kadec_684ff12d1835c13c10723164690ec4f9",
+    "review_version": 1,
+    "disposition": "reject",
+    "proposal_state": "rejected",
+    "assertion_id": null,
+    "receipt_id": null
+  },
+  "review.decide.invalidate": {
+    "review_case_id": "rvw_c35e4f5061728394a5b6c7d8e9f0a1b2",
+    "decision_id": "kadec_0c1d2e3f405162738495a6b7c8d9eaf0",
+    "review_version": 1,
+    "disposition": "invalidate",
+    "proposal_state": "invalidated",
+    "assertion_id": null,
+    "receipt_id": null
+  }
+}

@@ -745,6 +745,47 @@ describe("Review distinguishes an empty queue from an unread one", () => {
     );
   });
 
+  it("KLP-AC-135: renders a mixed page and never calls a page of dropped rows empty", async () => {
+    answerWith(
+      {
+        review_cases: [
+          {
+            review_case_id: "rvw_aa77ff0d68d72af5b4771d736a0f789e",
+            proposal_id: "kaprp_7a88c3d12e4066cd1e9f007ebf89c4b0",
+            proposal_state: "needs_review",
+            risk_class: "high",
+            opened_at: "2026-10-04T12:00:00.000Z",
+            review_version: 0,
+            latest_disposition: null,
+            subject_kind: "knowledge_assertion",
+            subject_kind_of_fact: "entity",
+            subject_id: "ent_66fb736038ea9e42d480f6f466210679",
+            predicate_code: "organization.payment_terms",
+            review_requirement: "requires_operator",
+          },
+          { review_case_id: "rvw_unknown0001unknown0001", subject_kind: "future_kind" },
+          { subject_kind: "future_kind" },
+        ],
+      },
+      whole(),
+    );
+    const { unmount } = await renderServerPage(() => ReviewPage());
+    const cards = screen.getAllByTestId("backend-review-case");
+    expect(cards.map((card) => card.getAttribute("data-subject-kind"))).toEqual([
+      "knowledge_assertion",
+      "unknown",
+    ]);
+    expect(screen.queryByTestId("review-reveal")).toBeNull();
+    expect(screen.getByTestId("review-dropped-rows").textContent).toMatch(/1 listed case/);
+    unmount();
+
+    answerWith({ review_cases: [{ subject_kind: "future_kind" }, null] }, whole());
+    await renderServerPage(() => ReviewPage());
+    expect(screen.queryByTestId("review-queue-empty")).toBeNull();
+    expect(screen.queryByText(/nothing to review/i)).toBeNull();
+    expect(screen.getByTestId("review-dropped-rows").textContent).toMatch(/2 listed cases/);
+  });
+
   it("says nothing is waiting only for a queue it actually read", async () => {
     answerWith({ review_cases: [] }, whole());
     const { unmount } = await renderServerPage(() => ReviewPage());

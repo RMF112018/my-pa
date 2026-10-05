@@ -1,12 +1,12 @@
 import { isFiniteInteger, ok, type DecodeResult } from "../primitives";
 import type { Decoder } from "../types";
 import {
-  decodeItems,
   fail,
   oneOf,
   pick,
   requiredBoolean,
   requiredInt,
+  requiredArray,
   requiredNullableString,
   requiredString,
 } from "./_read-helpers";
@@ -17,6 +17,7 @@ export const REVIEW_SUBJECT_KINDS = [
   "goodnotes_semantic",
   "relationship_memory",
   "entity_proposal",
+  "knowledge_assertion",
 ] as const;
 
 export type ReviewSubjectKind = (typeof REVIEW_SUBJECT_KINDS)[number];
@@ -91,6 +92,21 @@ export const ENTITY_PROPOSAL_KINDS = [
 
 export const ENTITY_PROPOSAL_METHODS = ["deterministic", "rule", "local_model"] as const;
 
+/**
+ * KLP R6 section 10.1: what a Knowledge Assertion proposal is *about*. The
+ * Python `KnowledgeSubjectKind` tokens; the row says which, never the fact.
+ */
+export const KNOWLEDGE_SUBJECT_KINDS = [
+  "principal",
+  "entity",
+  "project",
+  "managed_document",
+  "evidence_ref",
+] as const;
+
+/** The Python `KnowledgeReviewRequirement` tokens a review case can carry. */
+export const KNOWLEDGE_REVIEW_REQUIREMENTS = ["requires_review", "requires_operator"] as const;
+
 interface ReviewCaseCommon {
   readonly review_case_id: string;
   readonly proposal_id: string;
@@ -138,15 +154,52 @@ export interface EntityProposalReviewCase extends ReviewCaseCommon {
   readonly accepted_record_id: string | null;
 }
 
+/**
+ * A Knowledge Assertion review case (KLP R6 section 10.1): the common keys plus
+ * exactly the frozen five. No value, qualifier or evidence content is listed;
+ * `risk_class`, `proposal_state` and `latest_disposition` reuse the capture
+ * vocabularies, so no new token is decoded here.
+ */
+export interface KnowledgeAssertionReviewCase extends ReviewCaseCommon {
+  readonly subject_kind: "knowledge_assertion";
+  readonly subject_kind_of_fact: (typeof KNOWLEDGE_SUBJECT_KINDS)[number];
+  readonly subject_id: string;
+  readonly predicate_code: string;
+  readonly review_requirement: (typeof KNOWLEDGE_REVIEW_REQUIREMENTS)[number];
+}
+
+/**
+ * A row whose `subject_kind` this build does not know (KLP-AC-135).
+ *
+ * It needs only `review_case_id` and a string `subject_kind`, which is kept
+ * verbatim in `reported_subject_kind`. It carries nothing else on purpose: it
+ * is inert and undecidable — no version, no proposal, nothing a decision could
+ * be made against — so a newer backend can list a new kind without taking the
+ * whole page down, and this build never guesses at what the row means.
+ */
+export interface UnknownReviewCase {
+  readonly subject_kind: "unknown";
+  readonly review_case_id: string;
+  readonly reported_subject_kind: string;
+}
+
 export type ReviewCase =
   | CaptureProposalReviewCase
   | GoodNotesReviewCase
   | GoodNotesSemanticReviewCase
   | RelationshipMemoryReviewCase
-  | EntityProposalReviewCase;
+  | EntityProposalReviewCase
+  | KnowledgeAssertionReviewCase
+  | UnknownReviewCase;
 
 export interface ReviewListResult {
   readonly review_cases: readonly ReviewCase[];
+  /**
+   * Rows dropped because they lacked even a string `review_case_id` and
+   * `subject_kind` (KLP-AC-135). Counted, never silently discarded: the page
+   * renders the rest and states how many rows it could not show.
+   */
+  readonly dropped_row_count: number;
 }
 
 const COMMON_KEYS = [
@@ -218,12 +271,34 @@ function decodeCase(input: unknown): DecodeResult<ReviewCase> {
     "method",
     "escalated",
     "accepted_record_id",
+    "subject_kind_of_fact",
+    "subject_id",
+    "predicate_code",
+    "review_requirement",
   ]);
   if (!known.ok) return known;
   const kind = oneOf(known.value.subject_kind, REVIEW_SUBJECT_KINDS);
   if (!kind.ok) return kind;
   const common = decodeCommon(known.value);
   if (!common.ok) return common;
+  if (kind.value === "knowledge_assertion") {
+    const ofFact = oneOf(known.value.subject_kind_of_fact, KNOWLEDGE_SUBJECT_KINDS);
+    if (!ofFact.ok) return ofFact;
+    const subjectId = requiredString(known.value.subject_id);
+    if (!subjectId.ok) return subjectId;
+    const predicateCode = requiredString(known.value.predicate_code);
+    if (!predicateCode.ok) return predicateCode;
+    const requirement = oneOf(known.value.review_requirement, KNOWLEDGE_REVIEW_REQUIREMENTS);
+    if (!requirement.ok) return requirement;
+    return ok({
+      ...common.value,
+      subject_kind: "knowledge_assertion",
+      subject_kind_of_fact: ofFact.value,
+      subject_id: subjectId.value,
+      predicate_code: predicateCode.value,
+      review_requirement: requirement.value,
+    });
+  }
   if (kind.value === "capture_proposal") {
     const captureId = requiredString(known.value.capture_id);
     if (!captureId.ok) return captureId;
@@ -305,11 +380,58 @@ function decodeCase(input: unknown): DecodeResult<ReviewCase> {
   });
 }
 
+function isKnownSubjectKind(value: string): value is ReviewSubjectKind {
+  return (REVIEW_SUBJECT_KINDS as readonly string[]).includes(value);
+}
+
+/**
+ * One row of a tolerant page (KLP R6 section 10.2, KLP-AC-135).
+ *
+ * * No string `review_case_id` or `subject_kind` -> `"dropped"`: counted by the
+ *   caller, the rest of the page still decodes.
+ * * A `subject_kind` this build does not know -> an inert `unknown` row.
+ * * A known kind is held to its full contract exactly as before: a malformed
+ *   capture, GoodNotes, memory, entity or Knowledge row still fails the page,
+ *   because a known row that does not match its contract is a broken backend,
+ *   not a newer one.
+ */
+function decodeTolerantRow(input: unknown): DecodeResult<ReviewCase> | "dropped" {
+  const head = pick(input, ["review_case_id", "subject_kind"]);
+  if (!head.ok) return "dropped";
+  const reviewCaseId = head.value.review_case_id;
+  const subjectKind = head.value.subject_kind;
+  if (typeof reviewCaseId !== "string" || reviewCaseId.length === 0) return "dropped";
+  if (typeof subjectKind !== "string" || subjectKind.length === 0) return "dropped";
+  if (!isKnownSubjectKind(subjectKind)) {
+    return ok({
+      subject_kind: "unknown",
+      review_case_id: reviewCaseId,
+      reported_subject_kind: subjectKind,
+    });
+  }
+  return decodeCase(input);
+}
+
+/**
+ * `review.list` alone decodes its rows tolerantly; every other capability keeps
+ * `decodeItems`, which aborts on the first bad row.
+ */
 export const decodeReviewList: Decoder<ReviewListResult> = (input) => {
   const known = pick(input, ["review_cases"]);
   if (!known.ok) return known;
   if (known.value.review_cases === undefined) return fail("a required array was omitted");
-  const cases = decodeItems(known.value.review_cases, decodeCase);
-  if (!cases.ok) return cases;
-  return ok({ review_cases: cases.value });
+  const rows = requiredArray(known.value.review_cases);
+  if (!rows.ok) return rows;
+  const cases: ReviewCase[] = [];
+  let dropped = 0;
+  for (const item of rows.value) {
+    const row = decodeTolerantRow(item);
+    if (row === "dropped") {
+      dropped += 1;
+      continue;
+    }
+    if (!row.ok) return row;
+    cases.push(row.value);
+  }
+  return ok({ review_cases: cases, dropped_row_count: dropped });
 };

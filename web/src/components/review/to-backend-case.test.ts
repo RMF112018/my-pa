@@ -3,7 +3,10 @@ import type {
   CaptureProposalReviewCase,
   GoodNotesReviewCase,
   GoodNotesSemanticReviewCase,
+  KnowledgeAssertionReviewCase,
+  UnknownReviewCase,
 } from "@/lib/api/decode/capabilities/review.list";
+import { decodeReviewList } from "@/lib/api/decode/capabilities/review.list";
 import { toBackendReviewCase } from "./to-backend-case";
 
 const CAPTURE: CaptureProposalReviewCase = {
@@ -45,6 +48,28 @@ const REGION: GoodNotesReviewCase = {
   region_id: "gnreg_aaaaaaaaaaaaaaaaaaaaaaaa",
   page_version_id: "gnver_bbbbbbbbbbbbbbbbbbbbbbbb",
   confidence: 0.82,
+};
+
+/** KLP-WP-04 slice C's exact Python Knowledge row, decoded. */
+const KNOWLEDGE: KnowledgeAssertionReviewCase = {
+  review_case_id: "rvw_aa77ff0d68d72af5b4771d736a0f789e",
+  proposal_id: "kaprp_7a88c3d12e4066cd1e9f007ebf89c4b0",
+  proposal_state: "needs_review",
+  risk_class: "high",
+  opened_at: "2026-10-04T12:00:00.000Z",
+  review_version: 0,
+  latest_disposition: null,
+  subject_kind: "knowledge_assertion",
+  subject_kind_of_fact: "entity",
+  subject_id: "ent_66fb736038ea9e42d480f6f466210679",
+  predicate_code: "organization.payment_terms",
+  review_requirement: "requires_operator",
+};
+
+const UNKNOWN: UnknownReviewCase = {
+  subject_kind: "unknown",
+  review_case_id: "rvw_unknown0001unknown0001",
+  reported_subject_kind: "future_kind",
 };
 
 describe("toBackendReviewCase", () => {
@@ -105,5 +130,56 @@ describe("toBackendReviewCase", () => {
     expect(mapped).not.toHaveProperty("captureId");
     expect(mapped).not.toHaveProperty("runId");
     expect(mapped).not.toHaveProperty("proposalSummary");
+  });
+
+  it("KLP-AC-135: maps a knowledge_assertion row without borrowing capture identifiers", () => {
+    const mapped = toBackendReviewCase(KNOWLEDGE);
+    expect(mapped).toEqual({
+      reviewCaseId: KNOWLEDGE.review_case_id,
+      proposalId: KNOWLEDGE.proposal_id,
+      subjectKind: "knowledge_assertion",
+      subjectKindOfFact: "entity",
+      subjectId: KNOWLEDGE.subject_id,
+      predicateCode: "organization.payment_terms",
+      reviewRequirement: "requires_operator",
+      proposalType: "organization.payment_terms",
+      proposalState: "needs_review",
+      riskClass: "high",
+      openedAt: KNOWLEDGE.opened_at,
+      reviewVersion: 0,
+      latestDisposition: null,
+    });
+    // No capture id, so extraction Reveal has nothing to be handed.
+    expect(mapped).not.toHaveProperty("captureId");
+    expect(mapped).not.toHaveProperty("versionId");
+    expect(mapped).not.toHaveProperty("proposalSummary");
+  });
+
+  it("KLP-AC-135: maps an unknown row to an inert case carrying only its id and reported kind", () => {
+    const mapped = toBackendReviewCase(UNKNOWN);
+    expect(mapped).toEqual({
+      subjectKind: "unknown",
+      reviewCaseId: "rvw_unknown0001unknown0001",
+      reportedSubjectKind: "future_kind",
+    });
+    expect(mapped).not.toHaveProperty("reviewVersion");
+    expect(mapped).not.toHaveProperty("proposalId");
+  });
+
+  it("KLP-AC-135: maps every row of a decoded mixed page, dropped rows excluded", () => {
+    const decoded = decodeReviewList({
+      review_cases: [
+        { ...CAPTURE },
+        { ...KNOWLEDGE },
+        { review_case_id: UNKNOWN.review_case_id, subject_kind: "future_kind" },
+        { subject_kind: "future_kind" },
+      ],
+    });
+    expect(decoded.ok).toBe(true);
+    if (!decoded.ok) return;
+    expect(decoded.value.review_cases.map(toBackendReviewCase).map((row) => row.subjectKind)).toEqual(
+      ["capture_proposal", "knowledge_assertion", "unknown"],
+    );
+    expect(decoded.value.dropped_row_count).toBe(1);
   });
 });

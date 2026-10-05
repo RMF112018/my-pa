@@ -24,6 +24,8 @@ import type {
   CaptureBackendReviewCase,
   GoodNotesRegionBackendReviewCase,
   GoodNotesSemanticBackendReviewCase,
+  KnowledgeAssertionBackendReviewCase,
+  UnknownBackendReviewCase,
 } from "@/contracts/views";
 import {
   syntheticReviewCases,
@@ -349,5 +351,236 @@ describe("backend review workbench GoodNotes cases", () => {
       expectedReviewVersion: SEMANTIC_CASE.reviewVersion,
     });
     expect(body).not.toHaveProperty("principalId");
+  });
+});
+
+/**
+ * KLP-AC-037 (web half) and KLP-AC-135: Knowledge Assertion cases offer exactly
+ * accept / reject / defer / mark-unresolved / invalidate, hide Correct, never
+ * reach extraction Reveal, and read the stored fact through
+ * `knowledge.assertions.read`; unknown cases render inert; dropped rows are
+ * counted.
+ */
+describe("backend review workbench Knowledge Assertion and unknown cases", () => {
+  const KNOWLEDGE_CASE: KnowledgeAssertionBackendReviewCase = {
+    reviewCaseId: "rvw_aa77ff0d68d72af5b4771d736a0f789e",
+    proposalId: "kaprp_7a88c3d12e4066cd1e9f007ebf89c4b0",
+    subjectKind: "knowledge_assertion",
+    subjectKindOfFact: "entity",
+    subjectId: "ent_66fb736038ea9e42d480f6f466210679",
+    predicateCode: "organization.payment_terms",
+    reviewRequirement: "requires_operator",
+    proposalType: "organization.payment_terms",
+    proposalState: "needs_review",
+    riskClass: "high",
+    openedAt: "2026-10-04T12:00:00.000Z",
+    reviewVersion: 0,
+    latestDisposition: null,
+  };
+
+  const UNKNOWN_CASE: UnknownBackendReviewCase = {
+    subjectKind: "unknown",
+    reviewCaseId: "rvw_unknown0001unknown0001",
+    reportedSubjectKind: "future_kind",
+  };
+
+  const CAPTURE_CASE: CaptureBackendReviewCase = {
+    reviewCaseId: "rvc_aaaa0001aaaa0001aaaa0001",
+    proposalId: "prop_aaaa0001aaaa0001aaaa0001",
+    subjectKind: "capture_proposal",
+    captureId: "cap_aaaa0001aaaa0001aaaa0001",
+    versionId: "capver_aaaa0001aaaa0001aaaa0001",
+    proposalType: "commitment",
+    proposalState: "proposed",
+    riskClass: "high",
+    openedAt: "2026-01-01T00:00:00Z",
+    reviewVersion: 3,
+    latestDisposition: null,
+  };
+
+  function persisted(receipt: Record<string, unknown>) {
+    return new Response(JSON.stringify({ shape: "backend", status: "persisted", receipt }), {
+      status: 200,
+    });
+  }
+
+  const ASSERTION_BODY = {
+    shape: "backend",
+    assertion: {
+      assertion_id: "kasr_284d7c980ceccde51e55e10874e1c270",
+      subject_kind: "entity",
+      subject_id: "ent_66fb736038ea9e42d480f6f466210679",
+      predicate_code: "organization.payment_terms",
+      predicate_version: 1,
+      value_type: "text",
+      value: "net 30",
+      qualifier: null,
+      effective_from: "2026-10-04T12:00:00+00:00",
+      effective_to: null,
+      epistemic_status: "review_accepted",
+      classification: "private_local",
+      lifecycle: "active",
+      version: 1,
+      supersedes_assertion_id: null,
+      created_at: "2026-10-04T12:00:00+00:00",
+      updated_at: "2026-10-04T12:00:00+00:00",
+    },
+  };
+
+  it("offers exactly accept, reject, defer, mark unresolved and invalidate; no Correct, no Reveal", () => {
+    render(<BackendReviewWorkbench cases={[KNOWLEDGE_CASE]} />);
+    const card = screen.getByTestId("backend-review-case");
+    expect(card).toHaveAttribute("data-subject-kind", "knowledge_assertion");
+    const offered = within(card)
+      .getAllByRole("button")
+      .map((button) => button.getAttribute("data-testid"));
+    expect(offered).toEqual([
+      "review-accept",
+      "review-reject",
+      "review-defer",
+      "review-unresolved",
+      "review-invalidate",
+    ]);
+    expect(within(card).queryByTestId("review-correct")).not.toBeInTheDocument();
+    expect(within(card).queryByTestId("review-reveal")).not.toBeInTheDocument();
+    expect(within(card).queryByTestId("review-correction-field")).not.toBeInTheDocument();
+    expect(within(card).queryByTestId("review-capture-id")).not.toBeInTheDocument();
+    expect(within(card).queryByTestId("review-goodnotes-link")).not.toBeInTheDocument();
+    expect(within(card).getByTestId("review-fact-subject-kind")).toHaveTextContent("entity");
+    expect(within(card).getByTestId("review-requires-operator")).toBeInTheDocument();
+    expect(within(card).getByTestId("review-fact-subject")).toHaveTextContent(
+      KNOWLEDGE_CASE.subjectId,
+    );
+  });
+
+  it("keeps Correct and Reveal on a capture case beside it, and never offers it Invalidate", () => {
+    render(<BackendReviewWorkbench cases={[CAPTURE_CASE, KNOWLEDGE_CASE]} />);
+    const [capture, knowledge] = screen.getAllByTestId("backend-review-case");
+    expect(within(capture!).getByTestId("review-correct")).toBeInTheDocument();
+    expect(within(capture!).getByTestId("review-reveal")).toBeInTheDocument();
+    expect(within(capture!).queryByTestId("review-invalidate")).not.toBeInTheDocument();
+    expect(within(knowledge!).queryByTestId("review-correct")).not.toBeInTheDocument();
+  });
+
+  it("sends the typed invalidate verb with the row's version and no correction", async () => {
+    const user = userEvent.setup();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      persisted({
+        decisionId: "kadec_0c1d2e3f405162738495a6b7c8d9eaf0",
+        reviewVersion: 1,
+        proposalState: "invalidated",
+        assertionId: null,
+        receiptId: null,
+      }),
+    );
+    render(<BackendReviewWorkbench cases={[KNOWLEDGE_CASE]} />);
+    await user.click(screen.getByTestId("review-invalidate"));
+    await waitFor(() => expect(screen.getByTestId("review-decided")).toBeInTheDocument());
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe(`/api/review/${KNOWLEDGE_CASE.reviewCaseId}/decide`);
+    const body = JSON.parse((fetchSpy.mock.calls[0]?.[1] as RequestInit).body as string);
+    expect(body).toEqual({ disposition: "invalidate", expectedReviewVersion: 0 });
+    expect(screen.getByTestId("review-decided")).toHaveTextContent("invalidated");
+    // Nothing was stored as a fact, so there is nothing to read.
+    expect(screen.queryByTestId("review-read-fact")).not.toBeInTheDocument();
+  });
+
+  it("reads the accepted fact through knowledge.assertions.read, never through Reveal", async () => {
+    const user = userEvent.setup();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        persisted({
+          decisionId: "kadec_9adb6ea38eaeb5e05e1f635c96828236",
+          reviewVersion: 1,
+          proposalState: "accepted",
+          assertionId: "kasr_284d7c980ceccde51e55e10874e1c270",
+          receiptId: "kamut_3f7606c8c83bd6129e2301e3bac303ae",
+        }),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify(ASSERTION_BODY), { status: 200 }));
+    render(<BackendReviewWorkbench cases={[KNOWLEDGE_CASE]} />);
+    // Before a decision stores a fact there is nothing to read.
+    expect(screen.queryByTestId("review-read-fact")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("review-accept"));
+    await waitFor(() => expect(screen.getByTestId("review-read-fact")).toBeInTheDocument());
+    // A decided case offers no further dispositions.
+    expect(screen.queryByTestId("review-accept")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("review-read-fact"));
+    await waitFor(() => expect(screen.getByTestId("review-fact")).toBeInTheDocument());
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(fetchSpy.mock.calls[1]?.[0]).toBe(
+      "/api/knowledge/assertions/kasr_284d7c980ceccde51e55e10874e1c270",
+    );
+    expect((fetchSpy.mock.calls[1]?.[1] as RequestInit).method).toBe("GET");
+    expect(screen.getByTestId("review-fact-value")).toHaveTextContent("net 30");
+    for (const call of fetchSpy.mock.calls) {
+      expect(String(call[0])).not.toContain("/api/reveal");
+    }
+  });
+
+  it("reports an unreadable fact as unreadable rather than rendering a guess", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        persisted({
+          decisionId: "kadec_9adb6ea38eaeb5e05e1f635c96828236",
+          reviewVersion: 1,
+          proposalState: "accepted",
+          assertionId: "kasr_284d7c980ceccde51e55e10874e1c270",
+          receiptId: "kamut_3f7606c8c83bd6129e2301e3bac303ae",
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ error: { errorClass: "not_found", code: "not_found", message: "x" } }),
+          { status: 404 },
+        ),
+      );
+    render(<BackendReviewWorkbench cases={[KNOWLEDGE_CASE]} />);
+    await user.click(screen.getByTestId("review-accept"));
+    await user.click(await screen.findByTestId("review-read-fact"));
+    await waitFor(() => expect(screen.getByTestId("review-fact-failed")).toBeInTheDocument());
+    expect(screen.queryByTestId("review-fact")).not.toBeInTheDocument();
+  });
+
+  it("offers no decision on a Knowledge case already in a terminal state", () => {
+    render(
+      <BackendReviewWorkbench
+        cases={[
+          { ...KNOWLEDGE_CASE, proposalState: "rejected", latestDisposition: "reject", reviewVersion: 1 },
+        ]}
+      />,
+    );
+    const card = screen.getByTestId("backend-review-case");
+    expect(within(card).queryAllByRole("button")).toEqual([]);
+    expect(within(card).getByTestId("review-already-decided")).toBeInTheDocument();
+  });
+
+  it("renders an unknown case inert: its id and reported kind, and no control", () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    render(<BackendReviewWorkbench cases={[CAPTURE_CASE, UNKNOWN_CASE]} />);
+    const cards = screen.getAllByTestId("backend-review-case");
+    expect(cards).toHaveLength(2);
+    const unknown = cards[1]!;
+    expect(unknown).toHaveAttribute("data-subject-kind", "unknown");
+    expect(unknown).toHaveAttribute("data-review-case-id", UNKNOWN_CASE.reviewCaseId);
+    expect(within(unknown).queryAllByRole("button")).toEqual([]);
+    expect(within(unknown).getByTestId("review-unknown-case")).toBeInTheDocument();
+    expect(within(unknown).getByText("future_kind")).toBeInTheDocument();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("states how many listed rows were dropped instead of hiding them", () => {
+    const { rerender } = render(<BackendReviewWorkbench cases={[KNOWLEDGE_CASE]} droppedRows={2} />);
+    expect(screen.getByTestId("review-dropped-rows")).toHaveTextContent(
+      "2 listed cases could not be read",
+    );
+    rerender(<BackendReviewWorkbench cases={[]} droppedRows={1} />);
+    expect(screen.getByTestId("review-dropped-rows")).toHaveTextContent(
+      "1 listed case could not be read",
+    );
+    rerender(<BackendReviewWorkbench cases={[KNOWLEDGE_CASE]} />);
+    expect(screen.queryByTestId("review-dropped-rows")).not.toBeInTheDocument();
   });
 });

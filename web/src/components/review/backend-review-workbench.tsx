@@ -16,6 +16,20 @@
  * (`knowledge.reveal`), which is capture-oriented. GoodNotes rows link to the
  * notebook page by the identifiers the listing returned and do not call Reveal.
  *
+ * **Knowledge Assertion cases (KLP R6 section 10.2).** They offer exactly
+ * accept, reject, defer, mark-unresolved and invalidate: Correct is hidden
+ * (S-7 — R6 has no typed correction-patch editor, and a free-text correction is
+ * refused by the backend). They never call extraction Reveal; the fact an
+ * accept stored is read through `knowledge.assertions.read`
+ * (`/api/knowledge/assertions/:id`) by the `kasr_` identifier the decision
+ * returned. The listing carries no candidate identifier or value, so nothing is
+ * read before a decision stores one.
+ *
+ * **Unknown cases (KLP-AC-135)** — a kind this build does not know — render
+ * inert: the case id and the reported kind, and no control. A row the decoder
+ * had to drop is counted in a limitation above the list instead of failing the
+ * page.
+ *
  * **`expectedReviewVersion` is sent from the row, never defaulted.**
  * `review.decide` runs under optimistic concurrency: a decision made against a
  * stale version is answered `conflict` rather than silently winning. The version
@@ -30,26 +44,66 @@
  */
 import { useState } from "react";
 import Link from "next/link";
-import type { BackendReviewCase } from "@/contracts/views";
+import type {
+  BackendReviewCase,
+  BackendReviewDisposition,
+  DecidableBackendReviewCase,
+  KnowledgeAssertionReadView,
+} from "@/contracts/views";
 import { Card, CardTitle, CardBody } from "@/components/ui/card";
 import { WhenDiagnostics } from "@/components/diagnostics/diagnostics-provider";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { TextField } from "@/components/ui/field";
 import { RevealDialog } from "@/components/shell/reveal-dialog";
-import { apiPost } from "@/lib/api/client";
+import { apiGet, apiPost } from "@/lib/api/client";
 import { mapUserError } from "@/lib/ui/user-error";
 
-/** The five verbs this tier may submit, and the words a person reads. */
-const DISPOSITIONS = [
+type Disposition = BackendReviewDisposition;
+
+interface DispositionOption {
+  readonly value: Disposition;
+  readonly label: string;
+}
+
+/** The five verbs this tier may submit on a capture-family case, and the words a person reads. */
+const DISPOSITIONS: readonly DispositionOption[] = [
   { value: "accept", label: "Accept" },
   { value: "correct", label: "Correct & accept" },
   { value: "reject", label: "Reject" },
   { value: "defer", label: "Defer" },
   { value: "unresolved", label: "Mark unresolved" },
-] as const;
+];
 
-type Disposition = (typeof DISPOSITIONS)[number]["value"];
+/**
+ * KLP R6 section 10.2: a Knowledge Assertion case offers accept, reject, defer,
+ * mark-unresolved and invalidate — never Correct (S-7).
+ */
+export const KNOWLEDGE_DISPOSITIONS: readonly DispositionOption[] = [
+  { value: "accept", label: "Accept" },
+  { value: "reject", label: "Reject" },
+  { value: "defer", label: "Defer" },
+  { value: "unresolved", label: "Mark unresolved" },
+  { value: "invalidate", label: "Invalidate" },
+];
+
+function dispositionsFor(row: DecidableBackendReviewCase): readonly DispositionOption[] {
+  return row.subjectKind === "knowledge_assertion" ? KNOWLEDGE_DISPOSITIONS : DISPOSITIONS;
+}
+
+/** Knowledge proposal states no further decision can move. */
+const KNOWLEDGE_TERMINAL_STATES: ReadonlySet<string> = new Set([
+  "accepted",
+  "corrected_accepted",
+  "rejected",
+  "invalidated",
+  "superseded",
+]);
+
+type FactState =
+  | { readonly phase: "loading" }
+  | { readonly phase: "loaded"; readonly fact: KnowledgeAssertionReadView }
+  | { readonly phase: "failed"; readonly message: string };
 
 interface DecideResponse {
   readonly shape?: string;
@@ -98,8 +152,49 @@ function isTerminalDisposition(value: string | null): boolean {
   return value === "accept" || value === "correct_and_accept";
 }
 
+function isTerminalCase(row: DecidableBackendReviewCase): boolean {
+  if (row.subjectKind === "knowledge_assertion") {
+    return KNOWLEDGE_TERMINAL_STATES.has(row.proposalState) || isTerminalDisposition(row.latestDisposition);
+  }
+  return isTerminalDisposition(row.latestDisposition);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * The `/api/knowledge/assertions/:id` body's `assertion`, already decoded
+ * against the capability contract by the BFF. Re-checked for the fields this
+ * view renders; anything else is reported as unreadable rather than guessed.
+ */
+function toFactView(body: unknown): KnowledgeAssertionReadView | null {
+  if (!isRecord(body) || !isRecord(body.assertion)) return null;
+  const a = body.assertion;
+  const text = (value: unknown) => (typeof value === "string" ? value : null);
+  const assertionId = text(a.assertion_id);
+  const predicateCode = text(a.predicate_code);
+  const lifecycle = text(a.lifecycle);
+  if (assertionId === null || predicateCode === null || lifecycle === null) return null;
+  return {
+    assertionId,
+    subjectKind: text(a.subject_kind) ?? "",
+    subjectId: text(a.subject_id) ?? "",
+    predicateCode,
+    predicateVersion: typeof a.predicate_version === "number" ? a.predicate_version : 0,
+    valueType: text(a.value_type) ?? "",
+    value: text(a.value),
+    effectiveFrom: text(a.effective_from),
+    effectiveTo: text(a.effective_to),
+    epistemicStatus: text(a.epistemic_status) ?? "",
+    classification: text(a.classification) ?? "",
+    lifecycle,
+    version: typeof a.version === "number" ? a.version : 0,
+  };
+}
+
 function isGoodNotesCase(
-  row: BackendReviewCase,
+  row: DecidableBackendReviewCase,
 ): row is Extract<BackendReviewCase, { subjectKind: "goodnotes_semantic" | "goodnotes_region" }> {
   return row.subjectKind === "goodnotes_semantic" || row.subjectKind === "goodnotes_region";
 }
@@ -117,7 +212,19 @@ function goodnotesKnowledgeHref(
   return `/knowledge/goodnotes?${params.toString()}`;
 }
 
-function IdentityFields({ row }: { row: BackendReviewCase }) {
+function IdentityFields({ row }: { row: DecidableBackendReviewCase }) {
+  if (row.subjectKind === "knowledge_assertion") {
+    return (
+      <>
+        <dt className="text-muted">subject</dt>
+        <dd data-testid="review-subject-kind">{row.subjectKind}</dd>
+        <dt className="text-muted">fact about</dt>
+        <dd className="font-mono text-xs break-all" data-testid="review-fact-subject">
+          {row.subjectKindOfFact} {row.subjectId}
+        </dd>
+      </>
+    );
+  }
   if (row.subjectKind === "goodnotes_semantic") {
     return (
       <>
@@ -166,16 +273,135 @@ function IdentityFields({ row }: { row: BackendReviewCase }) {
   );
 }
 
-export function BackendReviewWorkbench({ cases }: { cases: readonly BackendReviewCase[] }) {
+function UnknownCaseCard({ row }: { row: Extract<BackendReviewCase, { subjectKind: "unknown" }> }) {
+  return (
+    <Card
+      data-testid="backend-review-case"
+      data-review-case-id={row.reviewCaseId}
+      data-subject-kind="unknown"
+    >
+      <CardTitle>
+        <span className="text-sm">A case this workbench cannot show</span>
+      </CardTitle>
+      <CardBody>
+        <p className="text-sm text-muted" data-testid="review-unknown-case">
+          This kind of review case is not supported here, so it cannot be decided from this page.
+        </p>
+        <WhenDiagnostics>
+          <dl className="grid grid-cols-[9rem_1fr] gap-x-2 gap-y-1">
+            <dt className="text-muted">case</dt>
+            <dd className="font-mono text-xs break-all">{row.reviewCaseId}</dd>
+            <dt className="text-muted">reported kind</dt>
+            <dd className="font-mono text-xs break-all">{row.reportedSubjectKind}</dd>
+          </dl>
+        </WhenDiagnostics>
+      </CardBody>
+    </Card>
+  );
+}
+
+function FactPanel({ state }: { state: FactState }) {
+  if (state.phase === "loading") {
+    return (
+      <p role="status" className="mt-3 text-sm text-muted" data-testid="review-fact-loading">
+        Reading the stored fact…
+      </p>
+    );
+  }
+  if (state.phase === "failed") {
+    return (
+      <p role="alert" className="mt-3 text-sm text-destructive" data-testid="review-fact-failed">
+        <strong>The stored fact could not be read.</strong> {state.message}
+      </p>
+    );
+  }
+  const fact = state.fact;
+  return (
+    <dl
+      className="mt-3 grid grid-cols-[9rem_1fr] gap-x-2 gap-y-1 text-sm"
+      data-testid="review-fact"
+    >
+      <dt className="text-muted">predicate</dt>
+      <dd className="font-mono text-xs break-all">{fact.predicateCode}</dd>
+      <dt className="text-muted">value</dt>
+      <dd data-testid="review-fact-value">{fact.value ?? "(no value)"}</dd>
+      {fact.effectiveFrom ? (
+        <>
+          <dt className="text-muted">effective from</dt>
+          <dd>{moment(fact.effectiveFrom)}</dd>
+        </>
+      ) : null}
+      {fact.effectiveTo ? (
+        <>
+          <dt className="text-muted">effective to</dt>
+          <dd>{moment(fact.effectiveTo)}</dd>
+        </>
+      ) : null}
+      <dt className="text-muted">status</dt>
+      <dd>
+        {fact.lifecycle} · {fact.epistemicStatus}
+      </dd>
+    </dl>
+  );
+}
+
+export function BackendReviewWorkbench({
+  cases,
+  droppedRows = 0,
+}: {
+  cases: readonly BackendReviewCase[];
+  /** Listed rows the decoder had to drop (KLP-AC-135); stated, never hidden. */
+  droppedRows?: number;
+}) {
   const [states, setStates] = useState<Record<string, RowState>>({});
   const [corrections, setCorrections] = useState<Record<string, string>>({});
   const [revealSubject, setRevealSubject] = useState<string | null>(null);
+  const [facts, setFacts] = useState<Record<string, FactState>>({});
+
+  async function readFact(reviewCaseId: string, assertionId: string) {
+    setFacts((prior) => ({ ...prior, [reviewCaseId]: { phase: "loading" } }));
+    try {
+      const answer = await apiGet<unknown>(
+        { hasSession: true },
+        `/api/knowledge/assertions/${encodeURIComponent(assertionId)}`,
+      );
+      const fact = answer.ok ? toFactView(answer.data) : null;
+      const next: FactState =
+        fact !== null
+          ? { phase: "loaded", fact }
+          : {
+              phase: "failed",
+              message: answer.ok
+                ? "The answer was not a readable fact."
+                : mapUserError({
+                    status: answer.status,
+                    errorClass: answer.errorClass,
+                    code: answer.code,
+                    message: answer.error,
+                  }).message,
+            };
+      setFacts((prior) => ({ ...prior, [reviewCaseId]: next }));
+    } catch (error) {
+      setFacts((prior) => ({
+        ...prior,
+        [reviewCaseId]: { phase: "failed", message: mapUserError(error).message },
+      }));
+    }
+  }
 
   const stateFor = (id: string): RowState => states[id] ?? { phase: "open" };
   const setState = (id: string, next: RowState) =>
     setStates((prior) => ({ ...prior, [id]: next }));
 
-  async function decide(row: BackendReviewCase, disposition: Disposition) {
+  async function decide(row: DecidableBackendReviewCase, disposition: Disposition) {
+    if (!dispositionsFor(row).some((option) => option.value === disposition)) {
+      // Not offered for this case kind (a Knowledge case never sends `correct`).
+      setState(row.reviewCaseId, {
+        phase: "refused",
+        message: "That decision is not available for this case.",
+      });
+      return;
+    }
     const correctedValue = corrections[row.reviewCaseId]?.trim() ?? "";
     if (disposition === "correct" && correctedValue.length === 0) {
       setState(row.reviewCaseId, {
@@ -249,13 +475,33 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
         data-testid="review-listing-limitation"
       >
         <strong>This listing carries no proposal text.</strong> Open <em>Reveal</em> on a capture
-        case, or the GoodNotes page, before you decide.
+        case, or the GoodNotes page, before you decide. A knowledge case lists what the fact is
+        about but not its proposed value; the stored fact can be read once it is accepted.
       </p>
+      {droppedRows > 0 ? (
+        <p
+          role="status"
+          className="mb-3 rounded-md border border-warning/40 bg-warning/10 p-3 text-sm"
+          data-testid="review-dropped-rows"
+        >
+          {droppedRows === 1
+            ? "1 listed case could not be read and is not shown."
+            : `${droppedRows} listed cases could not be read and are not shown.`}
+        </p>
+      ) : null}
       <ul className="flex flex-col gap-3" data-testid="backend-review-list">
         {cases.map((row) => {
+          if (row.subjectKind === "unknown") {
+            return (
+              <li key={row.reviewCaseId}>
+                <UnknownCaseCard row={row} />
+              </li>
+            );
+          }
           const state = stateFor(row.reviewCaseId);
-          const terminal =
-            state.phase === "decided" || isTerminalDisposition(row.latestDisposition);
+          const terminal = state.phase === "decided" || isTerminalCase(row);
+          const knowledge = row.subjectKind === "knowledge_assertion";
+          const fact = facts[row.reviewCaseId];
           return (
             <li key={row.reviewCaseId}>
               <Card
@@ -289,6 +535,18 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
                       <>
                         <dt className="text-muted">last disposition</dt>
                         <dd>{row.latestDisposition}</dd>
+                      </>
+                    ) : null}
+                    {row.subjectKind === "knowledge_assertion" ? (
+                      <>
+                        <dt className="text-muted">fact about</dt>
+                        <dd data-testid="review-fact-subject-kind">{row.subjectKindOfFact}</dd>
+                        {row.reviewRequirement === "requires_operator" ? (
+                          <>
+                            <dt className="text-muted">review</dt>
+                            <dd data-testid="review-requires-operator">operator review required</dd>
+                          </>
+                        ) : null}
                       </>
                     ) : null}
                   </dl>
@@ -375,15 +633,18 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
                     >
                       <strong>Refused, and nothing was stored.</strong> {state.message}
                     </p>
-                  ) : isTerminalDisposition(row.latestDisposition) ? (
+                  ) : isTerminalCase(row) ? (
                     <p
                       role="status"
                       data-testid="review-already-decided"
                       className="mt-3 text-sm text-success"
                     >
-                      This case already has a stored {row.latestDisposition} disposition.
+                      This case already has a stored {row.latestDisposition ?? row.proposalState}{" "}
+                      disposition.
                     </p>
                   ) : null}
+
+                  {fact ? <FactPanel state={fact} /> : null}
 
                   {state.phase === "correcting" ? (
                     <div className="mt-3">
@@ -405,7 +666,7 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
                   <div className="mt-3 flex flex-wrap gap-2">
                     {terminal
                       ? null
-                      : DISPOSITIONS.map((option) => (
+                      : dispositionsFor(row).map((option) => (
                           <Button
                             key={option.value}
                             variant={option.value === "accept" ? "primary" : "secondary"}
@@ -422,7 +683,20 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
                             {option.label}
                           </Button>
                         ))}
-                    {isGoodNotesCase(row) ? (
+                    {knowledge ? (
+                      state.phase === "decided" && state.assertionId ? (
+                        <Button
+                          variant="ghost"
+                          disabled={fact?.phase === "loading"}
+                          onClick={() =>
+                            void readFact(row.reviewCaseId, state.assertionId as string)
+                          }
+                          data-testid="review-read-fact"
+                        >
+                          Read the stored fact
+                        </Button>
+                      ) : null
+                    ) : isGoodNotesCase(row) ? (
                       <Link
                         href={goodnotesKnowledgeHref(row)}
                         className="inline-flex min-h-[var(--control-height)] items-center text-sm font-medium text-interactive underline decoration-interactive/40 underline-offset-2"

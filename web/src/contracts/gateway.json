@@ -43,6 +43,11 @@
       "payloadFields": ["subject_id"],
       "probe": { "subject_id": "cap_aaaaaaaa11111111" }
     },
+    "knowledge.assertions.read": {
+      "purpose": "knowledge_assertion_read",
+      "payloadFields": ["assertion_id"],
+      "probe": { "assertion_id": "kasr_aaaaaaaa11111111" }
+    },
     "capture.create": {
       "purpose": "capture_authoring",
       "payloadFields": [
@@ -1002,6 +1007,7 @@
     "correct": "correct_and_accept",
     "reject": "reject",
     "defer": "defer",
-    "unresolved": "mark_unresolved"
+    "unresolved": "mark_unresolved",
+    "invalidate": "invalidate"
   }
 }

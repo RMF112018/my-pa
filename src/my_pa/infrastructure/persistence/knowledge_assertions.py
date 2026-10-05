@@ -2895,28 +2895,25 @@ class _AutonomousSubmit:
                 self.connection, self._captures(), context=self.context
             ).values()
         )
-        decision = decide_direct_admission(
-            DirectAdmissionFacts(
-                predicate=self.predicate,
-                profile=SourceProfileFacts(
-                    source_profile_id=profile.source_profile_id,
-                    origin_system=KnowledgeOriginSystem(profile.origin_system),
-                    authority_ceiling=KnowledgeEvidenceAuthority(profile.authority_ceiling),
-                    direct_admission_enabled=bool(profile.direct_admission_enabled),
-                    read_only_proof_state=KnowledgeReadOnlyProofState(
-                        profile.read_only_proof_state
-                    ),
-                    is_synthetic=bool(profile.is_synthetic),
-                    disabled=False,
-                ),
-                subject=subject,
-                evidence=self._admission_evidence(existing),
-                candidate_effective_from=self.request.effective_from,
-                now=self.at,
-                current=current,
-                capture_archived=archived,
-            )
+        facts = DirectAdmissionFacts(
+            predicate=self.predicate,
+            profile=SourceProfileFacts(
+                source_profile_id=profile.source_profile_id,
+                origin_system=KnowledgeOriginSystem(profile.origin_system),
+                authority_ceiling=KnowledgeEvidenceAuthority(profile.authority_ceiling),
+                direct_admission_enabled=bool(profile.direct_admission_enabled),
+                read_only_proof_state=KnowledgeReadOnlyProofState(profile.read_only_proof_state),
+                is_synthetic=bool(profile.is_synthetic),
+                disabled=False,
+            ),
+            subject=subject,
+            evidence=self._admission_evidence(existing),
+            candidate_effective_from=self.request.effective_from,
+            now=self.at,
+            current=current,
+            capture_archived=archived,
         )
+        decision = decide_direct_admission(facts)
         if decision.path is AdmissionPath.REFUSE:
             assert decision.reason is not None  # noqa: S101 - a refusal always names one
             return self._complete(_refused(submission_id, decision.reason))
@@ -2949,6 +2946,18 @@ class _AutonomousSubmit:
         )
         # C6: the subject lock, even when no assertion exists (KLP-AC-091).
         self._lock_subject()
+        # The cited rows are locked since C4b: re-read their availability facts and
+        # re-run the policy, so an availability ingress (or drain) that committed
+        # while this transaction waited at C4b is decided on, never the stale C2
+        # read (a permission_lost / pending row blocks direct admission). The
+        # stored class needs no re-check here: the policy never reads it and the
+        # writers read it under the lock (`_classification`).
+        decision = decide_direct_admission(
+            replace(facts, evidence=self._admission_evidence(self._existing_rows()))
+        )
+        if decision.path is AdmissionPath.REFUSE:  # pragma: no cover - evidence never refuses
+            assert decision.reason is not None  # noqa: S101 - a refusal always names one
+            return self._complete(_refused(submission_id, decision.reason))
         return self._decide_under_lock(submission_id, decision, live, holder, locked, evidence_ids)
 
     def _raise_due(

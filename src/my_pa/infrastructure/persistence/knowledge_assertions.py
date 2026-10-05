@@ -66,6 +66,7 @@ from sqlalchemy import (
     func,
     insert,
     literal,
+    literal_column,
     not_,
     null,
     or_,
@@ -127,6 +128,7 @@ from my_pa.domain.knowledge_assertion.admission import (
     SourceProfileFacts,
     SubjectResolution,
     decide_direct_admission,
+    decide_domain_route,
 )
 from my_pa.domain.knowledge_assertion.predicate import KnowledgePredicate
 from my_pa.domain.knowledge_assertion.provenance import (
@@ -1806,19 +1808,11 @@ _OPEN_PROPOSAL: Final = (
     KnowledgeProposalState.UNRESOLVED.value,
 )
 #: The owner-ref kinds `project.critical_date` routes to (R6 section 13).
-_OWNER_TABLES: Final = {
-    KnowledgeOwnerRefKind.TASK.value: (tasks, "task_id", KnowledgeCanonicalOwner.TASKS),
-    KnowledgeOwnerRefKind.COMMITMENT.value: (
-        commitments,
-        "commitment_id",
-        KnowledgeCanonicalOwner.COMMITMENTS,
-    ),
-    KnowledgeOwnerRefKind.CONSTRAINT.value: (
-        project_constraints,
-        "constraint_id",
-        KnowledgeCanonicalOwner.CONSTRAINTS,
-    ),
-    KnowledgeOwnerRefKind.MEETING.value: (meetings, "meeting_id", KnowledgeCanonicalOwner.MEETINGS),
+_OWNER_TABLES: Final[Mapping[KnowledgeOwnerRefKind, tuple[Table, str]]] = {
+    KnowledgeOwnerRefKind.TASK: (tasks, "task_id"),
+    KnowledgeOwnerRefKind.COMMITMENT: (commitments, "commitment_id"),
+    KnowledgeOwnerRefKind.CONSTRAINT: (project_constraints, "constraint_id"),
+    KnowledgeOwnerRefKind.MEETING: (meetings, "meeting_id"),
 }
 _CRITICAL_DATE: Final = "project.critical_date"
 _MAX_LINEAGE_LEVELS: Final = 4
@@ -2206,48 +2200,40 @@ class _AutonomousSubmit:
     # -- C2: the route (R6 8.5 / section 13) -------------------------------------
 
     def _route(self, submission_id: str) -> KnowledgeSubmissionResult | None:
-        """The DOMAIN_OWNED completion decided from the immutable head, or `None`.
-
-        * `project.critical_date` with an owner ref: a resolving ref is
-          `domain_owned_routed` to that owner, an unresolvable one is refused
-          `owner_ref_invalid`; without one the candidate stays Knowledge's.
-        * an owner ref on any other predicate is refused `owner_ref_invalid`
-          (plan-silent, most restrictive: no other route reads it).
-        * a predicate owned outside the Knowledge plane completes
-          `domain_owned_no_intake` naming that owner. `relationship_memory` is
-          never routed here (KLP-WP-04 DEV): its proposal writer cites a
-          capture *span*, an entity observation or a knowledge record, and a
-          Knowledge citation names none of them, so nothing is transferable.
-        """
+        """The DOMAIN_OWNED completion (`decide_domain_route`), or `None` (R6 8.5, 13)."""
         request = self.request
-        owner = self.predicate.canonical_owner
-        if request.owner_ref_kind is not None:
-            if self.predicate.predicate_code != _CRITICAL_DATE:
-                return _refused(submission_id, KnowledgeSubmissionReason.OWNER_REF_INVALID)
-            table, column, routed_owner = _OWNER_TABLES[request.owner_ref_kind]
-            found = self.connection.execute(
-                select(table.c[column]).where(
-                    partition_criterion(table, self.context),
-                    table.c[column] == request.owner_ref_id,
-                )
-            ).scalar_one_or_none()
-            if found is None:
-                return _refused(submission_id, KnowledgeSubmissionReason.OWNER_REF_INVALID)
-            return _result(
-                submission_id,
-                KnowledgeSubmissionOutcome.DOMAIN_OWNED_ROUTED,
-                KnowledgeSubmissionReason.CANONICAL_OWNER,
-                owner=routed_owner,
-                routed_record_id=str(request.owner_ref_id),
+        kind = (
+            None
+            if request.owner_ref_kind is None
+            else KnowledgeOwnerRefKind(request.owner_ref_kind)
+        )
+        resolves = False
+        if kind is not None and self.predicate.predicate_code == _CRITICAL_DATE:
+            table, column = _OWNER_TABLES[kind]
+            resolves = (
+                self.connection.execute(
+                    select(table.c[column]).where(
+                        partition_criterion(table, self.context),
+                        table.c[column] == request.owner_ref_id,
+                    )
+                ).scalar_one_or_none()
+                is not None
             )
-        if owner is not KnowledgeCanonicalOwner.KNOWLEDGE_ASSERTION:
-            return _result(
-                submission_id,
-                KnowledgeSubmissionOutcome.DOMAIN_OWNED_NO_INTAKE,
-                KnowledgeSubmissionReason.CANONICAL_OWNER_NO_INTAKE,
-                owner=owner,
-            )
-        return None
+        route = decide_domain_route(
+            self.predicate,
+            owner_ref_kind=kind,
+            owner_ref_id=request.owner_ref_id,
+            owner_ref_resolves=resolves,
+        )
+        if route is None:
+            return None
+        return _result(
+            submission_id,
+            route.outcome,
+            route.reason,
+            owner=route.canonical_owner,
+            routed_record_id=route.routed_record_id,
+        )
 
     # -- C2 / C3: subject and profile -----------------------------------------------
 
@@ -2474,7 +2460,10 @@ class _AutonomousSubmit:
                             e.c.principal_id,
                             e.c.source_profile_id,
                             e.c.external_object_id,
-                            func.coalesce(e.c.external_version_id, ""),
+                            # A literal '' (never a bound parameter): a server-side
+                            # prepared statement cannot infer the expression index
+                            # from `COALESCE(col, $n)`.
+                            func.coalesce(e.c.external_version_id, literal_column("''")),
                             e.c.content_hash,
                         ],
                         index_where=sql_text(f"identity_kind = '{_EXTERNAL}'"),

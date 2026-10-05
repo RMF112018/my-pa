@@ -15,11 +15,27 @@ KLP-AC-042 (WP-03 slice) and KLP-AC-045. Marked `database` (auto
 * `causation_event_id` keeps its same-transaction meaning: an explicit create is
   a root write, so it names none, and the column's foreign key is still
   `NOT DEFERRABLE` against the feed.
+
+KLP-WP-04 slice B2 adds the autonomous-submit kinds (KLP-AC-042 submit half,
+KLP-AC-043):
+
+* `direct_created` -> one `created`; `direct_superseded` -> `state_changed
+  (lifecycle)` on the predecessor then `created` on the successor;
+  `duplicate_enriched` -> `updated(evidence)`; an enrichment whose new evidence
+  is restricted adds `state_changed(classification)` (the classification-raise
+  kind) -- each with actor `assistant`, authority `source_backed_assertion`,
+  `source_capability` `knowledge.assertions.submit` and its `kamut_` receipt.
+* `review_queued` and `duplicate_pending_review` (proposals) commit no event and
+  advance no sequence (KLP-AC-043).
+* The revalidation kind is staged by the availability ingress, whose event is
+  proven in `tests/database/test_knowledge_evidence_availability.py`; submit
+  carries no availability report in this build (slice B2 residual).
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import timedelta
 
 import pytest
 from sqlalchemy import select, text
@@ -37,16 +53,24 @@ from my_pa.domain.knowledge_assertion.vocabulary import (
     KnowledgeSubjectKind,
 )
 from my_pa.domain.source.registry import issue_identifier
-from my_pa.infrastructure.persistence.tables import knowledge_assertions
+from my_pa.infrastructure.persistence.tables import knowledge_assertions, knowledge_evidence_refs
+from my_pa.infrastructure.persistence.unit_of_work import knowledge_maintenance_transaction
 from tests.database.test_knowledge_assertion_repository import (
     DECISION,
     FINANCIAL,
     LESSON,
+    WHEN,
     KnowledgeRuntime,
     capture_evidence,
     create_command,
     knowledge_events,
     new_principal,
+)
+from tests.database.test_knowledge_assertion_submissions import (
+    PAYMENT,
+    SubmitRuntime,
+    add_direct_payment_head,
+    external,
 )
 from tests.database.test_task_record_events import next_sequence
 
@@ -180,3 +204,154 @@ def test_the_causation_foreign_key_is_still_not_deferrable(runtime: KnowledgeRun
             )
         ).scalars()
         assert list(rows) == [False]
+
+
+# ---- KLP-WP-04 slice B2: autonomous submit ------------------------------------------
+
+
+@pytest.fixture
+def submitter(disposable_database: str) -> Iterator[SubmitRuntime]:
+    composed = SubmitRuntime(disposable_database)
+    try:
+        yield composed
+    finally:
+        composed.close()
+
+
+def _assert_submit_event(event: dict[str, object], kind: KnowledgeMutationKind) -> None:
+    mapped = KNOWLEDGE_MUTATION_EVENTS[kind]
+    origin = KnowledgeEventOrigin.AUTONOMOUS_SUBMIT
+    assert event["event_kind"] == mapped.kind.value
+    assert tuple(event["changed_fields"]) == mapped.changed_fields  # type: ignore[arg-type]
+    assert event["actor_class"] == KNOWLEDGE_EVENT_ACTOR_CLASSES[origin].value
+    assert event["authority"] == KNOWLEDGE_EVENT_AUTHORITIES[origin].value
+    assert event["source_capability"] == "knowledge.assertions.submit"
+    assert str(event["source_receipt_id"]).startswith("kamut_")
+    assert event["causation_event_id"] is None
+
+
+def test_submit_supersede_and_enrich_stage_exactly_the_mapped_events(
+    submitter: SubmitRuntime,
+) -> None:
+    principal = new_principal()
+    add_direct_payment_head(submitter.engine)
+    profile = submitter.profile(principal)
+    org = submitter.entity(principal, "events")
+    first = submitter.submit(
+        principal,
+        profile,
+        subject_id=org,
+        predicate=PAYMENT,
+        value="Net 30",
+        candidate="e1",
+        effective_from=WHEN - timedelta(days=9),
+    )
+    second = submitter.submit(
+        principal,
+        profile,
+        subject_id=org,
+        predicate=PAYMENT,
+        value="Net 45",
+        candidate="e2",
+        effective_from=WHEN - timedelta(days=2),
+    )
+    enriched = submitter.submit(
+        principal,
+        profile,
+        subject_id=org,
+        predicate=PAYMENT,
+        value="Net 45",
+        candidate="e3",
+        effective_from=WHEN - timedelta(days=2),
+        evidence=(external("obj-1"), external("obj-extra", role="supporting")),
+    )
+    assert (first["outcome"], second["outcome"], enriched["outcome"]) == (
+        "direct_created",
+        "direct_superseded",
+        "duplicate_enriched",
+    )
+    events = knowledge_events(submitter.engine, principal)
+    expected = [
+        (first["assertion_id"], KnowledgeMutationKind.CREATE, 1),
+        (first["assertion_id"], KnowledgeMutationKind.SUPERSEDE_PREDECESSOR, 2),
+        (second["assertion_id"], KnowledgeMutationKind.SUPERSEDE_SUCCESSOR, 1),
+        (second["assertion_id"], KnowledgeMutationKind.EVIDENCE_ENRICH, 2),
+    ]
+    assert [(e["record_id"], e["record_version"]) for e in events] == [
+        (assertion_id, version) for assertion_id, _kind, version in expected
+    ]
+    for event, (_assertion_id, kind, _version) in zip(events, expected, strict=True):
+        _assert_submit_event(event, kind)
+    assert events[3]["source_receipt_id"] == enriched["mutation_id"]
+
+
+def test_an_enrichment_with_restricted_evidence_stages_the_classification_raise(
+    submitter: SubmitRuntime,
+) -> None:
+    principal = new_principal()
+    profile = submitter.profile(principal)
+    org, other = submitter.entity(principal, "raise-a"), submitter.entity(principal, "raise-b")
+    first = submitter.submit(principal, profile, subject_id=org, candidate="r1")
+    # Restrict an object through the source-classification ingress, via its row
+    # under another assertion; then re-cite a new version of that object.
+    submitter.submit(
+        principal,
+        profile,
+        subject_id=other,
+        candidate="r2",
+        value="Other requirement",
+        evidence=(external("obj-secret"),),
+    )
+    with submitter.engine.connect() as connection:
+        secret = connection.execute(
+            select(knowledge_evidence_refs.c.evidence_ref_id).where(
+                knowledge_evidence_refs.c.principal_id == principal,
+                knowledge_evidence_refs.c.external_object_id == "obj-secret",
+            )
+        ).scalar_one()
+    with knowledge_maintenance_transaction(submitter.engine) as repository:
+        repository.classify_evidence_restricted(principal, secret, at=WHEN)
+    enriched = submitter.submit(
+        principal,
+        profile,
+        subject_id=org,
+        candidate="r3",
+        evidence=(external("obj-1"), external("obj-secret", version="v2", role="supporting")),
+    )
+    assert enriched["outcome"] == "duplicate_enriched", enriched
+    assert enriched["assertion_version"] == 3
+    with submitter.engine.connect() as connection:
+        row = connection.execute(
+            select(knowledge_assertions.c.classification).where(
+                knowledge_assertions.c.assertion_id == first["assertion_id"]
+            )
+        ).scalar_one()
+    assert row == "restricted_local"
+    mine = [
+        e
+        for e in knowledge_events(submitter.engine, principal)
+        if e["record_id"] == first["assertion_id"]
+    ]
+    assert [(e["event_kind"], e["record_version"]) for e in mine] == [
+        ("created", 1),
+        ("updated", 2),
+        ("state_changed", 3),
+    ]
+    _assert_submit_event(mine[2], KnowledgeMutationKind.CLASSIFY)
+    assert mine[2]["classification"] == "restricted_local"
+
+
+def test_proposals_alone_emit_no_canonical_event(submitter: SubmitRuntime) -> None:
+    principal = new_principal()
+    profile = submitter.profile(principal)
+    org = submitter.entity(principal, "proposals")
+    before = next_sequence(submitter.engine, principal)
+    queued = submitter.submit(principal, profile, subject_id=org, predicate=PAYMENT)
+    pending = submitter.submit(
+        principal, profile, subject_id=org, predicate=PAYMENT, candidate="c2"
+    )
+    assert queued["outcome"] == "review_queued"
+    assert pending["outcome"] == "duplicate_pending_review"
+    assert pending["proposal_id"] == queued["proposal_id"]
+    assert knowledge_events(submitter.engine, principal) == []
+    assert next_sequence(submitter.engine, principal) == before

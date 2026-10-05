@@ -42,7 +42,7 @@ from typing import Any, Final
 import pytest
 from sqlalchemy import Engine, func, select, text
 
-from my_pa.application.commands import SubmitKnowledgeAssertion
+from my_pa.application.commands import ArchiveCapture, SubmitKnowledgeAssertion
 from my_pa.application.errors import InvalidRequestError
 from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.identity.operation import Capability
@@ -164,6 +164,7 @@ class SubmitRuntime(KnowledgeRuntime):
         triggers: tuple[str, ...] = (),
         owner_ref: dict[str, str] | None = None,
         effective_from: datetime | None = None,
+        qualifier: dict[str, object] | None = None,
     ) -> SubmitKnowledgeAssertion:
         del principal_id
         return SubmitKnowledgeAssertion(
@@ -176,6 +177,7 @@ class SubmitRuntime(KnowledgeRuntime):
             value=value,
             evidence=(external("obj-1"),) if evidence is None else evidence,
             owner_ref=owner_ref,
+            qualifier=qualifier,
             effective_from=effective_from,
             trigger_event_ids=triggers,
         )
@@ -211,6 +213,19 @@ class SubmitRuntime(KnowledgeRuntime):
             grants=SUBMIT_GRANTS,
             client_id=client,
         )
+
+
+def archive_capture(runtime: KnowledgeRuntime, principal_id: str, capture_id: str) -> None:
+    """Archive a capture through its own production writer (`capture.archive`)."""
+    runtime.ok(
+        ArchiveCapture(
+            capture_id=capture_id,
+            expected_lifecycle_revision=0,
+            idempotency_key=f"klp04-archive-{capture_id}",
+            reason="Synthetic knowledge archive",
+        ),
+        principal_id=principal_id,
+    )
 
 
 def add_direct_payment_head(engine: Engine) -> int:

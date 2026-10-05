@@ -66,6 +66,7 @@ from my_pa.infrastructure.persistence.tables import (
     record_events,
     relationship_memory_versions,
 )
+from my_pa.infrastructure.persistence.task_management import SqlAlchemyTaskManagementUnitOfWork
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 
 pytestmark = [
@@ -139,6 +140,8 @@ class KnowledgeRuntime:
             knowledge_assertions_enabled=knowledge_enabled,
             # KLP-WP-04 slice B2: the autonomous-submit tests bind a discovery client.
             knowledge_discovery_client_ids=discovery_client_ids,
+            # KLP-WP-04 slice B2: a task to route a critical date to.
+            task_management_unit_of_work=lambda: SqlAlchemyTaskManagementUnitOfWork(self.engine),
         )
 
     def close(self) -> None:

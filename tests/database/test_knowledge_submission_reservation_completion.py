@@ -15,6 +15,23 @@ KLP-AC-051 and KLP-AC-093 (the explicit-create slice). Marked `database`
   and visibly reports a later supersession.
 * The same key with a different digest is `conflict(idempotency_conflict)` and
   writes nothing.
+
+KLP-WP-04 slice B2 adds the autonomous-submit half (KLP-AC-051, 093, 102, 120,
+149) and the WP-02 DEV-01 ledger mapping:
+
+* KLP-AC-120 / 051: a submit replays by (principal, client, profile, run,
+  candidate) over the frozen digest: the stored row holds the exact public
+  result (assertion, mutation, proposal/case, owner, routed id) and a replay
+  returns it unchanged, writes nothing and stages no event -- including after
+  the profile is disabled or the head retired (N2: replay precedes admission).
+* KLP-AC-149: the same candidate identity with another digest is
+  `conflict(idempotency_conflict)` and writes no canonical row.
+* KLP-AC-093 / 102: an autonomous reservation left reserved cannot commit, and
+  a submit rolled back after its reservation leaves no row, link or event.
+* N2 (create): a same-key create retry replays after its predicate head would
+  now refuse it.
+* The ledger triggers' 23514 / 23001 raised through the repository's
+  translation are `KnowledgeLedgerInvariantError`.
 """
 
 from __future__ import annotations
@@ -28,18 +45,28 @@ from sqlalchemy.exc import IntegrityError
 from my_pa.adapters.normalization import normalize
 from my_pa.adapters.remote_request import compose_remote_arguments
 from my_pa.application.errors import InvalidRequestError
+from my_pa.contracts.ports import KnowledgeLedgerInvariantError
 from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.infrastructure.persistence.knowledge_assertions import _translated
 from tests.database.test_knowledge_assertion_repository import (
     KnowledgeRuntime,
+    capture_evidence,
     counts,
     create_command,
     new_principal,
     submission_row,
+)
+from tests.database.test_knowledge_assertion_submissions import (
+    CLIENT,
+    PAYMENT,
+    SubmitRuntime,
+    archive_capture,
+    external,
 )
 from tests.security.test_knowledge_assertion_disclosure import set_lifecycle
 
@@ -181,3 +208,209 @@ def test_a_remote_create_key_is_the_server_stamped_payload_hash(runtime: Knowled
     assert row["idempotency_key"].startswith("idk_")
     assert row["authenticated_client_id"] == "klp03-remote-client"
     assert counts(runtime.engine, principal)["knowledge_assertion_submissions"] == 1
+
+
+# ---- KLP-WP-04 slice B2: autonomous submit -------------------------------------------
+
+
+@pytest.fixture
+def submitter(disposable_database: str) -> Iterator[SubmitRuntime]:
+    composed = SubmitRuntime(disposable_database)
+    try:
+        yield composed
+    finally:
+        composed.close()
+
+
+def test_a_submit_row_stores_the_exact_replay_result(submitter: SubmitRuntime) -> None:
+    principal = new_principal()
+    profile = submitter.profile(principal)
+    org = submitter.entity(principal, "stored")
+    created = submitter.submit(principal, profile, subject_id=org)
+    queued = submitter.submit(principal, profile, subject_id=org, candidate="c2", predicate=PAYMENT)
+    for result in (created, queued):
+        row = submission_row(submitter.engine, result["submission_id"])
+        assert row["submission_state"] == "completed"
+        assert row["outcome"] == result["outcome"]
+        assert row["result_assertion_id"] == result["assertion_id"]
+        assert row["result_mutation_id"] == result["mutation_id"]
+        assert row["result_proposal_id"] == result["proposal_id"]
+        assert row["result_review_case_id"] == result["review_case_id"]
+        assert row["result_canonical_owner"] == result["canonical_owner"]
+        assert row["result_routed_record_id"] == result["routed_record_id"]
+        assert row["request_digest"] and row["result_digest"]
+
+
+def test_a_submit_retry_replays_writes_nothing_and_stages_no_event(
+    submitter: SubmitRuntime,
+) -> None:
+    principal = new_principal()
+    profile = submitter.profile(principal)
+    org = submitter.entity(principal, "replay")
+    first = submitter.submit(principal, profile, subject_id=org)
+    before = counts(submitter.engine, principal)
+    assert submitter.submit(principal, profile, subject_id=org) == first
+    assert counts(submitter.engine, principal) == before
+    # N2: the replay precedes every admission check -- a disabled profile still
+    # replays the stored result, while a new candidate is refused.
+    submitter.disable(principal, profile)
+    assert submitter.submit(principal, profile, subject_id=org) == first
+    refused = submitter.submit(principal, profile, subject_id=org, candidate="c-new")
+    assert refused["outcome"] == "refused"
+    assert refused["reason"] == "source_profile_inactive"
+
+
+def test_a_submit_replays_after_its_predicate_head_is_retired(submitter: SubmitRuntime) -> None:
+    principal = new_principal()
+    profile = submitter.profile(principal)
+    org = submitter.entity(principal, "retired")
+    first = submitter.submit(principal, profile, subject_id=org, predicate=PAYMENT)
+    _retire(submitter, PAYMENT)
+    assert submitter.submit(principal, profile, subject_id=org, predicate=PAYMENT) == first
+    error = submitter.submit_error(
+        principal, profile, subject_id=org, predicate=PAYMENT, candidate="c-after"
+    )
+    assert error["code"] == "invalid_request"
+
+
+def test_a_create_replays_after_its_predicate_head_is_retired(submitter: SubmitRuntime) -> None:
+    principal = new_principal()
+    first = submitter.create(principal, "klp04-n2-create")
+    _retire(submitter, "policy.requirement")
+    assert submitter.create(principal, "klp04-n2-create") == first
+    error = submitter.error(
+        create_command("klp04-n2-other", subject_id=principal), principal_id=principal
+    )
+    assert error["code"] == "invalid_request"
+
+
+def _retire(runtime: SubmitRuntime, predicate: str) -> None:
+    with runtime.engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO knowledge.knowledge_assertion_predicates SELECT predicate_code, "
+                "predicate_version + 1, 'retired', value_type, cardinality, temporal_semantics, "
+                "qualifier_rule, allowed_subject_kinds, allowed_entity_types, canonical_owner, "
+                "autonomous_admission_policy, review_requirement, consequential_class, "
+                "normalization_rule, classification_floor, conflict_rule, "
+                "minimum_evidence_authority, fingerprint_version, now() FROM "
+                "knowledge.knowledge_assertion_predicates WHERE predicate_code = :c "
+                "ORDER BY predicate_version DESC LIMIT 1"
+            ),
+            {"c": predicate},
+        )
+
+
+def test_the_same_candidate_with_another_digest_conflicts_and_writes_nothing(
+    submitter: SubmitRuntime,
+) -> None:
+    principal = new_principal()
+    profile = submitter.profile(principal)
+    org = submitter.entity(principal, "conflict")
+    submitter.submit(principal, profile, subject_id=org, value="First observation")
+    before = counts(submitter.engine, principal)
+    error = submitter.submit_error(principal, profile, subject_id=org, value="Second observation")
+    assert error["code"] == "conflict"
+    assert "idempotency_conflict" in error["safe_details"]
+    assert counts(submitter.engine, principal) == before
+
+
+def test_an_autonomous_reservation_left_reserved_cannot_commit(submitter: SubmitRuntime) -> None:
+    """KLP-AC-093, autonomous origin: the deferred guard refuses the COMMIT."""
+    principal = new_principal()
+    profile = submitter.profile(principal)
+    with submitter.engine.connect() as connection:
+        scope = connection.execute(
+            text(
+                "SELECT scope_digest FROM knowledge.knowledge_discovery_source_profiles "
+                "WHERE source_profile_id = :s"
+            ),
+            {"s": profile},
+        ).scalar_one()
+    submission = issue_identifier(IdKind.KNOWLEDGE_ASSERTION_SUBMISSION)
+    with pytest.raises(IntegrityError, match="reserved"), submitter.engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO knowledge.knowledge_assertion_submissions (principal_id, "
+                "submission_id, origin, authenticated_client_id, source_profile_id, "
+                "scope_digest, origin_is_synthetic, external_run_id, external_candidate_id, "
+                "subject_kind, subject_id, predicate_code, request_digest, submission_state, "
+                "causal_depth, causal_root_submission_id, created_at) VALUES (:p, :s, "
+                "'autonomous_submit', :c, :f, :d, false, 'run-1', 'cand-1', 'principal', :p, "
+                "'policy.requirement', :h, 'reserved', 0, :s, now())"
+            ),
+            {"p": principal, "s": submission, "c": CLIENT, "f": profile, "d": scope, "h": "a" * 64},
+        )
+    assert counts(submitter.engine, principal)["knowledge_assertion_submissions"] == 0
+
+
+def test_an_archived_citation_is_a_born_refusal_that_writes_only_its_row(
+    submitter: SubmitRuntime,
+) -> None:
+    """KLP-AC-102 (refusal half): a refused submit leaves no half-completed write.
+
+    The rolled-back half -- a failure after C1 leaves no reservation, link or
+    event -- is `test_a_failure_after_the_demotion_rolls_the_supersession_back`
+    (injected failure) and the C4c fence race in
+    `tests/concurrency/test_knowledge_capture_archive_race.py`.
+    """
+    principal = new_principal()
+    profile = submitter.profile(principal)
+    org = submitter.entity(principal, "rollback")
+    capture = submitter.capture(principal, "rollback")
+    archive_capture(submitter, principal, capture[0])
+    before = counts(submitter.engine, principal)
+    result = submitter.submit(
+        principal,
+        profile,
+        subject_id=org,
+        evidence=(external("obj-rb"), capture_evidence(*capture, role="supporting")),
+    )
+    # The C2 lifecycle read sees the archive: a born refusal, its row only.
+    assert result["outcome"] == "refused"
+    assert result["reason"] == "capture_archived"
+    after = counts(submitter.engine, principal)
+    assert after["knowledge_assertion_submissions"] == before["knowledge_assertion_submissions"] + 1
+    assert {k: v for k, v in after.items() if k != "knowledge_assertion_submissions"} == {
+        k: v for k, v in before.items() if k != "knowledge_assertion_submissions"
+    }
+
+
+def test_a_ledger_trigger_refusal_is_the_invariant_error(submitter: SubmitRuntime) -> None:
+    """WP-02 DEV-01: 23001 / 23514 from the submission ledger, through `_translated`."""
+    principal = new_principal()
+    result = submitter.create(principal, "klp04-ledger")
+    with submitter.engine.connect() as connection:
+        with pytest.raises(KnowledgeLedgerInvariantError):
+            _translated(
+                lambda: connection.execute(
+                    text(
+                        "UPDATE knowledge.knowledge_assertion_submissions SET reason = reason "
+                        "WHERE submission_id = :s"
+                    ),
+                    {"s": result["submission_id"]},
+                )
+            )
+        connection.rollback()
+        with pytest.raises(KnowledgeLedgerInvariantError):
+            _translated(
+                lambda: connection.execute(
+                    text(
+                        "INSERT INTO knowledge.knowledge_assertion_submissions (principal_id, "
+                        "submission_id, origin, idempotency_key, origin_is_synthetic, "
+                        "subject_kind, subject_id, predicate_code, request_digest, "
+                        "submission_state, outcome, reason, causal_depth, "
+                        "causal_root_submission_id, result_canonical_owner, result_digest, "
+                        "created_at, completed_at) VALUES (:p, :s, 'explicit_create', 'k', "
+                        "false, 'principal', :p, 'policy.requirement', :h, 'completed', "
+                        "'conflict', 'incompatible_current_fact', 0, :s, "
+                        "'knowledge_assertion', :h, now(), now())"
+                    ),
+                    {
+                        "p": principal,
+                        "s": issue_identifier(IdKind.KNOWLEDGE_ASSERTION_SUBMISSION),
+                        "h": "b" * 64,
+                    },
+                )
+            )
+        connection.rollback()

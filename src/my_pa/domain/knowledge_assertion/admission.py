@@ -80,6 +80,7 @@ from my_pa.domain.knowledge_assertion.vocabulary import (
     KnowledgeEvidenceIdentityKind,
     KnowledgeEvidenceRole,
     KnowledgeOriginSystem,
+    KnowledgeOwnerRefKind,
     KnowledgeReadOnlyProofState,
     KnowledgeReviewRequirement,
     KnowledgeSubmissionOutcome,
@@ -87,16 +88,19 @@ from my_pa.domain.knowledge_assertion.vocabulary import (
 )
 
 __all__ = [
+    "OWNER_REF_ROUTES",
     "AdmissionDecision",
     "AdmissionEvidence",
     "AdmissionPath",
     "CurrentFact",
     "DirectAdmissionBlocker",
     "DirectAdmissionFacts",
+    "DomainRoute",
     "InvalidAdmissionFactsError",
     "SourceProfileFacts",
     "SubjectResolution",
     "decide_direct_admission",
+    "decide_domain_route",
     "derive_content_origin",
     "independence_key",
     "independent_corroboration_keys",
@@ -394,3 +398,71 @@ def independent_corroboration_keys(evidence: Iterable[AdmissionEvidence]) -> fro
         for item in evidence
         if item.role is not KnowledgeEvidenceRole.COUNTEREVIDENCE
     )
+
+
+# --- DOMAIN_OWNED routes (R6 sections 8.5 and 13) --------------------------------------
+
+#: `project.critical_date`'s owner-ref kinds and the canonical owner each routes to.
+OWNER_REF_ROUTES: Final = {
+    KnowledgeOwnerRefKind.TASK: KnowledgeCanonicalOwner.TASKS,
+    KnowledgeOwnerRefKind.COMMITMENT: KnowledgeCanonicalOwner.COMMITMENTS,
+    KnowledgeOwnerRefKind.CONSTRAINT: KnowledgeCanonicalOwner.CONSTRAINTS,
+    KnowledgeOwnerRefKind.MEETING: KnowledgeCanonicalOwner.MEETINGS,
+}
+_CRITICAL_DATE: Final = "project.critical_date"
+
+
+@dataclass(frozen=True, slots=True)
+class DomainRoute:
+    """A DOMAIN_OWNED completion decided at C2 from the immutable predicate head."""
+
+    outcome: KnowledgeSubmissionOutcome
+    reason: KnowledgeSubmissionReason
+    canonical_owner: KnowledgeCanonicalOwner | None
+    routed_record_id: str | None = None
+
+
+def decide_domain_route(
+    predicate: KnowledgePredicate,
+    *,
+    owner_ref_kind: KnowledgeOwnerRefKind | None,
+    owner_ref_id: str | None,
+    owner_ref_resolves: bool,
+) -> DomainRoute | None:
+    """The DOMAIN_OWNED route of one candidate, or `None` (the Knowledge plane's).
+
+    Pure: the caller reads whether the owner ref resolves (a Principal-scoped
+    existence read at C2) and nothing else.
+
+    * `project.critical_date` with an owner ref: resolving -> `domain_owned_routed`
+      to that owner with `routed_record_id` = the ref; unresolvable -> refused
+      `owner_ref_invalid`; no ref -> the Knowledge plane (Review). No inference.
+    * An owner ref on any other predicate -> refused `owner_ref_invalid`
+      (plan-silent; most restrictive: no other route reads one).
+    * A predicate owned outside the Knowledge plane -> `domain_owned_no_intake`
+      naming that owner (`project.decision` -> `continuity_decision`, KLP-AC-097).
+      `relationship_memory` (`entity.communication_preference`) is no-intake in
+      this build: its proposal writer cites a capture span, an entity
+      observation or a knowledge record, and no Knowledge citation names one,
+      so no evidence is transferable (KLP-WP-04 deviation).
+    """
+    if owner_ref_kind is not None:
+        if predicate.predicate_code != _CRITICAL_DATE or not owner_ref_resolves:
+            return DomainRoute(
+                outcome=KnowledgeSubmissionOutcome.REFUSED,
+                reason=KnowledgeSubmissionReason.OWNER_REF_INVALID,
+                canonical_owner=None,
+            )
+        return DomainRoute(
+            outcome=KnowledgeSubmissionOutcome.DOMAIN_OWNED_ROUTED,
+            reason=KnowledgeSubmissionReason.CANONICAL_OWNER,
+            canonical_owner=OWNER_REF_ROUTES[owner_ref_kind],
+            routed_record_id=owner_ref_id,
+        )
+    if predicate.canonical_owner is not KnowledgeCanonicalOwner.KNOWLEDGE_ASSERTION:
+        return DomainRoute(
+            outcome=KnowledgeSubmissionOutcome.DOMAIN_OWNED_NO_INTAKE,
+            reason=KnowledgeSubmissionReason.CANONICAL_OWNER_NO_INTAKE,
+            canonical_owner=predicate.canonical_owner,
+        )
+    return None

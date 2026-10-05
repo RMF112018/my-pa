@@ -86,6 +86,9 @@ from my_pa.contracts.ports import (
     KnowledgeAssertionReveal,
     KnowledgeAssertionRow,
     KnowledgeCaptureWithdrawnError,
+    KnowledgeCheckpointKindMismatchError,
+    KnowledgeCheckpointRequest,
+    KnowledgeCheckpointResult,
     KnowledgeConcurrentDuplicateError,
     KnowledgeCreateEvidence,
     KnowledgeCreateRequest,
@@ -130,6 +133,7 @@ from my_pa.domain.knowledge_assertion.admission import (
     decide_direct_admission,
     decide_domain_route,
 )
+from my_pa.domain.knowledge_assertion.checkpoint import CheckpointBinding, CheckpointSeal
 from my_pa.domain.knowledge_assertion.predicate import KnowledgePredicate
 from my_pa.domain.knowledge_assertion.provenance import (
     CAUSAL_RATE_COUNTED_OUTCOMES,
@@ -149,6 +153,8 @@ from my_pa.domain.knowledge_assertion.vocabulary import (
     KnowledgeAutonomousAdmissionPolicy,
     KnowledgeCanonicalOwner,
     KnowledgeCardinality,
+    KnowledgeCheckpointOutcome,
+    KnowledgeCheckpointReason,
     KnowledgeConflictRule,
     KnowledgeConsequentialClass,
     KnowledgeContentOrigin,
@@ -202,6 +208,7 @@ from my_pa.infrastructure.persistence.tables import (
     knowledge_assertion_submissions,
     knowledge_assertions,
     knowledge_discovery_checkpoint_requests,
+    knowledge_discovery_checkpoints,
     knowledge_discovery_source_profiles,
     knowledge_evidence_refs,
     knowledge_submission_evidence,
@@ -1144,6 +1151,46 @@ class SqlKnowledgeAssertionRepository(KnowledgeAssertionRepository):
                 correlation_id=correlation_id,
             )
         return result
+
+    # ---- discovery checkpoint (KLP-WP-04 slice B3) ---------------------------
+
+    def replay_checkpoint(
+        self,
+        principal_id: str,
+        *,
+        authenticated_client_id: str,
+        idempotency_key: str,
+        request_digest: str,
+        seal: CheckpointSeal,
+    ) -> KnowledgeCheckpointResult | None:
+        r = knowledge_discovery_checkpoint_requests
+        row = _translated(
+            lambda: self._connection.execute(
+                select(r).where(
+                    partition_criterion(r, capture_context(principal_id)),
+                    r.c.authenticated_client_id == authenticated_client_id,
+                    r.c.idempotency_key == idempotency_key,
+                )
+            ).one_or_none()
+        )
+        if row is None:
+            return None
+        if row.request_digest != request_digest:
+            raise KnowledgeIdempotencyConflictError("the key is bound to another request")
+        return _translated(
+            lambda: _stored_checkpoint_result(self._connection, principal_id, row, seal)
+        )
+
+    def checkpoint(
+        self,
+        principal_id: str,
+        request: KnowledgeCheckpointRequest,
+        *,
+        at: datetime,
+        seal: CheckpointSeal,
+    ) -> KnowledgeCheckpointResult:
+        transaction = _CheckpointAdvance(self._connection, principal_id, request, at, seal)
+        return _translated(transaction.run)
 
     # ---- source profiles and maintenance (KLP-WP-04 slice B1) ---------------
 
@@ -3274,6 +3321,444 @@ class _AutonomousSubmit:
                 knowledge_assertions.c.assertion_id == assertion_id,
             )
         ).scalar_one_or_none()
+
+
+# ---- discovery checkpoint (KLP-WP-04 slice B3, R6 sections 6.1, 7, 8.1) ------------
+
+_ADVANCED: Final = KnowledgeCheckpointOutcome.ADVANCED.value
+_CHECKPOINT_CONFLICT: Final = KnowledgeCheckpointOutcome.CHECKPOINT_CONFLICT.value
+_CHECKPOINT_REFUSED: Final = KnowledgeCheckpointOutcome.REFUSED.value
+_UNVERIFIABLE: Final = KnowledgeCheckpointReason.ENVELOPE_UNVERIFIABLE.value
+
+
+def _checkpoint_binding(principal_id: str, row: Row[Any]) -> CheckpointBinding:
+    return CheckpointBinding(
+        principal_id=principal_id,
+        authenticated_client_id=row.authenticated_client_id,
+        source_profile_id=row.source_profile_id,
+        scope_digest=row.scope_digest,
+    )
+
+
+def _current_checkpoint(
+    connection: Connection, principal_id: str, binding: CheckpointBinding
+) -> Row[Any] | None:
+    """The one checkpoint row of (principal, profile, client, scope), or `None`."""
+    c = knowledge_discovery_checkpoints
+    return connection.execute(
+        select(c).where(
+            partition_criterion(c, capture_context(principal_id)),
+            c.c.source_profile_id == binding.source_profile_id,
+            c.c.authenticated_client_id == binding.authenticated_client_id,
+            c.c.scope_digest == binding.scope_digest,
+        )
+    ).one_or_none()
+
+
+def _verified(seal: CheckpointSeal, binding: CheckpointBinding, current: Row[Any]) -> bool:
+    """Whether the stored checkpoint's envelope may be returned or relied on (R6 7)."""
+    return seal.verify(
+        binding,
+        checkpoint_id=current.checkpoint_id,
+        version=current.version,
+        seal_version=current.seal_version,
+        private_envelope=current.private_envelope,
+        envelope_mac=current.envelope_mac,
+    )
+
+
+def _unverifiable(request_id: str, current: Row[Any] | None) -> KnowledgeCheckpointResult:
+    """`checkpoint_conflict(envelope_unverifiable)`: current id/version, no envelope."""
+    return KnowledgeCheckpointResult(
+        checkpoint_request_id=request_id,
+        outcome=_CHECKPOINT_CONFLICT,
+        reason=_UNVERIFIABLE,
+        checkpoint_id=None if current is None else current.checkpoint_id,
+        checkpoint_version=None if current is None else current.version,
+        checkpoint_kind=None if current is None else current.checkpoint_kind,
+        private_envelope=None,
+        private_token_redacted=True,
+    )
+
+
+def _stored_checkpoint_result(
+    connection: Connection, principal_id: str, row: Row[Any], seal: CheckpointSeal
+) -> KnowledgeCheckpointResult:
+    """The stored public answer of one completed request, verified before return.
+
+    A stored envelope is returned only when it verifies under the configured
+    seal (R6 7): one sealed under another seal version, or whose MAC fails,
+    answers `envelope_unverifiable` with the *current* checkpoint id/version.
+    A redacted row is its exact public receipt with `private_token_redacted`.
+    """
+    binding = _checkpoint_binding(principal_id, row)
+    if row.result_private_envelope is not None:
+        verified = seal.verify(
+            binding,
+            checkpoint_id=row.result_checkpoint_id,
+            version=row.result_checkpoint_version,
+            seal_version=row.result_seal_version,
+            private_envelope=row.result_private_envelope,
+            envelope_mac=row.result_envelope_mac,
+        )
+        if not verified:
+            return _unverifiable(
+                row.checkpoint_request_id, _current_checkpoint(connection, principal_id, binding)
+            )
+    return KnowledgeCheckpointResult(
+        checkpoint_request_id=row.checkpoint_request_id,
+        outcome=row.result_outcome,
+        reason=row.result_reason,
+        checkpoint_id=row.result_checkpoint_id,
+        checkpoint_version=row.result_checkpoint_version,
+        checkpoint_kind=row.result_checkpoint_kind,
+        private_envelope=row.result_private_envelope,
+        private_token_redacted=bool(row.private_token_redacted)
+        or row.result_reason == _UNVERIFIABLE,
+    )
+
+
+class _CheckpointAdvance:
+    """One checkpoint transaction body (R6 sections 6.1, 6.4, 7 and 8.1).
+
+    C1 the request reservation on (principal, client, idempotency_key) --
+    `INSERT ... ON CONFLICT DO NOTHING`, then the winner by key (equal digest
+    replays, a different digest is `idempotency_conflict` with no write); C4a
+    the bound profile row `FOR NO KEY UPDATE`, which serializes every advance,
+    first or later, of the one (profile, client, scope) checkpoint and every
+    disable, with `disabled_at` re-read after locking. Then, in order:
+
+    1. a disabled profile completes `refused(source_profile_inactive)`;
+    2. an `expected_version` other than the current version (0 = none) is
+       `checkpoint_conflict(stale_expected_version)` carrying the current id,
+       version and -- verified first -- the current envelope (lost-response
+       recovery, KLP-AC-145), else `envelope_unverifiable` without it;
+    3. a matching advance over a stored row sealed under the *current* seal
+       whose MAC fails, or under a newer seal, is `envelope_unverifiable`
+       (fail closed); a row under an *older* seal is the post-rotation
+       re-bootstrap and is advanced over without returning its token;
+    4. another `checkpoint_kind` than the stored one is refused as an invalid
+       request (the kind is immutable; rolls back whole, DEV-50);
+    5. a `submitted_candidate_count` other than the number of completed
+       submissions of (client, run, profile, scope) completes
+       `refused(candidate_count_mismatch)` (KLP-AC-074);
+    6. else the checkpoint is inserted at version 1 or advanced by one, sealed
+       under the current seal, the request completes `advanced`, and in the
+       same transaction every completed request row of the same (principal,
+       profile, client, scope) still holding an envelope with
+       `result_checkpoint_version` below the new version is redacted
+       (KLP-AC-094), conflict rows included.
+
+    Every outcome is a completed request row; the deferred trigger refuses a
+    COMMIT that leaves the reservation reserved (R6 6.4). No Record Event is
+    staged: a checkpoint is operational state, not a Knowledge mutation.
+    """
+
+    def __init__(
+        self,
+        connection: Connection,
+        principal_id: str,
+        request: KnowledgeCheckpointRequest,
+        at: datetime,
+        seal: CheckpointSeal,
+    ) -> None:
+        self.connection = connection
+        self.principal_id = principal_id
+        self.request = request
+        self.at = at
+        self.seal = seal
+        self.context = capture_context(principal_id)
+        self.binding = CheckpointBinding(
+            principal_id=principal_id,
+            authenticated_client_id=request.authenticated_client_id,
+            source_profile_id=request.source_profile_id,
+            scope_digest=request.scope_digest,
+        )
+
+    def _bound(self, table: Table, values: dict[str, object]) -> dict[str, object]:
+        return principal_bound_values(values, table, self.context)
+
+    # -- C1 ------------------------------------------------------------------------
+
+    def _reserve(self, request_id: str) -> bool:
+        request = self.request
+        statement = (
+            pg_insert(knowledge_discovery_checkpoint_requests)
+            .values(
+                **self._bound(
+                    knowledge_discovery_checkpoint_requests,
+                    {
+                        "checkpoint_request_id": request_id,
+                        "authenticated_client_id": request.authenticated_client_id,
+                        "source_profile_id": request.source_profile_id,
+                        "scope_digest": request.scope_digest,
+                        "external_run_id": request.external_run_id,
+                        "submitted_candidate_count": request.submitted_candidate_count,
+                        "expected_version": request.expected_version,
+                        "idempotency_key": request.idempotency_key,
+                        "request_digest": request.request_digest,
+                        "state": "reserved",
+                        "created_at": self.at,
+                    },
+                )
+            )
+            .on_conflict_do_nothing(
+                index_elements=["principal_id", "authenticated_client_id", "idempotency_key"]
+            )
+            .returning(knowledge_discovery_checkpoint_requests.c.checkpoint_request_id)
+        )
+        return self.connection.execute(statement).scalar_one_or_none() is not None
+
+    def _winner(self) -> KnowledgeCheckpointResult:
+        r = knowledge_discovery_checkpoint_requests
+        row = self.connection.execute(
+            select(r).where(
+                partition_criterion(r, self.context),
+                r.c.authenticated_client_id == self.request.authenticated_client_id,
+                r.c.idempotency_key == self.request.idempotency_key,
+            )
+        ).one()
+        if row.request_digest != self.request.request_digest:
+            raise KnowledgeIdempotencyConflictError("the key is bound to another request")
+        return _stored_checkpoint_result(self.connection, self.principal_id, row, self.seal)
+
+    def _complete(
+        self,
+        result: KnowledgeCheckpointResult,
+        *,
+        seal_version: int | None = None,
+        envelope_mac: str | None = None,
+    ) -> KnowledgeCheckpointResult:
+        r = knowledge_discovery_checkpoint_requests
+        done = self.connection.execute(
+            update(r)
+            .where(
+                partition_criterion(r, self.context),
+                r.c.checkpoint_request_id == result.checkpoint_request_id,
+                r.c.state == "reserved",
+            )
+            .values(
+                state="completed",
+                result_outcome=result.outcome,
+                result_reason=result.reason,
+                result_checkpoint_id=result.checkpoint_id,
+                result_checkpoint_version=result.checkpoint_version,
+                result_checkpoint_kind=result.checkpoint_kind,
+                result_private_envelope=result.private_envelope,
+                result_seal_version=None if result.private_envelope is None else seal_version,
+                result_envelope_mac=None if result.private_envelope is None else envelope_mac,
+                completed_at=self.at,
+            )
+        )
+        if done.rowcount != 1:
+            raise RepositoryFailureError("the reservation was not held")
+        return result
+
+    # -- C4a -----------------------------------------------------------------------
+
+    def _lock_profile(self) -> Row[Any]:
+        """The bound profile row, C4a `FOR NO KEY UPDATE`; `disabled_at` re-read."""
+        p = knowledge_discovery_source_profiles
+        row = self.connection.execute(
+            select(p.c.source_profile_id, p.c.disabled_at)
+            .where(
+                partition_criterion(p, self.context),
+                p.c.source_profile_id == self.request.source_profile_id,
+                p.c.authenticated_client_id == self.request.authenticated_client_id,
+                p.c.scope_digest == self.request.scope_digest,
+            )
+            .with_for_update(key_share=True)
+        ).one_or_none()
+        if row is None:  # the reservation's FK already proved the binding
+            raise KnowledgeSourceProfileUnboundError("the profile is not this client's")
+        return row
+
+    def _completed_submissions(self) -> int:
+        s = knowledge_assertion_submissions
+        request = self.request
+        return int(
+            self.connection.execute(
+                select(func.count()).where(
+                    partition_criterion(s, self.context),
+                    s.c.origin == _AUTONOMOUS,
+                    s.c.authenticated_client_id == request.authenticated_client_id,
+                    s.c.source_profile_id == request.source_profile_id,
+                    s.c.scope_digest == request.scope_digest,
+                    s.c.external_run_id == request.external_run_id,
+                    s.c.submission_state == "completed",
+                )
+            ).scalar_one()
+        )
+
+    # -- the body ------------------------------------------------------------------
+
+    def run(self) -> KnowledgeCheckpointResult:
+        request_id = issue_identifier(IdKind.KNOWLEDGE_DISCOVERY_CHECKPOINT_REQUEST)
+        if not self._reserve(request_id):
+            return self._winner()
+        profile = self._lock_profile()
+        if profile.disabled_at is not None:
+            return self._refused(request_id, KnowledgeCheckpointReason.SOURCE_PROFILE_INACTIVE)
+        current = _current_checkpoint(self.connection, self.principal_id, self.binding)
+        current_version = 0 if current is None else int(current.version)
+        if self.request.expected_version != current_version:
+            return self._stale(request_id, current)
+        if current is not None:
+            older_seal = current.seal_version < self.seal.seal_version
+            if not older_seal and not _verified(self.seal, self.binding, current):
+                return self._complete(_unverifiable(request_id, current))
+            if current.checkpoint_kind != self.request.checkpoint_kind:
+                raise KnowledgeCheckpointKindMismatchError("the checkpoint kind is immutable")
+        if self._completed_submissions() != self.request.submitted_candidate_count:
+            return self._refused(request_id, KnowledgeCheckpointReason.CANDIDATE_COUNT_MISMATCH)
+        return self._advance(request_id, current)
+
+    def _refused(
+        self, request_id: str, reason: KnowledgeCheckpointReason
+    ) -> KnowledgeCheckpointResult:
+        return self._complete(
+            KnowledgeCheckpointResult(
+                checkpoint_request_id=request_id,
+                outcome=_CHECKPOINT_REFUSED,
+                reason=reason.value,
+                checkpoint_id=None,
+                checkpoint_version=None,
+                checkpoint_kind=None,
+                private_envelope=None,
+                private_token_redacted=False,
+            )
+        )
+
+    def _stale(self, request_id: str, current: Row[Any] | None) -> KnowledgeCheckpointResult:
+        """Lost-response recovery (KLP-AC-145): the current state, to this client only.
+
+        The caller is the bound client of this very (profile, client, scope):
+        the C2 binding read refused every other client before the ledger was
+        touched, so the current envelope goes to its owner -- verified first.
+        """
+        if current is not None and not _verified(self.seal, self.binding, current):
+            return self._complete(_unverifiable(request_id, current))
+        envelope = None if current is None else str(current.private_envelope)
+        return self._complete(
+            KnowledgeCheckpointResult(
+                checkpoint_request_id=request_id,
+                outcome=_CHECKPOINT_CONFLICT,
+                reason=KnowledgeCheckpointReason.STALE_EXPECTED_VERSION.value,
+                checkpoint_id=None if current is None else current.checkpoint_id,
+                checkpoint_version=None if current is None else int(current.version),
+                checkpoint_kind=None if current is None else current.checkpoint_kind,
+                private_envelope=envelope,
+                private_token_redacted=False,
+            ),
+            seal_version=None if current is None else int(current.seal_version),
+            envelope_mac=None if current is None else current.envelope_mac,
+        )
+
+    def _advance(self, request_id: str, current: Row[Any] | None) -> KnowledgeCheckpointResult:
+        request = self.request
+        c = knowledge_discovery_checkpoints
+        version = 1 if current is None else int(current.version) + 1
+        checkpoint_id = (
+            issue_identifier(IdKind.KNOWLEDGE_DISCOVERY_CHECKPOINT)
+            if current is None
+            else str(current.checkpoint_id)
+        )
+        mac = self.seal.seal(
+            self.binding,
+            checkpoint_id=checkpoint_id,
+            version=version,
+            private_envelope=request.private_envelope,
+        )
+        sealed = {
+            "version": version,
+            "private_envelope": request.private_envelope,
+            "seal_version": self.seal.seal_version,
+            "envelope_mac": mac,
+            "external_run_id": request.external_run_id,
+        }
+        if current is None:
+            # Unreachable while C4a serializes first advances; a lost insert
+            # race still answers the routed conflict, never a 23505.
+            written = self.connection.execute(
+                pg_insert(c)
+                .values(
+                    **self._bound(
+                        c,
+                        {
+                            "checkpoint_id": checkpoint_id,
+                            "source_profile_id": request.source_profile_id,
+                            "authenticated_client_id": request.authenticated_client_id,
+                            "scope_digest": request.scope_digest,
+                            "checkpoint_kind": request.checkpoint_kind,
+                            "created_at": self.at,
+                            "updated_at": self.at,
+                            **sealed,
+                        },
+                    )
+                )
+                .on_conflict_do_nothing(
+                    index_elements=[
+                        "principal_id",
+                        "source_profile_id",
+                        "authenticated_client_id",
+                        "scope_digest",
+                    ]
+                )
+                .returning(c.c.checkpoint_id)
+            ).scalar_one_or_none()
+        else:
+            written = self.connection.execute(
+                update(c)
+                .where(
+                    partition_criterion(c, self.context),
+                    c.c.checkpoint_id == checkpoint_id,
+                    c.c.version == current.version,
+                )
+                .values(updated_at=max(self.at, current.updated_at), **sealed)
+                .returning(c.c.checkpoint_id)
+            ).scalar_one_or_none()
+        if written is None:  # pragma: no cover - serialized by the C4a lock
+            return self._stale(
+                request_id, _current_checkpoint(self.connection, self.principal_id, self.binding)
+            )
+        result = self._complete(
+            KnowledgeCheckpointResult(
+                checkpoint_request_id=request_id,
+                outcome=_ADVANCED,
+                reason=KnowledgeCheckpointReason.ADVANCED.value,
+                checkpoint_id=checkpoint_id,
+                checkpoint_version=version,
+                checkpoint_kind=request.checkpoint_kind,
+                private_envelope=request.private_envelope,
+                private_token_redacted=False,
+            ),
+            seal_version=self.seal.seal_version,
+            envelope_mac=mac,
+        )
+        self._redact_superseded(version)
+        return result
+
+    def _redact_superseded(self, version: int) -> None:
+        """KLP-AC-094: redact every older envelope of this binding, conflict rows too."""
+        r = knowledge_discovery_checkpoint_requests
+        request = self.request
+        self.connection.execute(
+            update(r)
+            .where(
+                partition_criterion(r, self.context),
+                r.c.source_profile_id == request.source_profile_id,
+                r.c.authenticated_client_id == request.authenticated_client_id,
+                r.c.scope_digest == request.scope_digest,
+                r.c.state == "completed",
+                r.c.result_private_envelope.is_not(None),
+                r.c.result_checkpoint_version < version,
+            )
+            .values(
+                result_private_envelope=null(),
+                result_envelope_mac=null(),
+                private_token_redacted=True,
+            )
+        )
 
 
 # ---- source-profile commissioning and maintenance (KLP-WP-04 slice B1) -------------

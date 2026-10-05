@@ -117,6 +117,8 @@ class KnowledgeRuntime:
         knowledge_enabled: bool = True,
         discovery_client_ids: frozenset[str] = frozenset(),
         relationship_intelligence: bool = True,
+        checkpoint_signing_key: bytes | None = None,
+        checkpoint_seal_version: int = 1,
     ) -> None:
         self.engine = create_database_engine(url)
         self.audit_engine = create_database_engine(url)
@@ -140,6 +142,9 @@ class KnowledgeRuntime:
             knowledge_assertions_enabled=knowledge_enabled,
             # KLP-WP-04 slice B2: the autonomous-submit tests bind a discovery client.
             knowledge_discovery_client_ids=discovery_client_ids,
+            # KLP-WP-04 slice B3: the checkpoint seal (R6 section 7).
+            knowledge_checkpoint_signing_key=checkpoint_signing_key,
+            knowledge_checkpoint_seal_version=checkpoint_seal_version,
             # KLP-WP-04 slice B2: a task to route a critical date to.
             task_management_unit_of_work=lambda: SqlAlchemyTaskManagementUnitOfWork(self.engine),
         )

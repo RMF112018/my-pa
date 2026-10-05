@@ -37,13 +37,19 @@ from datetime import datetime
 from typing import Any, Final
 
 from my_pa.application.authorization import Authorization
-from my_pa.application.commands import CreateKnowledgeAssertion, SubmitKnowledgeAssertion
+from my_pa.application.commands import (
+    CheckpointKnowledgeDiscovery,
+    CreateKnowledgeAssertion,
+    SubmitKnowledgeAssertion,
+)
 from my_pa.application.errors import InvalidRequestError, SafeDetail
 from my_pa.contracts.ports import (
     KnowledgeAssertionHistory,
     KnowledgeAssertionPage,
     KnowledgeAssertionReveal,
     KnowledgeAssertionRow,
+    KnowledgeCheckpointRequest,
+    KnowledgeCheckpointResult,
     KnowledgeCreateEvidence,
     KnowledgeCreateRequest,
     KnowledgeSourceBinding,
@@ -60,6 +66,7 @@ from my_pa.domain.knowledge_assertion.assertion import (
     validate_qualifier,
     validate_subject,
 )
+from my_pa.domain.knowledge_assertion.checkpoint import checkpoint_request_digest
 from my_pa.domain.knowledge_assertion.digest import (
     DigestEvidence,
     InvalidKnowledgeValueError,
@@ -86,6 +93,8 @@ __all__ = [
     "DEFAULT_KNOWLEDGE_PAGE_SIZE",
     "KNOWLEDGE_TRUST_BASIS",
     "assertion_view",
+    "checkpoint_request",
+    "checkpoint_view",
     "create_admission_refusal",
     "create_request",
     "decode_knowledge_cursor",
@@ -474,6 +483,52 @@ def submit_request(
         trigger_event_ids=tuple(sorted(command.trigger_event_ids)),
         evidence=evidence,
     )
+
+
+def checkpoint_request(
+    command: CheckpointKnowledgeDiscovery, binding: KnowledgeSourceBinding
+) -> KnowledgeCheckpointRequest:
+    """Everything one checkpoint transaction needs (KLP-WP-04 slice B3).
+
+    `binding` is the C2 binding read -- this client's profile, else the caller
+    already refused -- so the scope digest is the server's, never the caller's.
+    The digest is the DEV-48 object (envelope by SHA-256 only).
+    """
+    kind = command.checkpoint_kind.value
+    return KnowledgeCheckpointRequest(
+        authenticated_client_id=binding.authenticated_client_id,
+        source_profile_id=binding.source_profile_id,
+        scope_digest=binding.scope_digest,
+        expected_version=command.expected_version,
+        external_run_id=command.external_run_id,
+        submitted_candidate_count=command.submitted_candidate_count,
+        checkpoint_kind=kind,
+        private_envelope=command.private_envelope,
+        idempotency_key=command.idempotency_key,
+        request_digest=checkpoint_request_digest(
+            source_profile_id=binding.source_profile_id,
+            scope_digest=binding.scope_digest,
+            expected_version=command.expected_version,
+            external_run_id=command.external_run_id,
+            submitted_candidate_count=command.submitted_candidate_count,
+            checkpoint_kind=kind,
+            private_envelope=command.private_envelope,
+        ),
+    )
+
+
+def checkpoint_view(result: KnowledgeCheckpointResult) -> dict[str, object]:
+    """The checkpoint answer: the public receipt plus the envelope only when verified."""
+    return {
+        "checkpoint_request_id": result.checkpoint_request_id,
+        "outcome": result.outcome,
+        "reason": result.reason,
+        "checkpoint_id": result.checkpoint_id,
+        "checkpoint_version": result.checkpoint_version,
+        "checkpoint_kind": result.checkpoint_kind,
+        "private_envelope": result.private_envelope,
+        "private_token_redacted": result.private_token_redacted,
+    }
 
 
 # --- cursors ---------------------------------------------------------------------

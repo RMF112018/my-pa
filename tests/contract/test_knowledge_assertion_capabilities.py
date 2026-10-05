@@ -25,7 +25,9 @@ KLP-WP-04 slice A adds the discovery pair:
 * **KLP-AC-104 (catalog slice)** -- both are in `_SCOPELESS` and the scopeless arm
   of `_requested_scope`; a granted invoke is *allowed* by policy (audited
   `allowed`) and reaches the second service gate; slice B2: a granted submit
-  succeeds end to end (checkpoint is still the slice-A placeholder until B3).
+  succeeds end to end; slice B3: a granted checkpoint succeeds end to end (the
+  binding read, the replay lookup, then the advance), and a build without a
+  checkpoint signing key refuses every checkpoint before any read.
 * **R6 section 6.1 second gate** -- `unsupported` unless the remote transport and
   a client in the exact discovery allowlist; the plane switch withholds both.
 """
@@ -76,6 +78,8 @@ from my_pa.contracts.ports import (
     KnowledgeAssertionRepository,
     KnowledgeAssertionReveal,
     KnowledgeAssertionRow,
+    KnowledgeCheckpointRequest,
+    KnowledgeCheckpointResult,
     KnowledgeCreateRequest,
     KnowledgeSourceBinding,
     KnowledgeSubmissionResult,
@@ -230,6 +234,30 @@ class _CannedKnowledge(KnowledgeAssertionRepository):
             current_lifecycle=None,
             proposal_id="kaprp_fastworld000001",
             review_case_id="rvw_fastworld000001",
+        )
+
+
+    # KLP-WP-04 slice B3: a canned checkpoint plane (routing, not SQL).
+
+    def replay_checkpoint(  # type: ignore[override]
+        self, principal_id: str, **_: object
+    ) -> KnowledgeCheckpointResult | None:
+        self.calls.append("replay_checkpoint")
+        return None
+
+    def checkpoint(  # type: ignore[override]
+        self, principal_id: str, request: KnowledgeCheckpointRequest, **_: object
+    ) -> KnowledgeCheckpointResult:
+        self.calls.append("checkpoint")
+        return KnowledgeCheckpointResult(
+            checkpoint_request_id="kdcpr_fastworld000001",
+            outcome="advanced",
+            reason="advanced",
+            checkpoint_id="kdcp_fastworld000001",
+            checkpoint_version=1,
+            checkpoint_kind=request.checkpoint_kind,
+            private_envelope=request.private_envelope,
+            private_token_redacted=False,
         )
 
 
@@ -584,14 +612,26 @@ def _discovery_commands(principal_id: str) -> dict[Capability, object]:
     }
 
 
-def _discovery_service(world: World, *, bound: frozenset[str]) -> ApplicationService:
+#: A synthetic 32-octet checkpoint signing key (never a real key).
+_SIGNING_KEY: Final = b"klp04-synthetic-checkpoint-key-0"
+
+
+def _discovery_service(
+    world: World,
+    *,
+    bound: frozenset[str],
+    signing_key: bytes | None = _SIGNING_KEY,
+    repository: _CannedKnowledge | None = None,
+) -> ApplicationService:
+    canned = _CannedKnowledge(seeded=True) if repository is None else repository
     return ApplicationService(
-        unit_of_work=lambda: _KnowledgeUnitOfWork(world, _CannedKnowledge(seeded=True)),
+        unit_of_work=lambda: _KnowledgeUnitOfWork(world, canned),
         limits=DEFAULT_LIMITS,
         clock=lambda: WHEN,
         relationship_intelligence_enabled=True,
         knowledge_assertions_enabled=True,
         knowledge_discovery_client_ids=bound,
+        knowledge_checkpoint_signing_key=signing_key,
     )
 
 
@@ -683,12 +723,54 @@ def test_a_granted_invoke_is_allowed_by_policy_and_reaches_the_service_gate(
     decisions = scene.world.audit[before:]
     assert [event.capability for event in decisions] == [capability]
     assert decisions[0].outcome.value == "allowed"
-    if capability is Capability.KNOWLEDGE_ASSERTIONS_SUBMIT:
-        # KLP-AC-104 (submit, slice B2): a granted submit succeeds end to end.
-        assert code is None
-    else:
-        # KLP-WP-04-SLICE-A-PLACEHOLDER: checkpoint answers `unsupported` until B3.
-        assert code == "unsupported"
+    # KLP-AC-104: a granted submit (slice B2) and checkpoint (slice B3) succeed
+    # end to end.
+    assert code is None
+
+
+def test_a_granted_checkpoint_returns_the_advanced_receipt_end_to_end(scene: Scene) -> None:
+    """KLP-AC-104 (checkpoint, slice B3): binding read, replay lookup, then the advance."""
+    repository = _CannedKnowledge(seeded=True)
+    service = _discovery_service(scene.world, bound=frozenset({_BOUND}), repository=repository)
+    capability = Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT
+    response = service.invoke(
+        metadata_for(capability, Purpose.KNOWLEDGE_ASSERTION_OBSERVATION, scene.principal),
+        _discovery_commands(scene.principal.principal_id)[capability],  # type: ignore[arg-type]
+        principal=scene.principal,
+        transport=CaptureTransport.REMOTE_CLIENT,
+        capability_grants=frozenset({(capability, Purpose.KNOWLEDGE_ASSERTION_OBSERVATION)}),
+        authenticated_client_id=_BOUND,
+    )
+    assert response.error is None
+    assert response.result is not None
+    assert dict(response.result) == {
+        "checkpoint_request_id": "kdcpr_fastworld000001",
+        "outcome": "advanced",
+        "reason": "advanced",
+        "checkpoint_id": "kdcp_fastworld000001",
+        "checkpoint_version": 1,
+        "checkpoint_kind": "synthetic",
+        "private_envelope": "opaque",
+        "private_token_redacted": False,
+    }
+    assert repository.calls == ["source_binding", "replay_checkpoint", "checkpoint"]
+
+
+def test_a_build_without_a_signing_key_refuses_every_checkpoint(scene: Scene) -> None:
+    """R6 section 7: no key, no checkpoint -- refused before any read."""
+    repository = _CannedKnowledge(seeded=True)
+    service = _discovery_service(
+        scene.world, bound=frozenset({_BOUND}), signing_key=None, repository=repository
+    )
+    code = _invoke_discovery(
+        service,
+        scene,
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
+        transport=CaptureTransport.REMOTE_CLIENT,
+        client=_BOUND,
+    )
+    assert code == "unsupported"
+    assert repository.calls == []
 
 
 @pytest.mark.parametrize("capability", sorted(DISCOVERY), ids=lambda c: c.value)
@@ -728,7 +810,7 @@ def test_the_second_gate_refuses_every_unbound_composition(
 
 @pytest.mark.parametrize("capability", sorted(DISCOVERY), ids=lambda c: c.value)
 def test_the_second_gate_admits_a_bound_remote_client(scene: Scene, capability: Capability) -> None:
-    """The control: the gate itself passes; only the placeholder refuses."""
+    """The control: the gate itself passes for a bound remote client."""
     service = _discovery_service(scene.world, bound=frozenset({_BOUND}))
     authorization = _gate_authorization(
         scene, capability, transport=CaptureTransport.REMOTE_CLIENT, client=_BOUND

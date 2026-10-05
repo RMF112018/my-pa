@@ -21,6 +21,10 @@ rows WP-04 slice B1 has no writer for (external evidence and its links).
 * KLP-AC-090: `disable` is terminal (trigger), clears direct admission, and
   deletes and rewrites no Knowledge row; the next submission is refused
   `source_profile_inactive` by the policy (the submit handler is slice B2).
+  Slice B3: a checkpoint on a disabled profile is refused
+  `source_profile_inactive` as a completed request row (even from its current
+  version), advances nothing and deletes and rewrites no Knowledge row; a
+  replay of an earlier advance still returns its stored answer.
 
 Every identity here is synthetic.
 """
@@ -511,7 +515,12 @@ def test_disable_is_terminal_and_deletes_or_rewrites_no_knowledge_row(
     assert states == {profile: False, renewed: True}
 
 
-# ---- seal rotation: redact-sealed (R6 section 7 step 3; end to end in slice B3) ------
+# ---- seal rotation: redact-sealed (R6 section 7 step 3) -------------------------------
+#
+# This node seeds ledger rows directly; the end-to-end rotation through the real
+# checkpoint handler is
+# `tests/database/test_knowledge_checkpoint_idempotency_replay.py::
+# test_seal_rotation_redacts_old_envelopes_and_the_client_rebootstraps`.
 
 
 def _seal_request(
@@ -621,3 +630,39 @@ def test_redact_sealed_redacts_every_envelope_below_the_seal_and_only_those(
     assert (code, lines) == (EXIT_OK, ["redacted          0"])
     code, lines = run_cli(engine, principal, "redact-sealed", "--below-seal", "0")
     assert code == EXIT_REFUSED
+
+
+# ---- KLP-AC-090 (checkpoint, slice B3) ------------------------------------------------
+
+
+def test_a_disabled_profile_refuses_checkpoints_and_deletes_nothing(
+    disposable_database: str,
+) -> None:
+    from tests.database.test_knowledge_checkpoint_idempotency_replay import (
+        CheckpointRuntime,
+        _checkpoint_row,
+        _request_row,
+    )
+
+    checkpointer = CheckpointRuntime(disposable_database)
+    try:
+        principal = new_principal()
+        profile = checkpointer.profile(principal)
+        first = checkpointer.checkpoint(principal, profile, key="before-disable")
+        checkpointer.disable(principal, profile)
+        before = counts(checkpointer.engine, principal)
+        stored = _checkpoint_row(checkpointer.engine, principal)
+        for expected in (1, 0):
+            refused = checkpointer.checkpoint(
+                principal, profile, expected=expected, envelope=f"synthetic-after-{expected}"
+            )
+            assert (refused["outcome"], refused["reason"]) == ("refused", "source_profile_inactive")
+            assert refused["private_envelope"] is None
+            row = _request_row(checkpointer.engine, refused["checkpoint_request_id"])
+            assert (row["state"], row["result_outcome"]) == ("completed", "refused")
+        assert _checkpoint_row(checkpointer.engine, principal) == stored
+        assert counts(checkpointer.engine, principal) == before
+        # N2: a replay of the earlier advance still answers its stored result.
+        assert checkpointer.checkpoint(principal, profile, key="before-disable") == first
+    finally:
+        checkpointer.close()

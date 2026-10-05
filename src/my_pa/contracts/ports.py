@@ -368,6 +368,9 @@ __all__ = [
     "KnowledgeAssertionReveal",
     "KnowledgeAssertionRow",
     "KnowledgeCaptureWithdrawnError",
+    "KnowledgeCheckpointKindMismatchError",
+    "KnowledgeCheckpointRequest",
+    "KnowledgeCheckpointResult",
     "KnowledgeConcurrentDuplicateError",
     "KnowledgeCreateEvidence",
     "KnowledgeCreateRequest",
@@ -5067,6 +5070,16 @@ class KnowledgeLedgerInvariantError(PortError):
     """
 
 
+class KnowledgeCheckpointKindMismatchError(PortError):
+    """KLP-WP-04 slice B3: an advance names another kind than the stored checkpoint's.
+
+    `checkpoint_kind` is immutable per checkpoint (trigger
+    `knowledge_checkpoint_advances_only`) and the request ledger has no stored
+    reason for it, so the advance is refused as an invalid request and the
+    whole transaction -- its reservation included -- rolls back.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class KnowledgeAssertionRow:
     """One stored assertion, as the plane's reads disclose it. No evidence text."""
@@ -5305,6 +5318,50 @@ class KnowledgeSubmitRequest:
     evidence: tuple[KnowledgeSubmitEvidence, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class KnowledgeCheckpointRequest:
+    """KLP-WP-04 slice B3: one checkpoint advance (R6 sections 6.1 and 7).
+
+    The binding columns come from the C2 binding read (this client's profile),
+    never from the caller; `idempotency_key` is the server-stamped payload hash
+    remotely (DEV-03) and `request_digest` the DEV-48 object. The envelope and
+    the key never render.
+    """
+
+    authenticated_client_id: str
+    source_profile_id: str
+    scope_digest: str
+    expected_version: int
+    external_run_id: str
+    submitted_candidate_count: int
+    checkpoint_kind: str
+    private_envelope: str = field(repr=False)
+    idempotency_key: str = field(repr=False)
+    request_digest: str
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeCheckpointResult:
+    """KLP-WP-04 slice B3: the public answer to one checkpoint request.
+
+    `private_envelope` is present only for a verified envelope answered to the
+    bound client that owns it: an `advanced` result, a replay of the current
+    version, or a `stale_expected_version` conflict (lost-response recovery,
+    KLP-AC-145). `private_token_redacted` is true for a historical receipt
+    whose token a later advance or a seal rotation redacted, and for every
+    `envelope_unverifiable` conflict. Never rendered by `repr`.
+    """
+
+    checkpoint_request_id: str
+    outcome: str
+    reason: str
+    checkpoint_id: str | None
+    checkpoint_version: int | None
+    checkpoint_kind: str | None
+    private_envelope: str | None = field(repr=False)
+    private_token_redacted: bool
+
+
 class KnowledgeAssertionRepository(ABC):
     """The Knowledge Assertion plane, inside one transaction (KLP-WP-03)."""
 
@@ -5404,6 +5461,35 @@ class KnowledgeAssertionRepository(ABC):
         relationship_memory_composed: bool,
     ) -> KnowledgeSubmissionResult:
         """KLP-WP-04: one autonomous submit under R6 sections 6, 8 and 9, or its replay."""
+
+    @abstractmethod
+    def replay_checkpoint(
+        self,
+        principal_id: str,
+        *,
+        authenticated_client_id: str,
+        idempotency_key: str,
+        request_digest: str,
+        seal: Any,  # noqa: ANN401 - domain.knowledge_assertion.checkpoint.CheckpointSeal
+    ) -> KnowledgeCheckpointResult | None:
+        """KLP-WP-04 slice B3: the stored answer bound to this client's key, or `None`.
+
+        `KnowledgeIdempotencyConflictError` when the key is bound to another
+        digest. A stored envelope is verified under `seal` before it is
+        returned; an unverifiable one answers `envelope_unverifiable`. Writes
+        nothing.
+        """
+
+    @abstractmethod
+    def checkpoint(
+        self,
+        principal_id: str,
+        request: KnowledgeCheckpointRequest,
+        *,
+        at: datetime,
+        seal: Any,  # noqa: ANN401 - domain.knowledge_assertion.checkpoint.CheckpointSeal
+    ) -> KnowledgeCheckpointResult:
+        """KLP-WP-04 slice B3: one checkpoint advance under R6 sections 6.1, 7 and 8.1."""
 
 
 class RecordEventStager(ABC):

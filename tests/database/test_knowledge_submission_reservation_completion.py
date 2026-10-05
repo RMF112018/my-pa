@@ -32,14 +32,23 @@ KLP-WP-04 slice B2 adds the autonomous-submit half (KLP-AC-051, 093, 102, 120,
   now refuse it.
 * The ledger triggers' 23514 / 23001 raised through the repository's
   translation are `KnowledgeLedgerInvariantError`.
+
+KLP-WP-04 slice B3 adds the checkpoint-request half (KLP-AC-093, 102):
+
+* a checkpoint request left `reserved` cannot commit (the deferred trigger
+  re-reads the current row), and both checkpoint-request triggers' 23001
+  through the repository's translation are `KnowledgeLedgerInvariantError`;
+* a checkpoint that fails after its reservation (injected) rolls back whole:
+  no request row, no checkpoint, no redaction.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import Connection, func, select, text
 from sqlalchemy.exc import IntegrityError
 
 from my_pa.adapters.normalization import normalize
@@ -53,6 +62,10 @@ from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence.knowledge_assertions import _translated
+from my_pa.infrastructure.persistence.tables import (
+    knowledge_discovery_checkpoint_requests,
+    knowledge_discovery_checkpoints,
+)
 from tests.database.test_knowledge_assertion_repository import (
     KnowledgeRuntime,
     capture_evidence,
@@ -414,3 +427,162 @@ def test_a_ledger_trigger_refusal_is_the_invariant_error(submitter: SubmitRuntim
                 )
             )
         connection.rollback()
+
+
+# ---- KLP-WP-04 slice B3: checkpoint requests -----------------------------------------
+
+
+def _reserve_checkpoint_request(
+    connection: Connection, principal: str, profile: str, scope: str
+) -> str:
+    request = issue_identifier(IdKind.KNOWLEDGE_DISCOVERY_CHECKPOINT_REQUEST)
+    connection.execute(
+        text(
+            "INSERT INTO knowledge.knowledge_discovery_checkpoint_requests (principal_id, "
+            "checkpoint_request_id, authenticated_client_id, source_profile_id, scope_digest, "
+            "external_run_id, submitted_candidate_count, expected_version, idempotency_key, "
+            "request_digest, state, created_at) VALUES (:p, :r, :c, :s, :d, 'run-1', 0, 0, "
+            ":k, :h, 'reserved', now())"
+        ),
+        {
+            "p": principal,
+            "r": request,
+            "c": CLIENT,
+            "s": profile,
+            "d": scope,
+            "k": request,
+            "h": "a" * 64,
+        },
+    )
+    return request
+
+
+def _profile_scope(runtime: SubmitRuntime, profile: str) -> str:
+    with runtime.engine.connect() as connection:
+        return str(
+            connection.execute(
+                text(
+                    "SELECT scope_digest FROM knowledge.knowledge_discovery_source_profiles "
+                    "WHERE source_profile_id = :s"
+                ),
+                {"s": profile},
+            ).scalar_one()
+        )
+
+
+def _checkpoint_ledger(runtime: SubmitRuntime, principal: str) -> tuple[int, int]:
+    with runtime.engine.connect() as connection:
+        requests, checkpoints = (
+            int(
+                connection.execute(
+                    select(func.count()).where(table.c.principal_id == principal)
+                ).scalar_one()
+            )
+            for table in (knowledge_discovery_checkpoint_requests, knowledge_discovery_checkpoints)
+        )
+    return requests, checkpoints
+
+
+def test_a_checkpoint_request_left_reserved_cannot_commit(submitter: SubmitRuntime) -> None:
+    """KLP-AC-093, checkpoint requests: the deferred guard refuses the COMMIT."""
+    principal = new_principal()
+    profile = submitter.profile(principal)
+    scope = _profile_scope(submitter, profile)
+    with pytest.raises(IntegrityError, match="reserved"), submitter.engine.begin() as connection:
+        _reserve_checkpoint_request(connection, principal, profile, scope)
+    assert _checkpoint_ledger(submitter, principal) == (0, 0)
+    # Through the repository's translation: the 23001 is the ledger invariant error.
+    with submitter.engine.connect() as connection:
+        _reserve_checkpoint_request(connection, principal, profile, scope)
+        with pytest.raises(KnowledgeLedgerInvariantError):
+            _translated(connection.commit)
+    assert _checkpoint_ledger(submitter, principal) == (0, 0)
+
+
+def test_a_checkpoint_request_lifecycle_refusal_is_the_invariant_error(
+    submitter: SubmitRuntime,
+) -> None:
+    """WP-02 DEV-01: the request lifecycle guard's 23001, through `_translated`."""
+    principal = new_principal()
+    profile = submitter.profile(principal)
+    scope = _profile_scope(submitter, profile)
+    with submitter.engine.connect() as connection:
+        for statement in (
+            # Inserted completed (only `reserved` is insertable).
+            "INSERT INTO knowledge.knowledge_discovery_checkpoint_requests (principal_id, "
+            "checkpoint_request_id, authenticated_client_id, source_profile_id, scope_digest, "
+            "external_run_id, submitted_candidate_count, expected_version, idempotency_key, "
+            "request_digest, state, result_outcome, result_reason, created_at, completed_at) "
+            "VALUES (:p, :r, :c, :s, :d, 'run-1', 0, 0, :r, :h, 'completed', 'refused', "
+            "'source_profile_inactive', now(), now())",
+        ):
+            with pytest.raises(KnowledgeLedgerInvariantError):
+                _translated(
+                    lambda statement=statement: connection.execute(
+                        text(statement),
+                        {
+                            "p": principal,
+                            "r": issue_identifier(IdKind.KNOWLEDGE_DISCOVERY_CHECKPOINT_REQUEST),
+                            "c": CLIENT,
+                            "s": profile,
+                            "d": scope,
+                            "h": "c" * 64,
+                        },
+                    )
+                )
+            connection.rollback()
+        # A reserved row DELETEd in its own transaction: never deleted.
+        request = _reserve_checkpoint_request(connection, principal, profile, scope)
+        with pytest.raises(KnowledgeLedgerInvariantError):
+            _translated(
+                lambda: connection.execute(
+                    text(
+                        "DELETE FROM knowledge.knowledge_discovery_checkpoint_requests "
+                        "WHERE checkpoint_request_id = :r"
+                    ),
+                    {"r": request},
+                )
+            )
+        connection.rollback()
+    assert _checkpoint_ledger(submitter, principal) == (0, 0)
+
+
+def test_a_checkpoint_failing_after_its_reservation_leaves_nothing(
+    submitter: SubmitRuntime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """KLP-AC-102 (checkpoint): an injected failure after C1 rolls back whole."""
+    from my_pa.application.commands import CheckpointKnowledgeDiscovery
+    from my_pa.domain.knowledge_assertion.vocabulary import KnowledgeCheckpointKind
+    from my_pa.infrastructure.persistence import knowledge_assertions as persistence
+    from tests.database.test_knowledge_checkpoint_idempotency_replay import CHECKPOINT_GRANTS
+
+    principal = new_principal()
+    profile = submitter.profile(principal)
+    command = CheckpointKnowledgeDiscovery(
+        source_profile_id=profile,
+        expected_version=0,
+        external_run_id="run-1",
+        submitted_candidate_count=0,
+        checkpoint_kind=KnowledgeCheckpointKind.SYNTHETIC,
+        private_envelope="synthetic-token",
+        idempotency_key="klp04-rollback",
+    )
+    remote: dict[str, Any] = {
+        "transport": CaptureTransport.REMOTE_CLIENT,
+        "grants": CHECKPOINT_GRANTS,
+        "client_id": CLIENT,
+    }
+    original = persistence._CheckpointAdvance._complete
+
+    def fail_after_writing(self: Any, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        original(self, *args, **kwargs)
+        raise RuntimeError("injected failure after the reservation completed")
+
+    monkeypatch.setattr(persistence._CheckpointAdvance, "_complete", fail_after_writing)
+    error = submitter.error(command, principal_id=principal, **remote)
+    assert error["code"] == "internal_error"
+    assert _checkpoint_ledger(submitter, principal) == (0, 0)
+    monkeypatch.undo()
+    result = submitter.ok(command, principal_id=principal, **remote)
+    assert result["outcome"] == "advanced"
+    assert _checkpoint_ledger(submitter, principal) == (1, 1)

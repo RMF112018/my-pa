@@ -14,6 +14,13 @@ KLP-WP-04 slice B2 adds the autonomous-submit half: a supersession (two
 mutations, two events) lost after COMMIT replays from the autonomous arbiter
 with the stored result -- assertion, mutation, superseded id -- and stages no
 second mutation or event.
+
+KLP-WP-04 slice B3 adds the checkpoint half: an advance lost after COMMIT
+replays from the request ledger with the stored answer -- the same request id,
+version and the exact committed envelope -- and writes no second request row,
+no second version and no Knowledge row or event. A changed request after the
+loss is the lost-response recovery (`stale_expected_version` with the current
+envelope).
 """
 
 from __future__ import annotations
@@ -44,6 +51,12 @@ from tests.database.test_knowledge_assertion_submissions import (
     SubmitRuntime,
     add_direct_payment_head,
     external,
+)
+from tests.database.test_knowledge_checkpoint_idempotency_replay import (
+    CHECKPOINT_GRANTS,
+    CheckpointRuntime,
+    _checkpoint_row,
+    _ledger,
 )
 from tests.database.test_task_record_events import next_sequence
 
@@ -193,3 +206,65 @@ def test_a_submit_lost_after_commit_replays_and_stages_no_second_event(
     assert counts(service.engine, principal) == committed
     assert next_sequence(service.engine, principal) == sequence
     assert service.ok(command, principal_id=principal, **remote) == retried
+
+
+@pytest.fixture
+def checkpoint_runtime(disposable_database: str) -> Iterator[tuple[CheckpointRuntime, list[bool]]]:
+    composed = CheckpointRuntime(disposable_database)
+    armed: list[bool] = []
+    audit = SqlAlchemyAuditSink(composed.audit_engine)
+
+    def unit_of_work() -> UnitOfWork:
+        work = _CommitThenLose(
+            composed.engine,
+            audit=audit,
+            relationship_memory_enabled=True,
+            relationship_intelligence_enabled=True,
+        )
+        work.armed = armed
+        return work
+
+    composed.service._unit_of_work = unit_of_work  # type: ignore[attr-defined]
+    try:
+        yield composed, armed
+    finally:
+        composed.close()
+
+
+def test_a_checkpoint_lost_after_commit_replays_the_exact_envelope(
+    checkpoint_runtime: tuple[CheckpointRuntime, list[bool]],
+) -> None:
+    service, armed = checkpoint_runtime
+    principal = new_principal()
+    profile = service.profile(principal)
+    service.checkpoint(principal, profile, envelope="synthetic-token-v1")
+    command = service.command(profile, expected=1, envelope="synthetic-token-v2")
+    remote = {
+        "transport": CaptureTransport.REMOTE_CLIENT,
+        "grants": CHECKPOINT_GRANTS,
+        "client_id": CLIENT,
+    }
+    before = counts(service.engine, principal)
+    sequence = next_sequence(service.engine, principal)
+    armed.append(True)
+    lost = service.invoke(command, principal_id=principal, **remote)
+    assert lost.error is not None, "the injected loss must reach the caller as a failure"
+    ledger = _ledger(service.engine, principal)
+    row = _checkpoint_row(service.engine, principal)
+    assert row is not None
+    assert row["version"] == 2
+
+    retried: dict[str, Any] = service.ok(command, principal_id=principal, **remote)
+    assert (retried["outcome"], retried["checkpoint_version"]) == ("advanced", 2)
+    assert retried["private_envelope"] == "synthetic-token-v2"
+    assert service.ok(command, principal_id=principal, **remote) == retried
+    assert _ledger(service.engine, principal) == ledger
+    assert _checkpoint_row(service.engine, principal) == row
+    assert counts(service.engine, principal) == before
+    assert next_sequence(service.engine, principal) == sequence
+    # A changed retry is a new request: the lost-response recovery answer.
+    changed = service.checkpoint(principal, profile, expected=1, envelope="synthetic-token-v2b")
+    assert (changed["reason"], changed["private_envelope"]) == (
+        "stale_expected_version",
+        "synthetic-token-v2",
+    )

@@ -18,6 +18,16 @@ KLP-AC-126.
   excerpt, an envelope or an idempotency key in their `repr` (the shape logs and
   tracebacks take).
 
+KLP-WP-04 slice B3 adds the checkpoint half of KLP-AC-072 / 126: the checkpoint
+request and result port records and the configured seal never render the
+envelope, the idempotency key or the signing key; the MAC is a hex digest that
+carries none of them; the seal module and the application helpers neither log
+nor reach telemetry; an audit event has no field that could carry a token
+(identifiers, closed enums and counts only); and the checkpoint transaction
+stages no Record Event. The database proof that a real advance leaves the
+token in no audit row and no event is
+`tests/database/test_knowledge_checkpoint_idempotency_replay.py`.
+
 Every identity here is synthetic.
 """
 
@@ -42,6 +52,8 @@ from apps.cli.knowledge_source_profiles import (
 from tests.unit.test_knowledge_assertion_domain import SEEDS, _predicate_from_seed
 
 from my_pa.application.commands import CheckpointKnowledgeDiscovery, SubmitKnowledgeAssertion
+from my_pa.contracts.ports import KnowledgeCheckpointRequest, KnowledgeCheckpointResult
+from my_pa.domain.audit.events import AuditEvent
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.knowledge_assertion.admission import (
     AdmissionEvidence,
@@ -50,6 +62,11 @@ from my_pa.domain.knowledge_assertion.admission import (
     SourceProfileFacts,
     SubjectResolution,
     decide_direct_admission,
+)
+from my_pa.domain.knowledge_assertion.checkpoint import (
+    CheckpointBinding,
+    CheckpointSeal,
+    checkpoint_mac_object,
 )
 from my_pa.domain.knowledge_assertion.provenance import KNOWLEDGE_MUTATION_EVENTS
 from my_pa.domain.knowledge_assertion.vocabulary import (
@@ -74,6 +91,8 @@ COMMAND: Final = ROOT / "apps" / "cli" / "knowledge_source_profiles.py"
 PERSISTENCE: Final = (
     ROOT / "src" / "my_pa" / "infrastructure" / "persistence" / "knowledge_assertions.py"
 )
+SEAL: Final = ROOT / "src" / "my_pa" / "domain" / "knowledge_assertion" / "checkpoint.py"
+APPLICATION: Final = ROOT / "src" / "my_pa" / "application" / "knowledge_assertions.py"
 WHEN: Final = datetime(2026, 10, 5, 12, tzinfo=UTC)
 PROFILE: Final = "kdsp_SyntheticCeiling01"
 NATIVE_SCOPE: Final = "synthetic-site:finance/board-papers"
@@ -227,7 +246,11 @@ def test_maintenance_writes_no_audit_row() -> None:
         _MaintenanceWritesNoAudit().record(object())  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize("path", [COMMAND, PERSISTENCE], ids=["command", "persistence"])
+@pytest.mark.parametrize(
+    "path",
+    [COMMAND, PERSISTENCE, SEAL, APPLICATION],
+    ids=["command", "persistence", "seal", "application"],
+)
 def test_neither_the_command_nor_the_maintenance_code_logs_or_reaches_telemetry(path: Path) -> None:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     imported: set[str] = set()
@@ -288,3 +311,94 @@ def test_discovery_commands_never_render_excerpts_envelopes_or_keys() -> None:
     assert EXCERPT not in repr(submit)
     assert ENVELOPE not in repr(checkpoint)
     assert "synthetic-checkpoint-key" not in repr(checkpoint)
+
+
+# ---- KLP-AC-072 / 126 (checkpoint half, slice B3) ----------------------------------
+
+_KEY: Final = b"klp04-synthetic-ceiling-signkey0"
+_IDEMPOTENCY: Final = "synthetic-checkpoint-key"
+
+
+def _binding() -> CheckpointBinding:
+    return CheckpointBinding(
+        principal_id="prn_SyntheticCeiling01",
+        authenticated_client_id="klp04-synthetic-discovery-client",
+        source_profile_id=PROFILE,
+        scope_digest="d" * 64,
+    )
+
+
+def test_checkpoint_records_and_the_seal_never_render_tokens_or_keys() -> None:
+    request = KnowledgeCheckpointRequest(
+        authenticated_client_id="klp04-synthetic-discovery-client",
+        source_profile_id=PROFILE,
+        scope_digest="d" * 64,
+        expected_version=0,
+        external_run_id="synthetic-run",
+        submitted_candidate_count=0,
+        checkpoint_kind="delta_token",
+        private_envelope=ENVELOPE,
+        idempotency_key=_IDEMPOTENCY,
+        request_digest="e" * 64,
+    )
+    result = KnowledgeCheckpointResult(
+        checkpoint_request_id="kdcpr_SyntheticCeiling01",
+        outcome="advanced",
+        reason="advanced",
+        checkpoint_id="kdcp_SyntheticCeiling01",
+        checkpoint_version=1,
+        checkpoint_kind="delta_token",
+        private_envelope=ENVELOPE,
+        private_token_redacted=False,
+    )
+    seal = CheckpointSeal(key=_KEY, seal_version=1)
+    for record in (request, result, seal):
+        rendered = repr(record) + str(record)
+        assert ENVELOPE not in rendered
+        assert _IDEMPOTENCY not in rendered
+        assert _KEY.decode() not in rendered
+
+
+def test_the_mac_and_the_digest_are_hex_digests_carrying_no_token() -> None:
+    seal = CheckpointSeal(key=_KEY, seal_version=1)
+    mac = seal.seal(
+        _binding(), checkpoint_id="kdcp_SyntheticCeiling01", version=1, private_envelope=ENVELOPE
+    )
+    assert len(mac) == 64
+    assert set(mac) <= set("0123456789abcdef")
+    obj = checkpoint_mac_object(
+        _binding(),
+        checkpoint_id="kdcp_SyntheticCeiling01",
+        version=1,
+        seal_version=1,
+        private_envelope=ENVELOPE,
+    )
+    assert ENVELOPE not in repr(obj)  # the envelope enters only as its SHA-256
+    assert obj["private_envelope_sha256"] == hashlib.sha256(ENVELOPE.encode()).hexdigest()
+
+
+def test_an_audit_event_has_no_field_that_could_carry_a_token() -> None:
+    """Identifiers, closed enums, an instant and counts only: no free-form text."""
+    names = {field.name for field in dataclasses.fields(AuditEvent)}
+    assert names == {
+        "audit_id",
+        "correlation_id",
+        "principal_id",
+        "capability",
+        "purpose",
+        "outcome",
+        "policy_version",
+        "recorded_at",
+        "denial_reason",
+        "item_count",
+        "duration_ms",
+        "scope_source_id_count",
+    }
+
+
+def test_the_checkpoint_transaction_stages_no_record_event() -> None:
+    source = inspect.getsource(persistence._CheckpointAdvance)
+    assert "_stage_knowledge_event" not in source
+    assert "stager" not in source
+    replay = inspect.getsource(persistence.SqlKnowledgeAssertionRepository.checkpoint)
+    assert "_stage_knowledge_event" not in replay

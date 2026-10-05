@@ -477,6 +477,10 @@ from my_pa.application.knowledge_assertions import (
 )
 from my_pa.application.knowledge_assertions import assertion_view as knowledge_assertion_view
 from my_pa.application.knowledge_assertions import (
+    checkpoint_request as knowledge_checkpoint_request,
+)
+from my_pa.application.knowledge_assertions import checkpoint_view as knowledge_checkpoint_view
+from my_pa.application.knowledge_assertions import (
     create_admission_refusal as knowledge_create_admission_refusal,
 )
 from my_pa.application.knowledge_assertions import create_request as knowledge_create_request
@@ -527,6 +531,7 @@ from my_pa.contracts.ports import (
     GoodNotesPullRepositoryConflictError,
     KnowledgeAssertionRepository,
     KnowledgeCaptureWithdrawnError,
+    KnowledgeCheckpointKindMismatchError,
     KnowledgeConcurrentDuplicateError,
     KnowledgeEvidenceNotFoundError,
     KnowledgeIdempotencyConflictError,
@@ -644,6 +649,7 @@ from my_pa.domain.identity.operation import Capability, granted_purposes
 from my_pa.domain.identity.operator_surface import OperatorSurface
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.knowledge_assertion.checkpoint import CheckpointSeal
 from my_pa.domain.knowledge_assertion.vocabulary import KnowledgeAssertionLifecycle
 from my_pa.domain.meeting.model import (
     MAX_MEETING_PAGE_SIZE,
@@ -1288,6 +1294,9 @@ def _port_failure(error: PortError) -> ApplicationError:
         return NotFoundError(SafeDetail.PROVENANCE)
     if isinstance(error, KnowledgeLedgerInvariantError):
         return InternalError()
+    # KLP-WP-04 slice B3: the checkpoint kind is immutable; the advance rolls back.
+    if isinstance(error, KnowledgeCheckpointKindMismatchError):
+        return InvalidRequestError(SafeDetail.REPRESENTATION)
     if isinstance(error, EvidenceUnavailableError):
         return UnavailableError()
     return InternalError()
@@ -3826,6 +3835,8 @@ class ApplicationService:
         relationship_memory_enabled: bool = False,
         knowledge_assertions_enabled: bool = False,
         knowledge_discovery_client_ids: frozenset[str] = frozenset(),
+        knowledge_checkpoint_signing_key: bytes | None = None,
+        knowledge_checkpoint_seal_version: int = 1,
         relationship_identity_correction_enabled: bool = False,
         relationship_reenrichment_enabled: bool = False,
         producer_origins: ProducerOriginRegistry | None = None,
@@ -3873,6 +3884,17 @@ class ApplicationService:
         #: service gate reads. Empty -- the default -- refuses every submit and
         #: checkpoint, so an unconfigured build fails closed for the role.
         self._knowledge_discovery_client_ids = frozenset(knowledge_discovery_client_ids)
+        #: KLP-WP-04 slice B3 (R6 section 7): the checkpoint signing key and seal
+        #: version. `None` -- the default -- refuses every checkpoint `unsupported`,
+        #: so a build with no key never stores or serves an unsealed envelope.
+        self._knowledge_checkpoint_seal = (
+            None
+            if knowledge_checkpoint_signing_key is None
+            else CheckpointSeal(
+                key=knowledge_checkpoint_signing_key,
+                seal_version=knowledge_checkpoint_seal_version,
+            )
+        )
         # The third gate, and it is the narrowest. `_identity_correction_plane`
         # is the floor every one of its handlers asks; `available_capabilities`
         # is what `capabilities.get` and the MCP tool list read. Default `False`
@@ -12896,12 +12918,41 @@ class ApplicationService:
         authorization: Authorization,
         command: CheckpointKnowledgeDiscovery,
     ) -> _Result:
-        """One checkpoint advance from a bound discovery client (R6 section 7)."""
+        """One checkpoint advance from a bound discovery client (R6 sections 6.1, 7).
+
+        The second gate first, then the configured seal (none -> `unsupported`).
+        Then the C2 binding read: this client's profile, else
+        `not_found(provenance)` with no write -- so another client never reaches
+        a ledger row, a checkpoint or an envelope. Then the DEV-48 digest, the
+        replay of this client's key (an equal digest returns the stored answer,
+        its envelope verified first; another digest is
+        `conflict(idempotency_conflict)`), and only then the transaction.
+        """
         self._knowledge_discovery_gate(authorization, command.capability)
-        del unit_of_work
-        # KLP-WP-04-SLICE-A-PLACEHOLDER: behaviour lands in slice B3. Until then a
-        # gated call is refused `unsupported` and writes nothing.
-        raise UnsupportedError()
+        seal = self._knowledge_checkpoint_seal
+        client = authorization.authenticated_client_id
+        if seal is None or client is None:
+            raise UnsupportedError()
+        repository: KnowledgeAssertionRepository = unit_of_work.knowledge_assertions
+        principal_id = authorization.principal.principal_id
+        with _translated():
+            binding = repository.source_binding(principal_id, command.source_profile_id, client)
+        if binding is None:
+            raise NotFoundError(SafeDetail.PROVENANCE)
+        request = knowledge_checkpoint_request(command, binding)
+        with _translated():
+            replay = repository.replay_checkpoint(
+                principal_id,
+                authenticated_client_id=client,
+                idempotency_key=request.idempotency_key,
+                request_digest=request.request_digest,
+                seal=seal,
+            )
+        if replay is not None:
+            return self._knowledge_result(authorization, knowledge_checkpoint_view(replay))
+        with _translated():
+            result = repository.checkpoint(principal_id, request, at=authorization.at, seal=seal)
+        return self._knowledge_result(authorization, knowledge_checkpoint_view(result))
 
     def _record_events_list(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListRecordEvents

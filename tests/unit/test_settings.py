@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import traceback
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from my_pa.bootstrap.settings import (
     load_settings,
 )
 from my_pa.domain.extraction.text import MAX_EXTRACTED_CHARACTERS
+from my_pa.domain.knowledge_assertion.checkpoint import CheckpointBinding, CheckpointSeal
 
 DATABASE_URL = f"{ENV_PREFIX}DATABASE_URL"
 
@@ -913,3 +915,72 @@ def test_the_seal_version_is_a_positive_integer(value: str) -> None:
 def test_the_seal_version_can_be_incremented() -> None:
     settings = load_settings({DATABASE_URL: _A_URL, _SEAL_VERSION: "2"})
     assert settings.knowledge_checkpoint_seal_version == 2
+
+
+# ---- KLP-WP-04 slice B3: the configured seal (KLP-AC-126 / KLP-AC-155) -------------
+#
+# What `Settings` configures -- the signing key and the seal version -- becomes
+# one `CheckpointSeal` in the composition root. The seal MACs the R6 section 7
+# object under the key, verifies with `hmac.compare_digest`, and refuses any
+# stored seal version other than the configured one.
+
+_BINDING_FIELDS = {
+    "principal_id": "prn_SyntheticSettings01",
+    "authenticated_client_id": "disc",
+    "source_profile_id": "kdsp_SyntheticSettings1",
+    "scope_digest": "a" * 64,
+}
+
+
+def _seal(key: bytes = b"k" * 32, version: int = 1) -> CheckpointSeal:
+    return CheckpointSeal(key=key, seal_version=version)
+
+
+@pytest.mark.parametrize(
+    ("key", "version"),
+    [(b"k" * 31, 1), (b"k" * 129, 1), (b"k" * 32, 0), (b"k" * 32, 32768), (b"k" * 32, True)],
+)
+def test_the_seal_refuses_an_unbounded_key_or_version(key: bytes, version: int) -> None:
+    with pytest.raises(ValueError, match="checkpoint"):
+        _seal(key, version)
+
+
+def test_the_seal_verifies_only_its_own_seal_version_and_every_bound_member() -> None:
+    seal = _seal()
+    binding = CheckpointBinding(**_BINDING_FIELDS)
+    mac = seal.seal(
+        binding, checkpoint_id="kdcp_SyntheticSettings1", version=3, private_envelope="t"
+    )
+    stored = {
+        "checkpoint_id": "kdcp_SyntheticSettings1",
+        "version": 3,
+        "seal_version": 1,
+        "private_envelope": "t",
+        "envelope_mac": mac,
+    }
+    assert seal.verify(binding, **stored)
+    # A different seal version is unverifiable even with the matching key.
+    assert not _seal(version=2).verify(binding, **stored)
+    # Another key under the same seal version (rotation without increment).
+    assert not _seal(key=b"j" * 32).verify(binding, **stored)
+    for member, other in (
+        ("checkpoint_id", "kdcp_SyntheticSettings2"),
+        ("version", 4),
+        ("private_envelope", "u"),
+        ("envelope_mac", "0" * 64),
+    ):
+        assert not seal.verify(binding, **{**stored, member: other})
+    for field_name, other in (
+        ("principal_id", "prn_SyntheticSettings02"),
+        ("authenticated_client_id", "disc-2"),
+        ("source_profile_id", "kdsp_SyntheticSettings2"),
+        ("scope_digest", "b" * 64),
+    ):
+        moved = CheckpointBinding(**{**_BINDING_FIELDS, field_name: other})
+        assert not seal.verify(moved, **stored)
+
+
+def test_the_seal_compares_in_constant_time() -> None:
+    source = inspect.getsource(CheckpointSeal.verify)
+    assert "hmac.compare_digest(" in source
+    assert "==" not in source.replace("seal_version != self.seal_version", "")

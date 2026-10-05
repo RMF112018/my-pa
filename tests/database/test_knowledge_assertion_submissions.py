@@ -82,6 +82,8 @@ PAYMENT: Final = "organization.payment_terms"
 SUBMIT_GRANTS: Final = frozenset(
     {(Capability.KNOWLEDGE_ASSERTIONS_SUBMIT, Purpose.KNOWLEDGE_ASSERTION_OBSERVATION)}
 )
+#: A synthetic 32-octet checkpoint signing key (KLP-WP-04 slice B3; never a real key).
+CHECKPOINT_SIGNING_KEY: Final = b"klp04-synthetic-checkpoint-key-0"
 EARLY: Final = WHEN - timedelta(days=30)
 LATER: Final = WHEN - timedelta(days=10)
 LATEST: Final = WHEN - timedelta(days=1)
@@ -114,11 +116,21 @@ def external(
 class SubmitRuntime(KnowledgeRuntime):
     """`KnowledgeRuntime` with the discovery allowlist bound and submit helpers."""
 
-    def __init__(self, url: str, *, relationship_intelligence: bool = True) -> None:
+    def __init__(
+        self,
+        url: str,
+        *,
+        relationship_intelligence: bool = True,
+        seal_version: int = 1,
+        signing_key: bytes = CHECKPOINT_SIGNING_KEY,
+    ) -> None:
         super().__init__(
             url,
             discovery_client_ids=frozenset({CLIENT, OTHER_CLIENT}),
             relationship_intelligence=relationship_intelligence,
+            # KLP-WP-04 slice B3: a bound discovery list requires the seal.
+            checkpoint_signing_key=signing_key,
+            checkpoint_seal_version=seal_version,
         )
 
     def profile(

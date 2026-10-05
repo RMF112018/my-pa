@@ -101,6 +101,16 @@ PERMITTED_CLIENT_NAMES = frozenset(
 #: or accounts is reachable through either name.
 PERMITTED_AUTH_NAMES = frozenset({"AuthGrantStore", "AuthStateValidator"})
 
+#: Every name rule 2 permits `knowledge_source_profiles.py` to import from persistence.
+#:
+#: KLP-WP-04 (KLP-AC-129, KLP-AC-164). One name: the Knowledge maintenance
+#: transaction, a plain unit of work whose exit flushes the Record Event buffer
+#: last before COMMIT and whose audit sink refuses. Everything the command
+#: writes -- source profiles, the source-classification ingress, the
+#: availability drain, seal redaction -- goes through the repository it yields.
+#: No table declaration, and no capability.
+PERMITTED_KNOWLEDGE_PROFILE_NAMES = frozenset({"knowledge_maintenance_transaction"})
+
 #: The commands these rules govern, and — for rule 2 — exactly what each may name
 #: out of `infrastructure.persistence`.
 #:
@@ -121,6 +131,7 @@ COMMANDS = {
     "health.py": frozenset(),
     "clients.py": PERMITTED_CLIENT_NAMES,
     "auth.py": PERMITTED_AUTH_NAMES,
+    "knowledge_source_profiles.py": PERMITTED_KNOWLEDGE_PROFILE_NAMES,
 }
 
 #: The identifier rule 3 forbids anywhere in the file.

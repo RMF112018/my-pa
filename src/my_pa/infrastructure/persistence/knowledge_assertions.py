@@ -69,10 +69,11 @@ from sqlalchemy import (
     null,
     or_,
     select,
+    tuple_,
     update,
 )
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.exc import InterfaceError, OperationalError, SQLAlchemyError
+from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError, SQLAlchemyError
 from sqlalchemy.sql import text as sql_text
 
 from my_pa.contracts.ports import (
@@ -94,6 +95,8 @@ from my_pa.contracts.ports import (
     PortError,
     RecordEventStager,
     RepositoryFailureError,
+    TransactionConflictError,
+    is_transaction_conflict,
 )
 from my_pa.domain.capture.lifecycle import (
     CaptureLifecycleSelector,
@@ -123,6 +126,7 @@ from my_pa.domain.knowledge_assertion.vocabulary import (
     KnowledgeConsequentialClass,
     KnowledgeEpistemicStatus,
     KnowledgeEvidenceAuthority,
+    KnowledgeEvidenceAvailability,
     KnowledgeEvidenceIdentityKind,
     KnowledgeMutationKind,
     KnowledgeNormalizationRule,
@@ -162,6 +166,7 @@ from my_pa.infrastructure.persistence.tables import (
     knowledge_assertion_subject_locks,
     knowledge_assertion_submissions,
     knowledge_assertions,
+    knowledge_discovery_checkpoint_requests,
     knowledge_discovery_source_profiles,
     knowledge_evidence_refs,
     knowledge_submission_evidence,
@@ -171,6 +176,12 @@ from my_pa.infrastructure.persistence.tables import (
 
 __all__ = [
     "KNOWLEDGE_CREATE_CAPABILITY",
+    "KNOWLEDGE_MAINTENANCE_SOURCE",
+    "MAINTENANCE_BATCH",
+    "KnowledgeMaintenanceResult",
+    "KnowledgeSourceProfileChange",
+    "KnowledgeSourceProfileConflictError",
+    "KnowledgeSourceProfileRecord",
     "SqlKnowledgeAssertionRepository",
     "assertion_withheld_remote",
     "classification_rank",
@@ -349,14 +360,61 @@ def knowledge_event_withheld_remote(event: Table, principal_id: str) -> ColumnEl
     )
 
 
+def _stage_knowledge_event(
+    stager: RecordEventStager,
+    *,
+    principal_id: str,
+    assertion_id: str,
+    mutation_kind: KnowledgeMutationKind,
+    record_version: int,
+    origin: KnowledgeEventOrigin,
+    source_capability: str,
+    classification: Classification,
+    mutation_id: str,
+    at: datetime,
+    correlation_id: str | None,
+) -> None:
+    """Stage the one mapped Record Event of one `kamut_` mutation (C9).
+
+    The single staging site of this module (KLP-AC-045): metadata only, the
+    mutation as its receipt, actor/authority from who caused the write, and no
+    `causation_event_id` -- every Knowledge write here is a root write.
+    """
+    mapped = KNOWLEDGE_MUTATION_EVENTS[mutation_kind]
+    stager.stage(
+        RecordEventDraft.issue(
+            principal_id=principal_id,
+            record_family=RecordEventFamily.KNOWLEDGE_ASSERTION,
+            record_id=assertion_id,
+            event_kind=mapped.kind,
+            record_version=record_version,
+            changed_fields=mapped.changed_fields,
+            source_capability=source_capability,
+            actor_class=KNOWLEDGE_EVENT_ACTOR_CLASSES[origin],
+            classification=classification,
+            occurred_at=at,
+            source_receipt_id=mutation_id,
+            authority=KNOWLEDGE_EVENT_AUTHORITIES[origin],
+            correlation_id=correlation_id,
+        )
+    )
+
+
 def _translated[ResultT](work: Callable[[], ResultT]) -> ResultT:
     """Run one unit of SQL work, translating a store failure (the feed's rule)."""
     try:
         return work()
     except PortError:
         raise
-    except (OperationalError, InterfaceError):
-        failure: Exception = EvidenceUnavailableError("the store could not be read")
+    except DBAPIError as error:
+        # R6 section 8.4: a deadlock or serialization victim is a retryable
+        # conflict, checked before the OperationalError branch it falls into.
+        if is_transaction_conflict(error):
+            failure: Exception = TransactionConflictError("the transaction lost a race")
+        elif isinstance(error, (OperationalError, InterfaceError)):
+            failure = EvidenceUnavailableError("the store could not be read")
+        else:
+            failure = RepositoryFailureError("the request could not be completed")
     except (SQLAlchemyError, IsolationLevelError):
         failure = RepositoryFailureError("the request could not be completed")
     raise failure
@@ -766,26 +824,96 @@ class SqlKnowledgeAssertionRepository(KnowledgeAssertionRepository):
             # C9: exactly the mapped event, metadata only (KLP-AC-042/044), with
             # the `kamut_` mutation as its receipt. A replay, a duplicate, a
             # domain-owned completion and a refusal stage nothing.
-            mapped = KNOWLEDGE_MUTATION_EVENTS[KnowledgeMutationKind.CREATE]
-            origin = KnowledgeEventOrigin.EXPLICIT_CREATE
-            self._record_events.stage(
-                RecordEventDraft.issue(
-                    principal_id=principal_id,
-                    record_family=RecordEventFamily.KNOWLEDGE_ASSERTION,
-                    record_id=created.assertion_id,
-                    event_kind=mapped.kind,
-                    record_version=1,
-                    changed_fields=mapped.changed_fields,
-                    source_capability=KNOWLEDGE_CREATE_CAPABILITY,
-                    actor_class=KNOWLEDGE_EVENT_ACTOR_CLASSES[origin],
-                    classification=created.classification,
-                    occurred_at=at,
-                    source_receipt_id=created.mutation_id,
-                    authority=KNOWLEDGE_EVENT_AUTHORITIES[origin],
-                    correlation_id=correlation_id,
-                )
+            _stage_knowledge_event(
+                self._record_events,
+                principal_id=principal_id,
+                assertion_id=created.assertion_id,
+                mutation_kind=KnowledgeMutationKind.CREATE,
+                record_version=1,
+                origin=KnowledgeEventOrigin.EXPLICIT_CREATE,
+                source_capability=KNOWLEDGE_CREATE_CAPABILITY,
+                classification=created.classification,
+                mutation_id=created.mutation_id,
+                at=at,
+                correlation_id=correlation_id,
             )
         return result
+
+    # ---- source profiles and maintenance (KLP-WP-04 slice B1) ---------------
+
+    def _maintenance(self, principal_id: str, at: datetime) -> _Maintenance:
+        return _Maintenance(self._connection, principal_id, self._record_events, at)
+
+    def apply_source_profile(
+        self,
+        principal_id: str,
+        *,
+        authenticated_client_id: str,
+        origin_system: str,
+        scope_digest: str,
+        authority_ceiling: str,
+        direct_admission_enabled: bool,
+        read_only_proof_state: str,
+        at: datetime,
+    ) -> KnowledgeSourceProfileChange:
+        """Create, update the mutable controls of, or keep one active profile binding."""
+        body = self._maintenance(principal_id, at)
+        return _translated(
+            lambda: body.apply_profile(
+                authenticated_client_id=authenticated_client_id,
+                origin_system=origin_system,
+                scope_digest=scope_digest,
+                authority_ceiling=authority_ceiling,
+                direct_admission_enabled=direct_admission_enabled,
+                read_only_proof_state=read_only_proof_state,
+            )
+        )
+
+    def disable_source_profile(
+        self, principal_id: str, source_profile_id: str, *, at: datetime
+    ) -> KnowledgeSourceProfileRecord | None:
+        body = self._maintenance(principal_id, at)
+        return _translated(lambda: body.disable_profile(source_profile_id))
+
+    def source_profiles(
+        self, principal_id: str, *, at: datetime
+    ) -> tuple[KnowledgeSourceProfileRecord, ...]:
+        body = self._maintenance(principal_id, at)
+        return _translated(body.profiles)
+
+    def classify_evidence_restricted(
+        self, principal_id: str, evidence_ref_id: str, *, at: datetime
+    ) -> KnowledgeMaintenanceResult:
+        """The single source-classification ingress (R6 5.1, KLP-AC-164)."""
+        body = self._maintenance(principal_id, at)
+        return _translated(lambda: body.classify_restricted(evidence_ref_id))
+
+    def record_evidence_availability(
+        self,
+        principal_id: str,
+        evidence_ref_id: str,
+        availability: KnowledgeEvidenceAvailability,
+        *,
+        at: datetime,
+        verified_at: datetime | None = None,
+    ) -> KnowledgeMaintenanceResult:
+        """The single availability ingress (R6 5.4, KLP-AC-070/142)."""
+        body = self._maintenance(principal_id, at)
+        return _translated(
+            lambda: body.record_availability(evidence_ref_id, availability, verified_at=verified_at)
+        )
+
+    def drain_availability_revalidation(
+        self, principal_id: str, *, at: datetime
+    ) -> KnowledgeMaintenanceResult:
+        body = self._maintenance(principal_id, at)
+        return _translated(body.drain_revalidation)
+
+    def redact_sealed_checkpoint_requests(
+        self, principal_id: str, *, below_seal: int, at: datetime
+    ) -> int:
+        body = self._maintenance(principal_id, at)
+        return _translated(lambda: body.redact_sealed(below_seal))
 
 
 @dataclass(frozen=True, slots=True)
@@ -1372,3 +1500,619 @@ class _ExplicitCreate:
                 knowledge_assertions.c.assertion_id == assertion_id,
             )
         ).scalar_one_or_none()
+
+
+# ---- source-profile commissioning and maintenance (KLP-WP-04 slice B1) -------------
+#
+# Reached only through `knowledge_maintenance_transaction` (the guarded operator
+# command `apps/cli/knowledge_source_profiles.py`) and, from slice B2 on, from
+# the submit/checkpoint synchronization inside a unit of work. No capability
+# writes a profile, a class or an availability state.
+
+#: The bounded internal `source_capability` every maintenance event names. Not a
+#: `Capability` member: the operator command is configuration, not a capability.
+KNOWLEDGE_MAINTENANCE_SOURCE: Final = "knowledge.source_profiles.maintenance"
+#: At most this many linked live assertions are mutated per maintenance run
+#: (R6 5.1 KLP-R6V-101, 5.4).
+MAINTENANCE_BATCH: Final = 128
+_RESTRICTED: Final = Classification.RESTRICTED_LOCAL.value
+_ACTIVE: Final = KnowledgeAssertionLifecycle.ACTIVE.value
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeSourceProfileRecord:
+    """One provisioned source profile, as the operator command prints it.
+
+    Holds the scope *digest* only: a native scope identifier is never stored.
+    """
+
+    source_profile_id: str
+    authenticated_client_id: str
+    origin_system: str
+    scope_digest: str
+    authority_ceiling: str
+    direct_admission_enabled: bool
+    read_only_proof_state: str
+    is_synthetic: bool
+    profile_version: int
+    disabled_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeSourceProfileChange:
+    """What `apply` did to one profile entry: `created`, `updated` or `unchanged`."""
+
+    action: str
+    profile: KnowledgeSourceProfileRecord
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeMaintenanceResult:
+    """One maintenance run: what it wrote and how much is left for the next run."""
+
+    evidence_ref_ids: tuple[str, ...]
+    mutated_assertion_ids: tuple[str, ...]
+    remaining: int
+    pending: bool = False
+
+
+class KnowledgeSourceProfileConflictError(ValueError):
+    """An active profile binding exists with an immutable field that differs."""
+
+
+def _profile_record(row: Row[Any]) -> KnowledgeSourceProfileRecord:
+    m = row._mapping
+    return KnowledgeSourceProfileRecord(
+        source_profile_id=m["source_profile_id"],
+        authenticated_client_id=m["authenticated_client_id"],
+        origin_system=m["origin_system"],
+        scope_digest=m["scope_digest"],
+        authority_ceiling=m["authority_ceiling"],
+        direct_admission_enabled=bool(m["direct_admission_enabled"]),
+        read_only_proof_state=m["read_only_proof_state"],
+        is_synthetic=bool(m["is_synthetic"]),
+        profile_version=int(m["profile_version"]),
+        disabled_at=m["disabled_at"],
+    )
+
+
+def _not_before(column: ColumnElement[Any], at: datetime) -> ColumnElement[Any]:
+    """`at`, or the stored instant when it is later (the not-earlier triggers)."""
+    return case((column > at, column), else_=at)
+
+
+class _Maintenance:
+    """One maintenance body on one transaction's connection (R6 5.1, 5.4, 7, 8.2)."""
+
+    def __init__(
+        self, connection: Connection, principal_id: str, stager: RecordEventStager, at: datetime
+    ) -> None:
+        self.connection = connection
+        self.principal_id = principal_id
+        self.context = capture_context(principal_id)
+        self.stager = stager
+        self.at = at
+        self.correlation_id = issue_identifier(IdKind.CORRELATION)
+
+    def _bound(self, table: Table, values: dict[str, object]) -> dict[str, object]:
+        return principal_bound_values(values, table, self.context)
+
+    # -- source profiles (C4a) ------------------------------------------------
+
+    def apply_profile(
+        self,
+        *,
+        authenticated_client_id: str,
+        origin_system: str,
+        scope_digest: str,
+        authority_ceiling: str,
+        direct_admission_enabled: bool,
+        read_only_proof_state: str,
+    ) -> KnowledgeSourceProfileChange:
+        p = knowledge_discovery_source_profiles
+        current = self.connection.execute(
+            select(p)
+            .where(
+                partition_criterion(p, self.context),
+                p.c.authenticated_client_id == authenticated_client_id,
+                p.c.origin_system == origin_system,
+                p.c.scope_digest == scope_digest,
+                p.c.disabled_at.is_(None),
+            )
+            .with_for_update(key_share=True)
+        ).one_or_none()
+        if current is None:
+            row = self.connection.execute(
+                insert(p)
+                .values(
+                    **self._bound(
+                        p,
+                        {
+                            "source_profile_id": issue_identifier(
+                                IdKind.KNOWLEDGE_DISCOVERY_SOURCE_PROFILE
+                            ),
+                            "authenticated_client_id": authenticated_client_id,
+                            "origin_system": origin_system,
+                            "scope_digest": scope_digest,
+                            "authority_ceiling": authority_ceiling,
+                            "direct_admission_enabled": direct_admission_enabled,
+                            "read_only_proof_state": read_only_proof_state,
+                            "is_synthetic": origin_system == "synthetic",
+                            "profile_version": 1,
+                            "created_at": self.at,
+                            "updated_at": self.at,
+                        },
+                    )
+                )
+                .returning(p)
+            ).one()
+            return KnowledgeSourceProfileChange("created", _profile_record(row))
+        if current.authority_ceiling != authority_ceiling:
+            raise KnowledgeSourceProfileConflictError(
+                "an active profile's authority ceiling is immutable; disable it and "
+                "provision a new profile"
+            )
+        if (
+            bool(current.direct_admission_enabled) == direct_admission_enabled
+            and current.read_only_proof_state == read_only_proof_state
+        ):
+            return KnowledgeSourceProfileChange("unchanged", _profile_record(current))
+        row = self.connection.execute(
+            update(p)
+            .where(
+                partition_criterion(p, self.context),
+                p.c.source_profile_id == current.source_profile_id,
+            )
+            .values(
+                direct_admission_enabled=direct_admission_enabled,
+                read_only_proof_state=read_only_proof_state,
+                profile_version=p.c.profile_version + 1,
+                updated_at=_not_before(p.c.updated_at, self.at),
+            )
+            .returning(p)
+        ).one()
+        return KnowledgeSourceProfileChange("updated", _profile_record(row))
+
+    def disable_profile(self, source_profile_id: str) -> KnowledgeSourceProfileRecord | None:
+        """C4a `FOR NO KEY UPDATE`, re-read `disabled_at`, one terminal UPDATE.
+
+        Disabling deletes no Knowledge row (KLP-AC-090): it sets `disabled_at`
+        and clears direct admission together (CHECK
+        `knowledge_profile_direct_admission_needs_proof`). `None` when there is
+        no active profile of this Principal with that identifier.
+        """
+        p = knowledge_discovery_source_profiles
+        current = self.connection.execute(
+            select(p.c.source_profile_id, p.c.disabled_at)
+            .where(
+                partition_criterion(p, self.context),
+                p.c.source_profile_id == source_profile_id,
+            )
+            .with_for_update(key_share=True)
+        ).one_or_none()
+        if current is None or current.disabled_at is not None:
+            return None
+        row = self.connection.execute(
+            update(p)
+            .where(
+                partition_criterion(p, self.context),
+                p.c.source_profile_id == source_profile_id,
+                p.c.disabled_at.is_(None),
+            )
+            .values(
+                disabled_at=self.at,
+                direct_admission_enabled=False,
+                profile_version=p.c.profile_version + 1,
+                updated_at=_not_before(p.c.updated_at, self.at),
+            )
+            .returning(p)
+        ).one()
+        return _profile_record(row)
+
+    def profiles(self) -> tuple[KnowledgeSourceProfileRecord, ...]:
+        p = knowledge_discovery_source_profiles
+        rows = self.connection.execute(
+            select(p)
+            .where(partition_criterion(p, self.context))
+            .order_by(p.c.created_at, p.c.source_profile_id)
+        ).all()
+        return tuple(_profile_record(row) for row in rows)
+
+    # -- shared steps ---------------------------------------------------------
+
+    def _lock_evidence(self, evidence_ref_ids: Iterable[str]) -> list[Row[Any]]:
+        """C4b: one SELECT, sorted by evidence_ref_id, `FOR UPDATE` (maintenance)."""
+        e = knowledge_evidence_refs
+        return list(
+            self.connection.execute(
+                select(
+                    e.c.evidence_ref_id,
+                    e.c.identity_kind,
+                    e.c.source_classification,
+                    e.c.availability_state,
+                    e.c.availability_revalidation_pending,
+                )
+                .where(
+                    partition_criterion(e, self.context),
+                    e.c.evidence_ref_id.in_(sorted(set(evidence_ref_ids))),
+                )
+                .order_by(e.c.evidence_ref_id)
+                .with_for_update()
+            ).all()
+        )
+
+    def _linked(
+        self,
+        evidence_ref_ids: Sequence[str],
+        *,
+        lifecycles: Sequence[str],
+        below_restricted: bool = False,
+    ) -> list[Row[Any]]:
+        """Distinct assertions linked (any role) to the rows, sorted by assertion_id."""
+        a, links = knowledge_assertions, knowledge_assertion_evidence_links
+        criteria: list[ColumnElement[bool]] = [
+            partition_criterion(a, self.context),
+            a.c.lifecycle.in_(list(lifecycles)),
+            exists(
+                select(literal(1)).where(
+                    partition_criterion(links, self.context),
+                    links.c.assertion_id == a.c.assertion_id,
+                    links.c.evidence_ref_id.in_(list(evidence_ref_ids)),
+                )
+            ),
+        ]
+        if below_restricted:
+            criteria.append(classification_rank(a.c.classification) < _RESTRICTED_RANK)
+        return list(
+            self.connection.execute(
+                select(a.c.assertion_id, a.c.subject_kind, a.c.subject_id, a.c.predicate_code)
+                .where(*criteria)
+                .order_by(a.c.assertion_id)
+            ).all()
+        )
+
+    def _lock_subjects(self, rows: Sequence[Row[Any]]) -> None:
+        """C6: upsert every key of the complete sorted set, then one sorted lock."""
+        keys = sorted({(row.subject_kind, row.subject_id, row.predicate_code) for row in rows})
+        if not keys:
+            return
+        locks = knowledge_assertion_subject_locks
+        for subject_kind, subject_id, predicate_code in keys:
+            self.connection.execute(
+                pg_insert(locks)
+                .values(
+                    **self._bound(
+                        locks,
+                        {
+                            "subject_kind": subject_kind,
+                            "subject_id": subject_id,
+                            "predicate_code": predicate_code,
+                        },
+                    )
+                )
+                .on_conflict_do_nothing()
+            )
+        self.connection.execute(
+            select(locks.c.predicate_code)
+            .where(
+                partition_criterion(locks, self.context),
+                tuple_(locks.c.subject_kind, locks.c.subject_id, locks.c.predicate_code).in_(keys),
+            )
+            .order_by(
+                locks.c.principal_id,
+                locks.c.subject_kind,
+                locks.c.subject_id,
+                locks.c.predicate_code,
+            )
+            .with_for_update()
+        ).all()
+
+    def _control_mutation(
+        self,
+        assertion_id: str,
+        kind: KnowledgeMutationKind,
+        *,
+        guard: Sequence[ColumnElement[bool]],
+        values: Mapping[str, object],
+    ) -> bool:
+        """C7/C8/C9 for one control mutation: UPDATE, receipt, staged event."""
+        a = knowledge_assertions
+        row = self.connection.execute(
+            update(a)
+            .where(
+                partition_criterion(a, self.context),
+                a.c.assertion_id == assertion_id,
+                *guard,
+            )
+            .values(
+                version=a.c.version + 1,
+                updated_at=_not_before(a.c.updated_at, self.at),
+                **values,
+            )
+            .returning(a.c.version, a.c.classification)
+        ).one_or_none()
+        if row is None:
+            return False
+        version = int(row.version)
+        mutation_id = issue_identifier(IdKind.KNOWLEDGE_ASSERTION_MUTATION)
+        self.connection.execute(
+            insert(knowledge_assertion_mutations).values(
+                **self._bound(
+                    knowledge_assertion_mutations,
+                    {
+                        "mutation_id": mutation_id,
+                        "assertion_id": assertion_id,
+                        "mutation_kind": kind.value,
+                        "prior_version": version - 1,
+                        "new_version": version,
+                        "created_at": self.at,
+                    },
+                )
+            )
+        )
+        _stage_knowledge_event(
+            self.stager,
+            principal_id=self.principal_id,
+            assertion_id=assertion_id,
+            mutation_kind=kind,
+            record_version=version,
+            origin=KnowledgeEventOrigin.SERVER_MAINTENANCE,
+            source_capability=KNOWLEDGE_MAINTENANCE_SOURCE,
+            classification=Classification(row.classification),
+            mutation_id=mutation_id,
+            at=self.at,
+            correlation_id=self.correlation_id,
+        )
+        return True
+
+    def _mark_revalidation(self, rows: Sequence[Row[Any]]) -> list[str]:
+        a = knowledge_assertions
+        marked: list[str] = []
+        for row in rows:
+            if self._control_mutation(
+                row.assertion_id,
+                KnowledgeMutationKind.REVALIDATION_REQUIRED,
+                guard=(a.c.lifecycle == _ACTIVE,),
+                values={"lifecycle": KnowledgeAssertionLifecycle.REVALIDATION_REQUIRED.value},
+            ):
+                marked.append(row.assertion_id)
+        return marked
+
+    # -- source-classification ingress (R6 5.1, KLP-AC-164, KLP-R6V-201/202) ----
+
+    def _classification_set(self, evidence_ref_id: str) -> list[str]:
+        """The named row plus, for an external object, every sibling row of it.
+
+        Siblings: same Principal, same `external_object_id`, and a source profile
+        of the same `origin_system` (any profile, scope or version; KLP-R6V-202
+        option A: they are raised and redacted in the same run, in the same
+        sorted C4b set).
+        """
+        e, p = knowledge_evidence_refs, knowledge_discovery_source_profiles
+        named = self.connection.execute(
+            select(
+                e.c.evidence_ref_id, e.c.identity_kind, e.c.external_object_id, p.c.origin_system
+            )
+            .select_from(
+                e.outerjoin(
+                    p,
+                    and_(
+                        matching_partition_criterion(p, e),
+                        p.c.source_profile_id == e.c.source_profile_id,
+                    ),
+                )
+            )
+            .where(partition_criterion(e, self.context), e.c.evidence_ref_id == evidence_ref_id)
+        ).one_or_none()
+        if named is None:
+            raise KnowledgeEvidenceNotFoundError("no evidence row of this Principal")
+        if named.identity_kind != _EXTERNAL:
+            return [named.evidence_ref_id]
+        sibling = cast(Table, knowledge_discovery_source_profiles.alias("ka_classify_profile"))
+        siblings = self.connection.execute(
+            select(e.c.evidence_ref_id)
+            .select_from(
+                e.join(
+                    sibling,
+                    and_(
+                        matching_partition_criterion(sibling, e),
+                        sibling.c.source_profile_id == e.c.source_profile_id,
+                    ),
+                )
+            )
+            .where(
+                partition_criterion(e, self.context),
+                partition_criterion(sibling, self.context),
+                e.c.identity_kind == _EXTERNAL,
+                e.c.external_object_id == named.external_object_id,
+                sibling.c.origin_system == named.origin_system,
+            )
+        ).scalars()
+        return sorted({named.evidence_ref_id, *siblings})
+
+    def classify_restricted(self, evidence_ref_id: str) -> KnowledgeMaintenanceResult:
+        """C4b FOR UPDATE -> one raise+redact UPDATE -> links -> C6 -> <=128 classify.
+
+        Idempotent and resumable: the UPDATE is a no-op for rows already
+        restricted, each run classifies at most `MAINTENANCE_BATCH` live linked
+        assertions whose stored class is below `restricted_local`, and
+        `remaining` counts those still below after this run. It never sets
+        `availability_revalidation_pending` and never changes a lifecycle.
+        """
+        evidence_ids = self._classification_set(evidence_ref_id)
+        self._lock_evidence(evidence_ids)
+        e = knowledge_evidence_refs
+        # The one UPDATE that raises the class and redacts the excerpt (R6 5.5).
+        self.connection.execute(
+            update(e)
+            .where(
+                partition_criterion(e, self.context),
+                e.c.evidence_ref_id.in_(evidence_ids),
+                classification_rank(e.c.source_classification) < _RESTRICTED_RANK,
+            )
+            .values(
+                source_classification=_RESTRICTED,
+                excerpt=null(),
+                updated_at=_not_before(e.c.updated_at, self.at),
+            )
+        )
+        below = self._linked(evidence_ids, lifecycles=_LIVE, below_restricted=True)
+        batch = below[:MAINTENANCE_BATCH]
+        self._lock_subjects(batch)
+        # Re-read under C6 (unchanged: every linker waits on the C4b row lock).
+        current = {
+            row.assertion_id
+            for row in self._linked(evidence_ids, lifecycles=_LIVE, below_restricted=True)
+        }
+        a = knowledge_assertions
+        classified = [
+            row.assertion_id
+            for row in batch
+            if row.assertion_id in current
+            and self._control_mutation(
+                row.assertion_id,
+                KnowledgeMutationKind.CLASSIFY,
+                guard=(
+                    a.c.lifecycle.in_(_LIVE),
+                    classification_rank(a.c.classification) < _RESTRICTED_RANK,
+                ),
+                values={"classification": _RESTRICTED},
+            )
+        ]
+        remaining = len(self._linked(evidence_ids, lifecycles=_LIVE, below_restricted=True))
+        return KnowledgeMaintenanceResult(
+            evidence_ref_ids=tuple(evidence_ids),
+            mutated_assertion_ids=tuple(classified),
+            remaining=remaining,
+        )
+
+    # -- availability ingress (R6 5.4, KLP-AC-070/142) -------------------------
+
+    def record_availability(
+        self,
+        evidence_ref_id: str,
+        availability: KnowledgeEvidenceAvailability,
+        *,
+        verified_at: datetime | None,
+    ) -> KnowledgeMaintenanceResult:
+        """The single availability ingress. Never touches `source_classification`.
+
+        C4b `FOR UPDATE` on the row -> read links -> sorted C6 (no C3) -> re-read
+        links -> each `active` linked assertion becomes `revalidation_required`
+        with one mutation, when there are at most 128; above that the row
+        commits `availability_revalidation_pending = true` instead and reads
+        stay fail-closed until the guarded drain. A restored availability only
+        updates the row: it clears neither a lifecycle nor the pending flag.
+        """
+        locked = self._lock_evidence((evidence_ref_id,))
+        if not locked:
+            raise KnowledgeEvidenceNotFoundError("no evidence row of this Principal")
+        if locked[0].identity_kind != _EXTERNAL:
+            raise ValueError("only external evidence carries an availability state")
+        e = knowledge_evidence_refs
+        changes: dict[str, object] = {
+            "availability_state": availability.value,
+            "updated_at": _not_before(e.c.updated_at, self.at),
+        }
+        if verified_at is not None:
+            changes["access_last_verified_at"] = verified_at
+        lost = availability is not KnowledgeEvidenceAvailability.AVAILABLE
+        linked = self._linked([evidence_ref_id], lifecycles=(_ACTIVE,)) if lost else []
+        pending = bool(locked[0].availability_revalidation_pending)
+        if len(linked) > MAINTENANCE_BATCH:
+            changes["availability_revalidation_pending"] = True
+            pending = True
+        self.connection.execute(
+            update(e)
+            .where(partition_criterion(e, self.context), e.c.evidence_ref_id == evidence_ref_id)
+            .values(**changes)
+        )
+        if pending and len(linked) > MAINTENANCE_BATCH:
+            return KnowledgeMaintenanceResult(
+                evidence_ref_ids=(evidence_ref_id,),
+                mutated_assertion_ids=(),
+                remaining=len(linked),
+                pending=True,
+            )
+        self._lock_subjects(linked)
+        current = {
+            row.assertion_id for row in self._linked([evidence_ref_id], lifecycles=(_ACTIVE,))
+        }
+        marked = self._mark_revalidation([row for row in linked if row.assertion_id in current])
+        return KnowledgeMaintenanceResult(
+            evidence_ref_ids=(evidence_ref_id,),
+            mutated_assertion_ids=tuple(marked),
+            remaining=0,
+            pending=pending,
+        )
+
+    def drain_revalidation(self) -> KnowledgeMaintenanceResult:
+        """One pending row per run: <=128 marks, then clear the flag only when done.
+
+        One evidence row per transaction, so the run never takes a C4b lock
+        after its C6 locks (R6 8.1). `remaining` is the number of evidence rows
+        still pending after this run; the operator re-runs until it is 0.
+        """
+        e = knowledge_evidence_refs
+        first = self.connection.execute(
+            select(e.c.evidence_ref_id)
+            .where(partition_criterion(e, self.context), e.c.availability_revalidation_pending)
+            .order_by(e.c.evidence_ref_id)
+            .limit(1)
+        ).scalar_one_or_none()
+        if first is None:
+            return KnowledgeMaintenanceResult(
+                evidence_ref_ids=(), mutated_assertion_ids=(), remaining=0
+            )
+        locked = self._lock_evidence((first,))
+        marked: list[str] = []
+        if locked and locked[0].availability_revalidation_pending:
+            linked = self._linked([first], lifecycles=(_ACTIVE,))
+            batch = linked[:MAINTENANCE_BATCH]
+            self._lock_subjects(batch)
+            current = {row.assertion_id for row in self._linked([first], lifecycles=(_ACTIVE,))}
+            marked = self._mark_revalidation([row for row in batch if row.assertion_id in current])
+            if not self._linked([first], lifecycles=(_ACTIVE,)):
+                self.connection.execute(
+                    update(e)
+                    .where(partition_criterion(e, self.context), e.c.evidence_ref_id == first)
+                    .values(
+                        availability_revalidation_pending=False,
+                        updated_at=_not_before(e.c.updated_at, self.at),
+                    )
+                )
+        remaining = int(
+            self.connection.execute(
+                select(func.count()).where(
+                    partition_criterion(e, self.context), e.c.availability_revalidation_pending
+                )
+            ).scalar_one()
+        )
+        return KnowledgeMaintenanceResult(
+            evidence_ref_ids=(first,),
+            mutated_assertion_ids=tuple(marked),
+            remaining=remaining,
+            pending=remaining > 0,
+        )
+
+    # -- seal rotation (R6 7 step 3) -------------------------------------------
+
+    def redact_sealed(self, below_seal: int) -> int:
+        """Redact every request envelope sealed below `below_seal`. Idempotent."""
+        if isinstance(below_seal, bool) or not 1 <= below_seal <= 32767:
+            raise ValueError("the seal version is 1..32767")
+        r = knowledge_discovery_checkpoint_requests
+        result = self.connection.execute(
+            update(r)
+            .where(
+                partition_criterion(r, self.context),
+                r.c.result_private_envelope.is_not(None),
+                r.c.result_seal_version < below_seal,
+            )
+            .values(
+                result_private_envelope=null(),
+                result_envelope_mac=null(),
+                private_token_redacted=True,
+            )
+        )
+        return int(result.rowcount)

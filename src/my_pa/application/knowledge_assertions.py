@@ -36,7 +36,7 @@ from datetime import datetime
 from typing import Any, Final
 
 from my_pa.application.authorization import Authorization
-from my_pa.application.commands import CreateKnowledgeAssertion
+from my_pa.application.commands import CreateKnowledgeAssertion, SubmitKnowledgeAssertion
 from my_pa.application.errors import InvalidRequestError, SafeDetail
 from my_pa.contracts.ports import (
     KnowledgeAssertionHistory,
@@ -48,6 +48,7 @@ from my_pa.contracts.ports import (
     KnowledgeSubmissionResult,
 )
 from my_pa.domain.capture.submission import CaptureTransport
+from my_pa.domain.knowledge_assertion.admission import AdmissionEvidence
 from my_pa.domain.knowledge_assertion.assertion import (
     InvalidKnowledgeAssertionError,
     KnowledgeAssertionCandidate,
@@ -69,6 +70,7 @@ from my_pa.domain.knowledge_assertion.vocabulary import (
     KnowledgeConsequentialClass,
     KnowledgeEvidenceIdentityKind,
     KnowledgeEvidenceRole,
+    KnowledgeOriginSystem,
     KnowledgeReviewRequirement,
     KnowledgeValueType,
 )
@@ -86,6 +88,7 @@ __all__ = [
     "page_view",
     "reveal_view",
     "submission_view",
+    "submit_admission_evidence",
 ]
 
 #: The page size when the caller names none.
@@ -262,6 +265,68 @@ def create_request(
         evidence=evidence,
         domain_owned=domain_owned,
     )
+
+
+# --- autonomous submit: the admission policy's evidence facts ----------------------
+
+
+def submit_admission_evidence(
+    command: SubmitKnowledgeAssertion,
+    *,
+    origin_system: KnowledgeOriginSystem,
+    unavailable_identities: frozenset[tuple[str, ...]] = frozenset(),
+) -> tuple[AdmissionEvidence, ...]:
+    """The shape-only evidence facts of one submit, for `decide_direct_admission`.
+
+    External entries take the *command's* source profile (a client can never
+    cite another profile's object) and the profile's `origin_system` read by
+    the server. Only identity, role and availability survive: the excerpt and
+    `retrieved_at` are dropped here, so nothing written in evidence content can
+    reach the admission decision (KLP-AC-068/069). `unavailable_identities`
+    names the external identities (`(external_object_id, version or "",
+    content_hash)`) the server knows to be unavailable.
+    """
+    facts: list[AdmissionEvidence] = []
+    for item in command.evidence:
+        kind = KnowledgeEvidenceIdentityKind(str(item["identity_kind"]))
+        role = KnowledgeEvidenceRole(str(item["role"]))
+        content_hash = str(item["content_hash"])
+        if kind is KnowledgeEvidenceIdentityKind.EXTERNAL_OBJECT:
+            object_id = str(item["external_object_id"])
+            raw_version = item.get("external_version_id")
+            version = None if raw_version is None else str(raw_version)
+            facts.append(
+                AdmissionEvidence(
+                    identity_kind=kind,
+                    role=role,
+                    content_hash=content_hash,
+                    source_profile_id=command.source_profile_id,
+                    origin_system=origin_system,
+                    external_object_id=object_id,
+                    external_version_id=version,
+                    available=(object_id, version or "", content_hash)
+                    not in unavailable_identities,
+                )
+            )
+        elif kind is KnowledgeEvidenceIdentityKind.CAPTURE:
+            facts.append(
+                AdmissionEvidence(
+                    identity_kind=kind,
+                    role=role,
+                    content_hash=content_hash,
+                    capture_id=str(item["capture_id"]),
+                )
+            )
+        else:
+            facts.append(
+                AdmissionEvidence(
+                    identity_kind=kind,
+                    role=role,
+                    content_hash=content_hash,
+                    relationship_memory_id=str(item["relationship_memory_id"]),
+                )
+            )
+    return tuple(facts)
 
 
 # --- cursors ---------------------------------------------------------------------

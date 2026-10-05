@@ -45,8 +45,8 @@ back, which is section 5.6's fail-closed requirement holding by structure.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
-from contextlib import AbstractContextManager
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from contextlib import AbstractContextManager, contextmanager
 from datetime import datetime
 from types import TracebackType
 from typing import assert_never
@@ -106,6 +106,7 @@ from my_pa.contracts.ports import (
     is_transaction_conflict,
 )
 from my_pa.contracts.v1.status import SourceStatusState
+from my_pa.domain.audit.events import AuditEvent
 from my_pa.domain.capture.lifecycle import (
     CaptureLifecycleEvent,
     CaptureLifecycleProjection,
@@ -264,7 +265,7 @@ from my_pa.infrastructure.persistence.worker_health import worker_plane_health
 from my_pa.infrastructure.persistence.write_requests import SqlWriteRequestRepository
 from my_pa.infrastructure.providers.registered import RegisteredSourceProviders
 
-__all__ = ["SqlAlchemyUnitOfWork"]
+__all__ = ["SqlAlchemyUnitOfWork", "knowledge_maintenance_transaction"]
 
 
 def _read[T](statement: Callable[[], T]) -> T:
@@ -1519,3 +1520,32 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     @property
     def audit(self) -> AuditSink:
         return self._audit
+
+
+class _MaintenanceWritesNoAudit(AuditSink):
+    """The audit sink of an operator maintenance transaction: it refuses.
+
+    The source-profile command is configuration, not a capability, so it has no
+    capability name an audit event could carry (the `clients.py` precedent);
+    its rows -- mutations, Record Events, profile versions -- are its evidence.
+    A maintenance body that tried to audit would be a defect, and fails here.
+    """
+
+    def record(self, event: AuditEvent) -> None:
+        raise RuntimeError("a Knowledge maintenance transaction writes no audit event")
+
+
+@contextmanager
+def knowledge_maintenance_transaction(engine: Engine) -> Iterator[SqlKnowledgeAssertionRepository]:
+    """One operator maintenance transaction over the Knowledge plane (KLP-WP-04).
+
+    A plain `SqlAlchemyUnitOfWork` underneath, so the Record Event buffer is
+    flushed by its `__exit__` as the last work before COMMIT (RE-AC-014) and a
+    failure rolls everything back. Yields the concrete repository because the
+    maintenance methods (classification and availability ingress, drain,
+    profile provisioning, seal redaction) are operator surfaces and not part of
+    the application's `KnowledgeAssertionRepository` port.
+    """
+    unit = SqlAlchemyUnitOfWork(engine, audit=_MaintenanceWritesNoAudit())
+    with unit:
+        yield SqlKnowledgeAssertionRepository(unit._open, stager=unit._record_events)

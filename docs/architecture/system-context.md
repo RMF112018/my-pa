@@ -82,7 +82,11 @@ nine `relationship_memory.` names require that variable *and*
 `MY_PA_RELATIONSHIP_MEMORY_ENABLED`, because a memory binds an Entity as its
 subject and ownership is proven by reading `knowledge.entities`, and the seven
 `knowledge.assertions.` names and `knowledge.discovery.checkpoint` require that variable *and*
-`MY_PA_KNOWLEDGE_ASSERTIONS_ENABLED` (KLP-WP-03); none has
+`MY_PA_KNOWLEDGE_ASSERTIONS_ENABLED` (KLP-WP-03), while `submit` and
+`checkpoint` additionally serve only a remote client bound by
+`MY_PA_KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS` (KLP-WP-04; a Knowledge Review
+operator client is bound separately by
+`MY_PA_KNOWLEDGE_OPERATOR_REVIEW_OAUTH_CLIENT_IDS`, empty by default); none has
 a default, so an unconfigured process withholds all four families from
 `capabilities.get` and from the MCP tool list, refuses them `unsupported` over
 HTTP, and reports readiness `degraded`. The default figure moved from fifty to

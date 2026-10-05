@@ -700,6 +700,31 @@ Evidence: `src/my_pa/domain/record_events.py`, `src/my_pa/application/record_eve
 `tests/database/test_record_events_cursor_visibility.py::test_a_hand_built_cursor_on_a_withheld_memory_event_is_refused`,
 `tests/contract/test_chatllm_data_profile_diff.py::test_a_v3_converged_client_plans_exactly_the_record_events_add`.
 
+## 16. Knowledge discovery and Knowledge Review are built, not commissioned
+
+KLP-WP-04 builds autonomous `knowledge.assertions.submit`,
+`knowledge.discovery.checkpoint` and proposal-local Knowledge Review. Nothing is
+commissioned. The discovery and operator-review allowlists are empty by
+default, and `ops/knowledge-source-profiles/initial.json` provisions no source
+profile. No discovery client, signing key or seal rotation has run against a
+live database. Populating the operator-review allowlist is operator decision
+KLP-OD-005. A remote operator-review decision proves that the client holds the
+credential, not that a human decided (design residual R-1). Envelopes are
+MAC-sealed, not encrypted, and their retention is operator decision KLP-OD-002.
+The web Review workbench shows a Knowledge case without its proposed value: the
+frozen row carries no candidate value, and `knowledge.assertions.read` reads
+only an accepted `kasr_` fact. A proposal read surface needs a plan decision.
+`knowledge-discovery-v2` (with `record_events.provenance`) is KLP-WP-05.
+
+Evidence: `ops/runbooks/managed-knowledge-context.md`,
+`src/my_pa/bootstrap/knowledge_discovery_profiles.py`,
+`apps/cli/knowledge_source_profiles.py`,
+`tests/unit/test_knowledge_discovery_profile.py::test_every_unbound_client_loses_submit_and_checkpoint_only`,
+`tests/unit/test_knowledge_source_profile_provisioner.py::test_the_committed_initial_profiles_contain_no_onedrive_profile`,
+`tests/database/test_knowledge_checkpoint_idempotency_replay.py::test_a_first_advance_is_version_one_and_sealed_under_the_signing_key`,
+`tests/contract/test_knowledge_review_operator_authority.py::test_e_a_remote_chatllm_client_is_interactive_and_denied_operator_cases`,
+`tests/database/test_knowledge_assertion_review.py::test_a_queued_proposal_is_no_assertion_until_acceptance_promotes_it`.
+
 ---
 
 New implementation must use the neutral `my_pa` / `MY_PA_` namespace. Legacy

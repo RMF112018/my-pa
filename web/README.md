@@ -60,7 +60,7 @@ All application pages require a verified session. `/sign-in`, `/setup`, and
 | `POST /api/goodnotes/correct` | `goodnotes.correct` | Append-only canonical revision; Origin-admitted; does not overwrite source |
 | `GET /api/search` | federated `*.search` including `goodnotes.search` | GoodNotes is searched or typed unavailable/degraded; never omitted as not activated |
 | `POST /api/reveal` | `knowledge.reveal` | Preserves `evidence`, `no_evidence`, and `unavailable` as distinct answers |
-| `/review`, `GET /api/review` | `review.list` | Lists the acting Principal's review cases |
+| `/review`, `GET /api/review` | `review.list` | Lists the acting Principal's review cases, Knowledge Assertion cases included; a row of an unknown subject kind is shown inert and counted in `droppedRows`, never silently hidden |
 | `/intelligence`, `GET /api/intelligence` | `reports.list`, `reports.search` | Lists or searches Principal-scoped Intelligence artifacts; `structured_content` is persisted opaque JSON, not scraped from markdown |
 | `GET /api/intelligence/:reportId` | `reports.read` | Reads one same-Principal Intelligence artifact |
 | `GET /api/intelligence/latest` | `reports.latest` | Reads the current-head artifact for a cycle run |
@@ -86,7 +86,8 @@ All application pages require a verified session. `/sign-in`, `/setup`, and
 | `GET /api/people/:entityId/observations`, `GET /api/people/observations` | `entities.observations.list` | Lists observations; `observed_value` is refused |
 | `GET /api/people/unresolved` | `entities.unresolved_mentions` | Lists unresolved mentions; `observed_value` is refused |
 | `GET /api/people/:entityId/identity-history` | `entities.identity_history` | Reads Principal-scoped identity history |
-| `POST /api/review/:id/decide` | `review.decide` | Applies an optimistic-concurrency review decision |
+| `POST /api/review/:id/decide` | `review.decide` | Applies an optimistic-concurrency review decision; Knowledge cases offer accept, reject, defer, unresolved and invalidate, never a correction patch |
+| `GET /api/knowledge/assertions/:assertionId` | `knowledge.assertions.read` | Reads one accepted Knowledge Assertion (`kasr_` ids only) after a Review accept; replaces Reveal for Knowledge rows |
 | `POST /api/capture` | `capture.create` | Persists a Quick Capture with backend-owned idempotency and a verifiable receipt |
 | `GET /api/tasks` | `tasks.list`, `tasks.search` | Lists or searches server-owned Tasks with Work-view filters and opaque cursors |
 | `POST /api/tasks` | `tasks.create` | Creates a Task with server-validated origin evidence and idempotency |

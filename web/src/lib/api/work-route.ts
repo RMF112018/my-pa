@@ -326,17 +326,62 @@ export function isCanonicalTimezoneKey(value: unknown): value is string {
   return value.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
 }
 
+/** IPv6 bracket syntax used by canonical urllib.parse, including a nonempty scope. */
+function meetingIpv6Host(host: string): boolean {
+  const scoped = host.split("%");
+  if (scoped.length > 2 || (scoped.length === 2 && !scoped[1])) return false;
+  let address = scoped[0]!;
+  if (address.includes(".")) {
+    const colon = address.lastIndexOf(":");
+    if (colon < 0) return false;
+    const octets = address.slice(colon + 1).split(".");
+    if (octets.length !== 4 || octets.some((octet) => !/^(0|[1-9][0-9]{0,2})$/.test(octet) || Number(octet) > 255)) return false;
+    address = `${address.slice(0, colon + 1)}0:0`;
+  }
+  const halves = address.split("::");
+  if (halves.length > 2) return false;
+  const groups = halves.flatMap((half) => half === "" ? [] : half.split(":"));
+  if (groups.some((group) => !/^[0-9a-fA-F]{1,4}$/.test(group))) return false;
+  return halves.length === 2 ? groups.length < 8 : groups.length === 8;
+}
+
+/**
+ * Meeting's canonical HTTPS acceptance, without WHATWG normalization. Mirrors
+ * model.py and urllib.parse's netloc/bracket/port checks; returned text stays raw.
+ * Kept local to avoid a route -> gateway -> decoder dependency cycle.
+ */
+function meetingHttpsUrl(value: string): boolean {
+  if (Array.from(value).length < 1 || Array.from(value).length > 2048 || value !== pythonTrim(value) || /[\u0000-\u0020\u007F]/u.test(value)) return false;
+  if (value.slice(0, 8).toLowerCase() !== "https://") return false;
+  const netloc = value.slice(8).split(/[/?#]/, 1)[0]!;
+  // Presence, even empty userinfo, is refused by parsed.username/password.
+  if (!netloc || netloc.includes("@")) return false;
+  const normalized = netloc.replace(/[@:#?]/g, "").normalize("NFKC");
+  if (/[/?#@:]/.test(normalized)) return false;
+  let hostname: string, port: string;
+  if (netloc.includes("[") || netloc.includes("]")) {
+    if (!netloc.startsWith("[") || !netloc.includes("]")) return false;
+    const end = netloc.indexOf("]");
+    hostname = netloc.slice(1, end);
+    const tail = netloc.slice(end + 1);
+    if (tail && !tail.startsWith(":")) return false;
+    port = tail ? tail.slice(1) : "";
+    if (hostname.startsWith("v")) {
+      if (!/^v[0-9a-fA-F]+\..+$/.test(hostname)) return false;
+    } else if (!meetingIpv6Host(hostname)) return false;
+  } else {
+    const colon = netloc.indexOf(":");
+    hostname = colon < 0 ? netloc : netloc.slice(0, colon);
+    port = colon < 0 ? "" : netloc.slice(colon + 1);
+  }
+  return !!hostname && (port === "" || (/^[0-9]+$/.test(port) && Number(port) <= 65535));
+}
+
 function formatAccepted(value: string, format: WorkField["format"]): boolean {
   if (format === "timestamp") return isAwareRfc3339(value);
   if (format === "timezone") return isCanonicalTimezoneKey(value);
   if (format === "email") return normalizedEmail(value) !== null;
-  if (format === "https-url") {
-    if (value !== value.trim() || /[\u0000-\u0020\u007F]/u.test(value)) return false;
-    try {
-      const url = new URL(value);
-      return url.protocol === "https:" && !!url.hostname && !url.username && !url.password;
-    } catch { return false; }
-  }
+  if (format === "https-url") return meetingHttpsUrl(value);
   return true;
 }
 

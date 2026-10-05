@@ -13,9 +13,54 @@ const timezone = checked(text(1,64), (value) => {
     value.startsWith("/") || value.includes("\\")) return false;
   return value.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
 });
+// Canonical Python urlsplit accepts raw Unicode hosts, IPvFuture and scoped
+// IPv6. Keep these pure checks local to avoid a decoder -> route import cycle;
+// validation must preserve the original URL rather than WHATWG-normalize it.
+/** IPv6 bracket syntax used by canonical urllib.parse, including a nonempty scope. */
+function meetingIpv6Host(host: string): boolean {
+  const scoped = host.split("%");
+  if (scoped.length > 2 || (scoped.length === 2 && !scoped[1])) return false;
+  let address = scoped[0]!;
+  if (address.includes(".")) {
+    const colon = address.lastIndexOf(":");
+    if (colon < 0) return false;
+    const octets = address.slice(colon + 1).split(".");
+    if (octets.length !== 4 || octets.some((octet) => !/^(0|[1-9][0-9]{0,2})$/.test(octet) || Number(octet) > 255)) return false;
+    address = `${address.slice(0, colon + 1)}0:0`;
+  }
+  const halves = address.split("::");
+  if (halves.length > 2) return false;
+  const groups = halves.flatMap((half) => half === "" ? [] : half.split(":"));
+  if (groups.some((group) => !/^[0-9a-fA-F]{1,4}$/.test(group))) return false;
+  return halves.length === 2 ? groups.length < 8 : groups.length === 8;
+}
+
 const httpsUrl = checked(text(1,2048), (value) => {
-  if (/[\s\u0000-\u0020\u007f]/u.test(value)) return false;
-  try { const url = new URL(value); return url.protocol === "https:" && !!url.hostname && !url.username && !url.password; } catch { return false; }
+  const pythonOuterSpace = /^[\u0009-\u000d\u001c-\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+|[\u0009-\u000d\u001c-\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+$/gu;
+  if (value !== value.replace(pythonOuterSpace, "") || /[\u0000-\u0020\u007F]/u.test(value)) return false;
+  if (value.slice(0, 8).toLowerCase() !== "https://") return false;
+  const netloc = value.slice(8).split(/[/?#]/, 1)[0]!;
+  // Presence, even empty userinfo, is refused by parsed.username/password.
+  if (!netloc || netloc.includes("@")) return false;
+  const normalized = netloc.replace(/[@:#?]/g, "").normalize("NFKC");
+  if (/[/?#@:]/.test(normalized)) return false;
+  let hostname: string, port: string;
+  if (netloc.includes("[") || netloc.includes("]")) {
+    if (!netloc.startsWith("[") || !netloc.includes("]")) return false;
+    const end = netloc.indexOf("]");
+    hostname = netloc.slice(1, end);
+    const tail = netloc.slice(end + 1);
+    if (tail && !tail.startsWith(":")) return false;
+    port = tail ? tail.slice(1) : "";
+    if (hostname.startsWith("v")) {
+      if (!/^v[0-9a-fA-F]+\..+$/.test(hostname)) return false;
+    } else if (!meetingIpv6Host(hostname)) return false;
+  } else {
+    const colon = netloc.indexOf(":");
+    hostname = colon < 0 ? netloc : netloc.slice(0, colon);
+    port = colon < 0 ? "" : netloc.slice(colon + 1);
+  }
+  return !!hostname && (port === "" || (/^[0-9]+$/.test(port) && Number(port) <= 65535));
 });
 const attendee = checked(strictObject({
   attendee_id: identifier("matt"), entity_id: nullable(identifier("ent")), display_name: nullable(text(1,200)), email: nullable(text(1,320)),

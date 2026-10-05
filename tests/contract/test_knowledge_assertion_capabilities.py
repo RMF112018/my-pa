@@ -236,7 +236,6 @@ class _CannedKnowledge(KnowledgeAssertionRepository):
             review_case_id="rvw_fastworld000001",
         )
 
-
     # KLP-WP-04 slice B3: a canned checkpoint plane (routing, not SQL).
 
     def replay_checkpoint(  # type: ignore[override]

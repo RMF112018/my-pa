@@ -16,7 +16,8 @@ MAC independently, and to tamper with a stored MAC for the verification proof.
   `conflict(idempotency_conflict)`); two concurrent first advances -- both
   observed blocked at the C4a profile lock -- give one `advanced` and one
   routed `checkpoint_conflict(stale_expected_version)`, never an internal
-  error.
+  error; a concurrent retry of the same key waits on the first's uncommitted
+  reservation and then replays (same digest) or conflicts (other digest).
 * KLP-AC-074: an advance names `external_run_id` and
   `submitted_candidate_count` and is refused `candidate_count_mismatch`
   unless exactly that many completed submissions exist for (client, run,
@@ -404,6 +405,62 @@ def test_two_concurrent_first_advances_give_one_success_and_one_routed_conflict(
     assert conflict["checkpoint_version"] == 1
     assert conflict["private_envelope"] == advanced["private_envelope"]
     assert _ledger(engine, principal) == 2
+
+
+@pytest.mark.parametrize("same_request", [True, False], ids=["same-digest", "other-digest"])
+def test_a_concurrent_retry_of_the_same_key_waits_for_the_reservation_and_replays(
+    runtime: CheckpointRuntime, same_request: bool
+) -> None:
+    """KLP-AC-073 (separately idempotent, concurrent): the C1 arbiter, in-transaction.
+
+    The first request reserves its key and blocks at C4a (a holder keeps the
+    profile row); the retry's reservation INSERT then waits on the first's
+    uncommitted key (two waiters observed). On release the first advances, and
+    the retry finds the winner by key: the same digest replays the stored
+    answer, another digest is `conflict(idempotency_conflict)` -- one request
+    row either way, never a 23505.
+    """
+    principal = new_principal()
+    profile = runtime.profile(principal)
+    engine = runtime.engine
+    remote: dict[str, Any] = {
+        "transport": CaptureTransport.REMOTE_CLIENT,
+        "grants": CHECKPOINT_GRANTS,
+        "client_id": CLIENT,
+    }
+    first_command = runtime.command(profile, envelope="synthetic-token-a", key="same-key")
+    retry_command = runtime.command(
+        profile,
+        envelope="synthetic-token-a" if same_request else "synthetic-token-b",
+        key="same-key",
+    )
+    with engine.connect() as holder:
+        holder.execute(
+            text(
+                "SELECT 1 FROM knowledge.knowledge_discovery_source_profiles "
+                "WHERE source_profile_id = :s FOR NO KEY UPDATE"
+            ),
+            {"s": profile},
+        ).one()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(runtime.invoke, first_command, principal_id=principal, **remote)
+            _wait_for_waiters(engine, 1, first)
+            retry = pool.submit(runtime.invoke, retry_command, principal_id=principal, **remote)
+            _wait_for_waiters(engine, 2, first, retry)
+            holder.rollback()
+            first_response = first.result(timeout=DEADLINE_SECONDS)
+            retry_response = retry.result(timeout=DEADLINE_SECONDS)
+    assert first_response.error is None, first_response.error
+    assert dict(first_response.result or {})["outcome"] == "advanced"
+    if same_request:
+        assert retry_response.error is None, retry_response.error
+        assert dict(retry_response.result or {}) == dict(first_response.result or {})
+    else:
+        assert retry_response.error is not None
+        error = retry_response.error.model_dump(mode="json")
+        assert error["code"] == "conflict"
+        assert "idempotency_conflict" in error["safe_details"]
+    assert _ledger(engine, principal) == 1
 
 
 # ---- KLP-AC-074: the run's completed submission count ----------------------------------

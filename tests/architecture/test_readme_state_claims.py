@@ -903,3 +903,19 @@ def test_readme_declares_graph_off_by_default_and_entra_separate_from_activation
         "The README's frontend paragraph no longer states that Entra "
         "authentication is a separate concern from Graph connector activation."
     )
+
+
+def test_the_knowledge_plane_switch_and_its_cursor_reset_are_documented() -> None:
+    """KLP-AC-083 / KLP-AC-141: default off, needs the entity plane, resets cursors."""
+    from my_pa.bootstrap.settings import Settings
+
+    assert Settings.model_fields["knowledge_assertions_enabled"].default is False
+    readme = README.read_text(encoding="utf-8")
+    gateway_runbook = (ROOT / "ops/runbooks/gateway-operations.md").read_text(encoding="utf-8")
+    assert "MY_PA_KNOWLEDGE_ASSERTIONS_ENABLED" in readme
+    normalized = " ".join(gateway_runbook.split())
+    assert (
+        "Enabling the Knowledge Assertion plane is a Record Event cursor-reset condition"
+        in normalized
+    )
+    assert "MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` is on too" in normalized

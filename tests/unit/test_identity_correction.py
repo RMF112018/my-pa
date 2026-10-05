@@ -371,12 +371,17 @@ def test_the_two_blocking_conflict_kinds_are_the_two_the_contract_names() -> Non
     `IdentityConflictKind`'s own docstring for the full argument
     (`entity_organization_profiles.entity_id` as both primary key and
     foreign key, with no `state`/`superseded_by_*` column for a losing row).
+
+    KLP-WP-04 (R6 section 8.6) adds `KNOWLEDGE_REFERENCE_PRESENT`: a participant
+    named by a live Knowledge assertion or open Knowledge proposal refuses the
+    merge outright, because Knowledge facts are never reparented (KLP-AC-137).
     """
     blocking = {kind for kind in IdentityConflictKind if blocks_merge(kind)}
     assert blocking == {
         IdentityConflictKind.ACTIVE_IDENTIFIER_CONFLICT,
         IdentityConflictKind.UNSUPPORTED_FAMILY,
         IdentityConflictKind.SINGLETON_RECORD_CONFLICT,
+        IdentityConflictKind.KNOWLEDGE_REFERENCE_PRESENT,
     }
     assert not blocks_merge(IdentityConflictKind.AMBIGUOUS_DISPOSITION)
 

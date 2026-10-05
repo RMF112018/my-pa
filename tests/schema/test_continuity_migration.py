@@ -38,6 +38,7 @@ from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, Table, text
+from tests.schema.knowledge_schema_ahead_contract import admitted_ahead
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.situation.situation import PulseReasonCode
@@ -232,7 +233,9 @@ def test_downgrading_this_revision_restores_exactly_the_previous_vocabulary(
         declared = {member.value for member in Capability} | {
             member.value for member in NativeSourceCapability
         }
-        assert _admitted(engine, "audit_events", "capability_is_known") == declared
+        assert _admitted(engine, "audit_events", "capability_is_known") == (
+            declared | admitted_ahead("capability")
+        )
 
         command.downgrade(_config(), PREVIOUS_REVISION)
         assert _admitted(engine, "audit_events", "capability_is_known") == CAPABILITIES_BEFORE
@@ -351,6 +354,7 @@ def test_head_admits_exactly_the_capability_vocabulary_the_domain_declares(
         assert _admitted(engine, "audit_events", "capability_is_known") == (
             {member.value for member in Capability}
             | {member.value for member in NativeSourceCapability}
+            | admitted_ahead("capability")
         )
         # And the Pulse reason vocabulary, which the revision also freezes.
         assert _admitted(engine, "pulse_items", "a_pulse_reason_code_is_known") == {

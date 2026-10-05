@@ -14,6 +14,7 @@ from typing import Final
 
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+from tests.schema.knowledge_schema_ahead_contract import admitted_ahead
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.identity.purpose import Purpose
@@ -83,7 +84,7 @@ PHASE_B_START: Final = "c7a1f04b9e63"
 #: renames the seeded `entity_relationship_types` row `design_coordinates_with` to
 #: `design_coordination_with`; that in turn stacked on `1cda4d536268` (RI-ENT-WP-07).
 #: Written out rather than derived so chain drift fails here rather than passing.
-HEAD_REVISION: Final = "0641c354ca85"
+HEAD_REVISION: Final = "6734f039f7a6"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_a4d9c2e7b815_admit_goodnotes_content_and_durable_note_stages.py"
 )
@@ -236,7 +237,7 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     # and RI-ENT-WP-12's integration counted 89 from the merged tree rather
     # than adding one to either side (RULING-M2).
     # R8 adds one receipt migration on the previous 91-revision chain.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 111
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 112
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:
@@ -312,7 +313,9 @@ def test_the_frozen_literals_are_the_domain_at_head() -> None:
     declared = {member.value for member in Capability} | {
         member.value for member in NativeSourceCapability
     }
-    assert admitted <= declared
+    # KLP-WP-02: the latest admitting revision now runs ahead of the domain by
+    # exactly the Knowledge schema-ahead gap row (R6 section 12.1).
+    assert admitted <= declared | admitted_ahead("capability")
     # This module's own revision, kept separate from the head's. `admitted` is
     # the *latest* admitting revision's vocabulary; subtracting this revision's
     # predecessor from it would compare two different revisions' sets and call
@@ -336,9 +339,11 @@ def test_the_frozen_literals_are_the_domain_at_head() -> None:
         end = source.index("\n)", start)
         names = re.findall(r"'([^']+)'", source[start:end])
         assert names == sorted(names), f"{constant} is not in sorted order"
-    assert admitted == declared, (
+    ahead = declared | admitted_ahead("capability")
+    assert admitted == ahead, (
         f"the last admitting revision {admitting.name} freezes a capability vocabulary "
-        f"that is not the domain; the difference is {sorted(admitted ^ declared)}"
+        f"that is not the domain plus the Knowledge schema-ahead gap; the difference is "
+        f"{sorted(admitted ^ ahead)}"
     )
     # Asked of the last revision that freezes *purposes*, which is not always the
     # last that freezes capabilities. `e4d7b2f9a316` admits one capability and
@@ -348,10 +353,11 @@ def test_the_frozen_literals_are_the_domain_at_head() -> None:
     # meaning "what this revision installed".
     purposes_at = _latest_declaring("_PURPOSES_AT_THIS_REVISION")
     purposes = frozenset(_frozen_names(purposes_at, "_PURPOSES_AT_THIS_REVISION"))
-    assert purposes == {member.value for member in Purpose}, (
+    purposes_ahead = {member.value for member in Purpose} | admitted_ahead("purpose")
+    assert purposes == purposes_ahead, (
         f"the last purpose-freezing revision {purposes_at.name} freezes a purpose "
-        f"vocabulary that is not the domain; the difference is "
-        f"{sorted(purposes ^ {member.value for member in Purpose})}"
+        f"vocabulary that is not the domain plus the Knowledge schema-ahead gap; the "
+        f"difference is {sorted(purposes ^ purposes_ahead)}"
     )
 
     this_revision = _frozen_literals(_ADMITTING_CONSTANT)

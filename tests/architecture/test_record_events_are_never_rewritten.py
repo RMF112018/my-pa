@@ -16,7 +16,9 @@ string scan:
    updates, deletes from or truncates either table, except the Record Event
    privilege gate. That gate's literals are arguments of `_expect_sqlstate`
    and must come back `42501`. In `migrations/`, only the feed admission
-   revision and the TRUNCATE-refusal revision name the relations. The
+   revision, the TRUNCATE-refusal revision and the Knowledge revision (A3,
+   read-only: a CHECK restatement, a foreign key and a refusal read) name the
+   relations, and the Knowledge revision never rewrites them. The
    admission revision's downgrade starts with its refusal and its append-only
    trigger stays `BEFORE UPDATE OR DELETE` on `record_events`. No revision
    drops that trigger. The refusal revision's downgrade starts with its own
@@ -59,6 +61,12 @@ REFUSAL_PROBES: Final = frozenset(
 #: naming the head here would make this a head-pin file for every later
 #: revision to edit.
 REVISION_DOCSTRING: Final = "Admit the Record Event feed"
+#: KLP-WP-02's single Knowledge revision also names the feed, read-only: it
+#: restates `a_record_event_family_is_known` (+`knowledge_assertion`, A3), cites
+#: `record_events (event_id, principal_id)` by foreign key from
+#: `knowledge_submission_trigger_events`, and reads it in its downgrade refusal.
+#: It is found by content for the same reason, and it may never rewrite the feed.
+KNOWLEDGE_REVISION_DOCSTRING: Final = "Admit the Knowledge Assertion layer"
 RAW_REWRITE: Final = re.compile(
     r"\b(UPDATE|DELETE\s+FROM|TRUNCATE(\s+TABLE)?)\s+(ONLY\s+)?(\w+\.)?record_event(s|_sequences)\b",
     re.IGNORECASE,
@@ -206,7 +214,11 @@ def test_only_the_record_event_revisions_name_the_feed_and_keep_the_guards() -> 
     refusal = next(
         path for path, text in revisions.items() if "Refuse TRUNCATE of the Record Event" in text
     )
-    assert naming == {admission, refusal}, sorted(naming)
+    knowledge = next(
+        path for path, text in revisions.items() if KNOWLEDGE_REVISION_DOCSTRING in text
+    )
+    assert naming == {admission, refusal, knowledge}, sorted(naming)
+    assert not RAW_REWRITE.search(revisions[knowledge]), knowledge
     for path, text in revisions.items():
         assert not DROP_TRIGGER.search(text), path
     tree = ast.parse(revisions[admission])

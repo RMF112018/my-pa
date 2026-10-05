@@ -326,6 +326,21 @@ def test_downgrading_one_step_removes_exactly_this_table_and_restores_the_origin
         # CRL-WP-03. The Capture lifecycle revision stacks its two tables.
         "capture_lifecycle_events",
         "capture_lifecycle_receipts",
+        # KLP-WP-02. The Knowledge revision stacks its fourteen tables.
+        "knowledge_assertion_predicates",
+        "knowledge_discovery_source_profiles",
+        "knowledge_assertion_submissions",
+        "knowledge_evidence_refs",
+        "knowledge_assertion_subject_locks",
+        "knowledge_assertion_proposals",
+        "knowledge_assertion_review_decisions",
+        "knowledge_assertions",
+        "knowledge_assertion_mutations",
+        "knowledge_assertion_evidence_links",
+        "knowledge_submission_evidence",
+        "knowledge_submission_trigger_events",
+        "knowledge_discovery_checkpoints",
+        "knowledge_discovery_checkpoint_requests",
     }
     # The rest of the entity plane survives the downgrade of this revision alone.
     assert {

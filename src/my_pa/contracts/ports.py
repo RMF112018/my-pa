@@ -361,8 +361,22 @@ __all__ = [
     "FrameRepository",
     "InitialAlias",
     "InitialIdentifier",
+    "KnowledgeAssertionHistory",
+    "KnowledgeAssertionPage",
+    "KnowledgeAssertionRepository",
+    "KnowledgeAssertionReveal",
+    "KnowledgeAssertionRow",
+    "KnowledgeCaptureWithdrawnError",
+    "KnowledgeConcurrentDuplicateError",
+    "KnowledgeCreateEvidence",
+    "KnowledgeCreateRequest",
+    "KnowledgeEvidenceNotFoundError",
+    "KnowledgeEvidenceRow",
+    "KnowledgeIdempotencyConflictError",
+    "KnowledgeMutationRow",
     "KnowledgeRecord",
     "KnowledgeRepository",
+    "KnowledgeSubmissionResult",
     "ManagedAdmission",
     "ManagedByteStore",
     "ManagedDocumentRepository",
@@ -4934,6 +4948,241 @@ class GoodNotesSemanticReviewDecisionRecord:
     replayed: bool = False
 
 
+# --- KLP-WP-03: the Knowledge Assertion plane ---------------------------------
+#
+# The read/create seam of `knowledge.knowledge_assertions`. Every method takes the
+# authenticated Principal's partition as `principal_id` and, for reads, a
+# server-derived `remote` flag (R6 section 5.2: `transport is REMOTE_CLIENT or
+# capability_grants is not None`). A remote read excludes every `withheld_remote`
+# assertion in SQL before LIMIT, so a remote page is never short and a withheld
+# row never reaches a row, a count or a cursor.
+
+
+class KnowledgeIdempotencyConflictError(PortError):
+    """An explicit-create key is already bound to a different request digest."""
+
+
+class KnowledgeConcurrentDuplicateError(PortError):
+    """A concurrent create made this candidate a duplicate after its C2 reads.
+
+    Raised under the C6 subject lock, before any assertion is written; the
+    transaction rolls back whole, so no evidence, link, mutation or event row
+    survives (KLP-AC-148). A retry replays the deterministic `duplicate_existing`.
+    """
+
+
+class KnowledgeEvidenceNotFoundError(PortError):
+    """A cited capture or memory version is absent or another Principal's.
+
+    One answer for both, so the refusal is no existence oracle.
+    """
+
+
+class KnowledgeCaptureWithdrawnError(PortError):
+    """A cited capture root was archived after the C2 read (the C4c fence)."""
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeAssertionRow:
+    """One stored assertion, as the plane's reads disclose it. No evidence text."""
+
+    assertion_id: str
+    subject_kind: str
+    subject_id: str
+    predicate_code: str
+    predicate_version: int
+    value_type: str
+    value_text: str | None = field(repr=False)
+    value_datetime: datetime | None
+    qualifier: Mapping[str, object] | None
+    effective_from: datetime | None
+    effective_to: datetime | None
+    epistemic_status: str
+    classification: str
+    lifecycle: str
+    version: int
+    supersedes_assertion_id: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeAssertionPage:
+    """One keyset page, newest first; `has_more` says a further row exists."""
+
+    rows: tuple[KnowledgeAssertionRow, ...]
+    has_more: bool
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeMutationRow:
+    """One append-only mutation receipt of an assertion."""
+
+    mutation_id: str
+    mutation_kind: str
+    prior_version: int
+    new_version: int
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeAssertionHistory:
+    """An assertion, its mutation receipts and its visible supersession neighbours."""
+
+    assertion: KnowledgeAssertionRow
+    mutations: tuple[KnowledgeMutationRow, ...]
+    predecessor_id: str | None
+    successor_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeEvidenceRow:
+    """One evidence link of an assertion: identity, role and current state."""
+
+    evidence_ref_id: str
+    evidence_role: str
+    identity_kind: str
+    capture_id: str | None
+    relationship_memory_id: str | None
+    source_profile_id: str | None
+    external_object_id: str | None
+    external_version_id: str | None
+    content_hash: str
+    excerpt: str | None = field(repr=False)
+    excerpt_sha256: str | None
+    content_origin: str
+    source_classification: str
+    availability_state: str
+    availability_revalidation_pending: bool
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeAssertionReveal:
+    """The provenance behind one assertion: its origin and its evidence links."""
+
+    assertion: KnowledgeAssertionRow
+    submission_id: str
+    submission_origin: str
+    evidence: tuple[KnowledgeEvidenceRow, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeCreateEvidence:
+    """One cited capture or memory version of an explicit create."""
+
+    identity_kind: str
+    content_hash: str
+    role: str
+    capture_id: str | None = None
+    relationship_memory_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeCreateRequest:
+    """Everything the explicit-create transaction needs, derived by the application.
+
+    The predicate head was read at C2 and is passed back so the transaction
+    inserts against exactly the version whose structure the value was
+    normalized under. `domain_owned` routes the submission to
+    `domain_owned_no_intake` with no assertion.
+    """
+
+    idempotency_key: str
+    authenticated_client_id: str | None
+    request_digest: str
+    subject_kind: str
+    subject_id: str
+    predicate_code: str
+    predicate_version: int
+    value_type: str
+    cardinality: str
+    temporal_semantics: str
+    qualifier_rule: str
+    allowed_entity_types: frozenset[str]
+    canonical_owner: str
+    classification_floor: Classification
+    value_text: str | None = field(repr=False)
+    value_datetime: datetime | None
+    normalized_value_sha256: str
+    qualifier: Mapping[str, object] | None
+    effective_from: datetime | None
+    effective_to: datetime | None
+    assertion_fingerprint: str
+    evidence: tuple[KnowledgeCreateEvidence, ...]
+    domain_owned: bool
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeSubmissionResult:
+    """The stored public result of one submission plus the read-only current lifecycle.
+
+    Identical on the fresh call and on every replay of the same key (R6 6.3):
+    `current_lifecycle` is the one field read at response time.
+    """
+
+    submission_id: str
+    outcome: str
+    reason: str
+    assertion_id: str | None
+    assertion_version: int | None
+    mutation_id: str | None
+    canonical_owner: str | None
+    current_lifecycle: str | None
+
+
+class KnowledgeAssertionRepository(ABC):
+    """The Knowledge Assertion plane, inside one transaction (KLP-WP-03)."""
+
+    @abstractmethod
+    def predicate_head(self, predicate_code: str) -> Any:  # noqa: ANN401 - KnowledgePredicate
+        """The head version of `predicate_code`, or `None` when it is unregistered."""
+
+    @abstractmethod
+    def read(
+        self, principal_id: str, assertion_id: str, *, remote: bool
+    ) -> KnowledgeAssertionRow | None:
+        """One assertion of this Principal, or `None` (absent, foreign or withheld)."""
+
+    @abstractmethod
+    def page(
+        self,
+        principal_id: str,
+        *,
+        remote: bool,
+        subject_kind: str | None,
+        subject_id: str | None,
+        predicate_code: str | None,
+        lifecycles: frozenset[str],
+        query: str | None,
+        after: tuple[datetime, str] | None,
+        limit: int,
+    ) -> KnowledgeAssertionPage:
+        """One page, newest first, withheld rows excluded before LIMIT when remote."""
+
+    @abstractmethod
+    def history(
+        self, principal_id: str, assertion_id: str, *, remote: bool
+    ) -> KnowledgeAssertionHistory | None:
+        """The assertion's receipts and neighbours, or `None` (absent, foreign, withheld)."""
+
+    @abstractmethod
+    def reveal(
+        self, principal_id: str, assertion_id: str, *, remote: bool
+    ) -> KnowledgeAssertionReveal | None:
+        """The assertion's provenance, or `None` (absent, foreign, withheld)."""
+
+    @abstractmethod
+    def create(
+        self,
+        principal_id: str,
+        request: KnowledgeCreateRequest,
+        *,
+        at: datetime,
+        correlation_id: str,
+    ) -> KnowledgeSubmissionResult:
+        """Run one explicit create under the R6 section 8.1 lock order, or replay it."""
+
+
 class RecordEventStager(ABC):
     """The transaction-local Record Event buffer one unit of work owns (WP-RE-01).
 
@@ -5436,6 +5685,18 @@ class UnitOfWork(ABC):
 
         `principal_id` remains a parameter on every method of the port and is
         the authenticated caller's partition, never a caller-supplied field.
+        """
+        raise NotImplementedError
+
+    @property
+    def knowledge_assertions(self) -> KnowledgeAssertionRepository:
+        """The Knowledge Assertion plane, inside this transaction (KLP-WP-03).
+
+        Non-abstract with a refusal, the `relationship_memory` shape: narrow test
+        doubles implement only the ports their subject needs. The canonical
+        PostgreSQL composition overrides it with a repository built with this
+        unit of work's Record Event stager; a build that has not composed the
+        plane never reaches it, because `ApplicationService` refuses first.
         """
         raise NotImplementedError
 

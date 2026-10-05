@@ -76,6 +76,7 @@ from my_pa.contracts.ports import (
     EntitiesRepository,
     EvidenceUnavailableError,
     GoodNotesSemanticRepository,
+    KnowledgeAssertionRepository,
     KnowledgeRecord,
     KnowledgeRepository,
     ManagedDocumentRepository,
@@ -205,6 +206,9 @@ from my_pa.infrastructure.persistence.knowledge import (
     outcome_for_object,
     read_extraction,
     scope_beyond_enrollment,
+)
+from my_pa.infrastructure.persistence.knowledge_assertions import (
+    SqlKnowledgeAssertionRepository,
 )
 from my_pa.infrastructure.persistence.managed_documents import SqlManagedDocumentRepository
 from my_pa.infrastructure.persistence.meetings import SqlMeetingRepository
@@ -1477,6 +1481,17 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def relationship_memory(self) -> RelationshipMemoryRepository:
         """The Relationship Memory rows, on this transaction's connection."""
         return SqlRelationshipMemoryRepository(self._open, stager=self._record_events)
+
+    @property
+    def knowledge_assertions(self) -> KnowledgeAssertionRepository:
+        """The Knowledge Assertion plane, on this transaction's connection (KLP-WP-03).
+
+        Always built with this unit of work's Record Event buffer (KLP-AC-123),
+        so an explicit create's event commits or rolls back with the create.
+        Ungated here, as `relationship_memory` is: whether the plane is composed
+        is `ApplicationService`'s answer.
+        """
+        return SqlKnowledgeAssertionRepository(self._open, stager=self._record_events)
 
     @property
     def relationship_memory_proposals(self) -> RelationshipMemoryProposalRepository:

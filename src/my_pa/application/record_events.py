@@ -146,11 +146,16 @@ def granted_read(capability: Capability, grants: Grants) -> bool:
     return bool(granted_purposes(capability, grants))
 
 
-def memory_disclosure(grants: Grants | None) -> MemoryDisclosure:
-    """Local callers see restricted memory events; remote callers never do."""
+def memory_disclosure(grants: Grants | None, *, remote_transport: bool = False) -> MemoryDisclosure:
+    """Local callers see restricted memory events; remote callers never do.
+
+    Remote is R6 section 5.2's predicate (KLP-WP-03): a grant ceiling *or* a
+    `REMOTE_CLIENT` transport, so a remote composition that attached no grant
+    set still fails closed.
+    """
     return (
         MemoryDisclosure.INCLUDE_RESTRICTED
-        if grants is None
+        if grants is None and not remote_transport
         else MemoryDisclosure.EXCLUDE_RESTRICTED
     )
 
@@ -402,6 +407,7 @@ def list_record_events(
     record_families: object,
     page_size: int,
     cursor: str | None,
+    remote_transport: bool = False,
 ) -> RecordEventListView:
     """One `record_events.list` page for the server-resolved `principal_id`.
 
@@ -415,7 +421,7 @@ def list_record_events(
     requested = requested_families(record_families)
     visible = visible_families(available_capabilities, capability_grants)
     effective = effective_families(visible, requested)
-    disclosure = memory_disclosure(capability_grants)
+    disclosure = memory_disclosure(capability_grants, remote_transport=remote_transport)
     include_restricted = disclosure is MemoryDisclosure.INCLUDE_RESTRICTED
     binding = cursor_binding(
         principal_id=principal_id,

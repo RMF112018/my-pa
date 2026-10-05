@@ -92,6 +92,7 @@ from my_pa.application.commands import (
     CreateEntityParticipation,
     CreateEntityProposal,
     CreateEntityRelationship,
+    CreateKnowledgeAssertion,
     CreateManagedDocument,
     CreateMeeting,
     CreateProject,
@@ -122,6 +123,7 @@ from my_pa.application.commands import (
     GetGoodNotesPullStatus,
     GetGoodNotesWork,
     GetGsqsB0Status,
+    GetKnowledgeAssertionHistory,
     GetLatestIntelligenceArtifact,
     GetPulse,
     GetRelationshipMemory,
@@ -146,6 +148,7 @@ from my_pa.application.commands import (
     ListGoodNotesPages,
     ListGoodNotesRuns,
     ListIntelligenceArtifacts,
+    ListKnowledgeAssertions,
     ListManagedDocuments,
     ListMeetings,
     ListPortfolioConstraints,
@@ -178,6 +181,7 @@ from my_pa.application.commands import (
     ReadGoodNotes,
     ReadIntelligenceArtifact,
     ReadKnowledge,
+    ReadKnowledgeAssertion,
     ReadManagedDocument,
     ReadMeeting,
     ReadPortfolioConstraintOverview,
@@ -203,6 +207,7 @@ from my_pa.application.commands import (
     RetireEntityCommunicationMethod,
     RetireEntityIdentifier,
     RetireEntityName,
+    RevealKnowledgeAssertion,
     RevealSubject,
     ReviseCapture,
     ReviseEntityAddress,
@@ -220,6 +225,7 @@ from my_pa.application.commands import (
     SearchGoodNotes,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
+    SearchKnowledgeAssertions,
     SearchMeetings,
     SearchPortfolioConstraints,
     SearchRelationshipMemories,
@@ -2398,6 +2404,38 @@ def _list_record_events(payload: Mapping[str, Any]) -> Command:
     return ListRecordEvents(**converted)
 
 
+def _create_knowledge_assertion(payload: Mapping[str, Any]) -> Command:
+    """`knowledge.assertions.create`: two instants become datetimes, evidence a tuple.
+
+    Shape conversion only, as `_memory_moments` is. A server-owned field --
+    `principal_id`, a classification, an epistemic status, an actor or an
+    authority -- reaches the frozen dataclass as an unexpected keyword and is
+    refused there (KLP-AC-018).
+    """
+    converted = dict(payload)
+    for name, detail in (
+        ("effective_from", SafeDetail.EFFECTIVE_FROM),
+        ("effective_to", SafeDetail.EFFECTIVE_TO),
+    ):
+        supplied = converted.get(name)
+        if supplied is None:
+            continue
+        if not isinstance(supplied, str):
+            raise InvalidRequestError(detail)
+        parsed: datetime | None
+        try:
+            parsed = datetime.fromisoformat(supplied)
+        except ValueError:
+            parsed = None
+        if parsed is None:
+            raise InvalidRequestError(detail)
+        converted[name] = parsed
+    evidence = converted.get("evidence")
+    if isinstance(evidence, list):
+        converted["evidence"] = tuple(evidence)
+    return CreateKnowledgeAssertion(**converted)
+
+
 def _list_meetings(payload: Mapping[str, Any]) -> Command:
     return ListMeetings(**_meeting_shapes(payload))
 
@@ -2597,6 +2635,16 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.MEETINGS_UPDATE: _update_meeting,
         Capability.MEETINGS_SERIES_UPDATE: _update_meeting_series,
         Capability.RECORD_EVENTS_LIST: _list_record_events,
+        Capability.KNOWLEDGE_ASSERTIONS_READ: lambda payload: ReadKnowledgeAssertion(**payload),
+        Capability.KNOWLEDGE_ASSERTIONS_LIST: lambda payload: ListKnowledgeAssertions(**payload),
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH: lambda payload: SearchKnowledgeAssertions(
+            **payload
+        ),
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY: lambda payload: GetKnowledgeAssertionHistory(
+            **payload
+        ),
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL: lambda payload: RevealKnowledgeAssertion(**payload),
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE: _create_knowledge_assertion,
     }
 )
 

@@ -124,6 +124,7 @@ from my_pa.application.authorization import Authorization, authorize
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
 from my_pa.application.capture_lifecycle import transition_capture
 from my_pa.application.commands import (
+    MAX_KNOWLEDGE_PAGE_SIZE,
     AcknowledgeConstraintSync,
     AddEntityAddress,
     AddEntityAlias,
@@ -158,6 +159,7 @@ from my_pa.application.commands import (
     CreateEntityParticipation,
     CreateEntityProposal,
     CreateEntityRelationship,
+    CreateKnowledgeAssertion,
     CreateManagedDocument,
     CreateManagedDocumentCommand,
     CreateMeeting,
@@ -189,6 +191,7 @@ from my_pa.application.commands import (
     GetGoodNotesPullStatus,
     GetGoodNotesWork,
     GetGsqsB0Status,
+    GetKnowledgeAssertionHistory,
     GetLatestIntelligenceArtifact,
     GetPulse,
     GetRelationshipMemory,
@@ -213,6 +216,7 @@ from my_pa.application.commands import (
     ListGoodNotesPages,
     ListGoodNotesRuns,
     ListIntelligenceArtifacts,
+    ListKnowledgeAssertions,
     ListManagedDocuments,
     ListManagedDocumentsCommand,
     ListMeetings,
@@ -246,6 +250,7 @@ from my_pa.application.commands import (
     ReadGoodNotes,
     ReadIntelligenceArtifact,
     ReadKnowledge,
+    ReadKnowledgeAssertion,
     ReadManagedDocument,
     ReadManagedDocumentCommand,
     ReadMeeting,
@@ -273,6 +278,7 @@ from my_pa.application.commands import (
     RetireEntityCommunicationMethod,
     RetireEntityIdentifier,
     RetireEntityName,
+    RevealKnowledgeAssertion,
     RevealSubject,
     ReviseCapture,
     ReviseEntityAddress,
@@ -291,6 +297,7 @@ from my_pa.application.commands import (
     SearchGoodNotes,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
+    SearchKnowledgeAssertions,
     SearchMeetings,
     SearchPortfolioConstraints,
     SearchRelationshipMemories,
@@ -461,6 +468,19 @@ from my_pa.application.intelligence import (
     resolve_set,
     search_artifacts,
 )
+from my_pa.application.knowledge_assertions import (
+    DEFAULT_KNOWLEDGE_PAGE_SIZE,
+    KNOWLEDGE_TRUST_BASIS,
+    decode_knowledge_cursor,
+)
+from my_pa.application.knowledge_assertions import assertion_view as knowledge_assertion_view
+from my_pa.application.knowledge_assertions import create_request as knowledge_create_request
+from my_pa.application.knowledge_assertions import history_view as knowledge_history_view
+from my_pa.application.knowledge_assertions import is_remote as knowledge_is_remote
+from my_pa.application.knowledge_assertions import lifecycles_for as knowledge_lifecycles_for
+from my_pa.application.knowledge_assertions import page_view as knowledge_page_view
+from my_pa.application.knowledge_assertions import reveal_view as knowledge_reveal_view
+from my_pa.application.knowledge_assertions import submission_view as knowledge_submission_view
 from my_pa.application.managed_documents import ManagedDocumentService
 from my_pa.application.meetings import (
     MeetingApplication,
@@ -498,6 +518,10 @@ from my_pa.contracts.ports import (
     EntitySummary,
     EvidenceUnavailableError,
     GoodNotesPullRepositoryConflictError,
+    KnowledgeCaptureWithdrawnError,
+    KnowledgeConcurrentDuplicateError,
+    KnowledgeEvidenceNotFoundError,
+    KnowledgeIdempotencyConflictError,
     ManagedByteStore,
     MeetingListPage,
     MemoryDetail,
@@ -606,6 +630,7 @@ from my_pa.domain.goodnotes.models import GoodNotesReviewCase, GoodNotesSemantic
 from my_pa.domain.identity.operation import Capability, granted_purposes
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.knowledge_assertion.vocabulary import KnowledgeAssertionLifecycle
 from my_pa.domain.meeting.model import (
     MAX_MEETING_PAGE_SIZE,
     MeetingCursorError,
@@ -1227,6 +1252,16 @@ def _port_failure(error: PortError) -> ApplicationError:
     """The public error a port failure is, by classification and nothing else."""
     if isinstance(error, UnknownScopeError):
         return NotFoundError(SafeDetail.ENROLLMENT_ID)
+    # KLP-WP-03: the Knowledge plane's refusals. Each is raised before or under
+    # the C6 lock and rolls the whole create back, so none leaves a row.
+    if isinstance(error, KnowledgeIdempotencyConflictError):
+        return ConflictError(SafeDetail.IDEMPOTENCY_CONFLICT)
+    if isinstance(error, KnowledgeConcurrentDuplicateError):
+        return ConflictError(SafeDetail.DUPLICATE_FACT)
+    if isinstance(error, KnowledgeEvidenceNotFoundError):
+        return NotFoundError(SafeDetail.EVIDENCE)
+    if isinstance(error, KnowledgeCaptureWithdrawnError):
+        return DeniedError(SafeDetail.CAPTURE_WITHDRAWN)
     if isinstance(error, EvidenceUnavailableError):
         return UnavailableError()
     return InternalError()
@@ -3763,6 +3798,7 @@ class ApplicationService:
         relationship_intelligence_enabled: bool = False,
         relationship_intelligence_writes_enabled: bool = False,
         relationship_memory_enabled: bool = False,
+        knowledge_assertions_enabled: bool = False,
         relationship_identity_correction_enabled: bool = False,
         relationship_reenrichment_enabled: bool = False,
         producer_origins: ProducerOriginRegistry | None = None,
@@ -3801,6 +3837,11 @@ class ApplicationService:
         #: never widens an absent one.
         self._relationship_intelligence_writes_enabled = relationship_intelligence_writes_enabled
         self._relationship_memory_enabled = relationship_memory_enabled
+        #: KLP-WP-03: whether this build serves the Knowledge Assertion plane.
+        #: Default `False`, the failing-closed direction, and it needs the entity
+        #: plane as well (`Settings._check` refuses the switch without it): an
+        #: assertion's Entity subject is proven by reading the entity tables.
+        self._knowledge_assertions_enabled = knowledge_assertions_enabled
         # The third gate, and it is the narrowest. `_identity_correction_plane`
         # is the floor every one of its handlers asks; `available_capabilities`
         # is what `capabilities.get` and the MCP tool list read. Default `False`
@@ -3949,6 +3990,13 @@ class ApplicationService:
         # repository proves ownership of it by reading `knowledge.entities`.
         if not (self._relationship_intelligence_enabled and self._relationship_memory_enabled):
             served -= _RELATIONSHIP_MEMORY_CAPABILITIES
+        # KLP-WP-03 (KLP-AC-083): the Knowledge plane's switch, conjoined with
+        # the entity plane its subjects belong to. Off withholds all six names
+        # from `capabilities.get`, the MCP tool list and -- because the
+        # `knowledge_assertion` family's reads are among them -- the Record Event
+        # feed's visible families (KLP-AC-141).
+        if not (self._knowledge_assertions_enabled and self._relationship_intelligence_enabled):
+            served -= _KNOWLEDGE_ASSERTION_CAPABILITIES
         # A proposal surface without a trusted server registration would
         # advertise a write every authenticated caller can only be denied.
         # Withhold both producer capabilities when composition has no exact
@@ -5297,6 +5345,10 @@ class ApplicationService:
         Reveal be shown beside an item without becoming a second read of the
         content `capture.read` audits under its own capability.
         """
+        # KLP-AC-001: a Knowledge Assertion is not an extraction-plane subject,
+        # and `knowledge.reveal` answers it exactly as an absent subject.
+        if command.subject_id.startswith(f"{IdKind.KNOWLEDGE_ASSERTION.value}_"):
+            raise NotFoundError(SafeDetail.SUBJECT)
         with _translated():
             reveal = unit_of_work.captures.reveal(
                 command.subject_id, principal_id=authorization.principal.principal_id
@@ -12496,6 +12548,208 @@ class ApplicationService:
 
     # ---- the Record Event change feed (WP-RE-06) ------------------------------
 
+    # ---- the Knowledge Assertion plane (KLP-WP-03) ---------------------------
+
+    def _knowledge_plane(self, authorization: Authorization, capability: Capability) -> None:
+        """Refuse unless the Knowledge plane is composed and, remotely, granted.
+
+        The `_relationship_memory_plane` floor: `available_capabilities` withholds
+        the six names, and the HTTP transport routes by path segment straight
+        into `_HANDLERS`, so every handler asks again here. A grant ceiling is
+        re-checked for the capability's own purpose, as `record_events.list`
+        does, because `invoke` itself does not consult the grant set.
+        """
+        if not (self._knowledge_assertions_enabled and self._relationship_intelligence_enabled):
+            raise UnsupportedError()
+        grants = authorization.capability_grants
+        if grants is not None and not granted_purposes(capability, grants):
+            raise UnsupportedError()
+
+    def _knowledge_page_size(self, requested: int | None) -> int:
+        """The effective page bound: the caller's, the published limit, never above 100."""
+        size = DEFAULT_KNOWLEDGE_PAGE_SIZE if requested is None else requested
+        return min(size, self._limits.max_page_size, MAX_KNOWLEDGE_PAGE_SIZE)
+
+    @staticmethod
+    def _knowledge_result(
+        authorization: Authorization, payload: dict[str, object], next_cursor: str | None = None
+    ) -> _Result:
+        return _Result(
+            payload=payload,
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=KNOWLEDGE_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=next_cursor is not None,
+                    reason="page_size_reached" if next_cursor is not None else None,
+                    next_cursor=next_cursor,
+                ),
+            ),
+        )
+
+    def _knowledge_assertions_read(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReadKnowledgeAssertion,
+    ) -> _Result:
+        """One assertion; absent, foreign and remotely withheld answer alike."""
+        self._knowledge_plane(authorization, command.capability)
+        with _translated():
+            row = unit_of_work.knowledge_assertions.read(
+                authorization.principal.principal_id,
+                command.assertion_id,
+                remote=knowledge_is_remote(authorization),
+            )
+        if row is None:
+            raise NotFoundError(SafeDetail.SUBJECT)
+        return self._knowledge_result(authorization, {"assertion": knowledge_assertion_view(row)})
+
+    def _knowledge_page(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        *,
+        subject_kind: str | None,
+        subject_id: str | None,
+        predicate_code: str | None,
+        lifecycle: KnowledgeAssertionLifecycle | None,
+        query: str | None,
+        page_size: int | None,
+        cursor: str | None,
+    ) -> _Result:
+        after = decode_knowledge_cursor(cursor)
+        with _translated():
+            page = unit_of_work.knowledge_assertions.page(
+                authorization.principal.principal_id,
+                remote=knowledge_is_remote(authorization),
+                subject_kind=subject_kind,
+                subject_id=subject_id,
+                predicate_code=predicate_code,
+                lifecycles=knowledge_lifecycles_for(lifecycle),
+                query=query,
+                after=after,
+                limit=self._knowledge_page_size(page_size),
+            )
+        payload = knowledge_page_view(page)
+        next_cursor = payload["next_cursor"]
+        return self._knowledge_result(
+            authorization, payload, next_cursor if isinstance(next_cursor, str) else None
+        )
+
+    def _knowledge_assertions_list(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListKnowledgeAssertions,
+    ) -> _Result:
+        """A newest-first page; remote withholding is applied before LIMIT in SQL."""
+        self._knowledge_plane(authorization, command.capability)
+        return self._knowledge_page(
+            unit_of_work,
+            authorization,
+            subject_kind=None if command.subject_kind is None else command.subject_kind.value,
+            subject_id=command.subject_id,
+            predicate_code=command.predicate_code,
+            lifecycle=command.lifecycle,
+            query=None,
+            page_size=command.page_size,
+            cursor=command.cursor,
+        )
+
+    def _knowledge_assertions_search(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: SearchKnowledgeAssertions,
+    ) -> _Result:
+        """A newest-first page of text values containing the phrase."""
+        self._knowledge_plane(authorization, command.capability)
+        return self._knowledge_page(
+            unit_of_work,
+            authorization,
+            subject_kind=None,
+            subject_id=None,
+            predicate_code=command.predicate_code,
+            lifecycle=command.lifecycle,
+            query=command.query,
+            page_size=command.page_size,
+            cursor=command.cursor,
+        )
+
+    def _knowledge_assertions_history(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: GetKnowledgeAssertionHistory,
+    ) -> _Result:
+        """The receipts of one assertion and its visible supersession neighbours."""
+        self._knowledge_plane(authorization, command.capability)
+        with _translated():
+            history = unit_of_work.knowledge_assertions.history(
+                authorization.principal.principal_id,
+                command.assertion_id,
+                remote=knowledge_is_remote(authorization),
+            )
+        if history is None:
+            raise NotFoundError(SafeDetail.SUBJECT)
+        return self._knowledge_result(authorization, knowledge_history_view(history))
+
+    def _knowledge_assertions_reveal(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: RevealKnowledgeAssertion,
+    ) -> _Result:
+        """The provenance of one assertion.
+
+        Any identifier that is not a `kasr_` -- a capture-plane `asrt_` included
+        -- is not found, exactly as an absent assertion is (KLP-AC-001).
+        """
+        self._knowledge_plane(authorization, command.capability)
+        if not command.assertion_id.startswith(f"{IdKind.KNOWLEDGE_ASSERTION.value}_"):
+            raise NotFoundError(SafeDetail.SUBJECT)
+        with _translated():
+            reveal = unit_of_work.knowledge_assertions.reveal(
+                authorization.principal.principal_id,
+                command.assertion_id,
+                remote=knowledge_is_remote(authorization),
+            )
+        if reveal is None:
+            raise NotFoundError(SafeDetail.SUBJECT)
+        return self._knowledge_result(authorization, knowledge_reveal_view(reveal))
+
+    def _knowledge_assertions_create(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: CreateKnowledgeAssertion,
+    ) -> _Result:
+        """One explicit create, replayed permanently per key (R6 sections 6.3, 8.1).
+
+        Admissibility refusals precede every subject, evidence and ledger read,
+        so they write no row and say nothing about what exists. A replay with an
+        equal digest returns the stored result plus the read-only
+        `current_lifecycle`; a different digest is `conflict(idempotency_conflict)`.
+        """
+        self._knowledge_plane(authorization, command.capability)
+        repository = unit_of_work.knowledge_assertions
+        with _translated():
+            predicate = repository.predicate_head(command.predicate_code)
+        request = knowledge_create_request(
+            command,
+            predicate,
+            authenticated_client_id=authorization.authenticated_client_id,
+        )
+        with _translated():
+            result = repository.create(
+                authorization.principal.principal_id,
+                request,
+                at=authorization.at,
+                correlation_id=authorization.correlation_id,
+            )
+        return self._knowledge_result(authorization, knowledge_submission_view(result))
+
     def _record_events_list(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListRecordEvents
     ) -> _Result:
@@ -12524,6 +12778,7 @@ class ApplicationService:
                     command.page_size, published_max=self._limits.max_page_size
                 ),
                 cursor=command.cursor,
+                remote_transport=authorization.transport is CaptureTransport.REMOTE_CLIENT,
             )
         has_more = view.next_cursor is not None
         return _Result(
@@ -14167,6 +14422,12 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.MEETINGS_UPDATE: ApplicationService._meetings_update,
         Capability.MEETINGS_SERIES_UPDATE: ApplicationService._meetings_series_update,
         Capability.RECORD_EVENTS_LIST: ApplicationService._record_events_list,
+        Capability.KNOWLEDGE_ASSERTIONS_READ: ApplicationService._knowledge_assertions_read,
+        Capability.KNOWLEDGE_ASSERTIONS_LIST: ApplicationService._knowledge_assertions_list,
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH: ApplicationService._knowledge_assertions_search,
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY: ApplicationService._knowledge_assertions_history,
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL: ApplicationService._knowledge_assertions_reveal,
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE: ApplicationService._knowledge_assertions_create,
     }
 )
 
@@ -14196,6 +14457,20 @@ def published_capabilities(
 #: it. Written out rather than derived from the `entities.` prefix, for the
 #: reason `_MANAGED_CAPABILITIES` is: admitting another is a decision here and
 #: not a spelling that happens to start the right way.
+#: KLP-WP-03: the Knowledge Assertion plane's six names, written out one at a
+#: time and never selected by a `knowledge.` prefix -- the extraction plane's
+#: `knowledge.search`/`read`/`reveal`/`coverage` are not in it (KLP-AC-001).
+_KNOWLEDGE_ASSERTION_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.KNOWLEDGE_ASSERTIONS_READ,
+        Capability.KNOWLEDGE_ASSERTIONS_LIST,
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH,
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE,
+    }
+)
+
 _ENTITY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     {
         Capability.ENTITIES_SEARCH,

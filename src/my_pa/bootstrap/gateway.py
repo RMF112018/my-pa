@@ -76,7 +76,7 @@ principal is the only principal; no credential is issued, read, or required.
 `OPERATOR` rather than `GATEWAY` because the process *is* the operator's local
 transport — a `GATEWAY` principal cannot invoke `sources.enroll`, so the choice
 is between naming what this is and shipping a transport that cannot reach one of
-the 181 capabilities.
+the 187 capabilities.
 
 `entra` composes `entra_authenticator` instead and issues **no** process
 principal. Every request presents a bearer token, the token's validated
@@ -1106,6 +1106,12 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
                 settings.relationship_intelligence_writes_enabled
             ),
             relationship_memory_enabled=settings.relationship_memory_enabled,
+            # KLP-WP-03. `Settings._check` already refuses the switch without the
+            # entity plane; the conjunction is restated so a hand-built settings
+            # object cannot compose the Knowledge plane alone.
+            knowledge_assertions_enabled=(
+                settings.knowledge_assertions_enabled and settings.relationship_intelligence_enabled
+            ),
             relationship_identity_correction_enabled=(
                 settings.relationship_identity_correction_enabled
             ),

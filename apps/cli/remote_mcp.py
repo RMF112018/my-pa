@@ -62,6 +62,9 @@ def _planes_from_settings(settings: Settings) -> ChatLLMCompositionPlanes:
         relationship_intelligence_writes=settings.relationship_intelligence_writes_enabled,
         relationship_memory=settings.relationship_memory_enabled,
         constraints=True,
+        knowledge_assertions=(
+            settings.knowledge_assertions_enabled and settings.relationship_intelligence_enabled
+        ),
     )
 
 

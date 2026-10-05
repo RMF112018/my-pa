@@ -386,11 +386,23 @@ class Purpose(StrEnum):
     MEETING_READ = "meeting_read"
     MEETING_AUTHORING = "meeting_authoring"
     # The Record Event change feed (WP-RE-06), on `D-91`: would reuse widen the
-    # grant? Every candidate would. The feed spans twenty-two record families
+    # grant? Every candidate would. The feed spans twenty-three record families
     # across the Task, Task-comment, Commitment, Project, Entity, Relationship
-    # Memory, Constraint, Meeting and Capture planes (WP-RE-08 added the Capture
-    # and Task-comment planes), so admitting it under any one plane's read
+    # Memory, Constraint, Meeting, Capture and Knowledge Assertion planes
+    # (WP-RE-08 added the Capture and Task-comment planes, KLP-WP-03 the
+    # Knowledge Assertion plane), so admitting it under any one plane's read
     # purpose would let a grant issued for that plane enumerate change activity
     # on all the others. A purpose of its own, read-only: the feed never writes, and which
     # families it discloses is still narrowed to the caller's own family grants.
     RECORD_EVENT_READ = "record_event_read"
+    # The Knowledge Assertion plane (KLP-WP-03), on `D-91`: would reuse widen
+    # the grant? Every candidate would. `knowledge_read`/`knowledge_search` are
+    # one enrollment's extraction plane; a Knowledge Assertion is the
+    # Principal's own registered fact with its own effective-classification
+    # withholding, so admitting it under an extraction purpose would let a grant
+    # issued for extracted text read registered facts and the reverse. A
+    # read/authoring pair of its own, on the capture plane's split: a grant
+    # issued to read must never also create. `knowledge_assertion_authoring` is
+    # a remote-write purpose (KLP-AC-016).
+    KNOWLEDGE_ASSERTION_READ = "knowledge_assertion_read"
+    KNOWLEDGE_ASSERTION_AUTHORING = "knowledge_assertion_authoring"

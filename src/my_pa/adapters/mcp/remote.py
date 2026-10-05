@@ -64,6 +64,10 @@ _WRITE_PURPOSES: Final = frozenset(
         # classified remote reads -- routed to `my_pa.read` and not write-gated.
         # `meeting_read` stays out, for the reason every read purpose does.
         Purpose.MEETING_AUTHORING,
+        # KLP-WP-03 (KLP-AC-016/017/103). Without it `knowledge.assertions.create`
+        # would be classified a remote read -- published while writes are
+        # disabled and routed to `my_pa.read`. `knowledge_assertion_read` stays out.
+        Purpose.KNOWLEDGE_ASSERTION_AUTHORING,
         Purpose.CONTEXT_PREFERENCE,
         Purpose.GOODNOTES_PROPOSAL,
         Purpose.REPORT_AUTHORING,

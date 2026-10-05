@@ -82,6 +82,7 @@ from my_pa.application.commands import (
     CreateEntityParticipation,
     CreateEntityProposal,
     CreateEntityRelationship,
+    CreateKnowledgeAssertion,
     CreateManagedDocument,
     CreateMeeting,
     CreateProject,
@@ -112,6 +113,7 @@ from my_pa.application.commands import (
     GetGoodNotesPullStatus,
     GetGoodNotesWork,
     GetGsqsB0Status,
+    GetKnowledgeAssertionHistory,
     GetLatestIntelligenceArtifact,
     GetPulse,
     GetRelationshipMemory,
@@ -136,6 +138,7 @@ from my_pa.application.commands import (
     ListGoodNotesPages,
     ListGoodNotesRuns,
     ListIntelligenceArtifacts,
+    ListKnowledgeAssertions,
     ListManagedDocuments,
     ListMeetings,
     ListPortfolioConstraints,
@@ -168,6 +171,7 @@ from my_pa.application.commands import (
     ReadGoodNotes,
     ReadIntelligenceArtifact,
     ReadKnowledge,
+    ReadKnowledgeAssertion,
     ReadManagedDocument,
     ReadMeeting,
     ReadPortfolioConstraintOverview,
@@ -192,6 +196,7 @@ from my_pa.application.commands import (
     RetireEntityCommunicationMethod,
     RetireEntityIdentifier,
     RetireEntityName,
+    RevealKnowledgeAssertion,
     RevealSubject,
     ReviseCapture,
     ReviseEntityAddress,
@@ -209,6 +214,7 @@ from my_pa.application.commands import (
     SearchGoodNotes,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
+    SearchKnowledgeAssertions,
     SearchMeetings,
     SearchPortfolioConstraints,
     SearchRelationshipMemories,
@@ -623,6 +629,14 @@ def _requested_scope(
             # `record_events.list` (WP-RE-06) names only the acting Principal's
             # own change feed, never a configured source (G1-RD-011).
             | ListRecordEvents()
+            # The six Knowledge Assertion names (KLP-WP-03, KLP-AC-104) name a
+            # product-owned record of the acting Principal and never a source.
+            | ReadKnowledgeAssertion()
+            | ListKnowledgeAssertions()
+            | SearchKnowledgeAssertions()
+            | GetKnowledgeAssertionHistory()
+            | RevealKnowledgeAssertion()
+            | CreateKnowledgeAssertion()
         ):
             return frozenset()
         case CreateCapture():

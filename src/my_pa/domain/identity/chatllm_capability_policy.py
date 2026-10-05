@@ -15,7 +15,7 @@ from typing import Final
 
 from my_pa.domain.identity.operation import Capability
 
-CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v5"
+CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v6"
 
 
 class ChatLLMCapabilityClass(StrEnum):
@@ -33,6 +33,7 @@ class ChatLLMCompositionPrerequisite(StrEnum):
     RELATIONSHIP_INTELLIGENCE = "RELATIONSHIP_INTELLIGENCE"
     RELATIONSHIP_MEMORY = "RELATIONSHIP_MEMORY"
     CONSTRAINTS = "CONSTRAINTS"
+    KNOWLEDGE_ASSERTIONS = "KNOWLEDGE_ASSERTIONS"
     NONE = "NONE"
 
 
@@ -210,6 +211,17 @@ _DATA_CONDITIONAL: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_UNRESOLVED_MENTIONS,
         Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE,
         Capability.ENTITIES_UPDATE,
+        # KLP-WP-03 (chatllm-data-v6): the five Knowledge Assertion reads and the
+        # explicit create. Conditional on the Knowledge plane switch
+        # (`MY_PA_KNOWLEDGE_ASSERTIONS_ENABLED`), so a build with it off neither
+        # composes nor demands their grants. `knowledge.assertions.submit` and
+        # `knowledge.discovery.checkpoint` are not here (KLP-WP-04).
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE,
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
+        Capability.KNOWLEDGE_ASSERTIONS_LIST,
+        Capability.KNOWLEDGE_ASSERTIONS_READ,
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH,
         Capability.PROJECT_CONTROLS_CONFIGURE,
         Capability.PROJECT_CONTROLS_STATUS,
         Capability.RELATIONSHIP_MEMORY_ARCHIVE,
@@ -259,6 +271,22 @@ _OPERATOR_DECISION_REQUIRED: Final[frozenset[Capability]] = frozenset(
 )
 
 _RETIRED: Final[frozenset[Capability]] = frozenset()
+
+#: KLP-WP-03 (KLP-AC-105): the Knowledge Assertion data names composed only by the
+#: Knowledge plane switch. An explicit name set and never a `knowledge.` prefix:
+#: the extraction plane's `knowledge.search`/`read`/`reveal`/`coverage` share the
+#: prefix and stay `ALWAYS` (KLP-AC-001). `record_events.provenance` joins this set
+#: in KLP-WP-05; submit and checkpoint stay prerequisite `NONE` (KLP-WP-04).
+KNOWLEDGE_ASSERTION_DATA_NAMES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.KNOWLEDGE_ASSERTIONS_READ,
+        Capability.KNOWLEDGE_ASSERTIONS_LIST,
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH,
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE,
+    }
+)
 
 _COMPATIBILITY_REPLACEMENTS: Final[Mapping[Capability, Capability]] = MappingProxyType(
     {
@@ -317,6 +345,8 @@ def _prerequisite_of(
         ChatLLMCapabilityClass.RETIRED,
     }:
         return ChatLLMCompositionPrerequisite.NONE
+    if capability in KNOWLEDGE_ASSERTION_DATA_NAMES:
+        return ChatLLMCompositionPrerequisite.KNOWLEDGE_ASSERTIONS
     value = capability.value
     if value.startswith("documents."):
         return ChatLLMCompositionPrerequisite.MANAGED_DOCUMENTS

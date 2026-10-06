@@ -21,12 +21,21 @@ grant set (gsqs_b0-style stdio) is remote.
   case's C3 Entity lock (a held mutation-scope lock does not delay it). A CLI
   `local_operator` may accept the same restricted `requires_operator` case
   (decision row `local_cli` / `local_operator`).
+* **Remote replay re-gate** (fix round 3, R6 10.3): the remote replay key hashes
+  (capability, principal, arguments) and names no client, so a stored Knowledge
+  decision is re-gated for a remote caller before the generic replay answers.
+  The same client replays byte-identically; a second remote client without the
+  read grant, and any remote replay of a case that became withheld, get the
+  unknown-id `not_found` and none of the stored kadec_/kasr_/kamut_ ids. The
+  replay identity is driven here as a fixed request id (what the adapter derives
+  for both clients); a CLI replay of the withheld case is unchanged.
 
 Every identity here is synthetic.
 """
 
 from __future__ import annotations
 
+import json
 import threading
 from collections.abc import Iterator
 from datetime import timedelta
@@ -42,6 +51,7 @@ from tests.database.test_knowledge_assertion_review import (
     OPERATOR_CLIENT,
     READ_GRANTS,
     ReviewRuntime,
+    _queued,
     decisions_of,
     proposal_of,
     remote,
@@ -50,6 +60,7 @@ from tests.database.test_knowledge_assertion_review import (
 from tests.database.test_knowledge_assertion_submissions import external
 
 from my_pa.application.commands import ListReviewCases
+from my_pa.domain.capture.review import Disposition
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.knowledge_assertion.vocabulary import KnowledgeEvidenceAvailability
 from my_pa.domain.source.registry import issue_identifier
@@ -261,3 +272,70 @@ def test_a_cli_operator_may_accept_a_restricted_operator_case(review: ReviewRunt
     assert decision["authenticated_client_id"] is None
     # The promoted fact carries the raised evidence class forward.
     assert decided["assertion_id"] is not None
+
+
+def _decide_under(
+    review: ReviewRuntime, principal: str, case: str, request_id: str, via: dict[str, object]
+) -> Any:  # noqa: ANN401 - the response envelope
+    return review.invoke_with_request_id(
+        review.decide_command(case, Disposition.ACCEPT),
+        principal_id=principal,
+        request_id=request_id,
+        **via,
+    )
+
+
+def _unknown_reference(review: ReviewRuntime, principal: str) -> dict[str, Any]:
+    unknown = issue_identifier(IdKind.REVIEW_CASE)
+    reference = without_correlation(
+        review.decide_error(principal, unknown, via=remote(OPERATOR_CLIENT))
+    )
+    assert reference["code"] == "not_found"
+    return reference
+
+
+def test_a_remote_replay_by_the_same_client_stays_byte_identical(review: ReviewRuntime) -> None:
+    principal, _entity, case = _queued(review)
+    request_id = issue_identifier(IdKind.CORRELATION)
+    fresh = _decide_under(review, principal, case, request_id, remote(OPERATOR_CLIENT))
+    assert fresh.error is None, fresh.error
+    replayed = _decide_under(review, principal, case, request_id, remote(OPERATOR_CLIENT))
+    assert replayed.error is None, replayed.error
+    assert json.dumps(replayed.result, sort_keys=True) == json.dumps(fresh.result, sort_keys=True)
+
+
+def test_a_remote_replay_without_the_read_grant_is_not_found_like_an_unknown_id(
+    review: ReviewRuntime,
+) -> None:
+    principal, _entity, case = _queued(review)
+    request_id = issue_identifier(IdKind.CORRELATION)
+    fresh = _decide_under(review, principal, case, request_id, remote(OPERATOR_CLIENT))
+    assert fresh.error is None, fresh.error
+    reference = _unknown_reference(review, principal)
+    for via in (remote(CHATLLM_CLIENT, NO_READ_GRANTS), {"grants": NO_READ_GRANTS}):
+        replayed = _decide_under(review, principal, case, request_id, via)
+        assert replayed.result is None, replayed.result
+        assert replayed.error is not None
+        assert without_correlation(replayed.error.model_dump(mode="json")) == reference
+    assert len(decisions_of(review.engine, case)) == 1
+
+
+def test_a_remote_replay_of_a_case_withheld_since_is_not_found_like_an_unknown_id(
+    review: ReviewRuntime,
+) -> None:
+    principal, _entity, case = _queued(review)
+    request_id = issue_identifier(IdKind.CORRELATION)
+    fresh = _decide_under(review, principal, case, request_id, remote(OPERATOR_CLIENT))
+    assert fresh.error is None, fresh.error
+    _restrict(review, principal, case)
+    reference = _unknown_reference(review, principal)
+    replayed = _decide_under(review, principal, case, request_id, remote(OPERATOR_CLIENT))
+    assert replayed.result is None, replayed.result
+    assert replayed.error is not None
+    body = replayed.error.model_dump(mode="json")
+    assert without_correlation(body) == reference
+    assert "kadec_" not in json.dumps(body)
+    # A local replay is unchanged: the CLI still receives the stored decision.
+    local = _decide_under(review, principal, case, request_id, CLI)
+    assert local.error is None, local.error
+    assert local.result == fresh.result

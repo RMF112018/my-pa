@@ -5614,6 +5614,23 @@ class ApplicationService:
         """
         request_digest, replayed = _reserve_relationship_write(unit_of_work, authorization, command)
         if replayed is not None:
+            if (
+                knowledge_is_remote(authorization)
+                and replayed.result_family == "review_decision"
+                and replayed.result_id.startswith(
+                    f"{IdKind.KNOWLEDGE_ASSERTION_REVIEW_DECISION.value}_"
+                )
+                and self._knowledge_review_case(
+                    unit_of_work, authorization, str(replayed.result_secondary_id)
+                )
+                is None
+            ):
+                # R6 10.3 / KLP-AC-034: the replay key names no client, so a stored
+                # Knowledge decision is re-gated for a remote caller before it is
+                # returned. A caller without the Knowledge read grant, or naming a
+                # case whose proposal is now withheld, gets exactly the answer an
+                # unknown id gets -- never the stored kadec_/kasr_ ids.
+                raise NotFoundError(SafeDetail.REVIEW_CASE_ID)
             if replayed.result_family == "review_invalidated":
                 return _Result(
                     payload={"review_case_id": replayed.result_id, "result": "invalidated"},

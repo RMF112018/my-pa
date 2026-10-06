@@ -3,7 +3,8 @@
  *
  * Capture proposals keep `captureId` / `versionId`. GoodNotes rows keep the
  * identifiers the listing actually returned and never borrow a capture id.
- * Knowledge Assertion rows keep what the fact is about and its predicate and
+ * Knowledge Assertion rows keep what the fact is about, its predicate and the
+ * read-only candidate (value, bounds, cited evidence ids, current holder) and
  * never borrow a capture id. Unknown rows stay unknown: only the case id and
  * the reported kind cross over, with nothing to decide against.
  * The listing still carries no proposal text, evidence span, or impact summary.
@@ -39,6 +40,14 @@ export function toBackendReviewCase(row: ReviewCase): BackendReviewCase {
       subjectId: row.subject_id,
       predicateCode: row.predicate_code,
       reviewRequirement: row.review_requirement,
+      valueType: row.value_type,
+      value: row.value,
+      qualifier: row.qualifier,
+      effectiveFrom: row.effective_from,
+      effectiveTo: row.effective_to,
+      evidenceRefIds: row.evidence_ref_ids,
+      currentAssertionId: row.current_assertion_id,
+      currentValue: row.current_value,
       proposalType: row.predicate_code,
     };
   }

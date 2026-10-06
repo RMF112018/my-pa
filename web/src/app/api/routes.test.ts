@@ -851,6 +851,14 @@ describe("KLP-WP-04: Knowledge Assertion review through the BFF", () => {
     subject_id: "ent_66fb736038ea9e42d480f6f466210679",
     subject_kind: "knowledge_assertion",
     subject_kind_of_fact: "entity",
+    value_type: "text",
+    value: "net 60",
+    qualifier: null,
+    effective_from: "2026-10-04T12:00:00+00:00",
+    effective_to: null,
+    evidence_ref_ids: ["kaevd_1b0f3a7c9e2d4f6a8b0c2e4f6a8b0c2e"],
+    current_assertion_id: null,
+    current_value: null,
   };
 
   it("lists a mixed page: Knowledge mapped, unknown inert, a bad row counted", async () => {

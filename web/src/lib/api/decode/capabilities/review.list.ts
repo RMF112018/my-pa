@@ -1,4 +1,4 @@
-import { isFiniteInteger, ok, type DecodeResult } from "../primitives";
+import { isFiniteInteger, isRecord, isString, ok, type DecodeResult } from "../primitives";
 import type { Decoder } from "../types";
 import {
   fail,
@@ -107,6 +107,9 @@ export const KNOWLEDGE_SUBJECT_KINDS = [
 /** The Python `KnowledgeReviewRequirement` tokens a review case can carry. */
 export const KNOWLEDGE_REVIEW_REQUIREMENTS = ["requires_review", "requires_operator"] as const;
 
+/** The Python `KnowledgeValueType` tokens (shared with `knowledge.assertions.read`). */
+export const KNOWLEDGE_VALUE_TYPES = ["text", "datetime"] as const;
+
 interface ReviewCaseCommon {
   readonly review_case_id: string;
   readonly proposal_id: string;
@@ -155,10 +158,13 @@ export interface EntityProposalReviewCase extends ReviewCaseCommon {
 }
 
 /**
- * A Knowledge Assertion review case (KLP R6 section 10.1): the common keys plus
- * exactly the frozen five. No value, qualifier or evidence content is listed;
- * `risk_class`, `proposal_state` and `latest_disposition` reuse the capture
- * vocabularies, so no new token is decoded here.
+ * A Knowledge Assertion review case (KLP R6 section 10.1): the common keys, the
+ * frozen five, and (KLP-WP-04 fix round 4, Manager ruling on DEV-83) the
+ * read-only candidate an authorized reviewer decides on: the typed value,
+ * qualifier, effective bounds, the cited evidence ids (`kaevd_`; never excerpt
+ * text) and the current single_current holder (both holder fields null when
+ * there is none or the caller may not see it). `risk_class`, `proposal_state`
+ * and `latest_disposition` reuse the capture vocabularies.
  */
 export interface KnowledgeAssertionReviewCase extends ReviewCaseCommon {
   readonly subject_kind: "knowledge_assertion";
@@ -166,6 +172,14 @@ export interface KnowledgeAssertionReviewCase extends ReviewCaseCommon {
   readonly subject_id: string;
   readonly predicate_code: string;
   readonly review_requirement: (typeof KNOWLEDGE_REVIEW_REQUIREMENTS)[number];
+  readonly value_type: (typeof KNOWLEDGE_VALUE_TYPES)[number];
+  readonly value: string | null;
+  readonly qualifier: Readonly<Record<string, unknown>> | null;
+  readonly effective_from: string | null;
+  readonly effective_to: string | null;
+  readonly evidence_ref_ids: readonly string[];
+  readonly current_assertion_id: string | null;
+  readonly current_value: string | null;
 }
 
 /**
@@ -254,6 +268,77 @@ function requiredFiniteNumber(value: unknown): DecodeResult<number> {
   return fail("a required field was not the expected type");
 }
 
+function nullableQualifier(value: unknown): DecodeResult<Readonly<Record<string, unknown>> | null> {
+  if (value === undefined) return fail("a required field was missing");
+  if (value === null) return ok(null);
+  if (!isRecord(value)) return fail("a required field was not the expected type");
+  return ok(value);
+}
+
+/** The cited evidence ids: `kaevd_` identifiers only, never a word of content. */
+function evidenceRefIds(value: unknown): DecodeResult<readonly string[]> {
+  const rows = requiredArray(value);
+  if (!rows.ok) return rows;
+  const ids: string[] = [];
+  for (const row of rows.value) {
+    if (!isString(row) || !row.startsWith("kaevd_")) {
+      return fail("a cited evidence id was not a kaevd_ identifier");
+    }
+    ids.push(row);
+  }
+  return ok(ids);
+}
+
+function decodeKnowledgeCandidate(
+  record: Record<string, unknown>,
+): DecodeResult<
+  Pick<
+    KnowledgeAssertionReviewCase,
+    | "value_type"
+    | "value"
+    | "qualifier"
+    | "effective_from"
+    | "effective_to"
+    | "evidence_ref_ids"
+    | "current_assertion_id"
+    | "current_value"
+  >
+> {
+  const valueType = oneOf(record.value_type, KNOWLEDGE_VALUE_TYPES);
+  if (!valueType.ok) return valueType;
+  const value = requiredNullableString(record.value);
+  if (!value.ok) return value;
+  const qualifier = nullableQualifier(record.qualifier);
+  if (!qualifier.ok) return qualifier;
+  const effectiveFrom = requiredNullableString(record.effective_from);
+  if (!effectiveFrom.ok) return effectiveFrom;
+  const effectiveTo = requiredNullableString(record.effective_to);
+  if (!effectiveTo.ok) return effectiveTo;
+  const evidence = evidenceRefIds(record.evidence_ref_ids);
+  if (!evidence.ok) return evidence;
+  const holder = requiredNullableString(record.current_assertion_id);
+  if (!holder.ok) return holder;
+  const holderValue = requiredNullableString(record.current_value);
+  if (!holderValue.ok) return holderValue;
+  if (holder.value !== null && !holder.value.startsWith("kasr_")) {
+    return fail("the current holder was not a kasr_ identifier");
+  }
+  if (holder.value === null && holderValue.value !== null) {
+    // Withheld or absent holder: both fields travel null together.
+    return fail("a holder value arrived without its holder");
+  }
+  return ok({
+    value_type: valueType.value,
+    value: value.value,
+    qualifier: qualifier.value,
+    effective_from: effectiveFrom.value,
+    effective_to: effectiveTo.value,
+    evidence_ref_ids: evidence.value,
+    current_assertion_id: holder.value,
+    current_value: holderValue.value,
+  });
+}
+
 function decodeCase(input: unknown): DecodeResult<ReviewCase> {
   const known = pick(input, [
     ...COMMON_KEYS,
@@ -275,6 +360,14 @@ function decodeCase(input: unknown): DecodeResult<ReviewCase> {
     "subject_id",
     "predicate_code",
     "review_requirement",
+    "value_type",
+    "value",
+    "qualifier",
+    "effective_from",
+    "effective_to",
+    "evidence_ref_ids",
+    "current_assertion_id",
+    "current_value",
   ]);
   if (!known.ok) return known;
   const kind = oneOf(known.value.subject_kind, REVIEW_SUBJECT_KINDS);
@@ -290,6 +383,8 @@ function decodeCase(input: unknown): DecodeResult<ReviewCase> {
     if (!predicateCode.ok) return predicateCode;
     const requirement = oneOf(known.value.review_requirement, KNOWLEDGE_REVIEW_REQUIREMENTS);
     if (!requirement.ok) return requirement;
+    const candidate = decodeKnowledgeCandidate(known.value);
+    if (!candidate.ok) return candidate;
     return ok({
       ...common.value,
       subject_kind: "knowledge_assertion",
@@ -297,6 +392,7 @@ function decodeCase(input: unknown): DecodeResult<ReviewCase> {
       subject_id: subjectId.value,
       predicate_code: predicateCode.value,
       review_requirement: requirement.value,
+      ...candidate.value,
     });
   }
   if (kind.value === "capture_proposal") {

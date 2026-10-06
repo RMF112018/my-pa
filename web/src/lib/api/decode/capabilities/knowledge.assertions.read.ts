@@ -18,9 +18,9 @@ import {
   requiredNullableString,
   requiredString,
 } from "./_read-helpers";
-import { KNOWLEDGE_SUBJECT_KINDS } from "./review.list";
+import { KNOWLEDGE_SUBJECT_KINDS, KNOWLEDGE_VALUE_TYPES } from "./review.list";
 
-export const KNOWLEDGE_VALUE_TYPES = ["text", "datetime"] as const;
+export { KNOWLEDGE_VALUE_TYPES };
 
 export const KNOWLEDGE_ASSERTION_LIFECYCLES = [
   "active",

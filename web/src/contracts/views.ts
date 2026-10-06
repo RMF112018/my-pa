@@ -117,11 +117,13 @@ export interface GenericBackendReviewCase extends BackendReviewCaseCommon {
 /**
  * A Knowledge Assertion proposal case (KLP R6 section 10.1).
  *
- * It names what the proposed fact is about (`subjectKindOfFact` / `subjectId`)
- * and under which predicate, and nothing of the value: the listing carries no
- * fact content. It has no capture, so it never borrows a capture id and never
- * reaches extraction Reveal (`knowledge.reveal`); the fact a decision produced
- * is read through `knowledge.assertions.read` instead.
+ * It names what the proposed fact is about (`subjectKindOfFact` / `subjectId`),
+ * under which predicate, and (KLP-WP-04 fix round 4, Manager ruling on DEV-83)
+ * the read-only candidate the reviewer decides on: the typed value, qualifier,
+ * effective bounds, the cited evidence ids (never excerpt text) and the current
+ * single_current holder, both holder fields null when there is none or the
+ * caller may not see it. It has no capture, so it never borrows a capture id
+ * and never reaches extraction Reveal (`knowledge.reveal`).
  */
 export interface KnowledgeAssertionBackendReviewCase extends BackendReviewCaseCommon {
   readonly subjectKind: "knowledge_assertion";
@@ -129,6 +131,14 @@ export interface KnowledgeAssertionBackendReviewCase extends BackendReviewCaseCo
   readonly subjectId: OpaqueId;
   readonly predicateCode: string;
   readonly reviewRequirement: "requires_review" | "requires_operator";
+  readonly valueType: "text" | "datetime";
+  readonly value: string | null;
+  readonly qualifier: Readonly<Record<string, unknown>> | null;
+  readonly effectiveFrom: string | null;
+  readonly effectiveTo: string | null;
+  readonly evidenceRefIds: readonly OpaqueId[];
+  readonly currentAssertionId: OpaqueId | null;
+  readonly currentValue: string | null;
 }
 
 /**

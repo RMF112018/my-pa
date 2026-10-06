@@ -12,8 +12,22 @@ function fixture(name: string): Record<string, unknown> {
   return JSON.parse(readFileSync(join(FIXTURES, name), "utf8")) as Record<string, unknown>;
 }
 
-/** KLP-WP-04 slice C's exact Python Knowledge `review.list` row (R6 section 10.1). */
+/**
+ * The Python Knowledge `review.list` row (R6 section 10.1 keys plus the read-only
+ * candidate of fix round 4, Manager ruling on DEV-83), as `review_case_view` emits it.
+ */
 const KNOWLEDGE_CASE = {
+  current_assertion_id: "kasr_9c2e4f6a8b0c2e4f6a8b0c2e4f6a8b0c",
+  current_value: "net 30",
+  effective_from: "2026-10-04T12:00:00+00:00",
+  effective_to: null,
+  evidence_ref_ids: [
+    "kaevd_1b0f3a7c9e2d4f6a8b0c2e4f6a8b0c2e",
+    "kaevd_5d7f9b1d3f5a7c9e1b3d5f7a9c1e3b5d",
+  ],
+  qualifier: null,
+  value: "net 60",
+  value_type: "text",
   latest_disposition: null,
   opened_at: "2026-10-04T12:00:00.000Z",
   predicate_code: "organization.payment_terms",
@@ -27,6 +41,13 @@ const KNOWLEDGE_CASE = {
   subject_kind: "knowledge_assertion",
   subject_kind_of_fact: "entity",
 };
+
+/** The Knowledge row with one key omitted (a required candidate key missing). */
+function without(key: keyof typeof KNOWLEDGE_CASE): Record<string, unknown> {
+  const copy: Record<string, unknown> = { ...KNOWLEDGE_CASE };
+  delete copy[key];
+  return copy;
+}
 
 const CAPTURE_CASE = {
   review_case_id: "rvc_aaaa0001aaaa0001aaaa0001",
@@ -128,7 +149,7 @@ describe("decodeReviewList", () => {
 });
 
 describe("KLP-AC-033 / KLP-AC-135: a page mixing capture, knowledge_assertion and unknown rows", () => {
-  it("decodes a Knowledge row with exactly the frozen R6 section 10.1 keys", () => {
+  it("decodes a Knowledge row with the R6 section 10.1 keys and the read-only candidate", () => {
     const decoded = decodeReviewList({ review_cases: [KNOWLEDGE_CASE] });
     expect(decoded.ok).toBe(true);
     if (!decoded.ok) return;
@@ -146,6 +167,17 @@ describe("KLP-AC-033 / KLP-AC-135: a page mixing capture, knowledge_assertion an
         subject_id: "ent_66fb736038ea9e42d480f6f466210679",
         predicate_code: "organization.payment_terms",
         review_requirement: "requires_operator",
+        value_type: "text",
+        value: "net 60",
+        qualifier: null,
+        effective_from: "2026-10-04T12:00:00+00:00",
+        effective_to: null,
+        evidence_ref_ids: [
+          "kaevd_1b0f3a7c9e2d4f6a8b0c2e4f6a8b0c2e",
+          "kaevd_5d7f9b1d3f5a7c9e1b3d5f7a9c1e3b5d",
+        ],
+        current_assertion_id: "kasr_9c2e4f6a8b0c2e4f6a8b0c2e4f6a8b0c",
+        current_value: "net 30",
       },
     ]);
     expect(decoded.value.dropped_row_count).toBe(0);
@@ -159,7 +191,24 @@ describe("KLP-AC-033 / KLP-AC-135: a page mixing capture, knowledge_assertion an
       "capture_proposal",
       "knowledge_assertion",
     ]);
+    expect(decoded.value.review_cases[1]).toMatchObject({
+      value: "net 60",
+      current_value: "net 30",
+    });
     expect(decoded.value.dropped_row_count).toBe(0);
+  });
+
+  it("decodes a withheld or absent holder as both holder fields null", () => {
+    const decoded = decodeReviewList({
+      review_cases: [{ ...KNOWLEDGE_CASE, current_assertion_id: null, current_value: null }],
+    });
+    expect(decoded.ok).toBe(true);
+    if (decoded.ok) {
+      expect(decoded.value.review_cases[0]).toMatchObject({
+        current_assertion_id: null,
+        current_value: null,
+      });
+    }
   });
 
   it("decodes the post-accept Knowledge row slice C recorded", () => {
@@ -178,10 +227,16 @@ describe("KLP-AC-033 / KLP-AC-135: a page mixing capture, knowledge_assertion an
     }
   });
 
-  it("never carries a value, qualifier or evidence key a Knowledge row might be sent", () => {
+  it("carries only the declared candidate keys, never excerpt text or a raw column", () => {
     const decoded = decodeReviewList({
       review_cases: [
-        { ...KNOWLEDGE_CASE, value_text: "net 30", qualifier: { a: 1 }, evidence: ["x"], capture_id: "cap_x" },
+        {
+          ...KNOWLEDGE_CASE,
+          value_text: "net 99",
+          excerpt: "secret excerpt words",
+          evidence: ["x"],
+          capture_id: "cap_x",
+        },
       ],
     });
     expect(decoded.ok).toBe(true);
@@ -201,9 +256,18 @@ describe("KLP-AC-033 / KLP-AC-135: a page mixing capture, knowledge_assertion an
         "subject_id",
         "predicate_code",
         "review_requirement",
+        "value_type",
+        "value",
+        "qualifier",
+        "effective_from",
+        "effective_to",
+        "evidence_ref_ids",
+        "current_assertion_id",
+        "current_value",
       ].sort(),
     );
-    expect(JSON.stringify(row)).not.toContain("net 30");
+    expect(JSON.stringify(row)).not.toContain("net 99");
+    expect(JSON.stringify(row)).not.toContain("secret excerpt words");
   });
 
   it("accepts capture, knowledge_assertion and unknown rows on one page, in order", () => {
@@ -297,6 +361,17 @@ describe("KLP-AC-033 / KLP-AC-135: a page mixing capture, knowledge_assertion an
       { ...KNOWLEDGE_CASE, proposal_state: "open" },
       { ...KNOWLEDGE_CASE, latest_disposition: "approve" },
       { ...KNOWLEDGE_CASE, review_version: "0" },
+      { ...KNOWLEDGE_CASE, value_type: "number" },
+      { ...KNOWLEDGE_CASE, value: 60 },
+      { ...KNOWLEDGE_CASE, qualifier: "deadline" },
+      { ...KNOWLEDGE_CASE, effective_from: 1 },
+      { ...KNOWLEDGE_CASE, evidence_ref_ids: "kaevd_1b0f3a7c9e2d4f6a8b0c2e4f6a8b0c2e" },
+      { ...KNOWLEDGE_CASE, evidence_ref_ids: ["excerpt text"] },
+      { ...KNOWLEDGE_CASE, current_assertion_id: "ent_x" },
+      { ...KNOWLEDGE_CASE, current_assertion_id: null },
+      without("value"),
+      without("evidence_ref_ids"),
+      without("current_value"),
     ]) {
       expect(decodeReviewList({ review_cases: [CAPTURE_CASE, bad] }).ok).toBe(false);
     }

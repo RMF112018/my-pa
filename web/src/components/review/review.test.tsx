@@ -357,9 +357,9 @@ describe("backend review workbench GoodNotes cases", () => {
 /**
  * KLP-AC-037 (web half) and KLP-AC-135: Knowledge Assertion cases offer exactly
  * accept / reject / defer / mark-unresolved / invalidate, hide Correct, never
- * reach extraction Reveal, and read the stored fact through
- * `knowledge.assertions.read`; unknown cases render inert; dropped rows are
- * counted.
+ * reach extraction Reveal, and render the row's read-only candidate before any
+ * decision (fix round 4, Manager ruling on DEV-83: the "read after accept"
+ * workaround is gone); unknown cases render inert; dropped rows are counted.
  */
 describe("backend review workbench Knowledge Assertion and unknown cases", () => {
   const KNOWLEDGE_CASE: KnowledgeAssertionBackendReviewCase = {
@@ -370,6 +370,17 @@ describe("backend review workbench Knowledge Assertion and unknown cases", () =>
     subjectId: "ent_66fb736038ea9e42d480f6f466210679",
     predicateCode: "organization.payment_terms",
     reviewRequirement: "requires_operator",
+    valueType: "text",
+    value: "net 60",
+    qualifier: null,
+    effectiveFrom: "2026-10-04T12:00:00+00:00",
+    effectiveTo: null,
+    evidenceRefIds: [
+      "kaevd_1b0f3a7c9e2d4f6a8b0c2e4f6a8b0c2e",
+      "kaevd_5d7f9b1d3f5a7c9e1b3d5f7a9c1e3b5d",
+    ],
+    currentAssertionId: "kasr_9c2e4f6a8b0c2e4f6a8b0c2e4f6a8b0c",
+    currentValue: "net 30",
     proposalType: "organization.payment_terms",
     proposalState: "needs_review",
     riskClass: "high",
@@ -403,29 +414,6 @@ describe("backend review workbench Knowledge Assertion and unknown cases", () =>
       status: 200,
     });
   }
-
-  const ASSERTION_BODY = {
-    shape: "backend",
-    assertion: {
-      assertion_id: "kasr_284d7c980ceccde51e55e10874e1c270",
-      subject_kind: "entity",
-      subject_id: "ent_66fb736038ea9e42d480f6f466210679",
-      predicate_code: "organization.payment_terms",
-      predicate_version: 1,
-      value_type: "text",
-      value: "net 30",
-      qualifier: null,
-      effective_from: "2026-10-04T12:00:00+00:00",
-      effective_to: null,
-      epistemic_status: "review_accepted",
-      classification: "private_local",
-      lifecycle: "active",
-      version: 1,
-      supersedes_assertion_id: null,
-      created_at: "2026-10-04T12:00:00+00:00",
-      updated_at: "2026-10-04T12:00:00+00:00",
-    },
-  };
 
   it("offers exactly accept, reject, defer, mark unresolved and invalidate; no Correct, no Reveal", () => {
     render(<BackendReviewWorkbench cases={[KNOWLEDGE_CASE]} />);
@@ -481,67 +469,79 @@ describe("backend review workbench Knowledge Assertion and unknown cases", () =>
     const body = JSON.parse((fetchSpy.mock.calls[0]?.[1] as RequestInit).body as string);
     expect(body).toEqual({ disposition: "invalidate", expectedReviewVersion: 0 });
     expect(screen.getByTestId("review-decided")).toHaveTextContent("invalidated");
-    // Nothing was stored as a fact, so there is nothing to read.
+    // No read-after-decide control exists any more: the candidate was on the row.
     expect(screen.queryByTestId("review-read-fact")).not.toBeInTheDocument();
   });
 
-  it("reads the accepted fact through knowledge.assertions.read, never through Reveal", async () => {
-    const user = userEvent.setup();
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(
-        persisted({
-          decisionId: "kadec_9adb6ea38eaeb5e05e1f635c96828236",
-          reviewVersion: 1,
-          proposalState: "accepted",
-          assertionId: "kasr_284d7c980ceccde51e55e10874e1c270",
-          receiptId: "kamut_3f7606c8c83bd6129e2301e3bac303ae",
-        }),
-      )
-      .mockResolvedValueOnce(new Response(JSON.stringify(ASSERTION_BODY), { status: 200 }));
+  it("renders the read-only candidate before any decision, and reads nothing", () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
     render(<BackendReviewWorkbench cases={[KNOWLEDGE_CASE]} />);
-    // Before a decision stores a fact there is nothing to read.
-    expect(screen.queryByTestId("review-read-fact")).not.toBeInTheDocument();
-    await user.click(screen.getByTestId("review-accept"));
-    await waitFor(() => expect(screen.getByTestId("review-read-fact")).toBeInTheDocument());
-    // A decided case offers no further dispositions.
-    expect(screen.queryByTestId("review-accept")).not.toBeInTheDocument();
-    await user.click(screen.getByTestId("review-read-fact"));
-    await waitFor(() => expect(screen.getByTestId("review-fact")).toBeInTheDocument());
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
-    expect(fetchSpy.mock.calls[1]?.[0]).toBe(
-      "/api/knowledge/assertions/kasr_284d7c980ceccde51e55e10874e1c270",
+    const card = screen.getByTestId("backend-review-case");
+    const candidate = within(card).getByTestId("review-candidate");
+    expect(within(candidate).getByTestId("review-candidate-value")).toHaveTextContent("net 60");
+    expect(within(candidate).getByTestId("review-candidate-current")).toHaveTextContent("net 30");
+    expect(within(candidate).getByTestId("review-candidate-effective")).toHaveTextContent(
+      "2026-10-04 12:00 UTC",
     );
-    expect((fetchSpy.mock.calls[1]?.[1] as RequestInit).method).toBe("GET");
-    expect(screen.getByTestId("review-fact-value")).toHaveTextContent("net 30");
+    expect(within(candidate).getByTestId("review-candidate-evidence-count")).toHaveTextContent(
+      "2 items",
+    );
+    expect(within(candidate).queryByTestId("review-candidate-qualifier")).not.toBeInTheDocument();
+    // The candidate is shown with the decision controls still offered.
+    expect(within(card).getByTestId("review-accept")).toBeInTheDocument();
+    expect(within(card).queryByTestId("review-read-fact")).not.toBeInTheDocument();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("states a withheld or absent holder as none shown, never a guess", () => {
+    render(
+      <BackendReviewWorkbench
+        cases={[
+          {
+            ...KNOWLEDGE_CASE,
+            currentAssertionId: null,
+            currentValue: null,
+            qualifier: { date_kind: "deadline" },
+            valueType: "datetime",
+            value: "2026-12-15T08:30:00+00:00",
+          },
+        ]}
+      />,
+    );
+    const candidate = screen.getByTestId("review-candidate");
+    expect(within(candidate).getByTestId("review-candidate-current")).toHaveTextContent(
+      "none shown",
+    );
+    expect(within(candidate).getByTestId("review-candidate-value")).toHaveTextContent(
+      "2026-12-15 08:30 UTC",
+    );
+    expect(within(candidate).getByTestId("review-candidate-qualifier")).toHaveTextContent(
+      '{"date_kind":"deadline"}',
+    );
+    expect(screen.queryByText("net 30")).not.toBeInTheDocument();
+  });
+
+  it("accepts against the row it showed, without a follow-up read", async () => {
+    const user = userEvent.setup();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      persisted({
+        decisionId: "kadec_9adb6ea38eaeb5e05e1f635c96828236",
+        reviewVersion: 1,
+        proposalState: "accepted",
+        assertionId: "kasr_284d7c980ceccde51e55e10874e1c270",
+        receiptId: "kamut_3f7606c8c83bd6129e2301e3bac303ae",
+      }),
+    );
+    render(<BackendReviewWorkbench cases={[KNOWLEDGE_CASE]} />);
+    await user.click(screen.getByTestId("review-accept"));
+    await waitFor(() => expect(screen.getByTestId("review-decided")).toBeInTheDocument());
+    expect(screen.queryByTestId("review-accept")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("review-read-fact")).not.toBeInTheDocument();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
     for (const call of fetchSpy.mock.calls) {
       expect(String(call[0])).not.toContain("/api/reveal");
+      expect(String(call[0])).not.toContain("/api/knowledge/assertions");
     }
-  });
-
-  it("reports an unreadable fact as unreadable rather than rendering a guess", async () => {
-    const user = userEvent.setup();
-    vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(
-        persisted({
-          decisionId: "kadec_9adb6ea38eaeb5e05e1f635c96828236",
-          reviewVersion: 1,
-          proposalState: "accepted",
-          assertionId: "kasr_284d7c980ceccde51e55e10874e1c270",
-          receiptId: "kamut_3f7606c8c83bd6129e2301e3bac303ae",
-        }),
-      )
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({ error: { errorClass: "not_found", code: "not_found", message: "x" } }),
-          { status: 404 },
-        ),
-      );
-    render(<BackendReviewWorkbench cases={[KNOWLEDGE_CASE]} />);
-    await user.click(screen.getByTestId("review-accept"));
-    await user.click(await screen.findByTestId("review-read-fact"));
-    await waitFor(() => expect(screen.getByTestId("review-fact-failed")).toBeInTheDocument());
-    expect(screen.queryByTestId("review-fact")).not.toBeInTheDocument();
   });
 
   it("offers no decision on a Knowledge case already in a terminal state", () => {

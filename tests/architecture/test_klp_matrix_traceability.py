@@ -49,7 +49,7 @@ R6_BASIS_COMMIT: Final = "3f575c02570c8fa733ecdc7bf0284fedc3c1d980"
 
 #: The KLP work packages that have landed: their NEW paths must exist.
 LANDED_WPS: Final = frozenset(
-    {"KLP-WP-01", "KLP-WP-02", "KLP-WP-03", "KLP-WP-04", "KLP-WP-05", "KLP-WP-06"}
+    {"KLP-WP-01", "KLP-WP-02", "KLP-WP-03", "KLP-WP-04", "KLP-WP-05", "KLP-WP-06", "KLP-WP-07"}
 )
 
 #: The slow/skip/xfail census of every EXISTS test module a KLP WP edits, taken
@@ -100,8 +100,18 @@ BASIS_SKIP_CENSUS: Final[dict[str, int]] = {
     # test_application_authorization, test_http_negative_evidence,
     # test_mcp_and_cli_negative_evidence); KLP-WP-03 already censused each above
     # at 0, so none is repeated. Its other edits are matrix EXISTS paths.
-    # KLP-WP-06 edits only matrix-listed modules (its owned paths plus
-    # test_knowledge_assertion_migration / test_knowledge_assertion_domain).
+    # KLP-WP-06 edits its owned paths plus matrix-listed modules of other WPs
+    # (test_knowledge_assertion_migration, test_knowledge_assertion_domain,
+    # test_context_prepare_migration, test_klp_matrix_traceability) and one
+    # matrix-unlisted module, test_every_capability_reaching_a_memory_row_is_declared,
+    # which KLP-WP-03 already censused above at 0, so it is not repeated.
+    # KLP-WP-07 edits three test modules another WP's matrix row lists and none of
+    # its own (race closure, recovery replay, WP-06 R2-N1); each is censused at
+    # its basis count of 0 (absent at the R6 basis) so the no-new-skip check
+    # names it explicitly.
+    "tests/concurrency/test_knowledge_assertion_concurrency.py": 0,
+    "tests/database/test_context_knowledge_assertion.py": 0,
+    "tests/recovery/test_knowledge_replay_recovery.py": 0,
 }
 _SKIP_PATTERN: Final = re.compile(
     r"pytest\.mark\.(?:slow|skip|skipif|xfail)\b|pytest\.(?:skip|xfail)\(|importorskip\("

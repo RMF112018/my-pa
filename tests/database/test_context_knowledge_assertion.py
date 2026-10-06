@@ -34,6 +34,15 @@ helpers of `tests/security/test_knowledge_assertion_disclosure.py`.
   row (or of its cross-profile sibling) after promotion withholds the
   assertion from remote `record_events.list`, `record_events.provenance` and
   context alike: the section 5.3 proposal class adds no disclosure gap.
+* **WP-06 R2-N1 (KLP-WP-07)** -- each section 5.2 class term is read at the
+  `private_local` threshold on its own: starting from a stored `synthetic_test`
+  assertion whose every term is `synthetic_test`, raising exactly one term --
+  a linked evidence row, a cited capture version, a cited Relationship Memory
+  version, the stored class, or the predecessor's class -- to `private_local`
+  makes the effective class (`context_annotations`) and the item label
+  `private_local` locally and remotely. Moving any one term's threshold to
+  `restricted_local` turns its node red (the cross-profile sibling's node is
+  the F1 test below).
 
 Every identity here is synthetic.
 """
@@ -58,14 +67,25 @@ from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.knowledge_assertion.vocabulary import KnowledgeEvidenceAvailability
 from my_pa.domain.record_events import RecordEventFamily
-from my_pa.infrastructure.persistence.unit_of_work import knowledge_maintenance_transaction
+from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
+from my_pa.infrastructure.persistence.unit_of_work import (
+    SqlAlchemyUnitOfWork,
+    knowledge_maintenance_transaction,
+)
 from tests.database.test_knowledge_assertion_repository import (
     WHEN,
     KnowledgeRuntime,
+    capture_evidence,
+    memory_evidence,
     new_principal,
 )
 from tests.database.test_knowledge_assertion_review import PAYMENT, ReviewRuntime
-from tests.database.test_knowledge_assertion_submissions import external
+from tests.database.test_knowledge_assertion_submissions import (
+    LATER,
+    LATEST,
+    add_direct_payment_head,
+    external,
+)
 from tests.database.test_record_event_provenance import PROVENANCE_GRANTS, event_of
 from tests.security.test_knowledge_assertion_disclosure import (
     RESTRICTIONS,
@@ -634,3 +654,174 @@ def test_a_synthetic_assertion_with_a_private_term_is_labelled_private(
     for via in ({}, REMOTE):
         after = items(prepare(runtime, principal, "klp06f1", via))
         assert after[assertion_id]["classification"] == "private_local", via
+
+
+# ---- WP-06 R2-N1: every section 5.2 class term at the private_local threshold -----------
+
+PRIVATE_TERMS: Final = (
+    "evidence_row",
+    "capture_version",
+    "memory_version",
+    "stored_class",
+    "predecessor",
+)
+
+
+def effective_class(runtime: ReviewRuntime, principal: str, assertion_id: str) -> str:
+    """`context_annotations`' effective class: the SQL terms alone, no Python max."""
+    work = SqlAlchemyUnitOfWork(
+        runtime.engine,
+        audit=SqlAlchemyAuditSink(runtime.audit_engine),
+        relationship_memory_enabled=True,
+        relationship_intelligence_enabled=True,
+    )
+    with work:
+        annotations = work.knowledge_assertions.context_annotations(principal, (assertion_id,))
+    return annotations[assertion_id].effective_classification.value
+
+
+def _replica(runtime: ReviewRuntime, *statements: tuple[str, dict[str, Any]]) -> None:
+    """Fixture-only writes with triggers off (CHECKs and FKs still hold)."""
+    with runtime.engine.begin() as connection:
+        connection.execute(text("SET LOCAL session_replication_role = replica"))
+        for statement, parameters in statements:
+            connection.execute(text(statement), parameters)
+
+
+def _all_synthetic(
+    runtime: ReviewRuntime, principal: str, capture: str | None, memory: str | None
+) -> None:
+    """Lower every class term of the Principal's Knowledge rows to `synthetic_test`."""
+    statements: list[tuple[str, dict[str, Any]]] = [
+        (
+            "UPDATE knowledge.knowledge_assertions SET classification = 'synthetic_test' "
+            "WHERE principal_id = :p",
+            {"p": principal},
+        ),
+        (
+            "UPDATE knowledge.knowledge_evidence_refs SET source_classification = "
+            "'synthetic_test' WHERE principal_id = :p",
+            {"p": principal},
+        ),
+    ]
+    if capture is not None:
+        statements.append(
+            (
+                "UPDATE knowledge.capture_versions SET classification = 'synthetic_test' "
+                "WHERE capture_id = :c",
+                {"c": capture},
+            )
+        )
+    if memory is not None:
+        statements.append(
+            (
+                "UPDATE knowledge.relationship_memory_versions SET classification = "
+                "'synthetic_test' WHERE memory_id = :m",
+                {"m": memory},
+            )
+        )
+    _replica(runtime, *statements)
+
+
+def _private_term_target(
+    runtime: ReviewRuntime, term: str
+) -> tuple[str, str, str, tuple[str, dict[str, Any]]]:
+    """(principal, target assertion, query, the one UPDATE raising `term` to private_local)."""
+    principal = new_principal()
+    profile = runtime.profile(principal, origin="synthetic")
+    key = f"klp07n1{term.replace('_', '')}"
+    org = runtime.org(principal, key)
+    capture = memory = None
+    if term == "predecessor":
+        add_direct_payment_head(runtime.engine)
+        older = runtime.submit(
+            principal,
+            profile,
+            subject_id=org,
+            predicate=PAYMENT,
+            value=f"Synthetic net 30 {key}",
+            candidate="older",
+            effective_from=LATER,
+            evidence=(external(f"obj-{key}-a"),),
+        )
+        newer = runtime.submit(
+            principal,
+            profile,
+            subject_id=org,
+            predicate=PAYMENT,
+            value=f"Synthetic net 45 {key}",
+            candidate="newer",
+            effective_from=LATEST,
+            evidence=(external(f"obj-{key}-b"),),
+        )
+        assert newer["outcome"] == "direct_superseded", newer
+        _all_synthetic(runtime, principal, None, None)
+        return (
+            principal,
+            str(newer["assertion_id"]),
+            key,
+            (
+                "UPDATE knowledge.knowledge_assertions SET classification = 'private_local' "
+                "WHERE assertion_id = :a",
+                {"a": older["assertion_id"]},
+            ),
+        )
+    evidence: list[dict[str, object]] = [external(f"obj-{key}")]
+    if term in {"capture_version", "evidence_row"}:
+        capture, digest = runtime.capture(principal, key)
+        evidence.append(capture_evidence(capture, digest, role="supporting"))
+    if term == "memory_version":
+        memory, digest = runtime.memory(principal, org, key)
+        evidence.append(memory_evidence(memory, digest))
+    created = runtime.submit(
+        principal,
+        profile,
+        subject_id=org,
+        value=f"Synthetic requirement {key}",
+        evidence=tuple(evidence),
+    )
+    assert created["outcome"] == "direct_created", created
+    assertion_id = str(created["assertion_id"])
+    _all_synthetic(runtime, principal, capture, memory)
+    raised: dict[str, tuple[str, dict[str, Any]]] = {
+        # The capture-shaped row: an external row is also its own same-origin
+        # sibling, so raising one would not isolate the row's own term.
+        "evidence_row": (
+            "UPDATE knowledge.knowledge_evidence_refs SET source_classification = "
+            "'private_local' WHERE principal_id = :p AND capture_id = :c",
+            {"p": principal, "c": capture},
+        ),
+        "capture_version": (
+            "UPDATE knowledge.capture_versions SET classification = 'private_local' "
+            "WHERE capture_id = :c",
+            {"c": capture},
+        ),
+        "memory_version": (
+            "UPDATE knowledge.relationship_memory_versions SET classification = "
+            "'private_local' WHERE memory_id = :m",
+            {"m": memory},
+        ),
+        "stored_class": (
+            "UPDATE knowledge.knowledge_assertions SET classification = 'private_local' "
+            "WHERE assertion_id = :a",
+            {"a": assertion_id},
+        ),
+    }
+    return principal, assertion_id, key, raised[term]
+
+
+@pytest.mark.parametrize("term", PRIVATE_TERMS)
+def test_each_class_term_counts_at_the_private_local_threshold(
+    review_runtime: ReviewRuntime, term: str
+) -> None:
+    runtime = review_runtime
+    principal, assertion_id, query, raise_term = _private_term_target(runtime, term)
+    assert effective_class(runtime, principal, assertion_id) == "synthetic_test"
+    assert items(prepare(runtime, principal, query))[assertion_id]["classification"] == (
+        "synthetic_test"
+    )
+    _replica(runtime, raise_term)
+    assert effective_class(runtime, principal, assertion_id) == "private_local"
+    for via in ({}, REMOTE):
+        labelled = items(prepare(runtime, principal, query, via))
+        assert labelled[assertion_id]["classification"] == "private_local", via

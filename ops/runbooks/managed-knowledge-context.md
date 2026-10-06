@@ -197,6 +197,65 @@ then re-bootstraps. Submissions de-duplicate on candidate identity, so a
 re-run duplicates nothing. Envelopes are MAC-sealed, not encrypted. Envelope
 retention is still operator decision KLP-OD-002.
 
+### The `knowledge_assertion` context plane (KLP-WP-06)
+
+Read this section before any client is given the `knowledge.assertions.search`
+grant. **Nothing here is commissioned**, and this section authorizes no grant.
+
+- **What it returns.** `context.prepare` can include Knowledge Assertions as
+  items with plane `knowledge_assertion`, authority class
+  `product_owned_knowledge_assertion` and a `knowledge_assertion_id`
+  (`kasr_...`). Only live assertions are returned: lifecycle `active` or
+  `revalidation_required`. Superseded and archived assertions never appear,
+  even when a caller names one exactly.
+- **Default off.** The plane exists only when both
+  `MY_PA_KNOWLEDGE_ASSERTIONS_ENABLED` and `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`
+  are true. Otherwise it is absent from every package, locally and remotely.
+  It is not reported as denied or unavailable.
+- **Remote admission needs the exact grant pair.** A remote caller (a remote
+  MCP client, or any caller with a grant ceiling) reaches the plane only when
+  it holds `context.prepare` **and** `knowledge.assertions.search` with Purpose
+  `knowledge_assertion_read`. The following never admit it:
+  - `context.prepare` alone;
+  - `knowledge.assertions.read`, `list`, `history` or `reveal`, even with that
+    Purpose;
+  - the search capability under any other Purpose.
+
+  A remote caller without the pair gets a package with the plane omitted.
+- **Who already holds the pair.** The Knowledge discovery profile
+  (`knowledge-discovery-v2`) and the operator-review profile
+  (`knowledge-operator-review-v1`) do not include it. The ChatLLM profile
+  `chatllm-data-v8` **does** include `knowledge.assertions.search` once the
+  Knowledge plane is composed. Applying that profile to a client of a process
+  with the plane on therefore admits the plane for that client. Do not run
+  `profile-apply` for such a process, and do not grant the search capability
+  to any client, until the operator has read this section and decided to.
+- **Remote withholding (R6 sections 5.2 and 5.4).** An assertion is never sent
+  to a remote caller if any one of these holds:
+  - its stored class is `restricted_local`;
+  - a linked evidence row, or a same-origin sibling of an external row, is
+    `restricted_local`;
+  - a cited Capture version or Relationship Memory version is
+    `restricted_local`;
+  - a linked external row is `permission_lost`, `deleted` or pending
+    revalidation;
+  - a cited Capture root is archived;
+  - its predecessor is restricted;
+  - restricted counterevidence is linked.
+
+  A local caller still receives such an assertion, labelled with its effective
+  class. That label is never lower than its stored class or any of these terms.
+- **Limitation and contradiction codes.** An item carries
+  `knowledge_revalidation_required` (a limitation) when the assertion is
+  `revalidation_required`, or locally when a linked row is unavailable or a
+  cited Capture root is archived. It carries `knowledge_counterevidence` (a
+  contradiction) when counterevidence is linked or the assertion is contested.
+  The package carries exactly the union of its items' codes. Codes are not
+  stored in `context_run_items`.
+- **Rollback.** Turning `MY_PA_KNOWLEDGE_ASSERTIONS_ENABLED` off removes the
+  plane from every package. Revoking the search grant removes it for that
+  client. Neither deletes a Knowledge row.
+
 ## Activation sequence
 
 None of these steps turns production on by existing in this document. Marked

@@ -90,3 +90,11 @@ predicate, whose OD-8 (i) `EXISTS` joins `relationship_memories.memory_id` and
 partition and compares that version's `classification`, and whose R6 section 5.2 Knowledge
 term compares the `classification` of every version of a cited memory. No memory column enters
 the answer, and no statement, structured value or evidence payload is read.
+
+**KLP-WP-06 (Knowledge Assertion context plane, 2026-10-06):**
+`context.prepare` reads one of the eight (`relationship_memory_versions`) and
+writes none of the eight, and only through its Knowledge Assertion plane: a remote search applies the R6
+section 5.2 `withheld_remote` `EXISTS` before its LIMIT, and every caller's item annotation
+applies the section 5.2 class term, each comparing the `classification` of every version of a
+cited memory under the Principal partition. No memory column enters the package, and no
+statement, structured value or evidence payload is read.

@@ -243,6 +243,7 @@ __all__ = [
     "KnowledgeSourceProfileRecord",
     "SqlKnowledgeAssertionRepository",
     "assertion_effectively_restricted",
+    "assertion_evidence_unavailable",
     "assertion_withheld_remote",
     "classification_rank",
     "knowledge_event_withheld_remote",
@@ -380,21 +381,34 @@ def assertion_withheld_remote(assertion: Table, principal_id: str) -> ColumnElem
     `knowledge_assertions`): usable in a page's WHERE, a keyed read, and the
     Record Event reader's family predicate alike.
     """
-    return _assertion_term(assertion, principal_id, _evidence_withheld)
+    context = capture_context(principal_id)
+    return or_(
+        _restricted(assertion.c.classification),
+        _predecessor_restricted(assertion, context),
+        _assertion_linked(assertion, context, _evidence_withheld(_EVIDENCE, context)),
+    )
 
 
 def assertion_effectively_restricted(assertion: Table, principal_id: str) -> ColumnElement[bool]:
     """KLP-WP-06: effective(a) = 'restricted_local' (R6 5.2 without the availability term)."""
-    return _assertion_term(assertion, principal_id, _evidence_restricted)
+    context = capture_context(principal_id)
+    return or_(
+        _restricted(assertion.c.classification),
+        _predecessor_restricted(assertion, context),
+        _assertion_linked(assertion, context, _evidence_restricted(_EVIDENCE, context)),
+    )
+
+
+def assertion_evidence_unavailable(assertion: Table, principal_id: str) -> ColumnElement[bool]:
+    """KLP-WP-06: the R6 5.2 availability term of `assertion` (any linked row, any role)."""
+    context = capture_context(principal_id)
+    return _assertion_linked(assertion, context, _evidence_unavailable(_EVIDENCE, context))
 
 
 def _assertion_linked(
-    assertion: Table,
-    principal_id: str,
-    evidence_term: Callable[[Table, PrincipalContext], ColumnElement[bool]],
+    assertion: Table, context: PrincipalContext, evidence_term: ColumnElement[bool]
 ) -> ColumnElement[bool]:
-    """EXISTS a link of `assertion` (any role) whose evidence row satisfies `evidence_term`."""
-    context = capture_context(principal_id)
+    """EXISTS a link of `assertion` (any role) whose `_EVIDENCE` row satisfies `evidence_term`."""
     return exists(
         select(literal(1))
         .select_from(
@@ -410,28 +424,18 @@ def _assertion_linked(
             partition_criterion(_LINK, context),
             partition_criterion(_EVIDENCE, context),
             _LINK.c.assertion_id == assertion.c.assertion_id,
-            evidence_term(_EVIDENCE, context),
+            evidence_term,
         )
     )
 
 
-def _assertion_term(
-    assertion: Table,
-    principal_id: str,
-    evidence_term: Callable[[Table, PrincipalContext], ColumnElement[bool]],
-) -> ColumnElement[bool]:
-    context = capture_context(principal_id)
-    predecessor_restricted = exists(
+def _predecessor_restricted(assertion: Table, context: PrincipalContext) -> ColumnElement[bool]:
+    return exists(
         select(literal(1)).where(
             partition_criterion(_PREDECESSOR, context),
             _PREDECESSOR.c.assertion_id == assertion.c.supersedes_assertion_id,
             _restricted(_PREDECESSOR.c.classification),
         )
-    )
-    return or_(
-        _restricted(assertion.c.classification),
-        predecessor_restricted,
-        _assertion_linked(assertion, principal_id, evidence_term),
     )
 
 
@@ -882,7 +886,7 @@ class SqlKnowledgeAssertionRepository(KnowledgeAssertionRepository):
         statement = select(
             a.c.assertion_id,
             assertion_effectively_restricted(a, principal_id).label("restricted"),
-            _assertion_linked(a, principal_id, _evidence_unavailable).label("unavailable"),
+            assertion_evidence_unavailable(a, principal_id).label("unavailable"),
             counterevidence.label("counterevidence"),
         ).where(
             partition_criterion(a, context),

@@ -16,6 +16,7 @@ from my_pa.application.knowledge_assertions import is_remote as knowledge_is_rem
 from my_pa.contracts.ports import (
     CaptureSearchRequest,
     EvidenceUnavailableError,
+    KnowledgeAssertionRepository,
     KnowledgeAssertionRow,
     KnowledgeContextAnnotation,
     RepositoryFailureError,
@@ -913,7 +914,7 @@ def _knowledge_assertion_rows(
     before its LIMIT (KLP-AC-060/138). Returns the rows and whether any search
     filled its page (the coverage is then incomplete).
     """
-    repository = unit_of_work.knowledge_assertions
+    repository: KnowledgeAssertionRepository = unit_of_work.knowledge_assertions
     found: dict[str, KnowledgeAssertionRow] = {}
     truncated = False
     searches: list[tuple[str | None, str | None]] = [(None, query.text)]

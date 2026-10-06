@@ -31,6 +31,18 @@ production database by the change that added them. Schema migration remains a
 separate operator-gated Alembic run. The feed is uncommissioned until both
 checks pass on the deployed database. The truncate trigger does not replace
 the privilege split: the owner can drop it.
+
+KLP-WP-05 widens the runtime role's read set: `record_events.provenance` joins
+a feed event to its Knowledge mutation, submission, Review decision and cited
+trigger snapshots, so the provisioner now also grants `my_pa_runtime` `SELECT`
+on `knowledge_assertion_mutations`, `knowledge_assertion_submissions`,
+`knowledge_assertion_review_decisions` and `knowledge_submission_trigger_events`
+(`FEED_READER_SELECT_TABLES`). This is not an Alembic migration and changes no
+schema. A database on which the roles were already provisioned, and whose
+runtime connects as `my_pa_runtime`, needs the idempotent provisioner re-run
+(`--apply`, operator-gated) before provenance can run there; until then only
+`record_events.provenance` is refused by PostgreSQL, and `record_events.list`
+is unaffected. A runtime that does not connect as `my_pa_runtime` needs no step.
 | Encoding / locale | `UTF8` / `C.UTF-8` (see [Collation contract](#collation-contract)) |
 | Data checksums | enabled |
 

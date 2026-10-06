@@ -104,9 +104,9 @@ from my_pa.domain.relationship.entity import EntityType
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 MATRIX_PATH: Final = ROOT / "tests" / "architecture" / "klp_implementation_matrix_r6.json"
-MIGRATION: Final = (
-    ROOT / "migrations" / "versions" / "20261004_6734f039f7a6_knowledge_assertion_layer.py"
-)
+#: The Knowledge revision, found by its slug (naming its revision id here would
+#: make this module a head-pin file for `test_constraint_authoring_capability_migration`).
+(MIGRATION,) = (ROOT / "migrations" / "versions").glob("*_knowledge_assertion_layer.py")
 NOW: Final = datetime(2026, 10, 6, 12, tzinfo=UTC)
 PROFILE: Final = "kdsp_SyntheticRouting01"
 HASH: Final = hashlib.sha256(b"synthetic routing evidence").hexdigest()

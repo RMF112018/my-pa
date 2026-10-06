@@ -21,6 +21,9 @@ has no production writer (the shared disclosure helpers).
   proposal (`kaprp_`), the review case (`rvw_`) and the accepting decision
   (`kadec_`) with its stored `authenticated_client_id` and server-derived
   `decision_channel`, plus the run (to the supplier) and visible triggers.
+  DEV-13 (Manager ruling 2026-10-06): every OAuth client id in the answer goes
+  to a remote caller only when it is that caller's own; otherwise the key is
+  `null`. The local Principal sees every id, which is where AC-047 is met.
 * **KLP-AC-048 / 111 / 138** -- remote provenance *and* remote
   `record_events.list` never disclose a Knowledge event withheld by any single
   section 5.2 term (stored class, linked evidence raised, cross-profile same
@@ -392,7 +395,8 @@ def test_a_review_promoted_event_names_proposal_case_and_accepting_decision(
             "proposal_id": queued["proposal_id"],
             "review_case_id": queued["review_case_id"],
             "decision_id": decided["decision_id"],
-            "authenticated_client_id": client,
+            # DEV-13: only the local Principal sees another client's id.
+            "authenticated_client_id": client if caller is LOCAL else None,
             "decision_channel": channel,
         }
         assert review["proposal_id"].startswith("kaprp_")
@@ -405,6 +409,74 @@ def test_a_review_promoted_event_names_proposal_case_and_accepting_decision(
         assert submission["causal_depth"] == 1
         assert submission["causal_root_submission_id"] == trigger_source["submission_id"]
         assert (submission["external_run_id"], submission["external_candidate_id"]) == ids
+
+
+# ---- DEV-13 (Manager ruling 2026-10-06): client ids are caller-private -------------
+
+#: The operator-review client reading provenance with the same grants.
+REVIEWER: Final = remote(OPERATOR_CLIENT, PROVENANCE_GRANTS)
+
+
+def _operator_promoted_event(runtime: ProvenanceRuntime) -> tuple[str, str]:
+    """(principal, event) of a Review promotion decided by the operator-review client."""
+    principal = new_principal()
+    profile = runtime.profile(principal)
+    queued = runtime.submit(
+        principal,
+        profile,
+        subject_id=runtime.org(principal, "dev13"),
+        predicate=PAYMENT,
+        candidate="cand-dev13",
+        run="run-dev13",
+        value="Synthetic net 45 terms",
+    )
+    assert queued["outcome"] == "review_queued", queued
+    decided = runtime.decide(
+        principal,
+        str(queued["review_case_id"]),
+        Disposition.ACCEPT,
+        via=remote(OPERATOR_CLIENT),
+    )
+    return principal, event_of(runtime.engine, str(decided["receipt_id"]))
+
+
+def _decision_client(runtime: ProvenanceRuntime, principal: str, event: str, via: Any) -> Any:  # noqa: ANN401
+    return runtime.provenance(principal, event, via)["review"]["authenticated_client_id"]
+
+
+def test_the_caller_sees_its_own_decision_client_id(runtime: ProvenanceRuntime) -> None:
+    principal, event = _operator_promoted_event(runtime)
+    assert _decision_client(runtime, principal, event, REVIEWER) == OPERATOR_CLIENT
+
+
+def test_another_clients_decision_id_is_null_for_every_other_remote_caller(
+    runtime: ProvenanceRuntime,
+) -> None:
+    """An operator-review decision seen by an ordinary client, a discovery client and a ceiling."""
+    principal, event = _operator_promoted_event(runtime)
+    for via in (CHATLLM, SUPPLIER, CEILINGED):
+        answer = runtime.provenance(principal, event, via)
+        assert "authenticated_client_id" in answer["review"]
+        assert answer["review"]["authenticated_client_id"] is None, via
+        # The channel stays: it is the server-derived class, not an identity.
+        assert answer["review"]["decision_channel"] == "remote_operator_review"
+
+
+def test_a_local_caller_sees_every_client_id(runtime: ProvenanceRuntime) -> None:
+    principal, event = _operator_promoted_event(runtime)
+    assert _decision_client(runtime, principal, event, LOCAL) == OPERATOR_CLIENT
+
+
+def test_self_caused_uses_the_persisted_ids_before_redaction(runtime: ProvenanceRuntime) -> None:
+    """The submitting client is self-caused although no client id is in its answer."""
+    principal = new_principal()
+    profile = runtime.profile(principal)
+    created = runtime.hop(principal, profile, runtime.entity(principal, "sc"), "sc")
+    event = event_of(runtime.engine, created["mutation_id"])
+    answer = runtime.provenance(principal, event, SUPPLIER)
+    assert answer["submission"]["self_caused"] is True
+    assert CLIENT not in repr(answer)
+    assert runtime.provenance(principal, event, OTHER)["submission"]["self_caused"] is False
 
 
 # ---- KLP-AC-049 ------------------------------------------------------------------

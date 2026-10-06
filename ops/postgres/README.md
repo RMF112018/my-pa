@@ -40,8 +40,9 @@ on `knowledge_assertion_mutations`, `knowledge_assertion_submissions`,
 (`FEED_READER_SELECT_TABLES`). This is not an Alembic migration and changes no
 schema. A database on which the roles were already provisioned, and whose
 runtime connects as `my_pa_runtime`, needs the idempotent provisioner re-run
-(`--apply`, operator-gated) before provenance can run there; until then only
-`record_events.provenance` is refused by PostgreSQL, and `record_events.list`
+(`--apply`, operator-gated) before provenance can run there; until then every
+`record_events.provenance` read fails with a PostgreSQL permission-denied error
+(SQLSTATE `42501`, surfaced as a repository failure), and `record_events.list`
 is unaffected. A runtime that does not connect as `my_pa_runtime` needs no step.
 | Encoding / locale | `UTF8` / `C.UTF-8` (see [Collation contract](#collation-contract)) |
 | Data checksums | enabled |

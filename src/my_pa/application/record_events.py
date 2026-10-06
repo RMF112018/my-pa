@@ -531,6 +531,23 @@ def _self_caused(
     }
 
 
+def _disclosed_client_id(
+    client_id: str | None, *, remote: bool, authenticated_client_id: str | None
+) -> str | None:
+    """WP-05 DEV-13 (Manager ruling 2026-10-06): an OAuth client id in the answer.
+
+    A local caller (the owning Principal) sees every stored id. A remote caller
+    sees an id only when it is its own authenticated client id; any other id --
+    and every id for a grant-ceilinged composition with no client -- is `null`,
+    the same keys-always-present shape as the external ids (DEV-02).
+    """
+    if not remote:
+        return client_id
+    if authenticated_client_id is not None and client_id == authenticated_client_id:
+        return client_id
+    return None
+
+
 def provenance_view(
     provenance: RecordEventProvenance,
     *,
@@ -541,7 +558,9 @@ def provenance_view(
 
     External ids are always present as keys; for a caller they are not disclosed
     to, both are `null` -- the same shape as a submission that carried none, so
-    absence discloses nothing. The submission's own client ids never appear.
+    absence discloses nothing. The submission's own client ids never appear; the
+    decision's client id follows `_disclosed_client_id` (DEV-13). `self_caused`
+    is computed from the persisted ids before any redaction.
     """
     submission = provenance.submission
     submission_view: dict[str, object] | None = None
@@ -576,7 +595,11 @@ def provenance_view(
             "proposal_id": review.proposal_id,
             "review_case_id": review.review_case_id,
             "decision_id": review.decision_id,
-            "authenticated_client_id": review.authenticated_client_id,
+            "authenticated_client_id": _disclosed_client_id(
+                review.authenticated_client_id,
+                remote=remote,
+                authenticated_client_id=authenticated_client_id,
+            ),
             "decision_channel": review.decision_channel,
         },
     }

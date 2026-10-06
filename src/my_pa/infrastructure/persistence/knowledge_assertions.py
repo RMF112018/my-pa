@@ -250,6 +250,8 @@ __all__ = [
 KNOWLEDGE_CREATE_CAPABILITY: Final = Capability.KNOWLEDGE_ASSERTIONS_CREATE.value
 #: `knowledge_classification_rank('restricted_local')`.
 _RESTRICTED_RANK: Final = 2
+#: SQLSTATE `lock_not_available` (a `NOWAIT` row lock held by another transaction).
+_LOCK_NOT_AVAILABLE: Final = "55P03"
 _LIVE: Final = (
     KnowledgeAssertionLifecycle.ACTIVE.value,
     KnowledgeAssertionLifecycle.REVALIDATION_REQUIRED.value,
@@ -4675,7 +4677,9 @@ class _Maintenance:
 
     # -- shared steps ---------------------------------------------------------
 
-    def _lock_evidence(self, evidence_ref_ids: Iterable[str]) -> list[Row[Any]]:
+    def _lock_evidence(
+        self, evidence_ref_ids: Iterable[str], *, nowait: bool = False
+    ) -> list[Row[Any]]:
         """C4b: one SELECT, sorted by evidence_ref_id, `FOR UPDATE` (maintenance)."""
         e = knowledge_evidence_refs
         return list(
@@ -4692,7 +4696,7 @@ class _Maintenance:
                     e.c.evidence_ref_id.in_(sorted(set(evidence_ref_ids))),
                 )
                 .order_by(e.c.evidence_ref_id)
-                .with_for_update()
+                .with_for_update(nowait=nowait)
             ).all()
         )
 
@@ -4905,8 +4909,26 @@ class _Maintenance:
         `remaining` counts those still below after this run. It never sets
         `availability_revalidation_pending` and never changes a lifecycle.
         """
-        evidence_ids = self._classification_set(evidence_ref_id)
-        self._lock_evidence(evidence_ids)
+        # C4b, KLP-R6V-202 option A: a sibling a submit inserted and held while this
+        # waited on the named row is only visible once that submit commits, so the
+        # set is re-read under the lock until it is stable. The first lock is the
+        # whole set in one sorted statement; a later, grown part may sort below
+        # rows already held, so it is taken NOWAIT -- this transaction never
+        # *waits* while holding an out-of-order lock, hence never deadlocks with a
+        # sorted submit C4b. A held new sibling is a retryable conflict: the
+        # caller restarts the transaction, whose first read then has the larger set.
+        held: list[str] = []
+        locking = self._classification_set(evidence_ref_id)
+        while locking:
+            try:
+                self._lock_evidence(locking, nowait=bool(held))
+            except DBAPIError as error:
+                if getattr(getattr(error, "orig", None), "sqlstate", None) != _LOCK_NOT_AVAILABLE:
+                    raise
+                raise TransactionConflictError("a new sibling row is held by a writer") from None
+            held = sorted({*held, *locking})
+            locking = sorted(set(self._classification_set(evidence_ref_id)) - set(held))
+        evidence_ids = held
         e = knowledge_evidence_refs
         # The one UPDATE that raises the class and redacts the excerpt (R6 5.5).
         self.connection.execute(

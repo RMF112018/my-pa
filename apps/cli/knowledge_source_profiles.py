@@ -79,7 +79,7 @@ from my_pa.bootstrap.knowledge_discovery_profiles import (
     knowledge_allowlists,
 )
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
-from my_pa.contracts.ports import KnowledgeEvidenceNotFoundError
+from my_pa.contracts.ports import KnowledgeEvidenceNotFoundError, TransactionConflictError
 from my_pa.domain.knowledge_assertion.vocabulary import (
     KnowledgeEvidenceAuthority,
     KnowledgeOriginSystem,
@@ -92,6 +92,8 @@ EXIT_OK: Final = 0
 EXIT_REFUSED: Final = 1
 #: Maintenance is resumable: exit 3 means "re-run, work remains".
 EXIT_REMAINING: Final = 3
+#: Transactions `classify-evidence` may restart after a held new sibling (R6V-202).
+CLASSIFY_ATTEMPTS: Final = 3
 
 PROFILE_DOCUMENT_VERSION: Final = 1
 _DOCUMENT_KEYS: Final = frozenset({"version", "profiles"})
@@ -347,11 +349,20 @@ def _remaining(result: Any, out: Callable[[str], None]) -> int:  # noqa: ANN401
 def _classify(args: argparse.Namespace, runtime: Runtime, out: Callable[[str], None]) -> int:
     if not isinstance(args.evidence_ref, str) or not _EVIDENCE_REF.fullmatch(args.evidence_ref):
         raise ProfileRefusalError("--evidence-ref is not a kaevd_ identifier")
-    with knowledge_maintenance_transaction(runtime.engine) as repository:
-        result = repository.classify_evidence_restricted(
-            runtime.principal_id, args.evidence_ref, at=runtime.clock()
-        )
-    return _remaining(result, out)
+    for attempt in range(CLASSIFY_ATTEMPTS):
+        try:
+            with knowledge_maintenance_transaction(runtime.engine) as repository:
+                result = repository.classify_evidence_restricted(
+                    runtime.principal_id, args.evidence_ref, at=runtime.clock()
+                )
+        except TransactionConflictError:
+            # A sibling appeared and is held by a writer (KLP-R6V-202): restart the
+            # transaction, whose first read now carries the larger sibling set.
+            if attempt + 1 == CLASSIFY_ATTEMPTS:
+                raise
+            continue
+        return _remaining(result, out)
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 def _drain(args: argparse.Namespace, runtime: Runtime, out: Callable[[str], None]) -> int:

@@ -120,6 +120,7 @@ from my_pa.application.commands import (
     GetKnowledgeAssertionHistory,
     GetLatestIntelligenceArtifact,
     GetPulse,
+    GetRecordEventProvenance,
     GetRelationshipMemory,
     GetRelationshipMemoryHistory,
     GetSourceMetadata,
@@ -1221,6 +1222,9 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             private_envelope="policy-opaque-state",
             idempotency_key="policy-knowledge-checkpoint",
         ),
+        Capability.RECORD_EVENTS_PROVENANCE: GetRecordEventProvenance(
+            event_id="rcev_policyknowledge0001"
+        ),
     }
 
 
@@ -1655,6 +1659,8 @@ SCOPED_CAPABILITIES = [
         # KLP-WP-04: the discovery pair, also in `_SCOPELESS`.
         Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
         Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
+        # KLP-WP-05: provenance, also in `_SCOPELESS`.
+        Capability.RECORD_EVENTS_PROVENANCE,
     }
 ]
 
@@ -1939,6 +1945,8 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         # KLP-WP-04: the discovery pair, also in `_SCOPELESS`.
         Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
         Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
+        # KLP-WP-05: provenance, also in `_SCOPELESS`.
+        Capability.RECORD_EVENTS_PROVENANCE,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

@@ -562,3 +562,75 @@ def test_a_review_promoted_assertion_follows_its_origin_submission_evidence(
     )
     local = runtime.ok(PrepareContext(query=key), principal_id=principal)
     assert items(local)[assertion_id]["classification"] == "restricted_local"
+
+
+# ---- F1 (fix round 1): the label is never below the section 5.2 effective class ---------
+
+
+def _synthetic_assertion(runtime: ReviewRuntime, key: str) -> tuple[str, str, str]:
+    """(principal, assertion, external object) of a stored `synthetic_test` assertion.
+
+    The production writer stores a synthetic-origin assertion at `private_local`;
+    the class trigger forbids lowering it, so the fixture lowers it with triggers
+    off (the plain `origin_is_synthetic` CHECK still holds it to a synthetic origin).
+    """
+    principal = new_principal()
+    profile = runtime.profile(principal, origin="synthetic")
+    created = runtime.submit(
+        principal,
+        profile,
+        subject_id=runtime.org(principal, key),
+        value=f"Synthetic requirement {key}",
+        evidence=(external(f"obj-{key}"),),
+    )
+    assert created["outcome"] == "direct_created", created
+    with runtime.engine.begin() as connection:
+        connection.execute(text("SET LOCAL session_replication_role = replica"))
+        connection.execute(
+            text(
+                "UPDATE knowledge.knowledge_assertions SET classification = 'synthetic_test' "
+                "WHERE assertion_id = :a AND origin_is_synthetic"
+            ),
+            {"a": created["assertion_id"]},
+        )
+        stored = connection.execute(
+            text(
+                "SELECT e.source_classification FROM knowledge.knowledge_evidence_refs e "
+                "JOIN knowledge.knowledge_assertion_evidence_links l "
+                "ON l.evidence_ref_id = e.evidence_ref_id WHERE l.assertion_id = :a"
+            ),
+            {"a": created["assertion_id"]},
+        ).scalars()
+        assert set(stored) == {"synthetic_test"}
+    return principal, str(created["assertion_id"]), f"obj-{key}"
+
+
+def test_a_synthetic_assertion_with_a_private_term_is_labelled_private(
+    review_runtime: ReviewRuntime,
+) -> None:
+    """F1: stored `synthetic_test`, a same-origin sibling `private_local` -> `private_local`."""
+    runtime = review_runtime
+    principal, assertion_id, object_id = _synthetic_assertion(runtime, "klp06f1")
+    before = items(prepare(runtime, principal, "klp06f1"))
+    assert before[assertion_id]["classification"] == "synthetic_test"
+    other = runtime.profile(principal, origin="synthetic", scope="scope-f1")
+    with runtime.engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO knowledge.knowledge_evidence_refs (principal_id, evidence_ref_id, "
+                "identity_kind, source_profile_id, source_is_synthetic, external_object_id, "
+                "external_version_id, content_hash, content_origin, source_classification, "
+                "created_at, updated_at) VALUES (:p, :e, 'external_object', :s, true, :o, 'v9', "
+                ":h, 'synthetic_source', 'private_local', now(), now())"
+            ),
+            {
+                "p": principal,
+                "e": "kaevd_klp06f1sibling0001",
+                "s": other,
+                "o": object_id,
+                "h": "d" * 64,
+            },
+        )
+    for via in ({}, REMOTE):
+        after = items(prepare(runtime, principal, "klp06f1", via))
+        assert after[assertion_id]["classification"] == "private_local", via

@@ -662,7 +662,7 @@ class ContextKnowledge(_CannedKnowledge):
                 assertion_id,
                 KnowledgeContextAnnotation(
                     assertion_id=assertion_id,
-                    effectively_restricted=False,
+                    effective_classification=Classification.SYNTHETIC_TEST,
                     evidence_unavailable=False,
                     counterevidence_linked=False,
                 ),
@@ -980,14 +980,19 @@ def test_only_live_assertions_reach_context(scene: Scene) -> None:
 # -- KLP-AC-057: limitation and contradiction codes are never omitted -------------
 
 
-def _annotation(assertion_id: str, **flags: bool) -> KnowledgeContextAnnotation:
-    values = {
-        "effectively_restricted": False,
-        "evidence_unavailable": False,
-        "counterevidence_linked": False,
-        **flags,
-    }
-    return KnowledgeContextAnnotation(assertion_id=assertion_id, **values)
+def _annotation(
+    assertion_id: str,
+    *,
+    effective: Classification = Classification.SYNTHETIC_TEST,
+    evidence_unavailable: bool = False,
+    counterevidence_linked: bool = False,
+) -> KnowledgeContextAnnotation:
+    return KnowledgeContextAnnotation(
+        assertion_id=assertion_id,
+        effective_classification=effective,
+        evidence_unavailable=evidence_unavailable,
+        counterevidence_linked=counterevidence_linked,
+    )
 
 
 def test_revalidation_and_counterevidence_codes_ride_on_the_item(scene: Scene) -> None:
@@ -1023,12 +1028,33 @@ def test_a_restricted_assertion_is_labelled_restricted_locally(scene: Scene) -> 
     repository = ContextKnowledge(
         (ka_row("restrict1", "quarterly restricted"),),
         annotations={
-            "kasr_ctxrestrict1": _annotation("kasr_ctxrestrict1", effectively_restricted=True)
+            "kasr_ctxrestrict1": _annotation(
+                "kasr_ctxrestrict1", effective=Classification.RESTRICTED_LOCAL
+            )
         },
     )
     result = succeeded(ka_prepare(scene, repository, PrepareContext(query="quarterly")))
     (item,) = ka_items(result)
     assert item["classification"] == Classification.RESTRICTED_LOCAL.value
+
+
+def test_an_item_is_never_labelled_below_its_effective_class(scene: Scene) -> None:
+    """F1: stored synthetic_test, effective private_local -> labelled private_local."""
+    repository = ContextKnowledge(
+        (
+            ka_row("synthpriv", "quarterly synthetic", classification="synthetic_test"),
+            ka_row("synthonly", "quarterly synthetic only", classification="synthetic_test"),
+        ),
+        annotations={
+            "kasr_ctxsynthpriv": _annotation(
+                "kasr_ctxsynthpriv", effective=Classification.PRIVATE_LOCAL
+            )
+        },
+    )
+    result = succeeded(ka_prepare(scene, repository, PrepareContext(query="quarterly")))
+    by_id = {item["knowledge_assertion_id"]: item for item in ka_items(result)}
+    assert by_id["kasr_ctxsynthpriv"]["classification"] == Classification.PRIVATE_LOCAL.value
+    assert by_id["kasr_ctxsynthonly"]["classification"] == Classification.SYNTHETIC_TEST.value
 
 
 def test_codes_survive_ranking_dedup_and_truncation(scene: Scene) -> None:

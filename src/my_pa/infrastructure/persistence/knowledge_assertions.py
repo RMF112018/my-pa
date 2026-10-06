@@ -242,6 +242,7 @@ __all__ = [
     "KnowledgeSourceProfileConflictError",
     "KnowledgeSourceProfileRecord",
     "SqlKnowledgeAssertionRepository",
+    "assertion_effective_rank_at_least",
     "assertion_effectively_restricted",
     "assertion_evidence_unavailable",
     "assertion_withheld_remote",
@@ -255,6 +256,8 @@ __all__ = [
 KNOWLEDGE_CREATE_CAPABILITY: Final = Capability.KNOWLEDGE_ASSERTIONS_CREATE.value
 #: `knowledge_classification_rank('restricted_local')`.
 _RESTRICTED_RANK: Final = 2
+#: `knowledge_classification_rank('private_local')`.
+_PRIVATE_RANK: Final = 1
 #: SQLSTATE `lock_not_available` (a `NOWAIT` row lock held by another transaction).
 _LOCK_NOT_AVAILABLE: Final = "55P03"
 _LIVE: Final = (
@@ -323,8 +326,15 @@ def _evidence_unavailable(evidence: Table, context: PrincipalContext) -> ColumnE
     )
 
 
-def _evidence_restricted(evidence: Table, context: PrincipalContext) -> ColumnElement[bool]:
-    """The R6 section 5.2 class term of one linked evidence row (no availability)."""
+def _evidence_restricted(
+    evidence: Table, context: PrincipalContext, rank: int = _RESTRICTED_RANK
+) -> ColumnElement[bool]:
+    """The R6 section 5.2 class term of one linked evidence row (no availability).
+
+    True when any class the term reads ranks at least `rank` (default
+    `restricted_local`); KLP-WP-06 also asks it at `private_local` to derive the
+    effective class without a MAX over classification text.
+    """
     # The cited row's own profile is joined *inside* this EXISTS, so every name
     # it reads off `evidence` is a direct correlation to the enclosing link
     # SELECT (a nested scalar subquery would not correlate two levels out).
@@ -349,25 +359,25 @@ def _evidence_restricted(evidence: Table, context: PrincipalContext) -> ColumnEl
             _PROFILE.c.source_profile_id == evidence.c.source_profile_id,
             _SIBLING.c.identity_kind == _EXTERNAL,
             _SIBLING.c.external_object_id == evidence.c.external_object_id,
-            _restricted(_SIBLING.c.source_classification),
+            classification_rank(_SIBLING.c.source_classification) >= rank,
         )
     )
     capture_restricted = exists(
         select(literal(1)).where(
             partition_criterion(_CAPTURE_VERSION, context),
             _CAPTURE_VERSION.c.capture_id == evidence.c.capture_id,
-            _restricted(_CAPTURE_VERSION.c.classification),
+            classification_rank(_CAPTURE_VERSION.c.classification) >= rank,
         )
     )
     memory_restricted = exists(
         select(literal(1)).where(
             partition_criterion(_MEMORY_VERSION, context),
             _MEMORY_VERSION.c.memory_id == evidence.c.relationship_memory_id,
-            _restricted(_MEMORY_VERSION.c.classification),
+            classification_rank(_MEMORY_VERSION.c.classification) >= rank,
         )
     )
     return or_(
-        _restricted(evidence.c.source_classification),
+        classification_rank(evidence.c.source_classification) >= rank,
         and_(evidence.c.identity_kind == _EXTERNAL, sibling_restricted),
         and_(evidence.c.identity_kind == _CAPTURE, capture_restricted),
         and_(evidence.c.identity_kind == _MEMORY, memory_restricted),
@@ -396,6 +406,23 @@ def assertion_effectively_restricted(assertion: Table, principal_id: str) -> Col
         _restricted(assertion.c.classification),
         _predecessor_restricted(assertion, context),
         _assertion_linked(assertion, context, _evidence_restricted(_EVIDENCE, context)),
+    )
+
+
+def assertion_effective_rank_at_least(
+    assertion: Table, principal_id: str, rank: int
+) -> ColumnElement[bool]:
+    """KLP-WP-06 (F1): effective(a) ranks at least `rank` (R6 5.2, no availability term).
+
+    The same terms as `assertion_effectively_restricted` at any threshold, so the
+    effective class is read as two thresholds of `knowledge_classification_rank`
+    rather than a MAX over classification text.
+    """
+    context = capture_context(principal_id)
+    return or_(
+        classification_rank(assertion.c.classification) >= rank,
+        _predecessor_restricted(assertion, context, rank),
+        _assertion_linked(assertion, context, _evidence_restricted(_EVIDENCE, context, rank)),
     )
 
 
@@ -429,12 +456,14 @@ def _assertion_linked(
     )
 
 
-def _predecessor_restricted(assertion: Table, context: PrincipalContext) -> ColumnElement[bool]:
+def _predecessor_restricted(
+    assertion: Table, context: PrincipalContext, rank: int = _RESTRICTED_RANK
+) -> ColumnElement[bool]:
     return exists(
         select(literal(1)).where(
             partition_criterion(_PREDECESSOR, context),
             _PREDECESSOR.c.assertion_id == assertion.c.supersedes_assertion_id,
-            _restricted(_PREDECESSOR.c.classification),
+            classification_rank(_PREDECESSOR.c.classification) >= rank,
         )
     )
 
@@ -886,6 +915,7 @@ class SqlKnowledgeAssertionRepository(KnowledgeAssertionRepository):
         statement = select(
             a.c.assertion_id,
             assertion_effectively_restricted(a, principal_id).label("restricted"),
+            assertion_effective_rank_at_least(a, principal_id, _PRIVATE_RANK).label("private"),
             assertion_evidence_unavailable(a, principal_id).label("unavailable"),
             counterevidence.label("counterevidence"),
         ).where(
@@ -896,7 +926,13 @@ class SqlKnowledgeAssertionRepository(KnowledgeAssertionRepository):
         return {
             row.assertion_id: KnowledgeContextAnnotation(
                 assertion_id=row.assertion_id,
-                effectively_restricted=bool(row.restricted),
+                effective_classification=(
+                    Classification.RESTRICTED_LOCAL
+                    if row.restricted
+                    else Classification.PRIVATE_LOCAL
+                    if row.private
+                    else Classification.SYNTHETIC_TEST
+                ),
                 evidence_unavailable=bool(row.unavailable),
                 counterevidence_linked=bool(row.counterevidence),
             )

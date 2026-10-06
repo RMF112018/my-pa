@@ -24,7 +24,7 @@ from my_pa.contracts.ports import (
     UnitOfWork,
 )
 from my_pa.domain.capture.version import CaptureVersion
-from my_pa.domain.common.classification import Classification
+from my_pa.domain.common.classification import Classification, classification_max
 from my_pa.domain.common.coverage import CoverageState as ExtractionCoverageState
 from my_pa.domain.common.identifiers import IdKind, InvalidIdentifierError, parse_identifier
 from my_pa.domain.common.time import format_rfc3339
@@ -1023,10 +1023,9 @@ def _search_knowledge_assertions(
             accepted=True,
         )
         limitations, contradictions = _knowledge_assertion_codes(row, annotation)
-        classification = (
-            Classification.RESTRICTED_LOCAL
-            if annotation.effectively_restricted
-            else Classification(row.classification)
+        # F1: never below the section 5.2 effective class (nor the stored one).
+        classification = classification_max(
+            Classification(row.classification), annotation.effective_classification
         )
         evidence.append(
             PreparedContextEvidence(

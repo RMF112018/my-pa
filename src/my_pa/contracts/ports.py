@@ -5317,8 +5317,8 @@ class KnowledgeEvidenceRow:
 class KnowledgeContextAnnotation:
     """KLP-WP-06: what `context.prepare` must say about one assertion it cites.
 
-    Flags only -- never evidence identity, text or class values of the linked
-    rows. `effectively_restricted` is the R6 section 5.2 class term without
+    Flags and one derived class -- never evidence identity, text or any linked
+    row's own class. `effective_classification` is the R6 section 5.2 effective class without
     the availability term (stored class, predecessor, every linked row, its
     cross-profile siblings and every Capture / Relationship Memory version);
     `evidence_unavailable` is the availability term (a linked external row
@@ -5328,7 +5328,7 @@ class KnowledgeContextAnnotation:
     """
 
     assertion_id: str
-    effectively_restricted: bool
+    effective_classification: Classification
     evidence_unavailable: bool
     counterevidence_linked: bool
 

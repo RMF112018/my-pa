@@ -283,3 +283,162 @@ def test_writes_enabled_without_a_grant_is_denied(capability: Capability) -> Non
             principal=PRINCIPAL,
             grants=other,
         )
+
+
+# ---- DEV-08 confirmation (Manager ruling, fix round 4) ----------------------------
+#
+# AC-020 says a bound client asking for `knowledge.assertions.create` or
+# `review.decide` is refused; this build answers `unsupported` (DEV-08). The
+# Manager accepts that token only if it is the *uniform* answer for any
+# capability the caller does not hold -- so the body cannot reveal that the
+# client is bound. These nodes drive the real remote surface (the composition
+# root's `apps.gateway.remote_access_context`, overlay included, into
+# `create_remote_mcp_app`) and compare whole `tools/call` results, correlation id
+# stripped.
+
+_DISCOVERY_CLIENT: Final = "klp-wp04-discovery-client"
+_OPERATOR_REVIEW_CLIENT: Final = "klp-wp04-operator-review-client"
+_UNBOUND_CLIENT: Final = "klp-wp04-unbound-client"
+_NO_SUCH_CAPABILITY: Final = "knowledge.assertions.forge"
+_RESOURCE: Final = "https://mcp.example.invalid/mcp"
+#: Every Knowledge-facing capability, granted to every client below: the deny
+#: overlay, not a missing grant row, is what must take create/review.decide away.
+_EVERYTHING: Final = frozenset(
+    {
+        *KNOWLEDGE,
+        Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
+        Capability.RECORD_EVENTS_LIST,
+        Capability.REVIEW_LIST,
+        Capability.REVIEW_DECIDE,
+    }
+)
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
+
+
+def _bound_app(scene: Scene, client: str, granted: frozenset[Capability]) -> object:
+    from types import SimpleNamespace
+
+    from apps.gateway import remote_access_context
+
+    from my_pa.adapters.mcp.remote import create_remote_mcp_app
+
+    service = build_service(scene.world, scene.providers, knowledge_assertions_enabled=True)
+    settings = SimpleNamespace(
+        knowledge_discovery_oauth_client_id_set=lambda: frozenset({_DISCOVERY_CLIENT}),
+        knowledge_operator_review_oauth_client_id_set=lambda: frozenset({_OPERATOR_REVIEW_CLIENT}),
+        chatllm_gateway_oauth_client_id_set=frozenset,
+        compact_publication_for_client=lambda _client: False,
+    )
+    authenticated = SimpleNamespace(
+        principal=scene.principal,
+        client_id=client,
+        capabilities=granted,
+        capability_purposes=frozenset(
+            (capability, purpose)
+            for capability in granted
+            for purpose in permitted_purposes(capability)
+        ),
+        write_allowed=True,
+    )
+    context = remote_access_context(settings, service, authenticated)  # type: ignore[arg-type]
+    return create_remote_mcp_app(
+        service,
+        resolve_access=lambda _authorization: context,
+        allowed_hosts=("testserver",),
+        remote_enabled=True,
+        writes_enabled=True,
+        resource=_RESOURCE,
+        authorization_servers=("https://mcp.example.invalid",),
+        scopes=frozenset({"my-pa.read"}),
+    )
+
+
+async def _call(app: object, name: str) -> tuple[bool, str, dict[str, object]]:
+    import httpx2
+    from mcp.client.session import ClientSession
+    from mcp.client.streamable_http import streamable_http_client
+
+    async with (
+        app.router.lifespan_context(app),  # type: ignore[attr-defined]
+        httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=app),  # type: ignore[arg-type]
+            base_url="http://testserver",
+            headers={"Authorization": "Bearer synthetic"},
+        ) as http,
+        streamable_http_client("http://testserver/mcp", http_client=http) as streams,
+        ClientSession(*streams[:2]) as session,
+    ):
+        await session.initialize()
+        published = {tool.name for tool in (await session.list_tools()).tools}
+        result = await session.call_tool(name, {"payload": {}})
+    assert len(result.content) == 1
+    body = json.loads(result.content[0].text)  # type: ignore[union-attr]
+    correlation = body.pop("correlation_id")
+    assert isinstance(correlation, str) and correlation.startswith("corr_")
+    return bool(result.is_error), json.dumps(body, sort_keys=True), {"published": published}
+
+
+def _bound_cases() -> list[tuple[str, str]]:
+    return [
+        (_DISCOVERY_CLIENT, CREATE.value),
+        (_DISCOVERY_CLIENT, Capability.REVIEW_DECIDE.value),
+        (_OPERATOR_REVIEW_CLIENT, CREATE.value),
+        (_OPERATOR_REVIEW_CLIENT, Capability.KNOWLEDGE_ASSERTIONS_SUBMIT.value),
+    ]
+
+
+@pytest.mark.anyio
+async def test_a_bound_client_refusal_is_byte_identical_to_any_ungranted_capability(
+    scene: Scene,
+) -> None:
+    """Bound create/review.decide == unbound never-granted == nonexistent name.
+
+    Reference answers: an unbound client calling a capability it was never
+    granted (`review.decide`, published remotely with writes on) and calling a
+    name that is no capability at all; plus the bound clients calling a name that
+    is no capability. Every one must be the same error result, body for body.
+    """
+    unbound_granted = frozenset({Capability.KNOWLEDGE_ASSERTIONS_READ})
+    reference = await _call(
+        _bound_app(scene, _UNBOUND_CLIENT, unbound_granted), Capability.REVIEW_DECIDE.value
+    )
+    assert reference[0] is True
+    assert json.loads(reference[1])["code"] == "unsupported"
+    answers = {
+        ("unbound", "never_granted"): reference[:2],
+        ("unbound", "no_such_capability"): (
+            await _call(_bound_app(scene, _UNBOUND_CLIENT, unbound_granted), _NO_SUCH_CAPABILITY)
+        )[:2],
+    }
+    for client in (_DISCOVERY_CLIENT, _OPERATOR_REVIEW_CLIENT):
+        answers[(client, "no_such_capability")] = (
+            await _call(_bound_app(scene, client, _EVERYTHING), _NO_SUCH_CAPABILITY)
+        )[:2]
+    for client, name in _bound_cases():
+        is_error, body, seen = await _call(_bound_app(scene, client, _EVERYTHING), name)
+        assert name not in seen["published"]
+        answers[(client, name)] = (is_error, body)
+    assert set(answers.values()) == {reference[:2]}, answers
+
+
+@pytest.mark.anyio
+async def test_the_uniform_refusal_is_not_the_answer_of_a_granted_call(scene: Scene) -> None:
+    """Control: an unbound client *granted* create reaches the service.
+
+    Without this the node above would also pass if every call were refused
+    `unsupported` for an unrelated reason (plane off, writes off, wrong host).
+    """
+    reference = await _call(
+        _bound_app(scene, _UNBOUND_CLIENT, frozenset({CREATE})), Capability.REVIEW_DECIDE.value
+    )
+    is_error, body, seen = await _call(
+        _bound_app(scene, _UNBOUND_CLIENT, frozenset({CREATE})), CREATE.value
+    )
+    assert CREATE.value in seen["published"]
+    assert (is_error, body) != reference[:2]
+    assert json.loads(body)["code"] != "unsupported"

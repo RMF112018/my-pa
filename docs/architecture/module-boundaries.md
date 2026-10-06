@@ -277,7 +277,9 @@ Bootstrap loads validated configuration, constructs implementations, and attache
 
 Knowledge client roles (KLP-WP-04) are composition, not capabilities:
 `bootstrap/knowledge_discovery_profiles.py` binds the discovery and
-operator-review allowlists from `Settings` to their fixed profiles, and
+operator-review allowlists from `Settings` to their fixed profiles (discovery
+clients to `knowledge-discovery-v2` since KLP-WP-05, which adds
+`record_events.provenance`), and
 `apps.gateway` applies that overlay to both capabilities and purposes before any
 grant is used.
 

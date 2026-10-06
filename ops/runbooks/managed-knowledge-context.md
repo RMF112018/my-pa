@@ -61,7 +61,7 @@ returns a complete no-match or empty package and must not fabricate evidence.
 ChatLLM is a **full MY-PA application data manager**, not a system
 administrator. The machine-readable policy is
 `src/my_pa/domain/identity/chatllm_capability_policy.py` at profile version
-`chatllm-data-v7`. Do not grant every `Capability` enum member.
+`chatllm-data-v8`. Do not grant every `Capability` enum member.
 
 On the current head, the derived **effective** ChatLLM catalog is 162 names
 when documents, relationship intelligence (with writes), relationship memory,
@@ -85,14 +85,14 @@ Inspect and (operator-gated) reconcile with:
 ```bash
 python apps/cli/remote_mcp.py profile-diff \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v7
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v8
 python apps/cli/remote_mcp.py profile-plan \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v7
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v8
 # operator-gated; never run against production from this runbook alone
 python apps/cli/remote_mcp.py profile-apply \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v7 \
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v8 \
   --apply
 ```
 
@@ -122,7 +122,7 @@ populates it. Every command below that writes is **operator-only**.
 
 | Setting | Default | Effect |
 | --- | --- | --- |
-| `MY_PA_KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS` | empty | Remote clients bound to `knowledge-discovery-v1`: `knowledge.assertions.submit`, `knowledge.discovery.checkpoint`, `knowledge.assertions.read` and `record_events.list`, intersected with the client's grants. Never `knowledge.assertions.create` or `review.decide`. |
+| `MY_PA_KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS` | empty | Remote clients bound to `knowledge-discovery-v2` (KLP-WP-05; `knowledge-discovery-v1` is history): `knowledge.assertions.submit`, `knowledge.discovery.checkpoint`, `knowledge.assertions.read`, `record_events.list` and `record_events.provenance`, intersected with the client's grants. Never `knowledge.assertions.create` or `review.decide`. |
 | `MY_PA_KNOWLEDGE_OPERATOR_REVIEW_OAUTH_CLIENT_IDS` | empty | Remote clients bound to `knowledge-operator-review-v1`: `review.list`, `review.decide` and `knowledge.assertions.read`. Populating it is operator decision **KLP-OD-005**. It must stay empty until that decision is recorded. |
 | `MY_PA_KNOWLEDGE_CHECKPOINT_SIGNING_KEY` | empty | 32 to 128 UTF-8 bytes, never logged (`repr=False`). Required whenever the discovery allowlist is non-empty. Without it every `knowledge.discovery.checkpoint` answers `unsupported`. |
 | `MY_PA_KNOWLEDGE_CHECKPOINT_SEAL_VERSION` | `1` | Envelope seal version, 1 to 32767. Bump it only through the rotation procedure below. |
@@ -133,6 +133,12 @@ populates it. Every command below that writes is **operator-only**.
 - **Deny overlay.** The gateway intersects a bound client's capabilities *and*
   purposes with its profile. An unbound client never sees `submit` or
   `checkpoint`. stdio MCP never lists them.
+- **Provenance privacy.** `record_events.provenance` returns a Knowledge
+  event's submission, causal root and depth, visible cited triggers and, for a
+  Review promotion, the proposal, case and accepting decision. External run and
+  candidate ids are returned only to the client that supplied them (or a local
+  caller) and are `null` for every other client. A withheld, foreign or
+  non-Knowledge event answers `not_found` exactly as an unknown one.
 - **Review authority.** A Knowledge `review.decide` from an operator-review
   client derives `remote_operator_attested` from the binding. Accepted design
   residual R-1 applies: this proves the client holds the credential, not that
@@ -140,18 +146,23 @@ populates it. Every command below that writes is **operator-only**.
 - **Grants.** `remote_mcp.py grant` refuses `submit` and `checkpoint`, and
   refuses anything outside a bound client's profile. Install a bound client's
   profile with `knowledge-profile-plan`, then `knowledge-profile-apply --apply`.
-  ChatLLM `profile-*` commands refuse a Knowledge-bound client. Each of these
-  commands prints `allowlist_fingerprint <hex>` so the operator can confirm
+  ChatLLM `profile-*` commands refuse a Knowledge-bound client. A client
+  installed under `knowledge-discovery-v1` before KLP-WP-05 re-runs
+  `knowledge-profile-plan` / `knowledge-profile-apply --apply` for
+  `knowledge-discovery-v2`, which adds only the `record_events.provenance`
+  grant; an ordinary ChatLLM client re-runs `profile-plan` / `profile-apply`
+  for `chatllm-data-v8`, which adds the same read when the Knowledge plane is
+  composed. Each of these commands prints `allowlist_fingerprint <hex>` so the operator can confirm
   which allowlists the process loaded.
 
 ```bash
 python apps/cli/remote_mcp.py knowledge-profile-plan \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile knowledge-discovery-v1
+  --resource "$OAUTH_AUDIENCE" --profile knowledge-discovery-v2
 # operator-only
 python apps/cli/remote_mcp.py knowledge-profile-apply \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile knowledge-discovery-v1 --apply
+  --resource "$OAUTH_AUDIENCE" --profile knowledge-discovery-v2 --apply
 ```
 
 ### Source profiles and maintenance (operator command)
@@ -206,13 +217,13 @@ steps require a separate operator decision.
    ```bash
    python apps/cli/remote_mcp.py profile-diff \
      --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v7
+     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v8
    python apps/cli/remote_mcp.py profile-plan \
      --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v7
+     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v8
    python apps/cli/remote_mcp.py profile-apply \
      --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v7 \
+     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v8 \
      --apply
    ```
 

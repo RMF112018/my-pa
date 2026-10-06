@@ -658,8 +658,10 @@ does not. It remains an unverified caller string.
 
 **Nothing here is commissioned.** The migration `1d9b248e7f83` and the TRUNCATE
 refusal `c8e4a1b70d35` are proven on disposable databases only. The ChatLLM
-data profile `chatllm-data-v7`, which classifies `knowledge.assertions.submit` and
-`knowledge.discovery.checkpoint` `CONTROL_PLANE_EXCLUDED` (KLP-WP-04) on top of
+data profile `chatllm-data-v8`, which adds `record_events.provenance` as
+`DATA_CONDITIONAL` on the Knowledge plane switch (KLP-WP-05) on top of
+`chatllm-data-v7`'s `knowledge.assertions.submit` and
+`knowledge.discovery.checkpoint` `CONTROL_PLANE_EXCLUDED` (KLP-WP-04) and
 `chatllm-data-v6`'s first six Knowledge Assertion names as
 `DATA_CONDITIONAL` (KLP-WP-03) and `chatllm-data-v5`'s `capture.archive` and
 `capture.restore` (`DATA_REQUIRED`) and `chatllm-data-v4`'s
@@ -719,7 +721,13 @@ that the successor is not future-dated and that its effective_from does not
 precede the holder's (a holder with no recorded effective_from is the unbounded
 past); a reviewer may supersede a contested holder, which autonomous submit
 never does.
-`knowledge-discovery-v2` (with `record_events.provenance`) is KLP-WP-05.
+KLP-WP-05 binds every discovery client to `knowledge-discovery-v2` (v1 plus
+`record_events.provenance`). Provenance answers only for a Knowledge Assertion
+event the caller can see under the feed's own visibility and remote withholding
+(every R6 section 5.2 term, before LIMIT); any other event, withheld or not,
+answers `not_found` exactly as an unknown one. External run and candidate ids
+go only to the client that supplied them or a local caller; the accepting
+decision's client id and channel are shown to any caller who can see the event.
 
 Evidence: `ops/runbooks/managed-knowledge-context.md`,
 `src/my_pa/bootstrap/knowledge_discovery_profiles.py`,

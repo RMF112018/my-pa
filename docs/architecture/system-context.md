@@ -81,7 +81,8 @@ fifty-five `entities.` names require `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`
 nine `relationship_memory.` names require that variable *and*
 `MY_PA_RELATIONSHIP_MEMORY_ENABLED`, because a memory binds an Entity as its
 subject and ownership is proven by reading `knowledge.entities`, and the seven
-`knowledge.assertions.` names and `knowledge.discovery.checkpoint` require that variable *and*
+`knowledge.assertions.` names, `knowledge.discovery.checkpoint` and
+`record_events.provenance` (KLP-WP-05) require that variable *and*
 `MY_PA_KNOWLEDGE_ASSERTIONS_ENABLED` (KLP-WP-03), while `submit` and
 `checkpoint` additionally serve only a remote client bound by
 `MY_PA_KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS` (KLP-WP-04; a Knowledge Review

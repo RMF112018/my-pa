@@ -449,7 +449,7 @@ composition and in every MCP publication that composition produces.
   family, and each Meeting capability appears in it only for an authenticated
   client whose grants, purpose, capability version and write gates admit it.
 - **Desired ChatLLM profile.** The repository's ChatLLM data profile is
-  `chatllm-data-v7`. Since `chatllm-data-v3` it has classified the six
+  `chatllm-data-v8`. Since `chatllm-data-v3` it has classified the six
   `meetings.` names as `DATA_REQUIRED`: reads under `meeting_read`, writes under
   `meeting_authoring`; `chatllm-data-v4` adds `record_events.list` under
   `record_event_read`; `chatllm-data-v5` adds `capture.archive` and
@@ -464,7 +464,9 @@ composition and in every MCP publication that composition produces.
   `MY_PA_KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS` or
   `MY_PA_KNOWLEDGE_OPERATOR_REVIEW_OAUTH_CLIENT_IDS`, and only
   `knowledge-profile-plan`/`knowledge-profile-apply` install a bound client's
-  exact profile.
+  exact profile; `chatllm-data-v8` (KLP-WP-05) adds `record_events.provenance`
+  under `record_event_provenance_read` as `DATA_CONDITIONAL` on the same
+  Knowledge plane switch, and binds discovery clients to `knowledge-discovery-v2`.
   That is repository desire only. Whether any deployed client holds those
   grants is a runtime fact this document does not state.
 
@@ -548,10 +550,10 @@ python -m alembic heads
 python apps/cli/health.py
 python apps/cli/remote_mcp.py profile-diff \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v7
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v8
 python apps/cli/remote_mcp.py profile-plan \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v7
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v8
 ```
 
 `apps/cli/health.py` answers `not_at_head` for a database below `c8e4a1b70d35`,

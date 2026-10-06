@@ -550,6 +550,7 @@ from my_pa.contracts.ports import (
     KnowledgeReviewDecisionResult,
     KnowledgeSourceProfileUnboundError,
     KnowledgeSubjectNotCanonicalError,
+    KnowledgeSupersessionGuardError,
     KnowledgeTriggerNotFoundError,
     ManagedByteStore,
     MeetingListPage,
@@ -1306,6 +1307,20 @@ def _port_failure(error: PortError) -> ApplicationError:
         return ConflictError(SafeDetail.IDEMPOTENCY_CONFLICT)
     if isinstance(error, KnowledgeConcurrentDuplicateError):
         return ConflictError(SafeDetail.DUPLICATE_FACT)
+    if isinstance(error, KnowledgeSupersessionGuardError):
+        # KLP-WP-04 fix round 4 (DEV-66 ruling): a Review promotion over a
+        # single-current holder failing a KLP-AC-031 guard. Existing tokens only:
+        # `effective_from` for the bounds guards, `evidence` for counterevidence.
+        return ConflictError(
+            *(
+                detail
+                for detail, failed in (
+                    (SafeDetail.EFFECTIVE_FROM, error.bounds),
+                    (SafeDetail.EVIDENCE, error.counterevidence),
+                )
+                if failed
+            )
+        )
     if isinstance(error, KnowledgeEvidenceNotFoundError):
         return NotFoundError(SafeDetail.EVIDENCE)
     if isinstance(error, KnowledgeCaptureWithdrawnError):

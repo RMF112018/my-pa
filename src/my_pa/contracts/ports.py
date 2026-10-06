@@ -391,6 +391,7 @@ __all__ = [
     "KnowledgeSubmissionResult",
     "KnowledgeSubmitEvidence",
     "KnowledgeSubmitRequest",
+    "KnowledgeSupersessionGuardError",
     "KnowledgeTriggerNotFoundError",
     "ManagedAdmission",
     "ManagedByteStore",
@@ -5108,6 +5109,26 @@ class KnowledgeSubjectNotCanonicalError(PortError):
     creating a live fact on an identity the merge retired (R6 section 8.6,
     KLP-AC-036). Nothing is written.
     """
+
+
+class KnowledgeSupersessionGuardError(PortError):
+    """KLP-WP-04 fix round 4 (DEV-66 ruling): a Review promotion may not supersede.
+
+    The single-current holder found under C6 fails a KLP-AC-031 guard (the same
+    `supersession_guard_blockers` the autonomous policy applies): an unknown or
+    regressing successor effective_from, a future-dated successor, or a
+    predecessor with unresolved counterevidence. Raised before the decision row,
+    so the transaction (C1 reservation included) rolls back whole and the case
+    stays open for a `correct_and_accept` with corrected bounds.
+
+    `bounds` is true when an effective_from guard failed; `counterevidence` when
+    the predecessor carries counterevidence. Both may be true.
+    """
+
+    def __init__(self, *, bounds: bool, counterevidence: bool) -> None:
+        super().__init__("the single-current holder may not be superseded")
+        self.bounds = bounds
+        self.counterevidence = counterevidence
 
 
 @dataclass(frozen=True, slots=True)

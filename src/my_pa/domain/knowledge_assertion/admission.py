@@ -104,6 +104,7 @@ __all__ = [
     "derive_content_origin",
     "independence_key",
     "independent_corroboration_keys",
+    "supersession_guard_blockers",
 ]
 
 _SHA256_HEX: Final = re.compile(r"\A[0-9a-f]{64}\Z")
@@ -285,22 +286,38 @@ def _direct_blockers(facts: DirectAdmissionFacts) -> list[DirectAdmissionBlocker
     return blockers
 
 
-def _supersession_blockers(
-    facts: DirectAdmissionFacts, current: CurrentFact
-) -> list[DirectAdmissionBlocker]:
-    blockers = [DirectAdmissionBlocker.CURRENT_FACT_DIFFERS]
-    successor = facts.candidate_effective_from
+def supersession_guard_blockers(
+    successor_effective_from: datetime | None, current: CurrentFact, now: datetime
+) -> tuple[DirectAdmissionBlocker, ...]:
+    """The KLP-AC-031 guards on superseding `current`; empty means all hold.
+
+    One function for both supersession paths: the autonomous policy below and a
+    Review promotion over a single-current holder (KLP-WP-04 fix round 4,
+    Manager ruling on DEV-66). Either effective_from unknown (null) is a blocker
+    -- the ordering cannot be shown -- as are a regressing or future-dated
+    successor and a predecessor with unresolved counterevidence.
+    """
+    blockers: list[DirectAdmissionBlocker] = []
     predecessor = current.effective_from
-    if successor is None or predecessor is None:
+    if successor_effective_from is None or predecessor is None:
         blockers.append(DirectAdmissionBlocker.SUCCESSOR_EFFECTIVE_FROM_UNKNOWN)
     else:
-        if successor < predecessor:
+        if successor_effective_from < predecessor:
             blockers.append(DirectAdmissionBlocker.SUCCESSOR_EFFECTIVE_FROM_REGRESSES)
-        if successor > facts.now:
+        if successor_effective_from > now:
             blockers.append(DirectAdmissionBlocker.SUCCESSOR_FUTURE_DATED)
     if current.unresolved_counterevidence:
         blockers.append(DirectAdmissionBlocker.PREDECESSOR_COUNTEREVIDENCE_UNRESOLVED)
-    return blockers
+    return tuple(blockers)
+
+
+def _supersession_blockers(
+    facts: DirectAdmissionFacts, current: CurrentFact
+) -> list[DirectAdmissionBlocker]:
+    return [
+        DirectAdmissionBlocker.CURRENT_FACT_DIFFERS,
+        *supersession_guard_blockers(facts.candidate_effective_from, current, facts.now),
+    ]
 
 
 def decide_direct_admission(facts: DirectAdmissionFacts) -> AdmissionDecision:

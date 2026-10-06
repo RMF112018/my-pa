@@ -40,7 +40,7 @@ Every identity here is synthetic.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
 import pytest
@@ -82,8 +82,11 @@ from tests.database.test_knowledge_assertion_repository import (
     new_principal,
 )
 from tests.database.test_knowledge_assertion_submissions import (
+    EARLY,
+    LATER,
     PAYMENT,
     SubmitRuntime,
+    _payment,
     add_direct_payment_head,
     archive_capture,
     external,
@@ -739,34 +742,196 @@ def test_a_date_kind_qualifier_and_instant_value_are_correctable_on_a_dated_pred
 # ---- promotion under the C3-C6 locks ---------------------------------------------------
 
 
-def test_acceptance_supersedes_a_different_single_current_holder(review: ReviewRuntime) -> None:
+def _holder_and_case(
+    review: ReviewRuntime,
+    *,
+    successor_from: datetime | None,
+    holder_from: datetime | None = EARLY,
+    counterevidence: bool = False,
+    direct_successor: bool = True,
+) -> tuple[str, str, str]:
+    """(principal, live payment_terms holder, review_case_id of a different-value proposal).
+
+    The holder is direct-created by the production submit (effective_from
+    `holder_from`); `counterevidence` links counterevidence to it through the
+    production `_enrich` (an equal candidate citing a counterevidence row). The
+    proposal is queued by the production submit -- through the same direct
+    profile, where the autonomous KLP-AC-031 guards queue it, or (when
+    `direct_successor` is false) through a non-direct profile, so that it is
+    queued with the guards holding.
+    """
     add_direct_payment_head(review.engine)
     principal = new_principal()
     direct = review.profile(principal)
     entity = review.org(principal, "acme")
-    created = review.submit(
-        principal, direct, subject_id=entity, predicate=PAYMENT, value="Synthetic net 30"
-    )
+    created = _payment(review, principal, direct, entity, "Synthetic net 30", "p", holder_from)
     assert created["outcome"] == "direct_created", created
-    queued = review.submit(
-        principal,
-        direct,
-        subject_id=entity,
-        predicate=PAYMENT,
-        candidate="cand-2",
-        value="Synthetic net 60",
-        evidence=(external("obj-2"),),
-    )
+    if counterevidence:
+        enriched = _payment(
+            review,
+            principal,
+            direct,
+            entity,
+            "Synthetic net 30",
+            "e",
+            holder_from,
+            evidence=(external("inv-p"), external("contra-e", role="counterevidence")),
+        )
+        assert enriched["assertion_id"] == created["assertion_id"], enriched
+    profile = direct if direct_successor else review.profile(principal, scope="b", direct=False)
+    queued = _payment(review, principal, profile, entity, "Synthetic net 60", "q", successor_from)
     assert queued["outcome"] == "review_queued", queued
-    decided = review.decide(principal, str(queued["review_case_id"]))
+    return principal, str(created["assertion_id"]), str(queued["review_case_id"])
+
+
+def write_request_count(engine: Engine, principal_id: str) -> int:
+    w = relationship_write_requests
+    with engine.connect() as connection:
+        return int(
+            connection.execute(
+                select(func.count()).where(w.c.principal_id == principal_id)
+            ).scalar_one()
+        )
+
+
+def test_acceptance_supersedes_a_different_single_current_holder(review: ReviewRuntime) -> None:
+    principal, holder, case = _holder_and_case(review, successor_from=LATER, direct_successor=False)
+    decided = review.decide(principal, case)
     successor = assertion_of(review.engine, decided["assertion_id"])
-    predecessor = assertion_of(review.engine, str(created["assertion_id"]))
-    assert successor["supersedes_assertion_id"] == created["assertion_id"]
+    predecessor = assertion_of(review.engine, holder)
+    assert successor["supersedes_assertion_id"] == holder
     assert predecessor["lifecycle"] == "superseded"
     assert predecessor["version"] == 2
     kinds = [event["event_kind"] for event in knowledge_events(review.engine, principal)]
     # create (direct), then the predecessor's state change and the successor's creation.
     assert kinds == ["created", "state_changed", "created"]
+
+
+# ---- KLP-AC-031 on a Review supersession (fix round 4, Manager ruling on DEV-66) -----
+
+
+def _refused_and_untouched(
+    review: ReviewRuntime,
+    principal: str,
+    holder: str,
+    case: str,
+    disposition: Disposition,
+    details: list[str],
+    patch: dict[str, object] | None = None,
+) -> None:
+    before = counts(review.engine, principal)
+    requests = write_request_count(review.engine, principal)
+    error = review.decide_error(principal, case, disposition, patch=patch)
+    assert error["code"] == "conflict", error
+    assert error["safe_details"] == details
+    # No decision row, no mutation, no Record Event, no C1 reservation left.
+    assert decisions_of(review.engine, case) == []
+    assert counts(review.engine, principal) == before
+    assert write_request_count(review.engine, principal) == requests
+    assert proposal_of(review.engine, case)["state"] == "needs_review"
+    assert assertion_of(review.engine, holder)["lifecycle"] == "active"
+
+
+def _corrected_acceptance_supersedes(
+    review: ReviewRuntime, principal: str, holder: str, case: str
+) -> None:
+    decided = review.decide(
+        principal,
+        case,
+        Disposition.CORRECT_AND_ACCEPT,
+        patch={"effective_from": LATER.isoformat()},
+    )
+    assert decided["proposal_state"] == "corrected_accepted"
+    successor = assertion_of(review.engine, decided["assertion_id"])
+    assert successor["supersedes_assertion_id"] == holder
+    assert successor["effective_from"] == LATER
+    assert assertion_of(review.engine, holder)["lifecycle"] == "superseded"
+
+
+@pytest.mark.parametrize(
+    "successor_from",
+    [EARLY - timedelta(days=5), WHEN + timedelta(days=5), None],
+    ids=["regresses", "future_dated", "unknown"],
+)
+def test_a_review_supersession_failing_a_bounds_guard_is_refused_and_correctable(
+    review: ReviewRuntime, successor_from: datetime | None
+) -> None:
+    """A successor before the holder, after `now`, or without effective_from.
+
+    The autonomous guards queued it; acceptance re-checks the same guards under
+    C6 and refuses `conflict(effective_from)` writing nothing, the case open; a
+    `correct_and_accept` with a valid effective_from then supersedes.
+    """
+    principal, holder, case = _holder_and_case(review, successor_from=successor_from)
+    _refused_and_untouched(review, principal, holder, case, Disposition.ACCEPT, ["effective_from"])
+    _corrected_acceptance_supersedes(review, principal, holder, case)
+
+
+def test_a_correction_that_still_regresses_is_refused(review: ReviewRuntime) -> None:
+    principal, holder, case = _holder_and_case(review, successor_from=None)
+    _refused_and_untouched(
+        review,
+        principal,
+        holder,
+        case,
+        Disposition.CORRECT_AND_ACCEPT,
+        ["effective_from"],
+        patch={"effective_from": (EARLY - timedelta(days=1)).isoformat()},
+    )
+    _corrected_acceptance_supersedes(review, principal, holder, case)
+
+
+def test_a_holder_without_effective_from_is_never_superseded_by_review(
+    review: ReviewRuntime,
+) -> None:
+    """Unknown predecessor bound: as the submit policy, the ordering cannot be shown.
+
+    No correction can supply the holder's bound, so the case can only be
+    rejected (or left open); recorded as a residual.
+    """
+    principal, holder, case = _holder_and_case(review, successor_from=LATER, holder_from=None)
+    _refused_and_untouched(review, principal, holder, case, Disposition.ACCEPT, ["effective_from"])
+    _refused_and_untouched(
+        review,
+        principal,
+        holder,
+        case,
+        Disposition.CORRECT_AND_ACCEPT,
+        ["effective_from"],
+        patch={"effective_from": LATER.isoformat()},
+    )
+    assert review.decide(principal, case, Disposition.REJECT)["proposal_state"] == "rejected"
+
+
+def test_a_review_supersession_of_a_holder_with_counterevidence_is_refused(
+    review: ReviewRuntime,
+) -> None:
+    """Predecessor counterevidence: `conflict(evidence)`, nothing written, case open.
+
+    Bounds cannot cure it: a `correct_and_accept` with valid bounds is refused
+    the same way; the case stays decidable (reject).
+    """
+    principal, holder, case = _holder_and_case(review, successor_from=LATER, counterevidence=True)
+    _refused_and_untouched(review, principal, holder, case, Disposition.ACCEPT, ["evidence"])
+    _refused_and_untouched(
+        review,
+        principal,
+        holder,
+        case,
+        Disposition.CORRECT_AND_ACCEPT,
+        ["evidence"],
+        patch={"effective_from": LATER.isoformat()},
+    )
+    assert review.decide(principal, case, Disposition.REJECT)["proposal_state"] == "rejected"
+
+
+def test_both_guards_failing_name_both_details(review: ReviewRuntime) -> None:
+    principal, holder, case = _holder_and_case(
+        review, successor_from=WHEN + timedelta(days=5), counterevidence=True
+    )
+    _refused_and_untouched(
+        review, principal, holder, case, Disposition.ACCEPT, ["effective_from", "evidence"]
+    )
 
 
 def test_an_equal_live_fact_under_the_subject_lock_refuses_acceptance(

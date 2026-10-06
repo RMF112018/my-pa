@@ -39,12 +39,13 @@ Every identity here is synthetic.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Final
 
 import pytest
-from sqlalchemy import Connection, text
+from sqlalchemy import Connection, Engine, select, text
 from tests.concurrency.test_knowledge_assertion_concurrency import (
     commit_lock_row,
     hold_subject_lock,
@@ -57,18 +58,25 @@ from tests.database.test_knowledge_assertion_repository import counts, new_princ
 from tests.database.test_knowledge_assertion_review import (
     CLI,
     ReviewRuntime,
+    _holder_and_case,
     _queued,
     assertion_count,
+    assertion_of,
     decisions_of,
     proposal_of,
+    write_request_count,
 )
-from tests.database.test_knowledge_assertion_submissions import PAYMENT, external
+from tests.database.test_knowledge_assertion_submissions import LATER, PAYMENT, external
 
 from my_pa.application.commands import MergeEntities, PreviewEntityMerge
 from my_pa.domain.capture.review import Disposition
 from my_pa.domain.knowledge_assertion.vocabulary import KnowledgeSubjectKind
 from my_pa.infrastructure.persistence import knowledge_assertions as persistence
 from my_pa.infrastructure.persistence.identifier_claim_lock import lock_entity_mutation_scopes
+from my_pa.infrastructure.persistence.tables import (
+    knowledge_assertion_mutations,
+    knowledge_evidence_refs,
+)
 
 pytestmark = [
     pytest.mark.database,
@@ -373,3 +381,102 @@ def test_a_promotion_waiting_at_c6_holds_c5_and_a_second_waits_at_c5(
     assert second.error is not None
     assert second.error.code.value == "conflict"
     assert second.error.safe_details == ("expected_review_version",)
+
+
+# ---- KLP-AC-031 on a Review supersession (fix round 4, DEV-66 ruling) -----------------
+
+
+def _waiting_on_subject_lock(engine: Engine) -> int:
+    with engine.connect() as observer:
+        return int(
+            observer.execute(
+                text(
+                    "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() "
+                    "AND wait_event_type = 'Lock' AND pid <> pg_backend_pid() "
+                    "AND query ILIKE '%knowledge_assertion_subject_locks%FOR UPDATE%'"
+                )
+            ).scalar_one()
+        )
+
+
+def test_counterevidence_linked_to_the_holder_while_a_decide_waits_at_c6_refuses_it(
+    review: ReviewRuntime,
+) -> None:
+    """Modelled on test_knowledge_c4_order's holder-counterevidence node.
+
+    A session takes the C6 subject lock of the live payment_terms holder and
+    links counterevidence to it, pausing before COMMIT. An acceptance of a
+    queued different-value proposal (guards holding when it was filed) blocks on
+    that C6 row (the waiting statement is the subject-lock `SELECT ... FOR
+    UPDATE`, observed). After the commit the decide re-reads the holder's
+    counterevidence under C6 and answers `conflict(evidence)`: no decision, the
+    holder still active, the case open. The linking session takes no C3 (every
+    production link writer takes C3 first for an Entity subject, so with
+    today's registry the production race serialises at C3; this is the C6
+    re-read's guard).
+    """
+    principal, holder, case = _holder_and_case(review, successor_from=LATER, direct_successor=False)
+    engine = review.engine
+    with engine.connect() as connection:
+        evidence = connection.execute(
+            select(knowledge_evidence_refs.c.evidence_ref_id)
+            .where(knowledge_evidence_refs.c.principal_id == principal)
+            .order_by(knowledge_evidence_refs.c.evidence_ref_id)
+            .limit(1)
+        ).scalar_one()
+        mutation = connection.execute(
+            select(knowledge_assertion_mutations.c.mutation_id).where(
+                knowledge_assertion_mutations.c.assertion_id == holder
+            )
+        ).scalar_one()
+        subject_id = connection.execute(
+            text("SELECT subject_id FROM knowledge.knowledge_assertions WHERE assertion_id = :a"),
+            {"a": holder},
+        ).scalar_one()
+    before = counts(engine, principal)
+    requests = write_request_count(engine, principal)
+    locked = threading.Event()
+    release = threading.Event()
+
+    def link_counterevidence() -> None:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "SELECT 1 FROM knowledge.knowledge_assertion_subject_locks "
+                    "WHERE principal_id = :p AND subject_kind = 'entity' AND subject_id = :s "
+                    "AND predicate_code = :k FOR UPDATE"
+                ),
+                {"p": principal, "s": subject_id, "k": PAYMENT},
+            ).all()
+            connection.execute(
+                text(
+                    "INSERT INTO knowledge.knowledge_assertion_evidence_links (principal_id, "
+                    "assertion_id, evidence_ref_id, evidence_role, linked_by_mutation_id, "
+                    "created_at) VALUES (:p, :a, :e, 'counterevidence', :m, now())"
+                ),
+                {"p": principal, "a": holder, "e": evidence, "m": mutation},
+            )
+            locked.set()
+            assert release.wait(DEADLINE_SECONDS), "never released"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        linker = pool.submit(link_counterevidence)
+        assert locked.wait(DEADLINE_SECONDS)
+        decide: Future[Any] = pool.submit(_decide_envelope, review, principal, case)
+        _wait_for_waiters(engine, 1, decide)
+        assert _waiting_on_subject_lock(engine) == 1
+        release.set()
+        linker.result(timeout=DEADLINE_SECONDS)
+        envelope = decide.result(timeout=DEADLINE_SECONDS)
+    assert envelope.error is not None, envelope
+    assert envelope.error.code.value == "conflict"
+    assert envelope.error.safe_details == ("evidence",)
+    assert decisions_of(engine, case) == []
+    after = counts(engine, principal)
+    # Only the linker's row was added.
+    assert {k: after[k] - before[k] for k in after if after[k] != before[k]} == {
+        "knowledge_assertion_evidence_links": 1
+    }
+    assert write_request_count(engine, principal) == requests
+    assert proposal_of(engine, case)["state"] == "needs_review"
+    assert assertion_of(engine, holder)["lifecycle"] == "active"

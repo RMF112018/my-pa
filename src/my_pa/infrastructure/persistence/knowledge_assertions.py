@@ -106,6 +106,7 @@ from my_pa.contracts.ports import (
     KnowledgeSubmissionResult,
     KnowledgeSubmitEvidence,
     KnowledgeSubmitRequest,
+    KnowledgeSupersessionGuardError,
     KnowledgeTriggerNotFoundError,
     PortError,
     RecordEventStager,
@@ -132,11 +133,13 @@ from my_pa.domain.knowledge_assertion.admission import (
     AdmissionEvidence,
     AdmissionPath,
     CurrentFact,
+    DirectAdmissionBlocker,
     DirectAdmissionFacts,
     SourceProfileFacts,
     SubjectResolution,
     decide_direct_admission,
     decide_domain_route,
+    supersession_guard_blockers,
 )
 from my_pa.domain.knowledge_assertion.checkpoint import CheckpointBinding, CheckpointSeal
 from my_pa.domain.knowledge_assertion.predicate import KnowledgePredicate
@@ -2771,17 +2774,7 @@ class _AutonomousSubmit:
         )
 
     def _has_counterevidence(self, assertion_id: str) -> bool:
-        links = knowledge_assertion_evidence_links
-        return (
-            self.connection.execute(
-                select(links.c.evidence_ref_id).where(
-                    partition_criterion(links, self.context),
-                    links.c.assertion_id == assertion_id,
-                    links.c.evidence_role == KnowledgeEvidenceRole.COUNTEREVIDENCE.value,
-                )
-            ).first()
-            is not None
-        )
+        return _has_counterevidence(self.connection, self.context, assertion_id)
 
     def _equivalent_proposals(self, *, lock: bool, ids: Sequence[str] = ()) -> list[Row[Any]]:
         """Open proposals with this fingerprint; C5 `FOR UPDATE` by proposal_id when `lock`."""
@@ -3545,6 +3538,26 @@ def _review_case_row(row: Row[Any]) -> KnowledgeReviewCaseRow:
     )
 
 
+def _has_counterevidence(
+    connection: Connection, context: PrincipalContext, assertion_id: str
+) -> bool:
+    """Whether `assertion_id` carries a counterevidence link (unresolved, KLP-AC-031).
+
+    One reader for both supersession paths (autonomous submit and Review).
+    """
+    links = knowledge_assertion_evidence_links
+    return (
+        connection.execute(
+            select(links.c.evidence_ref_id).where(
+                partition_criterion(links, context),
+                links.c.assertion_id == assertion_id,
+                links.c.evidence_role == KnowledgeEvidenceRole.COUNTEREVIDENCE.value,
+            )
+        ).first()
+        is not None
+    )
+
+
 class _ReviewDecision:
     """One Knowledge `review.decide` transaction body (R6 sections 8.1, 8.2, 10).
 
@@ -3734,7 +3747,7 @@ class _ReviewDecision:
             return None
         a = knowledge_assertions
         return self.connection.execute(
-            select(a.c.assertion_id, a.c.version, a.c.classification).where(
+            select(a.c.assertion_id, a.c.version, a.c.classification, a.c.effective_from).where(
                 partition_criterion(a, self.context),
                 a.c.subject_kind == proposal.subject_kind,
                 a.c.subject_id == proposal.subject_id,
@@ -3801,6 +3814,8 @@ class _ReviewDecision:
             if self._live_duplicate(fingerprint):
                 raise KnowledgeConcurrentDuplicateError("an equal live fact exists")
             holder = self._slot_holder(locked)
+            if holder is not None:
+                self._require_supersession_guards(locked, holder)
         decision_id = self._insert_decision(locked, version + 1)
         assertion_id: str | None = None
         receipt_id: str | None = None
@@ -3828,6 +3843,36 @@ class _ReviewDecision:
             assertion_id=assertion_id,
             receipt_id=receipt_id,
         )
+
+    def _require_supersession_guards(self, proposal: Row[Any], holder: Row[Any]) -> None:
+        """KLP-AC-031 on a Review supersession, from facts read under C6 (DEV-66 ruling).
+
+        The holder (and its effective_from) was just read under the C6 subject
+        lock and its counterevidence links are read here, still under it; the
+        successor's bounds are the corrected candidate's, else the proposal's.
+        The same `supersession_guard_blockers` the autonomous policy applies.
+        Raised before the decision row: nothing of this decide survives.
+        """
+        corrected = self.request.corrected
+        successor = proposal.effective_from if corrected is None else corrected.effective_from
+        blockers = supersession_guard_blockers(
+            successor,
+            CurrentFact(
+                assertion_id=holder.assertion_id,
+                effective_from=holder.effective_from,
+                unresolved_counterevidence=_has_counterevidence(
+                    self.connection, self.context, holder.assertion_id
+                ),
+            ),
+            self.at,
+        )
+        if blockers:
+            counterevidence = (
+                DirectAdmissionBlocker.PREDECESSOR_COUNTEREVIDENCE_UNRESOLVED in blockers
+            )
+            raise KnowledgeSupersessionGuardError(
+                bounds=len(blockers) > int(counterevidence), counterevidence=counterevidence
+            )
 
     # -- C7 / C8 writers --------------------------------------------------------------
 

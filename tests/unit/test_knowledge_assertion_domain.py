@@ -149,8 +149,9 @@ def test_the_later_wps_additions_are_not_declared_by_wp01() -> None:
     """OperatorSurface and the '+1' members belong to WP-03/04/06.
 
     KLP-WP-03 has landed and declared `RecordEventFamily.KNOWLEDGE_ASSERTION`;
-    KLP-WP-04 (slice C) has declared `ReviewSubjectKind.KNOWLEDGE_ASSERTION`
-    outside this module; the WP-06 additions are still absent.
+    KLP-WP-04 (slice C) has declared `ReviewSubjectKind.KNOWLEDGE_ASSERTION`;
+    KLP-WP-06 has declared the context plane, authority class and the two
+    context codes -- all outside this module, which still declares none of them.
     """
     from my_pa.domain.capture.review import ReviewSubjectKind
     from my_pa.domain.context.prepared import ContextPlane, SourceAuthorityClass
@@ -159,8 +160,13 @@ def test_the_later_wps_additions_are_not_declared_by_wp01() -> None:
     assert not hasattr(vocabulary, "OperatorSurface")
     assert RecordEventFamily.KNOWLEDGE_ASSERTION.value == "knowledge_assertion"
     assert ReviewSubjectKind.KNOWLEDGE_ASSERTION.value == "knowledge_assertion"
-    assert "knowledge_assertion" not in {member.value for member in ContextPlane}
-    assert "product_owned_knowledge_assertion" not in {m.value for m in SourceAuthorityClass}
+    assert ContextPlane.KNOWLEDGE_ASSERTION.value == "knowledge_assertion"
+    assert (
+        SourceAuthorityClass.PRODUCT_OWNED_KNOWLEDGE_ASSERTION.value
+        == "product_owned_knowledge_assertion"
+    )
+    for name in ("ContextPlane", "SourceAuthorityClass", "ContextLimitationCode"):
+        assert not hasattr(vocabulary, name)
 
 
 def test_the_stored_submission_reasons_exclude_exactly_the_response_only_two() -> None:

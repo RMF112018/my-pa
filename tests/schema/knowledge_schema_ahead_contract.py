@@ -37,7 +37,7 @@ GAP_FAMILIES: Final[tuple[GapFamily, ...]] = (
 
 #: The latest landed KLP work package. Bumped by WP-03, WP-04, WP-05 and WP-06,
 #: each in the same change that declares the members its row stops listing.
-KNOWLEDGE_WP_HEAD: Final[KnowledgeWpHead] = "wp05"
+KNOWLEDGE_WP_HEAD: Final[KnowledgeWpHead] = "wp06"
 
 _WP02: Final = {
     "capability": frozenset(

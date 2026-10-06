@@ -30,6 +30,8 @@ __all__ = [
     "PackedEvidence",
     "apply_preferences",
     "identity_key",
+    "item_contradictions",
+    "item_limitations",
     "rank_and_pack",
 ]
 
@@ -39,6 +41,11 @@ _PLANE_ORDER: Final[dict[ContextPlane, int]] = {
     ContextPlane.CONTINUITY: 2,
     ContextPlane.RELATIONSHIP: 3,
     ContextPlane.MANAGED_DOCUMENT: 4,
+    # KLP-WP-06: the last tie-break. Product-owned Knowledge Assertions never
+    # reorder two items of the existing planes (KLP-AC-053), and a tie between
+    # an assertion and enrolled-source/user-authored evidence goes to the
+    # evidence the assertion was derived from.
+    ContextPlane.KNOWLEDGE_ASSERTION: 5,
 }
 
 #: Lower is better. EXPLICIT_SUBJECT and EXACT_IDENTIFIER share first place.
@@ -79,6 +86,7 @@ def identity_key(item: PreparedContextEvidence) -> str:
         or item.capture_version_id
         or item.product_id
         or item.managed_document_version_id
+        or item.knowledge_assertion_id
         or item.reference_id
     )
 
@@ -94,6 +102,7 @@ def _group_key(item: PreparedContextEvidence) -> str:
         or item.capture_id
         or item.product_id
         or item.managed_document_id
+        or item.knowledge_assertion_id
         or item.reference_id
     )
 
@@ -197,12 +206,39 @@ def rank_and_pack(
     limitations: tuple[ContextLimitationCode, ...] = ()
     if truncated:
         limitations = (ContextLimitationCode.RESULT_TRUNCATED,)
+    # KLP-AC-057: every packed item's own codes reach the package. Codes ride
+    # on the item itself, so ranking, dedup and packing cannot strip them from
+    # an item that is kept; a dropped item is disclosed by RESULT_TRUNCATED.
+    limitations = item_limitations(packed_items, limitations)
+    contradictions = item_contradictions(packed_items, contradictions)
     return PackedEvidence(
         items=packed_items,
         truncation=ContextTruncation(is_truncated=truncated, reason=reason),
         contradictions=contradictions,
         limitations=limitations,
     )
+
+
+def item_limitations(
+    items: tuple[PreparedContextEvidence, ...],
+    limitations: tuple[ContextLimitationCode, ...],
+) -> tuple[ContextLimitationCode, ...]:
+    """`limitations` plus every item code, once each, in first-seen order."""
+    seen = dict.fromkeys(limitations)
+    for item in items:
+        seen.update(dict.fromkeys(item.limitations))
+    return tuple(seen)
+
+
+def item_contradictions(
+    items: tuple[PreparedContextEvidence, ...],
+    contradictions: tuple[ContradictionCode, ...],
+) -> tuple[ContradictionCode, ...]:
+    """`contradictions` plus every item code, once each, in first-seen order."""
+    seen = dict.fromkeys(contradictions)
+    for item in items:
+        seen.update(dict.fromkeys(item.contradictions))
+    return tuple(seen)
 
 
 def _item_identities(item: PreparedContextEvidence) -> frozenset[str]:
@@ -220,6 +256,7 @@ def _item_identities(item: PreparedContextEvidence) -> frozenset[str]:
             item.managed_document_id,
             item.managed_document_version_id,
             item.reveal_subject_id,
+            item.knowledge_assertion_id,
         )
         if value is not None
     )

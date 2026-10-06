@@ -19,7 +19,7 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import IntegrityError
-from tests.schema.knowledge_schema_ahead_contract import admitted_ahead
+from tests.schema.knowledge_schema_ahead_contract import GAP_ROWS, admitted_ahead
 
 from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.common.identifiers import IdKind
@@ -91,6 +91,15 @@ def _admitted(engine: Engine, constraint: str) -> frozenset[str]:
     with engine.connect() as connection:
         definition = connection.execute(
             _CONSTRAINT, {"schema": SCHEMA, "table": "audit_events", "name": constraint}
+        ).scalar_one()
+    return frozenset(re.findall(r"'([^']+)'::text", str(definition)))
+
+
+def _item_admitted(engine: Engine, constraint: str) -> frozenset[str]:
+    """The literal of one `context_run_items` CHECK, read back from `pg_constraint`."""
+    with engine.connect() as connection:
+        definition = connection.execute(
+            _CONSTRAINT, {"schema": SCHEMA, "table": "context_run_items", "name": constraint}
         ).scalar_one()
     return frozenset(re.findall(r"'([^']+)'::text", str(definition)))
 
@@ -186,9 +195,16 @@ def test_the_frozen_literals_are_the_domain_at_head() -> None:
         assert names == sorted(names), f"{constant} is not in sorted order"
 
 
+#: KLP-WP-06: the plane and authority class the single Knowledge revision
+#: (ALTERs A4/A5) admitted -- never this table revision.
+KNOWLEDGE_REVISION_PLANES: Final = GAP_ROWS["wp02"]["context_plane"]
+KNOWLEDGE_REVISION_AUTHORITIES: Final = GAP_ROWS["wp02"]["source_authority_class"]
+
+
 def test_the_table_revision_freezes_transport_and_plane_literals() -> None:
     source = _revision_source(TABLE_REVISION)
     assert "CHECK (transport IN ('local', 'remote_client'))" in source
+    later = KNOWLEDGE_REVISION_PLANES | KNOWLEDGE_REVISION_AUTHORITIES
     members = (
         *CaptureTransport,
         *ContextPlane,
@@ -197,7 +213,13 @@ def test_the_table_revision_freezes_transport_and_plane_literals() -> None:
         *EvidenceLifecycle,
     )
     for member in members:
-        assert f"'{member.value}'" in source
+        if member.value in later:
+            # Declared by KLP-WP-06; the 2026-08-15 literal stays frozen without it.
+            assert f"'{member.value}'" not in source
+        else:
+            assert f"'{member.value}'" in source
+    assert {member.value for member in ContextPlane} >= KNOWLEDGE_REVISION_PLANES
+    assert {member.value for member in SourceAuthorityClass} >= KNOWLEDGE_REVISION_AUTHORITIES
 
 
 def test_the_revisions_read_no_enum_and_no_tables_module() -> None:
@@ -232,6 +254,14 @@ def test_the_revisions_run_empty_to_head_and_prior_to_head(disposable_database: 
             member.value for member in Purpose
         } | admitted_ahead("purpose")
         assert {"context_runs", "context_run_items"} <= _tables(engine)
+        # KLP-AC-109 / 132: at head the context item CHECKs equal the domain
+        # union the current gap row (empty at wp06).
+        assert _item_admitted(engine, "context_run_item_plane_is_known") == {
+            member.value for member in ContextPlane
+        } | admitted_ahead("context_plane")
+        assert _item_admitted(engine, "context_run_item_authority_is_known") == {
+            member.value for member in SourceAuthorityClass
+        } | admitted_ahead("source_authority_class")
 
         command.downgrade(_config(), PREVIOUS)
         assert "context_runs" not in _tables(engine)

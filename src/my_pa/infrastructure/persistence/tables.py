@@ -9734,9 +9734,10 @@ context_run_items = Table(
     Column("span_start", Integer),
     Column("span_end", Integer),
     # KLP-WP-02 A6: the Knowledge Assertion context identity, added by
-    # `6734f039f7a6`. The plane and authority CHECKs below are enum-derived and
-    # so lag the database's frozen literals by exactly the schema-ahead gap of
-    # `tests/schema/knowledge_schema_ahead_contract.py` until KLP-WP-06.
+    # `6734f039f7a6`. The plane and authority CHECKs below are enum-derived;
+    # since KLP-WP-06 declared `knowledge_assertion` /
+    # `product_owned_knowledge_assertion` they equal the database's frozen
+    # literals (the schema-ahead gap row `wp06` is empty).
     Column("knowledge_assertion_id", Text),
     PrimaryKeyConstraint(
         "context_manifest_id", "position", name="one_item_per_context_run_position"

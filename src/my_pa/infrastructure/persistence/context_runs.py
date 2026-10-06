@@ -73,6 +73,7 @@ class SqlContextRunRepository(ContextRunRepository):
                         managed_document_version_id=item.managed_document_version_id,
                         span_start=item.span_start,
                         span_end=item.span_end,
+                        knowledge_assertion_id=item.knowledge_assertion_id,
                     )
                 )
         except SQLAlchemyError:

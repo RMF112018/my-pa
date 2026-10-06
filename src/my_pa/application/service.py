@@ -12207,6 +12207,11 @@ class ApplicationService:
             raise InternalError()
         prepared = ContextPreparationService(
             managed_documents_composed=self._managed_store_or_none is not None,
+            # KLP-WP-06: the Knowledge Assertion plane exists only when its
+            # switch and the entity plane are both composed (`_knowledge_plane`).
+            knowledge_assertions_composed=(
+                self._knowledge_assertions_enabled and self._relationship_intelligence_enabled
+            ),
         ).prepare(unit_of_work, authorization, command, query)
         truncation = Truncation(
             is_truncated=prepared.truncation.is_truncated,

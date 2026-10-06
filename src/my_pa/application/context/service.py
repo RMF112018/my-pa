@@ -14,8 +14,17 @@ from dataclasses import replace
 
 from my_pa.application.authorization import Authorization
 from my_pa.application.commands import PrepareContext
-from my_pa.application.context.providers import search_plane, searchable_planes
-from my_pa.application.context.ranking import apply_preferences, rank_and_pack
+from my_pa.application.context.providers import (
+    knowledge_assertion_plane_admitted,
+    search_plane,
+    searchable_planes,
+)
+from my_pa.application.context.ranking import (
+    apply_preferences,
+    item_contradictions,
+    item_limitations,
+    rank_and_pack,
+)
 from my_pa.application.errors import InternalError
 from my_pa.contracts.ports import UnitOfWork
 from my_pa.domain.common.identifiers import IdKind
@@ -25,6 +34,8 @@ from my_pa.domain.context.prepared import (
     CONTEXT_RANKING_VERSION,
     DEFAULT_EVIDENCE_BYTES,
     DEFAULT_EVIDENCE_ITEMS,
+    KNOWLEDGE_ITEM_CONTRADICTIONS,
+    KNOWLEDGE_ITEM_LIMITATIONS,
     MAX_EVIDENCE_BYTES,
     MAX_EVIDENCE_ITEMS,
     ContextCoverage,
@@ -58,8 +69,13 @@ _ATTEMPTED_INCOMPLETE = frozenset(
 class ContextPreparationService:
     """Retrieve, rank, and pack a mixed context packet for one principal."""
 
-    def __init__(self, *, managed_documents_composed: bool) -> None:
+    def __init__(
+        self, *, managed_documents_composed: bool, knowledge_assertions_composed: bool = False
+    ) -> None:
         self._managed_documents_composed = managed_documents_composed
+        # KLP-WP-06: the Knowledge Assertion plane switch and its entity-plane
+        # dependency, composed together (`ApplicationService` decides).
+        self._knowledge_assertions_composed = knowledge_assertions_composed
 
     def prepare(
         self,
@@ -83,6 +99,8 @@ class ContextPreparationService:
         considered = searchable_planes(
             managed_documents_composed=self._managed_documents_composed,
             capability_grants=authorization.capability_grants,
+            knowledge_assertions_composed=self._knowledge_assertions_composed,
+            knowledge_assertions_admitted=knowledge_assertion_plane_admitted(authorization),
         )
         selected = tuple(plane for plane in considered if not requested or plane in requested)
 
@@ -165,6 +183,18 @@ class ContextPreparationService:
             )
         if _no_matching_evidence(evidence, coverage):
             limitations = (*limitations, ContextLimitationCode.NO_MATCHING_EVIDENCE)
+        # KLP-AC-057: the package's knowledge codes are exactly those of the
+        # items it finally publishes (after the capture fence above).
+        limitations = item_limitations(
+            evidence,
+            tuple(code for code in limitations if code not in KNOWLEDGE_ITEM_LIMITATIONS),
+        )
+        contradictions = item_contradictions(
+            evidence,
+            tuple(
+                code for code in packed.contradictions if code not in KNOWLEDGE_ITEM_CONTRADICTIONS
+            ),
+        )
         applied = tuple(
             hint
             for hint in command.subject_hints
@@ -182,7 +212,7 @@ class ContextPreparationService:
             coverage=coverage,
             unavailable_planes=unavailable,
             limitations=limitations,
-            contradictions_or_conflicts=packed.contradictions,
+            contradictions_or_conflicts=contradictions,
             truncation=packed.truncation,
             applied_subjects=applied,
             applied_preferences=applied_preferences,
@@ -239,6 +269,7 @@ def _run_record(
                 managed_document_version_id=item.managed_document_version_id,
                 span_start=item.span_start,
                 span_end=item.span_end,
+                knowledge_assertion_id=item.knowledge_assertion_id,
             )
             for position, item in enumerate(prepared.evidence)
         ),
@@ -296,6 +327,7 @@ def _hint_applied(hint: str, item: PreparedContextEvidence) -> bool:
         item.product_id,
         item.managed_document_id,
         item.managed_document_version_id,
+        item.knowledge_assertion_id,
         item.reference_id,
     )
     return hint in identities

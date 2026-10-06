@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from typing import Final
 
 import pytest
 from tests.conftest import (
@@ -23,16 +24,32 @@ from tests.conftest import (
 )
 from tests.contract.test_application_capabilities import run, succeeded
 from tests.contract.test_context_prepare import (
+    KA_GRANT,
+    KA_PLANE,
+    ContextKnowledge,
     _empty_search,
     _grants,
     _named_planes,
     _prepare_with_grants,
     _stage_search,
+    ka_items,
+    ka_prepare,
+    ka_row,
 )
 
 from my_pa.application.commands import PrepareContext
+from my_pa.application.context.providers import (
+    KNOWLEDGE_ASSERTION_CONTEXT_GRANT,
+    searchable_planes,
+)
 from my_pa.application.errors import InvalidRequestError, SafeDetail
 from my_pa.application.service import _HANDLERS, ApplicationService
+from my_pa.bootstrap.knowledge_discovery_profiles import (
+    DISCOVERY_PROFILE,
+    DISCOVERY_PROFILES,
+    KNOWLEDGE_CLIENT_PROFILES,
+    OPERATOR_REVIEW_PROFILE,
+)
 from my_pa.contracts.ports import SearchOutcome
 from my_pa.contracts.v1.disclosure import (
     Coverage,
@@ -43,6 +60,7 @@ from my_pa.contracts.v1.disclosure import (
     Trust,
 )
 from my_pa.contracts.v1.errors import ErrorCode
+from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.coverage import CoverageState as ExtractionCoverageState
 from my_pa.domain.common.identifiers import IdKind
@@ -52,7 +70,7 @@ from my_pa.domain.context.prepared import (
     ContextPlane,
     RetrievalMode,
 )
-from my_pa.domain.identity.operation import Capability
+from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.modeling.gate import SemanticRetrievalGate
 from my_pa.domain.search.query import MAX_QUERY_CHARACTERS, RankCategory, SearchMatch, SearchQuery
@@ -358,3 +376,167 @@ def test_prepare_finishes_under_two_seconds_against_fifty_fake_matches(scene: Sc
     elapsed = time.perf_counter() - started
     assert result["total_items"] >= 1
     assert elapsed < 2.0
+
+
+# ---- KLP-WP-06: Knowledge Assertion plane admission and remote withholding ----
+#
+# KLP-AC-055 (the grant/purpose matrix), and the provider/service halves of
+# KLP-AC-060 / 138: a remote caller's every Knowledge read is asked with
+# `remote=True`, so the R6 section 5.2 withholding (proven on SQL in
+# tests/database/test_context_knowledge_assertion.py) applies before LIMIT.
+
+PREPARE: Final = (Capability.CONTEXT_PREPARE, Purpose.CONTEXT_PREPARATION)
+
+
+def _pairs(*capabilities: Capability) -> frozenset[tuple[Capability, Purpose | None]]:
+    """Each capability under its own first permitted purpose, plus context.prepare."""
+    pairs = {(capability, sorted(permitted_purposes(capability))[0]) for capability in capabilities}
+    return frozenset({PREPARE, *pairs})
+
+
+#: Remote grant sets that must NOT admit the plane, by name.
+REFUSING_GRANTS: Final[dict[str, frozenset[tuple[Capability, Purpose | None]]]] = {
+    "context_prepare_only": frozenset({PREPARE}),
+    "search_with_no_purpose": frozenset({PREPARE, (Capability.KNOWLEDGE_ASSERTIONS_SEARCH, None)}),
+    "search_with_another_purpose": frozenset(
+        {PREPARE, (Capability.KNOWLEDGE_ASSERTIONS_SEARCH, Purpose.CONTEXT_PREPARATION)}
+    ),
+    "read_with_the_read_purpose": _pairs(Capability.KNOWLEDGE_ASSERTIONS_READ),
+    "list_with_the_read_purpose": _pairs(Capability.KNOWLEDGE_ASSERTIONS_LIST),
+    "history_reveal_with_the_read_purpose": _pairs(
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY, Capability.KNOWLEDGE_ASSERTIONS_REVEAL
+    ),
+    "discovery_v2_profile": _pairs(*DISCOVERY_PROFILES[DISCOVERY_PROFILE]),
+    "operator_review_profile": _pairs(*KNOWLEDGE_CLIENT_PROFILES[OPERATOR_REVIEW_PROFILE]),
+    "extraction_knowledge_search": _pairs(Capability.KNOWLEDGE_SEARCH),
+    "every_capability_without_purpose": frozenset(
+        {PREPARE, *((capability, None) for capability in Capability)}
+    ),
+}
+
+
+def _remote_ka(
+    scene: Scene,
+    repository: ContextKnowledge,
+    grants: frozenset[tuple[Capability, Purpose | None]] | None,
+    *,
+    transport: CaptureTransport = CaptureTransport.REMOTE_CLIENT,
+    enabled: bool = True,
+) -> dict[str, object]:
+    return succeeded(
+        ka_prepare(
+            scene,
+            repository,
+            PrepareContext(query="quarterly"),
+            grants=grants,
+            transport=transport,
+            enabled=enabled,
+        )
+    )
+
+
+@pytest.mark.parametrize("name", sorted(REFUSING_GRANTS))
+def test_a_remote_grant_set_without_the_exact_pair_never_reaches_the_plane(
+    scene: Scene, name: str
+) -> None:
+    """KLP-AC-055: context.prepare alone, a wrong/None purpose or another capability."""
+    repository = ContextKnowledge((ka_row("refuse001", "quarterly refused"),))
+    for transport in (CaptureTransport.REMOTE_CLIENT, CaptureTransport.LOCAL):
+        result = _remote_ka(scene, repository, REFUSING_GRANTS[name], transport=transport)
+        assert KA_PLANE not in _named_planes(result)
+        assert KA_PLANE not in json.dumps(result)
+    assert repository.page_calls == []
+    assert repository.read_calls == []
+
+
+def test_the_discovery_profile_gains_no_context_reach() -> None:
+    """KLP-AC-055: the discovery profile holds knowledge.assertions.read, not the pair."""
+    held = DISCOVERY_PROFILES[DISCOVERY_PROFILE]
+    assert Capability.KNOWLEDGE_ASSERTIONS_READ in held
+    assert KA_GRANT[0] not in held
+    assert Capability.CONTEXT_PREPARE not in held
+    assert KNOWLEDGE_ASSERTION_CONTEXT_GRANT == KA_GRANT
+
+
+def test_the_exact_pair_admits_the_plane_remotely_and_over_a_ceilinged_local_transport(
+    scene: Scene,
+) -> None:
+    repository = ContextKnowledge((ka_row("admit0001", "quarterly admitted"),))
+    for transport in (CaptureTransport.REMOTE_CLIENT, CaptureTransport.LOCAL):
+        result = _remote_ka(scene, repository, frozenset({PREPARE, KA_GRANT}), transport=transport)
+        assert _named_planes(result) == {KA_PLANE}
+    assert repository.page_calls
+    assert all(call["remote"] is True for call in repository.page_calls)
+
+
+def test_a_remote_transport_with_no_grant_set_fails_closed(scene: Scene) -> None:
+    """R6 5.2 who-counts-as-remote: REMOTE_CLIENT without grants holds no pair."""
+    repository = ContextKnowledge((ka_row("nogrant01", "quarterly nogrant"),))
+    result = _remote_ka(scene, repository, None)
+    assert KA_PLANE not in _named_planes(result)
+    assert repository.page_calls == []
+
+
+def test_the_plane_switch_off_removes_the_plane_even_with_the_pair(scene: Scene) -> None:
+    repository = ContextKnowledge((ka_row("switch001", "quarterly switch"),))
+    remote = _remote_ka(scene, repository, frozenset({PREPARE, KA_GRANT}), enabled=False)
+    local = _remote_ka(scene, repository, None, transport=CaptureTransport.LOCAL, enabled=False)
+    assert KA_PLANE not in _named_planes(remote)
+    assert KA_PLANE not in _named_planes(local)
+    assert repository.page_calls == []
+
+
+def test_existing_planes_admission_is_unchanged_by_the_pair(scene: Scene) -> None:
+    """KLP-AC-055: the pair adds only its plane; extraction still follows its own map."""
+    _stage_search(scene, staged_search(scene))
+    repository = ContextKnowledge((ka_row("unchgd001", "quarterly unchanged"),))
+    with_pair = _remote_ka(
+        scene,
+        repository,
+        _grants(Capability.CONTEXT_PREPARE, Capability.KNOWLEDGE_SEARCH) | {KA_GRANT},
+    )
+    without = _remote_ka(
+        scene, repository, _grants(Capability.CONTEXT_PREPARE, Capability.KNOWLEDGE_SEARCH)
+    )
+    assert _named_planes(with_pair) == {ContextPlane.KNOWLEDGE.value, KA_PLANE}
+    assert _named_planes(without) == {ContextPlane.KNOWLEDGE.value}
+    planes = searchable_planes(
+        managed_documents_composed=True,
+        capability_grants=None,
+        knowledge_assertions_composed=False,
+    )
+    assert ContextPlane.KNOWLEDGE_ASSERTION not in planes
+
+
+def test_remote_context_never_discloses_a_withheld_assertion_and_fills_its_page(
+    scene: Scene,
+) -> None:
+    """KLP-AC-060 / 138 (service half): withheld rows are dropped before the limit.
+
+    The canned port drops `withheld` rows before LIMIT exactly when asked with
+    `remote=True`; the provider must ask that way on every read, including the
+    exact-identifier read, and the visible rows still fill the page.
+    """
+    visible = tuple(ka_row(f"vis{index:05d}", f"quarterly visible {index}") for index in range(3))
+    hidden = tuple(ka_row(f"hid{index:05d}", f"quarterly hidden {index}") for index in range(40))
+    repository = ContextKnowledge(
+        (*hidden, *visible), withheld=frozenset(row.assertion_id for row in hidden)
+    )
+    grants = frozenset({PREPARE, KA_GRANT})
+    result = _remote_ka(scene, repository, grants)
+    seen = {item["knowledge_assertion_id"] for item in ka_items(result)}  # type: ignore[arg-type]
+    assert seen == {row.assertion_id for row in visible}
+    named = succeeded(
+        ka_prepare(
+            scene,
+            repository,
+            PrepareContext(query=hidden[0].assertion_id),
+            grants=grants,
+            transport=CaptureTransport.REMOTE_CLIENT,
+        )
+    )
+    assert ka_items(named) == []
+    assert repository.read_calls and all(repository.read_calls)
+    # The same exact-identifier read is answered locally (Principal partition only).
+    local = succeeded(ka_prepare(scene, repository, PrepareContext(query=hidden[0].assertion_id)))
+    assert [item["knowledge_assertion_id"] for item in ka_items(local)] == [hidden[0].assertion_id]

@@ -74,6 +74,7 @@ class ContextRunItemRecord:
     managed_document_version_id: str | None = None
     span_start: int | None = None
     span_end: int | None = None
+    knowledge_assertion_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.position < 0:
@@ -87,6 +88,42 @@ class ContextRunItemRecord:
         _digest(self.excerpt_sha256, "excerpt_sha256")
         if len(self.reason_codes) > 512:
             raise ValueError("reason_codes is bounded")
+        self._validate_knowledge_assertion_identity()
+
+    def _validate_knowledge_assertion_identity(self) -> None:
+        """R6 11.5 A6 (`context_run_item_knowledge_assertion_identity`), in Python too.
+
+        The plane, the authority class and a `kasr_` id travel together; such
+        an item carries no other plane's identity. The domain also refuses the
+        version ids the CHECK does not name.
+        """
+        knowledge_plane = self.plane is ContextPlane.KNOWLEDGE_ASSERTION
+        knowledge_authority = (
+            self.authority_class is SourceAuthorityClass.PRODUCT_OWNED_KNOWLEDGE_ASSERTION
+        )
+        if knowledge_plane is not knowledge_authority:
+            raise ValueError("the knowledge assertion plane and authority class travel together")
+        if knowledge_authority is not (self.knowledge_assertion_id is not None):
+            raise ValueError("a knowledge assertion item, and only one, names a kasr_ id")
+        if self.knowledge_assertion_id is None:
+            return
+        try:
+            validate_identifier(self.knowledge_assertion_id, IdKind.KNOWLEDGE_ASSERTION)
+        except InvalidIdentifierError as exc:
+            raise ValueError("knowledge_assertion_id is not a well-formed identifier") from exc
+        others = (
+            self.source_id,
+            self.source_object_id,
+            self.source_version_id,
+            self.knowledge_id,
+            self.capture_id,
+            self.capture_version_id,
+            self.product_id,
+            self.managed_document_id,
+            self.managed_document_version_id,
+        )
+        if any(value is not None for value in others):
+            raise ValueError("a knowledge assertion item names no other plane's identity")
 
 
 @dataclass(frozen=True, slots=True)

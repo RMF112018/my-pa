@@ -46,7 +46,8 @@ from my_pa.infrastructure.persistence.remote_identity import (
 #: KLP-WP-03 (KLP-AC-146 WP-03 slice): the Knowledge Assertion names raw `grant`
 #: governs. An explicit name set, never a `knowledge.` prefix, so the extraction
 #: plane's `knowledge.search`/`read`/`reveal`/`coverage` grants are unaffected.
-#: KLP-WP-04 added submit and checkpoint to both sets.
+#: KLP-WP-04 added submit and checkpoint to both sets; KLP-WP-05 adds the
+#: `record_events.provenance` read here (never a write, so not to the second).
 KNOWLEDGE_GRANT_CAPABILITIES: frozenset[Capability] = frozenset(
     {
         Capability.KNOWLEDGE_ASSERTIONS_READ,
@@ -57,6 +58,7 @@ KNOWLEDGE_GRANT_CAPABILITIES: frozenset[Capability] = frozenset(
         Capability.KNOWLEDGE_ASSERTIONS_CREATE,
         Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
         Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
+        Capability.RECORD_EVENTS_PROVENANCE,
     }
 )
 #: Knowledge writes only profile tooling may install: `profile-apply` for the

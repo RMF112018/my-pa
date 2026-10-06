@@ -120,7 +120,9 @@ def unreachable(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 
 def test_the_governed_sets_are_exactly_the_knowledge_names() -> None:
-    assert KNOWLEDGE_GRANT_CAPABILITIES == KNOWLEDGE | DISCOVERY_WRITES
+    # KLP-WP-05: the `record_events.provenance` read joins the governed set.
+    governed = KNOWLEDGE | DISCOVERY_WRITES | {Capability.RECORD_EVENTS_PROVENANCE}
+    assert governed == KNOWLEDGE_GRANT_CAPABILITIES
     assert {
         Capability.KNOWLEDGE_ASSERTIONS_CREATE,
         *DISCOVERY_WRITES,
@@ -444,7 +446,7 @@ def test_a_stray_grant_outside_the_profile_is_reported_and_never_extended(
     ("client", "profile", "message"),
     [
         (UNBOUND_CLIENT, DISCOVERY_PROFILE, "not in a Knowledge"),
-        (DISCOVERY_CLIENT, OPERATOR_REVIEW_PROFILE, "bound to knowledge-discovery-v1"),
+        (DISCOVERY_CLIENT, OPERATOR_REVIEW_PROFILE, "bound to knowledge-discovery-v2"),
         (REVIEW_CLIENT, DISCOVERY_PROFILE, "bound to knowledge-operator-review-v1"),
     ],
 )

@@ -4,8 +4,9 @@ Three kinds of remote OAuth client reach the Knowledge plane, and the Settings
 allowlists -- not grant rows -- say which kind a client is:
 
 * a **discovery** client (`MY_PA_KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS`) sees
-  exactly its discovery profile: submit, checkpoint, `knowledge.assertions.read`
-  and `record_events.list`, intersected with what it was granted;
+  exactly its discovery profile, `knowledge-discovery-v2` since KLP-WP-05:
+  submit, checkpoint, `knowledge.assertions.read`, `record_events.list` and
+  `record_events.provenance`, intersected with what it was granted;
 * an **operator-review** client (`MY_PA_KNOWLEDGE_OPERATOR_REVIEW_OAUTH_CLIENT_IDS`)
   sees exactly `knowledge-operator-review-v1`;
 * every **unbound** client keeps its grants minus submit and checkpoint.
@@ -40,7 +41,7 @@ __all__ = [
     "KNOWLEDGE_CLIENT_PROFILES",
     "KNOWLEDGE_DISCOVERY_ONLY_CAPABILITIES",
     "KNOWLEDGE_DISCOVERY_V1",
-    "KNOWLEDGE_DISCOVERY_V2_DEFERRED",
+    "KNOWLEDGE_DISCOVERY_V2",
     "KNOWLEDGE_OPERATOR_REVIEW_V1",
     "OPERATOR_REVIEW_PROFILE",
     "KnowledgeAllowlists",
@@ -52,11 +53,12 @@ __all__ = [
     "resolve_knowledge_client_overlay",
 ]
 
+#: The KLP-WP-04 profile, kept as history (matrix `profile_contract` lists both);
+#: no client is bound to it any more.
 KNOWLEDGE_DISCOVERY_V1: Final = "knowledge-discovery-v1"
-#: Matrix `knowledge-discovery-v2` adds `record_events.provenance`, which KLP-WP-05
-#: declares. It is not representable before that capability exists, so this
-#: build binds discovery clients to v1 (DEV recorded in the WP-04 slice log).
-KNOWLEDGE_DISCOVERY_V2_DEFERRED: Final = "knowledge-discovery-v2"
+#: KLP-WP-05 (WP-04 DEV-02 closed): v1 plus `record_events.provenance`, which a
+#: discovery client needs to tell its own effect from a new trigger.
+KNOWLEDGE_DISCOVERY_V2: Final = "knowledge-discovery-v2"
 KNOWLEDGE_OPERATOR_REVIEW_V1: Final = "knowledge-operator-review-v1"
 
 #: The discovery pair: only a bound discovery client may ever hold either.
@@ -78,10 +80,19 @@ DISCOVERY_PROFILES: Final[Mapping[str, frozenset[Capability]]] = MappingProxyTyp
                 Capability.RECORD_EVENTS_LIST,
             }
         ),
+        KNOWLEDGE_DISCOVERY_V2: frozenset(
+            {
+                Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
+                Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
+                Capability.KNOWLEDGE_ASSERTIONS_READ,
+                Capability.RECORD_EVENTS_LIST,
+                Capability.RECORD_EVENTS_PROVENANCE,
+            }
+        ),
     }
 )
 #: The discovery profile this build binds every discovery client to.
-DISCOVERY_PROFILE: Final = KNOWLEDGE_DISCOVERY_V1
+DISCOVERY_PROFILE: Final = KNOWLEDGE_DISCOVERY_V2
 OPERATOR_REVIEW_PROFILE: Final = KNOWLEDGE_OPERATOR_REVIEW_V1
 
 KNOWLEDGE_CLIENT_PROFILES: Final[Mapping[str, frozenset[Capability]]] = MappingProxyType(

@@ -1955,6 +1955,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "private_envelope": "parity-opaque-state",
             "idempotency_key": "parity-knowledge-checkpoint",
         },
+        Capability.RECORD_EVENTS_PROVENANCE: {"event_id": "rcev_parityknowledge0001"},
     }
 
 
@@ -2090,7 +2091,7 @@ def test_there_are_three_transports_to_compare() -> None:
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
     # The command union and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 190, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 191, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -2421,6 +2422,8 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         # KLP-WP-04: the discovery pair, on the same switch.
         Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
         Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
+        # KLP-WP-05: provenance, on the same switch.
+        Capability.RECORD_EVENTS_PROVENANCE,
     }
 )
 
@@ -2846,7 +2849,7 @@ def test_declared_unwired_capabilities_stay_separate_from_positive_parity(
     from my_pa.application.errors import UnsupportedError
 
     assert set(Capability) - set(_HANDLERS) == FUTURE_CAPABILITIES
-    assert len(IMPLEMENTED_CAPABILITIES) == 189
+    assert len(IMPLEMENTED_CAPABILITIES) == 190
     assert set(_BUILDERS) == set(IMPLEMENTED_CAPABILITIES)
     assert {Capability(tool.name) for tool in TOOLS} == set(IMPLEMENTED_CAPABILITIES)
 

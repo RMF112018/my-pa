@@ -30,13 +30,29 @@ KLP-WP-04 slice A adds the discovery pair:
   checkpoint signing key refuses every checkpoint before any read.
 * **R6 section 6.1 second gate** -- `unsupported` unless the remote transport and
   a client in the exact discovery allowlist; the plane switch withholds both.
+
+KLP-WP-05 adds `record_events.provenance`, the last KLP name:
+
+* **KLP-AC-002** -- the KLP capability names are exactly the matrix's list
+  (181 pre-KLP members plus that list), and `knowledge.assertions.propose` does
+  not exist.
+* **KLP-AC-015 (closed)** -- provenance maps to exactly one permitted Purpose,
+  `record_event_provenance_read`, used by nothing else; with the WP-03/04 eight
+  the mapping is exhaustive over all nine, each to its matrix purpose.
+* **KLP-AC-104 (closed)** -- provenance is in `_SCOPELESS` and the scopeless arm
+  of `_requested_scope`; a granted `invoke()` succeeds end to end through the
+  feed reader, and the plane switch withholds and refuses it.
+* **KLP-AC-105** -- the explicit name set is now the six data names plus
+  provenance.
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import UTC, datetime
-from typing import Final
+from pathlib import Path
+from typing import Any, Final
 
 import pytest
 from tests.conftest import (
@@ -62,6 +78,7 @@ from my_pa.application.commands import (
     CreateKnowledgeAssertion,
     GetCapabilities,
     GetKnowledgeAssertionHistory,
+    GetRecordEventProvenance,
     ListKnowledgeAssertions,
     ReadKnowledgeAssertion,
     RevealKnowledgeAssertion,
@@ -102,6 +119,7 @@ from my_pa.domain.knowledge_assertion.vocabulary import (
     KnowledgeSubjectKind,
 )
 from my_pa.domain.policy.decision import _SCOPELESS, POLICY_VERSION, PolicyDecision
+from my_pa.domain.record_events import RecordEventFamily
 from my_pa.domain.source.registry import issue_identifier
 
 KNOWLEDGE_READS: Final = (
@@ -115,12 +133,18 @@ KNOWLEDGE: Final = frozenset({*KNOWLEDGE_READS, Capability.KNOWLEDGE_ASSERTIONS_
 DISCOVERY: Final = frozenset(
     {Capability.KNOWLEDGE_ASSERTIONS_SUBMIT, Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT}
 )
+PROVENANCE: Final = Capability.RECORD_EVENTS_PROVENANCE
 EXTRACTION: Final = {
     Capability.KNOWLEDGE_SEARCH: "knowledge.search",
     Capability.KNOWLEDGE_READ: "knowledge.read",
     Capability.KNOWLEDGE_REVEAL: "knowledge.reveal",
     Capability.KNOWLEDGE_COVERAGE: "knowledge.coverage",
 }
+MATRIX: Final = json.loads(
+    (Path(__file__).parents[1] / "architecture" / "klp_implementation_matrix_r6.json").read_text(
+        encoding="utf-8"
+    )
+)
 _ROW = KnowledgeAssertionRow(
     assertion_id="kasr_fastworld00000001",
     subject_kind="principal",
@@ -417,14 +441,23 @@ def test_submit_checkpoint_and_provenance_are_not_declared_by_wp03() -> None:
 
 
 def test_provenance_is_not_declared_before_wp05() -> None:
-    """KLP-WP-04 declared submit and checkpoint; `record_events.provenance` is WP-05's."""
+    """At the KLP-WP-04 head provenance was admitted ahead of the domain; WP-05 declares it.
+
+    The node id is kept from KLP-WP-04 (KLP-AC-080). Its claim is about the WP-04
+    head, which the `wp04` gap row records (provenance and its purpose only);
+    at the WP-05 head both are declared and the `wp05` capability and purpose
+    rows are empty.
+    """
+    from tests.schema import knowledge_schema_ahead_contract as contract
+
+    assert contract.GAP_ROWS["wp04"]["capability"] == frozenset({"record_events.provenance"})
+    assert contract.GAP_ROWS["wp04"]["purpose"] == frozenset({"record_event_provenance_read"})
+    assert contract.GAP_ROWS["wp05"]["capability"] == frozenset()
+    assert contract.GAP_ROWS["wp05"]["purpose"] == frozenset()
     values = {capability.value for capability in Capability}
-    assert "knowledge.assertions.submit" in values
-    assert "knowledge.discovery.checkpoint" in values
-    assert "record_events.provenance" not in values
+    assert "record_events.provenance" in values
     purposes = {purpose.value for purpose in Purpose}
-    assert "knowledge_assertion_observation" in purposes
-    assert "record_event_provenance_read" not in purposes
+    assert "record_event_provenance_read" in purposes
 
 
 # ---- KLP-AC-083 -----------------------------------------------------------------
@@ -580,13 +613,14 @@ def test_a_read_grant_does_not_reach_the_plane_through_another_capability(scene:
 
 
 def test_an_explicit_name_set_maps_exactly_the_six_to_the_knowledge_prerequisite() -> None:
-    assert KNOWLEDGE_ASSERTION_DATA_NAMES == KNOWLEDGE
+    """KLP-WP-05: the six data names plus `record_events.provenance` (AC-105 set)."""
+    assert KNOWLEDGE | {PROVENANCE} == KNOWLEDGE_ASSERTION_DATA_NAMES
     mapped = {
         capability
         for capability, policy in CHATLLM_CAPABILITY_POLICY.items()
         if policy.composition_prerequisite is ChatLLMCompositionPrerequisite.KNOWLEDGE_ASSERTIONS
     }
-    assert mapped == KNOWLEDGE
+    assert mapped == KNOWLEDGE | {PROVENANCE}
     prefixed = {
         capability for capability in Capability if capability.value.startswith("knowledge.")
     }
@@ -703,7 +737,9 @@ def test_every_knowledge_assertion_name_is_exhaustively_mapped_to_one_purpose() 
     )
     declared = {capability.value for capability in Capability}
     rows = [row for row in matrix["capabilities"] if row["name"] in declared]
-    assert {row["name"] for row in rows} == {c.value for c in KNOWLEDGE | DISCOVERY}
+    # KLP-WP-05: every matrix row exists now -- the nine, provenance included.
+    assert {row["name"] for row in rows} == {c.value for c in KNOWLEDGE | DISCOVERY | {PROVENANCE}}
+    assert len(rows) == len(matrix["capabilities"])
     for row in rows:
         assert permitted_purposes(Capability(row["name"])) == {Purpose(row["purpose"])}
 
@@ -877,3 +913,236 @@ def _gate_authorization(
         capability_grants=frozenset({(capability, Purpose.KNOWLEDGE_ASSERTION_OBSERVATION)}),
         authenticated_client_id=client,
     )
+
+
+# ---- KLP-WP-05: `record_events.provenance`, the last KLP name -----------------------
+
+#: The capability count before the Knowledge layer (README/matrix pin: 181).
+_PRE_KLP_CAPABILITIES: Final = 181
+_EVENT: Final = "rcev_fastworld000000001"
+
+
+def test_the_nine_new_capabilities_are_exactly_the_matrix_nine() -> None:
+    """KLP-AC-002: exactly the matrix's KLP names, no other new member, no `propose`."""
+    nine = {row["name"] for row in MATRIX["capabilities"]}
+    assert len(nine) == 9
+    assert nine == {capability.value for capability in KNOWLEDGE | DISCOVERY | {PROVENANCE}}
+    assert nine <= {capability.value for capability in Capability}
+    assert len(Capability) == _PRE_KLP_CAPABILITIES + 9
+    assert "knowledge.assertions.propose" not in {capability.value for capability in Capability}
+    assert not any(
+        capability.value.endswith(".propose") and "knowledge" in capability.value
+        for capability in Capability
+    )
+
+
+def test_provenance_maps_to_its_own_purpose_only() -> None:
+    """KLP-AC-015: exactly `record_event_provenance_read`, used by nothing else."""
+    assert Purpose.RECORD_EVENT_PROVENANCE_READ.value == "record_event_provenance_read"
+    assert permitted_purposes(PROVENANCE) == {Purpose.RECORD_EVENT_PROVENANCE_READ}
+    users = {
+        capability
+        for capability in Capability
+        if Purpose.RECORD_EVENT_PROVENANCE_READ in permitted_purposes(capability)
+    }
+    assert users == {PROVENANCE}
+    assert Purpose.RECORD_EVENT_READ not in permitted_purposes(PROVENANCE)
+
+
+def test_all_nine_map_to_exactly_their_matrix_purpose() -> None:
+    """KLP-AC-015 (closed): exhaustive over the nine, each to one matrix Purpose."""
+    for row in MATRIX["capabilities"]:
+        assert permitted_purposes(Capability(row["name"])) == {Purpose(row["purpose"])}, row
+    matrix_purposes = {row["name"] for row in MATRIX["purposes"]}
+    assert matrix_purposes <= {purpose.value for purpose in Purpose}
+
+
+def test_provenance_is_scopeless_and_requests_no_scope(scene: Scene) -> None:
+    """KLP-AC-104: `_SCOPELESS` and the scopeless arm of `_requested_scope`."""
+    assert PROVENANCE in _SCOPELESS
+    with FakeUnitOfWork(scene.world) as unit_of_work:
+        requested = _requested_scope(
+            unit_of_work,
+            GetRecordEventProvenance(event_id=_EVENT),
+            (),
+            principal_id=scene.principal.principal_id,
+        )
+    assert requested == frozenset()
+
+
+def _canned_provenance(principal_id: str) -> object:
+    from my_pa.contracts.ports import (
+        RecordEventProvenance,
+        RecordEventProvenanceSubmission,
+    )
+    from my_pa.domain.record_events import RecordEventActorClass, RecordEventFamily
+
+    del principal_id
+    return RecordEventProvenance(
+        event_id=_EVENT,
+        record_family=RecordEventFamily.KNOWLEDGE_ASSERTION,
+        record_id="kasr_fastworld00000001",
+        source_receipt_id="kamut_fastworld0000001",
+        mutation_kind="create",
+        actor_class=RecordEventActorClass.ASSISTANT,
+        submission=RecordEventProvenanceSubmission(
+            submission_id="kasub_fastworld0000001",
+            origin="autonomous_submit",
+            authenticated_client_id=_BOUND,
+            external_run_id="run-1",
+            external_candidate_id="candidate-1",
+            causal_depth=0,
+            causal_root_submission_id="kasub_fastworld0000001",
+            root_authenticated_client_id=_BOUND,
+        ),
+        trigger_event_ids=(),
+        review=None,
+    )
+
+
+class _ProvenanceReader:
+    """The FAST feed reader plus a canned `provenance` answer (the SQL is DB-tested)."""
+
+    def __init__(self, world: World, calls: list[dict[str, object]]) -> None:
+        from tests.conftest import FakeRecordEventReader
+
+        self._inner = FakeRecordEventReader(world.record_events)
+        self._calls = calls
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._inner, name)
+
+    def event_provenance(self, **arguments: object) -> object:
+        """As the SQL reader: no visible Knowledge family answers `None` with no statement."""
+        self._calls.append(arguments)
+        if not arguments["event_families"]:
+            return None
+        return _canned_provenance(str(arguments["principal_id"]))
+
+
+class _ProvenanceUnitOfWork(_KnowledgeUnitOfWork):
+    def __init__(
+        self, world: World, repository: _CannedKnowledge, calls: list[dict[str, object]]
+    ) -> None:
+        super().__init__(world, repository)
+        self._calls = calls
+
+    @property
+    def record_event_reader(self) -> Any:  # noqa: ANN401 - a duck-typed reader
+        return _ProvenanceReader(self._world, self._calls)
+
+
+def _provenance_service(
+    world: World, calls: list[dict[str, object]], *, enabled: bool = True
+) -> ApplicationService:
+    repository = _CannedKnowledge()
+    return ApplicationService(
+        unit_of_work=lambda: _ProvenanceUnitOfWork(world, repository, calls),
+        limits=DEFAULT_LIMITS,
+        clock=lambda: WHEN,
+        relationship_intelligence_enabled=True,
+        knowledge_assertions_enabled=enabled,
+    )
+
+
+_PROVENANCE_GRANTS: Final = frozenset(
+    {
+        (PROVENANCE, Purpose.RECORD_EVENT_PROVENANCE_READ),
+        (Capability.KNOWLEDGE_ASSERTIONS_READ, Purpose.KNOWLEDGE_ASSERTION_READ),
+    }
+)
+
+
+def _invoke_provenance(
+    service: ApplicationService,
+    scene: Scene,
+    *,
+    grants: frozenset[tuple[Capability, Purpose | None]] | None = _PROVENANCE_GRANTS,
+    client: str | None = _BOUND,
+) -> Any:  # noqa: ANN401 - a response envelope
+    return service.invoke(
+        metadata_for(PROVENANCE, Purpose.RECORD_EVENT_PROVENANCE_READ, scene.principal),
+        GetRecordEventProvenance(event_id=_EVENT),
+        principal=scene.principal,
+        transport=CaptureTransport.REMOTE_CLIENT if client is not None else CaptureTransport.LOCAL,
+        capability_grants=grants,
+        authenticated_client_id=client,
+    )
+
+
+def test_a_granted_provenance_invoke_succeeds_end_to_end(scene: Scene) -> None:
+    """KLP-AC-104 (closed): allowed by policy, through the feed reader, to the view."""
+    calls: list[dict[str, object]] = []
+    service = _provenance_service(scene.world, calls)
+    before = len(scene.world.audit)
+    response = _invoke_provenance(service, scene)
+    assert response.error is None, response.error
+    decisions = scene.world.audit[before:]
+    assert [event.capability for event in decisions] == [PROVENANCE]
+    assert decisions[0].outcome.value == "allowed"
+    provenance = dict(response.result)["provenance"]
+    assert provenance["submission"]["external_run_id"] == "run-1"
+    assert provenance["submission"]["self_caused"] is True
+    (call,) = calls
+    assert call["event_id"] == _EVENT
+    assert call["principal_id"] == scene.principal.principal_id
+    assert call["include_restricted_memory"] is False
+    assert call["event_families"] == {RecordEventFamily.KNOWLEDGE_ASSERTION}
+
+
+def test_another_client_gets_the_same_shape_without_external_ids(scene: Scene) -> None:
+    calls: list[dict[str, object]] = []
+    service = _provenance_service(scene.world, calls)
+    response = _invoke_provenance(service, scene, client="synthetic-other-client")
+    submission = dict(response.result)["provenance"]["submission"]
+    assert submission["external_run_id"] is None
+    assert submission["external_candidate_id"] is None
+    assert submission["self_caused"] is False
+
+
+def test_a_local_caller_reads_with_restricted_disclosure_and_external_ids(scene: Scene) -> None:
+    calls: list[dict[str, object]] = []
+    service = _provenance_service(scene.world, calls)
+    response = _invoke_provenance(service, scene, grants=None, client=None)
+    submission = dict(response.result)["provenance"]["submission"]
+    assert submission["external_run_id"] == "run-1"
+    assert calls[0]["include_restricted_memory"] is True
+
+
+def test_a_grant_ceiling_without_the_provenance_grant_is_unsupported(scene: Scene) -> None:
+    calls: list[dict[str, object]] = []
+    service = _provenance_service(scene.world, calls)
+    response = _invoke_provenance(
+        service,
+        scene,
+        grants=frozenset(
+            {(Capability.KNOWLEDGE_ASSERTIONS_READ, Purpose.KNOWLEDGE_ASSERTION_READ)}
+        ),
+    )
+    assert response.error is not None
+    assert response.error.code.value == "unsupported"
+    assert calls == []
+
+
+def test_no_visible_knowledge_family_answers_not_found_before_the_reader(scene: Scene) -> None:
+    """Without a granted Knowledge read the family is invisible: not_found, no statement."""
+    calls: list[dict[str, object]] = []
+    service = _provenance_service(scene.world, calls)
+    response = _invoke_provenance(
+        service, scene, grants=frozenset({(PROVENANCE, Purpose.RECORD_EVENT_PROVENANCE_READ)})
+    )
+    assert response.error is not None
+    assert response.error.code.value == "not_found"
+    assert calls == []
+
+
+def test_the_plane_switch_withholds_and_refuses_provenance(scene: Scene) -> None:
+    calls: list[dict[str, object]] = []
+    off = _provenance_service(scene.world, calls, enabled=False)
+    assert PROVENANCE not in off.available_capabilities
+    response = _invoke_provenance(off, scene, grants=None, client=None)
+    assert response.error is not None
+    assert response.error.code.value == "unsupported"
+    assert calls == []
+    on = _provenance_service(scene.world, calls)
+    assert PROVENANCE in on.available_capabilities

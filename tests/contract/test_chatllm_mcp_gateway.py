@@ -1119,3 +1119,64 @@ async def test_an_unbound_client_never_reaches_the_discovery_pair(scene: Scene) 
     # Refused by the façade itself (a bare problem), before any invoke.
     assert _body(submitted)["code"] == "unsupported"
     assert Capability.KNOWLEDGE_ASSERTIONS_SUBMIT not in [e.capability for e in scene.world.audit]
+
+
+# ---- KLP-WP-05 (KLP-AC-022 whole: `record_events.provenance`) -----------------------
+
+PROVENANCE: Final = Capability.RECORD_EVENTS_PROVENANCE
+
+
+def test_provenance_routes_through_my_pa_read_under_record_events_and_adds_no_tool() -> None:
+    """Provenance is a read on the existing wrapper, labelled `record_events`."""
+    assert facade_kind(PROVENANCE) == "read"
+    assert feature_label(PROVENANCE.value) == "record_events"
+    nine = frozenset(capability.value for capability in KNOWLEDGE | DISCOVERY | {PROVENANCE})
+    assert facade_tool_names(nine) == {DESCRIBE_TOOL, READ_TOOL, WRITE_TOOL}
+    assert facade_tool_names(frozenset({PROVENANCE.value})) == {DESCRIBE_TOOL, READ_TOOL}
+    wrapper = {"capability": PROVENANCE.value, "arguments": {"payload": {}}}
+    allowed = frozenset({PROVENANCE.value})
+    assert prepare_compact_call(READ_TOOL, wrapper, allowed_canonical=allowed)[0] == (
+        PROVENANCE.value
+    )
+    with pytest.raises(InvalidRequestError):
+        prepare_compact_call(WRITE_TOOL, wrapper, allowed_canonical=allowed)
+
+
+@pytest.mark.anyio
+async def test_provenance_through_my_pa_read_is_audited_by_its_canonical_name(
+    scene: Scene,
+) -> None:
+    """Described under `record_events`, called by `my_pa.read`, audited canonically.
+
+    The client holds provenance and the feed but no Knowledge read, so the
+    `knowledge_assertion` family is invisible to it and every event id answers
+    `not_found` before any reader statement -- this FAST world needs no
+    provenance reader to prove routing and audit.
+    """
+    scene.world.audit.clear()
+    grants = (
+        (PROVENANCE, Purpose.RECORD_EVENT_PROVENANCE_READ, False),
+        (Capability.RECORD_EVENTS_LIST, Purpose.RECORD_EVENT_READ, False),
+    )
+
+    async def exercise(session: ClientSession) -> tuple[set[str], set[str], object]:
+        names = {tool.name for tool in (await session.list_tools()).tools}
+        described = await session.call_tool(DESCRIBE_TOOL, {"feature": "record_events"})
+        answered = await session.call_tool(
+            READ_TOOL,
+            {
+                "capability": PROVENANCE.value,
+                "arguments": {"payload": {"event_id": "rcev_compactgateway0001"}},
+            },
+        )
+        items = {str(item["capability"]) for item in _body(described)["items"]}
+        return names, items, answered
+
+    with _identity(global_writes=False, client_writes=False, grants=grants) as repository:
+        app = _resolved_app(scene, repository, process_writes=False, knowledge=True)
+        names, items, answered = await _session(app, exercise)
+    assert names == {DESCRIBE_TOOL, READ_TOOL}
+    assert items == {PROVENANCE.value, Capability.RECORD_EVENTS_LIST.value}
+    assert _body(answered)["error"]["code"] == "not_found"
+    audited = [event.capability for event in scene.world.audit]
+    assert audited == [PROVENANCE]

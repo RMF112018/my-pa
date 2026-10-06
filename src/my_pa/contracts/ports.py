@@ -415,6 +415,9 @@ __all__ = [
     "PulseRepository",
     "RecordEventFeedItem",
     "RecordEventPage",
+    "RecordEventProvenance",
+    "RecordEventProvenanceReview",
+    "RecordEventProvenanceSubmission",
     "RecordEventReader",
     "RecordEventStager",
     "RecordEventWriter",
@@ -5773,6 +5776,67 @@ class RecordEventPage:
     high_watermark_event_id: str | None
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RecordEventProvenanceSubmission:
+    """KLP-WP-05: the `kasub_` submission a Knowledge event's mutation names.
+
+    Exactly as stored. The application decides what of it a caller may see:
+    `external_run_id` and `external_candidate_id` only for the client that
+    supplied them, or a local caller (KLP-AC-143); `authenticated_client_id`
+    and `root_authenticated_client_id` (the causal root's client) only feed the
+    server-computed self-caused classification (KLP-AC-049) and are never
+    returned themselves.
+    """
+
+    submission_id: str
+    origin: str
+    authenticated_client_id: str | None
+    external_run_id: str | None
+    external_candidate_id: str | None
+    causal_depth: int | None
+    causal_root_submission_id: str | None
+    root_authenticated_client_id: str | None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RecordEventProvenanceReview:
+    """KLP-WP-05: the Review promotion behind a Knowledge event (KLP-AC-047).
+
+    The proposal (`kaprp_`), its proposal-local review case (`rvw_`) and the
+    accepting decision (`kadec_`), with the decision's stored
+    `authenticated_client_id` and server-derived `decision_channel`.
+    """
+
+    proposal_id: str
+    review_case_id: str
+    decision_id: str
+    authenticated_client_id: str | None
+    decision_channel: str
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RecordEventProvenance:
+    """KLP-WP-05: one visible Knowledge event's cross-run provenance.
+
+    Event -> `kamut_` mutation -> `kasub_` submission (R6 section 9, the
+    canonical join). `submission` is `None` for a server-maintenance mutation,
+    which names none; `review` is `None` unless a Review decision wrote the
+    mutation. `trigger_event_ids` are the submission's cited trigger events
+    that the same feed visibility predicate admits for this caller, in id
+    order; a withheld or invisible trigger is simply absent.
+    """
+
+    event_id: str
+    record_family: RecordEventFamily
+    record_id: str
+    source_receipt_id: str
+    mutation_kind: str
+    actor_class: RecordEventActorClass
+    submission: RecordEventProvenanceSubmission | None
+    trigger_event_ids: tuple[str, ...]
+    review: RecordEventProvenanceReview | None
+
+
 class RecordEventReader(ABC):
     """The Record Event feed's read half (WP-RE-06, plan D-01).
 
@@ -5814,6 +5878,27 @@ class RecordEventReader(ABC):
         include_restricted_memory: bool,
     ) -> frozenset[str]:
         """Which of `event_ids` the same visibility predicate as `page` admits."""
+
+    def event_provenance(
+        self,
+        *,
+        principal_id: str,
+        event_id: str,
+        event_families: frozenset[RecordEventFamily],
+        trigger_families: frozenset[RecordEventFamily],
+        include_restricted_memory: bool,
+    ) -> RecordEventProvenance | None:
+        """KLP-WP-05: the provenance of one Knowledge event, or `None`.
+
+        `None` -- byte-identical for the caller -- when the event is absent,
+        foreign, outside `event_families`, withheld by the same predicate as
+        `page` (remotely: every R6 section 5.2 term), or names no mutation.
+        Cited triggers are filtered by the same predicate over
+        `trigger_families`. A refusing default rather than an abstract member,
+        on the `UnitOfWork.record_event_reader` precedent: an in-memory double
+        that never serves provenance need not carry it.
+        """
+        raise NotImplementedError
 
 
 class UnitOfWork(ABC):

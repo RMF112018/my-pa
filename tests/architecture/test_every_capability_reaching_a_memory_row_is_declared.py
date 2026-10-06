@@ -363,6 +363,9 @@ DECLARED: Final = frozenset(
         Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
         Capability.KNOWLEDGE_ASSERTIONS_CREATE,
         Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
+        # KLP-WP-05: provenance applies the feed's own visibility predicate to
+        # the event and to its cited triggers (the OD-8 memory term included).
+        Capability.RECORD_EVENTS_PROVENANCE,
     }
 )
 
@@ -438,6 +441,15 @@ BEYOND_THE_NINE: Final = {
         "`current_version_id` to `memory_version_id` under the Principal partition and "
         "compares the version's `classification`. No memory column enters a returned row; "
         "an item carries only the event's own metadata (WP-RE-06)."
+    ),
+    Capability.RECORD_EVENTS_PROVENANCE: (
+        "purpose `record_event_provenance_read`. `record_events.provenance` (KLP-WP-05) reads "
+        "two of the eight (`relationship_memories`, `relationship_memory_versions`) and writes "
+        "none of the eight, and only for a remote caller: the event and each cited trigger "
+        "pass the feed's own visibility predicate, whose OD-8 (i) `EXISTS` joins `memory_id` "
+        "and `current_version_id` to `memory_version_id` under the Principal partition and "
+        "compares the version's `classification`, and whose Knowledge term compares every "
+        "cited memory version's `classification`. No memory column enters the answer."
     ),
     Capability.ENTITIES_SPLIT_PREVIEW: (
         "purpose `entity_identity_correction`. `entities.split.preview` reads three of the "
@@ -574,6 +586,11 @@ DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str
     # `WP-RE-06` (OD-8 (i)): keys, `current_version_id` and `classification` only,
     # inside the remote predicate's `EXISTS`; nothing is written.
     Capability.RECORD_EVENTS_LIST: (
+        frozenset({"relationship_memories", "relationship_memory_versions"}),
+        frozenset(),
+    ),
+    # KLP-WP-05: the same predicate, on the event and its cited triggers.
+    Capability.RECORD_EVENTS_PROVENANCE: (
         frozenset({"relationship_memories", "relationship_memory_versions"}),
         frozenset(),
     ),
@@ -3211,9 +3228,13 @@ def test_the_port_crossings_that_reach_a_memory_row_are_the_two_planes() -> None
         f"{sorted(crossings['RelationshipMemoryProposalRepository'])}; the whole claim about "
         "that port is that it has exactly one method and a producer can call nothing else"
     )
-    assert crossings["RecordEventReader"] == frozenset({"page", "visible_event_ids"}), (
+    # KLP-WP-05: `event_provenance` applies the same predicate to an event and
+    # its cited triggers.
+    assert crossings["RecordEventReader"] == frozenset(
+        {"page", "visible_event_ids", "event_provenance"}
+    ), (
         "the Record Event feed's crossings are now "
-        f"{sorted(crossings['RecordEventReader'])}; only the two reads that apply the "
+        f"{sorted(crossings['RecordEventReader'])}; only the three reads that apply the "
         "OD-8 restricted-memory predicate may reach a memory row"
     )
     assert crossings["KnowledgeAssertionRepository"] == frozenset(

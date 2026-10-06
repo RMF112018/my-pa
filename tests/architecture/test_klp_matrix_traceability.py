@@ -48,7 +48,7 @@ MATRIX_SHA256: Final = "ee2f2f8fc81a3e5e3f73e618a18fbf296ecd2a752d50499bf2e725e2
 R6_BASIS_COMMIT: Final = "3f575c02570c8fa733ecdc7bf0284fedc3c1d980"
 
 #: The KLP work packages that have landed: their NEW paths must exist.
-LANDED_WPS: Final = frozenset({"KLP-WP-01", "KLP-WP-02", "KLP-WP-03", "KLP-WP-04"})
+LANDED_WPS: Final = frozenset({"KLP-WP-01", "KLP-WP-02", "KLP-WP-03", "KLP-WP-04", "KLP-WP-05"})
 
 #: The slow/skip/xfail census of every EXISTS test module a KLP WP edits, taken
 #: at `R6_BASIS_COMMIT`. A WP may lower a count but never raise one (AC-080:
@@ -93,6 +93,11 @@ BASIS_SKIP_CENSUS: Final[dict[str, int]] = {
     "tests/contract/test_http_gateway_process.py": 0,
     "tests/contract/test_reenrichment_production_callers.py": 0,
     "tests/unit/test_identity_correction.py": 0,
+    # KLP-WP-05 edits four modules the matrix does not list
+    # (test_every_capability_reaching_a_memory_row_is_declared,
+    # test_application_authorization, test_http_negative_evidence,
+    # test_mcp_and_cli_negative_evidence); KLP-WP-03 already censused each above
+    # at 0, so none is repeated. Its other edits are matrix EXISTS paths.
 }
 _SKIP_PATTERN: Final = re.compile(
     r"pytest\.mark\.(?:slow|skip|skipif|xfail)\b|pytest\.(?:skip|xfail)\(|importorskip\("
@@ -242,7 +247,7 @@ def test_path_status_is_consistent_with_the_repository(wp: str, path: str, statu
 
     A later WP's NEW path may or may not exist, depending on whether that WP has
     landed; the WP that creates it is the one that proves it. KLP-WP-01,
-    KLP-WP-02, KLP-WP-03 and KLP-WP-04 have landed. A NEW_GENERATED path stays a
+    KLP-WP-02, KLP-WP-03, KLP-WP-04 and KLP-WP-05 have landed. A NEW_GENERATED path stays a
     template; once its WP has landed, exactly one file matches it (the one
     generated revision).
     """

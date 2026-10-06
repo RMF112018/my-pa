@@ -154,6 +154,7 @@ from my_pa.application.commands import (
     GetKnowledgeAssertionHistory,
     GetLatestIntelligenceArtifact,
     GetPulse,
+    GetRecordEventProvenance,
     GetRelationshipMemory,
     GetRelationshipMemoryHistory,
     GetSourceMetadata,
@@ -424,6 +425,8 @@ _UNCOMPOSED_CAPABILITIES = frozenset(
         # KLP-WP-04: the discovery pair, on the same switch.
         Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
         Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
+        # KLP-WP-05: provenance, on the same switch.
+        Capability.RECORD_EVENTS_PROVENANCE,
     }
 )
 
@@ -1536,6 +1539,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "private_envelope": "http-opaque-state",
             "idempotency_key": "http-knowledge-checkpoint",
         },
+        Capability.RECORD_EVENTS_PROVENANCE: {"event_id": "rcev_httpknowledge0001"},
     }
 
 
@@ -2545,6 +2549,9 @@ def commands_for(
             private_envelope="http-opaque-state",
             idempotency_key="http-knowledge-checkpoint",
         ),
+        Capability.RECORD_EVENTS_PROVENANCE: GetRecordEventProvenance(
+            event_id="rcev_httpknowledge0001"
+        ),
     }
 
 
@@ -2676,7 +2683,7 @@ def test_handler_unwired_capabilities_return_the_canonical_http_problem(
     capability: Capability, scene: Scene, wire: Wire
 ) -> None:
     assert set(Capability) - set(_HANDLERS) == _UNIMPLEMENTED_CAPABILITIES
-    assert len(HANDLER_CAPABILITIES) == 189
+    assert len(HANDLER_CAPABILITIES) == 190
     reply = wire.send(capability.value, document_for(capability, scene, {}))
     problem = ProblemDetail.model_validate(reply.document())
     assert reply.status == 501

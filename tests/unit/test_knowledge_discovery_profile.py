@@ -12,7 +12,12 @@ database (the real remote-identity store half is
 * **KLP-AC-040 (overlay half).** A discovery client never receives `review.decide`
   (nor `knowledge.assertions.create`), whatever its grants say.
 * **KLP-AC-106 (repository half).** The ordinary ChatLLM profile is
-  `chatllm-data-v7` and classifies submit/checkpoint `CONTROL_PLANE_EXCLUDED`.
+  `chatllm-data-v8` (KLP-WP-05; v7 at KLP-WP-04) and classifies submit/checkpoint
+  `CONTROL_PLANE_EXCLUDED`. KLP-WP-05: discovery clients are bound to
+  `knowledge-discovery-v2` = v1 + `record_events.provenance`, exactly the
+  matrix set, and never create, `review.decide`, list, search, history or
+  reveal; an unbound client never submit or checkpoint (v1 stays defined as
+  history).
 * **KLP-AC-134 (FAST half).** The same intersections hold for both outputs even
   with conflicting grant pairs.
 """
@@ -33,7 +38,7 @@ from my_pa.bootstrap.knowledge_discovery_profiles import (
     DISCOVERY_PROFILES,
     KNOWLEDGE_CLIENT_PROFILES,
     KNOWLEDGE_DISCOVERY_V1,
-    KNOWLEDGE_DISCOVERY_V2_DEFERRED,
+    KNOWLEDGE_DISCOVERY_V2,
     KNOWLEDGE_OPERATOR_REVIEW_V1,
     resolve_knowledge_client_overlay,
 )
@@ -74,6 +79,7 @@ CONFLICTING: Final = frozenset(
         Capability.KNOWLEDGE_ASSERTIONS_LIST,
         Capability.KNOWLEDGE_ASSERTIONS_CREATE,
         Capability.RECORD_EVENTS_LIST,
+        Capability.RECORD_EVENTS_PROVENANCE,
         Capability.REVIEW_LIST,
         Capability.REVIEW_DECIDE,
         Capability.TASKS_READ,
@@ -104,25 +110,102 @@ def test_the_profiles_are_the_matrix_profiles() -> None:
         name: frozenset(Capability(member) for member in members)
         for name, members in contract["operator_review_profiles"].items()
     } == {KNOWLEDGE_OPERATOR_REVIEW_V1: KNOWLEDGE_CLIENT_PROFILES[KNOWLEDGE_OPERATOR_REVIEW_V1]}
-    assert DISCOVERY_PROFILES[KNOWLEDGE_DISCOVERY_V1] == frozenset(
-        Capability(member) for member in contract["discovery_profiles"][KNOWLEDGE_DISCOVERY_V1]
-    )
+    assert {
+        name: frozenset(Capability(member) for member in members)
+        for name, members in contract["discovery_profiles"].items()
+    } == dict(DISCOVERY_PROFILES)
 
 
 def test_discovery_v2_is_not_representable_until_its_capability_exists() -> None:
-    """DEV: `record_events.provenance` is KLP-WP-05's; this build binds v1."""
-    v2 = MATRIX["profile_contract"]["discovery_profiles"][KNOWLEDGE_DISCOVERY_V2_DEFERRED]
+    """WP-04 DEV-02 closed by KLP-WP-05: v2's capability exists, so v2 is bound.
+
+    The node id is kept from KLP-WP-04 (KLP-AC-080). At the WP-04 head v2 named
+    the one undeclared capability `record_events.provenance`; KLP-WP-05 declares
+    it, so every v2 member is a Capability, v2 is in the table and every
+    discovery client is bound to it.
+    """
+    v2 = MATRIX["profile_contract"]["discovery_profiles"][KNOWLEDGE_DISCOVERY_V2]
     missing = {member for member in v2 if member not in {c.value for c in Capability}}
-    assert missing == {"record_events.provenance"}
-    assert KNOWLEDGE_DISCOVERY_V2_DEFERRED not in DISCOVERY_PROFILES
-    assert DISCOVERY_PROFILE == KNOWLEDGE_DISCOVERY_V1
+    assert missing == set()
+    assert "record_events.provenance" in v2
+    assert KNOWLEDGE_DISCOVERY_V2 in DISCOVERY_PROFILES
+    assert DISCOVERY_PROFILE == KNOWLEDGE_DISCOVERY_V2
 
 
 def test_matrix_discovery_membership_agrees_with_the_profile_table() -> None:
-    for row in MATRIX["capabilities"]:
-        if KNOWLEDGE_DISCOVERY_V1 not in row["discovery_profile"]:
-            continue
-        assert Capability(row["name"]) in DISCOVERY_PROFILES[KNOWLEDGE_DISCOVERY_V1]
+    for name in (KNOWLEDGE_DISCOVERY_V1, KNOWLEDGE_DISCOVERY_V2):
+        named = {
+            Capability(row["name"])
+            for row in MATRIX["capabilities"]
+            if name in row["discovery_profile"]
+        }
+        # Every matrix row naming the profile is in it; v1/v2 also carry the
+        # pre-KLP `record_events.list`, which the KLP capability table omits.
+        assert named <= DISCOVERY_PROFILES[name]
+        assert DISCOVERY_PROFILES[name] - named == {Capability.RECORD_EVENTS_LIST}
+
+
+# ---- KLP-AC-106 (KLP-WP-05): knowledge-discovery-v2 ---------------------------------
+
+
+def test_discovery_v2_is_exactly_v1_plus_provenance() -> None:
+    assert DISCOVERY_PROFILES[KNOWLEDGE_DISCOVERY_V2] == frozenset(
+        {
+            Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
+            Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
+            Capability.KNOWLEDGE_ASSERTIONS_READ,
+            Capability.RECORD_EVENTS_LIST,
+            Capability.RECORD_EVENTS_PROVENANCE,
+        }
+    )
+    assert DISCOVERY_PROFILES[KNOWLEDGE_DISCOVERY_V2] - DISCOVERY_PROFILES[
+        KNOWLEDGE_DISCOVERY_V1
+    ] == {Capability.RECORD_EVENTS_PROVENANCE}
+    assert set(DISCOVERY_PROFILES) == {KNOWLEDGE_DISCOVERY_V1, KNOWLEDGE_DISCOVERY_V2}
+
+
+@pytest.mark.parametrize(
+    "never",
+    [
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE,
+        Capability.REVIEW_DECIDE,
+        Capability.KNOWLEDGE_ASSERTIONS_LIST,
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH,
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
+    ],
+    ids=str,
+)
+def test_no_discovery_profile_ever_names_create_review_decide_or_the_wide_reads(
+    never: Capability,
+) -> None:
+    for profile in DISCOVERY_PROFILES.values():
+        assert never not in profile
+    granted = frozenset(Capability)
+    capabilities, purposes = resolve_knowledge_client_overlay(
+        SETTINGS, DISCOVERY, granted, _pairs(granted)
+    )
+    assert never not in capabilities
+    assert not any(capability is never for capability, _ in purposes)
+
+
+def test_a_fully_granted_discovery_client_holds_exactly_v2() -> None:
+    granted = frozenset(Capability)
+    capabilities, purposes = resolve_knowledge_client_overlay(
+        SETTINGS, DISCOVERY, granted, _pairs(granted)
+    )
+    assert capabilities == DISCOVERY_PROFILES[KNOWLEDGE_DISCOVERY_V2]
+    assert (Capability.RECORD_EVENTS_PROVENANCE, Purpose.RECORD_EVENT_PROVENANCE_READ) in purposes
+
+
+@pytest.mark.parametrize("client", [CHAT, REVIEW, "synthetic-unbound", None])
+def test_no_unbound_or_review_client_ever_holds_submit_or_checkpoint(client: str | None) -> None:
+    granted = frozenset(Capability)
+    capabilities, purposes = resolve_knowledge_client_overlay(
+        SETTINGS, client, granted, _pairs(granted)
+    )
+    assert not {SUBMIT, CHECKPOINT} & capabilities
+    assert not any(capability in {SUBMIT, CHECKPOINT} for capability, _ in purposes)
 
 
 def test_a_discovery_client_is_intersected_with_its_exact_profile() -> None:
@@ -210,9 +293,13 @@ def test_the_gateway_passes_the_overlaid_pair_on(client: str) -> None:
 
 
 def test_the_ordinary_chatllm_profile_excludes_submit_and_checkpoint() -> None:
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v7"
-    assert MATRIX["profile_contract"]["ordinary_chatllm_versions"]["KLP-WP-04"] == (
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v8"
+    assert MATRIX["profile_contract"]["ordinary_chatllm_versions"]["KLP-WP-05"] == (
         CHATLLM_DATA_PROFILE_VERSION
+    )
+    assert (
+        CHATLLM_CAPABILITY_POLICY[Capability.RECORD_EVENTS_PROVENANCE].classification
+        is ChatLLMCapabilityClass.DATA_CONDITIONAL
     )
     for capability in (SUBMIT, CHECKPOINT):
         assert (

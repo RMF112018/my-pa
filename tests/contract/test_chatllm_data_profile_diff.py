@@ -435,7 +435,7 @@ def test_no_path_grants_every_capability_enum_member() -> None:
     assert Capability.SOURCES_ENROLL not in desired
     assert Capability.GSQS_START not in desired
     assert Capability.CONTINUITY_TASKS_CREATE not in desired
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v7"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v8"
 
 
 def test_mismatched_purpose_or_write_is_add_not_noop() -> None:
@@ -689,7 +689,7 @@ def test_a_v2_converged_client_plans_exactly_the_six_meeting_adds() -> None:
         scope=SCOPE,
     )
     assert not diff.is_healthy()
-    assert diff.profile_version == "chatllm-data-v7"
+    assert diff.profile_version == "chatllm-data-v8"
     assert diff.add == _MEETINGS
     assert diff.renew == frozenset()
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
@@ -712,7 +712,7 @@ def test_a_v3_converged_client_plans_exactly_the_record_events_add() -> None:
         scope=SCOPE,
     )
     assert not diff.is_healthy()
-    assert diff.profile_version == "chatllm-data-v7"
+    assert diff.profile_version == "chatllm-data-v8"
     assert diff.add == feed
     assert diff.renew == frozenset()
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
@@ -739,7 +739,7 @@ def test_a_v4_converged_client_plans_exactly_the_capture_lifecycle_adds() -> Non
         scope=SCOPE,
     )
     assert not diff.is_healthy()
-    assert diff.profile_version == "chatllm-data-v7"
+    assert diff.profile_version == "chatllm-data-v8"
     assert diff.add == lifecycle
     assert diff.renew == frozenset()
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
@@ -823,17 +823,24 @@ _KNOWLEDGE = frozenset(
         Capability.KNOWLEDGE_ASSERTIONS_CREATE,
     }
 )
+#: KLP-WP-05 (chatllm-data-v8): the plane-conditional set gains provenance.
+_KNOWLEDGE_V8 = _KNOWLEDGE | {Capability.RECORD_EVENTS_PROVENANCE}
 
 
 def test_v6_demands_the_knowledge_grants_only_when_the_plane_is_composed() -> None:
+    """The node id is kept from KLP-WP-03 (KLP-AC-080).
+
+    v8 (KLP-WP-05) adds `record_events.provenance` to the same plane-conditional
+    set, so the plane-on delta is the six v6 names plus provenance.
+    """
     from dataclasses import replace
 
     off = desired_effective_capabilities(composed_capabilities(IMPLEMENTED, _FULL_PLANES))
-    assert not off & _KNOWLEDGE
+    assert not off & _KNOWLEDGE_V8
     planes = replace(_FULL_PLANES, knowledge_assertions=True)
     composed = composed_capabilities(IMPLEMENTED, planes)
     on = desired_effective_capabilities(composed)
-    assert on - off == _KNOWLEDGE
+    assert on - off == _KNOWLEDGE_V8
     grants = tuple(_grant(capability) for capability in off)
     diff = diff_chatllm_data_profile(
         implemented=IMPLEMENTED,
@@ -843,13 +850,18 @@ def test_v6_demands_the_knowledge_grants_only_when_the_plane_is_composed() -> No
         resource=RESOURCE,
         scope=SCOPE,
     )
-    assert diff.profile_version == "chatllm-data-v7"
-    assert diff.add == _KNOWLEDGE
+    assert diff.profile_version == "chatllm-data-v8"
+    assert diff.add == _KNOWLEDGE_V8
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
     added = {action.capability: action for action in actions if action.kind == "add"}
-    assert set(added) == _KNOWLEDGE
+    assert set(added) == _KNOWLEDGE_V8
     create = added[Capability.KNOWLEDGE_ASSERTIONS_CREATE]
     assert (create.purpose, create.is_write) == (Purpose.KNOWLEDGE_ASSERTION_AUTHORING, True)
+    provenance = added[Capability.RECORD_EVENTS_PROVENANCE]
+    assert (provenance.purpose, provenance.is_write) == (
+        Purpose.RECORD_EVENT_PROVENANCE_READ,
+        False,
+    )
     for capability in _KNOWLEDGE - {Capability.KNOWLEDGE_ASSERTIONS_CREATE}:
         assert (added[capability].purpose, added[capability].is_write) == (
             Purpose.KNOWLEDGE_ASSERTION_READ,
@@ -902,3 +914,31 @@ def test_v7_excludes_submit_and_checkpoint_from_the_ordinary_profile() -> None:
         assert capability not in desired_effective_capabilities(composed)
     for capability in _KNOWLEDGE:
         assert is_chatllm_data_management(capability)
+
+
+def test_v8_adds_exactly_provenance_and_still_excludes_the_discovery_pair() -> None:
+    """KLP-WP-05 (KLP-AC-106): v8 = v7 + `record_events.provenance`, plane-conditional.
+
+    Across all sixty-four compositions provenance is desired exactly when the
+    Knowledge plane (and the entity plane it requires) is composed, and submit
+    and checkpoint are never desired.
+    """
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v8"
+    provenance = Capability.RECORD_EVENTS_PROVENANCE
+    assert is_chatllm_data_management(provenance)
+    discovery = {Capability.KNOWLEDGE_ASSERTIONS_SUBMIT, Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT}
+    for bits in range(64):
+        planes = ChatLLMCompositionPlanes(
+            managed_documents=bool(bits & 1),
+            relationship_intelligence=bool(bits & 2),
+            relationship_intelligence_writes=bool(bits & 4),
+            relationship_memory=bool(bits & 8),
+            constraints=bool(bits & 16),
+            knowledge_assertions=bool(bits & 32),
+        )
+        desired = desired_effective_capabilities(
+            composed_capabilities(frozenset(Capability), planes)
+        )
+        expected = planes.knowledge_assertions and planes.relationship_intelligence
+        assert (provenance in desired) is expected, planes
+        assert not discovery & desired, planes

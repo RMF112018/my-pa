@@ -80,3 +80,13 @@ of each is `relationship_memory_versions.classification` (keys and that column o
 the R6 section 5.3 proposal-effective-class `EXISTS` that withholds a Knowledge Review case
 from a remote caller before the page LIMIT and before any decide lock. No memory column enters
 a returned row; the memory branches are otherwise unchanged.
+
+**KLP-WP-05 (cross-run Record Event provenance, 2026-10-06):**
+`record_events.provenance` reads two of the eight (`relationship_memories`,
+`relationship_memory_versions`) and writes none of the eight. The reach exists only for a
+remote caller: the event and each of its cited trigger events pass the feed's own visibility
+predicate, whose OD-8 (i) `EXISTS` joins `relationship_memories.memory_id` and
+`current_version_id` to `relationship_memory_versions.memory_version_id` under the Principal
+partition and compares that version's `classification`, and whose R6 section 5.2 Knowledge
+term compares the `classification` of every version of a cited memory. No memory column enters
+the answer, and no statement, structured value or evidence payload is read.

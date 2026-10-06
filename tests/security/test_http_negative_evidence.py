@@ -280,6 +280,8 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         # KLP-WP-04: the discovery pair, on the same terms.
         Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
         Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
+        # KLP-WP-05: provenance, on the same terms.
+        Capability.RECORD_EVENTS_PROVENANCE,
     }
 )
 
@@ -1342,6 +1344,7 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "private_envelope": "wire-opaque-state",
             "idempotency_key": "wire-knowledge-checkpoint",
         },
+        Capability.RECORD_EVENTS_PROVENANCE: {"event_id": "rcev_wireknowledge00001"},
     }
 
 
@@ -2017,6 +2020,8 @@ SCOPED_CAPABILITIES = [
         # KLP-WP-04: the discovery pair, on the same terms.
         Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
         Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
+        # KLP-WP-05: provenance, on the same terms.
+        Capability.RECORD_EVENTS_PROVENANCE,
     }
 ]
 

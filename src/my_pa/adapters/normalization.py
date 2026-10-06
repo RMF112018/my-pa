@@ -127,6 +127,7 @@ from my_pa.application.commands import (
     GetKnowledgeAssertionHistory,
     GetLatestIntelligenceArtifact,
     GetPulse,
+    GetRecordEventProvenance,
     GetRelationshipMemory,
     GetRelationshipMemoryHistory,
     GetSourceMetadata,
@@ -2668,6 +2669,7 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.MEETINGS_UPDATE: _update_meeting,
         Capability.MEETINGS_SERIES_UPDATE: _update_meeting_series,
         Capability.RECORD_EVENTS_LIST: _list_record_events,
+        Capability.RECORD_EVENTS_PROVENANCE: lambda payload: GetRecordEventProvenance(**payload),
         Capability.KNOWLEDGE_ASSERTIONS_READ: lambda payload: ReadKnowledgeAssertion(**payload),
         Capability.KNOWLEDGE_ASSERTIONS_LIST: lambda payload: ListKnowledgeAssertions(**payload),
         Capability.KNOWLEDGE_ASSERTIONS_SEARCH: lambda payload: SearchKnowledgeAssertions(

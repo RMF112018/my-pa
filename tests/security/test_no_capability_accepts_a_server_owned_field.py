@@ -105,7 +105,7 @@ def test_the_population_is_the_handler_backed_remote_tool_set() -> None:
     assert population, "there are no capabilities, so nothing below proves anything"
     assert population >= PHASE_B_CAPABILITIES
     assert population == command_backed
-    assert len(population) == 189
+    assert len(population) == 190
     assert set(Capability) - population == HANDLER_UNWIRED_CAPABILITIES
     assert not population & HANDLER_UNWIRED_CAPABILITIES
     assert population | HANDLER_UNWIRED_CAPABILITIES == set(Capability)
@@ -212,7 +212,7 @@ def test_phase_b_publishes_no_schema_naming_a_field_the_server_owns(
 
 
 #: KLP-WP-03 (KLP-AC-018): the six Knowledge Assertion names; KLP-WP-04 adds the
-#: discovery pair (eight today; `record_events.provenance` is KLP-WP-05's ninth).
+#: discovery pair; KLP-WP-05 adds `record_events.provenance`, the last (KLP-AC-002).
 KNOWLEDGE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     {
         Capability.KNOWLEDGE_ASSERTIONS_READ,
@@ -223,6 +223,7 @@ KNOWLEDGE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.KNOWLEDGE_ASSERTIONS_CREATE,
         Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
         Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
+        Capability.RECORD_EVENTS_PROVENANCE,
     }
 )
 #: KLP-WP-04: what the discovery pair derives from the authorization and the
@@ -285,3 +286,16 @@ def test_no_discovery_command_declares_a_profile_derived_field(field: str) -> No
         assert field not in names, (capability.value, field)
         published = remote_tool_schema(input_schema_for(commands[capability]))
         assert field not in published["properties"]["payload"]["properties"]
+
+
+def test_the_knowledge_sweep_covers_exactly_the_nine_names() -> None:
+    """KLP-WP-05 (KLP-AC-018 whole): the sweeps above run over every KLP name.
+
+    Each of them is refused each server-derived field by
+    `remote_request` (`KNOWLEDGE_SERVER_OWNED_FIELDS`), at the payload level.
+    """
+    from my_pa.adapters.remote_request import _KNOWLEDGE_CAPABILITIES, KNOWLEDGE_SERVER_OWNED_FIELDS
+
+    assert len(KNOWLEDGE_CAPABILITIES) == 9
+    assert _KNOWLEDGE_CAPABILITIES == KNOWLEDGE_CAPABILITIES
+    assert set(KNOWLEDGE_DERIVED_FIELDS) <= KNOWLEDGE_SERVER_OWNED_FIELDS

@@ -50,8 +50,18 @@ from collections.abc import Callable, Iterable
 from enum import StrEnum
 from typing import Any, Final
 
-from my_pa.application.errors import ConflictError, InvalidRequestError, SafeDetail
-from my_pa.contracts.ports import RecordEventFeedItem, RecordEventReader
+from my_pa.application.errors import (
+    ConflictError,
+    InvalidRequestError,
+    NotFoundError,
+    SafeDetail,
+)
+from my_pa.contracts.ports import (
+    RecordEventFeedItem,
+    RecordEventProvenance,
+    RecordEventProvenanceSubmission,
+    RecordEventReader,
+)
 from my_pa.contracts.v1.record_events import RecordEventItemView, RecordEventListView
 from my_pa.domain.identity.operation import Capability, granted_purposes
 from my_pa.domain.identity.purpose import Purpose
@@ -77,8 +87,10 @@ __all__ = [
     "granted_read",
     "list_record_events",
     "memory_disclosure",
+    "provenance_view",
     "read_cursor",
     "record_event_page_size",
+    "record_event_provenance",
     "requested_families",
     "visible_families",
 ]
@@ -474,4 +486,159 @@ def list_record_events(
         next_cursor=encode_cursor(binding, items[-1].event_id) if has_more else None,
         high_watermark_cursor=encode_cursor(binding, high_watermark),
         visible_families=tuple(sorted(visible, key=lambda family: family.value)),
+    )
+
+
+# --- KLP-WP-05: cross-run provenance ---------------------------------------------
+
+
+def _discloses_external_ids(
+    submission: RecordEventProvenanceSubmission,
+    *,
+    remote: bool,
+    authenticated_client_id: str | None,
+) -> bool:
+    """KLP-AC-143 (spec section 8): only the supplying client, or the Principal locally.
+
+    A local caller is the owning Principal in its own partition. A remote caller
+    -- `REMOTE_CLIENT` transport or any grant ceiling, R6 section 5.2 -- sees the
+    ids only when its authenticated client is the one the submission recorded;
+    a remote composition with no client (a grant-ceilinged stdio harness) never.
+    """
+    if not remote:
+        return True
+    return (
+        authenticated_client_id is not None
+        and submission.authenticated_client_id == authenticated_client_id
+    )
+
+
+def _self_caused(
+    submission: RecordEventProvenanceSubmission, *, authenticated_client_id: str | None
+) -> bool:
+    """KLP-AC-049: server-computed from the persisted lineage, never from the request.
+
+    True only for an authenticated client that submitted this event's submission
+    or its causal root (`causal_root_submission_id`, reached event ->
+    `kamut_` mutation -> submission). A caller with no client -- every local
+    surface -- is never self-caused: a NULL client is nobody's lineage.
+    """
+    if authenticated_client_id is None:
+        return False
+    return authenticated_client_id in {
+        submission.authenticated_client_id,
+        submission.root_authenticated_client_id,
+    }
+
+
+def _disclosed_client_id(
+    client_id: str | None, *, remote: bool, authenticated_client_id: str | None
+) -> str | None:
+    """WP-05 DEV-13 (Manager ruling 2026-10-06): an OAuth client id in the answer.
+
+    A local caller (the owning Principal) sees every stored id. A remote caller
+    sees an id only when it is its own authenticated client id; any other id --
+    and every id for a grant-ceilinged composition with no client -- is `null`,
+    the same keys-always-present shape as the external ids (DEV-02).
+    """
+    if not remote:
+        return client_id
+    if authenticated_client_id is not None and client_id == authenticated_client_id:
+        return client_id
+    return None
+
+
+def provenance_view(
+    provenance: RecordEventProvenance,
+    *,
+    remote: bool,
+    authenticated_client_id: str | None,
+) -> dict[str, object]:
+    """The public provenance object (one pinned shape, KLP-AC-046/047/143).
+
+    External ids are always present as keys; for a caller they are not disclosed
+    to, both are `null` -- the same shape as a submission that carried none, so
+    absence discloses nothing. The submission's own client ids never appear; the
+    decision's client id follows `_disclosed_client_id` (DEV-13). `self_caused`
+    is computed from the persisted ids before any redaction.
+    """
+    submission = provenance.submission
+    submission_view: dict[str, object] | None = None
+    if submission is not None:
+        disclose = _discloses_external_ids(
+            submission, remote=remote, authenticated_client_id=authenticated_client_id
+        )
+        submission_view = {
+            "submission_id": submission.submission_id,
+            "origin": submission.origin,
+            "causal_depth": submission.causal_depth,
+            "causal_root_submission_id": submission.causal_root_submission_id,
+            "external_run_id": submission.external_run_id if disclose else None,
+            "external_candidate_id": submission.external_candidate_id if disclose else None,
+            "self_caused": _self_caused(
+                submission, authenticated_client_id=authenticated_client_id
+            ),
+        }
+    review = provenance.review
+    return {
+        "event_id": provenance.event_id,
+        "record_family": provenance.record_family.value,
+        "record_id": provenance.record_id,
+        "source_receipt_id": provenance.source_receipt_id,
+        "mutation_kind": provenance.mutation_kind,
+        "actor_class": provenance.actor_class.value,
+        "submission": submission_view,
+        "trigger_event_ids": list(provenance.trigger_event_ids),
+        "review": None
+        if review is None
+        else {
+            "proposal_id": review.proposal_id,
+            "review_case_id": review.review_case_id,
+            "decision_id": review.decision_id,
+            "authenticated_client_id": _disclosed_client_id(
+                review.authenticated_client_id,
+                remote=remote,
+                authenticated_client_id=authenticated_client_id,
+            ),
+            "decision_channel": review.decision_channel,
+        },
+    }
+
+
+def record_event_provenance(
+    reader: RecordEventReader,
+    *,
+    principal_id: str,
+    event_id: str,
+    available_capabilities: frozenset[Capability],
+    capability_grants: Grants | None,
+    remote: bool,
+    authenticated_client_id: str | None,
+) -> dict[str, object]:
+    """`record_events.provenance` for the server-resolved `principal_id`.
+
+    Visibility is the feed's, re-derived here exactly as `list_record_events`
+    derives it: the families this composition and grant set make visible, and
+    for a remote caller the full withholding predicate in SQL. The event must be
+    a visible `knowledge_assertion` event (WP-05 DEV-01: no other family carries
+    provenance); cited triggers are filtered by the same predicate over every
+    visible family. Anything else -- unknown, foreign, withheld, invisible,
+    another family -- is the one `not_found(subject)`.
+    """
+    visible = visible_families(available_capabilities, capability_grants)
+    if RecordEventFamily.KNOWLEDGE_ASSERTION not in visible:
+        # The family itself is invisible to this caller: every event id answers
+        # as unknown, and no statement runs.
+        raise NotFoundError(SafeDetail.SUBJECT)
+    provenance = reader.event_provenance(
+        principal_id=principal_id,
+        event_id=event_id,
+        event_families=frozenset({RecordEventFamily.KNOWLEDGE_ASSERTION}),
+        trigger_families=visible,
+        include_restricted_memory=not remote,
+    )
+    if provenance is None:
+        raise NotFoundError(SafeDetail.SUBJECT)
+    return provenance_view(
+        provenance, remote=remote, authenticated_client_id=authenticated_client_id
     )

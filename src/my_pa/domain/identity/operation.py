@@ -953,6 +953,15 @@ class Capability(StrEnum):
     #: the reason the rest of the plane is.
     KNOWLEDGE_ASSERTIONS_SUBMIT = "knowledge.assertions.submit"
     KNOWLEDGE_DISCOVERY_CHECKPOINT = "knowledge.discovery.checkpoint"
+    #: KLP-WP-05: the cross-run provenance of one Knowledge Assertion Record
+    #: Event -- the event's `kamut_` mutation, its `kasub_` submission (causal
+    #: root and depth, the cited trigger events the caller may see, and the
+    #: external run and candidate ids only for the client that supplied them),
+    #: and for a Review promotion its proposal, case and accepting decision. A
+    #: read, never operator-only, and scopeless for the reason
+    #: `record_events.list` is: an event names a product-owned record of the
+    #: acting Principal's own partition and no configured source.
+    RECORD_EVENTS_PROVENANCE = "record_events.provenance"
 
 
 class NativeSourceCapability(StrEnum):
@@ -1486,6 +1495,11 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT: frozenset(
             {Purpose.KNOWLEDGE_ASSERTION_OBSERVATION}
         ),
+        # KLP-WP-05 (KLP-AC-015): provenance maps to exactly one purpose of its
+        # own, `record_event_provenance_read`, and never to the feed's
+        # `record_event_read`: a grant issued to list the feed must never also
+        # disclose submission lineage, and the reverse.
+        Capability.RECORD_EVENTS_PROVENANCE: frozenset({Purpose.RECORD_EVENT_PROVENANCE_READ}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),

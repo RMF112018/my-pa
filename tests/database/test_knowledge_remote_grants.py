@@ -325,6 +325,8 @@ _CONFLICTING = (
     (Capability.KNOWLEDGE_ASSERTIONS_LIST, Purpose.KNOWLEDGE_ASSERTION_READ, False),
     (CREATE, Purpose.KNOWLEDGE_ASSERTION_AUTHORING, True),
     (Capability.RECORD_EVENTS_LIST, Purpose.RECORD_EVENT_READ, False),
+    # KLP-WP-05: the v2 discovery profile's provenance read.
+    (Capability.RECORD_EVENTS_PROVENANCE, Purpose.RECORD_EVENT_PROVENANCE_READ, False),
     (Capability.REVIEW_LIST, Purpose.CAPTURE_REVIEW, False),
     (Capability.REVIEW_DECIDE, Purpose.REVIEW_DISPOSITION, True),
     (Capability.TASKS_READ, Purpose.TASK_READ, False),

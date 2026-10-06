@@ -76,8 +76,8 @@ _MEETINGS = _MEETING_READS | _MEETING_WRITES
 
 def test_policy_covers_every_public_capability_exactly_once() -> None:
     assert set(CHATLLM_CAPABILITY_POLICY) == set(Capability)
-    assert len(CHATLLM_CAPABILITY_POLICY) == 189
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v7"
+    assert len(CHATLLM_CAPABILITY_POLICY) == 190
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v8"
 
 
 def test_classification_counts_match_the_approved_plan() -> None:
@@ -86,7 +86,8 @@ def test_classification_counts_match_the_approved_plan() -> None:
         counts[policy.classification] += 1
     assert counts[ChatLLMCapabilityClass.DATA_REQUIRED] == 72
     # KLP-WP-03 (chatllm-data-v6): the six Knowledge Assertion names, 90 -> 96.
-    assert counts[ChatLLMCapabilityClass.DATA_CONDITIONAL] == 96
+    # KLP-WP-05 (chatllm-data-v8): `record_events.provenance`, 96 -> 97.
+    assert counts[ChatLLMCapabilityClass.DATA_CONDITIONAL] == 97
     assert counts[ChatLLMCapabilityClass.COMPATIBILITY_ONLY] == 2
     # KLP-WP-04 (chatllm-data-v7): submit and checkpoint are excluded, 15 -> 17.
     assert counts[ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED] == 17
@@ -173,7 +174,8 @@ def test_record_events_list_is_data_required_on_the_core_plane() -> None:
     named = {
         capability for capability in Capability if capability.value.startswith("record_events.")
     }
-    assert named == {Capability.RECORD_EVENTS_LIST}
+    # KLP-WP-05 adds the provenance read beside the feed (its own test below).
+    assert named == {Capability.RECORD_EVENTS_LIST, Capability.RECORD_EVENTS_PROVENANCE}
     policy = CHATLLM_CAPABILITY_POLICY[Capability.RECORD_EVENTS_LIST]
     assert policy.classification is ChatLLMCapabilityClass.DATA_REQUIRED
     assert is_chatllm_data_management(Capability.RECORD_EVENTS_LIST)
@@ -254,3 +256,21 @@ def test_the_knowledge_names_are_conditional_on_their_own_plane_by_explicit_name
         assert policy.classification is ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED
         assert policy.composition_prerequisite is ChatLLMCompositionPrerequisite.NONE
         assert policy.exclusion_rationale
+
+
+def test_record_events_provenance_is_conditional_on_the_knowledge_plane() -> None:
+    """KLP-WP-05 (chatllm-data-v8): DATA_CONDITIONAL, by explicit name (KLP-AC-105).
+
+    Only Knowledge Assertion events carry provenance, so the ordinary profile
+    demands its grant only when the Knowledge plane is composed.
+    """
+    capability = Capability.RECORD_EVENTS_PROVENANCE
+    policy = CHATLLM_CAPABILITY_POLICY[capability]
+    assert policy.classification is ChatLLMCapabilityClass.DATA_CONDITIONAL
+    assert policy.composition_prerequisite is ChatLLMCompositionPrerequisite.KNOWLEDGE_ASSERTIONS
+    assert policy.family == "record_events"
+    assert policy.exclusion_rationale is None
+    assert is_chatllm_data_management(capability)
+    assert capability in _HANDLERS
+    assert permitted_purposes(capability) == frozenset({Purpose.RECORD_EVENT_PROVENANCE_READ})
+    assert not is_write_capability(capability)

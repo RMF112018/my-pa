@@ -10634,6 +10634,31 @@ class ListRecordEvents:
         requested_families(self.record_families)
 
 
+@dataclass(frozen=True, slots=True)
+class GetRecordEventProvenance:
+    """`record_events.provenance`: why one Knowledge Assertion event happened.
+
+    Given an `rcev_` event you can see in your change feed, returns the
+    submission that caused it (its causal root and depth, the trigger events it
+    cited that you can see, and whether it was caused by you), and for a Review
+    promotion the proposal, review case and accepting decision. External run and
+    candidate ids are returned only to the client that supplied them. Any other
+    event -- unknown, not yours, withheld or not a Knowledge Assertion event --
+    answers not found.
+    """
+
+    capability: ClassVar[Capability] = Capability.RECORD_EVENTS_PROVENANCE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, object]]] = MappingProxyType(
+        {"event_id": {"description": "An `rcev_` Record Event identifier from your feed."}}
+    )
+
+    event_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.event_id, IdKind.RECORD_EVENT, SafeDetail.SUBJECT)
+
+
 # --- KLP-WP-03: the Knowledge Assertion plane -------------------------------------
 #
 # Six commands. None carries a `principal_id`, an actor class, an authority, a
@@ -11573,6 +11598,7 @@ type Command = (
     | UpdateMeeting
     | UpdateMeetingSeries
     | ListRecordEvents
+    | GetRecordEventProvenance
     | ReadKnowledgeAssertion
     | ListKnowledgeAssertions
     | SearchKnowledgeAssertions

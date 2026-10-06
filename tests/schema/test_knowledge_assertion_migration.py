@@ -723,13 +723,18 @@ def test_the_downgrade_refusal_names_exactly_the_new_vocabulary() -> None:
 def test_the_schema_ahead_contract_is_the_matrix_gap_table() -> None:
     """AC-109/AC-132: the one home of the gap rows, at the landed head, empty at `wp06`.
 
-    KLP-WP-04 declares submit, checkpoint and `knowledge_assertion_observation`, so
-    the head is `wp04` (bumped in the same change, as the FAST gap guard requires);
-    WP-05 and WP-06 each bump it again.
+    KLP-WP-04 declared submit, checkpoint and `knowledge_assertion_observation`;
+    KLP-WP-05 declares `record_events.provenance` and `record_event_provenance_read`,
+    so the head is `wp05` (bumped in the same change, as the FAST gap guard
+    requires) and the capability, Purpose and record-family gaps are empty; WP-06
+    bumps it again.
     """
     module = _matrix()["schema_ahead_contract_module"]
     assert module["path"] == "tests/schema/knowledge_schema_ahead_contract.py"
-    assert contract.KNOWLEDGE_WP_HEAD == "wp04"
+    assert contract.KNOWLEDGE_WP_HEAD == "wp05"
+    current = contract.current_gap()
+    assert current["capability"] == current["purpose"] == current["record_event_family"]
+    assert current["capability"] == frozenset()
     assert set(contract.GAP_ROWS) == set(module["rows"])
     assert (
         tuple(_matrix()["migration_contract"]["schema_ahead_gap_families"]) == contract.GAP_FAMILIES
@@ -749,7 +754,7 @@ def test_the_schema_ahead_contract_is_the_matrix_gap_table() -> None:
     assert row["context_plane"] == frozenset(alters["A4"]["added_values"])
     assert row["source_authority_class"] == frozenset(alters["A5"]["added_values"])
     source = (ROOT / module["path"]).read_text(encoding="utf-8")
-    assert re.search(r'^KNOWLEDGE_WP_HEAD: Final\[KnowledgeWpHead\] = "wp04"$', source, re.M)
+    assert re.search(r'^KNOWLEDGE_WP_HEAD: Final\[KnowledgeWpHead\] = "wp05"$', source, re.M)
     assert 'KnowledgeWpHead = Literal["wp02", "wp03", "wp04", "wp05", "wp06"]' in source
 
 

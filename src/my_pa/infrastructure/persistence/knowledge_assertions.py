@@ -2758,6 +2758,16 @@ class _AutonomousSubmit:
             )
         ).one_or_none()
 
+    def _current_fact(self, holder: Row[Any] | None, live: Row[Any] | None) -> CurrentFact | None:
+        """The live different-value slot holder as a policy fact (`None`: no such holder)."""
+        if holder is None or (live is not None and holder.assertion_id == live.assertion_id):
+            return None
+        return CurrentFact(
+            assertion_id=holder.assertion_id,
+            effective_from=holder.effective_from,
+            unresolved_counterevidence=self._has_counterevidence(holder.assertion_id),
+        )
+
     def _has_counterevidence(self, assertion_id: str) -> bool:
         links = knowledge_assertion_evidence_links
         return (
@@ -2882,13 +2892,7 @@ class _AutonomousSubmit:
         existing = self._existing_rows()
         live = self._live_duplicate()
         holder = self._slot_holder()
-        current = None
-        if holder is not None and (live is None or holder.assertion_id != live.assertion_id):
-            current = CurrentFact(
-                assertion_id=holder.assertion_id,
-                effective_from=holder.effective_from,
-                unresolved_counterevidence=self._has_counterevidence(holder.assertion_id),
-            )
+        current = self._current_fact(holder, live)
         archived = any(
             state is CaptureLifecycleState.ARCHIVED
             for state in capture_lifecycle_states(
@@ -2946,14 +2950,20 @@ class _AutonomousSubmit:
         )
         # C6: the subject lock, even when no assertion exists (KLP-AC-091).
         self._lock_subject()
-        # The cited rows are locked since C4b: re-read their availability facts and
-        # re-run the policy, so an availability ingress (or drain) that committed
-        # while this transaction waited at C4b is decided on, never the stale C2
-        # read (a permission_lost / pending row blocks direct admission). The
-        # stored class needs no re-check here: the policy never reads it and the
-        # writers read it under the lock (`_classification`).
+        # Re-decide on the facts as they stand under the locks, never the stale C2
+        # reads: the cited rows are locked since C4b (availability: an ingress or
+        # drain that committed while this transaction waited is decided on) and the
+        # (subject, predicate) key since C6 (the slot holder, its effective_from and
+        # its counterevidence: an enrich linking counterevidence commits under C6,
+        # KLP-AC-031). The stored class needs no re-check: the policy never reads it
+        # and the writers read it under the lock (`_classification`). The other
+        # facts are immutable or held since C3/C4a (fix round 2 audit, SLICE-LOG).
         decision = decide_direct_admission(
-            replace(facts, evidence=self._admission_evidence(self._existing_rows()))
+            replace(
+                facts,
+                evidence=self._admission_evidence(self._existing_rows()),
+                current=self._current_fact(self._slot_holder(), self._live_duplicate()),
+            )
         )
         if decision.path is AdmissionPath.REFUSE:  # pragma: no cover - evidence never refuses
             assert decision.reason is not None  # noqa: S101 - a refusal always names one

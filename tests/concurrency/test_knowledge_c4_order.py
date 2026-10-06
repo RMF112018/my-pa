@@ -22,6 +22,22 @@ KLP-AC-099 (C4b canonical order) and KLP-R6V-202 (sibling writer half). Marked
   After the ingress commits, the submit re-reads the locked rows' availability
   and re-runs the admission policy: it ends `review_queued` (no assertion), never
   `direct_created` / `active` on a `permission_lost` row.
+* **Holder counterevidence under C6** (KLP-AC-031, fix round 2) -- a session
+  takes the C6 subject lock of a live `organization.payment_terms` holder and
+  links counterevidence to it (what `_enrich` does after C6), pausing before
+  COMMIT; a later direct-supersede candidate blocks on that C6 row (the waiting
+  statement is the subject-lock `SELECT ... FOR UPDATE`, observed in
+  `pg_stat_activity`). After the commit the submit re-derives the current fact
+  under C6 and ends `review_queued`, the holder still `active`. The linking
+  session takes no C3: every production link writer (create, submit `_enrich`,
+  Review decide) takes C3 first for an Entity subject, and the only
+  single_current predicate is Entity-only, so with today's registry the
+  production race is serialised at C3 -- the next node drives that path.
+* **Production enrich vs supersede** -- the production submit `_enrich` of the
+  holder (citing new counterevidence) is paused after it linked, before COMMIT;
+  the supersede candidate waits (at C3), then ends `review_queued`. This node
+  proves the production serialisation; it is NOT a prove-red for the C6
+  re-derivation (it stays green without it: the holder is read after C3).
 """
 
 from __future__ import annotations
@@ -40,11 +56,21 @@ from tests.concurrency.test_knowledge_shared_evidence_raise import (
     _wait_for_waiters,
 )
 from tests.database.test_knowledge_assertion_repository import capture_evidence, new_principal
-from tests.database.test_knowledge_assertion_submissions import SubmitRuntime, external
+from tests.database.test_knowledge_assertion_submissions import (
+    EARLY,
+    LATER,
+    PAYMENT,
+    SubmitRuntime,
+    _payment,
+    add_direct_payment_head,
+    assertion,
+    external,
+)
 
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.knowledge_assertion.vocabulary import KnowledgeEvidenceAvailability
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.infrastructure.persistence import knowledge_assertions as persistence
 from my_pa.infrastructure.persistence.knowledge_assertions import KnowledgeMaintenanceResult
 from my_pa.infrastructure.persistence.tables import (
     knowledge_assertions,
@@ -251,3 +277,125 @@ def test_availability_lost_while_waiting_at_c4b_is_decided_on_never_direct(
         )
     # Only the first assertion exists, and the ingress marked it for revalidation.
     assert lifecycles == {first["assertion_id"]: "revalidation_required"}
+
+
+def _waiting_on_subject_lock(engine: Engine) -> int:
+    with engine.connect() as observer:
+        return int(
+            observer.execute(
+                text(
+                    "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() "
+                    "AND wait_event_type = 'Lock' AND pid <> pg_backend_pid() "
+                    "AND query ILIKE '%knowledge_assertion_subject_locks%FOR UPDATE%'"
+                )
+            ).scalar_one()
+        )
+
+
+def _holder_evidence(engine: Engine, principal: str) -> str:
+    with engine.connect() as connection:
+        return str(
+            connection.execute(
+                select(knowledge_evidence_refs.c.evidence_ref_id).where(
+                    knowledge_evidence_refs.c.principal_id == principal
+                )
+            ).scalar_one()
+        )
+
+
+def test_counterevidence_linked_to_the_holder_while_waiting_at_c6_blocks_supersession(
+    runtime: SubmitRuntime,
+) -> None:
+    principal = new_principal()
+    add_direct_payment_head(runtime.engine)
+    profile = runtime.profile(principal)
+    org = runtime.entity(principal, "c6-counter")
+    first = _payment(runtime, principal, profile, org, "Net 30", "p", EARLY)
+    assert first["outcome"] == "direct_created", first
+    evidence = _holder_evidence(runtime.engine, principal)
+    locked = threading.Event()
+    release = threading.Event()
+
+    def link_counterevidence() -> None:
+        # What `_enrich` does once it holds C6: the subject lock, then the link.
+        with runtime.engine.begin() as connection:
+            connection.execute(
+                text(
+                    "SELECT 1 FROM knowledge.knowledge_assertion_subject_locks "
+                    "WHERE principal_id = :p AND subject_kind = 'entity' AND subject_id = :s "
+                    "AND predicate_code = :k FOR UPDATE"
+                ),
+                {"p": principal, "s": org, "k": PAYMENT},
+            ).all()
+            connection.execute(
+                text(
+                    "INSERT INTO knowledge.knowledge_assertion_evidence_links (principal_id, "
+                    "assertion_id, evidence_ref_id, evidence_role, linked_by_mutation_id, "
+                    "created_at) VALUES (:p, :a, :e, 'counterevidence', :m, now())"
+                ),
+                {
+                    "p": principal,
+                    "a": first["assertion_id"],
+                    "e": evidence,
+                    "m": first["mutation_id"],
+                },
+            )
+            locked.set()
+            assert release.wait(DEADLINE_SECONDS), "never released"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        linker = pool.submit(link_counterevidence)
+        assert locked.wait(DEADLINE_SECONDS)
+        writer = pool.submit(_payment, runtime, principal, profile, org, "Net 90", "q", LATER)
+        _wait_for_waiters(runtime.engine, 1, writer)
+        assert _waiting_on_subject_lock(runtime.engine) == 1
+        release.set()
+        linker.result(timeout=DEADLINE_SECONDS)
+        second = writer.result(timeout=DEADLINE_SECONDS)
+    assert second["outcome"] == "review_queued", second
+    assert assertion(runtime.engine, first["assertion_id"])["lifecycle"] == "active"
+
+
+def test_a_production_enrich_with_counterevidence_serialises_the_supersession(
+    runtime: SubmitRuntime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    principal = new_principal()
+    add_direct_payment_head(runtime.engine)
+    profile = runtime.profile(principal)
+    org = runtime.entity(principal, "c3-counter")
+    first = _payment(runtime, principal, profile, org, "Net 30", "p", EARLY)
+    assert first["outcome"] == "direct_created", first
+    linked = threading.Event()
+    release = threading.Event()
+    enrich = persistence._AutonomousSubmit._enrich
+
+    def paused_enrich(self: Any, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        result = enrich(self, *args, **kwargs)
+        linked.set()
+        assert release.wait(DEADLINE_SECONDS), "never released"
+        return result
+
+    monkeypatch.setattr(persistence._AutonomousSubmit, "_enrich", paused_enrich)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        enricher = pool.submit(
+            _payment,
+            runtime,
+            principal,
+            profile,
+            org,
+            "Net 30",
+            "e",
+            EARLY,
+            evidence=(external("inv-p"), external("contra-e", role="counterevidence")),
+        )
+        assert linked.wait(DEADLINE_SECONDS)
+        writer = pool.submit(_payment, runtime, principal, profile, org, "Net 90", "q", LATER)
+        _wait_for_waiters(runtime.engine, 1, writer)
+        # Serialised before C6 (at C3), not on the subject lock.
+        assert _waiting_on_subject_lock(runtime.engine) == 0
+        release.set()
+        enriched = enricher.result(timeout=DEADLINE_SECONDS)
+        second = writer.result(timeout=DEADLINE_SECONDS)
+    assert enriched["assertion_id"] == first["assertion_id"], enriched
+    assert second["outcome"] == "review_queued", second
+    assert assertion(runtime.engine, first["assertion_id"])["lifecycle"] == "active"

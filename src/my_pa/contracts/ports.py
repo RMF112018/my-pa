@@ -372,6 +372,7 @@ __all__ = [
     "KnowledgeCheckpointRequest",
     "KnowledgeCheckpointResult",
     "KnowledgeConcurrentDuplicateError",
+    "KnowledgeContextAnnotation",
     "KnowledgeCorrectedCandidate",
     "KnowledgeCreateEvidence",
     "KnowledgeCreateRequest",
@@ -5313,6 +5314,26 @@ class KnowledgeEvidenceRow:
 
 
 @dataclass(frozen=True, slots=True)
+class KnowledgeContextAnnotation:
+    """KLP-WP-06: what `context.prepare` must say about one assertion it cites.
+
+    Flags and one derived class -- never evidence identity, text or any linked
+    row's own class. `effective_classification` is the R6 section 5.2 effective class without
+    the availability term (stored class, predecessor, every linked row, its
+    cross-profile siblings and every Capture / Relationship Memory version);
+    `evidence_unavailable` is the availability term (a linked external row
+    availability-pending, `permission_lost` or `deleted`, or a cited Capture
+    root archived); `counterevidence_linked` says a counterevidence link exists
+    (the unresolved-counterevidence reading of KLP-AC-031).
+    """
+
+    assertion_id: str
+    effective_classification: Classification
+    evidence_unavailable: bool
+    counterevidence_linked: bool
+
+
+@dataclass(frozen=True, slots=True)
 class KnowledgeAssertionReveal:
     """The provenance behind one assertion: its origin and its evidence links."""
 
@@ -5560,6 +5581,19 @@ class KnowledgeAssertionRepository(ABC):
         self, principal_id: str, assertion_id: str, *, remote: bool
     ) -> KnowledgeAssertionReveal | None:
         """The assertion's provenance, or `None` (absent, foreign, withheld)."""
+
+    def context_annotations(
+        self, principal_id: str, assertion_ids: Sequence[str]
+    ) -> Mapping[str, KnowledgeContextAnnotation]:
+        """KLP-WP-06: one annotation per named assertion of this Principal.
+
+        Non-abstract with a refusal (the `event_provenance` precedent): narrow
+        test doubles need not implement it, and a plane that cannot annotate is
+        reported unavailable by the context provider rather than serving items
+        whose limitation/contradiction codes would be omitted (KLP-AC-057).
+        Foreign or unknown ids are absent from the answer.
+        """
+        raise NotImplementedError
 
     @abstractmethod
     def create(

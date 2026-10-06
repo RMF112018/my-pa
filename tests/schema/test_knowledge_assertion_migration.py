@@ -731,7 +731,7 @@ def test_the_schema_ahead_contract_is_the_matrix_gap_table() -> None:
     """
     module = _matrix()["schema_ahead_contract_module"]
     assert module["path"] == "tests/schema/knowledge_schema_ahead_contract.py"
-    assert contract.KNOWLEDGE_WP_HEAD == "wp05"
+    assert contract.KNOWLEDGE_WP_HEAD == "wp06"
     current = contract.current_gap()
     assert current["capability"] == current["purpose"] == current["record_event_family"]
     assert current["capability"] == frozenset()
@@ -754,7 +754,7 @@ def test_the_schema_ahead_contract_is_the_matrix_gap_table() -> None:
     assert row["context_plane"] == frozenset(alters["A4"]["added_values"])
     assert row["source_authority_class"] == frozenset(alters["A5"]["added_values"])
     source = (ROOT / module["path"]).read_text(encoding="utf-8")
-    assert re.search(r'^KNOWLEDGE_WP_HEAD: Final\[KnowledgeWpHead\] = "wp05"$', source, re.M)
+    assert re.search(r'^KNOWLEDGE_WP_HEAD: Final\[KnowledgeWpHead\] = "wp06"$', source, re.M)
     assert 'KnowledgeWpHead = Literal["wp02", "wp03", "wp04", "wp05", "wp06"]' in source
 
 

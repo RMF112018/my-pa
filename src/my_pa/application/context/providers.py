@@ -12,21 +12,28 @@ from dataclasses import dataclass, field
 from typing import Final
 
 from my_pa.application.authorization import Authorization
+from my_pa.application.knowledge_assertions import is_remote as knowledge_is_remote
 from my_pa.contracts.ports import (
     CaptureSearchRequest,
     EvidenceUnavailableError,
+    KnowledgeAssertionRepository,
+    KnowledgeAssertionRow,
+    KnowledgeContextAnnotation,
     RepositoryFailureError,
     SearchOutcome,
     UnitOfWork,
 )
 from my_pa.domain.capture.version import CaptureVersion
-from my_pa.domain.common.classification import Classification
+from my_pa.domain.common.classification import Classification, classification_max
 from my_pa.domain.common.coverage import CoverageState as ExtractionCoverageState
-from my_pa.domain.common.identifiers import InvalidIdentifierError, parse_identifier
+from my_pa.domain.common.identifiers import IdKind, InvalidIdentifierError, parse_identifier
+from my_pa.domain.common.time import format_rfc3339
 from my_pa.domain.context.prepared import (
     MAX_EXCERPT_CHARACTERS,
     ContextCoverage,
+    ContextLimitationCode,
     ContextPlane,
+    ContradictionCode,
     CoverageState,
     EvidenceLifecycle,
     PreparedContextError,
@@ -36,6 +43,11 @@ from my_pa.domain.context.prepared import (
 )
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.knowledge_assertion.vocabulary import (
+    LIVE_ASSERTION_LIFECYCLES,
+    KnowledgeAssertionLifecycle,
+    KnowledgeEpistemicStatus,
+)
 from my_pa.domain.search.query import (
     RankCategory,
     SearchQuery,
@@ -45,7 +57,15 @@ from my_pa.domain.search.query import (
 )
 from my_pa.domain.situation.situation import Project, Situation
 
-__all__ = ["PlaneGather", "eligible_planes", "search_plane", "searchable_planes"]
+__all__ = [
+    "KNOWLEDGE_ASSERTION_CONTEXT_GRANT",
+    "KNOWLEDGE_ASSERTION_CONTEXT_LIMIT",
+    "PlaneGather",
+    "eligible_planes",
+    "knowledge_assertion_plane_admitted",
+    "search_plane",
+    "searchable_planes",
+]
 
 #: Remote grant intersection. A `context.prepare` grant does not imply these.
 #: Relationship has no read capability in this work package and stays omitted
@@ -65,6 +85,25 @@ _PLANE_GRANT_CAPABILITIES: Final[dict[ContextPlane, frozenset[Capability]]] = {
     ),
     ContextPlane.RELATIONSHIP: frozenset(),
 }
+
+#: KLP-WP-06 (KLP-AC-055): the one (capability, purpose) pair that admits the
+#: Knowledge Assertion plane to a remote caller. Purpose-aware, unlike the map
+#: above: `context.prepare` alone, this capability under any other purpose or
+#: under `None`, or any other Knowledge capability (the discovery profiles'
+#: `knowledge.assertions.read` among them) never admits it.
+KNOWLEDGE_ASSERTION_CONTEXT_GRANT: Final[tuple[Capability, Purpose]] = (
+    Capability.KNOWLEDGE_ASSERTIONS_SEARCH,
+    Purpose.KNOWLEDGE_ASSERTION_READ,
+)
+
+#: Rows per Knowledge Assertion search the context plane asks for. The remote
+#: section 5.2 withholding is applied by the statement before this LIMIT.
+KNOWLEDGE_ASSERTION_CONTEXT_LIMIT: Final = 32
+
+_KNOWLEDGE_SUBJECT_KINDS: Final[frozenset[IdKind]] = frozenset({IdKind.PROJECT, IdKind.ENTITY})
+_LIVE_LIFECYCLES: Final[frozenset[str]] = frozenset(
+    member.value for member in LIVE_ASSERTION_LIFECYCLES
+)
 
 _INTERNAL_TYPE_NAMES = frozenset(
     {
@@ -110,30 +149,71 @@ class PlaneGather:
     attempted: bool = True
 
 
-def eligible_planes(*, managed_documents_composed: bool) -> tuple[ContextPlane, ...]:
-    """Planes this composition may search. Relationship is not admitted on this UoW."""
+def eligible_planes(
+    *, managed_documents_composed: bool, knowledge_assertions_composed: bool = False
+) -> tuple[ContextPlane, ...]:
+    """Planes this composition may search. Relationship is not admitted on this UoW.
+
+    The Knowledge Assertion plane is eligible only when its plane switch (and
+    the entity plane it depends on) is composed; otherwise it is not a plane of
+    this build at all, the way `capabilities.get` withholds its names.
+    """
     planes = [ContextPlane.KNOWLEDGE, ContextPlane.CAPTURE, ContextPlane.CONTINUITY]
     if managed_documents_composed:
         planes.append(ContextPlane.MANAGED_DOCUMENT)
+    if knowledge_assertions_composed:
+        planes.append(ContextPlane.KNOWLEDGE_ASSERTION)
     return tuple(planes)
+
+
+def knowledge_assertion_plane_admitted(authorization: Authorization) -> bool:
+    """KLP-AC-055: whether this caller may have the Knowledge Assertion plane searched.
+
+    Remote is R6 section 5.2's predicate (a `REMOTE_CLIENT` transport or any
+    grant ceiling). A local caller always may; a remote one only with the exact
+    `KNOWLEDGE_ASSERTION_CONTEXT_GRANT` pair. A remote transport with no grant
+    set holds no pair, so it fails closed.
+    """
+    if not knowledge_is_remote(authorization):
+        return True
+    grants = authorization.capability_grants
+    return grants is not None and KNOWLEDGE_ASSERTION_CONTEXT_GRANT in grants
 
 
 def searchable_planes(
     *,
     managed_documents_composed: bool,
     capability_grants: frozenset[tuple[Capability, Purpose | None]] | None,
+    knowledge_assertions_composed: bool = False,
+    knowledge_assertions_admitted: bool = False,
 ) -> tuple[ContextPlane, ...]:
     """Planes this request may search after composition and remote grant intersection.
 
     `None` grants are local composition: every eligible plane, plus relationship
     reported as not admitted. A non-`None` set is the authenticated remote grant
     set; ungranted planes are omitted entirely rather than named as denied.
+
+    The Knowledge Assertion plane is decided by `knowledge_assertions_admitted`
+    (`knowledge_assertion_plane_admitted`), never by the purpose-blind map: an
+    eligible but unadmitted plane is omitted, never named as denied.
     """
-    eligible = eligible_planes(managed_documents_composed=managed_documents_composed)
+    eligible = eligible_planes(
+        managed_documents_composed=managed_documents_composed,
+        knowledge_assertions_composed=knowledge_assertions_composed,
+    )
+    existing = tuple(plane for plane in eligible if plane is not ContextPlane.KNOWLEDGE_ASSERTION)
+    knowledge = (
+        (ContextPlane.KNOWLEDGE_ASSERTION,)
+        if ContextPlane.KNOWLEDGE_ASSERTION in eligible and knowledge_assertions_admitted
+        else ()
+    )
     if capability_grants is None:
-        return (*eligible, ContextPlane.RELATIONSHIP)
+        return (*existing, ContextPlane.RELATIONSHIP, *knowledge)
     granted = {capability for capability, _purpose in capability_grants}
-    return tuple(plane for plane in eligible if granted & _PLANE_GRANT_CAPABILITIES[plane])
+    return (
+        *(plane for plane in existing if granted & _PLANE_GRANT_CAPABILITIES[plane]),
+        *knowledge,
+    )
 
 
 def search_plane(
@@ -159,6 +239,8 @@ def search_plane(
             attempted=False,
         )
     try:
+        if plane is ContextPlane.KNOWLEDGE_ASSERTION:
+            return _search_knowledge_assertions(unit_of_work, authorization, query, subject_hints)
         if plane is ContextPlane.KNOWLEDGE:
             return _search_knowledge(unit_of_work, authorization, query, extra_terms, subject_hints)
         if plane is ContextPlane.CAPTURE:
@@ -797,4 +879,174 @@ def _search_managed_documents(
                 plane=ContextPlane.MANAGED_DOCUMENT, state=CoverageState.SEARCHED_COMPLETE
             )
         ],
+    )
+
+
+# ---- KLP-WP-06: the Knowledge Assertion plane ------------------------------------
+
+
+def _knowledge_subject_hints(subject_hints: tuple[str, ...]) -> tuple[str, ...]:
+    """Hints shaped like a Knowledge subject (`prj_` / `ent_`), deduplicated."""
+    subjects: list[str] = []
+    for hint in subject_hints:
+        try:
+            kind, _suffix = parse_identifier(hint)
+        except InvalidIdentifierError:
+            continue
+        if kind in _KNOWLEDGE_SUBJECT_KINDS and hint not in subjects:
+            subjects.append(hint)
+    return tuple(subjects)
+
+
+def _knowledge_assertion_rows(
+    unit_of_work: UnitOfWork,
+    principal_id: str,
+    *,
+    remote: bool,
+    query: SearchQuery,
+    subject_hints: tuple[str, ...],
+) -> tuple[dict[str, KnowledgeAssertionRow], bool]:
+    """Live assertions matching the query phrase, a named `kasr_`, or a subject hint.
+
+    Every read goes through the WP-03 read/search port with `remote` and the
+    live lifecycles, so superseded/archived rows are never selected (KLP-AC-056)
+    and a remote caller's section 5.2 withholding is applied by the statement
+    before its LIMIT (KLP-AC-060/138). Returns the rows and whether any search
+    filled its page (the coverage is then incomplete).
+    """
+    repository: KnowledgeAssertionRepository = unit_of_work.knowledge_assertions
+    found: dict[str, KnowledgeAssertionRow] = {}
+    truncated = False
+    searches: list[tuple[str | None, str | None]] = [(None, query.text)]
+    searches.extend((subject, None) for subject in _knowledge_subject_hints(subject_hints))
+    for subject_id, phrase in searches:
+        page = repository.page(
+            principal_id,
+            remote=remote,
+            subject_kind=None,
+            subject_id=subject_id,
+            predicate_code=None,
+            lifecycles=_LIVE_LIFECYCLES,
+            query=phrase,
+            after=None,
+            limit=KNOWLEDGE_ASSERTION_CONTEXT_LIMIT,
+        )
+        truncated = truncated or page.has_more
+        for row in page.rows:
+            found.setdefault(row.assertion_id, row)
+    try:
+        kind, _suffix = parse_identifier(query.text)
+    except InvalidIdentifierError:
+        kind = None
+    if kind is IdKind.KNOWLEDGE_ASSERTION and query.text not in found:
+        named = repository.read_assertion(principal_id, query.text, remote=remote)
+        if named is not None and named.lifecycle in _LIVE_LIFECYCLES:
+            found[named.assertion_id] = named
+    return found, truncated
+
+
+def _knowledge_assertion_text(row: KnowledgeAssertionRow) -> str:
+    if row.value_text is not None:
+        value = row.value_text
+    elif row.value_datetime is not None:
+        value = format_rfc3339(row.value_datetime)
+    else:
+        value = ""
+    return _excerpt(f"{row.predicate_code}: {value}")
+
+
+def _knowledge_assertion_codes(
+    row: KnowledgeAssertionRow, annotation: KnowledgeContextAnnotation
+) -> tuple[tuple[ContextLimitationCode, ...], tuple[ContradictionCode, ...]]:
+    """KLP-AC-057 / R6 section 5.4: the item's limitation and contradiction codes.
+
+    Revalidation is the assertion's own `revalidation_required` lifecycle or any
+    linked evidence's availability term (a remote caller never reaches the
+    latter: such an assertion is withheld). Counterevidence is a counterevidence
+    link or the `contested` epistemic status.
+    """
+    limitations: tuple[ContextLimitationCode, ...] = ()
+    if (
+        row.lifecycle == KnowledgeAssertionLifecycle.REVALIDATION_REQUIRED.value
+        or annotation.evidence_unavailable
+    ):
+        limitations = (ContextLimitationCode.KNOWLEDGE_REVALIDATION_REQUIRED,)
+    contradictions: tuple[ContradictionCode, ...] = ()
+    if (
+        annotation.counterevidence_linked
+        or row.epistemic_status == KnowledgeEpistemicStatus.CONTESTED.value
+    ):
+        contradictions = (ContradictionCode.KNOWLEDGE_COUNTEREVIDENCE,)
+    return limitations, contradictions
+
+
+def _search_knowledge_assertions(
+    unit_of_work: UnitOfWork,
+    authorization: Authorization,
+    query: SearchQuery,
+    subject_hints: tuple[str, ...],
+) -> PlaneGather:
+    """The Knowledge Assertion plane: live, owned, remotely permitted assertions only.
+
+    An assertion is cited by its `kasr_` alone (R6 11.5 A6). Its class is the
+    effective one: `restricted_local` when the section 5.2 class term holds
+    (only a local caller can see such an item). An assertion that cannot be
+    annotated is not served: the plane reports unavailable rather than omit a
+    code.
+    """
+    principal_id = authorization.principal.principal_id
+    remote = knowledge_is_remote(authorization)
+    rows, truncated = _knowledge_assertion_rows(
+        unit_of_work, principal_id, remote=remote, query=query, subject_hints=subject_hints
+    )
+    annotations = (
+        unit_of_work.knowledge_assertions.context_annotations(principal_id, tuple(rows))
+        if rows
+        else {}
+    )
+    evidence: list[PreparedContextEvidence] = []
+    for assertion_id, row in rows.items():
+        annotation = annotations.get(assertion_id)
+        if annotation is None:
+            # Selected but not annotatable now: fail the plane, never the codes.
+            raise EvidenceUnavailableError()
+        text = _knowledge_assertion_text(row)
+        if not text:
+            continue
+        identities = _identities(row.assertion_id, row.subject_id)
+        codes = _reason_codes(
+            identities=identities,
+            searchable=f"{row.value_text or ''} {row.assertion_id} {row.subject_id}",
+            query=query,
+            extra_terms=(),
+            subject_hints=subject_hints,
+            accepted=True,
+        )
+        limitations, contradictions = _knowledge_assertion_codes(row, annotation)
+        # F1: never below the section 5.2 effective class (nor the stored one).
+        classification = classification_max(
+            Classification(row.classification), annotation.effective_classification
+        )
+        evidence.append(
+            PreparedContextEvidence(
+                reference_id=row.assertion_id,
+                principal_id=principal_id,
+                plane=ContextPlane.KNOWLEDGE_ASSERTION,
+                authority_class=SourceAuthorityClass.PRODUCT_OWNED_KNOWLEDGE_ASSERTION,
+                lifecycle=EvidenceLifecycle.ACCEPTED,
+                text=text,
+                classification=classification,
+                freshness=row.updated_at,
+                reason_codes=codes,
+                knowledge_assertion_id=row.assertion_id,
+                limitations=limitations,
+                contradictions=contradictions,
+            )
+        )
+    state = CoverageState.INCOMPLETE if truncated else CoverageState.SEARCHED_COMPLETE
+    return PlaneGather(
+        plane=ContextPlane.KNOWLEDGE_ASSERTION,
+        evidence=evidence,
+        coverage=[ContextCoverage(plane=ContextPlane.KNOWLEDGE_ASSERTION, state=state)],
+        incomplete=truncated,
     )

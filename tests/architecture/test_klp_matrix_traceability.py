@@ -48,7 +48,9 @@ MATRIX_SHA256: Final = "ee2f2f8fc81a3e5e3f73e618a18fbf296ecd2a752d50499bf2e725e2
 R6_BASIS_COMMIT: Final = "3f575c02570c8fa733ecdc7bf0284fedc3c1d980"
 
 #: The KLP work packages that have landed: their NEW paths must exist.
-LANDED_WPS: Final = frozenset({"KLP-WP-01", "KLP-WP-02", "KLP-WP-03", "KLP-WP-04", "KLP-WP-05"})
+LANDED_WPS: Final = frozenset(
+    {"KLP-WP-01", "KLP-WP-02", "KLP-WP-03", "KLP-WP-04", "KLP-WP-05", "KLP-WP-06"}
+)
 
 #: The slow/skip/xfail census of every EXISTS test module a KLP WP edits, taken
 #: at `R6_BASIS_COMMIT`. A WP may lower a count but never raise one (AC-080:
@@ -98,6 +100,8 @@ BASIS_SKIP_CENSUS: Final[dict[str, int]] = {
     # test_application_authorization, test_http_negative_evidence,
     # test_mcp_and_cli_negative_evidence); KLP-WP-03 already censused each above
     # at 0, so none is repeated. Its other edits are matrix EXISTS paths.
+    # KLP-WP-06 edits only matrix-listed modules (its owned paths plus
+    # test_knowledge_assertion_migration / test_knowledge_assertion_domain).
 }
 _SKIP_PATTERN: Final = re.compile(
     r"pytest\.mark\.(?:slow|skip|skipif|xfail)\b|pytest\.(?:skip|xfail)\(|importorskip\("

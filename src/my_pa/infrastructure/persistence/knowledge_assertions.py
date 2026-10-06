@@ -90,6 +90,7 @@ from my_pa.contracts.ports import (
     KnowledgeCheckpointRequest,
     KnowledgeCheckpointResult,
     KnowledgeConcurrentDuplicateError,
+    KnowledgeContextAnnotation,
     KnowledgeCreateEvidence,
     KnowledgeCreateRequest,
     KnowledgeEvidenceNotFoundError,
@@ -241,6 +242,9 @@ __all__ = [
     "KnowledgeSourceProfileConflictError",
     "KnowledgeSourceProfileRecord",
     "SqlKnowledgeAssertionRepository",
+    "assertion_effective_rank_at_least",
+    "assertion_effectively_restricted",
+    "assertion_evidence_unavailable",
     "assertion_withheld_remote",
     "classification_rank",
     "knowledge_event_withheld_remote",
@@ -252,6 +256,8 @@ __all__ = [
 KNOWLEDGE_CREATE_CAPABILITY: Final = Capability.KNOWLEDGE_ASSERTIONS_CREATE.value
 #: `knowledge_classification_rank('restricted_local')`.
 _RESTRICTED_RANK: Final = 2
+#: `knowledge_classification_rank('private_local')`.
+_PRIVATE_RANK: Final = 1
 #: SQLSTATE `lock_not_available` (a `NOWAIT` row lock held by another transaction).
 _LOCK_NOT_AVAILABLE: Final = "55P03"
 _LIVE: Final = (
@@ -293,7 +299,42 @@ def _restricted(value: ColumnElement[Any]) -> ColumnElement[bool]:
 
 
 def _evidence_withheld(evidence: Table, context: PrincipalContext) -> ColumnElement[bool]:
-    """Whether one linked evidence row makes its assertion `withheld_remote`."""
+    """Whether one linked evidence row makes its assertion `withheld_remote`.
+
+    The disjunction of the row's class term and its availability term (KLP-WP-06
+    split them so `context.prepare` can name each locally; the predicate is the
+    same one).
+    """
+    return or_(_evidence_restricted(evidence, context), _evidence_unavailable(evidence, context))
+
+
+def _evidence_unavailable(evidence: Table, context: PrincipalContext) -> ColumnElement[bool]:
+    """The R6 section 5.2 availability term of one linked evidence row."""
+    archived = lifecycle_selected(
+        evidence.c.capture_id, CaptureLifecycleSelector.ARCHIVED, context=context
+    )
+    assert archived is not None  # noqa: S101 - ARCHIVED always yields a condition
+    return or_(
+        and_(
+            evidence.c.identity_kind == _EXTERNAL,
+            or_(
+                evidence.c.availability_revalidation_pending,
+                evidence.c.availability_state.in_(_UNAVAILABLE),
+            ),
+        ),
+        and_(evidence.c.identity_kind == _CAPTURE, archived),
+    )
+
+
+def _evidence_restricted(
+    evidence: Table, context: PrincipalContext, rank: int = _RESTRICTED_RANK
+) -> ColumnElement[bool]:
+    """The R6 section 5.2 class term of one linked evidence row (no availability).
+
+    True when any class the term reads ranks at least `rank` (default
+    `restricted_local`); KLP-WP-06 also asks it at `private_local` to derive the
+    effective class without a MAX over classification text.
+    """
     # The cited row's own profile is joined *inside* this EXISTS, so every name
     # it reads off `evidence` is a direct correlation to the enclosing link
     # SELECT (a nested scalar subquery would not correlate two levels out).
@@ -318,38 +359,27 @@ def _evidence_withheld(evidence: Table, context: PrincipalContext) -> ColumnElem
             _PROFILE.c.source_profile_id == evidence.c.source_profile_id,
             _SIBLING.c.identity_kind == _EXTERNAL,
             _SIBLING.c.external_object_id == evidence.c.external_object_id,
-            _restricted(_SIBLING.c.source_classification),
+            classification_rank(_SIBLING.c.source_classification) >= rank,
         )
     )
     capture_restricted = exists(
         select(literal(1)).where(
             partition_criterion(_CAPTURE_VERSION, context),
             _CAPTURE_VERSION.c.capture_id == evidence.c.capture_id,
-            _restricted(_CAPTURE_VERSION.c.classification),
+            classification_rank(_CAPTURE_VERSION.c.classification) >= rank,
         )
     )
     memory_restricted = exists(
         select(literal(1)).where(
             partition_criterion(_MEMORY_VERSION, context),
             _MEMORY_VERSION.c.memory_id == evidence.c.relationship_memory_id,
-            _restricted(_MEMORY_VERSION.c.classification),
+            classification_rank(_MEMORY_VERSION.c.classification) >= rank,
         )
     )
-    archived = lifecycle_selected(
-        evidence.c.capture_id, CaptureLifecycleSelector.ARCHIVED, context=context
-    )
-    assert archived is not None  # noqa: S101 - ARCHIVED always yields a condition
     return or_(
-        _restricted(evidence.c.source_classification),
-        and_(
-            evidence.c.identity_kind == _EXTERNAL,
-            or_(
-                evidence.c.availability_revalidation_pending,
-                evidence.c.availability_state.in_(_UNAVAILABLE),
-                sibling_restricted,
-            ),
-        ),
-        and_(evidence.c.identity_kind == _CAPTURE, or_(capture_restricted, archived)),
+        classification_rank(evidence.c.source_classification) >= rank,
+        and_(evidence.c.identity_kind == _EXTERNAL, sibling_restricted),
+        and_(evidence.c.identity_kind == _CAPTURE, capture_restricted),
         and_(evidence.c.identity_kind == _MEMORY, memory_restricted),
     )
 
@@ -362,14 +392,51 @@ def assertion_withheld_remote(assertion: Table, principal_id: str) -> ColumnElem
     Record Event reader's family predicate alike.
     """
     context = capture_context(principal_id)
-    predecessor_restricted = exists(
-        select(literal(1)).where(
-            partition_criterion(_PREDECESSOR, context),
-            _PREDECESSOR.c.assertion_id == assertion.c.supersedes_assertion_id,
-            _restricted(_PREDECESSOR.c.classification),
-        )
+    return or_(
+        _restricted(assertion.c.classification),
+        _predecessor_restricted(assertion, context),
+        _assertion_linked(assertion, context, _evidence_withheld(_EVIDENCE, context)),
     )
-    evidence_withheld = exists(
+
+
+def assertion_effectively_restricted(assertion: Table, principal_id: str) -> ColumnElement[bool]:
+    """KLP-WP-06: effective(a) = 'restricted_local' (R6 5.2 without the availability term)."""
+    context = capture_context(principal_id)
+    return or_(
+        _restricted(assertion.c.classification),
+        _predecessor_restricted(assertion, context),
+        _assertion_linked(assertion, context, _evidence_restricted(_EVIDENCE, context)),
+    )
+
+
+def assertion_effective_rank_at_least(
+    assertion: Table, principal_id: str, rank: int
+) -> ColumnElement[bool]:
+    """KLP-WP-06 (F1): effective(a) ranks at least `rank` (R6 5.2, no availability term).
+
+    The same terms as `assertion_effectively_restricted` at any threshold, so the
+    effective class is read as two thresholds of `knowledge_classification_rank`
+    rather than a MAX over classification text.
+    """
+    context = capture_context(principal_id)
+    return or_(
+        classification_rank(assertion.c.classification) >= rank,
+        _predecessor_restricted(assertion, context, rank),
+        _assertion_linked(assertion, context, _evidence_restricted(_EVIDENCE, context, rank)),
+    )
+
+
+def assertion_evidence_unavailable(assertion: Table, principal_id: str) -> ColumnElement[bool]:
+    """KLP-WP-06: the R6 5.2 availability term of `assertion` (any linked row, any role)."""
+    context = capture_context(principal_id)
+    return _assertion_linked(assertion, context, _evidence_unavailable(_EVIDENCE, context))
+
+
+def _assertion_linked(
+    assertion: Table, context: PrincipalContext, evidence_term: ColumnElement[bool]
+) -> ColumnElement[bool]:
+    """EXISTS a link of `assertion` (any role) whose `_EVIDENCE` row satisfies `evidence_term`."""
+    return exists(
         select(literal(1))
         .select_from(
             _LINK.join(
@@ -384,13 +451,20 @@ def assertion_withheld_remote(assertion: Table, principal_id: str) -> ColumnElem
             partition_criterion(_LINK, context),
             partition_criterion(_EVIDENCE, context),
             _LINK.c.assertion_id == assertion.c.assertion_id,
-            _evidence_withheld(_EVIDENCE, context),
+            evidence_term,
         )
     )
-    return or_(
-        _restricted(assertion.c.classification),
-        predecessor_restricted,
-        evidence_withheld,
+
+
+def _predecessor_restricted(
+    assertion: Table, context: PrincipalContext, rank: int = _RESTRICTED_RANK
+) -> ColumnElement[bool]:
+    return exists(
+        select(literal(1)).where(
+            partition_criterion(_PREDECESSOR, context),
+            _PREDECESSOR.c.assertion_id == assertion.c.supersedes_assertion_id,
+            classification_rank(_PREDECESSOR.c.classification) >= rank,
+        )
     )
 
 
@@ -818,6 +892,52 @@ class SqlKnowledgeAssertionRepository(KnowledgeAssertionRepository):
             rows=tuple(_assertion_row(row) for row in rows[:limit]),
             has_more=len(rows) > limit,
         )
+
+    def context_annotations(
+        self, principal_id: str, assertion_ids: Sequence[str]
+    ) -> Mapping[str, KnowledgeContextAnnotation]:
+        """KLP-WP-06: the class, availability and counterevidence flags, in one SELECT.
+
+        Reuses the R6 section 5.2 terms of `assertion_withheld_remote` split
+        into its class and availability halves; reads no evidence column back.
+        """
+        if not assertion_ids:
+            return {}
+        a = knowledge_assertions
+        context = capture_context(principal_id)
+        counterevidence = exists(
+            select(literal(1)).where(
+                partition_criterion(_LINK, context),
+                _LINK.c.assertion_id == a.c.assertion_id,
+                _LINK.c.evidence_role == KnowledgeEvidenceRole.COUNTEREVIDENCE.value,
+            )
+        )
+        statement = select(
+            a.c.assertion_id,
+            assertion_effectively_restricted(a, principal_id).label("restricted"),
+            assertion_effective_rank_at_least(a, principal_id, _PRIVATE_RANK).label("private"),
+            assertion_evidence_unavailable(a, principal_id).label("unavailable"),
+            counterevidence.label("counterevidence"),
+        ).where(
+            partition_criterion(a, context),
+            a.c.assertion_id.in_(sorted(set(assertion_ids))),
+        )
+        rows = _translated(lambda: self._connection.execute(statement).all())
+        return {
+            row.assertion_id: KnowledgeContextAnnotation(
+                assertion_id=row.assertion_id,
+                effective_classification=(
+                    Classification.RESTRICTED_LOCAL
+                    if row.restricted
+                    else Classification.PRIVATE_LOCAL
+                    if row.private
+                    else Classification.SYNTHETIC_TEST
+                ),
+                evidence_unavailable=bool(row.unavailable),
+                counterevidence_linked=bool(row.counterevidence),
+            )
+            for row in rows
+        }
 
     def history(
         self, principal_id: str, assertion_id: str, *, remote: bool

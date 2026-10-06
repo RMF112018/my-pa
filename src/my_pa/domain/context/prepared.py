@@ -38,6 +38,8 @@ __all__ = [
     "CONTEXT_RANKING_VERSION",
     "DEFAULT_EVIDENCE_BYTES",
     "DEFAULT_EVIDENCE_ITEMS",
+    "KNOWLEDGE_ITEM_CONTRADICTIONS",
+    "KNOWLEDGE_ITEM_LIMITATIONS",
     "MAX_CONVERSATION_CONTEXT_CHARACTERS",
     "MAX_EVIDENCE_BYTES",
     "MAX_EVIDENCE_ITEMS",
@@ -126,6 +128,9 @@ class ContextPlane(StrEnum):
     CONTINUITY = "continuity"
     RELATIONSHIP = "relationship"
     MANAGED_DOCUMENT = "managed_document"
+    #: KLP-WP-06: accepted, product-owned Knowledge Assertions. Distinct from
+    #: extraction `KNOWLEDGE` (enrolled-source evidence), which is unchanged.
+    KNOWLEDGE_ASSERTION = "knowledge_assertion"
 
 
 class RetrievalMode(StrEnum):
@@ -143,6 +148,7 @@ class SourceAuthorityClass(StrEnum):
     PRODUCT_OWNED_CONTINUITY = "product_owned_continuity"
     PRODUCT_OWNED_RELATIONSHIP = "product_owned_relationship"
     MANAGED_DOCUMENT = "managed_document"
+    PRODUCT_OWNED_KNOWLEDGE_ASSERTION = "product_owned_knowledge_assertion"
 
 
 class EvidenceLifecycle(StrEnum):
@@ -192,12 +198,29 @@ class ContextLimitationCode(StrEnum):
     RESULT_TRUNCATED = "result_truncated"
     PREFERENCE_FILTERED = "preference_filtered"
     CAPTURE_WITHDRAWN = "capture_withdrawn"
+    #: KLP-WP-06 (KLP-AC-057): a cited Knowledge Assertion is
+    #: `revalidation_required`, or (locally) one of its linked evidence rows is
+    #: availability-pending, `permission_lost`, `deleted` or an archived Capture.
+    KNOWLEDGE_REVALIDATION_REQUIRED = "knowledge_revalidation_required"
 
 
 class ContradictionCode(StrEnum):
     """Closed codes for disclosed conflicts between cited evidence."""
 
     CONFLICTING_EVIDENCE = "conflicting_evidence"
+    #: KLP-WP-06 (KLP-AC-057): a cited Knowledge Assertion carries unresolved
+    #: counterevidence (a counterevidence link, or epistemic status `contested`).
+    KNOWLEDGE_COUNTEREVIDENCE = "knowledge_counterevidence"
+
+
+#: The per-item codes a Knowledge Assertion item may carry. Every other plane's
+#: items carry none, so their wire shape is byte-unchanged (KLP-AC-053).
+KNOWLEDGE_ITEM_LIMITATIONS: Final[frozenset[ContextLimitationCode]] = frozenset(
+    {ContextLimitationCode.KNOWLEDGE_REVALIDATION_REQUIRED}
+)
+KNOWLEDGE_ITEM_CONTRADICTIONS: Final[frozenset[ContradictionCode]] = frozenset(
+    {ContradictionCode.KNOWLEDGE_COUNTEREVIDENCE}
+)
 
 
 _PLANE_AUTHORITY: Final[dict[ContextPlane, SourceAuthorityClass]] = {
@@ -206,6 +229,7 @@ _PLANE_AUTHORITY: Final[dict[ContextPlane, SourceAuthorityClass]] = {
     ContextPlane.CONTINUITY: SourceAuthorityClass.PRODUCT_OWNED_CONTINUITY,
     ContextPlane.RELATIONSHIP: SourceAuthorityClass.PRODUCT_OWNED_RELATIONSHIP,
     ContextPlane.MANAGED_DOCUMENT: SourceAuthorityClass.MANAGED_DOCUMENT,
+    ContextPlane.KNOWLEDGE_ASSERTION: SourceAuthorityClass.PRODUCT_OWNED_KNOWLEDGE_ASSERTION,
 }
 
 
@@ -355,6 +379,9 @@ class PreparedContextEvidence:
     managed_document_id: str | None = None
     managed_document_version_id: str | None = None
     capture_lifecycle_state: str | None = None
+    knowledge_assertion_id: str | None = None
+    limitations: tuple[ContextLimitationCode, ...] = ()
+    contradictions: tuple[ContradictionCode, ...] = ()
 
     def __post_init__(self) -> None:
         try:
@@ -408,9 +435,50 @@ class PreparedContextEvidence:
                     "reveal_subject_id is not a well-formed identifier"
                 ) from exc
         self._validate_identity()
+        self._validate_item_codes()
+
+    def _validate_item_codes(self) -> None:
+        """KLP-AC-057: only a Knowledge Assertion item carries per-item codes."""
+        if any(not isinstance(code, ContextLimitationCode) for code in self.limitations):
+            raise PreparedContextError("item limitations must be ContextLimitationCode members")
+        if any(not isinstance(code, ContradictionCode) for code in self.contradictions):
+            raise PreparedContextError("item contradictions must be ContradictionCode members")
+        if len(set(self.limitations)) != len(self.limitations) or len(
+            set(self.contradictions)
+        ) != len(self.contradictions):
+            raise PreparedContextError("item codes must be distinct")
+        if self.authority_class is not SourceAuthorityClass.PRODUCT_OWNED_KNOWLEDGE_ASSERTION:
+            if self.limitations or self.contradictions:
+                raise PreparedContextError("only a knowledge assertion item carries item codes")
+            return
+        if not set(self.limitations) <= KNOWLEDGE_ITEM_LIMITATIONS:
+            raise PreparedContextError("a knowledge assertion item carries knowledge codes only")
+        if not set(self.contradictions) <= KNOWLEDGE_ITEM_CONTRADICTIONS:
+            raise PreparedContextError("a knowledge assertion item carries knowledge codes only")
 
     def _validate_identity(self) -> None:
+        if self.authority_class is not SourceAuthorityClass.PRODUCT_OWNED_KNOWLEDGE_ASSERTION:
+            _absent(self.knowledge_assertion_id, "knowledge_assertion_id")
         match self.authority_class:
+            case SourceAuthorityClass.PRODUCT_OWNED_KNOWLEDGE_ASSERTION:
+                # R6 11.5 A6: a `kasr_` and none of the other planes' identities.
+                _required_id(
+                    self.knowledge_assertion_id,
+                    IdKind.KNOWLEDGE_ASSERTION,
+                    "knowledge_assertion_id",
+                )
+                self._absent_source_and_capture()
+                _absent(self.product_id, "product_id")
+                _absent(self.managed_document_id, "managed_document_id")
+                _absent(self.managed_document_version_id, "managed_document_version_id")
+                if self.capture_lifecycle_state is not None:
+                    raise PreparedContextError(
+                        "capture_lifecycle_state cannot be set for this authority class"
+                    )
+                if self.reference_id != self.knowledge_assertion_id:
+                    raise PreparedContextError(
+                        "a knowledge assertion item is referenced by its assertion id"
+                    )
             case SourceAuthorityClass.ENROLLED_SOURCE:
                 _required_id(self.source_id, IdKind.SOURCE, "source_id")
                 _required_id(self.source_object_id, IdKind.SOURCE_OBJECT, "source_object_id")
@@ -472,6 +540,17 @@ class PreparedContextEvidence:
             raise PreparedContextError(f"product_id is not a {plane_name} identifier")
 
     def to_canonical_dict(self) -> dict[str, object]:
+        canonical = self._shared_canonical_dict()
+        if self.authority_class is SourceAuthorityClass.PRODUCT_OWNED_KNOWLEDGE_ASSERTION:
+            # Only this plane's items gain keys: every other item's wire shape
+            # is byte-unchanged (KLP-AC-053). The codes are always present here,
+            # empty or not, so a consumer cannot mistake absence for "none".
+            canonical["knowledge_assertion_id"] = self.knowledge_assertion_id
+            canonical["limitations"] = [code.value for code in self.limitations]
+            canonical["contradictions"] = [code.value for code in self.contradictions]
+        return canonical
+
+    def _shared_canonical_dict(self) -> dict[str, object]:
         return {
             "reference_id": self.reference_id,
             "principal_id": self.principal_id,
@@ -551,6 +630,7 @@ class PreparedContext:
             not isinstance(code, ContradictionCode) for code in self.contradictions_or_conflicts
         ):
             raise PreparedContextError("contradictions must be ContradictionCode members")
+        self._validate_knowledge_codes()
         for identifier in (*self.applied_subjects, *self.applied_preferences):
             try:
                 validate_identifier(identifier)
@@ -558,6 +638,21 @@ class PreparedContext:
                 raise PreparedContextError("applied identifiers are shape-validated only") from exc
         if len(self.applied_subjects) > MAX_SUBJECT_HINTS:
             raise PreparedContextError(f"at most {MAX_SUBJECT_HINTS} applied subjects")
+
+    def _validate_knowledge_codes(self) -> None:
+        """KLP-AC-057: a knowledge code is in the package exactly when an item carries it.
+
+        An item's code is never omitted from the package, and the package never
+        names a knowledge code no packed item carries.
+        """
+        carried_limitations = {code for item in self.evidence for code in item.limitations}
+        carried_contradictions = {code for item in self.evidence for code in item.contradictions}
+        named_limitations = set(self.limitations) & KNOWLEDGE_ITEM_LIMITATIONS
+        named_contradictions = set(self.contradictions_or_conflicts) & KNOWLEDGE_ITEM_CONTRADICTIONS
+        if named_limitations != carried_limitations:
+            raise PreparedContextError("package knowledge limitations must match its items")
+        if named_contradictions != carried_contradictions:
+            raise PreparedContextError("package knowledge contradictions must match its items")
 
     @property
     def total_items(self) -> int:

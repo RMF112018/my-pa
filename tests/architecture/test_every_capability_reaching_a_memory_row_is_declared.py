@@ -366,6 +366,9 @@ DECLARED: Final = frozenset(
         # KLP-WP-05: provenance applies the feed's own visibility predicate to
         # the event and to its cited triggers (the OD-8 memory term included).
         Capability.RECORD_EVENTS_PROVENANCE,
+        # KLP-WP-06: the Knowledge Assertion context plane applies the R6
+        # section 5.2 terms (remote withholding, local class/availability flags).
+        Capability.CONTEXT_PREPARE,
     }
 )
 
@@ -450,6 +453,14 @@ BEYOND_THE_NINE: Final = {
         "and `current_version_id` to `memory_version_id` under the Principal partition and "
         "compares the version's `classification`, and whose Knowledge term compares every "
         "cited memory version's `classification`. No memory column enters the answer."
+    ),
+    Capability.CONTEXT_PREPARE: (
+        "purpose `context_preparation`. `context.prepare` (KLP-WP-06) reads one of the eight "
+        "(`relationship_memory_versions`) and writes none of the eight, and only through the "
+        "Knowledge Assertion plane: a remote search applies the R6 section 5.2 "
+        "`withheld_remote` EXISTS, and every caller's item annotation applies its class term, "
+        "each comparing the `classification` of every version of a cited memory under the "
+        "Principal partition. No memory column enters the package."
     ),
     Capability.ENTITIES_SPLIT_PREVIEW: (
         "purpose `entity_identity_correction`. `entities.split.preview` reads three of the "
@@ -592,6 +603,11 @@ DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str
     # KLP-WP-05: the same predicate, on the event and its cited triggers.
     Capability.RECORD_EVENTS_PROVENANCE: (
         frozenset({"relationship_memories", "relationship_memory_versions"}),
+        frozenset(),
+    ),
+    # KLP-WP-06: the Knowledge Assertion context plane's section 5.2 terms.
+    Capability.CONTEXT_PREPARE: (
+        frozenset({"relationship_memory_versions"}),
         frozenset(),
     ),
     Capability.RELATIONSHIP_MEMORY_CREATE: (
@@ -3253,6 +3269,8 @@ def test_the_port_crossings_that_reach_a_memory_row_are_the_two_planes() -> None
             # branch applies the R6 section 5.3 proposal-effective-class term.
             "review_case",
             "review_cases",
+            # KLP-WP-06: the context plane's class/availability annotation.
+            "context_annotations",
         }
     ), (
         "the Knowledge plane's crossings are now "

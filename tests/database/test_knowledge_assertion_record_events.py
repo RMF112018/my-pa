@@ -77,6 +77,8 @@ from tests.database.test_knowledge_assertion_repository import (
 )
 from tests.database.test_knowledge_assertion_review import ReviewRuntime
 from tests.database.test_knowledge_assertion_submissions import (
+    EARLY,
+    LATER,
     PAYMENT,
     SubmitRuntime,
     add_direct_payment_head,
@@ -397,7 +399,11 @@ def test_review_accept_correct_and_supersede_stage_exactly_the_mapped_events(
     principal = new_principal()
     profile = reviewer.profile(principal)
     org = reviewer.entity(principal, "review-events")
-    first = reviewer.queue(principal, profile, org, candidate="r1", value="Synthetic net 30")
+    # Both bounds recorded and ordered: a Review supersession re-checks the
+    # KLP-AC-031 guards (fix round 4, DEV-66 ruling).
+    first = reviewer.queue(
+        principal, profile, org, candidate="r1", value="Synthetic net 30", effective_from=EARLY
+    )
     accepted = reviewer.decide(principal, str(first["review_case_id"]))
     (created,) = knowledge_events(reviewer.engine, principal)
     _assert_review_event(created, KnowledgeMutationKind.REVIEW_ACCEPT)
@@ -418,7 +424,7 @@ def test_review_accept_correct_and_supersede_stage_exactly_the_mapped_events(
         principal,
         str(second["review_case_id"]),
         Disposition.CORRECT_AND_ACCEPT,
-        patch={"value": "Synthetic net 75"},
+        patch={"value": "Synthetic net 75", "effective_from": LATER.isoformat()},
     )
     events = knowledge_events(reviewer.engine, principal)
     assert len(events) == 3

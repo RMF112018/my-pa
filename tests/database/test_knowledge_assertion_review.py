@@ -186,6 +186,7 @@ class ReviewRuntime(SubmitRuntime):
         subject_kind: KnowledgeSubjectKind = KnowledgeSubjectKind.ENTITY,
         value: str = "Synthetic net 30 terms",
         evidence: tuple[dict[str, object], ...] | None = None,
+        effective_from: datetime | None = None,
     ) -> dict[str, Any]:
         """File one proposal through the production submit; asserts `review_queued`."""
         result = self.submit(
@@ -197,6 +198,7 @@ class ReviewRuntime(SubmitRuntime):
             predicate=predicate,
             value=value,
             evidence=evidence,
+            effective_from=effective_from,
         )
         assert result["outcome"] == "review_queued", result
         return result

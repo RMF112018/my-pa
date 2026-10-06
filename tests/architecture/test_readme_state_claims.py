@@ -449,6 +449,10 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     185: "One hundred and eighty-five",
     186: "One hundred and eighty-six",
     187: "One hundred and eighty-seven",
+    # Extended at KLP-WP-04, whose submit and checkpoint took the public set to a
+    # hundred and eighty-nine.
+    188: "One hundred and eighty-eight",
+    189: "One hundred and eighty-nine",
 }
 
 
@@ -578,11 +582,14 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
         # KLP-WP-03: the Knowledge Assertion plane, an explicit name set behind
         # `MY_PA_KNOWLEDGE_ASSERTIONS_ENABLED` (default off), never a prefix.
         or capability in KNOWLEDGE_ASSERTION_DATA_NAMES
+        # KLP-WP-04: submit and checkpoint join the same switch's family.
+        or capability
+        in {Capability.KNOWLEDGE_ASSERTIONS_SUBMIT, Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT}
     }
     default = len(frozenset(_HANDLERS) - withheld_families)
     withheld = total - default
-    assert implemented == 187
-    assert len(withheld_families) == 76
+    assert implemented == 189
+    assert len(withheld_families) == 78
     assert unwired == set()
     # Phase B's additions all arrived on the withheld side; GSQS B0's pair is
     # composed by default, and `RI-ENT-WP-10`'s five record-family reads arrived
@@ -612,7 +619,9 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # KLP-WP-03's six Knowledge Assertion names are a fourth withheld family
     # (default-off switch), so the default is unchanged and the withheld figure
     # grows by six.
-    assert default == 111 and total == 187 and withheld == 76
+    # KLP-WP-04's submit and checkpoint join that fourth family, so the default
+    # is unchanged and the withheld figure grows by two.
+    assert default == 111 and total == 189 and withheld == 78
 
     # Exercise the same application and MCP publication composition that owns
     # the current 91-tool measurement. GoodNotes pull is part of that measured
@@ -707,7 +716,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     system_context_text = SYSTEM_CONTEXT.read_text(encoding="utf-8")
     assert f"wires {implemented} through HTTP, MCP, and CLI composition" in system_context_text
     system_context = system_context_text.lower()
-    assert "one hundred and eighty-seven capabilities" in system_context
+    assert "one hundred and eighty-nine capabilities" in system_context
     assert f"exposes {default} of them" in system_context
 
     architecture_index = (ROOT / "docs/architecture/00_ARCHITECTURE_INDEX.md").read_text(
@@ -716,11 +725,13 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     runbook = (ROOT / "ops/runbooks/mcp-and-cli-operations.md").read_text(encoding="utf-8")
     gateway_runbook = (ROOT / "ops/runbooks/gateway-operations.md").read_text(encoding="utf-8")
     assert f"default composition serves {default} of" in architecture_index
-    assert "one hundred and eighty-seven capabilities" in architecture_index
+    assert "one hundred and eighty-nine capabilities" in architecture_index
     assert f"**{default} application-available capabilities**" in runbook
     assert f"publishes **{default - 3} tools**" in runbook
     assert f"unconfigured local stdio: {default - 3}" in runbook
-    assert f"fully feature-composed local stdio: {implemented - 3}" in runbook
+    # KLP-WP-04: fully composed local stdio also withholds the two client-bound
+    # Knowledge discovery capabilities (three GoodNotes pull + two = five).
+    assert f"fully feature-composed local stdio: {implemented - 5}" in runbook
     assert f"{implemented} have application commands/handlers" in runbook
     assert f"all {implemented} implemented tools" in runbook
     normalized_runbook = " ".join(runbook.split()).lower()
@@ -767,7 +778,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert completion_unwired_claim in normalized_completion_state
 
     module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
-    assert "one hundred and eighty-seven capabilities" in module_boundaries
+    assert "one hundred and eighty-nine capabilities" in module_boundaries
 
 
 def test_readme_declares_apple_first_personal_data_ingestion() -> None:

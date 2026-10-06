@@ -3,12 +3,16 @@
  *
  * Capture proposals keep `captureId` / `versionId`. GoodNotes rows keep the
  * identifiers the listing actually returned and never borrow a capture id.
+ * Knowledge Assertion rows keep what the fact is about, its predicate and the
+ * read-only candidate (value, bounds, cited evidence ids, current holder) and
+ * never borrow a capture id. Unknown rows stay unknown: only the case id and
+ * the reported kind cross over, with nothing to decide against.
  * The listing still carries no proposal text, evidence span, or impact summary.
  */
 import type { ReviewCase } from "@/lib/api/decode/capabilities/review.list";
 import type { BackendReviewCase } from "@/contracts/views";
 
-function listingFields(row: ReviewCase) {
+function listingFields(row: Exclude<ReviewCase, { subject_kind: "unknown" }>) {
   return {
     reviewCaseId: row.review_case_id,
     proposalId: row.proposal_id,
@@ -21,6 +25,32 @@ function listingFields(row: ReviewCase) {
 }
 
 export function toBackendReviewCase(row: ReviewCase): BackendReviewCase {
+  if (row.subject_kind === "unknown") {
+    return {
+      subjectKind: "unknown",
+      reviewCaseId: row.review_case_id,
+      reportedSubjectKind: row.reported_subject_kind,
+    };
+  }
+  if (row.subject_kind === "knowledge_assertion") {
+    return {
+      ...listingFields(row),
+      subjectKind: "knowledge_assertion",
+      subjectKindOfFact: row.subject_kind_of_fact,
+      subjectId: row.subject_id,
+      predicateCode: row.predicate_code,
+      reviewRequirement: row.review_requirement,
+      valueType: row.value_type,
+      value: row.value,
+      qualifier: row.qualifier,
+      effectiveFrom: row.effective_from,
+      effectiveTo: row.effective_to,
+      evidenceRefIds: row.evidence_ref_ids,
+      currentAssertionId: row.current_assertion_id,
+      currentValue: row.current_value,
+      proposalType: row.predicate_code,
+    };
+  }
   if (row.subject_kind === "capture_proposal") {
     return {
       ...listingFields(row),

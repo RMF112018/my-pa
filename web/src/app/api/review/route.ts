@@ -53,6 +53,8 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({
     shape: "backend",
     cases: result.review_cases.map(toBackendReviewCase),
+    // KLP-AC-135: rows the decoder dropped are counted, not silently discarded.
+    droppedRows: result.dropped_row_count,
     disclosure: backendDisclosure(SCOPE, outcome.disclosure, transportLimitations()),
   });
 }

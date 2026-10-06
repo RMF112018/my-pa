@@ -81,7 +81,9 @@ export default async function ReviewPage() {
   const answer = surfaceAnswer(
     `${SCOPE}:review.list`,
     await invokeGateway(principal, "review.list"),
-    (result) => result.review_cases.length,
+    // KLP-AC-135: a dropped row is still a listed case, so a page of only
+    // dropped rows is not an empty queue.
+    (result) => result.review_cases.length + result.dropped_row_count,
   );
 
   if (answer.kind === "unavailable") {
@@ -126,13 +128,19 @@ export default async function ReviewPage() {
             testId="review-queue-degraded-empty"
           />
         ) : (
-          <BackendReviewWorkbench cases={answer.result.review_cases.map(toBackendReviewCase)} />
+          <BackendReviewWorkbench
+            cases={answer.result.review_cases.map(toBackendReviewCase)}
+            droppedRows={answer.result.dropped_row_count}
+          />
         )}
       </>,
     );
   }
 
   return frame(
-    <BackendReviewWorkbench cases={answer.result.review_cases.map(toBackendReviewCase)} />,
+    <BackendReviewWorkbench
+      cases={answer.result.review_cases.map(toBackendReviewCase)}
+      droppedRows={answer.result.dropped_row_count}
+    />,
   );
 }

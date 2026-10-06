@@ -59,6 +59,7 @@ statement runs.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import Any, Final, cast
 
 from sqlalchemy import (
@@ -79,16 +80,19 @@ from sqlalchemy import (
     true,
 )
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.exc import InterfaceError, OperationalError, SQLAlchemyError
+from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError, SQLAlchemyError
 
 from my_pa.contracts.ports import (
     EvidenceUnavailableError,
+    PortError,
     RecordEventFeedItem,
     RecordEventPage,
     RecordEventReader,
     RecordEventStager,
     RecordEventWriter,
     RepositoryFailureError,
+    TransactionConflictError,
+    is_transaction_conflict,
 )
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.record_events import (
@@ -132,8 +136,10 @@ __all__ = [
     "RecordEventBuffer",
     "SqlRecordEventReader",
     "SqlRecordEventWriter",
+    "TriggerReceipt",
     "feed_reader_memory_relation_names",
     "flush_record_events",
+    "trigger_receipts",
 ]
 
 #: The allocator's one conflict target: the Principal's own sequence row.
@@ -252,6 +258,19 @@ def _single_principal(drafts: Sequence[RecordEventDraft]) -> str:
     return next(iter(principals))
 
 
+def _classified(error: DBAPIError, unavailable: str) -> PortError:
+    """The port error one driver failure is: conflict, unavailable or this system's fault.
+
+    The transaction-conflict SQLSTATEs (`40P01`, `40001`) are checked before the
+    `OperationalError` branch they would otherwise fall into (KLP-AC-122).
+    """
+    if is_transaction_conflict(error):
+        return TransactionConflictError("the transaction lost a race")
+    if isinstance(error, (OperationalError, InterfaceError)):
+        return EvidenceUnavailableError(unavailable)
+    return RepositoryFailureError("the request could not be completed")
+
+
 def flush_record_events(writer: RecordEventWriter, drafts: Sequence[RecordEventDraft]) -> None:
     """Sequence `drafts` in one batch and insert them in stage order, translated.
 
@@ -265,8 +284,9 @@ def flush_record_events(writer: RecordEventWriter, drafts: Sequence[RecordEventD
     try:
         first = writer.allocate(principal_id, len(drafts))
         writer.insert(first, drafts)
-    except (OperationalError, InterfaceError):
-        failure: Exception = EvidenceUnavailableError("the store could not be written")
+    except DBAPIError as error:
+        # KLP-WP-04 (R6 section 8.4): a deadlock or serialization victim first.
+        failure: Exception = _classified(error, "the store could not be written")
     except (SQLAlchemyError, IsolationLevelError):
         failure = RepositoryFailureError("the request could not be completed")
     else:
@@ -527,11 +547,55 @@ def _translated[ResultT](work: Callable[[], ResultT]) -> ResultT:
     """Run one read, translating a store failure as `flush_record_events` does."""
     try:
         return work()
-    except (OperationalError, InterfaceError):
-        failure: Exception = EvidenceUnavailableError("the store could not be read")
+    except DBAPIError as error:
+        # KLP-WP-04 (R6 section 8.4): a deadlock or serialization victim first.
+        failure: Exception = _classified(error, "the store could not be read")
     except (SQLAlchemyError, IsolationLevelError):
         failure = RepositoryFailureError("the request could not be completed")
     raise failure
+
+
+@dataclass(frozen=True, slots=True)
+class TriggerReceipt:
+    """KLP-WP-04: one cited trigger event as autonomous submit's C2 read sees it."""
+
+    event_id: str
+    record_family: str
+    source_receipt_id: str | None
+    visible: bool
+
+
+def trigger_receipts(
+    connection: Connection, principal_id: str, event_ids: Sequence[str]
+) -> dict[str, TriggerReceipt]:
+    """KLP-WP-04 (R6 9.1): the cited events of this Principal and whether a remote caller sees them.
+
+    The feed module's own read (the only importer of the feed tables): family,
+    `source_receipt_id` and the full remote visibility predicate (restricted
+    memory, restricted capture and Knowledge withholding) for each owned event.
+    An absent or foreign id is simply missing from the answer.
+    """
+    if not event_ids:
+        return {}
+    families = frozenset(RecordEventFamily)
+    statement = select(
+        record_events.c.event_id,
+        record_events.c.record_family,
+        record_events.c.source_receipt_id,
+        not_(_withheld_remotely(record_events, principal_id, families)).label("visible"),
+    ).where(
+        partition_criterion(record_events, capture_context(principal_id)),
+        record_events.c.event_id.in_(sorted(set(event_ids))),
+    )
+    return {
+        row.event_id: TriggerReceipt(
+            event_id=row.event_id,
+            record_family=row.record_family,
+            source_receipt_id=row.source_receipt_id,
+            visible=bool(row.visible),
+        )
+        for row in connection.execute(statement)
+    }
 
 
 class SqlRecordEventReader(RecordEventReader):

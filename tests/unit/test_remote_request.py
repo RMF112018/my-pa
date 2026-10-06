@@ -1042,3 +1042,120 @@ def test_compose_refuses_a_server_owned_knowledge_field(field: str) -> None:
             principal=principal,
             grants=grants,
         )
+
+
+# ---- KLP-WP-04 (KLP-AC-018: the discovery pair) --------------------------------------
+
+_DISCOVERY_PRINCIPAL = Principal(
+    principal_id="prn_remoterequest0004", kind=PrincipalKind.OPERATOR, authenticated=True
+)
+_SUBMIT_PAYLOAD: dict[str, Any] = {
+    "source_profile_id": "kdsp_remoterequest0001",
+    "external_run_id": "run-1",
+    "external_candidate_id": "candidate-1",
+    "subject_kind": "principal",
+    "subject_id": "prn_remoterequest0004",
+    "predicate_code": "policy.requirement",
+    "value": "A remote observation",
+    "evidence": [
+        {
+            "identity_kind": "external_object",
+            "external_object_id": "object-1",
+            "content_hash": "a" * 64,
+            "role": "direct",
+        }
+    ],
+}
+_CHECKPOINT_PAYLOAD: dict[str, Any] = {
+    "source_profile_id": "kdsp_remoterequest0001",
+    "expected_version": 0,
+    "external_run_id": "run-1",
+    "submitted_candidate_count": 1,
+    "checkpoint_kind": "synthetic",
+    "private_envelope": "opaque-state",
+}
+
+
+def _compose_discovery(capability: Capability, payload: dict[str, Any]) -> dict[str, Any]:
+    return compose_remote_arguments(
+        capability_name=capability.value,
+        arguments={"payload": payload},
+        principal=_DISCOVERY_PRINCIPAL,
+        grants=frozenset({(capability, Purpose.KNOWLEDGE_ASSERTION_OBSERVATION)}),
+    )
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "principal_id",
+        "actor_class",
+        "authority",
+        "authority_class",
+        "source_classification",
+        "classification",
+        "independence_key",
+        "epistemic_status",
+    ],
+)
+@pytest.mark.parametrize(
+    ("capability", "payload"),
+    [
+        (Capability.KNOWLEDGE_ASSERTIONS_SUBMIT, _SUBMIT_PAYLOAD),
+        (Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT, _CHECKPOINT_PAYLOAD),
+    ],
+    ids=["submit", "checkpoint"],
+)
+def test_compose_refuses_a_server_owned_field_on_the_discovery_pair(
+    field: str, capability: Capability, payload: dict[str, Any]
+) -> None:
+    _compose_discovery(capability, payload)  # the control composes
+    with pytest.raises(InvalidRequestError):
+        _compose_discovery(capability, {**payload, field: "forged"})
+    with pytest.raises(InvalidRequestError):
+        compose_remote_arguments(
+            capability_name=capability.value,
+            arguments={"payload": payload, field: "forged"},
+            principal=_DISCOVERY_PRINCIPAL,
+            grants=frozenset({(capability, Purpose.KNOWLEDGE_ASSERTION_OBSERVATION)}),
+        )
+
+
+@pytest.mark.parametrize(
+    ("capability", "payload"),
+    [
+        (Capability.KNOWLEDGE_ASSERTIONS_SUBMIT, _SUBMIT_PAYLOAD),
+        (Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT, _CHECKPOINT_PAYLOAD),
+    ],
+    ids=["submit", "checkpoint"],
+)
+def test_a_caller_idempotency_key_is_refused_on_the_discovery_pair(
+    capability: Capability, payload: dict[str, Any]
+) -> None:
+    with pytest.raises(InvalidRequestError):
+        _compose_discovery(capability, {**payload, "idempotency_key": "chosen-by-model"})
+
+
+def test_the_checkpoint_key_is_the_server_stamped_payload_hash() -> None:
+    """R6 section 6.1: a checkpoint replays on its key, which the server stamps."""
+    first = _compose_discovery(Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT, _CHECKPOINT_PAYLOAD)
+    again = _compose_discovery(Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT, _CHECKPOINT_PAYLOAD)
+    changed = _compose_discovery(
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT, {**_CHECKPOINT_PAYLOAD, "expected_version": 1}
+    )
+    key = first["payload"]["idempotency_key"]
+    assert key.startswith("idk_")
+    assert again["payload"]["idempotency_key"] == key
+    assert changed["payload"]["idempotency_key"] != key
+    _metadata, command = normalize(Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT.value, first)
+    assert command.idempotency_key == key  # type: ignore[union-attr]
+
+
+def test_submit_carries_no_key_and_replays_on_its_candidate_identity() -> None:
+    composed = _compose_discovery(Capability.KNOWLEDGE_ASSERTIONS_SUBMIT, _SUBMIT_PAYLOAD)
+    assert "idempotency_key" not in composed["payload"]
+    _metadata, command = normalize(Capability.KNOWLEDGE_ASSERTIONS_SUBMIT.value, composed)
+    assert (command.external_run_id, command.external_candidate_id) == (  # type: ignore[union-attr]
+        "run-1",
+        "candidate-1",
+    )

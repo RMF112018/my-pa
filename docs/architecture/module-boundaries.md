@@ -130,14 +130,16 @@ vertical slice should be created. `adapters/mcp` and `adapters/cli` were named
 above by `D-23` before either existed; WP-4B2b built both, and the amendment
 here is that sentence catching up rather than a change of shape. `apps/cli/`
 now holds operator programs including `migration.py`, `invoke.py`, `sources.py`,
-and the later capture, managed-document, GoodNotes, and identity commands;
+and the later capture, managed-document, GoodNotes, and identity commands,
+and `knowledge_source_profiles.py` (KLP-WP-04: Knowledge discovery source
+profiles and their maintenance, an operator command and not a capability);
 `apps/gateway.py` serves both surfaces section 5.10 gives it,
 HTTP under `run` and MCP under `mcp`. Every other reserved directory still holds
 a README and nothing else.
 
 The operator commands and transport entry point share this directory, and the split is
 the reason they sit together rather than a reason to separate them. The public
-vocabulary contains one hundred and eighty-seven capabilities. `invoke.py`
+vocabulary contains one hundred and eighty-nine capabilities. `invoke.py`
 accepts any of those names, but only the one hundred and sixty-six command-backed
 names normalize and invoke;
 the six Run 01 names return the canonical unsupported response until their
@@ -271,6 +273,13 @@ Bootstrap loads validated configuration, constructs implementations, and attache
 - `apps.gateway`: HTTP/MCP surfaces;
 - `apps.worker`: bounded polling/lease execution;
 - `apps.cli`: operator commands.
+
+
+Knowledge client roles (KLP-WP-04) are composition, not capabilities:
+`bootstrap/knowledge_discovery_profiles.py` binds the discovery and
+operator-review allowlists from `Settings` to their fixed profiles, and
+`apps.gateway` applies that overlay to both capabilities and purposes before any
+grant is used.
 
 
 Configuration uses `MY_PA_` and inert examples. Secrets enter at runtime only. Active former-employer naming is prohibited.

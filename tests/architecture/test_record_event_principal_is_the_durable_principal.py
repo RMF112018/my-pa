@@ -51,6 +51,13 @@ STORED_ROOTS: Final = frozenset(
         # The privilege preflight appends one rolled-back probe event for the
         # durable local operator. It does not mint a principal.
         "capture_principal_id(LOCAL_OPERATOR_UUID)",
+        # KLP-WP-04: the Knowledge source-profile operator command
+        # (`apps/cli/knowledge_source_profiles.py main`) stages the maintenance
+        # events of its classification/availability writes for the one durable
+        # local-operator Principal this process serves -- the binding
+        # `apps/cli/clients.py` already uses. It is refused (no Principal) in
+        # entra mode and has no `--principal-id` flag.
+        "settings.admissible_client_principal_id()",
     }
 )
 #: MR-10: the ONE enumerated argument-supplied root, named by path.
@@ -73,6 +80,13 @@ UNCALLED_ENTRIES: Final = frozenset(
         ("src/my_pa/application/tasks.py", "unarchive"),
         ("src/my_pa/application/tasks.py", "update_description"),
         ("src/my_pa/application/tasks.py", "update_title"),
+        # KLP-WP-04 slice B1: the single availability ingress. Its production
+        # callers (submit / checkpoint synchronization) land in slice B2, which
+        # removes this entry; until then only tests call it.
+        (
+            "src/my_pa/infrastructure/persistence/knowledge_assertions.py",
+            "record_evidence_availability",
+        ),
     }
 )
 

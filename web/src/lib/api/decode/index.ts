@@ -20,6 +20,7 @@ import { decodeCapabilitiesGet } from "./capabilities/capabilities.get";
 import { decodeKnowledgeSearch } from "./capabilities/knowledge.search";
 import { decodeKnowledgeRead } from "./capabilities/knowledge.read";
 import { decodeKnowledgeReveal } from "./capabilities/knowledge.reveal";
+import { decodeKnowledgeAssertionsRead } from "./capabilities/knowledge.assertions.read";
 import { decodeCaptureCreate } from "./capabilities/capture.create";
 import { decodeCaptureList } from "./capabilities/capture.list";
 import { decodeCaptureRead } from "./capabilities/capture.read";
@@ -133,6 +134,7 @@ export const DECODERS = {
   "knowledge.search": decodeKnowledgeSearch,
   "knowledge.read": decodeKnowledgeRead,
   "knowledge.reveal": decodeKnowledgeReveal,
+  "knowledge.assertions.read": decodeKnowledgeAssertionsRead,
   "capture.create": decodeCaptureCreate,
   "capture.list": decodeCaptureList,
   "capture.read": decodeCaptureRead,

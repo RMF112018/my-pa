@@ -435,7 +435,7 @@ def test_no_path_grants_every_capability_enum_member() -> None:
     assert Capability.SOURCES_ENROLL not in desired
     assert Capability.GSQS_START not in desired
     assert Capability.CONTINUITY_TASKS_CREATE not in desired
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v6"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v7"
 
 
 def test_mismatched_purpose_or_write_is_add_not_noop() -> None:
@@ -689,7 +689,7 @@ def test_a_v2_converged_client_plans_exactly_the_six_meeting_adds() -> None:
         scope=SCOPE,
     )
     assert not diff.is_healthy()
-    assert diff.profile_version == "chatllm-data-v6"
+    assert diff.profile_version == "chatllm-data-v7"
     assert diff.add == _MEETINGS
     assert diff.renew == frozenset()
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
@@ -712,7 +712,7 @@ def test_a_v3_converged_client_plans_exactly_the_record_events_add() -> None:
         scope=SCOPE,
     )
     assert not diff.is_healthy()
-    assert diff.profile_version == "chatllm-data-v6"
+    assert diff.profile_version == "chatllm-data-v7"
     assert diff.add == feed
     assert diff.renew == frozenset()
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
@@ -739,7 +739,7 @@ def test_a_v4_converged_client_plans_exactly_the_capture_lifecycle_adds() -> Non
         scope=SCOPE,
     )
     assert not diff.is_healthy()
-    assert diff.profile_version == "chatllm-data-v6"
+    assert diff.profile_version == "chatllm-data-v7"
     assert diff.add == lifecycle
     assert diff.renew == frozenset()
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
@@ -843,7 +843,7 @@ def test_v6_demands_the_knowledge_grants_only_when_the_plane_is_composed() -> No
         resource=RESOURCE,
         scope=SCOPE,
     )
-    assert diff.profile_version == "chatllm-data-v6"
+    assert diff.profile_version == "chatllm-data-v7"
     assert diff.add == _KNOWLEDGE
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
     added = {action.capability: action for action in actions if action.kind == "add"}
@@ -858,8 +858,47 @@ def test_v6_demands_the_knowledge_grants_only_when_the_plane_is_composed() -> No
 
 
 def test_v6_publishes_no_submit_or_checkpoint_control_plane_name() -> None:
-    values = {capability.value for capability in Capability}
-    assert "knowledge.assertions.submit" not in values
-    assert "knowledge.discovery.checkpoint" not in values
+    """What `chatllm-data-v6` held stays true under v7, for every composition.
+
+    The node id is kept from KLP-WP-03 (KLP-AC-080: no collected node disappears
+    without a matrix replacement). v6 published neither name because neither was
+    declared; v7 declares both and still publishes neither: across all sixty-four
+    plane compositions the ordinary desired catalog never holds them.
+    """
+    discovery = {Capability.KNOWLEDGE_ASSERTIONS_SUBMIT, Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT}
+    for bits in range(64):
+        planes = ChatLLMCompositionPlanes(
+            managed_documents=bool(bits & 1),
+            relationship_intelligence=bool(bits & 2),
+            relationship_intelligence_writes=bool(bits & 4),
+            relationship_memory=bool(bits & 8),
+            constraints=bool(bits & 16),
+            knowledge_assertions=bool(bits & 32),
+        )
+        desired = desired_effective_capabilities(
+            composed_capabilities(frozenset(Capability), planes)
+        )
+        assert not discovery & desired, planes
+
+
+def test_v7_excludes_submit_and_checkpoint_from_the_ordinary_profile() -> None:
+    """KLP-WP-04 (KLP-AC-019/106): declared, and never data management or desired."""
+    for capability in (
+        Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
+    ):
+        assert not is_chatllm_data_management(capability)
+        composed = composed_capabilities(
+            frozenset(Capability),
+            ChatLLMCompositionPlanes(
+                managed_documents=True,
+                relationship_intelligence=True,
+                relationship_intelligence_writes=True,
+                relationship_memory=True,
+                constraints=True,
+                knowledge_assertions=True,
+            ),
+        )
+        assert capability not in desired_effective_capabilities(composed)
     for capability in _KNOWLEDGE:
         assert is_chatllm_data_management(capability)

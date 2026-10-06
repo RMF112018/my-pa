@@ -723,11 +723,13 @@ def test_the_downgrade_refusal_names_exactly_the_new_vocabulary() -> None:
 def test_the_schema_ahead_contract_is_the_matrix_gap_table() -> None:
     """AC-109/AC-132: the one home of the gap rows, at the landed head, empty at `wp06`.
 
-    KLP-WP-03 has landed, so the head is `wp03`; WP-04..06 each bump it.
+    KLP-WP-04 declares submit, checkpoint and `knowledge_assertion_observation`, so
+    the head is `wp04` (bumped in the same change, as the FAST gap guard requires);
+    WP-05 and WP-06 each bump it again.
     """
     module = _matrix()["schema_ahead_contract_module"]
     assert module["path"] == "tests/schema/knowledge_schema_ahead_contract.py"
-    assert contract.KNOWLEDGE_WP_HEAD == "wp03"
+    assert contract.KNOWLEDGE_WP_HEAD == "wp04"
     assert set(contract.GAP_ROWS) == set(module["rows"])
     assert (
         tuple(_matrix()["migration_contract"]["schema_ahead_gap_families"]) == contract.GAP_FAMILIES
@@ -747,7 +749,7 @@ def test_the_schema_ahead_contract_is_the_matrix_gap_table() -> None:
     assert row["context_plane"] == frozenset(alters["A4"]["added_values"])
     assert row["source_authority_class"] == frozenset(alters["A5"]["added_values"])
     source = (ROOT / module["path"]).read_text(encoding="utf-8")
-    assert re.search(r'^KNOWLEDGE_WP_HEAD: Final\[KnowledgeWpHead\] = "wp03"$', source, re.M)
+    assert re.search(r'^KNOWLEDGE_WP_HEAD: Final\[KnowledgeWpHead\] = "wp04"$', source, re.M)
     assert 'KnowledgeWpHead = Literal["wp02", "wp03", "wp04", "wp05", "wp06"]' in source
 
 
@@ -2389,6 +2391,25 @@ def test_each_check_refuses_its_minimal_violation_in_isolation(
         assert _refused(graph, table=table, **{**BASE[table], **override}) == (
             CHECK_VIOLATION,
             name,
+        )
+    finally:
+        savepoint.rollback()
+
+
+@pytest.mark.database
+@pytest.mark.parametrize("origin", ["onedrive", "onedrive_files", "one_drive"])
+def test_a_onedrive_profile_is_unrepresentable(graph: Connection, origin: str) -> None:
+    """KLP-AC-065, DDL half (KLP-WP-04): no origin_system token admits OneDrive.
+
+    The provisioner refuses every OneDrive spelling before it writes
+    (`tests/unit/test_knowledge_source_profile_provisioner.py`); this is the
+    database backstop under it.
+    """
+    savepoint = graph.begin_nested()
+    try:
+        assert _refused(graph, table=_PR, **{**BASE[_PR], "origin_system": origin}) == (
+            CHECK_VIOLATION,
+            "knowledge_profile_origin_system_is_known",
         )
     finally:
         savepoint.rollback()

@@ -30,6 +30,16 @@
  * `correct` and `unresolved`; the domain calls them `correct_and_accept` and
  * `mark_unresolved`. The map lives in `contracts/gateway.json` and a parity test
  * checks every value against the Python enum.
+ *
+ * **`invalidate` is backend-only (KLP R6 section 10.2).** The workbench offers
+ * it on Knowledge Assertion cases, alongside accept, reject, defer and
+ * mark-unresolved; it has no synthetic-fixture transition, so the synthetic
+ * branch refuses it as an unknown verb. Which disposition a case admits is the
+ * backend's to decide — a Knowledge case answers `unsupported` for
+ * reprocess/escalate and `invalid_request(corrected_value)` for a free-text
+ * correction — so this tier forwards the typed verb and never a
+ * `correction_patch` (R6 has no typed patch editor; the workbench hides Correct
+ * on Knowledge rows).
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { requirePrincipal, readCleanBody } from "@/lib/api/guard";
@@ -43,10 +53,18 @@ import {
   syntheticDecisionReceipt,
 } from "@/lib/fixtures/review";
 import { syntheticDisclosure } from "@/lib/fixtures/pulse";
-import type { ReviewDisposition, ReviewDecisionReceipt } from "@/contracts/views";
+import type {
+  BackendReviewDisposition,
+  ReviewDisposition,
+  ReviewDecisionReceipt,
+} from "@/contracts/views";
 
-/** The five verbs the workbench may submit, read off the shared contract. */
-const DISPOSITIONS = contract.dispositions as Record<string, string>;
+/** The verbs the workbench may submit, read off the shared contract. */
+const DISPOSITIONS = contract.dispositions as Record<BackendReviewDisposition, string>;
+
+function isBackendDisposition(value: unknown): value is BackendReviewDisposition {
+  return typeof value === "string" && Object.hasOwn(DISPOSITIONS, value);
+}
 
 function refuse(code: string, message: string, status: number): NextResponse {
   return NextResponse.json({ error: { errorClass: "validation", code, message } }, { status });
@@ -69,11 +87,7 @@ export async function POST(
   const scope = `review:${id}:decide`;
 
   const disposition = parsed.body["disposition"];
-  if (
-    typeof disposition !== "string" ||
-    !(disposition in DISPOSITIONS) ||
-    !REVIEW_DISPOSITIONS.includes(disposition as ReviewDisposition)
-  ) {
+  if (!isBackendDisposition(disposition)) {
     return refuse(
       "invalid_disposition",
       `disposition must be one of: ${Object.keys(DISPOSITIONS).join(", ")}`,
@@ -104,6 +118,13 @@ export async function POST(
   if (serving.kind === "refused") return serving.response;
 
   if (serving.kind === "synthetic") {
+    if (!REVIEW_DISPOSITIONS.includes(disposition as ReviewDisposition)) {
+      return refuse(
+        "invalid_disposition",
+        `disposition must be one of: ${REVIEW_DISPOSITIONS.join(", ")}`,
+        400,
+      );
+    }
     // The case must live in the caller's own partition. Foreign or unknown ids
     // are indistinguishable — never confirm another principal's case exists.
     const owned = syntheticReviewCases(guard.principal).some((c) => c.reviewCaseId === id);

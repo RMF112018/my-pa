@@ -100,6 +100,7 @@ from my_pa.application.commands import (
     BindEntityIdentifier,
     BulkConfirmTasks,
     BulkPreviewTasks,
+    CheckpointKnowledgeDiscovery,
     CloseCommitment,
     CloseConstraint,
     CloseConstraintWithFollowUp,
@@ -260,6 +261,7 @@ from my_pa.application.commands import (
     SplitEntity,
     StartGsqsB0,
     SubmitGoodNotesProposal,
+    SubmitKnowledgeAssertion,
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
     SupersedeEntityName,
@@ -287,6 +289,7 @@ from my_pa.domain.common.identifiers import IdKind, make_identifier
 from my_pa.domain.common.provenance import Provenance
 from my_pa.domain.context.preference import ContextPreferenceAction
 from my_pa.domain.identity.operation import Capability, permitted_purposes
+from my_pa.domain.identity.operator_surface import OperatorSurface
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.intelligence.catalog import (
@@ -299,7 +302,10 @@ from my_pa.domain.intelligence.catalog import (
     ResolverSetId,
     SourceLaneId,
 )
-from my_pa.domain.knowledge_assertion.vocabulary import KnowledgeSubjectKind
+from my_pa.domain.knowledge_assertion.vocabulary import (
+    KnowledgeCheckpointKind,
+    KnowledgeSubjectKind,
+)
 from my_pa.domain.project_controls.constraint import ConstraintLifecycleState
 from my_pa.domain.project_controls.party import PartyKind, PartyRef
 from my_pa.domain.project_controls.sync import (
@@ -415,6 +421,9 @@ _UNCOMPOSED_CAPABILITIES = frozenset(
         Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
         Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
         Capability.KNOWLEDGE_ASSERTIONS_CREATE,
+        # KLP-WP-04: the discovery pair, on the same switch.
+        Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
     }
 )
 
@@ -1499,6 +1508,34 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "value": "A synthetic knowledge value",
             "idempotency_key": "http-knowledge-create-0001",
         },
+        Capability.KNOWLEDGE_ASSERTIONS_SUBMIT: {
+            "source_profile_id": "kdsp_httpknowledge0001",
+            "external_run_id": "http-run",
+            "external_candidate_id": "http-candidate",
+            "subject_kind": "principal",
+            "subject_id": scene.principal.principal_id,
+            "predicate_code": "policy.requirement",
+            "value": "A http observed value",
+            "effective_from": "2026-10-01T00:00:00+00:00",
+            "evidence": [
+                {
+                    "identity_kind": "external_object",
+                    "external_object_id": "http-object",
+                    "content_hash": "c" * 64,
+                    "role": "direct",
+                }
+            ],
+            "trigger_event_ids": ["rcev_httpknowledge0001"],
+        },
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT: {
+            "source_profile_id": "kdsp_httpknowledge0001",
+            "expected_version": 0,
+            "external_run_id": "http-run",
+            "submitted_candidate_count": 1,
+            "checkpoint_kind": "synthetic",
+            "private_envelope": "http-opaque-state",
+            "idempotency_key": "http-knowledge-checkpoint",
+        },
     }
 
 
@@ -2480,6 +2517,34 @@ def commands_for(
             value="A synthetic knowledge value",
             idempotency_key="http-knowledge-create-0001",
         ),
+        Capability.KNOWLEDGE_ASSERTIONS_SUBMIT: SubmitKnowledgeAssertion(
+            source_profile_id="kdsp_httpknowledge0001",
+            external_run_id="http-run",
+            external_candidate_id="http-candidate",
+            subject_kind=KnowledgeSubjectKind.PRINCIPAL,
+            subject_id=scene.principal.principal_id,
+            predicate_code="policy.requirement",
+            value="A http observed value",
+            effective_from=datetime(2026, 10, 1, tzinfo=UTC),
+            evidence=(
+                {
+                    "identity_kind": "external_object",
+                    "external_object_id": "http-object",
+                    "content_hash": "c" * 64,
+                    "role": "direct",
+                },
+            ),
+            trigger_event_ids=("rcev_httpknowledge0001",),
+        ),
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT: CheckpointKnowledgeDiscovery(
+            source_profile_id="kdsp_httpknowledge0001",
+            expected_version=0,
+            external_run_id="http-run",
+            submitted_candidate_count=1,
+            checkpoint_kind=KnowledgeCheckpointKind.SYNTHETIC,
+            private_envelope="http-opaque-state",
+            idempotency_key="http-knowledge-checkpoint",
+        ),
     }
 
 
@@ -2540,9 +2605,17 @@ class RecordingService(ApplicationService):
         self.envelopes: list[ResponseEnvelope] = []
 
     def invoke(
-        self, metadata: RequestMetadata, command: Command, *, principal: Principal
+        self,
+        metadata: RequestMetadata,
+        command: Command,
+        *,
+        principal: Principal,
+        operator_surface: OperatorSurface | None = None,
     ) -> ResponseEnvelope:
-        envelope = super().invoke(metadata, command, principal=principal)
+        # KLP-WP-04: the HTTP `invoke` route stamps `operator_surface`.
+        envelope = super().invoke(
+            metadata, command, principal=principal, operator_surface=operator_surface
+        )
         self.envelopes.append(envelope)
         return envelope
 
@@ -2603,7 +2676,7 @@ def test_handler_unwired_capabilities_return_the_canonical_http_problem(
     capability: Capability, scene: Scene, wire: Wire
 ) -> None:
     assert set(Capability) - set(_HANDLERS) == _UNIMPLEMENTED_CAPABILITIES
-    assert len(HANDLER_CAPABILITIES) == 187
+    assert len(HANDLER_CAPABILITIES) == 189
     reply = wire.send(capability.value, document_for(capability, scene, {}))
     problem = ProblemDetail.model_validate(reply.document())
     assert reply.status == 501

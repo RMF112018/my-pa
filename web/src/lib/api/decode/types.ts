@@ -97,6 +97,7 @@ import type { ReportsListResult } from "./capabilities/reports.list";
 import type { ReportsReadResult } from "./capabilities/reports.read";
 import type { ReportsResolveSetResult } from "./capabilities/reports.resolve_set";
 import type { ReportsSearchResult } from "./capabilities/reports.search";
+import type { KnowledgeAssertionReadResult } from "./capabilities/knowledge.assertions.read";
 import type { ReviewDecideResult } from "./capabilities/review.decide";
 import type { ReviewListResult } from "./capabilities/review.list";
 import type { TasksBulkConfirmResult } from "./capabilities/tasks.bulk_confirm";
@@ -206,6 +207,7 @@ export type CapabilityResults = {
   readonly "constraint_categories.deactivate": ConstraintCategoriesDeactivateResult;
   readonly "constraint_categories.reorder": ConstraintCategoriesReorderResult;
   readonly "knowledge.search": KnowledgeSearchResult;
+  readonly "knowledge.assertions.read": KnowledgeAssertionReadResult;
   readonly "reports.latest": ReportsLatestResult;
   readonly "reports.list": ReportsListResult;
   readonly "reports.read": ReportsReadResult;

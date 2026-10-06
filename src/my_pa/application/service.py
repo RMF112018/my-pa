@@ -140,6 +140,7 @@ from my_pa.application.commands import (
     BindEntityIdentifier,
     BulkConfirmTasks,
     BulkPreviewTasks,
+    CheckpointKnowledgeDiscovery,
     CloseCommitment,
     CloseConstraint,
     CloseConstraintWithFollowUp,
@@ -305,6 +306,7 @@ from my_pa.application.commands import (
     SplitEntity,
     StartGsqsB0,
     SubmitGoodNotesProposal,
+    SubmitKnowledgeAssertion,
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
     SupersedeEntityName,
@@ -470,17 +472,35 @@ from my_pa.application.intelligence import (
 )
 from my_pa.application.knowledge_assertions import (
     DEFAULT_KNOWLEDGE_PAGE_SIZE,
+    KNOWLEDGE_PROMOTING_DISPOSITIONS,
+    KNOWLEDGE_REVIEW_DISPOSITIONS,
     KNOWLEDGE_TRUST_BASIS,
     decode_knowledge_cursor,
 )
 from my_pa.application.knowledge_assertions import assertion_view as knowledge_assertion_view
+from my_pa.application.knowledge_assertions import (
+    checkpoint_request as knowledge_checkpoint_request,
+)
+from my_pa.application.knowledge_assertions import checkpoint_view as knowledge_checkpoint_view
+from my_pa.application.knowledge_assertions import (
+    corrected_candidate as knowledge_corrected_candidate,
+)
+from my_pa.application.knowledge_assertions import (
+    create_admission_refusal as knowledge_create_admission_refusal,
+)
 from my_pa.application.knowledge_assertions import create_request as knowledge_create_request
 from my_pa.application.knowledge_assertions import history_view as knowledge_history_view
 from my_pa.application.knowledge_assertions import is_remote as knowledge_is_remote
 from my_pa.application.knowledge_assertions import lifecycles_for as knowledge_lifecycles_for
 from my_pa.application.knowledge_assertions import page_view as knowledge_page_view
 from my_pa.application.knowledge_assertions import reveal_view as knowledge_reveal_view
+from my_pa.application.knowledge_assertions import review_case_view as knowledge_review_case_view
+from my_pa.application.knowledge_assertions import (
+    review_read_granted as knowledge_review_read_granted,
+)
 from my_pa.application.knowledge_assertions import submission_view as knowledge_submission_view
+from my_pa.application.knowledge_assertions import submit_request as knowledge_submit_request
+from my_pa.application.knowledge_assertions import submit_view as knowledge_submit_view
 from my_pa.application.managed_documents import ManagedDocumentService
 from my_pa.application.meetings import (
     MeetingApplication,
@@ -520,9 +540,18 @@ from my_pa.contracts.ports import (
     GoodNotesPullRepositoryConflictError,
     KnowledgeAssertionRepository,
     KnowledgeCaptureWithdrawnError,
+    KnowledgeCheckpointKindMismatchError,
     KnowledgeConcurrentDuplicateError,
     KnowledgeEvidenceNotFoundError,
     KnowledgeIdempotencyConflictError,
+    KnowledgeLedgerInvariantError,
+    KnowledgeReviewCaseRow,
+    KnowledgeReviewDecisionRequest,
+    KnowledgeReviewDecisionResult,
+    KnowledgeSourceProfileUnboundError,
+    KnowledgeSubjectNotCanonicalError,
+    KnowledgeSupersessionGuardError,
+    KnowledgeTriggerNotFoundError,
     ManagedByteStore,
     MeetingListPage,
     MemoryDetail,
@@ -533,12 +562,14 @@ from my_pa.contracts.ports import (
     RelationshipMemoryRepository,
     ReviewDecisionRequest,
     SearchOutcome,
+    TransactionConflictError,
     UnitOfWork,
     UnknownScopeError,
     WorkCursorError,
     WriteRequestConflictError,
     WriteRequestEvidence,
     WriteRequestResult,
+    transaction_conflict_in_chain,
 )
 from my_pa.contracts.v1.canvas_workspace import (
     CanvasPointView,
@@ -629,9 +660,16 @@ from my_pa.domain.extraction.coverage import CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus, extract_text
 from my_pa.domain.goodnotes.models import GoodNotesReviewCase, GoodNotesSemanticReviewCase
 from my_pa.domain.identity.operation import Capability, granted_purposes
+from my_pa.domain.identity.operator_surface import OperatorSurface
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
-from my_pa.domain.knowledge_assertion.vocabulary import KnowledgeAssertionLifecycle
+from my_pa.domain.knowledge_assertion.checkpoint import CheckpointSeal
+from my_pa.domain.knowledge_assertion.vocabulary import (
+    KnowledgeAssertionLifecycle,
+    KnowledgeDecisionChannel,
+    KnowledgeReviewAuthorityClass,
+    KnowledgeReviewRequirement,
+)
 from my_pa.domain.meeting.model import (
     MAX_MEETING_PAGE_SIZE,
     MeetingCursorError,
@@ -643,6 +681,11 @@ from my_pa.domain.meeting.model import (
     MeetingUnavailableError,
 )
 from my_pa.domain.policy.decision import POLICY_VERSION
+from my_pa.domain.policy.knowledge_review_authority import (
+    InconsistentKnowledgeReviewCompositionError,
+    UnsupportedKnowledgeReviewCompositionError,
+    derive_knowledge_review_authority,
+)
 from my_pa.domain.project_controls.business_time import ProjectTimezoneError
 from my_pa.domain.project_controls.category import ConstraintCategoryError
 from my_pa.domain.project_controls.constraint import (
@@ -1253,16 +1296,45 @@ def _port_failure(error: PortError) -> ApplicationError:
     """The public error a port failure is, by classification and nothing else."""
     if isinstance(error, UnknownScopeError):
         return NotFoundError(SafeDetail.ENROLLMENT_ID)
+    # KLP-WP-04 (R6 section 8.4, KLP-AC-122): a deadlock or serialization victim
+    # is `conflict`, whose contract-fixed guidance is `after_refresh`. No detail
+    # token (no contract change) and no retry loop: the caller retries.
+    if isinstance(error, TransactionConflictError):
+        return ConflictError()
     # KLP-WP-03: the Knowledge plane's refusals. Each is raised before or under
     # the C6 lock and rolls the whole create back, so none leaves a row.
     if isinstance(error, KnowledgeIdempotencyConflictError):
         return ConflictError(SafeDetail.IDEMPOTENCY_CONFLICT)
     if isinstance(error, KnowledgeConcurrentDuplicateError):
         return ConflictError(SafeDetail.DUPLICATE_FACT)
+    if isinstance(error, KnowledgeSupersessionGuardError):
+        # KLP-WP-04 fix round 5: a Review promotion over a single-current holder
+        # failing a Review supersession guard (future-dated successor or
+        # effective_from ordering) is `conflict(effective_from)`. For a remote
+        # caller the holder is withheld from, every guard failure is the one
+        # uniform `conflict(review_case_id)` (NB-R5-1; existing token, no
+        # contract change), naming no field of a holder it may not see.
+        if error.generic:
+            return ConflictError(SafeDetail.REVIEW_CASE_ID)
+        return ConflictError(SafeDetail.EFFECTIVE_FROM)
     if isinstance(error, KnowledgeEvidenceNotFoundError):
         return NotFoundError(SafeDetail.EVIDENCE)
     if isinstance(error, KnowledgeCaptureWithdrawnError):
         return DeniedError(SafeDetail.CAPTURE_WITHDRAWN)
+    if isinstance(error, KnowledgeSubjectNotCanonicalError):
+        # KLP-WP-04 slice C: a Review promotion whose subject was archived or
+        # merged away, re-read under the C3 Entity mutation-scope lock.
+        return DeniedError(SafeDetail.SUBJECT)
+    # KLP-WP-04: autonomous submit's refusals that write nothing. An unbound
+    # profile and an unseen trigger are one `not_found(provenance)` each, so
+    # neither is an existence oracle; a ledger-trigger refusal is a server bug.
+    if isinstance(error, KnowledgeSourceProfileUnboundError | KnowledgeTriggerNotFoundError):
+        return NotFoundError(SafeDetail.PROVENANCE)
+    if isinstance(error, KnowledgeLedgerInvariantError):
+        return InternalError()
+    # KLP-WP-04 slice B3: the checkpoint kind is immutable; the advance rolls back.
+    if isinstance(error, KnowledgeCheckpointKindMismatchError):
+        return InvalidRequestError(SafeDetail.REPRESENTATION)
     if isinstance(error, EvidenceUnavailableError):
         return UnavailableError()
     return InternalError()
@@ -3800,6 +3872,10 @@ class ApplicationService:
         relationship_intelligence_writes_enabled: bool = False,
         relationship_memory_enabled: bool = False,
         knowledge_assertions_enabled: bool = False,
+        knowledge_discovery_client_ids: frozenset[str] = frozenset(),
+        knowledge_operator_review_client_ids: frozenset[str] = frozenset(),
+        knowledge_checkpoint_signing_key: bytes | None = None,
+        knowledge_checkpoint_seal_version: int = 1,
         relationship_identity_correction_enabled: bool = False,
         relationship_reenrichment_enabled: bool = False,
         producer_origins: ProducerOriginRegistry | None = None,
@@ -3843,6 +3919,26 @@ class ApplicationService:
         #: plane as well (`Settings._check` refuses the switch without it): an
         #: assertion's Entity subject is proven by reading the entity tables.
         self._knowledge_assertions_enabled = knowledge_assertions_enabled
+        #: KLP-WP-04 (R6 section 6.1): the exact discovery allowlist the second
+        #: service gate reads. Empty -- the default -- refuses every submit and
+        #: checkpoint, so an unconfigured build fails closed for the role.
+        self._knowledge_discovery_client_ids = frozenset(knowledge_discovery_client_ids)
+        #: KLP-WP-04 slice C (R6 section 3.2): the exact operator-review allowlist,
+        #: the only input that can make a remote Knowledge decision
+        #: `remote_operator_attested`. Empty by default (operator decision
+        #: KLP-OD-005), so every remote client is an ordinary reviewer.
+        self._knowledge_operator_review_client_ids = frozenset(knowledge_operator_review_client_ids)
+        #: KLP-WP-04 slice B3 (R6 section 7): the checkpoint signing key and seal
+        #: version. `None` -- the default -- refuses every checkpoint `unsupported`,
+        #: so a build with no key never stores or serves an unsealed envelope.
+        self._knowledge_checkpoint_seal = (
+            None
+            if knowledge_checkpoint_signing_key is None
+            else CheckpointSeal(
+                key=knowledge_checkpoint_signing_key,
+                seal_version=knowledge_checkpoint_seal_version,
+            )
+        )
         # The third gate, and it is the narrowest. `_identity_correction_plane`
         # is the floor every one of its handlers asks; `available_capabilities`
         # is what `capabilities.get` and the MCP tool list read. Default `False`
@@ -4040,6 +4136,7 @@ class ApplicationService:
         transport: CaptureTransport = CaptureTransport.LOCAL,
         capability_grants: frozenset[tuple[Capability, Purpose | None]] | None = None,
         authenticated_client_id: str | None = None,
+        operator_surface: OperatorSurface | None = None,
     ) -> ResponseEnvelope:
         """Execute one request and return the envelope describing what happened.
 
@@ -4064,6 +4161,12 @@ class ApplicationService:
         read from the request payload. `context.prepare` intersects it with
         per-plane read capabilities so a `context.prepare` grant does not
         implicitly search every plane the Principal can read.
+
+        `operator_surface` (KLP-WP-04, R6 section 3.2) is stamped only by the
+        CLI adapter and the HTTP gateway's `invoke` route. It reaches exactly
+        one rule, `derive_knowledge_review_authority`; together with a remote
+        transport, a client or a grant ceiling it is refused before anything is
+        recorded, and the request answers `internal_error`.
 
         **No exception leaves this method.** The first two handlers classify what
         this layer already understands. The third is a terminal catch, and it is
@@ -4102,6 +4205,7 @@ class ApplicationService:
                 transport=transport,
                 capability_grants=capability_grants,
                 authenticated_client_id=authenticated_client_id,
+                operator_surface=operator_surface,
             )
         except ApplicationError as error:
             failure = error
@@ -4109,11 +4213,22 @@ class ApplicationService:
             # A port failure raised outside a translated block — from the shared
             # authorization path's own reads, for instance — still has to reach
             # the caller as a classified public error rather than as a crash.
-            failure = _port_failure(error)
-        except Exception:
-            # Nothing that reaches here has been classified, so nothing about it
-            # is safe to report beyond that the request did not complete.
-            unclassified = True
+            # KLP-WP-04 (R6 section 8.4): a port error re-raised over a deadlock or
+            # serialization victim (kept in `__context__`) is that conflict.
+            failure = (
+                ConflictError() if transaction_conflict_in_chain(error) else _port_failure(error)
+            )
+        except Exception as error:
+            # KLP-WP-04 (R6 section 8.4): an unwrapped write port or the COMMIT
+            # itself can still surface a deadlock / serialization victim, directly
+            # or kept in `__context__` by a `raise ... from None`. That is a
+            # classified `conflict`; anything else here is not classified, so
+            # nothing about it is safe to report beyond that the request did not
+            # complete. Only the classification leaves this block.
+            if transaction_conflict_in_chain(error):
+                failure = ConflictError()
+            else:
+                unclassified = True
         if unclassified:
             failure = InternalError()
         if failure is not None:
@@ -4144,6 +4259,7 @@ class ApplicationService:
         transport: CaptureTransport = CaptureTransport.LOCAL,
         capability_grants: frozenset[tuple[Capability, Purpose | None]] | None = None,
         authenticated_client_id: str | None = None,
+        operator_surface: OperatorSurface | None = None,
     ) -> _Result:
         """Authorize, then execute, then commit — or refuse and still commit.
 
@@ -4197,6 +4313,7 @@ class ApplicationService:
                     transport=transport,
                     capability_grants=capability_grants,
                     authenticated_client_id=authenticated_client_id,
+                    operator_surface=operator_surface,
                 )
                 if authorization.allowed:
                     try:
@@ -5418,15 +5535,36 @@ class ApplicationService:
             if position is None:
                 raise ConflictError(SafeDetail.CURSOR)
         with _translated():
-            found = unit_of_work.reviews.cases(
-                limit=page_size + 1,
-                principal_id=principal_id,
-                subject_kind=command.subject_kind,
-                state=command.state,
-                entity_id=command.entity_id,
-                after_opened_at=None if position is None else position[0],
-                after_review_case_id=None if position is None else position[1],
+            found: list[Any] = list(
+                unit_of_work.reviews.cases(
+                    limit=page_size + 1,
+                    principal_id=principal_id,
+                    subject_kind=command.subject_kind,
+                    state=command.state,
+                    entity_id=command.entity_id,
+                    after_opened_at=None if position is None else position[0],
+                    after_review_case_id=None if position is None else position[1],
+                )
             )
+            # KLP-WP-04 slice C (R6 sections 5.3, 10.1): the Knowledge plane joins
+            # the one page only when composed and, for a remote caller, granted;
+            # its remote withholding runs inside its own statement before LIMIT,
+            # and the merge below takes the oldest `page_size + 1` overall, as
+            # `_Reviews.cases` merges its own planes.
+            if self._knowledge_review_listed(authorization, command.subject_kind):
+                found.extend(
+                    unit_of_work.knowledge_assertions.review_cases(
+                        principal_id,
+                        remote=knowledge_is_remote(authorization),
+                        state=None if command.state is None else command.state.value,
+                        entity_id=command.entity_id,
+                        after_opened_at=None if position is None else position[0],
+                        after_review_case_id=None if position is None else position[1],
+                        limit=page_size + 1,
+                    )
+                )
+                found.sort(key=lambda case: (case.opened_at, case.review_case_id))
+                found = found[: page_size + 1]
         truncated = len(found) > page_size
         page = found[:page_size]
         capture_ids = tuple(
@@ -5451,7 +5589,9 @@ class ApplicationService:
         return _Result(
             payload={
                 "review_cases": [
-                    _review_case_payload(case, lifecycle_by_capture=lifecycle_by_capture)
+                    knowledge_review_case_view(case)
+                    if isinstance(case, KnowledgeReviewCaseRow)
+                    else _review_case_payload(case, lifecycle_by_capture=lifecycle_by_capture)
                     for case in page
                 ]
             },
@@ -5485,6 +5625,23 @@ class ApplicationService:
         """
         request_digest, replayed = _reserve_relationship_write(unit_of_work, authorization, command)
         if replayed is not None:
+            if (
+                knowledge_is_remote(authorization)
+                and replayed.result_family == "review_decision"
+                and replayed.result_id.startswith(
+                    f"{IdKind.KNOWLEDGE_ASSERTION_REVIEW_DECISION.value}_"
+                )
+                and self._knowledge_review_case(
+                    unit_of_work, authorization, str(replayed.result_secondary_id)
+                )
+                is None
+            ):
+                # R6 10.3 / KLP-AC-034: the replay key names no client, so a stored
+                # Knowledge decision is re-gated for a remote caller before it is
+                # returned. A caller without the Knowledge read grant, or naming a
+                # case whose proposal is now withheld, gets exactly the answer an
+                # unknown id gets -- never the stored kadec_/kasr_ ids.
+                raise NotFoundError(SafeDetail.REVIEW_CASE_ID)
             if replayed.result_family == "review_invalidated":
                 return _Result(
                     payload={"review_case_id": replayed.result_id, "result": "invalidated"},
@@ -5517,6 +5674,13 @@ class ApplicationService:
                     authorization.at,
                     trust_basis=("review_policy", "reviewed_promotion"),
                 ),
+            )
+        knowledge_case = self._knowledge_review_case(
+            unit_of_work, authorization, command.review_case_id
+        )
+        if knowledge_case is not None:
+            return self._knowledge_review_decide(
+                unit_of_work, authorization, command, request_digest, knowledge_case
             )
         request = ReviewDecisionRequest(
             review_case_id=command.review_case_id,
@@ -5731,6 +5895,174 @@ class ApplicationService:
             ),
         )
         return result
+
+    # ---- Knowledge Review (KLP-WP-04 slice C, R6 sections 3.2, 5.3, 8, 10) ----
+
+    def _knowledge_review_listed(
+        self, authorization: Authorization, subject_kind: ReviewSubjectKind | None
+    ) -> bool:
+        """Whether `review.list` reads the Knowledge plane for this caller (KLP-AC-033).
+
+        Composition first (an uncomposed plane costs no query), then the
+        remote read grant, then the caller's subject filter.
+        """
+        if not (self._knowledge_assertions_enabled and self._relationship_intelligence_enabled):
+            return False
+        if not knowledge_review_read_granted(authorization):
+            return False
+        return subject_kind in (None, ReviewSubjectKind.KNOWLEDGE_ASSERTION)
+
+    def _knowledge_review_case(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, review_case_id: str
+    ) -> KnowledgeReviewCaseRow | None:
+        """The Knowledge case `review_case_id` names, as this caller may see it.
+
+        `None` sends the request down the existing planes, which answer an id
+        they do not hold `not_found(review_case_id)`: so an uncomposed plane, a
+        remote caller without the Knowledge read grant, and a remote caller
+        naming a case whose proposal effective class is withheld (R6 5.3) all
+        get exactly the answer an unknown or foreign id gets, before any C3
+        lock and with no decision row (R6 10.3, KLP-AC-034). Local surfaces
+        without a grant ceiling see every case of their Principal.
+        """
+        if not (self._knowledge_assertions_enabled and self._relationship_intelligence_enabled):
+            return None
+        if not knowledge_review_read_granted(authorization):
+            return None
+        with _translated():
+            return unit_of_work.knowledge_assertions.review_case(
+                authorization.principal.principal_id,
+                review_case_id,
+                remote=knowledge_is_remote(authorization),
+            )
+
+    def _knowledge_review_decide(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: DecideReviewCase,
+        request_digest: str,
+        case: KnowledgeReviewCaseRow,
+    ) -> _Result:
+        """Append one Knowledge decision (R6 sections 3.2, 8.1, 10).
+
+        The C1 reservation (`relationship_write_requests`) is the caller's.
+        Then, all before any lock: the authority pair from
+        `derive_knowledge_review_authority` alone (`_operator_authority()` never
+        reaches this branch), the disposition (`reprocess`/`escalate`
+        unsupported), the correction (a free-text `corrected_value` or any
+        uncorrectable field is invalid), the database operator rule restated
+        (an ordinary reviewer accepting a `requires_operator` case is denied),
+        and for a promotion the active predicate head. The repository then runs
+        C3 -> C4b -> C4c -> C5 -> C6 -> C7/C8 -> C9. The answer is exactly the
+        seven existing keys, completed into the same replay ledger row the
+        generic builder reads, so a retry is byte-identical (KLP-AC-038).
+        """
+        try:
+            authority, channel = derive_knowledge_review_authority(
+                operator_surface=authorization.operator_surface,
+                transport=authorization.transport,
+                principal_is_operator=authorization.principal.is_operator,
+                authenticated_client_id=authorization.authenticated_client_id,
+                operator_review_allowlist=self._knowledge_operator_review_client_ids,
+                capability_grants_present=authorization.capability_grants is not None,
+            )
+        except InconsistentKnowledgeReviewCompositionError:
+            raise InternalError() from None
+        except UnsupportedKnowledgeReviewCompositionError:
+            raise UnsupportedError(SafeDetail.DISPOSITION) from None
+        disposition = command.disposition.value
+        if disposition not in KNOWLEDGE_REVIEW_DISPOSITIONS:
+            raise UnsupportedError(SafeDetail.DISPOSITION)
+        if command.corrected_value is not None:
+            raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
+        promoting = disposition in KNOWLEDGE_PROMOTING_DISPOSITIONS
+        if (
+            promoting
+            and case.review_requirement == KnowledgeReviewRequirement.REQUIRES_OPERATOR.value
+            and authority is KnowledgeReviewAuthorityClass.ORDINARY_REVIEWER
+        ):
+            raise DeniedError(SafeDetail.DISPOSITION)
+        repository: KnowledgeAssertionRepository = unit_of_work.knowledge_assertions
+        predicate = None
+        corrected = None
+        patch = None if command.correction_patch is None else command.correction_patch.as_mapping()
+        if promoting:
+            with _translated():
+                predicate = repository.predicate_head(case.predicate_code)
+            if predicate is None or not predicate.is_open_for_intake:
+                raise InvalidRequestError(SafeDetail.KINDS)
+            if patch is not None:
+                corrected = knowledge_corrected_candidate(case, predicate, patch)
+        remote_channel = channel in (
+            KnowledgeDecisionChannel.REMOTE_INTERACTIVE,
+            KnowledgeDecisionChannel.REMOTE_OPERATOR_REVIEW,
+        )
+        request = KnowledgeReviewDecisionRequest(
+            review_case_id=case.review_case_id,
+            expected_review_version=command.expected_review_version,
+            disposition=disposition,
+            reason=command.reason,
+            correction_patch=patch,
+            corrected=corrected,
+            operator_authority_class=authority.value,
+            decision_channel=channel.value,
+            authenticated_client_id=(
+                authorization.authenticated_client_id if remote_channel else None
+            ),
+            correlation_id=authorization.correlation_id,
+            audit_id=authorization.audit_id,
+            predicate=predicate,
+            remote=knowledge_is_remote(authorization),
+        )
+        conflict = missing = False
+        decision: KnowledgeReviewDecisionResult | None = None
+        with _translated():
+            try:
+                decision = repository.decide_review(
+                    authorization.principal.principal_id, request, at=authorization.at
+                )
+            except ReviewConflictError:
+                conflict = True
+            except ReviewNotFoundError:
+                missing = True
+        if conflict:
+            raise ConflictError(SafeDetail.EXPECTED_REVIEW_VERSION)
+        if missing or decision is None:
+            raise NotFoundError(SafeDetail.REVIEW_CASE_ID)
+        payload: dict[str, object] = {
+            "review_case_id": decision.review_case_id,
+            "decision_id": decision.decision_id,
+            "review_version": decision.sequence,
+            "disposition": decision.disposition,
+            "proposal_state": decision.proposal_state,
+            "assertion_id": decision.assertion_id,
+            "receipt_id": decision.receipt_id,
+        }
+        _complete_relationship_write(
+            unit_of_work,
+            authorization,
+            command,
+            request_digest,
+            WriteRequestResult(
+                result_family="review_decision",
+                result_id=decision.decision_id,
+                result_secondary_id=decision.review_case_id,
+                result_version=decision.sequence,
+                result_state=decision.proposal_state,
+                result_disposition=decision.disposition,
+                result_assertion_id=decision.assertion_id,
+                receipt_id=decision.receipt_id,
+                audit_id=authorization.audit_id,
+            ),
+        )
+        return _Result(
+            payload=payload,
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=("review_policy", "reviewed_promotion"),
+            ),
+        )
 
     def _replayed_identity_handoff(
         self, unit_of_work: UnitOfWork, principal_id: str, decision_id: str
@@ -12735,6 +13067,8 @@ class ApplicationService:
         """
         self._knowledge_plane(authorization, command.capability)
         repository: KnowledgeAssertionRepository = unit_of_work.knowledge_assertions
+        principal_id = authorization.principal.principal_id
+        remote = knowledge_is_remote(authorization)
         with _translated():
             predicate = repository.predicate_head(command.predicate_code)
         request = knowledge_create_request(
@@ -12742,14 +13076,142 @@ class ApplicationService:
             predicate,
             authenticated_client_id=authorization.authenticated_client_id,
         )
+        # KLP-WP-04 N2: the replay lookup precedes every admissibility check, so a
+        # same-key retry returns its stored result even after the head changed.
+        with _translated():
+            replay = repository.replay_create(
+                principal_id, request.idempotency_key, request.request_digest, remote=remote
+            )
+        if replay is not None:
+            return self._knowledge_result(authorization, knowledge_submission_view(replay))
+        refusal = knowledge_create_admission_refusal(predicate)
+        if refusal is not None:
+            raise refusal
         with _translated():
             result = repository.create(
-                authorization.principal.principal_id,
+                principal_id,
                 request,
                 at=authorization.at,
                 correlation_id=authorization.correlation_id,
+                remote=remote,
             )
         return self._knowledge_result(authorization, knowledge_submission_view(result))
+
+    def _knowledge_discovery_gate(
+        self, authorization: Authorization, capability: Capability
+    ) -> None:
+        """The plane floor plus the second service gate (R6 section 6.1).
+
+        Repeats the gateway's deny overlay: the call must have arrived on the
+        authenticated remote transport from a client in the exact discovery
+        allowlist. stdio MCP, the CLI, the HTTP gateway, the remote capture route
+        (remote transport, no client) and every unbound client are refused
+        `unsupported`, before any read. Precedent: `_goodnotes_pull_plane`.
+        """
+        self._knowledge_plane(authorization, capability)
+        client = authorization.authenticated_client_id
+        if (
+            authorization.transport is not CaptureTransport.REMOTE_CLIENT
+            or client is None
+            or client not in self._knowledge_discovery_client_ids
+        ):
+            raise UnsupportedError()
+
+    def _knowledge_assertions_submit(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: SubmitKnowledgeAssertion,
+    ) -> _Result:
+        """One autonomous submission from a bound discovery client (R6 sections 6, 8, 9).
+
+        The second gate first. Then C2 reads that need no lock: the profile's
+        immutable binding (this client's, else `not_found(provenance)` with no
+        write) and the predicate head; the frozen digest; the replay lookup on
+        the autonomous arbiter before any admission check (N2); and only then
+        the retired-head refusal and the transaction (`repository.submit`).
+        """
+        self._knowledge_discovery_gate(authorization, command.capability)
+        repository: KnowledgeAssertionRepository = unit_of_work.knowledge_assertions
+        principal_id = authorization.principal.principal_id
+        client = authorization.authenticated_client_id
+        if client is None:  # pragma: no cover - the gate refused it
+            raise UnsupportedError()
+        with _translated():
+            binding = repository.source_binding(principal_id, command.source_profile_id, client)
+        if binding is None:
+            raise NotFoundError(SafeDetail.PROVENANCE)
+        with _translated():
+            predicate = repository.predicate_head(command.predicate_code)
+        request = knowledge_submit_request(command, predicate, binding)
+        with _translated():
+            replay = repository.replay_submission(
+                principal_id,
+                authenticated_client_id=client,
+                source_profile_id=binding.source_profile_id,
+                external_run_id=command.external_run_id,
+                external_candidate_id=command.external_candidate_id,
+                request_digest=request.request_digest,
+                remote=True,
+            )
+        if replay is not None:
+            return self._knowledge_result(authorization, knowledge_submit_view(replay))
+        if predicate is None or not predicate.is_open_for_intake:
+            raise InvalidRequestError(SafeDetail.KINDS)
+        with _translated():
+            result = repository.submit(
+                principal_id,
+                request,
+                at=authorization.at,
+                correlation_id=authorization.correlation_id,
+                relationship_intelligence_composed=self._relationship_intelligence_enabled,
+                relationship_memory_composed=(
+                    self._relationship_intelligence_enabled and self._relationship_memory_enabled
+                ),
+            )
+        return self._knowledge_result(authorization, knowledge_submit_view(result))
+
+    def _knowledge_discovery_checkpoint(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: CheckpointKnowledgeDiscovery,
+    ) -> _Result:
+        """One checkpoint advance from a bound discovery client (R6 sections 6.1, 7).
+
+        The second gate first, then the configured seal (none -> `unsupported`).
+        Then the C2 binding read: this client's profile, else
+        `not_found(provenance)` with no write -- so another client never reaches
+        a ledger row, a checkpoint or an envelope. Then the DEV-48 digest, the
+        replay of this client's key (an equal digest returns the stored answer,
+        its envelope verified first; another digest is
+        `conflict(idempotency_conflict)`), and only then the transaction.
+        """
+        self._knowledge_discovery_gate(authorization, command.capability)
+        seal = self._knowledge_checkpoint_seal
+        client = authorization.authenticated_client_id
+        if seal is None or client is None:
+            raise UnsupportedError()
+        repository: KnowledgeAssertionRepository = unit_of_work.knowledge_assertions
+        principal_id = authorization.principal.principal_id
+        with _translated():
+            binding = repository.source_binding(principal_id, command.source_profile_id, client)
+        if binding is None:
+            raise NotFoundError(SafeDetail.PROVENANCE)
+        request = knowledge_checkpoint_request(command, binding)
+        with _translated():
+            replay = repository.replay_checkpoint(
+                principal_id,
+                authenticated_client_id=client,
+                idempotency_key=request.idempotency_key,
+                request_digest=request.request_digest,
+                seal=seal,
+            )
+        if replay is not None:
+            return self._knowledge_result(authorization, knowledge_checkpoint_view(replay))
+        with _translated():
+            result = repository.checkpoint(principal_id, request, at=authorization.at, seal=seal)
+        return self._knowledge_result(authorization, knowledge_checkpoint_view(result))
 
     def _record_events_list(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListRecordEvents
@@ -14429,6 +14891,10 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.KNOWLEDGE_ASSERTIONS_HISTORY: ApplicationService._knowledge_assertions_history,
         Capability.KNOWLEDGE_ASSERTIONS_REVEAL: ApplicationService._knowledge_assertions_reveal,
         Capability.KNOWLEDGE_ASSERTIONS_CREATE: ApplicationService._knowledge_assertions_create,
+        Capability.KNOWLEDGE_ASSERTIONS_SUBMIT: ApplicationService._knowledge_assertions_submit,
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT: (
+            ApplicationService._knowledge_discovery_checkpoint
+        ),
     }
 )
 
@@ -14448,6 +14914,10 @@ def published_capabilities(
     served = service.available_capabilities
     if not authenticated_client_present:
         served -= _GOODNOTES_PULL_CAPABILITIES
+        # KLP-WP-04 (R6 section 6.1): the discovery pair is served only to an
+        # authenticated remote client, on the GoodNotes pull precedent; stdio MCP
+        # and every local surface would only ever be refused it.
+        served -= _KNOWLEDGE_DISCOVERY_CAPABILITIES
     return served
 
 
@@ -14537,6 +15007,20 @@ _KNOWLEDGE_ASSERTION_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
         Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
         Capability.KNOWLEDGE_ASSERTIONS_CREATE,
+        # KLP-WP-04: the discovery pair joins the plane's switch, so with
+        # `MY_PA_KNOWLEDGE_ASSERTIONS_ENABLED` off neither is served anywhere.
+        Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
+    }
+)
+
+#: KLP-WP-04: the bound discovery client's two writes. Withheld from every
+#: publication without an authenticated client and refused by the second
+#: service gate unless the client is in the exact discovery allowlist.
+_KNOWLEDGE_DISCOVERY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
     }
 )
 

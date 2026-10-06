@@ -114,11 +114,53 @@ export interface GenericBackendReviewCase extends BackendReviewCaseCommon {
   readonly versionId: OpaqueId;
 }
 
-export type BackendReviewCase =
+/**
+ * A Knowledge Assertion proposal case (KLP R6 section 10.1).
+ *
+ * It names what the proposed fact is about (`subjectKindOfFact` / `subjectId`),
+ * under which predicate, and (KLP-WP-04 fix round 4, Manager ruling on DEV-83)
+ * the read-only candidate the reviewer decides on: the typed value, qualifier,
+ * effective bounds, the cited evidence ids (never excerpt text) and the current
+ * single_current holder, both holder fields null when there is none or the
+ * caller may not see it. It has no capture, so it never borrows a capture id
+ * and never reaches extraction Reveal (`knowledge.reveal`).
+ */
+export interface KnowledgeAssertionBackendReviewCase extends BackendReviewCaseCommon {
+  readonly subjectKind: "knowledge_assertion";
+  readonly subjectKindOfFact: string;
+  readonly subjectId: OpaqueId;
+  readonly predicateCode: string;
+  readonly reviewRequirement: "requires_review" | "requires_operator";
+  readonly valueType: "text" | "datetime";
+  readonly value: string | null;
+  readonly qualifier: Readonly<Record<string, unknown>> | null;
+  readonly effectiveFrom: string | null;
+  readonly effectiveTo: string | null;
+  readonly evidenceRefIds: readonly OpaqueId[];
+  readonly currentAssertionId: OpaqueId | null;
+  readonly currentValue: string | null;
+}
+
+/**
+ * A listed case whose kind this build does not know (KLP-AC-135). It carries
+ * only its case id and the kind the backend reported; it is inert and cannot be
+ * decided from this workbench.
+ */
+export interface UnknownBackendReviewCase {
+  readonly subjectKind: "unknown";
+  readonly reviewCaseId: OpaqueId;
+  readonly reportedSubjectKind: string;
+}
+
+/** Every listed case this workbench can decide. */
+export type DecidableBackendReviewCase =
   | CaptureBackendReviewCase
   | GoodNotesSemanticBackendReviewCase
   | GoodNotesRegionBackendReviewCase
-  | GenericBackendReviewCase;
+  | GenericBackendReviewCase
+  | KnowledgeAssertionBackendReviewCase;
+
+export type BackendReviewCase = DecidableBackendReviewCase | UnknownBackendReviewCase;
 
 /**
  * The immutable receipt a real disposition produced, as `review.decide` emits it.
@@ -139,6 +181,33 @@ export interface ReviewDecisionReceipt {
 }
 
 export type ReviewDisposition = "accept" | "correct" | "reject" | "defer" | "unresolved";
+
+/**
+ * The verbs `/api/review/:id/decide` forwards to a backend case. `invalidate`
+ * is offered for Knowledge Assertion cases only (KLP R6 section 10.2) and has
+ * no synthetic-fixture counterpart, so it is not a `ReviewDisposition`.
+ */
+export type BackendReviewDisposition = ReviewDisposition | "invalidate";
+
+/**
+ * One Knowledge Assertion as `knowledge.assertions.read` returns it: the
+ * stored fact and its lifecycle, never its evidence text.
+ */
+export interface KnowledgeAssertionReadView {
+  readonly assertionId: OpaqueId;
+  readonly subjectKind: string;
+  readonly subjectId: OpaqueId;
+  readonly predicateCode: string;
+  readonly predicateVersion: number;
+  readonly valueType: string;
+  readonly value: string | null;
+  readonly effectiveFrom: IsoTimestamp | null;
+  readonly effectiveTo: IsoTimestamp | null;
+  readonly epistemicStatus: string;
+  readonly classification: string;
+  readonly lifecycle: string;
+  readonly version: number;
+}
 
 /** Situation lifecycle — parity with the Python `SituationState`. */
 export type SituationState = "open" | "active" | "suspended" | "closed";

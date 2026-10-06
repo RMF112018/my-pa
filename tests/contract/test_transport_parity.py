@@ -1927,6 +1927,34 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "effective_from": "2026-10-01T00:00:00+00:00",
             "idempotency_key": "parity-knowledge-create",
         },
+        Capability.KNOWLEDGE_ASSERTIONS_SUBMIT: {
+            "source_profile_id": "kdsp_parityknowledge0001",
+            "external_run_id": "parity-run",
+            "external_candidate_id": "parity-candidate",
+            "subject_kind": "principal",
+            "subject_id": scene.principal.principal_id,
+            "predicate_code": "policy.requirement",
+            "value": "A parity observed value",
+            "effective_from": "2026-10-01T00:00:00+00:00",
+            "evidence": [
+                {
+                    "identity_kind": "external_object",
+                    "external_object_id": "parity-object",
+                    "content_hash": "c" * 64,
+                    "role": "direct",
+                }
+            ],
+            "trigger_event_ids": ["rcev_parityknowledge0001"],
+        },
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT: {
+            "source_profile_id": "kdsp_parityknowledge0001",
+            "expected_version": 0,
+            "external_run_id": "parity-run",
+            "submitted_candidate_count": 1,
+            "checkpoint_kind": "synthetic",
+            "private_envelope": "parity-opaque-state",
+            "idempotency_key": "parity-knowledge-checkpoint",
+        },
     }
 
 
@@ -2062,7 +2090,7 @@ def test_there_are_three_transports_to_compare() -> None:
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
     # The command union and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 188, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 190, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -2390,6 +2418,9 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
         Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
         Capability.KNOWLEDGE_ASSERTIONS_CREATE,
+        # KLP-WP-04: the discovery pair, on the same switch.
+        Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
     }
 )
 
@@ -2815,7 +2846,7 @@ def test_declared_unwired_capabilities_stay_separate_from_positive_parity(
     from my_pa.application.errors import UnsupportedError
 
     assert set(Capability) - set(_HANDLERS) == FUTURE_CAPABILITIES
-    assert len(IMPLEMENTED_CAPABILITIES) == 187
+    assert len(IMPLEMENTED_CAPABILITIES) == 189
     assert set(_BUILDERS) == set(IMPLEMENTED_CAPABILITIES)
     assert {Capability(tool.name) for tool in TOOLS} == set(IMPLEMENTED_CAPABILITIES)
 

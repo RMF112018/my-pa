@@ -300,6 +300,12 @@ EXEMPT_PROPERTIES: Final[frozenset[tuple[str, str]]] = frozenset(
         # its admitted values are `any`, `outgoing` and `incoming`.
         ("entities.relationships", "direction"),
         ("context.feedback", "target_id"),
+        # KLP-WP-04: a provisioned Knowledge discovery source profile, not where a
+        # file lives. It trips the scan on the substring "file" inside "profile",
+        # it is an opaque `kdsp_` identifier the command validates by kind, and it
+        # is the frozen DDL column's name (`source_profile_id`, R6 section 11).
+        ("knowledge.assertions.submit", "source_profile_id"),
+        ("knowledge.discovery.checkpoint", "source_profile_id"),
         ("goodnotes.propose", "uncertainty"),
         # The version of the record a proposal asks to change, not where a file
         # lives. Exempt on the `direction` precedent above: it trips the scan on
@@ -644,8 +650,9 @@ def test_the_location_scan_would_catch_one() -> None:
     # Entity, an opaque `ent_` identifier that apply refuses outside that
     # ambiguity's own `allowed_target_entity_ids`. Plus WP-MTG-04's six Meeting
     # fields (operator ruling B1): `location_text`/`virtual_meeting_url` on
-    # create and update, `sort_direction` on list and search.
-    assert len(EXEMPT_PROPERTIES) == 20
+    # create and update, `sort_direction` on list and search. Plus KLP-WP-04's two
+    # `source_profile_id` fields (an opaque `kdsp_` profile, "file" in "profile").
+    assert len(EXEMPT_PROPERTIES) == 22
     for tool_name, property_name in EXEMPT_PROPERTIES:
         tool = next(entry for entry in TOOLS if entry.name == tool_name)
         assert property_name in set(_schema_property_names(tool.input_schema))

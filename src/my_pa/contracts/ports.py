@@ -47,7 +47,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from hashlib import sha256
 from types import TracebackType
-from typing import Any, ClassVar, Protocol
+from typing import Any, ClassVar, Final, Protocol
 
 from my_pa.contracts.v1.disclosure import Disclosure
 from my_pa.contracts.v1.meetings import (
@@ -321,6 +321,7 @@ class BulkIdempotencyConflictError(Exception):
 
 
 __all__ = [
+    "TRANSACTION_CONFLICT_SQLSTATES",
     "Acceptance",
     "AssignmentWriteRequest",
     "AuditSink",
@@ -367,16 +368,31 @@ __all__ = [
     "KnowledgeAssertionReveal",
     "KnowledgeAssertionRow",
     "KnowledgeCaptureWithdrawnError",
+    "KnowledgeCheckpointKindMismatchError",
+    "KnowledgeCheckpointRequest",
+    "KnowledgeCheckpointResult",
     "KnowledgeConcurrentDuplicateError",
+    "KnowledgeCorrectedCandidate",
     "KnowledgeCreateEvidence",
     "KnowledgeCreateRequest",
     "KnowledgeEvidenceNotFoundError",
     "KnowledgeEvidenceRow",
     "KnowledgeIdempotencyConflictError",
+    "KnowledgeLedgerInvariantError",
     "KnowledgeMutationRow",
     "KnowledgeRecord",
     "KnowledgeRepository",
+    "KnowledgeReviewCaseRow",
+    "KnowledgeReviewDecisionRequest",
+    "KnowledgeReviewDecisionResult",
+    "KnowledgeSourceBinding",
+    "KnowledgeSourceProfileUnboundError",
+    "KnowledgeSubjectNotCanonicalError",
     "KnowledgeSubmissionResult",
+    "KnowledgeSubmitEvidence",
+    "KnowledgeSubmitRequest",
+    "KnowledgeSupersessionGuardError",
+    "KnowledgeTriggerNotFoundError",
     "ManagedAdmission",
     "ManagedByteStore",
     "ManagedDocumentRepository",
@@ -415,6 +431,7 @@ __all__ = [
     "TaskManagementRepository",
     "TaskManagementUnitOfWork",
     "TraceRepository",
+    "TransactionConflictError",
     "UnitOfWork",
     "UnknownScopeError",
     "WorkerHealthRepository",
@@ -423,6 +440,8 @@ __all__ = [
     "WriteRequestEvidence",
     "WriteRequestRepository",
     "WriteRequestResult",
+    "is_transaction_conflict",
+    "transaction_conflict_in_chain",
 ]
 
 
@@ -3172,6 +3191,21 @@ class EntitiesRepository(ABC):
         """Hold transaction locks for every state of these normalized claims."""
         return None
 
+    def knowledge_referenced_entity_ids(
+        self, principal_id: str, entity_ids: frozenset[str]
+    ) -> frozenset[str]:
+        """KLP-WP-04 (R6 section 8.6): which of `entity_ids` a live Knowledge fact names.
+
+        An Entity is referenced while any live (`active`/`revalidation_required`)
+        Knowledge assertion or open (`needs_review`/`deferred`/`unresolved`)
+        Knowledge proposal has it as its subject. Identity merge reports each
+        as a blocking `knowledge_reference_present` conflict and re-checks it
+        under the participant mutation-scope lock. In-memory repositories hold
+        no Knowledge plane and answer the empty set; PostgreSQL reads the
+        Knowledge tables.
+        """
+        return frozenset()
+
     def reparent_entity_reference(
         self,
         principal_id: str,
@@ -3503,6 +3537,56 @@ class RepositoryFailureError(PortError):
     Separated from unavailability because telling a caller to retry a missing
     column would be a lie with a retry budget attached.
     """
+
+
+#: KLP-WP-04 (R6 section 8.4, KLP-AC-122): the PostgreSQL SQLSTATEs that mean
+#: "this transaction lost a race and may simply be retried" -- `40P01`
+#: (deadlock_detected) and `40001` (serialization_failure).
+TRANSACTION_CONFLICT_SQLSTATES: Final[frozenset[str]] = frozenset({"40P01", "40001"})
+
+
+class TransactionConflictError(PortError):
+    """The transaction was chosen as a deadlock or serialization victim. Retryable.
+
+    Carries nothing, like every port error: no statement, parameter or driver
+    text. The application maps it to `conflict` (retry after refresh); there is
+    no internal retry loop.
+    """
+
+
+def is_transaction_conflict(error: BaseException) -> bool:
+    """Whether `error` is a driver failure carrying a transaction-conflict SQLSTATE.
+
+    Duck-typed so neither side of the boundary imports the driver: a SQLAlchemy
+    `DBAPIError` exposes the driver exception as `.orig`, and the driver exception
+    (psycopg) exposes `.sqlstate` itself.
+    """
+    for candidate in (getattr(error, "orig", None), error):
+        if getattr(candidate, "sqlstate", None) in TRANSACTION_CONFLICT_SQLSTATES:
+            return True
+    return False
+
+
+def transaction_conflict_in_chain(error: BaseException) -> bool:
+    """Whether `error` or anything on its `__cause__`/`__context__` chain is a conflict.
+
+    Covers a failure that reached the caller unwrapped -- an untranslated write
+    port or the COMMIT itself -- and one re-raised with `from None`, which keeps
+    the original in `__context__`. Cycle-safe.
+    """
+    seen: set[int] = set()
+    pending: list[BaseException] = [error]
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, TransactionConflictError) or is_transaction_conflict(current):
+            return True
+        for linked in (current.__cause__, current.__context__):
+            if linked is not None:
+                pending.append(linked)
+    return False
 
 
 class WriteRequestConflictError(PortError):
@@ -4982,6 +5066,175 @@ class KnowledgeCaptureWithdrawnError(PortError):
     """A cited capture root was archived after the C2 read (the C4c fence)."""
 
 
+class KnowledgeSourceProfileUnboundError(PortError):
+    """KLP-WP-04: the named source profile is not bound to this client (or absent).
+
+    One answer for an absent, a foreign and another client's profile, raised
+    before any write: no submission row can name a binding it does not own
+    (FK `knowledge_submission_binds_profile_client_scope`).
+    """
+
+
+class KnowledgeTriggerNotFoundError(PortError):
+    """KLP-WP-04: a cited trigger event is absent, foreign or withheld from the caller."""
+
+
+class KnowledgeLedgerInvariantError(PortError):
+    """KLP-WP-04: a Knowledge ledger trigger refused a write (SQLSTATE 23514 / 23001).
+
+    The submission and checkpoint-request lifecycle triggers fire only when the
+    server itself broke a ledger invariant (a second completion, a reserved row
+    at COMMIT, a forbidden UPDATE/DELETE). Nothing a caller sends reaches them,
+    so the public answer is `internal_error`, never a retry hint. The one
+    (trigger function, SQLSTATE) table that maps to it is
+    `infrastructure.persistence.knowledge_assertions.KNOWLEDGE_LEDGER_TRIGGERS`.
+    """
+
+
+class KnowledgeCheckpointKindMismatchError(PortError):
+    """KLP-WP-04 slice B3: an advance names another kind than the stored checkpoint's.
+
+    `checkpoint_kind` is immutable per checkpoint (trigger
+    `knowledge_checkpoint_advances_only`) and the request ledger has no stored
+    reason for it, so the advance is refused as an invalid request and the
+    whole transaction -- its reservation included -- rolls back.
+    """
+
+
+class KnowledgeSubjectNotCanonicalError(PortError):
+    """KLP-WP-04 slice C: a Review promotion names a subject that is no longer canonical.
+
+    Re-checked under the C3 Entity mutation-scope lock: a merged-away (or
+    otherwise inactive) subject Entity refuses the acceptance rather than
+    creating a live fact on an identity the merge retired (R6 section 8.6,
+    KLP-AC-036). Nothing is written.
+    """
+
+
+class KnowledgeSupersessionGuardError(PortError):
+    """KLP-WP-04 (fix round 5 ruling): a Review promotion may not supersede the holder.
+
+    The single-current holder found under C6 fails a Review supersession guard
+    (`review_supersession_blockers`: a future-dated successor, or an
+    effective_from ordering failure). Raised before the decision row, so the
+    transaction (C1 reservation included) rolls back whole and the case stays
+    open for a `correct_and_accept` with corrected bounds.
+
+    `generic` is true when the caller is remote and the holder is
+    `withheld_remote` for it: the answer must then name no field, so a remote
+    caller cannot probe a holder it may not see (NB-R5-1).
+    """
+
+    def __init__(self, *, generic: bool) -> None:
+        super().__init__("the single-current holder may not be superseded")
+        self.generic = generic
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeReviewCaseRow:
+    """KLP-WP-04 slice C: one proposal-local Knowledge Review case (R6 section 10.1).
+
+    `review_version` is the count of decisions (= max `decision_sequence`) and
+    `latest_disposition` the disposition of the newest one. The factual fields
+    (`value_type` .. `effective_to`) build a corrected candidate on the decide
+    path and, since fix round 4 (Manager ruling on DEV-83), the read-only
+    candidate of the `review.list` row: an authorized reviewer sees what it
+    decides. `evidence_ref_ids` are the origin submission's cited `kaevd_`
+    ids (never excerpt text); `current_*` is the live single_current holder of
+    the same key, `None` when there is none -- or, for a remote caller, when the
+    holder itself is `withheld_remote` (both fields together).
+    """
+
+    review_case_id: str
+    proposal_id: str
+    subject_kind: str
+    subject_id: str
+    predicate_code: str
+    predicate_version: int
+    review_requirement: str
+    risk_class: str
+    state: str
+    classification: str
+    opened_at: datetime
+    review_version: int
+    latest_disposition: str | None
+    value_text: str | None = field(default=None, repr=False)
+    value_datetime: datetime | None = field(default=None, repr=False)
+    qualifier: Mapping[str, object] | None = field(default=None, repr=False)
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+    value_type: str = "text"
+    evidence_ref_ids: tuple[str, ...] = ()
+    current_assertion_id: str | None = None
+    current_value_text: str | None = field(default=None, repr=False)
+    current_value_datetime: datetime | None = field(default=None, repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeCorrectedCandidate:
+    """KLP-WP-04 slice C: the server-built corrected fact of one correct_and_accept.
+
+    Built by the application from the proposal and a validated correction
+    patch (value branch, effective bounds, correctable qualifier fields only);
+    the subject, predicate and owner are the proposal's and cannot be patched.
+    """
+
+    value_text: str | None = field(repr=False)
+    value_datetime: datetime | None = field(repr=False)
+    normalized_value_sha256: str
+    qualifier: Mapping[str, object] | None = field(repr=False)
+    effective_from: datetime | None
+    effective_to: datetime | None
+    assertion_fingerprint: str
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeReviewDecisionRequest:
+    """KLP-WP-04 slice C: one Knowledge `review.decide`, every authority field derived.
+
+    `operator_authority_class`, `decision_channel` and `authenticated_client_id`
+    come from `derive_knowledge_review_authority` and the authorization, never
+    from the payload; `authenticated_client_id` is set for remote channels only
+    (CHECK `knowledge_decision_channel_matches_authority`). `predicate` is the
+    active head (a promotion inserts at the head version, trigger
+    `knowledge_assertion_uses_active_predicate_head`).
+    """
+
+    review_case_id: str
+    expected_review_version: int
+    disposition: str
+    reason: str | None = field(repr=False)
+    correction_patch: Mapping[str, object] | None = field(repr=False)
+    corrected: KnowledgeCorrectedCandidate | None
+    operator_authority_class: str
+    decision_channel: str
+    authenticated_client_id: str | None
+    correlation_id: str
+    audit_id: str
+    predicate: Any = None  # domain.knowledge_assertion.predicate.KnowledgePredicate
+    #: R6's remote predicate for this caller (`REMOTE_CLIENT` or any grant
+    #: ceiling); a guard refusal over a holder withheld from it is generic.
+    remote: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeReviewDecisionResult:
+    """KLP-WP-04 slice C: the one appended Knowledge decision and what it produced.
+
+    Exactly what the existing seven `review.decide` result keys need:
+    `decision_id` = `kadec_`, `assertion_id` = `kasr_` or `None`, `receipt_id`
+    = the promoting `kamut_` mutation or `None`.
+    """
+
+    decision_id: str
+    review_case_id: str
+    sequence: int
+    disposition: str
+    proposal_state: str
+    assertion_id: str | None = None
+    receipt_id: str | None = None
+
+
 @dataclass(frozen=True, slots=True)
 class KnowledgeAssertionRow:
     """One stored assertion, as the plane's reads disclose it. No evidence text."""
@@ -5117,7 +5370,10 @@ class KnowledgeSubmissionResult:
     """The stored public result of one submission plus the read-only current lifecycle.
 
     Identical on the fresh call and on every replay of the same key (R6 6.3):
-    `current_lifecycle` is the one field read at response time.
+    `current_lifecycle` is the one field read at response time, and it is
+    `None` for a remote caller whenever the result assertion is now
+    `withheld_remote` (KLP-WP-04 F2). The four trailing fields are autonomous
+    submit's (KLP-WP-04); an explicit create never sets them.
     """
 
     submission_id: str
@@ -5128,6 +5384,137 @@ class KnowledgeSubmissionResult:
     mutation_id: str | None
     canonical_owner: str | None
     current_lifecycle: str | None
+    superseded_assertion_id: str | None = None
+    proposal_id: str | None = None
+    review_case_id: str | None = None
+    routed_record_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeSourceBinding:
+    """KLP-WP-04: the immutable binding columns of one source profile (a C2 read).
+
+    `disabled_at` is deliberately absent: it is mutable and re-read under the
+    C4a lock inside the submit transaction.
+    """
+
+    source_profile_id: str
+    authenticated_client_id: str
+    scope_digest: str
+    origin_system: str
+    is_synthetic: bool
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeSubmitEvidence:
+    """KLP-WP-04: one cited evidence identity of an autonomous submit.
+
+    External rows carry the *command's* source profile; `availability` is the
+    availability the client reports for that object (`None`: no report).
+    """
+
+    identity_kind: str
+    content_hash: str
+    role: str
+    capture_id: str | None = None
+    relationship_memory_id: str | None = None
+    source_profile_id: str | None = None
+    external_object_id: str | None = None
+    external_version_id: str | None = None
+    excerpt: str | None = field(default=None, repr=False)
+    excerpt_sha256: str | None = None
+    availability: str | None = None
+
+    @property
+    def identity(self) -> tuple[str, ...]:
+        """The canonical identity tuple (R6 6.2 / 5.1), content hash last."""
+        if self.identity_kind == "external_object":
+            return (
+                self.identity_kind,
+                str(self.source_profile_id),
+                str(self.external_object_id),
+                self.external_version_id or "",
+                self.content_hash,
+            )
+        key = self.capture_id if self.identity_kind == "capture" else self.relationship_memory_id
+        return (self.identity_kind, str(key), self.content_hash)
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeSubmitRequest:
+    """KLP-WP-04: everything one autonomous-submit transaction needs.
+
+    Derived by the application from the command, the immutable predicate head
+    (`predicate`, a `KnowledgePredicate`) and the C2 binding read; the request
+    digest (R6 6.2) and fingerprint (6.5) are already computed.
+    """
+
+    authenticated_client_id: str
+    source_profile_id: str
+    scope_digest: str
+    origin_system: str
+    origin_is_synthetic: bool
+    external_run_id: str
+    external_candidate_id: str
+    request_digest: str
+    predicate: Any
+    subject_kind: str
+    subject_id: str
+    value_text: str | None = field(repr=False)
+    value_datetime: datetime | None
+    normalized_value_sha256: str
+    qualifier: Mapping[str, object] | None
+    effective_from: datetime | None
+    effective_to: datetime | None
+    assertion_fingerprint: str
+    owner_ref_kind: str | None
+    owner_ref_id: str | None
+    trigger_event_ids: tuple[str, ...]
+    evidence: tuple[KnowledgeSubmitEvidence, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeCheckpointRequest:
+    """KLP-WP-04 slice B3: one checkpoint advance (R6 sections 6.1 and 7).
+
+    The binding columns come from the C2 binding read (this client's profile),
+    never from the caller; `idempotency_key` is the server-stamped payload hash
+    remotely (DEV-03) and `request_digest` the DEV-48 object. The envelope and
+    the key never render.
+    """
+
+    authenticated_client_id: str
+    source_profile_id: str
+    scope_digest: str
+    expected_version: int
+    external_run_id: str
+    submitted_candidate_count: int
+    checkpoint_kind: str
+    private_envelope: str = field(repr=False)
+    idempotency_key: str = field(repr=False)
+    request_digest: str
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeCheckpointResult:
+    """KLP-WP-04 slice B3: the public answer to one checkpoint request.
+
+    `private_envelope` is present only for a verified envelope answered to the
+    bound client that owns it: an `advanced` result, a replay of the current
+    version, or a `stale_expected_version` conflict (lost-response recovery,
+    KLP-AC-145). `private_token_redacted` is true for a historical receipt
+    whose token a later advance or a seal rotation redacted, and for every
+    `envelope_unverifiable` conflict. Never rendered by `repr`.
+    """
+
+    checkpoint_request_id: str
+    outcome: str
+    reason: str
+    checkpoint_id: str | None
+    checkpoint_version: int | None
+    checkpoint_kind: str | None
+    private_envelope: str | None = field(repr=False)
+    private_token_redacted: bool
 
 
 class KnowledgeAssertionRepository(ABC):
@@ -5179,8 +5566,122 @@ class KnowledgeAssertionRepository(ABC):
         *,
         at: datetime,
         correlation_id: str,
+        remote: bool = False,
     ) -> KnowledgeSubmissionResult:
-        """Run one explicit create under the R6 section 8.1 lock order, or replay it."""
+        """Run one explicit create under the R6 section 8.1 lock order, or replay it.
+
+        `remote` (KLP-WP-04 F2) masks a withheld result assertion's
+        `current_lifecycle` in the answer; the stored result is unchanged.
+        """
+
+    @abstractmethod
+    def replay_create(
+        self, principal_id: str, idempotency_key: str, request_digest: str, *, remote: bool
+    ) -> KnowledgeSubmissionResult | None:
+        """KLP-WP-04 (N2): the stored result bound to this key, before any admission check.
+
+        `None` when the key is unbound; `KnowledgeIdempotencyConflictError` when it
+        is bound to another digest. Writes nothing.
+        """
+
+    @abstractmethod
+    def source_binding(
+        self, principal_id: str, source_profile_id: str, authenticated_client_id: str
+    ) -> KnowledgeSourceBinding | None:
+        """KLP-WP-04: the profile's immutable binding when it is this client's, else `None`."""
+
+    @abstractmethod
+    def replay_submission(
+        self,
+        principal_id: str,
+        *,
+        authenticated_client_id: str,
+        source_profile_id: str,
+        external_run_id: str,
+        external_candidate_id: str,
+        request_digest: str,
+        remote: bool,
+    ) -> KnowledgeSubmissionResult | None:
+        """KLP-WP-04 (N2, R6 6.1): the stored result of this candidate identity, or `None`."""
+
+    @abstractmethod
+    def submit(
+        self,
+        principal_id: str,
+        request: KnowledgeSubmitRequest,
+        *,
+        at: datetime,
+        correlation_id: str,
+        relationship_intelligence_composed: bool,
+        relationship_memory_composed: bool,
+    ) -> KnowledgeSubmissionResult:
+        """KLP-WP-04: one autonomous submit under R6 sections 6, 8 and 9, or its replay."""
+
+    @abstractmethod
+    def replay_checkpoint(
+        self,
+        principal_id: str,
+        *,
+        authenticated_client_id: str,
+        idempotency_key: str,
+        request_digest: str,
+        seal: Any,  # noqa: ANN401 - domain.knowledge_assertion.checkpoint.CheckpointSeal
+    ) -> KnowledgeCheckpointResult | None:
+        """KLP-WP-04 slice B3: the stored answer bound to this client's key, or `None`.
+
+        `KnowledgeIdempotencyConflictError` when the key is bound to another
+        digest. A stored envelope is verified under `seal` before it is
+        returned; an unverifiable one answers `envelope_unverifiable`. Writes
+        nothing.
+        """
+
+    @abstractmethod
+    def checkpoint(
+        self,
+        principal_id: str,
+        request: KnowledgeCheckpointRequest,
+        *,
+        at: datetime,
+        seal: Any,  # noqa: ANN401 - domain.knowledge_assertion.checkpoint.CheckpointSeal
+    ) -> KnowledgeCheckpointResult:
+        """KLP-WP-04 slice B3: one checkpoint advance under R6 sections 6.1, 7 and 8.1."""
+
+    @abstractmethod
+    def review_cases(
+        self,
+        principal_id: str,
+        *,
+        remote: bool,
+        state: str | None,
+        entity_id: str | None,
+        after_opened_at: datetime | None,
+        after_review_case_id: str | None,
+        limit: int,
+    ) -> tuple[KnowledgeReviewCaseRow, ...]:
+        """KLP-WP-04 slice C: the oldest `limit` Knowledge cases after the keyset.
+
+        `remote` excludes every case whose proposal effective class (R6 5.3) is
+        withheld *in the statement*, before LIMIT (KLP-AC-033/136).
+        """
+
+    @abstractmethod
+    def review_case(
+        self, principal_id: str, review_case_id: str, *, remote: bool
+    ) -> KnowledgeReviewCaseRow | None:
+        """KLP-WP-04 slice C: one case of this Principal, or `None` (absent, foreign, withheld)."""
+
+    @abstractmethod
+    def decide_review(
+        self, principal_id: str, request: KnowledgeReviewDecisionRequest, *, at: datetime
+    ) -> KnowledgeReviewDecisionResult:
+        """KLP-WP-04 slice C: append one decision under the R6 section 8.1 lock order.
+
+        Raises `ReviewNotFoundError`, `ReviewConflictError` (stale version,
+        terminal proposal), `KnowledgeConcurrentDuplicateError` (an equal live
+        fact under C6), `KnowledgeCaptureWithdrawnError` (C4c),
+        `KnowledgeSubjectNotCanonicalError` (C3) or `TransactionConflictError`
+        (the promoted subject-key set changed after it was computed; KLP-AC-153).
+        """
 
 
 class RecordEventStager(ABC):

@@ -161,6 +161,7 @@ from my_pa.contracts.v1.envelope import ResponseEnvelope
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.identity.operator_surface import OperatorSurface
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.user_account import TokenClaimsError
 from my_pa.domain.source.registry import issue_identifier
@@ -597,7 +598,15 @@ def create_http_app(
             # longer decide whether this transport answers in its own vocabulary.
             return _problem_response(InternalError())
         try:
-            envelope = service.invoke(metadata, command, principal=acting)
+            # KLP-WP-04 (R6 section 3.2): the HTTP gateway's `invoke` route is the
+            # second of exactly two production stamps of the local operator
+            # surface. The remote capture route below never stamps it.
+            envelope = service.invoke(
+                metadata,
+                command,
+                principal=acting,
+                operator_surface=OperatorSurface.HTTP_GATEWAY,
+            )
         except Exception:
             # `invoke` has its own terminal catch, so reaching this is a fault in
             # the mapping between them rather than in a handler. Answered the

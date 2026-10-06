@@ -125,6 +125,9 @@ _KNOWLEDGE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
         Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
         Capability.KNOWLEDGE_ASSERTIONS_CREATE,
+        # KLP-WP-04 (KLP-AC-018): the discovery pair refuses the same fields.
+        Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
     }
 )
 _CAPABILITY_OWNED_PAYLOAD_FIELDS: Final[Mapping[Capability, frozenset[str]]] = MappingProxyType(
@@ -272,6 +275,17 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         # result permanently and a changed request hashes to a new key. The
         # application's frozen request digest stays the same-key discriminator.
         Capability.KNOWLEDGE_ASSERTIONS_CREATE,
+        # KLP-WP-04 (R6 section 6.1). A checkpoint replays on
+        # `(principal_id, authenticated_client_id, idempotency_key)`, and the
+        # command requires the key; a remote caller may not state one
+        # (`REMOTE_OWNED_PAYLOAD_FIELDS`), so the server stamps this set's payload
+        # hash, exactly as for the explicit create. An identical lost-response
+        # retry replays its stored result; a changed request (a new envelope, a
+        # new expected version) hashes to a new key and is decided afresh.
+        # `knowledge.assertions.submit` is deliberately NOT here: it has no key
+        # field and replays on its candidate identity (principal, client,
+        # profile, run, candidate -- `knowledge_submission_autonomous_candidate`).
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
         # **No keyless proposal or identity-correction write is here, and the reason is this set's
         # mechanism rather than a judgement about how replayable they are.**
         # Membership makes `compose_remote_arguments` derive a key and *insert it

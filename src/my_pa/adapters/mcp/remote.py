@@ -68,6 +68,9 @@ _WRITE_PURPOSES: Final = frozenset(
         # would be classified a remote read -- published while writes are
         # disabled and routed to `my_pa.read`. `knowledge_assertion_read` stays out.
         Purpose.KNOWLEDGE_ASSERTION_AUTHORING,
+        # KLP-WP-04 (KLP-AC-016/103): the discovery pair's purpose. Without it
+        # submit and checkpoint would be classified remote reads.
+        Purpose.KNOWLEDGE_ASSERTION_OBSERVATION,
         Purpose.CONTEXT_PREFERENCE,
         Purpose.GOODNOTES_PROPOSAL,
         Purpose.REPORT_AUTHORING,

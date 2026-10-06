@@ -1984,9 +1984,10 @@ def test_no_knowledge_command_carries_a_principal_or_a_server_derived_field() ->
     knowledge = {
         member
         for member in get_args(Command.__value__)
-        if member.capability.value.startswith("knowledge.assertions.")
+        if member.capability.value.startswith(("knowledge.assertions.", "knowledge.discovery."))
     }
-    assert len(knowledge) == 6
+    # KLP-WP-04 adds submit and checkpoint to the WP-03 six.
+    assert len(knowledge) == 8
     forbidden = {
         "principal_id",
         "owner_principal_id",
@@ -2010,7 +2011,9 @@ def test_no_knowledge_command_carries_a_principal_or_a_server_derived_field() ->
         "_knowledge_assertions_history",
         "_knowledge_assertions_reveal",
         "_knowledge_assertions_create",
+        "_knowledge_assertions_submit",
+        "_knowledge_discovery_checkpoint",
     ):
         body = service.split(f"def {handler}(", 1)[1].split("\n    def ", 1)[0]
-        assert "authorization.principal.principal_id" in body or "_knowledge_page(" in body
+        assert "authorization.principal.principal_id" in body or "_knowledge_page(" in body, handler
         assert "command.principal_id" not in body

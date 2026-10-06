@@ -498,6 +498,10 @@ _ORDINAL_UNITS = (
     "hundred-eighty-sixth",
     "hundred-eighty-seventh",
     "hundred-eighty-eighth",
+    # KLP-WP-04 adds submit and checkpoint and takes the public set to one
+    # hundred and eighty-nine; dense through a hundred-ninetieth.
+    "hundred-eighty-ninth",
+    "hundred-ninetieth",
 )
 
 

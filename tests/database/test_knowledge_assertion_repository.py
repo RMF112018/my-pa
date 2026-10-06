@@ -48,6 +48,7 @@ from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
 from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability, permitted_purposes
+from my_pa.domain.identity.operator_surface import OperatorSurface
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.knowledge_assertion.vocabulary import KnowledgeSubjectKind
@@ -66,6 +67,7 @@ from my_pa.infrastructure.persistence.tables import (
     record_events,
     relationship_memory_versions,
 )
+from my_pa.infrastructure.persistence.task_management import SqlAlchemyTaskManagementUnitOfWork
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 
 pytestmark = [
@@ -109,7 +111,18 @@ def new_principal() -> str:
 class KnowledgeRuntime:
     """`ApplicationService` over the production SQL unit of work, Knowledge plane on."""
 
-    def __init__(self, url: str, *, knowledge_enabled: bool = True) -> None:
+    def __init__(
+        self,
+        url: str,
+        *,
+        knowledge_enabled: bool = True,
+        discovery_client_ids: frozenset[str] = frozenset(),
+        relationship_intelligence: bool = True,
+        checkpoint_signing_key: bytes | None = None,
+        checkpoint_seal_version: int = 1,
+        operator_review_client_ids: frozenset[str] = frozenset(),
+        identity_correction: bool = False,
+    ) -> None:
         self.engine = create_database_engine(url)
         self.audit_engine = create_database_engine(url)
         audit = SqlAlchemyAuditSink(self.audit_engine)
@@ -126,10 +139,21 @@ class KnowledgeRuntime:
             unit_of_work=unit_of_work,
             limits=LIMITS,
             clock=lambda: WHEN,
-            relationship_intelligence_enabled=True,
+            relationship_intelligence_enabled=relationship_intelligence,
             relationship_intelligence_writes_enabled=True,
             relationship_memory_enabled=True,
             knowledge_assertions_enabled=knowledge_enabled,
+            # KLP-WP-04 slice B2: the autonomous-submit tests bind a discovery client.
+            knowledge_discovery_client_ids=discovery_client_ids,
+            # KLP-WP-04 slice C: the operator-review allowlist (R6 section 3.2).
+            knowledge_operator_review_client_ids=operator_review_client_ids,
+            # KLP-WP-04 slice C: governed merge, for the Knowledge merge guard.
+            relationship_identity_correction_enabled=identity_correction,
+            # KLP-WP-04 slice B3: the checkpoint seal (R6 section 7).
+            knowledge_checkpoint_signing_key=checkpoint_signing_key,
+            knowledge_checkpoint_seal_version=checkpoint_seal_version,
+            # KLP-WP-04 slice B2: a task to route a critical date to.
+            task_management_unit_of_work=lambda: SqlAlchemyTaskManagementUnitOfWork(self.engine),
         )
 
     def close(self) -> None:
@@ -144,6 +168,7 @@ class KnowledgeRuntime:
         transport: CaptureTransport = CaptureTransport.LOCAL,
         grants: frozenset[tuple[Capability, Purpose | None]] | None = None,
         client_id: str | None = None,
+        operator_surface: OperatorSurface | None = None,
     ) -> ResponseEnvelope:
         capability = command.capability
         purpose = sorted(permitted_purposes(capability))[0]
@@ -162,6 +187,7 @@ class KnowledgeRuntime:
             transport=transport,
             capability_grants=grants,
             authenticated_client_id=client_id,
+            operator_surface=operator_surface,
         )
 
     def ok(self, command: Command, *, principal_id: str, **remote: object) -> dict[str, Any]:

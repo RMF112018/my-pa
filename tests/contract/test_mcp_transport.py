@@ -143,7 +143,7 @@ def test_handler_unwired_capabilities_publish_no_mcp_tools() -> None:
     assert {tool.name for tool in TOOLS} == {
         capability.value for capability in HANDLER_CAPABILITIES
     }
-    assert len(TOOLS) == 187
+    assert len(TOOLS) == 189
     assert not {capability.value for capability in HANDLER_UNWIRED_CAPABILITIES} & {
         tool.name for tool in TOOLS
     }
@@ -555,6 +555,10 @@ _AUTHENTICATED_CLIENT_CAPABILITIES: Final = frozenset(
         Capability.GOODNOTES_PULL,
         Capability.GOODNOTES_COMPLETE,
         Capability.GOODNOTES_STATUS,
+        # KLP-WP-04: the Knowledge discovery pair is served only to an
+        # authenticated remote client (R6 section 6.1), on the pull precedent.
+        Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
     }
 )
 

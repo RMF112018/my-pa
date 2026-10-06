@@ -76,8 +76,8 @@ _MEETINGS = _MEETING_READS | _MEETING_WRITES
 
 def test_policy_covers_every_public_capability_exactly_once() -> None:
     assert set(CHATLLM_CAPABILITY_POLICY) == set(Capability)
-    assert len(CHATLLM_CAPABILITY_POLICY) == 187
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v6"
+    assert len(CHATLLM_CAPABILITY_POLICY) == 189
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v7"
 
 
 def test_classification_counts_match_the_approved_plan() -> None:
@@ -88,7 +88,8 @@ def test_classification_counts_match_the_approved_plan() -> None:
     # KLP-WP-03 (chatllm-data-v6): the six Knowledge Assertion names, 90 -> 96.
     assert counts[ChatLLMCapabilityClass.DATA_CONDITIONAL] == 96
     assert counts[ChatLLMCapabilityClass.COMPATIBILITY_ONLY] == 2
-    assert counts[ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED] == 15
+    # KLP-WP-04 (chatllm-data-v7): submit and checkpoint are excluded, 15 -> 17.
+    assert counts[ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED] == 17
     assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 2
     assert counts[ChatLLMCapabilityClass.RETIRED] == 0
 
@@ -243,6 +244,13 @@ def test_the_knowledge_names_are_conditional_on_their_own_plane_by_explicit_name
         assert CHATLLM_CAPABILITY_POLICY[capability].composition_prerequisite is (
             ChatLLMCompositionPrerequisite.ALWAYS
         )
-    values = {capability.value for capability in Capability}
-    assert "knowledge.assertions.submit" not in values
-    assert "knowledge.discovery.checkpoint" not in values
+    # KLP-WP-04 (chatllm-data-v7): the discovery pair is declared and excluded
+    # from the ordinary profile, so its ChatLLM prerequisite is `NONE`.
+    for capability in (
+        Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
+    ):
+        policy = CHATLLM_CAPABILITY_POLICY[capability]
+        assert policy.classification is ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED
+        assert policy.composition_prerequisite is ChatLLMCompositionPrerequisite.NONE
+        assert policy.exclusion_rationale

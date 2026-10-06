@@ -76,7 +76,7 @@ principal is the only principal; no credential is issued, read, or required.
 `OPERATOR` rather than `GATEWAY` because the process *is* the operator's local
 transport — a `GATEWAY` principal cannot invoke `sources.enroll`, so the choice
 is between naming what this is and shipping a transport that cannot reach one of
-the 187 capabilities.
+the 189 capabilities.
 
 `entra` composes `entra_authenticator` instead and issues **no** process
 principal. Every request presents a bearer token, the token's validated
@@ -1112,6 +1112,22 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
             knowledge_assertions_enabled=(
                 settings.knowledge_assertions_enabled and settings.relationship_intelligence_enabled
             ),
+            # KLP-WP-04 (R6 section 6.1): the second service gate's allowlist.
+            knowledge_discovery_client_ids=settings.knowledge_discovery_oauth_client_id_set(),
+            # KLP-WP-04 slice C (R6 section 3.2): the operator-review allowlist the
+            # Knowledge `review.decide` authority derivation reads.
+            knowledge_operator_review_client_ids=(
+                settings.knowledge_operator_review_oauth_client_id_set()
+            ),
+            # KLP-WP-04 slice B3 (R6 section 7): the checkpoint seal. `Settings._check`
+            # requires the key whenever the discovery list binds a client; without
+            # one the service refuses every checkpoint.
+            knowledge_checkpoint_signing_key=(
+                settings.knowledge_checkpoint_signing_key.encode("utf-8")
+                if settings.knowledge_discovery_oauth_client_id_set()
+                else None
+            ),
+            knowledge_checkpoint_seal_version=settings.knowledge_checkpoint_seal_version,
             relationship_identity_correction_enabled=(
                 settings.relationship_identity_correction_enabled
             ),

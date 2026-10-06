@@ -156,6 +156,9 @@ class ReviewSubjectKind(StrEnum):
     GOODNOTES_SEMANTIC = "goodnotes_semantic"
     RELATIONSHIP_MEMORY = "relationship_memory"
     ENTITY_PROPOSAL = "entity_proposal"
+    #: KLP-WP-04 (R6 section 10.1): a proposal-local Knowledge Assertion case.
+    #: Wire/Python only -- no database CHECK holds this vocabulary.
+    KNOWLEDGE_ASSERTION = "knowledge_assertion"
 
 
 class ConsequentialClass(StrEnum):

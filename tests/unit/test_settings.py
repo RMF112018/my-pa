@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import traceback
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from my_pa.bootstrap.settings import (
     load_settings,
 )
 from my_pa.domain.extraction.text import MAX_EXTRACTED_CHARACTERS
+from my_pa.domain.knowledge_assertion.checkpoint import CheckpointBinding, CheckpointSeal
 
 DATABASE_URL = f"{ENV_PREFIX}DATABASE_URL"
 
@@ -343,6 +345,7 @@ def test_only_explicitly_admitted_settings_may_be_credential_bearing() -> None:
         "webauthn_bff_secret",
         "session_service_secret",
         "goodnotes_pull_cursor_signing_key",
+        "knowledge_checkpoint_signing_key",
     }
     for name in Settings.model_fields:
         if name in admitted:
@@ -354,6 +357,7 @@ def test_only_explicitly_admitted_settings_may_be_credential_bearing() -> None:
     assert Settings.model_fields["webauthn_bff_secret"].repr is False
     assert Settings.model_fields["session_service_secret"].repr is False
     assert Settings.model_fields["goodnotes_pull_cursor_signing_key"].repr is False
+    assert Settings.model_fields["knowledge_checkpoint_signing_key"].repr is False
 
 
 @pytest.mark.parametrize("size", [32, 128])
@@ -813,3 +817,170 @@ def test_all_three_switches_together_are_admitted() -> None:
         }
     )
     assert settings.relationship_identity_correction_enabled is True
+
+
+# ---- KLP-WP-04: Knowledge client role allowlists and the checkpoint seal ----------
+#
+# KLP-AC-147 (whole): the discovery, operator-review and ChatLLM gateway allowlists
+# are exact, empty by default and pairwise disjoint. KLP-AC-126 / KLP-AC-155
+# (Settings halves): the checkpoint signing key is 32-128 UTF-8 bytes, never
+# rendered, and required whenever the discovery list binds a client; the seal
+# version is an integer >= 1, default 1.
+
+_DISCOVERY = f"{ENV_PREFIX}KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS"
+_OPERATOR_REVIEW = f"{ENV_PREFIX}KNOWLEDGE_OPERATOR_REVIEW_OAUTH_CLIENT_IDS"
+_CHATLLM = f"{ENV_PREFIX}MCP_CHATLLM_GATEWAY_OAUTH_CLIENT_IDS"
+_SIGNING_KEY = f"{ENV_PREFIX}KNOWLEDGE_CHECKPOINT_SIGNING_KEY"
+_SEAL_VERSION = f"{ENV_PREFIX}KNOWLEDGE_CHECKPOINT_SEAL_VERSION"
+_A_KEY = "k" * 32
+
+
+def test_knowledge_role_allowlists_are_empty_by_default_and_fail_closed() -> None:
+    settings = load_settings({DATABASE_URL: _A_URL})
+    assert settings.knowledge_discovery_oauth_client_ids == ""
+    assert settings.knowledge_operator_review_oauth_client_ids == ""
+    assert settings.knowledge_discovery_oauth_client_id_set() == frozenset()
+    assert settings.knowledge_operator_review_oauth_client_id_set() == frozenset()
+    assert settings.knowledge_checkpoint_signing_key == ""
+    assert settings.knowledge_checkpoint_seal_version == 1
+
+
+def test_knowledge_role_allowlists_are_exact_comma_lists() -> None:
+    settings = load_settings(
+        {
+            DATABASE_URL: _A_URL,
+            _DISCOVERY: "disc-a, disc-b",
+            _OPERATOR_REVIEW: "review-a",
+            _SIGNING_KEY: _A_KEY,
+        }
+    )
+    assert settings.knowledge_discovery_oauth_client_id_set() == frozenset({"disc-a", "disc-b"})
+    assert settings.knowledge_operator_review_oauth_client_id_set() == frozenset({"review-a"})
+    # Exact membership: no prefix, suffix or substring admits a client.
+    assert "disc" not in settings.knowledge_discovery_oauth_client_id_set()
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [(_DISCOVERY, _OPERATOR_REVIEW), (_DISCOVERY, _CHATLLM), (_OPERATOR_REVIEW, _CHATLLM)],
+    ids=["discovery-review", "discovery-chatllm", "review-chatllm"],
+)
+def test_overlapping_knowledge_role_allowlists_refuse_to_start(first: str, second: str) -> None:
+    values = {DATABASE_URL: _A_URL, _SIGNING_KEY: _A_KEY, first: "shared, a", second: "b shared"}
+    with pytest.raises(SettingsError, match="disjoint"):
+        load_settings(values)
+
+
+def test_disjoint_knowledge_role_allowlists_start() -> None:
+    settings = load_settings(
+        {
+            DATABASE_URL: _A_URL,
+            _SIGNING_KEY: _A_KEY,
+            _DISCOVERY: "disc",
+            _OPERATOR_REVIEW: "review",
+            _CHATLLM: "chat",
+        }
+    )
+    assert settings.chatllm_gateway_oauth_client_id_set() == frozenset({"chat"})
+
+
+@pytest.mark.parametrize("key", ["", "k" * 31, "k" * 129, "é" * 65])
+def test_a_bound_discovery_client_requires_a_bounded_signing_key(key: str) -> None:
+    values = {DATABASE_URL: _A_URL, _DISCOVERY: "disc"}
+    if key:
+        values[_SIGNING_KEY] = key
+    with pytest.raises(SettingsError, match="KNOWLEDGE_CHECKPOINT_SIGNING_KEY"):
+        load_settings(values)
+
+
+@pytest.mark.parametrize("key", ["k" * 32, "k" * 128, "é" * 16, "é" * 64])
+def test_a_bounded_utf8_signing_key_is_accepted_and_never_rendered(key: str) -> None:
+    settings = load_settings({DATABASE_URL: _A_URL, _DISCOVERY: "disc", _SIGNING_KEY: key})
+    assert settings.knowledge_checkpoint_signing_key == key
+    assert key not in repr(settings)
+    assert key not in str(settings)
+
+
+def test_without_a_discovery_client_no_signing_key_is_required() -> None:
+    settings = load_settings({DATABASE_URL: _A_URL, _OPERATOR_REVIEW: "review"})
+    assert settings.knowledge_checkpoint_signing_key == ""
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "one"])
+def test_the_seal_version_is_a_positive_integer(value: str) -> None:
+    with pytest.raises(SettingsError):
+        load_settings({DATABASE_URL: _A_URL, _SEAL_VERSION: value})
+
+
+def test_the_seal_version_can_be_incremented() -> None:
+    settings = load_settings({DATABASE_URL: _A_URL, _SEAL_VERSION: "2"})
+    assert settings.knowledge_checkpoint_seal_version == 2
+
+
+# ---- KLP-WP-04 slice B3: the configured seal (KLP-AC-126 / KLP-AC-155) -------------
+#
+# What `Settings` configures -- the signing key and the seal version -- becomes
+# one `CheckpointSeal` in the composition root. The seal MACs the R6 section 7
+# object under the key, verifies with `hmac.compare_digest`, and refuses any
+# stored seal version other than the configured one.
+
+_BINDING_FIELDS = {
+    "principal_id": "prn_SyntheticSettings01",
+    "authenticated_client_id": "disc",
+    "source_profile_id": "kdsp_SyntheticSettings1",
+    "scope_digest": "a" * 64,
+}
+
+
+def _seal(key: bytes = b"k" * 32, version: int = 1) -> CheckpointSeal:
+    return CheckpointSeal(key=key, seal_version=version)
+
+
+@pytest.mark.parametrize(
+    ("key", "version"),
+    [(b"k" * 31, 1), (b"k" * 129, 1), (b"k" * 32, 0), (b"k" * 32, 32768), (b"k" * 32, True)],
+)
+def test_the_seal_refuses_an_unbounded_key_or_version(key: bytes, version: int) -> None:
+    with pytest.raises(ValueError, match="checkpoint"):
+        _seal(key, version)
+
+
+def test_the_seal_verifies_only_its_own_seal_version_and_every_bound_member() -> None:
+    seal = _seal()
+    binding = CheckpointBinding(**_BINDING_FIELDS)
+    mac = seal.seal(
+        binding, checkpoint_id="kdcp_SyntheticSettings1", version=3, private_envelope="t"
+    )
+    stored = {
+        "checkpoint_id": "kdcp_SyntheticSettings1",
+        "version": 3,
+        "seal_version": 1,
+        "private_envelope": "t",
+        "envelope_mac": mac,
+    }
+    assert seal.verify(binding, **stored)
+    # A different seal version is unverifiable even with the matching key.
+    assert not _seal(version=2).verify(binding, **stored)
+    # Another key under the same seal version (rotation without increment).
+    assert not _seal(key=b"j" * 32).verify(binding, **stored)
+    for member, other in (
+        ("checkpoint_id", "kdcp_SyntheticSettings2"),
+        ("version", 4),
+        ("private_envelope", "u"),
+        ("envelope_mac", "0" * 64),
+    ):
+        assert not seal.verify(binding, **{**stored, member: other})
+    for field_name, other in (
+        ("principal_id", "prn_SyntheticSettings02"),
+        ("authenticated_client_id", "disc-2"),
+        ("source_profile_id", "kdsp_SyntheticSettings2"),
+        ("scope_digest", "b" * 64),
+    ):
+        moved = CheckpointBinding(**{**_BINDING_FIELDS, field_name: other})
+        assert not seal.verify(moved, **stored)
+
+
+def test_the_seal_compares_in_constant_time() -> None:
+    source = inspect.getsource(CheckpointSeal.verify)
+    assert "hmac.compare_digest(" in source
+    assert "==" not in source.replace("seal_version != self.seal_version", "")

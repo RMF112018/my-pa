@@ -50,6 +50,7 @@ from my_pa.application.commands import Command
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
 from my_pa.domain.identity.operation import Capability
+from my_pa.domain.identity.operator_surface import OperatorSurface
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.infrastructure.database.engine import create_database_engine
@@ -98,11 +99,19 @@ class HeldService(ApplicationService):
         self.release = threading.Event()
 
     def invoke(
-        self, metadata: RequestMetadata, command: Command, *, principal: Principal
+        self,
+        metadata: RequestMetadata,
+        command: Command,
+        *,
+        principal: Principal,
+        operator_surface: OperatorSurface | None = None,
     ) -> ResponseEnvelope:
         self.entered.set()
         assert self.release.wait(timeout=10), "the test never released the request"
-        return super().invoke(metadata, command, principal=principal)
+        # KLP-WP-04: the HTTP `invoke` route stamps `operator_surface`.
+        return super().invoke(
+            metadata, command, principal=principal, operator_surface=operator_surface
+        )
 
 
 @pytest.fixture

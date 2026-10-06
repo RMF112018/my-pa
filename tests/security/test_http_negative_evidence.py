@@ -277,6 +277,9 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
         Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
         Capability.KNOWLEDGE_ASSERTIONS_CREATE,
+        # KLP-WP-04: the discovery pair, on the same terms.
+        Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
     }
 )
 
@@ -1313,6 +1316,32 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "value": "A wire knowledge value",
             "idempotency_key": "wire-knowledge-create-0001",
         },
+        Capability.KNOWLEDGE_ASSERTIONS_SUBMIT: {
+            "source_profile_id": "kdsp_wireknowledge00001",
+            "external_run_id": "wire-run",
+            "external_candidate_id": "wire-candidate",
+            "subject_kind": "principal",
+            "subject_id": "prn_wireknowledge00001",
+            "predicate_code": "policy.requirement",
+            "value": "A wire observed value",
+            "evidence": [
+                {
+                    "identity_kind": "external_object",
+                    "external_object_id": "wire-object",
+                    "content_hash": "d" * 64,
+                    "role": "direct",
+                }
+            ],
+        },
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT: {
+            "source_profile_id": "kdsp_wireknowledge00001",
+            "expected_version": 0,
+            "external_run_id": "wire-run",
+            "submitted_candidate_count": 1,
+            "checkpoint_kind": "synthetic",
+            "private_envelope": "wire-opaque-state",
+            "idempotency_key": "wire-knowledge-checkpoint",
+        },
     }
 
 
@@ -1985,6 +2014,9 @@ SCOPED_CAPABILITIES = [
         Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
         Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
         Capability.KNOWLEDGE_ASSERTIONS_CREATE,
+        # KLP-WP-04: the discovery pair, on the same terms.
+        Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
     }
 ]
 

@@ -79,6 +79,11 @@ READS: Final = frozenset(
         "identity_operation",
         "identity_operation_for_key",
         "identity_preview",
+        # KLP-WP-04 (R6 section 8.6, KLP-AC-036/108/137): the read-only Knowledge
+        # reference check behind the `knowledge_reference_present` blocker. It
+        # writes nothing and reparents nothing: Knowledge facts are never moved
+        # by a merge, so no M-/S- write is enumerated for them.
+        "knowledge_referenced_entity_ids",
         "memory_feed_facts",
         "names",
         "observation",
@@ -176,3 +181,11 @@ def test_the_handlers_add_only_the_reenrichment_registration() -> None:
         registrations = {call for call in calls if call.startswith("self._register")}
         assert registrations == expected, (handler, registrations)
         assert not {call for call in calls if call.startswith("unit_of_work.")}, handler
+
+
+def test_merge_analysis_reads_knowledge_references_and_writes_none() -> None:
+    """KLP-WP-04 (AC-036/137): `_analyse` reads the Knowledge reference set (the
+    blocker's only source) and no Knowledge write exists on either port."""
+    calls = _repository_calls(ast.parse(SERVICE.read_text(encoding="utf-8")))
+    assert ("_analyse", "_entities", "knowledge_referenced_entity_ids") in calls
+    assert not {call for call in _writes(calls) if "knowledge" in call[2]}

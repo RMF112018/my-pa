@@ -658,8 +658,10 @@ does not. It remains an unverified caller string.
 
 **Nothing here is commissioned.** The migration `1d9b248e7f83` and the TRUNCATE
 refusal `c8e4a1b70d35` are proven on disposable databases only. The ChatLLM
-data profile `chatllm-data-v6`, which adds the six `knowledge.assertions.` names as
-`DATA_CONDITIONAL` (KLP-WP-03) on top of `chatllm-data-v5`'s `capture.archive` and
+data profile `chatllm-data-v7`, which classifies `knowledge.assertions.submit` and
+`knowledge.discovery.checkpoint` `CONTROL_PLANE_EXCLUDED` (KLP-WP-04) on top of
+`chatllm-data-v6`'s first six Knowledge Assertion names as
+`DATA_CONDITIONAL` (KLP-WP-03) and `chatllm-data-v5`'s `capture.archive` and
 `capture.restore` (`DATA_REQUIRED`) and `chatllm-data-v4`'s
 `record_events.list`, is repository desire. Whether any persistent database carries
 the feed tables, the runtime role boundary, or a client feed grant are runtime
@@ -697,6 +699,38 @@ Evidence: `src/my_pa/domain/record_events.py`, `src/my_pa/application/record_eve
 `tests/database/test_record_events_consumer_bootstrap.py::test_a_write_in_flight_at_w0_is_seen_by_the_delta`,
 `tests/database/test_record_events_cursor_visibility.py::test_a_hand_built_cursor_on_a_withheld_memory_event_is_refused`,
 `tests/contract/test_chatllm_data_profile_diff.py::test_a_v3_converged_client_plans_exactly_the_record_events_add`.
+
+## 16. Knowledge discovery and Knowledge Review are built, not commissioned
+
+KLP-WP-04 builds autonomous `knowledge.assertions.submit`,
+`knowledge.discovery.checkpoint` and proposal-local Knowledge Review. Nothing is
+commissioned. The discovery and operator-review allowlists are empty by
+default, and `ops/knowledge-source-profiles/initial.json` provisions no source
+profile. No discovery client, signing key or seal rotation has run against a
+live database. Populating the operator-review allowlist is operator decision
+KLP-OD-005. A remote operator-review decision proves that the client holds the
+credential, not that a human decided (design residual R-1). Envelopes are
+MAC-sealed, not encrypted, and their retention is operator decision KLP-OD-002.
+The `review.list` Knowledge row carries the read-only candidate (typed value,
+qualifier, bounds, cited `kaevd_` ids, current holder) under the existing Review
+gates, so a reviewer sees what it decides; a remote caller sees no holder the
+caller may not read. A Review promotion that supersedes re-checks under C6 only
+that the successor is not future-dated and that its effective_from does not
+precede the holder's (a holder with no recorded effective_from is the unbounded
+past); a reviewer may supersede a contested holder, which autonomous submit
+never does.
+`knowledge-discovery-v2` (with `record_events.provenance`) is KLP-WP-05.
+
+Evidence: `ops/runbooks/managed-knowledge-context.md`,
+`src/my_pa/bootstrap/knowledge_discovery_profiles.py`,
+`apps/cli/knowledge_source_profiles.py`,
+`tests/unit/test_knowledge_discovery_profile.py::test_every_unbound_client_loses_submit_and_checkpoint_only`,
+`tests/unit/test_knowledge_source_profile_provisioner.py::test_the_committed_initial_profiles_contain_no_onedrive_profile`,
+`tests/database/test_knowledge_checkpoint_idempotency_replay.py::test_a_first_advance_is_version_one_and_sealed_under_the_signing_key`,
+`tests/contract/test_knowledge_review_operator_authority.py::test_e_a_remote_chatllm_client_is_interactive_and_denied_operator_cases`,
+`tests/database/test_knowledge_assertion_review.py::test_a_queued_proposal_is_no_assertion_until_acceptance_promotes_it`,
+`tests/security/test_knowledge_review_disclosure.py::test_a_withheld_holder_is_nulled_for_a_remote_reviewer_only`,
+`tests/database/test_knowledge_assertion_review.py::test_counterevidence_blocks_submit_but_not_a_review_supersession`.
 
 ---
 

@@ -15,7 +15,7 @@ from typing import Final
 
 from my_pa.domain.identity.operation import Capability
 
-CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v6"
+CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v7"
 
 
 class ChatLLMCapabilityClass(StrEnum):
@@ -259,6 +259,13 @@ _CONTROL_PLANE_EXCLUDED: Final[frozenset[Capability]] = frozenset(
         Capability.GOODNOTES_COMPLETE,
         Capability.GOODNOTES_PULL,
         Capability.GOODNOTES_STATUS,
+        # KLP-WP-04 (chatllm-data-v7, KLP-AC-019/106): the bound discovery
+        # client's two writes are never part of the ordinary ChatLLM profile. A
+        # discovery client is bound by the exact Settings allowlist and installed
+        # through `knowledge-profile-apply`; the deny overlay strips both from
+        # every unbound client whatever its grants say.
+        Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
         Capability.SOURCES_ENROLL,
     }
 )
@@ -276,7 +283,9 @@ _RETIRED: Final[frozenset[Capability]] = frozenset()
 #: Knowledge plane switch. An explicit name set and never a `knowledge.` prefix:
 #: the extraction plane's `knowledge.search`/`read`/`reveal`/`coverage` share the
 #: prefix and stay `ALWAYS` (KLP-AC-001). `record_events.provenance` joins this set
-#: in KLP-WP-05; submit and checkpoint stay prerequisite `NONE` (KLP-WP-04).
+#: in KLP-WP-05. Submit and checkpoint (KLP-WP-04) are `CONTROL_PLANE_EXCLUDED`,
+#: so their ChatLLM prerequisite is `NONE`; the service still withholds both with
+#: the plane switch off (`_KNOWLEDGE_ASSERTION_CAPABILITIES`).
 KNOWLEDGE_ASSERTION_DATA_NAMES: Final[frozenset[Capability]] = frozenset(
     {
         Capability.KNOWLEDGE_ASSERTIONS_READ,
@@ -296,6 +305,9 @@ _COMPATIBILITY_REPLACEMENTS: Final[Mapping[Capability, Capability]] = MappingPro
 
 _SYNC_EXCLUSION: Final = "device sync protocol, not constraint record management"
 _GSQS_EXCLUSION: Final = "GSQS campaign lifecycle held out pending reclassification"
+_KNOWLEDGE_DISCOVERY_EXCLUSION: Final = (
+    "bound Knowledge discovery-client control plane (exact allowlist and profile only)"
+)
 
 _EXCLUSION_RATIONALE: Final[Mapping[Capability, str]] = MappingProxyType(
     {
@@ -315,6 +327,8 @@ _EXCLUSION_RATIONALE: Final[Mapping[Capability, str]] = MappingProxyType(
         Capability.GOODNOTES_COMPLETE: "source ingest/pull pipeline",
         Capability.GOODNOTES_PULL: "source ingest/pull pipeline",
         Capability.GOODNOTES_STATUS: "source ingest/pull pipeline",
+        Capability.KNOWLEDGE_ASSERTIONS_SUBMIT: _KNOWLEDGE_DISCOVERY_EXCLUSION,
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT: _KNOWLEDGE_DISCOVERY_EXCLUSION,
         Capability.GSQS_START: _GSQS_EXCLUSION,
         Capability.GSQS_STATUS: _GSQS_EXCLUSION,
         Capability.SOURCES_ENROLL: "operator-only source enrollment / authority expansion",

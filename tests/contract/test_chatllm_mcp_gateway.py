@@ -6,10 +6,12 @@ import json
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any, Final
 
 import httpx2
 import pytest
+from apps.gateway import remote_access_context
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from sqlalchemy import create_engine
@@ -28,7 +30,6 @@ from my_pa.adapters.mcp.chatllm_gateway import (
 from my_pa.adapters.mcp.remote import (
     RemoteAccessContext,
     create_remote_mcp_app,
-    remote_tool_names,
 )
 from my_pa.adapters.mcp.server import published_tools
 from my_pa.adapters.mcp.tools import TOOLS
@@ -458,8 +459,14 @@ def _resolved_app(
     process_writes: bool,
     oauth_client_id: str = _CLIENT_ID,
     knowledge: bool = False,
+    discovery_clients: frozenset[str] = frozenset(),
 ) -> object:
-    """The composition root's resolution (`apps/gateway.py`), over the synthetic store."""
+    """The composition root's resolution (`apps/gateway.py`), over the synthetic store.
+
+    KLP-WP-04: this is now `apps.gateway.remote_access_context` itself -- the one
+    Knowledge deny overlay included -- rather than a restatement of it, with the
+    compact façade selected for every client as before.
+    """
     service = build_service(scene.world, scene.providers, knowledge_assertions_enabled=knowledge)
     resolution = repository.authenticate(
         oauth_client_id=oauth_client_id,
@@ -468,16 +475,20 @@ def _resolved_app(
         now=_WHEN,
     )
     assert resolution is not None
-    capabilities = frozenset(capability.value for capability in resolution.capabilities)
-    if not resolution.write_allowed:
-        capabilities &= remote_tool_names(service, writes_enabled=False)
-    context = RemoteAccessContext(
-        principal=scene.principal,
-        authenticated_client_id=oauth_client_id,
-        allowed_capabilities=capabilities,
-        capability_purposes=resolution.capability_purposes,
-        compact_publication=True,
+    settings = SimpleNamespace(
+        knowledge_discovery_oauth_client_id_set=lambda: discovery_clients,
+        knowledge_operator_review_oauth_client_id_set=frozenset,
+        chatllm_gateway_oauth_client_id_set=frozenset,
+        compact_publication_for_client=lambda _client: True,
     )
+    authenticated = SimpleNamespace(
+        principal=scene.principal,
+        client_id=oauth_client_id,
+        capabilities=resolution.capabilities,
+        capability_purposes=resolution.capability_purposes,
+        write_allowed=resolution.write_allowed,
+    )
+    context = remote_access_context(settings, service, authenticated)  # type: ignore[arg-type]
     return create_remote_mcp_app(
         service,
         resolve_access=lambda _authorization: context,
@@ -983,3 +994,128 @@ async def test_knowledge_create_needs_writes_on_and_its_write_grant(scene: Scene
         names, items = await _session(app, exercise)
     assert WRITE_TOOL not in names
     assert Capability.KNOWLEDGE_ASSERTIONS_CREATE.value not in items
+
+
+# ---- KLP-WP-04 (KLP-AC-022 whole: the discovery pair) -------------------------------
+
+DISCOVERY: Final = frozenset(
+    {Capability.KNOWLEDGE_ASSERTIONS_SUBMIT, Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT}
+)
+
+
+def _discovery_grants() -> tuple[tuple[Capability, Purpose, bool], ...]:
+    return (
+        (Capability.KNOWLEDGE_ASSERTIONS_SUBMIT, Purpose.KNOWLEDGE_ASSERTION_OBSERVATION, True),
+        (Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT, Purpose.KNOWLEDGE_ASSERTION_OBSERVATION, True),
+        (Capability.KNOWLEDGE_ASSERTIONS_READ, Purpose.KNOWLEDGE_ASSERTION_READ, False),
+        (Capability.TASKS_READ, Purpose.TASK_READ, False),
+    )
+
+
+def test_the_discovery_pair_routes_through_my_pa_write_and_adds_no_facade_tool() -> None:
+    for capability in DISCOVERY:
+        assert facade_kind(capability) == "write"
+        assert feature_label(capability.value) == "knowledge"
+    everything = frozenset(capability.value for capability in KNOWLEDGE | DISCOVERY)
+    assert facade_tool_names(everything) == {DESCRIBE_TOOL, READ_TOOL, WRITE_TOOL}
+    for capability in DISCOVERY:
+        wrapper = {"capability": capability.value, "arguments": {"payload": {}}}
+        assert prepare_compact_call(WRITE_TOOL, wrapper, allowed_canonical=everything)[0] == (
+            capability.value
+        )
+        with pytest.raises(InvalidRequestError):
+            prepare_compact_call(READ_TOOL, wrapper, allowed_canonical=everything)
+
+
+@pytest.mark.anyio
+async def test_a_bound_discovery_submit_through_my_pa_write_is_audited_canonically(
+    scene: Scene,
+) -> None:
+    """The façade reaches submit only by `my_pa.write`; audit names the canonical capability.
+
+    The overlay keeps exactly the discovery profile (the stray `tasks.read` grant
+    is gone from `describe`), and the service's second gate -- not composed with
+    this client in this FAST world -- answers `unsupported` after the audited,
+    allowed decision.
+    """
+    scene.world.audit.clear()
+
+    async def exercise(session: ClientSession) -> tuple[set[str], set[str], object]:
+        names = {tool.name for tool in (await session.list_tools()).tools}
+        described = await session.call_tool(DESCRIBE_TOOL, {"feature": "knowledge"})
+        submitted = await session.call_tool(
+            WRITE_TOOL,
+            {
+                "capability": Capability.KNOWLEDGE_ASSERTIONS_SUBMIT.value,
+                "arguments": {
+                    "payload": {
+                        "source_profile_id": "kdsp_compactgateway0001",
+                        "external_run_id": "run-1",
+                        "external_candidate_id": "candidate-1",
+                        "subject_kind": "principal",
+                        "subject_id": scene.principal.principal_id,
+                        "predicate_code": "policy.requirement",
+                        "value": "Synthetic observation",
+                        "evidence": [
+                            {
+                                "identity_kind": "external_object",
+                                "external_object_id": "object-1",
+                                "content_hash": "b" * 64,
+                                "role": "direct",
+                            }
+                        ],
+                    }
+                },
+            },
+        )
+        items = {str(item["capability"]) for item in _body(described)["items"]}
+        return names, items, submitted
+
+    with _identity(
+        global_writes=True, client_writes=True, grants=_discovery_grants()
+    ) as repository:
+        app = _resolved_app(
+            scene,
+            repository,
+            process_writes=True,
+            knowledge=True,
+            discovery_clients=frozenset({_CLIENT_ID}),
+        )
+        names, items, submitted = await _session(app, exercise)
+    assert names == {DESCRIBE_TOOL, READ_TOOL, WRITE_TOOL}
+    assert items == {
+        Capability.KNOWLEDGE_ASSERTIONS_SUBMIT.value,
+        Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT.value,
+        Capability.KNOWLEDGE_ASSERTIONS_READ.value,
+    }
+    assert _body(submitted)["error"]["code"] == "unsupported"
+    audited = [event.capability for event in scene.world.audit]
+    assert audited == [Capability.KNOWLEDGE_ASSERTIONS_SUBMIT]
+
+
+@pytest.mark.anyio
+async def test_an_unbound_client_never_reaches_the_discovery_pair(scene: Scene) -> None:
+    """Stray submit/checkpoint grants on an unbound client are stripped by the overlay."""
+    scene.world.audit.clear()
+
+    async def exercise(session: ClientSession) -> tuple[set[str], object]:
+        described = await session.call_tool(DESCRIBE_TOOL, {"feature": "knowledge"})
+        submitted = await session.call_tool(
+            WRITE_TOOL,
+            {
+                "capability": Capability.KNOWLEDGE_ASSERTIONS_SUBMIT.value,
+                "arguments": {"payload": {}},
+            },
+        )
+        return {str(item["capability"]) for item in _body(described)["items"]}, submitted
+
+    with _identity(
+        global_writes=True, client_writes=True, grants=_discovery_grants()
+    ) as repository:
+        app = _resolved_app(scene, repository, process_writes=True, knowledge=True)
+        items, submitted = await _session(app, exercise)
+    assert not {capability.value for capability in DISCOVERY} & items
+    assert Capability.KNOWLEDGE_ASSERTIONS_READ.value in items
+    # Refused by the façade itself (a bare problem), before any invoke.
+    assert _body(submitted)["code"] == "unsupported"
+    assert Capability.KNOWLEDGE_ASSERTIONS_SUBMIT not in [e.capability for e in scene.world.audit]

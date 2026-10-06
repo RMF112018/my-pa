@@ -12,7 +12,7 @@ over a socket: nothing in this file knows which capabilities those are.
 
 **Why the envelope is options and the payload is JSON.** The two halves of a
 request have two owners. The envelope is one fixed shape — `RequestMetadata`'s
-fields, the same for all 187 capabilities — so it is presented as
+fields, the same for all 189 capabilities — so it is presented as
 options, which is what a CLI is for. The payload is capability-specific, so
 fifteen sets of hand-written options would be fifteen statements of what
 `application.commands` already says, and a 102nd capability would
@@ -61,6 +61,7 @@ from my_pa.application.errors import (
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.v1.errors import ProblemDetail
 from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.identity.operator_surface import OperatorSurface
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.source.registry import issue_identifier
 
@@ -223,7 +224,11 @@ def run(
     except Exception:
         return _write(out, _problem(InternalError()).to_canonical_json(), EXIT_FAILED)
     try:
-        envelope = service.invoke(metadata, command, principal=principal)
+        # KLP-WP-04 (R6 section 3.2): one of exactly two production stamps of
+        # the local operator surface.
+        envelope = service.invoke(
+            metadata, command, principal=principal, operator_surface=OperatorSurface.CLI
+        )
     except Exception:
         return _write(out, _problem(InternalError()).to_canonical_json(), EXIT_FAILED)
     status = EXIT_OK if envelope.error is None else EXIT_FAILED

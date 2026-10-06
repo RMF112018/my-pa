@@ -35,6 +35,7 @@ import { GET as system } from "@/app/api/system/route";
 import { GET as library } from "@/app/api/library/route";
 import { GET as reviewList } from "@/app/api/review/route";
 import { POST as reviewDecide } from "@/app/api/review/[id]/decide/route";
+import { GET as knowledgeAssertion } from "@/app/api/knowledge/assertions/[assertionId]/route";
 import { POST as capture } from "@/app/api/capture/route";
 import { GET as pulse } from "@/app/api/pulse/route";
 import { GET as situations } from "@/app/api/situations/route";
@@ -833,6 +834,196 @@ describe("the review decision is the backend's own", () => {
     );
     expect(response.status).toBe(409);
     expect((await response.json()).error.errorClass).toBe("conflict");
+  });
+});
+
+describe("KLP-WP-04: Knowledge Assertion review through the BFF", () => {
+  const KNOWLEDGE_ROW = {
+    latest_disposition: null,
+    opened_at: "2026-10-04T12:00:00.000Z",
+    predicate_code: "organization.payment_terms",
+    proposal_id: "kaprp_7a88c3d12e4066cd1e9f007ebf89c4b0",
+    proposal_state: "needs_review",
+    review_case_id: "rvw_aa77ff0d68d72af5b4771d736a0f789e",
+    review_requirement: "requires_operator",
+    review_version: 0,
+    risk_class: "high",
+    subject_id: "ent_66fb736038ea9e42d480f6f466210679",
+    subject_kind: "knowledge_assertion",
+    subject_kind_of_fact: "entity",
+    value_type: "text",
+    value: "net 60",
+    qualifier: null,
+    effective_from: "2026-10-04T12:00:00+00:00",
+    effective_to: null,
+    evidence_ref_ids: ["kaevd_1b0f3a7c9e2d4f6a8b0c2e4f6a8b0c2e"],
+    current_assertion_id: null,
+    current_value: null,
+  };
+
+  it("lists a mixed page: Knowledge mapped, unknown inert, a bad row counted", async () => {
+    const cookie = await signIn();
+    stubGateway({
+      review_cases: [
+        KNOWLEDGE_ROW,
+        { review_case_id: "rvw_unknown0001unknown0001", subject_kind: "future_kind" },
+        { subject_kind: "future_kind" },
+      ],
+    });
+    const response = await reviewList(get(cookie, "/api/review"));
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.droppedRows).toBe(1);
+    expect(body.cases.map((row: { subjectKind: string }) => row.subjectKind)).toEqual([
+      "knowledge_assertion",
+      "unknown",
+    ]);
+    expect(body.cases[0]).toMatchObject({
+      reviewCaseId: KNOWLEDGE_ROW.review_case_id,
+      predicateCode: "organization.payment_terms",
+      reviewRequirement: "requires_operator",
+    });
+    expect(body.cases[0]).not.toHaveProperty("captureId");
+    expect(body.cases[1]).toEqual({
+      subjectKind: "unknown",
+      reviewCaseId: "rvw_unknown0001unknown0001",
+      reportedSubjectKind: "future_kind",
+    });
+  });
+
+  it("forwards invalidate as the domain's own verb and returns the Knowledge receipt", async () => {
+    const cookie = await signIn();
+    stubGateway({
+      review_case_id: KNOWLEDGE_ROW.review_case_id,
+      decision_id: "kadec_0c1d2e3f405162738495a6b7c8d9eaf0",
+      review_version: 1,
+      disposition: "invalidate",
+      proposal_state: "invalidated",
+      assertion_id: null,
+      receipt_id: null,
+    });
+    const response = await reviewDecide(
+      post(cookie, `/api/review/${KNOWLEDGE_ROW.review_case_id}/decide`, {
+        disposition: "invalidate",
+        expectedReviewVersion: 0,
+        // R6 has no typed patch editor: a correction patch is never forwarded.
+        correctionPatch: { value: "net 60" },
+        correction_patch: { value: "net 60" },
+      }),
+      { params: Promise.resolve({ id: KNOWLEDGE_ROW.review_case_id }) },
+    );
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.status).toBe("persisted");
+    expect(body.receipt).toMatchObject({
+      decisionId: "kadec_0c1d2e3f405162738495a6b7c8d9eaf0",
+      proposalState: "invalidated",
+      assertionId: null,
+      receiptId: null,
+    });
+    expect(sent).toHaveLength(1);
+    expect(sent[0].url).toBe("http://127.0.0.1:8000/v1/review.decide");
+    expect(sent[0].body.payload).toEqual({
+      review_case_id: KNOWLEDGE_ROW.review_case_id,
+      expected_review_version: 0,
+      disposition: "invalidate",
+    });
+  });
+
+  it("passes the Knowledge accept's kadec_/kasr_/kamut_ through unchanged", async () => {
+    const cookie = await signIn();
+    stubGateway({
+      review_case_id: KNOWLEDGE_ROW.review_case_id,
+      decision_id: "kadec_9adb6ea38eaeb5e05e1f635c96828236",
+      review_version: 1,
+      disposition: "accept",
+      proposal_state: "accepted",
+      assertion_id: "kasr_284d7c980ceccde51e55e10874e1c270",
+      receipt_id: "kamut_3f7606c8c83bd6129e2301e3bac303ae",
+    });
+    const body = await (
+      await reviewDecide(
+        post(cookie, `/api/review/${KNOWLEDGE_ROW.review_case_id}/decide`, {
+          disposition: "accept",
+          expectedReviewVersion: 0,
+        }),
+        { params: Promise.resolve({ id: KNOWLEDGE_ROW.review_case_id }) },
+      )
+    ).json();
+    expect(body.receipt).toMatchObject({
+      decisionId: "kadec_9adb6ea38eaeb5e05e1f635c96828236",
+      assertionId: "kasr_284d7c980ceccde51e55e10874e1c270",
+      receiptId: "kamut_3f7606c8c83bd6129e2301e3bac303ae",
+    });
+  });
+
+  it("refuses a verb outside the contract, and invalidate on the synthetic path", async () => {
+    const cookie = await signIn();
+    stubGateway({});
+    for (const disposition of ["reprocess", "escalate", "correct_and_accept", "invalidated"]) {
+      const response = await reviewDecide(
+        post(cookie, "/api/review/rvw_aaaaaaaa11111111/decide", {
+          disposition,
+          expectedReviewVersion: 0,
+        }),
+        { params: Promise.resolve({ id: "rvw_aaaaaaaa11111111" }) },
+      );
+      expect(response.status, disposition).toBe(400);
+      expect((await response.json()).error.code).toBe("invalid_disposition");
+    }
+    expect(sent).toEqual([]);
+    vi.stubEnv("MYPA_DATA_PROVIDER", "synthetic");
+    const synthetic = await reviewDecide(
+      post(cookie, "/api/review/rvw_aaaaaaaa11111111/decide", { disposition: "invalidate" }),
+      { params: Promise.resolve({ id: "rvw_aaaaaaaa11111111" }) },
+    );
+    expect(synthetic.status).toBe(400);
+    expect((await synthetic.json()).error.code).toBe("invalid_disposition");
+  });
+
+  it("reads one assertion through knowledge.assertions.read by its kasr_ id only", async () => {
+    const cookie = await signIn();
+    const assertion = {
+      assertion_id: "kasr_284d7c980ceccde51e55e10874e1c270",
+      subject_kind: "entity",
+      subject_id: "ent_66fb736038ea9e42d480f6f466210679",
+      predicate_code: "organization.payment_terms",
+      predicate_version: 1,
+      value_type: "text",
+      value: "net 30",
+      qualifier: null,
+      effective_from: "2026-10-04T12:00:00+00:00",
+      effective_to: null,
+      epistemic_status: "review_accepted",
+      classification: "private_local",
+      lifecycle: "active",
+      version: 1,
+      supersedes_assertion_id: null,
+      created_at: "2026-10-04T12:00:00+00:00",
+      updated_at: "2026-10-04T12:00:00+00:00",
+    };
+    stubGateway({ assertion });
+    const response = await knowledgeAssertion(
+      get(cookie, `/api/knowledge/assertions/${assertion.assertion_id}`),
+      { params: Promise.resolve({ assertionId: assertion.assertion_id }) },
+    );
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.assertion).toEqual(assertion);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].url).toBe("http://127.0.0.1:8000/v1/knowledge.assertions.read");
+    expect(sent[0].body.payload).toEqual({ assertion_id: assertion.assertion_id });
+    expect(sent[0].body.purpose).toBe("knowledge_assertion_read");
+
+    sent = [];
+    for (const bad of ["cap_aaaaaaaa11111111", "kaprp_7a88c3d12e4066cd1e9f007ebf89c4b0", "kasr_x"]) {
+      const refused = await knowledgeAssertion(
+        get(cookie, `/api/knowledge/assertions/${bad}`),
+        { params: Promise.resolve({ assertionId: bad }) },
+      );
+      expect(refused.status, bad).toBe(400);
+    }
+    expect(sent).toEqual([]);
   });
 });
 

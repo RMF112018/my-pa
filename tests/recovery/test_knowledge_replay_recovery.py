@@ -26,6 +26,18 @@ KLP-WP-04 slice C adds the Knowledge `review.decide` half: an acceptance lost
 after COMMIT replays from `relationship_write_requests` (`review_decision`)
 with the stored seven keys -- the same decision, assertion and receipt -- and
 writes no second decision, mutation or Record Event.
+
+KLP-WP-07 (race 12 closure over every family the vertical slice uses) adds the
+DOMAIN_OWNED and Review-queued submit outcomes -- a `project.critical_date`
+routed to its task, a `project.decision` completed no-intake and a
+`project.financial_fact` queued for Review, each lost after COMMIT, replays the
+stored result (same submission, route or proposal/case) and writes no second
+submission, proposal, Review case or Knowledge row -- and the non-promoting
+Review dispositions the workbench offers (`reject`, `defer`), each lost after
+COMMIT, replaying the stored decision with no second decision row. Race 13: a
+Record Event flush that fails after the canonical write was staged rolls the
+whole submit back -- reservation, assertion, mutation, links and event -- and
+the retry is an ordinary first submit.
 """
 
 from __future__ import annotations
@@ -37,13 +49,17 @@ from typing import Any
 
 import pytest
 
+from my_pa.application.commands import CreateTask
 from my_pa.contracts.ports import UnitOfWork
 from my_pa.domain.capture.review import Disposition
 from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operator_surface import OperatorSurface
+from my_pa.domain.knowledge_assertion.vocabulary import KnowledgeSubjectKind
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.domain.task.lifecycle import TaskOriginKind
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
+from my_pa.infrastructure.persistence.tables import knowledge_assertion_proposals
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 from tests.database.test_knowledge_assertion_repository import (
     WHEN,
@@ -57,6 +73,7 @@ from tests.database.test_knowledge_assertion_review import (
     ReviewRuntime,
     _queued,
     decisions_of,
+    proposal_of,
 )
 from tests.database.test_knowledge_assertion_submissions import (
     CLIENT,
@@ -65,6 +82,7 @@ from tests.database.test_knowledge_assertion_submissions import (
     SubmitRuntime,
     add_direct_payment_head,
     external,
+    table_count,
 )
 from tests.database.test_knowledge_checkpoint_idempotency_replay import (
     CHECKPOINT_GRANTS,
@@ -347,3 +365,170 @@ def test_a_review_accept_lost_after_commit_replays_and_stages_no_second_event(
         command, principal_id=principal, request_id=request_id, operator_surface=CLI_SURFACE
     )
     assert again.result == retried.result
+
+
+# ---- KLP-WP-07: the DOMAIN_OWNED / Review-queued submit outcomes lost after COMMIT ------
+
+_REMOTE: dict[str, Any] = {
+    "transport": CaptureTransport.REMOTE_CLIENT,
+    "grants": SUBMIT_GRANTS,
+    "client_id": CLIENT,
+}
+
+
+def _task(service: SubmitRuntime, principal: str) -> str:
+    created = service.ok(
+        CreateTask(
+            title="Synthetic recovery task",
+            idempotency_key="klp07-recovery-task",
+            origin_kind=TaskOriginKind.DIRECT_PRINCIPAL,
+        ),
+        principal_id=principal,
+    )
+    found = next(value for value in _strings(created) if value.startswith("tsk_"))
+    return found
+
+
+def _strings(document: object) -> Iterator[str]:
+    if isinstance(document, str):
+        yield document
+    elif isinstance(document, dict):
+        for value in document.values():
+            yield from _strings(value)
+    elif isinstance(document, list | tuple):
+        for value in document:
+            yield from _strings(value)
+
+
+@pytest.mark.parametrize(
+    ("predicate", "routed", "outcome"),
+    [
+        ("project.critical_date", True, "domain_owned_routed"),
+        ("project.decision", False, "domain_owned_no_intake"),
+        ("project.financial_fact", False, "review_queued"),
+    ],
+    ids=["routed_critical_date", "decision_no_intake", "review_queued"],
+)
+def test_a_project_submit_outcome_lost_after_commit_replays_and_writes_nothing_more(
+    submit_runtime: tuple[SubmitRuntime, list[bool]],
+    predicate: str,
+    routed: bool,
+    outcome: str,
+) -> None:
+    service, armed = submit_runtime
+    principal = new_principal()
+    profile = service.profile(principal)
+    project = service.project(principal, "recovery-route")
+    extra: dict[str, Any] = {}
+    if predicate == "project.critical_date":
+        extra["qualifier"] = {"date_kind": "deadline"}
+        value = "2026-11-20T00:00:00+00:00"
+    else:
+        value = "Synthetic recovery fact"
+    if routed:
+        extra["owner_ref"] = {"kind": "task", "id": _task(service, principal)}
+    command = service.submit_command(
+        principal,
+        profile,
+        subject_kind=KnowledgeSubjectKind.PROJECT,
+        subject_id=project,
+        predicate=predicate,
+        value=value,
+        candidate="lost",
+        evidence=(external("obj-lost"),),
+        **extra,
+    )
+    armed.append(True)
+    lost = service.invoke(command, principal_id=principal, **_REMOTE)
+    assert lost.error is not None, "the injected loss must reach the caller as a failure"
+    committed = counts(service.engine, principal)
+    assert committed["knowledge_assertion_submissions"] == 1
+    assert committed["knowledge_assertions"] == 0
+    proposals = table_count(service.engine, knowledge_assertion_proposals, principal)
+    assert proposals == (1 if outcome == "review_queued" else 0)
+    sequence = next_sequence(service.engine, principal)
+
+    retried: dict[str, Any] = service.ok(command, principal_id=principal, **_REMOTE)
+    assert retried["outcome"] == outcome, retried
+    if routed:
+        assert retried["routed_record_id"] == extra["owner_ref"]["id"]
+        assert retried["canonical_owner"] == "tasks"
+    if outcome == "review_queued":
+        assert retried["review_case_id"] is not None
+        assert proposal_of(service.engine, retried["review_case_id"])["state"] == "needs_review"
+    assert counts(service.engine, principal) == committed
+    assert table_count(service.engine, knowledge_assertion_proposals, principal) == proposals
+    assert next_sequence(service.engine, principal) == sequence
+    assert service.ok(command, principal_id=principal, **_REMOTE) == retried
+
+
+@pytest.mark.parametrize("disposition", [Disposition.REJECT, Disposition.DEFER])
+def test_a_non_promoting_review_decision_lost_after_commit_replays(
+    review_runtime: tuple[ReviewRuntime, list[bool]], disposition: Disposition
+) -> None:
+    service, armed = review_runtime
+    principal, _entity, case = _queued(service)
+    command = service.decide_command(
+        case,
+        disposition,
+        reason="Synthetic reason" if disposition is Disposition.REJECT else None,
+    )
+    request_id = issue_identifier(IdKind.CORRELATION)
+    armed.append(True)
+    lost = service.invoke_with_request_id(
+        command, principal_id=principal, request_id=request_id, operator_surface=CLI_SURFACE
+    )
+    assert lost.error is not None, "the injected loss must reach the caller as a failure"
+    committed = counts(service.engine, principal)
+    sequence = next_sequence(service.engine, principal)
+    (decision,) = decisions_of(service.engine, case)
+    state = proposal_of(service.engine, case)["state"]
+    assert state == ("rejected" if disposition is Disposition.REJECT else "deferred")
+
+    retried = service.invoke_with_request_id(
+        command, principal_id=principal, request_id=request_id, operator_surface=CLI_SURFACE
+    )
+    assert retried.error is None, retried.error
+    assert retried.result is not None
+    assert retried.result["decision_id"] == decision["decision_id"]
+    assert retried.result["proposal_state"] == state
+    assert retried.result["assertion_id"] is None
+    assert counts(service.engine, principal) == committed
+    assert next_sequence(service.engine, principal) == sequence
+    assert len(decisions_of(service.engine, case)) == 1
+    assert proposal_of(service.engine, case)["state"] == state
+
+
+def test_a_record_event_flush_failure_rolls_the_whole_submit_back(
+    submit_runtime: tuple[SubmitRuntime, list[bool]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Race 13 (KLP-AC-102): the flush is the last work before COMMIT, in one transaction."""
+    from my_pa.infrastructure.persistence import unit_of_work as unit_of_work_module
+
+    service, _armed = submit_runtime
+    principal = new_principal()
+    profile = service.profile(principal)
+    org = service.entity(principal, "flush")
+    before = counts(service.engine, principal)
+    sequence = next_sequence(service.engine, principal)
+    original = unit_of_work_module.flush_record_events
+    staged: list[int] = []
+
+    def refuse(writer: Any, drafts: Any) -> None:  # noqa: ANN401
+        staged.append(len(drafts))
+        raise RuntimeError("injected Record Event flush failure")
+
+    monkeypatch.setattr(unit_of_work_module, "flush_record_events", refuse)
+    command = service.submit_command(principal, profile, subject_id=org, candidate="flush")
+    failed = service.invoke(command, principal_id=principal, **_REMOTE)
+    assert failed.error is not None
+    assert staged == [1], "the direct create had staged its one event when the flush failed"
+    assert counts(service.engine, principal) == before
+    assert next_sequence(service.engine, principal) == sequence
+    monkeypatch.setattr(unit_of_work_module, "flush_record_events", original)
+    created: dict[str, Any] = service.ok(command, principal_id=principal, **_REMOTE)
+    assert created["outcome"] == "direct_created", created
+    after = counts(service.engine, principal)
+    assert after["knowledge_assertion_submissions"] == 1
+    assert after["knowledge_assertions"] == 1
+    assert after["record_events"] == 1

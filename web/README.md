@@ -87,7 +87,7 @@ All application pages require a verified session. `/sign-in`, `/setup`, and
 | `GET /api/people/unresolved` | `entities.unresolved_mentions` | Lists unresolved mentions; `observed_value` is refused |
 | `GET /api/people/:entityId/identity-history` | `entities.identity_history` | Reads Principal-scoped identity history |
 | `POST /api/review/:id/decide` | `review.decide` | Applies an optimistic-concurrency review decision; Knowledge cases offer accept, reject, defer, unresolved and invalidate, never a correction patch |
-| `GET /api/knowledge/assertions/:assertionId` | `knowledge.assertions.read` | Reads one accepted Knowledge Assertion (`kasr_` ids only) after a Review accept; replaces Reveal for Knowledge rows |
+| `GET /api/knowledge/assertions/:assertionId` | `knowledge.assertions.read` | Reads one stored Knowledge Assertion (`kasr_` ids only); Knowledge rows never use Reveal (the Review workbench renders the candidate from the `review.list` row) |
 | `POST /api/capture` | `capture.create` | Persists a Quick Capture with backend-owned idempotency and a verifiable receipt |
 | `GET /api/tasks` | `tasks.list`, `tasks.search` | Lists or searches server-owned Tasks with Work-view filters and opaque cursors |
 | `POST /api/tasks` | `tasks.create` | Creates a Task with server-validated origin evidence and idempotency |

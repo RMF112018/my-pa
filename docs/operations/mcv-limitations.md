@@ -711,9 +711,12 @@ live database. Populating the operator-review allowlist is operator decision
 KLP-OD-005. A remote operator-review decision proves that the client holds the
 credential, not that a human decided (design residual R-1). Envelopes are
 MAC-sealed, not encrypted, and their retention is operator decision KLP-OD-002.
-The web Review workbench shows a Knowledge case without its proposed value: the
-frozen row carries no candidate value, and `knowledge.assertions.read` reads
-only an accepted `kasr_` fact. A proposal read surface needs a plan decision.
+The `review.list` Knowledge row carries the read-only candidate (typed value,
+qualifier, bounds, cited `kaevd_` ids, current holder) under the existing Review
+gates, so a reviewer sees what it decides; a remote caller sees no holder the
+caller may not read. A Review promotion re-checks the KLP-AC-031 supersession
+guards under C6; a holder with no recorded effective_from can then only be
+rejected, never superseded, through Review.
 `knowledge-discovery-v2` (with `record_events.provenance`) is KLP-WP-05.
 
 Evidence: `ops/runbooks/managed-knowledge-context.md`,
@@ -723,7 +726,9 @@ Evidence: `ops/runbooks/managed-knowledge-context.md`,
 `tests/unit/test_knowledge_source_profile_provisioner.py::test_the_committed_initial_profiles_contain_no_onedrive_profile`,
 `tests/database/test_knowledge_checkpoint_idempotency_replay.py::test_a_first_advance_is_version_one_and_sealed_under_the_signing_key`,
 `tests/contract/test_knowledge_review_operator_authority.py::test_e_a_remote_chatllm_client_is_interactive_and_denied_operator_cases`,
-`tests/database/test_knowledge_assertion_review.py::test_a_queued_proposal_is_no_assertion_until_acceptance_promotes_it`.
+`tests/database/test_knowledge_assertion_review.py::test_a_queued_proposal_is_no_assertion_until_acceptance_promotes_it`,
+`tests/security/test_knowledge_review_disclosure.py::test_a_withheld_holder_is_nulled_for_a_remote_reviewer_only`,
+`tests/database/test_knowledge_assertion_review.py::test_a_holder_without_effective_from_is_never_superseded_by_review`.
 
 ---
 

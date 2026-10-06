@@ -1308,19 +1308,15 @@ def _port_failure(error: PortError) -> ApplicationError:
     if isinstance(error, KnowledgeConcurrentDuplicateError):
         return ConflictError(SafeDetail.DUPLICATE_FACT)
     if isinstance(error, KnowledgeSupersessionGuardError):
-        # KLP-WP-04 fix round 4 (DEV-66 ruling): a Review promotion over a
-        # single-current holder failing a KLP-AC-031 guard. Existing tokens only:
-        # `effective_from` for the bounds guards, `evidence` for counterevidence.
-        return ConflictError(
-            *(
-                detail
-                for detail, failed in (
-                    (SafeDetail.EFFECTIVE_FROM, error.bounds),
-                    (SafeDetail.EVIDENCE, error.counterevidence),
-                )
-                if failed
-            )
-        )
+        # KLP-WP-04 fix round 5: a Review promotion over a single-current holder
+        # failing a Review supersession guard (future-dated successor or
+        # effective_from ordering) is `conflict(effective_from)`. For a remote
+        # caller the holder is withheld from, every guard failure is the one
+        # uniform `conflict(review_case_id)` (NB-R5-1; existing token, no
+        # contract change), naming no field of a holder it may not see.
+        if error.generic:
+            return ConflictError(SafeDetail.REVIEW_CASE_ID)
+        return ConflictError(SafeDetail.EFFECTIVE_FROM)
     if isinstance(error, KnowledgeEvidenceNotFoundError):
         return NotFoundError(SafeDetail.EVIDENCE)
     if isinstance(error, KnowledgeCaptureWithdrawnError):
@@ -6017,6 +6013,7 @@ class ApplicationService:
             correlation_id=authorization.correlation_id,
             audit_id=authorization.audit_id,
             predicate=predicate,
+            remote=knowledge_is_remote(authorization),
         )
         conflict = missing = False
         decision: KnowledgeReviewDecisionResult | None = None

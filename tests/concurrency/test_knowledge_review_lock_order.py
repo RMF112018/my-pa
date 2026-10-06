@@ -64,7 +64,6 @@ from tests.database.test_knowledge_assertion_review import (
     assertion_of,
     decisions_of,
     proposal_of,
-    write_request_count,
 )
 from tests.database.test_knowledge_assertion_submissions import LATER, PAYMENT, external
 
@@ -383,7 +382,7 @@ def test_a_promotion_waiting_at_c6_holds_c5_and_a_second_waits_at_c5(
     assert second.error.safe_details == ("expected_review_version",)
 
 
-# ---- KLP-AC-031 on a Review supersession (fix round 4, DEV-66 ruling) -----------------
+# ---- Review supersession under C6 (fix rounds 4-5, DEV-66 rulings) ---------------------
 
 
 def _waiting_on_subject_lock(engine: Engine) -> int:
@@ -399,21 +398,18 @@ def _waiting_on_subject_lock(engine: Engine) -> int:
         )
 
 
-def test_counterevidence_linked_to_the_holder_while_a_decide_waits_at_c6_refuses_it(
+def test_counterevidence_linked_while_a_decide_waits_at_c6_does_not_block_review(
     review: ReviewRuntime,
 ) -> None:
-    """Modelled on test_knowledge_c4_order's holder-counterevidence node.
+    """Fix round 5 ruling: Review has no counterevidence guard, even under a race.
 
-    A session takes the C6 subject lock of the live payment_terms holder and
-    links counterevidence to it, pausing before COMMIT. An acceptance of a
-    queued different-value proposal (guards holding when it was filed) blocks on
-    that C6 row (the waiting statement is the subject-lock `SELECT ... FOR
-    UPDATE`, observed). After the commit the decide re-reads the holder's
-    counterevidence under C6 and answers `conflict(evidence)`: no decision, the
-    holder still active, the case open. The linking session takes no C3 (every
-    production link writer takes C3 first for an Entity subject, so with
-    today's registry the production race serialises at C3; this is the C6
-    re-read's guard).
+    Modelled on test_knowledge_c4_order's holder-counterevidence node: a session
+    takes the C6 subject lock of the live payment_terms holder and links
+    counterevidence to it, pausing before COMMIT. An acceptance of a queued,
+    ordered, not-future different-value proposal blocks on that C6 row (the
+    waiting statement is the subject-lock `SELECT ... FOR UPDATE`, observed).
+    After the commit the decide re-reads the holder under C6 and supersedes it:
+    a contested holder is a reviewer's to replace.
     """
     principal, holder, case = _holder_and_case(review, successor_from=LATER, direct_successor=False)
     engine = review.engine
@@ -433,8 +429,6 @@ def test_counterevidence_linked_to_the_holder_while_a_decide_waits_at_c6_refuses
             text("SELECT subject_id FROM knowledge.knowledge_assertions WHERE assertion_id = :a"),
             {"a": holder},
         ).scalar_one()
-    before = counts(engine, principal)
-    requests = write_request_count(engine, principal)
     locked = threading.Event()
     release = threading.Event()
 
@@ -468,15 +462,9 @@ def test_counterevidence_linked_to_the_holder_while_a_decide_waits_at_c6_refuses
         release.set()
         linker.result(timeout=DEADLINE_SECONDS)
         envelope = decide.result(timeout=DEADLINE_SECONDS)
-    assert envelope.error is not None, envelope
-    assert envelope.error.code.value == "conflict"
-    assert envelope.error.safe_details == ("evidence",)
-    assert decisions_of(engine, case) == []
-    after = counts(engine, principal)
-    # Only the linker's row was added.
-    assert {k: after[k] - before[k] for k in after if after[k] != before[k]} == {
-        "knowledge_assertion_evidence_links": 1
-    }
-    assert write_request_count(engine, principal) == requests
-    assert proposal_of(engine, case)["state"] == "needs_review"
-    assert assertion_of(engine, holder)["lifecycle"] == "active"
+    assert envelope.error is None, envelope.error
+    assert envelope.result is not None
+    assert len(decisions_of(engine, case)) == 1
+    successor = assertion_of(engine, envelope.result["assertion_id"])
+    assert successor["supersedes_assertion_id"] == holder
+    assert assertion_of(engine, holder)["lifecycle"] == "superseded"

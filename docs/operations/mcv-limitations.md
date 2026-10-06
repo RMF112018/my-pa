@@ -714,9 +714,11 @@ MAC-sealed, not encrypted, and their retention is operator decision KLP-OD-002.
 The `review.list` Knowledge row carries the read-only candidate (typed value,
 qualifier, bounds, cited `kaevd_` ids, current holder) under the existing Review
 gates, so a reviewer sees what it decides; a remote caller sees no holder the
-caller may not read. A Review promotion re-checks the KLP-AC-031 supersession
-guards under C6; a holder with no recorded effective_from can then only be
-rejected, never superseded, through Review.
+caller may not read. A Review promotion that supersedes re-checks under C6 only
+that the successor is not future-dated and that its effective_from does not
+precede the holder's (a holder with no recorded effective_from is the unbounded
+past); a reviewer may supersede a contested holder, which autonomous submit
+never does.
 `knowledge-discovery-v2` (with `record_events.provenance`) is KLP-WP-05.
 
 Evidence: `ops/runbooks/managed-knowledge-context.md`,
@@ -728,7 +730,7 @@ Evidence: `ops/runbooks/managed-knowledge-context.md`,
 `tests/contract/test_knowledge_review_operator_authority.py::test_e_a_remote_chatllm_client_is_interactive_and_denied_operator_cases`,
 `tests/database/test_knowledge_assertion_review.py::test_a_queued_proposal_is_no_assertion_until_acceptance_promotes_it`,
 `tests/security/test_knowledge_review_disclosure.py::test_a_withheld_holder_is_nulled_for_a_remote_reviewer_only`,
-`tests/database/test_knowledge_assertion_review.py::test_a_holder_without_effective_from_is_never_superseded_by_review`.
+`tests/database/test_knowledge_assertion_review.py::test_counterevidence_blocks_submit_but_not_a_review_supersession`.
 
 ---
 

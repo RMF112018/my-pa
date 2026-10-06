@@ -38,7 +38,7 @@ from __future__ import annotations
 import json
 import threading
 from collections.abc import Iterator
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, Final
 
 import pytest
@@ -53,12 +53,13 @@ from tests.database.test_knowledge_assertion_review import (
     ReviewRuntime,
     _holder_and_case,
     _queued,
+    _refused_and_untouched,
     decisions_of,
     proposal_of,
     remote,
     without_correlation,
 )
-from tests.database.test_knowledge_assertion_submissions import LATER, external
+from tests.database.test_knowledge_assertion_submissions import EARLY, LATER, external
 
 from my_pa.application.commands import ListReviewCases
 from my_pa.domain.capture.review import Disposition
@@ -456,3 +457,63 @@ def test_a_restricted_or_ungranted_case_shows_nothing_and_the_page_is_not_short(
     assert [
         _knowledge_row(local, case)["value"] for case in (restricted, unavailable, visible)
     ] == ["Synthetic terms 0", "Synthetic terms 1", "Synthetic terms 2"]
+
+
+# ---- NB-R5-1: a remote guard refusal over a withheld holder is generic (fix round 5) ----
+
+#: The three Review supersession guard failures: regressing, future-dated, and a
+#: NULL successor over a dated predecessor.
+GUARD_FAILURES: Final = (EARLY - timedelta(days=5), WHEN + timedelta(days=5), None)
+
+
+def _withheld_holder_case(
+    review: ReviewRuntime, successor_from: datetime | None, *, withhold: bool = True
+) -> tuple[str, str, str]:
+    principal, holder, case = _holder_and_case(
+        review, successor_from=successor_from, direct_successor=False
+    )
+    if withhold:
+        with knowledge_maintenance_transaction(review.engine) as repository:
+            repository.classify_evidence_restricted(
+                principal, _holder_evidence(review, holder), at=WHEN
+            )
+    return principal, holder, case
+
+
+def test_a_remote_guard_refusal_over_a_withheld_holder_is_one_uniform_generic_conflict(
+    review: ReviewRuntime,
+) -> None:
+    """Every guard failure answers the same body, naming no field of the holder.
+
+    The case itself stays visible (its own evidence is unrestricted); only the
+    holder is `withheld_remote`. Remote is R6's predicate, so the LOCAL
+    composition with grants is generic too. Nothing is written by any refusal.
+    """
+    bodies: set[str] = set()
+    for successor_from in GUARD_FAILURES:
+        principal, holder, case = _withheld_holder_case(review, successor_from)
+        for via in (remote(OPERATOR_CLIENT), LOCAL_WITH_GRANTS):
+            error = _refused_and_untouched(
+                review, principal, holder, case, Disposition.ACCEPT, ["review_case_id"], via=via
+            )
+            bodies.add(json.dumps(without_correlation(error), sort_keys=True))
+    assert len(bodies) == 1, bodies
+    assert "effective_from" not in next(iter(bodies))
+
+
+def test_local_and_holder_visible_remote_refusals_keep_the_specific_reason(
+    review: ReviewRuntime,
+) -> None:
+    for successor_from in GUARD_FAILURES:
+        # Withheld holder: a local caller still gets the field.
+        principal, holder, case = _withheld_holder_case(review, successor_from)
+        for via in (CLI, {}):
+            _refused_and_untouched(
+                review, principal, holder, case, Disposition.ACCEPT, ["effective_from"], via=via
+            )
+        # Visible holder: a remote caller gets the field as well.
+        principal, holder, case = _withheld_holder_case(review, successor_from, withhold=False)
+        for via in (remote(OPERATOR_CLIENT), LOCAL_WITH_GRANTS):
+            _refused_and_untouched(
+                review, principal, holder, case, Disposition.ACCEPT, ["effective_from"], via=via
+            )

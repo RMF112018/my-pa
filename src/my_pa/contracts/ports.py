@@ -5112,23 +5112,22 @@ class KnowledgeSubjectNotCanonicalError(PortError):
 
 
 class KnowledgeSupersessionGuardError(PortError):
-    """KLP-WP-04 fix round 4 (DEV-66 ruling): a Review promotion may not supersede.
+    """KLP-WP-04 (fix round 5 ruling): a Review promotion may not supersede the holder.
 
-    The single-current holder found under C6 fails a KLP-AC-031 guard (the same
-    `supersession_guard_blockers` the autonomous policy applies): an unknown or
-    regressing successor effective_from, a future-dated successor, or a
-    predecessor with unresolved counterevidence. Raised before the decision row,
-    so the transaction (C1 reservation included) rolls back whole and the case
-    stays open for a `correct_and_accept` with corrected bounds.
+    The single-current holder found under C6 fails a Review supersession guard
+    (`review_supersession_blockers`: a future-dated successor, or an
+    effective_from ordering failure). Raised before the decision row, so the
+    transaction (C1 reservation included) rolls back whole and the case stays
+    open for a `correct_and_accept` with corrected bounds.
 
-    `bounds` is true when an effective_from guard failed; `counterevidence` when
-    the predecessor carries counterevidence. Both may be true.
+    `generic` is true when the caller is remote and the holder is
+    `withheld_remote` for it: the answer must then name no field, so a remote
+    caller cannot probe a holder it may not see (NB-R5-1).
     """
 
-    def __init__(self, *, bounds: bool, counterevidence: bool) -> None:
+    def __init__(self, *, generic: bool) -> None:
         super().__init__("the single-current holder may not be superseded")
-        self.bounds = bounds
-        self.counterevidence = counterevidence
+        self.generic = generic
 
 
 @dataclass(frozen=True, slots=True)
@@ -5213,6 +5212,9 @@ class KnowledgeReviewDecisionRequest:
     correlation_id: str
     audit_id: str
     predicate: Any = None  # domain.knowledge_assertion.predicate.KnowledgePredicate
+    #: R6's remote predicate for this caller (`REMOTE_CLIENT` or any grant
+    #: ceiling); a guard refusal over a holder withheld from it is generic.
+    remote: bool = False
 
 
 @dataclass(frozen=True, slots=True)

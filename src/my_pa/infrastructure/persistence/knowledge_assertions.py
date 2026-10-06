@@ -133,13 +133,12 @@ from my_pa.domain.knowledge_assertion.admission import (
     AdmissionEvidence,
     AdmissionPath,
     CurrentFact,
-    DirectAdmissionBlocker,
     DirectAdmissionFacts,
     SourceProfileFacts,
     SubjectResolution,
     decide_direct_admission,
     decide_domain_route,
-    supersession_guard_blockers,
+    review_supersession_blockers,
 )
 from my_pa.domain.knowledge_assertion.checkpoint import CheckpointBinding, CheckpointSeal
 from my_pa.domain.knowledge_assertion.predicate import KnowledgePredicate
@@ -3882,34 +3881,36 @@ class _ReviewDecision:
         )
 
     def _require_supersession_guards(self, proposal: Row[Any], holder: Row[Any]) -> None:
-        """KLP-AC-031 on a Review supersession, from facts read under C6 (DEV-66 ruling).
+        """The Review supersession guards, from facts read under C6 (fix round 5 ruling).
 
-        The holder (and its effective_from) was just read under the C6 subject
-        lock and its counterevidence links are read here, still under it; the
-        successor's bounds are the corrected candidate's, else the proposal's.
-        The same `supersession_guard_blockers` the autonomous policy applies.
-        Raised before the decision row: nothing of this decide survives.
+        The holder and its effective_from were just read under the C6 subject
+        lock; the successor's bounds are the corrected candidate's, else the
+        proposal's. `review_supersession_blockers` applies only the future-date
+        and ordering guards (no counterevidence guard: a reviewer may supersede a
+        contested holder). For a remote caller the holder is `withheld_remote`
+        from, the refusal is generic (NB-R5-1). Raised before the decision row:
+        nothing of this decide survives.
         """
         corrected = self.request.corrected
         successor = proposal.effective_from if corrected is None else corrected.effective_from
-        blockers = supersession_guard_blockers(
-            successor,
-            CurrentFact(
-                assertion_id=holder.assertion_id,
-                effective_from=holder.effective_from,
-                unresolved_counterevidence=_has_counterevidence(
-                    self.connection, self.context, holder.assertion_id
-                ),
-            ),
-            self.at,
+        if not review_supersession_blockers(successor, holder.effective_from, self.at):
+            return
+        raise KnowledgeSupersessionGuardError(
+            generic=self.request.remote and self._withheld_remote(holder.assertion_id)
         )
-        if blockers:
-            counterevidence = (
-                DirectAdmissionBlocker.PREDECESSOR_COUNTEREVIDENCE_UNRESOLVED in blockers
-            )
-            raise KnowledgeSupersessionGuardError(
-                bounds=len(blockers) > int(counterevidence), counterevidence=counterevidence
-            )
+
+    def _withheld_remote(self, assertion_id: str) -> bool:
+        a = knowledge_assertions
+        return (
+            self.connection.execute(
+                select(a.c.assertion_id).where(
+                    partition_criterion(a, self.context),
+                    a.c.assertion_id == assertion_id,
+                    assertion_withheld_remote(a, self.principal_id),
+                )
+            ).first()
+            is not None
+        )
 
     # -- C7 / C8 writers --------------------------------------------------------------
 

@@ -818,7 +818,7 @@ def test_acceptance_supersedes_a_different_single_current_holder(review: ReviewR
     assert kinds == ["created", "state_changed", "created"]
 
 
-# ---- KLP-AC-031 on a Review supersession (fix round 4, Manager ruling on DEV-66) -----
+# ---- Review supersession guards (fix rounds 4-5, Manager rulings on DEV-66) -----------
 
 
 def _refused_and_untouched(
@@ -829,10 +829,11 @@ def _refused_and_untouched(
     disposition: Disposition,
     details: list[str],
     patch: dict[str, object] | None = None,
-) -> None:
+    via: dict[str, object] = CLI,
+) -> dict[str, Any]:
     before = counts(review.engine, principal)
     requests = write_request_count(review.engine, principal)
-    error = review.decide_error(principal, case, disposition, patch=patch)
+    error = review.decide_error(principal, case, disposition, patch=patch, via=via)
     assert error["code"] == "conflict", error
     assert error["safe_details"] == details
     # No decision row, no mutation, no Record Event, no C1 reservation left.
@@ -841,6 +842,7 @@ def _refused_and_untouched(
     assert write_request_count(review.engine, principal) == requests
     assert proposal_of(review.engine, case)["state"] == "needs_review"
     assert assertion_of(review.engine, holder)["lifecycle"] == "active"
+    return error
 
 
 def _corrected_acceptance_supersedes(
@@ -862,7 +864,7 @@ def _corrected_acceptance_supersedes(
 @pytest.mark.parametrize(
     "successor_from",
     [EARLY - timedelta(days=5), WHEN + timedelta(days=5), None],
-    ids=["regresses", "future_dated", "unknown"],
+    ids=["regresses", "future_dated", "null_over_dated"],
 )
 def test_a_review_supersession_failing_a_bounds_guard_is_refused_and_correctable(
     review: ReviewRuntime, successor_from: datetime | None
@@ -892,57 +894,60 @@ def test_a_correction_that_still_regresses_is_refused(review: ReviewRuntime) -> 
     _corrected_acceptance_supersedes(review, principal, holder, case)
 
 
-def test_a_holder_without_effective_from_is_never_superseded_by_review(
-    review: ReviewRuntime,
+@pytest.mark.parametrize("successor_from", [LATER, None], ids=["dated", "null"])
+def test_a_holder_without_effective_from_is_superseded_by_review(
+    review: ReviewRuntime, successor_from: datetime | None
 ) -> None:
-    """Unknown predecessor bound: as the submit policy, the ordering cannot be shown.
+    """Fix round 5 ruling: a NULL predecessor bound is the unbounded past.
 
-    No correction can supply the holder's bound, so the case can only be
-    rejected (or left open); recorded as a residual.
+    Any not-future successor -- dated, or NULL itself -- satisfies the ordering,
+    so acceptance supersedes (the autonomous submit queued it: its policy keeps
+    the unknown-bound blocker).
     """
-    principal, holder, case = _holder_and_case(review, successor_from=LATER, holder_from=None)
-    _refused_and_untouched(review, principal, holder, case, Disposition.ACCEPT, ["effective_from"])
-    _refused_and_untouched(
-        review,
-        principal,
-        holder,
-        case,
-        Disposition.CORRECT_AND_ACCEPT,
-        ["effective_from"],
-        patch={"effective_from": LATER.isoformat()},
+    principal, holder, case = _holder_and_case(
+        review, successor_from=successor_from, holder_from=None
     )
-    assert review.decide(principal, case, Disposition.REJECT)["proposal_state"] == "rejected"
+    decided = review.decide(principal, case)
+    assert decided["proposal_state"] == "accepted"
+    successor = assertion_of(review.engine, decided["assertion_id"])
+    assert successor["supersedes_assertion_id"] == holder
+    assert successor["effective_from"] == successor_from
+    assert assertion_of(review.engine, holder)["lifecycle"] == "superseded"
 
 
-def test_a_review_supersession_of_a_holder_with_counterevidence_is_refused(
+def test_counterevidence_blocks_submit_but_not_a_review_supersession(
     review: ReviewRuntime,
 ) -> None:
-    """Predecessor counterevidence: `conflict(evidence)`, nothing written, case open.
+    """Fix round 5 ruling: a reviewer may supersede a contested holder.
 
-    Bounds cannot cure it: a `correct_and_accept` with valid bounds is refused
-    the same way; the case stays decidable (reject).
+    The autonomous submit of an ordered, not-future successor through the
+    direct profile is still queued -- by the predecessor's counterevidence
+    alone (KLP-AC-031 unchanged) -- and the Review acceptance then supersedes.
     """
     principal, holder, case = _holder_and_case(review, successor_from=LATER, counterevidence=True)
-    _refused_and_untouched(review, principal, holder, case, Disposition.ACCEPT, ["evidence"])
-    _refused_and_untouched(
-        review,
-        principal,
-        holder,
-        case,
-        Disposition.CORRECT_AND_ACCEPT,
-        ["evidence"],
-        patch={"effective_from": LATER.isoformat()},
-    )
-    assert review.decide(principal, case, Disposition.REJECT)["proposal_state"] == "rejected"
+    origin = proposal_of(review.engine, case)["origin_submission_id"]
+    with review.engine.connect() as connection:
+        reasons = connection.execute(
+            text(
+                "SELECT outcome, reason FROM knowledge.knowledge_assertion_submissions "
+                "WHERE submission_id = :s"
+            ),
+            {"s": origin},
+        ).one()
+    assert reasons.outcome == "review_queued", reasons
+    decided = review.decide(principal, case)
+    successor = assertion_of(review.engine, decided["assertion_id"])
+    assert successor["supersedes_assertion_id"] == holder
+    assert assertion_of(review.engine, holder)["lifecycle"] == "superseded"
 
 
-def test_both_guards_failing_name_both_details(review: ReviewRuntime) -> None:
+def test_a_future_successor_over_a_contested_holder_names_only_effective_from(
+    review: ReviewRuntime,
+) -> None:
     principal, holder, case = _holder_and_case(
         review, successor_from=WHEN + timedelta(days=5), counterevidence=True
     )
-    _refused_and_untouched(
-        review, principal, holder, case, Disposition.ACCEPT, ["effective_from", "evidence"]
-    )
+    _refused_and_untouched(review, principal, holder, case, Disposition.ACCEPT, ["effective_from"])
 
 
 def test_an_equal_live_fact_under_the_subject_lock_refuses_acceptance(

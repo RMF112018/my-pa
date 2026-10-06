@@ -104,7 +104,7 @@ __all__ = [
     "derive_content_origin",
     "independence_key",
     "independent_corroboration_keys",
-    "supersession_guard_blockers",
+    "review_supersession_blockers",
 ]
 
 _SHA256_HEX: Final = re.compile(r"\A[0-9a-f]{64}\Z")
@@ -286,38 +286,52 @@ def _direct_blockers(facts: DirectAdmissionFacts) -> list[DirectAdmissionBlocker
     return blockers
 
 
-def supersession_guard_blockers(
-    successor_effective_from: datetime | None, current: CurrentFact, now: datetime
-) -> tuple[DirectAdmissionBlocker, ...]:
-    """The KLP-AC-031 guards on superseding `current`; empty means all hold.
-
-    One function for both supersession paths: the autonomous policy below and a
-    Review promotion over a single-current holder (KLP-WP-04 fix round 4,
-    Manager ruling on DEV-66). Either effective_from unknown (null) is a blocker
-    -- the ordering cannot be shown -- as are a regressing or future-dated
-    successor and a predecessor with unresolved counterevidence.
-    """
-    blockers: list[DirectAdmissionBlocker] = []
-    predecessor = current.effective_from
-    if successor_effective_from is None or predecessor is None:
-        blockers.append(DirectAdmissionBlocker.SUCCESSOR_EFFECTIVE_FROM_UNKNOWN)
-    else:
-        if successor_effective_from < predecessor:
-            blockers.append(DirectAdmissionBlocker.SUCCESSOR_EFFECTIVE_FROM_REGRESSES)
-        if successor_effective_from > now:
-            blockers.append(DirectAdmissionBlocker.SUCCESSOR_FUTURE_DATED)
-    if current.unresolved_counterevidence:
-        blockers.append(DirectAdmissionBlocker.PREDECESSOR_COUNTEREVIDENCE_UNRESOLVED)
-    return tuple(blockers)
-
-
 def _supersession_blockers(
     facts: DirectAdmissionFacts, current: CurrentFact
 ) -> list[DirectAdmissionBlocker]:
-    return [
-        DirectAdmissionBlocker.CURRENT_FACT_DIFFERS,
-        *supersession_guard_blockers(facts.candidate_effective_from, current, facts.now),
-    ]
+    blockers = [DirectAdmissionBlocker.CURRENT_FACT_DIFFERS]
+    successor = facts.candidate_effective_from
+    predecessor = current.effective_from
+    if successor is None or predecessor is None:
+        blockers.append(DirectAdmissionBlocker.SUCCESSOR_EFFECTIVE_FROM_UNKNOWN)
+    else:
+        if successor < predecessor:
+            blockers.append(DirectAdmissionBlocker.SUCCESSOR_EFFECTIVE_FROM_REGRESSES)
+        if successor > facts.now:
+            blockers.append(DirectAdmissionBlocker.SUCCESSOR_FUTURE_DATED)
+    if current.unresolved_counterevidence:
+        blockers.append(DirectAdmissionBlocker.PREDECESSOR_COUNTEREVIDENCE_UNRESOLVED)
+    return blockers
+
+
+def review_supersession_blockers(
+    successor_effective_from: datetime | None,
+    predecessor_effective_from: datetime | None,
+    now: datetime,
+) -> tuple[DirectAdmissionBlocker, ...]:
+    """The two guards a Review promotion applies when it supersedes (fix round 5).
+
+    Manager ruling (revising DEV-66): a human reviewer may supersede a contested
+    holder, so there is no counterevidence guard here; the autonomous policy
+    above keeps every KLP-AC-031 guard unchanged. Only:
+
+    * the successor is not future-dated (`effective_from > now`);
+    * effective_from ordering: a NULL predecessor bound is the unbounded past
+      (always satisfied); a NULL successor bound is allowed only when the
+      predecessor's is NULL too; otherwise successor >= predecessor.
+
+    Empty means the supersession may proceed.
+    """
+    blockers: list[DirectAdmissionBlocker] = []
+    successor, predecessor = successor_effective_from, predecessor_effective_from
+    if successor is not None and successor > now:
+        blockers.append(DirectAdmissionBlocker.SUCCESSOR_FUTURE_DATED)
+    if predecessor is not None:
+        if successor is None:
+            blockers.append(DirectAdmissionBlocker.SUCCESSOR_EFFECTIVE_FROM_UNKNOWN)
+        elif successor < predecessor:
+            blockers.append(DirectAdmissionBlocker.SUCCESSOR_EFFECTIVE_FROM_REGRESSES)
+    return tuple(blockers)
 
 
 def decide_direct_admission(facts: DirectAdmissionFacts) -> AdmissionDecision:

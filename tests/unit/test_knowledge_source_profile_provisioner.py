@@ -232,3 +232,58 @@ def test_the_scope_digest_is_origin_bound_and_never_the_scope() -> None:
     assert outlook != sharepoint
     assert len(outlook) == 64
     assert "synthetic-scope" not in outlook
+
+
+# ---- Review 4 NB-1: classify-evidence retry exhaustion ------------------------------
+
+
+def test_classify_retry_exhaustion_prints_one_line_and_exits_re_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every restart conflicts -> one line, exit 3 (EXIT_REMAINING), no traceback.
+
+    The transaction is replaced by a stand-in whose classify raises the retryable
+    `TransactionConflictError` each time, so the node also pins that exactly
+    CLASSIFY_ATTEMPTS transactions are opened before the command gives up.
+    """
+    from contextlib import contextmanager
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    import apps.cli.knowledge_source_profiles as cli
+
+    from my_pa.contracts.ports import TransactionConflictError
+
+    opened: list[str] = []
+
+    class _Conflicting:
+        def classify_evidence_restricted(self, *_args: object, **_kwargs: object) -> object:
+            raise TransactionConflictError()
+
+    @contextmanager
+    def _transaction(_engine: object) -> Any:  # noqa: ANN401 - a stand-in
+        opened.append("txn")
+        yield _Conflicting()
+
+    monkeypatch.setattr(cli, "knowledge_maintenance_transaction", _transaction)
+    runtime = SimpleNamespace(
+        engine=object(),
+        principal_id="prn_klpwp04synthetic01",
+        allowlists=None,
+        clock=lambda: datetime(2026, 10, 5, tzinfo=UTC),
+    )
+    lines: list[str] = []
+    code = cli.run_knowledge_source_profiles(
+        [
+            "classify-evidence",
+            "--evidence-ref",
+            "kaevd_" + "0" * 32,
+            "--classification",
+            "restricted_local",
+        ],
+        runtime,  # type: ignore[arg-type]
+        out=lines.append,
+    )
+    assert code == cli.EXIT_REMAINING == 3
+    assert len(opened) == cli.CLASSIFY_ATTEMPTS
+    assert len(lines) == 1 and lines[0].startswith("conflict") and "re-run" in lines[0]

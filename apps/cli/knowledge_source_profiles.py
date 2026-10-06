@@ -446,6 +446,11 @@ def run_knowledge_source_profiles(
     except KnowledgeEvidenceNotFoundError:
         out("refused           no evidence row of this Principal carries that identifier")
         return EXIT_REFUSED
+    except TransactionConflictError:
+        # `classify-evidence` restarted CLASSIFY_ATTEMPTS times and a writer still
+        # held a new sibling: nothing committed, so the command is simply re-run.
+        out("conflict          evidence rows are held by another writer; re-run")
+        return EXIT_REMAINING
 
 
 def main(argv: list[str] | None = None) -> int:

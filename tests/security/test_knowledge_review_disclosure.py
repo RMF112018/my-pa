@@ -51,13 +51,14 @@ from tests.database.test_knowledge_assertion_review import (
     OPERATOR_CLIENT,
     READ_GRANTS,
     ReviewRuntime,
+    _holder_and_case,
     _queued,
     decisions_of,
     proposal_of,
     remote,
     without_correlation,
 )
-from tests.database.test_knowledge_assertion_submissions import external
+from tests.database.test_knowledge_assertion_submissions import LATER, external
 
 from my_pa.application.commands import ListReviewCases
 from my_pa.domain.capture.review import Disposition
@@ -65,7 +66,10 @@ from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.knowledge_assertion.vocabulary import KnowledgeEvidenceAvailability
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence.identifier_claim_lock import lock_entity_mutation_scopes
-from my_pa.infrastructure.persistence.tables import knowledge_submission_evidence
+from my_pa.infrastructure.persistence.tables import (
+    knowledge_assertion_evidence_links,
+    knowledge_submission_evidence,
+)
 from my_pa.infrastructure.persistence.unit_of_work import knowledge_maintenance_transaction
 
 pytestmark = [
@@ -339,3 +343,116 @@ def test_a_remote_replay_of_a_case_withheld_since_is_not_found_like_an_unknown_i
     local = _decide_under(review, principal, case, request_id, CLI)
     assert local.error is None, local.error
     assert local.result == fresh.result
+
+
+# ---- the read-only candidate on review.list (fix round 4, Manager ruling on DEV-83) ------
+
+
+def _knowledge_row(rows: list[dict[str, Any]], case: str) -> dict[str, Any]:
+    (row,) = [row for row in rows if row["review_case_id"] == case]
+    return row
+
+
+def _holder_evidence(review: ReviewRuntime, holder: str) -> str:
+    links = knowledge_assertion_evidence_links
+    with review.engine.connect() as connection:
+        return str(
+            connection.execute(
+                select(links.c.evidence_ref_id).where(links.c.assertion_id == holder)
+            ).scalar_one()
+        )
+
+
+def test_a_granted_remote_reviewer_and_a_local_one_see_the_candidate_and_holder(
+    review: ReviewRuntime,
+) -> None:
+    principal, holder, case = _holder_and_case(review, successor_from=LATER, direct_successor=False)
+    cited = _evidence_of(review, case)
+    expected = {
+        "value_type": "text",
+        "value": "Synthetic net 60",
+        "qualifier": None,
+        "effective_from": LATER.isoformat(),
+        "effective_to": None,
+        "evidence_ref_ids": cited,
+        "current_assertion_id": holder,
+        "current_value": "Synthetic net 30",
+    }
+    assert cited and all(ref.startswith("kaevd_") for ref in cited)
+    for via in (remote(CHATLLM_CLIENT), remote(OPERATOR_CLIENT), LOCAL_WITH_GRANTS, CLI, {}):
+        row = _knowledge_row(review.cases(principal, via=via), case)
+        assert {key: row[key] for key in expected} == expected, via
+        assert row["subject_kind_of_fact"] == "entity"
+        assert row["predicate_code"] == "organization.payment_terms"
+
+
+def test_the_candidate_never_carries_excerpt_text(review: ReviewRuntime) -> None:
+    principal = review_principal()
+    profile = review.profile(principal)
+    entity = review.org(principal, "acme")
+    excerpt = "Synthetic private excerpt words"
+    queued = review.queue(
+        principal, profile, entity, evidence=(external("obj-x", excerpt=excerpt),)
+    )
+    for via in (remote(CHATLLM_CLIENT), CLI):
+        row = _knowledge_row(review.cases(principal, via=via), str(queued["review_case_id"]))
+        assert row["evidence_ref_ids"] == _evidence_of(review, str(queued["review_case_id"]))
+        assert excerpt not in json.dumps(row)
+        assert "excerpt" not in json.dumps(row)
+
+
+def test_a_withheld_holder_is_nulled_for_a_remote_reviewer_only(review: ReviewRuntime) -> None:
+    """The holder's own `withheld_remote` nulls BOTH holder fields remotely.
+
+    The holder's evidence is raised to restricted_local through the production
+    classification ingress; the proposal cites other evidence and stays
+    visible, so the case is listed with its own candidate and no holder.
+    """
+    principal, holder, case = _holder_and_case(review, successor_from=LATER, direct_successor=False)
+    with knowledge_maintenance_transaction(review.engine) as repository:
+        repository.classify_evidence_restricted(
+            principal, _holder_evidence(review, holder), at=WHEN
+        )
+    for via in (remote(CHATLLM_CLIENT), remote(OPERATOR_CLIENT), LOCAL_WITH_GRANTS):
+        row = _knowledge_row(review.cases(principal, via=via), case)
+        assert row["value"] == "Synthetic net 60", via
+        assert row["current_assertion_id"] is None, via
+        assert row["current_value"] is None, via
+        assert "Synthetic net 30" not in json.dumps(row)
+    for via in (CLI, {}):
+        row = _knowledge_row(review.cases(principal, via=via), case)
+        assert row["current_assertion_id"] == holder, via
+        assert row["current_value"] == "Synthetic net 30", via
+
+
+def test_a_restricted_or_ungranted_case_shows_nothing_and_the_page_is_not_short(
+    review: ReviewRuntime,
+) -> None:
+    """Remote with the grant: page of one = the visible case, with its candidate.
+
+    No word of a withheld case's candidate reaches the page; without the grant no
+    Knowledge row at all. A local caller sees every candidate, the withheld
+    ones included.
+    """
+    principal, _entity, restricted, unavailable, visible = _world(review)
+    listed = review.invoke(
+        ListReviewCases(page_size=1), principal_id=principal, **remote(CHATLLM_CLIENT)
+    )
+    assert listed.error is None and listed.result is not None
+    page = list(listed.result["review_cases"])
+    assert _ids(page) == [visible]
+    assert page[-1]["value"] == "Synthetic terms 2"
+    assert page[-1]["evidence_ref_ids"] == _evidence_of(review, visible)
+    text = json.dumps(page)
+    for withheld in (restricted, unavailable):
+        assert withheld not in text
+        for ref in _evidence_of(review, withheld):
+            assert ref not in text
+    assert "Synthetic terms 0" not in text and "Synthetic terms 1" not in text
+    assert listed.disclosure.truncation.is_truncated is False
+    for via in (remote(CHATLLM_CLIENT, NO_READ_GRANTS), {"grants": NO_READ_GRANTS}):
+        assert _ids(review.cases(principal, via=via)) == [], via
+    local = review.cases(principal, via=CLI)
+    assert [
+        _knowledge_row(local, case)["value"] for case in (restricted, unavailable, visible)
+    ] == ["Synthetic terms 0", "Synthetic terms 1", "Synthetic terms 2"]

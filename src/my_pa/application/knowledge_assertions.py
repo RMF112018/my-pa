@@ -596,9 +596,7 @@ def _instant(value: datetime | None) -> str | None:
 
 def assertion_view(row: KnowledgeAssertionRow) -> dict[str, object]:
     """The public shape of one assertion. Its value and nothing of its evidence."""
-    value: str | None = row.value_text if row.value_type == KnowledgeValueType.TEXT.value else None
-    if row.value_type == KnowledgeValueType.DATETIME.value:
-        value = _instant(row.value_datetime)
+    value = _typed_value(row.value_type, row.value_text, row.value_datetime)
     return {
         "assertion_id": row.assertion_id,
         "subject_kind": row.subject_kind,
@@ -749,12 +747,28 @@ def review_read_granted(authorization: Authorization) -> bool:
     )
 
 
+def _typed_value(
+    value_type: str, value_text: str | None, value_datetime: datetime | None
+) -> str | None:
+    """The display value of one typed fact, exactly as `assertion_view` renders it."""
+    if value_type == KnowledgeValueType.DATETIME.value:
+        return _instant(value_datetime)
+    return value_text if value_type == KnowledgeValueType.TEXT.value else None
+
+
 def review_case_view(row: KnowledgeReviewCaseRow) -> dict[str, object]:
-    """One Knowledge `review.list` row: the common keys plus the frozen five (R6 10.1).
+    """One Knowledge `review.list` row: the common keys, the frozen five (R6 10.1) and
+    the read-only candidate (fix round 4, Manager ruling on DEV-83).
 
     `risk_class` is a `RiskClass` token and `proposal_state` a capture
     `ProposalState` token (the Knowledge vocabulary is a subset of both), so the
-    web decoder needs no new token. No value, qualifier or evidence content.
+    web decoder needs no new token. The candidate is the proposal's typed value
+    (`value_type`, `value`), `qualifier`, effective bounds, the cited evidence
+    ids (`kaevd_`; never excerpt text) and the current single_current holder
+    (`current_assertion_id`, `current_value`; both null when there is none or a
+    remote caller may not see it). The row is only built for a caller the
+    `review.list` gates admitted (plane composed; remote: Knowledge read grant,
+    proposal not withheld).
     """
     return {
         "review_case_id": row.review_case_id,
@@ -769,6 +783,18 @@ def review_case_view(row: KnowledgeReviewCaseRow) -> dict[str, object]:
         "subject_id": row.subject_id,
         "predicate_code": row.predicate_code,
         "review_requirement": KnowledgeReviewRequirement(row.review_requirement).value,
+        "value_type": KnowledgeValueType(row.value_type).value,
+        "value": _typed_value(row.value_type, row.value_text, row.value_datetime),
+        "qualifier": None if row.qualifier is None else dict(row.qualifier),
+        "effective_from": _instant(row.effective_from),
+        "effective_to": _instant(row.effective_to),
+        "evidence_ref_ids": list(row.evidence_ref_ids),
+        "current_assertion_id": row.current_assertion_id,
+        "current_value": (
+            None
+            if row.current_assertion_id is None
+            else _typed_value(row.value_type, row.current_value_text, row.current_value_datetime)
+        ),
     }
 
 

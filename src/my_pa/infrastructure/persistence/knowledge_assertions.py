@@ -3490,6 +3490,33 @@ def _review_case_statement(principal_id: str, *, remote: bool) -> Any:  # noqa: 
         .limit(1)
         .scalar_subquery()
     )
+    se = knowledge_submission_evidence
+    cited = (
+        select(func.array_agg(se.c.evidence_ref_id.distinct()))
+        .where(
+            partition_criterion(se, context),
+            se.c.submission_id == p.c.origin_submission_id,
+        )
+        .scalar_subquery()
+    )
+    # The live single_current holder of the same key (fix round 4, DEV-83
+    # ruling). For a remote caller a `withheld_remote` holder is no holder: its
+    # id and value are both null, never one without the other.
+    a = knowledge_assertions
+    holder_criteria: list[ColumnElement[bool]] = [
+        partition_criterion(a, context),
+        a.c.subject_kind == p.c.subject_kind,
+        a.c.subject_id == p.c.subject_id,
+        a.c.predicate_code == p.c.predicate_code,
+        a.c.cardinality == KnowledgeCardinality.SINGLE_CURRENT.value,
+        a.c.lifecycle.in_(_LIVE),
+    ]
+    if remote:
+        holder_criteria.append(not_(assertion_withheld_remote(a, principal_id)))
+
+    def holder(column: ColumnElement[Any]) -> Any:  # noqa: ANN401 - a scalar subquery
+        return select(column).where(*holder_criteria).limit(1).scalar_subquery()
+
     criteria: list[ColumnElement[bool]] = [partition_criterion(p, context)]
     if remote:
         criteria.append(not_(proposal_withheld_remote(p, principal_id)))
@@ -3510,8 +3537,13 @@ def _review_case_statement(principal_id: str, *, remote: bool) -> Any:  # noqa: 
         p.c.qualifier_json,
         p.c.effective_from,
         p.c.effective_to,
+        p.c.value_type,
         version.label("review_version"),
         latest.label("latest_disposition"),
+        cited.label("evidence_ref_ids"),
+        holder(a.c.assertion_id).label("current_assertion_id"),
+        holder(a.c.value_text).label("current_value_text"),
+        holder(a.c.value_datetime).label("current_value_datetime"),
     ).where(*criteria)
 
 
@@ -3535,6 +3567,11 @@ def _review_case_row(row: Row[Any]) -> KnowledgeReviewCaseRow:
         qualifier=None if row.qualifier_json is None else dict(row.qualifier_json),
         effective_from=row.effective_from,
         effective_to=row.effective_to,
+        value_type=row.value_type,
+        evidence_ref_ids=tuple(sorted(row.evidence_ref_ids or ())),
+        current_assertion_id=row.current_assertion_id,
+        current_value_text=row.current_value_text,
+        current_value_datetime=row.current_value_datetime,
     )
 
 

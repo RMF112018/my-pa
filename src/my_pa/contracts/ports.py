@@ -5137,8 +5137,13 @@ class KnowledgeReviewCaseRow:
 
     `review_version` is the count of decisions (= max `decision_sequence`) and
     `latest_disposition` the disposition of the newest one. The factual fields
-    (`value_text` .. `effective_to`) travel to the decide path only, to build a
-    corrected candidate; the `review.list` row never renders them.
+    (`value_type` .. `effective_to`) build a corrected candidate on the decide
+    path and, since fix round 4 (Manager ruling on DEV-83), the read-only
+    candidate of the `review.list` row: an authorized reviewer sees what it
+    decides. `evidence_ref_ids` are the origin submission's cited `kaevd_`
+    ids (never excerpt text); `current_*` is the live single_current holder of
+    the same key, `None` when there is none -- or, for a remote caller, when the
+    holder itself is `withheld_remote` (both fields together).
     """
 
     review_case_id: str
@@ -5159,6 +5164,11 @@ class KnowledgeReviewCaseRow:
     qualifier: Mapping[str, object] | None = field(default=None, repr=False)
     effective_from: datetime | None = None
     effective_to: datetime | None = None
+    value_type: str = "text"
+    evidence_ref_ids: tuple[str, ...] = ()
+    current_assertion_id: str | None = None
+    current_value_text: str | None = field(default=None, repr=False)
+    current_value_datetime: datetime | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)

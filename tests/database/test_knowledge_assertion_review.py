@@ -126,6 +126,15 @@ KNOWLEDGE_ROW_KEYS: Final = frozenset(
         "subject_id",
         "predicate_code",
         "review_requirement",
+        # The read-only candidate (fix round 4, Manager ruling on DEV-83).
+        "value_type",
+        "value",
+        "qualifier",
+        "effective_from",
+        "effective_to",
+        "evidence_ref_ids",
+        "current_assertion_id",
+        "current_value",
     }
 )
 #: The existing seven `review.decide` result keys (R6 section 10.1).

@@ -641,11 +641,21 @@ KNOWLEDGE_SUBJECT_ID: Final = "ent_66fb736038ea9e42d480f6f466210679"
 KNOWLEDGE_OPENED_AT: Final = datetime(2026, 10, 4, 12, 0, 0, tzinfo=UTC)
 
 
-def _knowledge_review_case_row() -> dict[str, Any]:
-    """The production `review_case_view` over one open Knowledge proposal case (R6 10.1).
+#: The origin submission's cited evidence and the live single_current holder
+#: (fix round 4, Manager ruling on DEV-83; synthetic ids).
+KNOWLEDGE_EVIDENCE_IDS: Final = (
+    "kaevd_1b0f3a7c9e2d4f6a8b0c2e4f6a8b0c2e",
+    "kaevd_5d7f9b1d3f5a7c9e1b3d5f7a9c1e3b5d",
+)
+KNOWLEDGE_HOLDER_ID: Final = "kasr_9c2e4f6a8b0c2e4f6a8b0c2e4f6a8b0c"
 
-    The factual columns (`value_text` ..) are set so the test also shows the
-    listing never renders them.
+
+def _knowledge_review_case_row() -> dict[str, Any]:
+    """The production `review_case_view` over one open Knowledge proposal case.
+
+    R6 10.1's frozen keys plus the read-only candidate the Manager ruling on
+    DEV-83 adds: the typed value, qualifier, bounds, cited `kaevd_` ids and the
+    current single_current holder.
     """
     return review_case_view(
         KnowledgeReviewCaseRow(
@@ -662,7 +672,12 @@ def _knowledge_review_case_row() -> dict[str, Any]:
             opened_at=KNOWLEDGE_OPENED_AT,
             review_version=0,
             latest_disposition=None,
-            value_text="net 30",
+            value_text="net 60",
+            effective_from=KNOWLEDGE_OPENED_AT,
+            value_type="text",
+            evidence_ref_ids=KNOWLEDGE_EVIDENCE_IDS,
+            current_assertion_id=KNOWLEDGE_HOLDER_ID,
+            current_value_text="net 30",
         )
     )
 
@@ -2631,8 +2646,11 @@ def test_knowledge_review_wire_shapes_are_the_frozen_ones() -> None:
 
     * The Knowledge `review.list` row is the capture common keys plus exactly
       `subject_kind_of_fact`, `subject_id`, `predicate_code`,
-      `review_requirement`, with `subject_kind = "knowledge_assertion"`, and no
-      value, qualifier or evidence key.
+      `review_requirement`, with `subject_kind = "knowledge_assertion"`, plus
+      (fix round 4, Manager ruling on DEV-83) the read-only candidate:
+      `value_type`, `value`, `qualifier`, `effective_from`, `effective_to`,
+      `evidence_ref_ids` (`kaevd_` ids only, no excerpt) and the holder's
+      `current_assertion_id` / `current_value`.
     * Every Knowledge `review.decide` result has exactly the capture result's
       seven keys (no discriminator), with `kadec_` / `kasr_` / `kamut_` ids.
     * The page mixes a capture and a Knowledge row (the decoder half is Vitest
@@ -2659,10 +2677,24 @@ def test_knowledge_review_wire_shapes_are_the_frozen_ones() -> None:
         "subject_id",
         "predicate_code",
         "review_requirement",
+        "value_type",
+        "value",
+        "qualifier",
+        "effective_from",
+        "effective_to",
+        "evidence_ref_ids",
+        "current_assertion_id",
+        "current_value",
     }
     assert ProposalState(knowledge["proposal_state"])
     assert RiskClass(knowledge["risk_class"])
-    assert "net 30" not in json.dumps(knowledge)
+    assert knowledge["value_type"] == "text" and knowledge["value"] == "net 60"
+    assert knowledge["evidence_ref_ids"] and all(
+        ref.startswith("kaevd_") for ref in knowledge["evidence_ref_ids"]
+    )
+    assert knowledge["current_assertion_id"].startswith("kasr_")
+    assert knowledge["current_value"] == "net 30"
+    assert "excerpt" not in json.dumps(knowledge)
 
     capture_decide_keys = set(committed["review.decide"])
     assert len(capture_decide_keys) == 7

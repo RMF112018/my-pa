@@ -502,6 +502,9 @@ _ORDINAL_UNITS = (
     # hundred and eighty-nine; dense through a hundred-ninetieth.
     "hundred-eighty-ninth",
     "hundred-ninetieth",
+    # KLP-WP-05 adds `record_events.provenance` and takes the public set to one
+    # hundred and ninety; dense through a hundred-ninety-first.
+    "hundred-ninety-first",
 )
 
 

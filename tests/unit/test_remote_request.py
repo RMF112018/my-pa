@@ -1159,3 +1159,55 @@ def test_submit_carries_no_key_and_replays_on_its_candidate_identity() -> None:
         "run-1",
         "candidate-1",
     )
+
+
+# ---- KLP-WP-05 (KLP-AC-018 whole: `record_events.provenance`) ------------------------
+
+_PROVENANCE_PAYLOAD: dict[str, Any] = {"event_id": "rcev_remoterequest0005"}
+
+
+def _compose_provenance(arguments: dict[str, Any]) -> dict[str, Any]:
+    capability = Capability.RECORD_EVENTS_PROVENANCE
+    return compose_remote_arguments(
+        capability_name=capability.value,
+        arguments=arguments,
+        principal=_DISCOVERY_PRINCIPAL,
+        grants=frozenset({(capability, Purpose.RECORD_EVENT_PROVENANCE_READ)}),
+    )
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "principal_id",
+        "actor_class",
+        "authority",
+        "authority_class",
+        "source_classification",
+        "classification",
+        "independence_key",
+        "epistemic_status",
+    ],
+)
+def test_compose_refuses_a_server_owned_field_on_provenance(field: str) -> None:
+    """Provenance refuses every server-derived field, in and beside the payload."""
+    composed = _compose_provenance({"payload": dict(_PROVENANCE_PAYLOAD)})  # the control
+    assert composed["payload"] == _PROVENANCE_PAYLOAD
+    assert "idempotency_key" not in composed["payload"]
+    with pytest.raises(InvalidRequestError):
+        _compose_provenance({"payload": {**_PROVENANCE_PAYLOAD, field: "forged"}})
+    with pytest.raises(InvalidRequestError):
+        _compose_provenance({"payload": dict(_PROVENANCE_PAYLOAD), field: "forged"})
+
+
+def test_provenance_normalizes_to_its_command_with_only_the_event_id() -> None:
+    from my_pa.application.commands import GetRecordEventProvenance
+
+    composed = _compose_provenance({"payload": dict(_PROVENANCE_PAYLOAD)})
+    _metadata, command = normalize(Capability.RECORD_EVENTS_PROVENANCE.value, composed)
+    assert command == GetRecordEventProvenance(event_id="rcev_remoterequest0005")
+    with pytest.raises(InvalidRequestError):
+        normalize(
+            Capability.RECORD_EVENTS_PROVENANCE.value,
+            {**composed, "payload": {"event_id": "kasr_remoterequest0005"}},
+        )

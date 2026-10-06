@@ -15,7 +15,7 @@ from typing import Final
 
 from my_pa.domain.identity.operation import Capability
 
-CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v7"
+CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v8"
 
 
 class ChatLLMCapabilityClass(StrEnum):
@@ -224,6 +224,11 @@ _DATA_CONDITIONAL: Final[frozenset[Capability]] = frozenset(
         Capability.KNOWLEDGE_ASSERTIONS_SEARCH,
         Capability.PROJECT_CONTROLS_CONFIGURE,
         Capability.PROJECT_CONTROLS_STATUS,
+        # KLP-WP-05 (chatllm-data-v8): the cross-run provenance read, metadata
+        # only and withheld remotely exactly as the feed is. Conditional on the
+        # Knowledge plane switch with the other Knowledge data names: only
+        # Knowledge Assertion events carry provenance.
+        Capability.RECORD_EVENTS_PROVENANCE,
         Capability.RELATIONSHIP_MEMORY_ARCHIVE,
         Capability.RELATIONSHIP_MEMORY_CREATE,
         Capability.RELATIONSHIP_MEMORY_GET,
@@ -282,9 +287,10 @@ _RETIRED: Final[frozenset[Capability]] = frozenset()
 #: KLP-WP-03 (KLP-AC-105): the Knowledge Assertion data names composed only by the
 #: Knowledge plane switch. An explicit name set and never a `knowledge.` prefix:
 #: the extraction plane's `knowledge.search`/`read`/`reveal`/`coverage` share the
-#: prefix and stay `ALWAYS` (KLP-AC-001). `record_events.provenance` joins this set
-#: in KLP-WP-05. Submit and checkpoint (KLP-WP-04) are `CONTROL_PLANE_EXCLUDED`,
-#: so their ChatLLM prerequisite is `NONE`; the service still withholds both with
+#: prefix and stay `ALWAYS` (KLP-AC-001). KLP-WP-05 added `record_events.provenance`
+#: (the KLP-AC-105 name set: the six data names plus provenance). Submit and
+#: checkpoint (KLP-WP-04) are `CONTROL_PLANE_EXCLUDED`, so their ChatLLM
+#: prerequisite is `NONE`; the service still withholds both with
 #: the plane switch off (`_KNOWLEDGE_ASSERTION_CAPABILITIES`).
 KNOWLEDGE_ASSERTION_DATA_NAMES: Final[frozenset[Capability]] = frozenset(
     {
@@ -294,6 +300,7 @@ KNOWLEDGE_ASSERTION_DATA_NAMES: Final[frozenset[Capability]] = frozenset(
         Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
         Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
         Capability.KNOWLEDGE_ASSERTIONS_CREATE,
+        Capability.RECORD_EVENTS_PROVENANCE,
     }
 )
 

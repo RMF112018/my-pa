@@ -414,3 +414,11 @@ class Purpose(StrEnum):
     # A remote-write purpose of its own (KLP-AC-016), used by exactly
     # `knowledge.assertions.submit` and `knowledge.discovery.checkpoint`.
     KNOWLEDGE_ASSERTION_OBSERVATION = "knowledge_assertion_observation"
+    # KLP-WP-05, on `D-91`: would reuse widen the grant? `record_event_read`
+    # would: the feed discloses which record changed, and provenance discloses
+    # why -- the submission, its causal root and depth, the cited triggers and,
+    # for the supplying client only, its external run and candidate ids. Sharing
+    # the feed's purpose would let every grant issued to follow the feed read
+    # submission lineage. A read-only purpose of its own, used by exactly
+    # `record_events.provenance` (R5 profile table, matrix `purposes`).
+    RECORD_EVENT_PROVENANCE_READ = "record_event_provenance_read"

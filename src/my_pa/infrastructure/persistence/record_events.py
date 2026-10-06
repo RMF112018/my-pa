@@ -87,6 +87,9 @@ from my_pa.contracts.ports import (
     PortError,
     RecordEventFeedItem,
     RecordEventPage,
+    RecordEventProvenance,
+    RecordEventProvenanceReview,
+    RecordEventProvenanceSubmission,
     RecordEventReader,
     RecordEventStager,
     RecordEventWriter,
@@ -109,6 +112,7 @@ from my_pa.infrastructure.persistence.knowledge_assertions import (
 )
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
+    matching_partition_criterion,
     partition_criterion,
     principal_bound_values,
 )
@@ -125,6 +129,10 @@ from my_pa.infrastructure.persistence.tables import (
     entity_person_organization_affiliations,
     entity_project_participations,
     entity_relationships,
+    knowledge_assertion_mutations,
+    knowledge_assertion_review_decisions,
+    knowledge_assertion_submissions,
+    knowledge_submission_trigger_events,
     record_event_sequences,
     record_events,
     relationship_memories,
@@ -139,6 +147,7 @@ __all__ = [
     "TriggerReceipt",
     "feed_reader_memory_relation_names",
     "flush_record_events",
+    "provenance_relation_names",
     "trigger_receipts",
 ]
 
@@ -598,6 +607,186 @@ def trigger_receipts(
     }
 
 
+# --- KLP-WP-05: cross-run provenance ---------------------------------------------
+
+#: The aliases the provenance statement reads through: the event, its mutation,
+#: the mutation's submission, that submission's causal root, and the decision.
+_PROVENANCE_EVENT: Final = cast(Table, record_events.alias("provenance_event"))
+_PROVENANCE_MUTATION: Final = cast(
+    Table, knowledge_assertion_mutations.alias("provenance_mutation")
+)
+_PROVENANCE_SUBMISSION: Final = cast(
+    Table, knowledge_assertion_submissions.alias("provenance_submission")
+)
+_PROVENANCE_ROOT: Final = cast(Table, knowledge_assertion_submissions.alias("provenance_root"))
+_PROVENANCE_DECISION: Final = cast(
+    Table, knowledge_assertion_review_decisions.alias("provenance_decision")
+)
+_PROVENANCE_TRIGGER: Final = cast(Table, record_events.alias("provenance_trigger"))
+
+
+def provenance_relation_names() -> tuple[str, ...]:
+    """SQL names of the Knowledge ledgers the provenance read joins (runtime `SELECT`)."""
+    return (
+        knowledge_assertion_mutations.name,
+        knowledge_assertion_submissions.name,
+        knowledge_submission_trigger_events.name,
+        knowledge_assertion_review_decisions.name,
+    )
+
+
+def _provenance_statement(
+    principal_id: str,
+    event_id: str,
+    families: frozenset[RecordEventFamily],
+    include_restricted_memory: bool,
+) -> Any:  # noqa: ANN401 - a SQLAlchemy Select
+    """One statement: the visible event, its mutation, submission, root and decision.
+
+    The event must pass the feed's own visibility predicate (`_visible`, the
+    one `page` applies -- remotely every R6 section 5.2 term of
+    `knowledge_event_withheld_remote`) inside the caller's partition, so an
+    invisible event yields no row at all. The mutation is an inner join on the
+    event's `source_receipt_id` *and* its `record_id`, so an event whose receipt
+    names no mutation of the same assertion yields no row either. Submission,
+    root and decision are outer joins: a maintenance mutation names no
+    submission, and only a Review promotion names a decision.
+    """
+    context = capture_context(principal_id)
+    event, mutation = _PROVENANCE_EVENT, _PROVENANCE_MUTATION
+    submission, root, decision = _PROVENANCE_SUBMISSION, _PROVENANCE_ROOT, _PROVENANCE_DECISION
+    joined = (
+        event.join(
+            mutation,
+            and_(
+                matching_partition_criterion(mutation, event),
+                mutation.c.mutation_id == event.c.source_receipt_id,
+                mutation.c.assertion_id == event.c.record_id,
+            ),
+        )
+        .outerjoin(
+            submission,
+            and_(
+                matching_partition_criterion(submission, mutation),
+                submission.c.submission_id == mutation.c.submission_id,
+            ),
+        )
+        .outerjoin(
+            root,
+            and_(
+                matching_partition_criterion(root, submission),
+                root.c.submission_id == submission.c.causal_root_submission_id,
+            ),
+        )
+        .outerjoin(
+            decision,
+            and_(
+                matching_partition_criterion(decision, mutation),
+                decision.c.decision_id == mutation.c.review_decision_id,
+            ),
+        )
+    )
+    return (
+        select(
+            event.c.event_id,
+            event.c.record_family,
+            event.c.record_id,
+            event.c.source_receipt_id,
+            event.c.actor_class,
+            mutation.c.mutation_kind,
+            mutation.c.proposal_id,
+            mutation.c.review_case_id,
+            mutation.c.review_decision_id,
+            submission.c.submission_id,
+            submission.c.origin,
+            submission.c.authenticated_client_id.label("submission_client_id"),
+            submission.c.external_run_id,
+            submission.c.external_candidate_id,
+            submission.c.causal_depth,
+            submission.c.causal_root_submission_id,
+            root.c.authenticated_client_id.label("root_client_id"),
+            decision.c.decision_id,
+            decision.c.authenticated_client_id.label("decision_client_id"),
+            decision.c.decision_channel,
+        )
+        .select_from(joined)
+        .where(
+            *_visible(event, principal_id, families, include_restricted_memory),
+            partition_criterion(mutation, context),
+            event.c.event_id == event_id,
+        )
+    )
+
+
+def _visible_triggers_statement(
+    principal_id: str,
+    submission_id: str,
+    families: frozenset[RecordEventFamily],
+    include_restricted_memory: bool,
+) -> Any:  # noqa: ANN401 - a SQLAlchemy Select
+    """The submission's cited trigger events that the feed predicate admits, in id order."""
+    context = capture_context(principal_id)
+    trigger = _PROVENANCE_TRIGGER
+    return (
+        select(knowledge_submission_trigger_events.c.trigger_event_id)
+        .select_from(
+            knowledge_submission_trigger_events.join(
+                trigger,
+                and_(
+                    matching_partition_criterion(trigger, knowledge_submission_trigger_events),
+                    trigger.c.event_id == knowledge_submission_trigger_events.c.trigger_event_id,
+                ),
+            )
+        )
+        .where(
+            partition_criterion(knowledge_submission_trigger_events, context),
+            knowledge_submission_trigger_events.c.submission_id == submission_id,
+            *_visible(trigger, principal_id, families, include_restricted_memory),
+        )
+        .order_by(knowledge_submission_trigger_events.c.trigger_event_id.asc())
+    )
+
+
+def _provenance(row: Row[Any], triggers: Sequence[str]) -> RecordEventProvenance:
+    mapping = row._mapping
+    submission = (
+        None
+        if mapping["submission_id"] is None
+        else RecordEventProvenanceSubmission(
+            submission_id=mapping["submission_id"],
+            origin=mapping["origin"],
+            authenticated_client_id=mapping["submission_client_id"],
+            external_run_id=mapping["external_run_id"],
+            external_candidate_id=mapping["external_candidate_id"],
+            causal_depth=mapping["causal_depth"],
+            causal_root_submission_id=mapping["causal_root_submission_id"],
+            root_authenticated_client_id=mapping["root_client_id"],
+        )
+    )
+    review = (
+        None
+        if mapping["decision_id"] is None
+        else RecordEventProvenanceReview(
+            proposal_id=mapping["proposal_id"],
+            review_case_id=mapping["review_case_id"],
+            decision_id=mapping["decision_id"],
+            authenticated_client_id=mapping["decision_client_id"],
+            decision_channel=mapping["decision_channel"],
+        )
+    )
+    return RecordEventProvenance(
+        event_id=mapping["event_id"],
+        record_family=RecordEventFamily(mapping["record_family"]),
+        record_id=mapping["record_id"],
+        source_receipt_id=mapping["source_receipt_id"],
+        mutation_kind=mapping["mutation_kind"],
+        actor_class=RecordEventActorClass(mapping["actor_class"]),
+        submission=submission,
+        trigger_event_ids=tuple(triggers),
+        review=review,
+    )
+
+
 class SqlRecordEventReader(RecordEventReader):
     """The feed reader, on one transaction's connection."""
 
@@ -677,3 +866,37 @@ class SqlRecordEventReader(RecordEventReader):
         )
         found = _translated(lambda: self._connection.execute(statement).scalars().all())
         return frozenset(found)
+
+    def event_provenance(
+        self,
+        *,
+        principal_id: str,
+        event_id: str,
+        event_families: frozenset[RecordEventFamily],
+        trigger_families: frozenset[RecordEventFamily],
+        include_restricted_memory: bool,
+    ) -> RecordEventProvenance | None:
+        """KLP-WP-05: two statements -- the visible event's lineage, then its visible triggers.
+
+        Every row read is append-only (events, mutations, decisions, trigger
+        snapshots) or a completed submission, so the two statements cannot
+        disagree about lineage; visibility is monotonic (R6 section 5.2), so a
+        trigger withheld between them is simply omitted.
+        """
+        knowledge = event_families & {RecordEventFamily.KNOWLEDGE_ASSERTION}
+        if not knowledge:
+            return None
+        statement = _provenance_statement(
+            principal_id, event_id, frozenset(knowledge), include_restricted_memory
+        )
+        row = _translated(lambda: self._connection.execute(statement).one_or_none())
+        if row is None:
+            return None
+        submission_id = row._mapping["submission_id"]
+        triggers: Sequence[str] = ()
+        if submission_id is not None and trigger_families:
+            listing = _visible_triggers_statement(
+                principal_id, submission_id, trigger_families, include_restricted_memory
+            )
+            triggers = _translated(lambda: self._connection.execute(listing).scalars().all())
+        return _provenance(row, triggers)

@@ -19,7 +19,10 @@ from typing import Final
 
 from sqlalchemy import Connection, text
 
-from my_pa.infrastructure.persistence.record_events import feed_reader_memory_relation_names
+from my_pa.infrastructure.persistence.record_events import (
+    feed_reader_memory_relation_names,
+    provenance_relation_names,
+)
 
 __all__ = [
     "FEED_READER_SELECT_TABLES",
@@ -74,6 +77,10 @@ FEED_READER_SELECT_TABLES: Final = (
     "knowledge_evidence_refs",
     "knowledge_discovery_source_profiles",
     "capture_lifecycle_events",
+    # KLP-WP-05: `record_events.provenance` joins the event to its mutation,
+    # submission (and causal root), Review decision and cited trigger snapshots.
+    # SELECT only: the feed still writes nothing but its own two relations.
+    *provenance_relation_names(),
 )
 
 _ROLE_NAME: Final = re.compile(r"^[a-z][a-z0-9_]{0,62}$")

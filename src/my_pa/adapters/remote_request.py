@@ -128,6 +128,10 @@ _KNOWLEDGE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         # KLP-WP-04 (KLP-AC-018): the discovery pair refuses the same fields.
         Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
         Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
+        # KLP-WP-05 (KLP-AC-018): provenance, the last KLP name. It takes only an event
+        # id; who submitted, under what authority and how restricted are the
+        # server's to read from the ledgers, never the caller's to state.
+        Capability.RECORD_EVENTS_PROVENANCE,
     }
 )
 _CAPABILITY_OWNED_PAYLOAD_FIELDS: Final[Mapping[Capability, frozenset[str]]] = MappingProxyType(

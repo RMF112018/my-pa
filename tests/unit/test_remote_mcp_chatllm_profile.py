@@ -280,7 +280,7 @@ def test_profile_apply_adds_the_meeting_grants_once_and_then_converges(
         desired = _grant_v2_catalog(repository)
         code, plan = _profile(repository, "profile-plan", capsys)
         assert code == 1
-        assert plan["profile_version"] == "chatllm-data-v7"
+        assert plan["profile_version"] == "chatllm-data-v8"
         assert plan["healthy"] is False
         assert plan["actions"] == [
             {
@@ -332,7 +332,7 @@ def test_profile_commands_refuse_the_previous_profile_version(
         with pytest.raises(SystemExit) as raised:
             _profile(repository, "profile-apply", capsys, profile_version="chatllm-data-v3")
         assert raised.value.code == 2
-        assert "profile version must be chatllm-data-v7" in capsys.readouterr().err
+        assert "profile version must be chatllm-data-v8" in capsys.readouterr().err
         rows = repository.list_capability_grants(remote_client_id=CLIENT_UUID)
         assert not any(row.capability.startswith("meetings.") for row in rows)
 
@@ -343,7 +343,12 @@ def test_profile_commands_refuse_the_previous_profile_version(
 def test_v6_profile_apply_adds_the_knowledge_grants_only_with_the_plane_on(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """With the plane off the converged client is healthy; on, exactly six adds."""
+    """With the plane off the converged client is healthy; on, exactly seven adds.
+
+    The node id is kept from KLP-WP-03 (KLP-AC-080): v6 added the six Knowledge
+    names; v8 (KLP-WP-05) adds `record_events.provenance` on the same plane
+    switch, so the plane-on plan now adds seven, each under its one purpose.
+    """
     knowledge = {
         Capability.KNOWLEDGE_ASSERTIONS_READ: (Purpose.KNOWLEDGE_ASSERTION_READ, False),
         Capability.KNOWLEDGE_ASSERTIONS_LIST: (Purpose.KNOWLEDGE_ASSERTION_READ, False),
@@ -351,6 +356,7 @@ def test_v6_profile_apply_adds_the_knowledge_grants_only_with_the_plane_on(
         Capability.KNOWLEDGE_ASSERTIONS_HISTORY: (Purpose.KNOWLEDGE_ASSERTION_READ, False),
         Capability.KNOWLEDGE_ASSERTIONS_REVEAL: (Purpose.KNOWLEDGE_ASSERTION_READ, False),
         Capability.KNOWLEDGE_ASSERTIONS_CREATE: (Purpose.KNOWLEDGE_ASSERTION_AUTHORING, True),
+        Capability.RECORD_EVENTS_PROVENANCE: (Purpose.RECORD_EVENT_PROVENANCE_READ, False),
     }
     with _repository() as (_, repository):
         _grant_v2_catalog(repository)
@@ -377,7 +383,7 @@ def test_v6_profile_apply_adds_the_knowledge_grants_only_with_the_plane_on(
         )
         plan = json.loads(capsys.readouterr().out)
     assert code == 1
-    assert plan["profile_version"] == "chatllm-data-v7"
+    assert plan["profile_version"] == "chatllm-data-v8"
     assert plan["actions"] == [
         {
             "kind": "add",

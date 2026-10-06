@@ -117,6 +117,7 @@ from my_pa.application.commands import (
     GetKnowledgeAssertionHistory,
     GetLatestIntelligenceArtifact,
     GetPulse,
+    GetRecordEventProvenance,
     GetRelationshipMemory,
     GetRelationshipMemoryHistory,
     GetSourceMetadata,
@@ -654,6 +655,9 @@ def _requested_scope(
             # `record_events.list` (WP-RE-06) names only the acting Principal's
             # own change feed, never a configured source (G1-RD-011).
             | ListRecordEvents()
+            # KLP-WP-05 (KLP-AC-104): provenance names one of the acting
+            # Principal's own events and the ledgers behind it, never a source.
+            | GetRecordEventProvenance()
             # The six Knowledge Assertion names (KLP-WP-03, KLP-AC-104) name a
             # product-owned record of the acting Principal and never a source.
             | ReadKnowledgeAssertion()

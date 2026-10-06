@@ -195,6 +195,7 @@ from my_pa.application.commands import (
     GetKnowledgeAssertionHistory,
     GetLatestIntelligenceArtifact,
     GetPulse,
+    GetRecordEventProvenance,
     GetRelationshipMemory,
     GetRelationshipMemoryHistory,
     GetSourceMetadata,
@@ -509,7 +510,11 @@ from my_pa.application.meetings import (
 )
 from my_pa.application.model_gate import BoundedModelGate
 from my_pa.application.producer_origin import ProducerOriginError, ProducerOriginRegistry
-from my_pa.application.record_events import list_record_events, record_event_page_size
+from my_pa.application.record_events import (
+    list_record_events,
+    record_event_page_size,
+    record_event_provenance,
+)
 from my_pa.application.relationship_memory import (
     ArchiveMemoryCommand,
     CreateMemoryCommand,
@@ -13257,6 +13262,42 @@ class ApplicationService:
             ),
         )
 
+    def _record_events_provenance(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: GetRecordEventProvenance,
+    ) -> _Result:
+        """`record_events.provenance` (KLP-WP-05): one Knowledge event's cross-run lineage.
+
+        The Knowledge plane floor first (the switch, and a grant ceiling must
+        name this capability for `record_event_provenance_read`), because the
+        HTTP transport routes straight into `_HANDLERS`. Visibility, remote
+        withholding and the external-id rule are re-derived from the
+        authorization and this process's composition; the request supplies only
+        the event id. Unknown, foreign, withheld and non-Knowledge events all
+        answer the same `not_found(subject)`.
+        """
+        self._knowledge_plane(authorization, command.capability)
+        with _translated():
+            view = record_event_provenance(
+                unit_of_work.record_event_reader,
+                principal_id=authorization.principal.principal_id,
+                event_id=command.event_id,
+                available_capabilities=self.available_capabilities,
+                capability_grants=authorization.capability_grants,
+                remote=knowledge_is_remote(authorization),
+                authenticated_client_id=authorization.authenticated_client_id,
+            )
+        return _Result(
+            payload={"provenance": view},
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_RECORD_EVENT_TRUST_BASIS,
+                truncation=_NO_TRUNCATION,
+            ),
+        )
+
     def _meeting_page_size(self, requested: int | None) -> int:
         """The effective page bound: the published limit, never above the plane's 100."""
         return min(self._page_size(requested), MAX_MEETING_PAGE_SIZE)
@@ -14885,6 +14926,7 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.MEETINGS_UPDATE: ApplicationService._meetings_update,
         Capability.MEETINGS_SERIES_UPDATE: ApplicationService._meetings_series_update,
         Capability.RECORD_EVENTS_LIST: ApplicationService._record_events_list,
+        Capability.RECORD_EVENTS_PROVENANCE: ApplicationService._record_events_provenance,
         Capability.KNOWLEDGE_ASSERTIONS_READ: ApplicationService._knowledge_assertions_read,
         Capability.KNOWLEDGE_ASSERTIONS_LIST: ApplicationService._knowledge_assertions_list,
         Capability.KNOWLEDGE_ASSERTIONS_SEARCH: ApplicationService._knowledge_assertions_search,
@@ -15011,6 +15053,9 @@ _KNOWLEDGE_ASSERTION_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         # `MY_PA_KNOWLEDGE_ASSERTIONS_ENABLED` off neither is served anywhere.
         Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
         Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
+        # KLP-WP-05: provenance is a read of the plane's own ledgers, so the
+        # switch withholds it with the rest (KLP-AC-105 name set).
+        Capability.RECORD_EVENTS_PROVENANCE,
     }
 )
 

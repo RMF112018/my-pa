@@ -434,6 +434,10 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         # `knowledge_assertion_observation`, and under no other purpose.
         (Capability.KNOWLEDGE_ASSERTIONS_SUBMIT, Purpose.KNOWLEDGE_ASSERTION_OBSERVATION),
         (Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT, Purpose.KNOWLEDGE_ASSERTION_OBSERVATION),
+        # KLP-WP-05 (KLP-AC-015): provenance under its own
+        # `record_event_provenance_read`, and never under the feed's
+        # `record_event_read` (the mismatch sweep below proves that pair denied).
+        (Capability.RECORD_EVENTS_PROVENANCE, Purpose.RECORD_EVENT_PROVENANCE_READ),
     }
 )
 
@@ -513,9 +517,11 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # `knowledge_assertion_read`/`knowledge_assertion_authoring` pair, six pairs.
     # KLP-WP-04 adds submit and checkpoint and the one `knowledge_assertion_observation`
     # purpose, each name mapped to that purpose alone, two pairs.
-    # Unioned: 189 capabilities, 51 purposes, 191 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 191
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 191 == 9448
+    # KLP-WP-05 adds `record_events.provenance` and its own
+    # `record_event_provenance_read`, one pair.
+    # Unioned: 190 capabilities, 52 purposes, 192 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 192
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 192 == 9688
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

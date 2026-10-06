@@ -363,6 +363,10 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         # partition, not a configured source or an enrollment.
         Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
         Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
+        # KLP-WP-05 (KLP-AC-104): provenance, on the `record_events.list`
+        # argument -- an event, its mutation, submission and Review decision
+        # are product-owned rows of the acting Principal's own partition.
+        Capability.RECORD_EVENTS_PROVENANCE,
         # `context.feedback` names a ranking preference, not a source. The rows
         # it writes belong to the acting Principal's partition and carry no
         # `enrollment_id` and no grant a scope could be compared against.

@@ -28,8 +28,8 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with one hundred and eighty-nine capabilities and
-fifty-one purposes now declared in the domain. If this reddens, the freeze has been undone
+emits what it emitted on the day it merged, with one hundred and ninety capabilities and
+fifty-two purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
 
@@ -871,6 +871,12 @@ def test_the_schema_ahead_gap_matches_the_knowledge_wp_head() -> None:
     assert not PURPOSES_ADMITTED_AHEAD_OF_THE_DOMAIN & {p.value for p in Purpose}
     assert all(not values for values in GAP_ROWS["wp06"].values())
     assert {c.value for c in Capability} and {p.value for p in Purpose}
+    # KLP-WP-05 (KLP-AC-132 wp05 row): the capability and Purpose gaps are closed;
+    # only the WP-06 context-plane and source-authority gaps remain.
+    if KNOWLEDGE_WP_HEAD in {"wp05", "wp06"}:
+        assert not CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN
+        assert not PURPOSES_ADMITTED_AHEAD_OF_THE_DOMAIN
+        assert row["record_event_family"] == frozenset()
     # The row is measured, not merely restated: what the chain's latest audit
     # restatement freezes, minus what the domain declares, is exactly the row.
     # Bumping `KNOWLEDGE_WP_HEAD` before the domain declares the members its next

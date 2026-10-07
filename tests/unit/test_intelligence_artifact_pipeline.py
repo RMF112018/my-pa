@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
+
+from my_pa.adapters.normalization import normalize
 from my_pa.application.commands import (
     BeginIntelligenceCycle,
     CommitIntelligenceArtifact,
@@ -12,6 +15,7 @@ from my_pa.application.commands import (
     ResolveIntelligenceSet,
     SearchIntelligenceArtifacts,
 )
+from my_pa.application.errors import InvalidRequestError
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.v1.envelope import ResponseEnvelope
 from my_pa.contracts.v1.errors import ErrorCode
@@ -21,7 +25,9 @@ from my_pa.domain.intelligence.catalog import (
     CYCLE_MORNING_INTELLIGENCE,
     EXPECTED_FOCUS_AREAS,
     EXPECTED_SOURCE_LANES,
+    FOCUS_AREA_IDS,
     MAX_ARTIFACT_BODY_BYTES,
+    REQUIRED_DEPENDENCY_COUNT,
     ArtifactKind,
     ArtifactState,
     FocusAreaId,
@@ -29,6 +35,7 @@ from my_pa.domain.intelligence.catalog import (
     ProducerRunState,
     ResolverSetId,
     SourceLaneId,
+    expected_members,
 )
 from my_pa.domain.intelligence.models import content_digest
 from tests.conftest import Scene, build_service, metadata_for, operator
@@ -1105,3 +1112,221 @@ def test_list_honors_cursor_and_refuses_a_foreign_one(scene: Scene) -> None:
     )
     assert envelope.error is not None
     assert envelope.error.code is ErrorCode.INVALID_REQUEST
+
+
+# ---- admitted but not expected focus areas ---------------------------------------
+
+#: The three focus areas admitted for commit and run-state recording that no
+#: cycle requires. Written out so the test states the operator-accepted set
+#: rather than inheriting it from the catalog it checks.
+ADMITTED_ONLY: tuple[FocusAreaId, ...] = (
+    FocusAreaId.CAPTURES,
+    FocusAreaId.NOTES,
+    FocusAreaId.FIELD_INTELLIGENCE,
+)
+ORIGINAL_SIX: tuple[str, ...] = (
+    "risk_deadline_exception",
+    "decision_approval",
+    "communications",
+    "project_program_pulse",
+    "watchlist_dependency",
+    "action_commitment",
+)
+
+
+def test_admitted_only_areas_are_allowed_but_not_expected() -> None:
+    assert [area.value for area in ADMITTED_ONLY] == ["captures", "notes", "field_intelligence"]
+    assert tuple(area.value for area in FOCUS_AREA_IDS) == (
+        *ORIGINAL_SIX,
+        "captures",
+        "notes",
+        "field_intelligence",
+    )
+    assert tuple(area.value for area in EXPECTED_FOCUS_AREAS) == ORIGINAL_SIX
+    assert REQUIRED_DEPENDENCY_COUNT[IntelligenceStage.MORNING_BRIEF] == 6
+    for set_id in (ResolverSetId.COLLECTORS, ResolverSetId.MORNING_BRIEF_INPUTS):
+        members = expected_members(set_id)
+        assert tuple(key for key, _, _ in members) == ORIGINAL_SIX
+        assert tuple(area.value for _, area, _ in members if area is not None) == ORIGINAL_SIX
+        assert all(lane is None for _, _, lane in members)
+
+
+def _wire(scene: Scene, capability: Capability, body: dict[str, object]) -> dict[str, object]:
+    return {
+        "request_id": f"req-{capability.value}",
+        "purpose": Purpose.REPORT_AUTHORING.value,
+        "principal_id": scene.principal.principal_id,
+        "requested_at": "2026-08-20T12:00:00Z",
+        "payload": body,
+    }
+
+
+def _wire_commit(cycle: str, focus: str, key: str) -> dict[str, object]:
+    return {
+        "cycle_run_id": cycle,
+        "stage": "collector",
+        "artifact_kind": "collector_candidates",
+        "focus_area_id": focus,
+        "producer_task_id": f"task-{key}",
+        "producer_task_name": f"Collector {focus}",
+        "automation_platform": "abacus_chatllm",
+        "report_date": "2026-08-20",
+        "title": f"Collector {focus}",
+        "body_markdown": f"collector {focus}",
+        "artifact_state": "final",
+        "schema_version": "1",
+        "idempotency_key": key,
+    }
+
+
+def _wire_run_state(cycle: str, focus: str, key: str) -> dict[str, object]:
+    return {
+        "cycle_run_id": cycle,
+        "stage": "researcher",
+        "artifact_kind": "research_context",
+        "focus_area_id": focus,
+        "source_lane": "teams",
+        "producer_task_id": f"task-{key}",
+        "producer_task_name": f"Researcher {focus}",
+        "automation_platform": "abacus_chatllm",
+        "report_date": "2026-08-20",
+        "state": "failed",
+        "idempotency_key": key,
+        "failure_code": "source_unavailable",
+    }
+
+
+@pytest.mark.parametrize("focus", ADMITTED_ONLY, ids=lambda area: area.value)
+def test_admitted_only_area_commits_and_records_run_state_from_the_wire(
+    scene: Scene, focus: FocusAreaId
+) -> None:
+    """`reports.commit` and `reports.record_run_state` admit the area end to end."""
+    service = build_service(scene.world, scene.providers)
+    cycle = begin(service, scene, f"cycle-wire-{focus.value}")
+    metadata, command = normalize(
+        Capability.REPORTS_COMMIT.value,
+        _wire(
+            scene,
+            Capability.REPORTS_COMMIT,
+            _wire_commit(cycle, focus.value, f"wire-{focus.value}-c"),
+        ),
+    )
+    assert isinstance(command, CommitIntelligenceArtifact)
+    assert command.focus_area_id is focus
+    committed = payload(service.invoke(metadata, command, principal=scene.principal))
+    assert committed["created"] is True
+    metadata, command = normalize(
+        Capability.REPORTS_RECORD_RUN_STATE.value,
+        _wire(
+            scene,
+            Capability.REPORTS_RECORD_RUN_STATE,
+            _wire_run_state(cycle, focus.value, f"wire-{focus.value}-r"),
+        ),
+    )
+    assert isinstance(command, RecordIntelligenceRunState)
+    assert command.focus_area_id is focus
+    recorded = payload(service.invoke(metadata, command, principal=scene.principal))
+    assert recorded["state"] == "failed"
+    assert recorded["created"] is True
+
+
+@pytest.mark.parametrize(
+    ("capability", "body"),
+    [
+        (Capability.REPORTS_COMMIT, _wire_commit),
+        (Capability.REPORTS_RECORD_RUN_STATE, _wire_run_state),
+    ],
+    ids=["commit", "record_run_state"],
+)
+def test_an_unknown_focus_area_is_still_refused_at_normalization(
+    scene: Scene,
+    capability: Capability,
+    body: object,
+) -> None:
+    assert callable(body)
+    with pytest.raises(InvalidRequestError) as refused:
+        normalize(
+            capability.value,
+            _wire(scene, capability, body("micr_00000000bogus", "bogus", "wire-bogus")),
+        )
+    assert list(refused.value.safe_details) == ["focus_area_id"]
+
+
+@pytest.mark.parametrize("focus", ADMITTED_ONLY, ids=lambda area: area.value)
+def test_admitted_only_area_runs_its_full_branch(scene: Scene, focus: FocusAreaId) -> None:
+    """Collector, five researchers, synthesizer and reporter, with typed dependencies."""
+    service = build_service(scene.world, scene.providers)
+    cycle = begin(service, scene, f"cycle-branch-{focus.value}")
+    reporter = _focus_branch(service, scene, cycle, focus)
+    resolved = payload(
+        run(
+            service,
+            scene,
+            Purpose.REPORT_READ,
+            ResolveIntelligenceSet(
+                cycle_run_id=cycle, set_id=ResolverSetId.REPORTER_INPUT, focus_area_id=focus
+            ),
+        )
+    )
+    assert resolved["aggregate"] == "READY"
+    read = payload(
+        run(service, scene, Purpose.REPORT_READ, ReadIntelligenceArtifact(report_id=reporter))
+    )
+    assert read["focus_area_id"] == focus.value
+
+
+def _brief(
+    service: ApplicationService, scene: Scene, cycle: str, key: str, reporters: tuple[str, ...]
+) -> ResponseEnvelope:
+    return run(
+        service,
+        scene,
+        Purpose.REPORT_AUTHORING,
+        CommitIntelligenceArtifact(
+            cycle_run_id=cycle,
+            stage=IntelligenceStage.MORNING_BRIEF,
+            artifact_kind=ArtifactKind.MORNING_BRIEF,
+            producer_task_id="brief",
+            producer_task_name="brief",
+            automation_platform="abacus_chatllm",
+            report_date="2026-08-20",
+            title="Morning Brief",
+            body_markdown="brief body",
+            artifact_state=ArtifactState.FINAL,
+            schema_version="1",
+            idempotency_key=key,
+            dependency_report_ids=reporters,
+        ),
+    )
+
+
+def test_the_morning_brief_still_takes_exactly_the_original_six(scene: Scene) -> None:
+    """New-area reporters exist in the cycle; the brief neither needs nor accepts them."""
+    service = build_service(scene.world, scene.providers)
+    cycle = begin(service, scene, "cycle-brief-six")
+    six = tuple(_focus_branch(service, scene, cycle, focus) for focus in EXPECTED_FOCUS_AREAS)
+    extra = tuple(_focus_branch(service, scene, cycle, focus) for focus in ADMITTED_ONLY)
+
+    resolved = payload(
+        run(
+            service,
+            scene,
+            Purpose.REPORT_READ,
+            ResolveIntelligenceSet(cycle_run_id=cycle, set_id=ResolverSetId.MORNING_BRIEF_INPUTS),
+        )
+    )
+    assert resolved["aggregate"] == "READY"
+    members = resolved["members"]
+    assert isinstance(members, list)
+    assert [member["member_id"] for member in members] == list(ORIGINAL_SIX)
+    assert {member["artifact_id"] for member in members} == set(six)
+
+    swapped = _brief(service, scene, cycle, "brief-swapped", (*six[:-1], extra[0]))
+    assert swapped.error is not None
+    assert swapped.error.code is ErrorCode.INVALID_REQUEST
+    added = _brief(service, scene, cycle, "brief-added", (*six, extra[0]))
+    assert added.error is not None
+    assert added.error.code is ErrorCode.INVALID_REQUEST
+
+    brief = payload(_brief(service, scene, cycle, "brief-six", six))
+    assert brief["created"] is True

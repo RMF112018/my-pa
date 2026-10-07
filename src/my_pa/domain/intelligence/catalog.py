@@ -48,7 +48,11 @@ ALLOWED_PROVENANCE_URL_SCHEMES: Final = frozenset({"https", "http"})
 
 
 class FocusAreaId(StrEnum):
-    """Stable focus-area identities, independent of Abacus task IDs."""
+    """Stable focus-area identities, independent of Abacus task IDs.
+
+    Every member is admitted for commit and run-state recording; only
+    ``EXPECTED_FOCUS_AREAS`` is required by cycle membership.
+    """
 
     RISK_DEADLINE_EXCEPTION = "risk_deadline_exception"
     DECISION_APPROVAL = "decision_approval"
@@ -56,6 +60,9 @@ class FocusAreaId(StrEnum):
     PROJECT_PROGRAM_PULSE = "project_program_pulse"
     WATCHLIST_DEPENDENCY = "watchlist_dependency"
     ACTION_COMMITMENT = "action_commitment"
+    CAPTURES = "captures"
+    NOTES = "notes"
+    FIELD_INTELLIGENCE = "field_intelligence"
 
 
 class SourceLaneId(StrEnum):
@@ -159,7 +166,18 @@ class ResolverAggregateState(StrEnum):
 
 FOCUS_AREA_IDS: Final = tuple(FocusAreaId)
 SOURCE_LANE_IDS: Final = tuple(SourceLaneId)
-EXPECTED_FOCUS_AREAS: Final = FOCUS_AREA_IDS
+#: The focus areas every Morning Intelligence cycle requires. ``FOCUS_AREA_IDS``
+#: is the admitted set; ``captures``, ``notes`` and ``field_intelligence`` are
+#: admitted but deliberately not expected, so collector and morning-brief
+#: membership stays these six.
+EXPECTED_FOCUS_AREAS: Final[tuple[FocusAreaId, ...]] = (
+    FocusAreaId.RISK_DEADLINE_EXCEPTION,
+    FocusAreaId.DECISION_APPROVAL,
+    FocusAreaId.COMMUNICATIONS,
+    FocusAreaId.PROJECT_PROGRAM_PULSE,
+    FocusAreaId.WATCHLIST_DEPENDENCY,
+    FocusAreaId.ACTION_COMMITMENT,
+)
 EXPECTED_SOURCE_LANES: Final = SOURCE_LANE_IDS
 RESOLVER_SET_IDS: Final = tuple(ResolverSetId)
 

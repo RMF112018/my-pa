@@ -39,7 +39,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "c4f1a8e52d90"
-CURRENT_HEAD: Final = "6734f039f7a6"
+CURRENT_HEAD: Final = "93f3aa113f58"
 PREVIOUS: Final = "b3e9d7a41c25"
 VOCABULARY_PREDECESSOR: Final = "b3e9d7a41c25"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
@@ -122,7 +122,8 @@ def _literals(block: str) -> list[str]:
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [CURRENT_HEAD]
-    assert script.get_revision(CURRENT_HEAD).down_revision == "0641c354ca85"
+    assert script.get_revision(CURRENT_HEAD).down_revision == "6734f039f7a6"
+    assert script.get_revision("6734f039f7a6").down_revision == "0641c354ca85"
     assert script.get_revision("0641c354ca85").down_revision == "c8e4a1b70d35"
     assert script.get_revision("c8e4a1b70d35").down_revision == "1d9b248e7f83"
     assert script.get_revision("1d9b248e7f83").down_revision == "7d9a450dfd07"
@@ -133,7 +134,7 @@ def test_revision_is_the_only_linear_head() -> None:
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 112
+    assert len(list(MIGRATIONS.glob("*.py"))) == 113
 
 
 def test_revision_is_frozen_and_does_not_import_live_schema_or_enums() -> None:

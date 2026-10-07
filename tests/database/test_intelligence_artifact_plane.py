@@ -10,7 +10,8 @@ from typing import Final
 
 import pytest
 from alembic.config import Config
-from sqlalchemy import Engine, text
+from sqlalchemy import Connection, Engine, text
+from sqlalchemy.exc import DBAPIError
 
 from my_pa.application.commands import (
     BeginIntelligenceCycle,
@@ -750,3 +751,229 @@ def test_sql_synthesizer_rerun_stales_brief_and_rejects_old_reporters(
         ReadIntelligenceArtifact(report_id=brief_id),
     )
     assert historical["body_markdown"] == "brief body"
+
+
+# ---- admitted but not expected focus areas ---------------------------------------
+
+#: Admitted for commit, run state and pipeline dependencies; required by no cycle.
+ADMITTED_ONLY: Final[tuple[FocusAreaId, ...]] = (
+    FocusAreaId.CAPTURES,
+    FocusAreaId.NOTES,
+    FocusAreaId.FIELD_INTELLIGENCE,
+)
+CHECK_VIOLATION: Final = "23514"
+#: (table, focus column, primary-key column substituted on a copy, CHECK name).
+FOCUS_CHECKS: Final = (
+    (
+        "intelligence_producer_runs",
+        "focus_area_id",
+        "run_id",
+        "intelligence_producer_runs_focus_area_id_check",
+    ),
+    (
+        "intelligence_artifacts",
+        "focus_area_id",
+        "artifact_id",
+        "intelligence_artifacts_focus_area_id_check",
+    ),
+    (
+        "intelligence_pipeline_dependencies",
+        "expected_focus_area_id",
+        "downstream_artifact_id",
+        "intelligence_pipeline_dependencies_expected_focus_area_id_check",
+    ),
+)
+
+
+def _count(engine: Engine, table: str, column: str, value: str) -> int:
+    with engine.connect() as connection:
+        return int(
+            connection.execute(
+                text(f"SELECT count(*) FROM knowledge.{table} WHERE {column} = :value"),  # noqa: S608
+                {"value": value},
+            ).scalar_one()
+        )
+
+
+@pytest.mark.parametrize("focus", ADMITTED_ONLY, ids=lambda area: area.value)
+def test_sql_admitted_only_area_persists_on_all_three_tables(
+    migrated_engine: Engine, focus: FocusAreaId
+) -> None:
+    """Commit, run state and typed dependencies all reach PostgreSQL for the area."""
+    service = _service(migrated_engine)
+    principal = operator()
+    cycle = _begin(service, principal, f"sql-admit-{focus.value}")
+    reporter = _focus_branch(service, principal, cycle, focus)
+    failed_cycle = _begin(service, principal, f"sql-admit-fail-{focus.value}")
+    failed = _ok(
+        service,
+        principal,
+        Purpose.REPORT_AUTHORING,
+        RecordIntelligenceRunState(
+            cycle_run_id=failed_cycle,
+            stage=IntelligenceStage.RESEARCHER,
+            artifact_kind=ArtifactKind.RESEARCH_CONTEXT,
+            producer_task_id=f"sql-{focus.value}-teams-fail",
+            producer_task_name="Teams",
+            automation_platform="abacus_chatllm",
+            report_date="2026-08-20",
+            state=ProducerRunState.FAILED,
+            idempotency_key=f"sql-{focus.value}-teams-fail",
+            focus_area_id=focus,
+            source_lane=SourceLaneId.TEAMS,
+            failure_code="source_unavailable",
+        ),
+    )
+    assert failed["state"] == "failed"
+    # Collector, five researchers, synthesizer and reporter: eight artifacts and
+    # eight producer runs, plus the failed run with no body.
+    assert _count(migrated_engine, "intelligence_artifacts", "focus_area_id", focus.value) == 8
+    assert _count(migrated_engine, "intelligence_producer_runs", "focus_area_id", focus.value) == 9
+    # Five researcher->collector, five synthesizer->researcher, one reporter->synthesizer.
+    assert (
+        _count(
+            migrated_engine,
+            "intelligence_pipeline_dependencies",
+            "expected_focus_area_id",
+            focus.value,
+        )
+        == 11
+    )
+    read = _ok(
+        service, principal, Purpose.REPORT_READ, ReadIntelligenceArtifact(report_id=reporter)
+    )
+    assert read["focus_area_id"] == focus.value
+
+
+def test_sql_morning_brief_still_takes_exactly_the_original_six(migrated_engine: Engine) -> None:
+    service = _service(migrated_engine)
+    principal = operator()
+    cycle = _begin(service, principal, "sql-brief-cycle")
+    six = tuple(_focus_branch(service, principal, cycle, focus) for focus in EXPECTED_FOCUS_AREAS)
+    extra = _focus_branch(service, principal, cycle, FocusAreaId.CAPTURES)
+    resolved = _ok(
+        service,
+        principal,
+        Purpose.REPORT_READ,
+        ResolveIntelligenceSet(cycle_run_id=cycle, set_id=ResolverSetId.MORNING_BRIEF_INPUTS),
+    )
+    assert resolved["aggregate"] == "READY"
+    members = resolved["members"]
+    assert isinstance(members, list)
+    assert [member["member_id"] for member in members] == [
+        area.value for area in EXPECTED_FOCUS_AREAS
+    ]
+    assert {member["artifact_id"] for member in members} == set(six)
+
+    def brief(key: str, reporters: tuple[str, ...]) -> ResponseEnvelope:
+        return _invoke(
+            service,
+            principal,
+            Purpose.REPORT_AUTHORING,
+            CommitIntelligenceArtifact(
+                cycle_run_id=cycle,
+                stage=IntelligenceStage.MORNING_BRIEF,
+                artifact_kind=ArtifactKind.MORNING_BRIEF,
+                producer_task_id="sql-brief",
+                producer_task_name="brief",
+                automation_platform="abacus_chatllm",
+                report_date="2026-08-20",
+                title="Morning Brief",
+                body_markdown="brief",
+                artifact_state=ArtifactState.FINAL,
+                schema_version="1",
+                idempotency_key=key,
+                dependency_report_ids=reporters,
+            ),
+        )
+
+    for key, reporters in (
+        ("sql-brief-swapped", (*six[:-1], extra)),
+        ("sql-brief-added", (*six, extra)),
+    ):
+        refused = brief(key, reporters)
+        assert refused.error is not None
+        assert refused.error.code is ErrorCode.INVALID_REQUEST
+    accepted = brief("sql-brief-six", six)
+    assert accepted.error is None, accepted.error
+    with migrated_engine.connect() as connection:
+        roles = connection.execute(
+            text(
+                "SELECT d.expected_focus_area_id "
+                "FROM knowledge.intelligence_pipeline_dependencies d "
+                "JOIN knowledge.intelligence_artifacts a "
+                "ON a.principal_id = d.principal_id AND a.artifact_id = d.downstream_artifact_id "
+                "WHERE a.stage = 'morning_brief'"
+            )
+        ).scalars()
+        assert sorted(roles) == sorted(area.value for area in EXPECTED_FOCUS_AREAS)
+
+
+def _copy_with(
+    connection: Connection, table: str, key_column: str, column: str, value: str
+) -> None:
+    """Insert a copy of one row with a fresh key and `column` set to `value`.
+
+    No intelligence table has a BEFORE INSERT trigger, so the CHECK under test is
+    what decides the insert, not an append-only guard.
+    """
+    columns = list(
+        connection.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'knowledge' AND table_name = :table "
+                "AND is_generated = 'NEVER' ORDER BY ordinal_position"
+            ),
+            {"table": table},
+        ).scalars()
+    )
+    if table == "intelligence_pipeline_dependencies":
+        # A reversed edge is a fresh primary key over the same two artifacts.
+        source = {
+            "downstream_artifact_id": "upstream_artifact_id",
+            "upstream_artifact_id": "downstream_artifact_id",
+        }
+        chosen = [source.get(name, name) for name in columns]
+    else:
+        chosen = [f"{name} || 'Zz9'" if name == key_column else name for name in columns]
+    chosen = [
+        ":value" if name == column else expression
+        for name, expression in zip(columns, chosen, strict=True)
+    ]
+    inserted = connection.execute(
+        text(
+            f"INSERT INTO knowledge.{table} ({', '.join(columns)}) "  # noqa: S608
+            f"SELECT {', '.join(chosen)} FROM knowledge.{table} "
+            f"WHERE {column} = 'communications' LIMIT 1"
+        ),
+        {"value": value},
+    )
+    assert inserted.rowcount == 1, f"no source row was copied in {table}"
+
+
+@pytest.mark.parametrize(
+    ("table", "column", "key_column", "constraint"),
+    FOCUS_CHECKS,
+    ids=[table for table, *_ in FOCUS_CHECKS],
+)
+def test_sql_focus_area_check_admits_the_nine_and_refuses_an_unknown_value(
+    migrated_engine: Engine, table: str, column: str, key_column: str, constraint: str
+) -> None:
+    service = _service(migrated_engine)
+    principal = operator()
+    cycle = _begin(service, principal, f"sql-check-{table}")
+    _focus_branch(service, principal, cycle, FocusAreaId.COMMUNICATIONS)
+    for focus in ADMITTED_ONLY:
+        with migrated_engine.connect() as connection, connection.begin() as transaction:
+            _copy_with(connection, table, key_column, column, focus.value)
+            transaction.rollback()
+    with (
+        migrated_engine.connect() as connection,
+        connection.begin(),
+        pytest.raises(DBAPIError) as refused,
+    ):
+        _copy_with(connection, table, key_column, column, "bogus")
+    diag = getattr(refused.value.orig, "diag", None)
+    assert getattr(refused.value.orig, "sqlstate", None) == CHECK_VIOLATION
+    assert diag is not None
+    assert diag.constraint_name == constraint

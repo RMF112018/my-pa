@@ -23,6 +23,20 @@ sleeps; each wait is observed in `pg_stat_activity` before it is released.
   (`review_queued`), the old one unchanged; race 14 (b): an equivalent proposal
   first seen after C6 -> retryable `conflict`, nothing written, retry
   `duplicate_pending_review`.
+* **Race 1 (KLP-WP-07 race closure)** -- two first-ever direct submissions of
+  one single-current key with different values and no `effective_from`, while
+  the key's C6 row is an uncommitted insert of a third session: the first
+  creates the fact; the second re-reads the slot under its own locks, finds a
+  different live fact it cannot govern (unknown bounds) and is queued for
+  Review. One live row, one lock row, never 23505.
+* **Races 7 and 8 (KLP-WP-07 race closure)** -- a production Review acceptance
+  and a production autonomous supersession of the same single-current holder
+  (race 7), and two production autonomous supersessions of one predecessor
+  (race 8), started while the key's C6 row is held: the first waits at C6, the
+  second behind it on the subject's Entity scope (C3). After release the first
+  supersedes the holder and the second re-reads the slot under its own locks
+  and supersedes the *new* holder: the chain stays linear, exactly one live
+  fact, never two successors of one predecessor and never a 23505.
 """
 
 from __future__ import annotations
@@ -43,12 +57,22 @@ from tests.database.test_knowledge_assertion_repository import (
     create_command,
     new_principal,
 )
+from tests.database.test_knowledge_assertion_review import (
+    CLI,
+    ReviewRuntime,
+    _holder_and_case,
+)
 from tests.database.test_knowledge_assertion_submissions import (
     CLIENT,
+    EARLY,
+    LATER,
+    LATEST,
     OPERATING,
     PAYMENT,
     SUBMIT_GRANTS,
     SubmitRuntime,
+    _payment,
+    add_direct_payment_head,
     external,
     live_assertions,
 )
@@ -58,7 +82,10 @@ from my_pa.domain.capture.review import Disposition
 from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.identity.operator_surface import OperatorSurface
 from my_pa.domain.knowledge_assertion.vocabulary import KnowledgeSubjectKind
-from my_pa.infrastructure.persistence.tables import knowledge_assertion_proposals
+from my_pa.infrastructure.persistence.tables import (
+    knowledge_assertion_proposals,
+    knowledge_assertions,
+)
 
 pytestmark = [
     pytest.mark.database,
@@ -414,3 +441,180 @@ def test_race_14b_a_proposal_first_seen_after_c6_is_a_retryable_conflict(
     assert retry.error is None
     assert retry.result["outcome"] == "duplicate_pending_review"
     assert retry.result["proposal_id"] == one.result["proposal_id"]
+
+
+# ---- races 7 and 8 (KLP-WP-07): supersessions of one single-current holder ---------------
+
+
+def _supersession_chain(engine: Engine, principal: str) -> dict[str, str | None]:
+    """assertion_id -> supersedes_assertion_id for every payment_terms fact."""
+    a = knowledge_assertions
+    with engine.connect() as connection:
+        return {
+            str(row.assertion_id): row.supersedes_assertion_id
+            for row in connection.execute(
+                select(a.c.assertion_id, a.c.supersedes_assertion_id).where(
+                    a.c.principal_id == principal, a.c.predicate_code == PAYMENT
+                )
+            )
+        }
+
+
+def _payment_envelope(
+    runtime: SubmitRuntime, principal: str, profile: str, org: str, value: str, candidate: str
+) -> Any:  # noqa: ANN401 - a ResponseEnvelope
+    return submit_envelope(
+        runtime,
+        principal,
+        profile,
+        subject_id=org,
+        predicate=PAYMENT,
+        value=value,
+        candidate=candidate,
+        effective_from=LATEST,
+        evidence=(external(f"inv-{candidate}"),),
+    )
+
+
+def test_race_8_two_supersessions_of_one_predecessor_stay_linear(
+    runtime: SubmitRuntime,
+) -> None:
+    principal = new_principal()
+    add_direct_payment_head(runtime.engine)
+    profile = runtime.profile(principal)
+    org = runtime.entity(principal, "race8")
+    holder = _payment(runtime, principal, profile, org, "Synthetic net 30", "a", EARLY)
+    assert holder["outcome"] == "direct_created", holder
+    engine = runtime.engine
+    first, second = race(
+        engine,
+        lambda lock: hold_subject_lock(lock, principal, ENTITY, org, PAYMENT),
+        lambda: submit_envelope(
+            runtime,
+            principal,
+            profile,
+            subject_id=org,
+            predicate=PAYMENT,
+            value="Synthetic net 45",
+            candidate="b",
+            effective_from=LATER,
+            evidence=(external("inv-b"),),
+        ),
+        lambda: _payment_envelope(runtime, principal, profile, org, "Synthetic net 60", "c"),
+    )
+    assert first.error is None and second.error is None, (first.error, second.error)
+    assert first.result["outcome"] == "direct_superseded", first.result
+    assert first.result["superseded_assertion_id"] == holder["assertion_id"]
+    # The loser re-read the slot under its own locks: it supersedes the NEW holder.
+    assert second.result["outcome"] == "direct_superseded", second.result
+    assert second.result["superseded_assertion_id"] == first.result["assertion_id"]
+    chain = _supersession_chain(engine, principal)
+    assert chain == {
+        holder["assertion_id"]: None,
+        first.result["assertion_id"]: holder["assertion_id"],
+        second.result["assertion_id"]: first.result["assertion_id"],
+    }
+    live = live_assertions(engine, principal, PAYMENT)
+    assert [row["assertion_id"] for row in live] == [second.result["assertion_id"]]
+
+
+@pytest.fixture
+def review(disposable_database: str) -> Iterator[ReviewRuntime]:
+    composed = ReviewRuntime(disposable_database)
+    try:
+        yield composed
+    finally:
+        composed.close()
+
+
+def test_race_7_review_acceptance_vs_autonomous_supersession_stays_linear(
+    review: ReviewRuntime,
+) -> None:
+    """A real accept (C5 held, waiting at C6) and a direct submit (waiting at C3)."""
+    principal, holder, case = _holder_and_case(review, successor_from=LATER, direct_successor=False)
+    engine = review.engine
+    with engine.connect() as connection:
+        org, direct = connection.execute(
+            text(
+                "SELECT a.subject_id, s.source_profile_id "
+                "FROM knowledge.knowledge_assertions a "
+                "JOIN knowledge.knowledge_assertion_submissions s "
+                "ON s.submission_id = a.origin_submission_id WHERE a.assertion_id = :a"
+            ),
+            {"a": holder},
+        ).one()
+    accepted, submitted = race(
+        engine,
+        lambda lock: hold_subject_lock(lock, principal, ENTITY, org, PAYMENT),
+        lambda: review.invoke(
+            DecideReviewCase(
+                review_case_id=case, expected_review_version=0, disposition=Disposition.ACCEPT
+            ),
+            principal_id=principal,
+            **CLI,
+        ),
+        lambda: _payment_envelope(review, principal, direct, org, "Synthetic net 90", "late"),
+    )
+    assert accepted.error is None, accepted.error
+    assert submitted.error is None, submitted.error
+    promoted = accepted.result["assertion_id"]
+    assert submitted.result["outcome"] == "direct_superseded", submitted.result
+    assert submitted.result["superseded_assertion_id"] == promoted
+    chain = _supersession_chain(engine, principal)
+    assert chain[promoted] == holder
+    assert chain[submitted.result["assertion_id"]] == promoted
+    assert sum(1 for predecessor in chain.values() if predecessor == holder) == 1
+    live = live_assertions(engine, principal, PAYMENT)
+    assert [row["assertion_id"] for row in live] == [submitted.result["assertion_id"]]
+
+
+def test_race_1_two_first_ever_single_current_submissions_leave_one_live_fact(
+    runtime: SubmitRuntime,
+) -> None:
+    principal = new_principal()
+    add_direct_payment_head(runtime.engine)
+    profile = runtime.profile(principal)
+    org = runtime.entity(principal, "race1")
+    engine = runtime.engine
+
+    def hold(holder: Connection) -> None:
+        holder.execute(
+            text(
+                "INSERT INTO knowledge.knowledge_assertion_subject_locks (principal_id, "
+                "subject_kind, subject_id, predicate_code) VALUES (:p, 'entity', :s, :c)"
+            ),
+            {"p": principal, "s": org, "c": PAYMENT},
+        )
+
+    def first_ever(value: str, candidate: str) -> Callable[[], Any]:
+        return lambda: submit_envelope(
+            runtime,
+            principal,
+            profile,
+            subject_id=org,
+            predicate=PAYMENT,
+            value=value,
+            candidate=candidate,
+            evidence=(external(f"inv-{candidate}"),),
+        )
+
+    first, second = race(
+        engine,
+        hold,
+        first_ever("Synthetic net 30", "one"),
+        first_ever("Synthetic net 45", "two"),
+    )
+    assert first.error is None and second.error is None, (first.error, second.error)
+    assert first.result["outcome"] == "direct_created", first.result
+    assert second.result["outcome"] == "review_queued", second.result
+    live = live_assertions(engine, principal, PAYMENT)
+    assert [row["assertion_id"] for row in live] == [first.result["assertion_id"]]
+    with engine.connect() as connection:
+        locks = connection.execute(
+            text(
+                "SELECT count(*) FROM knowledge.knowledge_assertion_subject_locks "
+                "WHERE principal_id = :p AND subject_id = :s AND predicate_code = :c"
+            ),
+            {"p": principal, "s": org, "c": PAYMENT},
+        ).scalar_one()
+    assert locks == 1

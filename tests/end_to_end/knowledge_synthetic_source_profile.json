@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "profiles": [
+    {
+      "authenticated_client_id": "klp07-synthetic-discovery-client",
+      "origin_system": "synthetic",
+      "scope": "klp07-synthetic-vertical-slice-scope",
+      "authority_ceiling": "authoritative_source",
+      "direct_admission_enabled": true,
+      "read_only_proof_state": "proven"
+    }
+  ]
+}

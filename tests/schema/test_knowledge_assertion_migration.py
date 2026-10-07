@@ -68,6 +68,9 @@ MATRIX_PATH: Final = ROOT / "tests" / "architecture" / "klp_implementation_matri
 SCHEMA: Final = "knowledge"
 REVISION: Final = "6734f039f7a6"
 PREVIOUS: Final = "0641c354ca85"
+#: The chain head. `93f3aa113f58` (Intelligence focus-area admission) is additive
+#: on `REVISION`, so a database upgraded to head stands there.
+HEAD: Final = "93f3aa113f58"
 MIGRATION: Final = VERSIONS / "20261004_6734f039f7a6_knowledge_assertion_layer.py"
 RESTRICT_VIOLATION: Final = "23001"
 FOREIGN_KEY_VIOLATION: Final = "23503"
@@ -177,17 +180,20 @@ def _render_trigger(table: str, trigger: Mapping[str, Any]) -> str:
 # ---- FAST: the graph -------------------------------------------------------------------
 
 
-def test_the_revision_is_the_single_head_directly_on_0641c354ca85() -> None:
+def test_the_revision_is_directly_on_0641c354ca85_under_one_later_head() -> None:
     """AC-076: one current head; the revision was generated from the sole head."""
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [REVISION]
+    assert script.get_heads() == [HEAD]
+    assert script.get_revision(HEAD).down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert _revision().revision == REVISION
     assert _revision().down_revision == PREVIOUS
     migration_contract = _matrix()["migration_contract"]
     assert migration_contract["current_head"] == PREVIOUS
     files = sorted(VERSIONS.glob("*.py"))
-    assert len(files) == migration_contract["expected_post_r6_revision_file_count"] == 112
+    # R6 counted 112 files at this revision; `HEAD` is the one file added since.
+    assert migration_contract["expected_post_r6_revision_file_count"] == 112
+    assert len(files) == 113
     assert [path.name for path in VERSIONS.glob("*_knowledge_assertion_layer.py")] == [
         MIGRATION.name
     ]
@@ -2121,7 +2127,7 @@ def _assert_alters(connection: Connection) -> None:
 def test_an_empty_database_reaches_the_head_with_the_frozen_inventory(engine: Engine) -> None:
     """AC-131 / AC-078 (empty->head): pg_catalog equals the matrix, exactly."""
     command.upgrade(_config(), "head")
-    assert _version(engine) == REVISION
+    assert _version(engine) == HEAD
     with engine.connect() as connection, connection.begin():
         tables = set(
             connection.execute(
@@ -2347,7 +2353,7 @@ def test_an_empty_downgrade_restores_the_exact_predecessor_and_upgrades_again(
         ).scalar_one()
         assert remaining == 0
     command.upgrade(_config(), "head")
-    assert _version(engine) == REVISION
+    assert _version(engine) == HEAD
     with engine.connect() as connection, connection.begin():
         _assert_seeds(connection)
         _assert_alters(connection)

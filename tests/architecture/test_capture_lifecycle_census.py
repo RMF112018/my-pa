@@ -44,7 +44,10 @@ def test_the_capture_census_at_this_head_is_the_three_lifecycle_modules() -> Non
     into the repository request (it reads no Capture row), and
     `infrastructure/persistence/knowledge_assertions.py` is a publication
     consumer: an explicit create links capture evidence, so it calls the fence
-    exactly once (R6 8.1 C4c) and withholds an archived root remotely.
+    exactly once (R6 8.1 C4c) and withholds an archived root remotely. The
+    Intelligence focus-area admission makes it 65: `domain/intelligence/catalog.py`
+    declares the `captures` Morning Intelligence focus-area identity (a string
+    enum member; it reads no Capture row and calls no fence).
     """
     import re
 
@@ -57,7 +60,8 @@ def test_the_capture_census_at_this_head_is_the_three_lifecycle_modules() -> Non
         for path in (ROOT / "src").rglob("*.py")
         if pattern.search(path.read_text(encoding="utf-8"))
     )
-    assert len(hits) == 64
+    assert len(hits) == 65
+    assert "src/my_pa/domain/intelligence/catalog.py" in hits
     assert set(DELTA) <= set(hits)
     assert "src/my_pa/adapters/remote_request.py" in hits
     assert "src/my_pa/infrastructure/database/record_event_roles.py" in hits
@@ -68,6 +72,8 @@ def test_the_capture_census_at_this_head_is_the_three_lifecycle_modules() -> Non
     assert "require_active_capture_roots" not in roles
     remote = (ROOT / "src/my_pa/adapters/remote_request.py").read_text(encoding="utf-8")
     assert "require_active_capture_roots" not in remote
+    catalog = (ROOT / "src/my_pa/domain/intelligence/catalog.py").read_text(encoding="utf-8")
+    assert "require_active_capture_roots" not in catalog
     knowledge = (ROOT / "src/my_pa/application/knowledge_assertions.py").read_text(encoding="utf-8")
     assert "require_active_capture_roots" not in knowledge
     persistence = (ROOT / "src/my_pa/infrastructure/persistence/knowledge_assertions.py").read_text(

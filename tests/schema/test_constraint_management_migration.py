@@ -156,7 +156,7 @@ def _offline(target: str, *, down: bool = False) -> str:
 
 def test_the_revision_is_the_only_head_and_sits_on_its_predecessor() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == ["6734f039f7a6"]
+    assert script.get_heads() == ["93f3aa113f58"]
     assert script.get_revision("a1c9e4b72f80").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
 

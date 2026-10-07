@@ -83,8 +83,9 @@ PREVIOUS_REVISION: Final = "16f05c46b8c3"
 #: Every `migrations/versions/*.py` on the chain, this revision included.
 #: Counted on the merged tree after the re-parent (RULING-M2): 88 on
 #: `origin/main` at `16f05c46b8c3` plus this revision, graph vocabulary,
-#: GoodNotes pull, promotion receipt, and canvas overlay successors.
-REVISION_FILE_COUNT: Final = 112
+#: GoodNotes pull, promotion receipt, and canvas overlay successors. The
+#: Intelligence focus-area admission `93f3aa113f58` makes it 113.
+REVISION_FILE_COUNT: Final = 113
 
 #: The revision's frozen salt, restated. If this and the revision ever disagree
 #: the expectations below stop matching, which is the point of restating it.

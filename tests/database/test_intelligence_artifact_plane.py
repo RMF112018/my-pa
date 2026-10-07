@@ -940,7 +940,7 @@ def _copy_with(
         ":value" if name == column else expression
         for name, expression in zip(columns, chosen, strict=True)
     ]
-    connection.execute(
+    inserted = connection.execute(
         text(
             f"INSERT INTO knowledge.{table} ({', '.join(columns)}) "  # noqa: S608
             f"SELECT {', '.join(chosen)} FROM knowledge.{table} "
@@ -948,6 +948,7 @@ def _copy_with(
         ),
         {"value": value},
     )
+    assert inserted.rowcount == 1, f"no source row was copied in {table}"
 
 
 @pytest.mark.parametrize(

@@ -1583,6 +1583,57 @@ def test_container_python_refuses_inconsistent_pinned_alias_constants(
     assert not git_calls.exists()
 
 
+@pytest.mark.parametrize("case", ("git-real-outside-store", "socket-path-outside-alias-dir"))
+def test_container_python_refuses_pinned_alias_constants_only_layout_guard_detects(
+    tmp_path: Path, case: str
+) -> None:
+    # Each rewrite is consistent everywhere except under one static layout
+    # guard, so the wrapper would otherwise accept and run the drifted layout.
+    launcher, calls, _environment, git_calls, tools, _admission, _git_state = _synthetic_wrapper(
+        tmp_path, dsm_layout=True
+    )
+    dsm = _dsm_paths(tmp_path)
+    source = launcher.read_text(encoding="utf-8")
+    if case == "git-real-outside-store":
+        # A real Git file on another volume, outside its store target, with the
+        # alias target and canonical link rewritten so the store-alias join
+        # still matches: a prefix strip that does not apply leaves the outside
+        # path intact, and the file otherwise passes every real-file check.
+        outside = tmp_path / "dsm/volume2/@appstore/Git/bin/git"
+        outside.parent.mkdir(parents=True)
+        shutil.copy2(dsm["git_real"], outside)
+        alias_target = f"{dsm['git_store_alias']}{outside}"
+        assert not str(outside).startswith(f"{dsm['git_store_target']}/")
+        _relink(tools / "git", alias_target)
+        rewrites = {
+            "git_real_path": (dsm["git_real"], outside),
+            "git_alias_target": (dsm["git_alias_target"], alias_target),
+        }
+        expected_error = "Git pinned alias layout is inconsistent"
+    else:
+        # The real socket stays the alias's literal resolution; only the
+        # canonical socket path leaves the alias directory.
+        outside = dsm["socket_root"] / "other/docker.sock"
+        outside.parent.mkdir()
+        _bind_socket(outside)
+        rewrites = {
+            "docker_socket_path": (dsm["socket_alias_dir"] / "docker.sock", outside),
+        }
+        expected_error = "Docker socket pinned alias layout is inconsistent"
+    for name, (current, drifted) in rewrites.items():
+        before = f"\n{name}={current}\n"
+        assert source.count(before) == 1, name
+        source = source.replace(before, f"\n{name}={drifted}\n")
+    _write(launcher, source)
+
+    result = _run(launcher, tools)
+
+    assert result.returncode != 0
+    assert expected_error in result.stderr
+    assert not calls.exists()
+    assert not git_calls.exists()
+
+
 def _function_harness(tmp_path: Path, body: str) -> Path:
     """Return a script holding only the launcher's definitions plus ``body``.
 

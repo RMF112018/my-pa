@@ -129,6 +129,12 @@ _STAT_STUB = r"""#!/bin/sh
 format=$2
 path=$4
 emit() { printf '%s\n' "$1"; exit 0; }
+# early-nonroot: the matched alias is faulty only until the guarded real path
+# is first inspected, so only a check that runs before that real-path access
+# can refuse it.
+if [ "${SYNTH_ALIAS_CASE:-}" = early-nonroot ] && [ "$path" = "${SYNTH_ALIAS_RELEASE:-}" ]; then
+  : > "@COUNTER@.released"
+fi
 case "$format" in
   '%u:%a:%F')
     case "${SYNTH_TOOL_CASE:-}:$path" in
@@ -229,6 +235,7 @@ case "$format" in
             links) links=2 ;;
             kind-directory) real="directory:${real#*:}" ;;
             kind-link) real="symbolic link:${real#*:}" ;;
+            early-nonroot) [ -e "@COUNTER@.released" ] || owner=1000 ;;
             drift|late-nonroot)
               count=$(/bin/cat "@COUNTER@" 2>/dev/null || printf 0)
               count=$((count + 1))
@@ -1395,6 +1402,55 @@ def test_container_python_refuses_untrusted_dsm_alias_metadata(
     )
     assert result.returncode != 0
     assert expected_error in result.stderr
+    assert not calls.exists()
+    assert not git_calls.exists()
+
+
+@pytest.mark.parametrize(
+    ("alias_match", "release_key", "expected_error"),
+    (
+        ("/trusted-tools/git", "git_real", "Git alias is not the pinned symbolic link"),
+        (
+            "/packages/Git/target",
+            "git_real",
+            "Git package store alias is not the pinned symbolic link",
+        ),
+        (
+            "/packages/ContainerManager/target",
+            "docker_real",
+            "Docker package store alias is not the pinned symbolic link",
+        ),
+        (
+            "/var/run",
+            "socket_real",
+            "Docker socket directory alias is not the pinned symbolic link",
+        ),
+    ),
+)
+def test_container_python_refuses_dsm_alias_fault_present_only_before_real_access(
+    tmp_path: Path, alias_match: str, release_key: str, expected_error: str
+) -> None:
+    """The alias is non-root only until its real file or socket is first inspected.
+
+    The post-open (post-check) re-verification sees a clean alias, so only the
+    pre-open (pre-check) verification can refuse this fault.
+    """
+    launcher, calls, _environment, git_calls, tools, _admission, _git_state = _synthetic_wrapper(
+        tmp_path, dsm_layout=True
+    )
+    release = tmp_path / "alias-stat-count.released"
+    result = _run(
+        launcher,
+        tools,
+        extra_environment={
+            "SYNTH_ALIAS_CASE": "early-nonroot",
+            "SYNTH_ALIAS_MATCH": alias_match,
+            "SYNTH_ALIAS_RELEASE": str(_dsm_paths(tmp_path)[release_key]),
+        },
+    )
+    assert result.returncode != 0
+    assert expected_error in result.stderr
+    assert not release.exists()
     assert not calls.exists()
     assert not git_calls.exists()
 

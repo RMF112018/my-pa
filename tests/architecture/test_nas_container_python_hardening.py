@@ -495,7 +495,10 @@ def test_container_python_uses_fixed_host_authorities_and_clears_overrides() -> 
     assert "verify_fd_path=/proc/$$/fd/3" in source
     assert "execution_fd_path=/proc/self/fd/3" in source
     assert source.count('open_verified_file_descriptor "$compose_path"') == 1
-    assert "verify_root_owned_socket \"$docker_socket_path\" 'Docker socket'" in source
+    # The non-DSM canonical socket keeps the base private policy verbatim; only
+    # the pinned DSM real socket may pass the root-group policy.
+    assert "\n  verify_root_owned_socket \"$docker_socket_path\" 'Docker socket'\n" in source
+    assert "\"$docker_socket_path\" 'Docker socket' docker-root-group" not in source
     assert (
         "verify_root_owned_socket \"$docker_socket_host_path\" 'Docker socket' docker-root-group"
         in source
@@ -1136,6 +1139,9 @@ def test_container_python_refuses_open_source_root_before_git_or_docker(tmp_path
         ("wrong-type", "Docker socket is unavailable"),
         ("docker-nonroot", "Docker socket must be a root-owned single-link socket"),
         ("docker-writable-socket", "Docker socket must not be group- or world-writable"),
+        # Off DSM the canonical socket keeps the private policy: root:root 0660
+        # is refused there; only the pinned DSM real socket admits it.
+        ("docker-0660", "Docker socket must not be group- or world-writable"),
         ("docker-0660-nonroot-group", "Docker socket must not be group- or world-writable"),
         ("docker-0666", "Docker socket must not be group- or world-writable"),
         ("docker-0670", "Docker socket must not be group- or world-writable"),
@@ -1422,6 +1428,25 @@ def test_container_python_refuses_untrusted_dsm_real_tool_metadata(
     assert not git_calls.exists()
 
 
+@pytest.mark.parametrize(
+    "socket_case",
+    ("docker-0660-nonroot-group", "docker-0666", "docker-0670", "docker-0662"),
+)
+def test_container_python_refuses_wider_dsm_docker_socket_than_root_group_0660(
+    tmp_path: Path, socket_case: str
+) -> None:
+    # The root-group rule applies only on the pinned DSM real socket, so its
+    # exact group-0 and mode-0660 bounds are exercised on that path.
+    launcher, calls, _environment, git_calls, tools, _admission, _git_state = _synthetic_wrapper(
+        tmp_path, dsm_layout=True
+    )
+    result = _run(launcher, tools, extra_environment={"SYNTH_DOCKER_SOCKET_CASE": socket_case})
+    assert result.returncode != 0
+    assert "Docker socket must not be group- or world-writable" in result.stderr
+    assert not calls.exists()
+    assert not git_calls.exists()
+
+
 @pytest.mark.parametrize("store", ("git_store_target", "docker_store_target"))
 def test_container_python_refuses_unpinned_link_inside_dsm_real_ancestors(
     tmp_path: Path, store: str
@@ -1576,18 +1601,22 @@ def test_docker_root_group_socket_policy_is_restricted_to_the_docker_socket(
     socket_root.mkdir()
     _SYNTHETIC_SOCKET_ROOTS.add(socket_root)
     docker_socket = socket_root / "docker.sock"
+    docker_real_socket = socket_root / "real-docker.sock"
     tailscale_socket = socket_root / "tailscale.sock"
-    for path in (docker_socket, tailscale_socket):
+    for path in (docker_socket, docker_real_socket, tailscale_socket):
         _bind_socket(path)
     harness = _function_harness(
         tmp_path,
         f"docker_socket_path={docker_socket}\n"
-        f"docker_socket_real_path={socket_root}/real-docker.sock\n"
+        f"docker_socket_real_path={docker_real_socket}\n"
         'verify_root_owned_socket "$1" "$2" "$3"\n',
     )
     group_writable = {"SYNTH_SOCKET_METADATA": "0:0:660:1:socket"}
 
-    docker = _run_harness(
+    docker_real = _run_harness(
+        harness, group_writable, str(docker_real_socket), "Docker socket", "docker-root-group"
+    )
+    docker_canonical = _run_harness(
         harness, group_writable, str(docker_socket), "Docker socket", "docker-root-group"
     )
     tailscale_policy = _run_harness(
@@ -1597,7 +1626,13 @@ def test_docker_root_group_socket_policy_is_restricted_to_the_docker_socket(
         harness, group_writable, str(tailscale_socket), "Tailscale socket", "private"
     )
 
-    assert docker.returncode == 0, docker.stderr
+    assert docker_real.returncode == 0, docker_real.stderr
+    # The canonical non-DSM socket path never takes the root-group policy.
+    assert docker_canonical.returncode != 0
+    assert (
+        "Docker socket root-group policy is restricted to the Docker socket"
+        in docker_canonical.stderr
+    )
     assert tailscale_policy.returncode != 0
     assert (
         "Tailscale socket root-group policy is restricted to the Docker socket"

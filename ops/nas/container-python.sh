@@ -188,8 +188,11 @@ verify_root_owned_regular_file() {
   kind=${remainder#*:}
   if [ "$link_policy" = pinned-git-shared-link ]; then
     # The DSM Git package hard-links its builtins to one inode; the count is
-    # package-version dependent, so it is not pinned. Hard links share that
-    # inode, so content and mode are governed by the root-owned exact-0755
+    # package-version dependent, so it is not pinned. This intentionally
+    # differs from preserved-runtime-env-preflight.py, which pins nlink 142:
+    # this wrapper must survive a DSM Git package update, while still
+    # requiring root-owned mode 0755 in a verified ancestor chain. Hard
+    # links share that inode, so content and mode are governed by the root-owned exact-0755
     # inode checked here, and the pathname opened below sits in a verified
     # root-owned, non-writable, symlink-free ancestor chain.
     case "$links" in
@@ -273,8 +276,9 @@ verify_root_owned_socket() {
   case "$socket_policy" in
     private) ;;
     docker-root-group)
-      # Only the fixed Docker socket may use the DSM root-group 0660 rule.
-      [ "$path" = "$docker_socket_path" ] || [ "$path" = "$docker_socket_real_path" ] || \
+      # Only the pinned DSM real Docker socket may use the root-group 0660
+      # rule; the canonical non-DSM socket keeps the private policy.
+      [ "$path" = "$docker_socket_real_path" ] || \
         fail "$label root-group policy is restricted to the Docker socket"
       ;;
     *) fail "internal socket policy selection is invalid" ;;
@@ -670,7 +674,7 @@ if [ -L "$docker_socket_alias_dir" ]; then
     'Docker socket directory'
 else
   docker_socket_host_path=$docker_socket_path
-  verify_root_owned_socket "$docker_socket_path" 'Docker socket' docker-root-group
+  verify_root_owned_socket "$docker_socket_path" 'Docker socket'
 fi
 
 # Verify every host file before the first Docker or Git invocation. The

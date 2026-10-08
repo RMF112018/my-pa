@@ -244,8 +244,10 @@ link and its exact literal target, stable before and after the real file is
 opened; the real file is then verified and executed by descriptor as before,
 and Docker bind mounts use the verified real paths. The DSM Git binary may be
 hard-linked (exact mode `0755`, root-owned); every other file keeps exactly one
-link. The Docker socket may be root-owned group `0` mode `0660` as DSM creates
-it; no wider mode, other group, or the Tailscale socket gets that allowance.
+link. Only the pinned DSM real Docker socket `/run/docker.sock` (reached through
+the verified `/var/run` alias) may be root-owned group `0` mode `0660` as DSM
+creates it; the non-DSM `/var/run/docker.sock` keeps the private no-group-write
+rule, and no wider mode, other group, or the Tailscale socket gets that allowance.
 The resolved repository root
 must also be root-owned with exact mode `0700` before either tool runs because
 the checkout is later bind-mounted into the Docker-socket operator container.

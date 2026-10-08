@@ -86,7 +86,7 @@ def test_operator_runtime_is_separate_hardened_and_nonpersistent() -> None:
     assert "/var/run/docker.sock:/var/run/docker.sock" in bootstrap
     assert "docker_socket_path=/var/run/docker.sock" in wrapper
     assert "verify_root_owned_socket \"$docker_socket_path\" 'Docker socket'" in wrapper
-    assert '--volume "$docker_socket_path:/var/run/docker.sock"' in wrapper
+    assert '--volume "$docker_socket_host_path:/var/run/docker.sock"' in wrapper
     assert "must be a root-owned unlinked regular file" in wrapper
     assert "--rm -i" in wrapper
     for script in (bootstrap, wrapper):

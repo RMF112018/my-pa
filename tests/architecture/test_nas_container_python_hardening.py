@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -17,16 +18,16 @@ IMAGE_ID = "sha256:" + "a" * 64
 COMMIT = "b" * 40
 TREE = "c" * 40
 _SYNTHETIC_SOCKET_PATHS: set[Path] = set()
+_SYNTHETIC_SOCKET_ROOTS: set[Path] = set()
+_FUNCTION_SECTION_END = "# A relative $0 lets an attacker select the resolution base."
 
 
 @pytest.fixture(autouse=True)
 def _remove_synthetic_socket_paths() -> None:
     yield
-    while _SYNTHETIC_SOCKET_PATHS:
-        socket_path = _SYNTHETIC_SOCKET_PATHS.pop()
-        for entry in socket_path.parent.iterdir():
-            entry.unlink(missing_ok=True)
-        socket_path.parent.rmdir()
+    _SYNTHETIC_SOCKET_PATHS.clear()
+    while _SYNTHETIC_SOCKET_ROOTS:
+        shutil.rmtree(_SYNTHETIC_SOCKET_ROOTS.pop(), ignore_errors=True)
 
 
 def _admission_contents(
@@ -75,20 +76,216 @@ def _rewrite_admission(admission: Path, contents: str) -> None:
     assert admission.stat().st_mode & 0o777 == 0o400
 
 
-def _synthetic_wrapper(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path, Path, Path]:
+def _socket_root(tmp_path: Path) -> Path:
+    """Return a short socket root; AF_UNIX paths are length-limited."""
+    socket_suffix = sha256(str(tmp_path).encode("utf-8")).hexdigest()[:12]
+    return Path(gettempdir()) / f"my-pa-ds-{socket_suffix}"
+
+
+def _dsm_paths(tmp_path: Path) -> dict[str, Path]:
+    """Return the synthetic stand-ins for the pinned Synology alias constants."""
+    dsm = tmp_path / "dsm"
+    socket_root = _socket_root(tmp_path)
+    docker_store_alias = dsm / "var/packages/ContainerManager/target"
+    docker_store_target = dsm / "volume1/@appstore/ContainerManager"
+    git_store_alias = dsm / "var/packages/Git/target"
+    git_store_target = dsm / "volume1/@appstore/Git"
+    return {
+        "docker_store_alias": docker_store_alias,
+        "docker_store_target": docker_store_target,
+        "docker_alias_target": docker_store_alias / "usr/bin/docker",
+        "compose_alias_target": docker_store_alias / "usr/bin/docker-compose",
+        "docker_real": docker_store_target / "usr/bin/docker",
+        "compose_real": docker_store_target / "usr/bin/docker-compose",
+        "git_store_alias": git_store_alias,
+        "git_store_target": git_store_target,
+        "git_alias_target": git_store_alias / "bin/git",
+        "git_real": git_store_target / "bin/git",
+        "socket_root": socket_root,
+        "socket_alias_dir": socket_root / "var/run",
+        "socket_real": socket_root / "run/docker.sock",
+    }
+
+
+# The production source must keep each fixed assignment on its own line; every
+# such line is redirected below and asserted verbatim by the source-pin test.
+_PINNED_ALIAS_LINES = {
+    "docker_alias_target": "/var/packages/ContainerManager/target/usr/bin/docker",
+    "compose_alias_target": "/var/packages/ContainerManager/target/usr/bin/docker-compose",
+    "docker_store_alias": "/var/packages/ContainerManager/target",
+    "docker_store_target": "/volume1/@appstore/ContainerManager",
+    "docker_real_path": "/volume1/@appstore/ContainerManager/usr/bin/docker",
+    "compose_real_path": "/volume1/@appstore/ContainerManager/usr/bin/docker-compose",
+    "git_alias_target": "/var/packages/Git/target/bin/git",
+    "git_store_alias": "/var/packages/Git/target",
+    "git_store_target": "/volume1/@appstore/Git",
+    "git_real_path": "/volume1/@appstore/Git/bin/git",
+    "docker_socket_alias_dir": "/var/run",
+    "docker_socket_alias_dir_target": "../run",
+    "docker_socket_real_path": "/run/docker.sock",
+}
+
+_STAT_STUB = r"""#!/bin/sh
+format=$2
+path=$4
+emit() { printf '%s\n' "$1"; exit 0; }
+case "$format" in
+  '%u:%a:%F')
+    case "${SYNTH_TOOL_CASE:-}:$path" in
+      writable-store:*/@appstore/ContainerManager) emit '0:775:directory' ;;
+      writable-alias-parent:*/var/packages/Git) emit '0:777:directory' ;;
+    esac
+    case "${SYNTH_POSTGRES_DATA_CASE:-}:$path" in
+      postgres-owned:*/nas/postgres/data) emit '999:700:directory' ;;
+      writable-ancestor:*/nas/postgres) emit '0:777:directory' ;;
+      unsafe-leaf:*/nas/postgres/data) emit '999:770:directory' ;;
+    esac
+    case "${SYNTH_DOCKER_SOCKET_CASE:-}:$path" in
+      docker-nonroot-ancestor:*/my-pa-ds-*) emit '1000:700:directory' ;;
+      docker-writable-ancestor:*/my-pa-ds-*) emit '0:777:directory' ;;
+    esac
+    case "${SYNTH_GIT_CASE:-}:$path" in
+      open-source-root:*/trusted-source) emit '0:755:directory' ;;
+      nonroot-ancestor:*/trusted-source) emit '1000:700:directory' ;;
+      writable-ancestor:*/trusted-source) emit '0:777:directory' ;;
+      nonroot-objects:*/.git/objects) emit '1000:700:directory' ;;
+      writable-objects:*/.git/objects) emit '0:777:directory' ;;
+      nonroot-refs:*/.git/refs) emit '1000:700:directory' ;;
+      writable-refs:*/.git/refs) emit '0:777:directory' ;;
+      *:*/.git/*) emit '0:700:directory' ;;
+    esac
+    case "${SYNTH_SOCKET_CASE:-}:$path" in
+      writable-ancestor:*/socket-parent) emit '0:777:directory' ;;
+    esac
+    case "${SYNTH_EVIDENCE_CASE:-}:$path" in
+      not-private:*/evidence) emit '0:755:directory' ;;
+    esac
+    case ${SYNTH_STAT_CASE:-ok} in
+      bad-ancestor-mode) emit '0:777:directory' ;;
+      bad-ancestor-owner) emit '1000:700:directory' ;;
+    esac
+    emit '0:700:directory' ;;
+  '%u:%a:%h:%F')
+    case "$path" in
+      *operator-runtime.toml) emit "${SYNTH_ADMISSION_METADATA:-0:400:1:regular file}" ;;
+    esac
+    case "${SYNTH_GIT_CASE:-}:$path" in
+      nonroot-config:*/.git/config|nonroot-head:*/.git/HEAD|nonroot-index:*/.git/index)
+        emit '1000:400:1:regular file' ;;
+      writable-config:*/.git/config|writable-head:*/.git/HEAD|writable-index:*/.git/index)
+        emit '0:620:1:regular file' ;;
+      malformed-metadata:*/.git/config) emit 'malformed metadata' ;;
+      *:*/.git/*) emit '0:400:1:regular file' ;;
+    esac
+    case "${SYNTH_TOOL_CASE:-}:$path" in
+      docker-real-nlink:*/@appstore/ContainerManager/usr/bin/docker)
+        emit '0:755:2:regular file' ;;
+      compose-real-nlink:*/@appstore/ContainerManager/usr/bin/docker-compose)
+        emit '0:755:2:regular file' ;;
+      git-mode-750:*/@appstore/Git/bin/git) emit '0:750:142:regular file' ;;
+      git-mode-775:*/@appstore/Git/bin/git) emit '0:775:142:regular file' ;;
+      git-nonroot:*/@appstore/Git/bin/git) emit '1000:755:142:regular file' ;;
+      git-zero-links:*/@appstore/Git/bin/git) emit '0:755:0:regular file' ;;
+      *:*/@appstore/Git/bin/git) emit '0:755:142:regular file' ;;
+      *:*/@appstore/*) emit '0:755:1:regular file' ;;
+    esac
+    case ${SYNTH_STAT_CASE:-ok} in
+      bad-file-mode) emit '0:620:1:regular file' ;;
+      bad-file-owner) emit '1000:400:1:regular file' ;;
+      bad-nlink) emit '0:400:2:regular file' ;;
+    esac
+    emit '0:400:1:regular file' ;;
+  '%u:%g:%a:%h:%F')
+    case "${SYNTH_DOCKER_SOCKET_CASE:-}:$path" in
+      docker-nonroot:*/my-pa-ds-*/docker.sock) emit '1000:0:600:1:socket' ;;
+      docker-writable-socket:*/my-pa-ds-*/docker.sock) emit '0:0:620:1:socket' ;;
+      docker-bad-link:*/my-pa-ds-*/docker.sock) emit '0:0:600:2:socket' ;;
+      docker-unsupported-metadata:*/my-pa-ds-*/docker.sock) emit 'unsupported metadata' ;;
+      docker-0660:*/my-pa-ds-*/docker.sock) emit '0:0:660:1:socket' ;;
+      docker-0660-nonroot-group:*/my-pa-ds-*/docker.sock) emit '0:1000:660:1:socket' ;;
+      docker-0666:*/my-pa-ds-*/docker.sock) emit '0:0:666:1:socket' ;;
+      docker-0670:*/my-pa-ds-*/docker.sock) emit '0:0:670:1:socket' ;;
+      docker-0662:*/my-pa-ds-*/docker.sock) emit '0:0:662:1:socket' ;;
+      *:*/my-pa-ds-*/docker.sock) emit '0:0:600:1:socket' ;;
+    esac
+    case "${SYNTH_SOCKET_CASE:-}:$path" in
+      nonroot:*/socket-parent/tailscale.sock) emit '1000:0:600:1:socket' ;;
+      unsupported-metadata:*/socket-parent/tailscale.sock) emit '0:0:600:1:unknown' ;;
+      tailscale-0660:*/socket-parent/tailscale.sock) emit '0:0:660:1:socket' ;;
+      *:*/socket-parent/tailscale.sock) emit '0:0:600:1:socket' ;;
+    esac
+    exit 97 ;;
+  '%u:%h:%F:%d:%i:%Y:%Z')
+    # Owner and link count are synthetic (tmp files are not root-owned); the
+    # type and identity are the real lstat values of the synthetic link.
+    real=$(/usr/bin/stat -c '%F:%d:%i:%Y:%Z' -- "$path") || exit 1
+    owner=0
+    links=1
+    if [ -n "${SYNTH_ALIAS_MATCH:-}" ]; then
+      case "$path" in
+        *"$SYNTH_ALIAS_MATCH")
+          case "${SYNTH_ALIAS_CASE:-}" in
+            nonroot) owner=1000 ;;
+            links) links=2 ;;
+            kind-directory) real="directory:${real#*:}" ;;
+            kind-link) real="symbolic link:${real#*:}" ;;
+            drift|late-nonroot)
+              count=$(/bin/cat "@COUNTER@" 2>/dev/null || printf 0)
+              count=$((count + 1))
+              printf '%s\n' "$count" > "@COUNTER@"
+              if [ "$SYNTH_ALIAS_CASE" = drift ]; then
+                real="$real$count"
+              elif [ "$count" -gt 2 ]; then
+                owner=1000
+              fi
+              ;;
+          esac
+          ;;
+      esac
+    fi
+    emit "$owner:$links:$real" ;;
+  '%d:%i')
+    case "${SYNTH_STAT_CASE:-ok}:$path" in
+      fd-mismatch:/proc/*|fd-mismatch:/dev/fd/*) emit '11:23' ;;
+    esac
+    emit '11:22' ;;
+  *) exit 97 ;;
+esac
+"""
+
+
+def _bind_socket(path: Path) -> None:
+    socket_handle = socket.socket(socket.AF_UNIX)
+    socket_handle.bind(str(path))
+    socket_handle.close()
+
+
+def _synthetic_wrapper(
+    tmp_path: Path, *, dsm_layout: bool = False
+) -> tuple[Path, Path, Path, Path, Path, Path, Path]:
     """Copy the checked-in launcher with only its fixed host paths redirected.
 
     The production source is separately asserted to contain the canonical paths.
     This fixture never resolves a real Docker client, admission, or NAS path.
+    With ``dsm_layout`` the tool and socket-directory paths become the exact
+    two-level Synology alias chains (real symbolic links with literal targets)
+    rooted in ``tmp_path`` and the short socket root.
     """
     if sys.platform != "linux":
         pytest.skip("requires Linux filesystem sockets and /proc descriptor behavior")
     tools = tmp_path / "trusted-tools"
     repo = tmp_path / "trusted-source"
     launcher = repo / "ops/nas/container-python.sh"
-    socket_suffix = sha256(str(tmp_path).encode("utf-8")).hexdigest()[:12]
-    docker_socket_parent = Path(gettempdir()) / f"my-pa-ds-{socket_suffix}"
-    docker_socket = docker_socket_parent / "docker.sock"
+    dsm = _dsm_paths(tmp_path)
+    socket_root = dsm["socket_root"]
+    if dsm_layout:
+        docker_socket_alias_dir = dsm["socket_alias_dir"]
+        docker_socket_real = dsm["socket_real"]
+        docker_socket = docker_socket_alias_dir / "docker.sock"
+    else:
+        docker_socket_alias_dir = socket_root
+        docker_socket_real = dsm["socket_real"]
+        docker_socket = socket_root / "docker.sock"
     admission = tmp_path / "operator-runtime.toml"
     git_state = tmp_path / "git-state"
     calls = tmp_path / "docker-calls"
@@ -110,11 +307,17 @@ def _synthetic_wrapper(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path, Pa
     tools.mkdir()
     _write(engine_projection, "synthetic-engine-id|synthetic-engine\n", mode=0o600)
     launcher.parent.mkdir(parents=True)
-    docker_socket_parent.mkdir()
-    socket_handle = socket.socket(socket.AF_UNIX)
-    socket_handle.bind(str(docker_socket))
-    socket_handle.close()
-    _SYNTHETIC_SOCKET_PATHS.add(docker_socket)
+    socket_root.mkdir()
+    _SYNTHETIC_SOCKET_ROOTS.add(socket_root)
+    if dsm_layout:
+        docker_socket_real.parent.mkdir()
+        _bind_socket(docker_socket_real)
+        _SYNTHETIC_SOCKET_PATHS.add(docker_socket_real)
+        docker_socket_alias_dir.parent.mkdir()
+        docker_socket_alias_dir.symlink_to("../run", target_is_directory=True)
+    else:
+        _bind_socket(docker_socket)
+        _SYNTHETIC_SOCKET_PATHS.add(docker_socket)
     git_dir = repo / ".git"
     (git_dir / "objects/info").mkdir(parents=True)
     (git_dir / "refs").mkdir()
@@ -125,96 +328,31 @@ def _synthetic_wrapper(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path, Pa
     git_state.write_text(f"{COMMIT}\n{TREE}\n\n{repo}\n", encoding="utf-8")
 
     stat = tools / "stat"
-    _write(
-        stat,
-        "#!/bin/sh\n"
-        "format=$2\npath=$4\n"
-        'case "$format" in\n'
-        "  '%u:%a:%F')\n"
-        '    case "${SYNTH_POSTGRES_DATA_CASE:-}:$path" in\n'
-        "      postgres-owned:*/nas/postgres/data) printf '999:700:directory\\n' ;;\n"
-        "      writable-ancestor:*/nas/postgres) printf '0:777:directory\\n' ;;\n"
-        "      unsafe-leaf:*/nas/postgres/data) printf '999:770:directory\\n' ;;\n"
-        "      *)\n"
-        '    case "${SYNTH_DOCKER_SOCKET_CASE:-}:$path" in\n'
-        "      docker-nonroot-ancestor:*/my-pa-ds-*) printf '1000:700:directory\\n' ;;\n"
-        "      docker-writable-ancestor:*/my-pa-ds-*) printf '0:777:directory\\n' ;;\n"
-        "      *)\n"
-        '    case "${SYNTH_GIT_CASE:-}:$path" in\n'
-        "      open-source-root:*/trusted-source) printf '0:755:directory\\n' ;;\n"
-        "      nonroot-ancestor:*/trusted-source) printf '1000:700:directory\\n' ;;\n"
-        "      writable-ancestor:*/trusted-source) printf '0:777:directory\\n' ;;\n"
-        "      nonroot-objects:*/.git/objects) printf '1000:700:directory\\n' ;;\n"
-        "      writable-objects:*/.git/objects) printf '0:777:directory\\n' ;;\n"
-        "      nonroot-refs:*/.git/refs) printf '1000:700:directory\\n' ;;\n"
-        "      writable-refs:*/.git/refs) printf '0:777:directory\\n' ;;\n"
-        "      *:*/.git/*) printf '0:700:directory\\n' ;;\n"
-        "      *)\n"
-        '    case "${SYNTH_SOCKET_CASE:-}:$path" in\n'
-        "      writable-ancestor:*/socket-parent) printf '0:777:directory\\n' ;;\n"
-        "      nonroot:*/socket-parent/tailscale.sock) printf '1000:600:socket\\n' ;;\n"
-        "      unsupported-metadata:*/socket-parent/tailscale.sock) printf '0:600:unknown\\n' ;;\n"
-        "      *:*/socket-parent/tailscale.sock) printf '0:600:socket\\n' ;;\n"
-        "      *)\n"
-        '        case "${SYNTH_EVIDENCE_CASE:-}:$path" in\n'
-        "          not-private:*/evidence) printf '0:755:directory\\n' ;;\n"
-        "          *)\n"
-        "        case ${SYNTH_STAT_CASE:-ok} in\n"
-        "          bad-ancestor-mode) printf '0:777:directory\\n' ;;\n"
-        "          bad-ancestor-owner) printf '1000:700:directory\\n' ;;\n"
-        "          *) printf '0:700:directory\\n' ;;\n"
-        "        esac ;;\n"
-        "        esac ;;\n"
-        "    esac ;;\n"
-        "    esac ;;\n"
-        "    esac ;;\n"
-        "    esac ;;\n"
-        "  '%u:%a:%h:%F')\n"
-        '    case "$path" in\n'
-        "      *operator-runtime.toml)\n"
-        "        printf '%s\\n' \"${SYNTH_ADMISSION_METADATA:-0:400:1:regular file}\" ;;\n"
-        "      *)\n"
-        '        case "${SYNTH_DOCKER_SOCKET_CASE:-}:$path" in\n'
-        "          docker-nonroot:*/my-pa-ds-*/"
-        "docker.sock) printf '1000:600:1:socket\\n' ;;\n"
-        "          docker-writable-socket:*/my-pa-ds-*/"
-        "docker.sock) printf '0:620:1:socket\\n' ;;\n"
-        "          docker-bad-link:*/my-pa-ds-*/"
-        "docker.sock) printf '0:600:2:socket\\n' ;;\n"
-        "          docker-unsupported-metadata:*/my-pa-ds-*/"
-        "docker.sock) printf 'unsupported metadata\\n' ;;\n"
-        "          *:*/my-pa-ds-*/docker.sock) printf '0:600:1:socket\\n' ;;\n"
-        "          *)\n"
-        '        case "${SYNTH_GIT_CASE:-}:$path" in\n'
-        "          nonroot-config:*/.git/config|nonroot-head:*/.git/HEAD|"
-        "nonroot-index:*/.git/index)\n"
-        "            printf '1000:400:1:regular file\\n' ;;\n"
-        "          writable-config:*/.git/config|writable-head:*/.git/HEAD|"
-        "writable-index:*/.git/index)\n"
-        "            printf '0:620:1:regular file\\n' ;;\n"
-        "          malformed-metadata:*/.git/config) printf 'malformed metadata\\n' ;;\n"
-        "          *:*/.git/*) printf '0:400:1:regular file\\n' ;;\n"
-        "          *)\n"
-        "            case ${SYNTH_STAT_CASE:-ok} in\n"
-        "              bad-file-mode) printf '0:620:1:regular file\\n' ;;\n"
-        "              bad-file-owner) printf '1000:400:1:regular file\\n' ;;\n"
-        "              bad-nlink) printf '0:400:2:regular file\\n' ;;\n"
-        "              *) printf '0:400:1:regular file\\n' ;;\n"
-        "            esac ;;\n"
-        "        esac ;;\n"
-        "        esac ;;\n"
-        "    esac ;;\n"
-        "  '%d:%i')\n"
-        '    case "${SYNTH_STAT_CASE:-ok}:$path" in\n'
-        "      fd-mismatch:/proc/*|fd-mismatch:/dev/fd/*) printf '11:23\\n' ;;\n"
-        "      *) printf '11:22\\n' ;;\n"
-        "    esac ;;\n"
-        "  *) exit 97 ;;\n"
-        "esac\n",
-    )
+    _write(stat, _STAT_STUB.replace("@COUNTER@", str(tmp_path / "alias-stat-count")))
     docker = tools / "docker"
+    compose = tools / "docker-compose"
+    git = tools / "git"
+    if dsm_layout:
+        docker_body, compose_body, git_body = (
+            dsm["docker_real"],
+            dsm["compose_real"],
+            dsm["git_real"],
+        )
+        for directory in (docker_body.parent, git_body.parent):
+            directory.mkdir(parents=True)
+        for alias in ("docker_store_alias", "git_store_alias"):
+            dsm[alias].parent.mkdir(parents=True)
+        dsm["docker_store_alias"].symlink_to(
+            str(dsm["docker_store_target"]), target_is_directory=True
+        )
+        dsm["git_store_alias"].symlink_to(str(dsm["git_store_target"]), target_is_directory=True)
+        docker.symlink_to(str(dsm["docker_alias_target"]))
+        compose.symlink_to(str(dsm["compose_alias_target"]))
+        git.symlink_to(str(dsm["git_alias_target"]))
+    else:
+        docker_body, compose_body, git_body = docker, compose, git
     _write(
-        docker,
+        docker_body,
         "#!/bin/sh\n"
         f'calls="{calls}"\n'
         f'run_argv="{run_argv}"\n'
@@ -233,11 +371,9 @@ def _synthetic_wrapper(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path, Pa
         "fi\n"
         'env | LC_ALL=C sort > "$environment"\n',
     )
-    compose = tools / "docker-compose"
-    _write(compose, "#!/bin/sh\nexit 0\n")
-    git = tools / "git"
+    _write(compose_body, "#!/bin/sh\nexit 0\n")
     _write(
-        git,
+        git_body,
         "#!/bin/sh\n"
         f'git_state="{git_state}"\n'
         f'printf "%s\\n" "$*" >> "{git_calls}"\n'
@@ -267,6 +403,31 @@ def _synthetic_wrapper(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path, Pa
     for before, after in replacements.items():
         assert before in source
         source = source.replace(before, after)
+    # Redirect every pinned alias constant by its whole line. The literal
+    # socket-directory target `../run` stays exact: the synthetic layout uses
+    # the same relative link shape.
+    alias_values = {
+        "docker_alias_target": dsm["docker_alias_target"],
+        "compose_alias_target": dsm["compose_alias_target"],
+        "docker_store_alias": dsm["docker_store_alias"],
+        "docker_store_target": dsm["docker_store_target"],
+        "docker_real_path": dsm["docker_real"],
+        "compose_real_path": dsm["compose_real"],
+        "git_alias_target": dsm["git_alias_target"],
+        "git_store_alias": dsm["git_store_alias"],
+        "git_store_target": dsm["git_store_target"],
+        "git_real_path": dsm["git_real"],
+        "docker_socket_alias_dir": docker_socket_alias_dir,
+        "docker_socket_alias_dir_target": "../run",
+        "docker_socket_real_path": docker_socket_real,
+    }
+    for name, production in _PINNED_ALIAS_LINES.items():
+        before = f"\n{name}={production}\n"
+        assert source.count(before) == 1, name
+        source = source.replace(before, f"\n{name}={alias_values[name]}\n")
+    # The literal readlink stays the real host program so literal-target
+    # comparisons exercise real symbolic links.
+    assert "\nreadlink_bin=/usr/bin/readlink\n" in source
     source = source.replace("/volume1/my-pa", str(nas_root))
     source = source.replace("/var/lib/my-pa/postgres-backup-attestations", str(evidence_root))
     source = source.replace("/etc/my-pa", str(etc_root))
@@ -335,7 +496,27 @@ def test_container_python_uses_fixed_host_authorities_and_clears_overrides() -> 
     assert "execution_fd_path=/proc/self/fd/3" in source
     assert source.count('open_verified_file_descriptor "$compose_path"') == 1
     assert "verify_root_owned_socket \"$docker_socket_path\" 'Docker socket'" in source
-    assert '--volume "$docker_socket_path:/var/run/docker.sock"' in source
+    assert (
+        "verify_root_owned_socket \"$docker_socket_host_path\" 'Docker socket' docker-root-group"
+        in source
+    )
+    # Exact Synology aliases are fixed assignments, never environment input.
+    assert "\nreadlink_bin=/usr/bin/readlink\n" in source
+    for name, value in _PINNED_ALIAS_LINES.items():
+        assert source.count(f"\n{name}={value}\n") == 1, name
+        assert f"${{{name}:" not in source and f"${{{name}-" not in source
+        assert f"${{{name}=" not in source and f"${{{name}+" not in source
+    assert "docker_host_path=$docker_real_path" in source
+    assert "compose_host_path=$compose_real_path" in source
+    assert "docker_socket_host_path=$docker_socket_real_path" in source
+    assert '--volume "$docker_socket_host_path:/var/run/docker.sock"' in source
+    assert '--volume "$docker_host_path:/usr/local/bin/docker:ro"' in source
+    assert '--volume "$compose_host_path:$compose_plugin_dir/docker-compose:ro"' in source
+    assert '--volume "$docker_socket_path:' not in source
+    assert '"$git_store_target" "$git_real_path" Git 5 pinned-git-shared-link' in source
+    assert source.count("pinned-git-shared-link") == 3
+    assert '"$readlink_bin" -- "$alias_link" && printf x' in source
+    assert "readlink -f" not in source and '"$readlink_bin" -f' not in source
 
 
 def test_synthetic_admission_fixture_has_the_exact_nineteen_key_contract() -> None:
@@ -849,7 +1030,8 @@ def test_container_python_refuses_symlinked_host_authority_before_docker_or_git(
     docker.symlink_to(replacement)
     result = _run(launcher, tools)
     assert result.returncode != 0
-    assert "Docker must not be a symbolic link" in result.stderr
+    # A canonical-path link is admitted only as the exact pinned DSM chain.
+    assert "Docker alias target is not pinned" in result.stderr
     assert not calls.exists()
     assert not git_calls.exists()
 
@@ -954,6 +1136,10 @@ def test_container_python_refuses_open_source_root_before_git_or_docker(tmp_path
         ("wrong-type", "Docker socket is unavailable"),
         ("docker-nonroot", "Docker socket must be a root-owned single-link socket"),
         ("docker-writable-socket", "Docker socket must not be group- or world-writable"),
+        ("docker-0660-nonroot-group", "Docker socket must not be group- or world-writable"),
+        ("docker-0666", "Docker socket must not be group- or world-writable"),
+        ("docker-0670", "Docker socket must not be group- or world-writable"),
+        ("docker-0662", "Docker socket must not be group- or world-writable"),
         ("docker-bad-link", "Docker socket must be a root-owned single-link socket"),
         ("docker-unsupported-metadata", "Docker socket must be a root-owned single-link socket"),
         ("docker-nonroot-ancestor", "trusted path ancestors must be root-owned directories"),
@@ -1017,6 +1203,8 @@ def test_container_python_refuses_trusted_git_root_mismatch_before_docker(tmp_pa
         ),
         ("nonroot", "Tailscale socket"),
         ("unsupported-metadata", "Tailscale socket"),
+        # The Docker socket's root-group 0660 rule never extends to Tailscale.
+        ("tailscale-0660", "Tailscale socket must not be group- or world-writable"),
     ),
 )
 def test_container_python_refuses_hostile_tailscale_socket_before_mount(
@@ -1055,3 +1243,398 @@ def test_container_python_refuses_hostile_tailscale_socket_before_mount(
     observed_calls = calls.read_text(encoding="utf-8")
     assert "run" not in observed_calls
     assert ":/var/run/tailscale/tailscaled.sock:ro" not in observed_calls
+
+
+def _run_argv(calls: Path) -> list[str]:
+    return [
+        part.decode() for part in calls.with_name("docker-run-argv").read_bytes().split(b"\0")[:-1]
+    ]
+
+
+def _relink(link: Path, target: str) -> None:
+    link.unlink()
+    link.symlink_to(target)
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux", reason="requires Linux /proc/self descriptor execution"
+)
+@pytest.mark.parametrize("socket_case", ("docker-0660", ""), ids=("root-group-0660", "0600"))
+def test_container_python_accepts_exact_pinned_dsm_aliases(
+    tmp_path: Path, socket_case: str
+) -> None:
+    launcher, calls, _environment, git_calls, tools, _admission, _git_state = _synthetic_wrapper(
+        tmp_path, dsm_layout=True
+    )
+    dsm = _dsm_paths(tmp_path)
+    assert str((tools / "git").readlink()) == str(dsm["git_alias_target"])
+    assert str(dsm["socket_alias_dir"].readlink()) == "../run"
+
+    result = _run(launcher, tools, extra_environment={"SYNTH_DOCKER_SOCKET_CASE": socket_case})
+
+    assert result.returncode == 0, result.stderr
+    arguments = _run_argv(calls)
+    mounts = [
+        arguments[index + 1] for index, value in enumerate(arguments[:-1]) if value == "--volume"
+    ]
+    assert f"{dsm['socket_real']}:/var/run/docker.sock" in mounts
+    assert f"{dsm['docker_real']}:/usr/local/bin/docker:ro" in mounts
+    assert f"{dsm['compose_real']}:{tools}/plugins/docker-compose:ro" in mounts
+    sources = {mount.partition(":")[0] for mount in mounts}
+    for alias in (
+        tools / "docker",
+        tools / "docker-compose",
+        dsm["socket_alias_dir"] / "docker.sock",
+        dsm["docker_alias_target"],
+        dsm["compose_alias_target"],
+    ):
+        assert str(alias) not in sources
+    assert "/proc/self/fd/5" in git_calls.with_name("git-endpoint").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("link_case", "expected_error"),
+    (
+        ("docker-canonical-absolute-real", "Docker alias target is not pinned"),
+        ("docker-store-relative", "Docker package store alias target is not pinned"),
+        ("compose-canonical-absolute-real", "Docker Compose plugin alias target is not pinned"),
+        ("git-canonical-absolute-real", "Git alias target is not pinned"),
+        ("git-canonical-trailing-newline", "Git alias target is not pinned"),
+        ("git-store-trailing-slash", "Git package store alias target is not pinned"),
+        ("socket-dir-absolute", "Docker socket directory alias target is not pinned"),
+        ("socket-dir-trailing-slash", "Docker socket directory alias target is not pinned"),
+    ),
+)
+def test_container_python_refuses_unpinned_dsm_alias_literal_target(
+    tmp_path: Path, link_case: str, expected_error: str
+) -> None:
+    launcher, calls, _environment, git_calls, tools, _admission, _git_state = _synthetic_wrapper(
+        tmp_path, dsm_layout=True
+    )
+    dsm = _dsm_paths(tmp_path)
+    # Each replacement still resolves to the same pinned file or directory
+    # (except the newline case), so only the literal-target compare refuses.
+    if link_case == "docker-canonical-absolute-real":
+        _relink(tools / "docker", str(dsm["docker_real"]))
+    elif link_case == "docker-store-relative":
+        store_alias = dsm["docker_store_alias"]
+        _relink(store_alias, os.path.relpath(dsm["docker_store_target"], store_alias.parent))
+    elif link_case == "compose-canonical-absolute-real":
+        _relink(tools / "docker-compose", str(dsm["compose_real"]))
+    elif link_case == "git-canonical-absolute-real":
+        _relink(tools / "git", str(dsm["git_real"]))
+    elif link_case == "git-canonical-trailing-newline":
+        _relink(tools / "git", str(dsm["git_alias_target"]) + "\n")
+    elif link_case == "git-store-trailing-slash":
+        _relink(dsm["git_store_alias"], str(dsm["git_store_target"]) + "/")
+    elif link_case == "socket-dir-absolute":
+        _relink(dsm["socket_alias_dir"], str(dsm["socket_root"] / "run"))
+    else:
+        _relink(dsm["socket_alias_dir"], "../run/")
+
+    result = _run(launcher, tools)
+
+    assert result.returncode != 0
+    assert expected_error in result.stderr
+    assert not calls.exists()
+    assert not git_calls.exists()
+
+
+@pytest.mark.parametrize(
+    ("alias_case", "alias_match", "expected_error"),
+    (
+        ("nonroot", "/trusted-tools/docker", "Docker alias is not the pinned symbolic link"),
+        (
+            "nonroot",
+            "/packages/Git/target",
+            "Git package store alias is not the pinned symbolic link",
+        ),
+        ("nonroot", "/var/run", "Docker socket directory alias is not the pinned symbolic link"),
+        ("links", "/trusted-tools/git", "Git alias is not the pinned symbolic link"),
+        (
+            "links",
+            "/packages/ContainerManager/target",
+            "Docker package store alias is not the pinned symbolic link",
+        ),
+        ("links", "/var/run", "Docker socket directory alias is not the pinned symbolic link"),
+        # A real link whose metadata type is not a link: only the type check.
+        ("kind-directory", "/trusted-tools/docker", "Docker alias is not the pinned symbolic link"),
+        ("drift", "/trusted-tools/docker-compose", "Docker Compose plugin alias changed"),
+        ("drift", "/var/run", "Docker socket directory alias changed while verifying"),
+        # Passes both pre-open checks, then changes: only the post-open
+        # re-verification can refuse it.
+        ("late-nonroot", "/trusted-tools/git", "Git alias is not the pinned symbolic link"),
+        (
+            "late-nonroot",
+            "/packages/Git/target",
+            "Git package store alias is not the pinned symbolic link",
+        ),
+        (
+            "late-nonroot",
+            "/var/run",
+            "Docker socket directory alias is not the pinned symbolic link",
+        ),
+    ),
+)
+def test_container_python_refuses_untrusted_dsm_alias_metadata(
+    tmp_path: Path, alias_case: str, alias_match: str, expected_error: str
+) -> None:
+    launcher, calls, _environment, git_calls, tools, _admission, _git_state = _synthetic_wrapper(
+        tmp_path, dsm_layout=True
+    )
+    result = _run(
+        launcher,
+        tools,
+        extra_environment={"SYNTH_ALIAS_CASE": alias_case, "SYNTH_ALIAS_MATCH": alias_match},
+    )
+    assert result.returncode != 0
+    assert expected_error in result.stderr
+    assert not calls.exists()
+    assert not git_calls.exists()
+
+
+@pytest.mark.parametrize(
+    ("tool_case", "expected_error"),
+    (
+        ("docker-real-nlink", "Docker must be a root-owned unlinked regular file"),
+        (
+            "compose-real-nlink",
+            "Docker Compose plugin must be a root-owned unlinked regular file",
+        ),
+        ("git-mode-750", "Git must be a root-owned mode 0755 regular file"),
+        ("git-mode-775", "Git must be a root-owned mode 0755 regular file"),
+        ("git-nonroot", "Git must be a root-owned mode 0755 regular file"),
+        ("git-zero-links", "Git must be a root-owned mode 0755 regular file"),
+        ("writable-store", "trusted path ancestors must not be group- or world-writable"),
+        ("writable-alias-parent", "trusted path ancestors must not be group- or world-writable"),
+    ),
+)
+def test_container_python_refuses_untrusted_dsm_real_tool_metadata(
+    tmp_path: Path, tool_case: str, expected_error: str
+) -> None:
+    launcher, calls, _environment, git_calls, tools, _admission, _git_state = _synthetic_wrapper(
+        tmp_path, dsm_layout=True
+    )
+    result = _run(launcher, tools, extra_environment={"SYNTH_TOOL_CASE": tool_case})
+    assert result.returncode != 0
+    assert expected_error in result.stderr
+    assert not calls.exists()
+    assert not git_calls.exists()
+
+
+@pytest.mark.parametrize("store", ("git_store_target", "docker_store_target"))
+def test_container_python_refuses_unpinned_link_inside_dsm_real_ancestors(
+    tmp_path: Path, store: str
+) -> None:
+    launcher, calls, _environment, git_calls, tools, _admission, _git_state = _synthetic_wrapper(
+        tmp_path, dsm_layout=True
+    )
+    store_target = _dsm_paths(tmp_path)[store]
+    nested = store_target / ("bin" if store == "git_store_target" else "usr")
+    nested.rename(nested.with_name(nested.name + "-real"))
+    nested.symlink_to(nested.name + "-real", target_is_directory=True)
+
+    result = _run(launcher, tools)
+
+    assert result.returncode != 0
+    assert "trusted path contains a symbolic link" in result.stderr
+    assert not calls.exists()
+    assert not git_calls.exists()
+
+
+@pytest.mark.parametrize("claimed_kind", ("real", "kind-link"))
+def test_container_python_refuses_real_directory_in_place_of_dsm_store_alias(
+    tmp_path: Path, claimed_kind: str
+) -> None:
+    launcher, calls, _environment, git_calls, tools, _admission, _git_state = _synthetic_wrapper(
+        tmp_path, dsm_layout=True
+    )
+    dsm = _dsm_paths(tmp_path)
+    store_alias = dsm["docker_store_alias"]
+    store_alias.unlink()
+    shutil.copytree(dsm["docker_store_target"], store_alias)
+    # `kind-link` makes metadata claim a link, isolating the `[ -L ]` check.
+    extra_environment = (
+        {}
+        if claimed_kind == "real"
+        else {"SYNTH_ALIAS_CASE": claimed_kind, "SYNTH_ALIAS_MATCH": "/ContainerManager/target"}
+    )
+
+    result = _run(launcher, tools, extra_environment=extra_environment)
+
+    assert result.returncode != 0
+    assert "Docker package store alias is not the pinned symbolic link" in result.stderr
+    assert not calls.exists()
+    assert not git_calls.exists()
+
+
+@pytest.mark.parametrize("constant", ("git_alias_target", "docker_socket_real_path"))
+def test_container_python_refuses_inconsistent_pinned_alias_constants(
+    tmp_path: Path, constant: str
+) -> None:
+    launcher, calls, _environment, git_calls, tools, _admission, _git_state = _synthetic_wrapper(
+        tmp_path, dsm_layout=True
+    )
+    dsm = _dsm_paths(tmp_path)
+    source = launcher.read_text(encoding="utf-8")
+    if constant == "git_alias_target":
+        # The canonical link matches its (drifted) pinned target exactly, but
+        # that target no longer names the pinned real file that would be run.
+        drifted = dsm["git_store_alias"] / "bin/git-other"
+        before = f"\ngit_alias_target={dsm['git_alias_target']}\n"
+        _relink(tools / "git", str(drifted))
+        expected_error = "Git pinned alias layout is inconsistent"
+    else:
+        # A valid socket elsewhere that is not the alias's literal resolution.
+        drifted = dsm["socket_root"] / "other/docker.sock"
+        drifted.parent.mkdir()
+        _bind_socket(drifted)
+        before = f"\ndocker_socket_real_path={dsm['socket_real']}\n"
+        expected_error = "Docker socket pinned alias layout is inconsistent"
+    assert source.count(before) == 1
+    _write(launcher, source.replace(before, f"\n{constant}={drifted}\n"))
+
+    result = _run(launcher, tools)
+
+    assert result.returncode != 0
+    assert expected_error in result.stderr
+    assert not calls.exists()
+    assert not git_calls.exists()
+
+
+def _function_harness(tmp_path: Path, body: str) -> Path:
+    """Return a script holding only the launcher's definitions plus ``body``.
+
+    The launcher's top-level work starts at a fixed marker; everything before
+    it is assignments and function definitions, so policy functions can be
+    exercised directly against synthetic metadata.
+    """
+    if sys.platform != "linux":
+        pytest.skip("requires Linux filesystem sockets and symlink-free temporary ancestors")
+    source = (ROOT / "ops/nas/container-python.sh").read_text(encoding="utf-8")
+    prefix, marker, _rest = source.partition(_FUNCTION_SECTION_END)
+    assert marker
+    stub = tmp_path / "harness-stat"
+    _write(
+        stub,
+        "#!/bin/sh\n"
+        'case "$2" in\n'
+        "  '%u:%a:%F') printf '0:755:directory\\n' ;;\n"
+        "  '%u:%a:%h:%F') printf '%s\\n' \"$SYNTH_FILE_METADATA\" ;;\n"
+        "  '%u:%g:%a:%h:%F') printf '%s\\n' \"$SYNTH_SOCKET_METADATA\" ;;\n"
+        "  '%u:%h:%F:%d:%i:%Y:%Z') printf '0:1:symbolic link:1:2:3:4\\n' ;;\n"
+        "  *) exit 97 ;;\n"
+        "esac\n",
+    )
+    prefix = prefix.replace("stat_bin=/usr/bin/stat", f"stat_bin={stub}")
+    harness = tmp_path / "harness.sh"
+    _write(harness, prefix + body)
+    return harness
+
+
+def _run_harness(
+    harness: Path, environment: dict[str, str], *arguments: str, shell: str = "/bin/sh"
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(  # noqa: S603 - checked-in definitions with synthetic metadata
+        [shell, str(harness), *arguments],
+        env={"PATH": "/usr/bin:/bin", **environment},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_shared_link_policy_is_restricted_to_the_pinned_git_binary(tmp_path: Path) -> None:
+    pinned = tmp_path / "pinned-git"
+    other = tmp_path / "other-tool"
+    for path in (pinned, other):
+        _write(path, "#!/bin/sh\nexit 0\n", mode=0o755)
+    harness = _function_harness(
+        tmp_path,
+        f'git_real_path={pinned}\nverify_root_owned_regular_file "$1" Synthetic "$2"\n',
+    )
+    shared = {"SYNTH_FILE_METADATA": "0:755:142:regular file"}
+
+    accepted = _run_harness(harness, shared, str(pinned), "pinned-git-shared-link")
+    refused = _run_harness(harness, shared, str(other), "pinned-git-shared-link")
+    default = _run_harness(harness, shared, str(pinned), "single-link")
+    unknown = _run_harness(harness, shared, str(pinned), "shared")
+
+    assert accepted.returncode == 0, accepted.stderr
+    assert refused.returncode != 0
+    assert "Synthetic shared-link policy is restricted to the pinned Git binary" in refused.stderr
+    assert default.returncode != 0
+    assert "Synthetic must be a root-owned unlinked regular file" in default.stderr
+    assert unknown.returncode != 0
+    assert "internal link policy selection is invalid" in unknown.stderr
+
+
+def test_docker_root_group_socket_policy_is_restricted_to_the_docker_socket(
+    tmp_path: Path,
+) -> None:
+    socket_root = _socket_root(tmp_path)
+    socket_root.mkdir()
+    _SYNTHETIC_SOCKET_ROOTS.add(socket_root)
+    docker_socket = socket_root / "docker.sock"
+    tailscale_socket = socket_root / "tailscale.sock"
+    for path in (docker_socket, tailscale_socket):
+        _bind_socket(path)
+    harness = _function_harness(
+        tmp_path,
+        f"docker_socket_path={docker_socket}\n"
+        f"docker_socket_real_path={socket_root}/real-docker.sock\n"
+        'verify_root_owned_socket "$1" "$2" "$3"\n',
+    )
+    group_writable = {"SYNTH_SOCKET_METADATA": "0:0:660:1:socket"}
+
+    docker = _run_harness(
+        harness, group_writable, str(docker_socket), "Docker socket", "docker-root-group"
+    )
+    tailscale_policy = _run_harness(
+        harness, group_writable, str(tailscale_socket), "Tailscale socket", "docker-root-group"
+    )
+    tailscale_private = _run_harness(
+        harness, group_writable, str(tailscale_socket), "Tailscale socket", "private"
+    )
+
+    assert docker.returncode == 0, docker.stderr
+    assert tailscale_policy.returncode != 0
+    assert (
+        "Tailscale socket root-group policy is restricted to the Docker socket"
+        in tailscale_policy.stderr
+    )
+    assert tailscale_private.returncode != 0
+    assert "Tailscale socket must not be group- or world-writable" in tailscale_private.stderr
+
+
+@pytest.mark.parametrize("shell", ("/bin/sh", "/bin/bash"))
+def test_pinned_alias_refuses_a_failed_literal_read(tmp_path: Path, shell: str) -> None:
+    # dash propagates `set -e` into command substitutions, which already stops
+    # a failed read; bash outside POSIX mode does not, so only the `&&` before
+    # the sentinel refuses there. Exercise both interpreters.
+    if not Path(shell).is_file():
+        pytest.skip(f"{shell} is unavailable")
+    target = tmp_path / "pinned-target"
+    link = tmp_path / "pinned-link"
+    link.symlink_to(str(target))
+    # A reader that prints the exact pinned target but reports failure.
+    failing_readlink = tmp_path / "failing-readlink"
+    _write(failing_readlink, f"#!/bin/sh\nprintf '%s\\n' '{target}'\nexit 1\n")
+    working = _function_harness(
+        tmp_path,
+        'verify_pinned_alias "$1" "$2" Synthetic\n',
+    )
+    failing = tmp_path / "failing-harness.sh"
+    source = working.read_text(encoding="utf-8")
+    assert "readlink_bin=/usr/bin/readlink" in source
+    _write(
+        failing,
+        source.replace("readlink_bin=/usr/bin/readlink", f"readlink_bin={failing_readlink}"),
+    )
+
+    accepted = _run_harness(working, {}, str(link), str(target), shell=shell)
+    refused = _run_harness(failing, {}, str(link), str(target), shell=shell)
+
+    assert accepted.returncode == 0, accepted.stderr
+    assert refused.returncode != 0
+    assert "Synthetic alias target is not pinned" in refused.stderr

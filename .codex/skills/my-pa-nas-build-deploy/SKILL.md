@@ -82,12 +82,13 @@ serving observation and the 2026-09-24 deviations. Read it before claiming
 what `https://pa.bobby-fetting.me/` runs.
 
 Before `load-candidates.sh`, invoke the new checkout's `container-python.sh`
-directly and keep its stderr. On TheLakeHouseNAS that wrapper exits
-`trusted path contains a symbolic link`: `/var/run` is a symlink, and
+directly and keep its stderr. On TheLakeHouseNAS `/var/run` is a symlink, and
 `/usr/local/bin/docker`, `/usr/local/bin/docker-compose`, and `/usr/bin/git`
-are DSM package symlinks. `load-candidates.sh` discards that stderr and
-reports `NAS tooling requires Python 3.12 or newer with tomllib` for any
-wrapper failure. Host Python 3.8 is not the defect, and the candidate images
+are DSM package symlinks. Older checkouts refuse them with `trusted path
+contains a symbolic link`; current checkouts accept only the exact pinned DSM
+alias chains in `ops/nas/README.md` and refuse anything else. The NAS tooling
+keeps the wrapper's stderr, then also reports `NAS tooling requires Python 3.12
+or newer with tomllib` for any wrapper failure. Host Python 3.8 is not the defect, and the candidate images
 are not the defect. Stop. Do not `docker load`, Compose-recreate, or run
 Alembic around the refusal unless the operator explicitly accepts the named
 deviations already recorded in that runbook. The 2026-09-24 cutover did not
@@ -114,4 +115,4 @@ objective outside this smoke-upgrade skill; never infer that authority.
 
 Claim success only when the exact current `origin/main` commit/tree built the transferred package; the live NAS admitted the same byte identities; required backup, scratch restore, quiescence, migration, firewall, lifecycle, and health gates passed; the gateway probe, not only public `/api/health`, shows the repository Alembic head; pilot-only diagnostics were recorded as inapplicable to smoke mode; previously running compatible dependent services were restored; and a sanitized receipt records every identity and command result. A public route that answers `live` is not that claim. The 2026-09-24 cutover is a recorded deviation, not a completed admission.
 
-If a required gate fails or identity drifts, preserve evidence, keep or return the system to the last verified safe state, and stop. A `container-python.sh` symlink refusal is that stop. Never improvise around a fail-closed gate.
+If a required gate fails or identity drifts, preserve evidence, keep or return the system to the last verified safe state, and stop. A `container-python.sh` refusal, including a pinned-alias refusal, is that stop. Never improvise around a fail-closed gate.

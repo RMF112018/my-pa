@@ -32,7 +32,7 @@ export MY_PA_NAS_PYTHON="$NAS_PYTHON_BIN"
 
 "$NAS_PYTHON_BIN" -c \
   'import sys, tomllib; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' \
-  >/dev/null 2>&1 || {
+  >/dev/null || {
     echo "NAS tooling requires Python 3.12 or newer with tomllib" >&2
     exit 1
   }

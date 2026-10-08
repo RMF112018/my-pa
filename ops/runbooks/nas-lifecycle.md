@@ -80,10 +80,13 @@ export MY_PA_NAS_PYTHON="$PWD/ops/nas/container-python.sh"
 ```
 
 On TheLakeHouseNAS, do not treat a failed `container-python.sh` as a Python
-version problem. The wrapper refuses a symlink on a trusted path. `/var/run`
-is a symlink, and `/usr/local/bin/docker`, `/usr/local/bin/docker-compose`,
-and `/usr/bin/git` are DSM package symlinks. `load-candidates.sh` hides that
-stderr behind `NAS tooling requires Python 3.12 or newer with tomllib`. Host
+version problem. The wrapper refuses a symlink on a trusted path except the
+exact pinned DSM package aliases listed in
+[`../nas/README.md`](../nas/README.md): `/var/run` to `../run`, and
+`/usr/local/bin/docker`, `/usr/local/bin/docker-compose`, and `/usr/bin/git`
+through their DSM package store links. Older checkouts refuse all of them.
+The NAS tooling keeps the wrapper's stderr, then also prints
+`NAS tooling requires Python 3.12 or newer with tomllib`. Host
 Python remains 3.8 and cannot replace the wrapper. The 2026-09-24 public
 cutover and its deviations are recorded in
 [`production-frontend-deployment.md`](production-frontend-deployment.md).

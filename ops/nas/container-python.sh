@@ -65,6 +65,24 @@ git_path=/usr/bin/git
 admission_path=/etc/my-pa/operator-runtime.toml
 docker_socket_path=/var/run/docker.sock
 compose_plugin_dir=/usr/local/lib/docker/cli-plugins
+# Exact Synology DSM package aliases. They are fixed assignments, never caller
+# input: a canonical tool path may be only this two-level link chain to the one
+# pinned real file, and /var/run may be only the literal relative link ../run.
+# Every other symbolic link on a trusted path still refuses.
+readlink_bin=/usr/bin/readlink
+docker_alias_target=/var/packages/ContainerManager/target/usr/bin/docker
+compose_alias_target=/var/packages/ContainerManager/target/usr/bin/docker-compose
+docker_store_alias=/var/packages/ContainerManager/target
+docker_store_target=/volume1/@appstore/ContainerManager
+docker_real_path=/volume1/@appstore/ContainerManager/usr/bin/docker
+compose_real_path=/volume1/@appstore/ContainerManager/usr/bin/docker-compose
+git_alias_target=/var/packages/Git/target/bin/git
+git_store_alias=/var/packages/Git/target
+git_store_target=/volume1/@appstore/Git
+git_real_path=/volume1/@appstore/Git/bin/git
+docker_socket_alias_dir=/var/run
+docker_socket_alias_dir_target=../run
+docker_socket_real_path=/run/docker.sock
 
 fail() {
   echo "$1" >&2
@@ -138,6 +156,16 @@ verify_root_owned_ancestors() {
 verify_root_owned_regular_file() {
   path=$1
   label=$2
+  link_policy=${3:-single-link}
+  case "$link_policy" in
+    single-link) ;;
+    pinned-git-shared-link)
+      # Fail closed: no caller can widen the link rule for any other file.
+      [ "$path" = "$git_real_path" ] || \
+        fail "$label shared-link policy is restricted to the pinned Git binary"
+      ;;
+    *) fail "internal link policy selection is invalid" ;;
+  esac
   case "$path" in
     /*) ;;
     *) fail "$label path must be absolute" 64 ;;
@@ -158,10 +186,65 @@ verify_root_owned_regular_file() {
   remainder=${remainder#*:}
   links=${remainder%%:*}
   kind=${remainder#*:}
+  if [ "$link_policy" = pinned-git-shared-link ]; then
+    # The DSM Git package hard-links its builtins to one inode; the count is
+    # package-version dependent, so it is not pinned. This intentionally
+    # differs from preserved-runtime-env-preflight.py, which pins nlink 142:
+    # this wrapper must survive a DSM Git package update, while still
+    # requiring root-owned mode 0755 in a verified ancestor chain. Hard
+    # links share that inode, so content and mode are governed by the root-owned exact-0755
+    # inode checked here, and the pathname opened below sits in a verified
+    # root-owned, non-writable, symlink-free ancestor chain.
+    case "$links" in
+      ''|0*|*[!0-9]*) fail "$label must be a root-owned mode 0755 regular file" ;;
+    esac
+    [ "$owner" = 0 ] && [ "$kind" = 'regular file' ] && [ "$mode" = 755 ] || {
+      fail "$label must be a root-owned mode 0755 regular file"
+    }
+    return 0
+  fi
   [ "$owner" = 0 ] && [ "$kind" = 'regular file' ] && [ "$links" = 1 ] || {
     fail "$label must be a root-owned unlinked regular file"
   }
   has_group_or_other_write "$mode" && fail "$label must not be group- or world-writable"
+  return 0
+}
+
+verify_pinned_alias() {
+  alias_link=$1
+  alias_expected=$2
+  alias_label=$3
+  case "$alias_link" in
+    /*) ;;
+    *) fail "$alias_label alias path must be absolute" 64 ;;
+  esac
+  case "$alias_link" in
+    *'
+'*|*//*|*/./*|*/../*|*/.|*/..) fail "$alias_label alias path is not canonical" 64 ;;
+  esac
+  alias_parent=${alias_link%/*}
+  [ -n "$alias_parent" ] || alias_parent=/
+  verify_root_owned_ancestors "$alias_parent"
+  [ -L "$alias_link" ] || fail "$alias_label alias is not the pinned symbolic link"
+  alias_before=$("$stat_bin" -c '%u:%h:%F:%d:%i:%Y:%Z' -- "$alias_link") || \
+    fail "$alias_label alias metadata is unavailable"
+  alias_owner=${alias_before%%:*}
+  alias_rest=${alias_before#*:}
+  alias_links=${alias_rest%%:*}
+  alias_rest=${alias_rest#*:}
+  alias_kind=${alias_rest%%:*}
+  [ "$alias_owner" = 0 ] && [ "$alias_links" = 1 ] && [ "$alias_kind" = 'symbolic link' ] || \
+    fail "$alias_label alias is not the pinned symbolic link"
+  # Read the literal target without resolving it. The trailing sentinel keeps
+  # command substitution from stripping newlines, so a failed read or a target
+  # ending in a newline cannot compare equal.
+  alias_literal=$("$readlink_bin" -- "$alias_link" && printf x) || \
+    fail "$alias_label alias target is not pinned"
+  [ "$alias_literal" = "$alias_expected
+x" ] || fail "$alias_label alias target is not pinned"
+  alias_after=$("$stat_bin" -c '%u:%h:%F:%d:%i:%Y:%Z' -- "$alias_link") || \
+    fail "$alias_label alias metadata is unavailable"
+  [ "$alias_before" = "$alias_after" ] || fail "$alias_label alias changed while verifying"
   return 0
 }
 
@@ -189,6 +272,17 @@ verify_exact_operator_admission() {
 verify_root_owned_socket() {
   path=$1
   label=$2
+  socket_policy=${3:-private}
+  case "$socket_policy" in
+    private) ;;
+    docker-root-group)
+      # Only the pinned DSM real Docker socket may use the root-group 0660
+      # rule; the canonical non-DSM socket keeps the private policy.
+      [ "$path" = "$docker_socket_real_path" ] || \
+        fail "$label root-group policy is restricted to the Docker socket"
+      ;;
+    *) fail "internal socket policy selection is invalid" ;;
+  esac
   case "$path" in
     /*) ;;
     *) fail "$label path must be absolute" 64 ;;
@@ -202,9 +296,11 @@ verify_root_owned_socket() {
   parent=${path%/*}
   [ -n "$parent" ] || parent=/
   verify_root_owned_ancestors "$parent"
-  metadata=$("$stat_bin" -c '%u:%a:%h:%F' -- "$path") || fail "$label metadata is unavailable"
+  metadata=$("$stat_bin" -c '%u:%g:%a:%h:%F' -- "$path") || fail "$label metadata is unavailable"
   owner=${metadata%%:*}
   remainder=${metadata#*:}
+  group=${remainder%%:*}
+  remainder=${remainder#*:}
   mode=${remainder%%:*}
   remainder=${remainder#*:}
   links=${remainder%%:*}
@@ -212,8 +308,37 @@ verify_root_owned_socket() {
   [ "$owner" = 0 ] && [ "$kind" = socket ] && [ "$links" = 1 ] || {
     fail "$label must be a root-owned single-link socket"
   }
-  has_group_or_other_write "$mode" && fail "$label must not be group- or world-writable"
+  if has_group_or_other_write "$mode"; then
+    # DSM creates the Docker socket root:root 0660. Group 0 is root, so this
+    # grants no principal beyond root; any other group or wider mode refuses.
+    [ "$socket_policy" = docker-root-group ] && [ "$group" = 0 ] && [ "$mode" = 660 ] || \
+      fail "$label must not be group- or world-writable"
+  fi
   return 0
+}
+
+open_pinned_alias_tool() {
+  tool_path=$1
+  tool_alias_target=$2
+  tool_store_alias=$3
+  tool_store_target=$4
+  tool_real_path=$5
+  tool_label=$6
+  tool_descriptor=$7
+  tool_link_policy=$8
+  # Static consistency: the alias target must be the store alias joined with
+  # the real file's path below the store target, so the pair cannot drift.
+  case "$tool_real_path" in
+    "$tool_store_target"/?*) ;;
+    *) fail "$tool_label pinned alias layout is inconsistent" ;;
+  esac
+  [ "$tool_alias_target" = "$tool_store_alias${tool_real_path#"$tool_store_target"}" ] || \
+    fail "$tool_label pinned alias layout is inconsistent"
+  verify_pinned_alias "$tool_path" "$tool_alias_target" "$tool_label"
+  verify_pinned_alias "$tool_store_alias" "$tool_store_target" "$tool_label package store"
+  open_verified_file_descriptor "$tool_real_path" "$tool_label" "$tool_descriptor" "$tool_link_policy"
+  verify_pinned_alias "$tool_store_alias" "$tool_store_target" "$tool_label package store"
+  verify_pinned_alias "$tool_path" "$tool_alias_target" "$tool_label"
 }
 
 is_lower_hex() {
@@ -383,7 +508,7 @@ open_verified_file_descriptor() {
   path=$1
   label=$2
   descriptor=$3
-  verify_root_owned_regular_file "$path" "$label"
+  verify_root_owned_regular_file "$path" "$label" "${4:-single-link}"
   before=$("$stat_bin" -c '%d:%i' -- "$path") || fail "$label identity is unavailable"
   case "$descriptor" in
     3) exec 3< "$path"; verify_fd_path=/proc/$$/fd/3; execution_fd_path=/proc/self/fd/3 ;;
@@ -525,17 +650,67 @@ if [ "$attestation_mode" != ordinary ]; then
 fi
 git_dir=$repo_root/.git
 verify_trusted_git_metadata "$git_dir"
-verify_root_owned_socket "$docker_socket_path" 'Docker socket'
+if [ -L "$docker_socket_alias_dir" ]; then
+  # Static consistency: the socket path must sit directly in the alias
+  # directory, and the real socket must be that alias's literal ../NAME
+  # resolution, so the canonical and real pair cannot drift.
+  docker_socket_alias_parent=${docker_socket_alias_dir%/*}
+  docker_socket_alias_grandparent=${docker_socket_alias_parent%/*}
+  docker_socket_target_name=${docker_socket_alias_dir_target#../}
+  case "$docker_socket_alias_dir_target:$docker_socket_target_name" in
+    ../?*:*/*|../?*:.|../?*:..) fail "Docker socket pinned alias layout is inconsistent" ;;
+    ../?*:?*) ;;
+    *) fail "Docker socket pinned alias layout is inconsistent" ;;
+  esac
+  [ "$docker_socket_path" = "$docker_socket_alias_dir/docker.sock" ] && \
+    [ "$docker_socket_real_path" = \
+      "$docker_socket_alias_grandparent/$docker_socket_target_name/docker.sock" ] || \
+    fail "Docker socket pinned alias layout is inconsistent"
+  verify_pinned_alias "$docker_socket_alias_dir" "$docker_socket_alias_dir_target" \
+    'Docker socket directory'
+  docker_socket_host_path=$docker_socket_real_path
+  verify_root_owned_socket "$docker_socket_host_path" 'Docker socket' docker-root-group
+  verify_pinned_alias "$docker_socket_alias_dir" "$docker_socket_alias_dir_target" \
+    'Docker socket directory'
+else
+  docker_socket_host_path=$docker_socket_path
+  verify_root_owned_socket "$docker_socket_path" 'Docker socket'
+fi
 
 # Verify every host file before the first Docker or Git invocation. The
 # descriptors are used for execution, so a later pathname replacement cannot
-# redirect the host client. Docker bind mounts retain canonical root-only
-# pathnames because the daemon, rather than this process, resolves mount input.
-open_verified_file_descriptor "$docker_path" Docker 3
+# redirect the host client. A canonical tool path that is a regular file is
+# opened directly. On Synology DSM it may instead be only the exact pinned
+# two-level package alias chain: both links are authenticated (root owner, one
+# link, exact literal target, stable identity) before and after the pinned real
+# file is opened, and the real file itself passes the unchanged symlink-free
+# root-owned file and ancestor checks. Docker bind mounts use the verified
+# real, symlink-free host pathnames because the daemon, rather than this
+# process, resolves mount input.
+if [ -L "$docker_path" ]; then
+  open_pinned_alias_tool "$docker_path" "$docker_alias_target" "$docker_store_alias" \
+    "$docker_store_target" "$docker_real_path" Docker 3 single-link
+  docker_host_path=$docker_real_path
+else
+  open_verified_file_descriptor "$docker_path" Docker 3
+  docker_host_path=$docker_path
+fi
 docker_fd=$verified_fd_path
-open_verified_file_descriptor "$compose_path" 'Docker Compose plugin' 4
+if [ -L "$compose_path" ]; then
+  open_pinned_alias_tool "$compose_path" "$compose_alias_target" "$docker_store_alias" \
+    "$docker_store_target" "$compose_real_path" 'Docker Compose plugin' 4 single-link
+  compose_host_path=$compose_real_path
+else
+  open_verified_file_descriptor "$compose_path" 'Docker Compose plugin' 4
+  compose_host_path=$compose_path
+fi
 compose_fd=$verified_fd_path
-open_verified_file_descriptor "$git_path" Git 5
+if [ -L "$git_path" ]; then
+  open_pinned_alias_tool "$git_path" "$git_alias_target" "$git_store_alias" \
+    "$git_store_target" "$git_real_path" Git 5 pinned-git-shared-link
+else
+  open_verified_file_descriptor "$git_path" Git 5
+fi
 git_fd=$verified_fd_path
 verify_exact_operator_admission "$admission_path"
 open_verified_file_descriptor "$admission_path" 'operator admission' 6
@@ -652,9 +827,9 @@ run_operator_container() {
     --cap-drop ALL \
     --security-opt no-new-privileges \
     --user 0:0 \
-    --volume "$docker_socket_path:/var/run/docker.sock" \
-    --volume "$docker_path:/usr/local/bin/docker:ro" \
-    --volume "$compose_path:$compose_plugin_dir/docker-compose:ro" \
+    --volume "$docker_socket_host_path:/var/run/docker.sock" \
+    --volume "$docker_host_path:/usr/local/bin/docker:ro" \
+    --volume "$compose_host_path:$compose_plugin_dir/docker-compose:ro" \
     --volume "$repo_root:$repo_root:ro" \
     --env MY_PA_NAS_DOCKER=/usr/local/bin/docker \
     --env DOCKER_CLI_PLUGIN_EXTRA_DIRS="$compose_plugin_dir" \

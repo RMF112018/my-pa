@@ -57,12 +57,12 @@ canonical operator admission was switched to that source. `load-candidates.sh`
 then failed. The failure is Synology path compatibility, not a bad image or
 Compose file:
 
-- `ops/nas/container-python.sh` walks trusted paths and refuses a symlink.
-  The error returned was `trusted path contains a symbolic link`.
+- `ops/nas/container-python.sh` at that commit refused every symlink on a
+  trusted path. The error returned was `trusted path contains a symbolic link`.
 - On this NAS, `/var/run` → `../run` (so `/var/run/docker.sock` fails first).
   `/usr/local/bin/docker`, `/usr/local/bin/docker-compose`, and `/usr/bin/git`
-  are also symlinks into DSM packages and fail the same class of check.
-- `load-candidates.sh` hides that stderr and prints `NAS tooling requires
+  are also symlinks into DSM packages and failed the same class of check.
+- `load-candidates.sh` then hid that stderr and printed `NAS tooling requires
   Python 3.12 or newer with tomllib` for any wrapper failure. Host Python is
   3.8.15. Do not treat that sentence as the cause.
 
@@ -109,8 +109,11 @@ What did run, under explicit operator instruction to deploy the package:
   became `healthy`.
 
 Do not repeat the ungated load, Compose, or Alembic steps unless the operator
-explicitly accepts those deviations again. The next gated attempt still stops
-at `container-python.sh` until the symlink contract matches this NAS.
+explicitly accepts those deviations again. `container-python.sh` now accepts
+the exact pinned DSM package aliases described in
+[`../nas/README.md`](../nas/README.md) and no other symbolic link. That
+compatibility has not yet been exercised on this NAS, so the next gated
+attempt still runs the wrapper directly first and stops on any refusal.
 
 ## PREPARE / GATED UPGRADE
 
@@ -191,12 +194,14 @@ restart or image replacement from changing live public traffic.
    must pass before `load-candidates.sh`; the old image manifest, runtime and
    PostgreSQL bootstrap admissions, Compose selection, and protected values
    remain old. Before `load-candidates.sh`, run the new checkout's
-   `container-python.sh` directly and keep its stderr. On this NAS it exits
-   `trusted path contains a symbolic link` because `/var/run` is a symlink and
-   the Docker and Git binaries are DSM package symlinks.
-   `load-candidates.sh` rewrites every such failure as a Python 3.12 error.
-   That is not image or Compose failure, and host Python 3.8 is not the
-   defect. Stop there; do not `docker load` around it unless the operator
+   `container-python.sh` directly and keep its stderr. A checkout without the
+   pinned DSM aliases exits `trusted path contains a symbolic link` on this NAS
+   because `/var/run` is a symlink and the Docker and Git binaries are DSM
+   package symlinks. A checkout with them accepts only those exact chains; any
+   refusal it prints names the failing alias or file. `load-candidates.sh`
+   keeps that stderr but then also prints a Python 3.12 error. That is not
+   image or Compose failure, and host Python 3.8 is not the defect. Stop on
+   any refusal; do not `docker load` around it unless the operator
    explicitly accepts the deviations in the 2026-09-24 observation above.
    When the wrapper does accept the paths, load/admit all four runtime images
    and issue the new deployable image manifest. Verify that the preserved old

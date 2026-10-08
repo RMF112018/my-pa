@@ -290,12 +290,14 @@ Keep the old runtime and PostgreSQL bootstrap admissions, image manifest,
 image references, Compose selection, and protected environment unchanged
 while old containers remain selected. With the newly canonical operator
 identity, invoke the new checkout's `ops/nas/container-python.sh` directly
-before `load-candidates.sh` and retain its stderr. On TheLakeHouseNAS the
-wrapper exits `trusted path contains a symbolic link` because `/var/run` is a
-symlink and `/usr/local/bin/docker`, `/usr/local/bin/docker-compose`, and
-`/usr/bin/git` are DSM package symlinks. `load-candidates.sh` hides that
-stderr and prints `NAS tooling requires Python 3.12 or newer with tomllib`
-for any wrapper failure; host Python 3.8 is not the cause, and neither is the
+before `load-candidates.sh` and retain its stderr. On TheLakeHouseNAS
+`/var/run` is a symlink and `/usr/local/bin/docker`,
+`/usr/local/bin/docker-compose`, and `/usr/bin/git` are DSM package symlinks.
+Older checkouts exit `trusted path contains a symbolic link`; current
+checkouts accept only the exact pinned DSM alias chains in
+`ops/nas/README.md` and refuse anything else. `load-candidates.sh` keeps that
+stderr and then also prints `NAS tooling requires Python 3.12 or newer with
+tomllib` for any wrapper failure; host Python 3.8 is not the cause, and neither is the
 candidate archive. Stop, restore the preserved operator admission if it was
 switched, and leave the old stack selected. The 2026-09-24 production
 cutover recorded in `ops/runbooks/production-frontend-deployment.md` loaded

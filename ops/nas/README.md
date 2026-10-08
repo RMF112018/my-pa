@@ -233,7 +233,22 @@ overrides for `MY_PA_NAS_DOCKER`, `MY_PA_NAS_COMPOSE_PLUGIN`, and
 `MY_PA_NAS_OPERATOR_ADMISSION`; do not use those names to select alternate
 tools or admissions for an operator invocation. Before either Docker or Git
 runs, the wrapper verifies those paths and their ancestors are root-owned,
-non-writable, non-symlinked, and identity-stable. The resolved repository root
+non-writable, non-symlinked, and identity-stable. The only symbolic links it
+accepts are the exact Synology DSM package aliases fixed in the script:
+`/usr/local/bin/docker` and `/usr/local/bin/docker-compose` to
+`/var/packages/ContainerManager/target/usr/bin/…`, that store link to
+`/volume1/@appstore/ContainerManager`, `/usr/bin/git` to
+`/var/packages/Git/target/bin/git`, that store link to `/volume1/@appstore/Git`,
+and `/var/run` to the literal `../run`. Each link must be root-owned with one
+link and its exact literal target, stable before and after the real file is
+opened; the real file is then verified and executed by descriptor as before,
+and Docker bind mounts use the verified real paths. The DSM Git binary may be
+hard-linked (exact mode `0755`, root-owned); every other file keeps exactly one
+link. Only the pinned DSM real Docker socket `/run/docker.sock` (reached through
+the verified `/var/run` alias) may be root-owned group `0` mode `0660` as DSM
+creates it; the non-DSM `/var/run/docker.sock` keeps the private no-group-write
+rule, and no wider mode, other group, or the Tailscale socket gets that allowance.
+The resolved repository root
 must also be root-owned with exact mode `0700` before either tool runs because
 the checkout is later bind-mounted into the Docker-socket operator container.
 The operator admission must

@@ -306,6 +306,8 @@ def test_the_allowlist_fingerprint_is_sha256_of_the_canonical_sorted_allowlists(
     document = {
         "chatllm_gateway": [],
         "knowledge_discovery": ["d1", "d2"],
+        # KLP Step 8: the manager list is always in the canonical document.
+        "knowledge_manager": [],
         "knowledge_operator_review": ["r1"],
     }
     expected = hashlib.sha256(
@@ -318,6 +320,42 @@ def test_the_allowlist_fingerprint_is_sha256_of_the_canonical_sorted_allowlists(
         chatllm_gateway=frozenset(),
     )
     assert allowlist_fingerprint(moved) != expected
+
+
+def test_the_allowlist_fingerprint_includes_the_sorted_manager_list() -> None:
+    """KLP Step 8: the manager allowlist is fingerprinted, and moving it changes the hash."""
+    base = {
+        "discovery": frozenset({"d1"}),
+        "operator_review": frozenset({"r1"}),
+        "chatllm_gateway": frozenset({"m2", "c1"}),
+    }
+    allowlists = KnowledgeAllowlists(**base, manager=frozenset({"m2", "m1"}))
+    document = {
+        "chatllm_gateway": ["c1", "m2"],
+        "knowledge_discovery": ["d1"],
+        "knowledge_manager": ["m1", "m2"],
+        "knowledge_operator_review": ["r1"],
+    }
+    expected = hashlib.sha256(
+        json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    assert allowlist_fingerprint(allowlists) == expected
+    assert allowlist_fingerprint(KnowledgeAllowlists(**base, manager=frozenset({"m1"}))) != expected
+    assert allowlist_fingerprint(KnowledgeAllowlists(**base)) != expected
+
+
+def test_knowledge_allowlists_reads_the_manager_list_from_settings() -> None:
+    settings = load_settings(
+        {
+            "MY_PA_DATABASE_URL": "postgresql+psycopg://someone@db.invalid:5432/somewhere",
+            "MY_PA_KNOWLEDGE_MANAGER_OAUTH_CLIENT_IDS": "synthetic-manager-client",
+            "MY_PA_MCP_CHATLLM_GATEWAY_OAUTH_CLIENT_IDS": "synthetic-manager-client",
+            "MY_PA_KNOWLEDGE_CHECKPOINT_SIGNING_KEY": "s" * 32,
+        }
+    )
+    allowlists = knowledge_allowlists(settings)
+    assert allowlists.manager == frozenset({"synthetic-manager-client"})
+    assert allowlists.chatllm_gateway == frozenset({"synthetic-manager-client"})
 
 
 @contextmanager

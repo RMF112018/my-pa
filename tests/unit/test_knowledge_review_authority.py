@@ -81,6 +81,7 @@ def _derive(
         principal_is_operator=operator,
         authenticated_client_id=client,
         operator_review_allowlist=ALLOWLIST,
+        manager_allowlist=frozenset(),
         capability_grants_present=grants,
     )
 
@@ -158,6 +159,7 @@ def test_row_7_an_empty_operator_review_allowlist_attests_nobody() -> None:
         principal_is_operator=True,
         authenticated_client_id=REVIEWER,
         operator_review_allowlist=frozenset(),
+        manager_allowlist=frozenset(),
     ) == (ORDINARY, KnowledgeDecisionChannel.REMOTE_INTERACTIVE)
 
 
@@ -209,6 +211,7 @@ def test_b_an_mcp_access_without_a_transport_derives_unattested() -> None:
         principal_is_operator=access.principal.is_operator,
         authenticated_client_id=access.authenticated_client_id,
         operator_review_allowlist=ALLOWLIST,
+        manager_allowlist=frozenset(),
         capability_grants_present=access.allowed_capability_purposes is not None,
     ) == (ORDINARY, KnowledgeDecisionChannel.LOCAL_UNATTESTED)
 
@@ -240,6 +243,7 @@ def test_c_an_authorization_without_a_surface_derives_ordinary_reviewer() -> Non
             principal_is_operator=authorization.principal.is_operator,
             authenticated_client_id=authorization.authenticated_client_id,
             operator_review_allowlist=ALLOWLIST,
+            manager_allowlist=frozenset(),
             capability_grants_present=authorization.capability_grants is not None,
         )[0]
         is ORDINARY

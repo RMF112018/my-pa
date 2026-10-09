@@ -215,6 +215,7 @@ _FULL_PLANE_SETTINGS = SimpleNamespace(
     knowledge_discovery_oauth_client_id_set=frozenset,
     knowledge_operator_review_oauth_client_id_set=frozenset,
     chatllm_gateway_oauth_client_id_set=frozenset,
+    knowledge_manager_oauth_client_id_set=frozenset,
 )
 
 

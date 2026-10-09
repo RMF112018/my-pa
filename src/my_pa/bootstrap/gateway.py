@@ -1119,12 +1119,16 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
             knowledge_operator_review_client_ids=(
                 settings.knowledge_operator_review_oauth_client_id_set()
             ),
+            # KLP Step 8: the Knowledge Manager allowlist, the one server-owned source
+            # both the submit/checkpoint gate and the Review authority derivation read.
+            knowledge_manager_client_ids=settings.knowledge_manager_oauth_client_id_set(),
             # KLP-WP-04 slice B3 (R6 section 7): the checkpoint seal. `Settings._check`
-            # requires the key whenever the discovery list binds a client; without
-            # one the service refuses every checkpoint.
+            # requires the key whenever the discovery or manager list binds a client;
+            # without one the service refuses every checkpoint.
             knowledge_checkpoint_signing_key=(
                 settings.knowledge_checkpoint_signing_key.encode("utf-8")
                 if settings.knowledge_discovery_oauth_client_id_set()
+                or settings.knowledge_manager_oauth_client_id_set()
                 else None
             ),
             knowledge_checkpoint_seal_version=settings.knowledge_checkpoint_seal_version,

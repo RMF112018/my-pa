@@ -479,6 +479,7 @@ def _resolved_app(
         knowledge_discovery_oauth_client_id_set=lambda: discovery_clients,
         knowledge_operator_review_oauth_client_id_set=frozenset,
         chatllm_gateway_oauth_client_id_set=frozenset,
+        knowledge_manager_oauth_client_id_set=frozenset,
         compact_publication_for_client=lambda _client: True,
     )
     authenticated = SimpleNamespace(

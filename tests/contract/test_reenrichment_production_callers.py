@@ -685,6 +685,7 @@ def test_remote_mcp_observes_only_authenticated_request_principals_before_contex
         knowledge_discovery_oauth_client_id_set=frozenset,
         knowledge_operator_review_oauth_client_id_set=frozenset,
         chatllm_gateway_oauth_client_id_set=frozenset,
+        knowledge_manager_oauth_client_id_set=frozenset,
     )
     authenticated = SimpleNamespace(
         principal=scene.principal,

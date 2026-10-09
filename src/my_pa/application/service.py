@@ -3879,6 +3879,7 @@ class ApplicationService:
         knowledge_assertions_enabled: bool = False,
         knowledge_discovery_client_ids: frozenset[str] = frozenset(),
         knowledge_operator_review_client_ids: frozenset[str] = frozenset(),
+        knowledge_manager_client_ids: frozenset[str] = frozenset(),
         knowledge_checkpoint_signing_key: bytes | None = None,
         knowledge_checkpoint_seal_version: int = 1,
         relationship_identity_correction_enabled: bool = False,
@@ -3933,6 +3934,12 @@ class ApplicationService:
         #: `remote_operator_attested`. Empty by default (operator decision
         #: KLP-OD-005), so every remote client is an ordinary reviewer.
         self._knowledge_operator_review_client_ids = frozenset(knowledge_operator_review_client_ids)
+        #: KLP Step 8: the exact Knowledge Manager allowlist. It widens exactly two
+        #: server-side rules: the submit/checkpoint gate admits a manager client as
+        #: well as a discovery client, and `derive_knowledge_review_authority`
+        #: attests a manager's remote Knowledge decision `remote_operator_attested`.
+        #: Empty by default, so an unconfigured build binds no manager.
+        self._knowledge_manager_client_ids = frozenset(knowledge_manager_client_ids)
         #: KLP-WP-04 slice B3 (R6 section 7): the checkpoint signing key and seal
         #: version. `None` -- the default -- refuses every checkpoint `unsupported`,
         #: so a build with no key never stores or serves an unsealed envelope.
@@ -5970,6 +5977,7 @@ class ApplicationService:
                 principal_is_operator=authorization.principal.is_operator,
                 authenticated_client_id=authorization.authenticated_client_id,
                 operator_review_allowlist=self._knowledge_operator_review_client_ids,
+                manager_allowlist=self._knowledge_manager_client_ids,
                 capability_grants_present=authorization.capability_grants is not None,
             )
         except InconsistentKnowledgeReviewCompositionError:
@@ -13112,18 +13120,25 @@ class ApplicationService:
     ) -> None:
         """The plane floor plus the second service gate (R6 section 6.1).
 
-        Repeats the gateway's deny overlay: the call must have arrived on the
+        Repeats the gateway's overlay: the call must have arrived on the
         authenticated remote transport from a client in the exact discovery
-        allowlist. stdio MCP, the CLI, the HTTP gateway, the remote capture route
-        (remote transport, no client) and every unbound client are refused
-        `unsupported`, before any read. Precedent: `_goodnotes_pull_plane`.
+        allowlist or -- KLP Step 8 -- the exact Knowledge Manager allowlist. The
+        client id is the OAuth-derived `authenticated_client_id`, never a payload
+        field. stdio MCP, the CLI, the HTTP gateway, the remote capture route
+        (remote transport, no client), operator-review clients and every unbound
+        client are refused `unsupported`, before any read. The capability must
+        still be granted and published (the first layer); this gate is the
+        second. Precedent: `_goodnotes_pull_plane`.
         """
         self._knowledge_plane(authorization, capability)
         client = authorization.authenticated_client_id
         if (
             authorization.transport is not CaptureTransport.REMOTE_CLIENT
             or client is None
-            or client not in self._knowledge_discovery_client_ids
+            or (
+                client not in self._knowledge_discovery_client_ids
+                and client not in self._knowledge_manager_client_ids
+            )
         ):
             raise UnsupportedError()
 
@@ -13133,7 +13148,7 @@ class ApplicationService:
         authorization: Authorization,
         command: SubmitKnowledgeAssertion,
     ) -> _Result:
-        """One autonomous submission from a bound discovery client (R6 sections 6, 8, 9).
+        """One autonomous submission from a bound discovery or manager client (R6 6, 8, 9).
 
         The second gate first. Then C2 reads that need no lock: the profile's
         immutable binding (this client's, else `not_found(provenance)` with no
@@ -13187,7 +13202,7 @@ class ApplicationService:
         authorization: Authorization,
         command: CheckpointKnowledgeDiscovery,
     ) -> _Result:
-        """One checkpoint advance from a bound discovery client (R6 sections 6.1, 7).
+        """One checkpoint advance from a bound discovery or manager client (R6 6.1, 7).
 
         The second gate first, then the configured seal (none -> `unsupported`).
         Then the C2 binding read: this client's profile, else
@@ -15066,7 +15081,8 @@ _KNOWLEDGE_ASSERTION_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
 
 #: KLP-WP-04: the bound discovery client's two writes. Withheld from every
 #: publication without an authenticated client and refused by the second
-#: service gate unless the client is in the exact discovery allowlist.
+#: service gate unless the client is in the exact discovery allowlist or (KLP
+#: Step 8) the exact Knowledge Manager allowlist.
 _KNOWLEDGE_DISCOVERY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     {
         Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,

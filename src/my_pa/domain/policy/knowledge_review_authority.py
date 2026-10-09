@@ -7,7 +7,9 @@ persists. Its table is matrix `profile_contract.review_authority_derivation`:
 * `local_operator` needs an explicitly stamped operator surface (CLI or the HTTP
   gateway), the LOCAL transport, an operator principal and no client;
 * `remote_operator_attested` needs the remote transport and a client in the
-  exact operator-review allowlist;
+  exact operator-review allowlist or -- KLP Step 8 -- the exact Knowledge
+  Manager allowlist. The manager reuses this persisted class and the
+  `remote_operator_review` channel, so no new vocabulary and no migration;
 * any other remote client is an `ordinary_reviewer` deciding interactively;
 * every other local caller -- stdio MCP, an unstamped surface, a non-operator, a
   grant-ceilinged composition -- is an `ordinary_reviewer`, unattested.
@@ -65,6 +67,7 @@ def derive_knowledge_review_authority(
     principal_is_operator: bool,
     authenticated_client_id: str | None,
     operator_review_allowlist: frozenset[str],
+    manager_allowlist: frozenset[str],
     capability_grants_present: bool = False,
 ) -> tuple[KnowledgeReviewAuthorityClass, KnowledgeDecisionChannel]:
     """The authority class and decision channel of one Knowledge decision."""
@@ -80,7 +83,10 @@ def derive_knowledge_review_authority(
             raise UnsupportedKnowledgeReviewCompositionError(
                 "the remote transport without a client cannot decide a Knowledge case"
             )
-        if authenticated_client_id in operator_review_allowlist:
+        if (
+            authenticated_client_id in operator_review_allowlist
+            or authenticated_client_id in manager_allowlist
+        ):
             return (
                 KnowledgeReviewAuthorityClass.REMOTE_OPERATOR_ATTESTED,
                 KnowledgeDecisionChannel.REMOTE_OPERATOR_REVIEW,

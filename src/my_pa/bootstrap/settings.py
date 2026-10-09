@@ -479,10 +479,22 @@ class Settings(StrictModel):
     #: populating it is operator decision KLP-OD-005. Empty means no client is
     #: ever `remote_operator_attested`.
     knowledge_operator_review_oauth_client_ids: str = ""
+    #: KLP Step 8. The exact OAuth client ids bound as Knowledge Manager clients.
+    #: Compared exactly, never by prefix; empty -- the default -- binds no client.
+    #: A Knowledge Manager stays an ordinary broad ChatLLM client and is *not*
+    #: narrowed to a profile: its overlay is additive
+    #: (`bootstrap.knowledge_discovery_profiles`), so it keeps every grant it
+    #: holds, may hold `knowledge.assertions.submit` and
+    #: `knowledge.discovery.checkpoint` when granted, passes the service-side
+    #: submit/checkpoint gate, and decides Knowledge Review cases as
+    #: `remote_operator_attested`. It may overlap the ChatLLM gateway allowlist
+    #: but never the discovery or operator-review allowlists, and a non-empty
+    #: list requires the checkpoint signing key below.
+    knowledge_manager_oauth_client_ids: str = ""
     #: KLP-WP-04 (R6 section 7, KLP-AC-126). The HMAC-SHA256 key sealing every
     #: discovery checkpoint envelope, 32-128 UTF-8 bytes, required whenever the
-    #: discovery allowlist is non-empty. Never rendered (`repr=False`); precedent
-    #: `goodnotes_pull_cursor_signing_key`.
+    #: discovery or Knowledge Manager allowlist is non-empty. Never rendered
+    #: (`repr=False`); precedent `goodnotes_pull_cursor_signing_key`.
     knowledge_checkpoint_signing_key: str = Field(default="", repr=False)
     #: KLP-WP-04 (R6 section 7, KLP-AC-155). The seal version every new envelope
     #: carries; an envelope sealed under any other version is unverifiable. An
@@ -749,37 +761,48 @@ class Settings(StrictModel):
         return self
 
     def _check_knowledge_bindings(self) -> None:
-        """KLP-AC-147 / KLP-AC-126: disjoint role allowlists and a sealing key.
+        """KLP-AC-147 / KLP-AC-126 / KLP Step 8: role allowlists and a sealing key.
 
-        A client id in two of the discovery, operator-review and ChatLLM gateway
-        allowlists would receive two incompatible overlays, so the process refuses
-        to start rather than pick one. The signing key is checked whenever the
-        discovery list binds anyone: an unsealed checkpoint is never served.
+        A client id in two narrowing role allowlists would receive two
+        incompatible overlays, so the process refuses to start rather than pick
+        one. Discovery, operator-review and ChatLLM gateway stay pairwise
+        disjoint. The Knowledge Manager allowlist is disjoint from discovery and
+        operator-review (a manager is never a narrow persona) but may overlap the
+        ChatLLM gateway allowlist: a manager is an ordinary broad ChatLLM client
+        with additive Knowledge authority. The signing key is checked whenever the
+        discovery or manager list binds anyone: an unsealed checkpoint is never
+        served.
         """
+        discovery_name = f"{ENV_PREFIX}KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS"
+        review_name = f"{ENV_PREFIX}KNOWLEDGE_OPERATOR_REVIEW_OAUTH_CLIENT_IDS"
+        chatllm_name = f"{ENV_PREFIX}MCP_CHATLLM_GATEWAY_OAUTH_CLIENT_IDS"
+        manager_name = f"{ENV_PREFIX}KNOWLEDGE_MANAGER_OAUTH_CLIENT_IDS"
         lists = {
-            f"{ENV_PREFIX}KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS": (
-                self.knowledge_discovery_oauth_client_id_set()
-            ),
-            f"{ENV_PREFIX}KNOWLEDGE_OPERATOR_REVIEW_OAUTH_CLIENT_IDS": (
-                self.knowledge_operator_review_oauth_client_id_set()
-            ),
-            f"{ENV_PREFIX}MCP_CHATLLM_GATEWAY_OAUTH_CLIENT_IDS": (
-                self.chatllm_gateway_oauth_client_id_set()
-            ),
+            discovery_name: self.knowledge_discovery_oauth_client_id_set(),
+            review_name: self.knowledge_operator_review_oauth_client_id_set(),
+            chatllm_name: self.chatllm_gateway_oauth_client_id_set(),
+            manager_name: self.knowledge_manager_oauth_client_id_set(),
         }
+        # Every pair is refused except manager + ChatLLM gateway, the one overlap
+        # Step 8 exists to allow.
+        allowed_overlaps = {frozenset({manager_name, chatllm_name})}
         names = sorted(lists)
         for index, first in enumerate(names):
             for second in names[index + 1 :]:
+                if frozenset({first, second}) in allowed_overlaps:
+                    continue
                 if lists[first] & lists[second]:
                     raise SettingsError(
                         f"{first} and {second} must be disjoint: one OAuth client cannot "
                         "hold two Knowledge client roles"
                     )
-        if self.knowledge_discovery_oauth_client_id_set():
+        for trigger in (discovery_name, manager_name):
+            if not lists[trigger]:
+                continue
             key_bytes = self.knowledge_checkpoint_signing_key.encode("utf-8")
             if not 32 <= len(key_bytes) <= 128:
                 raise SettingsError(
-                    f"a non-empty {ENV_PREFIX}KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS requires "
+                    f"a non-empty {trigger} requires "
                     f"{ENV_PREFIX}KNOWLEDGE_CHECKPOINT_SIGNING_KEY of 32 to 128 UTF-8 bytes"
                 )
 
@@ -887,6 +910,10 @@ class Settings(StrictModel):
     def knowledge_operator_review_oauth_client_id_set(self) -> frozenset[str]:
         """Exact OAuth client ids bound as Knowledge operator-review clients. Empty binds none."""
         return frozenset(_split_allowlist(self.knowledge_operator_review_oauth_client_ids))
+
+    def knowledge_manager_oauth_client_id_set(self) -> frozenset[str]:
+        """Exact OAuth client ids bound as Knowledge Manager clients. Empty binds none."""
+        return frozenset(_split_allowlist(self.knowledge_manager_oauth_client_ids))
 
     def compact_publication_for_client(self, authenticated_client_id: str) -> bool:
         """Whether this process publishes the compact façade to `authenticated_client_id`."""

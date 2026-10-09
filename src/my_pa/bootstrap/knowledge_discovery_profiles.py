@@ -1,6 +1,6 @@
-"""Knowledge client profiles and the one deny overlay (KLP-WP-04, R6 section 3.4).
+"""Knowledge client profiles and the one client overlay (KLP-WP-04, R6 section 3.4).
 
-Three kinds of remote OAuth client reach the Knowledge plane, and the Settings
+Four kinds of remote OAuth client reach the Knowledge plane, and the Settings
 allowlists -- not grant rows -- say which kind a client is:
 
 * a **discovery** client (`MY_PA_KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS`) sees
@@ -9,6 +9,12 @@ allowlists -- not grant rows -- say which kind a client is:
   `record_events.provenance`, intersected with what it was granted;
 * an **operator-review** client (`MY_PA_KNOWLEDGE_OPERATOR_REVIEW_OAUTH_CLIENT_IDS`)
   sees exactly `knowledge-operator-review-v1`;
+* a **Knowledge Manager** client (`MY_PA_KNOWLEDGE_MANAGER_OAUTH_CLIENT_IDS`,
+  KLP Step 8) is overlaid with `knowledge-manager-v1`, which is *additive*, not
+  a narrowing profile: the client keeps every capability it was granted,
+  including submit and checkpoint when -- and only when -- it holds those
+  grants. It is an ordinary broad ChatLLM client with Knowledge control-plane
+  authority, so it is deliberately absent from `KNOWLEDGE_CLIENT_PROFILES`;
 * every **unbound** client keeps its grants minus submit and checkpoint.
 
 `resolve_knowledge_client_overlay` is the single resolver for both outputs the
@@ -20,7 +26,7 @@ grant on a discovery client is simply not in the overlaid output.
 
 The allowlist fingerprint is what profile and grant tooling prints and what the
 gateway's runtime attestation will be compared with (WP-13): sha256 over the
-canonical JSON of the three sorted allowlists.
+canonical JSON of the four sorted allowlists.
 """
 
 from __future__ import annotations
@@ -42,11 +48,13 @@ __all__ = [
     "KNOWLEDGE_DISCOVERY_ONLY_CAPABILITIES",
     "KNOWLEDGE_DISCOVERY_V1",
     "KNOWLEDGE_DISCOVERY_V2",
+    "KNOWLEDGE_MANAGER_V1",
     "KNOWLEDGE_OPERATOR_REVIEW_V1",
     "OPERATOR_REVIEW_PROFILE",
     "KnowledgeAllowlists",
     "KnowledgeClientRole",
     "allowlist_fingerprint",
+    "is_knowledge_manager",
     "knowledge_allowlists",
     "knowledge_client_role",
     "profile_for_role",
@@ -60,6 +68,10 @@ KNOWLEDGE_DISCOVERY_V1: Final = "knowledge-discovery-v1"
 #: discovery client needs to tell its own effect from a new trigger.
 KNOWLEDGE_DISCOVERY_V2: Final = "knowledge-discovery-v2"
 KNOWLEDGE_OPERATOR_REVIEW_V1: Final = "knowledge-operator-review-v1"
+#: KLP Step 8: the name of the Knowledge Manager overlay. Additive, so it names
+#: no capability set and is never a key of `KNOWLEDGE_CLIENT_PROFILES` (that
+#: mapping holds only the narrowing profiles the knowledge-profile tooling plans).
+KNOWLEDGE_MANAGER_V1: Final = "knowledge-manager-v1"
 
 #: The discovery pair: only a bound discovery client may ever hold either.
 KNOWLEDGE_DISCOVERY_ONLY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
@@ -120,30 +132,39 @@ class _AllowlistSettings(Protocol):
 
     def chatllm_gateway_oauth_client_id_set(self) -> frozenset[str]: ...
 
+    def knowledge_manager_oauth_client_id_set(self) -> frozenset[str]: ...
+
 
 @dataclass(frozen=True, slots=True)
 class KnowledgeAllowlists:
-    """The three exact role allowlists one evaluation read."""
+    """The four exact role allowlists one evaluation read.
+
+    `manager` defaults to empty -- binding nobody, the failing-closed direction --
+    so a hand-built pre-Step-8 value still means what it meant.
+    """
 
     discovery: frozenset[str]
     operator_review: frozenset[str]
     chatllm_gateway: frozenset[str]
+    manager: frozenset[str] = frozenset()
 
 
 def knowledge_allowlists(settings: _AllowlistSettings) -> KnowledgeAllowlists:
-    """Read the three allowlists once, so one decision never mixes two readings."""
+    """Read the four allowlists once, so one decision never mixes two readings."""
     return KnowledgeAllowlists(
         discovery=settings.knowledge_discovery_oauth_client_id_set(),
         operator_review=settings.knowledge_operator_review_oauth_client_id_set(),
         chatllm_gateway=settings.chatllm_gateway_oauth_client_id_set(),
+        manager=settings.knowledge_manager_oauth_client_id_set(),
     )
 
 
 def allowlist_fingerprint(allowlists: KnowledgeAllowlists) -> str:
-    """sha256 hex over the canonical JSON of the three sorted allowlists."""
+    """sha256 hex over the canonical JSON of the four sorted allowlists."""
     document = {
         "chatllm_gateway": sorted(allowlists.chatllm_gateway),
         "knowledge_discovery": sorted(allowlists.discovery),
+        "knowledge_manager": sorted(allowlists.manager),
         "knowledge_operator_review": sorted(allowlists.operator_review),
     }
     encoded = json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -155,25 +176,40 @@ class KnowledgeClientRole:
 
     DISCOVERY: Final = "discovery"
     OPERATOR_REVIEW: Final = "operator_review"
+    MANAGER: Final = "manager"
     UNBOUND: Final = "unbound"
 
 
 def knowledge_client_role(allowlists: KnowledgeAllowlists, client_id: str | None) -> str:
     """Which role `client_id` has. Exact membership only; no client is unbound.
 
-    `Settings._check` refuses overlapping allowlists, so at most one matches. A
-    hand-built overlap still fails closed: discovery is checked first because its
-    profile is the narrowest that grants no Review decision.
+    `Settings._check` refuses overlapping role allowlists (the manager list may
+    overlap only the ChatLLM gateway list, which is not a role), so at most one
+    matches. A hand-built overlap still fails closed: narrowest first --
+    discovery (no Review decision), then operator-review, then the additive
+    manager overlay.
     """
     if client_id is not None and client_id in allowlists.discovery:
         return KnowledgeClientRole.DISCOVERY
     if client_id is not None and client_id in allowlists.operator_review:
         return KnowledgeClientRole.OPERATOR_REVIEW
+    if client_id is not None and client_id in allowlists.manager:
+        return KnowledgeClientRole.MANAGER
     return KnowledgeClientRole.UNBOUND
 
 
+def is_knowledge_manager(allowlists: KnowledgeAllowlists, client_id: str | None) -> bool:
+    """Whether `client_id` resolves to the Knowledge Manager role (exact membership)."""
+    return knowledge_client_role(allowlists, client_id) == KnowledgeClientRole.MANAGER
+
+
 def profile_for_role(role: str) -> str | None:
-    """The exact profile name a bound role is overlaid with, or `None` when unbound."""
+    """The exact narrowing profile a bound role is overlaid with, or `None`.
+
+    `None` for an unbound client and for a Knowledge Manager: neither is
+    narrowed to a profile (the manager overlay is additive), so the ordinary
+    ChatLLM tooling still plans and applies a manager's broad grants.
+    """
     if role == KnowledgeClientRole.DISCOVERY:
         return DISCOVERY_PROFILE
     if role == KnowledgeClientRole.OPERATOR_REVIEW:
@@ -192,14 +228,20 @@ def resolve_knowledge_client_overlay(
     * discovery-bound -> intersected with its exact discovery profile, and never
       `knowledge.assertions.create` or `review.decide`;
     * operator-review-bound -> intersected with `knowledge-operator-review-v1`;
+    * Knowledge Manager (`knowledge-manager-v1`) -> returned unchanged: nothing
+      is removed and nothing is added, so submit and checkpoint survive exactly
+      when granted, as do create, `review.decide` and every broad data grant;
     * unbound -> submit and checkpoint removed.
 
     Both outputs are filtered by the same allowed set, so a grant pair can never
     survive for a capability the overlay removed.
     """
     allowlists = knowledge_allowlists(settings)
-    profile = profile_for_role(knowledge_client_role(allowlists, client_id))
-    if profile is None:
+    role = knowledge_client_role(allowlists, client_id)
+    profile = profile_for_role(role)
+    if role == KnowledgeClientRole.MANAGER:
+        allowed = frozenset(capabilities)
+    elif profile is None:
         allowed = frozenset(capabilities) - KNOWLEDGE_DISCOVERY_ONLY_CAPABILITIES
     else:
         allowed = frozenset(capabilities) & KNOWLEDGE_CLIENT_PROFILES[profile]

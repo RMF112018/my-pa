@@ -875,7 +875,15 @@ def test_synthesizer_rerun_stales_brief_inputs_and_rejects_old_reporters(scene: 
     assert historical["body_markdown"] == "brief body"
 
 
-def test_failed_researcher_lane_exposes_run_id_and_blocks_synthesizer(scene: Scene) -> None:
+def test_failed_researcher_lane_exposes_run_id_and_does_not_block_synthesizer(
+    scene: Scene,
+) -> None:
+    """A failed lane is reported (FAILED, with its run id) and is not required.
+
+    Was "blocks synthesizer" under the every-lane-required policy. The four live
+    lanes are eligible, so the set is READY and a Synthesizer over exactly those
+    four commits; the failed lane has no artifact to name.
+    """
     service = build_service(scene.world, scene.providers)
     cycle = begin(service, scene, "cycle-blocked-lane")
     collector = commit(
@@ -948,13 +956,14 @@ def test_failed_researcher_lane_exposes_run_id_and_blocks_synthesizer(scene: Sce
             ),
         )
     )
-    assert resolved["aggregate"] == "BLOCKED"
+    assert resolved["aggregate"] == "READY"
     resolved_members = resolved["members"]
     assert isinstance(resolved_members, list)
     teams = next(member for member in resolved_members if member["source_lane"] == "teams")
     assert teams["readiness"] == "FAILED"
     assert teams["producer_run_id"] == failed_run_id
     assert teams["artifact_id"] is None
+    assert teams["required"] is False
     envelope = run(
         service,
         scene,
@@ -963,21 +972,20 @@ def test_failed_researcher_lane_exposes_run_id_and_blocks_synthesizer(scene: Sce
             cycle_run_id=cycle,
             stage=IntelligenceStage.SYNTHESIZER,
             artifact_kind=ArtifactKind.SYNTHESIS_PACKAGE,
-            producer_task_id="blocked-synth",
-            producer_task_name="blocked",
+            producer_task_id="four-lane-synth",
+            producer_task_name="four lanes",
             automation_platform="abacus_chatllm",
             report_date="2026-08-20",
-            title="blocked",
-            body_markdown="no",
+            title="four lanes",
+            body_markdown="four lanes",
             artifact_state=ArtifactState.FINAL,
             schema_version="1",
-            idempotency_key="blocked-synth",
+            idempotency_key="four-lane-synth",
             focus_area_id=FOCUS,
             dependency_report_ids=tuple(live_ids),
         ),
     )
-    assert envelope.error is not None
-    assert envelope.error.code is ErrorCode.INVALID_REQUEST
+    assert envelope.error is None, envelope.error
 
 
 def test_search_and_resolve_are_principal_scoped(scene: Scene) -> None:

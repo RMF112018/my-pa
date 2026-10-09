@@ -20,7 +20,9 @@ __all__ = [
     "MAX_ARTIFACT_BODY_BYTES",
     "MAX_IDEMPOTENCY_KEY_LENGTH",
     "MAX_STRUCTURED_CONTENT_BYTES",
+    "MIN_SYNTHESIZER_DEPENDENCY_COUNT",
     "REQUIRED_DEPENDENCY_COUNT",
+    "REQUIRED_MEMBERSHIP",
     "RESOLVER_SET_IDS",
     "SOURCE_LANE_IDS",
     "STAGE_FOR_KIND",
@@ -157,7 +159,11 @@ class ReadinessMemberState(StrEnum):
 
 
 class ResolverAggregateState(StrEnum):
-    """Aggregate resolver state. Degraded only when catalog policy says so."""
+    """Aggregate resolver state. Degraded only when catalog policy says so.
+
+    For the optional-membership sets, ``DEGRADED`` means at least one eligible
+    member is partial; ``BLOCKED`` means no member is eligible.
+    """
 
     READY = "READY"
     DEGRADED = "DEGRADED"
@@ -193,20 +199,36 @@ STAGE_FOR_KIND: Final[dict[ArtifactKind, IntelligenceStage]] = {
     kind: stage for stage, kind in ARTIFACT_KIND_FOR_STAGE.items()
 }
 
+#: Exact dependency count for every stage whose dependency set is fixed. The
+#: Synthesizer is deliberately absent: it takes any non-empty set of distinct
+#: Researcher lanes, bounded below by ``MIN_SYNTHESIZER_DEPENDENCY_COUNT`` and
+#: above by the lane vocabulary, because each lane may appear at most once.
 REQUIRED_DEPENDENCY_COUNT: Final[dict[IntelligenceStage, int]] = {
     IntelligenceStage.COLLECTOR: 0,
     IntelligenceStage.RESEARCHER: 1,
-    IntelligenceStage.SYNTHESIZER: 5,
     IntelligenceStage.REPORTER: 1,
     IntelligenceStage.MORNING_BRIEF: 6,
 }
 
-#: v1 Morning Intelligence policy: every expected member is required. A missing
-#: Researcher lane blocks the Synthesizer; there is no silent degraded fallback.
+#: The fewest Researcher dependencies a Synthesizer may name. Which lanes a
+#: focus area runs is an operator decision, not a catalog fact, so there is no
+#: "missing commissioned lane" rule: an absent lane is simply not an input.
+MIN_SYNTHESIZER_DEPENDENCY_COUNT: Final = 1
+
+#: Whether each member of a resolver set must be ready for the set to be ready.
+#:
+#: ``research_swarm`` and ``synthesizer_inputs`` list every source lane for
+#: information, but no lane is required: the set is ready when at least one lane
+#: is eligible (a current, lineage-fresh Researcher head), degraded when any
+#: eligible lane is partial, and blocked only when no lane is eligible. The
+#: eligible lanes are exactly the set a Synthesizer commit accepts.
+#: ``reporter_input`` stays required: the one Synthesizer head must be eligible.
+#: ``collectors`` and ``morning_brief_inputs`` keep the original every-member
+#: policy.
 REQUIRED_MEMBERSHIP: Final[dict[ResolverSetId, bool]] = {
     ResolverSetId.COLLECTORS: True,
-    ResolverSetId.RESEARCH_SWARM: True,
-    ResolverSetId.SYNTHESIZER_INPUTS: True,
+    ResolverSetId.RESEARCH_SWARM: False,
+    ResolverSetId.SYNTHESIZER_INPUTS: False,
     ResolverSetId.REPORTER_INPUT: True,
     ResolverSetId.MORNING_BRIEF_INPUTS: True,
 }
@@ -215,7 +237,12 @@ REQUIRED_MEMBERSHIP: Final[dict[ResolverSetId, bool]] = {
 def expected_members(
     set_id: ResolverSetId, *, focus_area_id: FocusAreaId | None = None
 ) -> tuple[tuple[str, FocusAreaId | None, SourceLaneId | None], ...]:
-    """Expected resolver members as (member_key, focus_area, source_lane)."""
+    """Expected resolver members as (member_key, focus_area, source_lane).
+
+    ``research_swarm`` and ``synthesizer_inputs`` list every source lane so a
+    caller sees each lane's state; ``REQUIRED_MEMBERSHIP`` says none of them is
+    required.
+    """
     if set_id is ResolverSetId.COLLECTORS:
         return tuple((area.value, area, None) for area in EXPECTED_FOCUS_AREAS)
     if set_id is ResolverSetId.RESEARCH_SWARM:

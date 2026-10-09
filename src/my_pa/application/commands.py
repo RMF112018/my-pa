@@ -4746,6 +4746,21 @@ class CommitIntelligenceArtifact:
 
     Markdown is stored as inert UTF-8 text. Principal is server-derived.
     Pipeline dependencies are exact upstream artifact IDs, not filenames.
+
+    Dependency rules by stage: a collector names none; a researcher names its
+    focus area's current collector head; a synthesizer names one or more
+    researcher heads of the same cycle and focus area, at most one per source
+    lane, each of them eligible (current head, citing the current collector);
+    a reporter names exactly the current, lineage-fresh synthesizer head; the
+    morning brief names the six expected reporters. Absent lanes are not an
+    error. A synthesizer or reporter over any partial input must be committed
+    with `artifact_state=partial`. Refusals carry `dependency_report_ids` and a
+    reason token: `dependency_missing`, `dependency_wrong_cycle`,
+    `dependency_wrong_focus`, `dependency_wrong_stage`,
+    `dependency_duplicate_lane`, `dependency_count` or
+    `dependency_partial_input` under `invalid_request`, and `dependency_stale`
+    under `conflict`, which a re-resolve and retry can clear. Morning brief
+    refusals keep the bare `dependency_report_ids` token, without a reason token.
     """
 
     capability: ClassVar[Capability] = Capability.REPORTS_COMMIT
@@ -4824,6 +4839,17 @@ class CommitIntelligenceArtifact:
 
 CommitIntelligenceArtifact.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
     {
+        "dependency_report_ids": {
+            "description": (
+                "Exact upstream report_id values from this cycle. collector: none. "
+                "researcher: the focus area's current collector. synthesizer: one or "
+                "more current researcher reports of the same focus area, at most one "
+                "per source_lane; use reports.resolve_set synthesizer_inputs and name "
+                "the READY or PARTIAL members. reporter: exactly the current "
+                "synthesizer. morning_brief: the six expected reporters. Any partial "
+                "input requires artifact_state partial."
+            )
+        },
         "structured_content": {"type": "object"},
         "provenance": {
             "type": "array",
@@ -4851,7 +4877,14 @@ CommitIntelligenceArtifact.mcp_payload_properties = MappingProxyType(  # type: i
 
 @dataclass(frozen=True, slots=True)
 class RecordIntelligenceRunState:
-    """`reports.record_run_state`: persist a producer attempt without a body."""
+    """`reports.record_run_state`: persist a producer attempt without a body.
+
+    `scheduled`, `running`, `partial`, `failed` and `cancelled` need no
+    artifact. `succeeded` is refused (`invalid_request` with
+    `run_state_without_artifact`) unless the exact cycle, stage, focus area and
+    source lane already has a committed current artifact: commit first, then
+    record `succeeded`. A retried request with a stored idempotency key replays.
+    """
 
     capability: ClassVar[Capability] = Capability.REPORTS_RECORD_RUN_STATE
 
@@ -4975,7 +5008,20 @@ class SearchIntelligenceArtifacts:
 
 @dataclass(frozen=True, slots=True)
 class ResolveIntelligenceSet:
-    """`reports.resolve_set`: stage-aware, cycle-bound expected-member resolution."""
+    """`reports.resolve_set`: stage-aware, cycle-bound expected-member resolution.
+
+    `research_swarm` and `synthesizer_inputs` list every source lane with
+    `required: false`. A lane is eligible when its current researcher is READY
+    or PARTIAL; MISSING, FAILED, STALE and SUPERSEDED lanes are reported and
+    never block. The set is BLOCKED with no eligible lane, DEGRADED when an
+    eligible lane is partial, and READY otherwise; the eligible members are
+    exactly what a synthesizer commit accepts. `reporter_input` is the one
+    required synthesizer head (PARTIAL makes it DEGRADED). `collectors` and
+    `morning_brief_inputs` require every member. `readiness_reason` is one of
+    `ready`, `eligible_partial`, `absent`, `failed`,
+    `partial_run_without_artifact`, `stale_upstream`, `not_current_head` or
+    `superseded` for the lane and reporter sets.
+    """
 
     capability: ClassVar[Capability] = Capability.REPORTS_RESOLVE_SET
 

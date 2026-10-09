@@ -344,9 +344,15 @@ def test_sql_fts_search_matches_title_term(migrated_engine: Engine) -> None:
     assert "snippet" in items[0]
 
 
-def test_sql_one_lane_failure_blocks_synthesizer_without_old_fallback(
+def test_sql_one_lane_failure_does_not_block_synthesizer_and_refuses_old_fallback(
     migrated_engine: Engine,
 ) -> None:
+    """A failed lane is reported and not required; another cycle's lane is still refused.
+
+    Was "blocks synthesizer" under the every-lane-required policy. The four live
+    lanes resolve READY and commit; substituting another cycle's teams
+    researcher stays `invalid_request` (`dependency_wrong_cycle`).
+    """
     service = _service(migrated_engine)
     principal = operator()
     cycle = _begin(service, principal, "sql-lane-fail")
@@ -416,13 +422,14 @@ def test_sql_one_lane_failure_blocks_synthesizer_without_old_fallback(
             focus_area_id=FocusAreaId.COMMUNICATIONS,
         ),
     )
-    assert resolved["aggregate"] == "BLOCKED"
+    assert resolved["aggregate"] == "READY"
     resolved_members = resolved["members"]
     assert isinstance(resolved_members, list)
     teams = next(member for member in resolved_members if member["source_lane"] == "teams")
     assert teams["readiness"] == "FAILED"
     assert teams["producer_run_id"] == failed_run_id
     assert teams["artifact_id"] is None
+    assert teams["required"] is False
     other_cycle = _begin(service, principal, "sql-lane-old")
     old_collector = _commit(
         service,
@@ -475,6 +482,29 @@ def test_sql_one_lane_failure_blocks_synthesizer_without_old_fallback(
     )
     assert mixed.error is not None
     assert mixed.error.code is ErrorCode.INVALID_REQUEST
+    assert mixed.error.safe_details == ("dependency_report_ids", "dependency_wrong_cycle")
+    four = _invoke(
+        service,
+        principal,
+        Purpose.REPORT_AUTHORING,
+        CommitIntelligenceArtifact(
+            cycle_run_id=cycle,
+            stage=IntelligenceStage.SYNTHESIZER,
+            artifact_kind=ArtifactKind.SYNTHESIS_PACKAGE,
+            producer_task_id="sql-four-synth",
+            producer_task_name="four lanes",
+            automation_platform="abacus_chatllm",
+            report_date="2026-08-20",
+            title="four lanes",
+            body_markdown="four lanes",
+            artifact_state=ArtifactState.FINAL,
+            schema_version="1",
+            idempotency_key="sql-four-synth",
+            focus_area_id=FocusAreaId.COMMUNICATIONS,
+            dependency_report_ids=tuple(live_ids),
+        ),
+    )
+    assert four.error is None, four.error
 
 
 def test_sql_concurrent_begin_cycle_has_one_durable_effect(migrated_engine: Engine) -> None:

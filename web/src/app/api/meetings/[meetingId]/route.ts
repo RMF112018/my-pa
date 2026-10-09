@@ -32,6 +32,10 @@ export async function PATCH(request: NextRequest, context: Context) {
     virtualMeetingUrl: { gateway: "virtual_meeting_url", type: "string", nullable: true, minLength: 1, maxLength: 2048, codePointLength: true, storable: true, format: "https-url" },
     description: { gateway: "description", type: "string", nullable: true, maxLength: 100000, codePointLength: true, storable: true },
     projectId: { gateway: "project_id", type: "string", nullable: true, pattern: /^prj_[A-Za-z0-9]{8,64}$/ },
+    // Three wire states (operator decision 2026-10-09, retiring AC-007): omitted
+    // leaves series membership unchanged and is never sent; a series id attaches
+    // or moves the Meeting; an explicit null is forwarded as null and detaches it.
+    meetingSeriesId: { gateway: "meeting_series_id", type: "string", nullable: true, pattern: /^mser_[A-Za-z0-9]{8,64}$/ },
     clearFields: {
       gateway: "clear_fields", type: "string-array", maxItems: 5, uniqueItems: true,
       values: ["endAt", "locationText", "virtualMeetingUrl", "description", "projectId"],
@@ -51,8 +55,10 @@ export async function PATCH(request: NextRequest, context: Context) {
       if (supplied("notes_mode") !== supplied("notes_markdown")) return "notesMode and notesMarkdown must be supplied together";
       if (typeof payload.start_at === "string" && typeof payload.end_at === "string"
           && instant(payload.end_at) < instant(payload.start_at)) return "endAt cannot be before startAt";
-      const scalars = ["title", "start_at", "end_at", "timezone_name", "status", "location_text", "virtual_meeting_url", "description", "project_id", "notes_mode", "attendees_replace"];
-      if (!scalars.some(supplied) && clears.length === 0
+      const scalars = ["title", "start_at", "end_at", "timezone_name", "status", "location_text", "virtual_meeting_url", "description", "project_id", "notes_mode", "attendees_replace", "meeting_series_id"];
+      // Unlike the other nullable scalars, a null meeting_series_id is material: it detaches.
+      const seriesSent = Object.hasOwn(payload, "meeting_series_id");
+      if (!scalars.some(supplied) && !seriesSent && clears.length === 0
           && ((payload.attachment_add_document_ids ?? []) as string[]).length === 0
           && ((payload.attachment_remove_ids ?? []) as string[]).length === 0) return "at least one Meeting mutation is required";
       return null;

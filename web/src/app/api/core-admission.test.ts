@@ -304,7 +304,25 @@ describe("Meeting aggregate command admission", () => {
     expect(dispatched()).toMatchObject({ notes_mode: "replace", notes_markdown: "Note" });
   });
   it("rejects timestamp, scalar type, enum, URL, ID and bound violations", async () => {
-    for (const patch of [{ startAt: "2026-02-30T12:00:00Z" }, { endAt: "2026-01-01T12:00:00" }, { startAt: "2026-08-09T12:00:00.000002Z", endAt: "2026-08-09T12:00:00.000001Z" }, { status: "active" }, { title: 1 }, { title: " " }, { title: "x".repeat(201) }, { locationText: "x".repeat(501) }, { description: "x".repeat(100001) }, { virtualMeetingUrl: "http://example.invalid" }, { projectId: meetingId }, { timezoneName: "../UTC" }, { timezoneName: "/UTC" }, { timezoneName: " UTC" }, { meetingSeriesId }]) await invalid(s, { ...s.body, ...patch });
+    for (const patch of [{ startAt: "2026-02-30T12:00:00Z" }, { endAt: "2026-01-01T12:00:00" }, { startAt: "2026-08-09T12:00:00.000002Z", endAt: "2026-08-09T12:00:00.000001Z" }, { status: "active" }, { title: 1 }, { title: " " }, { title: "x".repeat(201) }, { locationText: "x".repeat(501) }, { description: "x".repeat(100001) }, { virtualMeetingUrl: "http://example.invalid" }, { projectId: meetingId }, { timezoneName: "../UTC" }, { timezoneName: "/UTC" }, { timezoneName: " UTC" }]) await invalid(s, { ...s.body, ...patch });
+  });
+  it("series selector forwards an id or explicit null and never sends an omitted key", async () => {
+    success(s);
+    await answer(await s.run(request(s)), 200);
+    expect(dispatched()).not.toHaveProperty("meeting_series_id");
+    fetchStub.mockClear(); await answer(await s.run(request(s, { ...s.body, meetingSeriesId })), 200);
+    expect(dispatched()).toMatchObject({ meeting_series_id: meetingSeriesId, title: "Synthetic occurrence" });
+    // Alone, a series id or a detach is the one material mutation the request needs.
+    fetchStub.mockClear(); await answer(await s.run(request(s, { ...keyed, meetingSeriesId })), 200);
+    expect(dispatched()).toEqual({ meeting_id: meetingId, expected_version: 1, idempotency_key: "wp03b-key-1", meeting_series_id: meetingSeriesId });
+    fetchStub.mockClear(); await answer(await s.run(request(s, { ...keyed, meetingSeriesId: null })), 200);
+    const detach = dispatched();
+    expect(detach).toEqual({ meeting_id: meetingId, expected_version: 1, idempotency_key: "wp03b-key-1", meeting_series_id: null });
+    expect(Object.hasOwn(detach, "meeting_series_id")).toBe(true);
+    fetchStub.mockClear();
+    for (const meetingSeriesId of [meetingId, "mser_short", `mser_${suffix}!`, ` mser_${suffix}`, `mser_${"a".repeat(65)}`, "", 1, false, [`mser_${suffix}`], {}]) await invalid(s, { ...s.body, meetingSeriesId });
+    await invalid(s, { ...s.body, meeting_series_id: `mser_${suffix}` });
+    await invalid(s, { ...s.body, seriesTitle: "Synthetic series" });
   });
   it("passes Factory, posix/UTC and UTC and preserves backend semantic invalid-zone400", async () => {
     success(s);

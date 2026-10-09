@@ -941,7 +941,8 @@
         "attachment_add_document_ids",
         "attachment_remove_ids",
         "notes_mode",
-        "notes_markdown"
+        "notes_markdown",
+        "meeting_series_id"
       ],
       "probe": {
         "meeting_id": "mtg_aaaaaaaa11111111",

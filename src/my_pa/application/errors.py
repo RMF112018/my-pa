@@ -198,6 +198,29 @@ class SafeDetail(StrEnum):
     STRUCTURED_CONTENT = "structured_content"
     BODY_MARKDOWN = "body_markdown"
     ADVISORY_DIGEST = "advisory_digest"
+    ARTIFACT_STATE = "artifact_state"
+    #: Why the Report plane refused a named pipeline dependency. Each rides
+    #: after `DEPENDENCY_REPORT_IDS`, which names the field, and names the rule
+    #: that refused -- never which id, never what it held. `DEPENDENCY_MISSING`
+    #: answers an unknown id and another Principal's id alike, so a caller cannot
+    #: subtract one answer from the other. `DEPENDENCY_STALE` rides on
+    #: `conflict`, because re-resolving the set and retrying can succeed; every
+    #: other reason is `invalid_request`. `DEPENDENCY_PARTIAL_INPUT` is a `final`
+    #: claim over a `partial` input and rides with `ARTIFACT_STATE`, the field to
+    #: change. There is deliberately no "missing lane" reason: which source lanes
+    #: a focus area runs is an operator decision, not a server rule.
+    DEPENDENCY_MISSING = "dependency_missing"
+    DEPENDENCY_WRONG_CYCLE = "dependency_wrong_cycle"
+    DEPENDENCY_WRONG_FOCUS = "dependency_wrong_focus"
+    DEPENDENCY_WRONG_STAGE = "dependency_wrong_stage"
+    DEPENDENCY_DUPLICATE_LANE = "dependency_duplicate_lane"
+    DEPENDENCY_COUNT = "dependency_count"
+    DEPENDENCY_STALE = "dependency_stale"
+    DEPENDENCY_PARTIAL_INPUT = "dependency_partial_input"
+    #: `reports.record_run_state` claimed `succeeded` for a coordinate that has
+    #: no current artifact head in that cycle. Commit the artifact first; the
+    #: commit itself records the succeeded run.
+    RUN_STATE_WITHOUT_ARTIFACT = "run_state_without_artifact"
     #: The Relationship Memory plane. Field *names* only, as every member here
     #: is: `STATEMENT` names the field a malformed note arrived in and never
     #: carries the note, which is the whole reason this enum is a closed token

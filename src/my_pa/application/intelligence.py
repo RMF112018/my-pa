@@ -10,7 +10,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
-from typing import Protocol
+from typing import Final, Protocol
 from urllib.parse import urlsplit
 
 from my_pa.application.errors import (
@@ -25,9 +25,9 @@ from my_pa.domain.intelligence.catalog import (
     ARTIFACT_KIND_FOR_STAGE,
     CYCLE_MORNING_INTELLIGENCE,
     EXPECTED_FOCUS_AREAS,
-    EXPECTED_SOURCE_LANES,
     MAX_ARTIFACT_BODY_BYTES,
     MAX_STRUCTURED_CONTENT_BYTES,
+    MIN_SYNTHESIZER_DEPENDENCY_COUNT,
     REQUIRED_DEPENDENCY_COUNT,
     REQUIRED_MEMBERSHIP,
     ArtifactKind,
@@ -45,6 +45,7 @@ from my_pa.domain.intelligence.catalog import (
     validate_stage_coordinates,
 )
 from my_pa.domain.intelligence.errors import (
+    DependencyRejection,
     IntelligenceConflictError,
     IntelligenceCoordinateError,
     IntelligenceDependencyError,
@@ -174,6 +175,20 @@ def _now(at: datetime) -> datetime:
     return at
 
 
+#: The public token for each dependency refusal reason. A closed mapping, so a
+#: reason without a token is a KeyError in tests rather than a silent fallback.
+_DEPENDENCY_REASON_DETAIL: Mapping[DependencyRejection, SafeDetail] = {
+    DependencyRejection.MISSING: SafeDetail.DEPENDENCY_MISSING,
+    DependencyRejection.WRONG_CYCLE: SafeDetail.DEPENDENCY_WRONG_CYCLE,
+    DependencyRejection.WRONG_FOCUS: SafeDetail.DEPENDENCY_WRONG_FOCUS,
+    DependencyRejection.WRONG_STAGE: SafeDetail.DEPENDENCY_WRONG_STAGE,
+    DependencyRejection.DUPLICATE_LANE: SafeDetail.DEPENDENCY_DUPLICATE_LANE,
+    DependencyRejection.COUNT: SafeDetail.DEPENDENCY_COUNT,
+    DependencyRejection.STALE: SafeDetail.DEPENDENCY_STALE,
+    DependencyRejection.PARTIAL_INPUT: SafeDetail.DEPENDENCY_PARTIAL_INPUT,
+}
+
+
 def _translate(error: Exception) -> None:
     if isinstance(error, IntelligenceCoordinateError):
         raise InvalidRequestError(SafeDetail.STAGE) from None
@@ -182,8 +197,22 @@ def _translate(error: Exception) -> None:
     if isinstance(error, IntelligenceDigestMismatchError):
         raise InvalidRequestError(SafeDetail.ADVISORY_DIGEST) from None
     if isinstance(error, IntelligenceDependencyError):
+        if error.reason is DependencyRejection.PARTIAL_INPUT:
+            raise InvalidRequestError(
+                SafeDetail.DEPENDENCY_REPORT_IDS,
+                SafeDetail.DEPENDENCY_PARTIAL_INPUT,
+                SafeDetail.ARTIFACT_STATE,
+            ) from None
+        if error.reason is not None:
+            raise InvalidRequestError(
+                SafeDetail.DEPENDENCY_REPORT_IDS, _DEPENDENCY_REASON_DETAIL[error.reason]
+            ) from None
         raise InvalidRequestError(SafeDetail.DEPENDENCY_REPORT_IDS) from None
     if isinstance(error, IntelligenceStaleReferenceError):
+        if error.reason is not None:
+            raise ConflictError(
+                SafeDetail.DEPENDENCY_REPORT_IDS, _DEPENDENCY_REASON_DETAIL[error.reason]
+            ) from None
         raise ConflictError(SafeDetail.ARTIFACT_ID) from None
     if isinstance(error, IntelligenceIdempotencyConflictError):
         raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
@@ -381,6 +410,156 @@ def _member_lineage_is_stale(
     )
 
 
+#: Resolver ``readiness_reason`` tokens for the sets the shared eligibility
+#: predicate decides. Free strings on the wire; distinct so a caller can tell
+#: an absent lane from a failed one and a moved upstream from a moved head.
+REASON_READY: Final = "ready"
+REASON_ELIGIBLE_PARTIAL: Final = "eligible_partial"
+REASON_ABSENT: Final = "absent"
+REASON_FAILED: Final = "failed"
+REASON_PARTIAL_RUN_WITHOUT_ARTIFACT: Final = "partial_run_without_artifact"
+REASON_STALE_UPSTREAM: Final = "stale_upstream"
+REASON_NOT_CURRENT_HEAD: Final = "not_current_head"
+REASON_SUPERSEDED: Final = "superseded"
+
+#: Member states an upstream may be in and still be consumed.
+_ELIGIBLE_STATES: Final = frozenset({ReadinessMemberState.READY, ReadinessMemberState.PARTIAL})
+
+
+@dataclass(frozen=True, slots=True)
+class Eligibility:
+    """Whether one upstream artifact may be consumed, and why.
+
+    The single answer both ``reports.commit`` (Synthesizer and Reporter
+    dependencies) and ``reports.resolve_set`` (``research_swarm``,
+    ``synthesizer_inputs``, ``reporter_input``) use, so the set the resolver
+    calls eligible is exactly the set a commit accepts.
+    """
+
+    state: ReadinessMemberState
+    reason: str
+    artifact: IntelligenceArtifact | None = None
+    run: IntelligenceProducerRun | None = None
+
+    @property
+    def eligible(self) -> bool:
+        return self.state in _ELIGIBLE_STATES
+
+
+def _collector_dependency(artifact: IntelligenceArtifact) -> str | None:
+    return next(
+        (
+            dependency.upstream_artifact_id
+            for dependency in artifact.dependencies
+            if dependency.dependency_role == "collector"
+        ),
+        None,
+    )
+
+
+def artifact_eligibility(
+    store: IntelligenceStore,
+    *,
+    principal_id: str,
+    cycle_run_id: str,
+    artifact: IntelligenceArtifact,
+) -> Eligibility:
+    """The shared eligibility predicate for one existing Researcher or Synthesizer.
+
+    Order matters only for the reason reported, never for the verdict:
+    superseded, then not its coordinate's current head, then a moved upstream
+    (a Researcher's Collector, or any recorded parent of a Synthesizer), then
+    partial, then ready.
+    """
+    if artifact.artifact_state not in {ArtifactState.PARTIAL, ArtifactState.FINAL}:
+        return Eligibility(ReadinessMemberState.SUPERSEDED, REASON_SUPERSEDED, artifact)
+    head = store.current_head(
+        principal_id,
+        cycle_run_id,
+        artifact.stage,
+        artifact.focus_area_id,
+        artifact.source_lane,
+    )
+    if head is None or head.artifact_id != artifact.artifact_id:
+        return Eligibility(ReadinessMemberState.STALE, REASON_NOT_CURRENT_HEAD, artifact)
+    if artifact.stage is IntelligenceStage.RESEARCHER:
+        collector = store.current_head(
+            principal_id,
+            cycle_run_id,
+            IntelligenceStage.COLLECTOR,
+            artifact.focus_area_id,
+            None,
+        )
+        if collector is None or _collector_dependency(artifact) != collector.artifact_id:
+            return Eligibility(ReadinessMemberState.STALE, REASON_STALE_UPSTREAM, artifact)
+    elif _member_lineage_is_stale(
+        store,
+        principal_id=principal_id,
+        cycle_run_id=cycle_run_id,
+        focus_area_id=artifact.focus_area_id,
+        artifact=artifact,
+    ):
+        return Eligibility(ReadinessMemberState.STALE, REASON_STALE_UPSTREAM, artifact)
+    if artifact.artifact_state is ArtifactState.PARTIAL:
+        return Eligibility(ReadinessMemberState.PARTIAL, REASON_ELIGIBLE_PARTIAL, artifact)
+    return Eligibility(ReadinessMemberState.READY, REASON_READY, artifact)
+
+
+def coordinate_eligibility(
+    store: IntelligenceStore,
+    *,
+    principal_id: str,
+    cycle_run_id: str,
+    stage: IntelligenceStage,
+    focus_area_id: FocusAreaId | None,
+    source_lane: SourceLaneId | None,
+) -> Eligibility:
+    """The shared predicate at a coordinate: its current head, or why there is none.
+
+    A coordinate with no head is never eligible. Its latest run says whether it
+    is ``FAILED`` or ``MISSING``; a ``partial`` run with no artifact is
+    ``MISSING`` too, because there is nothing to consume.
+    """
+    run = store.failed_run(principal_id, cycle_run_id, stage, focus_area_id, source_lane)
+    head = store.current_head(principal_id, cycle_run_id, stage, focus_area_id, source_lane)
+    if head is None:
+        if run is not None and run.state is ProducerRunState.FAILED:
+            return Eligibility(ReadinessMemberState.FAILED, REASON_FAILED, None, run)
+        if run is not None and run.state is ProducerRunState.PARTIAL:
+            return Eligibility(
+                ReadinessMemberState.MISSING, REASON_PARTIAL_RUN_WITHOUT_ARTIFACT, None, run
+            )
+        return Eligibility(ReadinessMemberState.MISSING, REASON_ABSENT, None, run)
+    verdict = artifact_eligibility(
+        store, principal_id=principal_id, cycle_run_id=cycle_run_id, artifact=head
+    )
+    return replace(verdict, run=run)
+
+
+def _dependency_error(
+    stage: IntelligenceStage, reason: DependencyRejection
+) -> IntelligenceDependencyError:
+    """The refusal for ``stage``. The Morning Brief keeps its original bare token."""
+    if stage is IntelligenceStage.MORNING_BRIEF:
+        return IntelligenceDependencyError()
+    return IntelligenceDependencyError(reason)
+
+
+def _require_eligible(
+    store: IntelligenceStore,
+    *,
+    principal_id: str,
+    cycle_run_id: str,
+    artifact: IntelligenceArtifact,
+) -> Eligibility:
+    verdict = artifact_eligibility(
+        store, principal_id=principal_id, cycle_run_id=cycle_run_id, artifact=artifact
+    )
+    if not verdict.eligible:
+        raise IntelligenceStaleReferenceError(DependencyRejection.STALE)
+    return verdict
+
+
 def _validate_dependencies(
     store: IntelligenceStore,
     *,
@@ -389,30 +568,41 @@ def _validate_dependencies(
     stage: IntelligenceStage,
     focus_area_id: FocusAreaId | None,
     dependency_ids: tuple[str, ...],
-) -> tuple[tuple[IntelligencePipelineDependency, ...], tuple[IntelligenceArtifact, ...]]:
-    expected = REQUIRED_DEPENDENCY_COUNT[stage]
-    if len(dependency_ids) != expected:
-        raise IntelligenceDependencyError()
+) -> tuple[tuple[IntelligencePipelineDependency, ...], bool]:
+    """Validate named dependencies. Returns the lineage rows and whether any input is partial.
+
+    Synthesizer: one or more Researcher heads of this cycle and focus, at most
+    one per lane, each eligible under ``artifact_eligibility``. Reporter:
+    exactly the eligible Synthesizer head. Collector, Researcher, and Morning
+    Brief keep their fixed counts.
+    """
+    if stage is IntelligenceStage.SYNTHESIZER:
+        if len(dependency_ids) < MIN_SYNTHESIZER_DEPENDENCY_COUNT:
+            raise IntelligenceDependencyError(DependencyRejection.COUNT)
+    elif len(dependency_ids) != REQUIRED_DEPENDENCY_COUNT[stage]:
+        raise _dependency_error(stage, DependencyRejection.COUNT)
     upstreams: list[IntelligenceArtifact] = []
     deps: list[IntelligencePipelineDependency] = []
     for artifact_id in dependency_ids:
+        # Principal-scoped: another Principal's id is indistinguishable from none.
         artifact = store.get_artifact(principal_id, artifact_id)
         if artifact is None:
-            raise IntelligenceDependencyError()
+            raise _dependency_error(stage, DependencyRejection.MISSING)
         if artifact.cycle_run_id != cycle.cycle_run_id:
-            raise IntelligenceDependencyError()
+            raise _dependency_error(stage, DependencyRejection.WRONG_CYCLE)
         upstreams.append(artifact)
+    partial_input = False
     if stage is IntelligenceStage.RESEARCHER:
         collector = upstreams[0]
         if collector.stage is not IntelligenceStage.COLLECTOR:
-            raise IntelligenceDependencyError()
+            raise IntelligenceDependencyError(DependencyRejection.WRONG_STAGE)
         if collector.focus_area_id != focus_area_id:
-            raise IntelligenceDependencyError()
+            raise IntelligenceDependencyError(DependencyRejection.WRONG_FOCUS)
         current = store.current_head(
             principal_id, cycle.cycle_run_id, IntelligenceStage.COLLECTOR, focus_area_id, None
         )
         if current is None or current.artifact_id != collector.artifact_id:
-            raise IntelligenceStaleReferenceError()
+            raise IntelligenceStaleReferenceError(DependencyRejection.STALE)
         deps.append(
             IntelligencePipelineDependency(
                 upstream_artifact_id=collector.artifact_id,
@@ -422,67 +612,51 @@ def _validate_dependencies(
             )
         )
     elif stage is IntelligenceStage.SYNTHESIZER:
+        for item in upstreams:
+            if item.stage is not IntelligenceStage.RESEARCHER or item.source_lane is None:
+                raise IntelligenceDependencyError(DependencyRejection.WRONG_STAGE)
+            if item.focus_area_id != focus_area_id:
+                raise IntelligenceDependencyError(DependencyRejection.WRONG_FOCUS)
         lanes = [item.source_lane for item in upstreams]
-        if set(lanes) != set(EXPECTED_SOURCE_LANES) or len(lanes) != 5:
-            raise IntelligenceDependencyError()
-        collector_ids = set()
+        if len(set(lanes)) != len(lanes):
+            raise IntelligenceDependencyError(DependencyRejection.DUPLICATE_LANE)
+        collector_ids: set[str | None] = set()
         for item in upstreams:
-            if (
-                item.stage is not IntelligenceStage.RESEARCHER
-                or item.focus_area_id != focus_area_id
-            ):
-                raise IntelligenceDependencyError()
-            if not item.is_current or item.artifact_state is ArtifactState.SUPERSEDED:
-                raise IntelligenceStaleReferenceError()
-            collector_dep = next(
-                (
-                    dependency.upstream_artifact_id
-                    for dependency in item.dependencies
-                    if dependency.dependency_role == "collector"
-                ),
-                None,
+            verdict = _require_eligible(
+                store, principal_id=principal_id, cycle_run_id=cycle.cycle_run_id, artifact=item
             )
-            if collector_dep is None:
-                raise IntelligenceDependencyError()
-            collector_ids.add(collector_dep)
-        if len(collector_ids) != 1:
-            raise IntelligenceDependencyError()
-        selected = store.current_head(
-            principal_id, cycle.cycle_run_id, IntelligenceStage.COLLECTOR, focus_area_id, None
-        )
-        if selected is None or selected.artifact_id not in collector_ids:
-            raise IntelligenceStaleReferenceError()
+            partial_input = partial_input or verdict.state is ReadinessMemberState.PARTIAL
+            collector_ids.add(_collector_dependency(item))
+        # Implied by eligibility (every eligible Researcher cites the current
+        # Collector head), kept as a defensive check on the single-Collector rule.
+        if len(collector_ids) != 1 or None in collector_ids:
+            raise IntelligenceStaleReferenceError(DependencyRejection.STALE)
         for item in upstreams:
-            if item.source_lane is None:
-                raise IntelligenceDependencyError()
+            lane = item.source_lane
+            if lane is None:  # pragma: no cover - refused above
+                raise IntelligenceDependencyError(DependencyRejection.WRONG_STAGE)
             deps.append(
                 IntelligencePipelineDependency(
                     upstream_artifact_id=item.artifact_id,
-                    dependency_role=f"researcher:{item.source_lane.value}",
+                    dependency_role=f"researcher:{lane.value}",
                     expected_stage=IntelligenceStage.RESEARCHER,
                     expected_focus_area_id=focus_area_id,
-                    expected_source_lane=item.source_lane,
+                    expected_source_lane=lane,
                 )
             )
     elif stage is IntelligenceStage.REPORTER:
         synthesizer = upstreams[0]
         if synthesizer.stage is not IntelligenceStage.SYNTHESIZER:
-            raise IntelligenceDependencyError()
-        if synthesizer.focus_area_id != focus_area_id:
-            raise IntelligenceDependencyError()
-        current = store.current_head(
-            principal_id, cycle.cycle_run_id, IntelligenceStage.SYNTHESIZER, focus_area_id, None
-        )
-        if current is None or current.artifact_id != synthesizer.artifact_id:
-            raise IntelligenceStaleReferenceError()
-        if focus_area_id is None:
-            raise IntelligenceDependencyError()
-        _require_current_upstream_lineage(
+            raise IntelligenceDependencyError(DependencyRejection.WRONG_STAGE)
+        if focus_area_id is None or synthesizer.focus_area_id != focus_area_id:
+            raise IntelligenceDependencyError(DependencyRejection.WRONG_FOCUS)
+        verdict = _require_eligible(
             store,
             principal_id=principal_id,
             cycle_run_id=cycle.cycle_run_id,
             artifact=synthesizer,
         )
+        partial_input = verdict.state is ReadinessMemberState.PARTIAL
         deps.append(
             IntelligencePipelineDependency(
                 upstream_artifact_id=synthesizer.artifact_id,
@@ -525,7 +699,7 @@ def _validate_dependencies(
                     expected_focus_area_id=item.focus_area_id,
                 )
             )
-    return tuple(deps), tuple(upstreams)
+    return tuple(deps), partial_input
 
 
 def commit_artifact(
@@ -628,7 +802,7 @@ def commit_artifact(
         cycle = store.get_cycle(principal_id, cycle_run_id)
         if cycle is None:
             raise IntelligenceCoordinateError()
-        dependencies, _upstreams = _validate_dependencies(
+        dependencies, partial_input = _validate_dependencies(
             store,
             principal_id=principal_id,
             cycle=cycle,
@@ -636,6 +810,10 @@ def commit_artifact(
             focus_area_id=focus_area_id,
             dependency_ids=dependency_report_ids,
         )
+        # A Synthesizer or Reporter built over a partial input is itself partial.
+        # A partial claim over all-final inputs stays the producer's choice.
+        if partial_input and artifact_state is not ArtifactState.PARTIAL:
+            raise IntelligenceDependencyError(DependencyRejection.PARTIAL_INPUT)
         if automation_run_id:
             prior = store.run_for_external(
                 principal_id, automation_platform, producer_task_id, automation_run_id
@@ -774,7 +952,12 @@ def record_run_state(
     failure_code: str | None,
     failure_summary: str | None,
 ) -> MutationAdmission:
-    """Persist running/failed/cancelled without requiring an artifact body."""
+    """Persist running/failed/cancelled without requiring an artifact body.
+
+    ``succeeded`` is admitted only when the exact (cycle, stage, focus, lane)
+    coordinate already has a current artifact head. A stored receipt replays
+    before that check, so retrying an accepted request still replays.
+    """
     try:
         try:
             validate_stage_coordinates(
@@ -812,6 +995,14 @@ def record_run_state(
         cycle = store.get_cycle(principal_id, cycle_run_id)
         if cycle is None:
             raise IntelligenceCoordinateError()
+        # `succeeded` asserts an artifact exists. Producers commit first (which
+        # records its own succeeded run) and may then record `succeeded`; a
+        # `succeeded` with nothing committed at this exact coordinate is refused.
+        if state is ProducerRunState.SUCCEEDED and (
+            store.current_head(principal_id, cycle_run_id, stage, focus_area_id, source_lane)
+            is None
+        ):
+            raise InvalidRequestError(SafeDetail.SELECTOR, SafeDetail.RUN_STATE_WITHOUT_ARTIFACT)
         when = _now(at)
         run_id = issue_identifier(IdKind.INTELLIGENCE_RUN)
         receipt_id = issue_identifier(IdKind.INTELLIGENCE_RECEIPT)
@@ -960,6 +1151,16 @@ def search_artifacts(
     )
 
 
+#: Resolver sets whose members the shared eligibility predicate decides.
+_ELIGIBILITY_SETS: Final = frozenset(
+    {
+        ResolverSetId.RESEARCH_SWARM,
+        ResolverSetId.SYNTHESIZER_INPUTS,
+        ResolverSetId.REPORTER_INPUT,
+    }
+)
+
+
 def _member_state(
     store: IntelligenceStore,
     *,
@@ -968,66 +1169,54 @@ def _member_state(
     set_id: ResolverSetId,
     focus_area_id: FocusAreaId | None,
     source_lane: SourceLaneId | None,
-) -> tuple[ReadinessMemberState, IntelligenceArtifact | None, IntelligenceProducerRun | None]:
-    if set_id is ResolverSetId.COLLECTORS:
-        stage = IntelligenceStage.COLLECTOR
-        lane = None
-        area = focus_area_id
-    elif set_id in {ResolverSetId.RESEARCH_SWARM, ResolverSetId.SYNTHESIZER_INPUTS}:
-        stage = IntelligenceStage.RESEARCHER
-        lane = source_lane
-        area = focus_area_id
-    elif set_id is ResolverSetId.REPORTER_INPUT:
-        stage = IntelligenceStage.SYNTHESIZER
-        lane = None
-        area = focus_area_id
-    else:
-        stage = IntelligenceStage.REPORTER
-        lane = None
-        area = focus_area_id
-    current = store.current_head(principal_id, cycle_run_id, stage, area, lane)
-    failed = store.failed_run(principal_id, cycle_run_id, stage, area, lane)
-    if current is None:
-        if failed is not None and failed.state is ProducerRunState.FAILED:
-            return ReadinessMemberState.FAILED, None, failed
-        if failed is not None and failed.state is ProducerRunState.PARTIAL:
-            return ReadinessMemberState.PARTIAL, None, failed
-        return ReadinessMemberState.MISSING, None, failed
-    if current.artifact_state is ArtifactState.SUPERSEDED:
-        return ReadinessMemberState.SUPERSEDED, current, failed
-    if current.artifact_state is ArtifactState.PARTIAL:
-        return ReadinessMemberState.PARTIAL, current, failed
+) -> Eligibility:
     if set_id in {ResolverSetId.RESEARCH_SWARM, ResolverSetId.SYNTHESIZER_INPUTS}:
-        collector = store.current_head(
-            principal_id, cycle_run_id, IntelligenceStage.COLLECTOR, area, None
-        )
-        collector_dep = next(
-            (
-                dependency.upstream_artifact_id
-                for dependency in current.dependencies
-                if dependency.dependency_role == "collector"
-            ),
-            None,
-        )
-        if collector is None or collector_dep != collector.artifact_id:
-            return ReadinessMemberState.STALE, current, failed
-    if set_id is ResolverSetId.REPORTER_INPUT:
-        if current.stage is not IntelligenceStage.SYNTHESIZER:
-            return ReadinessMemberState.STALE, current, failed
-        if _member_lineage_is_stale(
+        return coordinate_eligibility(
             store,
             principal_id=principal_id,
             cycle_run_id=cycle_run_id,
-            focus_area_id=area,
-            artifact=current,
-        ):
-            return ReadinessMemberState.STALE, current, failed
+            stage=IntelligenceStage.RESEARCHER,
+            focus_area_id=focus_area_id,
+            source_lane=source_lane,
+        )
+    if set_id is ResolverSetId.REPORTER_INPUT:
+        return coordinate_eligibility(
+            store,
+            principal_id=principal_id,
+            cycle_run_id=cycle_run_id,
+            stage=IntelligenceStage.SYNTHESIZER,
+            focus_area_id=focus_area_id,
+            source_lane=None,
+        )
+    # `collectors` and `morning_brief_inputs`: the original per-member rules.
+    stage = (
+        IntelligenceStage.COLLECTOR
+        if set_id is ResolverSetId.COLLECTORS
+        else IntelligenceStage.REPORTER
+    )
+    area = focus_area_id
+    current = store.current_head(principal_id, cycle_run_id, stage, area, None)
+    failed = store.failed_run(principal_id, cycle_run_id, stage, area, None)
+
+    def legacy(state: ReadinessMemberState, artifact: IntelligenceArtifact | None) -> Eligibility:
+        return Eligibility(state, state.value.lower(), artifact, failed)
+
+    if current is None:
+        if failed is not None and failed.state is ProducerRunState.FAILED:
+            return legacy(ReadinessMemberState.FAILED, None)
+        if failed is not None and failed.state is ProducerRunState.PARTIAL:
+            return legacy(ReadinessMemberState.PARTIAL, None)
+        return legacy(ReadinessMemberState.MISSING, None)
+    if current.artifact_state is ArtifactState.SUPERSEDED:
+        return legacy(ReadinessMemberState.SUPERSEDED, current)
+    if current.artifact_state is ArtifactState.PARTIAL:
+        return legacy(ReadinessMemberState.PARTIAL, current)
     if set_id is ResolverSetId.MORNING_BRIEF_INPUTS:
         reporter = store.current_head(
             principal_id, cycle_run_id, IntelligenceStage.REPORTER, area, None
         )
         if reporter is None or reporter.artifact_id != current.artifact_id:
-            return ReadinessMemberState.STALE, current, failed
+            return legacy(ReadinessMemberState.STALE, current)
         if _member_lineage_is_stale(
             store,
             principal_id=principal_id,
@@ -1035,8 +1224,8 @@ def _member_state(
             focus_area_id=area,
             artifact=current,
         ):
-            return ReadinessMemberState.STALE, current, failed
-    return ReadinessMemberState.READY, current, failed
+            return legacy(ReadinessMemberState.STALE, current)
+    return legacy(ReadinessMemberState.READY, current)
 
 
 def resolve_set(
@@ -1047,6 +1236,16 @@ def resolve_set(
     set_id: ResolverSetId,
     focus_area_id: FocusAreaId | None,
 ) -> dict[str, object]:
+    """Resolve one declared set's members and aggregate.
+
+    ``research_swarm``, ``synthesizer_inputs`` and ``reporter_input`` use the
+    shared eligibility predicate, so their eligible members (``READY`` or
+    ``PARTIAL``) are exactly what ``reports.commit`` accepts. Their aggregate is
+    ``BLOCKED`` with no eligible member, ``DEGRADED`` when any eligible member is
+    partial, and ``READY`` otherwise; an ineligible optional lane is reported
+    and never blocks. ``collectors`` and ``morning_brief_inputs`` keep the
+    every-member-required rule.
+    """
     cycle = store.get_cycle(principal_id, cycle_run_id)
     if cycle is None:
         raise NotFoundError(SafeDetail.CYCLE_RUN_ID)
@@ -1064,10 +1263,10 @@ def resolve_set(
     except ValueError:
         raise InvalidRequestError(SafeDetail.SET_ID) from None
     members: list[dict[str, object]] = []
+    verdicts: list[Eligibility] = []
     required = REQUIRED_MEMBERSHIP[set_id]
-    blocking = False
     for key, area, lane in members_spec:
-        state, artifact, run = _member_state(
+        verdict = _member_state(
             store,
             principal_id=principal_id,
             cycle_run_id=cycle_run_id,
@@ -1075,25 +1274,15 @@ def resolve_set(
             focus_area_id=area,
             source_lane=lane,
         )
-        if (
-            state
-            in {
-                ReadinessMemberState.MISSING,
-                ReadinessMemberState.FAILED,
-                ReadinessMemberState.STALE,
-                ReadinessMemberState.SUPERSEDED,
-            }
-            and required
-        ):
-            blocking = True
-        if state is ReadinessMemberState.PARTIAL and required:
-            blocking = True
+        verdicts.append(verdict)
+        artifact = verdict.artifact
+        run = verdict.run
         members.append(
             {
                 "member_id": key,
                 "focus_area_id": None if area is None else area.value,
                 "source_lane": None if lane is None else lane.value,
-                "readiness": state.value,
+                "readiness": verdict.state.value,
                 "required": required,
                 "artifact_id": None if artifact is None else artifact.artifact_id,
                 "producer_run_id": run.run_id
@@ -1103,15 +1292,27 @@ def resolve_set(
                 else artifact.producer_run_id,
                 "content_sha256": None if artifact is None else artifact.content_sha256,
                 "committed_at": None if artifact is None else artifact.committed_at.isoformat(),
-                "readiness_reason": state.value.lower(),
+                "readiness_reason": verdict.reason,
             }
         )
-    if blocking:
-        aggregate = ResolverAggregateState.BLOCKED
-    elif all(member["readiness"] == ReadinessMemberState.READY.value for member in members):
-        aggregate = ResolverAggregateState.READY
+    if set_id in _ELIGIBILITY_SETS:
+        eligible = [verdict for verdict in verdicts if verdict.eligible]
+        if not eligible:
+            aggregate = ResolverAggregateState.BLOCKED
+        elif any(verdict.state is ReadinessMemberState.PARTIAL for verdict in eligible):
+            aggregate = ResolverAggregateState.DEGRADED
+        else:
+            aggregate = ResolverAggregateState.READY
     else:
-        aggregate = ResolverAggregateState.DEGRADED
+        blocking = required and any(
+            verdict.state is not ReadinessMemberState.READY for verdict in verdicts
+        )
+        if blocking:
+            aggregate = ResolverAggregateState.BLOCKED
+        elif all(verdict.state is ReadinessMemberState.READY for verdict in verdicts):
+            aggregate = ResolverAggregateState.READY
+        else:
+            aggregate = ResolverAggregateState.DEGRADED
     return {
         "cycle_run_id": cycle.cycle_run_id,
         "cycle_id": cycle.cycle_id,

@@ -15,6 +15,7 @@ from my_pa.domain.intelligence.catalog import (
     MAX_ARTIFACT_BODY_BYTES,
     MAX_IDEMPOTENCY_KEY_LENGTH,
     MAX_STRUCTURED_CONTENT_BYTES,
+    MIN_SYNTHESIZER_DEPENDENCY_COUNT,
     REQUIRED_DEPENDENCY_COUNT,
     RESOLVER_SET_IDS,
     SOURCE_LANE_IDS,
@@ -34,6 +35,7 @@ from my_pa.domain.intelligence.catalog import (
     validate_stage_coordinates,
 )
 from my_pa.domain.intelligence.errors import (
+    DependencyRejection,
     IntelligenceConflictError,
     IntelligenceCoordinateError,
     IntelligenceDependencyError,
@@ -66,6 +68,7 @@ __all__ = [
     "MAX_ARTIFACT_BODY_BYTES",
     "MAX_IDEMPOTENCY_KEY_LENGTH",
     "MAX_STRUCTURED_CONTENT_BYTES",
+    "MIN_SYNTHESIZER_DEPENDENCY_COUNT",
     "REQUIRED_DEPENDENCY_COUNT",
     "RESOLVER_SET_IDS",
     "SOURCE_LANE_IDS",
@@ -73,6 +76,7 @@ __all__ = [
     "ArtifactKind",
     "ArtifactState",
     "CycleState",
+    "DependencyRejection",
     "FocusAreaId",
     "IntelligenceArtifact",
     "IntelligenceCommitReceipt",

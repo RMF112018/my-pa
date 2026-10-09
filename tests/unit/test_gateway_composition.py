@@ -201,3 +201,69 @@ def test_both_engines_connect_to_the_url_settings_validated() -> None:
         assert built.audit_engine.url is approved
     finally:
         built.close()
+
+
+A_MANAGER_CLIENT = "synthetic-knowledge-manager-client"
+A_CHECKPOINT_KEY = "k" * 32
+
+
+def _manager_only_settings() -> Settings:
+    """Only the manager list binds a client; the discovery list is empty."""
+    settings = Settings(
+        database_url=A_URL,
+        knowledge_manager_oauth_client_ids=A_MANAGER_CLIENT,
+        knowledge_checkpoint_signing_key=A_CHECKPOINT_KEY,
+    )
+    assert settings.knowledge_discovery_oauth_client_id_set() == frozenset()
+    return settings
+
+
+def test_the_composition_wires_a_manager_only_allowlist() -> None:
+    """KLP Step 8: the service holds the configured Knowledge Manager allowlist.
+
+    The manager set is the one server-owned source both the submit/checkpoint
+    gate and the Review authority derivation read. A composition root that
+    validates the setting but never hands it over leaves a build that started
+    cleanly and refuses every manager call.
+    """
+    settings = _manager_only_settings()
+    built = build_gateway_runtime(settings)
+    try:
+        assert built.service._knowledge_manager_client_ids == frozenset({A_MANAGER_CLIENT})
+        assert built.service._knowledge_manager_client_ids == (
+            settings.knowledge_manager_oauth_client_id_set()
+        )
+    finally:
+        built.close()
+
+
+def test_the_composition_seals_checkpoints_for_a_manager_only_build() -> None:
+    """KLP Step 8: a manager list alone switches the checkpoint seal on.
+
+    The discovery list is empty, so only the manager arm of the key condition can
+    have passed the key through. Without it every manager checkpoint is refused
+    `unsupported` although `Settings` required -- and got -- a valid key.
+    """
+    built = build_gateway_runtime(_manager_only_settings())
+    try:
+        seal = built.service._knowledge_checkpoint_seal
+        assert seal is not None
+        assert seal.key == A_CHECKPOINT_KEY.encode("utf-8")
+    finally:
+        built.close()
+
+
+def test_the_composition_binds_no_manager_and_no_seal_by_default() -> None:
+    """The control: with both Knowledge client lists empty nothing is bound or sealed.
+
+    The key is set on purpose, so the absent seal is the condition's doing and
+    not merely a missing key.
+    """
+    settings = Settings(database_url=A_URL, knowledge_checkpoint_signing_key=A_CHECKPOINT_KEY)
+    built = build_gateway_runtime(settings)
+    try:
+        assert built.service._knowledge_manager_client_ids == frozenset()
+        assert built.service._knowledge_discovery_client_ids == frozenset()
+        assert built.service._knowledge_checkpoint_seal is None
+    finally:
+        built.close()

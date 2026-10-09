@@ -73,7 +73,7 @@ KNOWLEDGE_OPERATOR_REVIEW_V1: Final = "knowledge-operator-review-v1"
 #: mapping holds only the narrowing profiles the knowledge-profile tooling plans).
 KNOWLEDGE_MANAGER_V1: Final = "knowledge-manager-v1"
 
-#: The discovery pair: only a bound discovery client may ever hold either.
+#: The discovery pair: only a bound discovery or Knowledge Manager client may ever hold either.
 KNOWLEDGE_DISCOVERY_ONLY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     {Capability.KNOWLEDGE_ASSERTIONS_SUBMIT, Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT}
 )

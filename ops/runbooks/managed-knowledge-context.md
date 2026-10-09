@@ -155,7 +155,11 @@ populates it. Every command below that writes is **operator-only**.
   is the existing vocabulary, so there is no migration. Any other remote client
   is an ordinary reviewer and cannot accept a `requires_operator` case. Accepted design
   residual R-1 applies: this proves the client holds the credential, not that
-  a human decided.
+  a human decided. A manager decision persists the same
+  `remote_operator_attested` / `remote_operator_review` pair as an
+  operator-review client and is distinguished only by
+  `authenticated_client_id`. The allowlist in force at decision time is not
+  persisted, so keep the settings history for attribution.
 - **Grants.** `remote_mcp.py grant` refuses `submit` and `checkpoint`, and
   refuses anything outside a bound client's profile. Install a bound client's
   profile with `knowledge-profile-plan`, then `knowledge-profile-apply --apply`.
@@ -202,9 +206,14 @@ strips or refuses them, and its profile tooling reports them as
    `knowledge.assertions.submit` and `knowledge.discovery.checkpoint` under
    `knowledge_assertion_observation` (write), with nothing revoked or replaced.
    Then run `profile-apply --apply`.
-5. Restart, then verify. `tools/list` shows both capabilities to the manager,
-   the rest of its grants are unchanged, and a non-manager client still sees
-   neither.
+5. Restart, then verify. Both canonical names are listed to the manager, the
+   rest of its grants are unchanged, and a non-manager client sees neither.
+   Where they are listed depends on publication. For a client on the
+   per-capability catalog they are `tools/list` entries. For a
+   compact-publication (ChatLLM façade) client `tools/list` shows only the
+   `my_pa.*` façade tools, so look up the canonical names through
+   `my_pa.describe` (its catalog, or an exact `capability` lookup). They are
+   invoked through the façade's invoke tools, not as tools of their own.
 
 ### Source profiles and maintenance (operator command)
 

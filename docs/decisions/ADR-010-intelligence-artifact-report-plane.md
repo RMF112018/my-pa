@@ -39,4 +39,4 @@ Decision 6 stands: the catalog stays in code. Its membership policy changes for 
 - A Synthesizer or Reporter over any partial input must itself be committed as `partial`.
 - `reports.record_run_state` refuses `succeeded` when the coordinate has no current artifact head.
 - Dependency refusals carry `dependency_report_ids` plus a reason token from the closed `SafeDetail` set.
-- `collectors`, `reporter_input` and `morning_brief_inputs` keep every member required. No migration and no new persisted value.
+- `reporter_input` keeps its single member required, but a PARTIAL synthesizer is eligible, so its aggregate is DEGRADED rather than BLOCKED. `collectors` and `morning_brief_inputs` keep the legacy blocking behaviour with every member required. No migration and no new persisted value.

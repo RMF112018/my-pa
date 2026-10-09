@@ -17,7 +17,7 @@ Fixture shapes are synthetic.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date
 
 import pytest
@@ -31,6 +31,7 @@ from my_pa.application.commands import (
     RecordIntelligenceRunState,
     ResolveIntelligenceSet,
 )
+from my_pa.application.intelligence import REASON_NOT_CURRENT_HEAD, artifact_eligibility
 from my_pa.application.producer_origin import ProducerOrigin
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.v1.envelope import ResponseEnvelope
@@ -50,6 +51,7 @@ from my_pa.domain.intelligence.catalog import (
     ResolverSetId,
     SourceLaneId,
 )
+from my_pa.domain.intelligence.models import IntelligenceArtifact
 from my_pa.domain.source.registry import issue_identifier
 from tests.conftest import WHEN, Scene, build_service, metadata_for, operator
 
@@ -335,7 +337,7 @@ def test_target_lane_subset_synthesizer_then_reporter_succeeds(
     }
     assert eligible == set(ids)
     synth = commit_ok(service, scene, synth_command(cycle, ids, f"target{len(lanes)}-s"))
-    assert set(read(service, scene, synth)["dependency_report_ids"]) == set(ids)  # type: ignore[arg-type]
+    assert set(read(service, scene, synth)["dependency_report_ids"]) == set(ids)  # type: ignore[call-overload]
     reporter = commit_ok(service, scene, reporter_command(cycle, (synth,), f"target{len(lanes)}-r"))
     assert read(service, scene, reporter)["dependency_report_ids"] == [synth]
     assert resolve(service, scene, cycle, ResolverSetId.REPORTER_INPUT)["aggregate"] == "READY"
@@ -619,6 +621,100 @@ def test_s3_collector_recommit_stales_researchers(scene: Scene) -> None:
         ErrorCode.CONFLICT,
         *STALE,
     )
+
+
+def test_n4_researcher_naming_a_replaced_collector_is_stale(scene: Scene) -> None:
+    """A Researcher commit naming a Collector that is no longer the head is refused."""
+    service, cycle, coll = fresh(scene, "n4")
+    collector(service, scene, cycle, "n4-c2")
+    assert_error(
+        attempt(
+            service,
+            scene,
+            command(
+                cycle=cycle,
+                stage=IntelligenceStage.RESEARCHER,
+                kind=ArtifactKind.RESEARCH_CONTEXT,
+                key="n4-r",
+                lane=SourceLaneId.SHAREPOINT,
+                dependencies=(coll,),
+            ),
+        ),
+        ErrorCode.CONFLICT,
+        *STALE,
+    )
+
+
+def _store_row(scene: Scene, artifact_id: str) -> tuple[tuple[str, str], IntelligenceArtifact]:
+    key = (scene.principal.principal_id, artifact_id)
+    return key, scene.world.intelligence.artifacts[key]
+
+
+@pytest.mark.parametrize("state", [ArtifactState.SUPERSEDED, ArtifactState.REJECTED])
+def test_n3a_state_guard_alone_refuses_a_current_non_consumable_row(
+    scene: Scene, state: ArtifactState
+) -> None:
+    """Isolates the state guard: the row is still the current head, only its state differs."""
+    tag = f"n3a-{state.value}"
+    service, cycle, coll = fresh(scene, tag)
+    bad = researcher(service, scene, cycle, coll, SourceLaneId.SHAREPOINT, f"{tag}-bad")
+    good = researcher(service, scene, cycle, coll, SourceLaneId.MY_PA, f"{tag}-good")
+    key, row = _store_row(scene, bad)
+    scene.world.intelligence.artifacts[key] = replace(row, artifact_state=state)
+    stored = scene.world.intelligence.artifacts[key]
+    assert stored.is_current and stored.artifact_state is state
+    verdict = artifact_eligibility(
+        scene.world.intelligence,
+        principal_id=scene.principal.principal_id,
+        cycle_run_id=cycle,
+        artifact=stored,
+    )
+    assert (verdict.state.value, verdict.reason, verdict.eligible) == (
+        "SUPERSEDED",
+        "superseded",
+        False,
+    )
+    resolved = resolve(service, scene, cycle, ResolverSetId.SYNTHESIZER_INPUTS)
+    member = by_lane(resolved)["sharepoint"]
+    assert (member["readiness"], member["readiness_reason"]) == ("SUPERSEDED", "superseded")
+    assert member["artifact_id"] == bad
+    assert by_lane(resolved)["my_pa"]["readiness"] == "READY"
+    assert_error(
+        attempt(service, scene, synth_command(cycle, (bad, good), f"{tag}-s")),
+        ErrorCode.CONFLICT,
+        *STALE,
+    )
+
+
+def test_n3b_current_head_guard_alone_refuses_a_final_non_head_row(scene: Scene) -> None:
+    """Isolates the head guard: a FINAL row, not current, while a v2 is the coordinate head."""
+    service, cycle, coll = fresh(scene, "n3b")
+    v1 = researcher(service, scene, cycle, coll, SourceLaneId.SHAREPOINT, "n3b-v1")
+    v2 = researcher(service, scene, cycle, coll, SourceLaneId.SHAREPOINT, "n3b-v2")
+    assert store_head_id(scene, cycle) == v2
+    key, row = _store_row(scene, v1)
+    scene.world.intelligence.artifacts[key] = replace(
+        row, artifact_state=ArtifactState.FINAL, is_current=False
+    )
+    stored = scene.world.intelligence.artifacts[key]
+    assert stored.artifact_state is ArtifactState.FINAL and not stored.is_current
+    verdict = artifact_eligibility(
+        scene.world.intelligence,
+        principal_id=scene.principal.principal_id,
+        cycle_run_id=cycle,
+        artifact=stored,
+    )
+    assert (verdict.state.value, verdict.reason, verdict.eligible) == (
+        "STALE",
+        REASON_NOT_CURRENT_HEAD,
+        False,
+    )
+    assert_error(
+        attempt(service, scene, synth_command(cycle, (v1,), "n3b-s")),
+        ErrorCode.CONFLICT,
+        *STALE,
+    )
+    assert commit_ok(service, scene, synth_command(cycle, (v2,), "n3b-s2"))
 
 
 def test_supersedes_mismatch_keeps_artifact_id_token(scene: Scene) -> None:

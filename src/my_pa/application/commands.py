@@ -4759,7 +4759,8 @@ class CommitIntelligenceArtifact:
     `dependency_wrong_focus`, `dependency_wrong_stage`,
     `dependency_duplicate_lane`, `dependency_count` or
     `dependency_partial_input` under `invalid_request`, and `dependency_stale`
-    under `conflict`, which a re-resolve and retry can clear.
+    under `conflict`, which a re-resolve and retry can clear. Morning brief
+    refusals keep the bare `dependency_report_ids` token, without a reason token.
     """
 
     capability: ClassVar[Capability] = Capability.REPORTS_COMMIT

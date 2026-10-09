@@ -87,7 +87,10 @@ subject and ownership is proven by reading `knowledge.entities`, and the seven
 `checkpoint` additionally serve only a remote client bound by
 `MY_PA_KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS` (KLP-WP-04; a Knowledge Review
 operator client is bound separately by
-`MY_PA_KNOWLEDGE_OPERATOR_REVIEW_OAUTH_CLIENT_IDS`, empty by default); none has
+`MY_PA_KNOWLEDGE_OPERATOR_REVIEW_OAUTH_CLIENT_IDS`, empty by default) or by
+`MY_PA_KNOWLEDGE_MANAGER_OAUTH_CLIENT_IDS` (KLP Step 8, empty by default: an
+ordinary ChatLLM client with additive Knowledge authority that may overlap the
+ChatLLM gateway allowlist, never the discovery or operator-review one); none has
 a default, so an unconfigured process withholds all four families from
 `capabilities.get` and from the MCP tool list, refuses them `unsupported` over
 HTTP, and reports readiness `degraded`. The default figure moved from fifty to

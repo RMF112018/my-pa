@@ -473,7 +473,12 @@ composition and in every MCP publication that composition produces.
   `MY_PA_KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS` or
   `MY_PA_KNOWLEDGE_OPERATOR_REVIEW_OAUTH_CLIENT_IDS`, and only
   `knowledge-profile-plan`/`knowledge-profile-apply` install a bound client's
-  exact profile; `chatllm-data-v8` (KLP-WP-05) adds `record_events.provenance`
+  exact profile (KLP Step 8: a client in
+  `MY_PA_KNOWLEDGE_MANAGER_OAUTH_CLIENT_IDS` is the one exception. It keeps the
+  ordinary profile, `profile-diff`/`profile-plan`/`profile-apply` expect `submit`
+  and `checkpoint` for it under `knowledge_assertion_observation`, and
+  `knowledge-profile-plan`/`knowledge-profile-apply` refuse it);
+  `chatllm-data-v8` (KLP-WP-05) adds `record_events.provenance`
   under `record_event_provenance_read` as `DATA_CONDITIONAL` on the same
   Knowledge plane switch, and binds discovery clients to `knowledge-discovery-v2`.
   That is repository desire only. Whether any deployed client holds those

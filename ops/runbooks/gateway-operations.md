@@ -63,9 +63,11 @@ entity plane together. KLP-WP-03 adds a fourth (KLP-WP-04 extends it): the seven
 behind `MY_PA_KNOWLEDGE_ASSERTIONS_ENABLED` and the entity plane together. None of
 the five has a default. Even with the plane composed, `knowledge.assertions.submit`
 and `knowledge.discovery.checkpoint` serve only a remote client listed in
-`MY_PA_KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS`. An HTTP or CLI call answers
-`unsupported`. A non-empty list also needs `MY_PA_KNOWLEDGE_CHECKPOINT_SIGNING_KEY`,
-or the process refuses to start. The Knowledge client bindings, the seal rotation
+`MY_PA_KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS` or, since KLP Step 8, in
+`MY_PA_KNOWLEDGE_MANAGER_OAUTH_CLIENT_IDS`, and only when that client holds the
+grant. An HTTP or CLI call answers `unsupported`. A non-empty discovery or
+manager list also needs `MY_PA_KNOWLEDGE_CHECKPOINT_SIGNING_KEY`, or the process
+refuses to start. The Knowledge client bindings, the seal rotation
 and the `apps/cli/knowledge_source_profiles.py` operator procedures are in
 [`managed-knowledge-context.md`](managed-knowledge-context.md).
 

@@ -112,10 +112,12 @@ ungranted planes from the `context.prepare` payload rather than naming them as
 denied. `context.prepare` plus `knowledge.search` does not name capture or
 continuity. `context.prepare` alone names no plane.
 
-## Knowledge discovery and operator-review clients
+## Knowledge discovery, operator-review and manager clients
 
-KLP-WP-04 adds two Knowledge client roles beside ChatLLM. Both bindings are
-process settings that an operator sets. They are not capabilities, and the
+KLP-WP-04 adds two Knowledge client roles beside ChatLLM, and KLP Step 8 adds a
+third, the Knowledge Manager. That makes four roles: ordinary ChatLLM,
+discovery, operator-review and Knowledge Manager. Every binding is a process
+setting that an operator sets. They are not capabilities, and the
 roles do not depend on grant rows. **Nothing here is commissioned.** Every
 allowlist is empty by default, so neither role exists until an operator
 populates it. Every command below that writes is **operator-only**.
@@ -124,15 +126,23 @@ populates it. Every command below that writes is **operator-only**.
 | --- | --- | --- |
 | `MY_PA_KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS` | empty | Remote clients bound to `knowledge-discovery-v2` (KLP-WP-05; `knowledge-discovery-v1` is history): `knowledge.assertions.submit`, `knowledge.discovery.checkpoint`, `knowledge.assertions.read`, `record_events.list` and `record_events.provenance`, intersected with the client's grants. Never `knowledge.assertions.create` or `review.decide`. |
 | `MY_PA_KNOWLEDGE_OPERATOR_REVIEW_OAUTH_CLIENT_IDS` | empty | Remote clients bound to `knowledge-operator-review-v1`: `review.list`, `review.decide` and `knowledge.assertions.read`. Populating it is operator decision **KLP-OD-005**. It must stay empty until that decision is recorded. |
-| `MY_PA_KNOWLEDGE_CHECKPOINT_SIGNING_KEY` | empty | 32 to 128 UTF-8 bytes, never logged (`repr=False`). Required whenever the discovery allowlist is non-empty. Without it every `knowledge.discovery.checkpoint` answers `unsupported`. |
+| `MY_PA_KNOWLEDGE_MANAGER_OAUTH_CLIENT_IDS` | empty | KLP Step 8. Exact-match remote clients bound to the additive `knowledge-manager-v1` overlay. A manager stays an ordinary broad ChatLLM client and is not narrowed. It keeps every capability it is granted. It may use `knowledge.assertions.submit` and `knowledge.discovery.checkpoint` only when it holds those grants, and its Knowledge `review.decide` is `remote_operator_attested`. `knowledge.assertions.create` semantics are unchanged (Step 9). |
+| `MY_PA_KNOWLEDGE_CHECKPOINT_SIGNING_KEY` | empty | 32 to 128 UTF-8 bytes, never logged (`repr=False`). Required whenever the discovery or manager allowlist is non-empty. A manager uses the same key and seal version as discovery. Without it every `knowledge.discovery.checkpoint` answers `unsupported`. |
 | `MY_PA_KNOWLEDGE_CHECKPOINT_SEAL_VERSION` | `1` | Envelope seal version, 1 to 32767. Bump it only through the rotation procedure below. |
 
 - **Disjoint allowlists.** Settings refuse a client id that appears in more
   than one of the discovery list, the operator-review list and
-  `MY_PA_MCP_CHATLLM_GATEWAY_OAUTH_CLIENT_IDS`.
-- **Deny overlay.** The gateway intersects a bound client's capabilities *and*
-  purposes with its profile. An unbound client never sees `submit` or
-  `checkpoint`. stdio MCP never lists them.
+  `MY_PA_MCP_CHATLLM_GATEWAY_OAUTH_CLIENT_IDS`. The manager list must be
+  disjoint from the discovery and operator-review lists but may overlap the
+  ChatLLM gateway list. That overlap is the intended manager shape.
+- **Deny overlay.** The gateway intersects a bound discovery or operator-review
+  client's capabilities *and* purposes with its profile. A manager's overlay
+  removes nothing. An unbound client never sees `submit` or `checkpoint`. stdio
+  MCP never lists them.
+- **Second service gate.** `submit` and `checkpoint` are also refused
+  `unsupported` by the service unless the OAuth-derived client id, never a
+  payload field, is in the discovery or manager list. A grant alone is not
+  enough.
 - **Provenance privacy.** `record_events.provenance` returns a Knowledge
   event's submission, causal root and depth, visible cited triggers and, for a
   Review promotion, the proposal, case and accepting decision. External run and
@@ -140,13 +150,18 @@ populates it. Every command below that writes is **operator-only**.
   caller) and are `null` for every other client. A withheld, foreign or
   non-Knowledge event answers `not_found` exactly as an unknown one.
 - **Review authority.** A Knowledge `review.decide` from an operator-review
-  client derives `remote_operator_attested` from the binding. Accepted design
+  client or a manager client derives `remote_operator_attested`, recorded on
+  channel `remote_operator_review` with the client id, from the binding. This
+  is the existing vocabulary, so there is no migration. Any other remote client
+  is an ordinary reviewer and cannot accept a `requires_operator` case. Accepted design
   residual R-1 applies: this proves the client holds the credential, not that
   a human decided.
 - **Grants.** `remote_mcp.py grant` refuses `submit` and `checkpoint`, and
   refuses anything outside a bound client's profile. Install a bound client's
   profile with `knowledge-profile-plan`, then `knowledge-profile-apply --apply`.
-  ChatLLM `profile-*` commands refuse a Knowledge-bound client. A client
+  ChatLLM `profile-*` commands refuse a discovery or operator-review client.
+  A manager is the reverse: `knowledge-profile-*` refuses it, and `profile-*`
+  plans its ordinary profile plus `submit` and `checkpoint`. A client
   installed under `knowledge-discovery-v1` before KLP-WP-05 re-runs
   `knowledge-profile-plan` / `knowledge-profile-apply --apply` for
   `knowledge-discovery-v2`, which adds only the `record_events.provenance`
@@ -165,6 +180,32 @@ python apps/cli/remote_mcp.py knowledge-profile-apply \
   --resource "$OAUTH_AUDIENCE" --profile knowledge-discovery-v2 --apply
 ```
 
+### Commissioning a Knowledge Manager client (KLP Step 8)
+
+**Nothing here is commissioned.** Every step is **operator-only**. Add the
+grants only after a build containing KLP Step 8 is deployed. An older build
+strips or refuses them, and its profile tooling reports them as
+`unexpected_control_plane`.
+
+1. Set `MY_PA_KNOWLEDGE_MANAGER_OAUTH_CLIENT_IDS` to the exact client id. It may
+   stay in `MY_PA_MCP_CHATLLM_GATEWAY_OAUTH_CLIENT_IDS`. It must not be in the
+   discovery or operator-review list.
+2. Make sure `MY_PA_KNOWLEDGE_CHECKPOINT_SIGNING_KEY` is set (32 to 128 UTF-8
+   bytes). Without it the process refuses to start.
+3. Provision a source profile for the manager client with
+   `knowledge_source_profiles.py apply --file <json>` (below). Submit and
+   checkpoint answer `not_found(provenance)` until the client has an active
+   profile.
+4. Run `profile-plan` (shape under [Activation sequence](#activation-sequence)).
+   The plan reports `knowledge_role: manager`. For a client already converged
+   on `chatllm-data-v8`, its `add` set must be exactly
+   `knowledge.assertions.submit` and `knowledge.discovery.checkpoint` under
+   `knowledge_assertion_observation` (write), with nothing revoked or replaced.
+   Then run `profile-apply --apply`.
+5. Restart, then verify. `tools/list` shows both capabilities to the manager,
+   the rest of its grants are unchanged, and a non-manager client still sees
+   neither.
+
 ### Source profiles and maintenance (operator command)
 
 `apps/cli/knowledge_source_profiles.py` is an operator command, not a
@@ -175,7 +216,7 @@ provisions nothing.
 
 | Subcommand | Procedure |
 | --- | --- |
-| `apply --file <json>` (alias `provision`) | Create or update discovery source profiles: client, origin system, `scope` or `scope_digest`, authority ceiling, direct admission. It refuses OneDrive, direct admission without `read_only_proof_state = proven` and an `authoritative_source` ceiling, and a client that is not in the discovery allowlist. An active binding's authority ceiling cannot change: disable the profile and provision a new one. |
+| `apply --file <json>` (alias `provision`) | Create or update discovery source profiles: client, origin system, `scope` or `scope_digest`, authority ceiling, direct admission. It refuses OneDrive, direct admission without `read_only_proof_state = proven` and an `authoritative_source` ceiling, and a client that is in neither the discovery nor the Knowledge Manager allowlist. An active binding's authority ceiling cannot change: disable the profile and provision a new one. |
 | `list` | Print this Principal's profiles. |
 | `disable --source-profile-id kdsp_...` | Disable one profile. This is terminal. Later submits and checkpoints are refused with `source_profile_inactive`. |
 | `classify-evidence --evidence-ref kaevd_... --classification restricted_local` | Raise one evidence row and every sibling row (same object, same origin) to `restricted_local`, and redact their excerpts. Linked assertions are raised in batches of at most 128. Run it again until `remaining` is 0. |
@@ -184,8 +225,9 @@ provisions nothing.
 
 ### Checkpoint signing key and seal rotation (R6 section 7)
 
-1. Empty `MY_PA_KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS`, or `disable` the
-   affected profiles, and restart.
+1. Empty `MY_PA_KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS` and
+   `MY_PA_KNOWLEDGE_MANAGER_OAUTH_CLIENT_IDS`, or `disable` the affected
+   profiles, and restart.
 2. Set the new `MY_PA_KNOWLEDGE_CHECKPOINT_SIGNING_KEY` and increment
    `MY_PA_KNOWLEDGE_CHECKPOINT_SEAL_VERSION`.
 3. Run `apps/cli/knowledge_source_profiles.py redact-sealed --below-seal <new

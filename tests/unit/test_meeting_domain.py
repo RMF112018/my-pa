@@ -758,12 +758,50 @@ def test_update_status_and_schedule() -> None:
         _update(start_at=datetime(2026, 1, 1))
 
 
-def test_update_has_no_series_fields() -> None:
-    # Series membership is immutable (AC-007): update carries no selector.
-    with pytest.raises(TypeError):
-        _update(title="x", meeting_series_id=SERIES)
+def test_update_series_membership_has_three_states() -> None:
+    # Operator decision 2026-10-09, retiring AC-007: absent, attach/move, detach.
+    absent = _update(title="x")
+    assert (absent.meeting_series_id, absent.detach_series) == (None, False)
+    moved = _update(meeting_series_id=SERIES)
+    assert (moved.meeting_series_id, moved.detach_series) == (SERIES, False)
+    detached = _update(detach_series=True)
+    assert (detached.meeting_series_id, detached.detach_series) == (None, True)
+    assert len({absent, moved, detached}) == 3
+
+
+def test_update_still_rejects_series_title() -> None:
+    # Update never creates a series: there is no `series_title` field.
     with pytest.raises(TypeError):
         _update(title="x", series_title="y")
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [MEETING, PROJECT, "mser_short", "mser_" + "a" * 65, "", 7, SERIES.encode()],
+    ids=["meeting-id", "project-id", "too-short", "too-long", "empty", "integer", "bytes"],
+)
+def test_update_refuses_a_malformed_series_id(malformed: object) -> None:
+    with _refused(MeetingErrorField.MEETING_SERIES_ID):
+        _update(meeting_series_id=malformed)
+
+
+def test_update_refuses_a_series_id_together_with_detach() -> None:
+    with _refused(MeetingErrorField.MEETING_SERIES_ID):
+        _update(meeting_series_id=SERIES, detach_series=True)
+    with _refused(MeetingErrorField.MEETING_SERIES_ID):
+        _update(title="x", meeting_series_id=SERIES, detach_series=True)
+
+
+def test_update_refuses_a_non_boolean_detach() -> None:
+    with _refused(MeetingErrorField.MEETING_SERIES_ID):
+        _update(title="x", detach_series=1)
+
+
+def test_update_series_change_alone_is_material() -> None:
+    assert _update(detach_series=True).has_material_selector
+    assert _update(meeting_series_id=SERIES).has_material_selector
+    with _refused(MeetingErrorField.MUTATIONS):
+        _update(detach_series=False)
 
 
 def test_series_update_is_title_only() -> None:

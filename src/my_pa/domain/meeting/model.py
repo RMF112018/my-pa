@@ -744,9 +744,20 @@ class MeetingUpdateRequest:
     `None` on a scalar means *omitted* (unchanged), never a clear: a clear is
     only ever a `clear_fields` member. `attendees_replace is None` means
     unchanged; `()` means replace the active set with the empty set. Collections
-    are sorted, so two semantically identical requests compare equal. There is
-    no series field: series membership is immutable (AC-007). `expected_version`
-    and the idempotency key are parameters of the application call.
+    are sorted, so two semantically identical requests compare equal.
+    `expected_version` and the idempotency key are parameters of the application
+    call.
+
+    Series membership is reassignable through `meetings.update` (operator
+    decision 2026-10-09, retiring AC-007): an absent `meeting_series_id` leaves
+    membership unchanged; a series id attaches or moves the Meeting to an
+    existing series of the same principal (a missing or foreign series is
+    refused as not found); an explicit null detaches it to standalone. The
+    Meeting keeps its identity; a change bumps its version and is recorded in
+    its history, receipt and Record Event. Here the three states are
+    `meeting_series_id is None and not detach_series` (absent), a validated
+    `meeting_series_id` (attach or move) and `detach_series=True` (detach); both
+    together is invalid. `series_title` is never accepted on update.
     """
 
     meeting_id: str
@@ -765,9 +776,18 @@ class MeetingUpdateRequest:
     attachment_remove_ids: tuple[str, ...] = ()
     notes_mode: MeetingNotesMode | None = None
     notes_markdown: str | None = None
+    meeting_series_id: str | None = None
+    detach_series: bool = False
 
     def __post_init__(self) -> None:
         _identifier(self.meeting_id, IdKind.MEETING, MeetingErrorField.MEETING_ID)
+        if not isinstance(self.detach_series, bool):
+            raise _invalid(MeetingErrorField.MEETING_SERIES_ID)
+        if self.detach_series and self.meeting_series_id is not None:
+            raise _invalid(MeetingErrorField.MEETING_SERIES_ID)
+        _optional_identifier(
+            self.meeting_series_id, IdKind.MEETING_SERIES, MeetingErrorField.MEETING_SERIES_ID
+        )
         if self.title is not None:
             validate_meeting_title(self.title)
         start_at = (
@@ -855,7 +875,8 @@ class MeetingUpdateRequest:
         """Whether at least one mutation was requested.
 
         Empty `clear_fields` and empty attachment arrays request nothing. A
-        present `attendees_replace`, even empty, requests a replacement.
+        present `attendees_replace`, even empty, requests a replacement. A series
+        id or `detach_series` requests a membership change.
         """
         scalars = (
             self.title,
@@ -869,9 +890,11 @@ class MeetingUpdateRequest:
             self.project_id,
             self.notes_mode,
             self.attendees_replace,
+            self.meeting_series_id,
         )
         return (
             any(value is not None for value in scalars)
+            or self.detach_series
             or bool(self.clear_fields)
             or bool(self.attachment_add_document_ids)
             or bool(self.attachment_remove_ids)

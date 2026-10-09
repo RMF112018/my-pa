@@ -38,7 +38,7 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from enum import StrEnum
+from enum import Enum, StrEnum
 from types import MappingProxyType
 from typing import Any, ClassVar, Final
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -10034,6 +10034,22 @@ def _meeting_expected_version(value: object) -> int:
     return value
 
 
+class _SeriesOmitted(Enum):
+    """`UpdateMeeting.meeting_series_id` the caller did not send.
+
+    A third state beside a series id and JSON null, so the three wire states of
+    the series selector survive into the command: omitted leaves membership
+    unchanged, null detaches. Module-private: it never reaches the published
+    schema (the field's overlay states the wire shape) or the domain request.
+    """
+
+    OMITTED = "omitted"
+
+
+#: The default of `UpdateMeeting.meeting_series_id`: the key was not sent.
+_SERIES_OMITTED: Final = _SeriesOmitted.OMITTED
+
+
 def _meeting_id_schema(kind: IdKind, description: str) -> dict[str, object]:
     """The published identifier grammar for one Meeting-plane identifier kind."""
     return {
@@ -10445,8 +10461,11 @@ class UpdateMeeting:
     null. `attendees_replace` replaces the active attendee set (an empty array
     clears it). Attachments are added and removed as relations; the documents are
     never touched. `notes_mode` and `notes_markdown` come together. Series
-    membership cannot change here: `meeting_series_id` and `series_title` are not
-    fields. A request that changes nothing records a no_op receipt; a stale
+    membership is reassignable (operator decision 2026-10-09): omit
+    `meeting_series_id` to leave it unchanged, send an existing series id of
+    yours to attach or move the Meeting (a missing or foreign series is
+    not_found), or send null to detach it to standalone. `series_title` is not a
+    field. A request that changes nothing records a no_op receipt; a stale
     `expected_version` is conflict and writes nothing.
 
     The principal is not here. Authority comes from authenticated context.
@@ -10479,6 +10498,14 @@ class UpdateMeeting:
                 "description": "Attachment relations to detach; the documents are unchanged.",
             },
             "notes_mode": {"description": "append adds to the current note; replace rewrites it."},
+            "meeting_series_id": {
+                **_meeting_id_schema(
+                    IdKind.MEETING_SERIES,
+                    "Omit to leave series membership unchanged; an existing series of yours "
+                    "attaches or moves this Meeting to it; null detaches it to standalone.",
+                ),
+                "type": ["string", "null"],
+            },
             "allOf": [
                 {"if": {"required": ["notes_mode"]}, "then": {"required": ["notes_markdown"]}},
                 {"if": {"required": ["notes_markdown"]}, "then": {"required": ["notes_mode"]}},
@@ -10514,6 +10541,7 @@ class UpdateMeeting:
     attachment_remove_ids: tuple[str, ...] = ()
     notes_mode: MeetingNotesMode | None = None
     notes_markdown: str | None = field(default=None, repr=False)
+    meeting_series_id: str | _SeriesOmitted | None = _SERIES_OMITTED
 
     def __post_init__(self) -> None:
         _identifier(self.meeting_id, IdKind.MEETING, SafeDetail.MEETING_ID)
@@ -10559,6 +10587,12 @@ class UpdateMeeting:
                 attachment_remove_ids=removed,
                 notes_mode=self.notes_mode,
                 notes_markdown=self.notes_markdown,
+                meeting_series_id=(
+                    None
+                    if isinstance(self.meeting_series_id, _SeriesOmitted)
+                    else self.meeting_series_id
+                ),
+                detach_series=self.meeting_series_id is None,
             )
         )
 

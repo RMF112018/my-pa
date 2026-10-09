@@ -32,10 +32,12 @@ SHARE` in ascending id, the existing series read without a lock or a new series
 and its receipt, the Meeting, its attendees in digest order, its attachments,
 its receipt, its first note version, then completion. Update: digest, reserve,
 Meeting `FOR UPDATE`, version gate, nonlocking reference reads, Entities `FOR
-SHARE`, the exact no-op/material delta, the core row and child retire/insert,
+SHARE`, a target series read without a lock (only when the request reassigns
+membership), the exact no-op/material delta, the core row and child retire/insert,
 one receipt, the note version, completion. Series update: digest, reserve,
 series `FOR UPDATE`, version gate, the title, one receipt, completion. No child
-row is locked, and no Project or ManagedDocument is locked at all.
+row is locked, and no Project, ManagedDocument or MeetingSeries read by a
+Meeting write is locked at all.
 
 **Replay answers with the original receipt and the current state** (section
 35.7): the receipt the request row names, beside a fresh read of the aggregate,
@@ -258,6 +260,14 @@ def _update_document(
         document, "notes_mode", None if request.notes_mode is None else request.notes_mode.value
     )
     _present(document, "notes_markdown", request.notes_markdown)
+    # Series membership (operator decision 2026-10-09, retiring AC-007): the key
+    # appears only when the caller sent it -- the id to attach or move, JSON null
+    # to detach. Absent adds no key, so every pre-existing request digest is
+    # byte-identical to what it was before membership became reassignable.
+    if request.detach_series:
+        document["meeting_series_id"] = None
+    else:
+        _present(document, "meeting_series_id", request.meeting_series_id)
     return document
 
 
@@ -788,6 +798,17 @@ class MeetingApplication:
         _require_documents(meetings, principal_id, request.attachment_add_document_ids)
         if request.attendees_replace is not None:
             _require_active_people(meetings, principal_id, request.attendees_replace)
+        # Series reassignment (operator decision 2026-10-09, retiring AC-007).
+        # Checked last, as create checks it after the project, documents and
+        # people, and only after the lock and the `expected_version` gate, so a
+        # stale version still wins over a missing or foreign series. The read is
+        # principal-scoped and read-only, exactly as create's occurrence path:
+        # a missing and a foreign series are the same not-found refusal, and
+        # neither series is locked or versioned.
+        if request.meeting_series_id is not None and (
+            meetings.read_owned_series(principal_id, request.meeting_series_id) is None
+        ):
+            raise MeetingNotFoundError(MeetingErrorField.MEETING_SERIES_ID)
 
         record, scalar_fields = _updated_record(current, request, at)
 
@@ -842,11 +863,14 @@ class MeetingApplication:
             recorded_at=at,
         )
         # The receipt, the note linkage and the completed request all name the
-        # Meeting's own series, which update can never change (WP-MTG-02 F-05).
+        # Meeting's post-write series (WP-MTG-02 F-05): `record` carries the
+        # target series, which is the current one unless this request reassigns
+        # it (operator decision 2026-10-09, retiring AC-007). A no_op leaves it
+        # equal to the current series.
         meetings.insert_meeting_history(
             principal_id,
             receipt,
-            meeting_series_id=current.meeting_series_id,
+            meeting_series_id=record.meeting_series_id,
             idempotency_key=key,
             request_digest=digest,
         )
@@ -866,7 +890,7 @@ class MeetingApplication:
                 ),
             )
         view = _current_meeting(meetings, principal_id, current.meeting_id)
-        if view.meeting_series_id != current.meeting_series_id or view.version != after_version:
+        if view.meeting_series_id != record.meeting_series_id or view.version != after_version:
             raise RepositoryFailureError
         meetings.complete_write_request(
             principal_id,
@@ -874,7 +898,7 @@ class MeetingApplication:
             key,
             request_digest=digest,
             meeting_id=current.meeting_id,
-            meeting_series_id=current.meeting_series_id,
+            meeting_series_id=record.meeting_series_id,
             meeting_history_id=receipt.history_id,
             meeting_series_history_id=None,
             result_version=after_version,
@@ -1030,8 +1054,13 @@ def _updated_record(
     that differ (sorted; empty when nothing scalar changes).
 
     Omitted means unchanged; a `clear_fields` member means NULL, and wins over
-    a value supplied for the same field (module docstring, ruling R3-02). Series
-    membership, identity and creation time are carried over unchanged.
+    a value supplied for the same field (module docstring, ruling R3-02).
+    Identity and creation time are carried over unchanged. Series membership is
+    reassignable (operator decision 2026-10-09, retiring AC-007): an absent
+    `meeting_series_id` keeps the current series, a series id moves to it, and
+    `detach_series` makes the Meeting standalone. It is a scalar like the rest:
+    named in the changed fields only when it differs, so the same series, or a
+    detach of a standalone Meeting, is unchanged.
     """
     clears = frozenset(request.clear_fields)
 
@@ -1059,6 +1088,13 @@ def _updated_record(
     )
     description = patched(request.description, current.description, MeetingClearField.DESCRIPTION)
     project_id = patched(request.project_id, current.project_id, MeetingClearField.PROJECT_ID)
+    meeting_series_id: str | None
+    if request.detach_series:
+        meeting_series_id = None
+    elif request.meeting_series_id is not None:
+        meeting_series_id = request.meeting_series_id
+    else:
+        meeting_series_id = current.meeting_series_id
 
     # The resulting schedule, not only the supplied pair, must be ordered: a
     # later start alone can overtake the stored end.
@@ -1073,7 +1109,7 @@ def _updated_record(
 
     record = MeetingRecord(
         meeting_id=current.meeting_id,
-        meeting_series_id=current.meeting_series_id,
+        meeting_series_id=meeting_series_id,
         title=title,
         start_at=start_at,
         end_at=end_at,
@@ -1102,6 +1138,7 @@ def _updated_record(
         "virtual_meeting_url": current.virtual_meeting_url,
         "description": current.description,
         "project_id": current.project_id,
+        "meeting_series_id": current.meeting_series_id,
     }
     after: dict[str, object] = {
         "title": title,
@@ -1114,6 +1151,7 @@ def _updated_record(
         "virtual_meeting_url": virtual_meeting_url,
         "description": description,
         "project_id": project_id,
+        "meeting_series_id": meeting_series_id,
     }
     return record, field_set(*(name for name, value in after.items() if before[name] != value))
 

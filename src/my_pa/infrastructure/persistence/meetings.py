@@ -773,7 +773,6 @@ class SqlMeetingRepository(MeetingRepository):
                     principal_id,
                     {
                         "meeting_id": meeting.meeting_id,
-                        "meeting_series_id": meeting.meeting_series_id,
                         "created_at": meeting.created_at,
                         **_mutable_meeting_values(meeting),
                     },
@@ -1224,8 +1223,19 @@ class SqlMeetingRepository(MeetingRepository):
 
 
 def _mutable_meeting_values(meeting: MeetingRecord) -> dict[str, object]:
-    """The columns an update may rewrite: everything but identity, series and creation."""
+    """The columns an update may rewrite: everything but identity and creation.
+
+    `meeting_series_id` is among them (operator decision 2026-10-09, retiring
+    AC-007): series membership is written in the same UPDATE, under the
+    Meeting's existing `FOR UPDATE` lock and `expected_version` gate. Neither
+    the old nor the new series is locked or version-bumped, exactly as create
+    reads an existing series without a lock: a series is never deleted (its
+    foreign keys are RESTRICT), the composite foreign key `(meeting_series_id,
+    principal_id)` enforces same-principal custody structurally, and a series
+    version covers only the series' own fields, never its occurrence set.
+    """
     return {
+        "meeting_series_id": meeting.meeting_series_id,
         "title": meeting.title,
         "start_at": meeting.start_at,
         "end_at": meeting.end_at,

@@ -46,6 +46,7 @@ from my_pa.contracts.v1.meetings import (
     MeetingHistoryView,
     MeetingSeriesHistoryView,
     MeetingSeriesView,
+    MeetingView,
 )
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.documents.managed import DocumentState
@@ -1476,43 +1477,62 @@ def test_share_locked_entities_answer_ascending_with_type_and_status(
     )
 
 
-def test_an_update_rewrites_scalars_but_never_the_series_or_creation(
+def test_an_update_rewrites_scalars_and_the_series_but_never_creation(
     engine: Engine, stage: Stage
 ) -> None:
+    """Series membership is reassignable (operator decision 2026-10-09, retiring
+    AC-007): the UPDATE writes `meeting_series_id`, never `created_at`, and
+    neither the old nor the new series row is touched."""
     principal = stage.mine.principal_id
     series = _series("Canonical series title")
+    target = _series("Target series title")
     with engine.begin() as connection:
         _repository(connection).insert_series(principal, series)
+        _repository(connection).insert_series(principal, target)
     meeting = _created(engine, principal, meeting_series_id=series.meeting_series_id)
-    changed = MeetingRecord(
-        **{
-            **{field: getattr(meeting, field) for field in MeetingRecord.__dataclass_fields__},
-            "meeting_series_id": None,
-            "created_at": NOW,
-            "title": "Renamed occurrence",
-            "status": MeetingStatus.CANCELLED,
-            "cancelled_at": NOW,
-            "version": 2,
-            "updated_at": NOW,
-        }
-    )
-    with engine.begin() as connection:
-        repository = _repository(connection)
-        locked = repository.lock_meeting_for_update(principal, meeting.meeting_id)
-        assert locked is not None
-        assert locked.version == 1
-        repository.update_meeting(principal, changed)
-    with engine.connect() as connection:
-        view = _repository(connection).read_meeting(principal, meeting.meeting_id)
-    assert view is not None
-    assert view.meeting_series_id == series.meeting_series_id
-    assert view.series_title == "Canonical series title"
-    assert view.created_at == T0
-    assert (view.title, view.status, view.version) == (
+
+    def rewrite(version: int, meeting_series_id: str | None) -> MeetingView:
+        changed = MeetingRecord(
+            **{
+                **{field: getattr(meeting, field) for field in MeetingRecord.__dataclass_fields__},
+                "meeting_series_id": meeting_series_id,
+                "created_at": NOW,
+                "title": "Renamed occurrence",
+                "status": MeetingStatus.CANCELLED,
+                "cancelled_at": NOW,
+                "version": version + 1,
+                "updated_at": NOW,
+            }
+        )
+        with engine.begin() as connection:
+            repository = _repository(connection)
+            locked = repository.lock_meeting_for_update(principal, meeting.meeting_id)
+            assert locked is not None
+            assert locked.version == version
+            repository.update_meeting(principal, changed)
+        with engine.connect() as connection:
+            view = _repository(connection).read_meeting(principal, meeting.meeting_id)
+        assert view is not None
+        return view
+
+    moved = rewrite(1, target.meeting_series_id)
+    assert moved.meeting_series_id == target.meeting_series_id
+    assert moved.series_title == "Target series title"
+    assert moved.created_at == T0
+    assert (moved.title, moved.status, moved.version) == (
         "Renamed occurrence",
         MeetingStatus.CANCELLED,
         2,
     )
+    detached = rewrite(2, None)
+    assert detached.meeting_series_id is None
+    assert detached.series_title is None
+    assert detached.created_at == T0
+    assert detached.version == 3
+    with engine.connect() as connection:
+        repository = _repository(connection)
+        assert repository.read_owned_series(principal, series.meeting_series_id) == series
+        assert repository.read_owned_series(principal, target.meeting_series_id) == target
 
 
 def test_a_full_read_assembles_the_view_in_its_deterministic_order(

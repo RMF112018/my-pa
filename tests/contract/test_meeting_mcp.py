@@ -28,7 +28,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Final, get_args
 
 import jsonschema
@@ -58,6 +58,7 @@ from my_pa.application.commands import (
     UpdateMeetingSeries,
 )
 from my_pa.application.errors import InvalidRequestError, SafeDetail
+from my_pa.application.meetings import meeting_request_digest
 from my_pa.application.service import _HANDLERS, ApplicationService
 from my_pa.contracts.ports import RepositoryFailureError
 from my_pa.contracts.v1.envelope import ResponseEnvelope
@@ -76,9 +77,15 @@ from my_pa.domain.meeting.model import (
     MEETINGS_CREATE_NAME,
     MEETINGS_SERIES_UPDATE_NAME,
     MEETINGS_UPDATE_NAME,
+    AttendeeResponseStatus,
+    MeetingClearField,
     MeetingErrorField,
+    MeetingNotesMode,
     MeetingSortDirection,
+    MeetingStatus,
     MeetingTimeScope,
+    MeetingUpdateRequest,
+    normalize_attendee,
 )
 from my_pa.domain.policy.decision import _SCOPELESS
 from my_pa.domain.source.registry import issue_identifier
@@ -342,7 +349,10 @@ def test_update_schema_encodes_the_pairing_and_project_clear_rules() -> None:
     properties = schema["properties"]
     assert schema["additionalProperties"] is False
     assert schema["required"] == ["meeting_id", "expected_version", "idempotency_key"]
-    assert "meeting_series_id" not in properties
+    # Series membership is reassignable (operator decision 2026-10-09, retiring
+    # AC-007); a new series is never created here.
+    assert properties["meeting_series_id"]["type"] == ["string", "null"]
+    assert properties["meeting_series_id"]["pattern"] == _id_pattern(IdKind.MEETING_SERIES)
     assert "series_title" not in properties
     assert properties["expected_version"]["minimum"] == 1
     assert properties["clear_fields"]["items"]["enum"] == [
@@ -375,26 +385,137 @@ def test_update_schema_encodes_the_pairing_and_project_clear_rules() -> None:
             "project_id": make_identifier(IdKind.PROJECT, "schemaproject001"),
             "clear_fields": ["project_id"],
         },
-        {"meeting_series_id": make_identifier(IdKind.MEETING_SERIES, "schemaseries0001")},
+        {"meeting_series_id": make_identifier(IdKind.MEETING, "schemameeting001")},
         {"series_title": "A synthetic series"},
     ):
         with pytest.raises(jsonschema.ValidationError):
             jsonschema.validate({**base, **broken}, schema)
 
 
-@pytest.mark.parametrize("field", ["meeting_series_id", "series_title"])
-def test_an_update_naming_a_series_field_is_refused(field: str) -> None:
-    """Series membership is immutable: the field does not exist on the command."""
+def test_an_update_naming_a_series_title_is_refused() -> None:
+    """`series_title` is never an update field: update does not create a series."""
     payload = {
         "meeting_id": make_identifier(IdKind.MEETING, "schemameeting001"),
         "expected_version": 1,
         "idempotency_key": "k",
         "title": "Retitled",
-        field: make_identifier(IdKind.MEETING_SERIES, "schemaseries0001")
-        if field == "meeting_series_id"
-        else "A series",
+        "series_title": "A series",
     }
     assert _refusal(Capability.MEETINGS_UPDATE, payload) == ()
+
+
+_SERIES_UPDATE_BASE: Final[dict[str, Any]] = {
+    "meeting_id": make_identifier(IdKind.MEETING, "schemameeting001"),
+    "expected_version": 1,
+    "idempotency_key": "k",
+}
+_TARGET_SERIES: Final = make_identifier(IdKind.MEETING_SERIES, "schemaseries0001")
+
+
+def test_the_update_schema_admits_a_series_id_null_and_absence() -> None:
+    """Operator decision 2026-10-09: the three wire states are all schema-valid."""
+    schema = payload_schema_for(UpdateMeeting)
+    jsonschema.validate({**_SERIES_UPDATE_BASE, "title": "x"}, schema)
+    jsonschema.validate({**_SERIES_UPDATE_BASE, "meeting_series_id": _TARGET_SERIES}, schema)
+    jsonschema.validate({**_SERIES_UPDATE_BASE, "meeting_series_id": None}, schema)
+    for malformed in ("mser_short", "series-1", 7):
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate({**_SERIES_UPDATE_BASE, "meeting_series_id": malformed}, schema)
+
+
+def _normalized_update(payload: Mapping[str, Any]) -> Any:  # noqa: ANN401 - the request
+    _, command = normalize(
+        Capability.MEETINGS_UPDATE.value, _request(Capability.MEETINGS_UPDATE, payload)
+    )
+    assert isinstance(command, UpdateMeeting)
+    return command.meeting_request()
+
+
+def test_the_three_series_wire_states_normalize_to_three_domain_states() -> None:
+    absent = _normalized_update({**_SERIES_UPDATE_BASE, "title": "x"})
+    moved = _normalized_update({**_SERIES_UPDATE_BASE, "meeting_series_id": _TARGET_SERIES})
+    detached = _normalized_update({**_SERIES_UPDATE_BASE, "meeting_series_id": None})
+    assert (absent.meeting_series_id, absent.detach_series) == (None, False)
+    assert (moved.meeting_series_id, moved.detach_series) == (_TARGET_SERIES, False)
+    assert (detached.meeting_series_id, detached.detach_series) == (None, True)
+    # A series change alone is a material request, not an empty patch.
+    assert moved.has_material_selector
+    assert detached.has_material_selector
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        make_identifier(IdKind.MEETING, "schemameeting001"),
+        "mser_short",
+        "not-an-identifier",
+        7,
+        ["mser_schemaseries0001"],
+    ],
+    ids=["meeting-id", "too-short", "no-prefix", "integer", "array"],
+)
+def test_a_malformed_series_id_is_invalid_request_on_meeting_series_id(malformed: object) -> None:
+    payload = {**_SERIES_UPDATE_BASE, "meeting_series_id": malformed}
+    assert _refusal(Capability.MEETINGS_UPDATE, payload) == (SafeDetail.MEETING_SERIES_ID.value,)
+
+
+# The update digest across series reassignment. The digest names
+# `meeting_series_id` only when the caller sent it, so every digest an existing
+# caller produces -- stored in `meeting_write_requests` and compared on replay --
+# is byte-identical to the one computed before the field existed.
+
+_DIGEST_PRINCIPAL: Final = "prn_aaaa1111bbbb"
+_DIGEST_START: Final = datetime(2026, 10, 1, 14, 0, tzinfo=UTC)
+#: `meeting_request_digest` of `_digest_request()` at expected_version 3, computed
+#: on base commit 4cb7834b, before `meetings.update` had a series field.
+_PRE_REASSIGNMENT_DIGEST: Final = "b1bf001aefaf4db88ad7ea68d0a2afad50684059ba63f7d3f3f2120cda7ebcb6"
+
+
+def _digest_request(**series: Any) -> MeetingUpdateRequest:  # noqa: ANN401 - series fields
+    """Every pre-existing update field at once, plus `series` when given."""
+    return MeetingUpdateRequest(
+        meeting_id=make_identifier(IdKind.MEETING, "aaaa1111bbbb"),
+        title="Weekly sync",
+        start_at=_DIGEST_START,
+        end_at=_DIGEST_START + timedelta(minutes=30),
+        timezone_name="America/New_York",
+        status=MeetingStatus.SCHEDULED,
+        location_text="Room 4",
+        project_id=make_identifier(IdKind.PROJECT, "aaaa1111bbbb"),
+        clear_fields=(MeetingClearField.DESCRIPTION,),
+        attendees_replace=(
+            normalize_attendee(
+                display_name="Ada",
+                email="Ada@Example.com",
+                is_organizer=True,
+                response_status=AttendeeResponseStatus.ACCEPTED,
+            ),
+        ),
+        attachment_add_document_ids=(make_identifier(IdKind.MANAGED_DOCUMENT, "bbbb2222bbbb"),),
+        attachment_remove_ids=(make_identifier(IdKind.MEETING_ATTACHMENT, "aaaa1111aaaa"),),
+        notes_mode=MeetingNotesMode.APPEND,
+        notes_markdown="Decided **x**.",
+        **series,
+    )
+
+
+def _update_digest(request: MeetingUpdateRequest) -> str:
+    return meeting_request_digest(
+        MEETINGS_UPDATE_NAME, _DIGEST_PRINCIPAL, request, expected_version=3
+    )
+
+
+def test_an_update_without_the_series_field_keeps_its_pre_reassignment_digest() -> None:
+    assert _update_digest(_digest_request()) == _PRE_REASSIGNMENT_DIGEST
+
+
+def test_absent_series_id_and_null_give_three_distinct_update_digests() -> None:
+    absent = _update_digest(_digest_request())
+    moved = _update_digest(_digest_request(meeting_series_id=_TARGET_SERIES))
+    detached = _update_digest(_digest_request(detach_series=True))
+    assert len({absent, moved, detached}) == 3
+    other = make_identifier(IdKind.MEETING_SERIES, "cccc3333dddd")
+    assert moved != _update_digest(_digest_request(meeting_series_id=other))
 
 
 def test_the_read_list_search_and_series_schemas_are_exact() -> None:
@@ -729,6 +850,78 @@ def test_an_explicit_clear_still_wins_and_a_project_clear_pair_is_still_refused(
     ) == ("clear_fields",)
 
 
+def test_series_reassignment_over_the_service(scene: Scene) -> None:
+    """Operator decision 2026-10-09 (retiring AC-007) over the in-memory fake.
+
+    Detach, re-attach, a same-series no-op, then the refusals: a missing and a
+    foreign series are the same `not_found` on `meeting_series_id`, and a stale
+    version still wins over a missing series. Test infrastructure only; the
+    database evidence is the database tier's.
+    """
+    service = build_service(scene.world, scene.providers)
+    principal = scene.principal
+    series_id = scene.meeting_series_id
+
+    def update(version: int, key: str, **fields: object) -> ResponseEnvelope:
+        payload = {
+            "meeting_id": scene.meeting_id,
+            "expected_version": version,
+            "idempotency_key": key,
+            **fields,
+        }
+        return _invoke(service, principal, Capability.MEETINGS_UPDATE, payload)
+
+    def result(envelope: ResponseEnvelope) -> dict[str, Any]:
+        assert envelope.error is None, envelope.error
+        assert isinstance(envelope.result, dict)
+        return envelope.result
+
+    def last_changed_fields() -> tuple[str, ...]:
+        return scene.world.record_events[-1].changed_fields
+
+    detached = result(update(1, "series-detach-0001", meeting_series_id=None))
+    assert detached["history"]["outcome"] == "applied"
+    assert detached["meeting"]["meeting_series_id"] is None
+    assert detached["meeting"]["version"] == 2
+    assert last_changed_fields() == ("meeting_series_id",)
+
+    events = len(scene.world.record_events)
+    again = result(update(2, "series-detach-0002", meeting_series_id=None))
+    assert again["history"]["outcome"] == "no_op"
+    assert again["meeting"]["version"] == 2
+    assert len(scene.world.record_events) == events
+
+    attached = result(update(2, "series-attach-0001", meeting_series_id=series_id))
+    assert attached["history"]["outcome"] == "applied"
+    assert attached["meeting"]["meeting_series_id"] == series_id
+    assert attached["meeting"]["version"] == 3
+    assert last_changed_fields() == ("meeting_series_id",)
+
+    same = result(update(3, "series-same-0001", meeting_series_id=series_id))
+    assert same["history"]["outcome"] == "no_op"
+    assert same["meeting"]["version"] == 3
+
+    untouched = result(update(3, "series-absent-0001", title="Retitled"))
+    assert untouched["meeting"]["meeting_series_id"] == series_id
+    assert last_changed_fields() == ("title",)
+
+    missing = make_identifier(IdKind.MEETING_SERIES, "absentseries0001")
+    foreign = make_identifier(IdKind.MEETING_SERIES, "foreignseries001")
+    other = make_identifier(IdKind.PRINCIPAL, "foreignprincipal01")
+    scene.world.meeting_series[(other, foreign)] = scene.world.meeting_series[
+        (principal.principal_id, series_id)
+    ].model_copy(update={"meeting_series_id": foreign})
+    for target in (missing, foreign):
+        refused = update(4, f"series-refused-{target[-4:]}", meeting_series_id=target)
+        assert _problem(refused) == (
+            ErrorCode.NOT_FOUND,
+            RetryGuidance.CONDITIONAL,
+            ("meeting_series_id",),
+        )
+    stale = update(1, "series-stale-0001", meeting_series_id=missing)
+    assert _problem(stale) == (ErrorCode.CONFLICT, RetryGuidance.AFTER_REFRESH, ("stale_version",))
+
+
 # ======================================================================== E-nn
 #
 # database + e2e: the synthetic canonical path, through the real MCP server over
@@ -976,8 +1169,14 @@ def test_e04_an_aware_instant_keeps_its_zone_and_a_naive_one_is_refused(
 
 @pytest.mark.database
 @pytest.mark.e2e
-def test_e05_a_reschedule_keeps_identity_and_series_is_immutable(canonical: Canonical) -> None:
-    """AC-007."""
+def test_e05_a_reschedule_keeps_identity_and_the_same_series_is_a_no_op(
+    canonical: Canonical,
+) -> None:
+    """Identity across a reschedule; AC-007 is retired (operator decision 2026-10-09).
+
+    Sending the Meeting's own current series is accepted and changes nothing: a
+    no_op receipt at the same version, the same series.
+    """
     created = _create(canonical, "e05-create", series_title="A synthetic series")
     meeting = created["meeting"]
     moved = canonical.ok(
@@ -992,7 +1191,7 @@ def test_e05_a_reschedule_keeps_identity_and_series_is_immutable(canonical: Cano
     assert moved["meeting_id"] == meeting["meeting_id"]
     assert moved["meeting_series_id"] == meeting["meeting_series_id"]
     assert moved["version"] == 2
-    refused = canonical.refused(
+    same = canonical.ok(
         Capability.MEETINGS_UPDATE,
         {
             "meeting_id": meeting["meeting_id"],
@@ -1001,7 +1200,9 @@ def test_e05_a_reschedule_keeps_identity_and_series_is_immutable(canonical: Cano
             "meeting_series_id": meeting["meeting_series_id"],
         },
     )
-    assert refused["code"] == "invalid_request"
+    assert same["history"]["outcome"] == "no_op"
+    assert same["meeting"]["meeting_series_id"] == meeting["meeting_series_id"]
+    assert same["meeting"]["version"] == 2
 
 
 @pytest.mark.database

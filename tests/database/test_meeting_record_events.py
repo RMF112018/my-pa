@@ -17,6 +17,10 @@ committed Meeting, series and receipt rows:
 * **RE-AC-056** -- a material retitle commits one series `updated` event at the
   new series version, and under OD-7 (i) the SQL `meetings.read` and
   `meetings.list` answers carry that same `series_version` (D-21).
+* **Series reassignment** (operator decision 2026-10-09, retiring AC-007) --
+  an attach, move or detach commits one Meeting `updated` event naming
+  `meeting_series_id`; a foreign, missing, stale, unchanged or replayed one
+  commits none.
 
 Every identity, title and address here is synthetic.
 """
@@ -40,7 +44,9 @@ from my_pa.application.commands import (
     UpdateMeetingSeries,
 )
 from my_pa.contracts.v1.errors import ErrorCode
+from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.meeting.model import MeetingNotesMode, MeetingStatus
+from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence.tables import (
     meeting_history,
     meeting_series,
@@ -364,3 +370,155 @@ def test_sql_reads_carry_the_series_version_the_feed_names(scene: Scene) -> None
     assert entries[meeting_id]["series_version"] == 2
     assert entries[meeting_id]["version"] == 1
     assert entries[standalone["meeting"]["meeting_id"]]["series_version"] is None
+
+
+# ---- series reassignment (operator decision 2026-10-09, retiring AC-007) -----
+
+
+def test_series_attach_move_and_detach_each_commit_one_meeting_updated_event(
+    scene: Scene,
+) -> None:
+    """Each membership change is one Meeting `updated` event naming meeting_series_id."""
+    first = _create(scene, "db-reassign-first", series_title="First")["series"]["meeting_series_id"]
+    second = _create(scene, "db-reassign-second", series_title="Second")["series"][
+        "meeting_series_id"
+    ]
+    meeting_id = _create(scene, "db-reassign-0001")["meeting"]["meeting_id"]
+    before = scene.feed()
+    assert len(before) == 5
+    series_rows_before = [
+        _row(scene.engine, meeting_series, meeting_series.c.meeting_series_id, series_id)
+        for series_id in (first, second)
+    ]
+
+    written = [
+        scene.ok(
+            UpdateMeeting(
+                meeting_id=meeting_id,
+                expected_version=1,
+                idempotency_key="db-reassign-attach",
+                meeting_series_id=first,
+            )
+        ),
+        scene.ok(
+            UpdateMeeting(
+                meeting_id=meeting_id,
+                expected_version=2,
+                idempotency_key="db-reassign-move",
+                meeting_series_id=second,
+            )
+        ),
+        scene.ok(
+            UpdateMeeting(
+                meeting_id=meeting_id,
+                expected_version=3,
+                idempotency_key="db-reassign-detach",
+                meeting_series_id=None,
+            )
+        ),
+    ]
+    events = scene.feed()
+    assert events[: len(before)] == before
+    updates = events[len(before) :]
+    assert [
+        (u["record_family"], u["record_id"], u["event_kind"], u["record_version"]) for u in updates
+    ] == [("meeting", meeting_id, "updated", version) for version in (2, 3, 4)]
+    for update, result, target in zip(updates, written, (first, second, None), strict=True):
+        assert update["changed_fields"] == ["meeting_series_id"]
+        assert update["source_capability"] == "meetings.update"
+        assert update["causation_event_id"] is None
+        assert update["record_version"] == result["meeting"]["version"]
+        assert result["meeting"]["meeting_series_id"] == target
+        assert update["source_receipt_id"] == result["history"]["history_id"]
+        receipt = _row(
+            scene.engine, meeting_history, meeting_history.c.history_id, update["source_receipt_id"]
+        )
+        assert receipt["after_version"] == update["record_version"]
+        assert receipt["meeting_series_id"] == target
+    assert scene.next_sequence() == len(before) + 4
+    # Neither series is versioned or touched by a membership change.
+    assert [
+        _row(scene.engine, meeting_series, meeting_series.c.meeting_series_id, series_id)
+        for series_id in (first, second)
+    ] == series_rows_before
+
+
+def test_refused_no_op_and_replayed_reassignments_commit_no_event(scene: Scene) -> None:
+    """Foreign, missing, stale, unchanged and replayed reassignments are all silent."""
+    series_id = _create(scene, "db-quiet-r-series", series_title="Kept")["series"][
+        "meeting_series_id"
+    ]
+    member = _create(scene, "db-quiet-r-member", meeting_series_id=series_id)["meeting"]
+    standalone = _create(scene, "db-quiet-r-alone")["meeting"]
+    with scene.engine.begin() as connection:
+        theirs = _insert_partition(connection)
+    foreign_series = scene.runtime.ok(
+        CreateMeeting(
+            title="Their sync",
+            start_at=START,
+            timezone_name="UTC",
+            idempotency_key="db-quiet-r-theirs",
+            series_title="Theirs",
+        ),
+        principal_id=theirs.principal.principal_id,
+    )["series"]["meeting_series_id"]
+    attach = UpdateMeeting(
+        meeting_id=standalone["meeting_id"],
+        expected_version=1,
+        idempotency_key="db-quiet-r-attach",
+        meeting_series_id=series_id,
+    )
+    scene.ok(attach)
+    before = scene.feed()
+    sequence_before = scene.next_sequence()
+
+    refusals = [
+        scene.runtime.invoke(
+            UpdateMeeting(
+                meeting_id=member["meeting_id"],
+                expected_version=1,
+                idempotency_key=key,
+                meeting_series_id=target,
+            ),
+            principal_id=scene.principal_id,
+        ).error
+        for key, target in (
+            ("db-quiet-r-foreign", foreign_series),
+            ("db-quiet-r-missing", issue_identifier(IdKind.MEETING_SERIES)),
+        )
+    ]
+    foreign, missing = refusals
+    assert foreign is not None and missing is not None
+    assert foreign.code is ErrorCode.NOT_FOUND
+    # Indistinguishable: everything but the per-request correlation id is equal.
+    assert foreign.model_dump(exclude={"correlation_id"}) == missing.model_dump(
+        exclude={"correlation_id"}
+    )
+    assert "meeting_series_id" in foreign.safe_details
+    stale = scene.runtime.invoke(
+        UpdateMeeting(
+            meeting_id=standalone["meeting_id"],
+            expected_version=1,
+            idempotency_key="db-quiet-r-stale",
+            meeting_series_id=None,
+        ),
+        principal_id=scene.principal_id,
+    ).error
+    assert stale is not None and stale.code is ErrorCode.CONFLICT
+    same = scene.ok(
+        UpdateMeeting(
+            meeting_id=member["meeting_id"],
+            expected_version=1,
+            idempotency_key="db-quiet-r-same",
+            meeting_series_id=series_id,
+        )
+    )
+    assert same["history"]["outcome"] == "no_op"
+    assert same["meeting"]["version"] == 1
+    replay = scene.ok(attach)
+    assert replay["replayed"] is True
+    assert replay["meeting"]["version"] == 2
+
+    assert scene.feed() == before
+    assert scene.next_sequence() == sequence_before
+    assert scene.ok(ReadMeeting(meeting_id=member["meeting_id"]))["meeting"]["version"] == 1

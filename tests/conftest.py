@@ -9060,9 +9060,9 @@ class _Meetings:
         stored = self._world.meetings.get(key)
         if stored is None:
             raise RepositoryFailureError("no meeting to update in this partition")
-        self._world.meetings[key] = replace(
-            meeting, meeting_series_id=stored.meeting_series_id, created_at=stored.created_at
-        )
+        # Series membership is reassignable (operator decision 2026-10-09), so
+        # the series is written as given; identity and creation time are kept.
+        self._world.meetings[key] = replace(meeting, created_at=stored.created_at)
 
     def retire_attendees(
         self,

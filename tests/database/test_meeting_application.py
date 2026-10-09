@@ -97,6 +97,7 @@ from my_pa.infrastructure.persistence.tables import (
     meeting_write_requests,
     meetings,
     projects,
+    record_events,
     task_history,
     tasks,
 )
@@ -915,7 +916,11 @@ def test_a_scalar_update_bumps_the_version_once(harness: Harness, stage: Stage) 
 
 
 def test_reschedule_cancel_and_reinstate_keep_identity(harness: Harness, stage: Stage) -> None:
-    """AC-007/AC-008/AC-001: meeting_id and series never change; cancelled_at is server-owned."""
+    """AC-008/AC-001: meeting_id survives; cancelled_at is server-owned.
+
+    Series membership is unchanged because no `meeting_series_id` is sent; it is
+    reassignable when one is (operator decision 2026-10-09, retiring AC-007).
+    """
     principal = stage.mine.principal_id
     seed = _created(harness, stage, series_title="Synthetic series")
     moved = harness.update(
@@ -1306,6 +1311,334 @@ def test_replacement_attendee_entities_are_validated(harness: Harness, stage: St
             1,
             "inactive",
         )
+
+
+# ================================================== series reassignment
+#
+# Operator decision 2026-10-09 (retiring AC-007): `meetings.update` attaches,
+# moves and detaches a Meeting's series membership. The Meeting keeps its id;
+# a change is one version bump with its history row, receipt and Record Event;
+# neither series is locked or versioned; a missing and a foreign target series
+# are the same not-found refusal.
+
+
+def _series_ids(harness: Harness, principal_id: str, *titles: str) -> list[str]:
+    """One own series per title, each made by a create that starts it."""
+    made: list[str] = []
+    for title in titles:
+        series_id = harness.create(
+            principal_id, _create_request(series_title=title), f"series-{title}"
+        ).meeting.meeting_series_id
+        assert series_id is not None
+        made.append(series_id)
+    return made
+
+
+def _series_versions(harness: Harness, series_ids: Sequence[str]) -> dict[str, int]:
+    return {
+        series_id: int(row["version"])
+        for series_id in series_ids
+        for row in _rows(harness.engine, meeting_series, meeting_series_id=series_id)
+    }
+
+
+def _listed_in(harness: Harness, principal_id: str, series_id: str) -> set[str]:
+    page = harness.run(
+        lambda uow: APP.list_meetings(
+            uow, principal_id, MeetingListRequest(meeting_series_id=series_id), NOW
+        )
+    )
+    return {entry.meeting_id for entry in page.entries}
+
+
+def _meeting_row(harness: Harness, meeting_id: str) -> RowMapping:
+    (row,) = _rows(harness.engine, meetings, meeting_id=meeting_id)
+    return row
+
+
+def _events_of(harness: Harness, principal_id: str) -> int:
+    return _count(harness.engine, record_events, principal_id=principal_id)
+
+
+def test_an_update_attaches_a_standalone_meeting_to_an_own_series(
+    harness: Harness, stage: Stage
+) -> None:
+    """Attach: same id, one version, the row, the read and the series listing agree."""
+    principal = stage.mine.principal_id
+    (series_id,) = _series_ids(harness, principal, "Target")
+    seed = _created(harness, stage)
+    assert seed.meeting_series_id is None
+    series_before = _series_versions(harness, [series_id])
+
+    result = harness.update(
+        principal,
+        MeetingUpdateRequest(meeting_id=seed.meeting_id, meeting_series_id=series_id),
+        1,
+        "attach",
+    )
+
+    view = result.meeting
+    assert result.replayed is False
+    assert view.meeting_id == seed.meeting_id
+    assert view.version == 2
+    assert view.meeting_series_id == series_id
+    assert view.series_title == "Target"
+    assert view.series_version == 1
+    assert result.receipt.outcome is MeetingOutcome.APPLIED
+    assert (result.receipt.before_version, result.receipt.after_version) == (1, 2)
+    row = _meeting_row(harness, seed.meeting_id)
+    assert row["meeting_series_id"] == series_id
+    assert row["version"] == 2
+    assert row["created_at"] == seed.created_at
+    assert harness.read(principal, seed.meeting_id) == view
+    assert seed.meeting_id in _listed_in(harness, principal, series_id)
+    assert _series_versions(harness, [series_id]) == series_before
+    assert _count(harness.engine, meeting_series_history, principal_id=principal) == 1
+
+
+def test_an_update_moves_a_meeting_between_own_series_without_versioning_either(
+    harness: Harness, stage: Stage
+) -> None:
+    """Move: the old listing loses it, the new one gains it, no series version moves."""
+    principal = stage.mine.principal_id
+    old_series, new_series = _series_ids(harness, principal, "Old", "New")
+    seed = _created(harness, stage, meeting_series_id=old_series)
+    assert seed.meeting_id in _listed_in(harness, principal, old_series)
+    versions_before = _series_versions(harness, [old_series, new_series])
+    assert versions_before == {old_series: 1, new_series: 1}
+    series_rows_before = _rows(harness.engine, meeting_series, principal_id=principal)
+
+    moved = harness.update(
+        principal,
+        MeetingUpdateRequest(meeting_id=seed.meeting_id, meeting_series_id=new_series),
+        1,
+        "move",
+    ).meeting
+
+    assert moved.meeting_id == seed.meeting_id
+    assert moved.version == 2
+    assert moved.meeting_series_id == new_series
+    assert moved.series_title == "New"
+    assert _meeting_row(harness, seed.meeting_id)["meeting_series_id"] == new_series
+    assert seed.meeting_id not in _listed_in(harness, principal, old_series)
+    assert seed.meeting_id in _listed_in(harness, principal, new_series)
+    assert _series_versions(harness, [old_series, new_series]) == versions_before
+    assert _rows(harness.engine, meeting_series, principal_id=principal) == series_rows_before
+    assert _count(harness.engine, meeting_series_history, principal_id=principal) == 2
+
+
+def test_an_update_detaches_a_meeting_to_standalone(harness: Harness, stage: Stage) -> None:
+    """Detach: explicit null makes the Meeting standalone; the series listing drops it."""
+    principal = stage.mine.principal_id
+    (series_id,) = _series_ids(harness, principal, "Leaving")
+    seed = _created(harness, stage, meeting_series_id=series_id)
+    series_before = _series_versions(harness, [series_id])
+
+    detached = harness.update(
+        principal,
+        MeetingUpdateRequest(meeting_id=seed.meeting_id, detach_series=True),
+        1,
+        "detach",
+    ).meeting
+
+    assert detached.meeting_id == seed.meeting_id
+    assert detached.version == 2
+    assert detached.meeting_series_id is None
+    assert detached.series_title is None and detached.series_version is None
+    assert _meeting_row(harness, seed.meeting_id)["meeting_series_id"] is None
+    assert harness.read(principal, seed.meeting_id) == detached
+    assert seed.meeting_id not in _listed_in(harness, principal, series_id)
+    assert _series_versions(harness, [series_id]) == series_before
+
+
+def test_a_foreign_and_a_missing_target_series_are_the_same_not_found(
+    harness: Harness, stage: Stage
+) -> None:
+    """AC-032 on reassignment: foreign answers as absent; nothing is written for either."""
+    principal = stage.mine.principal_id
+    (own_series,) = _series_ids(harness, principal, "Mine")
+    (foreign_series,) = _series_ids(harness, stage.theirs.principal_id, "Theirs")
+    seed = _created(harness, stage, meeting_series_id=own_series)
+    row_before = _meeting_row(harness, seed.meeting_id)
+    rows_before = _meeting_rows_of(harness.engine, principal)
+    their_rows_before = _meeting_rows_of(harness.engine, stage.theirs.principal_id)
+    events_before = _events_of(harness, principal)
+
+    with pytest.raises(MeetingNotFoundError) as foreign:
+        harness.update(
+            principal,
+            MeetingUpdateRequest(meeting_id=seed.meeting_id, meeting_series_id=foreign_series),
+            1,
+            "foreign-series",
+        )
+    with pytest.raises(MeetingNotFoundError) as missing:
+        harness.update(
+            principal,
+            MeetingUpdateRequest(
+                meeting_id=seed.meeting_id,
+                meeting_series_id=issue_identifier(IdKind.MEETING_SERIES),
+            ),
+            1,
+            "missing-series",
+        )
+
+    assert foreign.value.field is MeetingErrorField.MEETING_SERIES_ID
+    _same_refusal(missing.value, foreign.value)
+    assert _meeting_row(harness, seed.meeting_id) == row_before
+    assert harness.read(principal, seed.meeting_id).version == 1
+    assert _meeting_rows_of(harness.engine, principal) == rows_before
+    assert _meeting_rows_of(harness.engine, stage.theirs.principal_id) == their_rows_before
+    assert _count(harness.engine, meeting_history, meeting_id=seed.meeting_id) == 1
+    assert _events_of(harness, principal) == events_before
+    assert seed.meeting_id not in _listed_in(harness, stage.theirs.principal_id, foreign_series)
+
+
+def test_a_stale_version_wins_over_a_series_change_and_writes_nothing(
+    harness: Harness, stage: Stage
+) -> None:
+    """AC-030: the version gate answers first, for a valid and for a missing target."""
+    principal = stage.mine.principal_id
+    (series_id,) = _series_ids(harness, principal, "Target")
+    seed = _created(harness, stage)
+    harness.update(principal, MeetingUpdateRequest(meeting_id=seed.meeting_id, title="A"), 1, "a")
+    row_before = _meeting_row(harness, seed.meeting_id)
+    rows_before = _meeting_rows_of(harness.engine, principal)
+    events_before = _events_of(harness, principal)
+
+    for key, target in (
+        ("stale-own", series_id),
+        ("stale-missing", issue_identifier(IdKind.MEETING_SERIES)),
+    ):
+        with pytest.raises(MeetingStaleVersionError):
+            harness.update(
+                principal,
+                MeetingUpdateRequest(meeting_id=seed.meeting_id, meeting_series_id=target),
+                1,
+                key,
+            )
+    with pytest.raises(MeetingStaleVersionError):
+        harness.update(
+            principal,
+            MeetingUpdateRequest(meeting_id=seed.meeting_id, detach_series=True),
+            1,
+            "stale-detach",
+        )
+
+    assert _meeting_row(harness, seed.meeting_id) == row_before
+    assert row_before["meeting_series_id"] is None
+    assert _meeting_rows_of(harness.engine, principal) == rows_before
+    assert _events_of(harness, principal) == events_before
+    assert seed.meeting_id not in _listed_in(harness, principal, series_id)
+
+
+def test_reassignment_history_and_request_rows_name_the_post_write_series(
+    harness: Harness, stage: Stage
+) -> None:
+    """WP-MTG-02 F-05 under reassignment: history and receipt carry the new series."""
+    principal = stage.mine.principal_id
+    first, second = _series_ids(harness, principal, "First", "Second")
+    seed = _created(harness, stage)
+    steps: tuple[tuple[str, MeetingUpdateRequest, str | None], ...] = (
+        (
+            "h-attach",
+            MeetingUpdateRequest(meeting_id=seed.meeting_id, meeting_series_id=first),
+            first,
+        ),
+        (
+            "h-move",
+            MeetingUpdateRequest(meeting_id=seed.meeting_id, meeting_series_id=second),
+            second,
+        ),
+        ("h-detach", MeetingUpdateRequest(meeting_id=seed.meeting_id, detach_series=True), None),
+    )
+    for expected_version, (key, request, target) in enumerate(steps, start=1):
+        result = harness.update(principal, request, expected_version, key)
+        after = expected_version + 1
+        assert result.receipt.after_version == after
+        (history_row,) = _rows(
+            harness.engine, meeting_history, meeting_id=seed.meeting_id, after_version=after
+        )
+        assert history_row["history_id"] == result.receipt.history_id
+        assert history_row["outcome"] == MeetingOutcome.APPLIED.value
+        assert history_row["meeting_series_id"] == target
+        request_row = _request_row(harness.engine, principal, MEETINGS_UPDATE_NAME, key)
+        assert request_row["completed_at"] is not None
+        assert request_row["meeting_id"] == seed.meeting_id
+        assert request_row["meeting_history_id"] == result.receipt.history_id
+        assert request_row["result_version"] == after
+        assert request_row["meeting_series_id"] == target
+        assert request_row["meeting_series_history_id"] is None
+    assert _meeting_row(harness, seed.meeting_id)["version"] == 4
+
+
+def test_a_reassignment_replays_and_a_different_target_with_its_key_conflicts(
+    harness: Harness, stage: Stage
+) -> None:
+    """AC-029 on reassignment: replay writes nothing; another target under the key conflicts."""
+    principal = stage.mine.principal_id
+    first, second = _series_ids(harness, principal, "First", "Second")
+    seed = _created(harness, stage)
+    request = MeetingUpdateRequest(meeting_id=seed.meeting_id, meeting_series_id=first)
+    applied = harness.update(principal, request, 1, "reassign")
+    rows_after = _meeting_rows_of(harness.engine, principal)
+    meeting_after = _meeting_row(harness, seed.meeting_id)
+    events_after = _events_of(harness, principal)
+
+    replay = harness.update(principal, request, 1, "reassign", now=LATEST)
+
+    assert replay.replayed is True
+    assert replay.receipt == applied.receipt
+    assert replay.meeting == applied.meeting
+    assert replay.meeting.version == 2
+    assert _meeting_rows_of(harness.engine, principal) == rows_after
+    assert _meeting_row(harness, seed.meeting_id) == meeting_after
+    assert _events_of(harness, principal) == events_after
+
+    for different in (
+        MeetingUpdateRequest(meeting_id=seed.meeting_id, meeting_series_id=second),
+        MeetingUpdateRequest(meeting_id=seed.meeting_id, detach_series=True),
+    ):
+        with pytest.raises(MeetingIdempotencyConflictError):
+            harness.update(principal, different, 1, "reassign")
+    assert _meeting_rows_of(harness.engine, principal) == rows_after
+    assert _meeting_row(harness, seed.meeting_id) == meeting_after
+    assert _events_of(harness, principal) == events_after
+
+
+def test_the_same_series_or_a_standalone_detach_is_a_no_op(harness: Harness, stage: Stage) -> None:
+    """Section 35.9: an unchanged membership is a no_op receipt, no version, no event."""
+    principal = stage.mine.principal_id
+    (series_id,) = _series_ids(harness, principal, "Kept")
+    member = _created(harness, stage, meeting_series_id=series_id)
+    alone = harness.create(principal, _create_request(), "alone").meeting
+    events_before = _events_of(harness, principal)
+
+    for view, request, key in (
+        (
+            member,
+            MeetingUpdateRequest(meeting_id=member.meeting_id, meeting_series_id=series_id),
+            "same-series",
+        ),
+        (alone, MeetingUpdateRequest(meeting_id=alone.meeting_id, detach_series=True), "detach"),
+    ):
+        row_before = _meeting_row(harness, view.meeting_id)
+        result = harness.update(principal, request, 1, key)
+        assert result.receipt.outcome is MeetingOutcome.NO_OP
+        assert (result.receipt.before_version, result.receipt.after_version) == (1, 1)
+        assert result.meeting.version == 1
+        assert result.meeting.meeting_series_id == view.meeting_series_id
+        assert _meeting_row(harness, view.meeting_id) == row_before
+        # The no_op receipt is the only new history row: nothing applied.
+        history = _rows(harness.engine, meeting_history, meeting_id=view.meeting_id)
+        assert sorted((h["outcome"], h["after_version"]) for h in history) == [
+            (MeetingOutcome.APPLIED.value, 1),
+            (MeetingOutcome.NO_OP.value, 1),
+        ]
+        request_row = _request_row(harness.engine, principal, MEETINGS_UPDATE_NAME, key)
+        assert request_row["result_version"] == 1
+        assert request_row["meeting_series_id"] == view.meeting_series_id
+    assert _events_of(harness, principal) == events_before
+    assert _series_versions(harness, [series_id]) == {series_id: 1}
 
 
 # =========================================================== series update

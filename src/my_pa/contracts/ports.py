@@ -8532,9 +8532,10 @@ class MeetingWriteRequestRecord:
 class MeetingRecord:
     """The scalar state of one Meeting occurrence, exactly as it is written.
 
-    `meeting_series_id` and `created_at` are written by `insert_meeting` only;
-    `update_meeting` never rewrites either (a Meeting's series is immutable
-    after create in v1).
+    `created_at` is written by `insert_meeting` only. `meeting_series_id` is
+    written by `insert_meeting` and rewritten by `update_meeting`: series
+    membership is reassignable through `meetings.update` (operator decision
+    2026-10-09, retiring AC-007), where `None` is a standalone Meeting.
     """
 
     meeting_id: str
@@ -8761,7 +8762,9 @@ class MeetingRepository(ABC):
     def update_meeting(self, principal_id: str, meeting: MeetingRecord) -> None:
         """Rewrite the locked Meeting's mutable scalar state.
 
-        Never rewrites `meeting_series_id` or `created_at`. Raises
+        Includes `meeting_series_id` (series reassignment, operator decision
+        2026-10-09); never rewrites `meeting_id` or `created_at`. Neither the old
+        nor the new series is locked or versioned. Raises
         `RepositoryFailureError` when the row is not in this partition.
         """
 

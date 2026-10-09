@@ -125,11 +125,13 @@ class SubmitRuntime(KnowledgeRuntime):
         signing_key: bytes = CHECKPOINT_SIGNING_KEY,
         operator_review_client_ids: frozenset[str] = frozenset(),
         identity_correction: bool = False,
+        manager_client_ids: frozenset[str] = frozenset(),
     ) -> None:
         super().__init__(
             url,
             discovery_client_ids=frozenset({CLIENT, OTHER_CLIENT}),
             operator_review_client_ids=operator_review_client_ids,
+            manager_client_ids=manager_client_ids,
             identity_correction=identity_correction,
             relationship_intelligence=relationship_intelligence,
             # KLP-WP-04 slice B3: a bound discovery list requires the seal.

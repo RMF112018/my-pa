@@ -29,3 +29,14 @@ Morning Intelligence produces durable intermediate artifacts, not only a final B
 ## Supersession
 
 Does not supersede ADR-003. Synthesized intelligence artifacts are a fourth authority class beside original sources, managed documents, and user-authored captures.
+
+## Amendment (2026-10-09): Synthesizer lane membership and partial lineage
+
+Decision 6 stands: the catalog stays in code. Its membership policy changes for the researcher-to-reporter path only.
+
+- A Synthesizer names one or more Researcher heads of its own cycle and focus area, at most one per source lane. The source-lane vocabulary is unchanged. Which lanes a focus area runs is an operator decision; an absent lane is not an error.
+- `research_swarm` and `synthesizer_inputs` list every lane with `required: false`. One shared eligibility predicate decides both these resolver sets and Synthesizer/Reporter commit acceptance, so the resolver's eligible members are exactly what a commit accepts.
+- A Synthesizer or Reporter over any partial input must itself be committed as `partial`.
+- `reports.record_run_state` refuses `succeeded` when the coordinate has no current artifact head.
+- Dependency refusals carry `dependency_report_ids` plus a reason token from the closed `SafeDetail` set.
+- `collectors`, `reporter_input` and `morning_brief_inputs` keep every member required. No migration and no new persisted value.

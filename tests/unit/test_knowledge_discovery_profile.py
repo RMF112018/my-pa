@@ -39,7 +39,13 @@ from my_pa.bootstrap.knowledge_discovery_profiles import (
     KNOWLEDGE_CLIENT_PROFILES,
     KNOWLEDGE_DISCOVERY_V1,
     KNOWLEDGE_DISCOVERY_V2,
+    KNOWLEDGE_MANAGER_V1,
     KNOWLEDGE_OPERATOR_REVIEW_V1,
+    KnowledgeAllowlists,
+    KnowledgeClientRole,
+    is_knowledge_manager,
+    knowledge_client_role,
+    profile_for_role,
     resolve_knowledge_client_overlay,
 )
 from my_pa.domain.identity.chatllm_capability_policy import (
@@ -60,12 +66,15 @@ MATRIX: Final = json.loads(
 DISCOVERY: Final = "synthetic-discovery"
 REVIEW: Final = "synthetic-review"
 CHAT: Final = "synthetic-chat"
+#: KLP Step 8: a Knowledge Manager is also a ChatLLM gateway client (allowed overlap).
+MANAGER: Final = "synthetic-manager"
 SUBMIT: Final = Capability.KNOWLEDGE_ASSERTIONS_SUBMIT
 CHECKPOINT: Final = Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT
 SETTINGS: Final = SimpleNamespace(
     knowledge_discovery_oauth_client_id_set=lambda: frozenset({DISCOVERY}),
     knowledge_operator_review_oauth_client_id_set=lambda: frozenset({REVIEW}),
-    chatllm_gateway_oauth_client_id_set=lambda: frozenset({CHAT}),
+    chatllm_gateway_oauth_client_id_set=lambda: frozenset({CHAT, MANAGER}),
+    knowledge_manager_oauth_client_id_set=lambda: frozenset({MANAGER}),
     compact_publication_for_client=lambda _client: False,
 )
 
@@ -278,7 +287,7 @@ def _authenticated(client: str) -> SimpleNamespace:
     )
 
 
-@pytest.mark.parametrize("client", [DISCOVERY, REVIEW, "synthetic-unbound"])
+@pytest.mark.parametrize("client", [DISCOVERY, REVIEW, MANAGER, "synthetic-unbound"])
 def test_the_gateway_passes_the_overlaid_pair_on(client: str) -> None:
     """`apps/gateway.py` hands the overlay -- not the raw grants -- to the transport."""
     expected_capabilities, expected_purposes = _overlay(client)
@@ -306,3 +315,123 @@ def test_the_ordinary_chatllm_profile_excludes_submit_and_checkpoint() -> None:
             CHATLLM_CAPABILITY_POLICY[capability].classification
             is ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED
         )
+
+
+# ---- KLP Step 8: the Knowledge Manager overlay (additive) ---------------------------
+
+#: A large synthetic broad ChatLLM grant set: Knowledge reads and create, Review,
+#: Record Events, context, and the broad data planes a manager must keep.
+BROAD: Final = frozenset(
+    {
+        Capability.KNOWLEDGE_ASSERTIONS_READ,
+        Capability.KNOWLEDGE_ASSERTIONS_LIST,
+        Capability.KNOWLEDGE_ASSERTIONS_SEARCH,
+        Capability.KNOWLEDGE_ASSERTIONS_HISTORY,
+        Capability.KNOWLEDGE_ASSERTIONS_REVEAL,
+        Capability.KNOWLEDGE_ASSERTIONS_CREATE,
+        Capability.REVIEW_LIST,
+        Capability.REVIEW_DECIDE,
+        Capability.RECORD_EVENTS_LIST,
+        Capability.RECORD_EVENTS_PROVENANCE,
+        Capability.CONTEXT_PREPARE,
+        Capability.TASKS_READ,
+        Capability.TASKS_LIST,
+        *(capability for capability in Capability if capability.value.startswith("entities.")),
+        *(capability for capability in Capability if capability.value.startswith("constraints.")),
+        *(capability for capability in Capability if capability.value.startswith("meetings.")),
+        *(capability for capability in Capability if capability.value.startswith("reports.")),
+    }
+)
+
+
+def _overlay_of(client: str | None, granted: frozenset[Capability]) -> Overlay:
+    return resolve_knowledge_client_overlay(SETTINGS, client, granted, _pairs(granted))
+
+
+def test_the_manager_overlay_is_named_but_is_not_a_narrowing_profile() -> None:
+    assert KNOWLEDGE_MANAGER_V1 == "knowledge-manager-v1"
+    assert KNOWLEDGE_MANAGER_V1 not in KNOWLEDGE_CLIENT_PROFILES
+    assert KnowledgeClientRole.MANAGER == "manager"
+    assert profile_for_role(KnowledgeClientRole.MANAGER) is None
+
+
+def test_the_broad_set_is_actually_broad() -> None:
+    """Guards the fixture: a narrow set would make the manager tests vacuous."""
+    assert len(BROAD) > 30
+    assert not BROAD & {SUBMIT, CHECKPOINT}
+    assert any(capability.value.startswith("entities.") for capability in BROAD)
+
+
+def test_a_manager_keeps_its_full_broad_grant_set() -> None:
+    capabilities, purposes = _overlay_of(MANAGER, BROAD)
+    assert capabilities == BROAD
+    assert purposes == _pairs(BROAD)
+
+
+def test_a_manager_gains_submit_and_checkpoint_only_when_granted() -> None:
+    granted = BROAD | {SUBMIT, CHECKPOINT}
+    capabilities, purposes = _overlay_of(MANAGER, granted)
+    assert capabilities == granted
+    assert {SUBMIT, CHECKPOINT} <= capabilities
+    assert (SUBMIT, Purpose.KNOWLEDGE_ASSERTION_OBSERVATION) in purposes
+    assert (CHECKPOINT, Purpose.KNOWLEDGE_ASSERTION_OBSERVATION) in purposes
+    assert purposes == _pairs(granted)
+
+
+@pytest.mark.parametrize("held", [frozenset(), frozenset({SUBMIT}), frozenset({CHECKPOINT})])
+def test_a_manager_never_gains_an_ungranted_submit_or_checkpoint(
+    held: frozenset[Capability],
+) -> None:
+    capabilities, purposes = _overlay_of(MANAGER, BROAD | held)
+    assert capabilities & {SUBMIT, CHECKPOINT} == held
+    assert {capability for capability, _ in purposes} == capabilities
+
+
+@pytest.mark.parametrize("client", [CHAT, "synthetic-unbound", None])
+def test_an_ordinary_client_still_loses_submit_and_checkpoint_from_a_broad_grant(
+    client: str | None,
+) -> None:
+    granted = BROAD | {SUBMIT, CHECKPOINT}
+    capabilities, purposes = _overlay_of(client, granted)
+    assert capabilities == BROAD
+    assert not any(capability in {SUBMIT, CHECKPOINT} for capability, _ in purposes)
+
+
+def test_discovery_and_operator_review_overlays_are_unchanged_by_a_manager_list() -> None:
+    """The narrow overlays are identical whether or not a manager list is configured."""
+    without_manager = SimpleNamespace(
+        knowledge_discovery_oauth_client_id_set=lambda: frozenset({DISCOVERY}),
+        knowledge_operator_review_oauth_client_id_set=lambda: frozenset({REVIEW}),
+        chatllm_gateway_oauth_client_id_set=lambda: frozenset({CHAT}),
+        knowledge_manager_oauth_client_id_set=frozenset,
+    )
+    granted = BROAD | {SUBMIT, CHECKPOINT}
+    for client in (DISCOVERY, REVIEW):
+        assert _overlay_of(client, granted) == resolve_knowledge_client_overlay(
+            without_manager, client, granted, _pairs(granted)
+        )
+    assert _overlay_of(DISCOVERY, granted)[0] == DISCOVERY_PROFILES[DISCOVERY_PROFILE]
+    assert (
+        _overlay_of(REVIEW, granted)[0] == KNOWLEDGE_CLIENT_PROFILES[KNOWLEDGE_OPERATOR_REVIEW_V1]
+    )
+
+
+def test_manager_membership_is_exact_never_a_prefix() -> None:
+    capabilities, _ = _overlay_of(f"{MANAGER}-x", BROAD | {SUBMIT, CHECKPOINT})
+    assert not capabilities & {SUBMIT, CHECKPOINT}
+
+
+def test_role_order_is_narrowest_first_so_a_hand_built_overlap_fails_closed() -> None:
+    overlap = KnowledgeAllowlists(
+        discovery=frozenset({"both-d"}),
+        operator_review=frozenset({"both-r"}),
+        chatllm_gateway=frozenset({MANAGER}),
+        manager=frozenset({"both-d", "both-r", MANAGER}),
+    )
+    assert knowledge_client_role(overlap, "both-d") == KnowledgeClientRole.DISCOVERY
+    assert knowledge_client_role(overlap, "both-r") == KnowledgeClientRole.OPERATOR_REVIEW
+    assert knowledge_client_role(overlap, MANAGER) == KnowledgeClientRole.MANAGER
+    assert knowledge_client_role(overlap, None) == KnowledgeClientRole.UNBOUND
+    assert is_knowledge_manager(overlap, MANAGER)
+    assert not is_knowledge_manager(overlap, "both-d")
+    assert not is_knowledge_manager(overlap, None)

@@ -25,7 +25,9 @@ from my_pa.bootstrap.knowledge_discovery_profiles import (
     DISCOVERY_PROFILES,
     KNOWLEDGE_CLIENT_PROFILES,
     KNOWLEDGE_DISCOVERY_ONLY_CAPABILITIES,
+    KNOWLEDGE_MANAGER_V1,
     KnowledgeAllowlists,
+    KnowledgeClientRole,
     allowlist_fingerprint,
     knowledge_allowlists,
     knowledge_client_role,
@@ -62,7 +64,8 @@ KNOWLEDGE_GRANT_CAPABILITIES: frozenset[Capability] = frozenset(
     }
 )
 #: Knowledge writes only profile tooling may install: `profile-apply` for the
-#: explicit create, `knowledge-profile-apply` for the discovery pair.
+#: explicit create, `knowledge-profile-apply` for the discovery pair -- and, for a
+#: bound Knowledge Manager only (KLP Step 8), `profile-apply` for that pair too.
 KNOWLEDGE_WRITE_GRANT_CAPABILITIES: frozenset[Capability] = frozenset(
     {
         Capability.KNOWLEDGE_ASSERTIONS_CREATE,
@@ -88,7 +91,8 @@ def raw_grant_refusal(
     """
     if capability in KNOWLEDGE_WRITE_GRANT_CAPABILITIES:
         installer = (
-            "knowledge-profile-apply"
+            # KLP Step 8: a Knowledge Manager's pair comes from profile-apply.
+            "knowledge-profile-apply (discovery) or profile-apply (Knowledge Manager)"
             if capability in KNOWLEDGE_DISCOVERY_ONLY_CAPABILITIES
             else "profile-apply"
         )
@@ -189,7 +193,8 @@ def _run_profile_command(
         )
     allowlists = knowledge_allowlists(settings)
     fingerprint = _print_fingerprint(allowlists)
-    bound = profile_for_role(knowledge_client_role(allowlists, args.oauth_client_id))
+    role = knowledge_client_role(allowlists, args.oauth_client_id)
+    bound = profile_for_role(role)
     if bound is not None:
         # KLP-AC-040: the ordinary ChatLLM profile names create and review.decide,
         # so it is never planned or written for a Knowledge-bound client.
@@ -197,6 +202,9 @@ def _run_profile_command(
             f"client is bound to {bound}; the ChatLLM data profile is never planned or "
             "applied for it -- use knowledge-profile-plan/apply"
         )
+    # KLP Step 8: a Knowledge Manager keeps the broad ChatLLM profile and also
+    # expects submit and checkpoint (exact-client exception); unbound is ordinary.
+    knowledge_manager = role == KnowledgeClientRole.MANAGER
     remote_client_id = repository.client_id_for_oauth_id(args.oauth_client_id)
     if remote_client_id is None:
         parser.error("remote client not found")
@@ -210,17 +218,24 @@ def _run_profile_command(
         now=now,
         resource=args.resource,
         scope=args.scope,
+        knowledge_manager=knowledge_manager,
     )
     if args.command == "profile-diff":
         rendered = {**profile_diff_as_json(diff), "allowlist_fingerprint": fingerprint}
         print(json.dumps(rendered, indent=2, sort_keys=True))
         return 0 if diff.is_healthy() else 1
     actions = plan_chatllm_grant_actions(
-        diff, records, now=now, resource=args.resource, scope=args.scope
+        diff,
+        records,
+        now=now,
+        resource=args.resource,
+        scope=args.scope,
+        knowledge_manager=knowledge_manager,
     )
     payload = {
         "allowlist_fingerprint": fingerprint,
         "profile_version": diff.profile_version,
+        "knowledge_role": diff.knowledge_role(),
         "healthy": diff.is_healthy(),
         "actions": [
             {
@@ -305,7 +320,15 @@ def _run_knowledge_profile_command(
     """
     allowlists = knowledge_allowlists(settings)
     fingerprint = _print_fingerprint(allowlists)
-    bound = profile_for_role(knowledge_client_role(allowlists, args.oauth_client_id))
+    role = knowledge_client_role(allowlists, args.oauth_client_id)
+    if role == KnowledgeClientRole.MANAGER:
+        # KLP Step 8: the manager overlay is additive. A narrowing profile is never
+        # planned for it; its two Knowledge grants come from profile-plan/apply.
+        parser.error(
+            f"client is bound as Knowledge Manager ({KNOWLEDGE_MANAGER_V1}); its grants "
+            "are planned by profile-plan/apply"
+        )
+    bound = profile_for_role(role)
     if bound is None:
         parser.error("client is not in a Knowledge discovery or operator-review allowlist")
     if args.profile != bound:

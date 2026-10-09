@@ -30,8 +30,10 @@ from apps.cli.knowledge_source_profiles import (
     parse_profile,
     parse_profiles,
     scope_digest_of,
+    source_profile_clients,
 )
 
+from my_pa.bootstrap.knowledge_discovery_profiles import KnowledgeAllowlists
 from my_pa.domain.knowledge_assertion.vocabulary import (
     KnowledgeEvidenceAuthority,
     KnowledgeOriginSystem,
@@ -287,3 +289,104 @@ def test_classify_retry_exhaustion_prints_one_line_and_exits_re_run(
     assert code == cli.EXIT_REMAINING == 3
     assert len(opened) == cli.CLASSIFY_ATTEMPTS
     assert len(lines) == 1 and lines[0].startswith("conflict") and "re-run" in lines[0]
+
+
+# ---- KLP Step 8: a Knowledge Manager may have a source profile ----------------------
+
+MANAGER: Final = "klp-step8-synthetic-manager-client"
+CHATLLM_ONLY: Final = "klp-step8-synthetic-chatllm-client"
+REVIEWER: Final = "klp-step8-synthetic-operator-review-client"
+ALLOWLISTS: Final = KnowledgeAllowlists(
+    discovery=CLIENTS,
+    operator_review=frozenset({REVIEWER}),
+    chatllm_gateway=frozenset({CHATLLM_ONLY, MANAGER}),
+    manager=frozenset({MANAGER}),
+)
+
+
+def test_source_profile_clients_are_exactly_discovery_and_manager() -> None:
+    assert source_profile_clients(ALLOWLISTS) == frozenset({CLIENT, MANAGER})
+
+
+@pytest.mark.parametrize("client", [CLIENT, MANAGER], ids=["discovery", "manager"])
+def test_a_discovery_or_manager_client_may_have_a_source_profile(client: str) -> None:
+    spec = parse_profile(
+        _entry(authenticated_client_id=client),
+        discovery_clients=source_profile_clients(ALLOWLISTS),
+    )
+    assert spec.authenticated_client_id == client
+
+
+@pytest.mark.parametrize(
+    "client",
+    [CHATLLM_ONLY, REVIEWER, "klp-step8-synthetic-unbound-client", MANAGER.upper()],
+    ids=["chatllm-only", "operator-review", "unbound", "not-exact"],
+)
+def test_any_other_client_is_refused_a_source_profile(client: str) -> None:
+    with pytest.raises(ProfileRefusalError) as refused:
+        parse_profile(
+            _entry(authenticated_client_id=client),
+            discovery_clients=source_profile_clients(ALLOWLISTS),
+        )
+    message = str(refused.value)
+    assert "KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS" in message
+    assert "KNOWLEDGE_MANAGER_OAUTH_CLIENT_IDS" in message
+
+
+@pytest.mark.parametrize(
+    ("client", "accepted"),
+    [(MANAGER, True), (CLIENT, True), (CHATLLM_ONLY, False)],
+    ids=["manager", "discovery", "chatllm-only"],
+)
+def test_apply_provisions_for_the_union_of_discovery_and_manager(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, client: str, accepted: bool
+) -> None:
+    """`apply` passes the union to the parser: the wiring, not just the helper."""
+    from contextlib import contextmanager
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    import apps.cli.knowledge_source_profiles as cli
+
+    applied: list[str] = []
+
+    class _Recording:
+        def apply_source_profile(self, _principal: str, **fields: Any) -> object:  # noqa: ANN401
+            applied.append(fields["authenticated_client_id"])
+            profile = SimpleNamespace(
+                source_profile_id="kdsp_synthetic",
+                disabled_at=None,
+                profile_version=1,
+                **fields,
+            )
+            return SimpleNamespace(action="created", profile=profile)
+
+    @contextmanager
+    def _transaction(_engine: object) -> Any:  # noqa: ANN401 - a stand-in
+        yield _Recording()
+
+    monkeypatch.setattr(cli, "knowledge_maintenance_transaction", _transaction)
+    document = tmp_path / "profiles.json"
+    document.write_text(
+        json.dumps({"version": 1, "profiles": [_entry(authenticated_client_id=client)]}),
+        encoding="utf-8",
+    )
+    runtime = SimpleNamespace(
+        engine=object(),
+        principal_id="prn_klpstep8synthetic01",
+        allowlists=ALLOWLISTS,
+        clock=lambda: datetime(2026, 10, 9, tzinfo=UTC),
+    )
+    lines: list[str] = []
+    code = cli.run_knowledge_source_profiles(
+        ["apply", "--file", str(document)],
+        runtime,  # type: ignore[arg-type]
+        out=lines.append,
+    )
+    if accepted:
+        assert code == cli.EXIT_OK
+        assert applied == [client]
+    else:
+        assert code == cli.EXIT_REFUSED
+        assert applied == []
+        assert any("KNOWLEDGE_MANAGER_OAUTH_CLIENT_IDS" in line for line in lines)

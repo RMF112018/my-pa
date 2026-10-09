@@ -917,6 +917,93 @@ def test_the_seal_version_can_be_incremented() -> None:
     assert settings.knowledge_checkpoint_seal_version == 2
 
 
+# ---- KLP Step 8: the Knowledge Manager allowlist -----------------------------------
+#
+# A Knowledge Manager is an ordinary broad ChatLLM client with additive Knowledge
+# authority: its allowlist may overlap the ChatLLM gateway list, never the
+# discovery or operator-review list, and a non-empty list requires the same
+# checkpoint signing key as discovery. Synthetic ids only.
+
+_MANAGER = f"{ENV_PREFIX}KNOWLEDGE_MANAGER_OAUTH_CLIENT_IDS"
+
+
+def test_the_manager_allowlist_is_empty_by_default_and_exact() -> None:
+    default = load_settings({DATABASE_URL: _A_URL})
+    assert default.knowledge_manager_oauth_client_ids == ""
+    assert default.knowledge_manager_oauth_client_id_set() == frozenset()
+    settings = load_settings({DATABASE_URL: _A_URL, _MANAGER: "mgr-a, mgr-b", _SIGNING_KEY: _A_KEY})
+    assert settings.knowledge_manager_oauth_client_id_set() == frozenset({"mgr-a", "mgr-b"})
+    assert "mgr" not in settings.knowledge_manager_oauth_client_id_set()
+
+
+def test_a_manager_may_overlap_the_chatllm_gateway_allowlist() -> None:
+    settings = load_settings(
+        {
+            DATABASE_URL: _A_URL,
+            _SIGNING_KEY: _A_KEY,
+            _MANAGER: "synthetic-manager",
+            _CHATLLM: "synthetic-manager, synthetic-chat",
+        }
+    )
+    assert "synthetic-manager" in settings.knowledge_manager_oauth_client_id_set()
+    assert "synthetic-manager" in settings.chatllm_gateway_oauth_client_id_set()
+
+
+def test_a_manager_need_not_be_in_the_chatllm_gateway_allowlist() -> None:
+    settings = load_settings(
+        {DATABASE_URL: _A_URL, _SIGNING_KEY: _A_KEY, _MANAGER: "synthetic-manager"}
+    )
+    assert settings.chatllm_gateway_oauth_client_id_set() == frozenset()
+
+
+@pytest.mark.parametrize(
+    "narrow", [_DISCOVERY, _OPERATOR_REVIEW], ids=["manager-discovery", "manager-review"]
+)
+def test_a_manager_overlapping_a_narrow_role_refuses_to_start(narrow: str) -> None:
+    values = {
+        DATABASE_URL: _A_URL,
+        _SIGNING_KEY: _A_KEY,
+        _MANAGER: "shared, a",
+        narrow: "b shared",
+    }
+    with pytest.raises(SettingsError, match="disjoint") as raised:
+        load_settings(values)
+    assert _MANAGER in str(raised.value)
+    assert narrow in str(raised.value)
+
+
+def test_discovery_and_operator_review_still_refuse_with_a_manager_configured() -> None:
+    values = {
+        DATABASE_URL: _A_URL,
+        _SIGNING_KEY: _A_KEY,
+        _MANAGER: "synthetic-manager",
+        _DISCOVERY: "shared",
+        _OPERATOR_REVIEW: "shared",
+    }
+    with pytest.raises(SettingsError, match="disjoint"):
+        load_settings(values)
+
+
+@pytest.mark.parametrize("key", ["", "k" * 31, "k" * 129])
+def test_a_bound_manager_requires_a_bounded_signing_key(key: str) -> None:
+    values = {DATABASE_URL: _A_URL, _MANAGER: "synthetic-manager"}
+    if key:
+        values[_SIGNING_KEY] = key
+    with pytest.raises(SettingsError, match="KNOWLEDGE_CHECKPOINT_SIGNING_KEY") as raised:
+        load_settings(values)
+    # The message names the allowlist that triggered the requirement.
+    assert _MANAGER in str(raised.value)
+    assert _DISCOVERY not in str(raised.value)
+
+
+def test_a_bound_manager_with_a_bounded_signing_key_starts() -> None:
+    settings = load_settings(
+        {DATABASE_URL: _A_URL, _MANAGER: "synthetic-manager", _SIGNING_KEY: _A_KEY}
+    )
+    assert settings.knowledge_checkpoint_signing_key == _A_KEY
+    assert settings.knowledge_checkpoint_seal_version == 1
+
+
 # ---- KLP-WP-04 slice B3: the configured seal (KLP-AC-126 / KLP-AC-155) -------------
 #
 # What `Settings` configures -- the signing key and the seal version -- becomes

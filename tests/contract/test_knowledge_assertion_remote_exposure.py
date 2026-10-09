@@ -332,6 +332,7 @@ def _bound_app(scene: Scene, client: str, granted: frozenset[Capability]) -> obj
         knowledge_discovery_oauth_client_id_set=lambda: frozenset({_DISCOVERY_CLIENT}),
         knowledge_operator_review_oauth_client_id_set=lambda: frozenset({_OPERATOR_REVIEW_CLIENT}),
         chatllm_gateway_oauth_client_id_set=frozenset,
+        knowledge_manager_oauth_client_id_set=frozenset,
         compact_publication_for_client=lambda _client: False,
     )
     authenticated = SimpleNamespace(

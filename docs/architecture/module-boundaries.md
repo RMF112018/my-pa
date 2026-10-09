@@ -279,7 +279,8 @@ Knowledge client roles (KLP-WP-04) are composition, not capabilities:
 `bootstrap/knowledge_discovery_profiles.py` binds the discovery and
 operator-review allowlists from `Settings` to their fixed profiles (discovery
 clients to `knowledge-discovery-v2` since KLP-WP-05, which adds
-`record_events.provenance`), and
+`record_events.provenance`), binds the Knowledge Manager allowlist (KLP Step
+8) to the additive `knowledge-manager-v1` overlay, which narrows nothing, and
 `apps.gateway` applies that overlay to both capabilities and purposes before any
 grant is used.
 

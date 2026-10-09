@@ -728,6 +728,12 @@ event the caller can see under the feed's own visibility and remote withholding
 answers `not_found` exactly as an unknown one. External run and candidate ids
 go only to the client that supplied them or a local caller; the accepting
 decision's client id and channel are shown to any caller who can see the event.
+KLP Step 8 builds a Knowledge Manager role
+(`MY_PA_KNOWLEDGE_MANAGER_OAUTH_CLIENT_IDS`, empty by default): an ordinary
+ChatLLM client that keeps its grants, may submit and checkpoint when granted,
+and decides Knowledge Review as `remote_operator_attested`. It is not
+commissioned either. No manager client, manager source profile or
+submit/checkpoint grant exists until an operator adds them after deployment.
 
 Evidence: `ops/runbooks/managed-knowledge-context.md`,
 `src/my_pa/bootstrap/knowledge_discovery_profiles.py`,
@@ -738,7 +744,9 @@ Evidence: `ops/runbooks/managed-knowledge-context.md`,
 `tests/contract/test_knowledge_review_operator_authority.py::test_e_a_remote_chatllm_client_is_interactive_and_denied_operator_cases`,
 `tests/database/test_knowledge_assertion_review.py::test_a_queued_proposal_is_no_assertion_until_acceptance_promotes_it`,
 `tests/security/test_knowledge_review_disclosure.py::test_a_withheld_holder_is_nulled_for_a_remote_reviewer_only`,
-`tests/database/test_knowledge_assertion_review.py::test_counterevidence_blocks_submit_but_not_a_review_supersession`.
+`tests/database/test_knowledge_assertion_review.py::test_counterevidence_blocks_submit_but_not_a_review_supersession`,
+`tests/contract/test_knowledge_manager_identity.py::test_the_gateway_strips_submit_and_checkpoint_from_an_ordinary_chatllm_client`,
+`tests/database/test_knowledge_manager_identity.py::test_a_manager_accepts_and_corrects_requires_operator_cases_as_attested`.
 
 ---
 

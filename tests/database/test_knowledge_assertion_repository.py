@@ -122,6 +122,7 @@ class KnowledgeRuntime:
         checkpoint_seal_version: int = 1,
         operator_review_client_ids: frozenset[str] = frozenset(),
         identity_correction: bool = False,
+        manager_client_ids: frozenset[str] = frozenset(),
     ) -> None:
         self.engine = create_database_engine(url)
         self.audit_engine = create_database_engine(url)
@@ -147,6 +148,8 @@ class KnowledgeRuntime:
             knowledge_discovery_client_ids=discovery_client_ids,
             # KLP-WP-04 slice C: the operator-review allowlist (R6 section 3.2).
             knowledge_operator_review_client_ids=operator_review_client_ids,
+            # KLP Step 8: the Knowledge Manager allowlist (empty binds no manager).
+            knowledge_manager_client_ids=manager_client_ids,
             # KLP-WP-04 slice C: governed merge, for the Knowledge merge guard.
             relationship_identity_correction_enabled=identity_correction,
             # KLP-WP-04 slice B3: the checkpoint seal (R6 section 7).

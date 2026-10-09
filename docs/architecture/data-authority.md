@@ -121,7 +121,7 @@ it. ADR-003 gives it its own class, and the rules that follow from it are:
 
 - An admitted assertion is `canonical` for exactly its typed value about its subject under its registered predicate. It never overrides source evidence, and it never shadows a fact another plane owns: domain-owned predicates route to that plane's writer or are not taken in.
 - Evidence rows are `observed`. One canonical row exists per source identity; the excerpt is redact-only and hashes are immutable. Unavailable evidence hides the assertion from remote readers; it is not removed at rest.
-- Proposals are `proposed` until Review decides them. Operator-required facts are accepted only under server-derived operator authority (a stamped CLI or HTTP-gateway operator surface on local transport, or an allowlisted operator-review client); `principal.is_operator` alone never suffices.
+- Proposals are `proposed` until Review decides them. Operator-required facts are accepted only under server-derived operator authority (a stamped CLI or HTTP-gateway operator surface on local transport, or an allowlisted operator-review or Knowledge Manager client); `principal.is_operator` alone never suffices.
 - Classification only rises. Effective class is the rank-max over the assertion, its predecessor and all linked evidence, including every same-origin external sibling across all source profiles. A caller is remote, and withheld rows are excluded for it, whenever `transport is REMOTE_CLIENT` or `capability_grants is not None`.
 - Every change is an append-only mutation receipt tied to a submission with a causal root and a depth of at most 4.
 

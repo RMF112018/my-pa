@@ -276,6 +276,8 @@ def test_profile_apply_installs_the_create_grant_with_its_purpose(
         knowledge_discovery_oauth_client_id_set=frozenset,
         knowledge_operator_review_oauth_client_id_set=frozenset,
         chatllm_gateway_oauth_client_id_set=frozenset,
+        # KLP Step 8: the profile tooling reads the Knowledge Manager allowlist too.
+        knowledge_manager_oauth_client_id_set=frozenset,
     )
     args = argparse.Namespace(
         command="profile-apply",

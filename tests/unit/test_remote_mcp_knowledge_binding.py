@@ -198,6 +198,7 @@ DISCOVERY_CLIENT: Final = "synthetic-discovery-client"
 REVIEW_CLIENT: Final = "synthetic-operator-review-client"
 CHAT_CLIENT: Final = "synthetic-chatllm-client"
 UNBOUND_CLIENT: Final = "synthetic-unbound-client"
+MANAGER_CLIENT: Final = "synthetic-knowledge-manager-client"
 RESOURCE: Final = "https://mcp.example.invalid/mcp"
 SCOPE: Final = "my-pa.read"
 WHEN: Final = datetime(2026, 10, 5, 12, tzinfo=UTC)
@@ -306,6 +307,8 @@ def test_the_allowlist_fingerprint_is_sha256_of_the_canonical_sorted_allowlists(
     document = {
         "chatllm_gateway": [],
         "knowledge_discovery": ["d1", "d2"],
+        # KLP Step 8: the manager list is always in the canonical document.
+        "knowledge_manager": [],
         "knowledge_operator_review": ["r1"],
     }
     expected = hashlib.sha256(
@@ -320,13 +323,51 @@ def test_the_allowlist_fingerprint_is_sha256_of_the_canonical_sorted_allowlists(
     assert allowlist_fingerprint(moved) != expected
 
 
+def test_the_allowlist_fingerprint_includes_the_sorted_manager_list() -> None:
+    """KLP Step 8: the manager allowlist is fingerprinted, and moving it changes the hash."""
+    base = {
+        "discovery": frozenset({"d1"}),
+        "operator_review": frozenset({"r1"}),
+        "chatllm_gateway": frozenset({"m2", "c1"}),
+    }
+    allowlists = KnowledgeAllowlists(**base, manager=frozenset({"m2", "m1"}))
+    document = {
+        "chatllm_gateway": ["c1", "m2"],
+        "knowledge_discovery": ["d1"],
+        "knowledge_manager": ["m1", "m2"],
+        "knowledge_operator_review": ["r1"],
+    }
+    expected = hashlib.sha256(
+        json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    assert allowlist_fingerprint(allowlists) == expected
+    assert allowlist_fingerprint(KnowledgeAllowlists(**base, manager=frozenset({"m1"}))) != expected
+    assert allowlist_fingerprint(KnowledgeAllowlists(**base)) != expected
+
+
+def test_knowledge_allowlists_reads_the_manager_list_from_settings() -> None:
+    settings = load_settings(
+        {
+            "MY_PA_DATABASE_URL": "postgresql+psycopg://someone@db.invalid:5432/somewhere",
+            "MY_PA_KNOWLEDGE_MANAGER_OAUTH_CLIENT_IDS": "synthetic-manager-client",
+            "MY_PA_MCP_CHATLLM_GATEWAY_OAUTH_CLIENT_IDS": "synthetic-manager-client",
+            "MY_PA_KNOWLEDGE_CHECKPOINT_SIGNING_KEY": "s" * 32,
+        }
+    )
+    allowlists = knowledge_allowlists(settings)
+    assert allowlists.manager == frozenset({"synthetic-manager-client"})
+    assert allowlists.chatllm_gateway == frozenset({"synthetic-manager-client"})
+
+
 @contextmanager
 def _repository() -> Iterator[RemoteIdentityRepository]:
     engine = create_engine("sqlite://")
     with engine.begin() as connection:
         connection.exec_driver_sql("ATTACH DATABASE ':memory:' AS identity")
         REMOTE_IDENTITY_METADATA.create_all(connection)
-        for index, client in enumerate((DISCOVERY_CLIENT, REVIEW_CLIENT, UNBOUND_CLIENT)):
+        for index, client in enumerate(
+            (DISCOVERY_CLIENT, REVIEW_CLIENT, UNBOUND_CLIENT, MANAGER_CLIENT)
+        ):
             connection.execute(
                 remote_clients.insert().values(
                     id=UUID(int=index + 1),
@@ -503,3 +544,115 @@ def test_the_chatllm_profile_tooling_refuses_a_knowledge_bound_client(
         assert "knowledge-profile-plan/apply" in err
         assert "allowlist_fingerprint " in err
         assert _rows(repository, client) == set()
+
+
+# ---- KLP Step 8: a Knowledge Manager is never planned a narrowing profile -----------
+
+
+def _manager_settings() -> Settings:
+    """The bound clients plus a manager that is also a ChatLLM gateway client."""
+    return load_settings(
+        {
+            "MY_PA_DATABASE_URL": "postgresql+psycopg://someone@db.invalid:5432/somewhere",
+            "MY_PA_KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS": DISCOVERY_CLIENT,
+            "MY_PA_KNOWLEDGE_OPERATOR_REVIEW_OAUTH_CLIENT_IDS": REVIEW_CLIENT,
+            "MY_PA_MCP_CHATLLM_GATEWAY_OAUTH_CLIENT_IDS": f"{CHAT_CLIENT},{MANAGER_CLIENT}",
+            "MY_PA_KNOWLEDGE_MANAGER_OAUTH_CLIENT_IDS": MANAGER_CLIENT,
+            "MY_PA_KNOWLEDGE_CHECKPOINT_SIGNING_KEY": "s" * 32,
+        }
+    )
+
+
+@pytest.mark.parametrize("command", ["knowledge-profile-plan", "knowledge-profile-apply"])
+@pytest.mark.parametrize("profile", sorted(KNOWLEDGE_CLIENT_PROFILES))
+def test_knowledge_profile_commands_refuse_a_knowledge_manager(
+    capsys: pytest.CaptureFixture[str], command: str, profile: str
+) -> None:
+    with _repository() as repository:
+        args = argparse.Namespace(
+            command=command,
+            oauth_client_id=MANAGER_CLIENT,
+            scope=SCOPE,
+            resource=RESOURCE,
+            profile=profile,
+            apply=True,
+        )
+        with pytest.raises(SystemExit) as raised:
+            _run_knowledge_profile_command(
+                argparse.ArgumentParser(prog="remote_mcp"),
+                args,
+                repository,
+                _manager_settings(),
+                WHEN,
+            )
+        assert raised.value.code != 0
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "client is bound as Knowledge Manager (knowledge-manager-v1)" in captured.err
+        assert "planned by profile-plan/apply" in captured.err
+        assert "allowlist_fingerprint " in captured.err
+        assert _rows(repository, MANAGER_CLIENT) == set()
+
+
+@pytest.mark.parametrize(
+    ("client", "profile"),
+    [(DISCOVERY_CLIENT, DISCOVERY_PROFILE), (REVIEW_CLIENT, OPERATOR_REVIEW_PROFILE)],
+)
+def test_a_configured_manager_leaves_the_narrow_profiles_unchanged(
+    capsys: pytest.CaptureFixture[str], client: str, profile: str
+) -> None:
+    """The control: with a manager bound, discovery and operator-review still plan exactly."""
+    with _repository() as repository:
+        args = argparse.Namespace(
+            command="knowledge-profile-plan",
+            oauth_client_id=client,
+            scope=SCOPE,
+            resource=RESOURCE,
+            profile=profile,
+            apply=False,
+        )
+        code = _run_knowledge_profile_command(
+            argparse.ArgumentParser(prog="remote_mcp"), args, repository, _manager_settings(), WHEN
+        )
+        plan = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert plan["profile"] == profile
+    assert {
+        action["capability"]  # type: ignore[index]
+        for action in plan["actions"]  # type: ignore[attr-defined]
+    } == {capability.value for capability in KNOWLEDGE_CLIENT_PROFILES[profile]}
+
+
+@pytest.mark.parametrize("command", ["profile-diff", "profile-plan", "profile-apply"])
+@pytest.mark.parametrize("client", [DISCOVERY_CLIENT, REVIEW_CLIENT])
+def test_the_chatllm_profile_tooling_still_refuses_narrow_clients_with_a_manager_bound(
+    capsys: pytest.CaptureFixture[str], command: str, client: str
+) -> None:
+    with _repository() as repository:
+        args = argparse.Namespace(
+            command=command,
+            oauth_client_id=client,
+            scope=SCOPE,
+            resource=RESOURCE,
+            profile_version=CHATLLM_DATA_PROFILE_VERSION,
+            apply=True,
+        )
+        with pytest.raises(SystemExit) as raised:
+            _run_profile_command(
+                argparse.ArgumentParser(prog="remote_mcp"),
+                args,
+                repository,
+                _manager_settings(),
+                WHEN,
+            )
+        assert raised.value.code != 0
+        assert "knowledge-profile-plan/apply" in capsys.readouterr().err
+        assert _rows(repository, client) == set()
+
+
+def test_raw_grant_names_both_installers_for_the_discovery_pair() -> None:
+    for capability in DISCOVERY_WRITES:
+        refusal = raw_grant_refusal(capability, Purpose.KNOWLEDGE_ASSERTION_OBSERVATION)
+        assert refusal is not None
+        assert "knowledge-profile-apply (discovery)" in refusal
+        assert "profile-apply (Knowledge Manager)" in refusal

@@ -381,6 +381,7 @@ def test_f_a_discovery_client_never_holds_review_decide_and_is_refused_at_the_ca
         knowledge_discovery_oauth_client_id_set=lambda: frozenset({DISCOVERY_CLIENT}),
         knowledge_operator_review_oauth_client_id_set=frozenset,
         chatllm_gateway_oauth_client_id_set=frozenset,
+        knowledge_manager_oauth_client_id_set=frozenset,
         compact_publication_for_client=lambda _client: False,
     )
     raw = frozenset({*READ, (Capability.KNOWLEDGE_ASSERTIONS_SUBMIT, None)})

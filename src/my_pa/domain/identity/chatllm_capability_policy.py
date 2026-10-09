@@ -268,7 +268,10 @@ _CONTROL_PLANE_EXCLUDED: Final[frozenset[Capability]] = frozenset(
         # client's two writes are never part of the ordinary ChatLLM profile. A
         # discovery client is bound by the exact Settings allowlist and installed
         # through `knowledge-profile-apply`; the deny overlay strips both from
-        # every unbound client whatever its grants say.
+        # every unbound client whatever its grants say. KLP Step 8 keeps both
+        # here: a client bound as Knowledge Manager is an exact-client exception
+        # applied by the profile tooling (`KNOWLEDGE_MANAGER_GRANT_EXCEPTIONS` in
+        # `my_pa.application.chatllm_data_profile`), never a policy widening.
         Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
         Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
         Capability.SOURCES_ENROLL,
@@ -312,6 +315,8 @@ _COMPATIBILITY_REPLACEMENTS: Final[Mapping[Capability, Capability]] = MappingPro
 
 _SYNC_EXCLUSION: Final = "device sync protocol, not constraint record management"
 _GSQS_EXCLUSION: Final = "GSQS campaign lifecycle held out pending reclassification"
+#: Still the rationale for both names after KLP Step 8: the Knowledge Manager
+#: exception is per-client profile tooling, not a change to this class.
 _KNOWLEDGE_DISCOVERY_EXCLUSION: Final = (
     "bound Knowledge discovery-client control plane (exact allowlist and profile only)"
 )

@@ -33,7 +33,9 @@ is this process's, never a file field. Refused before anything is written:
   `authoritative_source` ceiling, for every origin system and in particular
   `outlook_mail` and `sharepoint_documents` (KLP-AC-063/064; the database CHECK
   `knowledge_profile_direct_admission_needs_proof` backs it);
-* a client that is not in `MY_PA_KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS`;
+* a client that is in neither `MY_PA_KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS` nor
+  `MY_PA_KNOWLEDGE_MANAGER_OAUTH_CLIENT_IDS` (KLP Step 8: a Knowledge Manager
+  submits source-backed assertions too, so it may have a source profile);
 * an unknown field, a duplicate binding, a malformed value.
 
 An existing active binding has its mutable controls updated (new
@@ -150,8 +152,21 @@ def _origin(value: object) -> KnowledgeOriginSystem:
     return _member(value, KnowledgeOriginSystem, "origin_system")
 
 
+def source_profile_clients(allowlists: KnowledgeAllowlists) -> frozenset[str]:
+    """The exact clients a source profile may name: discovery or Knowledge Manager.
+
+    KLP Step 8. Exact membership of the two Settings allowlists; an operator-review
+    or ChatLLM-only client is in neither and is refused.
+    """
+    return allowlists.discovery | allowlists.manager
+
+
 def parse_profile(entry: object, *, discovery_clients: frozenset[str]) -> ProfileSpec:
-    """Validate one entry (KLP-AC-063/064/065). Pure: no database, no settings."""
+    """Validate one entry (KLP-AC-063/064/065). Pure: no database, no settings.
+
+    `discovery_clients` is every client that may submit: since KLP Step 8 the
+    union `source_profile_clients` builds (the name is kept for its callers).
+    """
     if not isinstance(entry, Mapping):
         raise ProfileRefusalError("each profile must be an object")
     keys = set(entry)
@@ -171,8 +186,9 @@ def parse_profile(entry: object, *, discovery_clients: frozenset[str]) -> Profil
         raise ProfileRefusalError("authenticated_client_id must be 1..256 printable characters")
     if client not in discovery_clients:
         raise ProfileRefusalError(
-            f"authenticated_client_id is not in {ENV_PREFIX}KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS; "
-            "only a bound discovery client can have a source profile"
+            f"authenticated_client_id is not in {ENV_PREFIX}KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS "
+            f"or {ENV_PREFIX}KNOWLEDGE_MANAGER_OAUTH_CLIENT_IDS; only a bound discovery or "
+            "Knowledge Manager client can have a source profile"
         )
     if ("scope" in entry) == ("scope_digest" in entry):
         raise ProfileRefusalError("a profile names exactly one of scope and scope_digest")
@@ -289,7 +305,8 @@ def _fingerprint(runtime: Runtime, out: Callable[[str], None]) -> None:
 def _apply(args: argparse.Namespace, runtime: Runtime, out: Callable[[str], None]) -> int:
     _fingerprint(runtime, out)
     specs = parse_profiles(
-        load_profile_document(Path(args.file)), discovery_clients=runtime.allowlists.discovery
+        load_profile_document(Path(args.file)),
+        discovery_clients=source_profile_clients(runtime.allowlists),
     )
     at = runtime.clock()
     with knowledge_maintenance_transaction(runtime.engine) as repository:

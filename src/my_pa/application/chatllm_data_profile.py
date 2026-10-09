@@ -36,6 +36,19 @@ _CHATLLM_MULTI_PURPOSE_STAMP: Final[Mapping[Capability, Purpose]] = MappingProxy
     }
 )
 
+#: KLP Step 8: the exact-client exception set. Both names stay
+#: `CONTROL_PLANE_EXCLUDED` in `CHATLLM_CAPABILITY_POLICY` -- every ordinary
+#: client is unchanged -- but a client bound as Knowledge Manager (the
+#: `MY_PA_KNOWLEDGE_MANAGER_OAUTH_CLIENT_IDS` allowlist, `knowledge-manager-v1`)
+#: is planned and diffed as holding them, under their one permitted purpose
+#: (`knowledge_assertion_observation`, write). Must equal
+#: `KNOWLEDGE_DISCOVERY_ONLY_CAPABILITIES` in the bootstrap overlay; restated
+#: here so application code does not import an outer layer (a contract test pins
+#: the equality). No other control-plane name is ever a manager exception.
+KNOWLEDGE_MANAGER_GRANT_EXCEPTIONS: Final[frozenset[Capability]] = frozenset(
+    {Capability.KNOWLEDGE_ASSERTIONS_SUBMIT, Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT}
+)
+
 FAILING_OUTCOMES: Final = frozenset(
     {
         "IMPLEMENTED_COMPOSED_GRANT_MISSING",
@@ -102,6 +115,12 @@ class ChatLLMProfileDiff:
     unexpected_control_plane: frozenset[Capability]
     add: frozenset[Capability]
     renew: frozenset[Capability]
+    #: KLP Step 8: whether this diff was computed for a bound Knowledge Manager.
+    knowledge_manager: bool = False
+
+    def knowledge_role(self) -> str:
+        """`manager` or `ordinary`: the profile semantics this diff applied."""
+        return "manager" if self.knowledge_manager else "ordinary"
 
     def is_healthy(self) -> bool:
         return not any(outcome.value in FAILING_OUTCOMES for outcome in self.outcomes.values())
@@ -122,12 +141,24 @@ def composed_capabilities(
     implemented: frozenset[Capability],
     planes: ChatLLMCompositionPlanes,
 ) -> frozenset[Capability]:
-    """Approximate ApplicationService.available_capabilities from plane flags."""
+    """Approximate ApplicationService.available_capabilities from plane flags.
+
+    KLP Step 8: the manager exception names carry the policy prerequisite `NONE`
+    (they are control-plane excluded), but the service composes them only with
+    the Knowledge plane on, so they are composed here only when the
+    `KNOWLEDGE_ASSERTIONS` prerequisite holds. Neither is data management, so an
+    ordinary client's desired set is unchanged by this.
+    """
     composed = set(implemented)
     for capability, policy in CHATLLM_CAPABILITY_POLICY.items():
         if capability not in composed:
             continue
-        if not _prerequisite_holds(policy.composition_prerequisite, capability, planes):
+        prerequisite = (
+            ChatLLMCompositionPrerequisite.KNOWLEDGE_ASSERTIONS
+            if capability in KNOWLEDGE_MANAGER_GRANT_EXCEPTIONS
+            else policy.composition_prerequisite
+        )
+        if not _prerequisite_holds(prerequisite, capability, planes):
             composed.discard(capability)
     return frozenset(composed)
 
@@ -161,10 +192,28 @@ def _prerequisite_holds(
     raise RuntimeError(f"unknown ChatLLM composition prerequisite: {prerequisite!r}")
 
 
-def desired_effective_capabilities(composed: frozenset[Capability]) -> frozenset[Capability]:
-    return frozenset(
+def desired_effective_capabilities(
+    composed: frozenset[Capability], *, knowledge_manager: bool = False
+) -> frozenset[Capability]:
+    """The data-management names `composed` holds, plus manager exceptions.
+
+    The composed `KNOWLEDGE_MANAGER_GRANT_EXCEPTIONS` join only for a bound
+    Knowledge Manager (KLP Step 8). Omitting `knowledge_manager` fails closed to
+    the ordinary profile.
+    """
+    desired = frozenset(
         capability for capability in composed if is_chatllm_data_management(capability)
     )
+    if knowledge_manager:
+        desired |= KNOWLEDGE_MANAGER_GRANT_EXCEPTIONS & composed
+    return desired
+
+
+def _is_desired_name(capability: Capability, *, knowledge_manager: bool) -> bool:
+    """Whether the profile may plan `capability` at all (before composition)."""
+    if is_chatllm_data_management(capability):
+        return True
+    return knowledge_manager and capability in KNOWLEDGE_MANAGER_GRANT_EXCEPTIONS
 
 
 def _is_active(record: ChatLLMGrantRecord, now: datetime) -> bool:
@@ -195,9 +244,17 @@ def diff_chatllm_data_profile(
     now: datetime,
     resource: str,
     scope: str,
+    knowledge_manager: bool = False,
 ) -> ChatLLMProfileDiff:
+    """Compare durable grants with the desired profile.
+
+    `knowledge_manager=True` (KLP Step 8) only for a client bound as Knowledge
+    Manager: the composed exception names are then desired, so their grants are
+    `IMPLEMENTED_COMPOSED_GRANTED` (or missing -> `add`). Every other
+    control-plane name stays `UNEXPECTED_CONTROL_PLANE_GRANT` for a manager too.
+    """
     grant_records = tuple(grants)
-    desired = desired_effective_capabilities(composed)
+    desired = desired_effective_capabilities(composed, knowledge_manager=knowledge_manager)
     outcomes: dict[Capability, ChatLLMProfileOutcome] = {}
     unexpected: set[Capability] = set()
     not_implemented: set[Capability] = set()
@@ -208,7 +265,12 @@ def diff_chatllm_data_profile(
         records = _matching_records(grant_records, capability, resource=resource, scope=scope)
         active = tuple(record for record in records if _is_active(record, now))
         data = is_chatllm_data_management(capability)
-        if policy.classification is ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED and active:
+        manager_exception = knowledge_manager and capability in KNOWLEDGE_MANAGER_GRANT_EXCEPTIONS
+        if (
+            policy.classification is ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED
+            and active
+            and not (manager_exception and capability in desired)
+        ):
             outcomes[capability] = ChatLLMProfileOutcome.UNEXPECTED_CONTROL_PLANE_GRANT
             unexpected.add(capability)
             continue
@@ -266,6 +328,7 @@ def diff_chatllm_data_profile(
         unexpected_control_plane=frozenset(unexpected),
         add=frozenset(add),
         renew=frozenset(renew),
+        knowledge_manager=knowledge_manager,
     )
 
 
@@ -276,12 +339,18 @@ def plan_chatllm_grant_actions(
     now: datetime,
     resource: str,
     scope: str,
+    knowledge_manager: bool = False,
 ) -> tuple[ChatLLMGrantAction, ...]:
-    """Deterministic add/renew set. Never includes control-plane names."""
+    """Deterministic add/renew set.
+
+    Never includes a control-plane name, except -- with `knowledge_manager=True`
+    for a bound Knowledge Manager -- the two `KNOWLEDGE_MANAGER_GRANT_EXCEPTIONS`
+    when the diff desires them. Omitting the flag fails closed to ordinary.
+    """
     grant_records = tuple(grants)
     actions: list[ChatLLMGrantAction] = []
     for capability in sorted(diff.desired_effective, key=lambda item: item.value):
-        if not is_chatllm_data_management(capability):
+        if not _is_desired_name(capability, knowledge_manager=knowledge_manager):
             continue
         purpose = chatllm_grant_purpose(capability)
         is_write = is_write_capability(capability)
@@ -327,6 +396,7 @@ def profile_diff_as_json(diff: ChatLLMProfileDiff) -> dict[str, object]:
     )
     return {
         "profile_version": diff.profile_version,
+        "knowledge_role": diff.knowledge_role(),
         "healthy": diff.is_healthy(),
         "desired_effective_count": len(diff.desired_effective),
         "desired_effective": sorted(item.value for item in diff.desired_effective),

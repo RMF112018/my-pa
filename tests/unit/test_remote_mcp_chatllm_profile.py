@@ -395,3 +395,148 @@ def test_v6_profile_apply_adds_the_knowledge_grants_only_with_the_plane_on(
         }
         for capability, (purpose, write) in sorted(knowledge.items(), key=lambda i: i[0].value)
     ]
+
+
+# ---- KLP Step 8: the Knowledge Manager exact-client exception ----------------------
+
+#: The Knowledge-Manager-exception pair: planned only for a bound manager.
+_MANAGER_PAIR = frozenset(
+    {Capability.KNOWLEDGE_ASSERTIONS_SUBMIT, Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT}
+)
+
+
+def _knowledge_settings(*, manager: bool) -> SimpleNamespace:
+    """Every plane on, the Knowledge plane too; CLIENT_ID bound as manager or not."""
+    return SimpleNamespace(
+        **{
+            **vars(_FULL_PLANE_SETTINGS),
+            "knowledge_assertions_enabled": True,
+            "chatllm_gateway_oauth_client_id_set": lambda: frozenset({CLIENT_ID}),
+            "knowledge_manager_oauth_client_id_set": (
+                (lambda: frozenset({CLIENT_ID})) if manager else frozenset
+            ),
+        }
+    )
+
+
+def _run(
+    repository: RemoteIdentityRepository,
+    command: str,
+    settings: SimpleNamespace,
+    capsys: pytest.CaptureFixture[str],
+) -> tuple[int, dict[str, object]]:
+    args = argparse.Namespace(
+        command=command,
+        oauth_client_id=CLIENT_ID,
+        scope=SCOPE,
+        resource=RESOURCE,
+        profile_version=CHATLLM_DATA_PROFILE_VERSION,
+        apply=command == "profile-apply",
+    )
+    code = _run_profile_command(
+        argparse.ArgumentParser(prog="remote_mcp"),
+        args,
+        repository,
+        settings,  # type: ignore[arg-type]
+        WHEN,
+    )
+    return code, json.loads(capsys.readouterr().out)
+
+
+def _converge_ordinary(repository: RemoteIdentityRepository) -> frozenset[Capability]:
+    """Grant every ordinary desired name with the Knowledge plane on."""
+    desired = desired_effective_capabilities(
+        composed_capabilities(
+            frozenset(_HANDLERS),
+            ChatLLMCompositionPlanes(
+                managed_documents=True,
+                relationship_intelligence=True,
+                relationship_intelligence_writes=True,
+                relationship_memory=True,
+                constraints=True,
+                knowledge_assertions=True,
+            ),
+        )
+    )
+    assert not _MANAGER_PAIR & desired
+    for capability in sorted(desired, key=lambda c: c.value):
+        repository.grant(
+            remote_client_id=CLIENT_UUID,
+            external_scope=SCOPE,
+            capability=capability,
+            now=WHEN,
+            is_write=is_write_capability(capability),
+            resource=RESOURCE,
+            expires_at=None,
+            purpose=chatllm_grant_purpose(capability),
+        )
+    return desired
+
+
+def test_manager_profile_plan_adds_submit_and_checkpoint_then_converges(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    settings = _knowledge_settings(manager=True)
+    with _repository() as (_, repository):
+        desired = _converge_ordinary(repository)
+        code, plan = _run(repository, "profile-plan", settings, capsys)
+        assert code == 1
+        assert plan["knowledge_role"] == "manager"
+        assert plan["unexpected_control_plane"] == []
+        assert plan["actions"] == [
+            {
+                "kind": "add",
+                "capability": capability.value,
+                "purpose": Purpose.KNOWLEDGE_ASSERTION_OBSERVATION.value,
+                "write": True,
+                "grant_id": None,
+            }
+            for capability in sorted(_MANAGER_PAIR, key=lambda c: c.value)
+        ]
+        code, applied = _run(repository, "profile-apply", settings, capsys)
+        assert code == 0 and applied["applied"] is True
+        rows = {
+            row.capability: row
+            for row in repository.list_capability_grants(remote_client_id=CLIENT_UUID)
+        }
+        assert len(rows) == len(desired) + 2
+        for capability in _MANAGER_PAIR:
+            row = rows[capability.value]
+            assert row.purpose == Purpose.KNOWLEDGE_ASSERTION_OBSERVATION.value
+            assert row.is_write is True
+            assert row.expires_at is None
+        code, diff = _run(repository, "profile-diff", settings, capsys)
+        assert code == 0
+        assert diff["healthy"] is True
+        assert diff["knowledge_role"] == "manager"
+        assert diff["unexpected_control_plane"] == []
+        for capability in _MANAGER_PAIR:
+            assert diff["outcomes"][capability.value] == "IMPLEMENTED_COMPOSED_GRANTED"  # type: ignore[index]
+
+
+def test_ordinary_profile_plan_never_adds_submit_or_checkpoint(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    settings = _knowledge_settings(manager=False)
+    with _repository() as (_, repository):
+        _converge_ordinary(repository)
+        code, plan = _run(repository, "profile-plan", settings, capsys)
+        assert code == 0
+        assert plan["knowledge_role"] == "ordinary"
+        assert plan["actions"] == []
+        for capability in sorted(_MANAGER_PAIR, key=lambda c: c.value):
+            repository.grant(
+                remote_client_id=CLIENT_UUID,
+                external_scope=SCOPE,
+                capability=capability,
+                now=WHEN,
+                is_write=True,
+                resource=RESOURCE,
+                expires_at=None,
+                purpose=Purpose.KNOWLEDGE_ASSERTION_OBSERVATION,
+            )
+        code, diff = _run(repository, "profile-diff", settings, capsys)
+        assert code == 1
+        assert diff["healthy"] is False
+        assert diff["unexpected_control_plane"] == sorted(c.value for c in _MANAGER_PAIR)
+        assert not set(diff["desired_effective"]) & {c.value for c in _MANAGER_PAIR}  # type: ignore[arg-type]

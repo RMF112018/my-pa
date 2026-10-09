@@ -45,7 +45,7 @@ All application pages require a verified session. `/sign-in`, `/setup`, and
 | `GET /api/meetings` | `meetings.list` | Lists Principal-owned Meetings with admitted filters and opaque continuation |
 | `GET /api/meetings/search` | `meetings.search` | Searches Principal-owned Meetings with admitted filters |
 | `GET /api/meetings/:meetingId` | `meetings.read` | Reads one Principal-owned Meeting |
-| `PATCH /api/meetings/:meetingId` | `meetings.update` | Applies an expected-version Meeting update |
+| `PATCH /api/meetings/:meetingId` | `meetings.update` | Applies an expected-version Meeting update; `meetingSeriesId` reassigns series membership (omitted: unchanged; a series id: attach or move; `null`: detach to standalone) |
 | `PATCH /api/meetings/series/:meetingSeriesId` | `meetings.series.update` | Applies an expected-version Meeting Series title update |
 | `GET /api/documents/:documentId` | `documents.read` | Reads one Principal-owned document version; bytes require explicit `includeBytes=true` |
 | `POST /api/documents/:documentId/archive` | `documents.archive` | Archives one Principal-owned managed document |

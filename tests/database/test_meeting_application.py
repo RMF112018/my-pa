@@ -916,7 +916,11 @@ def test_a_scalar_update_bumps_the_version_once(harness: Harness, stage: Stage) 
 
 
 def test_reschedule_cancel_and_reinstate_keep_identity(harness: Harness, stage: Stage) -> None:
-    """AC-007/AC-008/AC-001: meeting_id and series never change; cancelled_at is server-owned."""
+    """AC-008/AC-001: meeting_id survives; cancelled_at is server-owned.
+
+    Series membership is unchanged because no `meeting_series_id` is sent; it is
+    reassignable when one is (operator decision 2026-10-09, retiring AC-007).
+    """
     principal = stage.mine.principal_id
     seed = _created(harness, stage, series_title="Synthetic series")
     moved = harness.update(

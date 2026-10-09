@@ -414,7 +414,7 @@ composition and in every MCP publication that composition produces.
 | Capability | Purpose | Write | What it does |
 |---|---|---|---|
 | `meetings.create` | `meeting_authoring` | yes, additive | a standalone occurrence, the first occurrence of a new titled series, or a further occurrence of an existing series |
-| `meetings.update` | `meeting_authoring` | yes | scalar fields, reschedule, cancel or reinstate, attendee replacement, attachment add/remove, note append/replace, Project association |
+| `meetings.update` | `meeting_authoring` | yes | scalar fields, reschedule, cancel or reinstate, attendee replacement, attachment add/remove, note append/replace, Project association, series reassignment (attach, move or detach) |
 | `meetings.series.update` | `meeting_authoring` | yes | the series title only; no occurrence title changes |
 | `meetings.read` | `meeting_read` | no | the full Meeting: attendees, attachments, current note, description and link |
 | `meetings.list` | `meeting_read` | no | keyset-paged triage rows inside the caller's partition |
@@ -431,6 +431,15 @@ composition and in every MCP publication that composition produces.
   identity. A series is a titled grouping of explicitly created occurrences: there
   is no recurrence rule and nothing is expanded. A start is an aware instant with
   its IANA zone retained; a naive time is refused.
+- **Series membership is reassignable through `meetings.update`** (operator
+  decision 2026-10-09, retiring AC-007): an absent `meeting_series_id` leaves
+  membership unchanged; a series id attaches or moves the Meeting to an existing
+  series of the same principal (a missing or foreign series is refused as not
+  found); an explicit null detaches it to standalone. The Meeting keeps its
+  identity; a change bumps its version and is recorded in its history, receipt
+  and Record Event. The web BFF `PATCH /api/meetings/:meetingId` carries the
+  same three states as `meetingSeriesId`: omitted is never sent, and an explicit
+  null is forwarded as null.
 - **Minimization.** A `meetings.list` or `meetings.search` row has no
   description, virtual link, attendee identity or email, and no note body; only
   `meetings.read` on a named Meeting returns them. An absent Meeting and another

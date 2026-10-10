@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Decision date:** 2026-10-04
 - **Repository basis:** `main@3f575c02570c8fa733ecdc7bf0284fedc3c1d980`, tree `3667e3b7e1fd6a8d419deb57ebc2beaa2541789b`
-- **Authority:** Operator authorization of the Knowledge Layer readiness plan R5 as amended by R6 (`MYPA_KNOWLEDGE_LAYER_R6_PLAN_AMENDMENT_20261004.md`) and its machine contract, committed byte-exact as [`tests/architecture/klp_implementation_matrix_r6.json`](../../tests/architecture/klp_implementation_matrix_r6.json) (SHA-256 `ee2f2f8fc81a3e5e3f73e618a18fbf296ecd2a752d50499bf2e725e21e60de6a`). Where R6 differs from R5, R6 controls.
+- **Authority:** Operator authorization of the Knowledge Layer readiness plan R5 as amended by R6 (`MYPA_KNOWLEDGE_LAYER_R6_PLAN_AMENDMENT_20261004.md`) and its machine contract, committed byte-exact as [`tests/architecture/klp_implementation_matrix_r6.json`](../../tests/architecture/klp_implementation_matrix_r6.json) (SHA-256 `dc4ae067ea3f883ccafd20bbb60b977c8d895b8f9e0998cdb5376530e5068dcd`; amended for KLP Step 8 (Knowledge Manager) by operator decision 2026-10-09). Where R6 differs from R5, R6 controls.
 - **Scope:** A product-owned plane of canonical, evidence-backed Knowledge Assertions; its closed predicate registry; Review and operator authority derivation; classification rank and monotonicity; the frozen request digest and fingerprint; and the causal provenance bound.
 
 ## Context

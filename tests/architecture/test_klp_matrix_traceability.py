@@ -42,8 +42,9 @@ import pytest
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 MATRIX_PATH: Final = ROOT / "tests" / "architecture" / "klp_implementation_matrix_r6.json"
-#: SHA-256 of `MYPA_KNOWLEDGE_LAYER_IMPLEMENTATION_MATRIX_R6_20261004.json`.
-MATRIX_SHA256: Final = "ee2f2f8fc81a3e5e3f73e618a18fbf296ecd2a752d50499bf2e725e21e60de6a"
+#: SHA-256 of `MYPA_KNOWLEDGE_LAYER_IMPLEMENTATION_MATRIX_R6_20261004.json` as amended for
+#: KLP Step 8 (Knowledge Manager) by operator decision 2026-10-09.
+MATRIX_SHA256: Final = "dc4ae067ea3f883ccafd20bbb60b977c8d895b8f9e0998cdb5376530e5068dcd"
 #: Repository basis of the R6 contract.
 R6_BASIS_COMMIT: Final = "3f575c02570c8fa733ecdc7bf0284fedc3c1d980"
 

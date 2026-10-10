@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import inspect
+import itertools
+import json
 import traceback
 from pathlib import Path
 
@@ -1071,3 +1073,56 @@ def test_the_seal_compares_in_constant_time() -> None:
     source = inspect.getsource(CheckpointSeal.verify)
     assert "hmac.compare_digest(" in source
     assert "==" not in source.replace("seal_version != self.seal_version", "")
+
+
+# ---- KLP Step 8: the matrix `profile_contract.settings` against the real Settings ---
+
+_MATRIX_SETTINGS = json.loads(
+    (Path(__file__).parents[1] / "architecture" / "klp_implementation_matrix_r6.json").read_text(
+        encoding="utf-8"
+    )
+)["profile_contract"]["settings"]
+_ALLOWLIST_ENVS = {
+    "discovery": _DISCOVERY,
+    "operator-review": _OPERATOR_REVIEW,
+    "chatllm": _CHATLLM,
+    "manager": _MANAGER,
+}
+
+
+def test_every_matrix_knowledge_setting_is_a_settings_field() -> None:
+    names = [key for key in _MATRIX_SETTINGS if key.startswith(ENV_PREFIX)]
+    assert _MANAGER in names
+    for name in names:
+        assert name.removeprefix(ENV_PREFIX).lower() in Settings.model_fields, name
+
+
+def _starts(values: dict[str, str]) -> bool:
+    try:
+        load_settings({DATABASE_URL: _A_URL, _SIGNING_KEY: _A_KEY, **values})
+    except SettingsError:
+        return False
+    return True
+
+
+def test_the_pairs_that_may_share_a_client_id_are_exactly_the_matrix_overlap() -> None:
+    started = {
+        frozenset({first, second})
+        for first, second in itertools.combinations(_ALLOWLIST_ENVS, 2)
+        if _starts({_ALLOWLIST_ENVS[first]: "shared", _ALLOWLIST_ENVS[second]: "shared"})
+    }
+    assert started == {frozenset({"manager", "chatllm"})}
+    text = _MATRIX_SETTINGS["disjointness"]
+    assert "MY_PA_KNOWLEDGE_MANAGER_OAUTH_CLIENT_IDS" in text
+    assert "may overlap MY_PA_MCP_CHATLLM_GATEWAY_OAUTH_CLIENT_IDS" in text
+
+
+def test_the_lists_that_require_the_signing_key_are_exactly_the_matrix_ones() -> None:
+    required = set()
+    for role, env in _ALLOWLIST_ENVS.items():
+        try:
+            load_settings({DATABASE_URL: _A_URL, env: "synthetic-client"})
+        except SettingsError:
+            required.add(role)
+    assert required == {"discovery", "manager"}
+    assert "required when discovery or manager list non-empty" in _MATRIX_SETTINGS[_SIGNING_KEY]

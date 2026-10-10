@@ -5606,7 +5606,8 @@
   "knowledge_plane_switch": "MY_PA_KNOWLEDGE_ASSERTIONS_ENABLED=false by default; enabling requires Relationship Intelligence/entity plane composed",
   "discovery_binding_setting": "MY_PA_KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS exact allowlist",
   "operator_review_binding_setting": "MY_PA_KNOWLEDGE_OPERATOR_REVIEW_OAUTH_CLIENT_IDS exact allowlist",
-  "allowlist_disjointness": "discovery, operator-review, and existing ChatLLM gateway allowlists pairwise disjoint",
+  "manager_binding_setting": "MY_PA_KNOWLEDGE_MANAGER_OAUTH_CLIENT_IDS exact allowlist",
+  "allowlist_disjointness": "discovery, operator-review, and existing ChatLLM gateway allowlists pairwise disjoint; Knowledge Manager allowlist disjoint from discovery and operator-review, may overlap only the ChatLLM gateway allowlist",
   "discovery_profiles": {
    "knowledge-discovery-v1": [
     "knowledge.assertions.submit",
@@ -5622,13 +5623,16 @@
     "record_events.provenance"
    ]
   },
-  "deny_overlay": "one resolver (bootstrap/knowledge_discovery_profiles.py) returns overlaid (capabilities, capability_purposes): discovery-bound -> exact discovery profile; operator-review-bound -> knowledge-operator-review-v1; unbound -> minus submit/checkpoint; discovery-bound additionally never create/review.decide; applied even with conflicting grants",
+  "deny_overlay": "one resolver (bootstrap/knowledge_discovery_profiles.py) returns overlaid (capabilities, capability_purposes): discovery-bound -> exact discovery profile; operator-review-bound -> knowledge-operator-review-v1; Knowledge Manager-bound -> knowledge-manager-v1, additive (grants returned unchanged, so submit/checkpoint only when granted); unbound -> minus submit/checkpoint; discovery-bound additionally never create/review.decide; applied even with conflicting grants",
   "operator_review_profiles": {
    "knowledge-operator-review-v1": [
     "review.list",
     "review.decide",
     "knowledge.assertions.read"
    ]
+  },
+  "manager_profiles": {
+   "knowledge-manager-v1": "additive overlay, no capability set: every granted capability kept; never a key of KNOWLEDGE_CLIENT_PROFILES"
   },
   "operator_surface": "OperatorSurface {cli, http_gateway}; Authorization.operator_surface default None (fail-closed)",
   "review_authority_derivation": [
@@ -5683,7 +5687,7 @@
    {
     "operator_surface": "none",
     "transport": "remote_client",
-    "client": "present, not in operator-review allowlist",
+    "client": "present, not in the operator-review or Knowledge Manager allowlist",
     "principal_is_operator": "any",
     "authority_class": "ordinary_reviewer",
     "decision_channel": "remote_interactive"
@@ -5703,15 +5707,24 @@
     "principal_is_operator": "any",
     "authority_class": "REFUSED for Knowledge review.decide (unsupported)",
     "decision_channel": "-"
+   },
+   {
+    "operator_surface": "none",
+    "transport": "remote_client",
+    "client": "in Knowledge Manager allowlist",
+    "principal_is_operator": "any",
+    "authority_class": "remote_operator_attested",
+    "decision_channel": "remote_operator_review"
    }
   ],
   "settings": {
    "MY_PA_KNOWLEDGE_ASSERTIONS_ENABLED": "bool, default false",
    "MY_PA_KNOWLEDGE_DISCOVERY_OAUTH_CLIENT_IDS": "exact comma list, default empty",
    "MY_PA_KNOWLEDGE_OPERATOR_REVIEW_OAUTH_CLIENT_IDS": "exact comma list, default empty (operator decision KLP-OD-005)",
-   "MY_PA_KNOWLEDGE_CHECKPOINT_SIGNING_KEY": "str Field(default='', repr=False); 32-128 UTF-8 bytes; required when discovery list non-empty",
+   "MY_PA_KNOWLEDGE_MANAGER_OAUTH_CLIENT_IDS": "exact comma list, default empty",
+   "MY_PA_KNOWLEDGE_CHECKPOINT_SIGNING_KEY": "str Field(default='', repr=False); 32-128 UTF-8 bytes; required when discovery or manager list non-empty",
    "MY_PA_KNOWLEDGE_CHECKPOINT_SEAL_VERSION": "int >= 1, default 1",
-   "disjointness": "discovery, operator-review and MY_PA_MCP_CHATLLM_GATEWAY_OAUTH_CLIENT_IDS pairwise disjoint (Settings._check, settings.py:612)"
+   "disjointness": "discovery, operator-review and MY_PA_MCP_CHATLLM_GATEWAY_OAUTH_CLIENT_IDS pairwise disjoint; MY_PA_KNOWLEDGE_MANAGER_OAUTH_CLIENT_IDS disjoint from discovery and operator-review, may overlap MY_PA_MCP_CHATLLM_GATEWAY_OAUTH_CLIENT_IDS (Settings._check_knowledge_bindings, settings.py:763)"
   }
  },
  "global_lock_order": [

@@ -21,6 +21,11 @@ remote channel (as the service stores it), satisfies the frozen CHECK
 `knowledge_decision_channel_matches_authority` (restated and pinned to the
 matrix expression), and there is no feedback-relay role among the five
 channels and three classes.
+
+KLP Step 8 (operator decision 2026-10-09) appends matrix row 10: a client in the
+Knowledge Manager allowlist on the remote transport is `remote_operator_attested`
+over `remote_operator_review`, exactly like an operator-review client; row 7 now
+excludes both allowlists.
 """
 
 from __future__ import annotations
@@ -58,6 +63,7 @@ MATRIX: Final = json.loads(
 REVIEWER: Final = "synthetic-operator-review"
 CHAT: Final = "synthetic-chatllm"
 DISCOVERY: Final = "synthetic-discovery"
+MANAGER: Final = "synthetic-knowledge-manager"
 ALLOWLIST: Final = frozenset({REVIEWER})
 LOCAL: Final = CaptureTransport.LOCAL
 REMOTE: Final = CaptureTransport.REMOTE_CLIENT
@@ -91,7 +97,7 @@ def _derive(
 
 def test_the_matrix_table_has_the_rows_this_module_proves() -> None:
     rows = MATRIX["profile_contract"]["review_authority_derivation"]
-    assert len(rows) == 9
+    assert len(rows) == 10
     assert {row["authority_class"] for row in rows} == {
         "local_operator",
         "ordinary_reviewer",
@@ -364,3 +370,60 @@ def test_there_is_no_feedback_relay_role() -> None:
         "remote_operator_attested",
     }
     assert not [member for member in KnowledgeDecisionChannel if "feedback" in member.value]
+
+
+# ---- KLP Step 8: matrix row 10, the Knowledge Manager allowlist ------------------
+
+
+def _derive_with_manager(
+    *, transport: CaptureTransport, client: str | None, operator: bool = True
+) -> tuple[KnowledgeReviewAuthorityClass, KnowledgeDecisionChannel]:
+    return derive_knowledge_review_authority(
+        operator_surface=None,
+        transport=transport,
+        principal_is_operator=operator,
+        authenticated_client_id=client,
+        operator_review_allowlist=ALLOWLIST,
+        manager_allowlist=frozenset({MANAGER}),
+    )
+
+
+def _matrix_row(client: str) -> dict[str, object]:
+    (row,) = [
+        row
+        for row in MATRIX["profile_contract"]["review_authority_derivation"]
+        if row["client"] == client
+    ]
+    return row
+
+
+@pytest.mark.parametrize("operator", [True, False])
+def test_row_10_a_knowledge_manager_client_is_remote_operator_attested(operator: bool) -> None:
+    row = _matrix_row("in Knowledge Manager allowlist")
+    assert (row["operator_surface"], row["transport"], row["principal_is_operator"]) == (
+        "none",
+        "remote_client",
+        "any",
+    )
+    assert _derive_with_manager(transport=REMOTE, client=MANAGER, operator=operator) == (
+        KnowledgeReviewAuthorityClass(row["authority_class"]),
+        KnowledgeDecisionChannel(row["decision_channel"]),
+    )
+
+
+@pytest.mark.parametrize("client", [CHAT, DISCOVERY, f"{MANAGER}-x", MANAGER[:-1], MANAGER.upper()])
+def test_row_7_with_a_manager_allowlist_any_other_remote_client_stays_interactive(
+    client: str,
+) -> None:
+    row = _matrix_row("present, not in the operator-review or Knowledge Manager allowlist")
+    assert _derive_with_manager(transport=REMOTE, client=client) == (
+        KnowledgeReviewAuthorityClass(row["authority_class"]),
+        KnowledgeDecisionChannel(row["decision_channel"]),
+    )
+
+
+def test_a_local_transport_manager_client_is_never_attested() -> None:
+    assert _derive_with_manager(transport=LOCAL, client=MANAGER) == (
+        ORDINARY,
+        KnowledgeDecisionChannel.LOCAL_UNATTESTED,
+    )

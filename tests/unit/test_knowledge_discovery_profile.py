@@ -435,3 +435,24 @@ def test_role_order_is_narrowest_first_so_a_hand_built_overlap_fails_closed() ->
     assert is_knowledge_manager(overlap, MANAGER)
     assert not is_knowledge_manager(overlap, "both-d")
     assert not is_knowledge_manager(overlap, None)
+
+
+def test_the_matrix_manager_profile_is_the_additive_overlay_name() -> None:
+    contract = MATRIX["profile_contract"]
+    assert set(contract["manager_profiles"]) == {KNOWLEDGE_MANAGER_V1}
+    assert not set(contract["manager_profiles"]) & set(KNOWLEDGE_CLIENT_PROFILES)
+    assert KNOWLEDGE_MANAGER_V1 in contract["deny_overlay"]
+    assert "additive" in contract["manager_profiles"][KNOWLEDGE_MANAGER_V1]
+
+
+@pytest.mark.parametrize(
+    "held", [frozenset(), frozenset({SUBMIT}), frozenset({SUBMIT, CHECKPOINT})]
+)
+def test_a_matrix_manager_overlay_returns_the_grants_unchanged(held: frozenset[Capability]) -> None:
+    """The matrix `deny_overlay` clause: grants unchanged, submit/checkpoint only when granted."""
+    assert "grants returned unchanged" in MATRIX["profile_contract"]["deny_overlay"]
+    granted = BROAD | held
+    capabilities, purposes = _overlay_of(MANAGER, granted)
+    assert capabilities == granted
+    assert purposes == _pairs(granted)
+    assert capabilities & {SUBMIT, CHECKPOINT} == held

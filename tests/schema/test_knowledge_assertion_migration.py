@@ -69,8 +69,9 @@ SCHEMA: Final = "knowledge"
 REVISION: Final = "6734f039f7a6"
 PREVIOUS: Final = "0641c354ca85"
 #: The chain head. `93f3aa113f58` (Intelligence focus-area admission) is additive
-#: on `REVISION`, so a database upgraded to head stands there.
-HEAD: Final = "93f3aa113f58"
+#: on `REVISION`, and `a591b81f10a2` (Intelligence report type registry) is
+#: additive on it, so a database upgraded to head stands there.
+HEAD: Final = "a591b81f10a2"
 MIGRATION: Final = VERSIONS / "20261004_6734f039f7a6_knowledge_assertion_layer.py"
 RESTRICT_VIOLATION: Final = "23001"
 FOREIGN_KEY_VIOLATION: Final = "23503"
@@ -184,16 +185,18 @@ def test_the_revision_is_directly_on_0641c354ca85_under_one_later_head() -> None
     """AC-076: one current head; the revision was generated from the sole head."""
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == REVISION
+    assert script.get_revision(HEAD).down_revision == "93f3aa113f58"
+    assert script.get_revision("93f3aa113f58").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert _revision().revision == REVISION
     assert _revision().down_revision == PREVIOUS
     migration_contract = _matrix()["migration_contract"]
     assert migration_contract["current_head"] == PREVIOUS
     files = sorted(VERSIONS.glob("*.py"))
-    # R6 counted 112 files at this revision; `HEAD` is the one file added since.
+    # R6 counted 112 files at this revision; `93f3aa113f58` and `HEAD` are the
+    # two files added since.
     assert migration_contract["expected_post_r6_revision_file_count"] == 112
-    assert len(files) == 113
+    assert len(files) == 114
     assert [path.name for path in VERSIONS.glob("*_knowledge_assertion_layer.py")] == [
         MIGRATION.name
     ]
@@ -2068,11 +2071,20 @@ def _admitted(connection: Connection, table: str, constraint: str) -> tuple[str,
     return tuple(re.findall(r"'([^']+)'::text", str(definition)))
 
 
+#: The capabilities the head `a591b81f10a2` (Intelligence report type registry)
+#: admits after this revision; it restates A1 in place and changes nothing else
+#: this module inventories.
+_ADMITTED_AFTER_THIS_REVISION: Final = frozenset({"reports.types.create", "reports.types.list"})
+
+
 def _assert_alters(connection: Connection) -> None:
+    """Called at the chain head, which stands above this revision."""
     alters = _alters()
-    assert _admitted(connection, "audit_events", "capability_is_known") == tuple(
+    admitted = _admitted(connection, "audit_events", "capability_is_known")
+    assert tuple(name for name in admitted if name not in _ADMITTED_AFTER_THIS_REVISION) == tuple(
         alters["A1"]["after_literal"]
     )
+    assert set(admitted) - set(alters["A1"]["after_literal"]) == _ADMITTED_AFTER_THIS_REVISION
     assert _admitted(connection, "audit_events", "purpose_is_known") == tuple(
         alters["A2"]["after_literal"]
     )

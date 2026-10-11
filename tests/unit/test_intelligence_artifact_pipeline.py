@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from my_pa.adapters.normalization import normalize
@@ -16,6 +18,7 @@ from my_pa.application.commands import (
     SearchIntelligenceArtifacts,
 )
 from my_pa.application.errors import InvalidRequestError
+from my_pa.application.intelligence import InMemoryIntelligenceStore
 from my_pa.application.producer_origin import ProducerOrigin
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.v1.envelope import ResponseEnvelope
@@ -23,6 +26,7 @@ from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.intelligence.catalog import (
+    BUILTIN_REPORT_TYPES,
     CYCLE_MORNING_INTELLIGENCE,
     EXPECTED_FOCUS_AREAS,
     EXPECTED_SOURCE_LANES,
@@ -35,11 +39,17 @@ from my_pa.domain.intelligence.catalog import (
     FocusAreaId,
     IntelligenceStage,
     ProducerRunState,
+    ReportTypeOrigin,
     ResolverSetId,
     SourceLaneId,
     expected_members,
+    parse_artifact_kind,
 )
-from my_pa.domain.intelligence.models import content_digest
+from my_pa.domain.intelligence.models import (
+    ReportTypeDefinition,
+    builtin_report_type_definitions,
+    content_digest,
+)
 from tests.conftest import Scene, build_service, metadata_for, operator
 
 FOCUS = FocusAreaId.COMMUNICATIONS
@@ -1695,3 +1705,125 @@ def _area_of(scene: Scene, artifact_id: str) -> FocusAreaId | None:
     artifact = scene.world.intelligence.get_artifact(scene.principal.principal_id, artifact_id)
     assert artifact is not None
     return artifact.focus_area_id
+
+
+# ---- the report type registry: domain and the FAST-tier store ------------------------
+
+
+def test_parse_artifact_kind_keeps_builtins_as_members_and_validates_tokens() -> None:
+    for kind in ArtifactKind:
+        assert parse_artifact_kind(kind.value) is kind
+    parsed = parse_artifact_kind("weekly_digest")
+    assert parsed == "weekly_digest"
+    assert type(parsed) is str
+    assert parse_artifact_kind("w" * 64) == "w" * 64
+    for bad in ("", "Weekly", "9weekly", "weekly-digest", "weekly digest", "w" * 65, None, 7):
+        with pytest.raises(ValueError, match="artifact_kind"):
+            parse_artifact_kind(bad)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"artifact_kind": "Weekly"}, "artifact_kind"),
+        ({"description": ""}, "description"),
+        ({"description": "d" * 501}, "description"),
+        ({"display_name": ""}, "display name"),
+        ({"display_name": "n" * 121}, "display name"),
+        ({"artifact_kind": "focus_report"}, "built-in"),
+        ({"origin": ReportTypeOrigin.BUILTIN}, "built-in"),
+        (
+            {"origin": ReportTypeOrigin.BUILTIN, "artifact_kind": "morning_brief"},
+            "built-in",
+        ),
+        ({"stage": "reporter"}, "stage"),
+    ],
+)
+def test_a_report_type_definition_refuses_each_malformed_field(
+    overrides: dict[str, object], message: str
+) -> None:
+    fields: dict[str, object] = {
+        "artifact_kind": "weekly_digest",
+        "stage": IntelligenceStage.REPORTER,
+        "description": "A weekly digest.",
+        "origin": ReportTypeOrigin.CLIENT,
+        "display_name": None,
+        **overrides,
+    }
+    with pytest.raises(ValueError, match=message):
+        ReportTypeDefinition(**fields)  # type: ignore[arg-type]
+
+
+def test_the_builtin_definitions_are_the_five_pairs_and_fingerprint_stably() -> None:
+    definitions = builtin_report_type_definitions()
+    assert [(d.artifact_kind, d.stage) for d in definitions] == [
+        (kind, stage) for kind, stage, _, _ in BUILTIN_REPORT_TYPES
+    ]
+    assert all(d.origin is ReportTypeOrigin.BUILTIN for d in definitions)
+    assert all(isinstance(d.artifact_kind, ArtifactKind) for d in definitions)
+    assert len({d.fingerprint for d in definitions}) == 5
+    weekly = ReportTypeDefinition(
+        artifact_kind="weekly_digest",
+        stage=IntelligenceStage.REPORTER,
+        description="A weekly digest.",
+        origin=ReportTypeOrigin.CLIENT,
+    )
+    renamed = ReportTypeDefinition(
+        artifact_kind="weekly_digest",
+        stage=IntelligenceStage.REPORTER,
+        description="A weekly digest.",
+        origin=ReportTypeOrigin.CLIENT,
+        display_name="Weekly",
+    )
+    assert weekly.fingerprint != renamed.fingerprint
+    assert (
+        weekly.fingerprint
+        == ReportTypeDefinition(
+            artifact_kind="weekly_digest",
+            stage=IntelligenceStage.REPORTER,
+            description="A weekly digest.",
+            origin=ReportTypeOrigin.CLIENT,
+        ).fingerprint
+    )
+
+
+def test_the_in_memory_registry_is_idempotent_ordered_and_principal_isolated() -> None:
+    when = datetime(2026, 10, 11, 12, tzinfo=UTC)
+    store = InMemoryIntelligenceStore()
+    owner = operator().principal_id
+    other = operator().principal_id
+    weekly = ReportTypeDefinition(
+        artifact_kind="weekly_digest",
+        stage=IntelligenceStage.REPORTER,
+        description="A weekly digest.",
+        origin=ReportTypeOrigin.CLIENT,
+    )
+    first = store.insert_report_type(owner, weekly, created_at=when)
+    assert first.inserted is True
+    assert first.report_type.definition_fingerprint == weekly.fingerprint
+    replay = store.insert_report_type(
+        owner,
+        ReportTypeDefinition(
+            artifact_kind="weekly_digest",
+            stage=IntelligenceStage.REPORTER,
+            description="Changed.",
+            origin=ReportTypeOrigin.CLIENT,
+        ),
+        created_at=when,
+    )
+    assert replay.inserted is False
+    assert replay.report_type == first.report_type
+    assert store.ensure_builtin_report_types(owner, created_at=when) == 5
+    assert store.ensure_builtin_report_types(owner, created_at=when) == 0
+    listed = store.list_report_types(owner)
+    assert [(r.definition.stage.value, str(r.definition.artifact_kind)) for r in listed] == sorted(
+        [(stage.value, kind.value) for kind, stage, _, _ in BUILTIN_REPORT_TYPES]
+        + [("reporter", "weekly_digest")]
+    )
+    assert [
+        str(r.definition.artifact_kind)
+        for r in store.list_report_types(owner, stage=IntelligenceStage.REPORTER)
+    ] == ["focus_report", "weekly_digest"]
+    assert store.list_report_types(other) == ()
+    assert store.get_report_type(other, "weekly_digest") is None
+    assert store.get_report_type(owner, "weekly_digest") == first.report_type

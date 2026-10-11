@@ -7,12 +7,15 @@ future focus area or stage is a catalog change, not a schema redesign.
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from typing import Final
 
 __all__ = [
     "ALLOWED_PROVENANCE_URL_SCHEMES",
     "ARTIFACT_KIND_FOR_STAGE",
+    "ARTIFACT_KIND_TOKEN",
+    "BUILTIN_REPORT_TYPES",
     "CYCLE_MORNING_INTELLIGENCE",
     "EXPECTED_FOCUS_AREAS",
     "EXPECTED_SOURCE_LANES",
@@ -20,6 +23,8 @@ __all__ = [
     "MAX_ARTIFACT_BODY_BYTES",
     "MAX_IDEMPOTENCY_KEY_LENGTH",
     "MAX_MORNING_BRIEF_DEPENDENCY_COUNT",
+    "MAX_REPORT_TYPE_DESCRIPTION_CHARACTERS",
+    "MAX_REPORT_TYPE_DISPLAY_NAME_CHARACTERS",
     "MAX_STRUCTURED_CONTENT_BYTES",
     "MIN_SYNTHESIZER_DEPENDENCY_COUNT",
     "REQUIRED_DEPENDENCY_COUNT",
@@ -35,10 +40,12 @@ __all__ = [
     "ProducerRunState",
     "ProvenanceRelation",
     "ReadinessMemberState",
+    "ReportTypeOrigin",
     "ResolverAggregateState",
     "ResolverSetId",
     "SourceLaneId",
     "expected_members",
+    "parse_artifact_kind",
     "validate_stage_coordinates",
 ]
 
@@ -96,6 +103,18 @@ class ArtifactKind(StrEnum):
     SYNTHESIS_PACKAGE = "synthesis_package"
     FOCUS_REPORT = "focus_report"
     MORNING_BRIEF = "morning_brief"
+
+
+class ReportTypeOrigin(StrEnum):
+    """Who defined a registered report type.
+
+    ``builtin`` rows restate the five ``ArtifactKind`` members for one Principal;
+    ``client`` rows are additive kinds a Principal registered. A client row can
+    never redefine a built-in kind.
+    """
+
+    BUILTIN = "builtin"
+    CLIENT = "client"
 
 
 class ArtifactState(StrEnum):
@@ -202,6 +221,66 @@ ARTIFACT_KIND_FOR_STAGE: Final[dict[IntelligenceStage, ArtifactKind]] = {
 STAGE_FOR_KIND: Final[dict[ArtifactKind, IntelligenceStage]] = {
     kind: stage for stage, kind in ARTIFACT_KIND_FOR_STAGE.items()
 }
+
+#: The shape of every artifact kind, built-in or registered: lower snake case,
+#: one to sixty-four characters, starting with a letter. The registry revision
+#: restates it as the POSIX pattern ``^[a-z][a-z0-9_]{0,63}$``.
+ARTIFACT_KIND_TOKEN: Final = re.compile(r"\A[a-z][a-z0-9_]{0,63}\Z")
+MAX_REPORT_TYPE_DESCRIPTION_CHARACTERS: Final = 500
+MAX_REPORT_TYPE_DISPLAY_NAME_CHARACTERS: Final = 120
+
+#: The built-in report types as (kind, stage, description, display name), in
+#: pipeline order. Authoritative in code; the registry revision seeds the same
+#: definitions as frozen literals for every Principal already on the plane.
+BUILTIN_REPORT_TYPES: Final[tuple[tuple[ArtifactKind, IntelligenceStage, str, str], ...]] = (
+    (
+        ArtifactKind.COLLECTOR_CANDIDATES,
+        IntelligenceStage.COLLECTOR,
+        "Candidate items a collector gathered for one focus area.",
+        "Collector candidates",
+    ),
+    (
+        ArtifactKind.RESEARCH_CONTEXT,
+        IntelligenceStage.RESEARCHER,
+        "Research context one source lane gathered for one focus area.",
+        "Research context",
+    ),
+    (
+        ArtifactKind.SYNTHESIS_PACKAGE,
+        IntelligenceStage.SYNTHESIZER,
+        "Synthesis of the researched source lanes for one focus area.",
+        "Synthesis package",
+    ),
+    (
+        ArtifactKind.FOCUS_REPORT,
+        IntelligenceStage.REPORTER,
+        "Focus-area report for one focus area.",
+        "Focus report",
+    ),
+    (
+        ArtifactKind.MORNING_BRIEF,
+        IntelligenceStage.MORNING_BRIEF,
+        "Daily Briefing assembled from the focus-area reports.",
+        "Daily Briefing",
+    ),
+)
+
+
+def parse_artifact_kind(value: object) -> str:
+    """A persisted or supplied artifact kind as a validated token.
+
+    A built-in kind comes back as its ``ArtifactKind`` member, so built-ins
+    behave exactly as before; any other well-formed token comes back as a plain
+    ``str``. Whether that token is registered for a Principal is the registry's
+    question, not this function's.
+    """
+    if not isinstance(value, str) or ARTIFACT_KIND_TOKEN.fullmatch(value) is None:
+        raise ValueError("artifact_kind is not a lower_snake token of 1 to 64 characters")
+    try:
+        return ArtifactKind(value)
+    except ValueError:
+        return str(value)
+
 
 #: Exact dependency count for every stage whose dependency set is fixed. The
 #: Synthesizer is deliberately absent: it takes any non-empty set of distinct

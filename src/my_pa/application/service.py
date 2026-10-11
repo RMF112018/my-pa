@@ -13720,7 +13720,7 @@ class ApplicationService:
                 if artifact.focus_area_id is None
                 else artifact.focus_area_id.value,
                 "stage": artifact.stage.value,
-                "artifact_kind": artifact.artifact_kind.value,
+                "artifact_kind": str(artifact.artifact_kind),
                 "source_lane": None if artifact.source_lane is None else artifact.source_lane.value,
                 "report_date": artifact.report_date.isoformat(),
                 "artifact_state": artifact.artifact_state.value,
@@ -13796,7 +13796,7 @@ class ApplicationService:
             if artifact.focus_area_id is None
             else artifact.focus_area_id.value,
             "stage": artifact.stage.value,
-            "artifact_kind": artifact.artifact_kind.value,
+            "artifact_kind": str(artifact.artifact_kind),
             "source_lane": None if artifact.source_lane is None else artifact.source_lane.value,
             "report_date": artifact.report_date.isoformat(),
             "title": artifact.title,
@@ -13848,7 +13848,7 @@ class ApplicationService:
                 "report_id": artifact.artifact_id,
                 "cycle_run_id": artifact.cycle_run_id,
                 "stage": artifact.stage.value,
-                "artifact_kind": artifact.artifact_kind.value,
+                "artifact_kind": str(artifact.artifact_kind),
                 "focus_area_id": None
                 if artifact.focus_area_id is None
                 else artifact.focus_area_id.value,
@@ -13904,7 +13904,7 @@ class ApplicationService:
                         "report_id": artifact.artifact_id,
                         "cycle_run_id": artifact.cycle_run_id,
                         "stage": artifact.stage.value,
-                        "artifact_kind": artifact.artifact_kind.value,
+                        "artifact_kind": str(artifact.artifact_kind),
                         "focus_area_id": None
                         if artifact.focus_area_id is None
                         else artifact.focus_area_id.value,
@@ -13956,7 +13956,7 @@ class ApplicationService:
                         "snippet": snippet,
                         "cycle_run_id": artifact.cycle_run_id,
                         "stage": artifact.stage.value,
-                        "artifact_kind": artifact.artifact_kind.value,
+                        "artifact_kind": str(artifact.artifact_kind),
                     }
                     for artifact, snippet in found
                 ]

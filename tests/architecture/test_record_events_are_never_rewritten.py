@@ -72,11 +72,15 @@ RAW_REWRITE: Final = re.compile(
     re.IGNORECASE,
 )
 #: MR-C20 (operator ruling on D-1, 2026-10-01). A revision names the feed when it
-#: refers to either table. The capability token `record_events.list` is not a
-#: table reference: the negative lookahead keeps a vocabulary restatement from
-#: matching, and `record_event_sequences` has no such token. Raw SQL, a
-#: SQLAlchemy `Table` or `table()`, and `{SCHEMA}.record_events` still match.
-FEED_TABLE_REFERENCE: Final = re.compile(r"\brecord_events\b(?!\.list)|\brecord_event_sequences\b")
+#: refers to either table. The capability tokens `record_events.list` and
+#: `record_events.provenance` are not table references: the negative lookahead
+#: keeps a vocabulary restatement (the report type registry revision byte-copies `6734f039f7a6`'s
+#: capability literal) from matching, and `record_event_sequences` has no such
+#: token. Raw SQL, a SQLAlchemy `Table` or `table()`, and
+#: `{SCHEMA}.record_events` still match.
+FEED_TABLE_REFERENCE: Final = re.compile(
+    r"\brecord_events\b(?!\.(list|provenance)\b)|\brecord_event_sequences\b"
+)
 DROP_TRIGGER: Final = re.compile(r"DROP\s+TRIGGER\s+(IF\s+EXISTS\s+)?record_events_are_append_only")
 
 

@@ -1245,6 +1245,9 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             "intelligence_commit_receipts_are_append_only",
             "intelligence_pipeline_dependencies_are_append_only",
             "intelligence_provenance_refs_are_append_only",
+            # The report type registry's rows are immutable on the plane's own
+            # append-only function.
+            "intelligence_report_types_are_append_only",
             # The Relationship Memory plane's two append-only triggers, named for
             # the same reason as the report plane's above.
             "relationship_memory_versions_are_append_only",

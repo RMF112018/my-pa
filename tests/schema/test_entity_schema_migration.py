@@ -379,6 +379,9 @@ STACKED_ABOVE: Final[frozenset[str]] = frozenset(
         "knowledge_submission_trigger_events",
         "knowledge_discovery_checkpoints",
         "knowledge_discovery_checkpoint_requests",
+        # The Intelligence report type registry's table, stacked above by
+        # the same argument.
+        "intelligence_report_types",
     }
 )
 

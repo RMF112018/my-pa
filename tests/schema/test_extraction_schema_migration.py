@@ -516,6 +516,8 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "knowledge_discovery_checkpoint_requests",
         }
     ),
+    # The Intelligence report type registry: one per-Principal table.
+    "a591b81f10a2": frozenset({"intelligence_report_types"}),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

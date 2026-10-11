@@ -273,6 +273,8 @@ def test_downgrading_one_step_removes_exactly_these_two_tables(migrated_engine: 
         "knowledge_submission_trigger_events",
         "knowledge_discovery_checkpoints",
         "knowledge_discovery_checkpoint_requests",
+        # The Intelligence report type registry's table, stacked above.
+        "intelligence_report_types",
     }
     assert {
         "entities",

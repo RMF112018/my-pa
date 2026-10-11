@@ -16,6 +16,9 @@ from typing import Any, Final
 
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.intelligence.catalog import (
+    BUILTIN_REPORT_TYPES,
+    MAX_REPORT_TYPE_DESCRIPTION_CHARACTERS,
+    MAX_REPORT_TYPE_DISPLAY_NAME_CHARACTERS,
     ArtifactKind,
     ArtifactState,
     CycleState,
@@ -23,7 +26,9 @@ from my_pa.domain.intelligence.catalog import (
     IntelligenceStage,
     ProducerRunState,
     ProvenanceRelation,
+    ReportTypeOrigin,
     SourceLaneId,
+    parse_artifact_kind,
 )
 
 __all__ = [
@@ -33,7 +38,11 @@ __all__ = [
     "IntelligencePipelineDependency",
     "IntelligenceProducerRun",
     "IntelligenceProvenanceRef",
+    "IntelligenceReportType",
     "MutationAdmission",
+    "ReportTypeDefinition",
+    "ReportTypeInsertion",
+    "builtin_report_type_definitions",
     "content_digest",
     "content_utf8_bytes",
     "fingerprint_payload",
@@ -91,7 +100,9 @@ class IntelligenceProducerRun:
     principal_id: str
     cycle_run_id: str
     stage: IntelligenceStage
-    artifact_kind: ArtifactKind
+    #: A validated kind token: an ``ArtifactKind`` member for a built-in kind,
+    #: otherwise a kind registered for this Principal at ``stage``.
+    artifact_kind: str
     state: ProducerRunState
     version: int
     producer_task_id: str
@@ -113,6 +124,7 @@ class IntelligenceProducerRun:
         validate_identifier(self.run_id, IdKind.INTELLIGENCE_RUN)
         validate_identifier(self.principal_id, IdKind.PRINCIPAL)
         validate_identifier(self.cycle_run_id, IdKind.INTELLIGENCE_CYCLE_RUN)
+        object.__setattr__(self, "artifact_kind", parse_artifact_kind(self.artifact_kind))
         if self.version < 1:
             raise ValueError("run version starts at one")
 
@@ -160,7 +172,8 @@ class IntelligenceArtifact:
     cycle_run_id: str
     producer_run_id: str
     stage: IntelligenceStage
-    artifact_kind: ArtifactKind
+    #: A validated kind token; see ``IntelligenceProducerRun.artifact_kind``.
+    artifact_kind: str
     report_date: date
     title: str
     body_markdown: str
@@ -190,6 +203,7 @@ class IntelligenceArtifact:
         validate_identifier(self.principal_id, IdKind.PRINCIPAL)
         validate_identifier(self.cycle_run_id, IdKind.INTELLIGENCE_CYCLE_RUN)
         validate_identifier(self.producer_run_id, IdKind.INTELLIGENCE_RUN)
+        object.__setattr__(self, "artifact_kind", parse_artifact_kind(self.artifact_kind))
         if self.supersedes_artifact_id is not None:
             validate_identifier(self.supersedes_artifact_id, IdKind.INTELLIGENCE_ARTIFACT)
         if self.version < 1:
@@ -198,6 +212,99 @@ class IntelligenceArtifact:
             raise ValueError("content digest is lowercase hex SHA-256")
         if self.content_bytes < 0:
             raise ValueError("content byte count cannot be negative")
+
+
+@dataclass(frozen=True, slots=True)
+class ReportTypeDefinition:
+    """One report type's definition, without the Principal it is registered for.
+
+    The Principal is never part of a definition: a store stamps it from its own
+    scope, so a definition cannot name somebody else's registry.
+    """
+
+    artifact_kind: str
+    stage: IntelligenceStage
+    description: str
+    origin: ReportTypeOrigin
+    display_name: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "artifact_kind", parse_artifact_kind(self.artifact_kind))
+        if not isinstance(self.stage, IntelligenceStage):
+            raise ValueError("a report type names a known stage")
+        if not isinstance(self.origin, ReportTypeOrigin):
+            raise ValueError("a report type names a known origin")
+        if not 1 <= len(self.description) <= MAX_REPORT_TYPE_DESCRIPTION_CHARACTERS:
+            raise ValueError("a report type description is 1 to 500 characters")
+        if self.display_name is not None and not (
+            1 <= len(self.display_name) <= MAX_REPORT_TYPE_DISPLAY_NAME_CHARACTERS
+        ):
+            raise ValueError("a report type display name is 1 to 120 characters")
+        builtin = isinstance(self.artifact_kind, ArtifactKind)
+        if self.origin is ReportTypeOrigin.CLIENT and builtin:
+            raise ValueError("a client report type cannot redefine a built-in kind")
+        if self.origin is ReportTypeOrigin.BUILTIN and (
+            not builtin
+            or (self.artifact_kind, self.stage)
+            not in {(kind, stage) for kind, stage, _, _ in BUILTIN_REPORT_TYPES}
+        ):
+            raise ValueError("a built-in report type is one of the built-in kind and stage pairs")
+
+    @property
+    def fingerprint(self) -> str:
+        """SHA-256 of the canonical definition; replay compares this."""
+        return fingerprint_payload(
+            {
+                "artifact_kind": str(self.artifact_kind),
+                "description": self.description,
+                "display_name": self.display_name,
+                "stage": self.stage.value,
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class IntelligenceReportType:
+    """One registered report type, as stored for one Principal. Immutable."""
+
+    principal_id: str
+    definition: ReportTypeDefinition
+    definition_fingerprint: str
+    created_at: datetime
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        if (
+            len(self.definition_fingerprint) != 64
+            or self.definition_fingerprint != self.definition_fingerprint.lower()
+        ):
+            raise ValueError("definition fingerprint is lowercase hex SHA-256")
+
+
+@dataclass(frozen=True, slots=True)
+class ReportTypeInsertion:
+    """Result of an insert-if-absent: the stored row and whether this call wrote it.
+
+    ``inserted`` is False when a row for the kind already existed; the stored
+    row is then the existing one, which may hold a different definition.
+    """
+
+    report_type: IntelligenceReportType
+    inserted: bool
+
+
+def builtin_report_type_definitions() -> tuple[ReportTypeDefinition, ...]:
+    """The five built-in definitions, in pipeline order."""
+    return tuple(
+        ReportTypeDefinition(
+            artifact_kind=kind,
+            stage=stage,
+            description=description,
+            origin=ReportTypeOrigin.BUILTIN,
+            display_name=display_name,
+        )
+        for kind, stage, description, display_name in BUILTIN_REPORT_TYPES
+    )
 
 
 @dataclass(frozen=True, slots=True)

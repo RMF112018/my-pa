@@ -63,7 +63,11 @@ from my_pa.domain.intelligence.models import (
     IntelligencePipelineDependency,
     IntelligenceProducerRun,
     IntelligenceProvenanceRef,
+    IntelligenceReportType,
     MutationAdmission,
+    ReportTypeDefinition,
+    ReportTypeInsertion,
+    builtin_report_type_definitions,
     content_digest,
     content_utf8_bytes,
     fingerprint_payload,
@@ -137,7 +141,7 @@ class IntelligenceStore(Protocol):
         *,
         cycle_run_id: str | None,
         stage: IntelligenceStage | None,
-        artifact_kind: ArtifactKind | None,
+        artifact_kind: str | None,
         focus_area_id: FocusAreaId | None,
         source_lane: SourceLaneId | None,
         report_date: date | None,
@@ -154,7 +158,7 @@ class IntelligenceStore(Protocol):
         *,
         cycle_run_id: str | None,
         stage: IntelligenceStage | None,
-        artifact_kind: ArtifactKind | None,
+        artifact_kind: str | None,
         focus_area_id: FocusAreaId | None,
         source_lane: SourceLaneId | None,
         limit: int,
@@ -168,6 +172,23 @@ class IntelligenceStore(Protocol):
         focus_area_id: FocusAreaId | None,
         source_lane: SourceLaneId | None,
     ) -> IntelligenceProducerRun | None: ...
+
+    def list_report_types(
+        self, principal_id: str, *, stage: IntelligenceStage | None = None
+    ) -> tuple[IntelligenceReportType, ...]:
+        """The Principal's stored report types, ordered by (stage, kind). Stored rows only."""
+
+    def get_report_type(
+        self, principal_id: str, artifact_kind: str
+    ) -> IntelligenceReportType | None: ...
+
+    def insert_report_type(
+        self, principal_id: str, definition: ReportTypeDefinition, *, created_at: datetime
+    ) -> ReportTypeInsertion:
+        """Insert unless the kind is registered; an existing row is returned unchanged."""
+
+    def ensure_builtin_report_types(self, principal_id: str, *, created_at: datetime) -> int:
+        """Insert any missing built-in row; return how many were inserted."""
 
 
 def _now(at: datetime) -> datetime:
@@ -1366,6 +1387,7 @@ class InMemoryIntelligenceStore:
     cycles: dict[tuple[str, str], IntelligenceCycleRun] = field(default_factory=dict)
     runs: dict[tuple[str, str], IntelligenceProducerRun] = field(default_factory=dict)
     artifacts: dict[tuple[str, str], IntelligenceArtifact] = field(default_factory=dict)
+    report_types: dict[tuple[str, str], IntelligenceReportType] = field(default_factory=dict)
 
     def get_receipt(
         self, principal_id: str, idempotency_key: str
@@ -1470,7 +1492,7 @@ class InMemoryIntelligenceStore:
         *,
         cycle_run_id: str | None,
         stage: IntelligenceStage | None,
-        artifact_kind: ArtifactKind | None,
+        artifact_kind: str | None,
         focus_area_id: FocusAreaId | None,
         source_lane: SourceLaneId | None,
         report_date: date | None,
@@ -1487,7 +1509,7 @@ class InMemoryIntelligenceStore:
                 continue
             if stage is not None and artifact.stage is not stage:
                 continue
-            if artifact_kind is not None and artifact.artifact_kind is not artifact_kind:
+            if artifact_kind is not None and artifact.artifact_kind != artifact_kind:
                 continue
             if focus_area_id is not None and artifact.focus_area_id != focus_area_id:
                 continue
@@ -1517,7 +1539,7 @@ class InMemoryIntelligenceStore:
         *,
         cycle_run_id: str | None,
         stage: IntelligenceStage | None,
-        artifact_kind: ArtifactKind | None,
+        artifact_kind: str | None,
         focus_area_id: FocusAreaId | None,
         source_lane: SourceLaneId | None,
         limit: int,
@@ -1577,3 +1599,43 @@ class InMemoryIntelligenceStore:
             return None
         matches.sort(key=lambda item: item.created_at, reverse=True)
         return matches[0]
+
+    def list_report_types(
+        self, principal_id: str, *, stage: IntelligenceStage | None = None
+    ) -> tuple[IntelligenceReportType, ...]:
+        found = [
+            report_type
+            for (owner, _kind), report_type in self.report_types.items()
+            if owner == principal_id and (stage is None or report_type.definition.stage is stage)
+        ]
+        found.sort(
+            key=lambda item: (item.definition.stage.value, str(item.definition.artifact_kind))
+        )
+        return tuple(found)
+
+    def get_report_type(
+        self, principal_id: str, artifact_kind: str
+    ) -> IntelligenceReportType | None:
+        return self.report_types.get((principal_id, str(artifact_kind)))
+
+    def insert_report_type(
+        self, principal_id: str, definition: ReportTypeDefinition, *, created_at: datetime
+    ) -> ReportTypeInsertion:
+        key = (principal_id, str(definition.artifact_kind))
+        existing = self.report_types.get(key)
+        if existing is not None:
+            return ReportTypeInsertion(report_type=existing, inserted=False)
+        stored = IntelligenceReportType(
+            principal_id=principal_id,
+            definition=definition,
+            definition_fingerprint=definition.fingerprint,
+            created_at=created_at,
+        )
+        self.report_types[key] = stored
+        return ReportTypeInsertion(report_type=stored, inserted=True)
+
+    def ensure_builtin_report_types(self, principal_id: str, *, created_at: datetime) -> int:
+        return sum(
+            self.insert_report_type(principal_id, definition, created_at=created_at).inserted
+            for definition in builtin_report_type_definitions()
+        )

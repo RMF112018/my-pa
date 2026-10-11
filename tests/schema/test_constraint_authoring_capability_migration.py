@@ -52,7 +52,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "f7a2c9d51e64"
-CURRENT_HEAD: Final = "93f3aa113f58"
+CURRENT_HEAD: Final = "a591b81f10a2"
 CAPTURE_LABELS: Final = "c1a8e4d70b29"
 WP_TUX_01: Final = "de5ec1c65857"
 WP_MCP_PROJ_01: Final = "9f2c8a1d4e70"
@@ -93,6 +93,11 @@ CAPTURE_LIFECYCLE_MIGRATION: Final = MIGRATIONS / "20261001_0641c354ca85_capture
 #: additive head on the same precedent.
 INTELLIGENCE_FOCUS_AREA_MIGRATION: Final = (
     MIGRATIONS / "20261007_93f3aa113f58_intelligence_focus_area_admission.py"
+)
+#: The Intelligence report type registry (`a591b81f10a2`), registered as an
+#: additive head on the same precedent.
+INTELLIGENCE_REPORT_TYPE_MIGRATION: Final = (
+    MIGRATIONS / "20261011_a591b81f10a2_intelligence_report_type_registry.py"
 )
 #: The one sanctioned edit to a historical revision (operator ruling
 #: OPERATOR_RULING_WP04_A_to_E.md section E). Like D-48, the Meeting-records
@@ -189,8 +194,12 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_goodnotes_promotion_receipt_migration.py",
     "tests/schema/test_goodnotes_pull_migration.py",
     "tests/schema/test_goodnotes_semantic_proposal_migration.py",
-    # The Intelligence focus-area revision module names the head as the revision it tests.
+    # The Knowledge-table ledger keys the registry table by the revision that creates it.
+    "tests/schema/test_extraction_schema_migration.py",
+    # The Intelligence focus-area revision module names the head it now sits under.
     "tests/schema/test_intelligence_focus_area_admission_migration.py",
+    # The Intelligence report type registry module names the head as the revision it tests.
+    "tests/schema/test_intelligence_report_type_registry_migration.py",
     # KLP-WP-02's own revision module names the head as the revision it tests.
     "tests/schema/test_knowledge_assertion_migration.py",
     "tests/schema/test_legacy_direct_principal_task_origin_migration.py",
@@ -280,7 +289,8 @@ def _literals(block: str) -> list[str]:
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [CURRENT_HEAD]
-    assert script.get_revision(CURRENT_HEAD).down_revision == "6734f039f7a6"
+    assert script.get_revision(CURRENT_HEAD).down_revision == "93f3aa113f58"
+    assert script.get_revision("93f3aa113f58").down_revision == "6734f039f7a6"
     assert script.get_revision("6734f039f7a6").down_revision == "0641c354ca85"
     assert script.get_revision("0641c354ca85").down_revision == "c8e4a1b70d35"
     assert script.get_revision("c8e4a1b70d35").down_revision == "1d9b248e7f83"
@@ -298,7 +308,7 @@ def test_revision_is_the_only_linear_head() -> None:
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 113
+    assert len(list(MIGRATIONS.glob("*.py"))) == 114
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -445,6 +455,7 @@ def test_no_historical_revision_was_edited() -> None:
         RECORD_EVENTS_MIGRATION.relative_to(ROOT).as_posix(),
         CAPTURE_LIFECYCLE_MIGRATION.relative_to(ROOT).as_posix(),
         INTELLIGENCE_FOCUS_AREA_MIGRATION.relative_to(ROOT).as_posix(),
+        INTELLIGENCE_REPORT_TYPE_MIGRATION.relative_to(ROOT).as_posix(),
         # Not an additive head: the one sanctioned historical edit (see
         # `SANCTIONED_HISTORICAL_EDIT`; operator ruling section E).
         SANCTIONED_HISTORICAL_EDIT.relative_to(ROOT).as_posix(),

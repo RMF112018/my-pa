@@ -30,6 +30,7 @@ from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.intelligence.catalog import (
+    BUILTIN_REPORT_TYPES,
     CYCLE_MORNING_INTELLIGENCE,
     EXPECTED_FOCUS_AREAS,
     EXPECTED_SOURCE_LANES,
@@ -38,11 +39,18 @@ from my_pa.domain.intelligence.catalog import (
     FocusAreaId,
     IntelligenceStage,
     ProducerRunState,
+    ReportTypeOrigin,
     ResolverSetId,
     SourceLaneId,
 )
-from my_pa.domain.intelligence.models import content_digest
+from my_pa.domain.intelligence.models import (
+    IntelligenceArtifact,
+    IntelligenceProducerRun,
+    ReportTypeDefinition,
+    content_digest,
+)
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
+from my_pa.infrastructure.persistence.intelligence import SqlIntelligenceStore
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 from tests.conftest import DEFAULT_LIMITS, metadata_for, operator
 
@@ -1007,3 +1015,165 @@ def test_sql_focus_area_check_admits_the_nine_and_refuses_an_unknown_value(
     assert getattr(refused.value.orig, "sqlstate", None) == CHECK_VIOLATION
     assert diag is not None
     assert diag.constraint_name == constraint
+
+
+# ---- the per-Principal report type registry ---------------------------------------------
+
+WEEKLY: Final = ReportTypeDefinition(
+    artifact_kind="weekly_digest",
+    stage=IntelligenceStage.REPORTER,
+    description="A weekly digest of one focus area.",
+    origin=ReportTypeOrigin.CLIENT,
+    display_name="Weekly digest",
+)
+
+
+def _store(connection: Connection, principal: Principal) -> SqlIntelligenceStore:
+    return SqlIntelligenceStore(connection, principal.principal_id)
+
+
+def test_sql_registry_insert_is_idempotent_and_returns_the_existing_row(
+    migrated_engine: Engine,
+) -> None:
+    principal = operator()
+    with migrated_engine.begin() as connection:
+        store = _store(connection, principal)
+        first = store.insert_report_type(principal.principal_id, WEEKLY, created_at=WHEN)
+        assert first.inserted is True
+        assert first.report_type.principal_id == principal.principal_id
+        assert first.report_type.definition == WEEKLY
+        assert first.report_type.definition_fingerprint == WEEKLY.fingerprint
+        assert first.report_type.created_at == WHEN
+        changed = ReportTypeDefinition(
+            artifact_kind="weekly_digest",
+            stage=IntelligenceStage.REPORTER,
+            description="Something else entirely.",
+            origin=ReportTypeOrigin.CLIENT,
+        )
+        replay = store.insert_report_type(principal.principal_id, changed, created_at=WHEN)
+        assert replay.inserted is False
+        assert replay.report_type == first.report_type
+        assert store.get_report_type(principal.principal_id, "weekly_digest") == first.report_type
+        assert store.get_report_type(principal.principal_id, "never_registered") is None
+
+
+def test_sql_registry_builtins_are_ensured_once_and_listed_by_stage(
+    migrated_engine: Engine,
+) -> None:
+    principal = operator()
+    with migrated_engine.begin() as connection:
+        store = _store(connection, principal)
+        assert store.list_report_types(principal.principal_id) == ()
+        assert store.ensure_builtin_report_types(principal.principal_id, created_at=WHEN) == 5
+        assert store.ensure_builtin_report_types(principal.principal_id, created_at=WHEN) == 0
+        store.insert_report_type(principal.principal_id, WEEKLY, created_at=WHEN)
+        listed = store.list_report_types(principal.principal_id)
+        assert [
+            (row.definition.stage.value, str(row.definition.artifact_kind)) for row in listed
+        ] == sorted(
+            [(stage.value, kind.value) for kind, stage, _, _ in BUILTIN_REPORT_TYPES]
+            + [("reporter", "weekly_digest")]
+        )
+        assert {row.definition.origin for row in listed} == {
+            ReportTypeOrigin.BUILTIN,
+            ReportTypeOrigin.CLIENT,
+        }
+        builtin = store.get_report_type(principal.principal_id, "focus_report")
+        assert builtin is not None
+        assert builtin.definition.artifact_kind is ArtifactKind.FOCUS_REPORT
+        reporters = store.list_report_types(
+            principal.principal_id, stage=IntelligenceStage.REPORTER
+        )
+        assert [str(row.definition.artifact_kind) for row in reporters] == [
+            "focus_report",
+            "weekly_digest",
+        ]
+
+
+def test_sql_registry_is_principal_isolated(migrated_engine: Engine) -> None:
+    owner = operator()
+    other = operator()
+    with migrated_engine.begin() as connection:
+        _store(connection, owner).insert_report_type(owner.principal_id, WEEKLY, created_at=WHEN)
+        _store(connection, owner).ensure_builtin_report_types(owner.principal_id, created_at=WHEN)
+    with migrated_engine.begin() as connection:
+        foreign = _store(connection, other)
+        assert foreign.list_report_types(other.principal_id) == ()
+        assert foreign.list_report_types(other.principal_id, stage=IntelligenceStage.REPORTER) == ()
+        assert foreign.get_report_type(other.principal_id, "weekly_digest") is None
+        assert foreign.get_report_type(other.principal_id, "focus_report") is None
+        # The same kind under another Principal is a different, independent row.
+        mine = foreign.insert_report_type(other.principal_id, WEEKLY, created_at=WHEN)
+        assert mine.inserted is True
+        assert mine.report_type.principal_id == other.principal_id
+        assert len(_store(connection, owner).list_report_types(owner.principal_id)) == 6
+        assert len(foreign.list_report_types(other.principal_id)) == 1
+
+
+def test_sql_a_client_kind_run_and_artifact_read_back_as_the_stored_token(
+    migrated_engine: Engine,
+) -> None:
+    service = _service(migrated_engine)
+    principal = operator()
+    cycle = _begin(service, principal, "sql-client-kind")
+    body = "# Weekly\n\nsynthetic client kind"
+    with migrated_engine.begin() as connection:
+        store = _store(connection, principal)
+        run = IntelligenceProducerRun(
+            run_id="rrun_clientkind0001",
+            principal_id=principal.principal_id,
+            cycle_run_id=cycle,
+            stage=IntelligenceStage.REPORTER,
+            artifact_kind="weekly_digest",
+            state=ProducerRunState.SUCCEEDED,
+            version=1,
+            producer_task_id="sql-weekly",
+            producer_task_name="weekly",
+            automation_platform="abacus_chatllm",
+            report_date=WHEN.date(),
+            created_at=WHEN,
+            focus_area_id=FocusAreaId.COMMUNICATIONS,
+        )
+        store.put_run(run)
+        store.put_artifact(
+            IntelligenceArtifact(
+                artifact_id="rpt_clientkind0001",
+                principal_id=principal.principal_id,
+                cycle_run_id=cycle,
+                producer_run_id=run.run_id,
+                stage=IntelligenceStage.REPORTER,
+                artifact_kind="weekly_digest",
+                report_date=WHEN.date(),
+                title="Weekly",
+                body_markdown=body,
+                content_sha256=content_digest(body),
+                content_bytes=len(body.encode("utf-8")),
+                artifact_state=ArtifactState.FINAL,
+                schema_version="1",
+                generated_at=WHEN,
+                committed_at=WHEN,
+                version=1,
+                is_current=True,
+                focus_area_id=FocusAreaId.COMMUNICATIONS,
+            )
+        )
+    with migrated_engine.begin() as connection:
+        store = _store(connection, principal)
+        stored_run = store.get_run(principal.principal_id, "rrun_clientkind0001")
+        stored = store.get_artifact(principal.principal_id, "rpt_clientkind0001")
+        assert stored_run is not None
+        assert stored is not None
+        assert stored_run.artifact_kind == stored.artifact_kind == "weekly_digest"
+        assert type(stored.artifact_kind) is str
+        listed = store.list_artifacts(
+            principal.principal_id,
+            cycle_run_id=cycle,
+            stage=None,
+            artifact_kind="weekly_digest",
+            focus_area_id=None,
+            source_lane=None,
+            report_date=None,
+            include_superseded=False,
+            limit=10,
+        )
+        assert [artifact.artifact_id for artifact in listed] == ["rpt_clientkind0001"]

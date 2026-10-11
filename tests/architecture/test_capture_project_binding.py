@@ -17,7 +17,10 @@ from my_pa.infrastructure.persistence.tables import captures
 ROOT: Final = Path(__file__).resolve().parents[2]
 #: Moved by KLP-WP-02, which appends the fourteen Knowledge declarations and the
 #: `context_run_items.knowledge_assertion_id` identity; `captures` is untouched.
-TABLES_SHA256: Final = "3c20390a92ef9f8236ca5daa3474c5f6d0df5c6d906cfa2a793152cb69e5e92f"
+#: Moved again by the Intelligence report type registry, which declares
+#: `intelligence_report_types` and relaxes the two Intelligence artifact-kind
+#: CHECKs; `captures` is untouched.
+TABLES_SHA256: Final = "e77b8a45e6e9adcddf0cf9235bb2841cc5e4d15055becb4aad6bf19a462b42ef"
 WP03_MIGRATION_SHA256: Final = "098edd98ccc1846b01c58f42e296e4751e7841b562a2827616cc4337e174c354"
 WP03_MIGRATION: Final = (
     ROOT / "migrations/versions/20260914_e6a4c2f91b73_project_controls_run01_integrity.py"

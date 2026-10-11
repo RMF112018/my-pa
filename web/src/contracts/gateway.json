@@ -867,7 +867,8 @@
         "actual_start",
         "scheduled_finish",
         "contract_finish",
-        "actual_finish"
+        "actual_finish",
+        "clear_fields"
       ],
       "probe": {
         "project_id": "prj_aaaaaaaa11111111",

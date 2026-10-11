@@ -18,7 +18,6 @@ from typing import Final
 import pytest
 from alembic.config import Config
 from sqlalchemy import Engine, text
-from sqlalchemy.exc import DBAPIError
 
 from my_pa.application.commands import (
     Command,
@@ -502,25 +501,35 @@ def test_a_held_number_is_conflict_on_update_and_leaves_the_row_unchanged(
     assert read.result["version"] == 1
 
 
-def test_the_database_refuses_to_change_a_set_number_even_bypassing_the_domain(
-    migrated_engine: Engine,
-) -> None:
-    project_id = issue_identifier(IdKind.PROJECT)
-    with migrated_engine.connect() as connection, connection.begin():
-        SqlContinuityAuthoringRepository(connection).author_project(
-            principal_id=PRINCIPAL_A,
+def test_a_number_can_be_changed_and_cleared_through_postgres(runtime: _Runtime) -> None:
+    created = _numbered(runtime, "author-db-mut-0001", "DB-400", value=Decimal("10.00"))
+    assert created.error is None and created.result is not None
+    project_id = created.result["project_id"]
+    renumbered = runtime.invoke(
+        UpdateProject(
             project_id=project_id,
-            name="Trigger guarded",
-            description=None,
-            project_number="DB-400",
+            expected_version=1,
+            idempotency_key="author-db-mut-upd-0001",
+            project_number="DB-401",
+            value=Decimal("1000.00"),
         )
-    with (
-        migrated_engine.connect() as connection,
-        connection.begin(),
-        pytest.raises(DBAPIError, match="project_number is immutable once set"),
-    ):
-        connection.execute(
-            projects.update()
-            .where(projects.c.project_id == project_id)
-            .values(project_number="DB-401")
+    )
+    assert renumbered.error is None and renumbered.result is not None
+    assert renumbered.result["project_number"] == "DB-401"
+    assert renumbered.result["value"] == "1000.00"
+    cleared = runtime.invoke(
+        UpdateProject(
+            project_id=project_id,
+            expected_version=2,
+            idempotency_key="author-db-mut-clr-0001",
+            clear_fields=("project_number", "value"),
         )
+    )
+    assert cleared.error is None
+    read = runtime.invoke(ReadProject(project_id=project_id))
+    assert read.result is not None
+    assert read.result["project_number"] is None
+    assert read.result["value"] is None
+    assert read.result["version"] == 3
+    # The old numbers are free again.
+    assert _numbered(runtime, "author-db-mut-reuse-0001", "DB-400").error is None

@@ -6554,7 +6554,7 @@ class ApplicationService:
     def _continuity_projects_update(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: UpdateProject
     ) -> _Result:
-        """Versioned update of name, description, and/or nonterminal state."""
+        """Versioned update of any Project field, clears included; no reopen."""
         digest = _authoring_digest(
             command.capability.value,
             {
@@ -6593,6 +6593,7 @@ class ApplicationService:
                 "actual_finish": (
                     None if command.actual_finish is None else command.actual_finish.isoformat()
                 ),
+                "clear_fields": sorted(command.clear_fields),
             },
         )
         return self._continuity_project_mutation(
@@ -6625,6 +6626,7 @@ class ApplicationService:
                 scheduled_finish=command.scheduled_finish,
                 contract_finish=command.contract_finish,
                 actual_finish=command.actual_finish,
+                clear_fields=command.clear_fields,
             ),
         )
 

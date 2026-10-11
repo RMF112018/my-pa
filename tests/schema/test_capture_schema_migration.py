@@ -1324,10 +1324,6 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             # triggers over the fourteen `knowledge_*` tables, two of them
             # deferred constraint triggers; name them so the equality stays one.
             *KNOWLEDGE_TRIGGERS,
-            # The Continuity Project sixteen-field revision installs one
-            # `BEFORE UPDATE` trigger enforcing `knowledge.projects.project_number`
-            # immutability once set; name it so the equality stays one.
-            "a_project_number_does_not_change",
         }
         for name in ("a_proposal_cites_at_least_one_span", "a_span_link_leaves_its_proposal_cited"):
             assert "CONSTRAINT TRIGGER" in triggers[name]

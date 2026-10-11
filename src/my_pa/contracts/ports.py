@@ -6594,6 +6594,7 @@ class ProjectRepository(ABC):
         scheduled_finish: date | None = None,
         contract_finish: date | None = None,
         actual_finish: date | None = None,
+        clear_fields: tuple[str, ...] = (),
     ) -> ProjectMutationReceipt | None:
         """Versioned update of name, description, and/or nonterminal state.
 

@@ -1,8 +1,9 @@
 """`cc373834a485`: sixteen Continuity Project fields on `knowledge.projects`.
 
 The revision is additive: sixteen columns (fifteen nullable, `aliases` defaulting
-to an empty array), five CHECKs, a partial unique index making `project_number`
-unique per Principal, and a trigger keeping a set `project_number` unchanged.
+to an empty array), five CHECKs, and a partial unique index making
+`project_number` unique per Principal. Every field stays changeable; the revision
+installs no trigger.
 Downgrade deletes nothing it was not given: a Project holding any new field
 makes it refuse.
 """
@@ -35,7 +36,6 @@ PRINCIPAL_B: Final = "prn_bbbb0002bbbb0002bbbb0002"
 WHEN: Final = datetime(2026, 10, 11, 12, tzinfo=UTC)
 CHECK_VIOLATION: Final = "23514"
 UNIQUE_VIOLATION: Final = "23505"
-RESTRICT_VIOLATION: Final = "23001"
 NEW_COLUMNS: Final = frozenset(
     {
         "aliases",
@@ -189,10 +189,16 @@ def test_existing_projects_upgrade_to_empty_fields_and_the_guards_hold(engine: E
         "WHERE project_id = 'prj_aaaaaaaa00000002'",
         UNIQUE_VIOLATION,
     )
-    refused(one.format("project_number = 'P-2'"), RESTRICT_VIOLATION)
-    refused(one.format("project_number = NULL"), RESTRICT_VIOLATION)
     with engine.begin() as connection:
         connection.execute(text(one.format("name = 'Renamed', value = 12.50")))
+        connection.execute(text(one.format("project_number = 'P-2'")))
+        connection.execute(text(one.format("project_number = NULL")))
+        guard = connection.execute(
+            text(
+                "SELECT count(*) FROM pg_trigger WHERE tgname = 'a_project_number_does_not_change'"
+            )
+        ).scalar_one()
+    assert guard == 0
 
 
 @pytest.mark.database

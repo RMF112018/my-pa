@@ -4423,6 +4423,7 @@ class _Projects(ProjectRepository):
         scheduled_finish: date | None = None,
         contract_finish: date | None = None,
         actual_finish: date | None = None,
+        clear_fields: tuple[str, ...] = (),
     ) -> ProjectMutationReceipt | None:
         return execute_update_project(
             self,
@@ -4451,6 +4452,7 @@ class _Projects(ProjectRepository):
             scheduled_finish=scheduled_finish,
             contract_finish=contract_finish,
             actual_finish=actual_finish,
+            clear_fields=clear_fields,
         )
 
     def close_project(

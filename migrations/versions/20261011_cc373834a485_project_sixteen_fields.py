@@ -6,7 +6,7 @@ Create Date: 2026-10-11
 
 Sixteen new columns on `knowledge.projects`: `aliases` (a replacement-set
 JSONB array, the same shape `participants` already has), `project_number`
-(unique per Principal, immutable once set), `sector`/`type` (the 9/42-member
+(unique per Principal, changeable on update), `sector`/`type` (the 9/42-member
 `Construction_Project_Taxonomy_v1.csv` vocabulary — the 1-sector-per-type
 pairing itself is enforced in `domain.situation.situation.TYPE_TO_SECTOR`,
 not restated here as a duplicated 42-branch CHECK), `address`/`city`/
@@ -179,33 +179,6 @@ def upgrade() -> None:
         "WHERE project_number IS NOT NULL"
     )
 
-    # Defense-in-depth backstop for the application-layer immutability check
-    # in `domain.situation.project_history.execute_update_project`'s `change()`
-    # closure: even a future direct-SQL fix-up or an application bug cannot
-    # silently change a `project_number` once set.
-    op.execute(
-        f"""
-        CREATE FUNCTION {SCHEMA}.project_number_is_immutable_once_set() RETURNS trigger
-          LANGUAGE plpgsql AS $$
-          BEGIN
-            IF OLD.project_number IS NOT NULL
-               AND NEW.project_number IS DISTINCT FROM OLD.project_number THEN
-              RAISE EXCEPTION 'project_number is immutable once set'
-                USING ERRCODE = 'restrict_violation';
-            END IF;
-            RETURN NEW;
-          END;
-          $$
-        """
-    )
-    op.execute(
-        f"""
-        CREATE TRIGGER a_project_number_does_not_change BEFORE UPDATE ON
-            {SCHEMA}.projects FOR EACH ROW EXECUTE FUNCTION
-            {SCHEMA}.project_number_is_immutable_once_set()
-        """
-    )
-
 
 def downgrade() -> None:
     # `aliases` is `NOT NULL DEFAULT '[]'::jsonb`, never literally NULL, so its
@@ -222,13 +195,9 @@ def downgrade() -> None:
         ),
         message=(
             "Dropping these columns would destroy real Project data; clear the "
-            "16 new fields on every Project before downgrade. A set project_number "
-            "can only be cleared with trigger a_project_number_does_not_change "
-            "disabled."
+            "16 new fields on every Project before downgrade."
         ),
     )
-    op.execute(f"DROP TRIGGER IF EXISTS a_project_number_does_not_change ON {SCHEMA}.projects")
-    op.execute(f"DROP FUNCTION IF EXISTS {SCHEMA}.project_number_is_immutable_once_set()")
     op.execute(f"DROP INDEX IF EXISTS {SCHEMA}.a_project_number_is_unique_per_principal")
     for constraint in _NEW_CHECK_CONSTRAINTS:
         op.execute(f"ALTER TABLE {SCHEMA}.projects DROP CONSTRAINT IF EXISTS {constraint}")

@@ -50,6 +50,7 @@ from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import ensure_utc
 
 __all__ = [
+    "PROJECT_CLEARABLE_FIELDS",
     "PROJECT_VALUE_LIMIT",
     "TYPE_TO_SECTOR",
     "Frame",
@@ -277,6 +278,29 @@ TYPE_TO_SECTOR: Final[MappingProxyType[ProjectType, ProjectSector]] = MappingPro
         ProjectType.SPECIALTY_CONSTRUCTION_SCOPES_AND_BUILDING_RENEWAL: (
             ProjectSector.LAND_RESOURCE_AND_SPECIALTY
         ),
+    }
+)
+
+#: The optional Project fields an update may set back to empty through `clear_fields`.
+#: Wire names equal attribute names; `aliases` empties to `()`, the rest to `None`.
+PROJECT_CLEARABLE_FIELDS: Final = frozenset(
+    {
+        "aliases",
+        "project_number",
+        "sector",
+        "type",
+        "address",
+        "city",
+        "county",
+        "address_state",
+        "zip",
+        "value",
+        "scheduled_start",
+        "contract_start",
+        "actual_start",
+        "scheduled_finish",
+        "contract_finish",
+        "actual_finish",
     }
 )
 

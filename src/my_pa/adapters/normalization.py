@@ -632,13 +632,15 @@ _WHOLE_CENTS = Decimal("0.01")
 def _project_value(value: object) -> object:
     """One USD amount as a `Decimal`, or exactly what arrived.
 
+    Only a JSON number converts: a string, a boolean or anything else is passed
+    through for the command to refuse, so `value` is never parsed from text.
     Converts via `str(value)` rather than `Decimal(value)` directly, so a JSON
-    number never inherits a binary float's representation error. An exact amount
-    in whole cents is restated at two places (`1E+3` becomes `1000.00`), so the
-    echoed amount is the one a later read returns; anything else (`NaN`,
-    `Infinity`, a third decimal place) is passed through for the command to refuse.
+    number never inherits a binary float's representation error. An amount in
+    whole cents is restated at exactly two places (`1000` becomes `1000.00`), so
+    the echoed amount is the one a later read returns; anything else (a third
+    decimal place, a non-finite float) is passed through for the command to refuse.
     """
-    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         return value
     try:
         amount = Decimal(str(value))
@@ -690,6 +692,9 @@ def _update_project(payload: Mapping[str, Any]) -> Command:
             converted["state"] = ProjectState(named)
         except ValueError:
             raise InvalidRequestError(SafeDetail.SELECTOR) from None
+    clear_fields = converted.get("clear_fields")
+    if isinstance(clear_fields, list):
+        converted["clear_fields"] = tuple(clear_fields)
     return UpdateProject(**converted)
 
 

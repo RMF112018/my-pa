@@ -255,6 +255,7 @@ from my_pa.domain.situation.continuity import (
     CommitmentWorkView,
 )
 from my_pa.domain.situation.situation import (
+    PROJECT_CLEARABLE_FIELDS,
     TYPE_TO_SECTOR,
     ProjectSector,
     ProjectState,
@@ -1731,9 +1732,8 @@ _PROJECT_FIELD_DOCS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyTyp
         "project_number": {
             "description": (
                 "An external project number, unique among this Principal's "
-                "Projects. May be set at create or added later via update, but "
-                "is immutable once set — a later attempt to change or clear it "
-                "is refused. 1-64 characters, non-blank; surrounding whitespace "
+                "Projects. May be set at create, and changed or cleared later "
+                "via update. 1-64 characters, non-blank; surrounding whitespace "
                 "is trimmed. A number another Project already holds is "
                 "conflict (project_number)."
             )
@@ -1776,10 +1776,11 @@ _PROJECT_FIELD_DOCS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyTyp
             "type": "number",
             "minimum": 0,
             "description": (
-                "Optional project value in USD: a finite, non-negative amount "
-                "below 1,000,000,000,000 with at most two decimal places. "
-                "Anything else is invalid_request. Returned as a decimal "
-                'string in whole cents, e.g. "1250000.00".'
+                "Optional project value in USD: a JSON number (not a string), "
+                "non-negative, below 1,000,000,000,000, with at most two "
+                "decimal places, e.g. 1250000.5. Anything else is "
+                "invalid_request. Always returned as a decimal string with "
+                'exactly two places, e.g. "1250000.50".'
             ),
         },
         "scheduled_start": {"description": "Optional scheduled start date."},
@@ -1874,6 +1875,20 @@ def _project_sector_and_type(sector: object, type_: object) -> None:
     if not isinstance(sector, ProjectSector) or not isinstance(type_, ProjectType):
         raise InvalidRequestError(SafeDetail.SELECTOR)
     if TYPE_TO_SECTOR[type_] is not sector:
+        raise InvalidRequestError(SafeDetail.SELECTOR)
+
+
+def _project_clear_fields(command: object, value: object) -> None:
+    """Refuse a `clear_fields` that is not a set of clearable names, splits the
+    sector/type pair, or also sets a field it clears."""
+    if not isinstance(value, tuple) or not all(isinstance(item, str) for item in value):
+        raise InvalidRequestError(SafeDetail.SELECTOR)
+    names = set(value)
+    if len(names) != len(value) or not names <= PROJECT_CLEARABLE_FIELDS:
+        raise InvalidRequestError(SafeDetail.SELECTOR)
+    if ("sector" in names) != ("type" in names):
+        raise InvalidRequestError(SafeDetail.SELECTOR)
+    if any(getattr(command, name) is not None for name in names):
         raise InvalidRequestError(SafeDetail.SELECTOR)
 
 
@@ -2009,8 +2024,11 @@ class UpdateProject:
 
     Command fields live under nested `payload`. Envelope metadata stays at the
     top level. `expected_version` and `idempotency_key` are required and have no
-    default. At least one of `name`, `description`, or `state` must be
-    supplied. `state`, when present, is active or on_hold only — closing is
+    default. At least one field to set, or one `clear_fields` entry, must be
+    supplied. Every field is changeable after create: an omitted field is left
+    unchanged, and `clear_fields` empties named optional fields (naming a field
+    both to set and to clear is invalid_request). `state`, when present, is
+    active or on_hold only — closing is
     `continuity.projects.close`. A closed Project cannot be reopened. Same key
     and same payload replay; same key and a different payload is conflict. A
     stale `expected_version` is conflict and writes nothing. System-owned
@@ -2033,6 +2051,17 @@ class UpdateProject:
                 )
             ),
             "state": _PROJECT_FIELD_DOCS["nonterminal_state"],
+            "clear_fields": {
+                "type": "array",
+                "items": {"type": "string", "enum": sorted(PROJECT_CLEARABLE_FIELDS)},
+                "uniqueItems": True,
+                "description": (
+                    "Optional fields to empty: aliases becomes [], every other "
+                    "named field becomes null. sector and type are cleared "
+                    "together. A field may not be both set and cleared in one "
+                    "update. Omitted fields are left unchanged."
+                ),
+            },
         }
     )
 
@@ -2058,6 +2087,7 @@ class UpdateProject:
     scheduled_finish: date | None = None
     contract_finish: date | None = None
     actual_finish: date | None = None
+    clear_fields: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
@@ -2088,10 +2118,12 @@ class UpdateProject:
         _project_sector_and_type(self.sector, self.type)
         for field_name in _PROJECT_DATE_FIELD_NAMES:
             _constraint_date(getattr(self, field_name), SafeDetail.SELECTOR)
+        _project_clear_fields(self, self.clear_fields)
         if (
             self.name is None
             and self.description is None
             and self.state is None
+            and not self.clear_fields
             and all(getattr(self, field_name) is None for field_name in _PROJECT_DATA_FIELD_NAMES)
         ):
             raise InvalidRequestError(SafeDetail.SELECTOR)

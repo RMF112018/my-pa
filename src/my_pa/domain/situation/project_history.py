@@ -29,7 +29,13 @@ from typing import Any, Protocol
 
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import ensure_utc
-from my_pa.domain.situation.situation import Project, ProjectSector, ProjectState, ProjectType
+from my_pa.domain.situation.situation import (
+    PROJECT_CLEARABLE_FIELDS,
+    Project,
+    ProjectSector,
+    ProjectState,
+    ProjectType,
+)
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.domain.task.history import (
     IDEMPOTENCY_KEY_PATTERN,
@@ -185,8 +191,16 @@ def execute_update_project(
     scheduled_finish: date | None = None,
     contract_finish: date | None = None,
     actual_finish: date | None = None,
+    clear_fields: tuple[str, ...] = (),
 ) -> ProjectMutationReceipt | None:
-    """Apply a versioned project update, or return None when the row is absent."""
+    """Apply a versioned project update, or return None when the row is absent.
+
+    `clear_fields` names optional fields (`PROJECT_CLEARABLE_FIELDS`) to empty:
+    `aliases` becomes `()`, every other named field becomes `None`.
+    """
+    unknown = set(clear_fields) - PROJECT_CLEARABLE_FIELDS
+    if unknown:
+        raise ValueError(f"a project update cannot clear {sorted(unknown)}")
 
     def change(current: Project) -> Project:
         if current.state is ProjectState.CLOSED:
@@ -195,13 +209,9 @@ def execute_update_project(
             raise ProjectIllegalTransitionError(
                 "a project update may only move between active and on_hold"
             )
-        if (
-            project_number is not None
-            and current.project_number is not None
-            and project_number != current.project_number
-        ):
-            raise ProjectIllegalTransitionError("a project number is immutable once set")
-        replacements: dict[str, Any] = {}
+        replacements: dict[str, Any] = {
+            field_name: () if field_name == "aliases" else None for field_name in clear_fields
+        }
         if name is not None:
             replacements["name"] = name
         if description is not None:

@@ -133,10 +133,11 @@ def test_a_project_created_without_the_fields_carries_their_empty_defaults(scene
     ("given", "stated"),
     [
         (12.5, "12.50"),
-        ("1E+3", "1000.00"),
+        (1e3, "1000.00"),
         (0, "0.00"),
-        ("999999999999.99", "999999999999.99"),
+        (999999999999.99, "999999999999.99"),
         (7, "7.00"),
+        (1250000.05, "1250000.05"),
     ],
 )
 def test_an_exact_amount_is_echoed_in_whole_cents(scene: Scene, given: object, stated: str) -> None:
@@ -149,7 +150,23 @@ def test_an_exact_amount_is_echoed_in_whole_cents(scene: Scene, given: object, s
 
 @pytest.mark.parametrize(
     "given",
-    ["NaN", "sNaN", "Infinity", "-Infinity", 1e20, "1000000000000", "1.005", -1, "-0", True, "abc"],
+    [
+        "12.50",
+        "1E+3",
+        "NaN",
+        "Infinity",
+        float("nan"),
+        float("inf"),
+        1e20,
+        1000000000000,
+        1.005,
+        0.001,
+        -1,
+        -0.0,
+        True,
+        "abc",
+        [12],
+    ],
 )
 def test_an_amount_that_would_not_store_unchanged_is_invalid_request(given: object) -> None:
     with pytest.raises(InvalidRequestError):
@@ -215,7 +232,7 @@ def test_a_date_that_is_not_a_calendar_date_is_invalid_request(given: object) ->
         )
 
 
-# ---- project_number: trimmed, unique per Principal, immutable once set -----------
+# ---- project_number: trimmed, unique per Principal, changeable and clearable ----
 
 
 def test_a_project_number_is_trimmed(scene: Scene) -> None:
@@ -251,32 +268,119 @@ def test_a_number_another_project_holds_is_conflict_on_update(scene: Scene) -> N
     assert _read(service, scene.principal, other.result["project_id"])["project_number"] is None
 
 
-def test_a_number_is_set_later_and_then_cannot_change(scene: Scene) -> None:
+def test_every_field_can_be_changed_after_create_including_the_number(scene: Scene) -> None:
     service = build_service(scene.world, scene.providers)
-    created = _create(service, scene.principal, "fields-imm-0001")
+    created = _create(service, scene.principal, "fields-mut-0001", **FULL)
     assert created.error is None and created.result is not None
     project_id = created.result["project_id"]
-    numbered = _update(
-        service, scene.principal, project_id, 1, "fields-imm-set-0001", project_number="N-1"
+    changed = {
+        "aliases": ["Renamed alias"],
+        "project_number": "2026-099",
+        "sector": "transportation_and_mobility",
+        "type": "roads_bridges_and_tunnels",
+        "address": "2 Harbor Rd",
+        "city": "Clearwater",
+        "county": "Pinellas",
+        "address_state": "Florida",
+        "zip": "33755",
+        "value": 980000,
+        "scheduled_start": "2027-01-04",
+        "contract_start": "2027-01-11",
+        "actual_start": "2027-01-18",
+        "scheduled_finish": "2028-06-30",
+        "contract_finish": "2028-07-31",
+        "actual_finish": "2028-08-15",
+    }
+    updated = _update(service, scene.principal, project_id, 1, "fields-mut-upd-0001", **changed)
+    assert updated.error is None and updated.result is not None
+    read = _read(service, scene.principal, project_id)
+    for name, value in {**changed, "value": "980000.00"}.items():
+        assert updated.result[name] == value, name
+        assert read[name] == value, name
+    renumbered = _update(
+        service, scene.principal, project_id, 2, "fields-mut-renum-0001", project_number="2026-100"
     )
-    assert numbered.error is None and numbered.result is not None
-    assert numbered.result["project_number"] == "N-1"
-    restated = _update(
+    assert renumbered.error is None and renumbered.result is not None
+    assert renumbered.result["project_number"] == "2026-100"
+
+
+def test_clear_fields_empties_the_named_fields_and_leaves_the_rest(scene: Scene) -> None:
+    service = build_service(scene.world, scene.providers)
+    created = _create(service, scene.principal, "fields-clear-0001", **FULL)
+    assert created.error is None and created.result is not None
+    project_id = created.result["project_id"]
+    cleared = _update(
         service,
         scene.principal,
         project_id,
-        2,
-        "fields-imm-same-0001",
-        project_number="N-1",
-        value="5",
+        1,
+        "fields-clear-upd-0001",
+        clear_fields=["project_number", "value", "aliases", "sector", "type", "actual_finish"],
     )
-    assert restated.error is None and restated.result is not None
-    assert restated.result["value"] == "5.00"
-    changed = _update(
-        service, scene.principal, project_id, 3, "fields-imm-chg-0001", project_number="N-2"
+    assert cleared.error is None
+    read = _read(service, scene.principal, project_id)
+    for name in ("project_number", "value", "sector", "type", "actual_finish"):
+        assert read[name] is None, name
+    assert read["aliases"] == []
+    assert read["city"] == FULL["city"]
+    assert read["contract_finish"] == FULL["contract_finish"]
+    # A cleared number is free for another Project to take.
+    assert (
+        _create(service, scene.principal, "fields-clear-reuse-01", project_number="2026-017").error
+        is None
     )
-    assert _refusal(changed) == (ErrorCode.CONFLICT, ["project_id"])
-    assert _read(service, scene.principal, project_id)["project_number"] == "N-1"
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"clear_fields": ["sector"]},
+        {"clear_fields": ["value"], "value": 5},
+        {"clear_fields": ["name"]},
+        {"clear_fields": ["state"]},
+        {"clear_fields": ["not_a_field"]},
+        {"clear_fields": ["city", "city"]},
+        {"clear_fields": "city"},
+        {"clear_fields": [None]},
+    ],
+)
+def test_a_clear_that_is_unknown_split_duplicated_or_also_set_is_invalid_request(
+    fields: dict[str, object],
+) -> None:
+    with pytest.raises(InvalidRequestError):
+        normalize(
+            Capability.CONTINUITY_PROJECTS_UPDATE.value,
+            document(
+                Capability.CONTINUITY_PROJECTS_UPDATE,
+                "prn_aaaaaaaa11111111",
+                {
+                    "project_id": "prj_aaaaaaaa11111111",
+                    "expected_version": 1,
+                    "idempotency_key": "fields-badclear-0001",
+                    **fields,
+                },
+            ),
+        )
+
+
+def test_a_replayed_key_with_different_clears_is_conflict(scene: Scene) -> None:
+    service = build_service(scene.world, scene.providers)
+    created = _create(service, scene.principal, "fields-replay-0001", **FULL)
+    assert created.error is None and created.result is not None
+    project_id = created.result["project_id"]
+    first = _update(
+        service, scene.principal, project_id, 1, "fields-replay-upd-01", clear_fields=["city"]
+    )
+    assert first.error is None
+    again = _update(
+        service, scene.principal, project_id, 1, "fields-replay-upd-01", clear_fields=["city"]
+    )
+    assert again.error is None and again.result is not None
+    assert again.result["replayed"] is True
+    other = _update(
+        service, scene.principal, project_id, 1, "fields-replay-upd-01", clear_fields=["county"]
+    )
+    assert _refusal(other) == (ErrorCode.CONFLICT, ["idempotency_key"])
 
 
 def test_an_update_changes_only_the_fields_it_names(scene: Scene) -> None:

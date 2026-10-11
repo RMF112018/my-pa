@@ -106,6 +106,33 @@ describe("ReadinessPanel", () => {
     expect(screen.queryByTestId("intelligence-readiness-members-none")).toBeNull();
   });
 
+  it("names the Daily Briefing gaps instead of counting zero required members", () => {
+    render(
+      <ReadinessPanel
+        cycleRunId="micr_aaaaaaaa11111111"
+        answer={{
+          kind: "resolved",
+          result: {
+            ...result("DEGRADED", [
+              member("communications", "READY", false),
+              member("people", "MISSING", false),
+              member("projects", "MISSING", false),
+              member("research", "PARTIAL", false),
+            ]),
+            missing_focus_areas: ["people", "projects"],
+            partial_focus_areas: ["research"],
+          },
+        }}
+      />,
+    );
+    const partial = screen.getByTestId("intelligence-readiness-partial");
+    expect(partial).toHaveAttribute("role", "status");
+    expect(partial.textContent).toBe(
+      "Coverage is partial: Daily Briefing will publish as partial — missing: people, projects; partial: research.",
+    );
+    expect(partial.textContent).not.toMatch(/required member/);
+  });
+
   it("does not treat an empty member list as specialists all present", () => {
     render(
       <ReadinessPanel

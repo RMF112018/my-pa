@@ -163,12 +163,12 @@ def execute_update_project(
     aliases: tuple[str, ...] | None = None,
     project_number: str | None = None,
     sector: ProjectSector | None = None,
-    type: ProjectType | None = None,
+    type_: ProjectType | None = None,
     address: str | None = None,
     city: str | None = None,
     county: str | None = None,
     address_state: str | None = None,
-    zip: str | None = None,
+    zip_: str | None = None,
     value: Decimal | None = None,
     scheduled_start: date | None = None,
     contract_start: date | None = None,
@@ -205,8 +205,8 @@ def execute_update_project(
             replacements["project_number"] = project_number
         if sector is not None:
             replacements["sector"] = sector
-        if type is not None:
-            replacements["type"] = type
+        if type_ is not None:
+            replacements["type"] = type_
         if address is not None:
             replacements["address"] = address
         if city is not None:
@@ -215,8 +215,8 @@ def execute_update_project(
             replacements["county"] = county
         if address_state is not None:
             replacements["address_state"] = address_state
-        if zip is not None:
-            replacements["zip"] = zip
+        if zip_ is not None:
+            replacements["zip"] = zip_
         if value is not None:
             replacements["value"] = value
         if scheduled_start is not None:

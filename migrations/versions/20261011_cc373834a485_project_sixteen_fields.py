@@ -132,8 +132,7 @@ def _refuse(*, name: str, offending_sql: str, message: str) -> None:
 
 def upgrade() -> None:
     op.execute(
-        f"ALTER TABLE {SCHEMA}.projects "
-        "ADD COLUMN aliases jsonb NOT NULL DEFAULT '[]'::jsonb"
+        f"ALTER TABLE {SCHEMA}.projects ADD COLUMN aliases jsonb NOT NULL DEFAULT '[]'::jsonb"
     )
     op.execute(f"ALTER TABLE {SCHEMA}.projects ADD COLUMN project_number text")
     op.execute(f"ALTER TABLE {SCHEMA}.projects ADD COLUMN sector text")
@@ -214,8 +213,7 @@ def downgrade() -> None:
     # every other column is genuinely nullable and untouched means NULL.
     nullable_columns = [column for column in _NEW_COLUMNS if column != "aliases"]
     populated_sql = " OR ".join(
-        [f"{column} IS NOT NULL" for column in nullable_columns]
-        + ["aliases <> '[]'::jsonb"]
+        [f"{column} IS NOT NULL" for column in nullable_columns] + ["aliases <> '[]'::jsonb"]
     )
     _refuse(
         name="populated new Project fields",

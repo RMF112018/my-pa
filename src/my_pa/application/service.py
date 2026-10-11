@@ -6432,9 +6432,7 @@ class ApplicationService:
                     else command.scheduled_finish.isoformat()
                 ),
                 "contract_finish": (
-                    None
-                    if command.contract_finish is None
-                    else command.contract_finish.isoformat()
+                    None if command.contract_finish is None else command.contract_finish.isoformat()
                 ),
                 "actual_finish": (
                     None if command.actual_finish is None else command.actual_finish.isoformat()
@@ -6471,12 +6469,12 @@ class ApplicationService:
                     aliases=command.aliases,
                     project_number=command.project_number,
                     sector=command.sector,
-                    type=command.type,
+                    type_=command.type,
                     address=command.address,
                     city=command.city,
                     county=command.county,
                     address_state=command.address_state,
-                    zip=command.zip,
+                    zip_=command.zip,
                     value=command.value,
                     scheduled_start=command.scheduled_start,
                     contract_start=command.contract_start,
@@ -6585,9 +6583,7 @@ class ApplicationService:
                     else command.scheduled_finish.isoformat()
                 ),
                 "contract_finish": (
-                    None
-                    if command.contract_finish is None
-                    else command.contract_finish.isoformat()
+                    None if command.contract_finish is None else command.contract_finish.isoformat()
                 ),
                 "actual_finish": (
                     None if command.actual_finish is None else command.actual_finish.isoformat()
@@ -6611,12 +6607,12 @@ class ApplicationService:
                 aliases=command.aliases,
                 project_number=command.project_number,
                 sector=command.sector,
-                type=command.type,
+                type_=command.type,
                 address=command.address,
                 city=command.city,
                 county=command.county,
                 address_state=command.address_state,
-                zip=command.zip,
+                zip_=command.zip,
                 value=command.value,
                 scheduled_start=command.scheduled_start,
                 contract_start=command.contract_start,

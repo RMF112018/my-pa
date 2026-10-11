@@ -50,7 +50,7 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "c5b71e0a8d43"
 PREVIOUS: Final = "a1c9e4b72f80"
-CURRENT_HEAD: Final = "93f3aa113f58"
+CURRENT_HEAD: Final = "cc373834a485"
 CAPTURE_LABELS: Final = "c1a8e4d70b29"
 WP_TUX_01: Final = "de5ec1c65857"
 WP_MCP_PROJ_01: Final = "9f2c8a1d4e70"
@@ -179,12 +179,15 @@ def test_revision_sits_on_the_single_head_chain() -> None:
     assert script.get_heads() == [CURRENT_HEAD]
     # `4e9a1c7b2d60` (AUTH-IMP), `f7a2c9d51e64` (PC-CM-IMP-WP07),
     # `b8e4d6f20a11` (PC-CM-IMP-WP11), `c1a8e4d70b29` (capture labels),
-    # `de5ec1c65857` (WP-TUX-01), `9f2c8a1d4e70` (WP-MCP-PROJ-01), then
-    # `b3e9d7a41c25` (WP-MCP-PROJ-02) landed on top of this revision, so the
-    # head is no longer its direct child. The path from head down to this
-    # revision is asserted link by link rather than loosened to mere
-    # reachability, which would be the weaker claim.
-    assert script.get_revision(CURRENT_HEAD).down_revision == "6734f039f7a6"
+    # `de5ec1c65857` (WP-TUX-01), `9f2c8a1d4e70` (WP-MCP-PROJ-01),
+    # `b3e9d7a41c25` (WP-MCP-PROJ-02), `93f3aa113f58` (Intelligence focus-area
+    # admission), then `cc373834a485` (Continuity Project sixteen-field
+    # admission) landed on top of this revision, so the head is no longer its
+    # direct child. The path from head down to this revision is asserted link
+    # by link rather than loosened to mere reachability, which would be the
+    # weaker claim.
+    assert script.get_revision(CURRENT_HEAD).down_revision == "93f3aa113f58"
+    assert script.get_revision("93f3aa113f58").down_revision == "6734f039f7a6"
     assert script.get_revision("6734f039f7a6").down_revision == "0641c354ca85"
     assert script.get_revision("0641c354ca85").down_revision == "c8e4a1b70d35"
     assert script.get_revision("c8e4a1b70d35").down_revision == "1d9b248e7f83"

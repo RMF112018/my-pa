@@ -1,5 +1,6 @@
 import { closed, isRecord, ok } from "../primitives";
 import type { Decoder } from "../types";
+import { PROJECT_SECTORS, PROJECT_TYPES } from "./continuity.projects";
 
 // Shared only by the twelve closed WP03B success contracts. These validate and
 // reconstruct every object rather than dropping unknown upstream fields.
@@ -85,6 +86,11 @@ export const timestamp: Decoder<string> = checked(text(), (value) => {
 const projectCreate = strictObject({
   project_id: identifier("prj"), name: checked(text(1), (value) => /[^\u0009-\u000d\u001c-\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]/u.test(value)), state: enumeration(["active", "on_hold", "closed"]),
   description: nullable(text()), replayed: boolean, version: integer(1),
+  aliases: arrayOf(text()), project_number: nullable(text()), sector: nullable(enumeration(PROJECT_SECTORS)),
+  type: nullable(enumeration(PROJECT_TYPES)), address: nullable(text()), city: nullable(text()),
+  county: nullable(text()), address_state: nullable(text()), zip: nullable(text()), value: nullable(text()),
+  scheduled_start: nullable(text()), contract_start: nullable(text()), actual_start: nullable(text()),
+  scheduled_finish: nullable(text()), contract_finish: nullable(text()), actual_finish: nullable(text()),
 });
 export type ContinuityProjectsCreateResult = Decoded<typeof projectCreate>;
 export const decodeContinuityProjectsCreate: Decoder<ContinuityProjectsCreateResult> = projectCreate;

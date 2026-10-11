@@ -50,6 +50,7 @@ from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import ensure_utc
 
 __all__ = [
+    "TYPE_TO_SECTOR",
     "Frame",
     "FrameState",
     "Project",
@@ -64,7 +65,6 @@ __all__ = [
     "Situation",
     "SituationState",
     "Trace",
-    "TYPE_TO_SECTOR",
 ]
 
 
@@ -171,8 +171,12 @@ class ProjectType(StrEnum):
     ENVIRONMENTAL_REMEDIATION_AND_ECOSYSTEM_RESTORATION = (  # T39
         "environmental_remediation_and_ecosystem_restoration"
     )
-    LAND_DEVELOPMENT_ENABLING_AND_CIVIL_SITEWORK = "land_development_enabling_and_civil_sitework"  # T40
-    EXTRACTIVE_AND_MINERAL_RESOURCES_FACILITIES = "extractive_and_mineral_resources_facilities"  # T41
+    LAND_DEVELOPMENT_ENABLING_AND_CIVIL_SITEWORK = (  # T40
+        "land_development_enabling_and_civil_sitework"
+    )
+    EXTRACTIVE_AND_MINERAL_RESOURCES_FACILITIES = (  # T41
+        "extractive_and_mineral_resources_facilities"
+    )
     SPECIALTY_CONSTRUCTION_SCOPES_AND_BUILDING_RENEWAL = (  # T42
         "specialty_construction_scopes_and_building_renewal"
     )
@@ -235,11 +239,15 @@ TYPE_TO_SECTOR: Final[MappingProxyType[ProjectType, ProjectSector]] = MappingPro
         ProjectType.SPORTS_RECREATION_AND_WELLNESS_FACILITIES: (
             ProjectSector.RECREATION_AND_ENTERTAINMENT
         ),
-        ProjectType.ENTERTAINMENT_GAMING_AND_ATTRACTIONS: ProjectSector.RECREATION_AND_ENTERTAINMENT,
+        ProjectType.ENTERTAINMENT_GAMING_AND_ATTRACTIONS: (
+            ProjectSector.RECREATION_AND_ENTERTAINMENT
+        ),
         ProjectType.PARKS_LANDSCAPE_AND_PUBLIC_REALM: ProjectSector.RECREATION_AND_ENTERTAINMENT,
         ProjectType.ROADS_BRIDGES_AND_TUNNELS: ProjectSector.TRANSPORTATION_AND_MOBILITY,
         ProjectType.RAIL_BUS_AND_PUBLIC_TRANSIT: ProjectSector.TRANSPORTATION_AND_MOBILITY,
-        ProjectType.AVIATION_AND_SPACEPORT_INFRASTRUCTURE: ProjectSector.TRANSPORTATION_AND_MOBILITY,
+        ProjectType.AVIATION_AND_SPACEPORT_INFRASTRUCTURE: (
+            ProjectSector.TRANSPORTATION_AND_MOBILITY
+        ),
         ProjectType.MARINE_PORT_AND_COASTAL_TRANSPORTATION: (
             ProjectSector.TRANSPORTATION_AND_MOBILITY
         ),
@@ -252,7 +260,9 @@ TYPE_TO_SECTOR: Final[MappingProxyType[ProjectType, ProjectSector]] = MappingPro
         ProjectType.POWER_GENERATION_AND_ENERGY_STORAGE: (
             ProjectSector.UTILITIES_ENERGY_AND_ENVIRONMENTAL
         ),
-        ProjectType.POWER_FUEL_AND_UTILITY_NETWORKS: ProjectSector.UTILITIES_ENERGY_AND_ENVIRONMENTAL,
+        ProjectType.POWER_FUEL_AND_UTILITY_NETWORKS: (
+            ProjectSector.UTILITIES_ENERGY_AND_ENVIRONMENTAL
+        ),
         ProjectType.ENVIRONMENTAL_REMEDIATION_AND_ECOSYSTEM_RESTORATION: (
             ProjectSector.UTILITIES_ENERGY_AND_ENVIRONMENTAL
         ),

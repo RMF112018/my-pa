@@ -1,5 +1,6 @@
 import type { Decoder } from "../types";
 import { strictObject, nullable, arrayOf, checked, text, integer, boolean, enumeration, identifier, timestamp, type Decoded } from "./continuity.projects.create";
+import { PROJECT_SECTORS, PROJECT_TYPES } from "./continuity.projects";
 
 const participation = strictObject({
   participant_entity_id: identifier("ent"), role_code: nullable(text()),
@@ -11,6 +12,11 @@ export const projectMutation = checked(strictObject({
   description: nullable(text()), participants: arrayOf(text()), canonical_participations: arrayOf(participation),
   opened_at: timestamp, closed_at: nullable(timestamp), created_at: timestamp, updated_at: timestamp,
   version: integer(1), replayed: boolean,
+  aliases: arrayOf(text()), project_number: nullable(text()), sector: nullable(enumeration(PROJECT_SECTORS)),
+  type: nullable(enumeration(PROJECT_TYPES)), address: nullable(text()), city: nullable(text()),
+  county: nullable(text()), address_state: nullable(text()), zip: nullable(text()), value: nullable(text()),
+  scheduled_start: nullable(text()), contract_start: nullable(text()), actual_start: nullable(text()),
+  scheduled_finish: nullable(text()), contract_finish: nullable(text()), actual_finish: nullable(text()),
 }), (value) => (value.state === "closed") === (value.closed_at !== null));
 export type ContinuityProjectsUpdateResult = Decoded<typeof projectMutation>;
 export const decodeContinuityProjectsUpdate: Decoder<ContinuityProjectsUpdateResult> = projectMutation;

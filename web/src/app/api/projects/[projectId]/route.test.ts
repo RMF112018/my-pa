@@ -56,6 +56,22 @@ const PROJECT = {
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
   version: 2,
+  aliases: [],
+  project_number: null,
+  sector: null,
+  type: null,
+  address: null,
+  city: null,
+  county: null,
+  address_state: null,
+  zip: null,
+  value: null,
+  scheduled_start: null,
+  contract_start: null,
+  actual_start: null,
+  scheduled_finish: null,
+  contract_finish: null,
+  actual_finish: null,
 } as const;
 
 function request(projectId: string, query = ""): NextRequest {

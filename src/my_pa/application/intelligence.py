@@ -1002,10 +1002,12 @@ def commit_artifact(
     completeness: str | None = None,
 ) -> MutationAdmission:
     """Atomically commit a producer run and immutable artifact."""
-    artifact_kind = require_registered_kind(
-        store, principal_id=principal_id, artifact_kind=artifact_kind, stage=stage
-    )
     try:
+        # First, as before, but inside the translated block: a registry lookup
+        # fault is handled exactly like every other store fault of this commit.
+        artifact_kind = require_registered_kind(
+            store, principal_id=principal_id, artifact_kind=artifact_kind, stage=stage
+        )
         try:
             validate_stage_coordinates(
                 stage=stage,
@@ -1241,10 +1243,12 @@ def record_run_state(
     coordinate already has a current artifact head. A stored receipt replays
     before that check, so retrying an accepted request still replays.
     """
-    artifact_kind = require_registered_kind(
-        store, principal_id=principal_id, artifact_kind=artifact_kind, stage=stage
-    )
     try:
+        # First, as before, but inside the translated block: a registry lookup
+        # fault is handled exactly like every other store fault of this commit.
+        artifact_kind = require_registered_kind(
+            store, principal_id=principal_id, artifact_kind=artifact_kind, stage=stage
+        )
         try:
             validate_stage_coordinates(
                 stage=stage,

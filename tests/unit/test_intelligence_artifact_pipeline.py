@@ -19,8 +19,17 @@ from my_pa.application.commands import (
     ResolveIntelligenceSet,
     SearchIntelligenceArtifacts,
 )
-from my_pa.application.errors import InvalidRequestError, SafeDetail, problem_detail
-from my_pa.application.intelligence import InMemoryIntelligenceStore
+from my_pa.application.errors import (
+    ConflictError,
+    InvalidRequestError,
+    SafeDetail,
+    problem_detail,
+)
+from my_pa.application.intelligence import (
+    InMemoryIntelligenceStore,
+    commit_artifact,
+    record_run_state,
+)
 from my_pa.application.producer_origin import ProducerOrigin
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.v1.envelope import ResponseEnvelope
@@ -49,6 +58,10 @@ from my_pa.domain.intelligence.catalog import (
     SourceLaneId,
     expected_members,
     parse_artifact_kind,
+)
+from my_pa.domain.intelligence.errors import (
+    IntelligenceConflictError,
+    IntelligenceCoordinateError,
 )
 from my_pa.domain.intelligence.models import (
     ReportTypeDefinition,
@@ -2576,3 +2589,68 @@ def test_the_report_commands_check_the_kind_token_and_accept_any_well_formed_one
     assert ListIntelligenceArtifacts(artifact_kind="focus_report").artifact_kind is (
         ArtifactKind.FOCUS_REPORT
     )
+
+
+class _FaultingRegistryStore(InMemoryIntelligenceStore):
+    """A store whose registry lookup fails with the given error."""
+
+    def __init__(self, fault: Exception) -> None:
+        super().__init__()
+        self.fault = fault
+
+    def get_report_type(self, principal_id: str, artifact_kind: str) -> None:  # type: ignore[override]
+        raise self.fault
+
+
+@pytest.mark.parametrize("operation", ["commit", "record_run_state"])
+def test_a_registry_lookup_fault_is_handled_like_every_other_store_fault(operation: str) -> None:
+    """F6: the kind lookup runs inside the translated block of both writes.
+
+    A plane error from the lookup is translated exactly as one from any later
+    store call; any other fault propagates unchanged, as it always has.
+    """
+    common = {
+        "principal_id": operator().principal_id,
+        "cycle_run_id": "micr_faultfault0001",
+        "stage": IntelligenceStage.COLLECTOR,
+        "artifact_kind": "client_scan",
+        "focus_area_id": FOCUS,
+        "source_lane": None,
+        "producer_task_id": "task",
+        "producer_task_name": "task",
+        "automation_platform": "abacus_chatllm",
+        "automation_run_id": None,
+        "report_date": datetime(2026, 8, 20, tzinfo=UTC).date(),
+        "idempotency_key": "fault",
+        "at": datetime(2026, 8, 20, 12, tzinfo=UTC),
+    }
+
+    def invoke(store: InMemoryIntelligenceStore) -> object:
+        if operation == "commit":
+            return commit_artifact(
+                store,
+                title="t",
+                body_markdown="b",
+                artifact_state=ArtifactState.FINAL,
+                schema_version="1",
+                **common,  # type: ignore[arg-type]
+            )
+        return record_run_state(
+            store,
+            state=ProducerRunState.FAILED,
+            expected_version=None,
+            failure_code=None,
+            failure_summary=None,
+            **common,  # type: ignore[arg-type]
+        )
+
+    with pytest.raises(InvalidRequestError) as translated:
+        invoke(_FaultingRegistryStore(IntelligenceCoordinateError()))
+    assert translated.value.safe_details == (SafeDetail.STAGE,)
+    with pytest.raises(ConflictError) as conflict:
+        invoke(_FaultingRegistryStore(IntelligenceConflictError()))
+    assert conflict.value.safe_details == (SafeDetail.CYCLE_RUN_ID,)
+    fault = RuntimeError("store unavailable")
+    with pytest.raises(RuntimeError) as unchanged:
+        invoke(_FaultingRegistryStore(fault))
+    assert unchanged.value is fault

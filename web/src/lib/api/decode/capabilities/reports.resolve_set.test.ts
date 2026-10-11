@@ -7,12 +7,12 @@ const MEMBER = {
   focus_area_id: "communications",
   source_lane: null,
   readiness: "MISSING",
-  required: true,
+  required: false,
   artifact_id: null,
   producer_run_id: null,
   content_sha256: null,
   committed_at: null,
-  readiness_reason: "missing",
+  readiness_reason: "absent",
 };
 
 const PAYLOAD = {
@@ -20,8 +20,10 @@ const PAYLOAD = {
   cycle_id: "morning_intelligence",
   business_date: "2026-08-20",
   set_id: "morning_brief_inputs",
-  aggregate: "BLOCKED",
+  aggregate: "DEGRADED",
   members: [MEMBER],
+  missing_focus_areas: ["communications"],
+  partial_focus_areas: [],
 };
 
 describe("decodeReportsResolveSet", () => {
@@ -29,10 +31,48 @@ describe("decodeReportsResolveSet", () => {
     const decoded = decodeReportsResolveSet(PAYLOAD);
     expect(decoded.ok).toBe(true);
     if (decoded.ok) {
-      expect(decoded.value.aggregate).toBe("BLOCKED");
+      expect(decoded.value.aggregate).toBe("DEGRADED");
       expect(decoded.value.members).toHaveLength(1);
       expect(decoded.value.members[0]?.readiness).toBe("MISSING");
-      expect(decoded.value.members[0]?.required).toBe(true);
+      expect(decoded.value.members[0]?.required).toBe(false);
+      expect(decoded.value.members[0]?.readiness_reason).toBe("absent");
+      expect(decoded.value.missing_focus_areas).toEqual(["communications"]);
+      expect(decoded.value.partial_focus_areas).toEqual([]);
+    }
+  });
+
+  it("keeps partial focus areas distinct from missing ones", () => {
+    const decoded = decodeReportsResolveSet({
+      ...PAYLOAD,
+      missing_focus_areas: [],
+      partial_focus_areas: ["communications", "decision_approval"],
+    });
+    expect(decoded.ok).toBe(true);
+    if (decoded.ok) {
+      expect(decoded.value.missing_focus_areas).toEqual([]);
+      expect(decoded.value.partial_focus_areas).toEqual(["communications", "decision_approval"]);
+    }
+  });
+
+  it("still decodes a BLOCKED aggregate for the sets that can block", () => {
+    const decoded = decodeReportsResolveSet({
+      ...PAYLOAD,
+      set_id: "reporter_input",
+      aggregate: "BLOCKED",
+      missing_focus_areas: [],
+      partial_focus_areas: [],
+    });
+    expect(decoded.ok && decoded.value.aggregate).toBe("BLOCKED");
+  });
+
+  it("fails closed when a focus-area gap array is omitted or not strings", () => {
+    for (const key of ["missing_focus_areas", "partial_focus_areas"] as const) {
+      const rest: Record<string, unknown> = { ...PAYLOAD };
+      delete rest[key];
+      expect(decodeReportsResolveSet(rest).ok).toBe(false);
+      expect(decodeReportsResolveSet({ ...PAYLOAD, [key]: [1] }).ok).toBe(false);
+      expect(decodeReportsResolveSet({ ...PAYLOAD, [key]: "communications" }).ok).toBe(false);
+      expect(decodeReportsResolveSet({ ...PAYLOAD, [key]: null }).ok).toBe(false);
     }
   });
 

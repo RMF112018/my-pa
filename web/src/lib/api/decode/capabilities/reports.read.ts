@@ -1,4 +1,4 @@
-import { isRecord, ok, type DecodeResult } from "../primitives";
+import { isRecord, isString, ok, type DecodeResult } from "../primitives";
 import type { Decoder } from "../types";
 import {
   decodeItems,
@@ -21,7 +21,12 @@ export const INTELLIGENCE_STAGES = [
 
 export type IntelligenceStage = (typeof INTELLIGENCE_STAGES)[number];
 
-export const ARTIFACT_KINDS = [
+/**
+ * The five kinds the service ships with. Not a closed vocabulary: since R2 an
+ * `artifact_kind` is any lower_snake token a Principal has registered, so the
+ * decoder checks the token shape, not membership in this list.
+ */
+export const BUILT_IN_ARTIFACT_KINDS = [
   "collector_candidates",
   "research_context",
   "synthesis_package",
@@ -29,7 +34,11 @@ export const ARTIFACT_KINDS = [
   "morning_brief",
 ] as const;
 
-export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
+/** Python `ARTIFACT_KIND_TOKEN` (domain/intelligence/catalog.py): a lower_snake token of at most 64 characters. */
+export const ARTIFACT_KIND_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
+
+/** A built-in or Principal-registered kind token. */
+export type ArtifactKind = string;
 
 export const ARTIFACT_STATES = ["partial", "final", "superseded", "rejected"] as const;
 
@@ -121,7 +130,8 @@ export function decodeIntelligenceStage(value: unknown): DecodeResult<Intelligen
 }
 
 export function decodeArtifactKind(value: unknown): DecodeResult<ArtifactKind> {
-  return oneOf(value, ARTIFACT_KINDS);
+  if (isString(value) && ARTIFACT_KIND_PATTERN.test(value)) return ok(value);
+  return fail("a required field was not an allowed value");
 }
 
 export function decodeArtifactState(value: unknown): DecodeResult<ArtifactState> {

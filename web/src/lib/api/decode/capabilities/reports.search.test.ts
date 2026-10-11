@@ -43,4 +43,11 @@ describe("decodeReportsSearch", () => {
   it("fails closed on an invalid enum", () => {
     expect(decodeReportsSearch({ items: [{ ...MATCH, stage: "planner" }] }).ok).toBe(false);
   });
+
+  it("decodes a registered kind token and fails closed on a malformed one", () => {
+    expect(decodeReportsSearch({ items: [{ ...MATCH, artifact_kind: "weekly_digest" }] }).ok).toBe(
+      true,
+    );
+    expect(decodeReportsSearch({ items: [{ ...MATCH, artifact_kind: "Weekly" }] }).ok).toBe(false);
+  });
 });

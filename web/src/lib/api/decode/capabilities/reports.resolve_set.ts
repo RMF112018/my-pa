@@ -8,6 +8,7 @@ import {
   requiredBoolean,
   requiredNullableString,
   requiredString,
+  requiredStringArray,
 } from "./_read-helpers";
 
 export const RESOLVER_MEMBER_STATES = [
@@ -46,6 +47,13 @@ export interface ReportsResolveSetResult {
   readonly set_id: string;
   readonly aggregate: ResolverAggregate;
   readonly members: readonly ResolveSetMember[];
+  /**
+   * Focus areas with no eligible Reporter (absent, failed, stale, superseded).
+   * Named only for `morning_brief_inputs`; present and empty for every other set.
+   */
+  readonly missing_focus_areas: readonly string[];
+  /** Focus areas whose eligible Reporter is partial. Same scope as above. */
+  readonly partial_focus_areas: readonly string[];
 }
 
 const MEMBER_KEYS = [
@@ -106,6 +114,8 @@ export const decodeReportsResolveSet: Decoder<ReportsResolveSetResult> = (input)
     "set_id",
     "aggregate",
     "members",
+    "missing_focus_areas",
+    "partial_focus_areas",
   ]);
   if (!known.ok) return known;
   const cycleRunId = requiredString(known.value.cycle_run_id);
@@ -121,6 +131,10 @@ export const decodeReportsResolveSet: Decoder<ReportsResolveSetResult> = (input)
   if (known.value.members === undefined) return fail("a required array was omitted");
   const members = decodeItems(known.value.members, decodeMember);
   if (!members.ok) return members;
+  const missingFocusAreas = requiredStringArray(known.value.missing_focus_areas);
+  if (!missingFocusAreas.ok) return missingFocusAreas;
+  const partialFocusAreas = requiredStringArray(known.value.partial_focus_areas);
+  if (!partialFocusAreas.ok) return partialFocusAreas;
   return ok({
     cycle_run_id: cycleRunId.value,
     cycle_id: cycleId.value,
@@ -128,5 +142,7 @@ export const decodeReportsResolveSet: Decoder<ReportsResolveSetResult> = (input)
     set_id: setId.value,
     aggregate: aggregate.value,
     members: members.value,
+    missing_focus_areas: missingFocusAreas.value,
+    partial_focus_areas: partialFocusAreas.value,
   });
 };

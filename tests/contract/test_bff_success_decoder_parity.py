@@ -41,6 +41,7 @@ from my_pa.application.constraint_settings import (
 )
 from my_pa.application.goodnotes_content import content_payload
 from my_pa.application.goodnotes_semantics import work_payload
+from my_pa.application.intelligence import InMemoryIntelligenceStore, resolve_set
 from my_pa.application.knowledge_assertions import assertion_view, review_case_view
 from my_pa.application.meetings import MeetingSeriesWriteResult, MeetingWriteResult
 from my_pa.application.service import (
@@ -102,6 +103,8 @@ from my_pa.domain.documents.managed import DocumentState
 from my_pa.domain.extraction.text import EXTRACTOR, EXTRACTOR_VERSION
 from my_pa.domain.goodnotes.models import GoodNotesPageRaster, GoodNotesPageWork
 from my_pa.domain.identity.operation import Capability
+from my_pa.domain.intelligence.catalog import CycleState, ResolverSetId
+from my_pa.domain.intelligence.models import IntelligenceCycleRun
 from my_pa.domain.meeting.model import (
     AttendeeResponseStatus,
     MeetingActor,
@@ -997,28 +1000,31 @@ def _reports_search() -> dict[str, Any]:
 
 
 def _reports_resolve_set() -> dict[str, Any]:
-    """Handler-identical `resolve_set` payload: aggregate plus per-member states."""
-    return {
-        "cycle_run_id": "micr_aaaaaaaa11111111",
-        "cycle_id": "morning_intelligence",
-        "business_date": "2026-08-20",
-        "set_id": "morning_brief_inputs",
-        "aggregate": "BLOCKED",
-        "members": [
-            {
-                "member_id": "communications",
-                "focus_area_id": "communications",
-                "source_lane": None,
-                "readiness": "MISSING",
-                "required": True,
-                "artifact_id": None,
-                "producer_run_id": None,
-                "content_sha256": None,
-                "committed_at": None,
-                "readiness_reason": "missing",
-            }
-        ],
-    }
+    """Live `resolve_set` output for a `morning_brief_inputs` set with no Reporter yet.
+
+    Built by the resolver the handler calls, not hand-written, so the brief's
+    never-`BLOCKED` aggregate, optional members, shared `absent` reason and the
+    `missing_focus_areas` / `partial_focus_areas` keys stay what the gateway sends.
+    """
+    store = InMemoryIntelligenceStore()
+    principal_id = "prn_aaaaaaaa11111111"
+    cycle = IntelligenceCycleRun(
+        cycle_run_id="micr_aaaaaaaa11111111",
+        principal_id=principal_id,
+        cycle_id="morning_intelligence",
+        business_date=date(2026, 8, 20),
+        state=CycleState.OPEN,
+        version=1,
+        created_at=AT,
+    )
+    store.cycles[(principal_id, cycle.cycle_run_id)] = cycle
+    return resolve_set(
+        store,
+        principal_id=principal_id,
+        cycle_run_id=cycle.cycle_run_id,
+        set_id=ResolverSetId.MORNING_BRIEF_INPUTS,
+        focus_area_id=None,
+    )
 
 
 def _stamp() -> str:

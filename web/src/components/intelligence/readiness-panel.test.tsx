@@ -25,17 +25,25 @@ function member(
   };
 }
 
+/**
+ * `morning_brief_inputs` is never BLOCKED and its members are optional, so a
+ * BLOCKED fixture with required members names `collectors`, the set that still
+ * blocks on every member.
+ */
 function result(
   aggregate: ReportsResolveSetResult["aggregate"],
   members: ReportsResolveSetResult["members"],
+  set_id = "morning_brief_inputs",
 ): ReportsResolveSetResult {
   return {
     cycle_run_id: "micr_aaaaaaaa11111111",
     cycle_id: "morning_intelligence",
     business_date: "2026-08-20",
-    set_id: "morning_brief_inputs",
+    set_id,
     aggregate,
     members,
+    missing_focus_areas: [],
+    partial_focus_areas: [],
   };
 }
 
@@ -84,7 +92,11 @@ describe("ReadinessPanel", () => {
         cycleRunId="micr_aaaaaaaa11111111"
         answer={{
           kind: "resolved",
-          result: result("BLOCKED", [member("communications", "READY"), member("people", "MISSING")]),
+          result: result(
+            "BLOCKED",
+            [member("communications", "READY"), member("people", "MISSING")],
+            "collectors",
+          ),
         }}
       />,
     );
@@ -98,7 +110,7 @@ describe("ReadinessPanel", () => {
     render(
       <ReadinessPanel
         cycleRunId="micr_aaaaaaaa11111111"
-        answer={{ kind: "resolved", result: result("BLOCKED", []) }}
+        answer={{ kind: "resolved", result: result("DEGRADED", []) }}
       />,
     );
     expect(screen.getByTestId("intelligence-readiness-members-none").textContent).toMatch(

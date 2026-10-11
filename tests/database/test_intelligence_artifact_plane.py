@@ -1578,6 +1578,105 @@ def test_sql_a_stage_only_latest_stays_on_the_builtin_focus_report(
     )
 
 
+def _ticking_clock(service: ApplicationService) -> None:
+    """A clock one second later on every read, so commit order is `committed_at` order."""
+    ticks = [0]
+
+    def clock() -> datetime:
+        ticks[0] += 1
+        return WHEN + timedelta(seconds=ticks[0])
+
+    service._clock = clock
+
+
+def _sql_latest_kindless(
+    service: ApplicationService,
+    principal: Principal,
+    cycle: str,
+    focus: FocusAreaId | None = None,
+) -> str:
+    """`reports.latest` with neither a stage nor an artifact kind."""
+    result = _ok(
+        service,
+        principal,
+        Purpose.REPORT_READ,
+        GetLatestIntelligenceArtifact(cycle_run_id=cycle, focus_area_id=focus),
+    )
+    report_id = result["report_id"]
+    assert isinstance(report_id, str)
+    return report_id
+
+
+def test_sql_a_kindless_latest_with_no_stage_stays_on_the_builtin_brief(
+    migrated_engine: Engine,
+) -> None:
+    """N1: a later client brief is never a no-stage, no-kind latest over PostgreSQL."""
+    service = _service(migrated_engine)
+    principal = operator()
+    _register_sql(service, principal, "sql_kindless_brief", IntelligenceStage.MORNING_BRIEF)
+    _ticking_clock(service)
+    cycle = _begin(service, principal, "sql-kindless-brief-cycle")
+    heads = tuple(_focus_branch(service, principal, cycle, focus) for focus in EXPECTED_FOCUS_AREAS)
+    builtin = _commit_as(
+        service,
+        principal,
+        cycle=cycle,
+        stage=IntelligenceStage.MORNING_BRIEF,
+        kind="morning_brief",
+        key="sql-kindless-builtin-brief",
+        dependencies=heads,
+    )
+    assert builtin.error is None, builtin.error
+    assert builtin.result is not None
+    client = _commit_as(
+        service,
+        principal,
+        cycle=cycle,
+        stage=IntelligenceStage.MORNING_BRIEF,
+        kind="sql_kindless_brief",
+        key="sql-kindless-client-brief",
+        dependencies=heads,
+    )
+    assert client.error is None, client.error
+    assert client.result is not None
+    assert _sql_latest_kindless(service, principal, cycle) == builtin.result["report_id"]
+    assert (
+        _sql_latest_of(service, principal, cycle, "sql_kindless_brief")["report_id"]
+        == client.result["report_id"]
+    )
+
+
+def test_sql_a_focus_area_only_latest_stays_on_the_builtin_focus_report(
+    migrated_engine: Engine,
+) -> None:
+    """N1: a later client reporter is never a focus-area-only latest over PostgreSQL."""
+    service = _service(migrated_engine)
+    principal = operator()
+    _register_sql(service, principal, "sql_kindless_report", IntelligenceStage.REPORTER)
+    _ticking_clock(service)
+    cycle = _begin(service, principal, "sql-kindless-reporter-cycle")
+    heads = tuple(_focus_branch(service, principal, cycle, focus) for focus in EXPECTED_FOCUS_AREAS)
+    last = EXPECTED_FOCUS_AREAS[-1]
+    synth = _sql_latest(service, principal, cycle, IntelligenceStage.SYNTHESIZER, focus=last)
+    client = _commit_as(
+        service,
+        principal,
+        cycle=cycle,
+        stage=IntelligenceStage.REPORTER,
+        kind="sql_kindless_report",
+        key="sql-kindless-client-reporter",
+        focus=last,
+        dependencies=(synth,),
+    )
+    assert client.error is None, client.error
+    assert client.result is not None
+    assert _sql_latest_kindless(service, principal, cycle, focus=last) == heads[-1]
+    assert (
+        _sql_latest_of(service, principal, cycle, "sql_kindless_report", last)["report_id"]
+        == client.result["report_id"]
+    )
+
+
 def _client(kind: str) -> ReportTypeDefinition:
     return ReportTypeDefinition(
         artifact_kind=kind,

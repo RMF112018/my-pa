@@ -164,7 +164,13 @@ class IntelligenceStore(Protocol):
         limit: int,
         after_committed_at: datetime | None = None,
         after_artifact_id: str | None = None,
-    ) -> tuple[IntelligenceArtifact, ...]: ...
+        builtin_only: bool = False,
+    ) -> tuple[IntelligenceArtifact, ...]:
+        """Committed artifacts, newest first.
+
+        `builtin_only` keeps only the five built-in kinds (`ArtifactKind`), so a
+        kindless selection never answers with a Principal's client kind.
+        """
 
     def search_artifacts(
         self,
@@ -287,6 +293,9 @@ def _translate(error: Exception) -> None:
 # so one Principal's registry never reaches another's error.
 
 #: Pipeline order, the first key of every registry listing.
+#: The five built-in kinds' values: what a kindless `reports.latest` considers.
+_BUILTIN_KIND_VALUES: Final = frozenset(kind.value for kind in ArtifactKind)
+
 _STAGE_ORDER: Final[Mapping[IntelligenceStage, int]] = {
     stage: position for position, stage in enumerate(IntelligenceStage)
 }
@@ -1395,6 +1404,10 @@ def latest_artifact(
         # before client kinds: a client kind is a standalone report and never
         # displaces the built-in head in a read view. Name the kind to read it.
         artifact_kind = ARTIFACT_KIND_FOR_STAGE[stage].value
+    # Every other kindless latest -- no stage, or only a focus area, source lane
+    # or report date -- also considers the built-in kinds only (operator ruling
+    # N1): a client kind is returned only when the call names it.
+    builtin_only = artifact_kind is None
     if store.get_cycle(principal_id, cycle_run_id) is None:
         raise NotFoundError(SafeDetail.CYCLE_RUN_ID)
     found = store.list_artifacts(
@@ -1407,6 +1420,7 @@ def latest_artifact(
         report_date=report_date,
         include_superseded=False,
         limit=1,
+        builtin_only=builtin_only,
     )
     if not found:
         raise NotFoundError(SafeDetail.ARTIFACT_ID)
@@ -1784,6 +1798,7 @@ class InMemoryIntelligenceStore:
         limit: int,
         after_committed_at: datetime | None = None,
         after_artifact_id: str | None = None,
+        builtin_only: bool = False,
     ) -> tuple[IntelligenceArtifact, ...]:
         found = []
         for artifact in self.artifacts.values():
@@ -1794,6 +1809,8 @@ class InMemoryIntelligenceStore:
             if stage is not None and artifact.stage is not stage:
                 continue
             if artifact_kind is not None and artifact.artifact_kind != artifact_kind:
+                continue
+            if builtin_only and artifact.artifact_kind not in _BUILTIN_KIND_VALUES:
                 continue
             if focus_area_id is not None and artifact.focus_area_id != focus_area_id:
                 continue

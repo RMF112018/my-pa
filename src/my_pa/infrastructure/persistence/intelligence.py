@@ -13,6 +13,7 @@ from sqlalchemy.engine import RowMapping
 from sqlalchemy.sql.elements import ColumnElement
 
 from my_pa.domain.intelligence.catalog import (
+    ArtifactKind,
     ArtifactState,
     CycleState,
     FocusAreaId,
@@ -386,6 +387,7 @@ class SqlIntelligenceStore:
         limit: int,
         after_committed_at: datetime | None = None,
         after_artifact_id: str | None = None,
+        builtin_only: bool = False,
     ) -> tuple[IntelligenceArtifact, ...]:
         filters: list[ColumnElement[bool]] = []
         if cycle_run_id is not None:
@@ -394,6 +396,12 @@ class SqlIntelligenceStore:
             filters.append(intelligence_artifacts.c.stage == stage.value)
         if artifact_kind is not None:
             filters.append(intelligence_artifacts.c.artifact_kind == str(artifact_kind))
+        if builtin_only:
+            filters.append(
+                intelligence_artifacts.c.artifact_kind.in_(
+                    sorted(kind.value for kind in ArtifactKind)
+                )
+            )
         if focus_area_id is not None:
             filters.append(intelligence_artifacts.c.focus_area_id == focus_area_id.value)
         if source_lane is not None:

@@ -5231,10 +5231,11 @@ class ReadIntelligenceArtifact:
 
 @dataclass(frozen=True, slots=True)
 class GetLatestIntelligenceArtifact:
-    """`reports.latest`: current head; a stage without artifact_kind reads the built-in kind.
+    """`reports.latest`: current head; without artifact_kind only built-in kinds are read.
 
-    Never crosses cycle_run_id. A client kind at a built-in stage is a
-    standalone report: a stage-only selection never returns it; name the kind.
+    Never crosses cycle_run_id. A client kind is a standalone report: a
+    selection without artifact_kind (no stage, a stage, a focus area, or any
+    combination) never returns it; name the kind to read it.
     """
 
     capability: ClassVar[Capability] = Capability.REPORTS_LATEST

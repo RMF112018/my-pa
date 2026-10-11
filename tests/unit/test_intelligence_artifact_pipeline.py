@@ -2546,6 +2546,105 @@ def test_a_stage_only_latest_stays_on_the_builtin_focus_report(scene: Scene) -> 
     )
 
 
+def _ticking_clock(service: ApplicationService) -> None:
+    """A clock one second later on every read, so commit order is `committed_at` order.
+
+    A kindless latest with no stage ranges over every built-in kind in the cycle,
+    so which built-in is newest must not fall to the random `artifact_id`.
+    """
+    ticks = [0]
+
+    def clock() -> datetime:
+        ticks[0] += 1
+        return WHEN + timedelta(seconds=ticks[0])
+
+    service._clock = clock
+
+
+def _latest_kindless(
+    service: ApplicationService,
+    principal: Principal,
+    cycle: str,
+    focus: FocusAreaId | None = None,
+) -> str:
+    """`reports.latest` with neither a stage nor an artifact kind."""
+    result = payload(
+        _as(
+            service,
+            principal,
+            Purpose.REPORT_READ,
+            GetLatestIntelligenceArtifact(cycle_run_id=cycle, focus_area_id=focus),
+        )
+    )
+    report_id = result["report_id"]
+    assert isinstance(report_id, str)
+    return report_id
+
+
+def test_a_kindless_latest_with_no_stage_stays_on_the_builtin_brief(scene: Scene) -> None:
+    """N1: with no stage and no kind, `reports.latest` considers built-in kinds only.
+
+    A client brief committed after the Daily Briefing is the newest report in
+    the cycle, but a selection that names no kind still returns the built-in
+    brief; naming the client kind returns the client report.
+    """
+    service = build_service(scene.world, scene.providers)
+    principal = scene.principal
+    payload(_register(service, principal, "weekly_brief", IntelligenceStage.MORNING_BRIEF))
+    _ticking_clock(service)
+    cycle = begin(service, scene, "cycle-kindless-brief")
+    heads = tuple(_focus_branch(service, scene, cycle, focus) for focus in EXPECTED_FOCUS_AREAS)
+    builtin = payload(_brief(service, scene, cycle, "kindless-brief", heads))
+    assert builtin["artifact_state"] == "final"
+    client = payload(
+        _commit_kind(
+            service,
+            principal,
+            cycle=cycle,
+            stage=IntelligenceStage.MORNING_BRIEF,
+            kind="weekly_brief",
+            key="kindless-client-brief",
+            focus=None,
+            dependencies=heads,
+        )
+    )
+    assert client["artifact_state"] == "final"
+
+    assert _latest_kindless(service, principal, cycle) == builtin["report_id"]
+    assert _latest_of(service, principal, cycle, "weekly_brief")["report_id"] == client["report_id"]
+
+
+def test_a_focus_area_only_latest_stays_on_the_builtin_focus_report(scene: Scene) -> None:
+    """N1: with only a focus area, a later client reporter for it is never returned."""
+    service = build_service(scene.world, scene.providers)
+    principal = scene.principal
+    payload(_register(service, principal, "client_focus_report", IntelligenceStage.REPORTER))
+    _ticking_clock(service)
+    cycle = begin(service, scene, "cycle-kindless-reporter")
+    heads = tuple(_focus_branch(service, scene, cycle, focus) for focus in EXPECTED_FOCUS_AREAS)
+    last = EXPECTED_FOCUS_AREAS[-1]
+    synth_id = _latest(service, scene, cycle, IntelligenceStage.SYNTHESIZER, focus=last)
+    client = payload(
+        _commit_kind(
+            service,
+            principal,
+            cycle=cycle,
+            stage=IntelligenceStage.REPORTER,
+            kind="client_focus_report",
+            key="kindless-client-reporter",
+            focus=last,
+            dependencies=(synth_id,),
+        )
+    )
+    assert client["artifact_state"] == "final"
+
+    assert _latest_kindless(service, principal, cycle, focus=last) == heads[-1]
+    assert (
+        _latest_of(service, principal, cycle, "client_focus_report", last)["report_id"]
+        == client["report_id"]
+    )
+
+
 def test_a_client_kind_cited_as_a_dependency_is_refused(scene: Scene) -> None:
     """F1 (c): client kinds are standalone; no commit, built-in or client, consumes one."""
     service = build_service(scene.world, scene.providers)

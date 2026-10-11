@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -69,7 +69,7 @@ from my_pa.domain.intelligence.models import (
     content_digest,
 )
 from my_pa.domain.source.registry import issue_identifier
-from tests.conftest import Scene, build_service, metadata_for, operator
+from tests.conftest import WHEN, Scene, build_service, metadata_for, operator
 
 FOCUS = FocusAreaId.COMMUNICATIONS
 
@@ -2471,6 +2471,79 @@ def test_a_client_reporter_kind_never_displaces_the_builtin_focus_report(scene: 
     assert by_area[last.value]["readiness"] == "READY"
     brief = payload(_brief(service, scene, cycle, "brief-over-builtins", heads))
     assert brief["artifact_state"] == "final"
+
+
+def _commit_later(service: ApplicationService) -> None:
+    """Move the fixed clock forward, so the next commit is strictly the newest.
+
+    Every commit under the fixed clock shares one `committed_at`, and the
+    newest-first order would then fall to the random `artifact_id`.
+    """
+    service._clock = lambda: WHEN + timedelta(minutes=1)
+
+
+def test_a_stage_only_latest_stays_on_the_builtin_brief(scene: Scene) -> None:
+    """`reports.latest` with a stage and no kind reads that stage's built-in kind.
+
+    A client kind committed later at `morning_brief` is its own standalone
+    report: a stage-only selection still returns the Daily Briefing, and naming
+    the client kind returns the client report.
+    """
+    service = build_service(scene.world, scene.providers)
+    principal = scene.principal
+    payload(_register(service, principal, "weekly_brief", IntelligenceStage.MORNING_BRIEF))
+    cycle = begin(service, scene, "cycle-stage-only-brief")
+    heads = tuple(_focus_branch(service, scene, cycle, focus) for focus in EXPECTED_FOCUS_AREAS)
+    builtin = payload(_brief(service, scene, cycle, "stage-only-brief", heads))
+    assert builtin["artifact_state"] == "final"
+    _commit_later(service)
+    client = payload(
+        _commit_kind(
+            service,
+            principal,
+            cycle=cycle,
+            stage=IntelligenceStage.MORNING_BRIEF,
+            kind="weekly_brief",
+            key="stage-only-client-brief",
+            focus=None,
+            dependencies=heads,
+        )
+    )
+    assert client["artifact_state"] == "final"
+
+    assert _latest(service, scene, cycle, IntelligenceStage.MORNING_BRIEF) == builtin["report_id"]
+    assert _latest_of(service, principal, cycle, "weekly_brief")["report_id"] == client["report_id"]
+
+
+def test_a_stage_only_latest_stays_on_the_builtin_focus_report(scene: Scene) -> None:
+    """The same for `reporter` and a focus area: a later client reporter is never the head."""
+    service = build_service(scene.world, scene.providers)
+    principal = scene.principal
+    payload(_register(service, principal, "client_focus_report", IntelligenceStage.REPORTER))
+    cycle = begin(service, scene, "cycle-stage-only-reporter")
+    heads = tuple(_focus_branch(service, scene, cycle, focus) for focus in EXPECTED_FOCUS_AREAS)
+    last = EXPECTED_FOCUS_AREAS[-1]
+    synth_id = _latest(service, scene, cycle, IntelligenceStage.SYNTHESIZER, focus=last)
+    _commit_later(service)
+    client = payload(
+        _commit_kind(
+            service,
+            principal,
+            cycle=cycle,
+            stage=IntelligenceStage.REPORTER,
+            kind="client_focus_report",
+            key="stage-only-client-reporter",
+            focus=last,
+            dependencies=(synth_id,),
+        )
+    )
+    assert client["artifact_state"] == "final"
+
+    assert _latest(service, scene, cycle, IntelligenceStage.REPORTER, focus=last) == heads[-1]
+    assert (
+        _latest_of(service, principal, cycle, "client_focus_report", last)["report_id"]
+        == client["report_id"]
+    )
 
 
 def test_a_client_kind_cited_as_a_dependency_is_refused(scene: Scene) -> None:

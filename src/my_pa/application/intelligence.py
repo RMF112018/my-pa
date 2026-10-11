@@ -1390,6 +1390,11 @@ def latest_artifact(
     artifact_kind = _registered_filter(
         store, principal_id=principal_id, artifact_kind=artifact_kind, stage=stage
     )
+    if stage is not None and artifact_kind is None:
+        # A stage-only latest is the built-in report of that stage, exactly as
+        # before client kinds: a client kind is a standalone report and never
+        # displaces the built-in head in a read view. Name the kind to read it.
+        artifact_kind = ARTIFACT_KIND_FOR_STAGE[stage].value
     if store.get_cycle(principal_id, cycle_run_id) is None:
         raise NotFoundError(SafeDetail.CYCLE_RUN_ID)
     found = store.list_artifacts(

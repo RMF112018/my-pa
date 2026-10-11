@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Final
 
@@ -1498,6 +1498,84 @@ def test_sql_a_client_reporter_kind_never_displaces_the_builtin_focus_report(
         dependencies=heads,
     )
     assert brief.error is None, brief.error
+
+
+def _commit_later(service: ApplicationService) -> None:
+    """Move the fixed clock forward, so the next commit is strictly the newest."""
+    service._clock = lambda: WHEN + timedelta(minutes=1)
+
+
+def test_sql_a_stage_only_latest_stays_on_the_builtin_brief(migrated_engine: Engine) -> None:
+    """A later client kind at `morning_brief` is never a stage-only latest."""
+    service = _service(migrated_engine)
+    principal = operator()
+    _register_sql(service, principal, "sql_stage_brief", IntelligenceStage.MORNING_BRIEF)
+    cycle = _begin(service, principal, "sql-stage-only-brief-cycle")
+    heads = tuple(_focus_branch(service, principal, cycle, focus) for focus in EXPECTED_FOCUS_AREAS)
+    builtin = _commit_as(
+        service,
+        principal,
+        cycle=cycle,
+        stage=IntelligenceStage.MORNING_BRIEF,
+        kind="morning_brief",
+        key="sql-stage-only-builtin-brief",
+        dependencies=heads,
+    )
+    assert builtin.error is None, builtin.error
+    assert builtin.result is not None
+    _commit_later(service)
+    client = _commit_as(
+        service,
+        principal,
+        cycle=cycle,
+        stage=IntelligenceStage.MORNING_BRIEF,
+        kind="sql_stage_brief",
+        key="sql-stage-only-client-brief",
+        dependencies=heads,
+    )
+    assert client.error is None, client.error
+    assert client.result is not None
+    assert (
+        _sql_latest(service, principal, cycle, IntelligenceStage.MORNING_BRIEF)
+        == builtin.result["report_id"]
+    )
+    assert (
+        _sql_latest_of(service, principal, cycle, "sql_stage_brief")["report_id"]
+        == client.result["report_id"]
+    )
+
+
+def test_sql_a_stage_only_latest_stays_on_the_builtin_focus_report(
+    migrated_engine: Engine,
+) -> None:
+    """A later client kind at `reporter` is never a stage-only latest for the area."""
+    service = _service(migrated_engine)
+    principal = operator()
+    _register_sql(service, principal, "sql_stage_report", IntelligenceStage.REPORTER)
+    cycle = _begin(service, principal, "sql-stage-only-reporter-cycle")
+    heads = tuple(_focus_branch(service, principal, cycle, focus) for focus in EXPECTED_FOCUS_AREAS)
+    last = EXPECTED_FOCUS_AREAS[-1]
+    synth = _sql_latest(service, principal, cycle, IntelligenceStage.SYNTHESIZER, focus=last)
+    _commit_later(service)
+    client = _commit_as(
+        service,
+        principal,
+        cycle=cycle,
+        stage=IntelligenceStage.REPORTER,
+        kind="sql_stage_report",
+        key="sql-stage-only-client-reporter",
+        focus=last,
+        dependencies=(synth,),
+    )
+    assert client.error is None, client.error
+    assert client.result is not None
+    assert (
+        _sql_latest(service, principal, cycle, IntelligenceStage.REPORTER, focus=last) == heads[-1]
+    )
+    assert (
+        _sql_latest_of(service, principal, cycle, "sql_stage_report", last)["report_id"]
+        == client.result["report_id"]
+    )
 
 
 def _client(kind: str) -> ReportTypeDefinition:

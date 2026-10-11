@@ -10,20 +10,24 @@ from my_pa.adapters.normalization import normalize
 from my_pa.application.commands import (
     BeginIntelligenceCycle,
     CommitIntelligenceArtifact,
+    CreateReportType,
     GetLatestIntelligenceArtifact,
     ListIntelligenceArtifacts,
+    ListReportTypes,
     ReadIntelligenceArtifact,
     RecordIntelligenceRunState,
     ResolveIntelligenceSet,
     SearchIntelligenceArtifacts,
 )
-from my_pa.application.errors import InvalidRequestError
+from my_pa.application.errors import InvalidRequestError, SafeDetail, problem_detail
 from my_pa.application.intelligence import InMemoryIntelligenceStore
 from my_pa.application.producer_origin import ProducerOrigin
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.v1.envelope import ResponseEnvelope
 from my_pa.contracts.v1.errors import ErrorCode
-from my_pa.domain.identity.operation import Capability
+from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.identity.operation import Capability, permitted_purposes
+from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.intelligence.catalog import (
     BUILTIN_REPORT_TYPES,
@@ -32,6 +36,7 @@ from my_pa.domain.intelligence.catalog import (
     EXPECTED_SOURCE_LANES,
     FOCUS_AREA_IDS,
     MAX_ARTIFACT_BODY_BYTES,
+    MAX_CLIENT_REPORT_TYPES,
     MAX_MORNING_BRIEF_DEPENDENCY_COUNT,
     REQUIRED_DEPENDENCY_COUNT,
     ArtifactKind,
@@ -50,6 +55,7 @@ from my_pa.domain.intelligence.models import (
     builtin_report_type_definitions,
     content_digest,
 )
+from my_pa.domain.source.registry import issue_identifier
 from tests.conftest import Scene, build_service, metadata_for, operator
 
 FOCUS = FocusAreaId.COMMUNICATIONS
@@ -1827,3 +1833,575 @@ def test_the_in_memory_registry_is_idempotent_ordered_and_principal_isolated() -
     assert store.list_report_types(other) == ()
     assert store.get_report_type(other, "weekly_digest") is None
     assert store.get_report_type(owner, "weekly_digest") == first.report_type
+
+
+# --- R2/R3: the per-Principal report type registry ---------------------------
+
+
+def _as(
+    service: ApplicationService, principal: Principal, purpose: Purpose, command: object
+) -> ResponseEnvelope:
+    return service.invoke(
+        metadata_for(command.capability, purpose, principal),  # type: ignore[attr-defined]
+        command,  # type: ignore[arg-type]
+        principal=principal,
+    )
+
+
+def _register(
+    service: ApplicationService,
+    principal: Principal,
+    kind: str,
+    stage: IntelligenceStage,
+    description: str = "A synthetic client report type.",
+    display_name: str | None = None,
+) -> ResponseEnvelope:
+    return _as(
+        service,
+        principal,
+        Purpose.REPORT_AUTHORING,
+        CreateReportType(
+            artifact_kind=kind, stage=stage, description=description, display_name=display_name
+        ),
+    )
+
+
+def _types(
+    service: ApplicationService, principal: Principal, stage: IntelligenceStage | None = None
+) -> list[dict[str, object]]:
+    listed = payload(_as(service, principal, Purpose.REPORT_READ, ListReportTypes(stage=stage)))
+    report_types = listed["report_types"]
+    assert isinstance(report_types, list)
+    return report_types
+
+
+def _commit_kind(
+    service: ApplicationService,
+    principal: Principal,
+    *,
+    cycle: str,
+    stage: IntelligenceStage,
+    kind: str,
+    key: str,
+    focus: FocusAreaId | None = FOCUS,
+    lane: SourceLaneId | None = None,
+    dependencies: tuple[str, ...] = (),
+) -> ResponseEnvelope:
+    return _as(
+        service,
+        principal,
+        Purpose.REPORT_AUTHORING,
+        CommitIntelligenceArtifact(
+            cycle_run_id=cycle,
+            stage=stage,
+            artifact_kind=kind,
+            producer_task_id=f"task-{kind}",
+            producer_task_name=f"Producer {kind}",
+            automation_platform="abacus_chatllm",
+            report_date="2026-08-20",
+            title=f"Artifact {kind}",
+            body_markdown=f"body {kind}",
+            artifact_state=ArtifactState.FINAL,
+            schema_version="1",
+            idempotency_key=key,
+            focus_area_id=focus,
+            source_lane=lane,
+            dependency_report_ids=dependencies,
+        ),
+    )
+
+
+def _allowed(envelope: ResponseEnvelope) -> dict[str, list[str]]:
+    assert envelope.error is not None, "expected an error envelope"
+    return {entry.detail: list(entry.values) for entry in envelope.error.allowed_values}
+
+
+def _builtin_row(kind: ArtifactKind) -> dict[str, object]:
+    (definition,) = [d for d in builtin_report_type_definitions() if d.artifact_kind is kind]
+    return {
+        "artifact_kind": kind.value,
+        "stage": definition.stage.value,
+        "description": definition.description,
+        "display_name": definition.display_name,
+        "origin": "builtin",
+    }
+
+
+def test_report_types_create_lists_and_replays_an_identical_definition(scene: Scene) -> None:
+    service = build_service(scene.world, scene.providers)
+    principal = scene.principal
+    assert [row["artifact_kind"] for row in _types(service, principal)] == [
+        kind.value for kind, _stage, _d, _n in BUILTIN_REPORT_TYPES
+    ]
+    created = payload(
+        _register(
+            service, principal, "weekly_digest", IntelligenceStage.REPORTER, "Weekly.", "Weekly"
+        )
+    )
+    weekly = {
+        "artifact_kind": "weekly_digest",
+        "stage": "reporter",
+        "description": "Weekly.",
+        "display_name": "Weekly",
+        "origin": "client",
+    }
+    assert created == {**weekly, "created": True, "replayed": False}
+    replayed = payload(
+        _register(
+            service, principal, "weekly_digest", IntelligenceStage.REPORTER, "Weekly.", "Weekly"
+        )
+    )
+    assert replayed == {**weekly, "created": False, "replayed": True}
+    payload(_register(service, principal, "alpha_scan", IntelligenceStage.COLLECTOR))
+    # Pipeline-stage order, the built-in kind first within a stage, then by kind.
+    assert [(row["stage"], row["artifact_kind"]) for row in _types(service, principal)] == [
+        ("collector", "collector_candidates"),
+        ("collector", "alpha_scan"),
+        ("researcher", "research_context"),
+        ("synthesizer", "synthesis_package"),
+        ("reporter", "focus_report"),
+        ("reporter", "weekly_digest"),
+        ("morning_brief", "morning_brief"),
+    ]
+    assert _types(service, principal, IntelligenceStage.REPORTER) == [
+        _builtin_row(ArtifactKind.FOCUS_REPORT),
+        weekly,
+    ]
+    # The registry is the acting Principal's own: another sees only the built-ins.
+    other = operator()
+    assert [row["origin"] for row in _types(service, other)] == ["builtin"] * 5
+    # The stored registry carries the built-in rows beside the client ones.
+    stored = scene.world.intelligence.list_report_types(principal.principal_id)
+    assert {str(row.definition.artifact_kind) for row in stored} == {
+        *(kind.value for kind in ArtifactKind),
+        "weekly_digest",
+        "alpha_scan",
+    }
+
+
+def test_a_different_definition_or_a_builtin_kind_is_a_conflict(scene: Scene) -> None:
+    service = build_service(scene.world, scene.providers)
+    payload(_register(service, scene.principal, "weekly_digest", IntelligenceStage.REPORTER))
+    for envelope in (
+        _register(service, scene.principal, "weekly_digest", IntelligenceStage.COLLECTOR),
+        _register(service, scene.principal, "weekly_digest", IntelligenceStage.REPORTER, "Other."),
+        _register(
+            service,
+            scene.principal,
+            "weekly_digest",
+            IntelligenceStage.REPORTER,
+            display_name="Named now",
+        ),
+        _register(service, scene.principal, "focus_report", IntelligenceStage.REPORTER),
+        _register(service, scene.principal, "morning_brief", IntelligenceStage.COLLECTOR),
+    ):
+        assert _refusal(envelope) == (ErrorCode.CONFLICT, ("artifact_kind",))
+        assert envelope.error is not None and envelope.error.allowed_values == ()
+    # Nothing was rewritten.
+    (row,) = [r for r in _types(service, scene.principal) if r["artifact_kind"] == "weekly_digest"]
+    assert (row["stage"], row["description"], row["display_name"]) == (
+        "reporter",
+        "A synthetic client report type.",
+        None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("fields", "detail", "allowed"),
+    [
+        ({"artifact_kind": "Weekly Digest"}, "artifact_kind", None),
+        ({"artifact_kind": "9weekly"}, "artifact_kind", None),
+        ({"artifact_kind": "w" * 65}, "artifact_kind", None),
+        ({"stage": "editor"}, "stage", [stage.value for stage in IntelligenceStage]),
+        ({"description": ""}, "description", None),
+        ({"description": "d" * 501}, "description", None),
+        ({"display_name": "n" * 121}, "display_name", None),
+    ],
+)
+def test_report_types_create_refuses_each_malformed_field(
+    fields: dict[str, object], detail: str, allowed: list[str] | None
+) -> None:
+    """A malformed token lists nothing; an unknown stage lists the five stages."""
+    principal = operator()
+    request = {
+        "contract_version": "v1",
+        "request_id": "req-types-create",
+        "purpose": Purpose.REPORT_AUTHORING.value,
+        "principal_id": principal.principal_id,
+        "requested_at": "2026-10-11T12:00:00Z",
+        "payload": {
+            "artifact_kind": "weekly_digest",
+            "stage": "reporter",
+            "description": "A synthetic client report type.",
+            **fields,
+        },
+    }
+    with pytest.raises(InvalidRequestError) as refused:
+        normalize(Capability.REPORTS_TYPES_CREATE.value, request)
+    assert refused.value.safe_details == (SafeDetail(detail),)
+    expected = {} if allowed is None else {SafeDetail(detail): tuple(allowed)}
+    assert dict(refused.value.allowed_values) == expected
+
+
+def test_a_client_kind_commits_at_its_stage_and_is_refused_at_another(scene: Scene) -> None:
+    service = build_service(scene.world, scene.providers)
+    principal = scene.principal
+    payload(_register(service, principal, "alpha_scan", IntelligenceStage.COLLECTOR))
+    payload(_register(service, principal, "lane_notes", IntelligenceStage.RESEARCHER))
+    cycle = begin(service, scene, "cycle-client-kind")
+    committed = payload(
+        _commit_kind(
+            service,
+            principal,
+            cycle=cycle,
+            stage=IntelligenceStage.COLLECTOR,
+            kind="alpha_scan",
+            key="client-kind-c",
+        )
+    )
+    assert committed["artifact_kind"] == "alpha_scan"
+    assert committed["stage"] == "collector"
+    report_id = committed["report_id"]
+    assert isinstance(report_id, str)
+    # A client collector is the stage's head: a built-in researcher builds on it,
+    # and a client researcher does too.
+    lane_notes = payload(
+        _commit_kind(
+            service,
+            principal,
+            cycle=cycle,
+            stage=IntelligenceStage.RESEARCHER,
+            kind="lane_notes",
+            key="client-kind-r",
+            lane=SourceLaneId.TEAMS,
+            dependencies=(report_id,),
+        )
+    )
+    assert lane_notes["artifact_kind"] == "lane_notes"
+    read = payload(
+        _as(service, principal, Purpose.REPORT_READ, ReadIntelligenceArtifact(report_id))
+    )
+    assert read["artifact_kind"] == "alpha_scan"
+    latest = payload(
+        _as(
+            service,
+            principal,
+            Purpose.REPORT_READ,
+            GetLatestIntelligenceArtifact(cycle_run_id=cycle, artifact_kind="alpha_scan"),
+        )
+    )
+    assert latest["report_id"] == report_id
+    listed = payload(
+        _as(
+            service,
+            principal,
+            Purpose.REPORT_READ,
+            ListIntelligenceArtifacts(cycle_run_id=cycle, artifact_kind="alpha_scan"),
+        )
+    )
+    assert [item["report_id"] for item in listed["items"]] == [report_id]  # type: ignore[union-attr]
+    found = payload(
+        _as(
+            service,
+            principal,
+            Purpose.REPORT_READ,
+            SearchIntelligenceArtifacts(query="alpha_scan", artifact_kind="alpha_scan"),
+        )
+    )
+    assert [item["report_id"] for item in found["items"]] == [report_id]  # type: ignore[union-attr]
+    recorded = payload(
+        _as(
+            service,
+            principal,
+            Purpose.REPORT_AUTHORING,
+            RecordIntelligenceRunState(
+                cycle_run_id=cycle,
+                stage=IntelligenceStage.COLLECTOR,
+                artifact_kind="alpha_scan",
+                producer_task_id="task-alpha",
+                producer_task_name="alpha",
+                automation_platform="abacus_chatllm",
+                report_date="2026-08-20",
+                state=ProducerRunState.SUCCEEDED,
+                idempotency_key="client-kind-run",
+                focus_area_id=FOCUS,
+            ),
+        )
+    )
+    assert recorded["state"] == "succeeded"
+
+    # At another stage the kind is refused, listing the kinds of *that* stage.
+    misplaced = _commit_kind(
+        service,
+        principal,
+        cycle=cycle,
+        stage=IntelligenceStage.RESEARCHER,
+        kind="alpha_scan",
+        key="client-kind-misplaced",
+        lane=SourceLaneId.TEAMS,
+        dependencies=(report_id,),
+    )
+    assert _refusal(misplaced) == (ErrorCode.INVALID_REQUEST, ("stage", "artifact_kind"))
+    assert _allowed(misplaced) == {"artifact_kind": ["research_context", "lane_notes"]}
+    run_misplaced = _as(
+        service,
+        principal,
+        Purpose.REPORT_AUTHORING,
+        RecordIntelligenceRunState(
+            cycle_run_id=cycle,
+            stage=IntelligenceStage.REPORTER,
+            artifact_kind="alpha_scan",
+            producer_task_id="task-alpha",
+            producer_task_name="alpha",
+            automation_platform="abacus_chatllm",
+            report_date="2026-08-20",
+            state=ProducerRunState.FAILED,
+            idempotency_key="client-kind-run-misplaced",
+            focus_area_id=FOCUS,
+        ),
+    )
+    assert _refusal(run_misplaced) == (ErrorCode.INVALID_REQUEST, ("stage", "artifact_kind"))
+    assert _allowed(run_misplaced) == {"artifact_kind": ["focus_report"]}
+
+
+def test_a_builtin_kind_at_the_wrong_stage_lists_that_stages_kinds(scene: Scene) -> None:
+    service = build_service(scene.world, scene.providers)
+    cycle = begin(service, scene, "cycle-builtin-misplaced")
+    refused = _commit_kind(
+        service,
+        scene.principal,
+        cycle=cycle,
+        stage=IntelligenceStage.COLLECTOR,
+        kind="focus_report",
+        key="builtin-misplaced",
+    )
+    assert _refusal(refused) == (ErrorCode.INVALID_REQUEST, ("stage", "artifact_kind"))
+    assert _allowed(refused) == {"artifact_kind": ["collector_candidates"]}
+
+
+def test_an_unregistered_kind_lists_only_the_acting_principals_kinds(scene: Scene) -> None:
+    """R3 isolation: Principal B's kind never reaches Principal A's refusal, or the reverse."""
+    service = build_service(scene.world, scene.providers)
+    alice = scene.principal
+    bob = operator()
+    payload(_register(service, alice, "alice_scan", IntelligenceStage.COLLECTOR))
+    payload(_register(service, bob, "bob_secret_scan", IntelligenceStage.COLLECTOR))
+    payload(_register(service, bob, "bob_secret_brief", IntelligenceStage.MORNING_BRIEF))
+    cycle = begin(service, scene, "cycle-unregistered")
+
+    # Bob's kind is unregistered for Alice, at commit and as a read filter.
+    refused = _commit_kind(
+        service,
+        alice,
+        cycle=cycle,
+        stage=IntelligenceStage.COLLECTOR,
+        kind="bob_secret_scan",
+        key="alice-uses-bob",
+    )
+    assert _refusal(refused) == (ErrorCode.INVALID_REQUEST, ("artifact_kind",))
+    assert _allowed(refused) == {"artifact_kind": ["collector_candidates", "alice_scan"]}
+    filtered = _as(
+        service,
+        alice,
+        Purpose.REPORT_READ,
+        ListIntelligenceArtifacts(artifact_kind="bob_secret_brief"),
+    )
+    assert _refusal(filtered) == (ErrorCode.INVALID_REQUEST, ("artifact_kind",))
+    every_kind = [
+        "collector_candidates",
+        "alice_scan",
+        "research_context",
+        "synthesis_package",
+        "focus_report",
+        "morning_brief",
+    ]
+    assert _allowed(filtered) == {"artifact_kind": every_kind}
+    staged = _as(
+        service,
+        alice,
+        Purpose.REPORT_READ,
+        SearchIntelligenceArtifacts(
+            query="x", stage=IntelligenceStage.COLLECTOR, artifact_kind="never_registered"
+        ),
+    )
+    assert _allowed(staged) == {"artifact_kind": ["collector_candidates", "alice_scan"]}
+    latest = _as(
+        service,
+        alice,
+        Purpose.REPORT_READ,
+        GetLatestIntelligenceArtifact(cycle_run_id=cycle, artifact_kind="bob_secret_scan"),
+    )
+    assert _allowed(latest) == {"artifact_kind": every_kind}
+    for envelope in (refused, filtered, staged, latest):
+        assert "bob_secret" not in envelope.model_dump_json()
+
+    # And Alice's kind is unregistered for Bob.
+    bobs = _as(
+        service, bob, Purpose.REPORT_READ, ListIntelligenceArtifacts(artifact_kind="alice_scan")
+    )
+    assert _allowed(bobs) == {
+        "artifact_kind": [
+            "collector_candidates",
+            "bob_secret_scan",
+            "research_context",
+            "synthesis_package",
+            "focus_report",
+            "morning_brief",
+            "bob_secret_brief",
+        ]
+    }
+    assert "alice_scan" not in bobs.model_dump_json()
+
+
+def test_the_client_type_cap_is_enforced_and_an_existing_kind_still_replays(scene: Scene) -> None:
+    service = build_service(scene.world, scene.providers)
+    for index in range(MAX_CLIENT_REPORT_TYPES):
+        payload(
+            _register(service, scene.principal, f"kind_{index:02d}", IntelligenceStage.REPORTER)
+        )
+    full = _register(service, scene.principal, "one_too_many", IntelligenceStage.REPORTER)
+    assert _refusal(full) == (ErrorCode.CONFLICT, ("artifact_kind", "max_items"))
+    assert (
+        payload(_register(service, scene.principal, "kind_00", IntelligenceStage.REPORTER))[
+            "replayed"
+        ]
+        is True
+    )
+    assert len(_types(service, scene.principal)) == 5 + MAX_CLIENT_REPORT_TYPES
+    # A full registry still bounds the listing a refusal carries: truncated at 64.
+    refused = _commit_kind(
+        service,
+        scene.principal,
+        cycle=begin(service, scene, "cycle-cap"),
+        stage=IntelligenceStage.REPORTER,
+        kind="not_registered",
+        key="cap-unregistered",
+    )
+    assert refused.error is not None
+    (entry,) = refused.error.allowed_values
+    assert entry.detail == "artifact_kind" and entry.truncated is True
+    assert len(entry.values) == 64 and entry.values[0] == "focus_report"
+    # Another Principal is not affected by this one's cap.
+    assert (
+        payload(_register(service, operator(), "one_too_many", IntelligenceStage.REPORTER))[
+            "created"
+        ]
+        is True
+    )
+
+
+def test_client_reporter_and_brief_kinds_join_the_daily_briefing(scene: Scene) -> None:
+    """Reporters are matched by stage: a client reporter kind feeds the brief like a built-in.
+
+    A client brief kind at the `morning_brief` stage takes the brief's own rules.
+    """
+    service = build_service(scene.world, scene.providers)
+    principal = scene.principal
+    payload(_register(service, principal, "client_focus_report", IntelligenceStage.REPORTER))
+    payload(_register(service, principal, "weekly_brief", IntelligenceStage.MORNING_BRIEF))
+    cycle = begin(service, scene, "cycle-client-brief")
+    heads = [_focus_branch(service, scene, cycle, focus) for focus in EXPECTED_FOCUS_AREAS[:-1]]
+    last = EXPECTED_FOCUS_AREAS[-1]
+    built_in_head = _focus_branch(service, scene, cycle, last)
+    synth_id = _latest(service, scene, cycle, IntelligenceStage.SYNTHESIZER, focus=last)
+    client_reporter = payload(
+        _commit_kind(
+            service,
+            principal,
+            cycle=cycle,
+            stage=IntelligenceStage.REPORTER,
+            kind="client_focus_report",
+            key="client-reporter",
+            focus=last,
+            dependencies=(synth_id,),
+        )
+    )
+    client_id = client_reporter["report_id"]
+    assert isinstance(client_id, str)
+    # The client reporter is now the area's head; the built-in one it replaced is not.
+    resolved = _resolve_brief_inputs(service, scene, cycle)
+    assert resolved["aggregate"] == "READY"
+    by_area = {m["focus_area_id"]: m for m in resolved["members"]}  # type: ignore[union-attr]
+    assert by_area[last.value]["artifact_id"] == client_id
+    stale = _brief(service, scene, cycle, "client-brief-stale", (*heads, built_in_head))
+    assert stale.error is not None
+    brief = payload(
+        _commit_kind(
+            service,
+            principal,
+            cycle=cycle,
+            stage=IntelligenceStage.MORNING_BRIEF,
+            kind="weekly_brief",
+            key="client-brief",
+            focus=None,
+            dependencies=(*heads, client_id),
+        )
+    )
+    assert brief["artifact_kind"] == "weekly_brief"
+    assert brief["artifact_state"] == "final"
+
+
+def test_an_invalid_purpose_lists_the_purposes_the_capability_permits() -> None:
+    """R3: the one envelope vocabulary, listed for the capability that was named."""
+    principal = operator()
+    for capability, permitted in (
+        (Capability.REPORTS_TYPES_CREATE, ["report_authoring"]),
+        (Capability.REPORTS_TYPES_LIST, ["report_read"]),
+        (
+            Capability.CAPABILITIES_GET,
+            [p.value for p in Purpose if p in permitted_purposes(Capability.CAPABILITIES_GET)],
+        ),
+    ):
+        for bad in ("not_a_purpose", 7, None):
+            request = {
+                "contract_version": "v1",
+                "request_id": "req-bad-purpose",
+                "principal_id": principal.principal_id,
+                "requested_at": "2026-10-11T12:00:00Z",
+                "payload": {},
+            }
+            if bad is not None:
+                request["purpose"] = bad
+            with pytest.raises(InvalidRequestError) as refused:
+                normalize(capability.value, request)
+            assert refused.value.safe_details == (SafeDetail.PURPOSE,)
+            assert dict(refused.value.allowed_values) == {SafeDetail.PURPOSE: tuple(permitted)}
+            rendered = problem_detail(
+                refused.value, correlation_id=issue_identifier(IdKind.CORRELATION)
+            ).model_dump_json()
+            assert "not_a_purpose" not in rendered
+    # A valid purpose with another envelope fault keeps the bare refusal.
+    with pytest.raises(InvalidRequestError) as bare:
+        normalize(
+            Capability.REPORTS_TYPES_LIST.value,
+            {
+                "contract_version": "v1",
+                "request_id": "",
+                "purpose": "report_read",
+                "principal_id": principal.principal_id,
+                "requested_at": "2026-10-11T12:00:00Z",
+                "payload": {},
+            },
+        )
+    assert bare.value.safe_details == ()
+    assert dict(bare.value.allowed_values) == {}
+
+
+def test_the_report_commands_check_the_kind_token_and_accept_any_well_formed_one() -> None:
+    """The command layer, without normalization: shape here, registration in the application."""
+    for bad in ("Weekly", "", "w" * 65, 7, None):
+        with pytest.raises(InvalidRequestError) as refused:
+            CreateReportType(
+                artifact_kind=bad,  # type: ignore[arg-type]
+                stage=IntelligenceStage.REPORTER,
+                description="A synthetic client report type.",
+            )
+        assert refused.value.safe_details == (SafeDetail.ARTIFACT_KIND,)
+        with pytest.raises(InvalidRequestError) as listed:
+            ListIntelligenceArtifacts(artifact_kind=bad if bad is not None else "Bad")  # type: ignore[arg-type]
+        assert listed.value.safe_details == (SafeDetail.ARTIFACT_KIND,)
+    accepted = ListIntelligenceArtifacts(artifact_kind="weekly_digest")
+    assert accepted.artifact_kind == "weekly_digest"
+    assert ListIntelligenceArtifacts(artifact_kind="focus_report").artifact_kind is (
+        ArtifactKind.FOCUS_REPORT
+    )

@@ -505,6 +505,11 @@ _ORDINAL_UNITS = (
     # KLP-WP-05 adds `record_events.provenance` and takes the public set to one
     # hundred and ninety; dense through a hundred-ninety-first.
     "hundred-ninety-first",
+    # The report type registry adds `reports.types.create` and
+    # `reports.types.list` and takes the public set to one hundred and
+    # ninety-two; dense through a hundred-ninety-third.
+    "hundred-ninety-second",
+    "hundred-ninety-third",
 )
 
 

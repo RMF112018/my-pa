@@ -21,6 +21,7 @@ __all__ = [
     "EXPECTED_SOURCE_LANES",
     "FOCUS_AREA_IDS",
     "MAX_ARTIFACT_BODY_BYTES",
+    "MAX_CLIENT_REPORT_TYPES",
     "MAX_IDEMPOTENCY_KEY_LENGTH",
     "MAX_MORNING_BRIEF_DEPENDENCY_COUNT",
     "MAX_REPORT_TYPE_DESCRIPTION_CHARACTERS",
@@ -228,6 +229,9 @@ STAGE_FOR_KIND: Final[dict[ArtifactKind, IntelligenceStage]] = {
 ARTIFACT_KIND_TOKEN: Final = re.compile(r"\A[a-z][a-z0-9_]{0,63}\Z")
 MAX_REPORT_TYPE_DESCRIPTION_CHARACTERS: Final = 500
 MAX_REPORT_TYPE_DISPLAY_NAME_CHARACTERS: Final = 120
+#: Most client report types one Principal may register. Bounds the registry and
+#: so every refusal that lists a Principal's kinds.
+MAX_CLIENT_REPORT_TYPES: Final = 64
 
 #: The built-in report types as (kind, stage, description, display name), in
 #: pipeline order. Authoritative in code; the registry revision seeds the same
@@ -354,13 +358,18 @@ def expected_members(
 def validate_stage_coordinates(
     *,
     stage: IntelligenceStage,
-    artifact_kind: ArtifactKind,
+    artifact_kind: str,
     focus_area_id: FocusAreaId | None,
     source_lane: SourceLaneId | None,
 ) -> None:
-    """Fail closed when stage, kind, focus, and source-lane do not match."""
-    expected_kind = ARTIFACT_KIND_FOR_STAGE[stage]
-    if artifact_kind is not expected_kind:
+    """Fail closed when stage, kind, focus, and source-lane do not match.
+
+    A built-in kind is bound to its own stage here. A registered client kind is
+    bound to the stage it was registered at, which only the Principal's registry
+    knows, so the application checks it there before calling this.
+    """
+    builtin = isinstance(artifact_kind, ArtifactKind)
+    if builtin and artifact_kind is not ARTIFACT_KIND_FOR_STAGE[stage]:
         raise ValueError("stage and artifact_kind do not match")
     if stage is IntelligenceStage.MORNING_BRIEF:
         if focus_area_id is not None or source_lane is not None:

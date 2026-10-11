@@ -919,6 +919,8 @@ def _gate_authorization(
 
 #: The capability count before the Knowledge layer (README/matrix pin: 181).
 _PRE_KLP_CAPABILITIES: Final = 181
+#: Capabilities admitted after the Knowledge layer, none of them a Knowledge name.
+_POST_KLP_CAPABILITIES: Final = frozenset({"reports.types.create", "reports.types.list"})
 _EVENT: Final = "rcev_fastworld000000001"
 
 
@@ -928,7 +930,9 @@ def test_the_nine_new_capabilities_are_exactly_the_matrix_nine() -> None:
     assert len(nine) == 9
     assert nine == {capability.value for capability in KNOWLEDGE | DISCOVERY | {PROVENANCE}}
     assert nine <= {capability.value for capability in Capability}
-    assert len(Capability) == _PRE_KLP_CAPABILITIES + 9
+    assert {capability.value for capability in Capability} >= _POST_KLP_CAPABILITIES
+    assert not any("knowledge" in name for name in _POST_KLP_CAPABILITIES)
+    assert len(Capability) == _PRE_KLP_CAPABILITIES + 9 + len(_POST_KLP_CAPABILITIES)
     assert "knowledge.assertions.propose" not in {capability.value for capability in Capability}
     assert not any(
         capability.value.endswith(".propose") and "knowledge" in capability.value

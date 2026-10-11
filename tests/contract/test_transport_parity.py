@@ -116,7 +116,9 @@ from my_pa.domain.intelligence.catalog import (
     ArtifactState,
     FocusAreaId,
     IntelligenceStage,
+    ReportTypeOrigin,
 )
+from my_pa.domain.intelligence.models import ReportTypeDefinition
 from my_pa.domain.project_controls.read_models import ConstraintListScope
 from my_pa.domain.record_events import RecordEventFamily
 from my_pa.domain.relationship.entity import (
@@ -1242,6 +1244,15 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "cycle_run_id": cycle_run_id,
             "set_id": "collectors",
         },
+        # Every optional field supplied, so a transport that dropped
+        # `display_name` or the `stage` filter would answer differently.
+        Capability.REPORTS_TYPES_CREATE: {
+            "artifact_kind": "parity_weekly_digest",
+            "stage": "reporter",
+            "description": "A synthetic weekly digest report type.",
+            "display_name": "Parity weekly digest",
+        },
+        Capability.REPORTS_TYPES_LIST: {"stage": "reporter"},
         # The relationship-intelligence entity plane (WP-RI-05). `person` and
         # `organization` are staged before the world is copied per transport, so
         # all three read the same rows and a read is the same read everywhere.
@@ -2098,7 +2109,7 @@ def test_there_are_three_transports_to_compare() -> None:
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
     # The command union and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 191, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 193, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -2750,6 +2761,85 @@ def test_a_closed_vocabulary_refusal_lists_the_acceptable_values_over_all_three_
     assert_same_answer(answers, request, plane)
 
 
+def test_an_unregistered_report_kind_lists_only_the_principals_kinds_over_all_three_transports(
+    staged: tuple[Scene, KnowledgeRecord],
+) -> None:
+    """R2/R3: the per-Principal kind list, the same on every transport, and only its own.
+
+    The acting Principal's client kind is listed beside the built-ins; another
+    Principal's kind, staged in the same world, is never listed and never echoed.
+    """
+    scene, _record = staged
+    when = datetime(2026, 10, 11, 12, tzinfo=UTC)
+    store = scene.world.intelligence
+    store.insert_report_type(
+        scene.principal.principal_id,
+        ReportTypeDefinition(
+            artifact_kind="parity_own_scan",
+            stage=IntelligenceStage.COLLECTOR,
+            description="The acting Principal's own kind.",
+            origin=ReportTypeOrigin.CLIENT,
+        ),
+        created_at=when,
+    )
+    store.insert_report_type(
+        issue_identifier(IdKind.PRINCIPAL),
+        ReportTypeDefinition(
+            artifact_kind="zz_foreign_parity_kind",
+            stage=IntelligenceStage.COLLECTOR,
+            description="Another Principal's kind.",
+            origin=ReportTypeOrigin.CLIENT,
+        ),
+        created_at=when,
+    )
+    request = document(
+        Capability.REPORTS_LIST,
+        scene.principal.principal_id,
+        {"stage": "collector", "artifact_kind": REJECTED_VOCABULARY_MARKER},
+    )
+    answers = answers_for(scene, Capability.REPORTS_LIST.value, request)
+    for transport, answer in answers.items():
+        assert answer.failed, transport
+        error = answer.document.get("error") or answer.document
+        assert error["code"] == ErrorCode.INVALID_REQUEST.value, (transport, error)
+        assert error["safe_details"] == ["artifact_kind"], (transport, error)
+        assert error["allowed_values"] == [
+            {
+                "detail": "artifact_kind",
+                "values": ["collector_candidates", "parity_own_scan"],
+                "truncated": False,
+            }
+        ], (transport, error)
+        for leaked in (REJECTED_VOCABULARY_MARKER, "zz_foreign_parity_kind"):
+            assert leaked not in answer.rendered, (transport, leaked)
+            assert leaked not in json.dumps(answer.document), (transport, leaked)
+    assert_same_answer(answers, request, "unregistered report kind")
+
+
+def test_an_unknown_purpose_lists_the_permitted_purposes_over_all_three_transports(
+    staged: tuple[Scene, KnowledgeRecord],
+) -> None:
+    """R3: an envelope `purpose` outside `Purpose` names `purpose` and the capability's own."""
+    scene, _record = staged
+    for capability, permitted in (
+        (Capability.REPORTS_TYPES_CREATE, ["report_authoring"]),
+        (Capability.REPORTS_TYPES_LIST, ["report_read"]),
+    ):
+        request = document(capability, scene.principal.principal_id, {})
+        request["purpose"] = REJECTED_VOCABULARY_MARKER
+        answers = answers_for(scene, capability.value, request)
+        for transport, answer in answers.items():
+            assert answer.failed, transport
+            error = answer.document.get("error") or answer.document
+            assert error["code"] == ErrorCode.INVALID_REQUEST.value, (transport, error)
+            assert error["safe_details"] == ["purpose"], (transport, error)
+            assert error["allowed_values"] == [
+                {"detail": "purpose", "values": permitted, "truncated": False}
+            ], (transport, error)
+            assert REJECTED_VOCABULARY_MARKER not in answer.rendered, transport
+        assert_same_answer(answers, request, f"unknown purpose for {capability.value}")
+
+
 def test_largest_corrected_review_value_is_accepted_with_transport_parity(
     staged: tuple[Scene, KnowledgeRecord],
 ) -> None:
@@ -2941,7 +3031,7 @@ def test_declared_unwired_capabilities_stay_separate_from_positive_parity(
     from my_pa.application.errors import UnsupportedError
 
     assert set(Capability) - set(_HANDLERS) == FUTURE_CAPABILITIES
-    assert len(IMPLEMENTED_CAPABILITIES) == 190
+    assert len(IMPLEMENTED_CAPABILITIES) == 192
     assert set(_BUILDERS) == set(IMPLEMENTED_CAPABILITIES)
     assert {Capability(tool.name) for tool in TOOLS} == set(IMPLEMENTED_CAPABILITIES)
 

@@ -105,6 +105,9 @@ class SafeDetail(StrEnum):
     MEDIA_TYPES = "media_types"
     IDEMPOTENCY_KEY = "idempotency_key"
     SELECTOR = "selector"
+    #: The request's `purpose` is not a purpose at all. Listed with the purposes
+    #: the requested operation permits, never with the value that was sent.
+    PURPOSE = "purpose"
     REPRESENTATION = "representation"
     SUBJECT = "subject"
     CONVERSATION_CONTEXT = "conversation_context"

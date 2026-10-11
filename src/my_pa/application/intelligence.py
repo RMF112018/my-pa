@@ -26,11 +26,13 @@ from my_pa.domain.intelligence.catalog import (
     CYCLE_MORNING_INTELLIGENCE,
     EXPECTED_FOCUS_AREAS,
     MAX_ARTIFACT_BODY_BYTES,
+    MAX_CLIENT_REPORT_TYPES,
     MAX_MORNING_BRIEF_DEPENDENCY_COUNT,
     MAX_STRUCTURED_CONTENT_BYTES,
     MIN_SYNTHESIZER_DEPENDENCY_COUNT,
     REQUIRED_DEPENDENCY_COUNT,
     REQUIRED_MEMBERSHIP,
+    STAGE_FOR_KIND,
     ArtifactKind,
     ArtifactState,
     CycleState,
@@ -39,10 +41,12 @@ from my_pa.domain.intelligence.catalog import (
     ProducerRunState,
     ProvenanceRelation,
     ReadinessMemberState,
+    ReportTypeOrigin,
     ResolverAggregateState,
     ResolverSetId,
     SourceLaneId,
     expected_members,
+    parse_artifact_kind,
     validate_stage_coordinates,
 )
 from my_pa.domain.intelligence.errors import (
@@ -77,12 +81,16 @@ from my_pa.domain.source.registry import issue_identifier
 __all__ = [
     "InMemoryIntelligenceStore",
     "IntelligenceStore",
+    "ReportTypeRegistration",
     "begin_cycle",
     "commit_artifact",
     "latest_artifact",
     "list_artifacts",
     "read_artifact",
     "record_run_state",
+    "register_report_type",
+    "registered_report_types",
+    "require_registered_kind",
     "resolve_set",
     "search_artifacts",
 ]
@@ -243,6 +251,194 @@ def _translate(error: Exception) -> None:
     if isinstance(error, IntelligenceConflictError):
         raise ConflictError(SafeDetail.CYCLE_RUN_ID) from None
     raise error
+
+
+# ---- the report type registry ------------------------------------------------
+#
+# Built-in kinds are authoritative in code and immutable; a Principal's client
+# kinds are its own stored rows. A Principal with no stored row still has every
+# built-in. Every refusal that lists kinds lists only the acting Principal's own,
+# so one Principal's registry never reaches another's error.
+
+#: Pipeline order, the first key of every registry listing.
+_STAGE_ORDER: Final[Mapping[IntelligenceStage, int]] = {
+    stage: position for position, stage in enumerate(IntelligenceStage)
+}
+
+
+@dataclass(frozen=True, slots=True)
+class ReportTypeRegistration:
+    """The outcome of `reports.types.create`: the stored definition and how it got there."""
+
+    definition: ReportTypeDefinition
+    created: bool
+    replayed: bool
+
+
+def registered_report_types(
+    store: IntelligenceStore, *, principal_id: str, stage: IntelligenceStage | None = None
+) -> tuple[ReportTypeDefinition, ...]:
+    """The built-in kinds merged with the Principal's own client kinds.
+
+    Ordered by stage in pipeline order, then the built-in kind before the
+    client kinds, then by kind. Stored built-in rows are ignored: the code's
+    definitions are the authoritative ones.
+    """
+    merged = [
+        definition
+        for definition in builtin_report_type_definitions()
+        if stage is None or definition.stage is stage
+    ]
+    merged.extend(
+        row.definition
+        for row in store.list_report_types(principal_id, stage=stage)
+        if row.definition.origin is ReportTypeOrigin.CLIENT
+    )
+    merged.sort(
+        key=lambda definition: (
+            _STAGE_ORDER[definition.stage],
+            definition.origin is not ReportTypeOrigin.BUILTIN,
+            str(definition.artifact_kind),
+        )
+    )
+    return tuple(merged)
+
+
+def _kind_refusal(
+    store: IntelligenceStore,
+    *,
+    principal_id: str,
+    stage: IntelligenceStage | None,
+    mismatch: bool,
+) -> InvalidRequestError:
+    """`invalid_request` on `artifact_kind`, listing the Principal's kinds for `stage`.
+
+    A kind registered at another stage also names `stage`: the pair disagrees,
+    and `stage` is the token that refusal carried before kinds were registered.
+    """
+    kinds = tuple(
+        str(definition.artifact_kind)
+        for definition in registered_report_types(store, principal_id=principal_id, stage=stage)
+    )
+    details = (
+        (SafeDetail.STAGE, SafeDetail.ARTIFACT_KIND) if mismatch else (SafeDetail.ARTIFACT_KIND,)
+    )
+    return InvalidRequestError(*details, allowed_values={SafeDetail.ARTIFACT_KIND: kinds})
+
+
+def _registered_stage(
+    store: IntelligenceStore, *, principal_id: str, artifact_kind: str
+) -> tuple[str, IntelligenceStage] | None:
+    """The validated kind and the stage it is registered at, or None when unregistered."""
+    try:
+        kind = parse_artifact_kind(artifact_kind)
+    except ValueError:
+        return None
+    if isinstance(kind, ArtifactKind):
+        return kind, STAGE_FOR_KIND[kind]
+    row = store.get_report_type(principal_id, kind)
+    if row is None or row.definition.origin is not ReportTypeOrigin.CLIENT:
+        return None
+    return kind, row.definition.stage
+
+
+def require_registered_kind(
+    store: IntelligenceStore,
+    *,
+    principal_id: str,
+    artifact_kind: str,
+    stage: IntelligenceStage,
+) -> str:
+    """`artifact_kind` when the Principal has it registered at `stage`, else a refusal.
+
+    An unregistered kind lists the kinds registered at `stage`; a kind
+    registered at another stage lists the same and also names `stage`. A
+    built-in kind is registered for every Principal at its own stage.
+    """
+    registered = _registered_stage(store, principal_id=principal_id, artifact_kind=artifact_kind)
+    if registered is None:
+        raise _kind_refusal(store, principal_id=principal_id, stage=stage, mismatch=False)
+    kind, registered_at = registered
+    if registered_at is not stage:
+        raise _kind_refusal(store, principal_id=principal_id, stage=stage, mismatch=True)
+    return kind
+
+
+def _registered_filter(
+    store: IntelligenceStore,
+    *,
+    principal_id: str,
+    artifact_kind: str | None,
+    stage: IntelligenceStage | None,
+) -> str | None:
+    """A read filter's kind, refused when the Principal has no such kind.
+
+    The listing is narrowed to `stage` when the filter names one. A registered
+    kind at another stage is not refused: the filters simply match nothing,
+    exactly as two disagreeing built-in filters always have.
+    """
+    if artifact_kind is None:
+        return None
+    registered = _registered_stage(store, principal_id=principal_id, artifact_kind=artifact_kind)
+    if registered is None:
+        raise _kind_refusal(store, principal_id=principal_id, stage=stage, mismatch=False)
+    return registered[0]
+
+
+def register_report_type(
+    store: IntelligenceStore,
+    *,
+    principal_id: str,
+    artifact_kind: str,
+    stage: IntelligenceStage,
+    description: str,
+    display_name: str | None,
+    at: datetime,
+) -> ReportTypeRegistration:
+    """Register one client kind for the Principal, or replay an identical one.
+
+    Insert-only. A built-in kind, or a kind already registered with a different
+    definition, is a `conflict` on `artifact_kind`; so is a registry already
+    holding `MAX_CLIENT_REPORT_TYPES` client kinds (with `max_items`). The
+    Principal's built-in rows are ensured first, so the stored registry always
+    carries them beside its client rows.
+    """
+    try:
+        kind = parse_artifact_kind(artifact_kind)
+    except ValueError:
+        raise InvalidRequestError(SafeDetail.ARTIFACT_KIND) from None
+    if isinstance(kind, ArtifactKind):
+        raise ConflictError(SafeDetail.ARTIFACT_KIND)
+    try:
+        definition = ReportTypeDefinition(
+            artifact_kind=kind,
+            stage=stage,
+            description=description,
+            origin=ReportTypeOrigin.CLIENT,
+            display_name=display_name,
+        )
+    except ValueError:
+        raise InvalidRequestError(SafeDetail.PAYLOAD) from None
+    when = _now(at)
+    store.ensure_builtin_report_types(principal_id, created_at=when)
+    existing = store.get_report_type(principal_id, kind)
+    if existing is None:
+        clients = sum(
+            row.definition.origin is ReportTypeOrigin.CLIENT
+            for row in store.list_report_types(principal_id)
+        )
+        if clients >= MAX_CLIENT_REPORT_TYPES:
+            raise ConflictError(SafeDetail.ARTIFACT_KIND, SafeDetail.MAX_ITEMS)
+        insertion = store.insert_report_type(principal_id, definition, created_at=when)
+        if insertion.inserted:
+            return ReportTypeRegistration(definition=definition, created=True, replayed=False)
+        existing = insertion.report_type
+    if (
+        existing.definition.origin is not ReportTypeOrigin.CLIENT
+        or existing.definition_fingerprint != definition.fingerprint
+    ):
+        raise ConflictError(SafeDetail.ARTIFACT_KIND)
+    return ReportTypeRegistration(definition=existing.definition, created=False, replayed=True)
 
 
 def begin_cycle(
@@ -750,7 +946,7 @@ def commit_artifact(
     principal_id: str,
     cycle_run_id: str,
     stage: IntelligenceStage,
-    artifact_kind: ArtifactKind,
+    artifact_kind: str,
     focus_area_id: FocusAreaId | None,
     source_lane: SourceLaneId | None,
     producer_task_id: str,
@@ -775,6 +971,9 @@ def commit_artifact(
     completeness: str | None = None,
 ) -> MutationAdmission:
     """Atomically commit a producer run and immutable artifact."""
+    artifact_kind = require_registered_kind(
+        store, principal_id=principal_id, artifact_kind=artifact_kind, stage=stage
+    )
     try:
         try:
             validate_stage_coordinates(
@@ -785,7 +984,10 @@ def commit_artifact(
             )
         except ValueError as error:
             raise IntelligenceCoordinateError() from error
-        if artifact_kind is not ARTIFACT_KIND_FOR_STAGE[stage]:
+        if (
+            isinstance(artifact_kind, ArtifactKind)
+            and artifact_kind is not ARTIFACT_KIND_FOR_STAGE[stage]
+        ):
             raise IntelligenceCoordinateError()
         if artifact_state not in {ArtifactState.PARTIAL, ArtifactState.FINAL}:
             raise IntelligenceCoordinateError()
@@ -805,7 +1007,7 @@ def commit_artifact(
                 "kind": "artifact_commit",
                 "cycle_run_id": cycle_run_id,
                 "stage": stage.value,
-                "artifact_kind": artifact_kind.value,
+                "artifact_kind": str(artifact_kind),
                 "focus_area_id": None if focus_area_id is None else focus_area_id.value,
                 "source_lane": None if source_lane is None else source_lane.value,
                 "producer_task_id": producer_task_id,
@@ -983,7 +1185,7 @@ def record_run_state(
     principal_id: str,
     cycle_run_id: str,
     stage: IntelligenceStage,
-    artifact_kind: ArtifactKind,
+    artifact_kind: str,
     focus_area_id: FocusAreaId | None,
     source_lane: SourceLaneId | None,
     producer_task_id: str,
@@ -1004,6 +1206,9 @@ def record_run_state(
     coordinate already has a current artifact head. A stored receipt replays
     before that check, so retrying an accepted request still replays.
     """
+    artifact_kind = require_registered_kind(
+        store, principal_id=principal_id, artifact_kind=artifact_kind, stage=stage
+    )
     try:
         try:
             validate_stage_coordinates(
@@ -1019,7 +1224,7 @@ def record_run_state(
                 "kind": "run_state",
                 "cycle_run_id": cycle_run_id,
                 "stage": stage.value,
-                "artifact_kind": artifact_kind.value,
+                "artifact_kind": str(artifact_kind),
                 "focus_area_id": None if focus_area_id is None else focus_area_id.value,
                 "source_lane": None if source_lane is None else source_lane.value,
                 "producer_task_id": producer_task_id,
@@ -1120,11 +1325,14 @@ def latest_artifact(
     principal_id: str,
     cycle_run_id: str,
     stage: IntelligenceStage | None,
-    artifact_kind: ArtifactKind | None,
+    artifact_kind: str | None,
     focus_area_id: FocusAreaId | None,
     source_lane: SourceLaneId | None,
     report_date: date | None,
 ) -> IntelligenceArtifact:
+    artifact_kind = _registered_filter(
+        store, principal_id=principal_id, artifact_kind=artifact_kind, stage=stage
+    )
     if store.get_cycle(principal_id, cycle_run_id) is None:
         raise NotFoundError(SafeDetail.CYCLE_RUN_ID)
     found = store.list_artifacts(
@@ -1149,7 +1357,7 @@ def list_artifacts(
     principal_id: str,
     cycle_run_id: str | None,
     stage: IntelligenceStage | None,
-    artifact_kind: ArtifactKind | None,
+    artifact_kind: str | None,
     focus_area_id: FocusAreaId | None,
     source_lane: SourceLaneId | None,
     report_date: date | None,
@@ -1158,6 +1366,9 @@ def list_artifacts(
     after_committed_at: datetime | None = None,
     after_artifact_id: str | None = None,
 ) -> tuple[IntelligenceArtifact, ...]:
+    artifact_kind = _registered_filter(
+        store, principal_id=principal_id, artifact_kind=artifact_kind, stage=stage
+    )
     return store.list_artifacts(
         principal_id,
         cycle_run_id=cycle_run_id,
@@ -1180,11 +1391,14 @@ def search_artifacts(
     query: str,
     cycle_run_id: str | None,
     stage: IntelligenceStage | None,
-    artifact_kind: ArtifactKind | None,
+    artifact_kind: str | None,
     focus_area_id: FocusAreaId | None,
     source_lane: SourceLaneId | None,
     page_size: int,
 ) -> tuple[tuple[IntelligenceArtifact, str], ...]:
+    artifact_kind = _registered_filter(
+        store, principal_id=principal_id, artifact_kind=artifact_kind, stage=stage
+    )
     return store.search_artifacts(
         principal_id,
         query,

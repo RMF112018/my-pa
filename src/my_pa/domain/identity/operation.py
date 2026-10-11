@@ -419,7 +419,7 @@ class Capability(StrEnum):
     # Principal's own partition. Real handwriting remains fail-closed.
     GSQS_START = "gsqs.start"
     GSQS_STATUS = "gsqs.status"
-    # Intelligence Artifact / Report plane. Eight `reports.*` names rather than a
+    # Intelligence Artifact / Report plane. Ten `reports.*` names rather than a
     # widening of `capture.*`, `documents.*`, `knowledge.*`, or `context.*`
     # (`D-91`). Capture is user-authored notes. Documents are managed bytes.
     # Knowledge is enrollment-scoped extraction. Context assembles a retrieval
@@ -441,6 +441,14 @@ class Capability(StrEnum):
     REPORTS_LIST = "reports.list"
     REPORTS_SEARCH = "reports.search"
     REPORTS_RESOLVE_SET = "reports.resolve_set"
+    #: The per-Principal report type registry (revision `a591b81f10a2`). `create`
+    #: registers one additive client kind at one of the five stages -- insert
+    #: only, never a redefinition of a built-in kind or of a kind already
+    #: registered differently -- and `list` returns the built-in kinds merged
+    #: with the acting Principal's own client kinds. No retirement name: a kind
+    #: names committed, immutable artifacts, so retiring one would orphan them.
+    REPORTS_TYPES_CREATE = "reports.types.create"
+    REPORTS_TYPES_LIST = "reports.types.list"
     # The relationship-intelligence entity plane. Fifty-five `entities.` names
     # over `knowledge.entities` and the tables around it, declared in four
     # blocks by the package that added each: WP-RI-05's six reads here, then
@@ -1257,6 +1265,8 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.REPORTS_LIST: frozenset({Purpose.REPORT_READ}),
         Capability.REPORTS_SEARCH: frozenset({Purpose.REPORT_READ}),
         Capability.REPORTS_RESOLVE_SET: frozenset({Purpose.REPORT_READ}),
+        Capability.REPORTS_TYPES_CREATE: frozenset({Purpose.REPORT_AUTHORING}),
+        Capability.REPORTS_TYPES_LIST: frozenset({Purpose.REPORT_READ}),
         Capability.ENTITIES_SEARCH: frozenset({Purpose.ENTITY_READ}),
         Capability.ENTITIES_UNRESOLVED_MENTIONS: frozenset({Purpose.ENTITY_READ}),
         Capability.ENTITIES_GET: frozenset({Purpose.ENTITY_READ}),
@@ -1551,6 +1561,7 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.REPORTS_BEGIN_CYCLE,
         Capability.REPORTS_COMMIT,
         Capability.REPORTS_RECORD_RUN_STATE,
+        Capability.REPORTS_TYPES_CREATE,
         Capability.RELATIONSHIP_MEMORY_CREATE,
         Capability.RELATIONSHIP_MEMORY_REVISE,
         Capability.RELATIONSHIP_MEMORY_ARCHIVE,
@@ -1681,6 +1692,8 @@ _ADDITIVE_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.GSQS_START,
         Capability.REPORTS_BEGIN_CYCLE,
         Capability.REPORTS_RECORD_RUN_STATE,
+        # Insert-only: a registered type is never rewritten or removed.
+        Capability.REPORTS_TYPES_CREATE,
         Capability.RELATIONSHIP_MEMORY_CREATE,
         Capability.ENTITIES_CREATE,
         Capability.ENTITIES_IDENTIFIERS_BIND,

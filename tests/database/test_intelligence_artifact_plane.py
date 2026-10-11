@@ -16,8 +16,10 @@ from sqlalchemy.exc import DBAPIError
 from my_pa.application.commands import (
     BeginIntelligenceCycle,
     CommitIntelligenceArtifact,
+    CreateReportType,
     GetLatestIntelligenceArtifact,
     ListIntelligenceArtifacts,
+    ListReportTypes,
     ReadIntelligenceArtifact,
     RecordIntelligenceRunState,
     ResolveIntelligenceSet,
@@ -321,6 +323,8 @@ def test_sql_forty_nine_cycle_kind_counts_and_digest_readback(migrated_engine: E
         "reports.list",
         "reports.search",
         "reports.resolve_set",
+        "reports.types.create",
+        "reports.types.list",
     }
 
 
@@ -1177,3 +1181,122 @@ def test_sql_a_client_kind_run_and_artifact_read_back_as_the_stored_token(
             limit=10,
         )
         assert [artifact.artifact_id for artifact in listed] == ["rpt_clientkind0001"]
+
+
+def test_sql_report_types_create_list_commit_and_refuse_through_the_service(
+    migrated_engine: Engine,
+) -> None:
+    """R2/R3 over PostgreSQL: register, replay, commit at the stage, refuse elsewhere.
+
+    The refusal lists the acting Principal's own kinds and never another's, and
+    the audit row names the new capability (the restated `capability_is_known`).
+    """
+    service = _service(migrated_engine)
+    alice = operator()
+    bob = operator()
+    definition = {
+        "artifact_kind": "sql_weekly_scan",
+        "stage": IntelligenceStage.COLLECTOR,
+        "description": "A synthetic client collector kind.",
+        "display_name": "SQL weekly scan",
+    }
+    created = _ok(service, alice, Purpose.REPORT_AUTHORING, CreateReportType(**definition))  # type: ignore[arg-type]
+    assert (created["created"], created["replayed"], created["origin"]) == (True, False, "client")
+    replayed = _ok(service, alice, Purpose.REPORT_AUTHORING, CreateReportType(**definition))  # type: ignore[arg-type]
+    assert (replayed["created"], replayed["replayed"]) == (False, True)
+    changed = _invoke(
+        service,
+        alice,
+        Purpose.REPORT_AUTHORING,
+        CreateReportType(**{**definition, "description": "Changed."}),  # type: ignore[arg-type]
+    )
+    assert changed.error is not None
+    assert (changed.error.code, changed.error.safe_details) == (
+        ErrorCode.CONFLICT,
+        ("artifact_kind",),
+    )
+    _ok(
+        service,
+        bob,
+        Purpose.REPORT_AUTHORING,
+        CreateReportType(
+            artifact_kind="sql_bob_secret", stage=IntelligenceStage.COLLECTOR, description="Bob's."
+        ),
+    )
+    listed = _ok(
+        service, alice, Purpose.REPORT_READ, ListReportTypes(stage=IntelligenceStage.COLLECTOR)
+    )
+    assert [(row["artifact_kind"], row["origin"]) for row in listed["report_types"]] == [  # type: ignore[union-attr]
+        ("collector_candidates", "builtin"),
+        ("sql_weekly_scan", "client"),
+    ]
+    with migrated_engine.connect() as connection:
+        stored = _store(connection, alice).list_report_types(alice.principal_id)
+        audited = connection.execute(
+            text(
+                "SELECT count(*) FROM knowledge.audit_events "
+                "WHERE capability IN ('reports.types.create', 'reports.types.list')"
+            )
+        ).scalar_one()
+    assert {str(row.definition.artifact_kind) for row in stored} == {
+        *(kind.value for kind in ArtifactKind),
+        "sql_weekly_scan",
+    }
+    assert audited >= 4
+
+    cycle = _begin(service, alice, "sql-client-kind-cycle")
+    committed = _ok(
+        service,
+        alice,
+        Purpose.REPORT_AUTHORING,
+        CommitIntelligenceArtifact(
+            cycle_run_id=cycle,
+            stage=IntelligenceStage.COLLECTOR,
+            artifact_kind="sql_weekly_scan",
+            producer_task_id="sql-client",
+            producer_task_name="SQL client",
+            automation_platform="abacus_chatllm",
+            report_date="2026-08-20",
+            title="SQL client kind",
+            body_markdown=BODY,
+            artifact_state=ArtifactState.FINAL,
+            schema_version="1",
+            idempotency_key="sql-client-kind",
+            focus_area_id=FocusAreaId.COMMUNICATIONS,
+        ),
+    )
+    assert committed["artifact_kind"] == "sql_weekly_scan"
+    filtered = _ok(
+        service,
+        alice,
+        Purpose.REPORT_READ,
+        ListIntelligenceArtifacts(cycle_run_id=cycle, artifact_kind="sql_weekly_scan"),
+    )
+    assert [item["report_id"] for item in filtered["items"]] == [committed["report_id"]]  # type: ignore[union-attr]
+    for kind in ("sql_bob_secret", "sql_weekly_scan"):
+        misplaced = _invoke(
+            service,
+            alice,
+            Purpose.REPORT_AUTHORING,
+            CommitIntelligenceArtifact(
+                cycle_run_id=cycle,
+                stage=IntelligenceStage.REPORTER,
+                artifact_kind=kind,
+                producer_task_id="sql-client",
+                producer_task_name="SQL client",
+                automation_platform="abacus_chatllm",
+                report_date="2026-08-20",
+                title="misplaced",
+                body_markdown=BODY,
+                artifact_state=ArtifactState.FINAL,
+                schema_version="1",
+                idempotency_key=f"sql-misplaced-{kind}",
+                focus_area_id=FocusAreaId.COMMUNICATIONS,
+            ),
+        )
+        assert misplaced.error is not None
+        assert misplaced.error.code is ErrorCode.INVALID_REQUEST
+        assert [(entry.detail, entry.values) for entry in misplaced.error.allowed_values] == [
+            ("artifact_kind", ("focus_report",))
+        ]
+        assert "sql_bob_secret" not in misplaced.model_dump_json()

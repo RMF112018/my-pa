@@ -122,8 +122,9 @@ def test_revision_identity_and_frozen_vocabulary_are_exact() -> None:
     }
     assert _literal("_PURPOSES_BEFORE_THIS_REVISION") == _literal("_PURPOSES_AT_THIS_REVISION")
     assert len(_values(_literal("_PURPOSES_AT_THIS_REVISION"))) == 45
-    # KLP-WP-03 declared the Knowledge Assertion names and their purpose pair since.
-    assert len(Capability) == 190
+    # KLP-WP-03 declared the Knowledge Assertion names and their purpose pair since,
+    # and the report type registry its two `reports.types.*` names.
+    assert len(Capability) == 192
     assert len(Purpose) == 52
     assert "from my_pa.domain" not in MIGRATION.read_text(encoding="utf-8")
 

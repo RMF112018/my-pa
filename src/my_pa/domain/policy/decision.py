@@ -400,6 +400,9 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.REPORTS_LIST,
         Capability.REPORTS_SEARCH,
         Capability.REPORTS_RESOLVE_SET,
+        # The report type registry is the acting Principal's own partition too.
+        Capability.REPORTS_TYPES_CREATE,
+        Capability.REPORTS_TYPES_LIST,
         # The entity plane's partition, not a source. An entity carries no
         # `enrollment_id` and no grant a requested scope could be compared
         # against -- it is the Principal's own record of a person, not an

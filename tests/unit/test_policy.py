@@ -286,6 +286,8 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.REPORTS_LIST, Purpose.REPORT_READ),
         (Capability.REPORTS_SEARCH, Purpose.REPORT_READ),
         (Capability.REPORTS_RESOLVE_SET, Purpose.REPORT_READ),
+        (Capability.REPORTS_TYPES_CREATE, Purpose.REPORT_AUTHORING),
+        (Capability.REPORTS_TYPES_LIST, Purpose.REPORT_READ),
         # The entity plane. Every read on it shares the single `entity_read`
         # purpose, exactly as the task-plane reads share `task_read`. The writes
         # take `entity_authoring`, except `entities.observe`, which takes
@@ -519,9 +521,12 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # purpose, each name mapped to that purpose alone, two pairs.
     # KLP-WP-05 adds `record_events.provenance` and its own
     # `record_event_provenance_read`, one pair.
-    # Unioned: 190 capabilities, 52 purposes, 192 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 192
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 192 == 9688
+    # The report type registry adds `reports.types.create` under
+    # `report_authoring` and `reports.types.list` under `report_read`, and no
+    # purpose, two pairs.
+    # Unioned: 192 capabilities, 52 purposes, 194 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 194
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 194 == 9790
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

@@ -266,6 +266,9 @@ ADMITTED_LATER_CAPABILITIES: Final = frozenset(
         "knowledge.discovery.checkpoint",
         # KLP-WP-05: the provenance read, admitted by the same revision.
         "record_events.provenance",
+        # The report type registry, admitted by `a591b81f10a2`.
+        "reports.types.create",
+        "reports.types.list",
     }
 )
 ADMITTED_LATER_PURPOSES: Final = frozenset(

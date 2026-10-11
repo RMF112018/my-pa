@@ -126,6 +126,7 @@ from my_pa.application.commands import (
     CreateProject,
     CreatePublishedConstraint,
     CreateRelationshipMemory,
+    CreateReportType,
     CreateSituation,
     CreateTask,
     CreateTaskComment,
@@ -184,6 +185,7 @@ from my_pa.application.commands import (
     ListProjects,
     ListRecordEvents,
     ListRelationshipMemories,
+    ListReportTypes,
     ListReviewCases,
     ListSituations,
     ListSources,
@@ -864,6 +866,13 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "cycle_run_id": cycle_run_id,
             "set_id": "collectors",
         },
+        Capability.REPORTS_TYPES_CREATE: {
+            "artifact_kind": "http_weekly_digest",
+            "stage": "reporter",
+            "description": "A synthetic weekly digest report type.",
+            "display_name": "HTTP weekly digest",
+        },
+        Capability.REPORTS_TYPES_LIST: {"stage": "reporter"},
         # The relationship-intelligence entity plane (WP-RI-05). `person` and
         # `organization` are staged once per scene, so the payload table and the
         # command table below name the same two entities rather than each
@@ -1923,6 +1932,13 @@ def commands_for(
             cycle_run_id=cycle_run_id,
             set_id=ResolverSetId.COLLECTORS,
         ),
+        Capability.REPORTS_TYPES_CREATE: CreateReportType(
+            artifact_kind="http_weekly_digest",
+            stage=IntelligenceStage.REPORTER,
+            description="A synthetic weekly digest report type.",
+            display_name="HTTP weekly digest",
+        ),
+        Capability.REPORTS_TYPES_LIST: ListReportTypes(stage=IntelligenceStage.REPORTER),
         # The entity plane. `person` is the same staged entity the payload table
         # names, because `staged_entities` answers with the pair already in the
         # world: two tables each staging their own would be comparing two
@@ -2683,7 +2699,7 @@ def test_handler_unwired_capabilities_return_the_canonical_http_problem(
     capability: Capability, scene: Scene, wire: Wire
 ) -> None:
     assert set(Capability) - set(_HANDLERS) == _UNIMPLEMENTED_CAPABILITIES
-    assert len(HANDLER_CAPABILITIES) == 190
+    assert len(HANDLER_CAPABILITIES) == 192
     reply = wire.send(capability.value, document_for(capability, scene, {}))
     problem = ProblemDetail.model_validate(reply.document())
     assert reply.status == 501

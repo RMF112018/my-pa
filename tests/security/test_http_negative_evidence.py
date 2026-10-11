@@ -708,6 +708,12 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "cycle_run_id": cycle_run_id,
             "set_id": "collectors",
         },
+        Capability.REPORTS_TYPES_CREATE: {
+            "artifact_kind": "negative_digest",
+            "stage": "reporter",
+            "description": "A synthetic report type.",
+        },
+        Capability.REPORTS_TYPES_LIST: {},
         # The relationship-intelligence entity plane (WP-RI-05), and its payloads
         # carry no marker, deliberately. Every one of the five is a read whose
         # input is an identifier or a name the *request* supplies and the answer
@@ -1842,6 +1848,8 @@ SCOPED_CAPABILITIES = [
         Capability.REPORTS_LIST,
         Capability.REPORTS_SEARCH,
         Capability.REPORTS_RESOLVE_SET,
+        Capability.REPORTS_TYPES_CREATE,
+        Capability.REPORTS_TYPES_LIST,
         # The relationship-intelligence entity plane (WP-RI-05) is scopeless for
         # the reason the two planes above are: an entity belongs to no `src_…`
         # and no `enr_…`, so there is no scope for a request to name and none to
@@ -2313,6 +2321,12 @@ MEETING_AUTHORING_EXEMPTION = frozenset(
 #: Assertion rows and reaches no source provider and no enrollment.
 KNOWLEDGE_AUTHORING_EXEMPTION = frozenset({Capability.KNOWLEDGE_ASSERTIONS_CREATE})
 
+#: The report type registry's one write the substring proxy refuses --
+#: `reports.types.create` -- on the same reading: it inserts a row into the
+#: acting Principal's own report type registry and reaches no source provider
+#: and no enrollment.
+REPORT_TYPE_AUTHORING_EXEMPTION = frozenset({Capability.REPORTS_TYPES_CREATE})
+
 
 def test_the_transport_routes_no_mutating_capability() -> None:
     """One route, one method, and no name that mutates a *source*.
@@ -2362,6 +2376,7 @@ def test_the_transport_routes_no_mutating_capability() -> None:
         | CONSTRAINT_AUTHORING_EXEMPTION
         | MEETING_AUTHORING_EXEMPTION
         | KNOWLEDGE_AUTHORING_EXEMPTION
+        | REPORT_TYPE_AUTHORING_EXEMPTION
     )
     checked = [c for c in _BUILDERS if c not in exempt]
     assert len(checked) == len(IMPLEMENTED_CAPABILITIES) - len(exempt)

@@ -167,6 +167,7 @@ from my_pa.application.commands import (
     CreateProject,
     CreatePublishedConstraint,
     CreateRelationshipMemory,
+    CreateReportType,
     CreateSituation,
     CreateTask,
     CreateTaskComment,
@@ -226,6 +227,7 @@ from my_pa.application.commands import (
     ListProjects,
     ListRecordEvents,
     ListRelationshipMemories,
+    ListReportTypes,
     ListReviewCases,
     ListSituations,
     ListSources,
@@ -468,6 +470,8 @@ from my_pa.application.intelligence import (
     list_artifacts,
     read_artifact,
     record_run_state,
+    register_report_type,
+    registered_report_types,
     resolve_set,
     search_artifacts,
 )
@@ -668,6 +672,7 @@ from my_pa.domain.identity.operation import Capability, granted_purposes
 from my_pa.domain.identity.operator_surface import OperatorSurface
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.intelligence.models import ReportTypeDefinition
 from my_pa.domain.knowledge_assertion.checkpoint import CheckpointSeal
 from my_pa.domain.knowledge_assertion.vocabulary import (
     KnowledgeAssertionLifecycle,
@@ -3245,6 +3250,17 @@ def _meeting_translated() -> Iterator[None]:
         failure = InvalidRequestError(SafeDetail(error.field.value))
     if failure is not None:
         raise failure
+
+
+def _report_type_payload(definition: ReportTypeDefinition) -> dict[str, Any]:
+    """One report type as `reports.types.create` and `reports.types.list` publish it."""
+    return {
+        "artifact_kind": str(definition.artifact_kind),
+        "stage": definition.stage.value,
+        "description": definition.description,
+        "display_name": definition.display_name,
+        "origin": definition.origin.value,
+    }
 
 
 def _meeting_write_payload(
@@ -13979,6 +13995,46 @@ class ApplicationService:
         )
         return _Result(payload=payload, disclosure=unenrolled_disclosure(authorization.at))
 
+    def _reports_types_create(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: CreateReportType,
+    ) -> _Result:
+        registration = register_report_type(
+            self._intelligence_store(unit_of_work, authorization),  # type: ignore[arg-type]
+            principal_id=authorization.principal.principal_id,
+            artifact_kind=command.artifact_kind,
+            stage=command.stage,
+            description=command.description,
+            display_name=command.display_name,
+            at=authorization.at,
+        )
+        return _Result(
+            payload={
+                **_report_type_payload(registration.definition),
+                "created": registration.created,
+                "replayed": registration.replayed,
+            },
+            disclosure=unenrolled_disclosure(authorization.at),
+        )
+
+    def _reports_types_list(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListReportTypes,
+    ) -> _Result:
+        definitions = registered_report_types(
+            self._intelligence_store(unit_of_work, authorization),  # type: ignore[arg-type]
+            principal_id=authorization.principal.principal_id,
+            stage=command.stage,
+        )
+        return _Result(
+            payload={"report_types": [_report_type_payload(item) for item in definitions]},
+            disclosure=unenrolled_disclosure(authorization.at),
+        )
+
     # ---- WP-RI-B: producers and governed identity correction ----------------
     #
     # Six handlers, and every rule they enforce lives somewhere else. Which
@@ -14863,6 +14919,8 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.REPORTS_LIST: ApplicationService._reports_list,
         Capability.REPORTS_SEARCH: ApplicationService._reports_search,
         Capability.REPORTS_RESOLVE_SET: ApplicationService._reports_resolve_set,
+        Capability.REPORTS_TYPES_CREATE: ApplicationService._reports_types_create,
+        Capability.REPORTS_TYPES_LIST: ApplicationService._reports_types_list,
         Capability.ENTITIES_SEARCH: ApplicationService._entities_search,
         Capability.ENTITIES_GET: ApplicationService._entities_get,
         Capability.ENTITIES_RESOLVE: ApplicationService._entities_resolve,

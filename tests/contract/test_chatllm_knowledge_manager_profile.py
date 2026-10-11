@@ -115,7 +115,7 @@ def test_the_manager_exception_set_is_exactly_the_discovery_pair() -> None:
         assert policy.classification is ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED
         assert chatllm_grant_purpose(capability) is Purpose.KNOWLEDGE_ASSERTION_OBSERVATION
         assert is_write_capability(capability)
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v8"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v9"
 
 
 def test_ordinary_active_submit_and_checkpoint_grants_stay_unexpected() -> None:

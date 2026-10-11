@@ -99,6 +99,7 @@ from my_pa.application.commands import (
     CreateProject,
     CreatePublishedConstraint,
     CreateRelationshipMemory,
+    CreateReportType,
     CreateSituation,
     CreateTask,
     CreateTaskComment,
@@ -157,6 +158,7 @@ from my_pa.application.commands import (
     ListProjects,
     ListRecordEvents,
     ListRelationshipMemories,
+    ListReportTypes,
     ListReviewCases,
     ListSituations,
     ListSources,
@@ -269,15 +271,20 @@ from my_pa.domain.capture.review import (
 from my_pa.domain.capture.submission import CaptureKind
 from my_pa.domain.context import ContextPlane
 from my_pa.domain.context.preference import ContextPreferenceAction
-from my_pa.domain.identity.operation import Capability, NativeSourceCapability
+from my_pa.domain.identity.operation import (
+    Capability,
+    NativeSourceCapability,
+    permitted_purposes,
+)
+from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.intelligence.catalog import (
-    ArtifactKind,
     ArtifactState,
     FocusAreaId,
     IntelligenceStage,
     ProducerRunState,
     ResolverSetId,
     SourceLaneId,
+    parse_artifact_kind,
 )
 from my_pa.domain.meeting.model import (
     MeetingClearField,
@@ -1555,6 +1562,38 @@ def _enum_or_invalid[T: StrEnum](value: object, enum: type[T], detail: SafeDetai
         raise invalid_choice(detail, enum) from None
 
 
+def _report_kind_token(value: object) -> str:
+    """A well-formed report kind, or `invalid_request` on `artifact_kind`.
+
+    Not an enum: the kinds a caller may use are the built-ins plus the acting
+    Principal's own registered kinds, so whether this one is registered -- and
+    the list of those that are -- is answered by the application, which can see
+    the Principal's registry. A malformed token lists nothing.
+    """
+    try:
+        return parse_artifact_kind(value)
+    except ValueError:
+        raise InvalidRequestError(SafeDetail.ARTIFACT_KIND) from None
+
+
+def _create_report_type(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    converted["artifact_kind"] = _report_kind_token(converted.get("artifact_kind"))
+    converted["stage"] = _enum_or_invalid(
+        converted.get("stage"), IntelligenceStage, SafeDetail.STAGE
+    )
+    return CreateReportType(**converted)
+
+
+def _list_report_types(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    if converted.get("stage") is not None:
+        converted["stage"] = _enum_or_invalid(
+            converted["stage"], IntelligenceStage, SafeDetail.STAGE
+        )
+    return ListReportTypes(**converted)
+
+
 def _begin_intelligence_cycle(payload: Mapping[str, Any]) -> Command:
     return BeginIntelligenceCycle(**payload)
 
@@ -1564,9 +1603,7 @@ def _commit_intelligence_artifact(payload: Mapping[str, Any]) -> Command:
     converted["stage"] = _enum_or_invalid(
         converted.get("stage"), IntelligenceStage, SafeDetail.STAGE
     )
-    converted["artifact_kind"] = _enum_or_invalid(
-        converted.get("artifact_kind"), ArtifactKind, SafeDetail.ARTIFACT_KIND
-    )
+    converted["artifact_kind"] = _report_kind_token(converted.get("artifact_kind"))
     converted["artifact_state"] = _enum_or_invalid(
         converted.get("artifact_state"), ArtifactState, SafeDetail.SELECTOR
     )
@@ -1598,9 +1635,7 @@ def _record_intelligence_run_state(payload: Mapping[str, Any]) -> Command:
     converted["stage"] = _enum_or_invalid(
         converted.get("stage"), IntelligenceStage, SafeDetail.STAGE
     )
-    converted["artifact_kind"] = _enum_or_invalid(
-        converted.get("artifact_kind"), ArtifactKind, SafeDetail.ARTIFACT_KIND
-    )
+    converted["artifact_kind"] = _report_kind_token(converted.get("artifact_kind"))
     converted["state"] = _enum_or_invalid(
         converted.get("state"), ProducerRunState, SafeDetail.SELECTOR
     )
@@ -1626,9 +1661,7 @@ def _latest_intelligence_artifact(payload: Mapping[str, Any]) -> Command:
             converted["stage"], IntelligenceStage, SafeDetail.STAGE
         )
     if converted.get("artifact_kind") is not None:
-        converted["artifact_kind"] = _enum_or_invalid(
-            converted["artifact_kind"], ArtifactKind, SafeDetail.ARTIFACT_KIND
-        )
+        converted["artifact_kind"] = _report_kind_token(converted["artifact_kind"])
     if converted.get("focus_area_id") is not None:
         converted["focus_area_id"] = _enum_or_invalid(
             converted["focus_area_id"], FocusAreaId, SafeDetail.FOCUS_AREA_ID
@@ -1647,9 +1680,7 @@ def _list_intelligence_artifacts(payload: Mapping[str, Any]) -> Command:
             converted["stage"], IntelligenceStage, SafeDetail.STAGE
         )
     if converted.get("artifact_kind") is not None:
-        converted["artifact_kind"] = _enum_or_invalid(
-            converted["artifact_kind"], ArtifactKind, SafeDetail.ARTIFACT_KIND
-        )
+        converted["artifact_kind"] = _report_kind_token(converted["artifact_kind"])
     if converted.get("focus_area_id") is not None:
         converted["focus_area_id"] = _enum_or_invalid(
             converted["focus_area_id"], FocusAreaId, SafeDetail.FOCUS_AREA_ID
@@ -1668,9 +1699,7 @@ def _search_intelligence_artifacts(payload: Mapping[str, Any]) -> Command:
             converted["stage"], IntelligenceStage, SafeDetail.STAGE
         )
     if converted.get("artifact_kind") is not None:
-        converted["artifact_kind"] = _enum_or_invalid(
-            converted["artifact_kind"], ArtifactKind, SafeDetail.ARTIFACT_KIND
-        )
+        converted["artifact_kind"] = _report_kind_token(converted["artifact_kind"])
     if converted.get("focus_area_id") is not None:
         converted["focus_area_id"] = _enum_or_invalid(
             converted["focus_area_id"], FocusAreaId, SafeDetail.FOCUS_AREA_ID
@@ -2523,6 +2552,8 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.REPORTS_LIST: _list_intelligence_artifacts,
         Capability.REPORTS_SEARCH: _search_intelligence_artifacts,
         Capability.REPORTS_RESOLVE_SET: _resolve_intelligence_set,
+        Capability.REPORTS_TYPES_CREATE: _create_report_type,
+        Capability.REPORTS_TYPES_LIST: _list_report_types,
         Capability.ENTITIES_SEARCH: _search_entities,
         Capability.ENTITIES_GET: _get_entity,
         Capability.ENTITIES_RESOLVE: _resolve_entity,
@@ -2650,7 +2681,27 @@ def _metadata(capability: Capability, arguments: Mapping[str, Any]) -> RequestMe
     # Raised outside the handler, as everywhere else in this repository: the
     # original renders the rejected input, and leaving the handler first is what
     # actually clears `__context__`.
+    if not _is_purpose(fields.get("purpose")):
+        # The one envelope field with a closed vocabulary a caller chooses from.
+        # The list is the purposes this capability permits -- domain enum values,
+        # in declaration order -- so it answers "which purpose" for this request
+        # rather than listing every purpose there is.
+        permitted = permitted_purposes(capability)
+        raise InvalidRequestError(
+            SafeDetail.PURPOSE,
+            allowed_values={SafeDetail.PURPOSE: tuple(p.value for p in Purpose if p in permitted)},
+        )
     raise InvalidRequestError()
+
+
+def _is_purpose(value: object) -> bool:
+    """Whether `value` names a `Purpose`, as the envelope model would read it."""
+    if isinstance(value, Purpose):
+        return True
+    return isinstance(value, str) and value in _PURPOSE_VALUES
+
+
+_PURPOSE_VALUES: Final[frozenset[str]] = frozenset(purpose.value for purpose in Purpose)
 
 
 def _command(capability: Capability, payload: Mapping[str, Any]) -> Command:

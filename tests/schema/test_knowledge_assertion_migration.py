@@ -69,8 +69,9 @@ SCHEMA: Final = "knowledge"
 REVISION: Final = "6734f039f7a6"
 PREVIOUS: Final = "0641c354ca85"
 #: The chain head. `93f3aa113f58` (Intelligence focus-area admission) is additive
-#: on `REVISION`, and `a591b81f10a2` (Intelligence report type registry) is
-#: additive on it, so a database upgraded to head stands there.
+#: on `REVISION`, `cc373834a485` (Continuity Project sixteen-field admission) is
+#: additive on it, and `a591b81f10a2` (Intelligence report type registry) is
+#: additive on that, so a database upgraded to head stands there.
 HEAD: Final = "a591b81f10a2"
 MIGRATION: Final = VERSIONS / "20261004_6734f039f7a6_knowledge_assertion_layer.py"
 RESTRICT_VIOLATION: Final = "23001"
@@ -185,7 +186,8 @@ def test_the_revision_is_directly_on_0641c354ca85_under_one_later_head() -> None
     """AC-076: one current head; the revision was generated from the sole head."""
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "93f3aa113f58"
+    assert script.get_revision(HEAD).down_revision == "cc373834a485"
+    assert script.get_revision("cc373834a485").down_revision == "93f3aa113f58"
     assert script.get_revision("93f3aa113f58").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert _revision().revision == REVISION
@@ -196,7 +198,7 @@ def test_the_revision_is_directly_on_0641c354ca85_under_one_later_head() -> None
     # R6 counted 112 files at this revision; `93f3aa113f58` and `HEAD` are the
     # two files added since.
     assert migration_contract["expected_post_r6_revision_file_count"] == 112
-    assert len(files) == 114
+    assert len(files) == 115
     assert [path.name for path in VERSIONS.glob("*_knowledge_assertion_layer.py")] == [
         MIGRATION.name
     ]

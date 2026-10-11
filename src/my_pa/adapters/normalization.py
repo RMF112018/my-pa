@@ -53,6 +53,7 @@ from binascii import Error as BinasciiError
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Any, Final
@@ -345,7 +346,7 @@ from my_pa.domain.situation.continuity import (
     CommitmentState,
     CommitmentWorkView,
 )
-from my_pa.domain.situation.situation import ProjectState
+from my_pa.domain.situation.situation import ProjectSector, ProjectState, ProjectType
 from my_pa.domain.source.enrollment import MAX_ENROLLMENT_ITEMS
 from my_pa.domain.task.lifecycle import (
     TaskArchiveMode,
@@ -609,15 +610,83 @@ def _read_project(payload: Mapping[str, Any]) -> Command:
     return ReadProject(**payload)
 
 
+#: The six Project schedule dates, converted the same way everywhere they appear.
+_PROJECT_DATE_FIELDS: Final[tuple[str, ...]] = (
+    "scheduled_start",
+    "contract_start",
+    "actual_start",
+    "scheduled_finish",
+    "contract_finish",
+    "actual_finish",
+)
+
+
+_WHOLE_CENTS = Decimal("0.01")
+
+
+def _project_value(value: object) -> object:
+    """One USD amount as a `Decimal`, or exactly what arrived.
+
+    Only a JSON number converts: a string, a boolean or anything else is passed
+    through for the command to refuse, so `value` is never parsed from text.
+    Converts via `str(value)` rather than `Decimal(value)` directly, so a JSON
+    number never inherits a binary float's representation error. An amount in
+    whole cents is restated at exactly two places (`1000` becomes `1000.00`), so
+    the echoed amount is the one a later read returns; anything else (a third
+    decimal place, a non-finite float) is passed through for the command to refuse.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return value
+    try:
+        amount = Decimal(str(value))
+    except InvalidOperation:
+        return value
+    if not amount.is_finite() or int(amount.as_tuple().exponent) < -2:
+        return amount
+    try:
+        return amount.quantize(_WHOLE_CENTS)
+    except InvalidOperation:
+        return amount
+
+
+def _convert_project_data_fields(converted: dict[str, Any]) -> dict[str, Any]:
+    """The 16-field shape conversion shared by create and update.
+
+    Leniently converts; a value that does not convert is passed through
+    unchanged and the command's own `__post_init__` is what refuses it.
+    """
+    for name in _PROJECT_DATE_FIELDS:
+        if name in converted:
+            converted[name] = _constraint_date(converted[name])
+    if "sector" in converted:
+        converted["sector"] = _entity_member(converted["sector"], ProjectSector)
+    if "type" in converted:
+        converted["type"] = _entity_member(converted["type"], ProjectType)
+    if "value" in converted:
+        converted["value"] = _project_value(converted["value"])
+    # Trimmed so `" 12 "` and `"12"` are one number to the uniqueness rule; a
+    # value that trims to blank still reaches the command, which refuses it.
+    project_number = converted.get("project_number")
+    if isinstance(project_number, str) and project_number.strip():
+        converted["project_number"] = project_number.strip()
+    aliases = converted.get("aliases")
+    if isinstance(aliases, list):
+        converted["aliases"] = tuple(aliases)
+    return converted
+
+
 def _create_project(payload: Mapping[str, Any]) -> Command:
-    return CreateProject(**payload)
+    return CreateProject(**_convert_project_data_fields(dict(payload)))
 
 
 def _update_project(payload: Mapping[str, Any]) -> Command:
-    converted = dict(payload)
+    converted = _convert_project_data_fields(dict(payload))
     named = converted.get("state")
     if isinstance(named, str):
         converted["state"] = _enum_or_invalid(named, ProjectState, SafeDetail.SELECTOR)
+    clear_fields = converted.get("clear_fields")
+    if isinstance(clear_fields, list):
+        converted["clear_fields"] = tuple(clear_fields)
     return UpdateProject(**converted)
 
 

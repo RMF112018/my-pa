@@ -84,9 +84,10 @@ PREVIOUS_REVISION: Final = "16f05c46b8c3"
 #: Counted on the merged tree after the re-parent (RULING-M2): 88 on
 #: `origin/main` at `16f05c46b8c3` plus this revision, graph vocabulary,
 #: GoodNotes pull, promotion receipt, and canvas overlay successors. The
-#: Intelligence focus-area admission `93f3aa113f58` makes it 113, and the
-#: Intelligence report type registry `a591b81f10a2` makes it 114.
-REVISION_FILE_COUNT: Final = 114
+#: Intelligence focus-area admission `93f3aa113f58` makes it 113, the Continuity
+#: Project sixteen-field admission `cc373834a485` makes it 114, and the
+#: Intelligence report type registry `a591b81f10a2` makes it 115.
+REVISION_FILE_COUNT: Final = 115
 
 #: The revision's frozen salt, restated. If this and the revision ever disagree
 #: the expectations below stop matching, which is the point of restating it.
@@ -443,7 +444,8 @@ def test_the_revision_is_the_single_head_and_revises_the_prior_head() -> None:
     # labels), then `de5ec1c65857` (WP-TUX-01). Every edge below is retained
     # and the new ones are asserted, so the chain is still checked link by
     # link rather than loosened.
-    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == "93f3aa113f58"
+    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == "cc373834a485"
+    assert script.get_revision("cc373834a485").down_revision == "93f3aa113f58"
     assert script.get_revision("93f3aa113f58").down_revision == "6734f039f7a6"
     assert script.get_revision("6734f039f7a6").down_revision == "0641c354ca85"
     assert script.get_revision("0641c354ca85").down_revision == "c8e4a1b70d35"

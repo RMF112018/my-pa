@@ -125,6 +125,7 @@ class SafeDetail(StrEnum):
     TITLE = "title"
     NAME = "name"
     PROJECT_ID = "project_id"
+    PROJECT_NUMBER = "project_number"
     #: Publish completeness. Field names only; `DUE_AT` (`due_at`) is not `due_date`.
     CONSTRAINT_PUBLISH_INCOMPLETE = "constraint_publish_incomplete"
     CATEGORY_ID = "category_id"

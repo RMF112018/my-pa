@@ -179,12 +179,15 @@ def test_revision_sits_on_the_single_head_chain() -> None:
     assert script.get_heads() == [CURRENT_HEAD]
     # `4e9a1c7b2d60` (AUTH-IMP), `f7a2c9d51e64` (PC-CM-IMP-WP07),
     # `b8e4d6f20a11` (PC-CM-IMP-WP11), `c1a8e4d70b29` (capture labels),
-    # `de5ec1c65857` (WP-TUX-01), `9f2c8a1d4e70` (WP-MCP-PROJ-01), then
-    # `b3e9d7a41c25` (WP-MCP-PROJ-02) landed on top of this revision, so the
-    # head is no longer its direct child. The path from head down to this
-    # revision is asserted link by link rather than loosened to mere
-    # reachability, which would be the weaker claim.
-    assert script.get_revision(CURRENT_HEAD).down_revision == "93f3aa113f58"
+    # `de5ec1c65857` (WP-TUX-01), `9f2c8a1d4e70` (WP-MCP-PROJ-01),
+    # `b3e9d7a41c25` (WP-MCP-PROJ-02), `93f3aa113f58` (Intelligence focus-area
+    # admission), `cc373834a485` (Continuity Project sixteen-field admission),
+    # then `a591b81f10a2` (Intelligence report type registry) landed on top of
+    # this revision, so the head is no longer its direct child. The path from
+    # head down to this revision is asserted link by link rather than loosened
+    # to mere reachability, which would be the weaker claim.
+    assert script.get_revision(CURRENT_HEAD).down_revision == "cc373834a485"
+    assert script.get_revision("cc373834a485").down_revision == "93f3aa113f58"
     assert script.get_revision("93f3aa113f58").down_revision == "6734f039f7a6"
     assert script.get_revision("6734f039f7a6").down_revision == "0641c354ca85"
     assert script.get_revision("0641c354ca85").down_revision == "c8e4a1b70d35"

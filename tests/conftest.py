@@ -41,6 +41,7 @@ import sys
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Final, cast
@@ -411,6 +412,7 @@ from my_pa.domain.situation.continuity import Task as ContinuityTask
 from my_pa.domain.situation.project_history import (
     ProjectHistoryEntry,
     ProjectMutationReceipt,
+    ProjectNumberConflictError,
     execute_close_project,
     execute_update_project,
 )
@@ -419,7 +421,9 @@ from my_pa.domain.situation.situation import (
     Project,
     ProjectEntityLink,
     ProjectEntityLinkageState,
+    ProjectSector,
     ProjectState,
+    ProjectType,
     PulseItem,
     Situation,
     SituationState,
@@ -4250,6 +4254,19 @@ class _Situations(SituationRepository):
         return tuple(rows)
 
 
+def _refuse_a_held_project_number(world: World, project: Project) -> None:
+    """The in-memory twin of `a_project_number_is_unique_per_principal`."""
+    if project.project_number is None:
+        return
+    for row in world.projects:
+        if (
+            row.principal_id == project.principal_id
+            and row.project_id != project.project_id
+            and row.project_number == project.project_number
+        ):
+            raise ProjectNumberConflictError
+
+
 class _Projects(ProjectRepository):
     """Projects and the Project-Situation link, partitioned like everything else."""
 
@@ -4358,6 +4375,7 @@ class _Projects(ProjectRepository):
         return self.get_project(principal_id, project_id)
 
     def persist_project(self, project: Project) -> None:
+        _refuse_a_held_project_number(self._world, project)
         self._world.projects = [
             project if row.project_id == project.project_id else row for row in self._world.projects
         ]
@@ -4389,6 +4407,23 @@ class _Projects(ProjectRepository):
         description: str | None,
         state: ProjectState | None,
         now: datetime,
+        aliases: tuple[str, ...] | None = None,
+        project_number: str | None = None,
+        sector: ProjectSector | None = None,
+        type_: ProjectType | None = None,
+        address: str | None = None,
+        city: str | None = None,
+        county: str | None = None,
+        address_state: str | None = None,
+        zip_: str | None = None,
+        value: Decimal | None = None,
+        scheduled_start: date | None = None,
+        contract_start: date | None = None,
+        actual_start: date | None = None,
+        scheduled_finish: date | None = None,
+        contract_finish: date | None = None,
+        actual_finish: date | None = None,
+        clear_fields: tuple[str, ...] = (),
     ) -> ProjectMutationReceipt | None:
         return execute_update_project(
             self,
@@ -4401,6 +4436,23 @@ class _Projects(ProjectRepository):
             description=description,
             state=state,
             now=now,
+            aliases=aliases,
+            project_number=project_number,
+            sector=sector,
+            type_=type_,
+            address=address,
+            city=city,
+            county=county,
+            address_state=address_state,
+            zip_=zip_,
+            value=value,
+            scheduled_start=scheduled_start,
+            contract_start=contract_start,
+            actual_start=actual_start,
+            scheduled_finish=scheduled_finish,
+            contract_finish=contract_finish,
+            actual_finish=actual_finish,
+            clear_fields=clear_fields,
         )
 
     def close_project(
@@ -4531,6 +4583,22 @@ class _ContinuityAuthoring(ContinuityAuthoringRepository):
         project_id: str,
         name: str,
         description: str | None,
+        aliases: tuple[str, ...] | None = None,
+        project_number: str | None = None,
+        sector: ProjectSector | None = None,
+        type_: ProjectType | None = None,
+        address: str | None = None,
+        city: str | None = None,
+        county: str | None = None,
+        address_state: str | None = None,
+        zip_: str | None = None,
+        value: Decimal | None = None,
+        scheduled_start: date | None = None,
+        contract_start: date | None = None,
+        actual_start: date | None = None,
+        scheduled_finish: date | None = None,
+        contract_finish: date | None = None,
+        actual_finish: date | None = None,
     ) -> Project:
         now = utc_now()
         project = Project(
@@ -4543,7 +4611,24 @@ class _ContinuityAuthoring(ContinuityAuthoringRepository):
             updated_at=now,
             description=description,
             version=1,
+            aliases=aliases or (),
+            project_number=project_number,
+            sector=sector,
+            type=type_,
+            address=address,
+            city=city,
+            county=county,
+            address_state=address_state,
+            zip=zip_,
+            value=value,
+            scheduled_start=scheduled_start,
+            contract_start=contract_start,
+            actual_start=actual_start,
+            scheduled_finish=scheduled_finish,
+            contract_finish=contract_finish,
+            actual_finish=actual_finish,
         )
+        _refuse_a_held_project_number(self._world, project)
         self._world.projects.append(project)
         try:
             self._mint_bound_project_entity(

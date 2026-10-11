@@ -21,7 +21,9 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 #: `intelligence_report_types` and relaxes the two Intelligence artifact-kind
 #: CHECKs, and once more when it declares the kind-scoped
 #: `intelligence_artifact_current_head` index; `captures` is untouched.
-TABLES_SHA256: Final = "f7882d18170f951ae4a7823e09d3b007bc3aa8445122bb9086def17fc1c0adf8"
+#: Moved by the Continuity Project 16-field addition, which appends columns to
+#: `projects` only; `captures` is untouched.
+TABLES_SHA256: Final = "d6a8e8d27c69dfc56f9855418da1dcd4a9f3282805451990f85b0115bf43d4bb"
 WP03_MIGRATION_SHA256: Final = "098edd98ccc1846b01c58f42e296e4751e7841b562a2827616cc4337e174c354"
 WP03_MIGRATION: Final = (
     ROOT / "migrations/versions/20260914_e6a4c2f91b73_project_controls_run01_integrity.py"

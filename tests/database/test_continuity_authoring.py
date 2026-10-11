@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Iterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Final
 
@@ -25,15 +26,18 @@ from my_pa.application.commands import (
     ListProjects,
     ReadProject,
     RecordTask,
+    UpdateProject,
 )
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.ports import AuthoringConflictError, UnitOfWork
 from my_pa.contracts.v1.capabilities import EffectiveLimits
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
+from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.situation.situation import ProjectSector, ProjectType
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
@@ -391,3 +395,141 @@ def test_sql_list_keyset_does_not_skip_or_duplicate_on_tied_created_at(
         assert escaped == ()
         named = repository.list_projects(PRINCIPAL_A, exact_name="Keyset 1", limit=10)
         assert [row.project_id for row in named] == [ids[1]]
+
+
+# ---- the sixteen Project fields against the real table ------------------------
+
+
+def _numbered(
+    runtime: _Runtime, key: str, number: str | None, **fields: object
+) -> ResponseEnvelope:
+    return runtime.invoke(
+        CreateProject(name=f"Numbered {key}", idempotency_key=key, project_number=number, **fields)  # type: ignore[arg-type]
+    )
+
+
+def test_every_project_field_round_trips_through_postgres(runtime: _Runtime) -> None:
+    created = _numbered(
+        runtime,
+        "author-db-fields-0001",
+        "DB-100",
+        aliases=("NSP", "North slab"),
+        sector=ProjectSector.EDUCATION_CIVIC_AND_COMMUNITY,
+        type=ProjectType.HIGHER_EDUCATION_AND_ACADEMIC_FACILITIES,
+        address="1 College Way",
+        city="Tampa",
+        county="Hillsborough",
+        address_state="FL",
+        zip="33620",
+        value=Decimal("1250000.50"),
+        scheduled_start=date(2026, 11, 2),
+        contract_start=date(2026, 11, 9),
+        actual_start=date(2026, 11, 16),
+        scheduled_finish=date(2027, 12, 17),
+        contract_finish=date(2027, 12, 31),
+        actual_finish=date(2028, 1, 14),
+    )
+    assert created.error is None and created.result is not None
+    read = runtime.invoke(ReadProject(project_id=created.result["project_id"]))
+    assert read.error is None and read.result is not None
+    for name in (
+        "aliases",
+        "project_number",
+        "sector",
+        "type",
+        "address",
+        "city",
+        "county",
+        "address_state",
+        "zip",
+        "value",
+        "scheduled_start",
+        "contract_start",
+        "actual_start",
+        "scheduled_finish",
+        "contract_finish",
+        "actual_finish",
+    ):
+        assert read.result[name] == created.result[name], name
+    assert read.result["value"] == "1250000.50"
+    assert read.result["actual_finish"] == "2028-01-14"
+
+
+def test_a_held_number_is_conflict_on_create_and_the_service_still_commits_after(
+    runtime: _Runtime,
+) -> None:
+    assert _numbered(runtime, "author-db-dup-a-0001", "DB-200").error is None
+    refused = _numbered(runtime, "author-db-dup-b-0001", "DB-200")
+    assert refused.error is not None
+    assert refused.error.code is ErrorCode.CONFLICT
+    assert list(refused.error.safe_details) == ["project_number"]
+    # The violation was confined to a savepoint: the same service keeps writing.
+    assert _numbered(runtime, "author-db-dup-c-0001", "DB-201").error is None
+    assert (
+        runtime.invoke(
+            CreateProject(
+                name="Other Principal",
+                idempotency_key="author-db-dup-d-0001",
+                project_number="DB-200",
+            ),
+            principal_id="prn_bbbb0002bbbb0002bbbb0002",
+        ).error
+        is None
+    )
+
+
+def test_a_held_number_is_conflict_on_update_and_leaves_the_row_unchanged(
+    runtime: _Runtime,
+) -> None:
+    assert _numbered(runtime, "author-db-dupu-a-0001", "DB-300").error is None
+    other = _numbered(runtime, "author-db-dupu-b-0001", None)
+    assert other.error is None and other.result is not None
+    refused = runtime.invoke(
+        UpdateProject(
+            project_id=other.result["project_id"],
+            expected_version=1,
+            idempotency_key="author-db-dupu-upd-0001",
+            project_number="DB-300",
+        )
+    )
+    assert refused.error is not None
+    assert refused.error.code is ErrorCode.CONFLICT
+    assert list(refused.error.safe_details) == ["project_number"]
+    read = runtime.invoke(ReadProject(project_id=other.result["project_id"]))
+    assert read.result is not None
+    assert read.result["project_number"] is None
+    assert read.result["version"] == 1
+
+
+def test_a_number_can_be_changed_and_cleared_through_postgres(runtime: _Runtime) -> None:
+    created = _numbered(runtime, "author-db-mut-0001", "DB-400", value=Decimal("10.00"))
+    assert created.error is None and created.result is not None
+    project_id = created.result["project_id"]
+    renumbered = runtime.invoke(
+        UpdateProject(
+            project_id=project_id,
+            expected_version=1,
+            idempotency_key="author-db-mut-upd-0001",
+            project_number="DB-401",
+            value=Decimal("1000.00"),
+        )
+    )
+    assert renumbered.error is None and renumbered.result is not None
+    assert renumbered.result["project_number"] == "DB-401"
+    assert renumbered.result["value"] == "1000.00"
+    cleared = runtime.invoke(
+        UpdateProject(
+            project_id=project_id,
+            expected_version=2,
+            idempotency_key="author-db-mut-clr-0001",
+            clear_fields=("project_number", "value"),
+        )
+    )
+    assert cleared.error is None
+    read = runtime.invoke(ReadProject(project_id=project_id))
+    assert read.result is not None
+    assert read.result["project_number"] is None
+    assert read.result["value"] is None
+    assert read.result["version"] == 3
+    # The old numbers are free again.
+    assert _numbered(runtime, "author-db-mut-reuse-0001", "DB-400").error is None

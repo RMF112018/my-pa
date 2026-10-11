@@ -59,7 +59,7 @@ from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 ROOT: Final = Path(__file__).resolve().parents[2]
 VERSIONS: Final = ROOT / "migrations" / "versions"
 REVISION: Final = "a591b81f10a2"
-PREVIOUS: Final = "93f3aa113f58"
+PREVIOUS: Final = "cc373834a485"
 MIGRATION: Final = VERSIONS / "20261011_a591b81f10a2_intelligence_report_type_registry.py"
 PLANE_MIGRATION: Final = VERSIONS / "20260820_e9b2c4d7a150_admit_intelligence_artifact_plane.py"
 VOCABULARY_MIGRATION: Final = VERSIONS / "20261004_6734f039f7a6_knowledge_assertion_layer.py"
@@ -134,10 +134,12 @@ def _flat(value: str) -> str:
 # ---- FAST: the graph and the freeze -----------------------------------------------
 
 
-def test_the_revision_is_the_single_head_directly_on_the_focus_area_revision() -> None:
+def test_the_revision_is_the_single_head_directly_on_the_project_fields_revision() -> None:
+    """Re-parented onto `cc373834a485` (#325), which sits on the focus-area revision."""
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [REVISION]
     assert script.get_revision(REVISION).down_revision == PREVIOUS
+    assert script.get_revision(PREVIOUS).down_revision == "93f3aa113f58"
     assert [path.name for path in VERSIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
 
 

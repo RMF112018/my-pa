@@ -94,6 +94,11 @@ CAPTURE_LIFECYCLE_MIGRATION: Final = MIGRATIONS / "20261001_0641c354ca85_capture
 INTELLIGENCE_FOCUS_AREA_MIGRATION: Final = (
     MIGRATIONS / "20261007_93f3aa113f58_intelligence_focus_area_admission.py"
 )
+#: The Continuity Project sixteen-field admission (`cc373834a485`), registered
+#: as an additive head on the same precedent.
+PROJECT_SIXTEEN_FIELDS_MIGRATION: Final = (
+    MIGRATIONS / "20261011_cc373834a485_project_sixteen_fields.py"
+)
 #: The Intelligence report type registry (`a591b81f10a2`), registered as an
 #: additive head on the same precedent.
 INTELLIGENCE_REPORT_TYPE_MIGRATION: Final = (
@@ -168,6 +173,8 @@ CONSTRAINT_TABLES: Final[frozenset[str]] = frozenset(
 #: Fixed and written out, so the recurrence guard below is a bounded check over a
 #: named list rather than a repository-wide scan.
 HEAD_PIN_FILES: Final[tuple[str, ...]] = (
+    # Names the head only in a comment explaining its own revision-count bump.
+    "tests/architecture/test_no_revision_derives_a_closed_set_from_an_enum.py",
     "tests/database/test_cli_auth.py",
     "tests/database/test_entities_graph_vocabulary_migration.py",
     "tests/database/test_legacy_entity_backfill_migration.py",
@@ -211,6 +218,8 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_record_events_migration.py",
     "tests/schema/test_oauth_refresh_migration.py",
     "tests/schema/test_project_controls_run01_integrity_migration.py",
+    # The Continuity Project sixteen-field revision module names the head it now sits under.
+    "tests/schema/test_project_sixteen_fields_migration.py",
     "tests/schema/test_project_version_and_entity_bridge_migration.py",
     "tests/schema/test_webauthn_auth_persistence_migration.py",
     "tests/schema/test_work_task_commitment_migration.py",
@@ -292,7 +301,8 @@ def _literals(block: str) -> list[str]:
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [CURRENT_HEAD]
-    assert script.get_revision(CURRENT_HEAD).down_revision == "93f3aa113f58"
+    assert script.get_revision(CURRENT_HEAD).down_revision == "cc373834a485"
+    assert script.get_revision("cc373834a485").down_revision == "93f3aa113f58"
     assert script.get_revision("93f3aa113f58").down_revision == "6734f039f7a6"
     assert script.get_revision("6734f039f7a6").down_revision == "0641c354ca85"
     assert script.get_revision("0641c354ca85").down_revision == "c8e4a1b70d35"
@@ -311,7 +321,7 @@ def test_revision_is_the_only_linear_head() -> None:
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 114
+    assert len(list(MIGRATIONS.glob("*.py"))) == 115
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -458,6 +468,7 @@ def test_no_historical_revision_was_edited() -> None:
         RECORD_EVENTS_MIGRATION.relative_to(ROOT).as_posix(),
         CAPTURE_LIFECYCLE_MIGRATION.relative_to(ROOT).as_posix(),
         INTELLIGENCE_FOCUS_AREA_MIGRATION.relative_to(ROOT).as_posix(),
+        PROJECT_SIXTEEN_FIELDS_MIGRATION.relative_to(ROOT).as_posix(),
         INTELLIGENCE_REPORT_TYPE_MIGRATION.relative_to(ROOT).as_posix(),
         # Not an additive head: the one sanctioned historical edit (see
         # `SANCTIONED_HISTORICAL_EDIT`; operator ruling section E).

@@ -22,13 +22,20 @@ import dataclasses
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Protocol
 
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import ensure_utc
-from my_pa.domain.situation.situation import Project, ProjectState
+from my_pa.domain.situation.situation import (
+    PROJECT_CLEARABLE_FIELDS,
+    Project,
+    ProjectSector,
+    ProjectState,
+    ProjectType,
+)
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.domain.task.history import (
     IDEMPOTENCY_KEY_PATTERN,
@@ -43,6 +50,7 @@ __all__ = [
     "ProjectIllegalTransitionError",
     "ProjectMutationAction",
     "ProjectMutationReceipt",
+    "ProjectNumberConflictError",
     "ProjectVersionConflictError",
     "execute_close_project",
     "execute_update_project",
@@ -62,6 +70,14 @@ class ProjectIllegalTransitionError(ValueError):
 
 class ProjectIdempotencyConflictError(Exception):
     """Raised when a key is reused for different normalized project content."""
+
+
+class ProjectNumberConflictError(Exception):
+    """Raised when another of this Principal's Projects already holds the number."""
+
+
+#: The partial unique index that makes a `project_number` unique per Principal.
+PROJECT_NUMBER_UNIQUE_INDEX = "a_project_number_is_unique_per_principal"
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,8 +175,32 @@ def execute_update_project(
     state: ProjectState | None,
     now: datetime,
     actor: TaskMutationActor = TaskMutationActor.PRINCIPAL,
+    aliases: tuple[str, ...] | None = None,
+    project_number: str | None = None,
+    sector: ProjectSector | None = None,
+    type_: ProjectType | None = None,
+    address: str | None = None,
+    city: str | None = None,
+    county: str | None = None,
+    address_state: str | None = None,
+    zip_: str | None = None,
+    value: Decimal | None = None,
+    scheduled_start: date | None = None,
+    contract_start: date | None = None,
+    actual_start: date | None = None,
+    scheduled_finish: date | None = None,
+    contract_finish: date | None = None,
+    actual_finish: date | None = None,
+    clear_fields: tuple[str, ...] = (),
 ) -> ProjectMutationReceipt | None:
-    """Apply a versioned project update, or return None when the row is absent."""
+    """Apply a versioned project update, or return None when the row is absent.
+
+    `clear_fields` names optional fields (`PROJECT_CLEARABLE_FIELDS`) to empty:
+    `aliases` becomes `()`, every other named field becomes `None`.
+    """
+    unknown = set(clear_fields) - PROJECT_CLEARABLE_FIELDS
+    if unknown:
+        raise ValueError(f"a project update cannot clear {sorted(unknown)}")
 
     def change(current: Project) -> Project:
         if current.state is ProjectState.CLOSED:
@@ -169,13 +209,47 @@ def execute_update_project(
             raise ProjectIllegalTransitionError(
                 "a project update may only move between active and on_hold"
             )
-        replacements: dict[str, Any] = {}
+        replacements: dict[str, Any] = {
+            field_name: () if field_name == "aliases" else None for field_name in clear_fields
+        }
         if name is not None:
             replacements["name"] = name
         if description is not None:
             replacements["description"] = description
         if state is not None:
             replacements["state"] = state
+        if aliases is not None:
+            replacements["aliases"] = aliases
+        if project_number is not None:
+            replacements["project_number"] = project_number
+        if sector is not None:
+            replacements["sector"] = sector
+        if type_ is not None:
+            replacements["type"] = type_
+        if address is not None:
+            replacements["address"] = address
+        if city is not None:
+            replacements["city"] = city
+        if county is not None:
+            replacements["county"] = county
+        if address_state is not None:
+            replacements["address_state"] = address_state
+        if zip_ is not None:
+            replacements["zip"] = zip_
+        if value is not None:
+            replacements["value"] = value
+        if scheduled_start is not None:
+            replacements["scheduled_start"] = scheduled_start
+        if contract_start is not None:
+            replacements["contract_start"] = contract_start
+        if actual_start is not None:
+            replacements["actual_start"] = actual_start
+        if scheduled_finish is not None:
+            replacements["scheduled_finish"] = scheduled_finish
+        if contract_finish is not None:
+            replacements["contract_finish"] = contract_finish
+        if actual_finish is not None:
+            replacements["actual_finish"] = actual_finish
         return dataclasses.replace(current, **replacements)
 
     return _mutate(

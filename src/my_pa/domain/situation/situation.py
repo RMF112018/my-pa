@@ -40,25 +40,34 @@ alongside these objects.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from enum import StrEnum
+from types import MappingProxyType
+from typing import Final
 
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import ensure_utc
 
 __all__ = [
+    "PROJECT_CLEARABLE_FIELDS",
+    "PROJECT_VALUE_LIMIT",
+    "TYPE_TO_SECTOR",
     "Frame",
     "FrameState",
     "Project",
     "ProjectEntityLink",
     "ProjectEntityLinkageState",
+    "ProjectSector",
     "ProjectState",
+    "ProjectType",
     "PulseItem",
     "PulseItemType",
     "PulseReasonCode",
     "Situation",
     "SituationState",
     "Trace",
+    "is_storable_project_value",
 ]
 
 
@@ -85,6 +94,229 @@ class ProjectState(StrEnum):
     ACTIVE = "active"
     ON_HOLD = "on_hold"
     CLOSED = "closed"
+
+
+class ProjectSector(StrEnum):
+    """The 9 sectors of `Construction_Project_Taxonomy_v1.csv`.
+
+    Values are derived snake_case slugs of the CSV's own `Sector` column, not
+    retyped by hand, so they cannot silently diverge from the source of
+    record. `ProjectType` membership (below) is the finer-grained taxonomy
+    level; `TYPE_TO_SECTOR` is the one place the two are tied together.
+    """
+
+    HOUSING_AND_RESIDENTIAL = "housing_and_residential"
+    HOSPITALITY_AND_COMMERCIAL = "hospitality_and_commercial"
+    HEALTHCARE_AND_LIFE_SCIENCES = "healthcare_and_life_sciences"
+    EDUCATION_CIVIC_AND_COMMUNITY = "education_civic_and_community"
+    INDUSTRIAL_LOGISTICS_AND_TECHNOLOGY = "industrial_logistics_and_technology"
+    RECREATION_AND_ENTERTAINMENT = "recreation_and_entertainment"
+    TRANSPORTATION_AND_MOBILITY = "transportation_and_mobility"
+    UTILITIES_ENERGY_AND_ENVIRONMENTAL = "utilities_energy_and_environmental"
+    LAND_RESOURCE_AND_SPECIALTY = "land_resource_and_specialty"
+
+
+class ProjectType(StrEnum):
+    """The 42 project types of `Construction_Project_Taxonomy_v1.csv`.
+
+    Values are derived snake_case slugs of the CSV's own `Project Type`
+    column; the source `Type ID` code is kept only as a trailing comment for
+    traceability back to the v1 taxonomy, never as the stored/wire value —
+    this file's enums are always human-legible words, never opaque codes.
+    """
+
+    SINGLE_FAMILY_HOUSING = "single_family_housing"  # T01
+    MULTIFAMILY_HOUSING = "multifamily_housing"  # T02
+    SENIOR_LIVING_AND_RESIDENTIAL_CARE = "senior_living_and_residential_care"  # T03
+    STUDENT_STAFF_AND_GROUP_HOUSING = "student_staff_and_group_housing"  # T04
+    TRANSITIONAL_SUPPORTIVE_AND_EMERGENCY_HOUSING = (  # T05
+        "transitional_supportive_and_emergency_housing"
+    )
+    HOTELS_RESORTS_AND_LODGING = "hotels_resorts_and_lodging"  # T06
+    RESTAURANTS_AND_FOODSERVICE = "restaurants_and_foodservice"  # T07
+    RETAIL_SHOPPING_AND_CONSUMER_SERVICES = "retail_shopping_and_consumer_services"  # T08
+    OFFICE_AND_WORKPLACE = "office_and_workplace"  # T09
+    AUTOMOTIVE_AND_CONSUMER_MOBILITY_SERVICES = "automotive_and_consumer_mobility_services"  # T10
+    MIXED_USE_BUILDINGS_AND_DISTRICTS = "mixed_use_buildings_and_districts"  # T11
+    ACUTE_CARE_AND_HOSPITALS = "acute_care_and_hospitals"  # T12
+    OUTPATIENT_AND_SPECIALTY_HEALTHCARE = "outpatient_and_specialty_healthcare"  # T13
+    LIFE_SCIENCES_AND_LABORATORY_FACILITIES = "life_sciences_and_laboratory_facilities"  # T14
+    EARLY_CHILDHOOD_AND_K_12_SCHOOLS = "early_childhood_and_k_12_schools"  # T15
+    HIGHER_EDUCATION_AND_ACADEMIC_FACILITIES = "higher_education_and_academic_facilities"  # T16
+    GOVERNMENT_AND_CIVIC_BUILDINGS = "government_and_civic_buildings"  # T17
+    PUBLIC_SAFETY_COURTS_AND_CORRECTIONS = "public_safety_courts_and_corrections"  # T18
+    DEFENSE_AND_MILITARY_FACILITIES = "defense_and_military_facilities"  # T19
+    CULTURE_PERFORMING_ARTS_AND_RELIGIOUS_FACILITIES = (  # T20
+        "culture_performing_arts_and_religious_facilities"
+    )
+    SOCIAL_SERVICES_AND_COMMUNITY_FACILITIES = "social_services_and_community_facilities"  # T21
+    INDUSTRIAL_MANUFACTURING_AND_PROCESSING = "industrial_manufacturing_and_processing"  # T22
+    WAREHOUSING_LOGISTICS_AND_COLD_CHAIN = "warehousing_logistics_and_cold_chain"  # T23
+    DATA_CENTERS_AND_TELECOMMUNICATIONS = "data_centers_and_telecommunications"  # T24
+    AGRICULTURAL_HORTICULTURAL_AND_AQUACULTURE_FACILITIES = (  # T25
+        "agricultural_horticultural_and_aquaculture_facilities"
+    )
+    SPORTS_RECREATION_AND_WELLNESS_FACILITIES = "sports_recreation_and_wellness_facilities"  # T26
+    ENTERTAINMENT_GAMING_AND_ATTRACTIONS = "entertainment_gaming_and_attractions"  # T27
+    PARKS_LANDSCAPE_AND_PUBLIC_REALM = "parks_landscape_and_public_realm"  # T28
+    ROADS_BRIDGES_AND_TUNNELS = "roads_bridges_and_tunnels"  # T29
+    RAIL_BUS_AND_PUBLIC_TRANSIT = "rail_bus_and_public_transit"  # T30
+    AVIATION_AND_SPACEPORT_INFRASTRUCTURE = "aviation_and_spaceport_infrastructure"  # T31
+    MARINE_PORT_AND_COASTAL_TRANSPORTATION = "marine_port_and_coastal_transportation"  # T32
+    PARKING_AND_FLEET_INFRASTRUCTURE = "parking_and_fleet_infrastructure"  # T33
+    WATER_SUPPLY_AND_TREATMENT = "water_supply_and_treatment"  # T34
+    WASTEWATER_AND_SOLID_WASTE = "wastewater_and_solid_waste"  # T35
+    STORMWATER_FLOOD_CONTROL_AND_COASTAL_PROTECTION = (  # T36
+        "stormwater_flood_control_and_coastal_protection"
+    )
+    POWER_GENERATION_AND_ENERGY_STORAGE = "power_generation_and_energy_storage"  # T37
+    POWER_FUEL_AND_UTILITY_NETWORKS = "power_fuel_and_utility_networks"  # T38
+    ENVIRONMENTAL_REMEDIATION_AND_ECOSYSTEM_RESTORATION = (  # T39
+        "environmental_remediation_and_ecosystem_restoration"
+    )
+    LAND_DEVELOPMENT_ENABLING_AND_CIVIL_SITEWORK = (  # T40
+        "land_development_enabling_and_civil_sitework"
+    )
+    EXTRACTIVE_AND_MINERAL_RESOURCES_FACILITIES = (  # T41
+        "extractive_and_mineral_resources_facilities"
+    )
+    SPECIALTY_CONSTRUCTION_SCOPES_AND_BUILDING_RENEWAL = (  # T42
+        "specialty_construction_scopes_and_building_renewal"
+    )
+
+
+#: The taxonomy's 1-sector-per-type rule, as the one place it is stated.
+#: Checked in `Project.__post_init__` (and redundantly, for a classified
+#: refusal, in `CreateProject`/`UpdateProject.__post_init__`) rather than as a
+#: duplicated 42-branch DB CHECK, so the taxonomy is never stated twice able
+#: to disagree with itself or with a future v2 CSV.
+TYPE_TO_SECTOR: Final[MappingProxyType[ProjectType, ProjectSector]] = MappingProxyType(
+    {
+        ProjectType.SINGLE_FAMILY_HOUSING: ProjectSector.HOUSING_AND_RESIDENTIAL,
+        ProjectType.MULTIFAMILY_HOUSING: ProjectSector.HOUSING_AND_RESIDENTIAL,
+        ProjectType.SENIOR_LIVING_AND_RESIDENTIAL_CARE: ProjectSector.HOUSING_AND_RESIDENTIAL,
+        ProjectType.STUDENT_STAFF_AND_GROUP_HOUSING: ProjectSector.HOUSING_AND_RESIDENTIAL,
+        ProjectType.TRANSITIONAL_SUPPORTIVE_AND_EMERGENCY_HOUSING: (
+            ProjectSector.HOUSING_AND_RESIDENTIAL
+        ),
+        ProjectType.HOTELS_RESORTS_AND_LODGING: ProjectSector.HOSPITALITY_AND_COMMERCIAL,
+        ProjectType.RESTAURANTS_AND_FOODSERVICE: ProjectSector.HOSPITALITY_AND_COMMERCIAL,
+        ProjectType.RETAIL_SHOPPING_AND_CONSUMER_SERVICES: ProjectSector.HOSPITALITY_AND_COMMERCIAL,
+        ProjectType.OFFICE_AND_WORKPLACE: ProjectSector.HOSPITALITY_AND_COMMERCIAL,
+        ProjectType.AUTOMOTIVE_AND_CONSUMER_MOBILITY_SERVICES: (
+            ProjectSector.HOSPITALITY_AND_COMMERCIAL
+        ),
+        ProjectType.MIXED_USE_BUILDINGS_AND_DISTRICTS: ProjectSector.HOSPITALITY_AND_COMMERCIAL,
+        ProjectType.ACUTE_CARE_AND_HOSPITALS: ProjectSector.HEALTHCARE_AND_LIFE_SCIENCES,
+        ProjectType.OUTPATIENT_AND_SPECIALTY_HEALTHCARE: ProjectSector.HEALTHCARE_AND_LIFE_SCIENCES,
+        ProjectType.LIFE_SCIENCES_AND_LABORATORY_FACILITIES: (
+            ProjectSector.HEALTHCARE_AND_LIFE_SCIENCES
+        ),
+        ProjectType.EARLY_CHILDHOOD_AND_K_12_SCHOOLS: ProjectSector.EDUCATION_CIVIC_AND_COMMUNITY,
+        ProjectType.HIGHER_EDUCATION_AND_ACADEMIC_FACILITIES: (
+            ProjectSector.EDUCATION_CIVIC_AND_COMMUNITY
+        ),
+        ProjectType.GOVERNMENT_AND_CIVIC_BUILDINGS: ProjectSector.EDUCATION_CIVIC_AND_COMMUNITY,
+        ProjectType.PUBLIC_SAFETY_COURTS_AND_CORRECTIONS: (
+            ProjectSector.EDUCATION_CIVIC_AND_COMMUNITY
+        ),
+        ProjectType.DEFENSE_AND_MILITARY_FACILITIES: ProjectSector.EDUCATION_CIVIC_AND_COMMUNITY,
+        ProjectType.CULTURE_PERFORMING_ARTS_AND_RELIGIOUS_FACILITIES: (
+            ProjectSector.EDUCATION_CIVIC_AND_COMMUNITY
+        ),
+        ProjectType.SOCIAL_SERVICES_AND_COMMUNITY_FACILITIES: (
+            ProjectSector.EDUCATION_CIVIC_AND_COMMUNITY
+        ),
+        ProjectType.INDUSTRIAL_MANUFACTURING_AND_PROCESSING: (
+            ProjectSector.INDUSTRIAL_LOGISTICS_AND_TECHNOLOGY
+        ),
+        ProjectType.WAREHOUSING_LOGISTICS_AND_COLD_CHAIN: (
+            ProjectSector.INDUSTRIAL_LOGISTICS_AND_TECHNOLOGY
+        ),
+        ProjectType.DATA_CENTERS_AND_TELECOMMUNICATIONS: (
+            ProjectSector.INDUSTRIAL_LOGISTICS_AND_TECHNOLOGY
+        ),
+        ProjectType.AGRICULTURAL_HORTICULTURAL_AND_AQUACULTURE_FACILITIES: (
+            ProjectSector.INDUSTRIAL_LOGISTICS_AND_TECHNOLOGY
+        ),
+        ProjectType.SPORTS_RECREATION_AND_WELLNESS_FACILITIES: (
+            ProjectSector.RECREATION_AND_ENTERTAINMENT
+        ),
+        ProjectType.ENTERTAINMENT_GAMING_AND_ATTRACTIONS: (
+            ProjectSector.RECREATION_AND_ENTERTAINMENT
+        ),
+        ProjectType.PARKS_LANDSCAPE_AND_PUBLIC_REALM: ProjectSector.RECREATION_AND_ENTERTAINMENT,
+        ProjectType.ROADS_BRIDGES_AND_TUNNELS: ProjectSector.TRANSPORTATION_AND_MOBILITY,
+        ProjectType.RAIL_BUS_AND_PUBLIC_TRANSIT: ProjectSector.TRANSPORTATION_AND_MOBILITY,
+        ProjectType.AVIATION_AND_SPACEPORT_INFRASTRUCTURE: (
+            ProjectSector.TRANSPORTATION_AND_MOBILITY
+        ),
+        ProjectType.MARINE_PORT_AND_COASTAL_TRANSPORTATION: (
+            ProjectSector.TRANSPORTATION_AND_MOBILITY
+        ),
+        ProjectType.PARKING_AND_FLEET_INFRASTRUCTURE: ProjectSector.TRANSPORTATION_AND_MOBILITY,
+        ProjectType.WATER_SUPPLY_AND_TREATMENT: ProjectSector.UTILITIES_ENERGY_AND_ENVIRONMENTAL,
+        ProjectType.WASTEWATER_AND_SOLID_WASTE: ProjectSector.UTILITIES_ENERGY_AND_ENVIRONMENTAL,
+        ProjectType.STORMWATER_FLOOD_CONTROL_AND_COASTAL_PROTECTION: (
+            ProjectSector.UTILITIES_ENERGY_AND_ENVIRONMENTAL
+        ),
+        ProjectType.POWER_GENERATION_AND_ENERGY_STORAGE: (
+            ProjectSector.UTILITIES_ENERGY_AND_ENVIRONMENTAL
+        ),
+        ProjectType.POWER_FUEL_AND_UTILITY_NETWORKS: (
+            ProjectSector.UTILITIES_ENERGY_AND_ENVIRONMENTAL
+        ),
+        ProjectType.ENVIRONMENTAL_REMEDIATION_AND_ECOSYSTEM_RESTORATION: (
+            ProjectSector.UTILITIES_ENERGY_AND_ENVIRONMENTAL
+        ),
+        ProjectType.LAND_DEVELOPMENT_ENABLING_AND_CIVIL_SITEWORK: (
+            ProjectSector.LAND_RESOURCE_AND_SPECIALTY
+        ),
+        ProjectType.EXTRACTIVE_AND_MINERAL_RESOURCES_FACILITIES: (
+            ProjectSector.LAND_RESOURCE_AND_SPECIALTY
+        ),
+        ProjectType.SPECIALTY_CONSTRUCTION_SCOPES_AND_BUILDING_RENEWAL: (
+            ProjectSector.LAND_RESOURCE_AND_SPECIALTY
+        ),
+    }
+)
+
+#: The optional Project fields an update may set back to empty through `clear_fields`.
+#: Wire names equal attribute names; `aliases` empties to `()`, the rest to `None`.
+PROJECT_CLEARABLE_FIELDS: Final = frozenset(
+    {
+        "aliases",
+        "project_number",
+        "sector",
+        "type",
+        "address",
+        "city",
+        "county",
+        "address_state",
+        "zip",
+        "value",
+        "scheduled_start",
+        "contract_start",
+        "actual_start",
+        "scheduled_finish",
+        "contract_finish",
+        "actual_finish",
+    }
+)
+
+#: Exclusive upper bound of `knowledge.projects.value`, a `numeric(14, 2)`.
+PROJECT_VALUE_LIMIT: Final = Decimal(10) ** 12
+
+
+def is_storable_project_value(value: object) -> bool:
+    """True when `value` fits `numeric(14, 2)` exactly, so the stored amount is the one given."""
+    return (
+        isinstance(value, Decimal)
+        and value.is_finite()
+        and not value.is_signed()
+        and value < PROJECT_VALUE_LIMIT
+        and int(value.as_tuple().exponent) >= -2
+    )
 
 
 class ProjectEntityLinkageState(StrEnum):
@@ -279,6 +511,22 @@ class Project:
     participants: tuple[str, ...] = ()
     closed_at: datetime | None = None
     version: int = 1
+    aliases: tuple[str, ...] = ()
+    project_number: str | None = None
+    sector: ProjectSector | None = None
+    type: ProjectType | None = None
+    address: str | None = None
+    city: str | None = None
+    county: str | None = None
+    address_state: str | None = None
+    zip: str | None = None
+    value: Decimal | None = None
+    scheduled_start: date | None = None
+    contract_start: date | None = None
+    actual_start: date | None = None
+    scheduled_finish: date | None = None
+    contract_finish: date | None = None
+    actual_finish: date | None = None
 
     def __post_init__(self) -> None:
         validate_identifier(self.project_id, IdKind.PROJECT)
@@ -296,6 +544,51 @@ class Project:
             ensure_utc(self.closed_at)
         if (self.state is ProjectState.CLOSED) is not (self.closed_at is not None):
             raise ValueError("a closed project records when it closed, and only then")
+        if self.project_number is not None:
+            if not self.project_number.strip():
+                raise ValueError("a project number, if present, is non-blank")
+            if len(self.project_number) > 64:
+                raise ValueError("a project number is at most 64 characters")
+        for field_name, bound in (
+            ("address", 256),
+            ("city", 128),
+            ("county", 128),
+            ("address_state", 128),
+            ("zip", 32),
+        ):
+            value = getattr(self, field_name)
+            if value is not None:
+                if not value.strip():
+                    raise ValueError(f"a project {field_name}, if present, is non-blank")
+                if len(value) > bound:
+                    raise ValueError(f"a project {field_name} is at most {bound} characters")
+        if self.value is not None and not is_storable_project_value(self.value):
+            raise ValueError("a project value is a finite, non-negative amount in whole cents")
+        if (self.sector is None) != (self.type is None):
+            raise ValueError("a project sector and type are set together, or neither")
+        if self.sector is not None:
+            if not isinstance(self.sector, ProjectSector):
+                raise ValueError("a project names one known sector")
+            if not isinstance(self.type, ProjectType):
+                raise ValueError("a project names one known type")
+            if TYPE_TO_SECTOR[self.type] is not self.sector:
+                raise ValueError(
+                    f"project type {self.type.value} belongs to sector "
+                    f"{TYPE_TO_SECTOR[self.type].value}, not {self.sector.value}"
+                )
+        for field_name in (
+            "scheduled_start",
+            "contract_start",
+            "actual_start",
+            "scheduled_finish",
+            "contract_finish",
+            "actual_finish",
+        ):
+            value = getattr(self, field_name)
+            if value is not None and not isinstance(value, date):
+                raise ValueError(f"a project {field_name} is a date")
+            if isinstance(value, datetime):
+                raise ValueError(f"a project {field_name} is a date, not a datetime")
 
 
 @dataclass(frozen=True, slots=True)

@@ -111,9 +111,16 @@ def _constant(name: str) -> tuple[str, ...]:
 
 
 def test_the_revision_is_directly_on_the_knowledge_revision_under_one_later_head() -> None:
+    """`cc373834a485` (Continuity Project sixteen-field admission) landed on this
+    revision and `a591b81f10a2` (Intelligence report type registry) on that, so
+    it is no longer the head. The claim worth keeping is that the chain still
+    holds exactly one head and that this revision sits beneath it at a known
+    position.
+    """
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == REVISION
+    assert script.get_revision(HEAD).down_revision == "cc373834a485"
+    assert script.get_revision("cc373834a485").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
 
 
@@ -416,12 +423,12 @@ def test_a_downgrade_without_admitted_rows_restores_the_six_value_checks(
     del disposable_database
     command.upgrade(_config(), PREVIOUS)
     before = _definitions(engine)
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     _seed(engine, FocusAreaId.COMMUNICATIONS, "mig-round")
     command.downgrade(_config(), PREVIOUS)
     assert _version(engine) == PREVIOUS
     assert _definitions(engine) == before
     for table, column, key_column, name in CHECKS:
         assert _refused(engine, table, key_column, column, "captures") == name
-    command.upgrade(_config(), "head")
-    assert _version(engine) == HEAD
+    command.upgrade(_config(), REVISION)
+    assert _version(engine) == REVISION

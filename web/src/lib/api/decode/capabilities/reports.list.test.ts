@@ -51,9 +51,14 @@ describe("decodeReportsList", () => {
     expect(decodeReportsList({ items: [rest], next_cursor: null }).ok).toBe(false);
   });
 
-  it("fails closed on an invalid enum", () => {
+  it("decodes a registered kind token and fails closed on a malformed one", () => {
     expect(
-      decodeReportsList({ items: [{ ...ITEM, artifact_kind: "brief" }], next_cursor: null }).ok,
+      decodeReportsList({ items: [{ ...ITEM, artifact_kind: "weekly_digest" }], next_cursor: null })
+        .ok,
+    ).toBe(true);
+    expect(
+      decodeReportsList({ items: [{ ...ITEM, artifact_kind: "Weekly-Digest" }], next_cursor: null })
+        .ok,
     ).toBe(false);
   });
 });

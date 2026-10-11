@@ -174,13 +174,17 @@ from my_pa.domain.extraction.text import SUPPORTED_MEDIA_TYPES, ExtractionStatus
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.intelligence.catalog import (
+    BUILTIN_REPORT_TYPES,
     MAX_ARTIFACT_BODY_BYTES,
+    MAX_REPORT_TYPE_DESCRIPTION_CHARACTERS,
+    MAX_REPORT_TYPE_DISPLAY_NAME_CHARACTERS,
     ArtifactKind,
     ArtifactState,
     CycleState,
     IntelligenceStage,
     ProducerRunState,
     ProvenanceRelation,
+    ReportTypeOrigin,
 )
 from my_pa.domain.meeting.model import (
     MAX_ATTENDEE_DISPLAY_NAME_CHARACTERS,
@@ -9941,6 +9945,17 @@ context_preference_current = Table(
     ),
 )
 
+#: The artifact-kind token shape (`catalog.ARTIFACT_KIND_TOKEN`) as a POSIX
+#: pattern. Since `a591b81f10a2` a run or artifact kind is any registered token,
+#: not a member of `ArtifactKind`; the registry decides which tokens a Principal
+#: may use.
+_ARTIFACT_KIND_SHAPE_CHECK: Final = "artifact_kind ~ '^[a-z][a-z0-9_]{0,63}$'"
+_BUILTIN_KIND_LITERALS: Final = ", ".join(f"'{kind.value}'" for kind in ArtifactKind)
+_BUILTIN_PAIR_PREDICATE: Final = " OR ".join(
+    f"(stage = '{stage.value}' AND artifact_kind = '{kind.value}')"
+    for kind, stage, _description, _display in BUILTIN_REPORT_TYPES
+)
+
 intelligence_cycle_runs = Table(
     "intelligence_cycle_runs",
     METADATA,
@@ -9990,7 +10005,7 @@ intelligence_producer_runs = Table(
     _is_identifier("run_id", IdKind.INTELLIGENCE_RUN),
     _is_identifier("cycle_run_id", IdKind.INTELLIGENCE_CYCLE_RUN),
     _one_of("stage", IntelligenceStage, name="intelligence_run_stage_is_known"),
-    _one_of("artifact_kind", ArtifactKind, name="intelligence_run_kind_is_known"),
+    CheckConstraint(_ARTIFACT_KIND_SHAPE_CHECK, name="intelligence_run_kind_is_a_token"),
     _one_of("state", ProducerRunState, name="intelligence_run_state_is_known"),
 )
 
@@ -10051,6 +10066,66 @@ intelligence_artifacts = Table(
         name="intelligence_artifacts_structured_content_check",
     ),
     _one_of("artifact_state", ArtifactState, name="intelligence_artifact_state_is_known"),
+    CheckConstraint(_ARTIFACT_KIND_SHAPE_CHECK, name="intelligence_artifact_kind_is_a_token"),
+    # One current head per (cycle, stage, kind, focus area, source lane):
+    # `a591b81f10a2` added `artifact_kind`, so every kind has its own lineage and
+    # a client kind at a built-in stage never displaces the built-in head.
+    Index(
+        "intelligence_artifact_current_head",
+        "principal_id",
+        "cycle_run_id",
+        "stage",
+        "artifact_kind",
+        text("coalesce(focus_area_id, '')"),
+        text("coalesce(source_lane, '')"),
+        unique=True,
+        postgresql_where=text("is_current"),
+    ),
+)
+
+#: The per-Principal report type registry (`a591b81f10a2`). One immutable row
+#: per Principal and kind: `builtin` rows restate the five built-in pairs,
+#: `client` rows add kinds a Principal registered.
+intelligence_report_types = Table(
+    "intelligence_report_types",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("artifact_kind", Text, nullable=False),
+    Column("stage", Text, nullable=False),
+    Column("description", Text, nullable=False),
+    Column("display_name", Text),
+    Column("origin", Text, nullable=False),
+    Column("definition_fingerprint", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint("principal_id", "artifact_kind", name="intelligence_report_types_pkey"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint(
+        "artifact_kind ~ '^[a-z][a-z0-9_]{0,63}$'",
+        name="intelligence_report_type_kind_is_a_token",
+    ),
+    _one_of("stage", IntelligenceStage, name="intelligence_report_type_stage_is_known"),
+    CheckConstraint(
+        f"char_length(description) BETWEEN 1 AND {MAX_REPORT_TYPE_DESCRIPTION_CHARACTERS}",
+        name="intelligence_report_type_description_is_bounded",
+    ),
+    CheckConstraint(
+        "display_name IS NULL OR char_length(display_name) BETWEEN 1 AND "
+        f"{MAX_REPORT_TYPE_DISPLAY_NAME_CHARACTERS}",
+        name="intelligence_report_type_display_name_is_bounded",
+    ),
+    _one_of("origin", ReportTypeOrigin, name="intelligence_report_type_origin_is_known"),
+    CheckConstraint(
+        "definition_fingerprint ~ '^[0-9a-f]{64}$'",
+        name="intelligence_report_type_fingerprint_is_sha256",
+    ),
+    CheckConstraint(
+        f"origin <> 'builtin' OR {_BUILTIN_PAIR_PREDICATE}",
+        name="intelligence_report_type_builtin_is_a_builtin_pair",
+    ),
+    CheckConstraint(
+        f"origin <> 'client' OR artifact_kind NOT IN ({_BUILTIN_KIND_LITERALS})",
+        name="intelligence_report_type_client_is_not_builtin",
+    ),
 )
 
 intelligence_commit_receipts = Table(

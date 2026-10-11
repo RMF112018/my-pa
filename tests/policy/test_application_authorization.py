@@ -92,6 +92,7 @@ from my_pa.application.commands import (
     CreateProject,
     CreatePublishedConstraint,
     CreateRelationshipMemory,
+    CreateReportType,
     CreateSituation,
     CreateTask,
     CreateTaskComment,
@@ -150,6 +151,7 @@ from my_pa.application.commands import (
     ListProjects,
     ListRecordEvents,
     ListRelationshipMemories,
+    ListReportTypes,
     ListReviewCases,
     ListSituations,
     ListSources,
@@ -622,6 +624,12 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             cycle_run_id=issue_identifier(IdKind.INTELLIGENCE_CYCLE_RUN),
             set_id=ResolverSetId.COLLECTORS,
         ),
+        Capability.REPORTS_TYPES_CREATE: CreateReportType(
+            artifact_kind="synthetic_digest",
+            stage=IntelligenceStage.REPORTER,
+            description="A synthetic report type.",
+        ),
+        Capability.REPORTS_TYPES_LIST: ListReportTypes(),
         # The entity plane. Every identifier is minted rather than staged, for
         # the reason this table exists: a denial test must fail on the authority
         # and on nothing else, and an entity that existed would let a
@@ -1498,6 +1506,8 @@ SCOPED_CAPABILITIES = [
         Capability.REPORTS_LIST,
         Capability.REPORTS_SEARCH,
         Capability.REPORTS_RESOLVE_SET,
+        Capability.REPORTS_TYPES_CREATE,
+        Capability.REPORTS_TYPES_LIST,
         # The entity plane is a read plane over the acting Principal's own
         # entities. An entity carries no enrollment a requested scope could be
         # compared against — it is the Principal's own record of a person, not
@@ -1787,6 +1797,8 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.REPORTS_LIST,
         Capability.REPORTS_SEARCH,
         Capability.REPORTS_RESOLVE_SET,
+        Capability.REPORTS_TYPES_CREATE,
+        Capability.REPORTS_TYPES_LIST,
         Capability.ENTITIES_SEARCH,
         Capability.ENTITIES_GET,
         Capability.ENTITIES_RESOLVE,

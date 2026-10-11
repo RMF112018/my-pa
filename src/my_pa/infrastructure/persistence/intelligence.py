@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import date, datetime
 from typing import Any, cast
@@ -19,7 +20,9 @@ from my_pa.domain.intelligence.catalog import (
     IntelligenceStage,
     ProducerRunState,
     ProvenanceRelation,
+    ReportTypeOrigin,
     SourceLaneId,
+    parse_artifact_kind,
 )
 from my_pa.domain.intelligence.models import (
     IntelligenceArtifact,
@@ -28,6 +31,10 @@ from my_pa.domain.intelligence.models import (
     IntelligencePipelineDependency,
     IntelligenceProducerRun,
     IntelligenceProvenanceRef,
+    IntelligenceReportType,
+    ReportTypeDefinition,
+    ReportTypeInsertion,
+    builtin_report_type_definitions,
 )
 from my_pa.domain.search.query import SearchQuery, SearchQueryError
 from my_pa.infrastructure.persistence.principal_scope import (
@@ -43,9 +50,27 @@ from my_pa.infrastructure.persistence.tables import (
     intelligence_pipeline_dependencies,
     intelligence_producer_runs,
     intelligence_provenance_refs,
+    intelligence_report_types,
 )
 
-__all__ = ["SqlIntelligenceStore"]
+__all__ = [
+    "REPORT_TYPE_REGISTRY_LOCK_NAMESPACE",
+    "SqlIntelligenceStore",
+    "report_type_registry_lock_key",
+]
+
+#: Domain separator of the report type registry's per-Principal advisory lock.
+REPORT_TYPE_REGISTRY_LOCK_NAMESPACE = "intelligence-report-type-registry"
+
+
+def report_type_registry_lock_key(principal_id: str) -> int:
+    """A stable signed 64-bit advisory-lock key for one Principal's registry.
+
+    SHA-256 of the namespace and the Principal, so the key never depends on a
+    server hash function and never collides with another lock domain by design.
+    """
+    encoded = f"{REPORT_TYPE_REGISTRY_LOCK_NAMESPACE}\x1f{principal_id}".encode()
+    return int.from_bytes(hashlib.sha256(encoded).digest()[:8], byteorder="big", signed=True)
 
 
 def _area(value: str | None) -> FocusAreaId | None:
@@ -162,7 +187,7 @@ class SqlIntelligenceStore:
                 "cycle_run_id": run.cycle_run_id,
                 "focus_area_id": None if run.focus_area_id is None else run.focus_area_id.value,
                 "stage": run.stage.value,
-                "artifact_kind": run.artifact_kind.value,
+                "artifact_kind": str(run.artifact_kind),
                 "source_lane": None if run.source_lane is None else run.source_lane.value,
                 "producer_task_id": run.producer_task_id,
                 "producer_task_name": run.producer_task_name,
@@ -235,7 +260,7 @@ class SqlIntelligenceStore:
             if artifact.focus_area_id is None
             else artifact.focus_area_id.value,
             "stage": artifact.stage.value,
-            "artifact_kind": artifact.artifact_kind.value,
+            "artifact_kind": str(artifact.artifact_kind),
             "source_lane": None if artifact.source_lane is None else artifact.source_lane.value,
             "report_date": artifact.report_date,
             "title": artifact.title,
@@ -316,12 +341,15 @@ class SqlIntelligenceStore:
         principal_id: str,
         cycle_run_id: str,
         stage: IntelligenceStage,
+        artifact_kind: str,
         focus_area_id: FocusAreaId | None,
         source_lane: SourceLaneId | None,
     ) -> IntelligenceArtifact | None:
+        """The current head of one kind's lineage at a coordinate (`a591b81f10a2`)."""
         filters = [
             intelligence_artifacts.c.cycle_run_id == cycle_run_id,
             intelligence_artifacts.c.stage == stage.value,
+            intelligence_artifacts.c.artifact_kind == str(artifact_kind),
             intelligence_artifacts.c.is_current.is_(True),
         ]
         if focus_area_id is None:
@@ -351,7 +379,7 @@ class SqlIntelligenceStore:
         *,
         cycle_run_id: str | None,
         stage: IntelligenceStage | None,
-        artifact_kind: ArtifactKind | None,
+        artifact_kind: str | None,
         focus_area_id: FocusAreaId | None,
         source_lane: SourceLaneId | None,
         report_date: date | None,
@@ -359,6 +387,7 @@ class SqlIntelligenceStore:
         limit: int,
         after_committed_at: datetime | None = None,
         after_artifact_id: str | None = None,
+        builtin_only: bool = False,
     ) -> tuple[IntelligenceArtifact, ...]:
         filters: list[ColumnElement[bool]] = []
         if cycle_run_id is not None:
@@ -366,7 +395,13 @@ class SqlIntelligenceStore:
         if stage is not None:
             filters.append(intelligence_artifacts.c.stage == stage.value)
         if artifact_kind is not None:
-            filters.append(intelligence_artifacts.c.artifact_kind == artifact_kind.value)
+            filters.append(intelligence_artifacts.c.artifact_kind == str(artifact_kind))
+        if builtin_only:
+            filters.append(
+                intelligence_artifacts.c.artifact_kind.in_(
+                    sorted(kind.value for kind in ArtifactKind)
+                )
+            )
         if focus_area_id is not None:
             filters.append(intelligence_artifacts.c.focus_area_id == focus_area_id.value)
         if source_lane is not None:
@@ -408,7 +443,7 @@ class SqlIntelligenceStore:
         *,
         cycle_run_id: str | None,
         stage: IntelligenceStage | None,
-        artifact_kind: ArtifactKind | None,
+        artifact_kind: str | None,
         focus_area_id: FocusAreaId | None,
         source_lane: SourceLaneId | None,
         limit: int,
@@ -424,7 +459,7 @@ class SqlIntelligenceStore:
         if stage is not None:
             filters.append(intelligence_artifacts.c.stage == stage.value)
         if artifact_kind is not None:
-            filters.append(intelligence_artifacts.c.artifact_kind == artifact_kind.value)
+            filters.append(intelligence_artifacts.c.artifact_kind == str(artifact_kind))
         if focus_area_id is not None:
             filters.append(intelligence_artifacts.c.focus_area_id == focus_area_id.value)
         if source_lane is not None:
@@ -457,12 +492,14 @@ class SqlIntelligenceStore:
         principal_id: str,
         cycle_run_id: str,
         stage: IntelligenceStage,
+        artifact_kind: str,
         focus_area_id: FocusAreaId | None,
         source_lane: SourceLaneId | None,
     ) -> IntelligenceProducerRun | None:
         filters = [
             intelligence_producer_runs.c.cycle_run_id == cycle_run_id,
             intelligence_producer_runs.c.stage == stage.value,
+            intelligence_producer_runs.c.artifact_kind == str(artifact_kind),
         ]
         if focus_area_id is None:
             filters.append(intelligence_producer_runs.c.focus_area_id.is_(None))
@@ -481,6 +518,153 @@ class SqlIntelligenceStore:
         )
         row = self._connection.execute(statement).mappings().first()
         return None if row is None else self._run(row)
+
+    # ---- report type registry (`a591b81f10a2`) ------------------------------------
+
+    def list_report_types(
+        self, principal_id: str, *, stage: IntelligenceStage | None = None
+    ) -> tuple[IntelligenceReportType, ...]:
+        """This Principal's stored report types, in (stage, kind) order.
+
+        Stored rows only: a Principal never seeded has none here, and merging in
+        the code-authoritative built-ins is the application's job.
+        """
+        query = select(intelligence_report_types)
+        if stage is not None:
+            query = query.where(intelligence_report_types.c.stage == stage.value)
+        statement = principal_scoped(
+            query.order_by(
+                intelligence_report_types.c.stage,
+                intelligence_report_types.c.artifact_kind,
+            ),
+            intelligence_report_types,
+            self._context,
+        )
+        return tuple(
+            self._report_type(row) for row in self._connection.execute(statement).mappings()
+        )
+
+    def get_report_type(
+        self, principal_id: str, artifact_kind: str
+    ) -> IntelligenceReportType | None:
+        statement = principal_scoped(
+            select(intelligence_report_types).where(
+                intelligence_report_types.c.artifact_kind == str(artifact_kind)
+            ),
+            intelligence_report_types,
+            self._context,
+        )
+        row = self._connection.execute(statement).mappings().first()
+        return None if row is None else self._report_type(row)
+
+    def insert_report_type(
+        self, principal_id: str, definition: ReportTypeDefinition, *, created_at: datetime
+    ) -> ReportTypeInsertion:
+        """Insert the definition unless the kind is already registered.
+
+        Returns the stored row and whether this call wrote it. An existing row is
+        returned unchanged, whatever its definition: comparing fingerprints and
+        refusing a different definition is the caller's decision.
+        """
+        values = principal_bound_values(
+            self._report_type_values(definition, created_at),
+            intelligence_report_types,
+            self._context,
+        )
+        inserted = (
+            self._connection.execute(
+                pg_insert(intelligence_report_types)
+                .values(**values)
+                .on_conflict_do_nothing(constraint="intelligence_report_types_pkey")
+                .returning(intelligence_report_types.c.artifact_kind)
+            ).first()
+            is not None
+        )
+        stored = self.get_report_type(principal_id, str(definition.artifact_kind))
+        if stored is None:  # pragma: no cover - the row was just written or already present
+            raise RuntimeError("report type row vanished inside its own transaction")
+        return ReportTypeInsertion(report_type=stored, inserted=inserted)
+
+    def register_client_report_type(
+        self,
+        principal_id: str,
+        definition: ReportTypeDefinition,
+        *,
+        created_at: datetime,
+        limit: int,
+    ) -> ReportTypeInsertion | None:
+        """Lookup, count and insert in this transaction under the registry lock.
+
+        `pg_advisory_xact_lock` on the Principal's registry key is held to the
+        end of the transaction, so a concurrent registration for the same
+        Principal waits until this one commits and then counts its row. The
+        key is the bound partition identity, never the argument.
+        """
+        self._connection.execute(
+            select(func.pg_advisory_xact_lock(report_type_registry_lock_key(self._principal_id)))
+        ).one()
+        existing = self.get_report_type(principal_id, str(definition.artifact_kind))
+        if existing is not None:
+            return ReportTypeInsertion(report_type=existing, inserted=False)
+        clients = self._connection.execute(
+            principal_scoped(
+                select(func.count()).where(
+                    intelligence_report_types.c.origin == ReportTypeOrigin.CLIENT.value
+                ),
+                intelligence_report_types,
+                self._context,
+            )
+        ).scalar_one()
+        if clients >= limit:
+            return None
+        return self.insert_report_type(principal_id, definition, created_at=created_at)
+
+    def ensure_builtin_report_types(self, principal_id: str, *, created_at: datetime) -> int:
+        """Insert any missing built-in row for this Principal. Returns how many."""
+        rows = [
+            principal_bound_values(
+                self._report_type_values(definition, created_at),
+                intelligence_report_types,
+                self._context,
+            )
+            for definition in builtin_report_type_definitions()
+        ]
+        result = self._connection.execute(
+            pg_insert(intelligence_report_types)
+            .values(rows)
+            .on_conflict_do_nothing(constraint="intelligence_report_types_pkey")
+            .returning(intelligence_report_types.c.artifact_kind)
+        )
+        return len(result.all())
+
+    @staticmethod
+    def _report_type_values(
+        definition: ReportTypeDefinition, created_at: datetime
+    ) -> dict[str, object]:
+        return {
+            "artifact_kind": str(definition.artifact_kind),
+            "stage": definition.stage.value,
+            "description": definition.description,
+            "display_name": definition.display_name,
+            "origin": definition.origin.value,
+            "definition_fingerprint": definition.fingerprint,
+            "created_at": created_at,
+        }
+
+    def _report_type(self, row: RowMapping) -> IntelligenceReportType:
+        mapping = dict(row)
+        return IntelligenceReportType(
+            principal_id=mapping["principal_id"],
+            definition=ReportTypeDefinition(
+                artifact_kind=mapping["artifact_kind"],
+                stage=IntelligenceStage(mapping["stage"]),
+                description=mapping["description"],
+                origin=ReportTypeOrigin(mapping["origin"]),
+                display_name=mapping["display_name"],
+            ),
+            definition_fingerprint=mapping["definition_fingerprint"],
+            created_at=mapping["created_at"],
+        )
 
     def _cycle(self, row: RowMapping) -> IntelligenceCycleRun:
         mapping = dict(row)
@@ -505,7 +689,7 @@ class SqlIntelligenceStore:
             principal_id=mapping["principal_id"],
             cycle_run_id=mapping["cycle_run_id"],
             stage=IntelligenceStage(mapping["stage"]),
-            artifact_kind=ArtifactKind(mapping["artifact_kind"]),
+            artifact_kind=parse_artifact_kind(mapping["artifact_kind"]),
             state=ProducerRunState(mapping["state"]),
             version=mapping["version"],
             producer_task_id=mapping["producer_task_id"],
@@ -540,7 +724,7 @@ class SqlIntelligenceStore:
             cycle_run_id=mapping["cycle_run_id"],
             producer_run_id=mapping["producer_run_id"],
             stage=IntelligenceStage(mapping["stage"]),
-            artifact_kind=ArtifactKind(mapping["artifact_kind"]),
+            artifact_kind=parse_artifact_kind(mapping["artifact_kind"]),
             report_date=mapping["report_date"],
             title=mapping["title"],
             body_markdown=mapping["body_markdown"],

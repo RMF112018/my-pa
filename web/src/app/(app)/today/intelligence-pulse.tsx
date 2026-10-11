@@ -17,6 +17,7 @@ import { LiveAnnouncement } from "@/components/ui/live-region";
 import { SurfaceState } from "@/components/ui/surface-state";
 import type { PrincipalSession } from "@/contracts/identity";
 import {
+  briefingGapCopy,
   currentCycleRunId,
   nonReadyRequiredCount,
   resolveSetPayload,
@@ -180,6 +181,7 @@ export async function IntelligencePulse({
 
   const readiness = readinessAnswer.result;
   const missing = nonReadyRequiredCount(readiness.members);
+  const gaps = briefingGapCopy(readiness);
   const allClearForbidden = readiness.aggregate !== "READY" || missing > 0;
   const tone = AGGREGATE_TONE[readiness.aggregate] ?? "neutral";
 
@@ -192,9 +194,11 @@ export async function IntelligencePulse({
       <CardBody>
         <p data-testid="intelligence-pulse-summary" role="status">
           Business date {readiness.business_date}. Specialist coverage {readiness.aggregate}
-          {allClearForbidden
-            ? ` — ${missing} required member${missing === 1 ? " is" : "s are"} not READY. Not all-clear.`
-            : " — Brief/specialist coverage ready, not system healthy."}
+          {!allClearForbidden
+            ? " — Brief/specialist coverage ready, not system healthy."
+            : gaps
+              ? ` — ${gaps}. Not all-clear.`
+              : ` — ${missing} required member${missing === 1 ? " is" : "s are"} not READY. Not all-clear.`}
         </p>
         <OpenIntelligenceLink />
       </CardBody>

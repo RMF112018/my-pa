@@ -44,6 +44,9 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 VERSIONS: Final = ROOT / "migrations" / "versions"
 REVISION: Final = "93f3aa113f58"
 PREVIOUS: Final = "6734f039f7a6"
+#: The chain head: `a591b81f10a2` (Intelligence report type registry) is additive
+#: on `REVISION`, so a database upgraded to head stands there.
+HEAD: Final = "a591b81f10a2"
 MIGRATION: Final = VERSIONS / "20261007_93f3aa113f58_intelligence_focus_area_admission.py"
 PLANE_MIGRATION: Final = VERSIONS / "20260820_e9b2c4d7a150_admit_intelligence_artifact_plane.py"
 CHECK_VIOLATION: Final = "23514"
@@ -107,14 +110,16 @@ def _constant(name: str) -> tuple[str, ...]:
 # ---- FAST: the graph and the freeze -----------------------------------------------
 
 
-def test_the_revision_is_the_single_head_directly_on_the_knowledge_revision() -> None:
+def test_the_revision_is_directly_on_the_knowledge_revision_under_one_later_head() -> None:
     """`cc373834a485` (Continuity Project sixteen-field admission) landed on this
-    revision, so it is no longer the head. The claim worth keeping is that the
-    chain still holds exactly one head and that this revision sits beneath it
-    at a known position.
+    revision and `a591b81f10a2` (Intelligence report type registry) on that, so
+    it is no longer the head. The claim worth keeping is that the chain still
+    holds exactly one head and that this revision sits beneath it at a known
+    position.
     """
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == ["cc373834a485"]
+    assert script.get_heads() == [HEAD]
+    assert script.get_revision(HEAD).down_revision == "cc373834a485"
     assert script.get_revision("cc373834a485").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
 

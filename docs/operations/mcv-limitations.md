@@ -658,7 +658,9 @@ does not. It remains an unverified caller string.
 
 **Nothing here is commissioned.** The migration `1d9b248e7f83` and the TRUNCATE
 refusal `c8e4a1b70d35` are proven on disposable databases only. The ChatLLM
-data profile `chatllm-data-v8`, which adds `record_events.provenance` as
+data profile `chatllm-data-v9`, which adds `reports.types.create` and
+`reports.types.list` as `DATA_REQUIRED` on top of `chatllm-data-v8`'s
+`record_events.provenance` as
 `DATA_CONDITIONAL` on the Knowledge plane switch (KLP-WP-05) on top of
 `chatllm-data-v7`'s `knowledge.assertions.submit` and
 `knowledge.discovery.checkpoint` `CONTROL_PLANE_EXCLUDED` (KLP-WP-04) and

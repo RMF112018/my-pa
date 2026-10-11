@@ -72,11 +72,15 @@ RAW_REWRITE: Final = re.compile(
     re.IGNORECASE,
 )
 #: MR-C20 (operator ruling on D-1, 2026-10-01). A revision names the feed when it
-#: refers to either table. The capability token `record_events.list` is not a
-#: table reference: the negative lookahead keeps a vocabulary restatement from
-#: matching, and `record_event_sequences` has no such token. Raw SQL, a
-#: SQLAlchemy `Table` or `table()`, and `{SCHEMA}.record_events` still match.
-FEED_TABLE_REFERENCE: Final = re.compile(r"\brecord_events\b(?!\.list)|\brecord_event_sequences\b")
+#: refers to either table. The capability tokens `record_events.list` and
+#: `record_events.provenance` are not table references: the negative lookahead
+#: keeps a vocabulary restatement (the report type registry revision byte-copies `6734f039f7a6`'s
+#: capability literal) from matching, and `record_event_sequences` has no such
+#: token. Raw SQL, a SQLAlchemy `Table` or `table()`, and
+#: `{SCHEMA}.record_events` still match.
+FEED_TABLE_REFERENCE: Final = re.compile(
+    r"\brecord_events\b(?!\.(list|provenance)\b)|\brecord_event_sequences\b"
+)
 DROP_TRIGGER: Final = re.compile(r"DROP\s+TRIGGER\s+(IF\s+EXISTS\s+)?record_events_are_append_only")
 
 
@@ -319,3 +323,36 @@ def test_a_capability_token_is_not_a_feed_table_reference() -> None:
     """MR-C20 control (ii): the vocabulary literal is not a table reference."""
     planted = "capability IN ('record_events.list')"
     assert FEED_TABLE_REFERENCE.search(planted) is None
+
+
+def test_the_provenance_capability_token_is_not_a_feed_table_reference() -> None:
+    """MR-C20 control (ii), for the second exempted token."""
+    planted = "capability IN ('record_events.list', 'record_events.provenance')"
+    assert FEED_TABLE_REFERENCE.search(planted) is None
+
+
+@pytest.mark.parametrize(
+    "planted",
+    [
+        # A real reference beside the exempted token, before and after it.
+        "capability IN ('record_events.provenance') -- SELECT 1 FROM knowledge.record_events",
+        "SELECT 1 FROM knowledge.record_events WHERE c = 'record_events.provenance'",
+        "UPDATE record_events SET x = 1; -- record_events.provenance",
+        "'record_events.provenance', record_event_sequences",
+        "record_event_sequences -- 'record_events.provenance'",
+        # A longer token is not the exempted one.
+        "record_events.provenances",
+        "record_events.provenance_ref",
+        # The table without the token at all.
+        "knowledge.record_events",
+        "record_events.event_id",
+    ],
+)
+def test_the_provenance_exemption_never_hides_a_feed_table_reference(planted: str) -> None:
+    """The negative control for the `record_events.provenance` exemption (F5).
+
+    The lookahead exempts exactly that token: a table reference next to it on
+    the same line, a longer token sharing its prefix, and the bare table all
+    still match.
+    """
+    assert FEED_TABLE_REFERENCE.search(planted)

@@ -76,15 +76,16 @@ _MEETINGS = _MEETING_READS | _MEETING_WRITES
 
 def test_policy_covers_every_public_capability_exactly_once() -> None:
     assert set(CHATLLM_CAPABILITY_POLICY) == set(Capability)
-    assert len(CHATLLM_CAPABILITY_POLICY) == 190
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v8"
+    assert len(CHATLLM_CAPABILITY_POLICY) == 192
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v9"
 
 
 def test_classification_counts_match_the_approved_plan() -> None:
     counts = dict.fromkeys(ChatLLMCapabilityClass, 0)
     for policy in CHATLLM_CAPABILITY_POLICY.values():
         counts[policy.classification] += 1
-    assert counts[ChatLLMCapabilityClass.DATA_REQUIRED] == 72
+    # chatllm-data-v9: `reports.types.create` and `reports.types.list`, 72 -> 74.
+    assert counts[ChatLLMCapabilityClass.DATA_REQUIRED] == 74
     # KLP-WP-03 (chatllm-data-v6): the six Knowledge Assertion names, 90 -> 96.
     # KLP-WP-05 (chatllm-data-v8): `record_events.provenance`, 96 -> 97.
     assert counts[ChatLLMCapabilityClass.DATA_CONDITIONAL] == 97

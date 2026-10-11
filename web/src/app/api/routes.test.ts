@@ -192,33 +192,35 @@ const RESOLVE_SET = {
   cycle_id: "morning_intelligence",
   business_date: "2026-08-20",
   set_id: "morning_brief_inputs",
-  aggregate: "BLOCKED",
+  aggregate: "DEGRADED",
   members: [
     {
       member_id: "communications",
       focus_area_id: "communications",
       source_lane: null,
       readiness: "READY",
-      required: true,
+      required: false,
       artifact_id: "rpt_aaaaaaaa11111111",
       producer_run_id: "prun_aaaaaaaa11111111",
       content_sha256: "a".repeat(64),
       committed_at: "2026-08-20T12:00:00Z",
-      readiness_reason: "present",
+      readiness_reason: "ready",
     },
     {
       member_id: "people",
       focus_area_id: "people",
       source_lane: null,
       readiness: "MISSING",
-      required: true,
+      required: false,
       artifact_id: null,
       producer_run_id: null,
       content_sha256: null,
       committed_at: null,
-      readiness_reason: "missing",
+      readiness_reason: "absent",
     },
   ],
+  missing_focus_areas: ["people"],
+  partial_focus_areas: [],
 };
 
 const CAPABILITY_RESULTS: Record<string, unknown> = {
@@ -1109,7 +1111,7 @@ describe("System reports what is off as off", () => {
     expect(body.disclosure.limitations.join(" ")).not.toMatch(/PWA_FIELDS_PENDING_WP26/);
     expect(body.backend.workerPlanes[0].last_heartbeat_at).toBeNull();
     expect(body.backend.intelligence.state).toBe("resolved");
-    expect(body.backend.intelligence.result.aggregate).toBe("BLOCKED");
+    expect(body.backend.intelligence.result.aggregate).toBe("DEGRADED");
     const members = body.backend.intelligence.result.members;
     expect(members).toHaveLength(2);
     expect(members.map((member: { readiness: string }) => member.readiness)).toEqual([

@@ -92,7 +92,8 @@ def _audit(engine: Engine, *, capability: str, purpose: str) -> None:
 
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == ["cc373834a485"]
+    assert script.get_heads() == ["a591b81f10a2"]
+    assert script.get_revision("a591b81f10a2").down_revision == "cc373834a485"
     assert script.get_revision("cc373834a485").down_revision == "93f3aa113f58"
     assert script.get_revision("e8f2a6c9d104").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS

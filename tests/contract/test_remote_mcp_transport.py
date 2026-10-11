@@ -284,6 +284,82 @@ async def test_remote_gsqs_start_completes_without_a_caller_idempotency_key(
 
 
 @pytest.mark.anyio
+async def test_remote_report_type_registration_replays_without_any_key(scene: Scene) -> None:
+    """`reports.types.create` is replay-safe by its kind, so no key is stamped or needed.
+
+    The identical definition replays, a different one conflicts, and the listing
+    over the same remote session carries the registered kind beside the built-ins.
+    """
+    service = build_service(scene.world, scene.providers)
+    names = frozenset({Capability.REPORTS_TYPES_CREATE.value, Capability.REPORTS_TYPES_LIST.value})
+    app = create_remote_mcp_app(
+        service,
+        resolve_access=lambda _authorization: RemoteAccessContext(
+            scene.principal,
+            allowed_capabilities=names,
+            capability_purposes=frozenset(
+                {
+                    (Capability.REPORTS_TYPES_CREATE, Purpose.REPORT_AUTHORING),
+                    (Capability.REPORTS_TYPES_LIST, Purpose.REPORT_READ),
+                }
+            ),
+        ),
+        allowed_hosts=("testserver",),
+        remote_enabled=True,
+        writes_enabled=True,
+        resource="https://mcp.example.invalid",
+        authorization_servers=("https://issuer.example.invalid",),
+        scopes=frozenset({"my-pa.write"}),
+    )
+    definition = {
+        "artifact_kind": "remote_weekly_digest",
+        "stage": "reporter",
+        "description": "A synthetic remote report type.",
+    }
+    async with (
+        app.router.lifespan_context(app),
+        httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=app),
+            base_url="http://testserver",
+            headers={"Authorization": "Bearer synthetic"},
+        ) as http,
+        streamable_http_client("http://testserver/mcp", http_client=http) as streams,
+        ClientSession(*streams[:2]) as session,
+    ):
+        await session.initialize()
+        tools = {tool.name: tool for tool in (await session.list_tools()).tools}
+        assert names <= set(tools)
+        create_schema = tools[Capability.REPORTS_TYPES_CREATE.value].input_schema
+        assert "idempotency_key" not in json.dumps(create_schema)
+        first = await session.call_tool(
+            Capability.REPORTS_TYPES_CREATE.value, remote_arguments(definition)
+        )
+        again = await session.call_tool(
+            Capability.REPORTS_TYPES_CREATE.value, remote_arguments(definition)
+        )
+        changed = await session.call_tool(
+            Capability.REPORTS_TYPES_CREATE.value,
+            remote_arguments({**definition, "description": "Changed."}),
+        )
+        listed = await session.call_tool(
+            Capability.REPORTS_TYPES_LIST.value, remote_arguments({"stage": "reporter"})
+        )
+    assert first.is_error is False and again.is_error is False and listed.is_error is False
+    created = json.loads(first.content[0].text)["result"]
+    replayed = json.loads(again.content[0].text)["result"]
+    assert (created["created"], created["replayed"]) == (True, False)
+    assert (replayed["created"], replayed["replayed"]) == (False, True)
+    assert changed.is_error is True
+    refusal = json.loads(changed.content[0].text)["error"]
+    assert (refusal["code"], refusal["safe_details"]) == ("conflict", ["artifact_kind"])
+    report_types = json.loads(listed.content[0].text)["result"]["report_types"]
+    assert [(row["artifact_kind"], row["origin"]) for row in report_types] == [
+        ("focus_report", "builtin"),
+        ("remote_weekly_digest", "client"),
+    ]
+
+
+@pytest.mark.anyio
 async def test_remote_report_authoring_completes_without_a_caller_idempotency_key(
     scene: Scene,
 ) -> None:
@@ -505,6 +581,7 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.REPORTS_BEGIN_CYCLE,
         Capability.REPORTS_COMMIT,
         Capability.REPORTS_RECORD_RUN_STATE,
+        Capability.REPORTS_TYPES_CREATE,
         Capability.RELATIONSHIP_MEMORY_CREATE,
         Capability.RELATIONSHIP_MEMORY_REVISE,
         Capability.RELATIONSHIP_MEMORY_ARCHIVE,

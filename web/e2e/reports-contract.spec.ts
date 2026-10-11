@@ -120,7 +120,9 @@ test("BFF report reads keep structured_content and resolve_set members honest", 
     `/api/intelligence/readiness?cycleRunId=${encodeURIComponent(item!.cycle_run_id)}&setId=morning_brief_inputs`,
   );
   expect(readiness.status).toBe(200);
-  expect(readiness.body.result?.aggregate).toBe("BLOCKED");
+  // `morning_brief_inputs` is never BLOCKED: missing Reporters degrade it and
+  // are named in `missing_focus_areas`.
+  expect(readiness.body.result?.aggregate).toBe("DEGRADED");
   const members = readiness.body.result?.members ?? [];
   expect(members.length).toBeGreaterThan(1);
   expect(members.every((member) => typeof member.member_id === "string")).toBe(true);

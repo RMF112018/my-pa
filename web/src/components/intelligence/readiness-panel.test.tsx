@@ -25,17 +25,25 @@ function member(
   };
 }
 
+/**
+ * `morning_brief_inputs` is never BLOCKED and its members are optional, so a
+ * BLOCKED fixture with required members names `collectors`, the set that still
+ * blocks on every member.
+ */
 function result(
   aggregate: ReportsResolveSetResult["aggregate"],
   members: ReportsResolveSetResult["members"],
+  set_id = "morning_brief_inputs",
 ): ReportsResolveSetResult {
   return {
     cycle_run_id: "micr_aaaaaaaa11111111",
     cycle_id: "morning_intelligence",
     business_date: "2026-08-20",
-    set_id: "morning_brief_inputs",
+    set_id,
     aggregate,
     members,
+    missing_focus_areas: [],
+    partial_focus_areas: [],
   };
 }
 
@@ -84,7 +92,11 @@ describe("ReadinessPanel", () => {
         cycleRunId="micr_aaaaaaaa11111111"
         answer={{
           kind: "resolved",
-          result: result("BLOCKED", [member("communications", "READY"), member("people", "MISSING")]),
+          result: result(
+            "BLOCKED",
+            [member("communications", "READY"), member("people", "MISSING")],
+            "collectors",
+          ),
         }}
       />,
     );
@@ -94,11 +106,38 @@ describe("ReadinessPanel", () => {
     expect(screen.queryByTestId("intelligence-readiness-members-none")).toBeNull();
   });
 
+  it("names the Daily Briefing gaps instead of counting zero required members", () => {
+    render(
+      <ReadinessPanel
+        cycleRunId="micr_aaaaaaaa11111111"
+        answer={{
+          kind: "resolved",
+          result: {
+            ...result("DEGRADED", [
+              member("communications", "READY", false),
+              member("people", "MISSING", false),
+              member("projects", "MISSING", false),
+              member("research", "PARTIAL", false),
+            ]),
+            missing_focus_areas: ["people", "projects"],
+            partial_focus_areas: ["research"],
+          },
+        }}
+      />,
+    );
+    const partial = screen.getByTestId("intelligence-readiness-partial");
+    expect(partial).toHaveAttribute("role", "status");
+    expect(partial.textContent).toBe(
+      "Coverage is partial: Daily Briefing will publish as partial — missing: people, projects; partial: research.",
+    );
+    expect(partial.textContent).not.toMatch(/required member/);
+  });
+
   it("does not treat an empty member list as specialists all present", () => {
     render(
       <ReadinessPanel
         cycleRunId="micr_aaaaaaaa11111111"
-        answer={{ kind: "resolved", result: result("BLOCKED", []) }}
+        answer={{ kind: "resolved", result: result("DEGRADED", []) }}
       />,
     );
     expect(screen.getByTestId("intelligence-readiness-members-none").textContent).toMatch(

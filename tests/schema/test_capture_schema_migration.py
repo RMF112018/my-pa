@@ -28,7 +28,7 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with one hundred and ninety capabilities and
+emits what it emitted on the day it merged, with one hundred and ninety-two capabilities and
 fifty-two purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
@@ -318,6 +318,10 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "reports.record_run_state",
         "reports.resolve_set",
         "reports.search",
+        # The report type registry. `a591b81f10a2` is the forward `ALTER` that
+        # admits the two.
+        "reports.types.create",
+        "reports.types.list",
         # WP-RI-05. `c1a7e4b93d58` is the forward `ALTER` that admits the five.
         "entities.search",
         "entities.get",
@@ -1245,6 +1249,9 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             "intelligence_commit_receipts_are_append_only",
             "intelligence_pipeline_dependencies_are_append_only",
             "intelligence_provenance_refs_are_append_only",
+            # The report type registry's rows are immutable on the plane's own
+            # append-only function.
+            "intelligence_report_types_are_append_only",
             # The Relationship Memory plane's two append-only triggers, named for
             # the same reason as the report plane's above.
             "relationship_memory_versions_are_append_only",

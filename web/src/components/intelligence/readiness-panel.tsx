@@ -4,7 +4,11 @@ import { EpistemicLabel, type EpistemicRole } from "@/components/ui/epistemic-la
 import { SurfaceState } from "@/components/ui/surface-state";
 import type { ErrorEnvelope } from "@/contracts/envelope";
 import type { ReportsResolveSetResult } from "@/lib/api/decode/capabilities/reports.resolve_set";
-import { MORNING_BRIEF_SET_ID, nonReadyRequiredCount } from "@/components/intelligence/cycle-selection";
+import {
+  briefingGapCopy,
+  MORNING_BRIEF_SET_ID,
+  nonReadyRequiredCount,
+} from "@/components/intelligence/cycle-selection";
 import {
   diagnosticError,
 } from "@/lib/diagnostics/presentation";
@@ -93,6 +97,7 @@ export function ReadinessPanel({
 
   const result = answer.result;
   const missingRequired = nonReadyRequiredCount(result.members);
+  const gaps = briefingGapCopy(result);
   const aggregateTone = AGGREGATE_TONE[result.aggregate] ?? "neutral";
 
   return (
@@ -116,8 +121,10 @@ export function ReadinessPanel({
         </p>
         {result.aggregate !== "READY" || missingRequired > 0 ? (
           <p data-testid="intelligence-readiness-partial" className="mt-2 text-sm" role="status">
-            Coverage is partial: {missingRequired} required member
-            {missingRequired === 1 ? " is" : "s are"} not READY.
+            Coverage is partial:{" "}
+            {gaps
+              ? `${gaps}.`
+              : `${missingRequired} required member${missingRequired === 1 ? " is" : "s are"} not READY.`}
           </p>
         ) : (
           <p data-testid="intelligence-readiness-ready" className="mt-2 text-sm" role="status">

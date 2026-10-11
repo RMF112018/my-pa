@@ -27,11 +27,18 @@ from my_pa.contracts.v1.disclosure import (
     Trust,
 )
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
-from my_pa.contracts.v1.errors import ErrorCode, ProblemDetail, RetryGuidance, retry_guidance_for
+from my_pa.contracts.v1.errors import (
+    AllowedValues,
+    ErrorCode,
+    ProblemDetail,
+    RetryGuidance,
+    retry_guidance_for,
+)
 from my_pa.contracts.v1.status import SourceStatusState
 
 __all__ = [
     "CONTRACT_VERSION",
+    "AllowedValues",
     "Availability",
     "CapabilityManifest",
     "CapabilityStatus",

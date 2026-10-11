@@ -19,8 +19,10 @@ const RESULT: ReportsResolveSetResult = {
   cycle_id: "morning_intelligence",
   business_date: "2026-08-20",
   set_id: "morning_brief_inputs",
-  aggregate: "BLOCKED",
+  aggregate: "DEGRADED",
   members: [],
+  missing_focus_areas: [],
+  partial_focus_areas: [],
 };
 
 describe("readinessAnswerFromOutcome", () => {
@@ -33,7 +35,7 @@ describe("readinessAnswerFromOutcome", () => {
     const answer = readinessAnswerFromOutcome("intelligence:reports.resolve_set", outcome);
     expect(answer.kind).toBe("resolved");
     if (answer.kind === "resolved") {
-      expect(answer.result.aggregate).toBe("BLOCKED");
+      expect(answer.result.aggregate).toBe("DEGRADED");
       expect(answer.result.members).toEqual([]);
       expect(answer.result.business_date).toBe("2026-08-20");
     }

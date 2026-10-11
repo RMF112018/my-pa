@@ -134,7 +134,7 @@ def test_tools_list_publishes_exactly_the_local_capability_set(
         for capability in HANDLER_CAPABILITIES
         if capability not in _AUTHENTICATED_CLIENT_CAPABILITIES
     ]
-    assert len(listed.tools) == 185
+    assert len(listed.tools) == 187
     assert all(tool.description for tool in listed.tools), "a tool has no description"
 
 
@@ -143,7 +143,7 @@ def test_handler_unwired_capabilities_publish_no_mcp_tools() -> None:
     assert {tool.name for tool in TOOLS} == {
         capability.value for capability in HANDLER_CAPABILITIES
     }
-    assert len(TOOLS) == 190
+    assert len(TOOLS) == 192
     assert not {capability.value for capability in HANDLER_UNWIRED_CAPABILITIES} & {
         tool.name for tool in TOOLS
     }
@@ -199,6 +199,36 @@ def test_list_tasks_publishes_an_exact_calendar_date_schema() -> None:
         "format": "date",
         "pattern": r"^\d{4}-\d{2}-\d{2}$",
     }
+
+
+def test_every_report_kind_field_publishes_the_token_pattern_not_the_builtin_enum() -> None:
+    """R2: a kind is a built-in or one the caller registered, so no enum can list it.
+
+    Every command with an `artifact_kind` publishes the lower_snake token pattern,
+    points the caller at `reports.types.list`, and never the five built-ins as
+    a closed `enum` -- which would tell a model its own registered kinds are
+    invalid.
+    """
+    with_kind = [
+        command
+        for command in Command.__value__.__args__
+        if "artifact_kind" in payload_schema_for(command)["properties"]
+    ]
+    assert {command.capability for command in with_kind} == {
+        Capability.REPORTS_COMMIT,
+        Capability.REPORTS_RECORD_RUN_STATE,
+        Capability.REPORTS_LATEST,
+        Capability.REPORTS_LIST,
+        Capability.REPORTS_SEARCH,
+        Capability.REPORTS_TYPES_CREATE,
+    }
+    for command in with_kind:
+        kind = payload_schema_for(command)["properties"]["artifact_kind"]
+        assert kind["type"] == "string", command.__name__
+        assert kind["pattern"] == "^[a-z][a-z0-9_]{0,63}$", command.__name__
+        assert "enum" not in kind, command.__name__
+        if command.capability is not Capability.REPORTS_TYPES_CREATE:
+            assert "reports.types.list" in kind["description"], command.__name__
 
 
 def test_every_command_field_has_a_described_json_type() -> None:

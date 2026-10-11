@@ -89,6 +89,7 @@ from my_pa.application.commands import (
     CreateProject,
     CreatePublishedConstraint,
     CreateRelationshipMemory,
+    CreateReportType,
     CreateSituation,
     CreateTask,
     CreateTaskComment,
@@ -147,6 +148,7 @@ from my_pa.application.commands import (
     ListProjects,
     ListRecordEvents,
     ListRelationshipMemories,
+    ListReportTypes,
     ListReviewCases,
     ListSituations,
     ListSources,
@@ -524,6 +526,9 @@ def _requested_scope(
             | ListIntelligenceArtifacts()
             | SearchIntelligenceArtifacts()
             | ResolveIntelligenceSet()
+            # The report type registry is the acting Principal's own rows.
+            | CreateReportType()
+            | ListReportTypes()
             # The entity plane names a person, not a source, for the reason
             # `domain.policy.decision._SCOPELESS` states beside the same five.
             | SearchEntities()

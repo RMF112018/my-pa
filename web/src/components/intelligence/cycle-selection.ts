@@ -95,3 +95,25 @@ export function nonReadyRequiredCount(
 ): number {
   return members.filter((member) => member.required && member.readiness !== "READY").length;
 }
+
+/**
+ * `morning_brief_inputs` has only optional members and is DEGRADED, never
+ * BLOCKED, so a required-member count there is always 0 and says nothing. The
+ * resolver names the Daily Briefing gaps instead; this turns them into copy.
+ * Returns null when no gap is named (every other set, or a complete brief), so
+ * callers keep their required-member copy.
+ */
+export function briefingGapCopy(result: {
+  readonly missing_focus_areas: readonly string[];
+  readonly partial_focus_areas: readonly string[];
+}): string | null {
+  const parts: string[] = [];
+  if (result.missing_focus_areas.length > 0) {
+    parts.push(`missing: ${result.missing_focus_areas.join(", ")}`);
+  }
+  if (result.partial_focus_areas.length > 0) {
+    parts.push(`partial: ${result.partial_focus_areas.join(", ")}`);
+  }
+  if (parts.length === 0) return null;
+  return `Daily Briefing will publish as partial — ${parts.join("; ")}`;
+}

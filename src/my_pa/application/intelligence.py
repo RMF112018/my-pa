@@ -7,6 +7,7 @@ Principal is always the authenticated partition, never a request field.
 from __future__ import annotations
 
 import json
+import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
@@ -26,10 +27,13 @@ from my_pa.domain.intelligence.catalog import (
     CYCLE_MORNING_INTELLIGENCE,
     EXPECTED_FOCUS_AREAS,
     MAX_ARTIFACT_BODY_BYTES,
+    MAX_CLIENT_REPORT_TYPES,
+    MAX_MORNING_BRIEF_DEPENDENCY_COUNT,
     MAX_STRUCTURED_CONTENT_BYTES,
     MIN_SYNTHESIZER_DEPENDENCY_COUNT,
     REQUIRED_DEPENDENCY_COUNT,
     REQUIRED_MEMBERSHIP,
+    STAGE_FOR_KIND,
     ArtifactKind,
     ArtifactState,
     CycleState,
@@ -38,10 +42,12 @@ from my_pa.domain.intelligence.catalog import (
     ProducerRunState,
     ProvenanceRelation,
     ReadinessMemberState,
+    ReportTypeOrigin,
     ResolverAggregateState,
     ResolverSetId,
     SourceLaneId,
     expected_members,
+    parse_artifact_kind,
     validate_stage_coordinates,
 )
 from my_pa.domain.intelligence.errors import (
@@ -62,7 +68,11 @@ from my_pa.domain.intelligence.models import (
     IntelligencePipelineDependency,
     IntelligenceProducerRun,
     IntelligenceProvenanceRef,
+    IntelligenceReportType,
     MutationAdmission,
+    ReportTypeDefinition,
+    ReportTypeInsertion,
+    builtin_report_type_definitions,
     content_digest,
     content_utf8_bytes,
     fingerprint_payload,
@@ -72,12 +82,16 @@ from my_pa.domain.source.registry import issue_identifier
 __all__ = [
     "InMemoryIntelligenceStore",
     "IntelligenceStore",
+    "ReportTypeRegistration",
     "begin_cycle",
     "commit_artifact",
     "latest_artifact",
     "list_artifacts",
     "read_artifact",
     "record_run_state",
+    "register_report_type",
+    "registered_report_types",
+    "require_registered_kind",
     "resolve_set",
     "search_artifacts",
 ]
@@ -126,9 +140,15 @@ class IntelligenceStore(Protocol):
         principal_id: str,
         cycle_run_id: str,
         stage: IntelligenceStage,
+        artifact_kind: str,
         focus_area_id: FocusAreaId | None,
         source_lane: SourceLaneId | None,
-    ) -> IntelligenceArtifact | None: ...
+    ) -> IntelligenceArtifact | None:
+        """The current head of `artifact_kind`'s own lineage at the coordinate.
+
+        Heads are per kind: a client kind at a built-in stage has its own head
+        and never displaces the built-in one.
+        """
 
     def list_artifacts(
         self,
@@ -136,7 +156,7 @@ class IntelligenceStore(Protocol):
         *,
         cycle_run_id: str | None,
         stage: IntelligenceStage | None,
-        artifact_kind: ArtifactKind | None,
+        artifact_kind: str | None,
         focus_area_id: FocusAreaId | None,
         source_lane: SourceLaneId | None,
         report_date: date | None,
@@ -144,7 +164,13 @@ class IntelligenceStore(Protocol):
         limit: int,
         after_committed_at: datetime | None = None,
         after_artifact_id: str | None = None,
-    ) -> tuple[IntelligenceArtifact, ...]: ...
+        builtin_only: bool = False,
+    ) -> tuple[IntelligenceArtifact, ...]:
+        """Committed artifacts, newest first.
+
+        `builtin_only` keeps only the five built-in kinds (`ArtifactKind`), so a
+        kindless selection never answers with a Principal's client kind.
+        """
 
     def search_artifacts(
         self,
@@ -153,7 +179,7 @@ class IntelligenceStore(Protocol):
         *,
         cycle_run_id: str | None,
         stage: IntelligenceStage | None,
-        artifact_kind: ArtifactKind | None,
+        artifact_kind: str | None,
         focus_area_id: FocusAreaId | None,
         source_lane: SourceLaneId | None,
         limit: int,
@@ -164,9 +190,45 @@ class IntelligenceStore(Protocol):
         principal_id: str,
         cycle_run_id: str,
         stage: IntelligenceStage,
+        artifact_kind: str,
         focus_area_id: FocusAreaId | None,
         source_lane: SourceLaneId | None,
-    ) -> IntelligenceProducerRun | None: ...
+    ) -> IntelligenceProducerRun | None:
+        """The latest run of `artifact_kind` at the coordinate."""
+
+    def list_report_types(
+        self, principal_id: str, *, stage: IntelligenceStage | None = None
+    ) -> tuple[IntelligenceReportType, ...]:
+        """The Principal's stored report types, ordered by (stage, kind). Stored rows only."""
+
+    def get_report_type(
+        self, principal_id: str, artifact_kind: str
+    ) -> IntelligenceReportType | None: ...
+
+    def insert_report_type(
+        self, principal_id: str, definition: ReportTypeDefinition, *, created_at: datetime
+    ) -> ReportTypeInsertion:
+        """Insert unless the kind is registered; an existing row is returned unchanged."""
+
+    def ensure_builtin_report_types(self, principal_id: str, *, created_at: datetime) -> int:
+        """Insert any missing built-in row; return how many were inserted."""
+
+    def register_client_report_type(
+        self,
+        principal_id: str,
+        definition: ReportTypeDefinition,
+        *,
+        created_at: datetime,
+        limit: int,
+    ) -> ReportTypeInsertion | None:
+        """Insert a client kind under a per-Principal registration lock.
+
+        The lookup, the count of client rows and the insert run under one
+        lock held to the end of the transaction, so concurrent registrations
+        for a Principal serialize and the cap is never exceeded. An existing
+        kind is returned unchanged (``inserted`` False) whatever the count;
+        ``None`` means the kind is new and ``limit`` client kinds already exist.
+        """
 
 
 def _now(at: datetime) -> datetime:
@@ -221,6 +283,195 @@ def _translate(error: Exception) -> None:
     if isinstance(error, IntelligenceConflictError):
         raise ConflictError(SafeDetail.CYCLE_RUN_ID) from None
     raise error
+
+
+# ---- the report type registry ------------------------------------------------
+#
+# Built-in kinds are authoritative in code and immutable; a Principal's client
+# kinds are its own stored rows. A Principal with no stored row still has every
+# built-in. Every refusal that lists kinds lists only the acting Principal's own,
+# so one Principal's registry never reaches another's error.
+
+#: Pipeline order, the first key of every registry listing.
+#: The five built-in kinds' values: what a kindless `reports.latest` considers.
+_BUILTIN_KIND_VALUES: Final = frozenset(kind.value for kind in ArtifactKind)
+
+_STAGE_ORDER: Final[Mapping[IntelligenceStage, int]] = {
+    stage: position for position, stage in enumerate(IntelligenceStage)
+}
+
+
+@dataclass(frozen=True, slots=True)
+class ReportTypeRegistration:
+    """The outcome of `reports.types.create`: the stored definition and how it got there."""
+
+    definition: ReportTypeDefinition
+    created: bool
+    replayed: bool
+
+
+def registered_report_types(
+    store: IntelligenceStore, *, principal_id: str, stage: IntelligenceStage | None = None
+) -> tuple[ReportTypeDefinition, ...]:
+    """The built-in kinds merged with the Principal's own client kinds.
+
+    Ordered by stage in pipeline order, then the built-in kind before the
+    client kinds, then by kind. Stored built-in rows are ignored: the code's
+    definitions are the authoritative ones.
+    """
+    merged = [
+        definition
+        for definition in builtin_report_type_definitions()
+        if stage is None or definition.stage is stage
+    ]
+    merged.extend(
+        row.definition
+        for row in store.list_report_types(principal_id, stage=stage)
+        if row.definition.origin is ReportTypeOrigin.CLIENT
+    )
+    merged.sort(
+        key=lambda definition: (
+            _STAGE_ORDER[definition.stage],
+            definition.origin is not ReportTypeOrigin.BUILTIN,
+            str(definition.artifact_kind),
+        )
+    )
+    return tuple(merged)
+
+
+def _kind_refusal(
+    store: IntelligenceStore,
+    *,
+    principal_id: str,
+    stage: IntelligenceStage | None,
+    mismatch: bool,
+) -> InvalidRequestError:
+    """`invalid_request` on `artifact_kind`, listing the Principal's kinds for `stage`.
+
+    A kind registered at another stage also names `stage`: the pair disagrees,
+    and `stage` is the token that refusal carried before kinds were registered.
+    """
+    kinds = tuple(
+        str(definition.artifact_kind)
+        for definition in registered_report_types(store, principal_id=principal_id, stage=stage)
+    )
+    details = (
+        (SafeDetail.STAGE, SafeDetail.ARTIFACT_KIND) if mismatch else (SafeDetail.ARTIFACT_KIND,)
+    )
+    return InvalidRequestError(*details, allowed_values={SafeDetail.ARTIFACT_KIND: kinds})
+
+
+def _registered_stage(
+    store: IntelligenceStore, *, principal_id: str, artifact_kind: str
+) -> tuple[str, IntelligenceStage] | None:
+    """The validated kind and the stage it is registered at, or None when unregistered."""
+    try:
+        kind = parse_artifact_kind(artifact_kind)
+    except ValueError:
+        return None
+    if isinstance(kind, ArtifactKind):
+        return kind, STAGE_FOR_KIND[kind]
+    row = store.get_report_type(principal_id, kind)
+    if row is None or row.definition.origin is not ReportTypeOrigin.CLIENT:
+        return None
+    return kind, row.definition.stage
+
+
+def require_registered_kind(
+    store: IntelligenceStore,
+    *,
+    principal_id: str,
+    artifact_kind: str,
+    stage: IntelligenceStage,
+) -> str:
+    """`artifact_kind` when the Principal has it registered at `stage`, else a refusal.
+
+    An unregistered kind lists the kinds registered at `stage`; a kind
+    registered at another stage lists the same and also names `stage`. A
+    built-in kind is registered for every Principal at its own stage.
+    """
+    registered = _registered_stage(store, principal_id=principal_id, artifact_kind=artifact_kind)
+    if registered is None:
+        raise _kind_refusal(store, principal_id=principal_id, stage=stage, mismatch=False)
+    kind, registered_at = registered
+    if registered_at is not stage:
+        raise _kind_refusal(store, principal_id=principal_id, stage=stage, mismatch=True)
+    return kind
+
+
+def _registered_filter(
+    store: IntelligenceStore,
+    *,
+    principal_id: str,
+    artifact_kind: str | None,
+    stage: IntelligenceStage | None,
+) -> str | None:
+    """A read filter's kind, refused when the Principal has no such kind.
+
+    The listing is narrowed to `stage` when the filter names one. A registered
+    kind at another stage is not refused: the filters simply match nothing,
+    exactly as two disagreeing built-in filters always have.
+    """
+    if artifact_kind is None:
+        return None
+    registered = _registered_stage(store, principal_id=principal_id, artifact_kind=artifact_kind)
+    if registered is None:
+        raise _kind_refusal(store, principal_id=principal_id, stage=stage, mismatch=False)
+    return registered[0]
+
+
+def register_report_type(
+    store: IntelligenceStore,
+    *,
+    principal_id: str,
+    artifact_kind: str,
+    stage: IntelligenceStage,
+    description: str,
+    display_name: str | None,
+    at: datetime,
+) -> ReportTypeRegistration:
+    """Register one client kind for the Principal, or replay an identical one.
+
+    Insert-only. A built-in kind, or a kind already registered with a different
+    definition, is a `conflict` on `artifact_kind`; so is a registry already
+    holding `MAX_CLIENT_REPORT_TYPES` client kinds (with `max_items`). The
+    Principal's built-in rows are ensured first, so the stored registry always
+    carries them beside its client rows.
+    """
+    try:
+        kind = parse_artifact_kind(artifact_kind)
+    except ValueError:
+        raise InvalidRequestError(SafeDetail.ARTIFACT_KIND) from None
+    if isinstance(kind, ArtifactKind):
+        raise ConflictError(SafeDetail.ARTIFACT_KIND)
+    try:
+        definition = ReportTypeDefinition(
+            artifact_kind=kind,
+            stage=stage,
+            description=description,
+            origin=ReportTypeOrigin.CLIENT,
+            display_name=display_name,
+        )
+    except ValueError:
+        raise InvalidRequestError(SafeDetail.PAYLOAD) from None
+    when = _now(at)
+    store.ensure_builtin_report_types(principal_id, created_at=when)
+    # Check-then-insert under the store's per-Principal registration lock, so
+    # two concurrent registrations can never both pass the cap.
+    insertion = store.register_client_report_type(
+        principal_id, definition, created_at=when, limit=MAX_CLIENT_REPORT_TYPES
+    )
+    if insertion is None:
+        raise ConflictError(SafeDetail.ARTIFACT_KIND, SafeDetail.MAX_ITEMS)
+    if insertion.inserted:
+        return ReportTypeRegistration(definition=definition, created=True, replayed=False)
+    existing = insertion.report_type
+    if (
+        existing.definition.origin is not ReportTypeOrigin.CLIENT
+        or existing.definition_fingerprint != definition.fingerprint
+    ):
+        raise ConflictError(SafeDetail.ARTIFACT_KIND)
+    return ReportTypeRegistration(definition=existing.definition, created=False, replayed=True)
 
 
 def begin_cycle(
@@ -354,10 +605,12 @@ def _upstream_matches_current_head(
     for dependency in artifact.dependencies:
         if dependency.expected_stage is None:
             return False
+        # Every dependency is a built-in kind, so its role's head is the built-in one.
         current = store.current_head(
             principal_id,
             cycle_run_id,
             dependency.expected_stage,
+            ARTIFACT_KIND_FOR_STAGE[dependency.expected_stage],
             dependency.expected_focus_area_id,
             dependency.expected_source_lane,
         )
@@ -374,22 +627,6 @@ def _upstream_matches_current_head(
         ):
             return False
     return True
-
-
-def _require_current_upstream_lineage(
-    store: IntelligenceStore,
-    *,
-    principal_id: str,
-    cycle_run_id: str,
-    artifact: IntelligenceArtifact,
-) -> None:
-    if not _upstream_matches_current_head(
-        store,
-        principal_id=principal_id,
-        cycle_run_id=cycle_run_id,
-        artifact=artifact,
-    ):
-        raise IntelligenceStaleReferenceError()
 
 
 def _member_lineage_is_stale(
@@ -430,10 +667,10 @@ _ELIGIBLE_STATES: Final = frozenset({ReadinessMemberState.READY, ReadinessMember
 class Eligibility:
     """Whether one upstream artifact may be consumed, and why.
 
-    The single answer both ``reports.commit`` (Synthesizer and Reporter
-    dependencies) and ``reports.resolve_set`` (``research_swarm``,
-    ``synthesizer_inputs``, ``reporter_input``) use, so the set the resolver
-    calls eligible is exactly the set a commit accepts.
+    The single answer both ``reports.commit`` (Synthesizer, Reporter and
+    Morning Brief dependencies) and ``reports.resolve_set`` (``research_swarm``,
+    ``synthesizer_inputs``, ``reporter_input``, ``morning_brief_inputs``) use,
+    so the set the resolver calls eligible is exactly the set a commit accepts.
     """
 
     state: ReadinessMemberState
@@ -464,7 +701,7 @@ def artifact_eligibility(
     cycle_run_id: str,
     artifact: IntelligenceArtifact,
 ) -> Eligibility:
-    """The shared eligibility predicate for one existing Researcher or Synthesizer.
+    """The shared eligibility predicate for one existing Researcher, Synthesizer or Reporter.
 
     Order matters only for the reason reported, never for the verdict:
     superseded, then not its coordinate's current head, then a moved upstream
@@ -477,6 +714,7 @@ def artifact_eligibility(
         principal_id,
         cycle_run_id,
         artifact.stage,
+        artifact.artifact_kind,
         artifact.focus_area_id,
         artifact.source_lane,
     )
@@ -487,6 +725,7 @@ def artifact_eligibility(
             principal_id,
             cycle_run_id,
             IntelligenceStage.COLLECTOR,
+            ArtifactKind.COLLECTOR_CANDIDATES,
             artifact.focus_area_id,
             None,
         )
@@ -514,14 +753,18 @@ def coordinate_eligibility(
     focus_area_id: FocusAreaId | None,
     source_lane: SourceLaneId | None,
 ) -> Eligibility:
-    """The shared predicate at a coordinate: its current head, or why there is none.
+    """The shared predicate at a coordinate: its built-in head, or why there is none.
 
-    A coordinate with no head is never eligible. Its latest run says whether it
-    is ``FAILED`` or ``MISSING``; a ``partial`` run with no artifact is
-    ``MISSING`` too, because there is nothing to consume.
+    Only the stage's built-in kind is ever consumed: a client kind registered at
+    the stage is a standalone report with its own lineage, so neither its head
+    nor its runs are consulted here. A coordinate with no head is never
+    eligible. Its latest run says whether it is ``FAILED`` or ``MISSING``; a
+    ``partial`` run with no artifact is ``MISSING`` too, because there is
+    nothing to consume.
     """
-    run = store.failed_run(principal_id, cycle_run_id, stage, focus_area_id, source_lane)
-    head = store.current_head(principal_id, cycle_run_id, stage, focus_area_id, source_lane)
+    kind = ARTIFACT_KIND_FOR_STAGE[stage]
+    run = store.failed_run(principal_id, cycle_run_id, stage, kind, focus_area_id, source_lane)
+    head = store.current_head(principal_id, cycle_run_id, stage, kind, focus_area_id, source_lane)
     if head is None:
         if run is not None and run.state is ProducerRunState.FAILED:
             return Eligibility(ReadinessMemberState.FAILED, REASON_FAILED, None, run)
@@ -534,6 +777,43 @@ def coordinate_eligibility(
         store, principal_id=principal_id, cycle_run_id=cycle_run_id, artifact=head
     )
     return replace(verdict, run=run)
+
+
+@dataclass(frozen=True, slots=True)
+class MorningBriefGaps:
+    """Which expected focus areas a Morning Brief cannot treat as complete.
+
+    ``missing_focus_areas`` have no eligible Reporter (absent, failed, stale,
+    superseded); ``partial_focus_areas`` have an eligible but partial one. Both
+    are sorted focus-area ids, so the closed vocabulary is all they disclose.
+    """
+
+    missing_focus_areas: tuple[FocusAreaId, ...]
+    partial_focus_areas: tuple[FocusAreaId, ...]
+
+    @property
+    def complete(self) -> bool:
+        return not self.missing_focus_areas and not self.partial_focus_areas
+
+
+def morning_brief_gaps(verdicts: Mapping[FocusAreaId, Eligibility]) -> MorningBriefGaps:
+    """The one gap rule both the brief commit and ``morning_brief_inputs`` apply.
+
+    ``verdicts`` maps a focus area to its Reporter's shared-predicate verdict;
+    an expected area with no verdict, or an ineligible one, is missing.
+    """
+    missing: list[FocusAreaId] = []
+    partial: list[FocusAreaId] = []
+    for area in EXPECTED_FOCUS_AREAS:
+        verdict = verdicts.get(area)
+        if verdict is None or not verdict.eligible:
+            missing.append(area)
+        elif verdict.state is ReadinessMemberState.PARTIAL:
+            partial.append(area)
+    return MorningBriefGaps(
+        missing_focus_areas=tuple(sorted(missing, key=lambda area: area.value)),
+        partial_focus_areas=tuple(sorted(partial, key=lambda area: area.value)),
+    )
 
 
 def _dependency_error(
@@ -573,12 +853,22 @@ def _validate_dependencies(
 
     Synthesizer: one or more Researcher heads of this cycle and focus, at most
     one per lane, each eligible under ``artifact_eligibility``. Reporter:
-    exactly the eligible Synthesizer head. Collector, Researcher, and Morning
-    Brief keep their fixed counts.
+    exactly the eligible Synthesizer head. Morning Brief: zero to six eligible
+    Reporter heads of distinct expected focus areas; any uncovered or partial
+    area counts as partial input. Collector and Researcher keep their fixed
+    counts.
+
+    The rules are the stage's, whatever kind is committed: a client kind at a
+    stage takes exactly the built-in kind's upstream stage, count and
+    never-falsely-final rules. Every cited dependency must be the built-in kind
+    of its stage; a client-kind artifact is never consumed (bare refusal).
     """
     if stage is IntelligenceStage.SYNTHESIZER:
         if len(dependency_ids) < MIN_SYNTHESIZER_DEPENDENCY_COUNT:
             raise IntelligenceDependencyError(DependencyRejection.COUNT)
+    elif stage is IntelligenceStage.MORNING_BRIEF:
+        if len(dependency_ids) > MAX_MORNING_BRIEF_DEPENDENCY_COUNT:
+            raise _dependency_error(stage, DependencyRejection.COUNT)
     elif len(dependency_ids) != REQUIRED_DEPENDENCY_COUNT[stage]:
         raise _dependency_error(stage, DependencyRejection.COUNT)
     upstreams: list[IntelligenceArtifact] = []
@@ -590,6 +880,11 @@ def _validate_dependencies(
             raise _dependency_error(stage, DependencyRejection.MISSING)
         if artifact.cycle_run_id != cycle.cycle_run_id:
             raise _dependency_error(stage, DependencyRejection.WRONG_CYCLE)
+        # Only built-in kinds are ever consumed. A client kind is a standalone
+        # report: citing one, at any stage and for any committed kind, is the
+        # bare dependency refusal.
+        if artifact.artifact_kind != ARTIFACT_KIND_FOR_STAGE[artifact.stage]:
+            raise IntelligenceDependencyError()
         upstreams.append(artifact)
     partial_input = False
     if stage is IntelligenceStage.RESEARCHER:
@@ -599,7 +894,12 @@ def _validate_dependencies(
         if collector.focus_area_id != focus_area_id:
             raise IntelligenceDependencyError(DependencyRejection.WRONG_FOCUS)
         current = store.current_head(
-            principal_id, cycle.cycle_run_id, IntelligenceStage.COLLECTOR, focus_area_id, None
+            principal_id,
+            cycle.cycle_run_id,
+            IntelligenceStage.COLLECTOR,
+            ArtifactKind.COLLECTOR_CANDIDATES,
+            focus_area_id,
+            None,
         )
         if current is None or current.artifact_id != collector.artifact_id:
             raise IntelligenceStaleReferenceError(DependencyRejection.STALE)
@@ -667,30 +967,23 @@ def _validate_dependencies(
         )
     elif stage is IntelligenceStage.MORNING_BRIEF:
         areas = [item.focus_area_id for item in upstreams]
-        if set(areas) != set(EXPECTED_FOCUS_AREAS) or len(areas) != 6:
+        if len(set(areas)) != len(areas) or not set(areas) <= set(EXPECTED_FOCUS_AREAS):
             raise IntelligenceDependencyError()
+        verdicts: dict[FocusAreaId, Eligibility] = {}
         for item in upstreams:
-            if item.stage is not IntelligenceStage.REPORTER:
+            if item.stage is not IntelligenceStage.REPORTER or item.focus_area_id is None:
                 raise IntelligenceDependencyError()
-            if not item.is_current:
-                raise IntelligenceStaleReferenceError()
-            current = store.current_head(
-                principal_id,
-                cycle.cycle_run_id,
-                IntelligenceStage.REPORTER,
-                item.focus_area_id,
-                None,
-            )
-            if current is None or current.artifact_id != item.artifact_id:
-                raise IntelligenceStaleReferenceError()
-            if item.focus_area_id is None:
-                raise IntelligenceDependencyError()
-            _require_current_upstream_lineage(
+            # Superseded, not the current head, or a moved upstream: refused
+            # with the brief's original bare stale token, never downgraded.
+            verdict = artifact_eligibility(
                 store,
                 principal_id=principal_id,
                 cycle_run_id=cycle.cycle_run_id,
                 artifact=item,
             )
+            if not verdict.eligible:
+                raise IntelligenceStaleReferenceError()
+            verdicts[item.focus_area_id] = verdict
             deps.append(
                 IntelligencePipelineDependency(
                     upstream_artifact_id=item.artifact_id,
@@ -699,6 +992,7 @@ def _validate_dependencies(
                     expected_focus_area_id=item.focus_area_id,
                 )
             )
+        partial_input = not morning_brief_gaps(verdicts).complete
     return tuple(deps), partial_input
 
 
@@ -708,7 +1002,7 @@ def commit_artifact(
     principal_id: str,
     cycle_run_id: str,
     stage: IntelligenceStage,
-    artifact_kind: ArtifactKind,
+    artifact_kind: str,
     focus_area_id: FocusAreaId | None,
     source_lane: SourceLaneId | None,
     producer_task_id: str,
@@ -734,6 +1028,11 @@ def commit_artifact(
 ) -> MutationAdmission:
     """Atomically commit a producer run and immutable artifact."""
     try:
+        # First, as before, but inside the translated block: a registry lookup
+        # fault is handled exactly like every other store fault of this commit.
+        artifact_kind = require_registered_kind(
+            store, principal_id=principal_id, artifact_kind=artifact_kind, stage=stage
+        )
         try:
             validate_stage_coordinates(
                 stage=stage,
@@ -743,7 +1042,10 @@ def commit_artifact(
             )
         except ValueError as error:
             raise IntelligenceCoordinateError() from error
-        if artifact_kind is not ARTIFACT_KIND_FOR_STAGE[stage]:
+        if (
+            isinstance(artifact_kind, ArtifactKind)
+            and artifact_kind is not ARTIFACT_KIND_FOR_STAGE[stage]
+        ):
             raise IntelligenceCoordinateError()
         if artifact_state not in {ArtifactState.PARTIAL, ArtifactState.FINAL}:
             raise IntelligenceCoordinateError()
@@ -763,7 +1065,7 @@ def commit_artifact(
                 "kind": "artifact_commit",
                 "cycle_run_id": cycle_run_id,
                 "stage": stage.value,
-                "artifact_kind": artifact_kind.value,
+                "artifact_kind": str(artifact_kind),
                 "focus_area_id": None if focus_area_id is None else focus_area_id.value,
                 "source_lane": None if source_lane is None else source_lane.value,
                 "producer_task_id": producer_task_id,
@@ -810,9 +1112,13 @@ def commit_artifact(
             focus_area_id=focus_area_id,
             dependency_ids=dependency_report_ids,
         )
-        # A Synthesizer or Reporter built over a partial input is itself partial.
-        # A partial claim over all-final inputs stays the producer's choice.
+        # A Synthesizer, Reporter or Morning Brief built over a partial input is
+        # itself partial; for the brief an uncovered expected area is a partial
+        # input too. A partial claim over complete inputs stays the producer's
+        # choice. Never downgraded silently: a `final` claim is refused.
         if partial_input and artifact_state is not ArtifactState.PARTIAL:
+            if stage is IntelligenceStage.MORNING_BRIEF:
+                raise InvalidRequestError(SafeDetail.ARTIFACT_STATE)
             raise IntelligenceDependencyError(DependencyRejection.PARTIAL_INPUT)
         if automation_run_id:
             prior = store.run_for_external(
@@ -820,7 +1126,11 @@ def commit_artifact(
             )
             if prior is not None:
                 raise IntelligenceConflictError()
-        current = store.current_head(principal_id, cycle_run_id, stage, focus_area_id, source_lane)
+        # The head of this kind's own lineage: a client kind never supersedes
+        # (or is superseded by) the built-in kind at its stage.
+        current = store.current_head(
+            principal_id, cycle_run_id, stage, artifact_kind, focus_area_id, source_lane
+        )
         if supersedes_artifact_id is not None and (
             current is None or current.artifact_id != supersedes_artifact_id
         ):
@@ -937,7 +1247,7 @@ def record_run_state(
     principal_id: str,
     cycle_run_id: str,
     stage: IntelligenceStage,
-    artifact_kind: ArtifactKind,
+    artifact_kind: str,
     focus_area_id: FocusAreaId | None,
     source_lane: SourceLaneId | None,
     producer_task_id: str,
@@ -959,6 +1269,11 @@ def record_run_state(
     before that check, so retrying an accepted request still replays.
     """
     try:
+        # First, as before, but inside the translated block: a registry lookup
+        # fault is handled exactly like every other store fault of this commit.
+        artifact_kind = require_registered_kind(
+            store, principal_id=principal_id, artifact_kind=artifact_kind, stage=stage
+        )
         try:
             validate_stage_coordinates(
                 stage=stage,
@@ -973,7 +1288,7 @@ def record_run_state(
                 "kind": "run_state",
                 "cycle_run_id": cycle_run_id,
                 "stage": stage.value,
-                "artifact_kind": artifact_kind.value,
+                "artifact_kind": str(artifact_kind),
                 "focus_area_id": None if focus_area_id is None else focus_area_id.value,
                 "source_lane": None if source_lane is None else source_lane.value,
                 "producer_task_id": producer_task_id,
@@ -999,7 +1314,9 @@ def record_run_state(
         # records its own succeeded run) and may then record `succeeded`; a
         # `succeeded` with nothing committed at this exact coordinate is refused.
         if state is ProducerRunState.SUCCEEDED and (
-            store.current_head(principal_id, cycle_run_id, stage, focus_area_id, source_lane)
+            store.current_head(
+                principal_id, cycle_run_id, stage, artifact_kind, focus_area_id, source_lane
+            )
             is None
         ):
             raise InvalidRequestError(SafeDetail.SELECTOR, SafeDetail.RUN_STATE_WITHOUT_ARTIFACT)
@@ -1074,11 +1391,23 @@ def latest_artifact(
     principal_id: str,
     cycle_run_id: str,
     stage: IntelligenceStage | None,
-    artifact_kind: ArtifactKind | None,
+    artifact_kind: str | None,
     focus_area_id: FocusAreaId | None,
     source_lane: SourceLaneId | None,
     report_date: date | None,
 ) -> IntelligenceArtifact:
+    artifact_kind = _registered_filter(
+        store, principal_id=principal_id, artifact_kind=artifact_kind, stage=stage
+    )
+    if stage is not None and artifact_kind is None:
+        # A stage-only latest is the built-in report of that stage, exactly as
+        # before client kinds: a client kind is a standalone report and never
+        # displaces the built-in head in a read view. Name the kind to read it.
+        artifact_kind = ARTIFACT_KIND_FOR_STAGE[stage].value
+    # Every other kindless latest -- no stage, or only a focus area, source lane
+    # or report date -- also considers the built-in kinds only (operator ruling
+    # N1): a client kind is returned only when the call names it.
+    builtin_only = artifact_kind is None
     if store.get_cycle(principal_id, cycle_run_id) is None:
         raise NotFoundError(SafeDetail.CYCLE_RUN_ID)
     found = store.list_artifacts(
@@ -1091,6 +1420,7 @@ def latest_artifact(
         report_date=report_date,
         include_superseded=False,
         limit=1,
+        builtin_only=builtin_only,
     )
     if not found:
         raise NotFoundError(SafeDetail.ARTIFACT_ID)
@@ -1103,7 +1433,7 @@ def list_artifacts(
     principal_id: str,
     cycle_run_id: str | None,
     stage: IntelligenceStage | None,
-    artifact_kind: ArtifactKind | None,
+    artifact_kind: str | None,
     focus_area_id: FocusAreaId | None,
     source_lane: SourceLaneId | None,
     report_date: date | None,
@@ -1112,6 +1442,9 @@ def list_artifacts(
     after_committed_at: datetime | None = None,
     after_artifact_id: str | None = None,
 ) -> tuple[IntelligenceArtifact, ...]:
+    artifact_kind = _registered_filter(
+        store, principal_id=principal_id, artifact_kind=artifact_kind, stage=stage
+    )
     return store.list_artifacts(
         principal_id,
         cycle_run_id=cycle_run_id,
@@ -1134,11 +1467,14 @@ def search_artifacts(
     query: str,
     cycle_run_id: str | None,
     stage: IntelligenceStage | None,
-    artifact_kind: ArtifactKind | None,
+    artifact_kind: str | None,
     focus_area_id: FocusAreaId | None,
     source_lane: SourceLaneId | None,
     page_size: int,
 ) -> tuple[tuple[IntelligenceArtifact, str], ...]:
+    artifact_kind = _registered_filter(
+        store, principal_id=principal_id, artifact_kind=artifact_kind, stage=stage
+    )
     return store.search_artifacts(
         principal_id,
         query,
@@ -1157,6 +1493,7 @@ _ELIGIBILITY_SETS: Final = frozenset(
         ResolverSetId.RESEARCH_SWARM,
         ResolverSetId.SYNTHESIZER_INPUTS,
         ResolverSetId.REPORTER_INPUT,
+        ResolverSetId.MORNING_BRIEF_INPUTS,
     }
 )
 
@@ -1188,15 +1525,21 @@ def _member_state(
             focus_area_id=focus_area_id,
             source_lane=None,
         )
-    # `collectors` and `morning_brief_inputs`: the original per-member rules.
-    stage = (
-        IntelligenceStage.COLLECTOR
-        if set_id is ResolverSetId.COLLECTORS
-        else IntelligenceStage.REPORTER
-    )
+    if set_id is ResolverSetId.MORNING_BRIEF_INPUTS:
+        return coordinate_eligibility(
+            store,
+            principal_id=principal_id,
+            cycle_run_id=cycle_run_id,
+            stage=IntelligenceStage.REPORTER,
+            focus_area_id=focus_area_id,
+            source_lane=None,
+        )
+    # `collectors`: the original per-member rules.
+    stage = IntelligenceStage.COLLECTOR
     area = focus_area_id
-    current = store.current_head(principal_id, cycle_run_id, stage, area, None)
-    failed = store.failed_run(principal_id, cycle_run_id, stage, area, None)
+    kind = ArtifactKind.COLLECTOR_CANDIDATES
+    current = store.current_head(principal_id, cycle_run_id, stage, kind, area, None)
+    failed = store.failed_run(principal_id, cycle_run_id, stage, kind, area, None)
 
     def legacy(state: ReadinessMemberState, artifact: IntelligenceArtifact | None) -> Eligibility:
         return Eligibility(state, state.value.lower(), artifact, failed)
@@ -1211,20 +1554,6 @@ def _member_state(
         return legacy(ReadinessMemberState.SUPERSEDED, current)
     if current.artifact_state is ArtifactState.PARTIAL:
         return legacy(ReadinessMemberState.PARTIAL, current)
-    if set_id is ResolverSetId.MORNING_BRIEF_INPUTS:
-        reporter = store.current_head(
-            principal_id, cycle_run_id, IntelligenceStage.REPORTER, area, None
-        )
-        if reporter is None or reporter.artifact_id != current.artifact_id:
-            return legacy(ReadinessMemberState.STALE, current)
-        if _member_lineage_is_stale(
-            store,
-            principal_id=principal_id,
-            cycle_run_id=cycle_run_id,
-            focus_area_id=area,
-            artifact=current,
-        ):
-            return legacy(ReadinessMemberState.STALE, current)
     return legacy(ReadinessMemberState.READY, current)
 
 
@@ -1243,8 +1572,12 @@ def resolve_set(
     ``PARTIAL``) are exactly what ``reports.commit`` accepts. Their aggregate is
     ``BLOCKED`` with no eligible member, ``DEGRADED`` when any eligible member is
     partial, and ``READY`` otherwise; an ineligible optional lane is reported
-    and never blocks. ``collectors`` and ``morning_brief_inputs`` keep the
-    every-member-required rule.
+    and never blocks. ``morning_brief_inputs`` uses the same predicate per
+    expected focus area and is never ``BLOCKED``: ``READY`` when every area's
+    Reporter is eligible and final, ``DEGRADED`` otherwise, with the uncovered
+    and partial areas named in ``missing_focus_areas`` and
+    ``partial_focus_areas`` (empty for every other set). ``collectors`` keeps
+    the every-member-required rule.
     """
     cycle = store.get_cycle(principal_id, cycle_run_id)
     if cycle is None:
@@ -1295,7 +1628,19 @@ def resolve_set(
                 "readiness_reason": verdict.reason,
             }
         )
-    if set_id in _ELIGIBILITY_SETS:
+    gaps = MorningBriefGaps(missing_focus_areas=(), partial_focus_areas=())
+    if set_id is ResolverSetId.MORNING_BRIEF_INPUTS:
+        gaps = morning_brief_gaps(
+            {
+                area: verdict
+                for (_, area, _), verdict in zip(members_spec, verdicts, strict=True)
+                if area is not None
+            }
+        )
+        aggregate = (
+            ResolverAggregateState.READY if gaps.complete else ResolverAggregateState.DEGRADED
+        )
+    elif set_id in _ELIGIBILITY_SETS:
         eligible = [verdict for verdict in verdicts if verdict.eligible]
         if not eligible:
             aggregate = ResolverAggregateState.BLOCKED
@@ -1320,7 +1665,14 @@ def resolve_set(
         "set_id": set_id.value,
         "aggregate": aggregate.value,
         "members": members,
+        "missing_focus_areas": [area.value for area in gaps.missing_focus_areas],
+        "partial_focus_areas": [area.value for area in gaps.partial_focus_areas],
     }
+
+
+#: Serializes the FAST-tier store's registry check-then-insert. Module-level,
+#: not a field, because worlds holding the store are copied and a lock cannot be.
+_IN_MEMORY_REGISTRY_LOCK: Final = threading.Lock()
 
 
 @dataclass
@@ -1331,6 +1683,7 @@ class InMemoryIntelligenceStore:
     cycles: dict[tuple[str, str], IntelligenceCycleRun] = field(default_factory=dict)
     runs: dict[tuple[str, str], IntelligenceProducerRun] = field(default_factory=dict)
     artifacts: dict[tuple[str, str], IntelligenceArtifact] = field(default_factory=dict)
+    report_types: dict[tuple[str, str], IntelligenceReportType] = field(default_factory=dict)
 
     def get_receipt(
         self, principal_id: str, idempotency_key: str
@@ -1411,6 +1764,7 @@ class InMemoryIntelligenceStore:
         principal_id: str,
         cycle_run_id: str,
         stage: IntelligenceStage,
+        artifact_kind: str,
         focus_area_id: FocusAreaId | None,
         source_lane: SourceLaneId | None,
     ) -> IntelligenceArtifact | None:
@@ -1420,6 +1774,7 @@ class InMemoryIntelligenceStore:
             if artifact.principal_id == principal_id
             and artifact.cycle_run_id == cycle_run_id
             and artifact.stage is stage
+            and str(artifact.artifact_kind) == str(artifact_kind)
             and artifact.focus_area_id == focus_area_id
             and artifact.source_lane == source_lane
             and artifact.is_current
@@ -1435,7 +1790,7 @@ class InMemoryIntelligenceStore:
         *,
         cycle_run_id: str | None,
         stage: IntelligenceStage | None,
-        artifact_kind: ArtifactKind | None,
+        artifact_kind: str | None,
         focus_area_id: FocusAreaId | None,
         source_lane: SourceLaneId | None,
         report_date: date | None,
@@ -1443,6 +1798,7 @@ class InMemoryIntelligenceStore:
         limit: int,
         after_committed_at: datetime | None = None,
         after_artifact_id: str | None = None,
+        builtin_only: bool = False,
     ) -> tuple[IntelligenceArtifact, ...]:
         found = []
         for artifact in self.artifacts.values():
@@ -1452,7 +1808,9 @@ class InMemoryIntelligenceStore:
                 continue
             if stage is not None and artifact.stage is not stage:
                 continue
-            if artifact_kind is not None and artifact.artifact_kind is not artifact_kind:
+            if artifact_kind is not None and artifact.artifact_kind != artifact_kind:
+                continue
+            if builtin_only and artifact.artifact_kind not in _BUILTIN_KIND_VALUES:
                 continue
             if focus_area_id is not None and artifact.focus_area_id != focus_area_id:
                 continue
@@ -1482,7 +1840,7 @@ class InMemoryIntelligenceStore:
         *,
         cycle_run_id: str | None,
         stage: IntelligenceStage | None,
-        artifact_kind: ArtifactKind | None,
+        artifact_kind: str | None,
         focus_area_id: FocusAreaId | None,
         source_lane: SourceLaneId | None,
         limit: int,
@@ -1526,6 +1884,7 @@ class InMemoryIntelligenceStore:
         principal_id: str,
         cycle_run_id: str,
         stage: IntelligenceStage,
+        artifact_kind: str,
         focus_area_id: FocusAreaId | None,
         source_lane: SourceLaneId | None,
     ) -> IntelligenceProducerRun | None:
@@ -1535,6 +1894,7 @@ class InMemoryIntelligenceStore:
             if run.principal_id == principal_id
             and run.cycle_run_id == cycle_run_id
             and run.stage is stage
+            and str(run.artifact_kind) == str(artifact_kind)
             and run.focus_area_id == focus_area_id
             and run.source_lane == source_lane
         ]
@@ -1542,3 +1902,63 @@ class InMemoryIntelligenceStore:
             return None
         matches.sort(key=lambda item: item.created_at, reverse=True)
         return matches[0]
+
+    def list_report_types(
+        self, principal_id: str, *, stage: IntelligenceStage | None = None
+    ) -> tuple[IntelligenceReportType, ...]:
+        found = [
+            report_type
+            for (owner, _kind), report_type in self.report_types.items()
+            if owner == principal_id and (stage is None or report_type.definition.stage is stage)
+        ]
+        found.sort(
+            key=lambda item: (item.definition.stage.value, str(item.definition.artifact_kind))
+        )
+        return tuple(found)
+
+    def get_report_type(
+        self, principal_id: str, artifact_kind: str
+    ) -> IntelligenceReportType | None:
+        return self.report_types.get((principal_id, str(artifact_kind)))
+
+    def insert_report_type(
+        self, principal_id: str, definition: ReportTypeDefinition, *, created_at: datetime
+    ) -> ReportTypeInsertion:
+        key = (principal_id, str(definition.artifact_kind))
+        existing = self.report_types.get(key)
+        if existing is not None:
+            return ReportTypeInsertion(report_type=existing, inserted=False)
+        stored = IntelligenceReportType(
+            principal_id=principal_id,
+            definition=definition,
+            definition_fingerprint=definition.fingerprint,
+            created_at=created_at,
+        )
+        self.report_types[key] = stored
+        return ReportTypeInsertion(report_type=stored, inserted=True)
+
+    def register_client_report_type(
+        self,
+        principal_id: str,
+        definition: ReportTypeDefinition,
+        *,
+        created_at: datetime,
+        limit: int,
+    ) -> ReportTypeInsertion | None:
+        with _IN_MEMORY_REGISTRY_LOCK:
+            existing = self.report_types.get((principal_id, str(definition.artifact_kind)))
+            if existing is not None:
+                return ReportTypeInsertion(report_type=existing, inserted=False)
+            clients = sum(
+                row.definition.origin is ReportTypeOrigin.CLIENT
+                for row in self.list_report_types(principal_id)
+            )
+            if clients >= limit:
+                return None
+            return self.insert_report_type(principal_id, definition, created_at=created_at)
+
+    def ensure_builtin_report_types(self, principal_id: str, *, created_at: datetime) -> int:
+        return sum(
+            self.insert_report_type(principal_id, definition, created_at=created_at).inserted
+            for definition in builtin_report_type_definitions()
+        )

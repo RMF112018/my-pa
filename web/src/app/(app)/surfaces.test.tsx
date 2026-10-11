@@ -1092,33 +1092,35 @@ describe("System reports what it was told, and says so when it was told nothing"
     cycle_id: "morning_intelligence",
     business_date: "2026-08-20",
     set_id: "morning_brief_inputs",
-    aggregate: "BLOCKED",
+    aggregate: "DEGRADED",
     members: [
       {
         member_id: "communications",
         focus_area_id: "communications",
         source_lane: null,
         readiness: "READY",
-        required: true,
+        required: false,
         artifact_id: "rpt_aaaaaaaa11111111",
         producer_run_id: "prun_aaaaaaaa11111111",
         content_sha256: "a".repeat(64),
         committed_at: "2026-08-20T12:00:00Z",
-        readiness_reason: "present",
+        readiness_reason: "ready",
       },
       {
         member_id: "people",
         focus_area_id: "people",
         source_lane: null,
         readiness: "MISSING",
-        required: true,
+        required: false,
         artifact_id: null,
         producer_run_id: null,
         content_sha256: null,
         committed_at: null,
-        readiness_reason: "missing",
+        readiness_reason: "absent",
       },
     ],
+    missing_focus_areas: ["people"],
+    partial_focus_areas: [],
   };
 
   function answerSystem(overrides: {
@@ -1202,12 +1204,12 @@ describe("System reports what it was told, and says so when it was told nothing"
   it("shows Intelligence aggregate and members without flattening READY to system health", async () => {
     answerSystem();
     await renderServerPage(() => SystemPage());
-    expect(screen.getByTestId("system-intelligence-aggregate").textContent).toBe("BLOCKED");
+    expect(screen.getByTestId("system-intelligence-aggregate").textContent).toBe("DEGRADED");
     const members = screen.getAllByTestId("system-intelligence-member");
     expect(members).toHaveLength(2);
     const states = screen.getAllByTestId("system-intelligence-member-readiness").map((el) => el.textContent);
     expect(states).toEqual(["READY", "MISSING"]);
-    expect(states).not.toEqual(["BLOCKED"]);
+    expect(states).not.toEqual(["DEGRADED"]);
     expect(screen.getByTestId("system-intelligence-not-system-health").textContent).toMatch(
       /not a claim that the system is healthy/,
     );
@@ -1587,33 +1589,35 @@ describe("Intelligence readiness is diagnostic, and OFF never reaches for it", (
     cycle_id: "morning_intelligence",
     business_date: "2026-08-20",
     set_id: "morning_brief_inputs",
-    aggregate: "BLOCKED",
+    aggregate: "DEGRADED",
     members: [
       {
         member_id: "communications",
         focus_area_id: "communications",
         source_lane: null,
         readiness: "STALE",
-        required: true,
+        required: false,
         artifact_id: "rpt_bbbbbbbb22222222",
         producer_run_id: "prun_bbbbbbbb22222222",
         content_sha256: "b".repeat(64),
         committed_at: "2026-08-20T12:00:00Z",
-        readiness_reason: "superseded by a later commit",
+        readiness_reason: "stale_upstream",
       },
       {
         member_id: "people",
         focus_area_id: "people",
         source_lane: null,
         readiness: "MISSING",
-        required: true,
+        required: false,
         artifact_id: null,
         producer_run_id: null,
         content_sha256: null,
         committed_at: null,
-        readiness_reason: "missing",
+        readiness_reason: "absent",
       },
     ],
+    missing_focus_areas: ["communications", "people"],
+    partial_focus_areas: [],
   };
 
   /** Records the capability of every gateway call the page actually makes. */
@@ -1692,7 +1696,7 @@ describe("Intelligence readiness is diagnostic, and OFF never reaches for it", (
       expect(text).not.toMatch(/freshness/i);
 
       // Class-4 residue: the backend enums, the set id, and the member ids.
-      for (const raw of ["READY", "PARTIAL", "STALE", "SUPERSEDED", "BLOCKED"]) {
+      for (const raw of ["READY", "PARTIAL", "STALE", "SUPERSEDED", "BLOCKED", "DEGRADED"]) {
         expect(text).not.toContain(raw);
       }
       expect(text).not.toContain("morning_brief_inputs");
@@ -1737,7 +1741,7 @@ describe("Intelligence readiness is diagnostic, and OFF never reaches for it", (
 
       expect(called).toContain("reports.resolve_set");
       expect(screen.getByTestId("intelligence-readiness")).toBeTruthy();
-      expect(screen.getByTestId("intelligence-readiness-aggregate").textContent).toBe("BLOCKED");
+      expect(screen.getByTestId("intelligence-readiness-aggregate").textContent).toBe("DEGRADED");
       expect(screen.getByTestId("intelligence-readiness-not-health").textContent).toMatch(
         /not a claim that the system is healthy/i,
       );

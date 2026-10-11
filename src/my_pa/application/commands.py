@@ -45,7 +45,7 @@ from typing import Any, ClassVar, Final
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from my_pa.application import goodnotes_note_unit_contract as _note_unit
-from my_pa.application.errors import InvalidRequestError, SafeDetail
+from my_pa.application.errors import InvalidRequestError, SafeDetail, invalid_choice
 from my_pa.application.goodnotes_pull_orchestration import MAX_PULL_BATCH_SIZE
 from my_pa.application.identity_correction import ConflictChoice
 from my_pa.application.record_events import (
@@ -102,13 +102,15 @@ from my_pa.domain.goodnotes.models import (
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.intelligence.catalog import (
     MAX_IDEMPOTENCY_KEY_LENGTH,
-    ArtifactKind,
+    MAX_REPORT_TYPE_DESCRIPTION_CHARACTERS,
+    MAX_REPORT_TYPE_DISPLAY_NAME_CHARACTERS,
     ArtifactState,
     FocusAreaId,
     IntelligenceStage,
     ProducerRunState,
     ResolverSetId,
     SourceLaneId,
+    parse_artifact_kind,
 )
 from my_pa.domain.knowledge_assertion.vocabulary import (
     KnowledgeAssertionLifecycle,
@@ -553,7 +555,7 @@ def _lifecycle_selector(value: object) -> CaptureLifecycleSelector:
             return CaptureLifecycleSelector(value)
         except ValueError:
             pass
-    raise InvalidRequestError(SafeDetail.LIFECYCLE)
+    raise invalid_choice(SafeDetail.LIFECYCLE, CaptureLifecycleSelector)
 
 
 def _expected_lifecycle_revision(value: object) -> int:
@@ -4959,6 +4961,36 @@ SubmitGoodNotesProposal.mcp_payload_properties = MappingProxyType(  # type: igno
 )
 
 
+def _report_kind(value: object) -> str:
+    """A well-formed report kind token, or `invalid_request` on `artifact_kind`.
+
+    Shape only. Whether the acting Principal has the kind registered, and at
+    which stage, is the registry's question and is answered by the application
+    with the Principal's own kinds listed; a malformed token lists nothing.
+    """
+    try:
+        return parse_artifact_kind(value)
+    except ValueError:
+        raise InvalidRequestError(SafeDetail.ARTIFACT_KIND) from None
+
+
+#: The wire shape of every `artifact_kind` field. A pattern, not an enum: the
+#: kinds a caller may use are the built-ins plus its own registered client kinds.
+_ARTIFACT_KIND_PROPERTY: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_]{0,63}$",
+        "description": (
+            "A report type registered for you (see reports.types.list): a built-in "
+            "kind or a client kind registered with reports.types.create, at the "
+            "stage it was registered for. Each kind has its own current head and "
+            "lineage; a client kind never replaces a built-in report. An "
+            "unregistered kind is refused with the kinds you may use listed."
+        ),
+    }
+)
+
+
 @dataclass(frozen=True, slots=True)
 class BeginIntelligenceCycle:
     """`reports.begin_cycle`: create or replay one Morning Intelligence cycle run.
@@ -5018,7 +5050,7 @@ class CommitIntelligenceArtifact:
 
     cycle_run_id: str
     stage: IntelligenceStage
-    artifact_kind: ArtifactKind
+    artifact_kind: str
     producer_task_id: str
     producer_task_name: str
     automation_platform: str
@@ -5045,8 +5077,7 @@ class CommitIntelligenceArtifact:
         _identifier(self.cycle_run_id, IdKind.INTELLIGENCE_CYCLE_RUN, SafeDetail.CYCLE_RUN_ID)
         if not isinstance(self.stage, IntelligenceStage):
             raise InvalidRequestError(SafeDetail.STAGE)
-        if not isinstance(self.artifact_kind, ArtifactKind):
-            raise InvalidRequestError(SafeDetail.ARTIFACT_KIND)
+        object.__setattr__(self, "artifact_kind", _report_kind(self.artifact_kind))
         if self.focus_area_id is not None and not isinstance(self.focus_area_id, FocusAreaId):
             raise InvalidRequestError(SafeDetail.FOCUS_AREA_ID)
         if self.source_lane is not None and not isinstance(self.source_lane, SourceLaneId):
@@ -5090,6 +5121,7 @@ class CommitIntelligenceArtifact:
 
 CommitIntelligenceArtifact.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
     {
+        "artifact_kind": _ARTIFACT_KIND_PROPERTY,
         "dependency_report_ids": {
             "description": (
                 "Exact upstream report_id values from this cycle. collector: none. "
@@ -5097,8 +5129,11 @@ CommitIntelligenceArtifact.mcp_payload_properties = MappingProxyType(  # type: i
                 "more current researcher reports of the same focus area, at most one "
                 "per source_lane; use reports.resolve_set synthesizer_inputs and name "
                 "the READY or PARTIAL members. reporter: exactly the current "
-                "synthesizer. morning_brief: the six expected reporters. Any partial "
-                "input requires artifact_state partial."
+                "synthesizer. morning_brief: zero to six current reporters of "
+                "distinct expected focus areas; use reports.resolve_set "
+                "morning_brief_inputs and name the READY or PARTIAL members. Any "
+                "partial input, or for morning_brief any uncovered expected focus "
+                "area, requires artifact_state partial."
             )
         },
         "structured_content": {"type": "object"},
@@ -5141,7 +5176,7 @@ class RecordIntelligenceRunState:
 
     cycle_run_id: str
     stage: IntelligenceStage
-    artifact_kind: ArtifactKind
+    artifact_kind: str
     producer_task_id: str
     producer_task_name: str
     automation_platform: str
@@ -5159,8 +5194,7 @@ class RecordIntelligenceRunState:
         _identifier(self.cycle_run_id, IdKind.INTELLIGENCE_CYCLE_RUN, SafeDetail.CYCLE_RUN_ID)
         if not isinstance(self.stage, IntelligenceStage):
             raise InvalidRequestError(SafeDetail.STAGE)
-        if not isinstance(self.artifact_kind, ArtifactKind):
-            raise InvalidRequestError(SafeDetail.ARTIFACT_KIND)
+        object.__setattr__(self, "artifact_kind", _report_kind(self.artifact_kind))
         if not isinstance(self.state, ProducerRunState):
             raise InvalidRequestError(SafeDetail.SELECTOR)
         _iso_date(self.report_date, SafeDetail.REPORT_DATE)
@@ -5173,6 +5207,11 @@ class RecordIntelligenceRunState:
             type(self.expected_version) is not int or self.expected_version < 1
         ):
             raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
+
+
+RecordIntelligenceRunState.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {"artifact_kind": _ARTIFACT_KIND_PROPERTY}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -5192,21 +5231,33 @@ class ReadIntelligenceArtifact:
 
 @dataclass(frozen=True, slots=True)
 class GetLatestIntelligenceArtifact:
-    """`reports.latest`: current-head selection. Never crosses cycle_run_id."""
+    """`reports.latest`: current head; without artifact_kind only built-in kinds are read.
+
+    Never crosses cycle_run_id. A client kind is a standalone report: a
+    selection without artifact_kind (no stage, a stage, a focus area, or any
+    combination) never returns it; name the kind to read it.
+    """
 
     capability: ClassVar[Capability] = Capability.REPORTS_LATEST
 
     cycle_run_id: str
     stage: IntelligenceStage | None = None
-    artifact_kind: ArtifactKind | None = None
+    artifact_kind: str | None = None
     focus_area_id: FocusAreaId | None = None
     source_lane: SourceLaneId | None = None
     report_date: str | None = None
 
     def __post_init__(self) -> None:
         _identifier(self.cycle_run_id, IdKind.INTELLIGENCE_CYCLE_RUN, SafeDetail.CYCLE_RUN_ID)
+        if self.artifact_kind is not None:
+            object.__setattr__(self, "artifact_kind", _report_kind(self.artifact_kind))
         if self.report_date is not None:
             _iso_date(self.report_date, SafeDetail.REPORT_DATE)
+
+
+GetLatestIntelligenceArtifact.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {"artifact_kind": _ARTIFACT_KIND_PROPERTY}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -5217,7 +5268,7 @@ class ListIntelligenceArtifacts:
 
     cycle_run_id: str | None = None
     stage: IntelligenceStage | None = None
-    artifact_kind: ArtifactKind | None = None
+    artifact_kind: str | None = None
     focus_area_id: FocusAreaId | None = None
     source_lane: SourceLaneId | None = None
     report_date: str | None = None
@@ -5228,11 +5279,18 @@ class ListIntelligenceArtifacts:
     def __post_init__(self) -> None:
         if self.cycle_run_id is not None:
             _identifier(self.cycle_run_id, IdKind.INTELLIGENCE_CYCLE_RUN, SafeDetail.CYCLE_RUN_ID)
+        if self.artifact_kind is not None:
+            object.__setattr__(self, "artifact_kind", _report_kind(self.artifact_kind))
         if self.report_date is not None:
             _iso_date(self.report_date, SafeDetail.REPORT_DATE)
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
         if self.cursor is not None:
             _identifier(self.cursor, IdKind.INTELLIGENCE_ARTIFACT, SafeDetail.CURSOR)
+
+
+ListIntelligenceArtifacts.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {"artifact_kind": _ARTIFACT_KIND_PROPERTY}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -5244,7 +5302,7 @@ class SearchIntelligenceArtifacts:
     query: str = field(repr=False)
     cycle_run_id: str | None = None
     stage: IntelligenceStage | None = None
-    artifact_kind: ArtifactKind | None = None
+    artifact_kind: str | None = None
     focus_area_id: FocusAreaId | None = None
     source_lane: SourceLaneId | None = None
     page_size: int | None = None
@@ -5254,7 +5312,14 @@ class SearchIntelligenceArtifacts:
             raise InvalidRequestError(SafeDetail.QUERY)
         if self.cycle_run_id is not None:
             _identifier(self.cycle_run_id, IdKind.INTELLIGENCE_CYCLE_RUN, SafeDetail.CYCLE_RUN_ID)
+        if self.artifact_kind is not None:
+            object.__setattr__(self, "artifact_kind", _report_kind(self.artifact_kind))
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
+
+
+SearchIntelligenceArtifacts.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {"artifact_kind": _ARTIFACT_KIND_PROPERTY}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -5267,11 +5332,16 @@ class ResolveIntelligenceSet:
     never block. The set is BLOCKED with no eligible lane, DEGRADED when an
     eligible lane is partial, and READY otherwise; the eligible members are
     exactly what a synthesizer commit accepts. `reporter_input` is the one
-    required synthesizer head (PARTIAL makes it DEGRADED). `collectors` and
-    `morning_brief_inputs` require every member. `readiness_reason` is one of
+    required synthesizer head (PARTIAL makes it DEGRADED).
+    `morning_brief_inputs` lists the expected focus areas with `required:
+    false` and is never BLOCKED: READY when every area's current reporter is
+    READY, DEGRADED otherwise. `missing_focus_areas` and `partial_focus_areas`
+    name the areas a brief cannot cover or covers only partially (a brief over
+    any of them must be committed `partial`); both are empty for every other
+    set. `collectors` requires every member. `readiness_reason` is one of
     `ready`, `eligible_partial`, `absent`, `failed`,
     `partial_run_without_artifact`, `stale_upstream`, `not_current_head` or
-    `superseded` for the lane and reporter sets.
+    `superseded` for the lane, reporter and brief-input sets.
     """
 
     capability: ClassVar[Capability] = Capability.REPORTS_RESOLVE_SET
@@ -5286,6 +5356,94 @@ class ResolveIntelligenceSet:
             raise InvalidRequestError(SafeDetail.SET_ID)
         if self.focus_area_id is not None and not isinstance(self.focus_area_id, FocusAreaId):
             raise InvalidRequestError(SafeDetail.FOCUS_AREA_ID)
+
+
+def _bounded_label(value: object, limit: int, detail: SafeDetail) -> str:
+    """Non-blank text of at most `limit` characters, or `invalid_request` on `detail`."""
+    if not isinstance(value, str) or not value.strip() or len(value) > limit:
+        raise InvalidRequestError(detail)
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class CreateReportType:
+    """`reports.types.create`: register a standalone report type of your own at one stage.
+
+    `artifact_kind` is a new lower_snake token (1 to 64 characters) that is not
+    a built-in kind; `stage` is one of the five pipeline stages. A report of
+    the kind takes that stage's dependency rules exactly as the built-in kind
+    does: the same upstream stage and count, built-in upstream reports only,
+    and the same never-falsely-final rule (at `morning_brief`, zero to six
+    built-in focus reports, `partial` when any area is missing or partial). It
+    has its own current head and lineage, so it never supersedes, displaces or
+    is superseded by the built-in report at its stage. It is standalone: no
+    resolver set, Daily Briefing or other commit ever consumes it, and citing
+    one as a dependency is refused. Insert-only and
+    replay-safe without a key: repeating the identical definition succeeds with
+    `replayed: true`; a different definition for a registered kind, a built-in
+    kind, or a sixty-fifth client kind is a `conflict` on `artifact_kind`. There
+    is no retirement: committed artifacts keep their kind. The principal is not
+    here; authority comes from authenticated context.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_TYPES_CREATE
+
+    artifact_kind: str
+    stage: IntelligenceStage
+    description: str
+    display_name: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "artifact_kind", _report_kind(self.artifact_kind))
+        if not isinstance(self.stage, IntelligenceStage):
+            raise invalid_choice(SafeDetail.STAGE, IntelligenceStage)
+        _bounded_label(
+            self.description, MAX_REPORT_TYPE_DESCRIPTION_CHARACTERS, SafeDetail.DESCRIPTION
+        )
+        if self.display_name is not None:
+            _bounded_label(
+                self.display_name, MAX_REPORT_TYPE_DISPLAY_NAME_CHARACTERS, SafeDetail.DISPLAY_NAME
+            )
+
+
+CreateReportType.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {
+        "artifact_kind": {
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "description": (
+                "The new kind: lower_snake, 1 to 64 characters, not a built-in kind. "
+                "Its reports are standalone, with their own head and lineage."
+            ),
+        },
+        "description": {
+            "minLength": 1,
+            "maxLength": MAX_REPORT_TYPE_DESCRIPTION_CHARACTERS,
+            "description": "What a report of this kind is. Stored as inert text.",
+        },
+        "display_name": {"minLength": 1, "maxLength": MAX_REPORT_TYPE_DISPLAY_NAME_CHARACTERS},
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ListReportTypes:
+    """`reports.types.list`: your report types; only `builtin` kinds feed the Daily Briefing.
+
+    The five built-in kinds and your own registered client kinds, each with its
+    stage, description, display name and origin (`builtin` or `client`), in
+    pipeline-stage order with the built-in kind first. Another Principal's kinds
+    are never listed. A `client` kind is a standalone report with its own head
+    and lineage: resolver sets, the Daily Briefing and dependencies consume only
+    the `builtin` kinds.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_TYPES_LIST
+
+    stage: IntelligenceStage | None = None
+
+    def __post_init__(self) -> None:
+        if self.stage is not None and not isinstance(self.stage, IntelligenceStage):
+            raise invalid_choice(SafeDetail.STAGE, IntelligenceStage)
 
 
 #: Every command there is. A union rather than a base class, so adding a
@@ -5454,7 +5612,7 @@ def _memory_kind(value: object) -> MemoryKind:
     the caller's string into one, exactly as it does for `Representation`.
     """
     if not isinstance(value, MemoryKind):
-        raise InvalidRequestError(SafeDetail.MEMORY_KIND)
+        raise invalid_choice(SafeDetail.MEMORY_KIND, MemoryKind)
     return value
 
 
@@ -5517,7 +5675,7 @@ def _memory_kinds_filter(value: object) -> tuple[MemoryKind, ...] | None:
     if value is None:
         return None
     if not isinstance(value, tuple | list) or not value:
-        raise InvalidRequestError(SafeDetail.KINDS)
+        raise invalid_choice(SafeDetail.KINDS, MemoryKind)
     kinds: list[MemoryKind] = []
     for entry in value:
         kinds.append(_memory_kind(entry))
@@ -5529,7 +5687,7 @@ def _memory_kinds_filter(value: object) -> tuple[MemoryKind, ...] | None:
 def _memory_lifecycle(value: object) -> MemoryLifecycle:
     """Which lifecycle a listing asks for, as the closed member itself."""
     if not isinstance(value, MemoryLifecycle):
-        raise InvalidRequestError(SafeDetail.LIFECYCLE)
+        raise invalid_choice(SafeDetail.LIFECYCLE, MemoryLifecycle)
     return value
 
 
@@ -6401,7 +6559,7 @@ def _entity_evidence(value: object) -> tuple[str, ...]:
     return references
 
 
-def _entity_vocabulary[T](value: object, enum: type[T], detail: SafeDetail) -> T:
+def _entity_vocabulary[T: StrEnum](value: object, enum: type[T], detail: SafeDetail) -> T:
     """One closed-vocabulary field, which has already been resolved to its member.
 
     Strict, and the strictness is the same rule `_memory_kind` applies: the
@@ -6411,7 +6569,7 @@ def _entity_vocabulary[T](value: object, enum: type[T], detail: SafeDetail) -> T
     adapter refuses.
     """
     if not isinstance(value, enum):
-        raise InvalidRequestError(detail)
+        raise invalid_choice(detail, enum)
     return value
 
 
@@ -6427,14 +6585,16 @@ def _entity_kind(value: object, enum: type[StrEnum], detail: SafeDetail) -> str:
     if isinstance(value, enum):
         return str(value.value)
     if not isinstance(value, str):
-        raise InvalidRequestError(detail)
+        raise invalid_choice(detail, enum)
     try:
         return str(enum(value).value)
     except ValueError:
-        raise InvalidRequestError(detail) from None
+        raise invalid_choice(detail, enum) from None
 
 
-def _entity_filter[T](value: object, enum: type[T], detail: SafeDetail) -> tuple[T, ...] | None:
+def _entity_filter[T: StrEnum](
+    value: object, enum: type[T], detail: SafeDetail
+) -> tuple[T, ...] | None:
     """One optional closed-vocabulary filter. An explicit empty list is refused.
 
     Refused rather than treated as "no filter", for the reason the memory
@@ -6444,7 +6604,7 @@ def _entity_filter[T](value: object, enum: type[T], detail: SafeDetail) -> tuple
     if value is None:
         return None
     if not isinstance(value, tuple | list) or not value:
-        raise InvalidRequestError(detail)
+        raise invalid_choice(detail, enum)
     return tuple(_entity_vocabulary(item, enum, detail) for item in value)
 
 
@@ -8716,7 +8876,7 @@ def _constraint_enum[T: StrEnum](
     if optional and value is None:
         return
     if not isinstance(value, kind):
-        raise InvalidRequestError(detail)
+        raise invalid_choice(detail, kind)
 
 
 def _constraint_enum_tuple[T: StrEnum](value: object, kind: type[T], detail: SafeDetail) -> None:
@@ -8728,10 +8888,10 @@ def _constraint_enum_tuple[T: StrEnum](value: object, kind: type[T], detail: Saf
     handler converts; the closed enum is what makes the published array bounded.
     """
     if not isinstance(value, tuple):
-        raise InvalidRequestError(detail)
+        raise invalid_choice(detail, kind)
     for member in value:
         if not isinstance(member, kind):
-            raise InvalidRequestError(detail)
+            raise invalid_choice(detail, kind)
 
 
 def _constraint_cursor(value: str | None) -> None:
@@ -11076,7 +11236,7 @@ def _knowledge_member[E: StrEnum](value: object, enum: type[E], detail: SafeDeta
             return enum(value)
         except ValueError:
             pass
-    raise InvalidRequestError(detail)
+    raise invalid_choice(detail, enum)
 
 
 def _knowledge_predicate_code(value: object) -> str:
@@ -11825,6 +11985,8 @@ type Command = (
     | ListIntelligenceArtifacts
     | SearchIntelligenceArtifacts
     | ResolveIntelligenceSet
+    | CreateReportType
+    | ListReportTypes
     | SearchEntities
     | GetEntity
     | ResolveEntity

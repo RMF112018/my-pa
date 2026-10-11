@@ -688,7 +688,7 @@ def test_readiness_stops_reporting_contracts_only_because_the_manifest_is_derive
     expected_available = (
         set(_HANDLERS) - _GOODNOTES_PULL_CAPABILITIES - _KNOWLEDGE_ASSERTION_CAPABILITIES
     )
-    assert len(expected_available) == 178
+    assert len(expected_available) == 180
     assert readiness["implemented_capabilities"] == len(expected_available)
     assert readiness["limitations"]
     assert "Worker-plane health" in readiness["limitations"][-1]

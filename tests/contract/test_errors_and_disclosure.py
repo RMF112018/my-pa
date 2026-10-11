@@ -4,11 +4,28 @@ from __future__ import annotations
 
 import typing
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
+from my_pa.application.error_vocabularies import STATIC_VOCABULARIES, VOCABULARY_SOURCES
+from my_pa.application.errors import (
+    AmbiguousRequestError,
+    ApplicationError,
+    ConflictError,
+    DeniedError,
+    InternalError,
+    InvalidRequestError,
+    NotFoundError,
+    QuarantinedError,
+    SafeDetail,
+    UnavailableError,
+    UnsupportedError,
+    invalid_choice,
+    problem_detail,
+)
 from my_pa.contracts.v1 import (
     Coverage,
     CoverageState,
@@ -24,6 +41,11 @@ from my_pa.contracts.v1 import (
     Truncation,
     Trust,
     retry_guidance_for,
+)
+from my_pa.contracts.v1.errors import (
+    MAX_ALLOWED_VALUE_ENTRIES,
+    MAX_ALLOWED_VALUES,
+    AllowedValues,
 )
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.provenance import TrustLevel
@@ -117,6 +139,12 @@ def _carries_a_string(annotation: object) -> bool:
     """
     if annotation is str or annotation is object or annotation is typing.Any:
         return True
+    # A nested model is walked through its own fields: a string inside an
+    # element model is still a string on the wire.
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return any(
+            _carries_a_string(field.annotation) for field in annotation.model_fields.values()
+        )
     return any(_carries_a_string(arg) for arg in typing.get_args(annotation))
 
 
@@ -145,6 +173,7 @@ def test_problem_detail_has_no_field_that_can_carry_free_form_content() -> None:
         "message": "Field length bounds",
         "correlation_id": "validate_identifier in the model validator",
         "safe_details": "token pattern and arity bound in the model validator",
+        "allowed_values": "detail and value token patterns and both arity bounds",
     }
     string_bearing = {
         name
@@ -376,3 +405,281 @@ def test_no_disclosure_can_emit_the_two_removed_tokens() -> None:
         if token in line
     }
     assert not offending, f"a deleted limitation token is still in the source: {offending}"
+
+
+# ---- allowed values (R3) -----------------------------------------------------
+
+CORRELATION = "corr_abc123def456"
+
+
+def _rendered(error: ApplicationError) -> ProblemDetail:
+    return problem_detail(error, correlation_id=CORRELATION)
+
+
+#: Detail-name segments that say the field holds an identifier or a handle on
+#: tenant data. A detail carrying any of them is never a closed vocabulary.
+IDENTIFIER_SEGMENTS = frozenset(
+    {
+        "id",
+        "ids",
+        "key",
+        "keys",
+        "ref",
+        "refs",
+        "reference",
+        "references",
+        "handle",
+        "handles",
+        "cursor",
+        "digest",
+        "sha256",
+        "token",
+        "url",
+    }
+)
+
+#: Final detail-name segments that say the field is free text.
+FREE_TEXT_SEGMENTS = frozenset(
+    {
+        "body",
+        "comment",
+        "content",
+        "description",
+        "label",
+        "markdown",
+        "message",
+        "name",
+        "notes",
+        "query",
+        "reason",
+        "snippet",
+        "statement",
+        "text",
+        "title",
+        "value",
+    }
+)
+
+
+def _identifier_or_free_text(detail: SafeDetail) -> bool:
+    segments = detail.value.split("_")
+    return bool(IDENTIFIER_SEGMENTS & set(segments)) or segments[-1] in FREE_TEXT_SEGMENTS
+
+
+def test_the_detail_name_screen_recognises_what_it_must_refuse() -> None:
+    """The screen below is only as good as this: it must fire on real id/text details."""
+    for detail in (
+        SafeDetail.ENTITY_ID,
+        SafeDetail.DEPENDENCY_REPORT_IDS,
+        SafeDetail.IDEMPOTENCY_KEY,
+        SafeDetail.ORIGIN_EVIDENCE_REF,
+        SafeDetail.CURSOR,
+        SafeDetail.TEXT,
+        SafeDetail.DISPLAY_NAME,
+        SafeDetail.CORRECTED_VALUE,
+    ):
+        assert _identifier_or_free_text(detail), detail
+
+
+def test_no_static_vocabulary_names_an_identifier_or_free_text_field() -> None:
+    """R3: an identifier, a key, a reference or free text is never a vocabulary.
+
+    And the report kinds are not static at all: they become a per-Principal
+    registry, so `artifact_kind` must reach a refusal only through the raise
+    site's explicit list.
+    """
+    offending = sorted(d.value for d in STATIC_VOCABULARIES if _identifier_or_free_text(d))
+    assert not offending, f"identifier or free-text detail(s) mapped: {offending}"
+    assert SafeDetail.ARTIFACT_KIND not in STATIC_VOCABULARIES
+
+
+def test_every_static_vocabulary_is_a_domain_enum() -> None:
+    """R3: every listed value is a member of a domain enum, in declaration order."""
+    assert set(STATIC_VOCABULARIES) == set(VOCABULARY_SOURCES)
+    assert STATIC_VOCABULARIES, "the table is empty"
+    for detail, vocabulary in VOCABULARY_SOURCES.items():
+        assert isinstance(detail, SafeDetail), detail
+        assert isinstance(vocabulary, type), detail
+        assert issubclass(vocabulary, StrEnum), detail
+        assert vocabulary.__module__.startswith("my_pa.domain."), (detail, vocabulary.__module__)
+        assert STATIC_VOCABULARIES[detail] == tuple(m.value for m in vocabulary), detail
+        assert len(STATIC_VOCABULARIES[detail]) <= MAX_ALLOWED_VALUES, detail
+
+
+def test_every_static_vocabulary_renders_completely() -> None:
+    """A value the contract refuses would be dropped silently; none may be."""
+    for detail, values in STATIC_VOCABULARIES.items():
+        problem = _rendered(InvalidRequestError(detail))
+        assert problem.allowed_values == (AllowedValues(detail=detail.value, values=values),)
+
+
+def test_invalid_choice_lists_the_enum_in_declaration_order() -> None:
+    problem = _rendered(invalid_choice(SafeDetail.STAGE, Classification))
+    assert problem.safe_details == (SafeDetail.STAGE.value,)
+    assert problem.allowed_values == (
+        AllowedValues(detail="stage", values=tuple(c.value for c in Classification)),
+    )
+
+
+def test_an_explicit_vocabulary_overrides_the_static_table() -> None:
+    detail = SafeDetail.ASSIGNMENT_TYPE
+    assert detail in STATIC_VOCABULARIES
+    error = InvalidRequestError(detail, allowed_values={detail: ("only_this_one",)})
+    assert _rendered(error).allowed_values == (
+        AllowedValues(detail=detail.value, values=("only_this_one",)),
+    )
+
+
+def test_an_explicit_vocabulary_for_a_detail_the_error_lacks_is_not_rendered() -> None:
+    error = InvalidRequestError(
+        SafeDetail.TITLE, allowed_values={SafeDetail.ARTIFACT_KIND: ("focus_report",)}
+    )
+    assert _rendered(error).allowed_values == ()
+
+
+def test_a_vocabulary_longer_than_the_bound_is_a_marked_prefix() -> None:
+    """R3 bound: 100 values list as the first 64, in order, with `truncated` set."""
+    values = tuple(f"value_{index:03d}" for index in range(100))
+    entry = AllowedValues.bounded("selector", values)
+    assert entry.values == values[:MAX_ALLOWED_VALUES]
+    assert entry.truncated is True
+    assert MAX_ALLOWED_VALUES == 64
+    rendered = _rendered(
+        InvalidRequestError(SafeDetail.SELECTOR, allowed_values={SafeDetail.SELECTOR: values})
+    )
+    assert rendered.allowed_values == (entry,)
+    assert AllowedValues.bounded("selector", values[:64]).truncated is False
+
+
+def test_the_contract_refuses_more_than_the_bound() -> None:
+    with pytest.raises(ValidationError):
+        AllowedValues(detail="selector", values=tuple(f"v{i}" for i in range(65)))
+    with pytest.raises(ValidationError):
+        AllowedValues(detail="selector", values=())
+    details = tuple(f"field_{index}" for index in range(MAX_ALLOWED_VALUE_ENTRIES + 1))
+    assert MAX_ALLOWED_VALUE_ENTRIES == 16
+    with pytest.raises(ValidationError):
+        _problem(
+            safe_details=details[:16],
+            allowed_values=tuple(AllowedValues(detail=d, values=("a",)) for d in details),
+        )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "/Users/someone/tax.pdf",
+        "someone@example.com",
+        "two words",
+        "a" * 65,
+        "",
+        "-leading",
+        "quote'd",
+        "x:y",
+    ],
+)
+def test_allowed_values_refuse_anything_but_a_short_token(value: str) -> None:
+    with pytest.raises(ValidationError):
+        AllowedValues(detail="selector", values=(value,))
+
+
+def test_allowed_values_accept_upper_and_lower_case_tokens() -> None:
+    assert AllowedValues(detail="selector", values=("READY", "all-open", "p1", "v1.2")).values
+
+
+def test_allowed_values_detail_must_be_a_rejected_field() -> None:
+    entry = AllowedValues(detail="priority", values=("p1",))
+    assert _problem(safe_details=("priority",), allowed_values=(entry,)).allowed_values
+    with pytest.raises(ValidationError, match="detail in safe_details"):
+        _problem(safe_details=("title",), allowed_values=(entry,))
+    with pytest.raises(ValidationError, match="at most once"):
+        _problem(safe_details=("priority",), allowed_values=(entry, entry))
+    with pytest.raises(ValidationError):
+        AllowedValues(detail="Not A Token", values=("p1",))
+
+
+def test_only_invalid_request_may_list_allowed_values() -> None:
+    entry = AllowedValues(detail="priority", values=("p1",))
+    with pytest.raises(ValidationError, match="only invalid_request"):
+        ProblemDetail(
+            code=ErrorCode.CONFLICT,
+            message="conflict",
+            correlation_id=CORRELATION,
+            retry=RetryGuidance.AFTER_REFRESH,
+            safe_details=("priority",),
+            allowed_values=(entry,),
+        )
+
+
+@pytest.mark.parametrize(
+    "error_type",
+    [
+        AmbiguousRequestError,
+        ConflictError,
+        DeniedError,
+        InternalError,
+        NotFoundError,
+        QuarantinedError,
+        UnavailableError,
+        UnsupportedError,
+    ],
+)
+def test_a_non_invalid_request_error_never_carries_allowed_values(
+    error_type: type[ApplicationError],
+) -> None:
+    detail = SafeDetail.PRIORITY
+    assert detail in STATIC_VOCABULARIES
+    problem = _rendered(error_type(detail, allowed_values={detail: ("p1",)}))
+    assert problem.allowed_values == ()
+    assert "allowed_values" not in problem.to_canonical_dict()
+
+
+def test_a_problem_without_allowed_values_encodes_exactly_as_before() -> None:
+    """Backward compatibility, both directions.
+
+    An empty list is omitted, so every existing error keeps its exact bytes; and
+    a problem received in the old shape still validates.
+    """
+    old_shape = {
+        "code": "invalid_request",
+        "message": "the request is malformed, incomplete, or contradictory",
+        "correlation_id": CORRELATION,
+        "retry": "after_correction",
+        "safe_details": ["title"],
+    }
+    parsed = ProblemDetail.model_validate(old_shape)
+    assert parsed.allowed_values == ()
+    assert parsed.to_canonical_dict() == old_shape
+    rendered = _rendered(InvalidRequestError(SafeDetail.TITLE))
+    assert rendered.to_canonical_dict() == old_shape
+    envelope = ResponseEnvelope(
+        request_id="req-1", correlation_id=CORRELATION, completed_at=OBSERVED, error=rendered
+    )
+    assert "allowed_values" not in envelope.to_canonical_json()
+
+
+def test_a_listed_problem_round_trips_through_its_own_encoding() -> None:
+    rendered = _rendered(invalid_choice(SafeDetail.PRIORITY, ("p1", "p2")))
+    encoded = rendered.to_canonical_dict()
+    assert encoded["allowed_values"] == [
+        {"detail": "priority", "values": ["p1", "p2"], "truncated": False}
+    ]
+    assert ProblemDetail.model_validate(encoded) == rendered
+
+
+def test_a_value_the_contract_refuses_is_dropped_and_not_a_rendering_failure() -> None:
+    error = InvalidRequestError(
+        SafeDetail.SELECTOR, allowed_values={SafeDetail.SELECTOR: ("ok_value", "not ok")}
+    )
+    assert _rendered(error).allowed_values == (
+        AllowedValues(detail="selector", values=("ok_value",)),
+    )
+    only_bad = InvalidRequestError(
+        SafeDetail.SELECTOR, allowed_values={SafeDetail.SELECTOR: ("/etc/passwd",)}
+    )
+    assert _rendered(only_bad).allowed_values == ()
+
+
+def test_a_bare_string_is_not_a_vocabulary() -> None:
+    with pytest.raises(TypeError):
+        InvalidRequestError(SafeDetail.SELECTOR, allowed_values={SafeDetail.SELECTOR: "abc"})

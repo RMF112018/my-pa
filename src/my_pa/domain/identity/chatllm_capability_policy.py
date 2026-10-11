@@ -15,7 +15,7 @@ from typing import Final
 
 from my_pa.domain.identity.operation import Capability
 
-CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v8"
+CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v9"
 
 
 class ChatLLMCapabilityClass(StrEnum):
@@ -105,6 +105,11 @@ _DATA_REQUIRED: Final[frozenset[Capability]] = frozenset(
         Capability.REPORTS_RECORD_RUN_STATE,
         Capability.REPORTS_RESOLVE_SET,
         Capability.REPORTS_SEARCH,
+        # chatllm-data-v9: the report type registry, required with the rest of
+        # `reports.*` -- a producer that may commit a client kind must be able
+        # to register it and to list the kinds it may use.
+        Capability.REPORTS_TYPES_CREATE,
+        Capability.REPORTS_TYPES_LIST,
         Capability.REVIEW_DECIDE,
         Capability.REVIEW_LIST,
         Capability.SOURCES_FETCH,

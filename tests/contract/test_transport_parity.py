@@ -61,6 +61,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import fields as dataclass_fields
 from datetime import UTC, date, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -98,6 +99,7 @@ from my_pa.contracts.ports import KnowledgeRecord, MemoryWriteRequest
 from my_pa.contracts.v1.envelope import RequestMetadata
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.capture.proposal import MAX_NORMALIZED_VALUE_CHARACTERS
+from my_pa.domain.capture.submission import CaptureKind
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import (
     IdKind,
@@ -105,6 +107,7 @@ from my_pa.domain.common.identifiers import (
     make_identifier,
     validate_identifier,
 )
+from my_pa.domain.context.prepared import ContextPlane
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.intelligence.catalog import (
@@ -113,7 +116,11 @@ from my_pa.domain.intelligence.catalog import (
     ArtifactState,
     FocusAreaId,
     IntelligenceStage,
+    ReportTypeOrigin,
 )
+from my_pa.domain.intelligence.models import ReportTypeDefinition
+from my_pa.domain.project_controls.read_models import ConstraintListScope
+from my_pa.domain.record_events import RecordEventFamily
 from my_pa.domain.relationship.entity import (
     AddressTypeCode,
     AffiliationTypeCode,
@@ -157,8 +164,10 @@ from my_pa.domain.relationship.memory import (
     statement_digest,
 )
 from my_pa.domain.relationship.normalization import normalize_name
+from my_pa.domain.situation.continuity import CommitmentDirection
 from my_pa.domain.source.enrollment import MAX_ENROLLMENT_ITEMS
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.domain.task.lifecycle import TaskPriority
 
 PACKAGE = Path(cli_module.__file__).resolve().parents[2]
 ADAPTERS = PACKAGE / "adapters"
@@ -1235,6 +1244,15 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "cycle_run_id": cycle_run_id,
             "set_id": "collectors",
         },
+        # Every optional field supplied, so a transport that dropped
+        # `display_name` or the `stage` filter would answer differently.
+        Capability.REPORTS_TYPES_CREATE: {
+            "artifact_kind": "parity_weekly_digest",
+            "stage": "reporter",
+            "description": "A synthetic weekly digest report type.",
+            "display_name": "Parity weekly digest",
+        },
+        Capability.REPORTS_TYPES_LIST: {"stage": "reporter"},
         # The relationship-intelligence entity plane (WP-RI-05). `person` and
         # `organization` are staged before the world is copied per transport, so
         # all three read the same rows and a read is the same read everywhere.
@@ -2091,7 +2109,7 @@ def test_there_are_three_transports_to_compare() -> None:
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
     # The command union and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 191, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 193, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -2658,6 +2676,170 @@ def test_every_refusal_is_the_same_refusal_over_all_three_transports(
     assert_same_answer(answers, request, name)
 
 
+#: A value no closed vocabulary holds. It must never reach a refusal: the list a
+#: refusal carries is the vocabulary's, not the request's.
+REJECTED_VOCABULARY_MARKER = "zz_rejected_vocabulary_marker"
+
+
+def _closed_vocabulary_refusals(scene: Scene) -> dict[str, tuple[Capability, dict[str, Any]]]:
+    """One out-of-vocabulary request per plane, each refused for one field."""
+    marker = REJECTED_VOCABULARY_MARKER
+    return {
+        "tasks": (Capability.TASKS_LIST, {"priority": marker}),
+        "commitments": (Capability.COMMITMENTS_LIST, {"direction": marker}),
+        "reports": (
+            Capability.REPORTS_LIST,
+            {"cycle_run_id": issue_identifier(IdKind.INTELLIGENCE_CYCLE_RUN), "stage": marker},
+        ),
+        "constraints": (
+            Capability.CONSTRAINTS_LIST,
+            {"project_id": scene.constraint_project_id, "scope": marker},
+        ),
+        "entities": (
+            Capability.ENTITIES_GRAPH,
+            {"focus_entity_id": issue_identifier(IdKind.ENTITY), "relationship_types": [marker]},
+        ),
+        "record_events": (Capability.RECORD_EVENTS_LIST, {"record_families": [marker]}),
+        "captures": (
+            Capability.CAPTURE_CREATE,
+            {
+                "text": "a synthetic note",
+                "idempotency_key": "parity-vocabulary-0001",
+                "capture_kind": marker,
+            },
+        ),
+        "context": (
+            Capability.CONTEXT_PREPARE,
+            {"query": "revenue", "requested_planes": [marker]},
+        ),
+    }
+
+
+#: The field each refusal above names, and the vocabulary it must list.
+CLOSED_VOCABULARY_EXPECTATIONS: dict[str, tuple[str, type[StrEnum]]] = {
+    "tasks": ("priority", TaskPriority),
+    "commitments": ("selector", CommitmentDirection),
+    "reports": ("stage", IntelligenceStage),
+    "constraints": ("selector", ConstraintListScope),
+    "entities": ("relationship_types", EntityRelationshipType),
+    "record_events": ("record_families", RecordEventFamily),
+    "captures": ("capture_kind", CaptureKind),
+    "context": ("requested_planes", ContextPlane),
+}
+
+
+@pytest.mark.parametrize("plane", sorted(CLOSED_VOCABULARY_EXPECTATIONS))
+def test_a_closed_vocabulary_refusal_lists_the_acceptable_values_over_all_three_transports(
+    plane: str, staged: tuple[Scene, KnowledgeRecord]
+) -> None:
+    """R3: every transport carries the vocabulary of the rejected field, and only it.
+
+    Eight planes, reached through both the explicit route (a vocabulary helper
+    hands its enum over) and the static table (`entities` and `record_events`
+    refuse in the command or the plane, naming only the detail). One renderer
+    serves all three transports, so the answers must also be the same answer.
+    """
+    scene, _record = staged
+    capability, payload = _closed_vocabulary_refusals(scene)[plane]
+    detail, vocabulary = CLOSED_VOCABULARY_EXPECTATIONS[plane]
+    request = document(capability, scene.principal.principal_id, payload)
+    answers = answers_for(scene, capability.value, request)
+    for transport, answer in answers.items():
+        assert answer.failed, f"{transport} accepted {plane}"
+        error = answer.document.get("error") or answer.document
+        assert error["code"] == ErrorCode.INVALID_REQUEST.value, (transport, error)
+        assert error["safe_details"] == [detail], (transport, error)
+        assert error["allowed_values"] == [
+            {
+                "detail": detail,
+                "values": [member.value for member in vocabulary],
+                "truncated": False,
+            }
+        ], (transport, error)
+        assert REJECTED_VOCABULARY_MARKER not in answer.rendered, transport
+        assert REJECTED_VOCABULARY_MARKER not in json.dumps(answer.document), transport
+    assert_same_answer(answers, request, plane)
+
+
+def test_an_unregistered_report_kind_lists_only_the_principals_kinds_over_all_three_transports(
+    staged: tuple[Scene, KnowledgeRecord],
+) -> None:
+    """R2/R3: the per-Principal kind list, the same on every transport, and only its own.
+
+    The acting Principal's client kind is listed beside the built-ins; another
+    Principal's kind, staged in the same world, is never listed and never echoed.
+    """
+    scene, _record = staged
+    when = datetime(2026, 10, 11, 12, tzinfo=UTC)
+    store = scene.world.intelligence
+    store.insert_report_type(
+        scene.principal.principal_id,
+        ReportTypeDefinition(
+            artifact_kind="parity_own_scan",
+            stage=IntelligenceStage.COLLECTOR,
+            description="The acting Principal's own kind.",
+            origin=ReportTypeOrigin.CLIENT,
+        ),
+        created_at=when,
+    )
+    store.insert_report_type(
+        issue_identifier(IdKind.PRINCIPAL),
+        ReportTypeDefinition(
+            artifact_kind="zz_foreign_parity_kind",
+            stage=IntelligenceStage.COLLECTOR,
+            description="Another Principal's kind.",
+            origin=ReportTypeOrigin.CLIENT,
+        ),
+        created_at=when,
+    )
+    request = document(
+        Capability.REPORTS_LIST,
+        scene.principal.principal_id,
+        {"stage": "collector", "artifact_kind": REJECTED_VOCABULARY_MARKER},
+    )
+    answers = answers_for(scene, Capability.REPORTS_LIST.value, request)
+    for transport, answer in answers.items():
+        assert answer.failed, transport
+        error = answer.document.get("error") or answer.document
+        assert error["code"] == ErrorCode.INVALID_REQUEST.value, (transport, error)
+        assert error["safe_details"] == ["artifact_kind"], (transport, error)
+        assert error["allowed_values"] == [
+            {
+                "detail": "artifact_kind",
+                "values": ["collector_candidates", "parity_own_scan"],
+                "truncated": False,
+            }
+        ], (transport, error)
+        for leaked in (REJECTED_VOCABULARY_MARKER, "zz_foreign_parity_kind"):
+            assert leaked not in answer.rendered, (transport, leaked)
+            assert leaked not in json.dumps(answer.document), (transport, leaked)
+    assert_same_answer(answers, request, "unregistered report kind")
+
+
+def test_an_unknown_purpose_lists_the_permitted_purposes_over_all_three_transports(
+    staged: tuple[Scene, KnowledgeRecord],
+) -> None:
+    """R3: an envelope `purpose` outside `Purpose` names `purpose` and the capability's own."""
+    scene, _record = staged
+    for capability, permitted in (
+        (Capability.REPORTS_TYPES_CREATE, ["report_authoring"]),
+        (Capability.REPORTS_TYPES_LIST, ["report_read"]),
+    ):
+        request = document(capability, scene.principal.principal_id, {})
+        request["purpose"] = REJECTED_VOCABULARY_MARKER
+        answers = answers_for(scene, capability.value, request)
+        for transport, answer in answers.items():
+            assert answer.failed, transport
+            error = answer.document.get("error") or answer.document
+            assert error["code"] == ErrorCode.INVALID_REQUEST.value, (transport, error)
+            assert error["safe_details"] == ["purpose"], (transport, error)
+            assert error["allowed_values"] == [
+                {"detail": "purpose", "values": permitted, "truncated": False}
+            ], (transport, error)
+            assert REJECTED_VOCABULARY_MARKER not in answer.rendered, transport
+        assert_same_answer(answers, request, f"unknown purpose for {capability.value}")
+
+
 def test_largest_corrected_review_value_is_accepted_with_transport_parity(
     staged: tuple[Scene, KnowledgeRecord],
 ) -> None:
@@ -2849,7 +3031,7 @@ def test_declared_unwired_capabilities_stay_separate_from_positive_parity(
     from my_pa.application.errors import UnsupportedError
 
     assert set(Capability) - set(_HANDLERS) == FUTURE_CAPABILITIES
-    assert len(IMPLEMENTED_CAPABILITIES) == 190
+    assert len(IMPLEMENTED_CAPABILITIES) == 192
     assert set(_BUILDERS) == set(IMPLEMENTED_CAPABILITIES)
     assert {Capability(tool.name) for tool in TOOLS} == set(IMPLEMENTED_CAPABILITIES)
 

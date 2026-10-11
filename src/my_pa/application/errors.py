@@ -14,6 +14,15 @@ provider's single denial sentence is: `denied` and `not_found` share the posture
 that a caller must not be able to subtract one answer from another to learn that
 something exists.
 
+**Acceptable values come from the vocabulary, never from the request.** An
+`invalid_request` that rejected a closed-vocabulary field also lists what that
+field accepts (`ProblemDetail.allowed_values`). The list is either handed over
+explicitly by the raise site -- `invalid_choice` for an enum, or the
+`allowed_values` keyword for a vocabulary only known at run time -- or looked up
+in `error_vocabularies.STATIC_VOCABULARIES` by detail. Either way it is a
+vocabulary the service declares, so it adds nothing a caller could not read in
+the published schema, and the rejected value still has nowhere to go.
+
 **Detail is a closed token, not free text.** `ProblemDetail.safe_details` already
 bounds an entry to a short lowercase token, and every value this module supplies
 comes from `SafeDetail` below. A field name or a limit name is actionable; a
@@ -28,11 +37,18 @@ records which decision it made.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from enum import StrEnum
+from collections.abc import Iterable, Mapping, Sequence
+from enum import Enum, StrEnum
 from types import MappingProxyType
 
-from my_pa.contracts.v1.errors import ErrorCode, ProblemDetail, retry_guidance_for
+from my_pa.contracts.v1.errors import (
+    MAX_ALLOWED_VALUE_ENTRIES,
+    AllowedValues,
+    ErrorCode,
+    ProblemDetail,
+    is_allowed_value_token,
+    retry_guidance_for,
+)
 
 __all__ = [
     "AmbiguousRequestError",
@@ -46,6 +62,7 @@ __all__ = [
     "SafeDetail",
     "UnavailableError",
     "UnsupportedError",
+    "invalid_choice",
     "problem_detail",
 ]
 
@@ -88,6 +105,9 @@ class SafeDetail(StrEnum):
     MEDIA_TYPES = "media_types"
     IDEMPOTENCY_KEY = "idempotency_key"
     SELECTOR = "selector"
+    #: The request's `purpose` is not a purpose at all. Listed with the purposes
+    #: the requested operation permits, never with the value that was sent.
+    PURPOSE = "purpose"
     REPRESENTATION = "representation"
     SUBJECT = "subject"
     CONVERSATION_CONTEXT = "conversation_context"
@@ -533,9 +553,24 @@ class ApplicationError(Exception):
 
     code: ErrorCode = ErrorCode.INTERNAL_ERROR
 
-    def __init__(self, *details: SafeDetail) -> None:
+    def __init__(
+        self,
+        *details: SafeDetail,
+        allowed_values: Mapping[SafeDetail, Sequence[str]] | None = None,
+    ) -> None:
         super().__init__(self.code.value)
         self.safe_details: tuple[SafeDetail, ...] = details
+        explicit: dict[SafeDetail, tuple[str, ...]] = {}
+        for detail, values in (allowed_values or {}).items():
+            # A bare string is a Sequence[str] of its characters; listing those
+            # would be a vocabulary nobody declared.
+            if isinstance(values, str):
+                raise TypeError("allowed_values maps a detail to a sequence of values")
+            explicit[SafeDetail(detail)] = tuple(str(value) for value in values)
+        #: Vocabularies the raise site named itself, overriding the static table.
+        #: Rendered only for `invalid_request` and only for a detail this error
+        #: also carries in `safe_details`.
+        self.allowed_values: Mapping[SafeDetail, tuple[str, ...]] = MappingProxyType(explicit)
 
 
 class InvalidRequestError(ApplicationError):
@@ -600,6 +635,48 @@ class InternalError(ApplicationError):
     code = ErrorCode.INTERNAL_ERROR
 
 
+def invalid_choice(detail: SafeDetail, vocabulary: Iterable[object]) -> InvalidRequestError:
+    """An `invalid_request` for `detail` that lists the closed `vocabulary`.
+
+    `vocabulary` is an enum class or the members of one (an `Enum` member
+    contributes its value), in declaration order. This is the one constructor
+    the closed-vocabulary helpers share, so the list is always the vocabulary
+    the helper checked against and never the value it rejected.
+    """
+    values = tuple(
+        str(member.value) if isinstance(member, Enum) else str(member) for member in vocabulary
+    )
+    return InvalidRequestError(detail, allowed_values={detail: values})
+
+
+def _allowed_values(error: ApplicationError) -> tuple[AllowedValues, ...]:
+    """The vocabularies `error` may list: explicit first, else the static table.
+
+    Only for `invalid_request`, only for a detail the error carries, at most one
+    entry per detail and at most `MAX_ALLOWED_VALUE_ENTRIES` entries. A value
+    that is not a short vocabulary token is dropped rather than allowed to turn
+    an `invalid_request` into a rendering failure.
+    """
+    if error.code is not ErrorCode.INVALID_REQUEST:
+        return ()
+    # Imported here, not at the top: the table is keyed by `SafeDetail`, so it
+    # imports this module and a top-level import would be a cycle.
+    from my_pa.application.error_vocabularies import STATIC_VOCABULARIES
+
+    entries: list[AllowedValues] = []
+    for detail in dict.fromkeys(error.safe_details):
+        values = error.allowed_values.get(detail)
+        if values is None:
+            values = STATIC_VOCABULARIES.get(detail)
+        if values is None:
+            continue
+        listed = [value for value in values if is_allowed_value_token(value)]
+        if not listed:
+            continue
+        entries.append(AllowedValues.bounded(detail.value, listed))
+    return tuple(entries[:MAX_ALLOWED_VALUE_ENTRIES])
+
+
 def problem_detail(error: ApplicationError, *, correlation_id: str) -> ProblemDetail:
     """Render `error` as the public problem it was already classified as.
 
@@ -612,4 +689,5 @@ def problem_detail(error: ApplicationError, *, correlation_id: str) -> ProblemDe
         correlation_id=correlation_id,
         retry=retry_guidance_for(error.code),
         safe_details=tuple(detail.value for detail in error.safe_details),
+        allowed_values=_allowed_values(error),
     )

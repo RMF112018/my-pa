@@ -4,6 +4,7 @@ import {
   currentCycleRunId,
   groupArtifactsByCycle,
   MORNING_BRIEF_SET_ID,
+  briefingGapCopy,
   nonReadyRequiredCount,
   resolveSetPayload,
 } from "./cycle-selection";
@@ -94,5 +95,15 @@ describe("cycle selection from backend fields", () => {
       ]),
     ).toBe(1);
     expect(nonReadyRequiredCount([])).toBe(0);
+  });
+
+  it("names the Daily Briefing gaps and stays silent when none are named", () => {
+    expect(
+      briefingGapCopy({ missing_focus_areas: ["people", "projects"], partial_focus_areas: ["research"] }),
+    ).toBe("Daily Briefing will publish as partial — missing: people, projects; partial: research");
+    expect(briefingGapCopy({ missing_focus_areas: [], partial_focus_areas: ["research"] })).toBe(
+      "Daily Briefing will publish as partial — partial: research",
+    );
+    expect(briefingGapCopy({ missing_focus_areas: [], partial_focus_areas: [] })).toBeNull();
   });
 });

@@ -83,7 +83,33 @@ describe("decodeReportsRead", () => {
 
   it("fails closed on an invalid enum", () => {
     expect(decodeReportsRead({ ...ARTIFACT, stage: "planner" }).ok).toBe(false);
-    expect(decodeReportsRead({ ...ARTIFACT, artifact_kind: "brief" }).ok).toBe(false);
     expect(decodeReportsRead({ ...ARTIFACT, artifact_state: "draft" }).ok).toBe(false);
+  });
+
+  it("decodes a Principal-registered artifact kind token", () => {
+    for (const kind of ["weekly_digest", "a", "k2_review", `k${"a".repeat(63)}`]) {
+      const decoded = decodeReportsRead({ ...ARTIFACT, artifact_kind: kind });
+      expect(decoded.ok).toBe(true);
+      if (decoded.ok) expect(decoded.value.artifact_kind).toBe(kind);
+    }
+  });
+
+  it("fails closed on an artifact kind that is not a lower_snake token", () => {
+    for (const kind of [
+      "",
+      "Weekly_digest",
+      "2_digest",
+      "_digest",
+      "weekly-digest",
+      "weekly digest",
+      "weekly.digest",
+      "weekly_digest\n",
+      `k${"a".repeat(64)}`,
+      7,
+      null,
+      undefined,
+    ]) {
+      expect(decodeReportsRead({ ...ARTIFACT, artifact_kind: kind }).ok).toBe(false);
+    }
   });
 });

@@ -36,4 +36,9 @@ describe("decodeReportsLatest", () => {
     expect(decodeReportsLatest({ ...LATEST, stage: "planner" }).ok).toBe(false);
     expect(decodeReportsLatest({ ...LATEST, artifact_state: "draft" }).ok).toBe(false);
   });
+
+  it("decodes a registered kind token and fails closed on a malformed one", () => {
+    expect(decodeReportsLatest({ ...LATEST, artifact_kind: "weekly_digest" }).ok).toBe(true);
+    expect(decodeReportsLatest({ ...LATEST, artifact_kind: "weekly-digest" }).ok).toBe(false);
+  });
 });

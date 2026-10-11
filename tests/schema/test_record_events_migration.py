@@ -62,11 +62,11 @@ REVISION: Final = "1d9b248e7f83"
 #: The chain head. `0641c354ca85` (CRL-WP-03, Capture lifecycle) is additive on
 #: `REVISION`, so `REVISION` is no longer the head; a database upgraded to head
 #: stands there, and a refused downgrade leaves it there.
-HEAD: Final = "cc373834a485"
+HEAD: Final = "a591b81f10a2"
 PREVIOUS: Final = "7d9a450dfd07"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20260929_1d9b248e7f83_record_events.py"
-HEAD_MIGRATION: Final = MIGRATIONS / "20261004_6734f039f7a6_knowledge_assertion_layer.py"
+HEAD_MIGRATION: Final = MIGRATIONS / "20261011_a591b81f10a2_intelligence_report_type_registry.py"
 VOCABULARY_MIGRATION: Final = MIGRATIONS / "20260927_7d9a450dfd07_meeting_records.py"
 TABLE_NAMES: Final = frozenset({"record_event_sequences", "record_events"})
 TRIGGER: Final = "record_events_are_append_only"
@@ -131,7 +131,8 @@ def test_the_revision_is_directly_on_7d9a450dfd07_under_one_later_head() -> None
     script = ScriptDirectory.from_config(_config())
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "93f3aa113f58"
+    assert script.get_revision(HEAD).down_revision == "cc373834a485"
+    assert script.get_revision("cc373834a485").down_revision == "93f3aa113f58"
     assert script.get_revision("93f3aa113f58").down_revision == "6734f039f7a6"
     assert script.get_revision("6734f039f7a6").down_revision == "0641c354ca85"
     assert script.get_revision("0641c354ca85").down_revision == "c8e4a1b70d35"
@@ -214,9 +215,10 @@ def test_the_at_texts_add_exactly_the_record_event_vocabulary_and_stay_sorted() 
 def test_head_admits_every_declared_capability_and_purpose() -> None:
     """A subset, not equality: the audit set also holds the operator names.
 
-    The Knowledge revision `6734f039f7a6` is the last to restate the vocabulary
-    (the head `93f3aa113f58` touches no capability or purpose); it restates it in
-    place and admits the KLP names ahead of the domain. The names it
+    The head `a591b81f10a2` is the last to restate the vocabulary: it byte-copies
+    the Knowledge revision `6734f039f7a6`'s AT literals and adds the two
+    `reports.types.*` capabilities. `6734f039f7a6` restated it in place and
+    admitted the KLP names ahead of the domain. The names it
     admits beyond `Capability` are the native-host names and exactly the current
     KLP schema-ahead gap (`tests/schema/knowledge_schema_ahead_contract.py`).
     """

@@ -794,6 +794,22 @@ def _continuity_projects() -> dict[str, Any]:
                 "created_at": format_rfc3339(datetime(2026, 1, 1, tzinfo=UTC)),
                 "updated_at": format_rfc3339(datetime(2026, 1, 1, tzinfo=UTC)),
                 "version": 1,
+                "aliases": [],
+                "project_number": None,
+                "sector": None,
+                "type": None,
+                "address": None,
+                "city": None,
+                "county": None,
+                "address_state": None,
+                "zip": None,
+                "value": None,
+                "scheduled_start": None,
+                "contract_start": None,
+                "actual_start": None,
+                "scheduled_finish": None,
+                "contract_finish": None,
+                "actual_finish": None,
             }
         ]
     }

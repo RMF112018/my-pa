@@ -41,6 +41,7 @@ import sys
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Final, cast
@@ -419,7 +420,9 @@ from my_pa.domain.situation.situation import (
     Project,
     ProjectEntityLink,
     ProjectEntityLinkageState,
+    ProjectSector,
     ProjectState,
+    ProjectType,
     PulseItem,
     Situation,
     SituationState,
@@ -4389,6 +4392,22 @@ class _Projects(ProjectRepository):
         description: str | None,
         state: ProjectState | None,
         now: datetime,
+        aliases: tuple[str, ...] | None = None,
+        project_number: str | None = None,
+        sector: ProjectSector | None = None,
+        type: ProjectType | None = None,
+        address: str | None = None,
+        city: str | None = None,
+        county: str | None = None,
+        address_state: str | None = None,
+        zip: str | None = None,
+        value: Decimal | None = None,
+        scheduled_start: date | None = None,
+        contract_start: date | None = None,
+        actual_start: date | None = None,
+        scheduled_finish: date | None = None,
+        contract_finish: date | None = None,
+        actual_finish: date | None = None,
     ) -> ProjectMutationReceipt | None:
         return execute_update_project(
             self,
@@ -4401,6 +4420,22 @@ class _Projects(ProjectRepository):
             description=description,
             state=state,
             now=now,
+            aliases=aliases,
+            project_number=project_number,
+            sector=sector,
+            type=type,
+            address=address,
+            city=city,
+            county=county,
+            address_state=address_state,
+            zip=zip,
+            value=value,
+            scheduled_start=scheduled_start,
+            contract_start=contract_start,
+            actual_start=actual_start,
+            scheduled_finish=scheduled_finish,
+            contract_finish=contract_finish,
+            actual_finish=actual_finish,
         )
 
     def close_project(
@@ -4531,6 +4566,22 @@ class _ContinuityAuthoring(ContinuityAuthoringRepository):
         project_id: str,
         name: str,
         description: str | None,
+        aliases: tuple[str, ...] | None = None,
+        project_number: str | None = None,
+        sector: ProjectSector | None = None,
+        type: ProjectType | None = None,
+        address: str | None = None,
+        city: str | None = None,
+        county: str | None = None,
+        address_state: str | None = None,
+        zip: str | None = None,
+        value: Decimal | None = None,
+        scheduled_start: date | None = None,
+        contract_start: date | None = None,
+        actual_start: date | None = None,
+        scheduled_finish: date | None = None,
+        contract_finish: date | None = None,
+        actual_finish: date | None = None,
     ) -> Project:
         now = utc_now()
         project = Project(
@@ -4543,6 +4594,22 @@ class _ContinuityAuthoring(ContinuityAuthoringRepository):
             updated_at=now,
             description=description,
             version=1,
+            aliases=aliases or (),
+            project_number=project_number,
+            sector=sector,
+            type=type,
+            address=address,
+            city=city,
+            county=county,
+            address_state=address_state,
+            zip=zip,
+            value=value,
+            scheduled_start=scheduled_start,
+            contract_start=contract_start,
+            actual_start=actual_start,
+            scheduled_finish=scheduled_finish,
+            contract_finish=contract_finish,
+            actual_finish=actual_finish,
         )
         self._world.projects.append(project)
         try:

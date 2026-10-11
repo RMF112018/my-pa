@@ -45,6 +45,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from decimal import Decimal
 from hashlib import sha256
 from types import TracebackType
 from typing import Any, ClassVar, Final, Protocol
@@ -255,7 +256,9 @@ from my_pa.domain.situation.situation import (
     Frame,
     Project,
     ProjectEntityLink,
+    ProjectSector,
     ProjectState,
+    ProjectType,
     PulseItem,
     Situation,
     SituationState,
@@ -4868,6 +4871,22 @@ class ContinuityAuthoringRepository(ABC):
         project_id: str,
         name: str,
         description: str | None,
+        aliases: tuple[str, ...] | None = None,
+        project_number: str | None = None,
+        sector: ProjectSector | None = None,
+        type: ProjectType | None = None,
+        address: str | None = None,
+        city: str | None = None,
+        county: str | None = None,
+        address_state: str | None = None,
+        zip: str | None = None,
+        value: Decimal | None = None,
+        scheduled_start: date | None = None,
+        contract_start: date | None = None,
+        actual_start: date | None = None,
+        scheduled_finish: date | None = None,
+        contract_finish: date | None = None,
+        actual_finish: date | None = None,
     ) -> Project:
         """Create one Project under a key this transaction already reserved."""
 
@@ -6559,6 +6578,22 @@ class ProjectRepository(ABC):
         description: str | None,
         state: ProjectState | None,
         now: datetime,
+        aliases: tuple[str, ...] | None = None,
+        project_number: str | None = None,
+        sector: ProjectSector | None = None,
+        type: ProjectType | None = None,
+        address: str | None = None,
+        city: str | None = None,
+        county: str | None = None,
+        address_state: str | None = None,
+        zip: str | None = None,
+        value: Decimal | None = None,
+        scheduled_start: date | None = None,
+        contract_start: date | None = None,
+        actual_start: date | None = None,
+        scheduled_finish: date | None = None,
+        contract_finish: date | None = None,
+        actual_finish: date | None = None,
     ) -> ProjectMutationReceipt | None:
         """Versioned update of name, description, and/or nonterminal state.
 

@@ -22,13 +22,14 @@ import dataclasses
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Protocol
 
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import ensure_utc
-from my_pa.domain.situation.situation import Project, ProjectState
+from my_pa.domain.situation.situation import Project, ProjectSector, ProjectState, ProjectType
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.domain.task.history import (
     IDEMPOTENCY_KEY_PATTERN,
@@ -159,6 +160,22 @@ def execute_update_project(
     state: ProjectState | None,
     now: datetime,
     actor: TaskMutationActor = TaskMutationActor.PRINCIPAL,
+    aliases: tuple[str, ...] | None = None,
+    project_number: str | None = None,
+    sector: ProjectSector | None = None,
+    type: ProjectType | None = None,
+    address: str | None = None,
+    city: str | None = None,
+    county: str | None = None,
+    address_state: str | None = None,
+    zip: str | None = None,
+    value: Decimal | None = None,
+    scheduled_start: date | None = None,
+    contract_start: date | None = None,
+    actual_start: date | None = None,
+    scheduled_finish: date | None = None,
+    contract_finish: date | None = None,
+    actual_finish: date | None = None,
 ) -> ProjectMutationReceipt | None:
     """Apply a versioned project update, or return None when the row is absent."""
 
@@ -169,6 +186,12 @@ def execute_update_project(
             raise ProjectIllegalTransitionError(
                 "a project update may only move between active and on_hold"
             )
+        if (
+            project_number is not None
+            and current.project_number is not None
+            and project_number != current.project_number
+        ):
+            raise ProjectIllegalTransitionError("a project number is immutable once set")
         replacements: dict[str, Any] = {}
         if name is not None:
             replacements["name"] = name
@@ -176,6 +199,38 @@ def execute_update_project(
             replacements["description"] = description
         if state is not None:
             replacements["state"] = state
+        if aliases is not None:
+            replacements["aliases"] = aliases
+        if project_number is not None:
+            replacements["project_number"] = project_number
+        if sector is not None:
+            replacements["sector"] = sector
+        if type is not None:
+            replacements["type"] = type
+        if address is not None:
+            replacements["address"] = address
+        if city is not None:
+            replacements["city"] = city
+        if county is not None:
+            replacements["county"] = county
+        if address_state is not None:
+            replacements["address_state"] = address_state
+        if zip is not None:
+            replacements["zip"] = zip
+        if value is not None:
+            replacements["value"] = value
+        if scheduled_start is not None:
+            replacements["scheduled_start"] = scheduled_start
+        if contract_start is not None:
+            replacements["contract_start"] = contract_start
+        if actual_start is not None:
+            replacements["actual_start"] = actual_start
+        if scheduled_finish is not None:
+            replacements["scheduled_finish"] = scheduled_finish
+        if contract_finish is not None:
+            replacements["contract_finish"] = contract_finish
+        if actual_finish is not None:
+            replacements["actual_finish"] = actual_finish
         return dataclasses.replace(current, **replacements)
 
     return _mutate(

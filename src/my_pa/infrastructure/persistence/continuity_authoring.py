@@ -8,7 +8,8 @@ treat the same digest as success while leaving the extra row committed.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -35,7 +36,9 @@ from my_pa.domain.situation.continuity import (
 from my_pa.domain.situation.situation import (
     Project,
     ProjectEntityLinkageState,
+    ProjectSector,
     ProjectState,
+    ProjectType,
     Situation,
     SituationState,
 )
@@ -111,8 +114,25 @@ class SqlContinuityAuthoringRepository(ContinuityAuthoringRepository):
         project_id: str,
         name: str,
         description: str | None,
+        aliases: tuple[str, ...] | None = None,
+        project_number: str | None = None,
+        sector: ProjectSector | None = None,
+        type: ProjectType | None = None,
+        address: str | None = None,
+        city: str | None = None,
+        county: str | None = None,
+        address_state: str | None = None,
+        zip: str | None = None,
+        value: Decimal | None = None,
+        scheduled_start: date | None = None,
+        contract_start: date | None = None,
+        actual_start: date | None = None,
+        scheduled_finish: date | None = None,
+        contract_finish: date | None = None,
+        actual_finish: date | None = None,
     ) -> Project:
         now = utc_now()
+        resolved_aliases = aliases or ()
         self._connection.execute(
             projects.insert().values(
                 project_id=project_id,
@@ -126,6 +146,22 @@ class SqlContinuityAuthoringRepository(ContinuityAuthoringRepository):
                 created_at=now,
                 updated_at=now,
                 version=1,
+                aliases=list(resolved_aliases),
+                project_number=project_number,
+                sector=None if sector is None else sector.value,
+                type=None if type is None else type.value,
+                address=address,
+                city=city,
+                county=county,
+                address_state=address_state,
+                zip=zip,
+                value=value,
+                scheduled_start=scheduled_start,
+                contract_start=contract_start,
+                actual_start=actual_start,
+                scheduled_finish=scheduled_finish,
+                contract_finish=contract_finish,
+                actual_finish=actual_finish,
             )
         )
         self._mint_bound_project_entity(
@@ -144,6 +180,22 @@ class SqlContinuityAuthoringRepository(ContinuityAuthoringRepository):
             updated_at=now,
             description=description,
             version=1,
+            aliases=resolved_aliases,
+            project_number=project_number,
+            sector=sector,
+            type=type,
+            address=address,
+            city=city,
+            county=county,
+            address_state=address_state,
+            zip=zip,
+            value=value,
+            scheduled_start=scheduled_start,
+            contract_start=contract_start,
+            actual_start=actual_start,
+            scheduled_finish=scheduled_finish,
+            contract_finish=contract_finish,
+            actual_finish=actual_finish,
         )
 
     def _mint_bound_project_entity(

@@ -6404,7 +6404,42 @@ class ApplicationService:
         principal_id = authorization.principal.principal_id
         digest = _authoring_digest(
             command.capability.value,
-            {"name": command.name, "description": command.description},
+            {
+                "name": command.name,
+                "description": command.description,
+                "aliases": command.aliases,
+                "project_number": command.project_number,
+                "sector": None if command.sector is None else command.sector.value,
+                "type": None if command.type is None else command.type.value,
+                "address": command.address,
+                "city": command.city,
+                "county": command.county,
+                "address_state": command.address_state,
+                "zip": command.zip,
+                "value": None if command.value is None else str(command.value),
+                "scheduled_start": (
+                    None if command.scheduled_start is None else command.scheduled_start.isoformat()
+                ),
+                "contract_start": (
+                    None if command.contract_start is None else command.contract_start.isoformat()
+                ),
+                "actual_start": (
+                    None if command.actual_start is None else command.actual_start.isoformat()
+                ),
+                "scheduled_finish": (
+                    None
+                    if command.scheduled_finish is None
+                    else command.scheduled_finish.isoformat()
+                ),
+                "contract_finish": (
+                    None
+                    if command.contract_finish is None
+                    else command.contract_finish.isoformat()
+                ),
+                "actual_finish": (
+                    None if command.actual_finish is None else command.actual_finish.isoformat()
+                ),
+            },
         )
         object_id = issue_identifier(IdKind.PROJECT)
         with _translated():
@@ -6433,6 +6468,22 @@ class ApplicationService:
                     project_id=object_id,
                     name=command.name,
                     description=command.description,
+                    aliases=command.aliases,
+                    project_number=command.project_number,
+                    sector=command.sector,
+                    type=command.type,
+                    address=command.address,
+                    city=command.city,
+                    county=command.county,
+                    address_state=command.address_state,
+                    zip=command.zip,
+                    value=command.value,
+                    scheduled_start=command.scheduled_start,
+                    contract_start=command.contract_start,
+                    actual_start=command.actual_start,
+                    scheduled_finish=command.scheduled_finish,
+                    contract_finish=command.contract_finish,
+                    actual_finish=command.actual_finish,
                 )
             except ValueError as error:
                 if str(error) != "an active project-type canonical name is already held":
@@ -6509,6 +6560,38 @@ class ApplicationService:
                 "name": command.name,
                 "project_id": command.project_id,
                 "state": None if command.state is None else command.state.value,
+                "aliases": command.aliases,
+                "project_number": command.project_number,
+                "sector": None if command.sector is None else command.sector.value,
+                "type": None if command.type is None else command.type.value,
+                "address": command.address,
+                "city": command.city,
+                "county": command.county,
+                "address_state": command.address_state,
+                "zip": command.zip,
+                "value": None if command.value is None else str(command.value),
+                "scheduled_start": (
+                    None if command.scheduled_start is None else command.scheduled_start.isoformat()
+                ),
+                "contract_start": (
+                    None if command.contract_start is None else command.contract_start.isoformat()
+                ),
+                "actual_start": (
+                    None if command.actual_start is None else command.actual_start.isoformat()
+                ),
+                "scheduled_finish": (
+                    None
+                    if command.scheduled_finish is None
+                    else command.scheduled_finish.isoformat()
+                ),
+                "contract_finish": (
+                    None
+                    if command.contract_finish is None
+                    else command.contract_finish.isoformat()
+                ),
+                "actual_finish": (
+                    None if command.actual_finish is None else command.actual_finish.isoformat()
+                ),
             },
         )
         return self._continuity_project_mutation(
@@ -6525,6 +6608,22 @@ class ApplicationService:
                 description=command.description,
                 state=command.state,
                 now=authorization.at,
+                aliases=command.aliases,
+                project_number=command.project_number,
+                sector=command.sector,
+                type=command.type,
+                address=command.address,
+                city=command.city,
+                county=command.county,
+                address_state=command.address_state,
+                zip=command.zip,
+                value=command.value,
+                scheduled_start=command.scheduled_start,
+                contract_start=command.contract_start,
+                actual_start=command.actual_start,
+                scheduled_finish=command.scheduled_finish,
+                contract_finish=command.contract_finish,
+                actual_finish=command.actual_finish,
             ),
         )
 
@@ -6747,6 +6846,45 @@ class ApplicationService:
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_CONTINUITY_TRUST_BASIS),
         )
 
+    @staticmethod
+    def _project_data_fields(project: Project) -> dict[str, object]:
+        """The 16 fields added beyond the original Project shape, as their wire form.
+
+        Shared by `_project_authoring_result` and `_continuity_project_payload`,
+        which are otherwise two independently-maintained literals — this is the
+        one place both draw from so the two cannot drift apart on these fields.
+        """
+        return {
+            "aliases": list(project.aliases),
+            "project_number": project.project_number,
+            "sector": None if project.sector is None else project.sector.value,
+            "type": None if project.type is None else project.type.value,
+            "address": project.address,
+            "city": project.city,
+            "county": project.county,
+            "address_state": project.address_state,
+            "zip": project.zip,
+            "value": None if project.value is None else str(project.value),
+            "scheduled_start": (
+                None if project.scheduled_start is None else project.scheduled_start.isoformat()
+            ),
+            "contract_start": (
+                None if project.contract_start is None else project.contract_start.isoformat()
+            ),
+            "actual_start": (
+                None if project.actual_start is None else project.actual_start.isoformat()
+            ),
+            "scheduled_finish": (
+                None if project.scheduled_finish is None else project.scheduled_finish.isoformat()
+            ),
+            "contract_finish": (
+                None if project.contract_finish is None else project.contract_finish.isoformat()
+            ),
+            "actual_finish": (
+                None if project.actual_finish is None else project.actual_finish.isoformat()
+            ),
+        }
+
     def _project_authoring_result(
         self, authorization: Authorization, project: Project, *, replayed: bool
     ) -> _Result:
@@ -6758,6 +6896,7 @@ class ApplicationService:
                 "description": project.description,
                 "replayed": replayed,
                 "version": project.version,
+                **self._project_data_fields(project),
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_CONTINUITY_TRUST_BASIS),
         )
@@ -6779,6 +6918,7 @@ class ApplicationService:
             "created_at": format_rfc3339(project.created_at),
             "updated_at": format_rfc3339(project.updated_at),
             "version": project.version,
+            **self._project_data_fields(project),
         }
 
     def _canonical_participations(

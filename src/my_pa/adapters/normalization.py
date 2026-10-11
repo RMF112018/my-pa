@@ -53,6 +53,7 @@ from binascii import Error as BinasciiError
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Any, Final
@@ -333,7 +334,7 @@ from my_pa.domain.situation.continuity import (
     CommitmentState,
     CommitmentWorkView,
 )
-from my_pa.domain.situation.situation import ProjectState
+from my_pa.domain.situation.situation import ProjectSector, ProjectState, ProjectType
 from my_pa.domain.source.enrollment import MAX_ENROLLMENT_ITEMS
 from my_pa.domain.task.lifecycle import (
     TaskArchiveMode,
@@ -614,12 +615,58 @@ def _read_project(payload: Mapping[str, Any]) -> Command:
     return ReadProject(**payload)
 
 
+#: The six Project schedule dates, converted the same way everywhere they appear.
+_PROJECT_DATE_FIELDS: Final[tuple[str, ...]] = (
+    "scheduled_start",
+    "contract_start",
+    "actual_start",
+    "scheduled_finish",
+    "contract_finish",
+    "actual_finish",
+)
+
+
+def _project_value(value: object) -> object:
+    """One USD amount as a `Decimal`, or exactly what arrived.
+
+    Converts via `str(value)` rather than `Decimal(value)` directly, so a JSON
+    number never inherits a binary float's representation error.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return value
+    try:
+        return Decimal(str(value))
+    except InvalidOperation:
+        return value
+
+
+def _convert_project_data_fields(converted: dict[str, Any]) -> dict[str, Any]:
+    """The 16-field shape conversion shared by create and update.
+
+    Leniently converts; a value that does not convert is passed through
+    unchanged and the command's own `__post_init__` is what refuses it.
+    """
+    for name in _PROJECT_DATE_FIELDS:
+        if name in converted:
+            converted[name] = _constraint_date(converted[name])
+    if "sector" in converted:
+        converted["sector"] = _entity_member(converted["sector"], ProjectSector)
+    if "type" in converted:
+        converted["type"] = _entity_member(converted["type"], ProjectType)
+    if "value" in converted:
+        converted["value"] = _project_value(converted["value"])
+    aliases = converted.get("aliases")
+    if isinstance(aliases, list):
+        converted["aliases"] = tuple(aliases)
+    return converted
+
+
 def _create_project(payload: Mapping[str, Any]) -> Command:
-    return CreateProject(**payload)
+    return CreateProject(**_convert_project_data_fields(dict(payload)))
 
 
 def _update_project(payload: Mapping[str, Any]) -> Command:
-    converted = dict(payload)
+    converted = _convert_project_data_fields(dict(payload))
     named = converted.get("state")
     if isinstance(named, str):
         try:

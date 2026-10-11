@@ -15,9 +15,9 @@ from my_pa.infrastructure.persistence import capture, capture_search
 from my_pa.infrastructure.persistence.tables import captures
 
 ROOT: Final = Path(__file__).resolve().parents[2]
-#: Moved by KLP-WP-02, which appends the fourteen Knowledge declarations and the
-#: `context_run_items.knowledge_assertion_id` identity; `captures` is untouched.
-TABLES_SHA256: Final = "3c20390a92ef9f8236ca5daa3474c5f6d0df5c6d906cfa2a793152cb69e5e92f"
+#: Moved by the Continuity Project 16-field addition, which appends columns to
+#: `projects` only; `captures` is untouched.
+TABLES_SHA256: Final = "e2f2d2b15ec72420ec0a1c6171be6a63cd99b9de3b0e0e1ec9b0269dfcd4357d"
 WP03_MIGRATION_SHA256: Final = "098edd98ccc1846b01c58f42e296e4751e7841b562a2827616cc4337e174c354"
 WP03_MIGRATION: Final = (
     ROOT / "migrations/versions/20260914_e6a4c2f91b73_project_controls_run01_integrity.py"

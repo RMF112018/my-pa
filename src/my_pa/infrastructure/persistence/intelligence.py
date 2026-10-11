@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import date, datetime
 from typing import Any, cast
@@ -51,7 +52,24 @@ from my_pa.infrastructure.persistence.tables import (
     intelligence_report_types,
 )
 
-__all__ = ["SqlIntelligenceStore"]
+__all__ = [
+    "REPORT_TYPE_REGISTRY_LOCK_NAMESPACE",
+    "SqlIntelligenceStore",
+    "report_type_registry_lock_key",
+]
+
+#: Domain separator of the report type registry's per-Principal advisory lock.
+REPORT_TYPE_REGISTRY_LOCK_NAMESPACE = "intelligence-report-type-registry"
+
+
+def report_type_registry_lock_key(principal_id: str) -> int:
+    """A stable signed 64-bit advisory-lock key for one Principal's registry.
+
+    SHA-256 of the namespace and the Principal, so the key never depends on a
+    server hash function and never collides with another lock domain by design.
+    """
+    encoded = f"{REPORT_TYPE_REGISTRY_LOCK_NAMESPACE}\x1f{principal_id}".encode()
+    return int.from_bytes(hashlib.sha256(encoded).digest()[:8], byteorder="big", signed=True)
 
 
 def _area(value: str | None) -> FocusAreaId | None:
@@ -558,6 +576,40 @@ class SqlIntelligenceStore:
         if stored is None:  # pragma: no cover - the row was just written or already present
             raise RuntimeError("report type row vanished inside its own transaction")
         return ReportTypeInsertion(report_type=stored, inserted=inserted)
+
+    def register_client_report_type(
+        self,
+        principal_id: str,
+        definition: ReportTypeDefinition,
+        *,
+        created_at: datetime,
+        limit: int,
+    ) -> ReportTypeInsertion | None:
+        """Lookup, count and insert in this transaction under the registry lock.
+
+        `pg_advisory_xact_lock` on the Principal's registry key is held to the
+        end of the transaction, so a concurrent registration for the same
+        Principal waits until this one commits and then counts its row. The
+        key is the bound partition identity, never the argument.
+        """
+        self._connection.execute(
+            select(func.pg_advisory_xact_lock(report_type_registry_lock_key(self._principal_id)))
+        ).one()
+        existing = self.get_report_type(principal_id, str(definition.artifact_kind))
+        if existing is not None:
+            return ReportTypeInsertion(report_type=existing, inserted=False)
+        clients = self._connection.execute(
+            principal_scoped(
+                select(func.count()).where(
+                    intelligence_report_types.c.origin == ReportTypeOrigin.CLIENT.value
+                ),
+                intelligence_report_types,
+                self._context,
+            )
+        ).scalar_one()
+        if clients >= limit:
+            return None
+        return self.insert_report_type(principal_id, definition, created_at=created_at)
 
     def ensure_builtin_report_types(self, principal_id: str, *, created_at: datetime) -> int:
         """Insert any missing built-in row for this Principal. Returns how many."""

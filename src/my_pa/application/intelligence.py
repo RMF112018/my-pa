@@ -7,6 +7,7 @@ Principal is always the authenticated partition, never a request field.
 from __future__ import annotations
 
 import json
+import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
@@ -205,6 +206,23 @@ class IntelligenceStore(Protocol):
 
     def ensure_builtin_report_types(self, principal_id: str, *, created_at: datetime) -> int:
         """Insert any missing built-in row; return how many were inserted."""
+
+    def register_client_report_type(
+        self,
+        principal_id: str,
+        definition: ReportTypeDefinition,
+        *,
+        created_at: datetime,
+        limit: int,
+    ) -> ReportTypeInsertion | None:
+        """Insert a client kind under a per-Principal registration lock.
+
+        The lookup, the count of client rows and the insert run under one
+        lock held to the end of the transaction, so concurrent registrations
+        for a Principal serialize and the cap is never exceeded. An existing
+        kind is returned unchanged (``inserted`` False) whatever the count;
+        ``None`` means the kind is new and ``limit`` client kinds already exist.
+        """
 
 
 def _now(at: datetime) -> datetime:
@@ -429,18 +447,16 @@ def register_report_type(
         raise InvalidRequestError(SafeDetail.PAYLOAD) from None
     when = _now(at)
     store.ensure_builtin_report_types(principal_id, created_at=when)
-    existing = store.get_report_type(principal_id, kind)
-    if existing is None:
-        clients = sum(
-            row.definition.origin is ReportTypeOrigin.CLIENT
-            for row in store.list_report_types(principal_id)
-        )
-        if clients >= MAX_CLIENT_REPORT_TYPES:
-            raise ConflictError(SafeDetail.ARTIFACT_KIND, SafeDetail.MAX_ITEMS)
-        insertion = store.insert_report_type(principal_id, definition, created_at=when)
-        if insertion.inserted:
-            return ReportTypeRegistration(definition=definition, created=True, replayed=False)
-        existing = insertion.report_type
+    # Check-then-insert under the store's per-Principal registration lock, so
+    # two concurrent registrations can never both pass the cap.
+    insertion = store.register_client_report_type(
+        principal_id, definition, created_at=when, limit=MAX_CLIENT_REPORT_TYPES
+    )
+    if insertion is None:
+        raise ConflictError(SafeDetail.ARTIFACT_KIND, SafeDetail.MAX_ITEMS)
+    if insertion.inserted:
+        return ReportTypeRegistration(definition=definition, created=True, replayed=False)
+    existing = insertion.report_type
     if (
         existing.definition.origin is not ReportTypeOrigin.CLIENT
         or existing.definition_fingerprint != definition.fingerprint
@@ -1635,6 +1651,11 @@ def resolve_set(
     }
 
 
+#: Serializes the FAST-tier store's registry check-then-insert. Module-level,
+#: not a field, because worlds holding the store are copied and a lock cannot be.
+_IN_MEMORY_REGISTRY_LOCK: Final = threading.Lock()
+
+
 @dataclass
 class InMemoryIntelligenceStore:
     """FAST-tier store. Immutability of bodies is a property of this class not writing them."""
@@ -1893,6 +1914,26 @@ class InMemoryIntelligenceStore:
         )
         self.report_types[key] = stored
         return ReportTypeInsertion(report_type=stored, inserted=True)
+
+    def register_client_report_type(
+        self,
+        principal_id: str,
+        definition: ReportTypeDefinition,
+        *,
+        created_at: datetime,
+        limit: int,
+    ) -> ReportTypeInsertion | None:
+        with _IN_MEMORY_REGISTRY_LOCK:
+            existing = self.report_types.get((principal_id, str(definition.artifact_kind)))
+            if existing is not None:
+                return ReportTypeInsertion(report_type=existing, inserted=False)
+            clients = sum(
+                row.definition.origin is ReportTypeOrigin.CLIENT
+                for row in self.list_report_types(principal_id)
+            )
+            if clients >= limit:
+                return None
+            return self.insert_report_type(principal_id, definition, created_at=created_at)
 
     def ensure_builtin_report_types(self, principal_id: str, *, created_at: datetime) -> int:
         return sum(

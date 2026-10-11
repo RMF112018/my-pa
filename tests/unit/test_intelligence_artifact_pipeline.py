@@ -2654,3 +2654,39 @@ def test_a_registry_lookup_fault_is_handled_like_every_other_store_fault(operati
     with pytest.raises(RuntimeError) as unchanged:
         invoke(_FaultingRegistryStore(fault))
     assert unchanged.value is fault
+
+
+def test_the_store_registers_a_client_kind_only_below_the_limit() -> None:
+    """F2: lookup, count and insert are one store call, so the cap is decided atomically."""
+    store = InMemoryIntelligenceStore()
+    owner = operator().principal_id
+    when = datetime(2026, 10, 11, 12, tzinfo=UTC)
+
+    def definition(kind: str) -> ReportTypeDefinition:
+        return ReportTypeDefinition(
+            artifact_kind=kind,
+            stage=IntelligenceStage.REPORTER,
+            description="A synthetic client report type.",
+            origin=ReportTypeOrigin.CLIENT,
+        )
+
+    store.ensure_builtin_report_types(owner, created_at=when)
+    first = store.register_client_report_type(
+        owner, definition("first_kind"), created_at=when, limit=2
+    )
+    second = store.register_client_report_type(
+        owner, definition("second_kind"), created_at=when, limit=2
+    )
+    assert first is not None and first.inserted
+    assert second is not None and second.inserted
+    # Built-in rows never count toward the cap; a new kind at the cap is None ...
+    assert (
+        store.register_client_report_type(owner, definition("third"), created_at=when, limit=2)
+        is None
+    )
+    # ... and an existing kind still comes back, unchanged, at the cap.
+    again = store.register_client_report_type(
+        owner, definition("first_kind"), created_at=when, limit=2
+    )
+    assert again is not None and again.inserted is False
+    assert again.report_type == first.report_type

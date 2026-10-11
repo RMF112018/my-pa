@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
@@ -36,6 +37,7 @@ from my_pa.domain.intelligence.catalog import (
     CYCLE_MORNING_INTELLIGENCE,
     EXPECTED_FOCUS_AREAS,
     EXPECTED_SOURCE_LANES,
+    MAX_CLIENT_REPORT_TYPES,
     ArtifactKind,
     ArtifactState,
     FocusAreaId,
@@ -1496,3 +1498,96 @@ def test_sql_a_client_reporter_kind_never_displaces_the_builtin_focus_report(
         dependencies=heads,
     )
     assert brief.error is None, brief.error
+
+
+def _client(kind: str) -> ReportTypeDefinition:
+    return ReportTypeDefinition(
+        artifact_kind=kind,
+        stage=IntelligenceStage.REPORTER,
+        description="A synthetic client kind.",
+        origin=ReportTypeOrigin.CLIENT,
+    )
+
+
+def _client_count(engine: Engine, principal: Principal) -> int:
+    with engine.connect() as connection:
+        return int(
+            connection.execute(
+                text(
+                    "SELECT count(*) FROM knowledge.intelligence_report_types "
+                    "WHERE principal_id = :principal AND origin = 'client'"
+                ),
+                {"principal": principal.principal_id},
+            ).scalar_one()
+        )
+
+
+def test_sql_concurrent_registrations_at_the_cap_admit_exactly_one(
+    migrated_engine: Engine,
+) -> None:
+    """F2: two registrations racing at 63 client kinds; the advisory lock admits one.
+
+    A holds the registry lock with its 64th row uncommitted while B registers
+    another kind. B must wait for A's commit and then see 64 rows; without the
+    lock B would count 63, insert, and the Principal would hold 65.
+    """
+    principal = operator()
+    other = operator()
+    with migrated_engine.begin() as connection:
+        store = _store(connection, principal)
+        for index in range(MAX_CLIENT_REPORT_TYPES - 1):
+            store.insert_report_type(
+                principal.principal_id, _client(f"seeded_{index:02d}"), created_at=WHEN
+            )
+    assert _client_count(migrated_engine, principal) == MAX_CLIENT_REPORT_TYPES - 1
+
+    def register(kind: str) -> bool | None:
+        with migrated_engine.begin() as connection:
+            outcome = _store(connection, principal).register_client_report_type(
+                principal.principal_id,
+                _client(kind),
+                created_at=WHEN,
+                limit=MAX_CLIENT_REPORT_TYPES,
+            )
+        return None if outcome is None else outcome.inserted
+
+    def waiting_on_the_lock(connection: Connection) -> bool:
+        return bool(
+            connection.execute(
+                text("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted")
+            ).scalar_one()
+        )
+
+    with migrated_engine.connect() as holder, migrated_engine.connect() as observer:
+        transaction = holder.begin()
+        first = _store(holder, principal).register_client_report_type(
+            principal.principal_id,
+            _client("race_first"),
+            created_at=WHEN,
+            limit=MAX_CLIENT_REPORT_TYPES,
+        )
+        assert first is not None and first.inserted is True
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            second = pool.submit(register, "race_second")
+            deadline = datetime.now(UTC).timestamp() + 30
+            while not second.done() and not waiting_on_the_lock(observer):
+                observer.rollback()
+                time.sleep(0.02)
+                assert datetime.now(UTC).timestamp() < deadline, "B neither ran nor waited"
+            # Another Principal's registry is a different key: it is never blocked.
+            assert _register_other(migrated_engine, other) is True
+            transaction.commit()
+            outcome = second.result(timeout=30)
+    assert outcome is None
+    assert _client_count(migrated_engine, principal) == MAX_CLIENT_REPORT_TYPES
+
+
+def _register_other(engine: Engine, principal: Principal) -> bool:
+    with engine.begin() as connection:
+        # Fail rather than hang if another Principal's key were ever shared.
+        connection.execute(text("SET LOCAL lock_timeout = '5s'"))
+        outcome = _store(connection, principal).register_client_report_type(
+            principal.principal_id, _client("other_kind"), created_at=WHEN, limit=1
+        )
+    assert outcome is not None
+    return outcome.inserted

@@ -16,6 +16,7 @@ from my_pa.application.commands import (
     SearchIntelligenceArtifacts,
 )
 from my_pa.application.errors import InvalidRequestError
+from my_pa.application.producer_origin import ProducerOrigin
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.v1.envelope import ResponseEnvelope
 from my_pa.contracts.v1.errors import ErrorCode
@@ -27,6 +28,7 @@ from my_pa.domain.intelligence.catalog import (
     EXPECTED_SOURCE_LANES,
     FOCUS_AREA_IDS,
     MAX_ARTIFACT_BODY_BYTES,
+    MAX_MORNING_BRIEF_DEPENDENCY_COUNT,
     REQUIRED_DEPENDENCY_COUNT,
     ArtifactKind,
     ArtifactState,
@@ -351,7 +353,13 @@ def test_failed_run_is_durable_without_a_body(scene: Scene) -> None:
     assert result["created"] is True
 
 
-def _focus_branch(service: ApplicationService, scene: Scene, cycle: str, focus: FocusAreaId) -> str:
+def _focus_branch(
+    service: ApplicationService,
+    scene: Scene,
+    cycle: str,
+    focus: FocusAreaId,
+    reporter_state: ArtifactState = ArtifactState.FINAL,
+) -> str:
     collector = commit(
         service,
         scene,
@@ -408,6 +416,7 @@ def _focus_branch(service: ApplicationService, scene: Scene, cycle: str, focus: 
         body=f"report {focus.value}",
         focus=focus,
         dependencies=(synth_id,),
+        state=reporter_state,
     )
     report_id = reporter["report_id"]
     assert isinstance(report_id, str)
@@ -1151,7 +1160,9 @@ def test_admitted_only_areas_are_allowed_but_not_expected() -> None:
         "field_intelligence",
     )
     assert tuple(area.value for area in EXPECTED_FOCUS_AREAS) == ORIGINAL_SIX
-    assert REQUIRED_DEPENDENCY_COUNT[IntelligenceStage.MORNING_BRIEF] == 6
+    # R1: the brief takes at most one reporter per expected area and has no minimum.
+    assert IntelligenceStage.MORNING_BRIEF not in REQUIRED_DEPENDENCY_COUNT
+    assert len(ORIGINAL_SIX) == MAX_MORNING_BRIEF_DEPENDENCY_COUNT
     for set_id in (ResolverSetId.COLLECTORS, ResolverSetId.MORNING_BRIEF_INPUTS):
         members = expected_members(set_id)
         assert tuple(key for key, _, _ in members) == ORIGINAL_SIX
@@ -1284,7 +1295,12 @@ def test_admitted_only_area_runs_its_full_branch(scene: Scene, focus: FocusAreaI
 
 
 def _brief(
-    service: ApplicationService, scene: Scene, cycle: str, key: str, reporters: tuple[str, ...]
+    service: ApplicationService,
+    scene: Scene,
+    cycle: str,
+    key: str,
+    reporters: tuple[str, ...],
+    state: ArtifactState = ArtifactState.FINAL,
 ) -> ResponseEnvelope:
     return run(
         service,
@@ -1300,7 +1316,7 @@ def _brief(
             report_date="2026-08-20",
             title="Morning Brief",
             body_markdown="brief body",
-            artifact_state=ArtifactState.FINAL,
+            artifact_state=state,
             schema_version="1",
             idempotency_key=key,
             dependency_report_ids=reporters,
@@ -1308,7 +1324,7 @@ def _brief(
     )
 
 
-def test_the_morning_brief_still_takes_exactly_the_original_six(scene: Scene) -> None:
+def test_the_morning_brief_takes_only_the_original_six_areas(scene: Scene) -> None:
     """New-area reporters exist in the cycle; the brief neither needs nor accepts them."""
     service = build_service(scene.world, scene.providers)
     cycle = begin(service, scene, "cycle-brief-six")
@@ -1338,3 +1354,344 @@ def test_the_morning_brief_still_takes_exactly_the_original_six(scene: Scene) ->
 
     brief = payload(_brief(service, scene, cycle, "brief-six", six))
     assert brief["created"] is True
+
+
+# --- R1: the Daily Briefing is never blocked by a missing or partial reporter ---
+
+ARTIFACT_STATE_REFUSAL = ("artifact_state",)
+BARE_DEPENDENCY_REFUSAL = ("dependency_report_ids",)
+STALE_BRIEF_REFUSAL = ("artifact_id",)
+
+#: Per expected focus area: ``final`` / ``partial`` reporter heads; ``absent``
+#: (nothing); ``failed`` and ``partial_run`` (a reporter run with no artifact);
+#: ``stale`` (a reporter whose synthesizer was rerun); ``superseded`` (a v1
+#: reporter replaced by an eligible v2).
+AreaSpec = dict[FocusAreaId, str]
+
+
+def _resolve_brief_inputs(
+    service: ApplicationService, scene: Scene, cycle: str
+) -> dict[str, object]:
+    return payload(
+        run(
+            service,
+            scene,
+            Purpose.REPORT_READ,
+            ResolveIntelligenceSet(cycle_run_id=cycle, set_id=ResolverSetId.MORNING_BRIEF_INPUTS),
+        )
+    )
+
+
+def _reporter_run(
+    service: ApplicationService, scene: Scene, cycle: str, focus: FocusAreaId, state: str
+) -> None:
+    payload(
+        run(
+            service,
+            scene,
+            Purpose.REPORT_AUTHORING,
+            RecordIntelligenceRunState(
+                cycle_run_id=cycle,
+                stage=IntelligenceStage.REPORTER,
+                artifact_kind=ArtifactKind.FOCUS_REPORT,
+                producer_task_id=f"task-run-{focus.value}",
+                producer_task_name="reporter run",
+                automation_platform="abacus_chatllm",
+                report_date="2026-08-20",
+                state=ProducerRunState(state),
+                idempotency_key=f"{cycle}-{focus.value}-run",
+                focus_area_id=focus,
+                failure_code="source_unavailable" if state == "failed" else None,
+            ),
+        )
+    )
+
+
+def _brief_areas(
+    service: ApplicationService, scene: Scene, cycle: str, spec: AreaSpec
+) -> dict[str, tuple[str, ...]]:
+    """Build ``spec``; return the eligible heads and the ineligible artifacts by kind."""
+    heads: list[str] = []
+    stale: list[str] = []
+    superseded: list[str] = []
+    for focus, kind in spec.items():
+        if kind in {"final", "partial"}:
+            heads.append(
+                _focus_branch(
+                    service,
+                    scene,
+                    cycle,
+                    focus,
+                    reporter_state=ArtifactState(kind),
+                )
+            )
+        elif kind in {"failed", "partial_run"}:
+            _reporter_run(service, scene, cycle, focus, "failed" if kind == "failed" else "partial")
+        elif kind == "stale":
+            stale.append(_focus_branch(service, scene, cycle, focus))
+            researcher_ids = tuple(
+                _latest(service, scene, cycle, IntelligenceStage.RESEARCHER, focus=focus, lane=lane)
+                for lane in EXPECTED_SOURCE_LANES
+            )
+            commit(
+                service,
+                scene,
+                cycle_run_id=cycle,
+                stage=IntelligenceStage.SYNTHESIZER,
+                kind=ArtifactKind.SYNTHESIS_PACKAGE,
+                key=f"{cycle}-{focus.value}-s2",
+                title="synthesis v2",
+                body="synthesis v2",
+                focus=focus,
+                dependencies=researcher_ids,
+            )
+        elif kind == "superseded":
+            superseded.append(_focus_branch(service, scene, cycle, focus))
+            synth_id = _latest(service, scene, cycle, IntelligenceStage.SYNTHESIZER, focus=focus)
+            v2 = commit(
+                service,
+                scene,
+                cycle_run_id=cycle,
+                stage=IntelligenceStage.REPORTER,
+                kind=ArtifactKind.FOCUS_REPORT,
+                key=f"{cycle}-{focus.value}-r2",
+                title="report v2",
+                body="report v2",
+                focus=focus,
+                dependencies=(synth_id,),
+            )
+            heads.append(str(v2["report_id"]))
+        else:
+            assert kind == "absent"
+    return {"heads": tuple(heads), "stale": tuple(stale), "superseded": tuple(superseded)}
+
+
+def _refusal(envelope: ResponseEnvelope) -> tuple[ErrorCode, tuple[str, ...]]:
+    assert envelope.error is not None, "expected an error envelope"
+    return envelope.error.code, tuple(envelope.error.safe_details)
+
+
+def _areas(*kinds: str) -> AreaSpec:
+    return dict(zip(EXPECTED_FOCUS_AREAS, kinds, strict=False))
+
+
+@pytest.mark.parametrize(
+    ("name", "spec"),
+    [
+        ("zero", {}),
+        ("one-final", _areas("final")),
+        ("one-partial", _areas("partial")),
+        ("n-mixed", _areas("final", "partial", "final")),
+        ("six-one-partial", _areas("final", "final", "partial", "final", "final", "final")),
+        ("six-final", _areas(*(["final"] * len(EXPECTED_FOCUS_AREAS)))),
+    ],
+)
+def test_the_brief_commits_over_zero_one_and_n_reporters(
+    scene: Scene, name: str, spec: AreaSpec
+) -> None:
+    """R1: partial whenever an input is partial or an area is uncovered; final only when whole."""
+    service = build_service(scene.world, scene.providers)
+    cycle = begin(service, scene, f"cycle-r1-{name}")
+    reporters = _brief_areas(service, scene, cycle, spec)["heads"]
+    complete = len(spec) == len(EXPECTED_FOCUS_AREAS) and set(spec.values()) == {"final"}
+    claimed_final = _brief(service, scene, cycle, f"r1-{name}-final", reporters)
+    if complete:
+        assert payload(claimed_final)["artifact_state"] == "final"
+        return
+    assert _refusal(claimed_final) == (ErrorCode.INVALID_REQUEST, ARTIFACT_STATE_REFUSAL)
+    accepted = payload(
+        _brief(service, scene, cycle, f"r1-{name}-partial", reporters, state=ArtifactState.PARTIAL)
+    )
+    assert accepted["created"] is True
+    assert accepted["artifact_state"] == "partial"
+    brief = scene.world.intelligence.get_artifact(
+        scene.principal.principal_id, str(accepted["report_id"])
+    )
+    assert brief is not None
+    assert {dependency.upstream_artifact_id for dependency in brief.dependencies} == set(reporters)
+
+
+def test_resolve_set_names_every_gap_and_never_blocks_the_brief(scene: Scene) -> None:
+    service = build_service(scene.world, scene.providers)
+    cycle = begin(service, scene, "cycle-r1-gaps")
+    empty = _resolve_brief_inputs(service, scene, cycle)
+    assert empty["aggregate"] == "DEGRADED"
+    assert empty["missing_focus_areas"] == sorted(ORIGINAL_SIX)
+    assert empty["partial_focus_areas"] == []
+    spec = _areas("final", "partial", "failed", "stale", "absent", "partial_run")
+    _brief_areas(service, scene, cycle, spec)
+    resolved = _resolve_brief_inputs(service, scene, cycle)
+    assert resolved["aggregate"] == "DEGRADED"
+    by_area = {
+        member["focus_area_id"]: member
+        for member in resolved["members"]  # type: ignore[union-attr]
+    }
+    assert {
+        area.value: (by_area[area.value]["readiness"], by_area[area.value]["readiness_reason"])
+        for area in EXPECTED_FOCUS_AREAS
+    } == {
+        EXPECTED_FOCUS_AREAS[0].value: ("READY", "ready"),
+        EXPECTED_FOCUS_AREAS[1].value: ("PARTIAL", "eligible_partial"),
+        EXPECTED_FOCUS_AREAS[2].value: ("FAILED", "failed"),
+        EXPECTED_FOCUS_AREAS[3].value: ("STALE", "stale_upstream"),
+        EXPECTED_FOCUS_AREAS[4].value: ("MISSING", "absent"),
+        EXPECTED_FOCUS_AREAS[5].value: ("MISSING", "partial_run_without_artifact"),
+    }
+    assert {member["required"] for member in by_area.values()} == {False}
+    assert resolved["missing_focus_areas"] == sorted(
+        area.value for area in EXPECTED_FOCUS_AREAS[2:]
+    )
+    assert resolved["partial_focus_areas"] == [EXPECTED_FOCUS_AREAS[1].value]
+    collectors = payload(
+        run(
+            service,
+            scene,
+            Purpose.REPORT_READ,
+            ResolveIntelligenceSet(cycle_run_id=cycle, set_id=ResolverSetId.COLLECTORS),
+        )
+    )
+    assert collectors["aggregate"] == "BLOCKED"
+    assert collectors["missing_focus_areas"] == []
+    assert collectors["partial_focus_areas"] == []
+
+
+def test_ineligible_reporters_are_still_refused_whatever_the_brief_claims(
+    scene: Scene,
+) -> None:
+    """Stale, superseded, cross-cycle, foreign, wrong-stage, duplicate, unexpected: refused."""
+    service = build_service(scene.world, scene.providers)
+    cycle = begin(service, scene, "cycle-r1-refused")
+    built = _brief_areas(service, scene, cycle, _areas("final", "stale", "superseded", "partial"))
+    heads = built["heads"]
+    other_cycle = begin(service, scene, "cycle-r1-other")
+    elsewhere = _focus_branch(service, scene, other_cycle, EXPECTED_FOCUS_AREAS[4])
+    # The stale area's rerun synthesizer: eligible, of an uncited expected area,
+    # so only the stage rule can refuse it.
+    synthesizer = _latest(
+        service, scene, cycle, IntelligenceStage.SYNTHESIZER, focus=EXPECTED_FOCUS_AREAS[1]
+    )
+    unexpected = _focus_branch(service, scene, cycle, ADMITTED_ONLY[0])
+    cases: dict[str, tuple[tuple[str, ...], tuple[ErrorCode, tuple[str, ...]]]] = {
+        "stale": ((*heads, built["stale"][0]), (ErrorCode.CONFLICT, STALE_BRIEF_REFUSAL)),
+        "superseded": (
+            (heads[0], built["superseded"][0]),
+            (ErrorCode.CONFLICT, STALE_BRIEF_REFUSAL),
+        ),
+        "cross-cycle": ((*heads, elsewhere), (ErrorCode.INVALID_REQUEST, BARE_DEPENDENCY_REFUSAL)),
+        "wrong-stage": (
+            (heads[0], synthesizer),
+            (ErrorCode.INVALID_REQUEST, BARE_DEPENDENCY_REFUSAL),
+        ),
+        # The superseded v1 and its v2 head share a focus area.
+        "duplicate-area": (
+            (built["superseded"][0], heads[1]),
+            (ErrorCode.INVALID_REQUEST, BARE_DEPENDENCY_REFUSAL),
+        ),
+        "unexpected-area": (
+            (*heads, unexpected),
+            (ErrorCode.INVALID_REQUEST, BARE_DEPENDENCY_REFUSAL),
+        ),
+        "over-count": (
+            (*heads, built["stale"][0], elsewhere, synthesizer, unexpected),
+            (ErrorCode.INVALID_REQUEST, BARE_DEPENDENCY_REFUSAL),
+        ),
+    }
+    for name, (reporters, expected) in cases.items():
+        for state in (ArtifactState.PARTIAL, ArtifactState.FINAL):
+            outcome = _brief(service, scene, cycle, f"r1-{name}-{state.value}", reporters, state)
+            assert _refusal(outcome) == expected, name
+    # Another Principal citing this Principal's reporters sees them as absent.
+    other = operator()
+    scene.world.producer_origins[other.principal_id] = ProducerOrigin(
+        principal_id=other.principal_id,
+        principal_kind=other.kind,
+        method="rule",
+        method_version="synthetic-rule-producer.1",
+    )
+    begin_command = BeginIntelligenceCycle(
+        cycle_id=CYCLE_MORNING_INTELLIGENCE, business_date="2026-08-20", idempotency_key="r1-o"
+    )
+    foreign_cycle = payload(
+        service.invoke(
+            metadata_for(begin_command.capability, Purpose.REPORT_AUTHORING, other),
+            begin_command,
+            principal=other,
+        )
+    )["cycle_run_id"]
+    for state in (ArtifactState.PARTIAL, ArtifactState.FINAL):
+        foreign = CommitIntelligenceArtifact(
+            cycle_run_id=str(foreign_cycle),
+            stage=IntelligenceStage.MORNING_BRIEF,
+            artifact_kind=ArtifactKind.MORNING_BRIEF,
+            producer_task_id="brief",
+            producer_task_name="brief",
+            automation_platform="abacus_chatllm",
+            report_date="2026-08-20",
+            title="foreign",
+            body_markdown="foreign",
+            artifact_state=state,
+            schema_version="1",
+            idempotency_key=f"r1-foreign-{state.value}",
+            dependency_report_ids=(heads[0],),
+        )
+        envelope = service.invoke(
+            metadata_for(foreign.capability, Purpose.REPORT_AUTHORING, other),
+            foreign,
+            principal=other,
+        )
+        assert _refusal(envelope) == (ErrorCode.INVALID_REQUEST, BARE_DEPENDENCY_REFUSAL)
+    # The eligible heads alone still commit, as partial: two areas are uncovered.
+    accepted = _brief(service, scene, cycle, "r1-eligible", heads, ArtifactState.PARTIAL)
+    assert payload(accepted)["created"] is True
+
+
+RESOLVER_AGREEMENT: dict[str, AreaSpec] = {
+    "empty": {},
+    "all-final": _areas(*(["final"] * len(EXPECTED_FOCUS_AREAS))),
+    "all-final-but-one-stale": _areas("final", "final", "final", "final", "final", "stale"),
+    "superseded-heads": _areas("superseded", "final", "final", "final", "final", "superseded"),
+    "mixed": _areas("partial", "failed", "final", "absent", "stale", "partial_run"),
+    "all-partial": _areas(*(["partial"] * len(EXPECTED_FOCUS_AREAS))),
+}
+
+
+@pytest.mark.parametrize("name", list(RESOLVER_AGREEMENT))
+def test_brief_commit_acceptance_equals_the_resolver_gaps(scene: Scene, name: str) -> None:
+    """A brief over the resolver's eligible members commits final iff the resolver names no gap."""
+    service = build_service(scene.world, scene.providers)
+    cycle = begin(service, scene, f"cycle-r1-agree-{name}")
+    built = _brief_areas(service, scene, cycle, RESOLVER_AGREEMENT[name])
+    resolved = _resolve_brief_inputs(service, scene, cycle)
+    rows = resolved["members"]
+    assert isinstance(rows, list)
+    eligible = tuple(
+        str(member["artifact_id"]) for member in rows if member["readiness"] in {"READY", "PARTIAL"}
+    )
+    assert set(eligible) == set(built["heads"])
+    gaps = resolved["missing_focus_areas"], resolved["partial_focus_areas"]
+    whole = gaps == ([], [])
+    assert resolved["aggregate"] == ("READY" if whole else "DEGRADED")
+    final = _brief(service, scene, cycle, f"agree-{name}-final", eligible)
+    if whole:
+        assert final.error is None, final.error
+    else:
+        assert _refusal(final) == (ErrorCode.INVALID_REQUEST, ARTIFACT_STATE_REFUSAL)
+    # Each ineligible artifact added to the eligible set is refused, never downgraded.
+    for index, bad in enumerate((*built["stale"], *built["superseded"])):
+        base = tuple(head for head in eligible if _area_of(scene, head) != _area_of(scene, bad))
+        refused = _brief(
+            service, scene, cycle, f"agree-{name}-bad-{index}", (*base, bad), ArtifactState.PARTIAL
+        )
+        assert _refusal(refused) == (ErrorCode.CONFLICT, STALE_BRIEF_REFUSAL)
+    if whole:
+        return
+    partial = _brief(
+        service, scene, cycle, f"agree-{name}-partial", eligible, ArtifactState.PARTIAL
+    )
+    assert payload(partial)["created"] is True
+
+
+def _area_of(scene: Scene, artifact_id: str) -> FocusAreaId | None:
+    artifact = scene.world.intelligence.get_artifact(scene.principal.principal_id, artifact_id)
+    assert artifact is not None
+    return artifact.focus_area_id

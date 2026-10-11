@@ -19,6 +19,7 @@ __all__ = [
     "FOCUS_AREA_IDS",
     "MAX_ARTIFACT_BODY_BYTES",
     "MAX_IDEMPOTENCY_KEY_LENGTH",
+    "MAX_MORNING_BRIEF_DEPENDENCY_COUNT",
     "MAX_STRUCTURED_CONTENT_BYTES",
     "MIN_SYNTHESIZER_DEPENDENCY_COUNT",
     "REQUIRED_DEPENDENCY_COUNT",
@@ -163,6 +164,9 @@ class ResolverAggregateState(StrEnum):
 
     For the optional-membership sets, ``DEGRADED`` means at least one eligible
     member is partial; ``BLOCKED`` means no member is eligible.
+    ``morning_brief_inputs`` is never ``BLOCKED``: it is ``DEGRADED`` whenever
+    any expected focus area is missing or partial, including when none is
+    eligible, because the Daily Briefing is then committed ``partial``.
     """
 
     READY = "READY"
@@ -203,12 +207,18 @@ STAGE_FOR_KIND: Final[dict[ArtifactKind, IntelligenceStage]] = {
 #: Synthesizer is deliberately absent: it takes any non-empty set of distinct
 #: Researcher lanes, bounded below by ``MIN_SYNTHESIZER_DEPENDENCY_COUNT`` and
 #: above by the lane vocabulary, because each lane may appear at most once.
+#: The Morning Brief is absent too: see ``MAX_MORNING_BRIEF_DEPENDENCY_COUNT``.
 REQUIRED_DEPENDENCY_COUNT: Final[dict[IntelligenceStage, int]] = {
     IntelligenceStage.COLLECTOR: 0,
     IntelligenceStage.RESEARCHER: 1,
     IntelligenceStage.REPORTER: 1,
-    IntelligenceStage.MORNING_BRIEF: 6,
 }
+
+#: The most Reporter dependencies a Morning Brief may name: at most one per
+#: expected focus area. The Daily Briefing is never blocked by a missing or
+#: partial Reporter, so there is no minimum; an uncovered or partial area makes
+#: the brief itself ``partial`` instead.
+MAX_MORNING_BRIEF_DEPENDENCY_COUNT: Final = len(EXPECTED_FOCUS_AREAS)
 
 #: The fewest Researcher dependencies a Synthesizer may name. Which lanes a
 #: focus area runs is an operator decision, not a catalog fact, so there is no
@@ -223,14 +233,16 @@ MIN_SYNTHESIZER_DEPENDENCY_COUNT: Final = 1
 #: eligible lane is partial, and blocked only when no lane is eligible. The
 #: eligible lanes are exactly the set a Synthesizer commit accepts.
 #: ``reporter_input`` stays required: the one Synthesizer head must be eligible.
-#: ``collectors`` and ``morning_brief_inputs`` keep the original every-member
-#: policy.
+#: ``morning_brief_inputs`` lists every expected focus area but requires none:
+#: the set is never blocked, only ready (every area's Reporter eligible and
+#: final) or degraded, with the uncovered and partial areas named.
+#: ``collectors`` keeps the original every-member policy.
 REQUIRED_MEMBERSHIP: Final[dict[ResolverSetId, bool]] = {
     ResolverSetId.COLLECTORS: True,
     ResolverSetId.RESEARCH_SWARM: False,
     ResolverSetId.SYNTHESIZER_INPUTS: False,
     ResolverSetId.REPORTER_INPUT: True,
-    ResolverSetId.MORNING_BRIEF_INPUTS: True,
+    ResolverSetId.MORNING_BRIEF_INPUTS: False,
 }
 
 

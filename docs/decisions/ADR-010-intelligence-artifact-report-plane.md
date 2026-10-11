@@ -39,4 +39,14 @@ Decision 6 stands: the catalog stays in code. Its membership policy changes for 
 - A Synthesizer or Reporter over any partial input must itself be committed as `partial`.
 - `reports.record_run_state` refuses `succeeded` when the coordinate has no current artifact head.
 - Dependency refusals carry `dependency_report_ids` plus a reason token from the closed `SafeDetail` set.
-- `reporter_input` keeps its single member required, but a PARTIAL synthesizer is eligible, so its aggregate is DEGRADED rather than BLOCKED. `collectors` and `morning_brief_inputs` keep the legacy blocking behaviour with every member required. No migration and no new persisted value.
+- `reporter_input` keeps its single member required, but a PARTIAL synthesizer is eligible, so its aggregate is DEGRADED rather than BLOCKED. `collectors` keeps the legacy blocking behaviour with every member required. (`morning_brief_inputs` originally kept it too; superseded by the amendment below.) No migration and no new persisted value.
+
+## Amendment (2026-10-11): the Daily Briefing is never blocked
+
+Decision 6 still stands. The Morning Brief and `morning_brief_inputs` move onto the shared eligibility predicate.
+
+- A Morning Brief names zero or more Reporter heads of its own cycle, at most one per expected focus area, each eligible (`READY` or `PARTIAL`) under the shared predicate. A missing or partial Reporter never blocks the brief.
+- A brief with any partial Reporter input or any uncovered expected focus area must be committed as `partial`; a `final` claim is refused with `artifact_state`. It is never downgraded silently.
+- A superseded, non-head or lineage-stale Reporter, another cycle's Reporter, another Principal's id, a non-Reporter, a duplicate focus area and an admitted-but-not-expected focus area stay refused exactly as before.
+- `morning_brief_inputs` lists every expected focus area with `required: false` and is never `BLOCKED`: `READY` when every area's Reporter is eligible and final, `DEGRADED` otherwise. Every `reports.resolve_set` result carries `missing_focus_areas` and `partial_focus_areas` (sorted focus-area ids; empty for every other set). One gap rule computes them for both the resolver and the brief commit.
+- No migration and no new persisted value.

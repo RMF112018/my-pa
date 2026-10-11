@@ -875,7 +875,7 @@ def test_sql_admitted_only_area_persists_on_all_three_tables(
     assert read["focus_area_id"] == focus.value
 
 
-def test_sql_morning_brief_still_takes_exactly_the_original_six(migrated_engine: Engine) -> None:
+def test_sql_morning_brief_takes_only_the_original_six_areas(migrated_engine: Engine) -> None:
     service = _service(migrated_engine)
     principal = operator()
     cycle = _begin(service, principal, "sql-brief-cycle")

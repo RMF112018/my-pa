@@ -4846,8 +4846,11 @@ CommitIntelligenceArtifact.mcp_payload_properties = MappingProxyType(  # type: i
                 "more current researcher reports of the same focus area, at most one "
                 "per source_lane; use reports.resolve_set synthesizer_inputs and name "
                 "the READY or PARTIAL members. reporter: exactly the current "
-                "synthesizer. morning_brief: the six expected reporters. Any partial "
-                "input requires artifact_state partial."
+                "synthesizer. morning_brief: zero to six current reporters of "
+                "distinct expected focus areas; use reports.resolve_set "
+                "morning_brief_inputs and name the READY or PARTIAL members. Any "
+                "partial input, or for morning_brief any uncovered expected focus "
+                "area, requires artifact_state partial."
             )
         },
         "structured_content": {"type": "object"},
@@ -5016,11 +5019,16 @@ class ResolveIntelligenceSet:
     never block. The set is BLOCKED with no eligible lane, DEGRADED when an
     eligible lane is partial, and READY otherwise; the eligible members are
     exactly what a synthesizer commit accepts. `reporter_input` is the one
-    required synthesizer head (PARTIAL makes it DEGRADED). `collectors` and
-    `morning_brief_inputs` require every member. `readiness_reason` is one of
+    required synthesizer head (PARTIAL makes it DEGRADED).
+    `morning_brief_inputs` lists the expected focus areas with `required:
+    false` and is never BLOCKED: READY when every area's current reporter is
+    READY, DEGRADED otherwise. `missing_focus_areas` and `partial_focus_areas`
+    name the areas a brief cannot cover or covers only partially (a brief over
+    any of them must be committed `partial`); both are empty for every other
+    set. `collectors` requires every member. `readiness_reason` is one of
     `ready`, `eligible_partial`, `absent`, `failed`,
     `partial_run_without_artifact`, `stale_upstream`, `not_current_head` or
-    `superseded` for the lane and reporter sets.
+    `superseded` for the lane, reporter and brief-input sets.
     """
 
     capability: ClassVar[Capability] = Capability.REPORTS_RESOLVE_SET

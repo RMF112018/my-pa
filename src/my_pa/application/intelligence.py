@@ -26,6 +26,7 @@ from my_pa.domain.intelligence.catalog import (
     CYCLE_MORNING_INTELLIGENCE,
     EXPECTED_FOCUS_AREAS,
     MAX_ARTIFACT_BODY_BYTES,
+    MAX_MORNING_BRIEF_DEPENDENCY_COUNT,
     MAX_STRUCTURED_CONTENT_BYTES,
     MIN_SYNTHESIZER_DEPENDENCY_COUNT,
     REQUIRED_DEPENDENCY_COUNT,
@@ -376,22 +377,6 @@ def _upstream_matches_current_head(
     return True
 
 
-def _require_current_upstream_lineage(
-    store: IntelligenceStore,
-    *,
-    principal_id: str,
-    cycle_run_id: str,
-    artifact: IntelligenceArtifact,
-) -> None:
-    if not _upstream_matches_current_head(
-        store,
-        principal_id=principal_id,
-        cycle_run_id=cycle_run_id,
-        artifact=artifact,
-    ):
-        raise IntelligenceStaleReferenceError()
-
-
 def _member_lineage_is_stale(
     store: IntelligenceStore,
     *,
@@ -430,10 +415,10 @@ _ELIGIBLE_STATES: Final = frozenset({ReadinessMemberState.READY, ReadinessMember
 class Eligibility:
     """Whether one upstream artifact may be consumed, and why.
 
-    The single answer both ``reports.commit`` (Synthesizer and Reporter
-    dependencies) and ``reports.resolve_set`` (``research_swarm``,
-    ``synthesizer_inputs``, ``reporter_input``) use, so the set the resolver
-    calls eligible is exactly the set a commit accepts.
+    The single answer both ``reports.commit`` (Synthesizer, Reporter and
+    Morning Brief dependencies) and ``reports.resolve_set`` (``research_swarm``,
+    ``synthesizer_inputs``, ``reporter_input``, ``morning_brief_inputs``) use,
+    so the set the resolver calls eligible is exactly the set a commit accepts.
     """
 
     state: ReadinessMemberState
@@ -464,7 +449,7 @@ def artifact_eligibility(
     cycle_run_id: str,
     artifact: IntelligenceArtifact,
 ) -> Eligibility:
-    """The shared eligibility predicate for one existing Researcher or Synthesizer.
+    """The shared eligibility predicate for one existing Researcher, Synthesizer or Reporter.
 
     Order matters only for the reason reported, never for the verdict:
     superseded, then not its coordinate's current head, then a moved upstream
@@ -536,6 +521,43 @@ def coordinate_eligibility(
     return replace(verdict, run=run)
 
 
+@dataclass(frozen=True, slots=True)
+class MorningBriefGaps:
+    """Which expected focus areas a Morning Brief cannot treat as complete.
+
+    ``missing_focus_areas`` have no eligible Reporter (absent, failed, stale,
+    superseded); ``partial_focus_areas`` have an eligible but partial one. Both
+    are sorted focus-area ids, so the closed vocabulary is all they disclose.
+    """
+
+    missing_focus_areas: tuple[FocusAreaId, ...]
+    partial_focus_areas: tuple[FocusAreaId, ...]
+
+    @property
+    def complete(self) -> bool:
+        return not self.missing_focus_areas and not self.partial_focus_areas
+
+
+def morning_brief_gaps(verdicts: Mapping[FocusAreaId, Eligibility]) -> MorningBriefGaps:
+    """The one gap rule both the brief commit and ``morning_brief_inputs`` apply.
+
+    ``verdicts`` maps a focus area to its Reporter's shared-predicate verdict;
+    an expected area with no verdict, or an ineligible one, is missing.
+    """
+    missing: list[FocusAreaId] = []
+    partial: list[FocusAreaId] = []
+    for area in EXPECTED_FOCUS_AREAS:
+        verdict = verdicts.get(area)
+        if verdict is None or not verdict.eligible:
+            missing.append(area)
+        elif verdict.state is ReadinessMemberState.PARTIAL:
+            partial.append(area)
+    return MorningBriefGaps(
+        missing_focus_areas=tuple(sorted(missing, key=lambda area: area.value)),
+        partial_focus_areas=tuple(sorted(partial, key=lambda area: area.value)),
+    )
+
+
 def _dependency_error(
     stage: IntelligenceStage, reason: DependencyRejection
 ) -> IntelligenceDependencyError:
@@ -573,12 +595,17 @@ def _validate_dependencies(
 
     Synthesizer: one or more Researcher heads of this cycle and focus, at most
     one per lane, each eligible under ``artifact_eligibility``. Reporter:
-    exactly the eligible Synthesizer head. Collector, Researcher, and Morning
-    Brief keep their fixed counts.
+    exactly the eligible Synthesizer head. Morning Brief: zero to six eligible
+    Reporter heads of distinct expected focus areas; any uncovered or partial
+    area counts as partial input. Collector and Researcher keep their fixed
+    counts.
     """
     if stage is IntelligenceStage.SYNTHESIZER:
         if len(dependency_ids) < MIN_SYNTHESIZER_DEPENDENCY_COUNT:
             raise IntelligenceDependencyError(DependencyRejection.COUNT)
+    elif stage is IntelligenceStage.MORNING_BRIEF:
+        if len(dependency_ids) > MAX_MORNING_BRIEF_DEPENDENCY_COUNT:
+            raise _dependency_error(stage, DependencyRejection.COUNT)
     elif len(dependency_ids) != REQUIRED_DEPENDENCY_COUNT[stage]:
         raise _dependency_error(stage, DependencyRejection.COUNT)
     upstreams: list[IntelligenceArtifact] = []
@@ -667,30 +694,23 @@ def _validate_dependencies(
         )
     elif stage is IntelligenceStage.MORNING_BRIEF:
         areas = [item.focus_area_id for item in upstreams]
-        if set(areas) != set(EXPECTED_FOCUS_AREAS) or len(areas) != 6:
+        if len(set(areas)) != len(areas) or not set(areas) <= set(EXPECTED_FOCUS_AREAS):
             raise IntelligenceDependencyError()
+        verdicts: dict[FocusAreaId, Eligibility] = {}
         for item in upstreams:
-            if item.stage is not IntelligenceStage.REPORTER:
+            if item.stage is not IntelligenceStage.REPORTER or item.focus_area_id is None:
                 raise IntelligenceDependencyError()
-            if not item.is_current:
-                raise IntelligenceStaleReferenceError()
-            current = store.current_head(
-                principal_id,
-                cycle.cycle_run_id,
-                IntelligenceStage.REPORTER,
-                item.focus_area_id,
-                None,
-            )
-            if current is None or current.artifact_id != item.artifact_id:
-                raise IntelligenceStaleReferenceError()
-            if item.focus_area_id is None:
-                raise IntelligenceDependencyError()
-            _require_current_upstream_lineage(
+            # Superseded, not the current head, or a moved upstream: refused
+            # with the brief's original bare stale token, never downgraded.
+            verdict = artifact_eligibility(
                 store,
                 principal_id=principal_id,
                 cycle_run_id=cycle.cycle_run_id,
                 artifact=item,
             )
+            if not verdict.eligible:
+                raise IntelligenceStaleReferenceError()
+            verdicts[item.focus_area_id] = verdict
             deps.append(
                 IntelligencePipelineDependency(
                     upstream_artifact_id=item.artifact_id,
@@ -699,6 +719,7 @@ def _validate_dependencies(
                     expected_focus_area_id=item.focus_area_id,
                 )
             )
+        partial_input = not morning_brief_gaps(verdicts).complete
     return tuple(deps), partial_input
 
 
@@ -810,9 +831,13 @@ def commit_artifact(
             focus_area_id=focus_area_id,
             dependency_ids=dependency_report_ids,
         )
-        # A Synthesizer or Reporter built over a partial input is itself partial.
-        # A partial claim over all-final inputs stays the producer's choice.
+        # A Synthesizer, Reporter or Morning Brief built over a partial input is
+        # itself partial; for the brief an uncovered expected area is a partial
+        # input too. A partial claim over complete inputs stays the producer's
+        # choice. Never downgraded silently: a `final` claim is refused.
         if partial_input and artifact_state is not ArtifactState.PARTIAL:
+            if stage is IntelligenceStage.MORNING_BRIEF:
+                raise InvalidRequestError(SafeDetail.ARTIFACT_STATE)
             raise IntelligenceDependencyError(DependencyRejection.PARTIAL_INPUT)
         if automation_run_id:
             prior = store.run_for_external(
@@ -1157,6 +1182,7 @@ _ELIGIBILITY_SETS: Final = frozenset(
         ResolverSetId.RESEARCH_SWARM,
         ResolverSetId.SYNTHESIZER_INPUTS,
         ResolverSetId.REPORTER_INPUT,
+        ResolverSetId.MORNING_BRIEF_INPUTS,
     }
 )
 
@@ -1188,12 +1214,17 @@ def _member_state(
             focus_area_id=focus_area_id,
             source_lane=None,
         )
-    # `collectors` and `morning_brief_inputs`: the original per-member rules.
-    stage = (
-        IntelligenceStage.COLLECTOR
-        if set_id is ResolverSetId.COLLECTORS
-        else IntelligenceStage.REPORTER
-    )
+    if set_id is ResolverSetId.MORNING_BRIEF_INPUTS:
+        return coordinate_eligibility(
+            store,
+            principal_id=principal_id,
+            cycle_run_id=cycle_run_id,
+            stage=IntelligenceStage.REPORTER,
+            focus_area_id=focus_area_id,
+            source_lane=None,
+        )
+    # `collectors`: the original per-member rules.
+    stage = IntelligenceStage.COLLECTOR
     area = focus_area_id
     current = store.current_head(principal_id, cycle_run_id, stage, area, None)
     failed = store.failed_run(principal_id, cycle_run_id, stage, area, None)
@@ -1211,20 +1242,6 @@ def _member_state(
         return legacy(ReadinessMemberState.SUPERSEDED, current)
     if current.artifact_state is ArtifactState.PARTIAL:
         return legacy(ReadinessMemberState.PARTIAL, current)
-    if set_id is ResolverSetId.MORNING_BRIEF_INPUTS:
-        reporter = store.current_head(
-            principal_id, cycle_run_id, IntelligenceStage.REPORTER, area, None
-        )
-        if reporter is None or reporter.artifact_id != current.artifact_id:
-            return legacy(ReadinessMemberState.STALE, current)
-        if _member_lineage_is_stale(
-            store,
-            principal_id=principal_id,
-            cycle_run_id=cycle_run_id,
-            focus_area_id=area,
-            artifact=current,
-        ):
-            return legacy(ReadinessMemberState.STALE, current)
     return legacy(ReadinessMemberState.READY, current)
 
 
@@ -1243,8 +1260,12 @@ def resolve_set(
     ``PARTIAL``) are exactly what ``reports.commit`` accepts. Their aggregate is
     ``BLOCKED`` with no eligible member, ``DEGRADED`` when any eligible member is
     partial, and ``READY`` otherwise; an ineligible optional lane is reported
-    and never blocks. ``collectors`` and ``morning_brief_inputs`` keep the
-    every-member-required rule.
+    and never blocks. ``morning_brief_inputs`` uses the same predicate per
+    expected focus area and is never ``BLOCKED``: ``READY`` when every area's
+    Reporter is eligible and final, ``DEGRADED`` otherwise, with the uncovered
+    and partial areas named in ``missing_focus_areas`` and
+    ``partial_focus_areas`` (empty for every other set). ``collectors`` keeps
+    the every-member-required rule.
     """
     cycle = store.get_cycle(principal_id, cycle_run_id)
     if cycle is None:
@@ -1295,7 +1316,19 @@ def resolve_set(
                 "readiness_reason": verdict.reason,
             }
         )
-    if set_id in _ELIGIBILITY_SETS:
+    gaps = MorningBriefGaps(missing_focus_areas=(), partial_focus_areas=())
+    if set_id is ResolverSetId.MORNING_BRIEF_INPUTS:
+        gaps = morning_brief_gaps(
+            {
+                area: verdict
+                for (_, area, _), verdict in zip(members_spec, verdicts, strict=True)
+                if area is not None
+            }
+        )
+        aggregate = (
+            ResolverAggregateState.READY if gaps.complete else ResolverAggregateState.DEGRADED
+        )
+    elif set_id in _ELIGIBILITY_SETS:
         eligible = [verdict for verdict in verdicts if verdict.eligible]
         if not eligible:
             aggregate = ResolverAggregateState.BLOCKED
@@ -1320,6 +1353,8 @@ def resolve_set(
         "set_id": set_id.value,
         "aggregate": aggregate.value,
         "members": members,
+        "missing_focus_areas": [area.value for area in gaps.missing_focus_areas],
+        "partial_focus_areas": [area.value for area in gaps.partial_focus_areas],
     }
 
 

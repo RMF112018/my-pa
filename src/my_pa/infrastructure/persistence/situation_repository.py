@@ -44,12 +44,14 @@ cross-principal reference is answered the same way a genuinely absent one is.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import Column, Table, and_, desc, func, insert, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection, Row
+from sqlalchemy.exc import IntegrityError
 
 from my_pa.contracts.ports import (
     ContinuityRepository,
@@ -82,9 +84,11 @@ from my_pa.domain.situation.continuity import (
     TaskState,
 )
 from my_pa.domain.situation.project_history import (
+    PROJECT_NUMBER_UNIQUE_INDEX,
     ProjectHistoryEntry,
     ProjectMutationAction,
     ProjectMutationReceipt,
+    ProjectNumberConflictError,
     execute_close_project,
     execute_update_project,
 )
@@ -95,7 +99,9 @@ from my_pa.domain.situation.situation import (
     Project,
     ProjectEntityLink,
     ProjectEntityLinkageState,
+    ProjectSector,
     ProjectState,
+    ProjectType,
     PulseItem,
     PulseItemType,
     PulseReasonCode,
@@ -161,6 +167,12 @@ _OBJECT_TABLE: dict[ContinuityObjectKind, tuple[Table, Column[str]]] = {
 _ASSOCIABLE: frozenset[ContinuityObjectKind] = frozenset(
     {ContinuityObjectKind.COMMITMENT, ContinuityObjectKind.DECISION, ContinuityObjectKind.TASK}
 )
+
+
+def is_project_number_conflict(error: IntegrityError) -> bool:
+    """True when `error` is another Project of this Principal already holding the number."""
+    diagnostic = getattr(error.orig, "diag", None)
+    return getattr(diagnostic, "constraint_name", None) == PROJECT_NUMBER_UNIQUE_INDEX
 
 
 def _append_lifecycle_event(
@@ -718,6 +730,15 @@ class SqlProjectRepository(ProjectRepository):
         return None if row is None else self._to_project(row)
 
     def persist_project(self, project: Project) -> None:
+        try:
+            with self._connection.begin_nested():
+                self._update_project_row(project)
+        except IntegrityError as error:
+            if is_project_number_conflict(error):
+                raise ProjectNumberConflictError from None
+            raise
+
+    def _update_project_row(self, project: Project) -> None:
         self._connection.execute(
             update(projects)
             .where(
@@ -733,6 +754,22 @@ class SqlProjectRepository(ProjectRepository):
                 closed_at=project.closed_at,
                 updated_at=project.updated_at,
                 version=project.version,
+                aliases=list(project.aliases),
+                project_number=project.project_number,
+                sector=None if project.sector is None else project.sector.value,
+                type=None if project.type is None else project.type.value,
+                address=project.address,
+                city=project.city,
+                county=project.county,
+                address_state=project.address_state,
+                zip=project.zip,
+                value=project.value,
+                scheduled_start=project.scheduled_start,
+                contract_start=project.contract_start,
+                actual_start=project.actual_start,
+                scheduled_finish=project.scheduled_finish,
+                contract_finish=project.contract_finish,
+                actual_finish=project.actual_finish,
             )
         )
 
@@ -779,6 +816,23 @@ class SqlProjectRepository(ProjectRepository):
         description: str | None,
         state: ProjectState | None,
         now: datetime,
+        aliases: tuple[str, ...] | None = None,
+        project_number: str | None = None,
+        sector: ProjectSector | None = None,
+        type_: ProjectType | None = None,
+        address: str | None = None,
+        city: str | None = None,
+        county: str | None = None,
+        address_state: str | None = None,
+        zip_: str | None = None,
+        value: Decimal | None = None,
+        scheduled_start: date | None = None,
+        contract_start: date | None = None,
+        actual_start: date | None = None,
+        scheduled_finish: date | None = None,
+        contract_finish: date | None = None,
+        actual_finish: date | None = None,
+        clear_fields: tuple[str, ...] = (),
     ) -> ProjectMutationReceipt | None:
         return execute_update_project(
             self,
@@ -791,6 +845,23 @@ class SqlProjectRepository(ProjectRepository):
             description=description,
             state=state,
             now=now,
+            aliases=aliases,
+            project_number=project_number,
+            sector=sector,
+            type_=type_,
+            address=address,
+            city=city,
+            county=county,
+            address_state=address_state,
+            zip_=zip_,
+            value=value,
+            scheduled_start=scheduled_start,
+            contract_start=contract_start,
+            actual_start=actual_start,
+            scheduled_finish=scheduled_finish,
+            contract_finish=contract_finish,
+            actual_finish=actual_finish,
+            clear_fields=clear_fields,
         )
 
     def close_project(
@@ -834,6 +905,8 @@ class SqlProjectRepository(ProjectRepository):
     @staticmethod
     def _to_project(row: Row[Any]) -> Project:
         mapping = row._mapping
+        sector = mapping["sector"]
+        type_ = mapping["type"]
         return Project(
             project_id=mapping["project_id"],
             principal_id=mapping["principal_id"],
@@ -846,6 +919,22 @@ class SqlProjectRepository(ProjectRepository):
             participants=_as_tuple(mapping["participants"]),
             closed_at=mapping["closed_at"],
             version=int(mapping["version"]),
+            aliases=_as_tuple(mapping["aliases"]),
+            project_number=mapping["project_number"],
+            sector=None if sector is None else ProjectSector(sector),
+            type=None if type_ is None else ProjectType(type_),
+            address=mapping["address"],
+            city=mapping["city"],
+            county=mapping["county"],
+            address_state=mapping["address_state"],
+            zip=mapping["zip"],
+            value=mapping["value"],
+            scheduled_start=mapping["scheduled_start"],
+            contract_start=mapping["contract_start"],
+            actual_start=mapping["actual_start"],
+            scheduled_finish=mapping["scheduled_finish"],
+            contract_finish=mapping["contract_finish"],
+            actual_finish=mapping["actual_finish"],
         )
 
     @staticmethod

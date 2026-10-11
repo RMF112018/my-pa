@@ -1300,3 +1300,199 @@ def test_sql_report_types_create_list_commit_and_refuse_through_the_service(
             ("artifact_kind", ("focus_report",))
         ]
         assert "sql_bob_secret" not in misplaced.model_dump_json()
+
+
+def _commit_as(
+    service: ApplicationService,
+    principal: Principal,
+    *,
+    cycle: str,
+    stage: IntelligenceStage,
+    kind: str,
+    key: str,
+    focus: FocusAreaId | None = None,
+    dependencies: tuple[str, ...] = (),
+    state: ArtifactState = ArtifactState.FINAL,
+) -> ResponseEnvelope:
+    return _invoke(
+        service,
+        principal,
+        Purpose.REPORT_AUTHORING,
+        CommitIntelligenceArtifact(
+            cycle_run_id=cycle,
+            stage=stage,
+            artifact_kind=kind,
+            producer_task_id=f"sql-{kind}",
+            producer_task_name=kind,
+            automation_platform="abacus_chatllm",
+            report_date="2026-08-20",
+            title=f"SQL {kind}",
+            body_markdown=f"synthetic {kind}",
+            artifact_state=state,
+            schema_version="1",
+            idempotency_key=key,
+            focus_area_id=focus,
+            dependency_report_ids=dependencies,
+        ),
+    )
+
+
+def _sql_latest_of(
+    service: ApplicationService,
+    principal: Principal,
+    cycle: str,
+    kind: str,
+    focus: FocusAreaId | None = None,
+) -> dict[str, object]:
+    return _ok(
+        service,
+        principal,
+        Purpose.REPORT_READ,
+        GetLatestIntelligenceArtifact(cycle_run_id=cycle, artifact_kind=kind, focus_area_id=focus),
+    )
+
+
+def _register_sql(
+    service: ApplicationService, principal: Principal, kind: str, stage: IntelligenceStage
+) -> None:
+    _ok(
+        service,
+        principal,
+        Purpose.REPORT_AUTHORING,
+        CreateReportType(artifact_kind=kind, stage=stage, description="A synthetic client kind."),
+    )
+
+
+def test_sql_a_client_brief_kind_never_displaces_the_builtin_daily_briefing(
+    migrated_engine: Engine,
+) -> None:
+    """F1 (a) over PostgreSQL: the head index and lookups are per kind."""
+    service = _service(migrated_engine)
+    principal = operator()
+    _register_sql(service, principal, "sql_weekly_brief", IntelligenceStage.MORNING_BRIEF)
+    cycle = _begin(service, principal, "sql-client-brief-cycle")
+    heads = tuple(_focus_branch(service, principal, cycle, focus) for focus in EXPECTED_FOCUS_AREAS)
+    builtin = _ok(
+        service,
+        principal,
+        Purpose.REPORT_AUTHORING,
+        CommitIntelligenceArtifact(
+            cycle_run_id=cycle,
+            stage=IntelligenceStage.MORNING_BRIEF,
+            artifact_kind=ArtifactKind.MORNING_BRIEF,
+            producer_task_id="sql-brief",
+            producer_task_name="brief",
+            automation_platform="abacus_chatllm",
+            report_date="2026-08-20",
+            title="Daily Briefing",
+            body_markdown="brief",
+            artifact_state=ArtifactState.FINAL,
+            schema_version="1",
+            idempotency_key="sql-builtin-brief",
+            dependency_report_ids=heads,
+        ),
+    )
+    false_final = _commit_as(
+        service,
+        principal,
+        cycle=cycle,
+        stage=IntelligenceStage.MORNING_BRIEF,
+        kind="sql_weekly_brief",
+        key="sql-client-brief-final",
+    )
+    assert false_final.error is not None
+    assert (false_final.error.code, false_final.error.safe_details) == (
+        ErrorCode.INVALID_REQUEST,
+        ("artifact_state",),
+    )
+    client = _commit_as(
+        service,
+        principal,
+        cycle=cycle,
+        stage=IntelligenceStage.MORNING_BRIEF,
+        kind="sql_weekly_brief",
+        key="sql-client-brief-partial",
+        state=ArtifactState.PARTIAL,
+    )
+    assert client.error is None, client.error
+    assert client.result is not None
+    assert (client.result["version"], client.result["supersedes_report_id"]) == (1, None)
+    latest = _sql_latest_of(service, principal, cycle, "morning_brief")
+    assert (latest["report_id"], latest["artifact_state"]) == (builtin["report_id"], "final")
+    mine = _sql_latest_of(service, principal, cycle, "sql_weekly_brief")
+    assert (mine["report_id"], mine["artifact_state"]) == (client.result["report_id"], "partial")
+    with migrated_engine.connect() as connection:
+        current = connection.execute(
+            text(
+                "SELECT artifact_kind FROM knowledge.intelligence_artifacts "
+                "WHERE principal_id = :principal AND stage = 'morning_brief' AND is_current "
+                "ORDER BY artifact_kind"
+            ),
+            {"principal": principal.principal_id},
+        ).scalars()
+        assert list(current) == ["morning_brief", "sql_weekly_brief"]
+
+
+def test_sql_a_client_reporter_kind_never_displaces_the_builtin_focus_report(
+    migrated_engine: Engine,
+) -> None:
+    """F1 (b) and (c) over PostgreSQL: the brief inputs see only the built-in reporter."""
+    service = _service(migrated_engine)
+    principal = operator()
+    _register_sql(service, principal, "sql_client_report", IntelligenceStage.REPORTER)
+    cycle = _begin(service, principal, "sql-client-reporter-cycle")
+    heads = tuple(_focus_branch(service, principal, cycle, focus) for focus in EXPECTED_FOCUS_AREAS)
+    last = EXPECTED_FOCUS_AREAS[-1]
+    synth = _sql_latest(service, principal, cycle, IntelligenceStage.SYNTHESIZER, focus=last)
+    client = _commit_as(
+        service,
+        principal,
+        cycle=cycle,
+        stage=IntelligenceStage.REPORTER,
+        kind="sql_client_report",
+        key="sql-client-reporter",
+        focus=last,
+        dependencies=(synth,),
+    )
+    assert client.error is None, client.error
+    assert client.result is not None
+    client_id = client.result["report_id"]
+    assert isinstance(client_id, str)
+    assert (client.result["version"], client.result["supersedes_report_id"]) == (1, None)
+    builtin = _sql_latest_of(service, principal, cycle, "focus_report", last)
+    assert (builtin["report_id"], builtin["artifact_state"]) == (heads[-1], "final")
+    resolved = _ok(
+        service,
+        principal,
+        Purpose.REPORT_READ,
+        ResolveIntelligenceSet(cycle_run_id=cycle, set_id=ResolverSetId.MORNING_BRIEF_INPUTS),
+    )
+    assert resolved["aggregate"] == "READY"
+    by_area = {m["focus_area_id"]: m for m in resolved["members"]}  # type: ignore[union-attr]
+    assert by_area[last.value]["artifact_id"] == heads[-1]
+    # (c) the client reporter cited by a brief is the bare dependency refusal.
+    cited = _commit_as(
+        service,
+        principal,
+        cycle=cycle,
+        stage=IntelligenceStage.MORNING_BRIEF,
+        kind="morning_brief",
+        key="sql-brief-cites-client",
+        dependencies=(*heads[:-1], client_id),
+        state=ArtifactState.PARTIAL,
+    )
+    assert cited.error is not None
+    assert (cited.error.code, cited.error.safe_details) == (
+        ErrorCode.INVALID_REQUEST,
+        ("dependency_report_ids",),
+    )
+    brief = _commit_as(
+        service,
+        principal,
+        cycle=cycle,
+        stage=IntelligenceStage.MORNING_BRIEF,
+        kind="morning_brief",
+        key="sql-brief-over-builtins",
+        dependencies=heads,
+    )
+    assert brief.error is None, brief.error

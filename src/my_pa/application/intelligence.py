@@ -139,9 +139,15 @@ class IntelligenceStore(Protocol):
         principal_id: str,
         cycle_run_id: str,
         stage: IntelligenceStage,
+        artifact_kind: str,
         focus_area_id: FocusAreaId | None,
         source_lane: SourceLaneId | None,
-    ) -> IntelligenceArtifact | None: ...
+    ) -> IntelligenceArtifact | None:
+        """The current head of `artifact_kind`'s own lineage at the coordinate.
+
+        Heads are per kind: a client kind at a built-in stage has its own head
+        and never displaces the built-in one.
+        """
 
     def list_artifacts(
         self,
@@ -177,9 +183,11 @@ class IntelligenceStore(Protocol):
         principal_id: str,
         cycle_run_id: str,
         stage: IntelligenceStage,
+        artifact_kind: str,
         focus_area_id: FocusAreaId | None,
         source_lane: SourceLaneId | None,
-    ) -> IntelligenceProducerRun | None: ...
+    ) -> IntelligenceProducerRun | None:
+        """The latest run of `artifact_kind` at the coordinate."""
 
     def list_report_types(
         self, principal_id: str, *, stage: IntelligenceStage | None = None
@@ -572,10 +580,12 @@ def _upstream_matches_current_head(
     for dependency in artifact.dependencies:
         if dependency.expected_stage is None:
             return False
+        # Every dependency is a built-in kind, so its role's head is the built-in one.
         current = store.current_head(
             principal_id,
             cycle_run_id,
             dependency.expected_stage,
+            ARTIFACT_KIND_FOR_STAGE[dependency.expected_stage],
             dependency.expected_focus_area_id,
             dependency.expected_source_lane,
         )
@@ -679,6 +689,7 @@ def artifact_eligibility(
         principal_id,
         cycle_run_id,
         artifact.stage,
+        artifact.artifact_kind,
         artifact.focus_area_id,
         artifact.source_lane,
     )
@@ -689,6 +700,7 @@ def artifact_eligibility(
             principal_id,
             cycle_run_id,
             IntelligenceStage.COLLECTOR,
+            ArtifactKind.COLLECTOR_CANDIDATES,
             artifact.focus_area_id,
             None,
         )
@@ -716,14 +728,18 @@ def coordinate_eligibility(
     focus_area_id: FocusAreaId | None,
     source_lane: SourceLaneId | None,
 ) -> Eligibility:
-    """The shared predicate at a coordinate: its current head, or why there is none.
+    """The shared predicate at a coordinate: its built-in head, or why there is none.
 
-    A coordinate with no head is never eligible. Its latest run says whether it
-    is ``FAILED`` or ``MISSING``; a ``partial`` run with no artifact is
-    ``MISSING`` too, because there is nothing to consume.
+    Only the stage's built-in kind is ever consumed: a client kind registered at
+    the stage is a standalone report with its own lineage, so neither its head
+    nor its runs are consulted here. A coordinate with no head is never
+    eligible. Its latest run says whether it is ``FAILED`` or ``MISSING``; a
+    ``partial`` run with no artifact is ``MISSING`` too, because there is
+    nothing to consume.
     """
-    run = store.failed_run(principal_id, cycle_run_id, stage, focus_area_id, source_lane)
-    head = store.current_head(principal_id, cycle_run_id, stage, focus_area_id, source_lane)
+    kind = ARTIFACT_KIND_FOR_STAGE[stage]
+    run = store.failed_run(principal_id, cycle_run_id, stage, kind, focus_area_id, source_lane)
+    head = store.current_head(principal_id, cycle_run_id, stage, kind, focus_area_id, source_lane)
     if head is None:
         if run is not None and run.state is ProducerRunState.FAILED:
             return Eligibility(ReadinessMemberState.FAILED, REASON_FAILED, None, run)
@@ -816,6 +832,11 @@ def _validate_dependencies(
     Reporter heads of distinct expected focus areas; any uncovered or partial
     area counts as partial input. Collector and Researcher keep their fixed
     counts.
+
+    The rules are the stage's, whatever kind is committed: a client kind at a
+    stage takes exactly the built-in kind's upstream stage, count and
+    never-falsely-final rules. Every cited dependency must be the built-in kind
+    of its stage; a client-kind artifact is never consumed (bare refusal).
     """
     if stage is IntelligenceStage.SYNTHESIZER:
         if len(dependency_ids) < MIN_SYNTHESIZER_DEPENDENCY_COUNT:
@@ -834,6 +855,11 @@ def _validate_dependencies(
             raise _dependency_error(stage, DependencyRejection.MISSING)
         if artifact.cycle_run_id != cycle.cycle_run_id:
             raise _dependency_error(stage, DependencyRejection.WRONG_CYCLE)
+        # Only built-in kinds are ever consumed. A client kind is a standalone
+        # report: citing one, at any stage and for any committed kind, is the
+        # bare dependency refusal.
+        if artifact.artifact_kind != ARTIFACT_KIND_FOR_STAGE[artifact.stage]:
+            raise IntelligenceDependencyError()
         upstreams.append(artifact)
     partial_input = False
     if stage is IntelligenceStage.RESEARCHER:
@@ -843,7 +869,12 @@ def _validate_dependencies(
         if collector.focus_area_id != focus_area_id:
             raise IntelligenceDependencyError(DependencyRejection.WRONG_FOCUS)
         current = store.current_head(
-            principal_id, cycle.cycle_run_id, IntelligenceStage.COLLECTOR, focus_area_id, None
+            principal_id,
+            cycle.cycle_run_id,
+            IntelligenceStage.COLLECTOR,
+            ArtifactKind.COLLECTOR_CANDIDATES,
+            focus_area_id,
+            None,
         )
         if current is None or current.artifact_id != collector.artifact_id:
             raise IntelligenceStaleReferenceError(DependencyRejection.STALE)
@@ -1068,7 +1099,11 @@ def commit_artifact(
             )
             if prior is not None:
                 raise IntelligenceConflictError()
-        current = store.current_head(principal_id, cycle_run_id, stage, focus_area_id, source_lane)
+        # The head of this kind's own lineage: a client kind never supersedes
+        # (or is superseded by) the built-in kind at its stage.
+        current = store.current_head(
+            principal_id, cycle_run_id, stage, artifact_kind, focus_area_id, source_lane
+        )
         if supersedes_artifact_id is not None and (
             current is None or current.artifact_id != supersedes_artifact_id
         ):
@@ -1250,7 +1285,9 @@ def record_run_state(
         # records its own succeeded run) and may then record `succeeded`; a
         # `succeeded` with nothing committed at this exact coordinate is refused.
         if state is ProducerRunState.SUCCEEDED and (
-            store.current_head(principal_id, cycle_run_id, stage, focus_area_id, source_lane)
+            store.current_head(
+                principal_id, cycle_run_id, stage, artifact_kind, focus_area_id, source_lane
+            )
             is None
         ):
             raise InvalidRequestError(SafeDetail.SELECTOR, SafeDetail.RUN_STATE_WITHOUT_ARTIFACT)
@@ -1461,8 +1498,9 @@ def _member_state(
     # `collectors`: the original per-member rules.
     stage = IntelligenceStage.COLLECTOR
     area = focus_area_id
-    current = store.current_head(principal_id, cycle_run_id, stage, area, None)
-    failed = store.failed_run(principal_id, cycle_run_id, stage, area, None)
+    kind = ArtifactKind.COLLECTOR_CANDIDATES
+    current = store.current_head(principal_id, cycle_run_id, stage, kind, area, None)
+    failed = store.failed_run(principal_id, cycle_run_id, stage, kind, area, None)
 
     def legacy(state: ReadinessMemberState, artifact: IntelligenceArtifact | None) -> Eligibility:
         return Eligibility(state, state.value.lower(), artifact, failed)
@@ -1682,6 +1720,7 @@ class InMemoryIntelligenceStore:
         principal_id: str,
         cycle_run_id: str,
         stage: IntelligenceStage,
+        artifact_kind: str,
         focus_area_id: FocusAreaId | None,
         source_lane: SourceLaneId | None,
     ) -> IntelligenceArtifact | None:
@@ -1691,6 +1730,7 @@ class InMemoryIntelligenceStore:
             if artifact.principal_id == principal_id
             and artifact.cycle_run_id == cycle_run_id
             and artifact.stage is stage
+            and str(artifact.artifact_kind) == str(artifact_kind)
             and artifact.focus_area_id == focus_area_id
             and artifact.source_lane == source_lane
             and artifact.is_current
@@ -1797,6 +1837,7 @@ class InMemoryIntelligenceStore:
         principal_id: str,
         cycle_run_id: str,
         stage: IntelligenceStage,
+        artifact_kind: str,
         focus_area_id: FocusAreaId | None,
         source_lane: SourceLaneId | None,
     ) -> IntelligenceProducerRun | None:
@@ -1806,6 +1847,7 @@ class InMemoryIntelligenceStore:
             if run.principal_id == principal_id
             and run.cycle_run_id == cycle_run_id
             and run.stage is stage
+            and str(run.artifact_kind) == str(artifact_kind)
             and run.focus_area_id == focus_area_id
             and run.source_lane == source_lane
         ]

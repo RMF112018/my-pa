@@ -4732,8 +4732,9 @@ _ARTIFACT_KIND_PROPERTY: Final[Mapping[str, object]] = MappingProxyType(
         "description": (
             "A report type registered for you (see reports.types.list): a built-in "
             "kind or a client kind registered with reports.types.create, at the "
-            "stage it was registered for. An unregistered kind is refused with the "
-            "kinds you may use listed."
+            "stage it was registered for. Each kind has its own current head and "
+            "lineage; a client kind never replaces a built-in report. An "
+            "unregistered kind is refused with the kinds you may use listed."
         ),
     }
 )
@@ -5110,11 +5111,18 @@ def _bounded_label(value: object, limit: int, detail: SafeDetail) -> str:
 
 @dataclass(frozen=True, slots=True)
 class CreateReportType:
-    """`reports.types.create`: register a report type of your own at one stage.
+    """`reports.types.create`: register a standalone report type of your own at one stage.
 
     `artifact_kind` is a new lower_snake token (1 to 64 characters) that is not
-    a built-in kind; `stage` is one of the five pipeline stages, whose
-    dependency, head and lineage rules the kind then shares. Insert-only and
+    a built-in kind; `stage` is one of the five pipeline stages. A report of
+    the kind takes that stage's dependency rules exactly as the built-in kind
+    does: the same upstream stage and count, built-in upstream reports only,
+    and the same never-falsely-final rule (at `morning_brief`, zero to six
+    built-in focus reports, `partial` when any area is missing or partial). It
+    has its own current head and lineage, so it never supersedes, displaces or
+    is superseded by the built-in report at its stage. It is standalone: no
+    resolver set, Daily Briefing or other commit ever consumes it, and citing
+    one as a dependency is refused. Insert-only and
     replay-safe without a key: repeating the identical definition succeeds with
     `replayed: true`; a different definition for a registered kind, a built-in
     kind, or a sixty-fifth client kind is a `conflict` on `artifact_kind`. There
@@ -5146,7 +5154,10 @@ CreateReportType.mcp_payload_properties = MappingProxyType(  # type: ignore[attr
     {
         "artifact_kind": {
             "pattern": "^[a-z][a-z0-9_]{0,63}$",
-            "description": ("The new kind: lower_snake, 1 to 64 characters, not a built-in kind."),
+            "description": (
+                "The new kind: lower_snake, 1 to 64 characters, not a built-in kind. "
+                "Its reports are standalone, with their own head and lineage."
+            ),
         },
         "description": {
             "minLength": 1,
@@ -5160,12 +5171,14 @@ CreateReportType.mcp_payload_properties = MappingProxyType(  # type: ignore[attr
 
 @dataclass(frozen=True, slots=True)
 class ListReportTypes:
-    """`reports.types.list`: the report types you may use, optionally for one stage.
+    """`reports.types.list`: your report types; only `builtin` kinds feed the Daily Briefing.
 
     The five built-in kinds and your own registered client kinds, each with its
     stage, description, display name and origin (`builtin` or `client`), in
     pipeline-stage order with the built-in kind first. Another Principal's kinds
-    are never listed.
+    are never listed. A `client` kind is a standalone report with its own head
+    and lineage: resolver sets, the Daily Briefing and dependencies consume only
+    the `builtin` kinds.
     """
 
     capability: ClassVar[Capability] = Capability.REPORTS_TYPES_LIST

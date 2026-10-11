@@ -1886,6 +1886,7 @@ def _commit_kind(
     focus: FocusAreaId | None = FOCUS,
     lane: SourceLaneId | None = None,
     dependencies: tuple[str, ...] = (),
+    state: ArtifactState = ArtifactState.FINAL,
 ) -> ResponseEnvelope:
     return _as(
         service,
@@ -1901,7 +1902,7 @@ def _commit_kind(
             report_date="2026-08-20",
             title=f"Artifact {kind}",
             body_markdown=f"body {kind}",
-            artifact_state=ArtifactState.FINAL,
+            artifact_state=state,
             schema_version="1",
             idempotency_key=key,
             focus_area_id=focus,
@@ -2063,8 +2064,33 @@ def test_a_client_kind_commits_at_its_stage_and_is_refused_at_another(scene: Sce
     assert committed["stage"] == "collector"
     report_id = committed["report_id"]
     assert isinstance(report_id, str)
-    # A client collector is the stage's head: a built-in researcher builds on it,
-    # and a client researcher does too.
+    # A client kind is a standalone report with its own head: it never becomes
+    # the stage's built-in head, and citing it as a dependency is refused for a
+    # client and a built-in researcher alike (the bare dependency refusal).
+    for kind, key in (("lane_notes", "client-dep"), ("research_context", "builtin-dep")):
+        cited = _commit_kind(
+            service,
+            principal,
+            cycle=cycle,
+            stage=IntelligenceStage.RESEARCHER,
+            kind=kind,
+            key=key,
+            lane=SourceLaneId.TEAMS,
+            dependencies=(report_id,),
+        )
+        assert _refusal(cited) == (ErrorCode.INVALID_REQUEST, ("dependency_report_ids",))
+    # A client researcher takes the built-in researcher's upstream: the built-in
+    # collector head, never the client collector committed beside it.
+    collector = payload(
+        _commit_kind(
+            service,
+            principal,
+            cycle=cycle,
+            stage=IntelligenceStage.COLLECTOR,
+            kind="collector_candidates",
+            key="builtin-collector",
+        )
+    )
     lane_notes = payload(
         _commit_kind(
             service,
@@ -2074,10 +2100,23 @@ def test_a_client_kind_commits_at_its_stage_and_is_refused_at_another(scene: Sce
             kind="lane_notes",
             key="client-kind-r",
             lane=SourceLaneId.TEAMS,
-            dependencies=(report_id,),
+            dependencies=(str(collector["report_id"]),),
         )
     )
     assert lane_notes["artifact_kind"] == "lane_notes"
+    # Each kind kept its own head at the collector coordinate.
+    collector_id = collector["report_id"]
+    for kind, expected in (("alpha_scan", report_id), ("collector_candidates", collector_id)):
+        head = payload(
+            _as(
+                service,
+                principal,
+                Purpose.REPORT_READ,
+                GetLatestIntelligenceArtifact(cycle_run_id=cycle, artifact_kind=kind),
+            )
+        )
+        assert head["report_id"] == expected
+        assert head["artifact_state"] == "final"
     read = payload(
         _as(service, principal, Purpose.REPORT_READ, ReadIntelligenceArtifact(report_id))
     )
@@ -2290,21 +2329,108 @@ def test_the_client_type_cap_is_enforced_and_an_existing_kind_still_replays(scen
     )
 
 
-def test_client_reporter_and_brief_kinds_join_the_daily_briefing(scene: Scene) -> None:
-    """Reporters are matched by stage: a client reporter kind feeds the brief like a built-in.
+def _latest_of(
+    service: ApplicationService,
+    principal: Principal,
+    cycle: str,
+    kind: str,
+    focus: FocusAreaId | None = None,
+) -> dict[str, object]:
+    return payload(
+        _as(
+            service,
+            principal,
+            Purpose.REPORT_READ,
+            GetLatestIntelligenceArtifact(
+                cycle_run_id=cycle, artifact_kind=kind, focus_area_id=focus
+            ),
+        )
+    )
 
-    A client brief kind at the `morning_brief` stage takes the brief's own rules.
+
+def test_a_client_brief_kind_never_displaces_the_builtin_daily_briefing(scene: Scene) -> None:
+    """F1 (a): heads are per kind, so a client kind at `morning_brief` has its own lineage.
+
+    The final built-in brief over six final reporters stays the built-in head
+    after a client brief kind commits at the same stage, and the client kind
+    takes the Daily Briefing's own rules: zero to six built-in reporters,
+    partial forced on gaps, a false `final` refused.
     """
     service = build_service(scene.world, scene.providers)
     principal = scene.principal
-    payload(_register(service, principal, "client_focus_report", IntelligenceStage.REPORTER))
     payload(_register(service, principal, "weekly_brief", IntelligenceStage.MORNING_BRIEF))
     cycle = begin(service, scene, "cycle-client-brief")
-    heads = [_focus_branch(service, scene, cycle, focus) for focus in EXPECTED_FOCUS_AREAS[:-1]]
+    heads = tuple(_focus_branch(service, scene, cycle, focus) for focus in EXPECTED_FOCUS_AREAS)
+    builtin = payload(_brief(service, scene, cycle, "builtin-brief", heads))
+    assert builtin["artifact_state"] == "final"
+
+    # The client kind with zero reporters: a gap, so `final` is refused ...
+    false_final = _commit_kind(
+        service,
+        principal,
+        cycle=cycle,
+        stage=IntelligenceStage.MORNING_BRIEF,
+        kind="weekly_brief",
+        key="client-brief-final",
+        focus=None,
+    )
+    assert _refusal(false_final) == (ErrorCode.INVALID_REQUEST, ARTIFACT_STATE_REFUSAL)
+    # ... and `partial` is admitted, as its own lineage's first version.
+    client = payload(
+        _commit_kind(
+            service,
+            principal,
+            cycle=cycle,
+            stage=IntelligenceStage.MORNING_BRIEF,
+            kind="weekly_brief",
+            key="client-brief-partial",
+            focus=None,
+            state=ArtifactState.PARTIAL,
+        )
+    )
+    assert (client["version"], client["supersedes_report_id"]) == (1, None)
+
+    latest_builtin = _latest_of(service, principal, cycle, "morning_brief")
+    assert latest_builtin["report_id"] == builtin["report_id"]
+    assert latest_builtin["artifact_state"] == "final"
+    latest_client = _latest_of(service, principal, cycle, "weekly_brief")
+    assert latest_client["report_id"] == client["report_id"]
+    assert latest_client["artifact_state"] == "partial"
+
+    # Over the six built-in final reporters the client kind may be final, and it
+    # supersedes only its own previous head.
+    client_v2 = payload(
+        _commit_kind(
+            service,
+            principal,
+            cycle=cycle,
+            stage=IntelligenceStage.MORNING_BRIEF,
+            kind="weekly_brief",
+            key="client-brief-v2",
+            focus=None,
+            dependencies=heads,
+        )
+    )
+    assert (client_v2["version"], client_v2["supersedes_report_id"]) == (2, client["report_id"])
+    latest_builtin = _latest_of(service, principal, cycle, "morning_brief")
+    assert latest_builtin["report_id"] == builtin["report_id"]
+    # A built-in rerun supersedes the built-in head, never the client one.
+    builtin_v2 = payload(_brief(service, scene, cycle, "builtin-brief-v2", heads))
+    assert (builtin_v2["version"], builtin_v2["supersedes_report_id"]) == (2, builtin["report_id"])
+    latest_client = _latest_of(service, principal, cycle, "weekly_brief")
+    assert latest_client["report_id"] == client_v2["report_id"]
+
+
+def test_a_client_reporter_kind_never_displaces_the_builtin_focus_report(scene: Scene) -> None:
+    """F1 (b): a client reporter kind keeps its own head; the Daily Briefing never sees it."""
+    service = build_service(scene.world, scene.providers)
+    principal = scene.principal
+    payload(_register(service, principal, "client_focus_report", IntelligenceStage.REPORTER))
+    cycle = begin(service, scene, "cycle-client-reporter")
+    heads = tuple(_focus_branch(service, scene, cycle, focus) for focus in EXPECTED_FOCUS_AREAS)
     last = EXPECTED_FOCUS_AREAS[-1]
-    built_in_head = _focus_branch(service, scene, cycle, last)
     synth_id = _latest(service, scene, cycle, IntelligenceStage.SYNTHESIZER, focus=last)
-    client_reporter = payload(
+    client = payload(
         _commit_kind(
             service,
             principal,
@@ -2316,29 +2442,74 @@ def test_client_reporter_and_brief_kinds_join_the_daily_briefing(scene: Scene) -
             dependencies=(synth_id,),
         )
     )
-    client_id = client_reporter["report_id"]
-    assert isinstance(client_id, str)
-    # The client reporter is now the area's head; the built-in one it replaced is not.
+    assert (client["version"], client["supersedes_report_id"]) == (1, None)
+    builtin_head = _latest_of(service, principal, cycle, "focus_report", last)
+    assert builtin_head["report_id"] == heads[-1]
+    assert builtin_head["artifact_state"] == "final"
+    assert (
+        _latest_of(service, principal, cycle, "client_focus_report", last)["report_id"]
+        == (client["report_id"])
+    )
+    # `morning_brief_inputs` and the brief commit still see the built-in reporter.
     resolved = _resolve_brief_inputs(service, scene, cycle)
     assert resolved["aggregate"] == "READY"
     by_area = {m["focus_area_id"]: m for m in resolved["members"]}  # type: ignore[union-attr]
-    assert by_area[last.value]["artifact_id"] == client_id
-    stale = _brief(service, scene, cycle, "client-brief-stale", (*heads, built_in_head))
-    assert stale.error is not None
-    brief = payload(
-        _commit_kind(
+    assert by_area[last.value]["artifact_id"] == heads[-1]
+    assert by_area[last.value]["readiness"] == "READY"
+    brief = payload(_brief(service, scene, cycle, "brief-over-builtins", heads))
+    assert brief["artifact_state"] == "final"
+
+
+def test_a_client_kind_cited_as_a_dependency_is_refused(scene: Scene) -> None:
+    """F1 (c): client kinds are standalone; no commit, built-in or client, consumes one."""
+    service = build_service(scene.world, scene.providers)
+    principal = scene.principal
+    payload(_register(service, principal, "client_focus_report", IntelligenceStage.REPORTER))
+    payload(_register(service, principal, "weekly_brief", IntelligenceStage.MORNING_BRIEF))
+    cycle = begin(service, scene, "cycle-client-dependency")
+    heads = tuple(_focus_branch(service, scene, cycle, focus) for focus in EXPECTED_FOCUS_AREAS)
+    last = EXPECTED_FOCUS_AREAS[-1]
+    synth_id = _latest(service, scene, cycle, IntelligenceStage.SYNTHESIZER, focus=last)
+    client_id = str(
+        payload(
+            _commit_kind(
+                service,
+                principal,
+                cycle=cycle,
+                stage=IntelligenceStage.REPORTER,
+                kind="client_focus_report",
+                key="client-reporter-dep",
+                focus=last,
+                dependencies=(synth_id,),
+            )
+        )["report_id"]
+    )
+    cited = (*heads[:-1], client_id)
+    for state in (ArtifactState.FINAL, ArtifactState.PARTIAL):
+        refused = _brief(service, scene, cycle, f"builtin-cites-client-{state.value}", cited, state)
+        assert _refusal(refused) == (ErrorCode.INVALID_REQUEST, BARE_DEPENDENCY_REFUSAL)
+        client_brief = _commit_kind(
             service,
             principal,
             cycle=cycle,
             stage=IntelligenceStage.MORNING_BRIEF,
             kind="weekly_brief",
-            key="client-brief",
+            key=f"client-cites-client-{state.value}",
             focus=None,
-            dependencies=(*heads, client_id),
+            dependencies=(client_id,),
+            state=state,
+        )
+        assert _refusal(client_brief) == (ErrorCode.INVALID_REQUEST, BARE_DEPENDENCY_REFUSAL)
+    # Nothing was committed at the brief stage.
+    listed = payload(
+        _as(
+            service,
+            principal,
+            Purpose.REPORT_READ,
+            ListIntelligenceArtifacts(cycle_run_id=cycle, stage=IntelligenceStage.MORNING_BRIEF),
         )
     )
-    assert brief["artifact_kind"] == "weekly_brief"
-    assert brief["artifact_state"] == "final"
+    assert listed["items"] == []
 
 
 def test_an_invalid_purpose_lists_the_purposes_the_capability_permits() -> None:

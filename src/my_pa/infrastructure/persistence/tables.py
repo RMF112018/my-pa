@@ -10024,6 +10024,20 @@ intelligence_artifacts = Table(
     ),
     _one_of("artifact_state", ArtifactState, name="intelligence_artifact_state_is_known"),
     CheckConstraint(_ARTIFACT_KIND_SHAPE_CHECK, name="intelligence_artifact_kind_is_a_token"),
+    # One current head per (cycle, stage, kind, focus area, source lane):
+    # `a591b81f10a2` added `artifact_kind`, so every kind has its own lineage and
+    # a client kind at a built-in stage never displaces the built-in head.
+    Index(
+        "intelligence_artifact_current_head",
+        "principal_id",
+        "cycle_run_id",
+        "stage",
+        "artifact_kind",
+        text("coalesce(focus_area_id, '')"),
+        text("coalesce(source_lane, '')"),
+        unique=True,
+        postgresql_where=text("is_current"),
+    ),
 )
 
 #: The per-Principal report type registry (`a591b81f10a2`). One immutable row

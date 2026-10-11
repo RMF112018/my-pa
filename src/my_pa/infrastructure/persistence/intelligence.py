@@ -322,12 +322,15 @@ class SqlIntelligenceStore:
         principal_id: str,
         cycle_run_id: str,
         stage: IntelligenceStage,
+        artifact_kind: str,
         focus_area_id: FocusAreaId | None,
         source_lane: SourceLaneId | None,
     ) -> IntelligenceArtifact | None:
+        """The current head of one kind's lineage at a coordinate (`a591b81f10a2`)."""
         filters = [
             intelligence_artifacts.c.cycle_run_id == cycle_run_id,
             intelligence_artifacts.c.stage == stage.value,
+            intelligence_artifacts.c.artifact_kind == str(artifact_kind),
             intelligence_artifacts.c.is_current.is_(True),
         ]
         if focus_area_id is None:
@@ -463,12 +466,14 @@ class SqlIntelligenceStore:
         principal_id: str,
         cycle_run_id: str,
         stage: IntelligenceStage,
+        artifact_kind: str,
         focus_area_id: FocusAreaId | None,
         source_lane: SourceLaneId | None,
     ) -> IntelligenceProducerRun | None:
         filters = [
             intelligence_producer_runs.c.cycle_run_id == cycle_run_id,
             intelligence_producer_runs.c.stage == stage.value,
+            intelligence_producer_runs.c.artifact_kind == str(artifact_kind),
         ]
         if focus_area_id is None:
             filters.append(intelligence_producer_runs.c.focus_area_id.is_(None))

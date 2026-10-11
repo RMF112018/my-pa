@@ -940,6 +940,7 @@ def store_head_id(scene: Scene, cycle: str) -> str:
         scene.principal.principal_id,
         cycle,
         IntelligenceStage.RESEARCHER,
+        ArtifactKind.RESEARCH_CONTEXT,
         FOCUS,
         SourceLaneId.SHAREPOINT,
     )

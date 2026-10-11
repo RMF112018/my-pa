@@ -3,13 +3,15 @@
 The revision creates `knowledge.intelligence_report_types`, seeds the five
 built-in rows for every Principal already on the Intelligence Artifact plane,
 relaxes the artifact-kind CHECKs of producer runs and artifacts to a kind token
-(built-in kinds stay bound to their stage), and restates `capability_is_known`
-201 -> 203 for `reports.types.create` and `reports.types.list`.
+(built-in kinds stay bound to their stage), adds `artifact_kind` to the
+current-head unique index (heads and lineage are per kind), and restates
+`capability_is_known` 201 -> 203 for `reports.types.create` and
+`reports.types.list`.
 
 Downgrade deletes nothing. It refuses with `restrict_violation` while a client
 type, a non-built-in run or artifact kind, or an audit row naming a new
-capability exists; otherwise it restores the original CHECKs exactly and drops
-the table.
+capability exists; otherwise it restores the original CHECKs and the original
+current-head index exactly and drops the table.
 """
 
 from __future__ import annotations
@@ -27,7 +29,9 @@ from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import Connection, Engine, text
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import DBAPIError
+from sqlalchemy.schema import CreateIndex
 from tests.conftest import DEFAULT_LIMITS, metadata_for, operator
 
 from my_pa.application.commands import BeginIntelligenceCycle, CommitIntelligenceArtifact
@@ -46,7 +50,10 @@ from my_pa.domain.intelligence.catalog import (
 from my_pa.domain.intelligence.models import builtin_report_type_definitions
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
-from my_pa.infrastructure.persistence.tables import intelligence_report_types
+from my_pa.infrastructure.persistence.tables import (
+    intelligence_artifacts,
+    intelligence_report_types,
+)
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 
 ROOT: Final = Path(__file__).resolve().parents[2]
@@ -60,6 +67,19 @@ TABLE: Final = "intelligence_report_types"
 CHECK_VIOLATION: Final = "23514"
 RESTRICT_VIOLATION: Final = "23001"
 RAISE_EXCEPTION: Final = "P0001"
+UNIQUE_VIOLATION: Final = "23505"
+HEAD_INDEX: Final = "intelligence_artifact_current_head"
+#: `pg_get_indexdef` of the head index before this revision and at it.
+HEAD_INDEX_BEFORE: Final = (
+    "CREATE UNIQUE INDEX intelligence_artifact_current_head ON knowledge.intelligence_artifacts "
+    "USING btree (principal_id, cycle_run_id, stage, COALESCE(focus_area_id, ''::text), "
+    "COALESCE(source_lane, ''::text)) WHERE is_current"
+)
+HEAD_INDEX_AT: Final = (
+    "CREATE UNIQUE INDEX intelligence_artifact_current_head ON knowledge.intelligence_artifacts "
+    "USING btree (principal_id, cycle_run_id, stage, artifact_kind, "
+    "COALESCE(focus_area_id, ''::text), COALESCE(source_lane, ''::text)) WHERE is_current"
+)
 WHEN: Final = datetime(2026, 10, 11, 12, tzinfo=UTC)
 NEW_CAPABILITIES: Final = ("reports.types.create", "reports.types.list")
 BUILTIN_KINDS: Final = tuple(kind.value for kind in ArtifactKind)
@@ -210,6 +230,32 @@ def test_the_downgrade_refusal_names_every_state_the_narrower_schema_cannot_hold
     assert "ERRCODE = 'restrict_violation'" in refusal
 
 
+def test_the_head_index_before_literal_is_what_the_plane_revision_emitted() -> None:
+    def bare(value: str) -> str:
+        return _WHITESPACE.sub("", value)
+
+    plane = bare(PLANE_MIGRATION.read_text(encoding="utf-8").replace("{SCHEMA}", "knowledge"))
+    before = bare(_text(MIGRATION, "_HEAD_INDEX_BEFORE"))
+    assert before.startswith(f"CREATEUNIQUEINDEX{HEAD_INDEX}ON")
+    assert plane.count(before) == 1
+    assert _text(MIGRATION, "HEAD_INDEX") == HEAD_INDEX
+
+
+def test_the_head_index_at_literal_adds_only_the_kind_after_the_stage() -> None:
+    before = _flat(_text(MIGRATION, "_HEAD_INDEX_BEFORE"))
+    at = _flat(_text(MIGRATION, "_HEAD_INDEX_AT"))
+    assert at == before.replace("stage, coalesce", "stage, artifact_kind, coalesce")
+    assert at != before
+
+
+def test_the_declared_head_index_is_the_at_literal() -> None:
+    """The live declaration mirrors the revision (the DDL itself stays frozen text)."""
+    (index,) = [i for i in intelligence_artifacts.indexes if i.name == HEAD_INDEX]
+    compiled = str(CreateIndex(index).compile(dialect=postgresql.dialect()))
+    frozen = _text(MIGRATION, "_HEAD_INDEX_AT")
+    assert _WHITESPACE.sub("", compiled) + ";" == _WHITESPACE.sub("", frozen)
+
+
 # ---- the database --------------------------------------------------------------------
 
 
@@ -245,6 +291,17 @@ def _checks(engine: Engine) -> dict[tuple[str, str], str]:
             )
         ).all()
     return {(str(table), str(name)): str(definition) for table, name, definition in rows}
+
+
+def _head_index(engine: Engine) -> str | None:
+    with engine.connect() as connection:
+        return connection.execute(
+            text(
+                "SELECT indexdef FROM pg_indexes WHERE schemaname = 'knowledge' "
+                "AND tablename = 'intelligence_artifacts' AND indexname = :name"
+            ),
+            {"name": HEAD_INDEX},
+        ).scalar_one_or_none()
 
 
 def _admitted_capabilities(engine: Engine) -> list[str]:
@@ -588,15 +645,63 @@ def test_runs_and_artifacts_admit_a_client_kind_but_keep_builtins_on_their_stage
         )
 
 
+def _refused_head(engine: Engine, **values: object) -> str | None:
+    """The SQLSTATE refusing a second *current* artifact at the seeded coordinate, or None."""
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            _copy_with(
+                connection, "intelligence_artifacts", "artifact_id", is_current=True, **values
+            )
+        except DBAPIError as error:
+            transaction.rollback()
+            return str(getattr(error.orig, "sqlstate", None))
+        transaction.rollback()
+        return None
+
+
+@pytest.mark.database
+@pytest.mark.migration_edge
+def test_the_head_index_is_per_kind_at_this_revision_and_per_stage_before(
+    engine: Engine,
+) -> None:
+    """F1: a client kind is a second head at a built-in coordinate; a built-in still is not."""
+    command.upgrade(_config(), PREVIOUS)
+    _seed(engine, "rt-heads")
+    assert _refused_head(engine) == UNIQUE_VIOLATION
+    command.upgrade(_config(), REVISION)
+    # The same kind at the same coordinate is still one head ...
+    assert _refused_head(engine) == UNIQUE_VIOLATION
+    # ... and another kind at that coordinate is its own head.
+    assert _refused_head(engine, artifact_kind="weekly_digest") is None
+    with engine.begin() as connection:
+        _copy_with(
+            connection,
+            "intelligence_artifacts",
+            "artifact_id",
+            is_current=True,
+            artifact_kind="weekly_digest",
+        )
+        current = connection.execute(
+            text(
+                "SELECT artifact_kind FROM knowledge.intelligence_artifacts "
+                "WHERE is_current ORDER BY artifact_kind"
+            )
+        ).scalars()
+        assert list(current) == ["collector_candidates", "weekly_digest"]
+
+
 @pytest.mark.database
 def test_a_clean_downgrade_restores_every_check_exactly_and_upgrades_again(
     engine: Engine,
 ) -> None:
     command.upgrade(_config(), PREVIOUS)
     before = _checks(engine)
+    assert _head_index(engine) == HEAD_INDEX_BEFORE
     assert len(_admitted_capabilities(engine)) == 201
     principal = _seed(engine, "rt-round")
     command.upgrade(_config(), "head")
+    assert _head_index(engine) == HEAD_INDEX_AT
     after = _checks(engine)
     assert set(after) == set(before)
     assert sorted(
@@ -614,6 +719,7 @@ def test_a_clean_downgrade_restores_every_check_exactly_and_upgrades_again(
     command.downgrade(_config(), PREVIOUS)
     assert _version(engine) == PREVIOUS
     assert _checks(engine) == before
+    assert _head_index(engine) == HEAD_INDEX_BEFORE
     assert not _table_exists(engine)
     with engine.connect() as connection:
         kept = connection.execute(
@@ -669,4 +775,5 @@ def test_the_downgrade_refuses_while_registry_state_exists(engine: Engine, plant
     assert getattr(refused.value.orig, "sqlstate", None) == RESTRICT_VIOLATION
     assert _version(engine) == REVISION
     assert _checks(engine) == before
+    assert _head_index(engine) == HEAD_INDEX_AT
     assert _registry(engine) == registry

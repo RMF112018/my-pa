@@ -22,7 +22,14 @@ identifier was preassigned and no merge revision exists. It:
    the kind-token CHECK, and each `*_stage_kind_match` CHECK keeps every
    built-in kind bound to its own stage while any other kind passes at the
    database (the application admits only kinds registered for the Principal);
-4. restates `capability_is_known` in place. The BEFORE capability literal is a
+4. scopes the current-head unique index to the artifact kind: the
+   `intelligence_artifact_current_head` index of `e9b2c4d7a150`, keyed by
+   (principal, cycle, stage, focus area, source lane), is dropped and recreated
+   with `artifact_kind` after `stage`, so each kind has its own head and lineage
+   and a client kind at a built-in stage can never displace the built-in head.
+   It is the plane's only head or lineage uniqueness index; the other indexes on
+   stage coordinates are non-unique lookups and are unchanged;
+5. restates `capability_is_known` in place. The BEFORE capability literal is a
    byte copy of `6734f039f7a6`'s AT vocabulary (201 names); the AT literal adds
    exactly `reports.types.create` and `reports.types.list` (203). Both purpose
    literals are a byte copy of that revision's AT purposes: `report_authoring`
@@ -35,9 +42,11 @@ grant, and the registry emits no Record Event.
 `downgrade` refuses with `restrict_violation`, deleting nothing, while any
 `client` registry row exists, while any producer run or artifact holds a kind
 outside the five built-ins, or while any audit row names one of the two new
-capabilities. Otherwise it restores the original CHECKs and drops the table:
-the remaining rows are the seeded built-ins, derivable from the plane, so the
-drop loses nothing.
+capabilities. Otherwise it restores the original CHECKs, restores the original
+current-head index byte for byte (with only built-in kinds left, stage and kind
+are one to one, so the narrower key holds every head the wider one did), and
+drops the table: the remaining rows are the seeded built-ins, derivable from
+the plane, so the drop loses nothing.
 
 Applying this revision to a persistent, shared or production database requires
 separate operator authority; nothing here grants it.
@@ -166,6 +175,34 @@ _STAGE_KIND_MATCH_AT: Final = (
     "OR (stage = 'reporter' AND artifact_kind = 'focus_report') "
     "OR (stage = 'morning_brief' AND artifact_kind = 'morning_brief')"
 )
+
+#: The plane's current-head unique index. BEFORE is a byte copy of what
+#: `e9b2c4d7a150` emitted (its `{SCHEMA}` placeholder resolved); AT adds
+#: `artifact_kind` after `stage`, so heads and lineage are per kind.
+HEAD_INDEX: Final = "intelligence_artifact_current_head"
+_HEAD_INDEX_BEFORE: Final = """
+        CREATE UNIQUE INDEX intelligence_artifact_current_head
+          ON knowledge.intelligence_artifacts (
+            principal_id,
+            cycle_run_id,
+            stage,
+            coalesce(focus_area_id, ''),
+            coalesce(source_lane, '')
+          )
+          WHERE is_current;
+"""
+_HEAD_INDEX_AT: Final = """
+        CREATE UNIQUE INDEX intelligence_artifact_current_head
+          ON knowledge.intelligence_artifacts (
+            principal_id,
+            cycle_run_id,
+            stage,
+            artifact_kind,
+            coalesce(focus_area_id, ''),
+            coalesce(source_lane, '')
+          )
+          WHERE is_current;
+"""
 
 _TABLE_DDL: Final = f"""
     CREATE TABLE {SCHEMA}.{TABLE} (
@@ -472,17 +509,26 @@ def _restate_kind_checks(kind_check: str, stage_kind_match: str) -> None:
             op.execute(f'ALTER TABLE {SCHEMA}.{table} ADD CONSTRAINT "{name}" CHECK ({expression})')
 
 
+def _restate_head_index(definition: str) -> None:
+    op.execute(f"DROP INDEX {SCHEMA}.{HEAD_INDEX}")
+    op.execute(definition)
+
+
 def upgrade() -> None:
     op.execute(_TABLE_DDL)
     op.execute(_APPEND_ONLY)
     op.execute(_seed_statement())
     _restate_kind_checks(_KIND_CHECK_AT, _STAGE_KIND_MATCH_AT)
+    _restate_head_index(_HEAD_INDEX_AT)
     _restate_audit(_CAPABILITIES_AT_THIS_REVISION, _PURPOSES_AT_THIS_REVISION)
 
 
 def downgrade() -> None:
     op.execute(_REFUSE_DOWNGRADE)
     _restate_audit(_CAPABILITIES_BEFORE_THIS_REVISION, _PURPOSES_BEFORE_THIS_REVISION)
+    # Only built-in kinds remain, each bound to its own stage: the narrower key
+    # cannot collide, so the original index is restored without touching a row.
+    _restate_head_index(_HEAD_INDEX_BEFORE)
     _restate_kind_checks(_KIND_CHECK_BEFORE, _STAGE_KIND_MATCH_BEFORE)
     op.execute(f"DROP TRIGGER {TRIGGER} ON {SCHEMA}.{TABLE}")
     op.execute(f"DROP TABLE {SCHEMA}.{TABLE} RESTRICT")

@@ -44,7 +44,7 @@ from typing import Any, ClassVar, Final
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from my_pa.application import goodnotes_note_unit_contract as _note_unit
-from my_pa.application.errors import InvalidRequestError, SafeDetail
+from my_pa.application.errors import InvalidRequestError, SafeDetail, invalid_choice
 from my_pa.application.goodnotes_pull_orchestration import MAX_PULL_BATCH_SIZE
 from my_pa.application.identity_correction import ConflictChoice
 from my_pa.application.record_events import (
@@ -545,7 +545,7 @@ def _lifecycle_selector(value: object) -> CaptureLifecycleSelector:
             return CaptureLifecycleSelector(value)
         except ValueError:
             pass
-    raise InvalidRequestError(SafeDetail.LIFECYCLE)
+    raise invalid_choice(SafeDetail.LIFECYCLE, CaptureLifecycleSelector)
 
 
 def _expected_lifecycle_revision(value: object) -> int:
@@ -5211,7 +5211,7 @@ def _memory_kind(value: object) -> MemoryKind:
     the caller's string into one, exactly as it does for `Representation`.
     """
     if not isinstance(value, MemoryKind):
-        raise InvalidRequestError(SafeDetail.MEMORY_KIND)
+        raise invalid_choice(SafeDetail.MEMORY_KIND, MemoryKind)
     return value
 
 
@@ -5274,7 +5274,7 @@ def _memory_kinds_filter(value: object) -> tuple[MemoryKind, ...] | None:
     if value is None:
         return None
     if not isinstance(value, tuple | list) or not value:
-        raise InvalidRequestError(SafeDetail.KINDS)
+        raise invalid_choice(SafeDetail.KINDS, MemoryKind)
     kinds: list[MemoryKind] = []
     for entry in value:
         kinds.append(_memory_kind(entry))
@@ -5286,7 +5286,7 @@ def _memory_kinds_filter(value: object) -> tuple[MemoryKind, ...] | None:
 def _memory_lifecycle(value: object) -> MemoryLifecycle:
     """Which lifecycle a listing asks for, as the closed member itself."""
     if not isinstance(value, MemoryLifecycle):
-        raise InvalidRequestError(SafeDetail.LIFECYCLE)
+        raise invalid_choice(SafeDetail.LIFECYCLE, MemoryLifecycle)
     return value
 
 
@@ -6158,7 +6158,7 @@ def _entity_evidence(value: object) -> tuple[str, ...]:
     return references
 
 
-def _entity_vocabulary[T](value: object, enum: type[T], detail: SafeDetail) -> T:
+def _entity_vocabulary[T: StrEnum](value: object, enum: type[T], detail: SafeDetail) -> T:
     """One closed-vocabulary field, which has already been resolved to its member.
 
     Strict, and the strictness is the same rule `_memory_kind` applies: the
@@ -6168,7 +6168,7 @@ def _entity_vocabulary[T](value: object, enum: type[T], detail: SafeDetail) -> T
     adapter refuses.
     """
     if not isinstance(value, enum):
-        raise InvalidRequestError(detail)
+        raise invalid_choice(detail, enum)
     return value
 
 
@@ -6184,14 +6184,16 @@ def _entity_kind(value: object, enum: type[StrEnum], detail: SafeDetail) -> str:
     if isinstance(value, enum):
         return str(value.value)
     if not isinstance(value, str):
-        raise InvalidRequestError(detail)
+        raise invalid_choice(detail, enum)
     try:
         return str(enum(value).value)
     except ValueError:
-        raise InvalidRequestError(detail) from None
+        raise invalid_choice(detail, enum) from None
 
 
-def _entity_filter[T](value: object, enum: type[T], detail: SafeDetail) -> tuple[T, ...] | None:
+def _entity_filter[T: StrEnum](
+    value: object, enum: type[T], detail: SafeDetail
+) -> tuple[T, ...] | None:
     """One optional closed-vocabulary filter. An explicit empty list is refused.
 
     Refused rather than treated as "no filter", for the reason the memory
@@ -6201,7 +6203,7 @@ def _entity_filter[T](value: object, enum: type[T], detail: SafeDetail) -> tuple
     if value is None:
         return None
     if not isinstance(value, tuple | list) or not value:
-        raise InvalidRequestError(detail)
+        raise invalid_choice(detail, enum)
     return tuple(_entity_vocabulary(item, enum, detail) for item in value)
 
 
@@ -8473,7 +8475,7 @@ def _constraint_enum[T: StrEnum](
     if optional and value is None:
         return
     if not isinstance(value, kind):
-        raise InvalidRequestError(detail)
+        raise invalid_choice(detail, kind)
 
 
 def _constraint_enum_tuple[T: StrEnum](value: object, kind: type[T], detail: SafeDetail) -> None:
@@ -8485,10 +8487,10 @@ def _constraint_enum_tuple[T: StrEnum](value: object, kind: type[T], detail: Saf
     handler converts; the closed enum is what makes the published array bounded.
     """
     if not isinstance(value, tuple):
-        raise InvalidRequestError(detail)
+        raise invalid_choice(detail, kind)
     for member in value:
         if not isinstance(member, kind):
-            raise InvalidRequestError(detail)
+            raise invalid_choice(detail, kind)
 
 
 def _constraint_cursor(value: str | None) -> None:
@@ -10833,7 +10835,7 @@ def _knowledge_member[E: StrEnum](value: object, enum: type[E], detail: SafeDeta
             return enum(value)
         except ValueError:
             pass
-    raise InvalidRequestError(detail)
+    raise invalid_choice(detail, enum)
 
 
 def _knowledge_predicate_code(value: object) -> str:

@@ -252,7 +252,12 @@ from my_pa.application.commands import (
     VoidConstraint,
     WaitingOn,
 )
-from my_pa.application.errors import InvalidRequestError, SafeDetail, UnsupportedError
+from my_pa.application.errors import (
+    InvalidRequestError,
+    SafeDetail,
+    UnsupportedError,
+    invalid_choice,
+)
 from my_pa.contracts.v1.envelope import RequestMetadata
 from my_pa.domain.capture.proposal import ProposalState
 from my_pa.domain.capture.review import (
@@ -446,13 +451,8 @@ def _fetch_source(payload: Mapping[str, Any]) -> Command:
         # Left alone: `FetchSource` refuses a non-string representation itself,
         # and an absent one takes the command's own default.
         return FetchSource(**payload)
-    try:
-        representation = Representation(named)
-    except ValueError:
-        pass
-    else:
-        return FetchSource(**{**payload, "representation": representation})
-    raise InvalidRequestError(SafeDetail.REPRESENTATION)
+    representation = _enum_or_invalid(named, Representation, SafeDetail.REPRESENTATION)
+    return FetchSource(**{**payload, "representation": representation})
 
 
 def _get_source_status(payload: Mapping[str, Any]) -> Command:
@@ -530,10 +530,7 @@ def _create_capture(payload: Mapping[str, Any]) -> Command:
     converted = _moments(payload)
     named = converted.get("capture_kind")
     if isinstance(named, str):
-        try:
-            converted["capture_kind"] = CaptureKind(named)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.CAPTURE_KIND) from None
+        converted["capture_kind"] = _enum_or_invalid(named, CaptureKind, SafeDetail.CAPTURE_KIND)
     return CreateCapture(**converted)
 
 
@@ -578,16 +575,10 @@ def _list_review_cases(payload: Mapping[str, Any]) -> Command:
     converted = dict(payload)
     named = converted.get("subject_kind")
     if isinstance(named, str):
-        try:
-            converted["subject_kind"] = ReviewSubjectKind(named)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.SUBJECT) from None
+        converted["subject_kind"] = _enum_or_invalid(named, ReviewSubjectKind, SafeDetail.SUBJECT)
     state = converted.get("state")
     if isinstance(state, str):
-        try:
-            converted["state"] = ProposalState(state)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.LIFECYCLE_STATE) from None
+        converted["state"] = _enum_or_invalid(state, ProposalState, SafeDetail.LIFECYCLE_STATE)
     return ListReviewCases(**converted)
 
 
@@ -603,10 +594,7 @@ def _list_projects(payload: Mapping[str, Any]) -> Command:
     converted = dict(payload)
     named = converted.get("state")
     if isinstance(named, str):
-        try:
-            converted["state"] = ProjectState(named)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+        converted["state"] = _enum_or_invalid(named, ProjectState, SafeDetail.SELECTOR)
     return ListProjects(**converted)
 
 
@@ -622,10 +610,7 @@ def _update_project(payload: Mapping[str, Any]) -> Command:
     converted = dict(payload)
     named = converted.get("state")
     if isinstance(named, str):
-        try:
-            converted["state"] = ProjectState(named)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+        converted["state"] = _enum_or_invalid(named, ProjectState, SafeDetail.SELECTOR)
     return UpdateProject(**converted)
 
 
@@ -660,28 +645,18 @@ def _list_tasks(payload: Mapping[str, Any]) -> Command:
     converted = dict(payload)
     named = converted.get("archive_mode")
     if isinstance(named, str):
-        try:
-            converted["archive_mode"] = TaskArchiveMode(named)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+        converted["archive_mode"] = _enum_or_invalid(named, TaskArchiveMode, SafeDetail.SELECTOR)
     named = converted.get("lifecycle_state")
     if isinstance(named, str):
-        try:
-            converted["lifecycle_state"] = TaskLifecycleState(named)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.LIFECYCLE_STATE) from None
+        converted["lifecycle_state"] = _enum_or_invalid(
+            named, TaskLifecycleState, SafeDetail.LIFECYCLE_STATE
+        )
     named = converted.get("priority")
     if isinstance(named, str):
-        try:
-            converted["priority"] = TaskPriority(named)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.PRIORITY) from None
+        converted["priority"] = _enum_or_invalid(named, TaskPriority, SafeDetail.PRIORITY)
     named = converted.get("work_view")
     if isinstance(named, str):
-        try:
-            converted["work_view"] = TaskWorkView(named)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+        converted["work_view"] = _enum_or_invalid(named, TaskWorkView, SafeDetail.SELECTOR)
     named_date = converted.get("work_date")
     if isinstance(named_date, str):
         try:
@@ -695,16 +670,10 @@ def _search_tasks(payload: Mapping[str, Any]) -> Command:
     converted = dict(payload)
     named = converted.get("archive_mode")
     if isinstance(named, str):
-        try:
-            converted["archive_mode"] = TaskArchiveMode(named)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+        converted["archive_mode"] = _enum_or_invalid(named, TaskArchiveMode, SafeDetail.SELECTOR)
     named = converted.get("work_view")
     if isinstance(named, str):
-        try:
-            converted["work_view"] = TaskWorkView(named)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+        converted["work_view"] = _enum_or_invalid(named, TaskWorkView, SafeDetail.SELECTOR)
     named_date = converted.get("work_date")
     if isinstance(named_date, str):
         try:
@@ -740,22 +709,13 @@ def _create_task(payload: Mapping[str, Any]) -> Command:
     _task_moment(converted, "due_at", SafeDetail.DUE_AT)
     named = converted.get("priority")
     if isinstance(named, str):
-        try:
-            converted["priority"] = TaskPriority(named)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.PRIORITY) from None
+        converted["priority"] = _enum_or_invalid(named, TaskPriority, SafeDetail.PRIORITY)
     named = converted.get("role")
     if isinstance(named, str):
-        try:
-            converted["role"] = TaskRole(named)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+        converted["role"] = _enum_or_invalid(named, TaskRole, SafeDetail.SELECTOR)
     named = converted.get("origin_kind")
     if isinstance(named, str):
-        try:
-            converted["origin_kind"] = TaskOriginKind(named)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.ORIGIN_KIND) from None
+        converted["origin_kind"] = _enum_or_invalid(named, TaskOriginKind, SafeDetail.ORIGIN_KIND)
     return CreateTask(**converted)
 
 
@@ -774,16 +734,10 @@ def _update_task(payload: Mapping[str, Any]) -> Command:
     _task_moment(converted, "deferred_until", SafeDetail.DEFERRED_UNTIL)
     named = converted.get("priority")
     if isinstance(named, str):
-        try:
-            converted["priority"] = TaskPriority(named)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.PRIORITY) from None
+        converted["priority"] = _enum_or_invalid(named, TaskPriority, SafeDetail.PRIORITY)
     named = converted.get("role")
     if isinstance(named, str):
-        try:
-            converted["role"] = TaskRole(named)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+        converted["role"] = _enum_or_invalid(named, TaskRole, SafeDetail.SELECTOR)
     return UpdateTask(**converted)
 
 
@@ -791,10 +745,9 @@ def _transition_task(payload: Mapping[str, Any]) -> Command:
     converted = dict(payload)
     named = converted.get("to_state")
     if isinstance(named, str):
-        try:
-            converted["to_state"] = TaskLifecycleState(named)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.LIFECYCLE_STATE) from None
+        converted["to_state"] = _enum_or_invalid(
+            named, TaskLifecycleState, SafeDetail.LIFECYCLE_STATE
+        )
     return TransitionTask(**converted)
 
 
@@ -837,22 +790,13 @@ def _list_commitments(payload: Mapping[str, Any]) -> Command:
     converted = dict(payload)
     named = converted.get("direction")
     if isinstance(named, str):
-        try:
-            converted["direction"] = CommitmentDirection(named)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+        converted["direction"] = _enum_or_invalid(named, CommitmentDirection, SafeDetail.SELECTOR)
     named = converted.get("state")
     if isinstance(named, str):
-        try:
-            converted["state"] = CommitmentState(named)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+        converted["state"] = _enum_or_invalid(named, CommitmentState, SafeDetail.SELECTOR)
     named = converted.get("work_view")
     if isinstance(named, str):
-        try:
-            converted["work_view"] = CommitmentWorkView(named)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+        converted["work_view"] = _enum_or_invalid(named, CommitmentWorkView, SafeDetail.SELECTOR)
     named_date = converted.get("work_date")
     if isinstance(named_date, str):
         try:
@@ -866,22 +810,13 @@ def _search_commitments(payload: Mapping[str, Any]) -> Command:
     converted = dict(payload)
     named = converted.get("direction")
     if isinstance(named, str):
-        try:
-            converted["direction"] = CommitmentDirection(named)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+        converted["direction"] = _enum_or_invalid(named, CommitmentDirection, SafeDetail.SELECTOR)
     named = converted.get("state")
     if isinstance(named, str):
-        try:
-            converted["state"] = CommitmentState(named)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+        converted["state"] = _enum_or_invalid(named, CommitmentState, SafeDetail.SELECTOR)
     named = converted.get("work_view")
     if isinstance(named, str):
-        try:
-            converted["work_view"] = CommitmentWorkView(named)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+        converted["work_view"] = _enum_or_invalid(named, CommitmentWorkView, SafeDetail.SELECTOR)
     named_date = converted.get("work_date")
     if isinstance(named_date, str):
         try:
@@ -904,10 +839,7 @@ def _create_commitment(payload: Mapping[str, Any]) -> Command:
     _task_moment(converted, "due_at", SafeDetail.DUE_AT)
     named = converted.get("direction")
     if isinstance(named, str):
-        try:
-            converted["direction"] = CommitmentDirection(named)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+        converted["direction"] = _enum_or_invalid(named, CommitmentDirection, SafeDetail.SELECTOR)
     return CreateCommitment(**converted)
 
 
@@ -940,10 +872,7 @@ def _prepare_context(payload: Mapping[str, Any]) -> Command:
         for item in named:
             if not isinstance(item, str):
                 raise InvalidRequestError(SafeDetail.REQUESTED_PLANES)
-            try:
-                planes.append(ContextPlane(item))
-            except ValueError:
-                raise InvalidRequestError(SafeDetail.REQUESTED_PLANES) from None
+            planes.append(_enum_or_invalid(item, ContextPlane, SafeDetail.REQUESTED_PLANES))
         converted["requested_planes"] = tuple(planes)
     return PrepareContext(**converted)
 
@@ -954,10 +883,7 @@ def _record_context_feedback(payload: Mapping[str, Any]) -> Command:
         named = converted["action"]
         if not isinstance(named, str):
             raise InvalidRequestError(SafeDetail.ACTION)
-        try:
-            converted["action"] = ContextPreferenceAction(named)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.ACTION) from None
+        converted["action"] = _enum_or_invalid(named, ContextPreferenceAction, SafeDetail.ACTION)
     return RecordContextFeedback(**converted)
 
 
@@ -1613,15 +1539,20 @@ def _get_goodnotes_content(payload: Mapping[str, Any]) -> Command:
     return GetGoodNotesContent(**payload)
 
 
-def _enum_or_invalid[T](value: object, enum: type[T], detail: SafeDetail) -> T:
+def _enum_or_invalid[T: StrEnum](value: object, enum: type[T], detail: SafeDetail) -> T:
+    """`value` as a member of `enum`, or an `invalid_request` listing `enum`.
+
+    The refusal names `detail` and carries the vocabulary's own values, never
+    the rejected one, so a caller is told what it may send.
+    """
     if isinstance(value, enum):
         return value
     if not isinstance(value, str):
-        raise InvalidRequestError(detail)
+        raise invalid_choice(detail, enum)
     try:
-        return enum(value)  # type: ignore[call-arg]
+        return enum(value)
     except ValueError:
-        raise InvalidRequestError(detail) from None
+        raise invalid_choice(detail, enum) from None
 
 
 def _begin_intelligence_cycle(payload: Mapping[str, Any]) -> Command:
@@ -1853,10 +1784,7 @@ def _decide_review_case(payload: Mapping[str, Any]) -> Command:
     converted = dict(payload)
     named = converted.get("disposition")
     if isinstance(named, str):
-        try:
-            converted["disposition"] = Disposition(named)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.DISPOSITION) from None
+        converted["disposition"] = _enum_or_invalid(named, Disposition, SafeDetail.DISPOSITION)
     patch = converted.get("correction_patch")
     if patch is not None:
         converted["correction_patch"] = _correction_patch(patch)
@@ -1893,10 +1821,7 @@ def _create_entity_proposal(payload: Mapping[str, Any]) -> Command:
         raise InvalidRequestError(SafeDetail.PROPOSED_BY)
     kind = converted.get("kind")
     if isinstance(kind, str):
-        try:
-            converted["kind"] = EntityProposalKind(kind)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.PROPOSAL_KIND) from None
+        converted["kind"] = _enum_or_invalid(kind, EntityProposalKind, SafeDetail.PROPOSAL_KIND)
     evidence = converted.get("evidence")
     if isinstance(evidence, list):
         converted["evidence"] = tuple(evidence)
@@ -2400,10 +2325,10 @@ def _list_record_events(payload: Mapping[str, Any]) -> Command:
     converted = dict(payload)
     families = converted.get("record_families")
     if isinstance(families, list):
-        try:
-            converted["record_families"] = tuple(RecordEventFamily(item) for item in families)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.RECORD_FAMILIES) from None
+        converted["record_families"] = tuple(
+            _enum_or_invalid(item, RecordEventFamily, SafeDetail.RECORD_FAMILIES)
+            for item in families
+        )
     return ListRecordEvents(**converted)
 
 

@@ -61,6 +61,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import fields as dataclass_fields
 from datetime import UTC, date, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -98,6 +99,7 @@ from my_pa.contracts.ports import KnowledgeRecord, MemoryWriteRequest
 from my_pa.contracts.v1.envelope import RequestMetadata
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.capture.proposal import MAX_NORMALIZED_VALUE_CHARACTERS
+from my_pa.domain.capture.submission import CaptureKind
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import (
     IdKind,
@@ -105,6 +107,7 @@ from my_pa.domain.common.identifiers import (
     make_identifier,
     validate_identifier,
 )
+from my_pa.domain.context.prepared import ContextPlane
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.intelligence.catalog import (
@@ -114,6 +117,8 @@ from my_pa.domain.intelligence.catalog import (
     FocusAreaId,
     IntelligenceStage,
 )
+from my_pa.domain.project_controls.read_models import ConstraintListScope
+from my_pa.domain.record_events import RecordEventFamily
 from my_pa.domain.relationship.entity import (
     AddressTypeCode,
     AffiliationTypeCode,
@@ -157,8 +162,10 @@ from my_pa.domain.relationship.memory import (
     statement_digest,
 )
 from my_pa.domain.relationship.normalization import normalize_name
+from my_pa.domain.situation.continuity import CommitmentDirection
 from my_pa.domain.source.enrollment import MAX_ENROLLMENT_ITEMS
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.domain.task.lifecycle import TaskPriority
 
 PACKAGE = Path(cli_module.__file__).resolve().parents[2]
 ADAPTERS = PACKAGE / "adapters"
@@ -2656,6 +2663,91 @@ def test_every_refusal_is_the_same_refusal_over_all_three_transports(
             assert CORRECTED_VALUE_MARKER not in answer.rendered
             assert CORRECTED_VALUE_MARKER not in json.dumps(answer.document)
     assert_same_answer(answers, request, name)
+
+
+#: A value no closed vocabulary holds. It must never reach a refusal: the list a
+#: refusal carries is the vocabulary's, not the request's.
+REJECTED_VOCABULARY_MARKER = "zz_rejected_vocabulary_marker"
+
+
+def _closed_vocabulary_refusals(scene: Scene) -> dict[str, tuple[Capability, dict[str, Any]]]:
+    """One out-of-vocabulary request per plane, each refused for one field."""
+    marker = REJECTED_VOCABULARY_MARKER
+    return {
+        "tasks": (Capability.TASKS_LIST, {"priority": marker}),
+        "commitments": (Capability.COMMITMENTS_LIST, {"direction": marker}),
+        "reports": (
+            Capability.REPORTS_LIST,
+            {"cycle_run_id": issue_identifier(IdKind.INTELLIGENCE_CYCLE_RUN), "stage": marker},
+        ),
+        "constraints": (
+            Capability.CONSTRAINTS_LIST,
+            {"project_id": scene.constraint_project_id, "scope": marker},
+        ),
+        "entities": (
+            Capability.ENTITIES_GRAPH,
+            {"focus_entity_id": issue_identifier(IdKind.ENTITY), "relationship_types": [marker]},
+        ),
+        "record_events": (Capability.RECORD_EVENTS_LIST, {"record_families": [marker]}),
+        "captures": (
+            Capability.CAPTURE_CREATE,
+            {
+                "text": "a synthetic note",
+                "idempotency_key": "parity-vocabulary-0001",
+                "capture_kind": marker,
+            },
+        ),
+        "context": (
+            Capability.CONTEXT_PREPARE,
+            {"query": "revenue", "requested_planes": [marker]},
+        ),
+    }
+
+
+#: The field each refusal above names, and the vocabulary it must list.
+CLOSED_VOCABULARY_EXPECTATIONS: dict[str, tuple[str, type[StrEnum]]] = {
+    "tasks": ("priority", TaskPriority),
+    "commitments": ("selector", CommitmentDirection),
+    "reports": ("stage", IntelligenceStage),
+    "constraints": ("selector", ConstraintListScope),
+    "entities": ("relationship_types", EntityRelationshipType),
+    "record_events": ("record_families", RecordEventFamily),
+    "captures": ("capture_kind", CaptureKind),
+    "context": ("requested_planes", ContextPlane),
+}
+
+
+@pytest.mark.parametrize("plane", sorted(CLOSED_VOCABULARY_EXPECTATIONS))
+def test_a_closed_vocabulary_refusal_lists_the_acceptable_values_over_all_three_transports(
+    plane: str, staged: tuple[Scene, KnowledgeRecord]
+) -> None:
+    """R3: every transport carries the vocabulary of the rejected field, and only it.
+
+    Eight planes, reached through both the explicit route (a vocabulary helper
+    hands its enum over) and the static table (`entities` and `record_events`
+    refuse in the command or the plane, naming only the detail). One renderer
+    serves all three transports, so the answers must also be the same answer.
+    """
+    scene, _record = staged
+    capability, payload = _closed_vocabulary_refusals(scene)[plane]
+    detail, vocabulary = CLOSED_VOCABULARY_EXPECTATIONS[plane]
+    request = document(capability, scene.principal.principal_id, payload)
+    answers = answers_for(scene, capability.value, request)
+    for transport, answer in answers.items():
+        assert answer.failed, f"{transport} accepted {plane}"
+        error = answer.document.get("error") or answer.document
+        assert error["code"] == ErrorCode.INVALID_REQUEST.value, (transport, error)
+        assert error["safe_details"] == [detail], (transport, error)
+        assert error["allowed_values"] == [
+            {
+                "detail": detail,
+                "values": [member.value for member in vocabulary],
+                "truncated": False,
+            }
+        ], (transport, error)
+        assert REJECTED_VOCABULARY_MARKER not in answer.rendered, transport
+        assert REJECTED_VOCABULARY_MARKER not in json.dumps(answer.document), transport
+    assert_same_answer(answers, request, plane)
 
 
 def test_largest_corrected_review_value_is_accepted_with_transport_parity(

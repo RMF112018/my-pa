@@ -176,6 +176,9 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_auth_identity_and_grants_migration.py",
     "tests/schema/test_canvas_workspace_migration.py",
     "tests/schema/test_capture_lifecycle_migration.py",
+    # The frozen capability set names the head as the forward `ALTER` that admits
+    # the two `reports.types.*` capabilities.
+    "tests/schema/test_capture_schema_migration.py",
     "tests/schema/test_constraint_management_migration.py",
     "tests/schema/test_constraint_read_capability_migration.py",
     "tests/schema/test_constraint_sync_migration.py",

@@ -206,6 +206,8 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_record_events_migration.py",
     "tests/schema/test_oauth_refresh_migration.py",
     "tests/schema/test_project_controls_run01_integrity_migration.py",
+    # The Continuity Project sixteen-field revision module names the head as the revision it tests.
+    "tests/schema/test_project_sixteen_fields_migration.py",
     "tests/schema/test_project_version_and_entity_bridge_migration.py",
     "tests/schema/test_webauthn_auth_persistence_migration.py",
     "tests/schema/test_work_task_commitment_migration.py",

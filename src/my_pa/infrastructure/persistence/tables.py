@@ -3100,7 +3100,8 @@ projects = Table(
     ),
     CheckConstraint("version >= 1", name="a_project_version_is_positive"),
     CheckConstraint(
-        "project_number IS NULL OR length(trim(project_number)) > 0",
+        "project_number IS NULL OR length(trim(project_number)) > 0 "
+        "AND length(project_number) <= 64",
         name="a_project_number_is_not_blank",
     ),
     CheckConstraint(

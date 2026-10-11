@@ -222,7 +222,9 @@ def downgrade() -> None:
         ),
         message=(
             "Dropping these columns would destroy real Project data; clear the "
-            "16 new fields on every Project before downgrade."
+            "16 new fields on every Project before downgrade. A set project_number "
+            "can only be cleared with trigger a_project_number_does_not_change "
+            "disabled."
         ),
     )
     op.execute(f"DROP TRIGGER IF EXISTS a_project_number_does_not_change ON {SCHEMA}.projects")

@@ -50,6 +50,7 @@ from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import ensure_utc
 
 __all__ = [
+    "PROJECT_VALUE_LIMIT",
     "TYPE_TO_SECTOR",
     "Frame",
     "FrameState",
@@ -65,6 +66,7 @@ __all__ = [
     "Situation",
     "SituationState",
     "Trace",
+    "is_storable_project_value",
 ]
 
 
@@ -277,6 +279,20 @@ TYPE_TO_SECTOR: Final[MappingProxyType[ProjectType, ProjectSector]] = MappingPro
         ),
     }
 )
+
+#: Exclusive upper bound of `knowledge.projects.value`, a `numeric(14, 2)`.
+PROJECT_VALUE_LIMIT: Final = Decimal(10) ** 12
+
+
+def is_storable_project_value(value: object) -> bool:
+    """True when `value` fits `numeric(14, 2)` exactly, so the stored amount is the one given."""
+    return (
+        isinstance(value, Decimal)
+        and value.is_finite()
+        and not value.is_signed()
+        and value < PROJECT_VALUE_LIMIT
+        and int(value.as_tuple().exponent) >= -2
+    )
 
 
 class ProjectEntityLinkageState(StrEnum):
@@ -522,11 +538,8 @@ class Project:
                     raise ValueError(f"a project {field_name}, if present, is non-blank")
                 if len(value) > bound:
                     raise ValueError(f"a project {field_name} is at most {bound} characters")
-        if self.value is not None:
-            if not isinstance(self.value, Decimal):
-                raise ValueError("a project value is a Decimal")
-            if self.value < 0:
-                raise ValueError("a project value is never negative")
+        if self.value is not None and not is_storable_project_value(self.value):
+            raise ValueError("a project value is a finite, non-negative amount in whole cents")
         if (self.sector is None) != (self.type is None):
             raise ValueError("a project sector and type are set together, or neither")
         if self.sector is not None:

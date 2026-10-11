@@ -51,6 +51,7 @@ from typing import Any
 from sqlalchemy import Column, Table, and_, desc, func, insert, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection, Row
+from sqlalchemy.exc import IntegrityError
 
 from my_pa.contracts.ports import (
     ContinuityRepository,
@@ -83,9 +84,11 @@ from my_pa.domain.situation.continuity import (
     TaskState,
 )
 from my_pa.domain.situation.project_history import (
+    PROJECT_NUMBER_UNIQUE_INDEX,
     ProjectHistoryEntry,
     ProjectMutationAction,
     ProjectMutationReceipt,
+    ProjectNumberConflictError,
     execute_close_project,
     execute_update_project,
 )
@@ -164,6 +167,12 @@ _OBJECT_TABLE: dict[ContinuityObjectKind, tuple[Table, Column[str]]] = {
 _ASSOCIABLE: frozenset[ContinuityObjectKind] = frozenset(
     {ContinuityObjectKind.COMMITMENT, ContinuityObjectKind.DECISION, ContinuityObjectKind.TASK}
 )
+
+
+def is_project_number_conflict(error: IntegrityError) -> bool:
+    """True when `error` is another Project of this Principal already holding the number."""
+    diagnostic = getattr(error.orig, "diag", None)
+    return getattr(diagnostic, "constraint_name", None) == PROJECT_NUMBER_UNIQUE_INDEX
 
 
 def _append_lifecycle_event(
@@ -721,6 +730,15 @@ class SqlProjectRepository(ProjectRepository):
         return None if row is None else self._to_project(row)
 
     def persist_project(self, project: Project) -> None:
+        try:
+            with self._connection.begin_nested():
+                self._update_project_row(project)
+        except IntegrityError as error:
+            if is_project_number_conflict(error):
+                raise ProjectNumberConflictError from None
+            raise
+
+    def _update_project_row(self, project: Project) -> None:
         self._connection.execute(
             update(projects)
             .where(

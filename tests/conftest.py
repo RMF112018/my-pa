@@ -412,6 +412,7 @@ from my_pa.domain.situation.continuity import Task as ContinuityTask
 from my_pa.domain.situation.project_history import (
     ProjectHistoryEntry,
     ProjectMutationReceipt,
+    ProjectNumberConflictError,
     execute_close_project,
     execute_update_project,
 )
@@ -4253,6 +4254,19 @@ class _Situations(SituationRepository):
         return tuple(rows)
 
 
+def _refuse_a_held_project_number(world: World, project: Project) -> None:
+    """The in-memory twin of `a_project_number_is_unique_per_principal`."""
+    if project.project_number is None:
+        return
+    for row in world.projects:
+        if (
+            row.principal_id == project.principal_id
+            and row.project_id != project.project_id
+            and row.project_number == project.project_number
+        ):
+            raise ProjectNumberConflictError
+
+
 class _Projects(ProjectRepository):
     """Projects and the Project-Situation link, partitioned like everything else."""
 
@@ -4361,6 +4375,7 @@ class _Projects(ProjectRepository):
         return self.get_project(principal_id, project_id)
 
     def persist_project(self, project: Project) -> None:
+        _refuse_a_held_project_number(self._world, project)
         self._world.projects = [
             project if row.project_id == project.project_id else row for row in self._world.projects
         ]
@@ -4611,6 +4626,7 @@ class _ContinuityAuthoring(ContinuityAuthoringRepository):
             contract_finish=contract_finish,
             actual_finish=actual_finish,
         )
+        _refuse_a_held_project_number(self._world, project)
         self._world.projects.append(project)
         try:
             self._mint_bound_project_entity(

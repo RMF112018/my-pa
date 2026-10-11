@@ -44,6 +44,7 @@ __all__ = [
     "ProjectIllegalTransitionError",
     "ProjectMutationAction",
     "ProjectMutationReceipt",
+    "ProjectNumberConflictError",
     "ProjectVersionConflictError",
     "execute_close_project",
     "execute_update_project",
@@ -63,6 +64,14 @@ class ProjectIllegalTransitionError(ValueError):
 
 class ProjectIdempotencyConflictError(Exception):
     """Raised when a key is reused for different normalized project content."""
+
+
+class ProjectNumberConflictError(Exception):
+    """Raised when another of this Principal's Projects already holds the number."""
+
+
+#: The partial unique index that makes a `project_number` unique per Principal.
+PROJECT_NUMBER_UNIQUE_INDEX = "a_project_number_is_unique_per_principal"
 
 
 @dataclass(frozen=True, slots=True)

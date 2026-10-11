@@ -626,18 +626,30 @@ _PROJECT_DATE_FIELDS: Final[tuple[str, ...]] = (
 )
 
 
+_WHOLE_CENTS = Decimal("0.01")
+
+
 def _project_value(value: object) -> object:
     """One USD amount as a `Decimal`, or exactly what arrived.
 
     Converts via `str(value)` rather than `Decimal(value)` directly, so a JSON
-    number never inherits a binary float's representation error.
+    number never inherits a binary float's representation error. An exact amount
+    in whole cents is restated at two places (`1E+3` becomes `1000.00`), so the
+    echoed amount is the one a later read returns; anything else (`NaN`,
+    `Infinity`, a third decimal place) is passed through for the command to refuse.
     """
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         return value
     try:
-        return Decimal(str(value))
+        amount = Decimal(str(value))
     except InvalidOperation:
         return value
+    if not amount.is_finite() or int(amount.as_tuple().exponent) < -2:
+        return amount
+    try:
+        return amount.quantize(_WHOLE_CENTS)
+    except InvalidOperation:
+        return amount
 
 
 def _convert_project_data_fields(converted: dict[str, Any]) -> dict[str, Any]:
@@ -655,6 +667,11 @@ def _convert_project_data_fields(converted: dict[str, Any]) -> dict[str, Any]:
         converted["type"] = _entity_member(converted["type"], ProjectType)
     if "value" in converted:
         converted["value"] = _project_value(converted["value"])
+    # Trimmed so `" 12 "` and `"12"` are one number to the uniqueness rule; a
+    # value that trims to blank still reaches the command, which refuses it.
+    project_number = converted.get("project_number")
+    if isinstance(project_number, str) and project_number.strip():
+        converted["project_number"] = project_number.strip()
     aliases = converted.get("aliases")
     if isinstance(aliases, list):
         converted["aliases"] = tuple(aliases)

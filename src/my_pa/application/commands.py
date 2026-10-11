@@ -259,6 +259,7 @@ from my_pa.domain.situation.situation import (
     ProjectSector,
     ProjectState,
     ProjectType,
+    is_storable_project_value,
 )
 from my_pa.domain.task.comment import (
     MAX_TASK_COMMENT_BODY_CHARACTERS,
@@ -1732,7 +1733,9 @@ _PROJECT_FIELD_DOCS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyTyp
                 "An external project number, unique among this Principal's "
                 "Projects. May be set at create or added later via update, but "
                 "is immutable once set — a later attempt to change or clear it "
-                "is refused. 1-64 characters, non-blank."
+                "is refused. 1-64 characters, non-blank; surrounding whitespace "
+                "is trimmed. A number another Project already holds is "
+                "conflict (project_number)."
             )
         },
         "sector": {
@@ -1772,7 +1775,12 @@ _PROJECT_FIELD_DOCS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyTyp
         "value": {
             "type": "number",
             "minimum": 0,
-            "description": "Optional project value in USD. Never negative.",
+            "description": (
+                "Optional project value in USD: a finite, non-negative amount "
+                "below 1,000,000,000,000 with at most two decimal places. "
+                "Anything else is invalid_request. Returned as a decimal "
+                'string in whole cents, e.g. "1250000.00".'
+            ),
         },
         "scheduled_start": {"description": "Optional scheduled start date."},
         "contract_start": {"description": "Optional contract start date."},
@@ -1851,9 +1859,9 @@ def _project_value(value: object) -> None:
     """
     if value is None:
         return
-    if isinstance(value, bool) or not isinstance(value, Decimal):
-        raise InvalidRequestError(SafeDetail.SELECTOR)
-    if value < 0:
+    # Finite, unsigned, whole cents, and below 10**12: exactly what `numeric(14, 2)`
+    # stores unchanged, so the echoed amount is the one a later read returns.
+    if not is_storable_project_value(value):
         raise InvalidRequestError(SafeDetail.SELECTOR)
 
 

@@ -806,7 +806,10 @@ from my_pa.domain.search.query import (
 )
 from my_pa.domain.situation.continuity import CommitmentWorkView
 from my_pa.domain.situation.continuity import Task as ContinuityTask
-from my_pa.domain.situation.project_history import ProjectMutationReceipt
+from my_pa.domain.situation.project_history import (
+    ProjectMutationReceipt,
+    ProjectNumberConflictError,
+)
 from my_pa.domain.situation.situation import Project, ProjectEntityLinkageState, Situation
 from my_pa.domain.source.enrollment import (
     MAX_ENROLLMENT_BYTES,
@@ -6483,6 +6486,8 @@ class ApplicationService:
                     contract_finish=command.contract_finish,
                     actual_finish=command.actual_finish,
                 )
+            except ProjectNumberConflictError:
+                raise ConflictError(SafeDetail.PROJECT_NUMBER) from None
             except ValueError as error:
                 if str(error) != "an active project-type canonical name is already held":
                     raise
@@ -6676,6 +6681,8 @@ class ApplicationService:
             raise ConflictError(SafeDetail.PROJECT_ID) from None
         except ProjectIdempotencyConflictError:
             raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
+        except ProjectNumberConflictError:
+            raise ConflictError(SafeDetail.PROJECT_NUMBER) from None
         except ProjectVersionConflictError as conflict:
             current = unit_of_work.projects.get_project(principal_id, project_id)
             receipt = conflict.receipt

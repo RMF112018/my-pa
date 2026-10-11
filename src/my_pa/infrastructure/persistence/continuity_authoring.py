@@ -14,6 +14,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection
+from sqlalchemy.exc import IntegrityError
 
 from my_pa.contracts.ports import (
     AuthoringConflictError,
@@ -33,6 +34,7 @@ from my_pa.domain.situation.continuity import (
     Task,
     TaskState,
 )
+from my_pa.domain.situation.project_history import ProjectNumberConflictError
 from my_pa.domain.situation.situation import (
     Project,
     ProjectEntityLinkageState,
@@ -44,7 +46,10 @@ from my_pa.domain.situation.situation import (
 )
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.domain.task.lifecycle import TaskOriginKind
-from my_pa.infrastructure.persistence.situation_repository import _append_lifecycle_event
+from my_pa.infrastructure.persistence.situation_repository import (
+    _append_lifecycle_event,
+    is_project_number_conflict,
+)
 from my_pa.infrastructure.persistence.tables import (
     continuity_authoring_submissions,
     entities,
@@ -133,37 +138,35 @@ class SqlContinuityAuthoringRepository(ContinuityAuthoringRepository):
     ) -> Project:
         now = utc_now()
         resolved_aliases = aliases or ()
-        self._connection.execute(
-            projects.insert().values(
-                project_id=project_id,
-                principal_id=principal_id,
-                name=name,
-                description=description,
-                state=ProjectState.ACTIVE.value,
-                participants=[],
-                opened_at=now,
-                closed_at=None,
-                created_at=now,
-                updated_at=now,
-                version=1,
-                aliases=list(resolved_aliases),
-                project_number=project_number,
-                sector=None if sector is None else sector.value,
-                type=None if type_ is None else type_.value,
-                address=address,
-                city=city,
-                county=county,
-                address_state=address_state,
-                zip=zip_,
-                value=value,
-                scheduled_start=scheduled_start,
-                contract_start=contract_start,
-                actual_start=actual_start,
-                scheduled_finish=scheduled_finish,
-                contract_finish=contract_finish,
-                actual_finish=actual_finish,
-            )
-        )
+        try:
+            with self._connection.begin_nested():
+                self._insert_project_row(
+                    principal_id=principal_id,
+                    project_id=project_id,
+                    name=name,
+                    description=description,
+                    now=now,
+                    aliases=resolved_aliases,
+                    project_number=project_number,
+                    sector=sector,
+                    type_=type_,
+                    address=address,
+                    city=city,
+                    county=county,
+                    address_state=address_state,
+                    zip_=zip_,
+                    value=value,
+                    scheduled_start=scheduled_start,
+                    contract_start=contract_start,
+                    actual_start=actual_start,
+                    scheduled_finish=scheduled_finish,
+                    contract_finish=contract_finish,
+                    actual_finish=actual_finish,
+                )
+        except IntegrityError as error:
+            if is_project_number_conflict(error):
+                raise ProjectNumberConflictError from None
+            raise
         self._mint_bound_project_entity(
             principal_id=principal_id,
             project_id=project_id,
@@ -196,6 +199,63 @@ class SqlContinuityAuthoringRepository(ContinuityAuthoringRepository):
             scheduled_finish=scheduled_finish,
             contract_finish=contract_finish,
             actual_finish=actual_finish,
+        )
+
+    def _insert_project_row(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        name: str,
+        description: str | None,
+        now: datetime,
+        aliases: tuple[str, ...],
+        project_number: str | None,
+        sector: ProjectSector | None,
+        type_: ProjectType | None,
+        address: str | None,
+        city: str | None,
+        county: str | None,
+        address_state: str | None,
+        zip_: str | None,
+        value: Decimal | None,
+        scheduled_start: date | None,
+        contract_start: date | None,
+        actual_start: date | None,
+        scheduled_finish: date | None,
+        contract_finish: date | None,
+        actual_finish: date | None,
+    ) -> None:
+        self._connection.execute(
+            projects.insert().values(
+                project_id=project_id,
+                principal_id=principal_id,
+                name=name,
+                description=description,
+                state=ProjectState.ACTIVE.value,
+                participants=[],
+                opened_at=now,
+                closed_at=None,
+                created_at=now,
+                updated_at=now,
+                version=1,
+                aliases=list(aliases),
+                project_number=project_number,
+                sector=None if sector is None else sector.value,
+                type=None if type_ is None else type_.value,
+                address=address,
+                city=city,
+                county=county,
+                address_state=address_state,
+                zip=zip_,
+                value=value,
+                scheduled_start=scheduled_start,
+                contract_start=contract_start,
+                actual_start=actual_start,
+                scheduled_finish=scheduled_finish,
+                contract_finish=contract_finish,
+                actual_finish=actual_finish,
+            )
         )
 
     def _mint_bound_project_entity(

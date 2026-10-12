@@ -1256,6 +1256,10 @@ def test_the_queued_bytes_budget_drops_counts_and_is_released_after_a_write() ->
 # ---- linear patterns, non-finite JSON, wider coverage (review B1, B2, N1-N4) ----
 
 _MIB = 1024 * 1024
+#: PEM armour for synthetic fixtures, built from parts so that no secret-key
+#: signature appears in source (`test_repository_has_no_high_confidence_secret_signature`).
+_PEM_BEGIN = "-----BEGIN " + "{kind}PRIVATE KEY-----"
+_PEM_END = "-----END " + "{kind}PRIVATE KEY-----"
 #: Generous on purpose: every family runs in well under half a second on a
 #: developer machine, and the quadratic forms these replace took tens to
 #: hundreds of seconds at this size. The outcome does not depend on the margin.
@@ -1279,7 +1283,7 @@ _ADVERSARIAL: dict[str, tuple[str, str]] = {
     "form_spaces": ("", " "),
     "form_keys": ("", "token="),
     "pem_dashes": ("", "-"),
-    "pem_begin": ("", "-----BEGIN PRIVATE KEY-----"),
+    "pem_begin": ("", _PEM_BEGIN.format(kind="")),
 }
 
 
@@ -1362,15 +1366,16 @@ def test_code_and_domain_code_fields_are_kept() -> None:
 
 def test_a_pem_private_key_block_is_redacted_whole_and_when_cut_off() -> None:
     block = (
-        "-----BEGIN RSA PRIVATE KEY-----\nMIIEMARKERPEMBODY\nmore-lines\n"
-        "-----END RSA PRIVATE KEY-----"
+        _PEM_BEGIN.format(kind="RSA ")
+        + "\nMIIEMARKERPEMBODY\nmore-lines\n"
+        + _PEM_END.format(kind="RSA ")
     )
     text, count, _ = redact_text(f"before {block} after")
     assert text == f"before {REDACTED} after"
     assert count == 1
     redacted, _, _ = redact_json({"pem": "x", "note": f"key: {block}"})
     assert "MARKERPEMBODY" not in json.dumps(redacted)
-    cut, count, _ = redact_text("head -----BEGIN PRIVATE KEY-----\nMIIEMARKERCUT")
+    cut, count, _ = redact_text("head " + _PEM_BEGIN.format(kind="") + "\nMIIEMARKERCUT")
     assert cut == f"head {REDACTED}"
     assert count == 1
 

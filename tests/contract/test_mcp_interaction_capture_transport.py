@@ -33,12 +33,15 @@ import pytest
 from tests.conftest import Scene, build_service
 
 from my_pa.adapters import mcp_interaction_capture as capture
-from my_pa.adapters.mcp.remote import RemoteAccessContext, create_remote_mcp_app
+from my_pa.adapters.mcp.chatllm_gateway import OPERATOR_TOOL, READ_TOOL, WRITE_TOOL
+from my_pa.adapters.mcp.remote import MCP_PATH, RemoteAccessContext, create_remote_mcp_app
 from my_pa.adapters.mcp_interaction_capture import InteractionRecorder, McpInteractionCapture
 from my_pa.domain.identity.operation import Capability
 
 RESOURCE = "http://testserver"
 CLIENT = "client-synthetic-capture"
+#: The façade invoke tools, as the composition root passes them.
+FACADE = frozenset({READ_TOOL, WRITE_TOOL, OPERATOR_TOOL})
 _HEADERS = {
     "Accept": "application/json, text/event-stream",
     "Content-Type": "application/json",
@@ -296,7 +299,9 @@ def _recorder(
     rows: list[Mapping[str, object]],
     **kwargs: Any,  # noqa: ANN401
 ) -> InteractionRecorder:
-    return InteractionRecorder(rows.append, stderr=io.StringIO(), **kwargs)
+    return InteractionRecorder(
+        rows.append, facade_invoke_tools=FACADE, stderr=io.StringIO(), **kwargs
+    )
 
 
 @pytest.mark.anyio
@@ -309,7 +314,9 @@ async def test_each_exchange_is_one_row_with_the_right_metadata_and_an_untouched
     recorder = _recorder(rows)
     recorder.start()
     try:
-        responses = await _exchange(McpInteractionCapture(probe, recorder), app, _REQUESTS)
+        responses = await _exchange(
+            McpInteractionCapture(probe, recorder, path=MCP_PATH), app, _REQUESTS
+        )
     finally:
         recorder.stop(timeout=5)
 
@@ -372,7 +379,9 @@ async def test_deterministic_exchanges_are_identical_with_and_without_the_wrappe
     recorder = _recorder(rows)
     recorder.start()
     try:
-        wrapped = await _exchange(McpInteractionCapture(app, recorder), app, deterministic)
+        wrapped = await _exchange(
+            McpInteractionCapture(app, recorder, path=MCP_PATH), app, deterministic
+        )
     finally:
         recorder.stop(timeout=5)
     assert [_wire(r) for r in wrapped] == [_wire(r) for r in plain]
@@ -387,7 +396,7 @@ async def test_the_access_context_is_visible_when_the_server_provides_a_state_di
     app = _app(scene)
     rows: list[Mapping[str, object]] = []
     recorder = _recorder(rows)
-    wrapped = McpInteractionCapture(app, recorder)
+    wrapped = McpInteractionCapture(app, recorder, path=MCP_PATH)
 
     async def with_server_state(scope: Any, receive: Any, send: Any) -> None:  # noqa: ANN401
         if scope["type"] == "http":
@@ -419,9 +428,9 @@ async def test_a_failing_sink_changes_no_response_and_is_reported_on_the_next_ro
         rows.append(row)
 
     stderr = io.StringIO()
-    recorder = InteractionRecorder(sink, stderr=stderr)
+    recorder = InteractionRecorder(sink, facade_invoke_tools=FACADE, stderr=stderr)
     recorder.start()
-    wrapped = McpInteractionCapture(probe, recorder)
+    wrapped = McpInteractionCapture(probe, recorder, path=MCP_PATH)
 
     async def recover_before_the_fourth(index: int) -> None:
         if index != 3:
@@ -462,7 +471,7 @@ async def test_a_full_queue_drops_and_counts_without_touching_the_request(scene:
         wrapped.extend(
             asyncio.run(
                 _exchange(
-                    McpInteractionCapture(app, recorder),
+                    McpInteractionCapture(app, recorder, path=MCP_PATH),
                     app,
                     [_REQUESTS[0], _REQUESTS[1], _REQUESTS[4]],
                 )
@@ -505,7 +514,9 @@ async def test_broken_capture_internals_change_no_response(
     recorder.start()
     try:
         wrapped = await _exchange(
-            McpInteractionCapture(app, recorder), app, [_REQUESTS[0], _REQUESTS[4], _REQUESTS[7]]
+            McpInteractionCapture(app, recorder, path=MCP_PATH),
+            app,
+            [_REQUESTS[0], _REQUESTS[4], _REQUESTS[7]],
         )
     finally:
         recorder.stop(timeout=5)
@@ -532,7 +543,9 @@ async def test_a_failing_captured_snapshot_changes_no_response_and_is_counted(
     recorder.start()
     try:
         wrapped = await _exchange(
-            McpInteractionCapture(app, recorder), app, [_REQUESTS[0], _REQUESTS[4], _REQUESTS[7]]
+            McpInteractionCapture(app, recorder, path=MCP_PATH),
+            app,
+            [_REQUESTS[0], _REQUESTS[4], _REQUESTS[7]],
         )
     finally:
         recorder.stop(timeout=5)
@@ -559,7 +572,9 @@ async def test_a_failing_submit_changes_no_response_and_is_counted(scene: Scene)
     recorder.start()
     try:
         wrapped = await _exchange(
-            McpInteractionCapture(app, recorder), app, [_REQUESTS[0], _REQUESTS[4], _REQUESTS[7]]
+            McpInteractionCapture(app, recorder, path=MCP_PATH),
+            app,
+            [_REQUESTS[0], _REQUESTS[4], _REQUESTS[7]],
         )
     finally:
         recorder.stop(timeout=5)

@@ -24,6 +24,8 @@ import apps.gateway as gateway
 import pytest
 
 from my_pa.adapters import mcp_interaction_capture as capture
+from my_pa.adapters.mcp.chatllm_gateway import OPERATOR_TOOL, READ_TOOL, WRITE_TOOL
+from my_pa.adapters.mcp.remote import MCP_PATH
 from my_pa.adapters.mcp_interaction_capture import (
     BODY_CAP_BYTES,
     BUFFER_CEILING_BYTES,
@@ -41,6 +43,8 @@ from my_pa.infrastructure.persistence import mcp_interactions as store
 
 _URL = "postgresql+psycopg://someone@db.invalid:5432/somewhere"
 _WHEN = datetime(2026, 10, 11, 12, 0, tzinfo=UTC)
+#: The façade invoke tools, as the composition root passes them.
+FACADE = frozenset({READ_TOOL, WRITE_TOOL, OPERATOR_TOOL})
 
 
 def _exchange(
@@ -85,6 +89,10 @@ def _exchange(
     )
 
 
+def _row(exchange: CapturedExchange, **counters: int) -> dict[str, object]:
+    return build_interaction_row(exchange, facade_invoke_tools=FACADE, **counters)
+
+
 def _serialized(row: Mapping[str, object]) -> str:
     return json.dumps(row, default=str, ensure_ascii=False)
 
@@ -110,7 +118,7 @@ def _tool_result(text: str, *, is_error: bool) -> dict[str, object]:
 
 
 def test_the_row_carries_exactly_the_stores_insert_columns() -> None:
-    row = build_interaction_row(_exchange({"jsonrpc": "2.0", "id": 1, "method": "ping"}))
+    row = _row(_exchange({"jsonrpc": "2.0", "id": 1, "method": "ping"}))
     assert frozenset(INTERACTION_COLUMNS) == store.INSERT_COLUMNS
     assert frozenset(row) == store.INSERT_COLUMNS
     assert BODY_CAP_BYTES == store.BODY_CAP_BYTES
@@ -118,8 +126,8 @@ def test_the_row_carries_exactly_the_stores_insert_columns() -> None:
 
 
 def test_the_interaction_id_is_the_prefixed_uuid4_hex() -> None:
-    first = build_interaction_row(_exchange())["interaction_id"]
-    second = build_interaction_row(_exchange())["interaction_id"]
+    first = _row(_exchange())["interaction_id"]
+    second = _row(_exchange())["interaction_id"]
     assert isinstance(first, str)
     assert first.startswith("mcpi_") and len(first) == 37
     assert all(c in "0123456789abcdef" for c in first[5:])
@@ -127,7 +135,7 @@ def test_the_interaction_id_is_the_prefixed_uuid4_hex() -> None:
 
 
 def test_empty_bodies_store_nothing_and_hash_the_empty_string() -> None:
-    row = build_interaction_row(_exchange(status=202))
+    row = _row(_exchange(status=202))
     empty = hashlib.sha256(b"").hexdigest()
     assert row["request_bytes"] == row["response_bytes"] == 0
     assert row["request_sha256"] == row["response_sha256"] == empty
@@ -140,7 +148,7 @@ def test_empty_bodies_store_nothing_and_hash_the_empty_string() -> None:
 
 
 def test_a_body_the_app_never_read_is_not_captured_rather_than_empty() -> None:
-    row = build_interaction_row(_exchange(status=401, request_overflowed=True))
+    row = _row(_exchange(status=401, request_overflowed=True))
     assert row["diagnostics"]["capture"]["request_parse"] == "not_captured"  # type: ignore[index]
     assert row["diagnostics"]["capture"]["request_hash_scope"] == "redacted_prefix"  # type: ignore[index]
     assert row["request_sha256"] == hashlib.sha256(b"").hexdigest()
@@ -162,7 +170,7 @@ def test_only_allowlisted_headers_are_stored_and_credentials_never_are() -> None
         (b"mcp-protocol-version", b"2025-06-18"),
         (b"user-agent", b"synthetic-agent/1"),
     )
-    row = build_interaction_row(
+    row = _row(
         _exchange(
             {"jsonrpc": "2.0", "id": 1, "method": "ping"},
             request_headers=headers,
@@ -182,15 +190,11 @@ def test_only_allowlisted_headers_are_stored_and_credentials_never_are() -> None
 
 
 def test_the_session_header_is_read_from_the_request_or_the_response() -> None:
-    from_request = build_interaction_row(
-        _exchange(request_headers=((b"mcp-session-id", b"sess-1"),))
-    )
-    from_response = build_interaction_row(
-        _exchange(response_headers=((b"mcp-session-id", b"sess-2"),))
-    )
+    from_request = _row(_exchange(request_headers=((b"mcp-session-id", b"sess-1"),)))
+    from_response = _row(_exchange(response_headers=((b"mcp-session-id", b"sess-2"),)))
     assert from_request["mcp_session_id"] == "sess-1"
     assert from_response["mcp_session_id"] == "sess-2"
-    assert build_interaction_row(_exchange())["mcp_session_id"] is None
+    assert _row(_exchange())["mcp_session_id"] is None
 
 
 # ---- body redaction ----------------------------------------------------------
@@ -252,7 +256,7 @@ def test_bearer_and_jwt_runs_are_redacted_inside_any_string() -> None:
 
 def test_json_inside_a_text_content_string_is_parsed_and_redacted() -> None:
     envelope = json.dumps({"result": {"refresh_token": "MARKERNESTED", "title": "kept"}})
-    row = build_interaction_row(
+    row = _row(
         _exchange(
             _call("documents.read", {}),
             _tool_result(envelope, is_error=False),
@@ -280,7 +284,7 @@ def test_an_embedded_document_hides_non_string_values_under_redacted_keys() -> N
             "title": "kept",
         }
     )
-    row = build_interaction_row(
+    row = _row(
         _exchange(
             _call("documents.read", {}),
             _tool_result(envelope, is_error=False),
@@ -307,7 +311,7 @@ def test_an_embedded_document_without_secrets_keeps_its_original_text() -> None:
 
 
 def test_the_request_arguments_are_redacted_before_storage() -> None:
-    row = build_interaction_row(
+    row = _row(
         _exchange(
             _call(
                 "capture.create",
@@ -329,7 +333,7 @@ def test_non_json_text_is_redacted_by_pattern() -> None:
         b'\\"client_secret\\":\\"MARKERESCAPED\\" '
         b"{'token': 'MARKERREPR'} Bearer MARKERBEARER"
     )
-    row = build_interaction_row(_exchange(raw_request=raw))
+    row = _row(_exchange(raw_request=raw))
     text = row["request_body_text"]
     assert isinstance(text, str)
     for marker in ("MARKERPLAIN", "MARKERESCAPED", "MARKERREPR", "MARKERBEARER"):
@@ -350,7 +354,7 @@ def test_redact_text_counts_and_keeps_structure() -> None:
 
 
 def test_a_python_repr_echo_in_a_jsonrpc_error_message_is_redacted() -> None:
-    row = build_interaction_row(
+    row = _row(
         _exchange(
             _call("x", {"password": "MARKERECHO"}),
             {
@@ -365,9 +369,7 @@ def test_a_python_repr_echo_in_a_jsonrpc_error_message_is_redacted() -> None:
 
 
 def test_metadata_columns_are_redacted_and_bounded() -> None:
-    row = build_interaction_row(
-        _exchange({"jsonrpc": "2.0", "id": "Bearer MARKERID", "method": "m" * 1000})
-    )
+    row = _row(_exchange({"jsonrpc": "2.0", "id": "Bearer MARKERID", "method": "m" * 1000}))
     assert row["jsonrpc_id"] == f"Bearer {REDACTED}"
     assert row["jsonrpc_method"] == "m" * 256
 
@@ -377,7 +379,7 @@ def test_metadata_columns_are_redacted_and_bounded() -> None:
 
 def test_a_json_body_within_the_cap_is_stored_as_json() -> None:
     request = {"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {"pad": "x" * 1000}}
-    row = build_interaction_row(_exchange(request))
+    row = _row(_exchange(request))
     raw = json.dumps(request).encode()
     assert row["request_body"] == request
     assert row["request_body_text"] is None
@@ -392,7 +394,7 @@ def test_the_stored_digest_is_of_the_redacted_body_never_the_raw_one() -> None:
     """A stored hash must not be an oracle for a credential the redaction removed."""
     request = {"jsonrpc": "2.0", "id": 1, "params": {"password": "MARKERORACLE", "n": 1}}
     raw = json.dumps(request, separators=(",", ":")).encode()
-    row = build_interaction_row(_exchange(raw_request=raw))
+    row = _row(_exchange(raw_request=raw))
     redacted = json.dumps(
         {"jsonrpc": "2.0", "id": 1, "params": {"password": REDACTED, "n": 1}},
         ensure_ascii=False,
@@ -407,7 +409,7 @@ def test_a_json_body_over_the_cap_is_a_truncated_redacted_prefix() -> None:
     pad = "x" * (BODY_CAP_BYTES - 40)
     request = {"pad": pad, "access_token": "T" * 500, "tail": "MARKERTAIL"}
     raw = json.dumps(request).encode()
-    row = build_interaction_row(_exchange(raw_request=raw))
+    row = _row(_exchange(raw_request=raw))
     text = row["request_body_text"]
     assert isinstance(text, str)
     assert len(text.encode()) <= BODY_CAP_BYTES
@@ -429,7 +431,7 @@ def test_a_json_body_over_the_cap_is_a_truncated_redacted_prefix() -> None:
 
 def test_a_token_beyond_the_cap_never_appears() -> None:
     raw = b"x" * (BODY_CAP_BYTES + 100) + b" Bearer MARKERBEYOND"
-    row = build_interaction_row(_exchange(raw_request=raw))
+    row = _row(_exchange(raw_request=raw))
     text = row["request_body_text"]
     assert isinstance(text, str)
     assert len(text.encode()) <= BODY_CAP_BYTES
@@ -446,7 +448,7 @@ def test_a_token_straddling_the_cap_is_not_stored_in_part(shape: str) -> None:
         "pair": f'"password": "{secret}"',
     }[shape]
     raw = (b"y" * (BODY_CAP_BYTES - 100)) + token.encode() + b" " + b"z" * 1000
-    row = build_interaction_row(_exchange(raw_request=raw))
+    row = _row(_exchange(raw_request=raw))
     text = row["request_body_text"]
     assert isinstance(text, str)
     assert len(text.encode()) <= BODY_CAP_BYTES
@@ -456,24 +458,24 @@ def test_a_token_straddling_the_cap_is_not_stored_in_part(shape: str) -> None:
 
 def test_truncation_never_splits_a_multibyte_character() -> None:
     raw = ("é" * BODY_CAP_BYTES).encode()  # two bytes each; not JSON
-    row = build_interaction_row(_exchange(raw_request=raw))
+    row = _row(_exchange(raw_request=raw))
     text = row["request_body_text"]
     assert isinstance(text, str)
     assert text == "é" * (BODY_CAP_BYTES // 2)
 
 
 def test_nul_is_replaced_and_flagged_in_json_and_in_text() -> None:
-    json_row = build_interaction_row(_exchange({"text": "a\u0000b", "k\u0000": 1}))
+    json_row = _row(_exchange({"text": "a\u0000b", "k\u0000": 1}))
     assert json_row["request_body"] == {"text": "a�b", "k�": 1}
     assert json_row["diagnostics"]["capture"]["nul_replaced"] is True  # type: ignore[index]
-    text_row = build_interaction_row(_exchange(raw_request=b"not json \x00 here"))
+    text_row = _row(_exchange(raw_request=b"not json \x00 here"))
     assert text_row["request_body_text"] == "not json � here"
     assert text_row["diagnostics"]["capture"]["nul_replaced"] is True  # type: ignore[index]
     assert "\x00" not in _serialized(json_row) + _serialized(text_row)
 
 
 def test_a_lone_surrogate_is_made_encodable() -> None:
-    row = build_interaction_row(_exchange(raw_request=b'{"t": "\\ud800x"}'))
+    row = _row(_exchange(raw_request=b'{"t": "\\ud800x"}'))
     _serialized(row).encode("utf-8")
     assert row["diagnostics"]["capture"]["nul_replaced"] is True  # type: ignore[index]
 
@@ -482,7 +484,7 @@ def test_a_lone_surrogate_is_made_encodable() -> None:
 
 
 def test_a_canonical_tools_call_names_tool_and_capability() -> None:
-    row = build_interaction_row(_exchange(_call("tasks.list", {}, request_id="abc")))
+    row = _row(_exchange(_call("tasks.list", {}, request_id="abc")))
     assert row["jsonrpc_method"] == "tools/call"
     assert row["jsonrpc_id"] == "abc"
     assert row["tool_name"] == "tasks.list"
@@ -491,7 +493,7 @@ def test_a_canonical_tools_call_names_tool_and_capability() -> None:
 
 @pytest.mark.parametrize("facade", ["my_pa.read", "my_pa.write", "my_pa.operator"])
 def test_a_facade_invoke_records_the_canonical_capability(facade: str) -> None:
-    row = build_interaction_row(
+    row = _row(
         _exchange(_call(facade, {"capability": "tasks.update", "arguments": {}}, request_id=7))
     )
     assert row["tool_name"] == facade
@@ -500,14 +502,14 @@ def test_a_facade_invoke_records_the_canonical_capability(facade: str) -> None:
 
 
 def test_describe_and_malformed_facade_calls_fall_back_to_the_tool_name() -> None:
-    describe = build_interaction_row(_exchange(_call("my_pa.describe", {"capability": "x"})))
-    malformed = build_interaction_row(_exchange(_call("my_pa.read", {"capability": 3})))
+    describe = _row(_exchange(_call("my_pa.describe", {"capability": "x"})))
+    malformed = _row(_exchange(_call("my_pa.read", {"capability": 3})))
     assert describe["capability"] == "my_pa.describe"
     assert malformed["capability"] == "my_pa.read"
 
 
 def test_a_batch_array_is_recorded_as_batch() -> None:
-    row = build_interaction_row(
+    row = _row(
         _exchange(
             [{"jsonrpc": "2.0", "id": 1, "method": "ping"}],
             [{"jsonrpc": "2.0", "id": 1, "error": {"code": -32600, "message": "no batches"}}],
@@ -520,8 +522,8 @@ def test_a_batch_array_is_recorded_as_batch() -> None:
 
 
 def test_a_boolean_id_and_a_notification_have_no_id() -> None:
-    assert build_interaction_row(_exchange({"id": True, "method": "m"}))["jsonrpc_id"] is None
-    assert build_interaction_row(_exchange({"method": "m"}))["jsonrpc_id"] is None
+    assert _row(_exchange({"id": True, "method": "m"}))["jsonrpc_id"] is None
+    assert _row(_exchange({"method": "m"}))["jsonrpc_id"] is None
 
 
 def test_the_authenticated_context_is_read_by_duck_type() -> None:
@@ -536,11 +538,11 @@ def test_the_authenticated_context_is_read_by_duck_type() -> None:
         principal = Principal()
         authenticated_client_id = "client-synthetic"
 
-    row = build_interaction_row(_exchange(access=Access()))
+    row = _row(_exchange(access=Access()))
     assert row["oauth_client_id"] == "client-synthetic"
     assert row["principal_id"] == "prn_synthetic"
     assert row["principal_kind"] == "operator"
-    anonymous = build_interaction_row(_exchange())
+    anonymous = _row(_exchange())
     assert anonymous["oauth_client_id"] is anonymous["principal_id"] is None
 
 
@@ -559,9 +561,7 @@ _PROBLEM = {
 
 def test_a_successful_tool_call_is_ok_with_the_envelope_correlation() -> None:
     envelope = {"correlation_id": "corr_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "error": None}
-    row = build_interaction_row(
-        _exchange(_call("t", {}), _tool_result(json.dumps(envelope), is_error=False))
-    )
+    row = _row(_exchange(_call("t", {}), _tool_result(json.dumps(envelope), is_error=False)))
     assert row["outcome"] == "ok"
     assert row["error_code"] is None
     assert row["correlation_id"] == "corr_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -571,9 +571,7 @@ def test_a_successful_tool_call_is_ok_with_the_envelope_correlation() -> None:
 
 def test_an_envelope_error_is_a_tool_error_with_its_problem() -> None:
     envelope = {"correlation_id": _PROBLEM["correlation_id"], "error": _PROBLEM, "result": None}
-    row = build_interaction_row(
-        _exchange(_call("t", {}), _tool_result(json.dumps(envelope), is_error=True))
-    )
+    row = _row(_exchange(_call("t", {}), _tool_result(json.dumps(envelope), is_error=True)))
     assert row["outcome"] == "tool_error"
     assert row["error_code"] == "invalid_request"
     assert row["correlation_id"] == _PROBLEM["correlation_id"]
@@ -587,16 +585,14 @@ def test_an_envelope_error_is_a_tool_error_with_its_problem() -> None:
 
 def test_a_bare_problem_detail_is_a_tool_error() -> None:
     problem = {**_PROBLEM, "code": "unsupported", "safe_details": [], "allowed_values": []}
-    row = build_interaction_row(
-        _exchange(_call("t", {}), _tool_result(json.dumps(problem), is_error=True))
-    )
+    row = _row(_exchange(_call("t", {}), _tool_result(json.dumps(problem), is_error=True)))
     assert row["outcome"] == "tool_error"
     assert row["error_code"] == "unsupported"
     assert row["correlation_id"] == _PROBLEM["correlation_id"]
 
 
 def test_a_jsonrpc_error_records_code_and_message() -> None:
-    row = build_interaction_row(
+    row = _row(
         _exchange(
             {"jsonrpc": "2.0", "id": 5, "method": "nope"},
             {"jsonrpc": "2.0", "id": 5, "error": {"code": -32601, "message": "Method not found"}},
@@ -621,7 +617,7 @@ def test_a_jsonrpc_error_records_code_and_message() -> None:
 def test_endpoint_refusals_are_classified_by_their_token(
     status: int, token: str, outcome: str
 ) -> None:
-    row = build_interaction_row(_exchange(None, {"error": token}, status=status))
+    row = _row(_exchange(None, {"error": token}, status=status))
     assert row["outcome"] == outcome
     assert row["error_code"] == token
     assert row["diagnostics"]["endpoint_error"] == token  # type: ignore[index]
@@ -639,7 +635,7 @@ def test_endpoint_refusals_are_classified_by_their_token(
     ],
 )
 def test_other_statuses_are_classified(status: int | None, raw: bytes, outcome: str) -> None:
-    row = build_interaction_row(_exchange({"method": "m"}, raw_response=raw, status=status))
+    row = _row(_exchange({"method": "m"}, raw_response=raw, status=status))
     assert row["outcome"] == outcome
     assert row["http_status"] == status
 
@@ -676,7 +672,7 @@ def test_a_failed_write_is_counted_reported_by_count_only_and_carried_forward() 
         rows.append(row)
 
     stderr = io.StringIO()
-    recorder = InteractionRecorder(sink, stderr=stderr)
+    recorder = InteractionRecorder(sink, facade_invoke_tools=FACADE, stderr=stderr)
     recorder.start()
     try:
         recorder.submit(_exchange({"method": "m", "password": "MARKERSTDERR"}))
@@ -700,7 +696,9 @@ def test_a_failed_write_is_counted_reported_by_count_only_and_carried_forward() 
 
 def test_a_full_queue_drops_counts_and_reports_on_the_next_row() -> None:
     rows: list[Mapping[str, object]] = []
-    recorder = InteractionRecorder(rows.append, maxsize=1, stderr=io.StringIO())
+    recorder = InteractionRecorder(
+        rows.append, facade_invoke_tools=FACADE, maxsize=1, stderr=io.StringIO()
+    )
 
     def submit_three() -> None:
         for _ in range(3):
@@ -731,7 +729,7 @@ def test_a_row_builder_failure_is_a_capture_error_not_a_crash(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     rows: list[Mapping[str, object]] = []
-    recorder = InteractionRecorder(rows.append, stderr=io.StringIO())
+    recorder = InteractionRecorder(rows.append, facade_invoke_tools=FACADE, stderr=io.StringIO())
 
     def broken(*_args: object, **_kwargs: object) -> dict[str, object]:
         raise ValueError("builder broke")
@@ -754,7 +752,7 @@ def test_stop_is_bounded_even_when_the_sink_is_slow() -> None:
     def slow(_row: Mapping[str, object]) -> None:
         release.wait(5)
 
-    recorder = InteractionRecorder(slow, stderr=io.StringIO())
+    recorder = InteractionRecorder(slow, facade_invoke_tools=FACADE, stderr=io.StringIO())
     recorder.start()
     for _ in range(5):
         recorder.submit(_exchange())
@@ -770,7 +768,7 @@ def test_stop_is_bounded_even_when_the_sink_is_slow() -> None:
 
 def test_stop_drains_what_is_queued() -> None:
     rows: list[Mapping[str, object]] = []
-    recorder = InteractionRecorder(rows.append, stderr=io.StringIO())
+    recorder = InteractionRecorder(rows.append, facade_invoke_tools=FACADE, stderr=io.StringIO())
     for _ in range(20):
         recorder.submit(_exchange())
     recorder.start()
@@ -780,7 +778,7 @@ def test_stop_drains_what_is_queued() -> None:
 
 
 def test_the_writer_is_one_daemon_thread() -> None:
-    recorder = InteractionRecorder(lambda _row: None)
+    recorder = InteractionRecorder(lambda _row: None, facade_invoke_tools=FACADE)
     before = {thread.ident for thread in threading.enumerate()}
     recorder.start()
     recorder.start()
@@ -869,7 +867,7 @@ def test_only_the_mcp_path_is_captured_and_others_pass_untouched() -> None:
     async def inner(scope: Any, receive: Any, send: Any) -> None:  # noqa: ANN401
         seen.append((receive, send))
 
-    wrapped = McpInteractionCapture(inner, collector)  # type: ignore[arg-type]
+    wrapped = McpInteractionCapture(inner, collector, path=MCP_PATH)  # type: ignore[arg-type]
     for path in ("/token", "/authorize", "/healthz", "/readyz", "/mcp/", "/.well-known/x"):
         _drive(wrapped, path, [b"{}"])
     assert collector.exchanges == []
@@ -882,7 +880,7 @@ def test_the_tee_passes_every_message_unchanged_and_records_the_whole_body() -> 
     body = b'{"jsonrpc":"2.0","id":1,"method":"ping"}'
     direct, _ = _drive(_echo_app(), "/mcp", [body[:10], body[10:]])
     sent, scope = _drive(
-        McpInteractionCapture(_echo_app(), collector),  # type: ignore[arg-type]
+        McpInteractionCapture(_echo_app(), collector, path=MCP_PATH),  # type: ignore[arg-type]
         "/mcp",
         [body[:10], body[10:]],
     )
@@ -902,13 +900,13 @@ def test_a_body_past_the_buffer_ceiling_is_counted_whole_and_hashed_as_a_prefix(
     collector = _Collector()
     chunk = b"z" * (1024 * 1024)
     chunks = [chunk] * 16 + [b"tail-bytes"]
-    _drive(McpInteractionCapture(_echo_app(), collector), "/mcp", chunks)  # type: ignore[arg-type]
+    _drive(McpInteractionCapture(_echo_app(), collector, path=MCP_PATH), "/mcp", chunks)  # type: ignore[arg-type]
     (exchange,) = collector.exchanges
     whole = b"".join(chunks)
     assert exchange.request_bytes == len(whole)
     assert len(exchange.request_body) == BUFFER_CEILING_BYTES
     assert exchange.request_overflowed is True
-    row = build_interaction_row(exchange)
+    row = _row(exchange)
     assert row["request_truncated"] is True
     assert row["diagnostics"]["capture"]["request_parse"] == "not_captured"  # type: ignore[index]
     assert row["diagnostics"]["capture"]["request_hash_scope"] == "redacted_prefix"  # type: ignore[index]
@@ -930,14 +928,14 @@ def test_a_partly_read_body_under_the_ceiling_is_truncated_and_hashed_as_a_prefi
         await send({"type": "http.response.body", "body": b""})
 
     _drive(
-        McpInteractionCapture(reads_once, collector),  # type: ignore[arg-type]
+        McpInteractionCapture(reads_once, collector, path=MCP_PATH),  # type: ignore[arg-type]
         "/mcp",
         [first, b'"method":"ping"}'],
     )
     (exchange,) = collector.exchanges
     assert exchange.request_bytes == len(first) < BODY_CAP_BYTES
     assert exchange.request_overflowed is True
-    row = build_interaction_row(exchange)
+    row = _row(exchange)
     assert row["request_truncated"] is True
     assert row["request_body"] is None
     assert row["request_body_text"] == first.decode()
@@ -956,7 +954,7 @@ def test_a_failing_tee_leaves_the_exchange_untouched(monkeypatch: pytest.MonkeyP
     direct, _ = _drive(_echo_app(), "/mcp", [b"{}"])
     monkeypatch.setattr(capture._Exchange, "on_response", explode)
     monkeypatch.setattr(capture._Exchange, "on_request", explode)
-    sent, _ = _drive(McpInteractionCapture(_echo_app(), collector), "/mcp", [b"{}"])  # type: ignore[arg-type]
+    sent, _ = _drive(McpInteractionCapture(_echo_app(), collector, path=MCP_PATH), "/mcp", [b"{}"])  # type: ignore[arg-type]
     assert sent == direct
     assert collector.errors == 1
     assert collector.exchanges == []
@@ -970,7 +968,7 @@ def test_a_failing_start_passes_the_request_through(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(capture._Exchange, "__init__", explode)
     direct, _ = _drive(_echo_app(), "/mcp", [b"{}"])
-    sent, _ = _drive(McpInteractionCapture(_echo_app(), collector), "/mcp", [b"{}"])  # type: ignore[arg-type]
+    sent, _ = _drive(McpInteractionCapture(_echo_app(), collector, path=MCP_PATH), "/mcp", [b"{}"])  # type: ignore[arg-type]
     assert sent == direct
     assert collector.errors == 1
 
@@ -983,10 +981,10 @@ def test_an_app_exception_still_records_and_still_propagates() -> None:
         raise LookupError("app broke")
 
     with pytest.raises(LookupError):
-        _drive(McpInteractionCapture(broken, collector), "/mcp", [b"{}"])  # type: ignore[arg-type]
+        _drive(McpInteractionCapture(broken, collector, path=MCP_PATH), "/mcp", [b"{}"])  # type: ignore[arg-type]
     (exchange,) = collector.exchanges
     assert exchange.http_status is None
-    assert build_interaction_row(exchange)["outcome"] == "http_error"
+    assert _row(exchange)["outcome"] == "http_error"
 
 
 def test_lifespan_shutdown_stops_the_recorder_before_the_app_hears_it() -> None:
@@ -1005,7 +1003,7 @@ def test_lifespan_shutdown_stops_the_recorder_before_the_app_hears_it() -> None:
     async def send(_message: object) -> None:
         return None
 
-    wrapped = McpInteractionCapture(app, collector)  # type: ignore[arg-type]
+    wrapped = McpInteractionCapture(app, collector, path=MCP_PATH)  # type: ignore[arg-type]
     asyncio.run(wrapped({"type": "lifespan"}, receive, send))
     assert observed == [False, True]
     assert collector.exchanges == []
@@ -1065,6 +1063,14 @@ def test_enabled_the_app_is_wrapped_and_the_closer_stops_and_disposes(
     served, close = gateway.with_interaction_log(settings, app)
     assert isinstance(served, McpInteractionCapture)
     assert served.app is app
+    # The composition root is what names the captured route and the façade
+    # tools; the adapter imports neither (test_transport_parity).
+    assert served.path == MCP_PATH == "/mcp"
+    assert (
+        served.recorder.facade_invoke_tools
+        == frozenset({READ_TOOL, WRITE_TOOL, OPERATOR_TOOL})
+        == frozenset({"my_pa.read", "my_pa.write", "my_pa.operator"})
+    )
     assert built == [
         {
             "url": settings.parsed_database_url(),

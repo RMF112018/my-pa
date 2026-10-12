@@ -87,6 +87,8 @@ import uvicorn
 from my_pa.adapters.http import REMOTE_CAPTURE_PATH, create_http_app
 from my_pa.adapters.http.oauth import build_origin_oauth_routes
 from my_pa.adapters.mcp import RemoteAccessContext, create_remote_mcp_app, serve_stdio
+from my_pa.adapters.mcp.chatllm_gateway import OPERATOR_TOOL, READ_TOOL, WRITE_TOOL
+from my_pa.adapters.mcp.remote import MCP_PATH
 from my_pa.adapters.mcp.server import SERVER_NAME
 from my_pa.adapters.mcp_interaction_capture import (
     AsgiApp,
@@ -327,6 +329,9 @@ def remote_access_context(
 INTERACTION_LOG_STATEMENT_TIMEOUT_MS: Final = 2_000
 #: How long shutdown waits for queued interaction rows to be written.
 INTERACTION_LOG_FLUSH_SECONDS: Final = 2.0
+#: The compact façade tools whose `arguments.capability` is the canonical target,
+#: handed to the capture so the adapter never imports the MCP transport itself.
+FACADE_INVOKE_TOOLS: Final = frozenset({READ_TOOL, WRITE_TOOL, OPERATOR_TOOL})
 
 
 def _no_interaction_log() -> None:
@@ -355,7 +360,7 @@ def with_interaction_log(settings: Settings, app: AsgiApp) -> tuple[AsgiApp, Cal
         with engine.begin() as connection:
             insert_interaction(connection, row)
 
-    recorder = InteractionRecorder(sink)
+    recorder = InteractionRecorder(sink, facade_invoke_tools=FACADE_INVOKE_TOOLS)
     recorder.start()
 
     def close() -> None:
@@ -364,7 +369,9 @@ def with_interaction_log(settings: Settings, app: AsgiApp) -> tuple[AsgiApp, Cal
         finally:
             engine.dispose()
 
-    wrapped = McpInteractionCapture(app, recorder, stop_timeout=INTERACTION_LOG_FLUSH_SECONDS)
+    wrapped = McpInteractionCapture(
+        app, recorder, path=MCP_PATH, stop_timeout=INTERACTION_LOG_FLUSH_SECONDS
+    )
     return wrapped, close
 
 

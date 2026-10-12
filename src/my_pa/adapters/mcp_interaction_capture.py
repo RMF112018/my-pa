@@ -20,6 +20,11 @@ hands it to the injected sink. Nothing here knows what the sink is; the
 composition root (`apps/gateway.py`) gives it one that appends through
 `infrastructure.persistence.mcp_interactions`.
 
+**Nothing here imports the MCP transport.** The captured path and the façade
+tool names whose `arguments.capability` names the canonical target are inputs:
+`apps/gateway.py`, the composition root, passes `MCP_PATH` and the three façade
+invoke names, so the sibling-transport rule in `test_transport_parity.py` holds.
+
 **Scope is the `/mcp` path and nothing else.** OAuth (`/authorize`, `/token`,
 `/register`, ...), health, readiness and protected-resource metadata pass
 straight through untouched: they carry credentials and are not JSON-RPC.
@@ -89,9 +94,6 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping, MutableMappi
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Final, TextIO
-
-from my_pa.adapters.mcp.chatllm_gateway import OPERATOR_TOOL, READ_TOOL, WRITE_TOOL
-from my_pa.adapters.mcp.remote import MCP_PATH
 
 __all__ = [
     "BODY_CAP_BYTES",
@@ -206,8 +208,6 @@ REDACTED_KEYS: Final = frozenset(
     }
 )
 
-#: The façade tools whose `arguments.capability` names the canonical target.
-_FACADE_INVOKE_TOOLS: Final = frozenset({READ_TOOL, WRITE_TOOL, OPERATOR_TOOL})
 #: Endpoint-level refusal tokens `_McpEndpoint` answers with.
 _ENDPOINT_ERRORS: Final = frozenset(
     {"invalid_token", "insufficient_scope", "temporarily_unavailable"}
@@ -469,7 +469,9 @@ def _metadata(value: object, walk: _Walk) -> str | None:
     return text
 
 
-def _request_metadata(parsed: object, walk: _Walk) -> dict[str, str | None]:
+def _request_metadata(
+    parsed: object, walk: _Walk, facade_invoke_tools: frozenset[str]
+) -> dict[str, str | None]:
     found: dict[str, str | None] = {
         "jsonrpc_method": None,
         "jsonrpc_id": None,
@@ -493,7 +495,7 @@ def _request_metadata(parsed: object, walk: _Walk) -> dict[str, str | None]:
             found["tool_name"] = _metadata(name, walk)
             capability: object = name
             arguments = params.get("arguments")
-            if name in _FACADE_INVOKE_TOOLS and isinstance(arguments, dict):
+            if name in facade_invoke_tools and isinstance(arguments, dict):
                 target = arguments.get("capability")
                 if isinstance(target, str):
                     capability = target
@@ -617,13 +619,24 @@ def _outcome(facts: _ResponseFacts, status: int | None, response: _Body) -> tupl
 
 
 def build_interaction_row(
-    exchange: CapturedExchange, *, dropped_before: int = 0, write_failures_before: int = 0
+    exchange: CapturedExchange,
+    *,
+    facade_invoke_tools: frozenset[str],
+    dropped_before: int = 0,
+    write_failures_before: int = 0,
 ) -> dict[str, object]:
-    """Parse, redact and cap one exchange into a row keyed by `INTERACTION_COLUMNS`."""
+    """Parse, redact and cap one exchange into a row keyed by `INTERACTION_COLUMNS`.
+
+    `facade_invoke_tools` names the compact façade tools whose
+    `arguments.capability` is the canonical target; the composition root
+    supplies them, so this module never imports the MCP transport.
+    """
     walk = _Walk()
     request = _process_body(exchange.request_body, overflowed=exchange.request_overflowed)
     response = _process_body(exchange.response_body, overflowed=exchange.response_overflowed)
-    request_meta = _request_metadata(request.parsed if request.is_json else None, walk)
+    request_meta = _request_metadata(
+        request.parsed if request.is_json else None, walk, facade_invoke_tools
+    )
     facts = _response_facts(
         response.parsed if response.is_json else None, exchange.http_status, walk
     )
@@ -708,10 +721,12 @@ class InteractionRecorder:
         self,
         sink: InteractionSink,
         *,
+        facade_invoke_tools: frozenset[str],
         maxsize: int = QUEUE_MAXSIZE,
         stderr: TextIO | None = None,
     ) -> None:
         self._sink = sink
+        self.facade_invoke_tools = facade_invoke_tools
         self._queue: queue.Queue[object] = queue.Queue(maxsize=maxsize)
         self._stderr = stderr
         self._lock = threading.Lock()
@@ -817,6 +832,7 @@ class InteractionRecorder:
         try:
             row = build_interaction_row(
                 exchange,
+                facade_invoke_tools=self.facade_invoke_tools,
                 dropped_before=dropped - self._dropped_reported,
                 write_failures_before=failures - self._failures_reported,
             )
@@ -889,9 +905,10 @@ class _Exchange:
 
 
 class McpInteractionCapture:
-    """ASGI middleware teeing `/mcp` exchanges to an `InteractionRecorder`.
+    """ASGI middleware teeing one path's exchanges to an `InteractionRecorder`.
 
-    Every other path, and every non-HTTP scope, passes straight through. On a
+    `path` is the remote MCP route, supplied by the composition root. Every
+    other path, and every non-HTTP scope, passes straight through. On a
     lifespan shutdown the recorder is stopped (bounded by `stop_timeout`) before
     the inner app hears of it, because uvicorn re-raises a captured signal after
     lifespan shutdown and the composition root's `finally` never runs on that
@@ -903,7 +920,7 @@ class McpInteractionCapture:
         app: AsgiApp,
         recorder: InteractionRecorder,
         *,
-        path: str = MCP_PATH,
+        path: str,
         stop_timeout: float = 2.0,
     ) -> None:
         self.app = app

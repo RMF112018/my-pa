@@ -18,7 +18,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Final
 
 import pytest
-from sqlalchemy import Engine, func, insert, text
+from sqlalchemy import Connection, Engine, func, insert, text
 from sqlalchemy.exc import DBAPIError
 
 from my_pa.infrastructure.persistence.mcp_interactions import (
@@ -336,6 +336,33 @@ def test_purge_batches_and_reports_what_remains(db_engine: Engine) -> None:
     with db_engine.begin() as connection:
         assert purge_expired(connection, batch_size=2, dry_run=False) == PurgeResult(0, 0)
     assert _count(db_engine) == 1
+
+
+def _ids(connection: Connection) -> set[str]:
+    return {
+        str(value)
+        for value in connection.execute(
+            text("SELECT interaction_id FROM observability.mcp_interactions")
+        ).scalars()
+    }
+
+
+def test_purge_deletes_the_oldest_expired_row_first(db_engine: Engine) -> None:
+    """The documented order: a one-row batch takes the oldest expired row, then the next."""
+    middle = _insert_aged(db_engine, timedelta(days=30))
+    oldest = _insert_aged(db_engine, timedelta(days=40))
+    newest = _insert_aged(db_engine, OLD)
+    young = _insert(db_engine)
+    gone: list[str] = []
+    for _ in range(3):
+        with db_engine.begin() as connection:
+            before = _ids(connection)
+            assert purge_expired(connection, batch_size=1, dry_run=False).deleted == 1
+            (deleted,) = before - _ids(connection)
+        gone.append(deleted)
+    assert gone == [oldest, middle, newest]
+    with db_engine.connect() as connection:
+        assert _ids(connection) == {young}
 
 
 @pytest.mark.parametrize("batch_size", [0, -1, 10_001])

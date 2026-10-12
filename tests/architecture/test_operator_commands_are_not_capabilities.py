@@ -31,9 +31,14 @@ governed by `tests/contract/test_cli_transport.py`'s disjointness rule instead.
 
 **Each rule has a planted violation in this file.** A guard whose set has been
 narrowed to nothing keeps reporting success on every module in the tree, which is
-a defect this campaign has shipped once already. The three planted fixtures are
+a defect this campaign has shipped once already. The planted fixtures are
 read by the *same* functions that read the real module, so narrowing a rule
 breaks its plant in the same commit.
+
+**`COMMANDS` is complete.** Every `apps/cli/*.py` is either in `COMMANDS` or in
+`EXEMPT` with the test that governs it instead, so dropping a command from
+`COMMANDS` — or adding a program to `apps/cli/` — fails here rather than
+silently removing it from all three rules. The completeness rule has a plant too.
 
 What the three rules are for, in the order they matter:
 
@@ -157,6 +162,37 @@ COMMANDS = {
     "auth.py": PERMITTED_AUTH_NAMES,
     "knowledge_source_profiles.py": PERMITTED_KNOWLEDGE_PROFILE_NAMES,
     "mcp_interactions.py": PERMITTED_MCP_INTERACTION_NAMES,
+}
+
+#: Every other program in `apps/cli/`, and the test that governs it instead.
+#:
+#: These are not operator commands in the sense above: each reaches the
+#: application, a transport, or a write path by design, so the three rules here
+#: would refuse it, and a narrower rule elsewhere holds what it may do. Listing
+#: them is what makes `COMMANDS` complete — a new program, or one dropped from
+#: `COMMANDS`, is neither governed here nor named below, and the completeness
+#: test fails until somebody decides which it is. Each governing test is checked
+#: to exist and to name its program, so an exemption cannot outlive its guard.
+EXEMPT = {
+    # The capability transport itself: the CLI that *is* the invoke surface.
+    "invoke.py": "tests/contract/test_cli_transport.py",
+    # The migration control plane; writes `migration_runs` by design and is held
+    # disjoint from the other programs by the transport's option rule.
+    "migration.py": "tests/contract/test_cli_transport.py",
+    # Managed-document writes, contained to their one writer.
+    "managed_documents.py": "tests/architecture/test_managed_writes_are_contained.py",
+    # The legacy TBR import; no cutover path, writes contained.
+    "tbr_import.py": "tests/architecture/test_tbr_import_has_no_cutover_path.py",
+    # GSQS B0 evaluation; may not reach the operator surface.
+    "gsqs_b0.py": (
+        "tests/architecture/test_operator_surface_is_stamped_only_by_operator_adapters.py"
+    ),
+    # Remote MCP client grants; no runtime writer of the knowledge registry.
+    "remote_mcp.py": "tests/architecture/test_knowledge_registry_has_no_runtime_writer.py",
+    # Apple credential control; operator-principal selection.
+    "apple_credentials.py": "tests/unit/test_apple_operator_commands.py",
+    # GoodNotes operator command; explicit-owner principal selection.
+    "goodnotes.py": "tests/unit/test_goodnotes_operator_command.py",
 }
 
 #: The identifier rule 3 forbids anywhere in the file.
@@ -295,7 +331,53 @@ def test_the_command_never_names_a_capability(command: str) -> None:
     )
 
 
-# ---- the three plants ---------------------------------------------------------
+def _ungoverned(directory: Path) -> set[str]:
+    """Programs in `directory` neither governed here nor exempted to another test."""
+    present = {path.name for path in directory.glob("*.py")}
+    return present - set(COMMANDS) - set(EXEMPT)
+
+
+def _mentions(test: Path, program: str) -> bool:
+    source = test.read_text(encoding="utf-8")
+    stem = program.removesuffix(".py")
+    return any(
+        form in source
+        for form in (
+            f"apps/cli/{program}",
+            f"apps.cli.{stem}",
+            f"apps.cli import {stem}",
+            f'"cli" / "{program}"',
+        )
+    )
+
+
+def test_every_program_in_apps_cli_is_governed_here_or_exempted() -> None:
+    """Completeness: dropping an entry from `COMMANDS` must not leave this file green."""
+    assert not _ungoverned(ROOT / "apps" / "cli"), (
+        f"apps/cli/ programs {sorted(_ungoverned(ROOT / 'apps' / 'cli'))} are in neither "
+        "COMMANDS nor EXEMPT; decide which rule governs each"
+    )
+    assert not set(COMMANDS) & set(EXEMPT)
+    stale = sorted(name for name in EXEMPT if not _command(name).is_file())
+    assert not stale, f"EXEMPT names programs that are gone: {stale}"
+
+
+@pytest.mark.parametrize("program", sorted(EXEMPT), ids=lambda value: str(value))
+def test_each_exemption_names_a_test_that_governs_it(program: str) -> None:
+    governing = ROOT / EXEMPT[program]
+    assert governing.is_file(), f"{EXEMPT[program]} is gone; {program} is ungoverned"
+    assert _mentions(governing, program), f"{EXEMPT[program]} does not name apps/cli/{program}"
+
+
+# ---- the plants ---------------------------------------------------------------
+
+
+def test_the_completeness_rule_catches_a_planted_program(tmp_path: Path) -> None:
+    """A program that is in neither set is reported, and a governed one is not."""
+    (tmp_path / "planted.py").write_text("\n", encoding="utf-8")
+    (tmp_path / "health.py").write_text("\n", encoding="utf-8")
+    (tmp_path / "invoke.py").write_text("\n", encoding="utf-8")
+    assert _ungoverned(tmp_path) == {"planted.py"}
 
 
 @pytest.mark.parametrize(

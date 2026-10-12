@@ -8,6 +8,7 @@ from the whole serialized row is what is asserted.
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import hashlib
 import io
@@ -16,6 +17,7 @@ import threading
 import time
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 import apps.gateway as gateway
@@ -261,6 +263,40 @@ def test_json_inside_a_text_content_string_is_parsed_and_redacted() -> None:
     assert "MARKERNESTED" not in _serialized(row)
     assert json.loads(text) == {"result": {"refresh_token": REDACTED, "title": "kept"}}
     assert row["diagnostics"]["capture"]["redactions"] == 1  # type: ignore[index]
+
+
+def test_an_embedded_document_hides_non_string_values_under_redacted_keys() -> None:
+    """The embedded-JSON walk, not the `"key": "value"` text pattern, is what hides these.
+
+    Every secret here is a value the string pattern cannot match — an object, a
+    number, an array — so this fails if the embedded document is only
+    pattern-redacted instead of parsed and walked.
+    """
+    envelope = json.dumps(
+        {
+            "credentials": {"user": "MARKERCREDUSER", "n": 7},
+            "password": 98765432123,
+            "api_key": ["MARKERAPIKEY"],
+            "title": "kept",
+        }
+    )
+    row = build_interaction_row(
+        _exchange(
+            _call("documents.read", {}),
+            _tool_result(envelope, is_error=False),
+        )
+    )
+    serialized = _serialized(row)
+    for marker in ("MARKERCREDUSER", "98765432123", "MARKERAPIKEY"):
+        assert marker not in serialized
+    text = row["response_body"]["result"]["content"][0]["text"]  # type: ignore[index]
+    assert json.loads(text) == {
+        "credentials": REDACTED,
+        "password": REDACTED,
+        "api_key": REDACTED,
+        "title": "kept",
+    }
+    assert row["diagnostics"]["capture"]["redactions"] == 3  # type: ignore[index]
 
 
 def test_an_embedded_document_without_secrets_keeps_its_original_text() -> None:
@@ -665,9 +701,20 @@ def test_a_failed_write_is_counted_reported_by_count_only_and_carried_forward() 
 def test_a_full_queue_drops_counts_and_reports_on_the_next_row() -> None:
     rows: list[Mapping[str, object]] = []
     recorder = InteractionRecorder(rows.append, maxsize=1, stderr=io.StringIO())
-    recorder.submit(_exchange())
-    recorder.submit(_exchange())
-    recorder.submit(_exchange())
+
+    def submit_three() -> None:
+        for _ in range(3):
+            recorder.submit(_exchange())
+
+    # Off the test thread with a bounded wait: a blocking `put` regression must
+    # fail here within seconds, not hang the run (the repo has no pytest-timeout).
+    submitter = threading.Thread(target=submit_three, daemon=True)
+    submitter.start()
+    submitter.join(timeout=2.0)
+    if submitter.is_alive():
+        recorder.start()  # drain so the blocked submitter can finish
+        recorder.stop(timeout=2.0)
+        pytest.fail("submit blocked on a full queue; it must drop and count instead")
     assert recorder.dropped == 2
     recorder.start()
     try:
@@ -868,6 +915,38 @@ def test_a_body_past_the_buffer_ceiling_is_counted_whole_and_hashed_as_a_prefix(
     assert row["request_sha256"] == hashlib.sha256(b"z" * BUFFER_CEILING_BYTES).hexdigest()
 
 
+def test_a_partly_read_body_under_the_ceiling_is_truncated_and_hashed_as_a_prefix() -> None:
+    """The app stops reading (or the client goes away) before `more_body` ends.
+
+    Small, so nothing overflowed the buffer: only "never completed" marks the
+    body as partial, and that alone must make it a truncated prefix.
+    """
+    collector = _Collector()
+    first = b'{"jsonrpc":"2.0","id":1,'
+
+    async def reads_once(scope: Any, receive: Any, send: Any) -> None:  # noqa: ANN401
+        await receive()
+        await send({"type": "http.response.start", "status": 400, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    _drive(
+        McpInteractionCapture(reads_once, collector),  # type: ignore[arg-type]
+        "/mcp",
+        [first, b'"method":"ping"}'],
+    )
+    (exchange,) = collector.exchanges
+    assert exchange.request_bytes == len(first) < BODY_CAP_BYTES
+    assert exchange.request_overflowed is True
+    row = build_interaction_row(exchange)
+    assert row["request_truncated"] is True
+    assert row["request_body"] is None
+    assert row["request_body_text"] == first.decode()
+    capture_facts = row["diagnostics"]["capture"]  # type: ignore[index]
+    assert capture_facts["request_parse"] == "not_captured"
+    assert capture_facts["request_hash_scope"] == "redacted_prefix"
+    assert row["request_sha256"] == hashlib.sha256(first).hexdigest()
+
+
 def test_a_failing_tee_leaves_the_exchange_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
     collector = _Collector()
 
@@ -997,3 +1076,70 @@ def test_enabled_the_app_is_wrapped_and_the_closer_stops_and_disposes(
     close()
     assert FakeEngine.disposed is True
     _wait_for(lambda: not any(t.is_alive() for t in writer))
+
+
+def test_mcp_remote_serves_the_wrapped_app_and_closes_the_log_in_its_finally(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_mcp_remote` hands uvicorn the capture, not the bare app, and always closes it.
+
+    uvicorn is made to raise, as a signal re-raised after shutdown would, so the
+    closer is proven to run on the `finally` path rather than only after a
+    clean return; the runtime is closed after it.
+    """
+    events: list[str] = []
+    bare = _echo_app()
+
+    class FakeEngine:
+        def dispose(self) -> None:
+            events.append("dispose")
+
+    class Runtime:
+        principal = None
+        service = object()
+        work_engine = SimpleNamespace(begin=lambda: None, connect=lambda: None)
+
+        def close(self) -> None:
+            events.append("runtime_close")
+
+    settings = SimpleNamespace(
+        remote_mcp_enabled=True,
+        oauth_authorization_server="https://issuer.invalid",
+        oauth_audience="https://resource.invalid",
+        oauth_scopes="relationship.read",
+        remote_mcp_public_host="mcp.invalid",
+        mcp_surface_disabled=False,
+        remote_writes_enabled=False,
+        oauth_operator_secret=None,
+        mcp_interaction_log_enabled=True,
+        parsed_database_url=lambda: _URL,
+    )
+    monkeypatch.setattr(gateway, "load_settings", lambda: settings)
+    monkeypatch.setattr(gateway, "build_gateway_runtime", lambda _settings: Runtime())
+    monkeypatch.setattr(gateway, "create_database_engine", lambda *_a, **_k: FakeEngine())
+    monkeypatch.setattr(
+        gateway, "OriginOAuthServer", lambda **_kwargs: SimpleNamespace(introspect=None)
+    )
+    monkeypatch.setattr(
+        gateway, "RemoteAuthenticator", lambda **_kwargs: SimpleNamespace(authenticate=None)
+    )
+    monkeypatch.setattr(gateway, "build_origin_oauth_routes", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(gateway, "create_remote_mcp_app", lambda *_args, **_kwargs: bare)
+    served: list[object] = []
+    writers: list[threading.Thread] = []
+
+    def run(app: object, **_kwargs: object) -> None:
+        served.append(app)
+        writers.extend(t for t in threading.enumerate() if t.name == "mcp-interaction-writer")
+        events.append("serve")
+        raise RuntimeError("serving stopped by a signal")
+
+    monkeypatch.setattr(gateway.uvicorn, "run", run)
+    with pytest.raises(RuntimeError, match="serving stopped by a signal"):
+        gateway._mcp_remote(argparse.Namespace(host="127.0.0.1", port=8766))
+    (app,) = served
+    assert isinstance(app, McpInteractionCapture)
+    assert app.app is bare
+    assert writers
+    assert events == ["serve", "dispose", "runtime_close"]
+    _wait_for(lambda: not any(t.is_alive() for t in writers))

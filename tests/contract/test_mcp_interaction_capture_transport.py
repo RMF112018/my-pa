@@ -24,6 +24,7 @@ import asyncio
 import hashlib
 import io
 import json
+import threading
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
@@ -455,9 +456,29 @@ async def test_a_full_queue_drops_and_counts_without_touching_the_request(scene:
     app = _app(scene)
     rows: list[Mapping[str, object]] = []
     recorder = _recorder(rows, maxsize=1)  # not started: nothing drains the queue
-    wrapped = await _exchange(
-        McpInteractionCapture(app, recorder), app, [_REQUESTS[0], _REQUESTS[1], _REQUESTS[4]]
-    )
+    wrapped: list[httpx2.Response] = []
+
+    def drive() -> None:
+        wrapped.extend(
+            asyncio.run(
+                _exchange(
+                    McpInteractionCapture(app, recorder),
+                    app,
+                    [_REQUESTS[0], _REQUESTS[1], _REQUESTS[4]],
+                )
+            )
+        )
+
+    # On its own loop and thread with a bounded wait: a blocking `put` would
+    # stall the event loop, and that must fail here within seconds rather than
+    # hang the run (the repo has no pytest-timeout).
+    driver = threading.Thread(target=drive, daemon=True)
+    driver.start()
+    driver.join(timeout=15.0)
+    if driver.is_alive():
+        recorder.start()  # drain so the stalled loop can finish
+        recorder.stop(timeout=5)
+        pytest.fail("a full queue blocked the request path; it must drop and count instead")
     assert [_wire(r) for r in wrapped] == [_wire(r) for r in plain]
     assert recorder.dropped == 2
     recorder.start()
@@ -490,4 +511,59 @@ async def test_broken_capture_internals_change_no_response(
         recorder.stop(timeout=5)
     assert [_wire(r) for r in wrapped] == [_wire(r) for r in plain]
     assert recorder.capture_errors >= 3
+    assert rows == []
+
+
+@pytest.mark.anyio
+async def test_a_failing_captured_snapshot_changes_no_response_and_is_counted(
+    scene: Scene, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only `_Exchange.captured` raises: the tee works, so `_finish`'s guard is what holds."""
+    unwrapped = _app(scene)
+    plain = await _exchange(unwrapped, unwrapped, [_REQUESTS[0], _REQUESTS[4], _REQUESTS[7]])
+    app = _app(scene)
+
+    def explode(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("snapshot broke")
+
+    monkeypatch.setattr(capture._Exchange, "captured", explode)
+    rows: list[Mapping[str, object]] = []
+    recorder = _recorder(rows)
+    recorder.start()
+    try:
+        wrapped = await _exchange(
+            McpInteractionCapture(app, recorder), app, [_REQUESTS[0], _REQUESTS[4], _REQUESTS[7]]
+        )
+    finally:
+        recorder.stop(timeout=5)
+    assert [_wire(r) for r in wrapped] == [_wire(r) for r in plain]
+    assert recorder.capture_errors == 3
+    assert rows == []
+
+
+@pytest.mark.anyio
+async def test_a_failing_submit_changes_no_response_and_is_counted(scene: Scene) -> None:
+    """Only `recorder.submit` raises: `_finish`'s guard, not `submit`'s own, is what holds."""
+    unwrapped = _app(scene)
+    plain = await _exchange(unwrapped, unwrapped, [_REQUESTS[0], _REQUESTS[4], _REQUESTS[7]])
+    app = _app(scene)
+    rows: list[Mapping[str, object]] = []
+    recorder = _recorder(rows)
+    offered: list[object] = []
+
+    def explode(exchange: object) -> None:
+        offered.append(exchange)
+        raise RuntimeError("submit broke")
+
+    recorder.submit = explode  # type: ignore[method-assign]
+    recorder.start()
+    try:
+        wrapped = await _exchange(
+            McpInteractionCapture(app, recorder), app, [_REQUESTS[0], _REQUESTS[4], _REQUESTS[7]]
+        )
+    finally:
+        recorder.stop(timeout=5)
+    assert [_wire(r) for r in wrapped] == [_wire(r) for r in plain]
+    assert len(offered) == 3
+    assert recorder.capture_errors == 3
     assert rows == []

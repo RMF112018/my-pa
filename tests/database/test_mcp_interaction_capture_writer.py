@@ -188,3 +188,49 @@ async def test_an_unreachable_database_changes_no_response_and_counts_failures(
     report = stderr.getvalue()
     assert "write_failures=3" in report
     assert "MARKERDBSECRET" not in report
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("number", ["NaN", "1e999"])
+async def test_a_non_finite_number_in_the_body_still_produces_a_row(
+    scene: Scene, db_engine: Engine, cloned_database_url: str, number: str
+) -> None:
+    """Python parses `NaN` and `1e999` (as inf); JSONB refuses both, so they become strings."""
+    settings = Settings(database_url=cloned_database_url, mcp_interaction_log_enabled=True)
+    app = _app(scene)
+    served, close = with_interaction_log(settings, app)
+    assert isinstance(served, McpInteractionCapture)
+    raw = (
+        '{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{"name":"'
+        + Capability.CAPABILITIES_GET.value
+        + '","arguments":{},"_meta":{"x":'
+        + number
+        + "}}}"
+    ).encode()
+    try:
+        async with (
+            app.router.lifespan_context(app),
+            httpx2.AsyncClient(
+                transport=httpx2.ASGITransport(app=served), base_url="http://testserver"
+            ) as client,
+        ):
+            response = await client.post(
+                "/mcp",
+                headers={
+                    "Authorization": "Bearer synthetic",
+                    "Accept": "application/json, text/event-stream",
+                    "Content-Type": "application/json",
+                },
+                content=raw,
+            )
+    finally:
+        close()
+    assert response.status_code == 200
+    assert served.recorder.write_failures == 0
+    with db_engine.connect() as connection:
+        (summary,) = list_interactions(connection, limit=10)
+        stored = get_interaction(connection, summary.interaction_id)
+    assert stored is not None
+    assert stored.jsonrpc_id == "41"
+    assert stored.request_body["params"]["_meta"] == {"x": number}  # type: ignore[index]
+    assert stored.diagnostics["capture"]["non_finite_replaced"] is True  # type: ignore[index]

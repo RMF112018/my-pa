@@ -49,19 +49,22 @@ header are never stored. JSON bodies are walked: keys are normalised
 (lower-cased, `-`, `_` and spaces removed, so `accessToken` is `access_token`),
 and a value of any type under a key in `REDACTED_KEYS`, or one ending in a
 `REDACTED_KEY_SUFFIXES` entry (`auth_token`, `x_api_key`, ...), becomes
-`"[REDACTED]"`. Every string has `Bearer <token>`, `Basic <base64>`,
-`Cookie:`/`Set-Cookie:` header-line values and JWT-shaped runs replaced; a
-string that is itself a JSON object or array (MCP `TextContent.text` carries the response
-envelope that way) is parsed, redacted the same way and re-serialised. A body
-that is not JSON, or that overflowed the capture buffer, is redacted as text
-(`"key": value` pairs for the same keys, where value is a string, number,
-`true`/`false`/`null`, also one escaping level down and Python-repr quoted,
-plus the Bearer, Basic, Cookie and JWT patterns).
-Only then is the result cut to `BODY_CAP_BYTES`, so a credential beyond the cap
+`"[REDACTED]"`. Every string (and a body that is not JSON, or that overflowed
+the capture buffer, as a whole) goes through `_redact_string_patterns`: PEM
+private-key blocks; `"key": value` pairs for the same keys, where value is a
+string or a non-string scalar, plain, one escaping level down and Python-repr
+quoted; a credential value cut off by the end of the text; `key=value` form and
+query-string pairs; `Cookie:`/`Set-Cookie:` header-line values; `Bearer` and
+`Basic` credentials; and JWTs inside dotted base64url runs. A string that is
+itself a JSON object or array (MCP `TextContent.text` carries the response
+envelope that way) is parsed, redacted the same way and re-serialised. Only
+then is the result cut to `BODY_CAP_BYTES`, so a credential beyond the cap
 never appears and one straddling it is never stored in part. NUL characters,
-which PostgreSQL text and JSONB cannot hold, are replaced and flagged.
-Bearer and JWT runs are matched anywhere, without a word boundary, so a token
-glued to preceding text is still caught (over-redaction is the safe direction).
+which PostgreSQL text and JSONB cannot hold, are replaced and flagged, and so
+are `NaN`, `Infinity` and overflowing numbers, which JSONB refuses: they are
+kept as the strings they were written as (`non_finite_replaced`). Every
+pattern is linear in its input (see the comment above `_BEARER`); a text-path
+credential whose value is an array or object is a stated limit, not matched.
 
 **What the digests are.** `request_sha256` / `response_sha256` are the SHA-256 of
 the *redacted, untruncated* body as this module serialises it — the compact
@@ -93,6 +96,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import math
 import queue
 import re
 import sys
@@ -107,6 +111,7 @@ from typing import Any, Final, TextIO
 __all__ = [
     "BODY_CAP_BYTES",
     "BUFFER_CEILING_BYTES",
+    "DROP_REPORT_SECONDS",
     "INTERACTION_COLUMNS",
     "QUEUED_BYTES_BUDGET",
     "QUEUE_MAXSIZE",
@@ -144,6 +149,10 @@ QUEUE_MAXSIZE: Final = 1024
 #: queue holds at most 64 MiB of bodies, i.e. at least two exchanges at the
 #: per-body ceiling. A submit that would exceed it is dropped and counted.
 QUEUED_BYTES_BUDGET: Final = 64 * 1024 * 1024
+#: A drop is reported on standard error (count-only) at the first drop, then at
+#: most once per this many seconds, so a sustained overload is visible without
+#: waiting for the next written row and without a line per request.
+DROP_REPORT_SECONDS: Final = 60.0
 #: What a redacted value becomes.
 REDACTED: Final = "[REDACTED]"
 
@@ -222,6 +231,12 @@ REDACTED_KEYS: Final = frozenset(
         "sessiontoken",
         "credential",
         "credentials",
+        "secretkey",
+        "accesskey",
+        "authorizationcode",
+        "secrets",
+        "pwd",
+        "passwd",
     }
 )
 #: Normalised suffixes that make any key credential-bearing: `auth_token`,
@@ -231,13 +246,22 @@ REDACTED_KEYS: Final = frozenset(
 #: no non-secret exception set is needed. `lease_token` and `idempotency_token`
 #: are matched and redacted deliberately; the first is a bearer-style lease.
 #: MCP's own `progressToken` is matched too: an opaque client correlation value,
-#: lost to over-redaction rather than kept by an exception.
+#: lost to over-redaction rather than kept by an exception. `accesskey` and
+#: `secretkey` cover `aws_access_key` and `aws_secret_access_key`; `secrets` and
+#: `passwd` their plural and short forms. The bare key `code` is deliberately
+#: *not* matched: dozens of domain `*_code` fields are vocabulary, not secrets.
+#: None of the additions names a field in `contracts`, `application`, `domain`
+#: or `adapters`.
 REDACTED_KEY_SUFFIXES: Final = (
     "token",
     "secret",
+    "secrets",
     "password",
+    "passwd",
     "passphrase",
     "apikey",
+    "accesskey",
+    "secretkey",
     "privatekey",
     "signingkey",
     "credential",
@@ -256,29 +280,56 @@ _MAX_EMBEDDED_DEPTH: Final = 4
 _NUL: Final = "\x00"
 _NUL_REPLACEMENT: Final = "\ufffd"
 
+# Every pattern below is written to run in time linear in its input, because
+# the writer thread runs them over request bodies an untrusted client chooses.
+# `tests/unit/test_mcp_interaction_capture.py` times each family on about 1 MiB
+# of adversarial input. The rules that keep them linear: a pattern that scans a
+# run is anchored with a lookbehind so it starts only at the run's first
+# character; quantified prefixes are bounded (`{0,64}`); and every repeated
+# group consumes at least one character that the following token cannot.
+
 _BEARER: Final = re.compile(r"(bearer)\s+[A-Za-z0-9\-._~+/]+=*", re.IGNORECASE)
-#: `Basic <base64>`: the run must look like base64 (eight or more characters
-#: with a digit, an upper-case letter, `+`, `/` or `=`), so prose such as
-#: "basic information" is left alone.
-_BASIC: Final = re.compile(
-    r"(basic)\s+(?=[A-Za-z0-9+/]*[0-9A-Z+/=])[A-Za-z0-9+/]{8,}={0,2}", re.IGNORECASE
-)
+#: `Basic <base64>`. Only the scheme word is case-insensitive: the run must look
+#: like base64 (eight or more characters including a digit, an upper-case
+#: letter, `+`, `/` or `=`), so prose such as "basic information" is left alone.
+_BASIC: Final = re.compile(r"((?i:basic))\s+(?=[A-Za-z0-9+/]*[0-9A-Z+/=])[A-Za-z0-9+/]{8,}={0,2}")
 #: A `Cookie:` or `Set-Cookie:` header line inside text: the value up to the
 #: end of the line, a quote or a backslash (the edge of an escaped string).
 _COOKIE_LINE: Final = re.compile(
     r"\b(set-cookie|cookie)\s*:[ \t]*(?!\[REDACTED\])[^\r\n\"\\]+", re.IGNORECASE
 )
-_JWT: Final = re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*")
-_SEP: Final = r"[-_ ]?"
-#: A credential key as text: any of the exact keys, or anything ending in a
-#: suffix, with `-`, `_` or a space allowed between the words.
-_KEY_PATTERN: Final = (
-    r"(?:(?:proxy" + _SEP + r")?authorization|bearer|(?:client" + _SEP + r")?assertion"
-    r"|code" + _SEP + r"verifier"
-    r"|[A-Za-z0-9_\- ]{0,64}?(?:token|secret|password|passphrase"
-    r"|api" + _SEP + r"key|private" + _SEP + r"key|signing" + _SEP + r"key"
-    r"|credentials?|cookie))"
+#: A whole dotted base64url run, started only at its first character. The
+#: callback redacts from the first `eyJ` onward when two dots follow it, so a
+#: JWT glued to preceding text is still caught without the pattern restarting
+#: at every `eyJ` inside one run (which made the old form quadratic).
+_DOTTED_RUN: Final = re.compile(r"(?<![A-Za-z0-9_.\-])[A-Za-z0-9_\-]+(?:\.[A-Za-z0-9_\-]*)+")
+#: A PEM private-key block, `BEGIN` to `END`, or to the end of the text when the
+#: block is cut off. The body consumes one character per step and stops only at
+#: `-----END `, so it is linear; an unterminated block consumes the rest of the
+#: text in one match.
+_PEM_PRIVATE_KEY: Final = re.compile(
+    r"-----BEGIN [A-Z ]{0,40}PRIVATE KEY-----(?:[^-]|-(?!----END ))*"
+    r"(?:-----END [A-Z ]{0,40}PRIVATE KEY-----|\Z)"
 )
+_SEP: Final = r"[-_ ]?"
+
+
+def _key_pattern(prefix_class: str, separator: str) -> str:
+    """A credential key as text: an exact key, or a bounded prefix and a suffix."""
+    return (
+        r"(?:(?:proxy" + separator + r")?authorization(?:" + separator + r"code)?|bearer"
+        r"|(?:client" + separator + r")?assertion|code" + separator + r"verifier|pwd"
+        r"|" + prefix_class + r"{0,64}?(?:token|secrets?|password|passwd|passphrase"
+        r"|api" + separator + r"key|private" + separator + r"key|signing" + separator + r"key"
+        r"|access" + separator + r"key|secret" + separator + r"key|credentials?|cookie))"
+    )
+
+
+#: Inside quotes a key may contain `-`, `_` or spaces between its words.
+_KEY_PATTERN: Final = _key_pattern(r"[A-Za-z0-9_\- ]", _SEP)
+#: In a query string or form body a key is one word (no spaces), so a run of
+#: spaces cannot make every position a candidate start.
+_FORM_KEY_PATTERN: Final = _key_pattern(r"[A-Za-z0-9_\-]", r"[-_]?")
 #: A JSON scalar that is not a string.
 _SCALAR: Final = r"(?:-?\d[\d.eE+\-]*|true|false|null)"
 #: `"key": value` in plain JSON text, where value is a JSON string or scalar.
@@ -287,9 +338,11 @@ _TEXT_PAIR: Final = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 #: The same pair one escaping level down, as it appears inside a JSON string
-#: (`\"key\":\"value\"`), which is how TextContent carries the envelope.
+#: (`\"key\":\"value\"`), which is how TextContent carries the envelope. The
+#: backslash run is anchored by `(?<!\\)` so it starts only at the run's first
+#: backslash (unanchored, it restarted at every one: quadratic).
 _ESCAPED_TEXT_PAIR: Final = re.compile(
-    r'(?P<head>(?P<q>\\+")' + _KEY_PATTERN + r"(?P=q)\s*:\s*)"
+    r'(?P<head>(?<!\\)(?P<q>\\+")' + _KEY_PATTERN + r"(?P=q)\s*:\s*)"
     r"(?:(?P=q)(?:(?!(?P=q)).)*(?P=q)|" + _SCALAR + r")",
     re.IGNORECASE | re.DOTALL,
 )
@@ -299,6 +352,33 @@ _QUOTED_TEXT_PAIR: Final = re.compile(
     r"-?\d[\d.eE+\-]*|True|False|None)",
     re.IGNORECASE | re.DOTALL,
 )
+#: A credential value cut off by the end of the text (a truncated or
+#: never-finished body): the key and its opening quote are kept, the rest of the
+#: text is redacted. Plain and one escaping level down.
+_UNTERMINATED_PAIR: Final = re.compile(
+    r'(?P<head>"' + _KEY_PATTERN + r'"\s*:\s*")(?:[^"\\]|\\.)*\\?\Z',
+    re.IGNORECASE | re.DOTALL,
+)
+_ESCAPED_UNTERMINATED_PAIR: Final = re.compile(
+    r'(?P<head>(?<!\\)(?P<q>\\+")' + _KEY_PATTERN + r"(?P=q)\s*:\s*(?P=q))"
+    r"(?:(?!(?P=q)).)*\Z",
+    re.IGNORECASE | re.DOTALL,
+)
+#: `key=value` in a query string or form body. The key starts only at the start
+#: of a word, and the value runs to `&`, whitespace, a quote or a backslash.
+_FORM_PAIR: Final = re.compile(
+    r"(?P<head>(?<![A-Za-z0-9_\-])" + _FORM_KEY_PATTERN + r"=)(?!\[REDACTED\])[^&\s\"'\\]+",
+    re.IGNORECASE,
+)
+
+
+def _redact_dotted_run(match: re.Match[str], counter: list[int]) -> str:
+    run = match.group(0)
+    start = run.find("eyJ")
+    if start < 0 or run.count(".", start) < 2:
+        return run
+    counter[0] += 1
+    return run[:start] + REDACTED
 
 
 def _normalized_key(key: str) -> str:
@@ -317,16 +397,24 @@ def _redact_string_patterns(value: str) -> tuple[str, int]:
     and single-quoted as a Python repr echoes them in a validation message),
     then `Bearer <token>` and JWT-shaped runs.
     """
+    value, pem = _PEM_PRIVATE_KEY.subn(REDACTED, value)
     value, pairs = _TEXT_PAIR.subn(lambda match: f'{match.group("head")}"{REDACTED}"', value)
     value, escaped = _ESCAPED_TEXT_PAIR.subn(_escaped_replacement, value)
     value, quoted = _QUOTED_TEXT_PAIR.subn(
         lambda match: f"{match.group('head')}'{REDACTED}'", value
     )
+    value, cut = _UNTERMINATED_PAIR.subn(lambda match: f"{match.group('head')}{REDACTED}", value)
+    value, escaped_cut = _ESCAPED_UNTERMINATED_PAIR.subn(
+        lambda match: f"{match.group('head')}{REDACTED}", value
+    )
+    value, form = _FORM_PAIR.subn(lambda match: f"{match.group('head')}{REDACTED}", value)
     value, cookies = _COOKIE_LINE.subn(lambda match: f"{match.group(1)}: {REDACTED}", value)
     value, bearer = _BEARER.subn(lambda match: f"{match.group(1)} {REDACTED}", value)
     value, basic = _BASIC.subn(lambda match: f"{match.group(1)} {REDACTED}", value)
-    value, jwt = _JWT.subn(REDACTED, value)
-    return value, pairs + escaped + quoted + cookies + bearer + basic + jwt
+    jwt = [0]
+    value = _DOTTED_RUN.sub(lambda match: _redact_dotted_run(match, jwt), value)
+    count = pem + pairs + escaped + quoted + cut + escaped_cut + form + cookies + bearer + basic
+    return value, count + jwt[0]
 
 
 def _sanitize(value: str) -> tuple[str, bool]:
@@ -346,6 +434,33 @@ def _sanitize(value: str) -> tuple[str, bool]:
 class _Walk:
     redactions: int = 0
     nul_replaced: bool = False
+
+
+def _loads(text: str | bytes) -> tuple[Any, bool]:
+    """`json.loads`, with `NaN`, `Infinity`, `-Infinity` and overflowing numbers kept as strings.
+
+    Python accepts and re-emits those; PostgreSQL JSONB rejects them, so a body
+    carrying one would lose its whole row at insert. Returns the value and
+    whether anything was replaced.
+    """
+    replaced = [False]
+
+    def constant(name: str) -> str:
+        replaced[0] = True
+        return name
+
+    def number(literal: str) -> float | str:
+        value = float(literal)
+        if math.isfinite(value):
+            return value
+        replaced[0] = True
+        return literal
+
+    return json.loads(text, parse_constant=constant, parse_float=number), replaced[0]
+
+
+def _dumps(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
 
 def _redact_value(value: object, walk: _Walk, depth: int) -> object:
@@ -371,7 +486,9 @@ def _redact_string(value: str, walk: _Walk, depth: int) -> str:
     stripped = value.lstrip()
     if depth < _MAX_EMBEDDED_DEPTH and stripped[:1] in {"{", "["}:
         try:
-            embedded = json.loads(value)
+            # A non-finite value inside an embedded document stays a string of
+            # the outer one, which JSONB holds; only the parse must not fail.
+            embedded, _ = _loads(value)
         except (ValueError, RecursionError):
             embedded = None
         if isinstance(embedded, dict | list):
@@ -380,7 +497,7 @@ def _redact_string(value: str, walk: _Walk, depth: int) -> str:
             walk.nul_replaced |= inner.nul_replaced
             if inner.redactions:
                 walk.redactions += inner.redactions
-                return json.dumps(redacted, ensure_ascii=False, separators=(",", ":"))
+                return _dumps(redacted)
     value, count = _redact_string_patterns(value)
     walk.redactions += count
     value, replaced = _sanitize(value)
@@ -427,6 +544,7 @@ class _Body:
     parse: str = "empty"
     redactions: int = 0
     nul_replaced: bool = False
+    non_finite_replaced: bool = False
     sha256: str = hashlib.sha256(b"").hexdigest()
     hash_scope: str = "redacted_full"
 
@@ -442,16 +560,17 @@ def _process_body(raw: bytes, *, overflowed: bool) -> _Body:
         return body
     if not overflowed:
         try:
-            body.parsed = json.loads(raw)
+            body.parsed, body.non_finite_replaced = _loads(raw)
             body.is_json = True
         except (ValueError, RecursionError):
             body.is_json = False
     if body.is_json:
         try:
             redacted, body.redactions, body.nul_replaced = redact_json(body.parsed)
-            serialized = json.dumps(redacted, ensure_ascii=False, separators=(",", ":"))
-        except RecursionError:
+            serialized = _dumps(redacted)
+        except (ValueError, RecursionError):
             body.is_json = False
+            body.non_finite_replaced = False
         else:
             body.parse = "json"
             encoded_json = serialized.encode("utf-8")
@@ -610,7 +729,7 @@ def _tool_result_facts(result: Mapping[str, Any], facts: _ResponseFacts, walk: _
         if not isinstance(text, str):
             continue
         try:
-            document = json.loads(text)
+            document, _ = _loads(text)
         except (ValueError, RecursionError):
             continue
         if not isinstance(document, dict):
@@ -735,6 +854,7 @@ def build_interaction_row(
             "response_hash_scope": response.hash_scope,
             "redactions": walk.redactions + request.redactions + response.redactions,
             "nul_replaced": walk.nul_replaced or request.nul_replaced or response.nul_replaced,
+            "non_finite_replaced": request.non_finite_replaced or response.non_finite_replaced,
             "dropped_before": dropped_before,
             "write_failures_before": write_failures_before,
         },
@@ -795,6 +915,7 @@ class InteractionRecorder:
         facade_invoke_tools: frozenset[str],
         maxsize: int = QUEUE_MAXSIZE,
         max_queued_bytes: int = QUEUED_BYTES_BUDGET,
+        drop_report_seconds: float = DROP_REPORT_SECONDS,
         stderr: TextIO | None = None,
     ) -> None:
         self._sink = sink
@@ -812,6 +933,8 @@ class InteractionRecorder:
         self._deadline = 0.0
         self._max_queued_bytes = max_queued_bytes
         self._queued_bytes = 0
+        self._drop_report_seconds = drop_report_seconds
+        self._last_drop_report: float | None = None
 
     @property
     def dropped(self) -> int:
@@ -874,8 +997,18 @@ class InteractionRecorder:
                 self._release(exchange)
                 raise
         except queue.Full:
+            now = time.monotonic()
             with self._lock:
                 self._dropped += 1
+                due = (
+                    self._last_drop_report is None
+                    or now - self._last_drop_report >= self._drop_report_seconds
+                )
+                if due:
+                    self._last_drop_report = now
+            if due:
+                # Count-only, at most once per interval, outside the lock.
+                self._report("dropped")
         except Exception:
             self.note_capture_error()
 

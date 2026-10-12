@@ -1251,3 +1251,191 @@ def test_the_queued_bytes_budget_drops_counts_and_is_released_after_a_write() ->
     assert recorder.queued_bytes == 0
     assert capture.QUEUED_BYTES_BUDGET == 64 * 1024 * 1024
     assert capture.QUEUED_BYTES_BUDGET >= 2 * BUFFER_CEILING_BYTES
+
+
+# ---- linear patterns, non-finite JSON, wider coverage (review B1, B2, N1-N4) ----
+
+_MIB = 1024 * 1024
+#: Generous on purpose: every family runs in well under half a second on a
+#: developer machine, and the quadratic forms these replace took tens to
+#: hundreds of seconds at this size. The outcome does not depend on the margin.
+_LINEAR_BOUND_SECONDS = 2.0
+
+#: One adversarial run per pattern family, each about 1 MiB of text.
+_ADVERSARIAL: dict[str, tuple[str, str]] = {
+    "jwt_eyj_run": ("", "eyJ"),
+    "jwt_dotted_run": ("", "a."),
+    "escaped_backslash_run": ("", "\\"),
+    "escaped_key_run": ("", '\\\\"token\\\\":'),
+    "escaped_unterminated": ("", '\\"token\\":\\"'),
+    "text_key_prefix": ("", '"a '),
+    "text_unterminated": ("", '"token":"a"'),
+    "quoted_key": ("", "'token':"),
+    "bearer_spaces": ("bearer", " "),
+    "basic_word": ("", "basic "),
+    "cookie_lines": ("", "cookie:"),
+    "scalar_digits": ('"token":', "1"),
+    "scalar_minus": ("", '"token":-'),
+    "form_spaces": ("", " "),
+    "form_keys": ("", "token="),
+    "pem_dashes": ("", "-"),
+    "pem_begin": ("", "-----BEGIN PRIVATE KEY-----"),
+}
+
+
+@pytest.mark.parametrize("family", sorted(_ADVERSARIAL))
+def test_every_redaction_pattern_family_is_linear_on_adversarial_input(family: str) -> None:
+    prefix, unit = _ADVERSARIAL[family]
+    text = prefix + unit * (_MIB // len(unit))
+    began = time.perf_counter()
+    redact_text(text)
+    assert time.perf_counter() - began < _LINEAR_BOUND_SECONDS
+
+
+def test_an_adversarial_tools_call_body_builds_its_row_quickly() -> None:
+    """The reviewer's shape: a ~450 KB tools/call body, on the full row path."""
+    arguments = {"a": "eyJ" * 60_000, "b": "\\" * 160_000, "c": '\\"token\\":' * 10_000}
+    began = time.perf_counter()
+    row = _row(_exchange(_call("tasks.list", arguments)))
+    assert time.perf_counter() - began < _LINEAR_BOUND_SECONDS
+    assert row["outcome"] == "ok"
+
+
+@pytest.mark.parametrize(
+    ("raw", "stored"),
+    [
+        (b'{"x": NaN, "y": 1}', {"x": "NaN", "y": 1}),
+        (b'{"x": Infinity, "y": -Infinity}', {"x": "Infinity", "y": "-Infinity"}),
+        (b'{"x": 1e999, "y": 1.5}', {"x": "1e999", "y": 1.5}),
+        (b'{"x": -1e999}', {"x": "-1e999"}),
+    ],
+)
+def test_non_finite_numbers_are_kept_as_strings_and_flagged(raw: bytes, stored: object) -> None:
+    row = _row(_exchange(raw_request=raw, raw_response=raw))
+    assert row["request_body"] == stored
+    assert row["response_body"] == stored
+    assert row["diagnostics"]["capture"]["non_finite_replaced"] is True  # type: ignore[index]
+    # What JSONB will be handed is strict JSON.
+    json.dumps(row["request_body"], allow_nan=False)
+    assert _row(_exchange({"x": 1.5}))["diagnostics"]["capture"]["non_finite_replaced"] is False  # type: ignore[index]
+
+
+def test_basic_prose_of_any_case_shape_is_kept() -> None:
+    phrase = "Here is basic information about the project and Basic overview"
+    text, count, _ = redact_text(phrase)
+    assert text == phrase
+    assert count == 0
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "aws_secret_access_key",
+        "secretAccessKey",
+        "secret_key",
+        "accessKey",
+        "aws_access_key",
+        "authorization_code",
+        "authorizationCode",
+        "secrets",
+        "app_secrets",
+        "pwd",
+        "passwd",
+        "db_passwd",
+    ],
+)
+def test_the_added_credential_keys_are_redacted_in_json_and_in_text(key: str) -> None:
+    redacted, count, _ = redact_json({key: "MARKERADDED"})
+    assert redacted == {key: REDACTED}
+    assert count == 1
+    text, count, _ = redact_text(f'{{"{key}": "MARKERADDED", "x": 1')
+    assert "MARKERADDED" not in text
+    assert count == 1
+
+
+def test_code_and_domain_code_fields_are_kept() -> None:
+    document = {"code": "invalid_request", "status_code": 3, "country_code": "US"}
+    assert redact_json(document) == (document, 0, False)
+    text = '{"code": "abc", "status_code": "x"} ?code=abc&state=s'
+    assert redact_text(text) == (text, 0, False)
+
+
+def test_a_pem_private_key_block_is_redacted_whole_and_when_cut_off() -> None:
+    block = (
+        "-----BEGIN RSA PRIVATE KEY-----\nMIIEMARKERPEMBODY\nmore-lines\n"
+        "-----END RSA PRIVATE KEY-----"
+    )
+    text, count, _ = redact_text(f"before {block} after")
+    assert text == f"before {REDACTED} after"
+    assert count == 1
+    redacted, _, _ = redact_json({"pem": "x", "note": f"key: {block}"})
+    assert "MARKERPEMBODY" not in json.dumps(redacted)
+    cut, count, _ = redact_text("head -----BEGIN PRIVATE KEY-----\nMIIEMARKERCUT")
+    assert cut == f"head {REDACTED}"
+    assert count == 1
+
+
+def test_query_string_and_form_credentials_are_redacted() -> None:
+    text, count, _ = redact_text(
+        "grant_type=authorization_code&client_secret=S1&code_verifier=V2"
+        "&refresh_token=R3&password=P4&api_key=K5&github_token=G6&code=keep&state=keep"
+    )
+    assert text == (
+        f"grant_type=authorization_code&client_secret={REDACTED}&code_verifier={REDACTED}"
+        f"&refresh_token={REDACTED}&password={REDACTED}&api_key={REDACTED}"
+        f"&github_token={REDACTED}&code=keep&state=keep"
+    )
+    assert count == 6
+
+
+@pytest.mark.parametrize(
+    ("cut", "expected"),
+    [
+        ('{"x": 1, "refresh_token":"ABCDEFGH', '{"x": 1, "refresh_token":"' + REDACTED),
+        ('{"x": 1, "apiKey": "ABC\\"DEF', '{"x": 1, "apiKey": "' + REDACTED),
+        (
+            '"t": "{\\"x\\":1,\\"access_token\\":\\"ABCDEF',
+            '"t": "{\\"x\\":1,\\"access_token\\":\\"' + REDACTED,
+        ),
+    ],
+)
+def test_a_credential_value_cut_off_by_the_end_of_the_text_is_redacted(
+    cut: str, expected: str
+) -> None:
+    text, count, _ = redact_text(cut)
+    assert text == expected
+    assert count == 1
+
+
+def test_a_cut_off_credential_in_an_overflowed_body_never_reaches_the_row() -> None:
+    raw = b'{"jsonrpc":"2.0","params":{"refresh_token":"MARKERCUTOFF'
+    row = _row(_exchange(raw_request=raw, request_overflowed=True))
+    assert "MARKERCUTOFF" not in _serialized(row)
+
+
+def test_drops_are_reported_count_only_at_the_first_and_then_rate_limited() -> None:
+    stderr = io.StringIO()
+    recorder = InteractionRecorder(
+        lambda _row: None, facade_invoke_tools=FACADE, maxsize=1, stderr=stderr
+    )
+    for _ in range(4):
+        recorder.submit(_exchange({"password": "MARKERDROP"}))
+    lines = stderr.getvalue().splitlines()
+    assert lines == ["mcp-interaction-log dropped dropped=1 write_failures=0 capture_errors=0"]
+    eager = io.StringIO()
+    every = InteractionRecorder(
+        lambda _row: None,
+        facade_invoke_tools=FACADE,
+        maxsize=1,
+        stderr=eager,
+        drop_report_seconds=0.0,
+    )
+    for _ in range(4):
+        every.submit(_exchange())
+    assert [line.split()[2] for line in eager.getvalue().splitlines()] == [
+        "dropped=1",
+        "dropped=2",
+        "dropped=3",
+    ]
+    assert "MARKERDROP" not in stderr.getvalue() + eager.getvalue()
+    assert capture.DROP_REPORT_SECONDS == 60.0

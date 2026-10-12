@@ -92,38 +92,77 @@ them:
   `proxyauthorization`, `cookie`, `setcookie`, `accesstoken`, `refreshtoken`,
   `idtoken`, `token`, `bearer`, `clientsecret`, `secret`, `password`,
   `passphrase`, `apikey`, `privatekey`, `signingkey`, `codeverifier`,
-  `assertion`, `clientassertion`, `sessiontoken`, `credential` or
-  `credentials`, **or ends with** `token`, `secret`, `password`, `passphrase`,
-  `apikey`, `privatekey`, `signingkey`, `credential`, `credentials` or `cookie`
-  (so `auth_token`, `oauth_token`, `github_token`, `x_api_key`, `db_password`,
-  `lease_token` and MCP's `progressToken` are redacted). Its value is replaced
-  by `"[REDACTED]"`, whatever the value's type. `tokens`, `max_tokens` and
-  `token_count` do not match and are kept.
-- **Every string.** `Bearer <token>` becomes `Bearer [REDACTED]`;
-  `Basic <base64>` becomes `Basic [REDACTED]` when the run looks like base64
-  (eight or more characters including a digit, an upper-case letter, `+`, `/`
-  or `=`, so "basic information" is kept); a `Cookie:` or `Set-Cookie:`
-  header line keeps its name and loses its value (`Cookie: [REDACTED]`, up to
-  the end of the line, a quote or a backslash); any JWT-shaped run
-  (`eyJ<…>.<…>.<…>`) becomes `[REDACTED]`. Bearer, Basic and JWT are matched
-  without a leading word boundary; over-redaction is the safe direction.
+  `assertion`, `clientassertion`, `sessiontoken`, `credential`, `credentials`,
+  `secretkey`, `accesskey`, `authorizationcode`, `secrets`, `pwd` or `passwd`,
+  **or ends with** `token`, `secret`, `secrets`, `password`, `passwd`,
+  `passphrase`, `apikey`, `accesskey`, `secretkey`, `privatekey`,
+  `signingkey`, `credential`, `credentials` or `cookie` (so `auth_token`,
+  `oauth_token`, `github_token`, `x_api_key`, `db_password`,
+  `aws_secret_access_key`, `aws_access_key`, `lease_token` and MCP's
+  `progressToken` are redacted). Its value is replaced by `"[REDACTED]"`,
+  whatever the value's type. `tokens`, `max_tokens`, `token_count`, the bare
+  key `code` and every domain `*_code` field do not match and are kept.
+- **JSON numbers PostgreSQL cannot store.** `NaN`, `Infinity`, `-Infinity`
+  and numbers that overflow to infinity (`1e999`) are parsed and stored as the
+  strings they were written as (`"NaN"`, `"1e999"`), and
+  `diagnostics.capture.non_finite_replaced` is `true`. Without this JSONB
+  would refuse the row and the exchange would go unlogged.
+- **Every string**, in this order:
+  - a PEM private-key block (`-----BEGIN … PRIVATE KEY-----` to
+    `-----END … PRIVATE KEY-----`, or to the end of the text when the block is
+    cut off) becomes `[REDACTED]`;
+  - `"key": value`, `\"key\": value` (one escaping level down) and
+    `'key': value` (a Python repr) pairs for the keys above become
+    `"key": "[REDACTED]"` (same quoting), where value is a string or a
+    non-string scalar (number, `true`/`false`/`null`; `True`/`False`/`None` in
+    a repr). As text, a key matches with `-`, `_` or a space between its words,
+    in any case, and the suffix rule allows up to 64 characters before the
+    suffix;
+  - a credential value **cut off by the end of the text** (`"refresh_token":"ABC`
+    with no closing quote, plain or one escaping level down) is redacted to the
+    end;
+  - `key=value` in a query string or form body (`client_secret=…&code_verifier=…`)
+    becomes `key=[REDACTED]`, the value running to `&`, whitespace, a quote or a
+    backslash; the key must start a word and contain no spaces;
+  - a `Cookie:` or `Set-Cookie:` header line keeps its name and loses its value
+    (`Cookie: [REDACTED]`, up to the end of the line, a quote or a backslash);
+  - `Bearer <token>` becomes `Bearer [REDACTED]` (any case);
+  - `Basic <base64>` becomes `Basic [REDACTED]`. Only the word `basic` is
+    case-insensitive; the run must be eight or more base64 characters and
+    contain a digit, an **upper-case** letter, `+`, `/` or `=`, so prose such as
+    "basic information about the project" is kept;
+  - a JWT: in any dotted base64url run (`x.y.z…`), everything from the first
+    `eyJ` onward is replaced by `[REDACTED]` when at least two dots follow it,
+    so a token glued to preceding text is still caught.
 - **JSON inside strings.** A string that is itself a JSON object or array (MCP
   `TextContent.text` carries the response envelope that way) is parsed,
   redacted by the same rules, and re-serialised, up to four levels deep.
-- **Text that is not JSON** (or a body that overflowed the capture buffer) is
-  redacted as text: `"key": value` pairs for the same exact keys and suffixes
-  (with `-`, `_` or a space allowed between words, any case), where the value
-  is a string or a non-string scalar (number, `true`, `false`, `null`; in a
-  Python repr also `True`, `False`, `None`) — plain, one escaping level down
-  (`\"key\":\"value\"`), and single-quoted as a Python repr prints them — plus
-  the Bearer, Basic, Cookie and JWT patterns.
+- **Text that is not JSON** (or a body that overflowed the capture buffer, or
+  was never read whole) is redacted by the string rules above, applied to the
+  whole text.
 - **NUL characters**, which PostgreSQL text and JSONB cannot hold, and
   unencodable surrogates are replaced with U+FFFD and flagged in
   `diagnostics.capture.nul_replaced`.
 - `diagnostics.capture.redactions` counts the replacements made.
 
-Redaction is pattern-based. A credential carried under an unlisted key in a
-non-credential shape would be stored; treat the log as sensitive regardless.
+**Every pattern runs in linear time.** The writer thread runs them over
+bodies an untrusted client chooses, so each is written so that it cannot
+restart inside a run (lookbehind-anchored runs, bounded key prefixes). A unit
+test times every family on about 1 MiB of adversarial input against a 2-second
+bound; measured, the slowest family takes about 0.4 s.
+
+**Stated limits.** Redaction is pattern-based; treat the log as sensitive
+regardless.
+
+- A credential under an unlisted key that is not otherwise credential-shaped
+  is stored.
+- On the **text** path (non-JSON, truncated or overflowed bodies) a credential
+  key whose value is an array or an object (`"apiKey": ["…"]`, `"secret":
+  {…}`) is not redacted: matching nested values linearly is not possible with
+  these patterns, and none is attempted. On the JSON path such values are
+  redacted whole.
+- `progressToken`, `lease_token` and `idempotency_token` are redacted although
+  they are not secrets (over-redaction is the safe direction).
 
 ## Digests
 
@@ -179,6 +218,12 @@ stored.
   written**, as `diagnostics.capture.dropped_before` and
   `write_failures_before`. A gap in the log therefore shows up on the row after
   it.
+- **Drops are reported when they happen**, not only on the next row: the first
+  drop prints one count-only line on standard error, and further drops print
+  at most one more line per 60 seconds, for example
+  `mcp-interaction-log dropped dropped=17 write_failures=0 capture_errors=0`.
+  The line is printed outside the recorder's lock and never carries a body,
+  header or identifier.
 - On shutdown the writer gets up to 2 seconds to flush; anything still queued
   is counted as dropped (`abandoned=<n>` on standard error).
 

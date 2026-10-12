@@ -111,6 +111,27 @@ PERMITTED_AUTH_NAMES = frozenset({"AuthGrantStore", "AuthStateValidator"})
 #: No table declaration, and no capability.
 PERMITTED_KNOWLEDGE_PROFILE_NAMES = frozenset({"knowledge_maintenance_transaction"})
 
+#: Every name rule 2 permits `mcp_interactions.py` to import from persistence.
+#:
+#: The MCP interaction log's three readers, its one purge, and the store's own
+#: bounds (page size, purge batch, outcome vocabulary, fixed retention) for
+#: argument validation. **Not** `insert_interaction` -- the gateway's capture
+#: sink is the log's only writer -- and no table declaration: `mcp_interactions`
+#: the `Table` is a write surface, and the append-only triggers are what make the
+#: purge the only delete this command can reach.
+PERMITTED_MCP_INTERACTION_NAMES = frozenset(
+    {
+        "get_interaction",
+        "list_interactions",
+        "search_interactions",
+        "purge_expired",
+        "MAX_PAGE",
+        "MAX_PURGE_BATCH",
+        "OUTCOMES",
+        "RETENTION_DAYS",
+    }
+)
+
 #: The commands these rules govern, and — for rule 2 — exactly what each may name
 #: out of `infrastructure.persistence`.
 #:
@@ -126,12 +147,16 @@ PERMITTED_KNOWLEDGE_PROFILE_NAMES = frozenset({"knowledge_maintenance_transactio
 #:
 #: `auth.py` issues digest-only bootstrap and recovery grants. It may name the
 #: grant store and the read-only state validator, and nothing else.
+#:
+#: `mcp_interactions.py` reads the MCP interaction log and runs its bounded
+#: retention purge; it may name the store's readers and purge, and no writer.
 COMMANDS = {
     "sources.py": PERMITTED_PERSISTENCE_NAMES,
     "health.py": frozenset(),
     "clients.py": PERMITTED_CLIENT_NAMES,
     "auth.py": PERMITTED_AUTH_NAMES,
     "knowledge_source_profiles.py": PERMITTED_KNOWLEDGE_PROFILE_NAMES,
+    "mcp_interactions.py": PERMITTED_MCP_INTERACTION_NAMES,
 }
 
 #: The identifier rule 3 forbids anywhere in the file.

@@ -754,5 +754,10 @@ operator-gated.
 payload, versioning, lifecycle, Task association, and error vocabulary are
 [`mcp-project-management.md`](mcp-project-management.md).
 
+The remote `/mcp` interaction log and its operator CLI
+(`apps/cli/mcp_interactions.py`) are
+[`mcp-interaction-log.md`](mcp-interaction-log.md). It records the remote
+process only; nothing in this runbook's stdio server or CLI is captured.
+
 New implementation must use the neutral `my_pa` / `MY_PA_` namespace. Legacy
 identities may appear only in explicit compatibility or evidence records.

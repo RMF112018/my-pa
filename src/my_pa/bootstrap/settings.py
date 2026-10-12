@@ -377,6 +377,19 @@ class Settings(StrictModel):
     mcp_surface_disabled: bool = False
     remote_mcp_enabled: bool = False
     remote_writes_enabled: bool = False
+    #: Record every remote `/mcp` HTTP exchange, bodies included, in
+    #: `observability.mcp_interactions` (`adapters.mcp_interaction_capture`).
+    #:
+    #: **Off by default**, because `AGENTS.md` section 5 makes "logs exclude
+    #: message bodies by default" the rule and full-body capture is an
+    #: operator-accepted exception to it, not a property of an unconfigured
+    #: process. Turning it on is an explicit operator act; bodies are redacted
+    #: and capped before they are written, and the rows expire after 14 days.
+    #: Off, `apps/gateway.py mcp-remote` does not wrap the app at all: no
+    #: middleware, no writer thread, no extra engine. It has no effect on any
+    #: other surface, and an unparseable value refuses to start like every
+    #: other boolean here.
+    mcp_interaction_log_enabled: bool = False
     #: Compact ChatLLM publication profile on the existing `/mcp` resource.
     #: **Off by default.** True does not change OAuth audience, protected-resource
     #: metadata, grants, or which Principal is acting. It only allows the

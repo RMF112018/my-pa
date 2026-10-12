@@ -66,12 +66,20 @@ that to be true rather than stated. What an operator sees is the two lines this
 module prints at startup: what it is serving, and what it cannot serve. A
 per-request log would be the one place a path, a query, or a principal could
 reach a file, and this process does not have one.
+
+**The one per-request record is opt-in and goes to the database.**
+`MY_PA_MCP_INTERACTION_LOG_ENABLED` (off by default) makes `mcp-remote` record
+each `/mcp` exchange, redacted and capped, in `observability.mcp_interactions`
+through its own bounded engine and one background writer
+(`with_interaction_log`). It writes no file and no log record; a failed write
+is a count-only line on standard error.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Callable, Mapping
 from typing import Final, Literal
 
 import uvicorn
@@ -80,6 +88,11 @@ from my_pa.adapters.http import REMOTE_CAPTURE_PATH, create_http_app
 from my_pa.adapters.http.oauth import build_origin_oauth_routes
 from my_pa.adapters.mcp import RemoteAccessContext, create_remote_mcp_app, serve_stdio
 from my_pa.adapters.mcp.server import SERVER_NAME
+from my_pa.adapters.mcp_interaction_capture import (
+    AsgiApp,
+    InteractionRecorder,
+    McpInteractionCapture,
+)
 from my_pa.application.service import ApplicationService
 from my_pa.bootstrap.gateway import GatewayRuntime, build_gateway_runtime
 from my_pa.bootstrap.knowledge_discovery_profiles import resolve_knowledge_client_overlay
@@ -88,6 +101,8 @@ from my_pa.bootstrap.settings import Settings, load_settings
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.infrastructure.database.engine import create_database_engine
+from my_pa.infrastructure.persistence.mcp_interactions import insert_interaction
 from my_pa.infrastructure.security import (
     RemoteAuthContext,
     RemoteAuthenticationError,
@@ -305,6 +320,54 @@ def remote_access_context(
     )
 
 
+#: Statement bound for the interaction log's writer. One single-row append into
+#: an indexed table; two seconds is generous for that and short enough that a
+#: stalled database costs the writer thread, never a request, a bounded wait
+#: before the row is counted as a write failure and dropped.
+INTERACTION_LOG_STATEMENT_TIMEOUT_MS: Final = 2_000
+#: How long shutdown waits for queued interaction rows to be written.
+INTERACTION_LOG_FLUSH_SECONDS: Final = 2.0
+
+
+def _no_interaction_log() -> None:
+    """Nothing to stop: the log was not composed."""
+
+
+def with_interaction_log(settings: Settings, app: AsgiApp) -> tuple[AsgiApp, Callable[[], None]]:
+    """Wrap the remote MCP app in the interaction log when, and only when, it is enabled.
+
+    Disabled (the default), `app` is returned unchanged with a no-op closer: no
+    middleware, no writer thread, no engine. Enabled, it composes a dedicated
+    engine with a short statement bound — separate from the work and audit
+    pools so a slow log write can never hold a connection a request needs — a
+    sink that appends one row per short transaction, and one recorder whose
+    writer thread is started here. The returned closer stops the recorder with
+    a bounded flush and disposes the engine.
+    """
+    if not settings.mcp_interaction_log_enabled:
+        return app, _no_interaction_log
+    engine = create_database_engine(
+        settings.parsed_database_url(),
+        statement_timeout_ms=INTERACTION_LOG_STATEMENT_TIMEOUT_MS,
+    )
+
+    def sink(row: Mapping[str, object]) -> None:
+        with engine.begin() as connection:
+            insert_interaction(connection, row)
+
+    recorder = InteractionRecorder(sink)
+    recorder.start()
+
+    def close() -> None:
+        try:
+            recorder.stop(INTERACTION_LOG_FLUSH_SECONDS)
+        finally:
+            engine.dispose()
+
+    wrapped = McpInteractionCapture(app, recorder, stop_timeout=INTERACTION_LOG_FLUSH_SECONDS)
+    return wrapped, close
+
+
 def _mcp_remote(args: argparse.Namespace) -> int:
     """Serve authenticated Streamable HTTP MCP; fail closed if auth is incomplete."""
     settings = load_settings()
@@ -366,10 +429,18 @@ def _mcp_remote(args: argparse.Namespace) -> int:
             operator_secret=settings.oauth_operator_secret,
         ),
     )
+    served, close_interaction_log = with_interaction_log(settings, app)
     print(f"serving     remote mcp on {args.host}:{args.port}/mcp", file=sys.stderr, flush=True)
+    if settings.mcp_interaction_log_enabled:
+        print(
+            "notice      the MCP interaction log is on: every /mcp exchange is recorded, "
+            "redacted, in observability.mcp_interactions and kept for 14 days",
+            file=sys.stderr,
+            flush=True,
+        )
     try:
         uvicorn.run(
-            app,
+            served,
             host=args.host,
             port=args.port,
             log_config=None,
@@ -377,7 +448,10 @@ def _mcp_remote(args: argparse.Namespace) -> int:
             timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_SECONDS,
         )
     finally:
-        runtime.close()
+        try:
+            close_interaction_log()
+        finally:
+            runtime.close()
     return 0
 
 

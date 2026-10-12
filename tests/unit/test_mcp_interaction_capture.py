@@ -1149,3 +1149,105 @@ def test_mcp_remote_serves_the_wrapped_app_and_closes_the_log_in_its_finally(
     assert writers
     assert events == ["serve", "dispose", "runtime_close"]
     _wait_for(lambda: not any(t.is_alive() for t in writers))
+
+
+# ---- widened redaction (review N1) and the queued-bytes budget (review N2) ----
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "accessToken",
+        "refreshToken",
+        "clientSecret",
+        "idToken",
+        "privateKey",
+        "auth_token",
+        "oauth_token",
+        "github_token",
+        "x_api_key",
+        "X-Api-Key",
+        "db_password",
+        "Code Verifier",
+        "sessionCookie",
+    ],
+)
+def test_camel_case_spaced_and_suffixed_credential_keys_are_redacted(key: str) -> None:
+    redacted, count, _ = redact_json({"wrap": {key: "MARKERWIDE", "kept": 1}})
+    assert redacted == {"wrap": {key: REDACTED, "kept": 1}}
+    assert count == 1
+
+
+def test_token_named_fields_that_are_not_credentials_are_kept() -> None:
+    document = {"tokens": ["a"], "max_tokens": 5, "token_count": 3, "nextCursor": "c1"}
+    redacted, count, _ = redact_json(document)
+    assert redacted == document
+    assert count == 0
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '{"password": 12345, "x": 1',
+        '{"token": true, "x": 1',
+        '{"accessToken": null, "x": 1',
+        '{"github_token": -3.5e2, "x": 1',
+        '\\"x_api_key\\": 98765, \\"x\\": 1',
+        "{'clientSecret': 424242, 'x': 1",
+    ],
+)
+def test_the_text_path_redacts_scalar_values_and_widened_keys(raw: str) -> None:
+    text, count, _ = redact_text(raw)
+    for marker in ("12345", "true", "null", "-3.5e2", "98765", "424242"):
+        assert marker not in text
+    assert REDACTED in text
+    assert count == 1
+
+
+def test_basic_credentials_in_text_are_redacted_and_prose_is_not() -> None:
+    text, count, _ = redact_text("Authorization: Basic dXNlcjpwYXNzd29yZA== then a basic setup")
+    assert text == f"Authorization: Basic {REDACTED} then a basic setup"
+    assert count == 1
+    redacted, count, _ = redact_json({"note": "sent basic QWxhZGRpbjpvcGVu here"})
+    assert redacted == {"note": f"sent basic {REDACTED} here"}
+
+
+def test_cookie_header_lines_in_text_are_redacted() -> None:
+    text, count, _ = redact_text(
+        "GET /\r\nCookie: session=MARKERCOOKIE1; theme=dark\r\n"
+        "Set-Cookie: sid=MARKERCOOKIE2; HttpOnly\r\nAccept: */*"
+    )
+    assert "MARKERCOOKIE" not in text
+    assert text.endswith(f"Cookie: {REDACTED}\r\nSet-Cookie: {REDACTED}\r\nAccept: */*")
+    assert count == 2
+    redacted, _, _ = redact_json({"echo": "cookie: a=MARKERCOOKIE3"})
+    assert "MARKERCOOKIE3" not in json.dumps(redacted)
+
+
+def test_the_queued_bytes_budget_drops_counts_and_is_released_after_a_write() -> None:
+    rows: list[Mapping[str, object]] = []
+    recorder = InteractionRecorder(
+        rows.append, facade_invoke_tools=FACADE, max_queued_bytes=100, stderr=io.StringIO()
+    )
+    body = {"pad": "x" * 30}
+    size = len(json.dumps(body).encode())  # 41 bytes; two fit in 100, three do not
+    began = time.monotonic()
+    recorder.submit(_exchange(body))
+    recorder.submit(_exchange(body))
+    recorder.submit(_exchange(body))  # 3 x 41 > 100: dropped, not waited for
+    assert time.monotonic() - began < 0.5
+    assert recorder.dropped == 1
+    assert recorder.queued_bytes == 2 * size
+    recorder.start()
+    try:
+        _wait_for(lambda: len(rows) == 2)
+        _wait_for(lambda: recorder.queued_bytes == 0)
+        recorder.submit(_exchange(body))
+        recorder.submit(_exchange(body))
+        _wait_for(lambda: len(rows) == 4)
+    finally:
+        recorder.stop()
+    assert recorder.dropped == 1
+    assert recorder.queued_bytes == 0
+    assert capture.QUEUED_BYTES_BUDGET == 64 * 1024 * 1024
+    assert capture.QUEUED_BYTES_BUDGET >= 2 * BUFFER_CEILING_BYTES

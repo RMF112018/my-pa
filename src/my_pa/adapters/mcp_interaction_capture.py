@@ -32,22 +32,31 @@ straight through untouched: they carry credentials and are not JSON-RPC.
 **Failure isolation.** Every capture step is wrapped: an exception inside the
 tee, the row builder or the sink increments a counter and is otherwise
 swallowed, so the request proceeds exactly as it would without the wrapper. The
-queue is bounded (`QUEUE_MAXSIZE`); a full queue drops the exchange and counts
-it. A failed write is counted, reported as a count-only line on standard error
-(never a body, a header or an identifier), and dropped — there is no retry loop.
+queue is bounded twice: by count (`QUEUE_MAXSIZE`, 1024) and by the body bytes
+the queued exchanges hold together (`QUEUED_BYTES_BUDGET`, 64 MiB); an exchange
+that would exceed either is dropped and counted, never waited for. Each body
+buffers at most `BUFFER_CEILING_BYTES` (16 MiB) and the tee keeps references to
+the chunks the server already holds rather than copies. A failed write is
+counted, reported as a count-only line on standard error (never a body, a
+header or an identifier), and dropped — there is no retry loop.
 The counters accumulated since the last successful write ride on the next row
 that does get written, as `diagnostics.capture.dropped_before` and
 `write_failures_before`.
 
 **Redaction, before truncation.** Headers are allowlisted (`STORED_HEADERS`);
 `authorization`, `cookie`, `set-cookie`, `proxy-authorization` and every other
-header are never stored. JSON bodies are walked: a value under any key in
-`REDACTED_KEYS` (case-insensitive, `-` read as `_`) becomes `"[REDACTED]"`;
-every string has `Bearer <token>` and JWT-shaped runs replaced; a string that is
-itself a JSON object or array (MCP `TextContent.text` carries the response
+header are never stored. JSON bodies are walked: keys are normalised
+(lower-cased, `-`, `_` and spaces removed, so `accessToken` is `access_token`),
+and a value of any type under a key in `REDACTED_KEYS`, or one ending in a
+`REDACTED_KEY_SUFFIXES` entry (`auth_token`, `x_api_key`, ...), becomes
+`"[REDACTED]"`. Every string has `Bearer <token>`, `Basic <base64>`,
+`Cookie:`/`Set-Cookie:` header-line values and JWT-shaped runs replaced; a
+string that is itself a JSON object or array (MCP `TextContent.text` carries the response
 envelope that way) is parsed, redacted the same way and re-serialised. A body
 that is not JSON, or that overflowed the capture buffer, is redacted as text
-(`"key": "value"` pairs for the same keys, plus the Bearer and JWT patterns).
+(`"key": value` pairs for the same keys, where value is a string, number,
+`true`/`false`/`null`, also one escaping level down and Python-repr quoted,
+plus the Bearer, Basic, Cookie and JWT patterns).
 Only then is the result cut to `BODY_CAP_BYTES`, so a credential beyond the cap
 never appears and one straddling it is never stored in part. NUL characters,
 which PostgreSQL text and JSONB cannot hold, are replaced and flagged.
@@ -99,6 +108,7 @@ __all__ = [
     "BODY_CAP_BYTES",
     "BUFFER_CEILING_BYTES",
     "INTERACTION_COLUMNS",
+    "QUEUED_BYTES_BUDGET",
     "QUEUE_MAXSIZE",
     "REDACTED",
     "REDACTED_KEYS",
@@ -129,6 +139,11 @@ BODY_CAP_BYTES: Final = 262_144
 BUFFER_CEILING_BYTES: Final = 16 * 1024 * 1024
 #: Exchanges waiting for the writer thread. A full queue drops and counts.
 QUEUE_MAXSIZE: Final = 1024
+#: Most body bytes all queued exchanges may hold together. The count bound alone
+#: would admit 1024 x 2 x `BUFFER_CEILING_BYTES` (32 GiB); with this budget the
+#: queue holds at most 64 MiB of bodies, i.e. at least two exchanges at the
+#: per-body ceiling. A submit that would exceed it is dropped and counted.
+QUEUED_BYTES_BUDGET: Final = 64 * 1024 * 1024
 #: What a redacted value becomes.
 REDACTED: Final = "[REDACTED]"
 
@@ -178,34 +193,56 @@ STORED_HEADERS: Final = frozenset(
     }
 )
 
-#: Object keys whose values are always redacted, compared after lower-casing and
-#: reading `-` as `_`.
+#: Object keys whose values are always redacted. Keys are compared after
+#: `_normalized_key`: lower-cased, with `-`, `_` and spaces removed, so
+#: `access_token`, `Access-Token` and `accessToken` are one key. A key matches
+#: when its normalised form is in this set *or* ends with one of
+#: `REDACTED_KEY_SUFFIXES`.
 REDACTED_KEYS: Final = frozenset(
     {
         "authorization",
-        "proxy_authorization",
+        "proxyauthorization",
         "cookie",
-        "set_cookie",
-        "access_token",
-        "refresh_token",
-        "id_token",
+        "setcookie",
+        "accesstoken",
+        "refreshtoken",
+        "idtoken",
         "token",
         "bearer",
-        "client_secret",
+        "clientsecret",
         "secret",
         "password",
         "passphrase",
-        "api_key",
         "apikey",
-        "private_key",
-        "signing_key",
-        "code_verifier",
+        "privatekey",
+        "signingkey",
+        "codeverifier",
         "assertion",
-        "client_assertion",
-        "session_token",
+        "clientassertion",
+        "sessiontoken",
         "credential",
         "credentials",
     }
+)
+#: Normalised suffixes that make any key credential-bearing: `auth_token`,
+#: `oauth_token`, `github_token`, `x_api_key`, `lease_token`, `db_password`...
+#: Checked against the field names this repository publishes: `tokens`,
+#: `max_tokens` and `token_count` do not end in a suffix (plural / `count`), so
+#: no non-secret exception set is needed. `lease_token` and `idempotency_token`
+#: are matched and redacted deliberately; the first is a bearer-style lease.
+#: MCP's own `progressToken` is matched too: an opaque client correlation value,
+#: lost to over-redaction rather than kept by an exception.
+REDACTED_KEY_SUFFIXES: Final = (
+    "token",
+    "secret",
+    "password",
+    "passphrase",
+    "apikey",
+    "privatekey",
+    "signingkey",
+    "credential",
+    "credentials",
+    "cookie",
 )
 
 #: Endpoint-level refusal tokens `_McpEndpoint` answers with.
@@ -220,30 +257,57 @@ _NUL: Final = "\x00"
 _NUL_REPLACEMENT: Final = "\ufffd"
 
 _BEARER: Final = re.compile(r"(bearer)\s+[A-Za-z0-9\-._~+/]+=*", re.IGNORECASE)
-_JWT: Final = re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*")
-_KEY_ALTERNATION: Final = "|".join(
-    sorted((key.replace("_", "[-_]") for key in REDACTED_KEYS), key=len, reverse=True)
+#: `Basic <base64>`: the run must look like base64 (eight or more characters
+#: with a digit, an upper-case letter, `+`, `/` or `=`), so prose such as
+#: "basic information" is left alone.
+_BASIC: Final = re.compile(
+    r"(basic)\s+(?=[A-Za-z0-9+/]*[0-9A-Z+/=])[A-Za-z0-9+/]{8,}={0,2}", re.IGNORECASE
 )
-#: `"key": "value"` in plain JSON text. The value is a proper JSON string.
+#: A `Cookie:` or `Set-Cookie:` header line inside text: the value up to the
+#: end of the line, a quote or a backslash (the edge of an escaped string).
+_COOKIE_LINE: Final = re.compile(
+    r"\b(set-cookie|cookie)\s*:[ \t]*(?!\[REDACTED\])[^\r\n\"\\]+", re.IGNORECASE
+)
+_JWT: Final = re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*")
+_SEP: Final = r"[-_ ]?"
+#: A credential key as text: any of the exact keys, or anything ending in a
+#: suffix, with `-`, `_` or a space allowed between the words.
+_KEY_PATTERN: Final = (
+    r"(?:(?:proxy" + _SEP + r")?authorization|bearer|(?:client" + _SEP + r")?assertion"
+    r"|code" + _SEP + r"verifier"
+    r"|[A-Za-z0-9_\- ]{0,64}?(?:token|secret|password|passphrase"
+    r"|api" + _SEP + r"key|private" + _SEP + r"key|signing" + _SEP + r"key"
+    r"|credentials?|cookie))"
+)
+#: A JSON scalar that is not a string.
+_SCALAR: Final = r"(?:-?\d[\d.eE+\-]*|true|false|null)"
+#: `"key": value` in plain JSON text, where value is a JSON string or scalar.
 _TEXT_PAIR: Final = re.compile(
-    r'(?P<head>"(?:' + _KEY_ALTERNATION + r')"\s*:\s*")(?:[^"\\]|\\.)*"',
+    r'(?P<head>"' + _KEY_PATTERN + r'"\s*:\s*)(?:"(?:[^"\\]|\\.)*"|' + _SCALAR + r")",
     re.IGNORECASE | re.DOTALL,
 )
 #: The same pair one escaping level down, as it appears inside a JSON string
 #: (`\"key\":\"value\"`), which is how TextContent carries the envelope.
 _ESCAPED_TEXT_PAIR: Final = re.compile(
-    r'(?P<head>\\+"(?:' + _KEY_ALTERNATION + r')\\+"\s*:\s*\\+")(?:(?!\\+").)*\\+"',
+    r'(?P<head>(?P<q>\\+")' + _KEY_PATTERN + r"(?P=q)\s*:\s*)"
+    r"(?:(?P=q)(?:(?!(?P=q)).)*(?P=q)|" + _SCALAR + r")",
     re.IGNORECASE | re.DOTALL,
 )
-#: `'key': 'value'`, as a Python repr of a request echoes it.
+#: `'key': value`, as a Python repr of a request echoes it.
 _QUOTED_TEXT_PAIR: Final = re.compile(
-    r"(?P<head>'(?:" + _KEY_ALTERNATION + r")'\s*:\s*')(?:[^'\\]|\\.)*'",
+    r"(?P<head>'" + _KEY_PATTERN + r"'\s*:\s*)(?:'(?:[^'\\]|\\.)*'|"
+    r"-?\d[\d.eE+\-]*|True|False|None)",
     re.IGNORECASE | re.DOTALL,
 )
 
 
 def _normalized_key(key: str) -> str:
-    return key.lower().replace("-", "_")
+    return key.lower().replace("-", "").replace("_", "").replace(" ", "")
+
+
+def _is_credential_key(key: str) -> bool:
+    normalized = _normalized_key(key)
+    return normalized in REDACTED_KEYS or normalized.endswith(REDACTED_KEY_SUFFIXES)
 
 
 def _redact_string_patterns(value: str) -> tuple[str, int]:
@@ -253,12 +317,16 @@ def _redact_string_patterns(value: str) -> tuple[str, int]:
     and single-quoted as a Python repr echoes them in a validation message),
     then `Bearer <token>` and JWT-shaped runs.
     """
-    value, pairs = _TEXT_PAIR.subn(lambda match: f'{match.group("head")}{REDACTED}"', value)
+    value, pairs = _TEXT_PAIR.subn(lambda match: f'{match.group("head")}"{REDACTED}"', value)
     value, escaped = _ESCAPED_TEXT_PAIR.subn(_escaped_replacement, value)
-    value, quoted = _QUOTED_TEXT_PAIR.subn(lambda match: f"{match.group('head')}{REDACTED}'", value)
+    value, quoted = _QUOTED_TEXT_PAIR.subn(
+        lambda match: f"{match.group('head')}'{REDACTED}'", value
+    )
+    value, cookies = _COOKIE_LINE.subn(lambda match: f"{match.group(1)}: {REDACTED}", value)
     value, bearer = _BEARER.subn(lambda match: f"{match.group(1)} {REDACTED}", value)
+    value, basic = _BASIC.subn(lambda match: f"{match.group(1)} {REDACTED}", value)
     value, jwt = _JWT.subn(REDACTED, value)
-    return value, pairs + escaped + quoted + bearer + jwt
+    return value, pairs + escaped + quoted + cookies + bearer + basic + jwt
 
 
 def _sanitize(value: str) -> tuple[str, bool]:
@@ -286,7 +354,7 @@ def _redact_value(value: object, walk: _Walk, depth: int) -> object:
         for key, item in value.items():
             clean_key, key_replaced = _sanitize(str(key))
             walk.nul_replaced |= key_replaced
-            if _normalized_key(clean_key) in REDACTED_KEYS:
+            if _is_credential_key(clean_key):
                 result[clean_key] = REDACTED
                 walk.redactions += 1
             else:
@@ -338,9 +406,8 @@ def redact_text(value: str) -> tuple[str, int, bool]:
 
 
 def _escaped_replacement(match: re.Match[str]) -> str:
-    head = match.group("head")
-    quote = head[head.rfind(":") :].lstrip(": \t\r\n")
-    return f"{head}{REDACTED}{quote}"
+    quote = match.group("q")
+    return f"{match.group('head')}{quote}{REDACTED}{quote}"
 
 
 def _utf8_prefix(value: str, limit: int) -> str:
@@ -707,6 +774,10 @@ def build_interaction_row(
 _STOP: Final = object()
 
 
+def _held_bytes(exchange: CapturedExchange) -> int:
+    return len(exchange.request_body) + len(exchange.response_body)
+
+
 class InteractionRecorder:
     """One bounded queue and one daemon writer thread in front of a sink.
 
@@ -723,6 +794,7 @@ class InteractionRecorder:
         *,
         facade_invoke_tools: frozenset[str],
         maxsize: int = QUEUE_MAXSIZE,
+        max_queued_bytes: int = QUEUED_BYTES_BUDGET,
         stderr: TextIO | None = None,
     ) -> None:
         self._sink = sink
@@ -738,6 +810,8 @@ class InteractionRecorder:
         self._thread: threading.Thread | None = None
         self._stopping = threading.Event()
         self._deadline = 0.0
+        self._max_queued_bytes = max_queued_bytes
+        self._queued_bytes = 0
 
     @property
     def dropped(self) -> int:
@@ -778,6 +852,7 @@ class InteractionRecorder:
                 break
             if isinstance(item, CapturedExchange):
                 abandoned += 1
+                self._release(item)
         if abandoned:
             with self._lock:
                 self._dropped += abandoned
@@ -788,12 +863,30 @@ class InteractionRecorder:
         try:
             if self._stopping.is_set():
                 raise queue.Full
-            self._queue.put_nowait(exchange)
+            size = _held_bytes(exchange)
+            with self._lock:
+                if self._queued_bytes + size > self._max_queued_bytes:
+                    raise queue.Full
+                self._queued_bytes += size
+            try:
+                self._queue.put_nowait(exchange)
+            except queue.Full:
+                self._release(exchange)
+                raise
         except queue.Full:
             with self._lock:
                 self._dropped += 1
         except Exception:
             self.note_capture_error()
+
+    @property
+    def queued_bytes(self) -> int:
+        """Body bytes held by exchanges waiting for the writer."""
+        return self._queued_bytes
+
+    def _release(self, exchange: CapturedExchange) -> None:
+        with self._lock:
+            self._queued_bytes -= _held_bytes(exchange)
 
     def note_capture_error(self) -> None:
         with self._lock:
@@ -823,6 +916,7 @@ class InteractionRecorder:
             if item is _STOP:
                 return
             if isinstance(item, CapturedExchange):
+                self._release(item)
                 self._write(item)
 
     def _write(self, exchange: CapturedExchange) -> None:

@@ -86,23 +86,37 @@ them:
   `mcp-protocol-version`, `origin` and `content-length` are stored.
   `authorization`, `cookie`, `set-cookie`, `proxy-authorization` and every
   other header are never read into a row.
-- **JSON keys.** Any object key that, lower-cased with `-` read as `_`, is one
-  of `authorization`, `proxy_authorization`, `cookie`, `set_cookie`,
-  `access_token`, `refresh_token`, `id_token`, `token`, `bearer`,
-  `client_secret`, `secret`, `password`, `passphrase`, `api_key`, `apikey`,
-  `private_key`, `signing_key`, `code_verifier`, `assertion`,
-  `client_assertion`, `session_token`, `credential` or `credentials` has its
-  value replaced by `"[REDACTED]"`, whatever the value's type.
-- **Every string.** `Bearer <token>` becomes `Bearer [REDACTED]`, and any
-  JWT-shaped run (`eyJ<…>.<…>.<…>`) becomes `[REDACTED]`. Both are matched anywhere
-  in the string, without a word boundary; over-redaction is the safe direction.
+- **JSON keys.** Keys are normalised — lower-cased, with `-`, `_` and spaces
+  removed, so `access_token`, `Access-Token` and `accessToken` are one key. A
+  key is a credential key when its normalised form is one of `authorization`,
+  `proxyauthorization`, `cookie`, `setcookie`, `accesstoken`, `refreshtoken`,
+  `idtoken`, `token`, `bearer`, `clientsecret`, `secret`, `password`,
+  `passphrase`, `apikey`, `privatekey`, `signingkey`, `codeverifier`,
+  `assertion`, `clientassertion`, `sessiontoken`, `credential` or
+  `credentials`, **or ends with** `token`, `secret`, `password`, `passphrase`,
+  `apikey`, `privatekey`, `signingkey`, `credential`, `credentials` or `cookie`
+  (so `auth_token`, `oauth_token`, `github_token`, `x_api_key`, `db_password`,
+  `lease_token` and MCP's `progressToken` are redacted). Its value is replaced
+  by `"[REDACTED]"`, whatever the value's type. `tokens`, `max_tokens` and
+  `token_count` do not match and are kept.
+- **Every string.** `Bearer <token>` becomes `Bearer [REDACTED]`;
+  `Basic <base64>` becomes `Basic [REDACTED]` when the run looks like base64
+  (eight or more characters including a digit, an upper-case letter, `+`, `/`
+  or `=`, so "basic information" is kept); a `Cookie:` or `Set-Cookie:`
+  header line keeps its name and loses its value (`Cookie: [REDACTED]`, up to
+  the end of the line, a quote or a backslash); any JWT-shaped run
+  (`eyJ<…>.<…>.<…>`) becomes `[REDACTED]`. Bearer, Basic and JWT are matched
+  without a leading word boundary; over-redaction is the safe direction.
 - **JSON inside strings.** A string that is itself a JSON object or array (MCP
   `TextContent.text` carries the response envelope that way) is parsed,
   redacted by the same rules, and re-serialised, up to four levels deep.
 - **Text that is not JSON** (or a body that overflowed the capture buffer) is
-  redacted as text: `"key": "value"` pairs for the key list above — plain, one
-  escaping level down (`\"key\":\"value\"`), and single-quoted as a Python repr
-  prints them — plus the Bearer and JWT patterns.
+  redacted as text: `"key": value` pairs for the same exact keys and suffixes
+  (with `-`, `_` or a space allowed between words, any case), where the value
+  is a string or a non-string scalar (number, `true`, `false`, `null`; in a
+  Python repr also `True`, `False`, `None`) — plain, one escaping level down
+  (`\"key\":\"value\"`), and single-quoted as a Python repr prints them — plus
+  the Bearer, Basic, Cookie and JWT patterns.
 - **NUL characters**, which PostgreSQL text and JSONB cannot hold, and
   unencodable surrogates are replaced with U+FFFD and flagged in
   `diagnostics.capture.nul_replaced`.
@@ -140,8 +154,18 @@ stored.
 - The middleware only tees the ASGI messages; it never changes them, and every
   capture step is wrapped so an exception in it is counted and the request
   proceeds as it would without the log.
-- An exchange is queued **after** its last response byte is sent, into a
-  bounded queue (1024). A full queue drops the exchange and counts it.
+- An exchange is queued **after** its last response byte is sent, into a queue
+  bounded twice: at most **1024** exchanges, and at most **64 MiB** of body
+  bytes held by all queued exchanges together. An exchange that would exceed
+  either bound is dropped and counted (`dropped`); the request never waits.
+  Each body buffers at most 16 MiB, so the queue's memory bound is 64 MiB
+  rather than 1024 x 2 x 16 MiB. The tee keeps references to the chunks the
+  server already holds, not copies; the budget is released as the writer
+  takes each exchange.
+- The writer engine has no connect timeout of its own (`create_database_engine`
+  takes none), so an unreachable host that does not refuse the connection
+  holds only the writer thread for the operating system's connect timeout;
+  meanwhile the queue fills and further exchanges are dropped and counted.
 - Parsing, redaction, hashing and the insert run on one daemon writer thread,
   on a dedicated engine with a 2-second statement timeout, separate from the
   pools that serve requests.

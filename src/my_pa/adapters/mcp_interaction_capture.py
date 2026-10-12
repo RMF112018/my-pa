@@ -35,8 +35,11 @@ swallowed, so the request proceeds exactly as it would without the wrapper. The
 queue is bounded twice: by count (`QUEUE_MAXSIZE`, 1024) and by the body bytes
 the queued exchanges hold together (`QUEUED_BYTES_BUDGET`, 64 MiB); an exchange
 that would exceed either is dropped and counted, never waited for. Each body
-buffers at most `BUFFER_CEILING_BYTES` (16 MiB) and the tee keeps references to
-the chunks the server already holds rather than copies. A failed write is
+buffers at most `BUFFER_CEILING_BYTES` (16 MiB). The tee keeps references to
+the chunks the server sends; after the inner app returns, `_Exchange.captured`
+joins each body's chunks on the event loop — a single-chunk body (the usual
+Starlette response) is returned as the same object, a multi-chunk body is
+copied once, at most 16 MiB per direction. A failed write is
 counted, reported as a count-only line on standard error (never a body, a
 header or an identifier), and dropped — there is no retry loop.
 The counters accumulated since the last successful write ride on the next row
@@ -53,9 +56,12 @@ and a value of any type under a key in `REDACTED_KEYS`, or one ending in a
 the capture buffer, as a whole) goes through `_redact_string_patterns`: PEM
 private-key blocks; `"key": value` pairs for the same keys, where value is a
 string or a non-string scalar, plain, one escaping level down and Python-repr
-quoted; a credential value cut off by the end of the text; `key=value` form and
-query-string pairs; `Cookie:`/`Set-Cookie:` header-line values; `Bearer` and
-`Basic` credentials; and JWTs inside dotted base64url runs. A string that is
+quoted (dotted keys such as `oauth.token` included, and escaped pairs at the
+four escaping levels the JSON path follows); a credential value cut off by the
+end of the text; `key=value` form and query-string pairs; the password in URL
+userinfo; credential header lines (`Cookie:`, `Set-Cookie:`, `Authorization:`
+of any scheme, `X-Api-Key:`, `*-Token:`, `*-Secret:`); `Bearer` and `Basic`
+credentials; and JWTs inside dotted base64url runs. A string that is
 itself a JSON object or array (MCP `TextContent.text` carries the response
 envelope that way) is parsed, redacted the same way and re-serialised. Only
 then is the result cut to `BODY_CAP_BYTES`, so a credential beyond the cap
@@ -63,8 +69,10 @@ never appears and one straddling it is never stored in part. NUL characters,
 which PostgreSQL text and JSONB cannot hold, are replaced and flagged, and so
 are `NaN`, `Infinity` and overflowing numbers, which JSONB refuses: they are
 kept as the strings they were written as (`non_finite_replaced`). Every
-pattern is linear in its input (see the comment above `_BEARER`); a text-path
-credential whose value is an array or object is a stated limit, not matched.
+pattern is linear by construction (the rules are in the comment above
+`_BEARER`, and a unit test probes every compiled pattern for quadratic growth);
+a text-path credential whose value is an array or object is a stated limit,
+not matched.
 
 **What the digests are.** `request_sha256` / `response_sha256` are the SHA-256 of
 the *redacted, untruncated* body as this module serialises it — the compact
@@ -280,36 +288,54 @@ _MAX_EMBEDDED_DEPTH: Final = 4
 _NUL: Final = "\x00"
 _NUL_REPLACEMENT: Final = "\ufffd"
 
-# Every pattern below is written to run in time linear in its input, because
-# the writer thread runs them over request bodies an untrusted client chooses.
-# `tests/unit/test_mcp_interaction_capture.py` times each family on about 1 MiB
-# of adversarial input. The rules that keep them linear: a pattern that scans a
-# run is anchored with a lookbehind so it starts only at the run's first
-# character; quantified prefixes are bounded (`{0,64}`); and every repeated
-# group consumes at least one character that the following token cannot.
+# Every pattern below is linear by construction, because the writer thread runs
+# them over bodies an untrusted client chooses. The rules: a pattern that scans
+# a run starts only at the run's first character (a lookbehind anchor); every
+# quantified prefix or escape run is bounded; a repeated group's alternatives
+# partition the input (each character can be consumed one way only); and every
+# scan that could reach a near-miss terminator stops at the first terminator of
+# its kind and then *succeeds* (or stops at the next start of its own kind), so
+# no start ever rescans text a later start will scan again.
+# `tests/unit/test_mcp_interaction_capture.py` checks this for every compiled
+# pattern in the module: worst-case shapes at 20 K and 80 K characters must grow
+# by less than 8x (quadratic is ~16x), and each runs at 1 MiB within 2 s.
 
 _BEARER: Final = re.compile(r"(bearer)\s+[A-Za-z0-9\-._~+/]+=*", re.IGNORECASE)
 #: `Basic <base64>`. Only the scheme word is case-insensitive: the run must look
 #: like base64 (eight or more characters including a digit, an upper-case
 #: letter, `+`, `/` or `=`), so prose such as "basic information" is left alone.
 _BASIC: Final = re.compile(r"((?i:basic))\s+(?=[A-Za-z0-9+/]*[0-9A-Z+/=])[A-Za-z0-9+/]{8,}={0,2}")
-#: A `Cookie:` or `Set-Cookie:` header line inside text: the value up to the
-#: end of the line, a quote or a backslash (the edge of an escaped string).
-_COOKIE_LINE: Final = re.compile(
-    r"\b(set-cookie|cookie)\s*:[ \t]*(?!\[REDACTED\])[^\r\n\"\\]+", re.IGNORECASE
+#: A credential-bearing header line inside text: `Cookie:`, `Set-Cookie:`,
+#: `Authorization:` / `Proxy-Authorization:` with any scheme, `X-Api-Key:` /
+#: `Api-Key:`, and any `*-Token:` or `*-Secret:` header. The name starts a word;
+#: the value runs to the end of the line, a quote or a backslash.
+_HEADER_LINE: Final = re.compile(
+    r"(?<![A-Za-z0-9\-])((?:set-)?cookie|(?:proxy-)?authorization|(?:x-)?api-key"
+    r"|[A-Za-z0-9\-]{0,64}?-(?:token|secret))[ \t]*:[ \t]*(?!\[REDACTED\])[^\r\n\"\\]+",
+    re.IGNORECASE,
+)
+#: The password in URL userinfo, `scheme://user:password@host`. Every part is
+#: bounded and the scheme starts a word.
+_URL_USERINFO: Final = re.compile(
+    r"(?<![A-Za-z0-9+.\-])([A-Za-z][A-Za-z0-9+.\-]{0,31}://[^\s/:@\"'\\]{0,256}:)"
+    r"(?!\[REDACTED\])[^\s/@\"'\\]{1,256}@"
 )
 #: A whole dotted base64url run, started only at its first character. The
 #: callback redacts from the first `eyJ` onward when two dots follow it, so a
-#: JWT glued to preceding text is still caught without the pattern restarting
-#: at every `eyJ` inside one run (which made the old form quadratic).
+#: JWT glued to preceding text is still caught without restarting at every `eyJ`.
 _DOTTED_RUN: Final = re.compile(r"(?<![A-Za-z0-9_.\-])[A-Za-z0-9_\-]+(?:\.[A-Za-z0-9_\-]*)+")
-#: A PEM private-key block, `BEGIN` to `END`, or to the end of the text when the
-#: block is cut off. The body consumes one character per step and stops only at
-#: `-----END `, so it is linear; an unterminated block consumes the rest of the
-#: text in one match.
+#: A PEM or PGP private-key block. The body stops at the first `-----` of any
+#: kind; the match then takes a matching `END` line if that is what follows,
+#: and otherwise ends there (or at the end of the text). It never fails once
+#: the `BEGIN` line matched, so no later `BEGIN` rescans the same body. A
+#: near-miss `END` is not consumed, but everything up to it is redacted. The
+#: armour is split across literals so no key signature appears in source.
 _PEM_PRIVATE_KEY: Final = re.compile(
-    r"-----BEGIN [A-Z ]{0,40}PRIVATE KEY-----(?:[^-]|-(?!----END ))*"
-    r"(?:-----END [A-Z ]{0,40}PRIVATE KEY-----|\Z)"
+    "-----BEGIN "
+    + r"[A-Z ]{0,40}PRIVATE KEY(?: BLOCK)?-----"
+    + r"(?:[^-]|-(?!----))*"
+    + "(?:-----END "
+    + r"[A-Z ]{0,40}PRIVATE KEY(?: BLOCK)?-----|(?=-----)|\Z)"
 )
 _SEP: Final = r"[-_ ]?"
 
@@ -325,11 +351,11 @@ def _key_pattern(prefix_class: str, separator: str) -> str:
     )
 
 
-#: Inside quotes a key may contain `-`, `_` or spaces between its words.
-_KEY_PATTERN: Final = _key_pattern(r"[A-Za-z0-9_\- ]", _SEP)
+#: Inside quotes a key may contain `-`, `_`, `.` or spaces (`oauth.token`).
+_KEY_PATTERN: Final = _key_pattern(r"[A-Za-z0-9_.\- ]", _SEP)
 #: In a query string or form body a key is one word (no spaces), so a run of
 #: spaces cannot make every position a candidate start.
-_FORM_KEY_PATTERN: Final = _key_pattern(r"[A-Za-z0-9_\-]", r"[-_]?")
+_FORM_KEY_PATTERN: Final = _key_pattern(r"[A-Za-z0-9_.\-]", r"[-_]?")
 #: A JSON scalar that is not a string.
 _SCALAR: Final = r"(?:-?\d[\d.eE+\-]*|true|false|null)"
 #: `"key": value` in plain JSON text, where value is a JSON string or scalar.
@@ -337,14 +363,45 @@ _TEXT_PAIR: Final = re.compile(
     r'(?P<head>"' + _KEY_PATTERN + r'"\s*:\s*)(?:"(?:[^"\\]|\\.)*"|' + _SCALAR + r")",
     re.IGNORECASE | re.DOTALL,
 )
-#: The same pair one escaping level down, as it appears inside a JSON string
-#: (`\"key\":\"value\"`), which is how TextContent carries the envelope. The
-#: backslash run is anchored by `(?<!\\)` so it starts only at the run's first
-#: backslash (unanchored, it restarted at every one: quadratic).
-_ESCAPED_TEXT_PAIR: Final = re.compile(
-    r'(?P<head>(?<!\\)(?P<q>\\+")' + _KEY_PATTERN + r"(?P=q)\s*:\s*)"
-    r"(?:(?P=q)(?:(?!(?P=q)).)*(?P=q)|" + _SCALAR + r")",
-    re.IGNORECASE | re.DOTALL,
+#: The JSON escaping levels the text path redacts, as backslashes before a
+#: quote. A document embedded in a JSON string is escaped once more at each
+#: level, which doubles the backslashes and adds one: 1, 3, 7, 15. That is the
+#: four embedding levels the JSON path follows (`_MAX_EMBEDDED_DEPTH`), and the
+#: bound is what keeps the escape run from being an unbounded backtracking
+#: point.
+_ESCAPE_LEVELS: Final = (1, 3, 7, 15)
+
+
+def _escaped_pair(level: int, *, unterminated: bool) -> re.Pattern[str]:
+    r"""`\"key\": value` at one escaping level, terminated or cut off by the end.
+
+    The quote run is exactly `level` backslashes and a quote, starting at the
+    run's first backslash. The value is a partition of the text into
+    non-backslash, non-quote characters; backslash runs not followed by a
+    quote; and quote runs *longer* than `level` (a deeper level's quote, which
+    belongs to the value). It stops at the first quote run of `level` or fewer
+    backslashes, which every later head at this level contains, so a scan never
+    crosses a later head.
+    """
+    quote = r"(?<!\\)\\{" + str(level) + r'}"'
+    value = r'(?:[^\\"]|\\+(?!["\\])|\\{' + str(level + 1) + r',}")*'
+    head = r"(?P<head>" + quote + _KEY_PATTERN + quote + r"\s*:\s*)"
+    if unterminated:
+        return re.compile(
+            head + quote + value + r"\\*\Z",
+            re.IGNORECASE | re.DOTALL,
+        )
+    return re.compile(
+        head + r"(?:" + quote + value + r"\\{0," + str(level) + r'}"|' + _SCALAR + r")",
+        re.IGNORECASE | re.DOTALL,
+    )
+
+
+_ESCAPED_TEXT_PAIRS: Final = tuple(
+    _escaped_pair(level, unterminated=False) for level in _ESCAPE_LEVELS
+)
+_ESCAPED_UNTERMINATED_PAIRS: Final = tuple(
+    _escaped_pair(level, unterminated=True) for level in _ESCAPE_LEVELS
 )
 #: `'key': value`, as a Python repr of a request echoes it.
 _QUOTED_TEXT_PAIR: Final = re.compile(
@@ -354,22 +411,28 @@ _QUOTED_TEXT_PAIR: Final = re.compile(
 )
 #: A credential value cut off by the end of the text (a truncated or
 #: never-finished body): the key and its opening quote are kept, the rest of the
-#: text is redacted. Plain and one escaping level down.
+#: text is redacted.
 _UNTERMINATED_PAIR: Final = re.compile(
     r'(?P<head>"' + _KEY_PATTERN + r'"\s*:\s*")(?:[^"\\]|\\.)*\\?\Z',
-    re.IGNORECASE | re.DOTALL,
-)
-_ESCAPED_UNTERMINATED_PAIR: Final = re.compile(
-    r'(?P<head>(?<!\\)(?P<q>\\+")' + _KEY_PATTERN + r"(?P=q)\s*:\s*(?P=q))"
-    r"(?:(?!(?P=q)).)*\Z",
     re.IGNORECASE | re.DOTALL,
 )
 #: `key=value` in a query string or form body. The key starts only at the start
 #: of a word, and the value runs to `&`, whitespace, a quote or a backslash.
 _FORM_PAIR: Final = re.compile(
-    r"(?P<head>(?<![A-Za-z0-9_\-])" + _FORM_KEY_PATTERN + r"=)(?!\[REDACTED\])[^&\s\"'\\]+",
+    r"(?P<head>(?<![A-Za-z0-9_.\-])" + _FORM_KEY_PATTERN + r"=)(?!\[REDACTED\])[^&\s\"'\\]+",
     re.IGNORECASE,
 )
+
+
+def _escaped_replacement(level: int, *, closed: bool) -> Callable[[re.Match[str]], str]:
+    """Keep the head; replace the value with an escaped `[REDACTED]` at `level`."""
+    quote = "\\" * level + '"'
+    tail = quote if closed else ""
+
+    def replace(match: re.Match[str]) -> str:
+        return f"{match.group('head')}{quote}{REDACTED}{tail}"
+
+    return replace
 
 
 def _redact_dotted_run(match: re.Match[str], counter: list[int]) -> str:
@@ -397,23 +460,31 @@ def _redact_string_patterns(value: str) -> tuple[str, int]:
     and single-quoted as a Python repr echoes them in a validation message),
     then `Bearer <token>` and JWT-shaped runs.
     """
-    value, pem = _PEM_PRIVATE_KEY.subn(REDACTED, value)
-    value, pairs = _TEXT_PAIR.subn(lambda match: f'{match.group("head")}"{REDACTED}"', value)
-    value, escaped = _ESCAPED_TEXT_PAIR.subn(_escaped_replacement, value)
-    value, quoted = _QUOTED_TEXT_PAIR.subn(
-        lambda match: f"{match.group('head')}'{REDACTED}'", value
-    )
-    value, cut = _UNTERMINATED_PAIR.subn(lambda match: f"{match.group('head')}{REDACTED}", value)
-    value, escaped_cut = _ESCAPED_UNTERMINATED_PAIR.subn(
-        lambda match: f"{match.group('head')}{REDACTED}", value
-    )
-    value, form = _FORM_PAIR.subn(lambda match: f"{match.group('head')}{REDACTED}", value)
-    value, cookies = _COOKIE_LINE.subn(lambda match: f"{match.group(1)}: {REDACTED}", value)
-    value, bearer = _BEARER.subn(lambda match: f"{match.group(1)} {REDACTED}", value)
-    value, basic = _BASIC.subn(lambda match: f"{match.group(1)} {REDACTED}", value)
+    value, count = _PEM_PRIVATE_KEY.subn(REDACTED, value)
+    value, found = _TEXT_PAIR.subn(lambda match: f'{match.group("head")}"{REDACTED}"', value)
+    count += found
+    for level, pattern in zip(_ESCAPE_LEVELS, _ESCAPED_TEXT_PAIRS, strict=True):
+        value, found = pattern.subn(_escaped_replacement(level, closed=True), value)
+        count += found
+    value, found = _QUOTED_TEXT_PAIR.subn(lambda match: f"{match.group('head')}'{REDACTED}'", value)
+    count += found
+    value, found = _UNTERMINATED_PAIR.subn(lambda match: f"{match.group('head')}{REDACTED}", value)
+    count += found
+    for level, pattern in zip(_ESCAPE_LEVELS, _ESCAPED_UNTERMINATED_PAIRS, strict=True):
+        value, found = pattern.subn(_escaped_replacement(level, closed=False), value)
+        count += found
+    value, found = _FORM_PAIR.subn(lambda match: f"{match.group('head')}{REDACTED}", value)
+    count += found
+    value, found = _URL_USERINFO.subn(lambda match: f"{match.group(1)}{REDACTED}@", value)
+    count += found
+    value, found = _HEADER_LINE.subn(lambda match: f"{match.group(1)}: {REDACTED}", value)
+    count += found
+    value, found = _BEARER.subn(lambda match: f"{match.group(1)} {REDACTED}", value)
+    count += found
+    value, found = _BASIC.subn(lambda match: f"{match.group(1)} {REDACTED}", value)
+    count += found
     jwt = [0]
     value = _DOTTED_RUN.sub(lambda match: _redact_dotted_run(match, jwt), value)
-    count = pem + pairs + escaped + quoted + cut + escaped_cut + form + cookies + bearer + basic
     return value, count + jwt[0]
 
 
@@ -520,11 +591,6 @@ def redact_text(value: str) -> tuple[str, int, bool]:
     value, patterns = _redact_string_patterns(value)
     value, replaced = _sanitize(value)
     return value, patterns, replaced
-
-
-def _escaped_replacement(match: re.Match[str]) -> str:
-    quote = match.group("q")
-    return f"{match.group('head')}{quote}{REDACTED}{quote}"
 
 
 def _utf8_prefix(value: str, limit: int) -> str:

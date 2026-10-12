@@ -108,24 +108,38 @@ them:
   `diagnostics.capture.non_finite_replaced` is `true`. Without this JSONB
   would refuse the row and the exchange would go unlogged.
 - **Every string**, in this order:
-  - a PEM private-key block (`-----BEGIN … PRIVATE KEY-----` to
-    `-----END … PRIVATE KEY-----`, or to the end of the text when the block is
-    cut off) becomes `[REDACTED]`;
-  - `"key": value`, `\"key\": value` (one escaping level down) and
-    `'key': value` (a Python repr) pairs for the keys above become
-    `"key": "[REDACTED]"` (same quoting), where value is a string or a
-    non-string scalar (number, `true`/`false`/`null`; `True`/`False`/`None` in
-    a repr). As text, a key matches with `-`, `_` or a space between its words,
-    in any case, and the suffix rule allows up to 64 characters before the
-    suffix;
+  - a PEM or PGP private-key block (a `-----BEGIN` line naming a `PRIVATE KEY`
+    or `PRIVATE KEY BLOCK`) becomes `[REDACTED]` up to and including its
+    matching `END` line; if the next `-----` is anything else (a near-miss
+    `END`, another armour line) or the text ends first, everything up to that
+    point is redacted and the near-miss line is kept;
+  - `"key": value` pairs for the keys above become `"key": "[REDACTED]"`,
+    where value is a string or a non-string scalar (number,
+    `true`/`false`/`null`). As text, a key matches with `-`, `_`, `.` or a space
+    between its words (so `oauth.token` and `a.b.client_secret` match), in any
+    case, and the suffix rule allows up to 64 characters before the suffix;
+  - the same pairs inside an escaped JSON string, at the four escaping levels
+    the JSON path follows — one, three, seven or fifteen backslashes before
+    each quote (each embedding doubles the backslashes and adds one). The value
+    runs to the first quote with that many backslashes or fewer, so a deeper
+    level's escaped quote inside the value is redacted with it; a quote run of
+    more than fifteen backslashes is not treated as a pair;
+  - `'key': value` pairs as a Python repr prints them (`True`/`False`/`None`
+    as scalars);
   - a credential value **cut off by the end of the text** (`"refresh_token":"ABC`
-    with no closing quote, plain or one escaping level down) is redacted to the
-    end;
+    with no closing quote, plain or at any of the four escaping levels) is
+    redacted to the end;
   - `key=value` in a query string or form body (`client_secret=…&code_verifier=…`)
     becomes `key=[REDACTED]`, the value running to `&`, whitespace, a quote or a
     backslash; the key must start a word and contain no spaces;
-  - a `Cookie:` or `Set-Cookie:` header line keeps its name and loses its value
-    (`Cookie: [REDACTED]`, up to the end of the line, a quote or a backslash);
+  - the password in URL userinfo: `scheme://user:password@host` becomes
+    `scheme://user:[REDACTED]@host` (scheme up to 32 characters, user and
+    password up to 256 each);
+  - a credential header line — `Cookie:`, `Set-Cookie:`, `Authorization:` or
+    `Proxy-Authorization:` with any scheme (`Bearer`, `Basic`, `Token`,
+    `Digest`, …), `X-Api-Key:` / `Api-Key:`, and any `*-Token:` or `*-Secret:`
+    header — keeps its name and loses its value (`Authorization: [REDACTED]`, up
+    to the end of the line, a quote or a backslash);
   - `Bearer <token>` becomes `Bearer [REDACTED]` (any case);
   - `Basic <base64>` becomes `Basic [REDACTED]`. Only the word `basic` is
     case-insensitive; the run must be eight or more base64 characters and
@@ -145,11 +159,17 @@ them:
   `diagnostics.capture.nul_replaced`.
 - `diagnostics.capture.redactions` counts the replacements made.
 
-**Every pattern runs in linear time.** The writer thread runs them over
-bodies an untrusted client chooses, so each is written so that it cannot
-restart inside a run (lookbehind-anchored runs, bounded key prefixes). A unit
-test times every family on about 1 MiB of adversarial input against a 2-second
-bound; measured, the slowest family takes about 0.4 s.
+**Every pattern is linear by construction.** The writer thread runs them over
+bodies an untrusted client chooses, so each is built so that no start can
+rescan text a later start will scan: scans start only at the first character
+of a run, every prefix and escape run is bounded, and every body or value scan
+stops at the first terminator of its kind. A unit test probes **every compiled
+pattern** with worst-case shapes (many start tokens, filler, a near-miss
+terminator at the end, and start tokens of decreasing length): growth from
+20 000 to 80 000 characters must stay under 8x (quadratic growth is about 16x)
+and each runs at 1 MiB within 2 seconds. Measured on the development machine,
+the slowest pattern on its worst shape takes about 0.12 s at 1 MiB; the slowest
+whole-family run through all rules (`redact_text`) about 0.6 s.
 
 **Stated limits.** Redaction is pattern-based; treat the log as sensitive
 regardless.
@@ -199,8 +219,10 @@ stored.
   either bound is dropped and counted (`dropped`); the request never waits.
   Each body buffers at most 16 MiB, so the queue's memory bound is 64 MiB
   rather than 1024 x 2 x 16 MiB. The tee keeps references to the chunks the
-  server already holds, not copies; the budget is released as the writer
-  takes each exchange.
+  server sends and joins each body once on the event loop after the response
+  is sent: a single-chunk body (the usual case) is not copied, a multi-chunk
+  body is copied once (at most 16 MiB per direction). The budget is released
+  as the writer takes each exchange.
 - The writer engine has no connect timeout of its own (`create_database_engine`
   takes none), so an unreachable host that does not refuse the connection
   holds only the writer thread for the operating system's connect timeout;

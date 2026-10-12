@@ -13,6 +13,7 @@ import asyncio
 import hashlib
 import io
 import json
+import re
 import threading
 import time
 from collections.abc import Mapping
@@ -1205,8 +1206,8 @@ def test_the_text_path_redacts_scalar_values_and_widened_keys(raw: str) -> None:
 
 
 def test_basic_credentials_in_text_are_redacted_and_prose_is_not() -> None:
-    text, count, _ = redact_text("Authorization: Basic dXNlcjpwYXNzd29yZA== then a basic setup")
-    assert text == f"Authorization: Basic {REDACTED} then a basic setup"
+    text, count, _ = redact_text("sent Basic dXNlcjpwYXNzd29yZA== then a basic setup")
+    assert text == f"sent Basic {REDACTED} then a basic setup"
     assert count == 1
     redacted, count, _ = redact_json({"note": "sent basic QWxhZGRpbjpvcGVu here"})
     assert redacted == {"note": f"sent basic {REDACTED} here"}
@@ -1444,3 +1445,256 @@ def test_drops_are_reported_count_only_at_the_first_and_then_rate_limited() -> N
     ]
     assert "MARKERDROP" not in stderr.getvalue() + eager.getvalue()
     assert capture.DROP_REPORT_SECONDS == 60.0
+
+
+# ---- systematic quadratic probe over every compiled pattern (review B1, round 2) ----
+#
+# For every compiled pattern in the module: many repetitions of the pattern's
+# start token, filler, and a near-miss terminator at the very end. A pattern
+# that restarts a scan at every start token is quadratic, so its 80 K time is
+# about 16x its 20 K time; a linear one is about 4x. Timings are best-of-3 so
+# one scheduler hiccup cannot fail the test, and a ratio is only judged once
+# the 80 K time is large enough to measure (below the floor nothing quadratic
+# of interest can hide at this size; the 1 MiB absolute bound still applies).
+
+_RATIO_LIMIT = 8.0
+_RATIO_FLOOR_SECONDS = 0.005
+_PROBE_SMALL = 20_000
+_PROBE_LARGE = 80_000
+_PEM_CERT_END = "-----END " + "CERTIFICATE-----"
+
+
+def _repeat(start: str, filler: str = "", tail: str = "") -> Any:  # noqa: ANN401
+    unit = start + filler
+
+    def build(size: int) -> str:
+        return unit * max(1, size // len(unit)) + tail
+
+    return build
+
+
+def _decreasing_escaped_heads(size: int) -> str:
+    """The reviewer's shape: escaped heads whose backslash runs shrink by one."""
+    heads: list[str] = []
+    total = 0
+    runs = 1
+    while total < size:
+        total += 3 * runs + 12
+        runs += 1
+    for run in range(runs, 0, -1):
+        quote = "\\" * run + '"'
+        heads.append(quote + "token" + quote + ":" + quote + "x")
+    return "".join(heads)
+
+
+def _decreasing_start_tokens(token: str) -> Any:  # noqa: ANN401
+    """Start tokens whose lengths decrease: each shorter variant is a near miss."""
+
+    def build(size: int) -> str:
+        parts: list[str] = []
+        total = 0
+        length = len(token)
+        while total < size:
+            for cut in range(length, 0, -1):
+                parts.append(token[:cut] + " ")
+                total += cut + 1
+        return "".join(parts)
+
+    return build
+
+
+#: Per-pattern worst-case shapes: start token, filler, near-miss tail.
+_PATTERN_SHAPES: dict[str, list[Any]] = {
+    "_BEARER": [_repeat("bearer "), _repeat("Bearer", " "), _decreasing_start_tokens("bearer")],
+    "_BASIC": [_repeat("basic ", "a"), _repeat("Basic aaaaaaa"), _repeat("basic", " ")],
+    "_HEADER_LINE": [
+        _repeat("cookie", " "),
+        _repeat("set-cookie", "\t"),
+        _repeat("cookie:"),
+        _repeat("authorization", " "),
+        _repeat("a-", "", "token"),
+        _repeat("x-" + "a" * 70 + "-token", " "),
+        _decreasing_start_tokens("proxy-authorization"),
+    ],
+    "_URL_USERINFO": [
+        _repeat("https://u", ":"),
+        _repeat("a://", "b:c"),
+        _repeat("a" * 40 + "://", "u:" + "p" * 300),
+        _repeat("s://u:p", "@", "x"),
+    ],
+    "_DOTTED_RUN": [_repeat("eyJ"), _repeat("a."), _repeat("eyJ."), _repeat("eyJa.b", "", "c")],
+    "_PEM_PRIVATE_KEY": [
+        _repeat(_PEM_BEGIN.format(kind="") + "a", "", "-----END X"),
+        _repeat(_PEM_BEGIN.format(kind=""), "", _PEM_CERT_END),
+        _repeat("-----BEGIN ", "A"),
+        _repeat("-"),
+    ],
+    "_TEXT_PAIR": [
+        _repeat('"token":"', "a"),
+        _repeat('"a', " "),
+        _repeat('"token": -', "1"),
+        _repeat('"' + "a" * 63, " "),
+        _repeat('"oauth.', "a.", '":'),
+        _repeat('"a.b.c.token":"', "x"),
+    ],
+    "_ESCAPED_TEXT_PAIRS": [
+        _decreasing_escaped_heads,
+        _repeat('\\"token\\":\\"', "x"),
+        _repeat("\\", "", '"'),
+        _repeat('\\\\\\"token\\\\\\":', "1"),
+        _repeat("\\" * 15 + '"token' + "\\" * 15 + '":' + "\\" * 15 + '"x', "\\" * 16 + '"'),
+        _repeat("\\" * 7 + '"token' + "\\" * 7 + '":' + "\\" * 7 + '"', "\\" * 8),
+    ],
+    "_QUOTED_TEXT_PAIR": [_repeat("'token':'", "a"), _repeat("'token':", "-"), _repeat("'a", " ")],
+    "_UNTERMINATED_PAIR": [
+        _repeat('"token":"a', "\\"),
+        _repeat('"token":"', "a", "\\"),
+        _repeat('"token": "', '\\"'),
+    ],
+    "_ESCAPED_UNTERMINATED_PAIRS": [
+        _decreasing_escaped_heads,
+        _repeat('\\"token\\":\\"', "x"),
+        _repeat('\\\\\\"token\\\\\\":\\\\\\"', "\\"),
+        _repeat("\\" * 15 + '"token' + "\\" * 15 + '":' + "\\" * 15 + '"x', "\\" * 16 + '"'),
+    ],
+    "_FORM_PAIR": [_repeat("token="), _repeat("a", " ", "token"), _repeat("x_token", "=")],
+}
+
+#: The reviewer's two inputs, kept verbatim in shape.
+_REVIEWER_INPUTS: dict[str, Any] = {
+    "pem_begins_then_near_miss_end": _repeat(_PEM_BEGIN.format(kind="") + "a", "", "-----END X"),
+    "escaped_heads_with_shrinking_runs": _decreasing_escaped_heads,
+}
+
+
+def _compiled_patterns() -> dict[str, re.Pattern[str]]:
+    found: dict[str, re.Pattern[str]] = {}
+    for name, value in vars(capture).items():
+        if isinstance(value, re.Pattern):
+            found[name] = value
+        elif isinstance(value, tuple) and value and all(isinstance(v, re.Pattern) for v in value):
+            for index, pattern in enumerate(value):
+                found[f"{name}[{index}]"] = pattern
+    return found
+
+
+def _best_of_three(pattern: re.Pattern[str], text: str) -> float:
+    best = float("inf")
+    for _ in range(3):
+        began = time.perf_counter()
+        pattern.sub("", text)
+        best = min(best, time.perf_counter() - began)
+    return best
+
+
+def _assert_linear(pattern: re.Pattern[str], build: Any, label: str) -> None:  # noqa: ANN401
+    small = _best_of_three(pattern, build(_PROBE_SMALL))
+    large = _best_of_three(pattern, build(_PROBE_LARGE))
+    if large >= _RATIO_FLOOR_SECONDS:
+        ratio = large / max(small, 1e-6)
+        assert ratio < _RATIO_LIMIT, f"{label}: 80K/20K = {ratio:.1f} ({small:.4f}s, {large:.4f}s)"
+
+
+def _shape_key(name: str) -> str:
+    return name.split("[", 1)[0]
+
+
+def test_every_compiled_pattern_has_probe_shapes() -> None:
+    assert {_shape_key(name) for name in _compiled_patterns()} == set(_PATTERN_SHAPES)
+
+
+@pytest.mark.parametrize("name", sorted(_compiled_patterns()))
+def test_every_compiled_pattern_is_linear_on_its_worst_case_shapes(name: str) -> None:
+    pattern = _compiled_patterns()[name]
+    own = _PATTERN_SHAPES[_shape_key(name)]
+    for index, build in enumerate(own):
+        _assert_linear(pattern, build, f"{name} shape {index}")
+    for key, shapes in _PATTERN_SHAPES.items():
+        if key == _shape_key(name):
+            continue
+        for index, build in enumerate(shapes):
+            _assert_linear(pattern, build, f"{name} on {key} shape {index}")
+    for index, build in enumerate(own):
+        text = build(_MIB)
+        began = time.perf_counter()
+        pattern.sub("", text)
+        assert time.perf_counter() - began < _LINEAR_BOUND_SECONDS, f"{name} shape {index} @1MiB"
+
+
+@pytest.mark.parametrize("name", sorted(_REVIEWER_INPUTS))
+def test_the_reviewers_quadratic_inputs_are_linear_through_redact_text(name: str) -> None:
+    build = _REVIEWER_INPUTS[name]
+    small = min(_timed_redact(build(_PROBE_SMALL)) for _ in range(3))
+    large = min(_timed_redact(build(_PROBE_LARGE)) for _ in range(3))
+    if large >= _RATIO_FLOOR_SECONDS:
+        assert large / max(small, 1e-6) < _RATIO_LIMIT, (small, large)
+    assert _timed_redact(build(320_000)) < _LINEAR_BOUND_SECONDS
+
+
+def _timed_redact(text: str) -> float:
+    began = time.perf_counter()
+    redact_text(text)
+    return time.perf_counter() - began
+
+
+def test_url_userinfo_passwords_are_redacted() -> None:
+    text, count, _ = redact_text(
+        "dsn postgresql+psycopg://app:MARKERURLPASS@db.example/x and https://example.org/a:b@c"
+    )
+    assert text == (
+        f"dsn postgresql+psycopg://app:{REDACTED}@db.example/x and https://example.org/a:b@c"
+    )
+    assert count == 1
+    redacted, _, _ = redact_json({"url": "ftp://u:MARKERFTP@h"})
+    assert redacted == {"url": f"ftp://u:{REDACTED}@h"}
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("Authorization: Token MARKERHDR1", f"Authorization: {REDACTED}"),
+        ("authorization: Digest username=x, response=MARKERHDR2", f"authorization: {REDACTED}"),
+        ("Proxy-Authorization: Basic MARKERHDR3", f"Proxy-Authorization: {REDACTED}"),
+        ("X-Api-Key: MARKERHDR4", f"X-Api-Key: {REDACTED}"),
+        ("X-Auth-Token:MARKERHDR5", f"X-Auth-Token: {REDACTED}"),
+        ("X-Client-Secret: MARKERHDR6", f"X-Client-Secret: {REDACTED}"),
+    ],
+)
+def test_credential_header_lines_of_any_scheme_are_redacted(line: str, expected: str) -> None:
+    text, count, _ = redact_text(f"GET /\r\n{line}\r\nAccept: */*")
+    assert text == f"GET /\r\n{expected}\r\nAccept: */*"
+    assert count == 1
+
+
+def test_dotted_credential_keys_are_redacted_on_the_text_path() -> None:
+    text, count, _ = redact_text('{"oauth.token": "MARKERDOT1", "a.b.client_secret": 7, "x": 1')
+    assert "MARKERDOT1" not in text
+    assert '"a.b.client_secret": "[REDACTED]"' in text
+    assert count == 2
+    form, count, _ = redact_text("oauth.token=MARKERDOT2&x=1")
+    assert form == f"oauth.token={REDACTED}&x=1"
+    assert count == 1
+    redacted, _, _ = redact_json({"oauth.token": "MARKERDOT3"})
+    assert redacted == {"oauth.token": REDACTED}
+
+
+def test_escaped_pairs_keep_deeper_quotes_inside_the_redacted_value() -> None:
+    level_one = 'a \\"apiKey\\": \\"AB\\\\\\"CD\\" z'
+    text, count, _ = redact_text(level_one)
+    assert text == f'a \\"apiKey\\": \\"{REDACTED}\\" z'
+    assert count == 1
+    level_three = "\\\\\\" + '"token' + "\\\\\\" + '":' + "\\\\\\" + '"MARKERL3' + "\\\\\\" + '" y'
+    text, count, _ = redact_text(level_three)
+    assert "MARKERL3" not in text
+    assert count == 1
+
+
+def test_a_pgp_private_key_block_and_a_near_miss_end_are_redacted() -> None:
+    begin = "-----BEGIN " + "PGP PRIVATE KEY BLOCK-----"
+    end = "-----END " + "PGP PRIVATE KEY BLOCK-----"
+    text, count, _ = redact_text(f"a {begin}\nMARKERPGP\n{end} b")
+    assert text == f"a {REDACTED} b"
+    assert count == 1
+    near, count, _ = redact_text(_PEM_BEGIN.format(kind="") + "\nMARKERNEAR\n" + _PEM_CERT_END)
+    assert near == REDACTED + _PEM_CERT_END
+    assert count == 1

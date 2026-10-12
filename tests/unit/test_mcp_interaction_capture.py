@@ -1261,10 +1261,15 @@ _MIB = 1024 * 1024
 #: signature appears in source (`test_repository_has_no_high_confidence_secret_signature`).
 _PEM_BEGIN = "-----BEGIN " + "{kind}PRIVATE KEY-----"
 _PEM_END = "-----END " + "{kind}PRIVATE KEY-----"
-#: Generous on purpose: every family runs in well under half a second on a
-#: developer machine, and the quadratic forms these replace took tens to
-#: hundreds of seconds at this size. The outcome does not depend on the margin.
-_LINEAR_BOUND_SECONDS = 2.0
+#: Absolute backstop for one timed run (thread CPU time), a fixed generous constant
+#: rather than an in-process calibration (a calibration loop is itself slowed
+#: by the contention it is meant to measure). Idle, the slowest run it guards
+#: takes about 0.6 s (a whole 1 MiB family through `redact_text`), so this
+#: leaves ~16x headroom for an oversubscribed CI host; the quadratic forms
+#: these tests exist to catch take tens to hundreds of seconds at the same
+#: sizes, so the margin cannot hide them. The primary discriminator for the
+#: probes below is the size-spread ratio, not this bound.
+_LINEAR_BOUND_SECONDS = 10.0
 
 #: One adversarial run per pattern family, each about 1 MiB of text.
 _ADVERSARIAL: dict[str, tuple[str, str]] = {
@@ -1292,18 +1297,29 @@ _ADVERSARIAL: dict[str, tuple[str, str]] = {
 def test_every_redaction_pattern_family_is_linear_on_adversarial_input(family: str) -> None:
     prefix, unit = _ADVERSARIAL[family]
     text = prefix + unit * (_MIB // len(unit))
-    began = time.perf_counter()
+    began = time.thread_time()
     redact_text(text)
-    assert time.perf_counter() - began < _LINEAR_BOUND_SECONDS
+    assert time.thread_time() - began < _LINEAR_BOUND_SECONDS
 
 
 def test_an_adversarial_tools_call_body_builds_its_row_quickly() -> None:
-    """The reviewer's shape: a ~450 KB tools/call body, on the full row path."""
-    arguments = {"a": "eyJ" * 60_000, "b": "\\" * 160_000, "c": '\\"token\\":' * 10_000}
-    began = time.perf_counter()
-    row = _row(_exchange(_call("tasks.list", arguments)))
-    assert time.perf_counter() - began < _LINEAR_BOUND_SECONDS
-    assert row["outcome"] == "ok"
+    """The reviewer's shape on the full row path: up to a ~450 KB tools/call body.
+
+    Timed like the probes below: a 16x size spread, minimum of three, a ratio
+    judged only on a measurable large sample, and the absolute backstop.
+    """
+
+    def body(scale: int) -> CapturedExchange:
+        arguments = {
+            "a": "eyJ" * (3_750 * scale),
+            "b": "\\" * (10_000 * scale),
+            "c": '\\"token\\":' * (625 * scale),
+        }
+        return _exchange(_call("tasks.list", arguments))
+
+    exchanges = {1: body(1), 16: body(16)}
+    _assert_linear(_row, exchanges.__getitem__, "tools/call row", sizes=(1, 16))
+    assert _row(exchanges[16])["outcome"] == "ok"
 
 
 @pytest.mark.parametrize(
@@ -1450,17 +1466,41 @@ def test_drops_are_reported_count_only_at_the_first_and_then_rate_limited() -> N
 # ---- systematic quadratic probe over every compiled pattern (review B1, round 2) ----
 #
 # For every compiled pattern in the module: many repetitions of the pattern's
-# start token, filler, and a near-miss terminator at the very end. A pattern
-# that restarts a scan at every start token is quadratic, so its 80 K time is
-# about 16x its 20 K time; a linear one is about 4x. Timings are best-of-3 so
-# one scheduler hiccup cannot fail the test, and a ratio is only judged once
-# the 80 K time is large enough to measure (below the floor nothing quadratic
-# of interest can hide at this size; the 1 MiB absolute bound still applies).
+# start token, filler, and a near-miss terminator at the very end.
+#
+# Robust to CPU contention by construction (AGENTS.md section 7: no flaky
+# tests), in two ways.
+#
+# 1. **CPU time, not wall time.** Every probe sample is the calling thread's
+#    CPU time (`time.thread_time`, CLOCK_THREAD_CPUTIME_ID). Time the thread
+#    spends descheduled is not counted, so an oversubscribed host cannot
+#    inflate one sample against another. Two wall-clock designs were measured
+#    flaking with 20 busy loops on 14 cores: comparing one 32 K run with one
+#    512 K run, and comparing equal work split 16 ways; in both a sample that
+#    straddled a preemption absorbed tens of milliseconds the other did not.
+# 2. **Equal work, wide spread.** The probe compares one run over a large text
+#    with `spread` runs over a text `spread` times smaller (16x: 32 K and
+#    512 K characters), normalised by actual length. Linear costs the same
+#    either way (ratio ~1); quadratic costs ~16x more on the large text. The
+#    limit of 4 leaves 4x margin on both sides, which also absorbs the cache
+#    and shared-core effects CPU time still sees under load.
+#
+# Each side is the minimum of three repetitions (two for the cross-pattern
+# probes), and the ratio is judged only when the large run uses at least 20 ms
+# of CPU; below that only the absolute backstop applies. Every pattern is also
+# probed with every *other* pattern's shapes at 8 K / 128 K (same 16x spread)
+# to keep the file inside FAST.
 
-_RATIO_LIMIT = 8.0
-_RATIO_FLOOR_SECONDS = 0.005
-_PROBE_SMALL = 20_000
-_PROBE_LARGE = 80_000
+_RATIO_LIMIT = 4.0
+_RATIO_FLOOR_SECONDS = 0.020
+_PROBE_SMALL = 32_768
+_PROBE_LARGE = 524_288
+_CROSS_SMALL = 8_192
+_CROSS_LARGE = 131_072
+_REPETITIONS = 3
+#: The cross-pattern probes take the minimum of two: they are a broad net over
+#: shapes written for other patterns, and the FAST budget pays for them.
+_CROSS_REPETITIONS = 2
 _PEM_CERT_END = "-----END " + "CERTIFICATE-----"
 
 
@@ -1578,21 +1618,50 @@ def _compiled_patterns() -> dict[str, re.Pattern[str]]:
     return found
 
 
-def _best_of_three(pattern: re.Pattern[str], text: str) -> float:
+def _min_time(run: Any, text: Any, times: int, label: str, repetitions: int) -> float:  # noqa: ANN401
+    """The minimum over `repetitions` of the CPU time to run `run(text)` `times` times.
+
+    Each repetition is checked against `_LINEAR_BOUND_SECONDS` as it finishes,
+    so a quadratic regression fails after one slow repetition, not three.
+    """
     best = float("inf")
-    for _ in range(3):
-        began = time.perf_counter()
-        pattern.sub("", text)
-        best = min(best, time.perf_counter() - began)
+    for _ in range(repetitions):
+        began = time.thread_time()
+        for _ in range(times):
+            run(text)
+        elapsed = time.thread_time() - began
+        assert elapsed < _LINEAR_BOUND_SECONDS, f"{label}: {elapsed:.2f}s per repetition"
+        best = min(best, elapsed)
     return best
 
 
-def _assert_linear(pattern: re.Pattern[str], build: Any, label: str) -> None:  # noqa: ANN401
-    small = _best_of_three(pattern, build(_PROBE_SMALL))
-    large = _best_of_three(pattern, build(_PROBE_LARGE))
+def _assert_linear(
+    run: Any,  # noqa: ANN401
+    build: Any,  # noqa: ANN401
+    label: str,
+    *,
+    sizes: tuple[int, int] = (_PROBE_SMALL, _PROBE_LARGE),
+    repetitions: int = _REPETITIONS,
+) -> None:
+    small_size, large_size = sizes
+    spread = large_size // small_size
+    small_text, large_text = build(small_size), build(large_size)
+    small_length = len(small_text) if isinstance(small_text, str) else small_size
+    large_length = len(large_text) if isinstance(large_text, str) else large_size
+    small = _min_time(run, small_text, spread, label, repetitions)
+    large = _min_time(run, large_text, 1, label, repetitions)
     if large >= _RATIO_FLOOR_SECONDS:
-        ratio = large / max(small, 1e-6)
-        assert ratio < _RATIO_LIMIT, f"{label}: 80K/20K = {ratio:.1f} ({small:.4f}s, {large:.4f}s)"
+        per_char_small = small / (spread * small_length)
+        per_char_large = large / large_length
+        ratio = per_char_large / max(per_char_small, 1e-12)
+        assert ratio < _RATIO_LIMIT, (
+            f"{label}: one {large_length}-char run costs {ratio:.1f}x the same work in "
+            f"{spread} runs of {small_length} chars ({large:.4f}s vs {small:.4f}s)"
+        )
+
+
+def _substitute(pattern: re.Pattern[str]) -> Any:  # noqa: ANN401
+    return lambda text: pattern.sub("", text)
 
 
 def _shape_key(name: str) -> str:
@@ -1606,35 +1675,31 @@ def test_every_compiled_pattern_has_probe_shapes() -> None:
 @pytest.mark.parametrize("name", sorted(_compiled_patterns()))
 def test_every_compiled_pattern_is_linear_on_its_worst_case_shapes(name: str) -> None:
     pattern = _compiled_patterns()[name]
+    run = _substitute(pattern)
     own = _PATTERN_SHAPES[_shape_key(name)]
     for index, build in enumerate(own):
-        _assert_linear(pattern, build, f"{name} shape {index}")
+        _assert_linear(run, build, f"{name} shape {index}")
     for key, shapes in _PATTERN_SHAPES.items():
         if key == _shape_key(name):
             continue
         for index, build in enumerate(shapes):
-            _assert_linear(pattern, build, f"{name} on {key} shape {index}")
+            _assert_linear(
+                run,
+                build,
+                f"{name} on {key} shape {index}",
+                sizes=(_CROSS_SMALL, _CROSS_LARGE),
+                repetitions=_CROSS_REPETITIONS,
+            )
     for index, build in enumerate(own):
         text = build(_MIB)
-        began = time.perf_counter()
+        began = time.thread_time()
         pattern.sub("", text)
-        assert time.perf_counter() - began < _LINEAR_BOUND_SECONDS, f"{name} shape {index} @1MiB"
+        assert time.thread_time() - began < _LINEAR_BOUND_SECONDS, f"{name} shape {index} @1MiB"
 
 
 @pytest.mark.parametrize("name", sorted(_REVIEWER_INPUTS))
 def test_the_reviewers_quadratic_inputs_are_linear_through_redact_text(name: str) -> None:
-    build = _REVIEWER_INPUTS[name]
-    small = min(_timed_redact(build(_PROBE_SMALL)) for _ in range(3))
-    large = min(_timed_redact(build(_PROBE_LARGE)) for _ in range(3))
-    if large >= _RATIO_FLOOR_SECONDS:
-        assert large / max(small, 1e-6) < _RATIO_LIMIT, (small, large)
-    assert _timed_redact(build(320_000)) < _LINEAR_BOUND_SECONDS
-
-
-def _timed_redact(text: str) -> float:
-    began = time.perf_counter()
-    redact_text(text)
-    return time.perf_counter() - began
+    _assert_linear(redact_text, _REVIEWER_INPUTS[name], name)
 
 
 def test_url_userinfo_passwords_are_redacted() -> None:

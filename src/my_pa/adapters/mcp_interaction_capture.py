@@ -60,19 +60,22 @@ quoted (dotted keys such as `oauth.token` included, and escaped pairs at the
 four escaping levels the JSON path follows); a credential value cut off by the
 end of the text; `key=value` form and query-string pairs; the password in URL
 userinfo; credential header lines (`Cookie:`, `Set-Cookie:`, `Authorization:`
-of any scheme, `X-Api-Key:`, `*-Token:`, `*-Secret:`); `Bearer` and `Basic`
-credentials; and JWTs inside dotted base64url runs. A string that is
-itself a JSON object or array (MCP `TextContent.text` carries the response
-envelope that way) is parsed, redacted the same way and re-serialised. Only
-then is the result cut to `BODY_CAP_BYTES`, so a credential beyond the cap
-never appears and one straddling it is never stored in part. NUL characters,
-which PostgreSQL text and JSONB cannot hold, are replaced and flagged, and so
-are `NaN`, `Infinity` and overflowing numbers, which JSONB refuses: they are
-kept as the strings they were written as (`non_finite_replaced`). Every
-pattern is linear by construction (the rules are in the comment above
-`_BEARER`, and a unit test probes every compiled pattern for quadratic growth);
-a text-path credential whose value is an array or object is a stated limit,
-not matched.
+of any scheme, `X-Api-Key:`, `*-Token:`, `*-Secret:`); colon-style `key: value`
+lines (YAML, logs); `Bearer` and `Basic` credentials; and JWTs inside dotted
+base64url runs. Object keys that are not credential keys go through the same
+patterns (a colliding result gets a ` #n` suffix), and every metadata column
+and stored header is redacted whole before it is cut to 256 characters. A
+string that is itself a JSON object or array (MCP `TextContent.text` carries
+the response envelope that way) is parsed, redacted the same way and
+re-serialised. Only then is the result cut to `BODY_CAP_BYTES`, so a credential
+beyond the cap never appears and one straddling it is never stored in part. NUL
+characters, which PostgreSQL text and JSONB cannot hold, are replaced and
+flagged, and so are `NaN`, `Infinity` and overflowing numbers, which JSONB
+refuses: they are kept as the strings they were written as
+(`non_finite_replaced`). Every pattern is linear by construction (the rules are
+in the comment above `_BEARER`, and a unit test probes every compiled pattern
+for quadratic growth); a text-path credential whose value is an array or object
+is a stated limit, not matched.
 
 **What the digests are.** `request_sha256` / `response_sha256` are the SHA-256 of
 the *redacted, untruncated* body as this module serialises it — the compact
@@ -157,9 +160,10 @@ QUEUE_MAXSIZE: Final = 1024
 #: queue holds at most 64 MiB of bodies, i.e. at least two exchanges at the
 #: per-body ceiling. A submit that would exceed it is dropped and counted.
 QUEUED_BYTES_BUDGET: Final = 64 * 1024 * 1024
-#: A drop is reported on standard error (count-only) at the first drop, then at
-#: most once per this many seconds, so a sustained overload is visible without
-#: waiting for the next written row and without a line per request.
+#: A drop, and likewise a write failure, is reported on standard error
+#: (count-only) at the first occurrence, then at most once per this many seconds
+#: each, so a sustained overload or database outage is visible without waiting
+#: for the next written row and without a line per request.
 DROP_REPORT_SECONDS: Final = 60.0
 #: What a redacted value becomes.
 REDACTED: Final = "[REDACTED]"
@@ -297,8 +301,10 @@ _NUL_REPLACEMENT: Final = "\ufffd"
 # its kind and then *succeeds* (or stops at the next start of its own kind), so
 # no start ever rescans text a later start will scan again.
 # `tests/unit/test_mcp_interaction_capture.py` checks this for every compiled
-# pattern in the module: worst-case shapes at 20 K and 80 K characters must grow
-# by less than 8x (quadratic is ~16x), and each runs at 1 MiB within 2 s.
+# pattern in the module (`tests/unit/redaction_probe.py`): measured in thread
+# CPU time, one 512 K-character run of a worst-case shape must cost less than
+# 4x sixteen 32 K runs of it (linear ~1x, quadratic ~16x), and each probe runs
+# in a subprocess that is killed after 60 s.
 
 _BEARER: Final = re.compile(r"(bearer)\s+[A-Za-z0-9\-._~+/]+=*", re.IGNORECASE)
 #: `Basic <base64>`. Only the scheme word is case-insensitive: the run must look
@@ -311,7 +317,7 @@ _BASIC: Final = re.compile(r"((?i:basic))\s+(?=[A-Za-z0-9+/]*[0-9A-Z+/=])[A-Za-z
 #: the value runs to the end of the line, a quote or a backslash.
 _HEADER_LINE: Final = re.compile(
     r"(?<![A-Za-z0-9\-])((?:set-)?cookie|(?:proxy-)?authorization|(?:x-)?api-key"
-    r"|[A-Za-z0-9\-]{0,64}?-(?:token|secret))[ \t]*:[ \t]*(?!\[REDACTED\])[^\r\n\"\\]+",
+    r"|[A-Za-z0-9\-]{0,64}?-(?:token|secret))[ \t]*:[ \t]*(?![ \t]*\[REDACTED\])[^\r\n\"\\]+",
     re.IGNORECASE,
 )
 #: The password in URL userinfo, `scheme://user:password@host`. Every part is
@@ -416,6 +422,15 @@ _UNTERMINATED_PAIR: Final = re.compile(
     r'(?P<head>"' + _KEY_PATTERN + r'"\s*:\s*")(?:[^"\\]|\\.)*\\?\Z',
     re.IGNORECASE | re.DOTALL,
 )
+#: `key: value` at the start of a line, as YAML, `.env`-style dumps and logs write
+#: it (`password: x`, `client_secret: x`, `x_api_key: x`). The key uses the
+#: one-word form grammar; indentation and the gap around the colon are bounded,
+#: and the value runs to the end of the line.
+_COLON_LINE: Final = re.compile(
+    r"(?m)^(?P<head>[ \t]{0,64}" + _FORM_KEY_PATTERN + r"[ \t]{0,16}:[ \t]{0,16})"
+    r"(?![ \t]*\[REDACTED\])[^\r\n]+",
+    re.IGNORECASE,
+)
 #: `key=value` in a query string or form body. The key starts only at the start
 #: of a word, and the value runs to `&`, whitespace, a quote or a backslash.
 _FORM_PAIR: Final = re.compile(
@@ -479,6 +494,8 @@ def _redact_string_patterns(value: str) -> tuple[str, int]:
     count += found
     value, found = _HEADER_LINE.subn(lambda match: f"{match.group(1)}: {REDACTED}", value)
     count += found
+    value, found = _COLON_LINE.subn(lambda match: f"{match.group('head')}{REDACTED}", value)
+    count += found
     value, found = _BEARER.subn(lambda match: f"{match.group(1)} {REDACTED}", value)
     count += found
     value, found = _BASIC.subn(lambda match: f"{match.group(1)} {REDACTED}", value)
@@ -534,17 +551,43 @@ def _dumps(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
 
+def _unique_key(key: str, taken: dict[str, object], next_suffix: dict[str, int]) -> str:
+    """`key`, or `key #2`, `key #3`, ... when redaction made two keys equal.
+
+    Two distinct keys can become one after redaction (`"Bearer A"` and
+    `"Bearer B"` both become `"Bearer [REDACTED]"`). Neither value is dropped:
+    the later key gets the next free ` #n` suffix. `next_suffix` remembers the
+    last suffix per base, so many colliding keys cost linear, not quadratic, time.
+    """
+    if key not in taken:
+        return key
+    suffix = next_suffix.get(key, 1)
+    while True:
+        suffix += 1
+        candidate = f"{key} #{suffix}"
+        if candidate not in taken:
+            next_suffix[key] = suffix
+            return candidate
+
+
 def _redact_value(value: object, walk: _Walk, depth: int) -> object:
     if isinstance(value, dict):
         result: dict[str, object] = {}
+        next_suffix: dict[str, int] = {}
         for key, item in value.items():
             clean_key, key_replaced = _sanitize(str(key))
             walk.nul_replaced |= key_replaced
             if _is_credential_key(clean_key):
-                result[clean_key] = REDACTED
+                result[_unique_key(clean_key, result, next_suffix)] = REDACTED
                 walk.redactions += 1
-            else:
-                result[clean_key] = _redact_value(item, walk, depth)
+                continue
+            # A key is text too: a URL with userinfo, a bearer token or a JWT
+            # used as a key is redacted like any other string.
+            redacted_key, count = _redact_string_patterns(clean_key)
+            walk.redactions += count
+            result[_unique_key(redacted_key, result, next_suffix)] = _redact_value(
+                item, walk, depth
+            )
         return result
     if isinstance(value, list):
         return [_redact_value(item, walk, depth) for item in value]
@@ -710,11 +753,17 @@ def _header_map(headers: Iterable[tuple[bytes, bytes]]) -> dict[str, str]:
 
 
 def _metadata(value: object, walk: _Walk) -> str | None:
-    """A JSON-RPC metadata value as column text, bounded and redacted."""
+    """A metadata value as column text: redacted whole, *then* cut to 256 characters.
+
+    Redacting before the cut is the same rule the bodies follow: a credential
+    straddling the cut (a URL whose `@` falls past it) is recognised whole and
+    never stored in part.
+    """
     if value is None:
         return None
     text = value if isinstance(value, str) else json.dumps(value, separators=(",", ":"))
-    text, count = _redact_string_patterns(text[:_MAX_METADATA_CHARS])
+    text, count = _redact_string_patterns(text)
+    text = text[:_MAX_METADATA_CHARS]
     walk.redactions += count
     text, replaced = _sanitize(text)
     walk.nul_replaced |= replaced
@@ -1001,6 +1050,7 @@ class InteractionRecorder:
         self._queued_bytes = 0
         self._drop_report_seconds = drop_report_seconds
         self._last_drop_report: float | None = None
+        self._last_failure_report: float | None = None
 
     @property
     def dropped(self) -> int:
@@ -1136,9 +1186,19 @@ class InteractionRecorder:
         try:
             self._sink(row)
         except Exception:
+            now = time.monotonic()
             with self._lock:
                 self._write_failures += 1
-            self._report("write_failed")
+                due = (
+                    self._last_failure_report is None
+                    or now - self._last_failure_report >= self._drop_report_seconds
+                )
+                if due:
+                    self._last_failure_report = now
+            if due:
+                # Count-only, first failure then at most once per interval: a
+                # database outage must not become a line per request.
+                self._report("write_failed")
             return
         self._dropped_reported = dropped
         self._failures_reported = failures

@@ -13,11 +13,14 @@ import asyncio
 import hashlib
 import io
 import json
-import re
+import os
+import subprocess
+import sys
 import threading
 import time
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -41,6 +44,7 @@ from my_pa.adapters.mcp_interaction_capture import (
 )
 from my_pa.bootstrap.settings import ENV_PREFIX, Settings, SettingsError, load_settings
 from my_pa.infrastructure.persistence import mcp_interactions as store
+from tests.unit import redaction_probe as probe
 
 _URL = "postgresql+psycopg://someone@db.invalid:5432/somewhere"
 _WHEN = datetime(2026, 10, 11, 12, 0, tzinfo=UTC)
@@ -689,8 +693,8 @@ def test_a_failed_write_is_counted_reported_by_count_only_and_carried_forward() 
     assert first["write_failures_before"] == 2
     assert second["write_failures_before"] == 0
     report = stderr.getvalue()
-    assert report.count("write_failed") == 2
-    assert "write_failures=2" in report
+    assert report.count("write_failed") == 1  # throttled: first failure only
+    assert "write_failures=1" in report
     for marker in ("MARKERSTDERR", "MARKERDBERROR", "mcpi_", "password"):
         assert marker not in report
 
@@ -1256,50 +1260,49 @@ def test_the_queued_bytes_budget_drops_counts_and_is_released_after_a_write() ->
 
 # ---- linear patterns, non-finite JSON, wider coverage (review B1, B2, N1-N4) ----
 
-_MIB = 1024 * 1024
-#: PEM armour for synthetic fixtures, built from parts so that no secret-key
-#: signature appears in source (`test_repository_has_no_high_confidence_secret_signature`).
-_PEM_BEGIN = "-----BEGIN " + "{kind}PRIVATE KEY-----"
-_PEM_END = "-----END " + "{kind}PRIVATE KEY-----"
-#: Absolute backstop for one timed run (thread CPU time), a fixed generous constant
-#: rather than an in-process calibration (a calibration loop is itself slowed
-#: by the contention it is meant to measure). Idle, the slowest run it guards
-#: takes about 0.6 s (a whole 1 MiB family through `redact_text`), so this
-#: leaves ~16x headroom for an oversubscribed CI host; the quadratic forms
-#: these tests exist to catch take tens to hundreds of seconds at the same
-#: sizes, so the margin cannot hide them. The primary discriminator for the
-#: probes below is the size-spread ratio, not this bound.
-_LINEAR_BOUND_SECONDS = 10.0
-
-#: One adversarial run per pattern family, each about 1 MiB of text.
-_ADVERSARIAL: dict[str, tuple[str, str]] = {
-    "jwt_eyj_run": ("", "eyJ"),
-    "jwt_dotted_run": ("", "a."),
-    "escaped_backslash_run": ("", "\\"),
-    "escaped_key_run": ("", '\\\\"token\\\\":'),
-    "escaped_unterminated": ("", '\\"token\\":\\"'),
-    "text_key_prefix": ("", '"a '),
-    "text_unterminated": ("", '"token":"a"'),
-    "quoted_key": ("", "'token':"),
-    "bearer_spaces": ("bearer", " "),
-    "basic_word": ("", "basic "),
-    "cookie_lines": ("", "cookie:"),
-    "scalar_digits": ('"token":', "1"),
-    "scalar_minus": ("", '"token":-'),
-    "form_spaces": ("", " "),
-    "form_keys": ("", "token="),
-    "pem_dashes": ("", "-"),
-    "pem_begin": ("", _PEM_BEGIN.format(kind="")),
-}
+#: Shape tables and measurement helpers live in `tests/unit/redaction_probe.py`
+#: so each linearity probe can also run in a subprocess under a timeout.
+_MIB = probe._MIB
+_PEM_BEGIN = probe._PEM_BEGIN
+_PEM_END = probe._PEM_END
+_PEM_CERT_END = probe._PEM_CERT_END
+_assert_linear = probe._assert_linear
+#: Wall-clock limit for one probe subprocess. Idle, the slowest probe finishes
+#: in about 2 s, and under 20 busy loops on 14 cores in about 6 s, so 60 s is a
+#: 10x margin; a quadratic regression is cut off here instead of running for
+#: minutes (a quadratic `_DOTTED_RUN` ran over 600 s in-process at 1 MiB).
+_PROBE_TIMEOUT_SECONDS = 60
+_ROOT = Path(__file__).resolve().parents[2]
 
 
-@pytest.mark.parametrize("family", sorted(_ADVERSARIAL))
+def _run_probe(kind: str, name: str) -> None:
+    """Run one probe of `redaction_probe` in a subprocess, failing within the timeout."""
+    environment = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join([str(_ROOT / "src"), str(_ROOT)]),
+    }
+    began = time.monotonic()
+    try:
+        done = subprocess.run(  # noqa: S603 - fixed interpreter, fixed module, table keys
+            [sys.executable, "-m", "tests.unit.redaction_probe", kind, name],
+            cwd=_ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=_PROBE_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(
+            f"{kind} probe {name!r} did not finish within {_PROBE_TIMEOUT_SECONDS}s "
+            f"({time.monotonic() - began:.0f}s): super-linear"
+        )
+    assert done.returncode == 0, done.stderr[-4000:]
+
+
+@pytest.mark.parametrize("family", sorted(probe._ADVERSARIAL))
 def test_every_redaction_pattern_family_is_linear_on_adversarial_input(family: str) -> None:
-    prefix, unit = _ADVERSARIAL[family]
-    text = prefix + unit * (_MIB // len(unit))
-    began = time.thread_time()
-    redact_text(text)
-    assert time.thread_time() - began < _LINEAR_BOUND_SECONDS
+    _run_probe("family", family)
 
 
 def test_an_adversarial_tools_call_body_builds_its_row_quickly() -> None:
@@ -1463,243 +1466,20 @@ def test_drops_are_reported_count_only_at_the_first_and_then_rate_limited() -> N
     assert capture.DROP_REPORT_SECONDS == 60.0
 
 
-# ---- systematic quadratic probe over every compiled pattern (review B1, round 2) ----
-#
-# For every compiled pattern in the module: many repetitions of the pattern's
-# start token, filler, and a near-miss terminator at the very end.
-#
-# Robust to CPU contention by construction (AGENTS.md section 7: no flaky
-# tests), in two ways.
-#
-# 1. **CPU time, not wall time.** Every probe sample is the calling thread's
-#    CPU time (`time.thread_time`, CLOCK_THREAD_CPUTIME_ID). Time the thread
-#    spends descheduled is not counted, so an oversubscribed host cannot
-#    inflate one sample against another. Two wall-clock designs were measured
-#    flaking with 20 busy loops on 14 cores: comparing one 32 K run with one
-#    512 K run, and comparing equal work split 16 ways; in both a sample that
-#    straddled a preemption absorbed tens of milliseconds the other did not.
-# 2. **Equal work, wide spread.** The probe compares one run over a large text
-#    with `spread` runs over a text `spread` times smaller (16x: 32 K and
-#    512 K characters), normalised by actual length. Linear costs the same
-#    either way (ratio ~1); quadratic costs ~16x more on the large text. The
-#    limit of 4 leaves 4x margin on both sides, which also absorbs the cache
-#    and shared-core effects CPU time still sees under load.
-#
-# Each side is the minimum of three repetitions (two for the cross-pattern
-# probes), and the ratio is judged only when the large run uses at least 20 ms
-# of CPU; below that only the absolute backstop applies. Every pattern is also
-# probed with every *other* pattern's shapes at 8 K / 128 K (same 16x spread)
-# to keep the file inside FAST.
-
-_RATIO_LIMIT = 4.0
-_RATIO_FLOOR_SECONDS = 0.020
-_PROBE_SMALL = 32_768
-_PROBE_LARGE = 524_288
-_CROSS_SMALL = 8_192
-_CROSS_LARGE = 131_072
-_REPETITIONS = 3
-#: The cross-pattern probes take the minimum of two: they are a broad net over
-#: shapes written for other patterns, and the FAST budget pays for them.
-_CROSS_REPETITIONS = 2
-_PEM_CERT_END = "-----END " + "CERTIFICATE-----"
-
-
-def _repeat(start: str, filler: str = "", tail: str = "") -> Any:  # noqa: ANN401
-    unit = start + filler
-
-    def build(size: int) -> str:
-        return unit * max(1, size // len(unit)) + tail
-
-    return build
-
-
-def _decreasing_escaped_heads(size: int) -> str:
-    """The reviewer's shape: escaped heads whose backslash runs shrink by one."""
-    heads: list[str] = []
-    total = 0
-    runs = 1
-    while total < size:
-        total += 3 * runs + 12
-        runs += 1
-    for run in range(runs, 0, -1):
-        quote = "\\" * run + '"'
-        heads.append(quote + "token" + quote + ":" + quote + "x")
-    return "".join(heads)
-
-
-def _decreasing_start_tokens(token: str) -> Any:  # noqa: ANN401
-    """Start tokens whose lengths decrease: each shorter variant is a near miss."""
-
-    def build(size: int) -> str:
-        parts: list[str] = []
-        total = 0
-        length = len(token)
-        while total < size:
-            for cut in range(length, 0, -1):
-                parts.append(token[:cut] + " ")
-                total += cut + 1
-        return "".join(parts)
-
-    return build
-
-
-#: Per-pattern worst-case shapes: start token, filler, near-miss tail.
-_PATTERN_SHAPES: dict[str, list[Any]] = {
-    "_BEARER": [_repeat("bearer "), _repeat("Bearer", " "), _decreasing_start_tokens("bearer")],
-    "_BASIC": [_repeat("basic ", "a"), _repeat("Basic aaaaaaa"), _repeat("basic", " ")],
-    "_HEADER_LINE": [
-        _repeat("cookie", " "),
-        _repeat("set-cookie", "\t"),
-        _repeat("cookie:"),
-        _repeat("authorization", " "),
-        _repeat("a-", "", "token"),
-        _repeat("x-" + "a" * 70 + "-token", " "),
-        _decreasing_start_tokens("proxy-authorization"),
-    ],
-    "_URL_USERINFO": [
-        _repeat("https://u", ":"),
-        _repeat("a://", "b:c"),
-        _repeat("a" * 40 + "://", "u:" + "p" * 300),
-        _repeat("s://u:p", "@", "x"),
-    ],
-    "_DOTTED_RUN": [_repeat("eyJ"), _repeat("a."), _repeat("eyJ."), _repeat("eyJa.b", "", "c")],
-    "_PEM_PRIVATE_KEY": [
-        _repeat(_PEM_BEGIN.format(kind="") + "a", "", "-----END X"),
-        _repeat(_PEM_BEGIN.format(kind=""), "", _PEM_CERT_END),
-        _repeat("-----BEGIN ", "A"),
-        _repeat("-"),
-    ],
-    "_TEXT_PAIR": [
-        _repeat('"token":"', "a"),
-        _repeat('"a', " "),
-        _repeat('"token": -', "1"),
-        _repeat('"' + "a" * 63, " "),
-        _repeat('"oauth.', "a.", '":'),
-        _repeat('"a.b.c.token":"', "x"),
-    ],
-    "_ESCAPED_TEXT_PAIRS": [
-        _decreasing_escaped_heads,
-        _repeat('\\"token\\":\\"', "x"),
-        _repeat("\\", "", '"'),
-        _repeat('\\\\\\"token\\\\\\":', "1"),
-        _repeat("\\" * 15 + '"token' + "\\" * 15 + '":' + "\\" * 15 + '"x', "\\" * 16 + '"'),
-        _repeat("\\" * 7 + '"token' + "\\" * 7 + '":' + "\\" * 7 + '"', "\\" * 8),
-    ],
-    "_QUOTED_TEXT_PAIR": [_repeat("'token':'", "a"), _repeat("'token':", "-"), _repeat("'a", " ")],
-    "_UNTERMINATED_PAIR": [
-        _repeat('"token":"a', "\\"),
-        _repeat('"token":"', "a", "\\"),
-        _repeat('"token": "', '\\"'),
-    ],
-    "_ESCAPED_UNTERMINATED_PAIRS": [
-        _decreasing_escaped_heads,
-        _repeat('\\"token\\":\\"', "x"),
-        _repeat('\\\\\\"token\\\\\\":\\\\\\"', "\\"),
-        _repeat("\\" * 15 + '"token' + "\\" * 15 + '":' + "\\" * 15 + '"x', "\\" * 16 + '"'),
-    ],
-    "_FORM_PAIR": [_repeat("token="), _repeat("a", " ", "token"), _repeat("x_token", "=")],
-}
-
-#: The reviewer's two inputs, kept verbatim in shape.
-_REVIEWER_INPUTS: dict[str, Any] = {
-    "pem_begins_then_near_miss_end": _repeat(_PEM_BEGIN.format(kind="") + "a", "", "-----END X"),
-    "escaped_heads_with_shrinking_runs": _decreasing_escaped_heads,
-}
-
-
-def _compiled_patterns() -> dict[str, re.Pattern[str]]:
-    found: dict[str, re.Pattern[str]] = {}
-    for name, value in vars(capture).items():
-        if isinstance(value, re.Pattern):
-            found[name] = value
-        elif isinstance(value, tuple) and value and all(isinstance(v, re.Pattern) for v in value):
-            for index, pattern in enumerate(value):
-                found[f"{name}[{index}]"] = pattern
-    return found
-
-
-def _min_time(run: Any, text: Any, times: int, label: str, repetitions: int) -> float:  # noqa: ANN401
-    """The minimum over `repetitions` of the CPU time to run `run(text)` `times` times.
-
-    Each repetition is checked against `_LINEAR_BOUND_SECONDS` as it finishes,
-    so a quadratic regression fails after one slow repetition, not three.
-    """
-    best = float("inf")
-    for _ in range(repetitions):
-        began = time.thread_time()
-        for _ in range(times):
-            run(text)
-        elapsed = time.thread_time() - began
-        assert elapsed < _LINEAR_BOUND_SECONDS, f"{label}: {elapsed:.2f}s per repetition"
-        best = min(best, elapsed)
-    return best
-
-
-def _assert_linear(
-    run: Any,  # noqa: ANN401
-    build: Any,  # noqa: ANN401
-    label: str,
-    *,
-    sizes: tuple[int, int] = (_PROBE_SMALL, _PROBE_LARGE),
-    repetitions: int = _REPETITIONS,
-) -> None:
-    small_size, large_size = sizes
-    spread = large_size // small_size
-    small_text, large_text = build(small_size), build(large_size)
-    small_length = len(small_text) if isinstance(small_text, str) else small_size
-    large_length = len(large_text) if isinstance(large_text, str) else large_size
-    small = _min_time(run, small_text, spread, label, repetitions)
-    large = _min_time(run, large_text, 1, label, repetitions)
-    if large >= _RATIO_FLOOR_SECONDS:
-        per_char_small = small / (spread * small_length)
-        per_char_large = large / large_length
-        ratio = per_char_large / max(per_char_small, 1e-12)
-        assert ratio < _RATIO_LIMIT, (
-            f"{label}: one {large_length}-char run costs {ratio:.1f}x the same work in "
-            f"{spread} runs of {small_length} chars ({large:.4f}s vs {small:.4f}s)"
-        )
-
-
-def _substitute(pattern: re.Pattern[str]) -> Any:  # noqa: ANN401
-    return lambda text: pattern.sub("", text)
-
-
-def _shape_key(name: str) -> str:
-    return name.split("[", 1)[0]
-
-
 def test_every_compiled_pattern_has_probe_shapes() -> None:
-    assert {_shape_key(name) for name in _compiled_patterns()} == set(_PATTERN_SHAPES)
+    assert {probe._shape_key(name) for name in probe._compiled_patterns()} == set(
+        probe._PATTERN_SHAPES
+    )
 
 
-@pytest.mark.parametrize("name", sorted(_compiled_patterns()))
+@pytest.mark.parametrize("name", sorted(probe._compiled_patterns()))
 def test_every_compiled_pattern_is_linear_on_its_worst_case_shapes(name: str) -> None:
-    pattern = _compiled_patterns()[name]
-    run = _substitute(pattern)
-    own = _PATTERN_SHAPES[_shape_key(name)]
-    for index, build in enumerate(own):
-        _assert_linear(run, build, f"{name} shape {index}")
-    for key, shapes in _PATTERN_SHAPES.items():
-        if key == _shape_key(name):
-            continue
-        for index, build in enumerate(shapes):
-            _assert_linear(
-                run,
-                build,
-                f"{name} on {key} shape {index}",
-                sizes=(_CROSS_SMALL, _CROSS_LARGE),
-                repetitions=_CROSS_REPETITIONS,
-            )
-    for index, build in enumerate(own):
-        text = build(_MIB)
-        began = time.thread_time()
-        pattern.sub("", text)
-        assert time.thread_time() - began < _LINEAR_BOUND_SECONDS, f"{name} shape {index} @1MiB"
+    _run_probe("pattern", name)
 
 
-@pytest.mark.parametrize("name", sorted(_REVIEWER_INPUTS))
+@pytest.mark.parametrize("name", sorted(probe._REVIEWER_INPUTS))
 def test_the_reviewers_quadratic_inputs_are_linear_through_redact_text(name: str) -> None:
-    _assert_linear(redact_text, _REVIEWER_INPUTS[name], name)
+    _run_probe("reviewer", name)
 
 
 def test_url_userinfo_passwords_are_redacted() -> None:
@@ -1763,3 +1543,123 @@ def test_a_pgp_private_key_block_and_a_near_miss_end_are_redacted() -> None:
     near, count, _ = redact_text(_PEM_BEGIN.format(kind="") + "\nMARKERNEAR\n" + _PEM_CERT_END)
     assert near == REDACTED + _PEM_CERT_END
     assert count == 1
+
+
+# ---- redact before cutting metadata; object keys; colon lines; throttling (review 4) ----
+
+#: A URL whose `@` lands past the 256-character metadata cut.
+_STRADDLE = "x" * 230 + " https://u:MARKERMETA9" + "Q" * 40 + "@host"
+
+
+@pytest.mark.parametrize("column", ["jsonrpc_id", "tool_name", "capability", "header"])
+def test_metadata_is_redacted_whole_before_it_is_cut(column: str) -> None:
+    if column == "jsonrpc_id":
+        exchange = _exchange({"jsonrpc": "2.0", "id": _STRADDLE, "method": "m"})
+    elif column == "tool_name":
+        exchange = _exchange(_call(_STRADDLE, {}))
+    elif column == "capability":
+        exchange = _exchange(_call("my_pa.read", {"capability": _STRADDLE, "arguments": {}}))
+    else:
+        exchange = _exchange(request_headers=((b"user-agent", _STRADDLE.encode()),))
+    row = _row(exchange)
+    stored = row["request_headers"]["user-agent"] if column == "header" else row[column]  # type: ignore[index]
+    assert isinstance(stored, str)
+    assert len(stored) <= 256
+    assert "MARKERMETA9" not in stored
+    assert "MARKERMETA9" not in json.dumps(row["request_headers"]) + str(row["jsonrpc_id"])
+    assert stored == ("x" * 230 + f" https://u:{REDACTED}@host")[:256]
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "https://u:MARKERKEY1@h/x",
+        "Bearer MARKERKEY2xyz",
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJNQVJLRVJLRVkzIn0.sig",
+    ],
+)
+def test_object_keys_are_redacted_like_strings(key: str) -> None:
+    redacted, count, _ = redact_json({"sources": {key: {"n": 1}}, "plain": 1})
+    text = json.dumps(redacted)
+    assert "MARKERKEY" not in text
+    assert "eyJzdWIi" not in text
+    assert count == 1
+    assert redacted["plain"] == 1  # type: ignore[index]
+
+
+def test_a_key_inside_an_embedded_document_is_redacted_with_or_without_other_redactions() -> None:
+    for extra in ({}, {"token": "t"}):
+        inner = json.dumps({"sources": {"https://u:MARKEREMB@h/x": {"n": 1}}, **extra})
+        row = _row(_exchange(_call("documents.read", {}), _tool_result(inner, is_error=False)))
+        assert "MARKEREMB" not in _serialized(row)
+
+
+def test_keys_that_collide_after_redaction_keep_every_value() -> None:
+    redacted, count, _ = redact_json(
+        {
+            "Bearer AAAAAAAA": 1,
+            "Bearer BBBBBBBB": 2,
+            "Bearer CCCCCCCC": 3,
+            "Bearer [REDACTED] #2": 4,
+        }
+    )
+    assert redacted == {
+        "Bearer [REDACTED]": 1,
+        "Bearer [REDACTED] #2": 2,
+        "Bearer [REDACTED] #3": 3,
+        "Bearer [REDACTED] #2 #2": 4,
+    }
+    assert count == 3
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "password: MARKERCOLON1",
+        "  api_key: MARKERCOLON2",
+        "client_secret:MARKERCOLON3",
+        "x_api_key :  MARKERCOLON4 trailing",
+        "DB_PASSWORD: MARKERCOLON5",
+    ],
+)
+def test_colon_style_credential_lines_are_redacted(line: str) -> None:
+    text, count, _ = redact_text(f"config:\n{line}\nname: kept")
+    assert "MARKERCOLON" not in text
+    assert text.endswith("\nname: kept")
+    assert count == 1
+
+
+def test_colon_lines_do_not_touch_non_credential_keys_or_mid_line_text() -> None:
+    text = "status: open\npassword_hint: kept\nthe password: is a word here"
+    assert redact_text(text) == (text, 0, False)
+
+
+def test_write_failures_are_reported_at_the_first_and_then_rate_limited() -> None:
+    def failing(_row: Mapping[str, object]) -> None:
+        raise ConnectionError("MARKERDBDOWN")
+
+    stderr = io.StringIO()
+    recorder = InteractionRecorder(failing, facade_invoke_tools=FACADE, stderr=stderr)
+    recorder.start()
+    try:
+        for _ in range(5):
+            recorder.submit(_exchange({"password": "MARKERFAILROW"}))
+        _wait_for(lambda: recorder.write_failures == 5)
+    finally:
+        recorder.stop()
+    assert stderr.getvalue().splitlines() == [
+        "mcp-interaction-log write_failed dropped=0 write_failures=1 capture_errors=0"
+    ]
+    eager = io.StringIO()
+    every = InteractionRecorder(
+        failing, facade_invoke_tools=FACADE, stderr=eager, drop_report_seconds=0.0
+    )
+    every.start()
+    try:
+        for _ in range(3):
+            every.submit(_exchange())
+        _wait_for(lambda: every.write_failures == 3)
+    finally:
+        every.stop()
+    assert eager.getvalue().count("write_failed") == 3
+    assert "MARKER" not in stderr.getvalue() + eager.getvalue()

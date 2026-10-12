@@ -454,7 +454,8 @@ async def test_a_failing_sink_changes_no_response_and_is_reported_on_the_next_ro
     assert recorder.write_failures == 3
     (row,) = rows
     assert row["diagnostics"]["capture"]["write_failures_before"] == 3  # type: ignore[index]
-    assert "write_failures=3" in stderr.getvalue()
+    assert "write_failures=1" in stderr.getvalue()
+    assert stderr.getvalue().count("write_failed") == 1  # throttled: first failure only
     assert "capabilities" not in stderr.getvalue()
 
 

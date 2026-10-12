@@ -186,7 +186,8 @@ async def test_an_unreachable_database_changes_no_response_and_counts_failures(
     assert served.recorder.write_failures == 3
     assert served.recorder.capture_errors == 0
     report = stderr.getvalue()
-    assert "write_failures=3" in report
+    assert report.count("write_failed") == 1  # throttled: first failure only
+    assert "write_failures=1" in report
     assert "MARKERDBSECRET" not in report
 
 

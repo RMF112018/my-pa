@@ -102,6 +102,17 @@ them:
   `progressToken` are redacted). Its value is replaced by `"[REDACTED]"`,
   whatever the value's type. `tokens`, `max_tokens`, `token_count`, the bare
   key `code` and every domain `*_code` field do not match and are kept.
+- **Keys are text too.** Every key that is not itself a credential key goes
+  through the string rules below, so a URL with userinfo, a `Bearer` token or a
+  JWT used as an object key is redacted like any other string — at the top
+  level and inside embedded documents alike. If redaction makes two keys of
+  one object equal (`"Bearer A"` and `"Bearer B"` both become
+  `"Bearer [REDACTED]"`), the later one gets the next free ` #2`, ` #3`, …
+  suffix, so no value is silently merged away.
+- **Metadata columns** (`jsonrpc_id`, `jsonrpc_method`, `tool_name`,
+  `capability`, `oauth_client_id`, `principal_id`, `mcp_session_id`) and stored
+  header values are redacted **whole** by the string rules, **then** cut to 256
+  characters, so a credential straddling the cut is never stored in part.
 - **JSON numbers PostgreSQL cannot store.** `NaN`, `Infinity`, `-Infinity`
   and numbers that overflow to infinity (`1e999`) are parsed and stored as the
   strings they were written as (`"NaN"`, `"1e999"`), and
@@ -140,6 +151,12 @@ them:
     `Digest`, …), `X-Api-Key:` / `Api-Key:`, and any `*-Token:` or `*-Secret:`
     header — keeps its name and loses its value (`Authorization: [REDACTED]`, up
     to the end of the line, a quote or a backslash);
+  - a colon-style credential line, as YAML, `.env`-style dumps and logs write
+    it: at the start of a line (after at most 64 spaces or tabs), a credential
+    key in its one-word form (`password`, `api_key`, `client_secret`,
+    `x_api_key`, `DB_PASSWORD`, …), up to 16 spaces or tabs on each side of the
+    colon, then the value to the end of the line, which becomes `[REDACTED]`.
+    `password_hint:` and a `password:` in the middle of a line are not matched;
   - `Bearer <token>` becomes `Bearer [REDACTED]` (any case);
   - `Basic <base64>` becomes `Basic [REDACTED]`. Only the word `basic` is
     case-insensitive; the run must be eight or more base64 characters and
@@ -165,11 +182,15 @@ rescan text a later start will scan: scans start only at the first character
 of a run, every prefix and escape run is bounded, and every body or value scan
 stops at the first terminator of its kind. A unit test probes **every compiled
 pattern** with worst-case shapes (many start tokens, filler, a near-miss
-terminator at the end, and start tokens of decreasing length): growth from
-20 000 to 80 000 characters must stay under 8x (quadratic growth is about 16x)
-and each runs at 1 MiB within 2 seconds. Measured on the development machine,
-the slowest pattern on its worst shape takes about 0.12 s at 1 MiB; the slowest
-whole-family run through all rules (`redact_text`) about 0.6 s.
+terminator at the end, and start tokens of decreasing length). It measures
+thread CPU time, so a busy host cannot skew it, and compares one 512 K-character
+run with sixteen 32 K runs of the same shape: linear costs the same either way,
+quadratic about 16 times more, and the limit is 4. Each pattern is also run
+against every other pattern's shapes (8 K / 128 K), at 1 MiB under a 10-second
+CPU backstop, and each probe runs in a subprocess killed after 60 seconds, so a
+quadratic regression fails within a minute. Measured on the development
+machine, the slowest pattern on its worst shape takes about 0.1 s at 1 MiB, and
+the slowest whole-family run through all rules (`redact_text`) about 0.6 s.
 
 **Stated limits.** Redaction is pattern-based; treat the log as sensitive
 regardless.
@@ -181,6 +202,11 @@ regardless.
   {…}`) is not redacted: matching nested values linearly is not possible with
   these patterns, and none is attempted. On the JSON path such values are
   redacted whole.
+- On the text path a key is matched only as written without escapes: a key
+  that itself contains an escaped quote or backslash (`"pass\"word"`), or a
+  pair escaped at a level other than one, three, seven or fifteen backslashes,
+  is not recognised as a credential pair (the Bearer, Basic, JWT, userinfo and header rules still apply
+  to its value).
 - `progressToken`, `lease_token` and `idempotency_token` are redacted although
   they are not secrets (over-redaction is the safe direction).
 
@@ -231,11 +257,13 @@ stored.
   on a dedicated engine with a 2-second statement timeout, separate from the
   pools that serve requests.
 - **If the database is unavailable or slow**, the insert fails, the row is
-  dropped and counted, and nothing is retried. Requests are unaffected. Each
-  write failure prints one count-only line on the container's standard error,
-  for example
-  `mcp-interaction-log write_failed dropped=0 write_failures=3 capture_errors=0`
-  — never a body, header or identifier.
+  dropped and counted, and nothing is retried. Requests are unaffected. The
+  first write failure prints one count-only line on the container's standard
+  error, and further failures print at most one more line per 60 seconds (an
+  outage is not a line per request), for example
+  `mcp-interaction-log write_failed dropped=0 write_failures=1 capture_errors=0`
+  — never a body, header or identifier. The full count rides on the next
+  written row.
 - The counts since the last successful write ride on the **next row that is
   written**, as `diagnostics.capture.dropped_before` and
   `write_failures_before`. A gap in the log therefore shows up on the row after

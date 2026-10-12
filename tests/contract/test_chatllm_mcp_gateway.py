@@ -481,6 +481,7 @@ def _resolved_app(
         chatllm_gateway_oauth_client_id_set=frozenset,
         knowledge_manager_oauth_client_id_set=frozenset,
         compact_publication_for_client=lambda _client: True,
+        compact_operator_publication_for_client=lambda _client: False,
     )
     authenticated = SimpleNamespace(
         principal=scene.principal,

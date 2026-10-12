@@ -56,7 +56,7 @@ def test_remote_profile_is_deterministic_read_only(scene: Scene) -> None:
     assert Capability.GOODNOTES_PROPOSE.value not in first
     assert Capability.GOODNOTES_WORK.value in first
     assert Capability.GOODNOTES_CONTENT.value in first
-    assert Capability.GSQS_START.value in first
+    assert Capability.GSQS_START.value not in first
     assert Capability.GSQS_STATUS.value in first
     assert Capability.CONTINUITY_PROJECTS_CREATE.value not in first
     assert Capability.CONTINUITY_PROJECTS_UPDATE.value not in first
@@ -247,7 +247,7 @@ async def test_remote_gsqs_start_completes_without_a_caller_idempotency_key(
         ),
         allowed_hosts=("testserver",),
         remote_enabled=True,
-        writes_enabled=False,
+        writes_enabled=True,
         resource="https://mcp.example.invalid",
         authorization_servers=("https://issuer.example.invalid",),
         scopes=frozenset({"my-pa.read"}),

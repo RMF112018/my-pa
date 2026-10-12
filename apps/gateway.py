@@ -70,14 +70,15 @@ reach a file, and this process does not have one.
 **The one per-request record is opt-in and goes to the database.**
 `MY_PA_MCP_INTERACTION_LOG_ENABLED` (off by default) makes `mcp-remote` record
 each `/mcp` exchange, redacted and capped, in `observability.mcp_interactions`
-through its own bounded engine and one background writer
-(`with_interaction_log`). It writes no file and no log record; a failed write
-is a count-only line on standard error.
+through its own bounded engine, one background writer thread and one spawned
+row-building worker process (`with_interaction_log`). It writes no file and no
+log record; a failed write is a throttled, count-only line on standard error.
 """
 
 from __future__ import annotations
 
 import argparse
+import multiprocessing
 import sys
 from collections.abc import Callable, Mapping
 from typing import Final, Literal
@@ -94,6 +95,7 @@ from my_pa.adapters.mcp_interaction_capture import (
     AsgiApp,
     InteractionRecorder,
     McpInteractionCapture,
+    ProcessRowBuilder,
 )
 from my_pa.application.service import ApplicationService
 from my_pa.bootstrap.gateway import GatewayRuntime, build_gateway_runtime
@@ -332,6 +334,11 @@ INTERACTION_LOG_FLUSH_SECONDS: Final = 2.0
 #: The compact façade tools whose `arguments.capability` is the canonical target,
 #: handed to the capture so the adapter never imports the MCP transport itself.
 FACADE_INVOKE_TOOLS: Final = frozenset({READ_TOOL, WRITE_TOOL, OPERATOR_TOOL})
+#: Longest one row may take to build in the worker process before the worker is
+#: killed and the row dropped (counted as a capture error). A 16 MiB body takes
+#: about 4 s; anything far slower is a defect, and a bound keeps it from
+#: blacking out the writer.
+INTERACTION_LOG_ROW_TIMEOUT_SECONDS: Final = 30.0
 
 
 def _no_interaction_log() -> None:
@@ -346,8 +353,11 @@ def with_interaction_log(settings: Settings, app: AsgiApp) -> tuple[AsgiApp, Cal
     engine with a short statement bound — separate from the work and audit
     pools so a slow log write can never hold a connection a request needs — a
     sink that appends one row per short transaction, and one recorder whose
-    writer thread is started here. The returned closer stops the recorder with
-    a bounded flush and disposes the engine.
+    writer thread is started here. Rows are built in one child process
+    (`ProcessRowBuilder`, `spawn` context, started on the first row), so the
+    redaction and JSON work never holds this process's GIL while requests are
+    served. The returned closer stops the recorder with a bounded flush — which
+    also stops the worker process — and disposes the engine.
     """
     if not settings.mcp_interaction_log_enabled:
         return app, _no_interaction_log
@@ -360,7 +370,11 @@ def with_interaction_log(settings: Settings, app: AsgiApp) -> tuple[AsgiApp, Cal
         with engine.begin() as connection:
             insert_interaction(connection, row)
 
-    recorder = InteractionRecorder(sink, facade_invoke_tools=FACADE_INVOKE_TOOLS)
+    builder = ProcessRowBuilder(
+        multiprocessing.get_context("spawn"),
+        timeout_seconds=INTERACTION_LOG_ROW_TIMEOUT_SECONDS,
+    )
+    recorder = InteractionRecorder(sink, facade_invoke_tools=FACADE_INVOKE_TOOLS, builder=builder)
     recorder.start()
 
     def close() -> None:

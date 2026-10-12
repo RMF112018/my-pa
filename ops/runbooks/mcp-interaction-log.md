@@ -253,9 +253,26 @@ stored.
   takes none), so an unreachable host that does not refuse the connection
   holds only the writer thread for the operating system's connect timeout;
   meanwhile the queue fills and further exchanges are dropped and counted.
-- Parsing, redaction, hashing and the insert run on one daemon writer thread,
-  on a dedicated engine with a 2-second statement timeout, separate from the
-  pools that serve requests.
+- One daemon writer thread takes each queued exchange and has its row built
+  by **one spawned worker process** (`ProcessRowBuilder`, started on the first
+  row): parsing, redaction, hashing and capping happen there, so their CPU
+  never holds the gateway's GIL. The writer thread only sends the bodies over a
+  pipe and waits for the row, then inserts it on a dedicated engine with a
+  2-second statement timeout, separate from the pools that serve requests.
+  Measured with a 1 ms ticker thread in the gateway process, building a row
+  in-thread stalled every other thread for 83 ms (1 MiB body) up to 1.34 s
+  (16 MiB) idle, and up to 4.1 s under heavy CPU contention; through the worker
+  the longest stall was 0.5–1.6 ms idle and at most 35 ms under the same
+  contention.
+- **A slow or crashed worker** costs one row, never a request: a row that takes
+  longer than 30 seconds to build, a worker that dies, or a broken pipe kills
+  the worker, drops that row and counts a **capture error**; there is no retry,
+  and the next row starts a fresh worker. Capture errors are reported like
+  drops — one count-only `mcp-interaction-log capture_error …` line at the
+  first, then at most one per 60 seconds — and the count since the last written
+  row rides on the next one as `diagnostics.capture.capture_errors_before`.
+  The worker is a `spawn` child, so it re-imports `apps/gateway.py` as its main
+  module (module-level imports only; nothing is started).
 - **If the database is unavailable or slow**, the insert fails, the row is
   dropped and counted, and nothing is retried. Requests are unaffected. The
   first write failure prints one count-only line on the container's standard
@@ -275,7 +292,10 @@ stored.
   The line is printed outside the recorder's lock and never carries a body,
   header or identifier.
 - On shutdown the writer gets up to 2 seconds to flush; anything still queued
-  is counted as dropped (`abandoned=<n>` on standard error).
+  is counted as dropped (`abandoned=<n>` on standard error). The worker process
+  is then asked to exit, terminated if it has not within one second, and killed
+  if it still has not; a row it was building is lost and counted as a capture
+  error. With the log disabled no worker process, thread or engine exists.
 
 ## Enable it in production
 

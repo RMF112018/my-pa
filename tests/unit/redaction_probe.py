@@ -268,10 +268,6 @@ def _shape_key(name: str) -> str:
     return name.split("[", 1)[0]
 
 
-def _shape_key(name: str) -> str:
-    return name.split("[", 1)[0]
-
-
 def _probe_pattern(name: str) -> None:
     """Own shapes at the wide spread, every other pattern's at the cross spread, 1 MiB."""
     pattern = _compiled_patterns()[name]

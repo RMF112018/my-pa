@@ -7,18 +7,26 @@ message bodies by default"), which is why it is off unless
 `MY_PA_MCP_INTERACTION_LOG_ENABLED` turns it on, and why everything it stores is
 redacted first.
 
-**Two halves, two threads.** `McpInteractionCapture` is ASGI middleware around
-the Starlette app `create_remote_mcp_app` returns. On the event loop it only
-*tees*: every `http.request` and `http.response.*` message passes through
-unchanged, and the tee keeps a reference to each body chunk (up to
-`BUFFER_CEILING_BYTES` per body), a byte count of the full wire body, the
-status and the response headers. It hashes nothing. After the inner app
-returns — so after the final response byte has been handed to the server — the
-captured exchange is offered to `InteractionRecorder` with `put_nowait`. One
-daemon writer thread then parses the JSON-RPC, redacts, caps, builds the row and
-hands it to the injected sink. Nothing here knows what the sink is; the
-composition root (`apps/gateway.py`) gives it one that appends through
-`infrastructure.persistence.mcp_interactions`.
+**Three parts: tee, writer thread, row worker.** `McpInteractionCapture` is
+ASGI middleware around the Starlette app `create_remote_mcp_app` returns. On
+the event loop it only *tees*: every `http.request` and `http.response.*`
+message passes through unchanged, and the tee keeps a reference to each body
+chunk (up to `BUFFER_CEILING_BYTES` per body), a byte count of the full wire
+body, the status and the response headers. It hashes nothing. After the inner
+app returns — so after the final response byte has been handed to the server —
+the captured exchange is offered to `InteractionRecorder` with `put_nowait`.
+One daemon writer thread takes it, has the row built, and hands the row to the
+injected sink. In the gateway the row is built by `ProcessRowBuilder` in one
+spawned child process: parsing, redaction, hashing and capping hold *that*
+process's GIL, never the gateway's. The writer thread only sends the bodies
+over a pipe and waits (both release the GIL). Measured with a 1 ms ticker
+thread: building a 16 MiB text body in-thread stalled the gateway's threads for
+about 1.3 s; through the worker the longest stall was under 2 ms idle and 35 ms
+under heavy CPU contention. A row that takes longer than its bound (30 s in the
+gateway), or a worker that crashes, kills that worker, drops that row and
+counts a capture error; the next row starts a fresh worker. Nothing here knows
+what the sink is; the composition root (`apps/gateway.py`) gives it one that
+appends through `infrastructure.persistence.mcp_interactions`.
 
 **Nothing here imports the MCP transport.** The captured path and the façade
 tool names whose `arguments.capability` names the canonical target are inputs:
@@ -105,6 +113,7 @@ only for requests that reach the MCP session manager, so an `invalid_token` or
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import hashlib
 import json
 import math
@@ -117,7 +126,10 @@ import uuid
 from collections.abc import Awaitable, Callable, Iterable, Mapping, MutableMapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Final, TextIO
+from multiprocessing.connection import Connection
+from multiprocessing.context import BaseContext
+from multiprocessing.process import BaseProcess
+from typing import Any, Final, Protocol, TextIO
 
 __all__ = [
     "BODY_CAP_BYTES",
@@ -249,6 +261,10 @@ REDACTED_KEYS: Final = frozenset(
         "secrets",
         "pwd",
         "passwd",
+        "passcode",
+        "privatekeypem",
+        "authheader",
+        "authorizationheader",
     }
 )
 #: Normalised suffixes that make any key credential-bearing: `auth_token`,
@@ -349,7 +365,9 @@ _SEP: Final = r"[-_ ]?"
 def _key_pattern(prefix_class: str, separator: str) -> str:
     """A credential key as text: an exact key, or a bounded prefix and a suffix."""
     return (
-        r"(?:(?:proxy" + separator + r")?authorization(?:" + separator + r"code)?|bearer"
+        r"(?:(?:proxy" + separator + r")?authorization(?:" + separator + r"(?:code|header))?"
+        r"|auth" + separator + r"header|passcode|private" + separator + r"key" + separator + r"pem"
+        r"|bearer"
         r"|(?:client" + separator + r")?assertion|code" + separator + r"verifier|pwd"
         r"|" + prefix_class + r"{0,64}?(?:token|secrets?|password|passwd|passphrase"
         r"|api" + separator + r"key|private" + separator + r"key|signing" + separator + r"key"
@@ -551,6 +569,15 @@ def _dumps(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
 
+def _without_noise(key: str) -> str:
+    """`key` without NUL and lone surrogates, so `pass\x00word` is still `password`."""
+    return "".join(
+        character
+        for character in key
+        if character != _NUL and not 0xD800 <= ord(character) <= 0xDFFF
+    )
+
+
 def _unique_key(key: str, taken: dict[str, object], next_suffix: dict[str, int]) -> str:
     """`key`, or `key #2`, `key #3`, ... when redaction made two keys equal.
 
@@ -577,9 +604,12 @@ def _redact_value(value: object, walk: _Walk, depth: int) -> object:
         for key, item in value.items():
             clean_key, key_replaced = _sanitize(str(key))
             walk.nul_replaced |= key_replaced
-            if _is_credential_key(clean_key):
-                result[_unique_key(clean_key, result, next_suffix)] = REDACTED
-                walk.redactions += 1
+            if _is_credential_key(clean_key) or _is_credential_key(_without_noise(str(key))):
+                # The key's own text can carry a credential too
+                # (`"https://u:PASS@h/x_token"`), so it is redacted as a string.
+                redacted_key, count = _redact_string_patterns(clean_key)
+                walk.redactions += count + 1
+                result[_unique_key(redacted_key, result, next_suffix)] = REDACTED
                 continue
             # A key is text too: a URL with userinfo, a bearer token or a JWT
             # used as a key is redacted like any other string.
@@ -761,8 +791,15 @@ def _metadata(value: object, walk: _Walk) -> str | None:
     """
     if value is None:
         return None
-    text = value if isinstance(value, str) else json.dumps(value, separators=(",", ":"))
-    text, count = _redact_string_patterns(text)
+    if isinstance(value, str):
+        text, count = _redact_string_patterns(value)
+    else:
+        # An id or method given as an object or array is redacted structurally
+        # (`{"password": ["S"]}`), exactly as a body would be; that walk already
+        # applies the string patterns to every key and leaf.
+        structured, count, replaced = redact_json(value)
+        walk.nul_replaced |= replaced
+        text = json.dumps(structured, ensure_ascii=False, separators=(",", ":"))
     text = text[:_MAX_METADATA_CHARS]
     walk.redactions += count
     text, replaced = _sanitize(text)
@@ -925,6 +962,7 @@ def build_interaction_row(
     facade_invoke_tools: frozenset[str],
     dropped_before: int = 0,
     write_failures_before: int = 0,
+    capture_errors_before: int = 0,
 ) -> dict[str, object]:
     """Parse, redact and cap one exchange into a row keyed by `INTERACTION_COLUMNS`.
 
@@ -972,6 +1010,7 @@ def build_interaction_row(
             "non_finite_replaced": request.non_finite_replaced or response.non_finite_replaced,
             "dropped_before": dropped_before,
             "write_failures_before": write_failures_before,
+            "capture_errors_before": capture_errors_before,
         },
     }
     return {
@@ -1013,14 +1052,239 @@ def _held_bytes(exchange: CapturedExchange) -> int:
     return len(exchange.request_body) + len(exchange.response_body)
 
 
+class RowBuilder(Protocol):
+    """Turns one captured exchange into a row; raises when it cannot."""
+
+    def __call__(
+        self,
+        exchange: CapturedExchange,
+        *,
+        facade_invoke_tools: frozenset[str],
+        dropped_before: int = 0,
+        write_failures_before: int = 0,
+        capture_errors_before: int = 0,
+    ) -> dict[str, object]: ...
+
+
+def _build_in_process(
+    exchange: CapturedExchange,
+    *,
+    facade_invoke_tools: frozenset[str],
+    dropped_before: int = 0,
+    write_failures_before: int = 0,
+    capture_errors_before: int = 0,
+) -> dict[str, object]:
+    """The default builder: `build_interaction_row`, in the calling thread."""
+    return build_interaction_row(
+        exchange,
+        facade_invoke_tools=facade_invoke_tools,
+        dropped_before=dropped_before,
+        write_failures_before=write_failures_before,
+        capture_errors_before=capture_errors_before,
+    )
+
+
+@dataclass(frozen=True)
+class _PortablePrincipal:
+    principal_id: object
+    kind: object
+
+
+@dataclass(frozen=True)
+class _PortableAccess:
+    """The two facts the row reads from the access context, in picklable form."""
+
+    principal: _PortablePrincipal | None
+    authenticated_client_id: object
+
+
+def _portable_access(access: object) -> _PortableAccess | None:
+    if access is None:
+        return None
+    principal = getattr(access, "principal", None)
+    kind = getattr(principal, "kind", None)
+    return _PortableAccess(
+        principal=None
+        if principal is None
+        else _PortablePrincipal(
+            principal_id=getattr(principal, "principal_id", None),
+            kind=None if kind is None else str(getattr(kind, "value", kind)),
+        ),
+        authenticated_client_id=getattr(access, "authenticated_client_id", None),
+    )
+
+
+class RowBuildFailedError(RuntimeError):
+    """The worker process failed, crashed or exceeded its time for one row."""
+
+
+def _row_worker(connection: Connection) -> None:
+    """Child-process loop: one header and two bodies in, one row out, until EOF.
+
+    The bodies arrive with `send_bytes` (no pickling of up to 2 x 16 MiB); the
+    header is a small pickled `CapturedExchange` with empty bodies.
+    """
+    while True:
+        try:
+            message = connection.recv()
+        except (EOFError, OSError):
+            return
+        if message is None:
+            return
+        header, options = message
+        try:
+            request = connection.recv_bytes()
+            response = connection.recv_bytes()
+        except (EOFError, OSError):
+            return
+        try:
+            exchange = dataclasses.replace(header, request_body=request, response_body=response)
+            row = build_interaction_row(exchange, **options)
+        except Exception:
+            connection.send(("error", None))
+        else:
+            connection.send(("ok", row))
+
+
+class ProcessRowBuilder:
+    """Builds rows in one child process, so their CPU never holds the gateway's GIL.
+
+    Every regex and JSON step of `build_interaction_row` holds the GIL for its
+    whole run (measured in-thread: a 16 MiB text body stalled a 1 ms ticker
+    for about 1.3 s). Here the writer thread only sends the bodies over a pipe
+    (`send_bytes`, which releases the GIL while it writes), waits with
+    `poll` (which releases it too) and unpickles the finished row.
+
+    One worker, started lazily on the first row from `context` (the
+    composition root passes a `spawn` context). Each row is bounded by
+    `timeout_seconds`: on a timeout, a crash or a broken pipe the worker is
+    killed, `RowBuildFailedError` is raised (the recorder counts a capture
+    error and drops that row, never retrying) and the next row starts a fresh
+    worker. `close` asks the worker to exit, then terminates and finally kills
+    it if it does not; after `close` no new worker is started.
+    """
+
+    def __init__(
+        self,
+        context: BaseContext,
+        *,
+        timeout_seconds: float = 30.0,
+        exit_seconds: float = 1.0,
+    ) -> None:
+        self._context = context
+        self._timeout = timeout_seconds
+        self._exit_seconds = exit_seconds
+        self._lock = threading.Lock()
+        self._process: BaseProcess | None = None
+        self._connection: Connection | None = None
+        self._closed = False
+
+    @property
+    def worker_pid(self) -> int | None:
+        process = self._process
+        return None if process is None else process.pid
+
+    def _worker(self) -> Connection:
+        if self._closed:
+            raise RowBuildFailedError("row builder is closed")
+        if self._connection is None or self._process is None or not self._process.is_alive():
+            self._discard()
+            parent, child = self._context.Pipe(duplex=True)
+            process = self._context.Process(  # type: ignore[attr-defined]
+                target=_row_worker, args=(child,), name="mcp-interaction-rows", daemon=True
+            )
+            process.start()
+            child.close()
+            self._process, self._connection = process, parent
+        return self._connection
+
+    def _discard(self) -> None:
+        """Kill and forget the current worker, if any."""
+        process, connection = self._process, self._connection
+        self._process, self._connection = None, None
+        if connection is not None:
+            with contextlib.suppress(Exception):
+                connection.close()
+        if process is not None:
+            with contextlib.suppress(Exception):
+                process.kill()
+                process.join(self._exit_seconds)
+
+    def __call__(
+        self,
+        exchange: CapturedExchange,
+        *,
+        facade_invoke_tools: frozenset[str],
+        dropped_before: int = 0,
+        write_failures_before: int = 0,
+        capture_errors_before: int = 0,
+    ) -> dict[str, object]:
+        header = dataclasses.replace(
+            exchange,
+            request_body=b"",
+            response_body=b"",
+            access=_portable_access(exchange.access),
+        )
+        options = {
+            "facade_invoke_tools": facade_invoke_tools,
+            "dropped_before": dropped_before,
+            "write_failures_before": write_failures_before,
+            "capture_errors_before": capture_errors_before,
+        }
+        with self._lock:
+            connection = self._worker()
+            try:
+                connection.send((header, options))
+                connection.send_bytes(exchange.request_body)
+                connection.send_bytes(exchange.response_body)
+                if not connection.poll(self._timeout):
+                    raise RowBuildFailedError("row build timed out")
+                status, row = connection.recv()
+            except RowBuildFailedError:
+                self._discard()
+                raise
+            except Exception as failure:
+                self._discard()
+                raise RowBuildFailedError("row worker failed") from failure
+        if status != "ok" or not isinstance(row, dict):
+            raise RowBuildFailedError("row build raised in the worker")
+        return row
+
+    def close(self) -> None:
+        """Stop the worker: ask, then terminate, then kill. Idempotent."""
+        self._closed = True
+        process, connection = self._process, self._connection
+        if connection is not None:
+            with contextlib.suppress(Exception):
+                connection.send(None)
+        if process is not None:
+            with contextlib.suppress(Exception):
+                process.join(self._exit_seconds)
+                if process.is_alive():
+                    process.terminate()
+                    process.join(self._exit_seconds)
+                if process.is_alive():
+                    process.kill()
+                    process.join(self._exit_seconds)
+        if connection is not None:
+            with contextlib.suppress(Exception):
+                connection.close()
+        self._process, self._connection = None, None
+
+
 class InteractionRecorder:
     """One bounded queue and one daemon writer thread in front of a sink.
 
     `submit` never blocks and never raises. `start` launches the writer; `stop`
-    drains what it can within `timeout` seconds and returns. The counters are
-    process totals: `dropped` (queue full, or offered after stop),
-    `write_failures` (the sink raised) and `capture_errors` (the tee or the row
-    builder raised).
+    drains what it can within `timeout` seconds, closes the row builder and
+    returns. The counters are process totals: `dropped` (queue full, or offered
+    after stop), `write_failures` (the sink raised) and `capture_errors` (the
+    tee or the row builder raised or timed out).
+
+    `builder` turns a captured exchange into a row. The default builds it in
+    this process (unit tests); the gateway injects a `ProcessRowBuilder`, which
+    builds it in a child process so the regex and JSON work never holds this
+    process's GIL. A builder with a `close()` method is closed by `stop`.
     """
 
     def __init__(
@@ -1032,8 +1296,10 @@ class InteractionRecorder:
         max_queued_bytes: int = QUEUED_BYTES_BUDGET,
         drop_report_seconds: float = DROP_REPORT_SECONDS,
         stderr: TextIO | None = None,
+        builder: RowBuilder | None = None,
     ) -> None:
         self._sink = sink
+        self._builder: RowBuilder = builder if builder is not None else _build_in_process
         self.facade_invoke_tools = facade_invoke_tools
         self._queue: queue.Queue[object] = queue.Queue(maxsize=maxsize)
         self._stderr = stderr
@@ -1043,14 +1309,14 @@ class InteractionRecorder:
         self._capture_errors = 0
         self._dropped_reported = 0
         self._failures_reported = 0
+        self._capture_errors_reported = 0
         self._thread: threading.Thread | None = None
         self._stopping = threading.Event()
         self._deadline = 0.0
         self._max_queued_bytes = max_queued_bytes
         self._queued_bytes = 0
         self._drop_report_seconds = drop_report_seconds
-        self._last_drop_report: float | None = None
-        self._last_failure_report: float | None = None
+        self._last_report: dict[str, float] = {}
 
     @property
     def dropped(self) -> int:
@@ -1082,7 +1348,11 @@ class InteractionRecorder:
             self._queue.put_nowait(_STOP)
         thread = self._thread
         if thread is not None:
-            thread.join(timeout)
+            thread.join(max(0.0, self._deadline - time.monotonic()))
+        close = getattr(self._builder, "close", None)
+        if close is not None:
+            with contextlib.suppress(Exception):
+                close()
         abandoned = 0
         while True:
             try:
@@ -1113,15 +1383,9 @@ class InteractionRecorder:
                 self._release(exchange)
                 raise
         except queue.Full:
-            now = time.monotonic()
             with self._lock:
                 self._dropped += 1
-                due = (
-                    self._last_drop_report is None
-                    or now - self._last_drop_report >= self._drop_report_seconds
-                )
-                if due:
-                    self._last_drop_report = now
+                due = self._report_due("dropped")
             if due:
                 # Count-only, at most once per interval, outside the lock.
                 self._report("dropped")
@@ -1140,6 +1404,15 @@ class InteractionRecorder:
     def note_capture_error(self) -> None:
         with self._lock:
             self._capture_errors += 1
+
+    def _report_due(self, kind: str) -> bool:
+        """First occurrence of `kind`, then at most once per interval. Call under the lock."""
+        now = time.monotonic()
+        last = self._last_report.get(kind)
+        if last is not None and now - last < self._drop_report_seconds:
+            return False
+        self._last_report[kind] = now
+        return True
 
     def _report(self, what: str) -> None:
         stream = self._stderr if self._stderr is not None else sys.stderr
@@ -1172,29 +1445,29 @@ class InteractionRecorder:
         with self._lock:
             dropped = self._dropped
             failures = self._write_failures
+            errors = self._capture_errors
         try:
-            row = build_interaction_row(
+            row = self._builder(
                 exchange,
                 facade_invoke_tools=self.facade_invoke_tools,
                 dropped_before=dropped - self._dropped_reported,
                 write_failures_before=failures - self._failures_reported,
+                capture_errors_before=errors - self._capture_errors_reported,
             )
         except Exception:
-            self.note_capture_error()
-            self._report("capture_error")
+            with self._lock:
+                self._capture_errors += 1
+                due = self._report_due("capture_error")
+            if due:
+                # Count-only and throttled like drops; never the exchange.
+                self._report("capture_error")
             return
         try:
             self._sink(row)
         except Exception:
-            now = time.monotonic()
             with self._lock:
                 self._write_failures += 1
-                due = (
-                    self._last_failure_report is None
-                    or now - self._last_failure_report >= self._drop_report_seconds
-                )
-                if due:
-                    self._last_failure_report = now
+                due = self._report_due("write_failed")
             if due:
                 # Count-only, first failure then at most once per interval: a
                 # database outage must not become a line per request.
@@ -1202,6 +1475,7 @@ class InteractionRecorder:
             return
         self._dropped_reported = dropped
         self._failures_reported = failures
+        self._capture_errors_reported = errors
 
 
 class _Exchange:

@@ -10,10 +10,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import hashlib
 import io
 import json
+import multiprocessing
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -1082,6 +1085,12 @@ def test_enabled_the_app_is_wrapped_and_the_closer_stops_and_disposes(
             "statement_timeout_ms": gateway.INTERACTION_LOG_STATEMENT_TIMEOUT_MS,
         }
     ]
+    # Rows are built in one spawned worker process, bounded per row.
+    builder = served.recorder._builder
+    assert isinstance(builder, capture.ProcessRowBuilder)
+    assert builder._context.get_start_method() == "spawn"
+    assert builder._timeout == gateway.INTERACTION_LOG_ROW_TIMEOUT_SECONDS == 30.0
+    assert builder.worker_pid is None  # started on the first row, not at composition
     writer = [t for t in threading.enumerate() if t.name == "mcp-interaction-writer"]
     assert writer
     close()
@@ -1663,3 +1672,230 @@ def test_write_failures_are_reported_at_the_first_and_then_rate_limited() -> Non
         every.stop()
     assert eager.getvalue().count("write_failed") == 3
     assert "MARKER" not in stderr.getvalue() + eager.getvalue()
+
+
+# ---- rows built in a worker process; metadata/key coverage; capture errors (review 5) ----
+
+_SPAWN = multiprocessing.get_context("spawn")
+
+
+def _longest_stall_while(action: Any) -> float:  # noqa: ANN401
+    """The longest gap a 1 ms ticker thread sees while `action()` runs, in seconds.
+
+    The ticker sleeps 1 ms and records how late each wake-up is. While another
+    thread holds the GIL the ticker cannot run, so the gap is the longest time
+    the GIL was held — the time a request on the event loop would have waited.
+    """
+    stop = threading.Event()
+    worst = [0.0]
+
+    def tick() -> None:
+        last = time.perf_counter()
+        while not stop.is_set():
+            time.sleep(0.001)
+            now = time.perf_counter()
+            worst[0] = max(worst[0], now - last - 0.001)
+            last = now
+
+    ticker = threading.Thread(target=tick, daemon=True)
+    ticker.start()
+    time.sleep(0.05)
+    try:
+        action()
+    finally:
+        time.sleep(0.05)
+        stop.set()
+        ticker.join()
+    return worst[0]
+
+
+#: Measured on the development machine (1, 4 and 16 MiB bodies): in-thread
+#: building stalled the ticker 83 ms-1.34 s idle and 0.35-4.1 s under 20 busy
+#: loops on 14 cores; the worker process 0.5-1.6 ms idle and at most 35 ms
+#: under the same load. 250 ms is 7x above the worst worker stall and far below
+#: the in-thread stall for the 16 MiB body this test uses (1.34 s idle).
+_STALL_BOUND_SECONDS = 0.25
+
+
+def test_building_a_16_mib_row_does_not_stall_the_gateway_process() -> None:
+    raw = b"plain text " * (16 * 1024 * 1024 // 11)
+    rows: list[Mapping[str, object]] = []
+    builder = capture.ProcessRowBuilder(_SPAWN, timeout_seconds=60.0)
+    recorder = InteractionRecorder(
+        rows.append, facade_invoke_tools=FACADE, stderr=io.StringIO(), builder=builder
+    )
+    recorder.start()
+    try:
+        recorder.submit(_exchange(raw_request=b"{}"))  # start the worker outside the window
+        _wait_for(lambda: len(rows) == 1, timeout=60)
+        stall = _longest_stall_while(
+            lambda: (
+                recorder.submit(_exchange(raw_request=raw)),
+                _wait_for(lambda: len(rows) == 2, timeout=60),
+            )
+        )
+    finally:
+        recorder.stop(timeout=5)
+    assert stall < _STALL_BOUND_SECONDS, f"longest stall {stall * 1000:.0f} ms"
+    assert rows[1]["request_bytes"] == len(raw)
+    assert builder.worker_pid is None
+
+
+def test_a_worker_timeout_or_crash_drops_the_row_counts_it_and_replaces_the_worker() -> None:
+    stderr = io.StringIO()
+    rows: list[Mapping[str, object]] = []
+    builder = capture.ProcessRowBuilder(_SPAWN, timeout_seconds=60.0)
+    recorder = InteractionRecorder(
+        rows.append, facade_invoke_tools=FACADE, stderr=stderr, builder=builder
+    )
+    recorder.start()
+    try:
+        recorder.submit(_exchange({"method": "first"}))
+        _wait_for(lambda: len(rows) == 1, timeout=60)
+        first_pid = builder.worker_pid
+        assert first_pid is not None
+        os.kill(first_pid, signal.SIGKILL)  # a crashed worker
+        _wait_for(lambda: not _pid_alive(first_pid))
+        recorder.submit(_exchange({"method": "lost"}))
+        _wait_for(lambda: recorder.capture_errors == 1, timeout=60)
+        builder._timeout = 0.0  # every build now times out
+        recorder.submit(_exchange({"method": "too slow"}))
+        _wait_for(lambda: recorder.capture_errors == 2, timeout=60)
+        builder._timeout = 60.0
+        recorder.submit(_exchange({"method": "after"}))
+        _wait_for(lambda: len(rows) == 2, timeout=60)
+        assert builder.worker_pid not in {None, first_pid}
+    finally:
+        recorder.stop(timeout=5)
+    assert [row["jsonrpc_method"] for row in rows] == ["first", "after"]
+    assert rows[1]["diagnostics"]["capture"]["capture_errors_before"] == 2  # type: ignore[index]
+    assert stderr.getvalue().count("log capture_error ") == 1  # throttled
+    assert builder.worker_pid is None
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    with contextlib.suppress(ChildProcessError):
+        finished, _ = os.waitpid(pid, os.WNOHANG)
+        if finished:
+            return False
+    return True
+
+
+def test_close_stops_the_worker_and_refuses_new_rows() -> None:
+    builder = capture.ProcessRowBuilder(_SPAWN, timeout_seconds=60.0)
+    row = builder(_exchange({"method": "m"}), facade_invoke_tools=FACADE)
+    assert row["jsonrpc_method"] == "m"
+    pid = builder.worker_pid
+    assert pid is not None
+    builder.close()
+    _wait_for(lambda: not _pid_alive(pid))
+    with pytest.raises(capture.RowBuildFailedError):
+        builder(_exchange(), facade_invoke_tools=FACADE)
+    assert builder.worker_pid is None
+
+
+def test_the_worker_builds_the_same_row_as_the_thread() -> None:
+    class Kind:
+        value = "operator"
+
+    class Principal:
+        principal_id = "prn_synthetic"
+        kind = Kind()
+
+    class Access:
+        principal = Principal()
+        authenticated_client_id = "client-synthetic"
+
+    exchange = _exchange(
+        _call("my_pa.read", {"capability": "tasks.list", "password": "S"}), access=Access()
+    )
+    builder = capture.ProcessRowBuilder(_SPAWN, timeout_seconds=60.0)
+    try:
+        remote = builder(exchange, facade_invoke_tools=FACADE, dropped_before=3)
+    finally:
+        builder.close()
+    local = _row(exchange, dropped_before=3)
+    for row in (remote, local):
+        row.pop("interaction_id")
+    assert remote == local
+
+
+def test_non_string_metadata_is_redacted_structurally() -> None:
+    row = _row(
+        _exchange(
+            {
+                "jsonrpc": "2.0",
+                "id": {"password": ["MARKERMETAID"]},
+                "method": {"token": "MARKERMETHOD"},
+            }
+        )
+    )
+    assert row["jsonrpc_id"] == '{"password":"[REDACTED]"}'
+    assert row["jsonrpc_method"] == '{"token":"[REDACTED]"}'
+    assert "MARKERMETA" not in _serialized(row)
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "https://u:MARKERCK1@h/x_token",
+        "Bearer MARKERCK2xyz token",
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJNQVJLRVJDSzMifQ.sig_token",
+    ],
+)
+def test_a_credential_key_has_its_own_text_redacted_too(key: str) -> None:
+    redacted, _, _ = redact_json({key: "MARKERVALUE"})
+    text = json.dumps(redacted)
+    assert "MARKER" not in text
+    assert "eyJzdWIi" not in text
+    assert list(redacted.values()) == [REDACTED]  # type: ignore[union-attr]
+
+
+@pytest.mark.parametrize(
+    "key", ["passcode", "privateKeyPem", "auth_header", "Authorization-Header"]
+)
+def test_the_added_exact_keys_are_credential_keys(key: str) -> None:
+    assert redact_json({key: "MARKERN2"}) == ({key: REDACTED}, 1, False)
+    text, count, _ = redact_text(f'{{"{key}": "MARKERN2", "x": 1')
+    assert "MARKERN2" not in text
+    assert count == 1
+
+
+@pytest.mark.parametrize("key", ["pass\x00word", "api\x00_key", "tok\ud800en"])
+def test_a_nul_or_surrogate_inside_a_key_does_not_hide_a_credential_key(key: str) -> None:
+    redacted, _, replaced = redact_json({key: "MARKERN3"})
+    assert "MARKERN3" not in json.dumps(redacted)
+    assert replaced is True
+
+
+def test_capture_errors_are_throttled_and_carried_forward() -> None:
+    stderr = io.StringIO()
+    rows: list[Mapping[str, object]] = []
+    failing = [3]
+
+    def flaky(exchange: CapturedExchange, **options: Any) -> dict[str, object]:  # noqa: ANN401
+        if failing[0]:
+            failing[0] -= 1
+            raise ValueError("MARKERBUILD")
+        return capture.build_interaction_row(exchange, **options)
+
+    recorder = InteractionRecorder(
+        rows.append, facade_invoke_tools=FACADE, stderr=stderr, builder=flaky
+    )
+    recorder.start()
+    try:
+        for _ in range(4):
+            recorder.submit(_exchange({"password": "MARKERCE"}))
+        _wait_for(lambda: len(rows) == 1)
+    finally:
+        recorder.stop()
+    assert recorder.capture_errors == 3
+    assert rows[0]["diagnostics"]["capture"]["capture_errors_before"] == 3  # type: ignore[index]
+    assert stderr.getvalue().splitlines() == [
+        "mcp-interaction-log capture_error dropped=0 write_failures=0 capture_errors=1"
+    ]
+    assert "MARKER" not in stderr.getvalue()

@@ -431,8 +431,8 @@ acceptance check. Do not widen the ordinary profile or infer execution authority
 from publication. Each grant keeps its canonical permitted purpose, exact scope
 and resource and canonical write flag.
 
-The deployed inventory contained 190 names; current main adds two report-type
-reads. A full catalog check must enumerate each current capability and identify
+The deployed inventory contained 190 names; current main adds
+`reports.types.create` (write) and `reports.types.list` (read). A full catalog check must enumerate each current capability and identify
 missing composition or authorization gates explicitly. Paginated `my_pa.describe`
 proves eligible contract exposure; successful metadata calls and isolated
 synthetic family tests provide separate execution evidence. Catalogs, missing

@@ -395,3 +395,44 @@ Implementation areas by package:
   configuration or application egress;
 - NAS-07 live Apple/TCC activation and real credential minting remain operator gates;
 - NAS-10 acceptance.
+
+
+### Source-bound public-browser smoke composition
+
+Set `MY_PA_NAS_PUBLIC_BROWSER_OVERLAY` only to the selected source checkout's
+`ops/nas/compose.public-browser.example.yml`. The admission generator takes the
+same file through `--public-browser-overlay`. Its `public_browser` table binds
+that physical, owner-controlled, checked-in file's path, SHA-256, commit and tree.
+The smoke digest and running service hashes cover base plus public overlay;
+base-only and pilot selection retain their existing contracts. Public selection
+with pilot is refused.
+
+Every lifecycle command selects only `nas-01-contract-only` and the six named
+canonical services. It never enables `public-browser-edge`, starts an edge
+service, changes tunnel credentials, or silently drops web's `browser-origin`
+network. Cleanup stops only those six services; its possible PostgreSQL
+interruption remains separately gated. Existing edge state and routing must be
+verified before and after the maintenance window.
+
+The one-off preserved-public reconciliation supports only commit
+`f7aa253968362fb673e811bfc3de2afe84855ae7`, tree
+`1debda7554f342048ca20dbed40f845af714ce5b`, at the authenticated source
+`/volume1/my-pa/runtime-f7aa2539-prod-20261011T171832Z`. From the reviewed current
+source and authenticated operator/interpreter, prepare a **new exclusive**
+`/etc/my-pa/runtime-admission.public-browser.f7aa2539.toml` using the generator's
+`--preserved-source` and `--public-browser-overlay` options. The unchanged
+canonical old admission is independently bound by
+`previous_runtime_admission_sha256`; old source/image/engine bindings, base
+render, combined live hashes and physical PostgreSQL resource checks remain
+mandatory. Preparation is not canonical publication or deployment authority.
+Other preserved public versions are unsupported, not inferred compatible.
+
+The old wrapper cannot forward the frontend interpolation names. Current
+verification therefore lets Compose consume only the original source-bound
+`production.f7aa2539.env` in place under `/volume1/my-pa/secrets`, after physical
+root-owned directory, regular-file, mode and no-alias checks. It never copies or
+prints those values. This is not permission to inspect secrets, create a secret
+stage or disclose configuration to a model. The source-first preflight first
+requires the authoritative baked operator gate and cleanup, then runs the
+reviewed current target verifier; an incompatible old gate's failure is never
+ignored or converted to PASS. Preserved backup follows the same selection.

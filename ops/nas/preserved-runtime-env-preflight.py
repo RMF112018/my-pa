@@ -1130,6 +1130,8 @@ def verify(
     ingress_manifest: Path = INGRESS_MANIFEST,
     canonical_compose: Path = CANONICAL_COMPOSE,
     secrets: Path = SECRETS,
+    public_admission: Path = Path("/etc/my-pa/runtime-admission.public-browser.f7aa2539.toml"),
+    postgres_resources: Path = Path("/etc/my-pa/postgres-resources.toml"),
 ) -> None:
     _require(HEX40.fullmatch(new_commit) is not None and HEX40.fullmatch(new_tree) is not None)
     _canonical(new_source)
@@ -1298,7 +1300,119 @@ def verify(
         env=lifecycle,
         discard=True,
     )
-    runner([str(status_script)], cwd=old_source, env=lifecycle, discard=True)
+    if old_commit == "f7aa253968362fb673e811bfc3de2afe84855ae7":
+        _require(old_tree == "1debda7554f342048ca20dbed40f845af714ce5b")
+        web_ids = (
+            runner(
+                [
+                    DOCKER,
+                    "ps",
+                    "-a",
+                    "--no-trunc",
+                    "--filter",
+                    "label=com.docker.compose.project=my-pa-nas-contract",
+                    "--filter",
+                    "label=com.docker.compose.service=web",
+                    "--format",
+                    "{{.ID}}",
+                ]
+            )
+            .decode()
+            .strip()
+            .splitlines()
+        )
+        _require(len(web_ids) == 1 and HEX64.fullmatch(web_ids[0]) is not None)
+        labels = json.loads(
+            runner(
+                [
+                    DOCKER,
+                    "inspect",
+                    "--format",
+                    "{{json .Config.Labels}}",
+                    web_ids[0],
+                ]
+            )
+        )
+        _require(isinstance(labels, dict))
+        files = str(labels.get("com.docker.compose.project.config_files", "")).split(",")
+        public_path = old_source / "ops/nas/compose.public-browser.example.yml"
+        if str(public_path) in files:
+            _require(files == [str(old_compose), str(public_path)])
+            public_bytes = _trusted_file(
+                public_path, uid, mode=(0o400, 0o600, 0o644), stop=trust_stop
+            )
+            reconciliation = _literal_toml(_trusted_file(public_admission, uid, stop=trust_stop))
+            binding = reconciliation.get("public_browser", {})
+            _require(
+                binding
+                == {
+                    "overlay_path": str(public_path),
+                    "overlay_sha256": _sha(public_bytes),
+                    "repository_commit": old_commit,
+                    "repository_tree": old_tree,
+                    "previous_runtime_admission_sha256": _sha(
+                        _trusted_file(runtime_admission, uid, stop=trust_stop)
+                    ),
+                }
+            )
+            for key in (
+                "schema",
+                "status",
+                "docker_engine_id",
+                "docker_engine_name",
+                "image_manifest_sha256",
+                "service_images",
+                "service_image_ids",
+            ):
+                _require(reconciliation.get(key) == runtime.get(key))
+            current_identity = new_source / "ops/nas/runtime_identity_gate.py"
+            current_postgres = new_source / "ops/nas/postgres_gate.py"
+            for program in (current_identity, current_postgres):
+                _trusted_file(
+                    program, uid, mode=(0o400, 0o600, 0o644, 0o500, 0o700, 0o755), stop=trust_stop
+                )
+            # _source(new_source, expected commit/tree) and the authoritative
+            # baked operator gate above precede every current-program call.
+            # No old status refusal is ignored: current target validation must
+            # pass the independent baseline and all combined live hashes.
+            runner(
+                [
+                    str(wrapper),
+                    str(current_identity),
+                    str(old_compose),
+                    str(manifest),
+                    "--preserved-source",
+                    str(old_source),
+                    "--public-browser-overlay",
+                    str(public_path),
+                    "--running",
+                ],
+                cwd=old_source,
+                env=lifecycle,
+                discard=True,
+            )
+            resource = _literal_toml(_trusted_file(postgres_resources, uid, stop=trust_stop))
+            cid = resource.get("postgres_container_id")
+            _require(isinstance(cid, str) and HEX64.fullmatch(cid) is not None)
+            _require(resource.get("postgres_image_id") == runtime["service_image_ids"]["postgres"])
+            runner(
+                [
+                    str(wrapper),
+                    str(current_postgres),
+                    str(postgres_resources),
+                    "--live",
+                    "--container-id",
+                    cid,
+                ],
+                cwd=old_source,
+                env=lifecycle,
+                discard=True,
+            )
+        else:
+            _require(files == [str(old_compose)])
+            runner([str(status_script)], cwd=old_source, env=lifecycle, discard=True)
+    else:
+        runner([str(status_script)], cwd=old_source, env=lifecycle, discard=True)
 
 
 def main(argv: list[str]) -> int:

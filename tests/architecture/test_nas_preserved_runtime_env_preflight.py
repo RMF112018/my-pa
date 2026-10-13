@@ -191,8 +191,10 @@ def _fixture(tmp_path):
         ),
     )
     secrets = _directory(root / "secrets")
-    nas = _file(secrets / "nas.aaaaaaaa.env", "MY_PA_DATABASE_URL=synthetic\n")
-    web = _file(secrets / "web.aaaaaaaa.env", "MYPA_WEBAUTHN_BFF_SECRET=synthetic\n")
+    nas = _file(secrets / ("nas." + OLD_COMMIT[:8] + ".env"), "MY_PA_DATABASE_URL=synthetic\n")
+    web = _file(
+        secrets / ("web." + OLD_COMMIT[:8] + ".env"), "MYPA_WEBAUTHN_BFF_SECRET=synthetic\n"
+    )
     container_id = "1" * 64
     ingress = _file(
         etc / "ingress-manifest.toml",
@@ -222,7 +224,7 @@ def _fixture(tmp_path):
         ),
     )
     production = _file(
-        secrets / "production.aaaaaaaa.env",
+        secrets / ("production." + OLD_COMMIT[:8] + ".env"),
         "\n".join(
             [
                 "MYPA_SOURCE_COMMIT=" + OLD_COMMIT,
@@ -1232,3 +1234,102 @@ def test_capture_within_limit_and_status_output_discarded(capsys):
     program = "import sys; print('private'); print('private', file=sys.stderr)"
     assert GATE._run([sys.executable, "-c", program], discard=True) == b""
     assert capsys.readouterr() == ("", "")
+
+
+@pytest.mark.parametrize("failure", ["none", "baked", "baseline", "current_gate", "pg_resource"])
+def test_f7_public_preflight_authenticates_baked_operator_before_current_target_gate(
+    tmp_path,
+    monkeypatch,
+    failure,
+):
+    monkeypatch.setattr(
+        sys.modules[__name__], "OLD_COMMIT", "f7aa253968362fb673e811bfc3de2afe84855ae7"
+    )
+    monkeypatch.setattr(
+        sys.modules[__name__], "OLD_TREE", "1debda7554f342048ca20dbed40f845af714ce5b"
+    )
+    new, old, paths, calls, _production, _operator, baseline, _ingress = _fixture(tmp_path)
+    public = _file(
+        old / "ops/nas/compose.public-browser.example.yml", "synthetic tracked overlay", 0o644
+    )
+    current = _file(new / "ops/nas/runtime_identity_gate.py", "synthetic reviewed gate", 0o644)
+    current_pg = _file(new / "ops/nas/postgres_gate.py", "synthetic reviewed pg gate", 0o644)
+    reconciliation = _file(
+        tmp_path / "trusted/etc/public-admission.toml",
+        baseline.read_text()
+        + _toml(
+            {},
+            {
+                "public_browser": {
+                    "overlay_path": str(public),
+                    "overlay_sha256": hashlib.sha256(public.read_bytes()).hexdigest(),
+                    "repository_commit": OLD_COMMIT,
+                    "repository_tree": OLD_TREE,
+                    "previous_runtime_admission_sha256": "0" * 64
+                    if failure == "baseline"
+                    else hashlib.sha256(baseline.read_bytes()).hexdigest(),
+                },
+            },
+        ),
+    )
+    pg_cid = "9" * 64
+    resource = _file(
+        tmp_path / "trusted/etc/postgres-resources.toml",
+        _toml(
+            {
+                "postgres_container_id": pg_cid,
+                "postgres_image_id": "sha256:" + "f" * 64 if failure == "pg_resource" else IMAGE,
+            }
+        ),
+    )
+    original_runner = paths["runner"]
+    if failure == "baked":
+        original_runner.gate_state["exit"] = b"1\n"
+    web_cid = "8" * 64
+
+    def runner(argv, **kwargs):
+        if argv[:2] == [GATE.DOCKER, "ps"] and "label=com.docker.compose.service=web" in argv:
+            calls.append((argv, kwargs.get("cwd"), kwargs.get("env")))
+            return (web_cid + "\n").encode()
+        if argv[:2] == [GATE.DOCKER, "inspect"] and argv[-1] == web_cid:
+            calls.append((argv, kwargs.get("cwd"), kwargs.get("env")))
+            assert argv[3] == "{{json .Config.Labels}}"
+            return json.dumps(
+                {
+                    "com.docker.compose.project.config_files": str(
+                        old / "ops/nas/compose.example.yml"
+                    )
+                    + ","
+                    + str(public)
+                }
+            ).encode()
+        if len(argv) > 1 and argv[1] in {str(current), str(current_pg)}:
+            calls.append((argv, kwargs.get("cwd"), kwargs.get("env")))
+            prior = [command for command, _cwd, _env in calls]
+            assert any(command[:2] == [GATE.DOCKER, "wait"] for command in prior)
+            assert any(command[:2] == [GATE.DOCKER, "rm"] for command in prior)
+            assert kwargs["discard"] is True
+            if failure == "current_gate" and argv[1] == str(current):
+                raise GATE.RefusalError
+            return b""
+        return original_runner(argv, **kwargs)
+
+    paths.update(runner=runner, public_admission=reconciliation, postgres_resources=resource)
+    if failure == "none":
+        GATE.verify(new, NEW_COMMIT, NEW_TREE, old, **paths)
+    else:
+        with pytest.raises(GATE.RefusalError):
+            GATE.verify(new, NEW_COMMIT, NEW_TREE, old, **paths)
+    commands = [command for command, _cwd, _env in calls]
+    assert [str(old / "ops/nas/status.sh")] not in commands
+    current_calls = [
+        command for command in commands if len(command) > 1 and command[1] == str(current)
+    ]
+    if failure in {"baked", "baseline"}:
+        assert current_calls == []
+    elif failure == "none":
+        assert len(current_calls) == 1
+        assert current_calls[0][-1] == "--running"
+        assert "--preserved-source" in current_calls[0]
+        assert commands[-1][-3:] == ["--live", "--container-id", pg_cid]
+    assert not any(SYNTHETIC_MARKER in str(command) for command in commands)

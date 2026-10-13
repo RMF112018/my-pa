@@ -448,6 +448,7 @@ UNRELATED_CALLS: Final = frozenset(
         ("apps/cli/migration.py", "observe", "binding"),
         ("src/my_pa/infrastructure/managed_document_stores/filesystem/store.py", "link", "os"),
         ("ops/nas/write-postgres-backup-runtime-attestation.py", "link", "os"),
+        ("ops/nas/generate-runtime-admission.py", "link", "os"),
     }
 )
 

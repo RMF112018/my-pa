@@ -201,6 +201,8 @@ def verify(
     trusted_owner_uid: int = 0,
     runtime_admission_path: Path = RUNTIME_ADMISSION,
     verified_origin: list[str] | None = None,
+    public_browser_overlay_path: Path | None = None,
+    preserved_source_path: Path | None = None,
 ) -> list[str]:
     try:
         compose = _yaml(compose_path)
@@ -225,7 +227,11 @@ def verify(
         errors.append("pilot_overlay_scope")
     if overlay.get("_top_level") != {"services"}:
         errors.append("pilot_overlay_scope")
-    repository = Path(__file__).resolve().parents[2]
+    repository = preserved_source_path or Path(__file__).resolve().parents[2]
+    if pilot and public_browser_overlay_path is not None:
+        errors.append("public_browser_pilot_scope")
+    if preserved_source_path is not None and public_browser_overlay_path is None:
+        errors.append("preserved_public_overlay_required")
     if (
         compose_path.resolve() != repository / "ops/nas/compose.example.yml"
         or pilot_overlay_path.resolve() != repository / "ops/nas/compose.pilot.example.yml"
@@ -238,6 +244,29 @@ def verify(
         image_manifest = tomllib.loads(image_manifest_path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError):
         return [*errors, "image_manifest_unreadable"]
+    if public_browser_overlay_path is not None:
+        from runtime_identity_gate import preserved_public_source_errors, public_browser_binding
+
+        try:
+            public_browser_binding(
+                repository,
+                public_browser_overlay_path,
+                image_manifest,
+                owner_uid=trusted_owner_uid,
+                runner=runner,
+            )
+            if preserved_source_path is not None:
+                errors.extend(
+                    preserved_public_source_errors(
+                        repository,
+                        image_manifest_path,
+                        image_manifest,
+                        owner_uid=trusted_owner_uid,
+                        runner=runner,
+                    )
+                )
+        except (OSError, ValueError, subprocess.SubprocessError):
+            errors.append("public_browser_overlay_binding")
     manifest_commit = str(image_manifest.get("repository_commit", ""))
     manifest_tree = str(image_manifest.get("repository_tree", ""))
     if (
@@ -414,6 +443,8 @@ def main() -> int:
     parser.add_argument("--pilot", action="store_true")
     parser.add_argument("--live", action="store_true")
     parser.add_argument("--print-verified-origin", action="store_true")
+    parser.add_argument("--public-browser-overlay", type=Path)
+    parser.add_argument("--preserved-source", type=Path)
     args = parser.parse_args()
     verified_origin: list[str] = []
     errors = verify(
@@ -423,6 +454,8 @@ def main() -> int:
         pilot=args.pilot,
         live=args.live,
         verified_origin=verified_origin if args.print_verified_origin else None,
+        public_browser_overlay_path=args.public_browser_overlay,
+        preserved_source_path=args.preserved_source,
     )
     if errors:
         print(

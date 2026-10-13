@@ -5,7 +5,7 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 "$script_dir/synology-data-plane-firewall.sh" check
 "$script_dir/synology-ingress-plane-firewall.sh" check
 verify_running_identity
-running=$(nas_compose ps --status running -q | wc -l | tr -d ' ')
+running=$(nas_compose ps --status running -q postgres gateway worker-enrollment worker-capture web proxy | wc -l | tr -d ' ')
 [ "$running" -eq 6 ] || { echo "expected six running runtime services" >&2; exit 1; }
 nas_compose exec -T postgres pg_isready -U my_pa -d my_pa >/dev/null
 nas_compose exec -T gateway python apps/cli/health.py >/dev/null

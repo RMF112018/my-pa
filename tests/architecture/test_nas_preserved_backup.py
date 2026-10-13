@@ -1060,3 +1060,50 @@ def test_reusable_postgres_common_has_no_preserved_runtime_mode() -> None:
         assert target.startswith("/run/my-pa-input/")
         assert not target.startswith("/usr/local")
     assert ":/usr/local/libexec/my-pa-operator-pre-source-gate.py:ro" not in backup
+
+
+@pytest.mark.parametrize("refusal", ["none", "runtime_identity_gate.py", "foreign_overlay"])
+def test_preserved_public_backup_uses_current_gate_without_ignoring_refusal(
+    tmp_path: Path,
+    refusal: str,
+) -> None:
+    env, log = _backup_environment(
+        tmp_path,
+        firewall_passes=True,
+        rejected_gate="runtime_identity_gate.py" if refusal == "runtime_identity_gate.py" else "",
+    )
+    current = Path(env["MY_PA_CURRENT_GATE_SOURCE"]) / "ops/nas"
+    old = Path(env["MY_PA_PRESERVED_RUNTIME_SOURCE"]) / "ops/nas"
+    (current / "runtime_identity_gate.py").write_text("synthetic current gate\n")
+    (current / "compose.public-browser.example.yml").write_text("synthetic current overlay\n")
+    public = old / "compose.public-browser.example.yml"
+    public.write_text("synthetic preserved overlay\n")
+    env["MY_PA_NAS_PUBLIC_BROWSER_OVERLAY"] = str(
+        public if refusal != "foreign_overlay" else tmp_path / "foreign.yml"
+    )
+    backup = _backup_script(tmp_path, env)
+    destination = tmp_path / "backups"
+    destination.mkdir(mode=0o700)
+    completed = subprocess.run(  # noqa: S603 - synthetic repository script under test
+        [str(backup), str(destination)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    commands = log.read_text()
+    if refusal == "none":
+        assert completed.returncode == 0, completed.stderr
+        receipt = Path(completed.stdout.strip().splitlines()[-1])
+        assert Path(str(receipt).removesuffix(".sha256")).read_bytes() == b"synthetic-dump"
+        gate_call = f"{current}/runtime_identity_gate.py"
+        assert gate_call in commands
+        assert commands.index("my-pa-operator-pre-source-gate.py") < commands.index(gate_call)
+        assert "--preserved-source" in commands and "--public-browser-overlay" in commands
+        assert f"{old}/runtime_identity_gate.py" not in commands
+        assert "--profile public-browser-edge" not in commands
+        assert "--env-file /volume1/my-pa/secrets/production.f7aa2539.env" in commands
+    else:
+        assert completed.returncode != 0
+        assert "exec -i pg-id pg_dump" not in commands
+        assert list(destination.iterdir()) == []

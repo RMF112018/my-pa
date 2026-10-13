@@ -147,6 +147,9 @@ Only after that PASS may the helper select the old versioned environment
 files in memory without changing canonical configuration, compare their
 rendered/admitted/live identity, run the preserved checkout's exact old
 lifecycle and running-identity gates, and verify the selected mode is `smoke`.
+For the explicitly supported f7 public composition, the versioned reconciliation
+below instead requires reviewed current target validation after the same baked
+operator bootstrap; an old gate refusal must never be ignored.
 It must check the full static ingress-manifest shape and live proxy
 publication as an early screen. The later full ingress, Tailscale, and public
 route/traffic gates remain mandatory. Report only bounded gate outcomes and
@@ -230,6 +233,22 @@ bind its manifest and still-canonical old admissions, run the applicable old
 image/lifecycle and running-identity gates, and prove the rollback package and
 admissions are readable and byte-identical. Do not change the canonical
 operator admission while these old-checkout gates are running.
+
+### Preserved f7 public composition before quiescence
+
+For the exact f7 public runtime described in the NAS README, retain the canonical
+old admission unchanged and prepare the exclusive versioned public re-admission
+with reviewed current code under the authenticated existing operator/interpreter.
+Bind it to the original admission SHA, fixed old source/tree, loaded image and
+engine identity, base render and actual combined live hashes. The source-first
+helper must authenticate the new source bundle and require the baked old-operator
+gate and cleanup before current target validation; the physical PostgreSQL
+resource gate remains required. Missing re-admission, unsupported source/version,
+private-file metadata refusal or combined-hash drift stops before quiescence.
+This preparation creates only nonsecret evidence; it grants no canonical
+publication authority and never copies the original protected environment.
+Select the fixed overlay consistently for the old pre-migration backup and the
+new prospective/start/health context. Base-only and pilot paths remain unchanged.
 
 ## 5. Writer quiescence and pre-migration backup
 
@@ -427,7 +446,7 @@ If a first start is intentionally preparing a previously absent ingress network,
 
 After every apparently successful `start.sh` and before health completion or any writer restoration, re-read the live PostgreSQL container ID and require it to equal the pre-start admitted ID. Run the verified new checkout's `postgres_gate.py` against the existing resource artifact with `--live --container-id` set to that exact live ID. Any ID or resource-gate mismatch means unexpected recreation: stop only the five application services, keep every writer stopped, preserve the data directory and evidence, and hand off to the separate provisioning/resource-readmission objective without operating on the replacement container.
 
-Then require all six canonical services running with exact project/service/image labels, `ops/nas/health.sh` passing, and PostgreSQL at the repository-derived migration head. `ops/nas/start.sh` uses only the base Compose file, so `web` is not attached to `browser-origin`. When the authenticated public route is `frontend-cloudflared` → `public-proxy:8080` → `web:3000` on that network, apply `ops/nas/compose.public-browser.example.yml` to `web` before calling the public route updated. Do not change tunnel credentials, DNS, or the Caddy upstream to do that. Health is readiness, not full operational acceptance. Public `GET /api/health` returning `{"ok":true,"status":"live"}` is the web process through Caddy and Cloudflare; require `apps/cli/health.py` as well, because that probe refuses a database that is not at the repository head. On this cluster the PostgreSQL role is `my_pa`, not `postgres`.
+Then require all six named canonical services running with exact project/service/image labels, `ops/nas/health.sh` passing, and PostgreSQL at the repository-derived migration head. When the authenticated public route uses `browser-origin`, admit the fixed checked-in public-browser overlay with `--public-browser-overlay` and select it through `MY_PA_NAS_PUBLIC_BROWSER_OVERLAY` before preflight/start. The same combined source-bound selection is used for create/up, running identity, health and cleanup. Never enable the edge profile or drop the public overlay to fit a base-only hash. Do not change tunnel credentials, DNS, or the Caddy upstream to do that. Health is readiness, not full operational acceptance. Public `GET /api/health` returning `{"ok":true,"status":"live"}` is the web process through Caddy and Cloudflare; require `apps/cli/health.py` as well, because that probe refuses a database that is not at the repository head. On this cluster the PostgreSQL role is `my_pa`, not `postgres`.
 
 Do not run `ops/nas/diagnostics.sh` in this smoke-only workflow: the script
 requires admitted pilot identity and authorized protected diagnostic inputs.

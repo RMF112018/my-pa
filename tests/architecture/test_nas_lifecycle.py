@@ -1120,3 +1120,460 @@ def test_health_is_readiness_and_diagnostics_cover_operational_signals() -> None
         "verify-backup-receipt.sh",
     ):
         assert marker in diagnostics
+
+
+def test_public_browser_identity_binds_source_and_preserves_only_the_web_network(
+    tmp_path: Path,
+) -> None:
+    gate = _module("runtime_identity_gate")
+    manifest, admission, images, image_ids, base_json, _pilot = _runtime_fixture(tmp_path)
+    public = ROOT / "ops/nas/compose.public-browser.example.yml"
+    original_fixture_json = base_json
+    base = json.loads(base_json)
+    base["services"]["web"]["networks"] = ["ingress-plane"]
+    base_json = json.dumps(base)
+    rendered = json.loads(base_json)
+    rendered["services"]["web"]["networks"] = ["ingress-plane", "browser-origin"]
+    public_json = json.dumps(rendered)
+    commands: list[list[str]] = []
+    wrong_live_hash = False
+
+    def runner(command: list[str]) -> str:
+        commands.append(command)
+        if command[0] == "git":
+            if command[-1] == "HEAD":
+                return HEAD
+            if command[-1] == "HEAD^{tree}":
+                return TREE
+            if "status" in command:
+                return ""
+            return "checked-in-overlay-blob"
+        if command[:2] == ["docker", "info"]:
+            return json.dumps({"ID": ENGINE_ID, "Name": ENGINE_NAME})
+        if command[:2] == ["docker", "inspect"]:
+            name = command[-1].removeprefix("container-")
+            value = "base-web" if wrong_live_hash and name == "web" else "public-" + name
+            return json.dumps(
+                [
+                    {
+                        "Image": image_ids[name],
+                        "Config": {
+                            "Labels": {
+                                "com.docker.compose.project": "my-pa-nas-contract",
+                                "com.docker.compose.service": name,
+                                "com.docker.compose.config-hash": value,
+                            }
+                        },
+                    }
+                ]
+            )
+        if command[2:4] == ["--file", str(COMPOSE)] and str(public) not in command:
+            assert command[-3:] == ["config", "--format", "json"]
+            return base_json
+        assert command[2:6] == ["--file", str(COMPOSE), "--file", str(public)]
+        assert command.count("--profile") == 1
+        assert "public-browser-edge" not in command
+        if command[-3:] == ["config", "--format", "json"]:
+            return public_json
+        if command[-2:] == ["config", "--images"]:
+            return "\n".join(images.values())
+        if command[-3:] == ["config", "--hash", "*"]:
+            return "\n".join(name + " public-" + name for name in images)
+        if "ps" in command:
+            return "container-" + command[-1]
+        raise AssertionError(command)
+
+    binding = gate.public_browser_binding(
+        ROOT,
+        public,
+        {"repository_commit": HEAD, "repository_tree": TREE},
+        owner_uid=os.getuid(),
+        runner=runner,
+    )
+    text = admission.read_text()
+    base_sha = hashlib.sha256(
+        json.dumps(
+            json.loads(original_fixture_json), sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+    combined_sha = hashlib.sha256(
+        json.dumps(rendered, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    text = text.replace(base_sha, combined_sha)
+    text += "\n[public_browser]\n" + "".join(
+        f"{key} = {json.dumps(value)}\n" for key, value in binding.items()
+    )
+    admission.chmod(0o600)
+    admission.write_text(text)
+    admission.chmod(0o400)
+    assert (
+        gate.verify(
+            COMPOSE,
+            manifest,
+            public_browser_overlay_path=public,
+            admission_path=admission,
+            owner_uid=os.getuid(),
+            running=True,
+            runner=runner,
+        )
+        == []
+    )
+    assert set(rendered["services"]) == gate.SERVICES
+    assert rendered["services"]["postgres"] == json.loads(base_json)["services"]["postgres"]
+    wrong_live_hash = True
+    assert "web_running_config" in gate.verify(
+        COMPOSE,
+        manifest,
+        public_browser_overlay_path=public,
+        admission_path=admission,
+        owner_uid=os.getuid(),
+        running=True,
+        runner=runner,
+    )
+    assert not any(
+        "public-proxy" in command or "frontend-cloudflared" in command for command in commands
+    )
+
+
+def test_public_browser_binding_refuses_foreign_links_and_source_drift(tmp_path: Path) -> None:
+    gate = _module("runtime_identity_gate")
+    source = tmp_path / "source"
+    directory = source / "ops/nas"
+    directory.mkdir(parents=True)
+    overlay = directory / "compose.public-browser.example.yml"
+    overlay.write_text("services:\n  web:\n    networks: [ingress-plane, browser-origin]\n")
+    manifest = {"repository_commit": HEAD, "repository_tree": TREE}
+    dirty = False
+    drift = False
+
+    def runner(command: list[str]) -> str:
+        if command[-1] == "HEAD":
+            return HEAD
+        if command[-1] == "HEAD^{tree}":
+            return TREE
+        if "status" in command:
+            return " M tracked.py" if dirty else ""
+        if "hash-object" in command:
+            return "changed" if drift else "blob"
+        return "blob"
+
+    assert gate.public_browser_binding(
+        source,
+        overlay,
+        manifest,
+        owner_uid=os.getuid(),
+        runner=runner,
+    )["overlay_sha256"] == _sha(overlay)
+    drift = True
+    with pytest.raises(ValueError, match="source_drift"):
+        gate.public_browser_binding(source, overlay, manifest, owner_uid=os.getuid(), runner=runner)
+    drift = False
+    dirty = True
+    with pytest.raises(ValueError, match="source_dirty"):
+        gate.public_browser_binding(source, overlay, manifest, owner_uid=os.getuid(), runner=runner)
+    dirty = False
+    with pytest.raises(ValueError, match="overlay_path"):
+        gate.public_browser_binding(
+            source, tmp_path / "foreign.yml", manifest, owner_uid=os.getuid(), runner=runner
+        )
+    saved = overlay.with_name("saved.yml")
+    overlay.rename(saved)
+    overlay.symlink_to(saved)
+    with pytest.raises(ValueError, match="overlay_path"):
+        gate.public_browser_binding(source, overlay, manifest, owner_uid=os.getuid(), runner=runner)
+
+
+def test_preserved_public_loaded_source_is_independent_of_manifest_claim(tmp_path: Path) -> None:
+    gate = _module("runtime_identity_gate")
+    manifest_path, ids = _complete_manifest(tmp_path)
+    manifest_path.chmod(0o400)
+    source = tmp_path / "preserved"
+    source.mkdir()
+    manifest = {
+        "repository_commit": gate.PRESERVED_PUBLIC_COMMIT,
+        "repository_tree": gate.PRESERVED_PUBLIC_TREE,
+        "images": {name: {"docker_image_id": value} for name, value in ids.items()},
+    }
+    labels = {
+        "org.opencontainers.image.revision": gate.PRESERVED_PUBLIC_COMMIT,
+        "io.my-pa.repository-tree": gate.PRESERVED_PUBLIC_TREE,
+    }
+    assert (
+        gate.preserved_public_source_errors(
+            source,
+            manifest_path,
+            manifest,
+            owner_uid=os.getuid(),
+            runner=lambda _command: json.dumps(labels),
+        )
+        == []
+    )
+    labels["org.opencontainers.image.revision"] = HEAD
+    assert "preserved_public_loaded_source" in gate.preserved_public_source_errors(
+        source,
+        manifest_path,
+        manifest,
+        owner_uid=os.getuid(),
+        runner=lambda _command: json.dumps(labels),
+    )
+
+
+@pytest.mark.parametrize(
+    "refusal", ["none", "baseline_hash", "baseline_mode", "pg_image", "loaded_source", "web_hash"]
+)
+def test_preserved_public_reconciliation_requires_independent_original_admission(
+    tmp_path: Path,
+    refusal: str,
+) -> None:
+    gate = _module("runtime_identity_gate")
+    manifest, baseline, images, image_ids, base_json, _pilot = _runtime_fixture(tmp_path)
+    prior_manifest_sha = _sha(manifest)
+    manifest.write_text(
+        manifest.read_text()
+        .replace(HEAD, gate.PRESERVED_PUBLIC_COMMIT)
+        .replace(TREE, gate.PRESERVED_PUBLIC_TREE)
+    )
+    manifest.chmod(0o400)
+    baseline.chmod(0o600)
+    baseline.write_text(baseline.read_text().replace(prior_manifest_sha, _sha(manifest)))
+    baseline.chmod(0o400)
+    private_root = tmp_path / "volume1/my-pa/secrets"
+    private_root.mkdir(parents=True, mode=0o700)
+    env_file = private_root / "production.f7aa2539.env"
+    env_file.write_text("SYNTHETIC_DEPLOYMENT_METADATA=fixture\n")
+    env_file.chmod(0o600)
+    source = tmp_path / "preserved"
+    directory = source / "ops/nas"
+    directory.mkdir(parents=True)
+    compose = directory / "compose.example.yml"
+    compose.write_text("synthetic tracked base")
+    overlay = directory / "compose.public-browser.example.yml"
+    overlay.write_text("synthetic tracked fixed overlay")
+    combined = json.loads(base_json)
+    combined["services"]["web"]["networks"] = ["browser-origin"]
+    combined_json = json.dumps(combined)
+
+    def runner(command: list[str]) -> str:
+        if command[0] == "git":
+            if command[-1] == "HEAD":
+                return gate.PRESERVED_PUBLIC_COMMIT
+            if command[-1] == "HEAD^{tree}":
+                return gate.PRESERVED_PUBLIC_TREE
+            if "status" in command:
+                return ""
+            return "original-tracked-blob"
+        if command[:3] == ["docker", "image", "inspect"]:
+            return json.dumps(
+                {
+                    "org.opencontainers.image.revision": HEAD
+                    if refusal == "loaded_source"
+                    else gate.PRESERVED_PUBLIC_COMMIT,
+                    "io.my-pa.repository-tree": gate.PRESERVED_PUBLIC_TREE,
+                }
+            )
+        if command[:2] == ["docker", "info"]:
+            return json.dumps({"ID": ENGINE_ID, "Name": ENGINE_NAME})
+        if command[:2] == ["docker", "inspect"]:
+            name = command[-1].removeprefix("old-")
+            return json.dumps(
+                [
+                    {
+                        "Image": image_ids[name],
+                        "Config": {
+                            "Labels": {
+                                "com.docker.compose.project": "my-pa-nas-contract",
+                                "com.docker.compose.service": name,
+                                "com.docker.compose.config-hash": "wrong"
+                                if refusal == "web_hash" and name == "web"
+                                else "combined-" + name,
+                            }
+                        },
+                    }
+                ]
+            )
+        if command[-3:] == ["config", "--format", "json"]:
+            return combined_json if str(overlay) in command else base_json
+        if command[-2:] == ["config", "--images"]:
+            return "\n".join(images.values())
+        if command[-3:] == ["config", "--hash", "*"]:
+            return "\n".join(name + " combined-" + name for name in images)
+        if "ps" in command:
+            return "old-" + command[-1]
+        raise AssertionError(command)
+
+    binding = gate.public_browser_binding(
+        source,
+        overlay,
+        {
+            "repository_commit": gate.PRESERVED_PUBLIC_COMMIT,
+            "repository_tree": gate.PRESERVED_PUBLIC_TREE,
+        },
+        owner_uid=os.getuid(),
+        runner=runner,
+    )
+    binding["previous_runtime_admission_sha256"] = (
+        "0" * 64 if refusal == "baseline_hash" else _sha(baseline)
+    )
+    combined_sha = hashlib.sha256(
+        json.dumps(combined, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    base_sha = hashlib.sha256(
+        json.dumps(json.loads(base_json), sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    text = baseline.read_text().replace(base_sha, combined_sha)
+    if refusal == "pg_image":
+        text = text.replace(image_ids["postgres"], "sha256:" + "e" * 64)
+    text += "\n[public_browser]\n" + "".join(
+        f"{key} = {json.dumps(value)}\n" for key, value in binding.items()
+    )
+    admission = tmp_path / "versioned-public-admission.toml"
+    admission.write_text(text)
+    admission.chmod(0o400)
+    if refusal == "baseline_mode":
+        baseline.chmod(0o600)
+    errors = gate.verify(
+        compose,
+        manifest,
+        public_browser_overlay_path=overlay,
+        preserved_source_path=source,
+        admission_path=admission,
+        baseline_admission_path=baseline,
+        preserved_env_path=env_file,
+        preserved_private_root=private_root,
+        owner_uid=os.getuid(),
+        running=True,
+        runner=runner,
+    )
+    assert (errors == []) is (refusal == "none"), errors
+    if refusal in {"baseline_hash", "baseline_mode", "pg_image"}:
+        assert (
+            "runtime_public_browser_binding" in errors
+            or "preserved_public_baseline_admission" in errors
+        )
+
+
+def test_public_overlay_cannot_change_postgres_or_another_canonical_service() -> None:
+    gate = _module("runtime_identity_gate")
+    base = {
+        "services": {name: {"image": name, "networks": ["ingress-plane"]} for name in gate.SERVICES}
+    }
+    combined = json.loads(json.dumps(base))
+    combined["services"]["web"]["networks"].append("browser-origin")
+    assert gate.public_browser_scope_errors(base, combined) == []
+    combined["services"]["postgres"]["image"] = "different"
+    assert gate.public_browser_scope_errors(base, combined) == [
+        "public_browser_canonical_service_drift"
+    ]
+
+
+def test_public_overlay_preserves_existing_web_network_values() -> None:
+    gate = _module("runtime_identity_gate")
+    base = {"services": {name: {"image": name} for name in gate.SERVICES}}
+    base["services"]["web"]["networks"] = {"ingress-plane": {"aliases": ["unchanged"]}}
+    combined = json.loads(json.dumps(base))
+    combined["services"]["web"]["networks"]["browser-origin"] = None
+    assert gate.public_browser_scope_errors(base, combined) == []
+    combined["services"]["web"]["networks"]["ingress-plane"] = {"aliases": ["different"]}
+    assert gate.public_browser_scope_errors(base, combined) == [
+        "public_browser_existing_web_network_drift"
+    ]
+
+
+def test_preserved_compose_consumes_only_protected_regular_env_in_place(tmp_path: Path) -> None:
+    gate = _module("runtime_identity_gate")
+    private_root = tmp_path / "volume1/my-pa/secrets"
+    private_root.mkdir(parents=True, mode=0o700)
+    env = private_root / "production.f7aa2539.env"
+    env.write_text("SYNTHETIC_KEY=fixture\n")
+    env.chmod(0o600)
+    assert gate.preserved_compose_prefix(
+        COMPOSE, env, owner_uid=os.getuid(), private_root=private_root
+    ) == [
+        "docker",
+        "compose",
+        "--env-file",
+        str(env),
+        "--file",
+        str(COMPOSE),
+    ]
+    env.chmod(0o644)
+    with pytest.raises(ValueError, match="environment_metadata"):
+        gate.preserved_compose_prefix(
+            COMPOSE, env, owner_uid=os.getuid(), private_root=private_root
+        )
+    env.chmod(0o600)
+    alias = tmp_path / "alias.env"
+    alias.symlink_to(env)
+    with pytest.raises(ValueError, match="environment_path"):
+        gate.preserved_compose_prefix(
+            COMPOSE, alias, owner_uid=os.getuid(), private_root=private_root
+        )
+
+
+def test_public_runtime_admission_producer_binds_combined_render_without_edge_activation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    producer = _module("generate-runtime-admission")
+    gate = _module("runtime_identity_gate")
+    manifest, _baseline, images, ids, base_json, pilot_json = _runtime_fixture(tmp_path)
+    public = ROOT / "ops/nas/compose.public-browser.example.yml"
+    base = json.loads(base_json)
+    base["services"]["web"]["networks"] = {"ingress-plane": None}
+    combined = json.loads(json.dumps(base))
+    combined["services"]["web"]["networks"]["browser-origin"] = None
+    commands: list[list[str]] = []
+
+    def runner(command: list[str]) -> str:
+        commands.append(command)
+        if command[0] == "git":
+            if command[-1] == "HEAD":
+                return HEAD
+            if command[-1] == "HEAD^{tree}":
+                return TREE
+            return "" if "status" in command else "checked-in-blob"
+        if command[:2] == ["docker", "info"]:
+            return json.dumps({"ID": ENGINE_ID, "Name": ENGINE_NAME})
+        if command[:3] == ["docker", "image", "inspect"]:
+            reference = command[-1]
+            name = next(name for name, value in images.items() if value == reference)
+            return json.dumps([{"Id": ids[name]}])
+        assert command[-3:] == ["config", "--format", "json"]
+        assert "public-browser-edge" not in command
+        if str(public) in command:
+            return json.dumps(combined)
+        if str(OVERLAY) in command:
+            return pilot_json
+        return json.dumps(base)
+
+    monkeypatch.setattr(producer, "_run", runner)
+    monkeypatch.setattr(
+        producer,
+        "public_browser_binding",
+        lambda source, overlay, value: gate.public_browser_binding(
+            source, overlay, value, owner_uid=os.getuid(), runner=runner
+        ),
+    )
+    output = tmp_path / "new-public-admission.toml"
+    assert producer.generate(COMPOSE, OVERLAY, manifest, output, public_overlay=public) == []
+    import tomllib
+
+    admitted = tomllib.loads(output.read_text())
+    assert admitted["public_browser"]["overlay_sha256"] == _sha(public)
+    assert (
+        admitted["resolved_compose_sha256"]["smoke"]
+        == hashlib.sha256(
+            json.dumps(combined, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
+    assert set(admitted["service_image_ids"]) == gate.SERVICES
+    assert output.stat().st_mode & 0o777 == 0o400
+    assert producer.generate(COMPOSE, OVERLAY, manifest, output, public_overlay=public) == [
+        "runtime_admission_output"
+    ]
+    combined["services"]["postgres"]["image"] = "different"
+    other = tmp_path / "refused-admission.toml"
+    assert producer.generate(COMPOSE, OVERLAY, manifest, other, public_overlay=public) == [
+        "public_browser_canonical_service_drift"
+    ]
+    assert not other.exists()

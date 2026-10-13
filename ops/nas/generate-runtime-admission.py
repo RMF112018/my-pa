@@ -7,8 +7,11 @@ import argparse
 import hashlib
 import json
 import os
+import secrets as secure_random
+import stat
 import subprocess
 import tomllib
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -62,6 +65,121 @@ def _digest(rendered: dict[str, Any]) -> str:
 
 def _quote(value: object) -> str:
     return json.dumps(str(value))
+
+
+def _publish_preserved_admission(output: Path, body: bytes, *, owner_uid: int = 0) -> None:
+    """Publish only the fixed f7 artifact, without replacing any existing leaf.
+
+    A crash after link but before unlink leaves two links and must refuse on
+    readmission. This is no-clobber publication, not recovery from a root race.
+    """
+    if output != PRESERVED_PUBLIC_ADMISSION:
+        raise ValueError("preserved_public_admission_path")
+    parent = output.parent
+    before = parent.lstat()
+    if (
+        parent.resolve(strict=True) != parent
+        or not stat.S_ISDIR(before.st_mode)
+        or before.st_uid != owner_uid
+        or stat.S_IMODE(before.st_mode) != 0o700
+    ):
+        raise ValueError("preserved_public_admission_parent")
+    directory = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    temporary = f".{output.name}.{secure_random.token_hex(16)}.tmp"
+    owned: tuple[int, int] | None = None
+    try:
+        opened_parent = os.fstat(directory)
+        if (opened_parent.st_dev, opened_parent.st_ino) != (before.st_dev, before.st_ino):
+            raise ValueError("preserved_public_admission_parent")
+        descriptor = os.open(
+            temporary,
+            os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o400,
+            dir_fd=directory,
+        )
+        with os.fdopen(descriptor, "w+b") as stream:
+            state = os.fstat(stream.fileno())
+            owned = (state.st_dev, state.st_ino)
+            if state.st_uid != owner_uid or stat.S_IMODE(state.st_mode) != 0o400:
+                raise ValueError("preserved_public_admission_metadata")
+            stream.write(body)
+            stream.flush()
+            os.fsync(stream.fileno())
+            stream.seek(0)
+            if stream.read() != body:
+                raise ValueError("preserved_public_admission_readback")
+            state = os.stat(temporary, dir_fd=directory, follow_symlinks=False)
+            if (
+                (state.st_dev, state.st_ino) != owned
+                or state.st_nlink != 1
+                or state.st_uid != owner_uid
+                or stat.S_IMODE(state.st_mode) != 0o400
+                or not stat.S_ISREG(state.st_mode)
+                or state.st_size != len(body)
+            ):
+                raise ValueError("preserved_public_admission_metadata")
+            current = parent.lstat()
+            if (
+                (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino)
+                or current.st_uid != owner_uid
+                or stat.S_IMODE(current.st_mode) != 0o700
+                or parent.resolve(strict=True) != parent
+            ):
+                raise ValueError("preserved_public_admission_parent")
+            os.link(
+                temporary,
+                output.name,
+                src_dir_fd=directory,
+                dst_dir_fd=directory,
+                follow_symlinks=False,
+            )
+            linked = os.stat(temporary, dir_fd=directory, follow_symlinks=False)
+            if (linked.st_dev, linked.st_ino) != owned or linked.st_nlink != 2:
+                raise ValueError("preserved_public_admission_cleanup_identity")
+            os.unlink(temporary, dir_fd=directory)
+            owned = None
+            os.fsync(directory)
+            final = os.stat(output.name, dir_fd=directory, follow_symlinks=False)
+            if (
+                (final.st_dev, final.st_ino) != (state.st_dev, state.st_ino)
+                or final.st_uid != owner_uid
+                or stat.S_IMODE(final.st_mode) != 0o400
+                or final.st_nlink != 1
+                or not _trusted_file(output, owner_uid)
+            ):
+                raise ValueError("preserved_public_admission_metadata")
+            stream.seek(0)
+            if stream.read() != body:
+                raise ValueError("preserved_public_admission_readback")
+            readback = os.open(output.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
+            with os.fdopen(readback, "rb") as verified:
+                reopened = os.fstat(verified.fileno())
+                fields = (
+                    "st_dev",
+                    "st_ino",
+                    "st_size",
+                    "st_mtime_ns",
+                    "st_ctime_ns",
+                    "st_mode",
+                    "st_uid",
+                    "st_nlink",
+                )
+                if (
+                    any(getattr(reopened, field) != getattr(final, field) for field in fields)
+                    or verified.read(len(body) + 1) != body
+                ):
+                    raise ValueError("preserved_public_admission_readback")
+    finally:
+        try:
+            if owned is not None:
+                remaining: os.stat_result | None = None
+                with suppress(FileNotFoundError):
+                    remaining = os.stat(temporary, dir_fd=directory, follow_symlinks=False)
+                if remaining is not None and (remaining.st_dev, remaining.st_ino) == owned:
+                    os.unlink(temporary, dir_fd=directory)
+                    os.fsync(directory)
+        finally:
+            os.close(directory)
 
 
 def generate(
@@ -191,6 +309,12 @@ def generate(
     if binding is not None:
         lines.extend(["", "[public_browser]"])
         lines.extend(f"{key} = {_quote(value)}" for key, value in binding.items())
+    if preserved_source is not None:
+        try:
+            _publish_preserved_admission(output, ("\n".join(lines) + "\n").encode())
+        except (OSError, ValueError):
+            return ["runtime_admission_output"]
+        return []
     try:
         descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
     except OSError:

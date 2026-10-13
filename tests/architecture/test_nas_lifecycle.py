@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import stat
 import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1577,3 +1578,106 @@ def test_public_runtime_admission_producer_binds_combined_render_without_edge_ac
         "public_browser_canonical_service_drift"
     ]
     assert not other.exists()
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "absent",
+        "existing",
+        "race",
+        "staging_drift",
+        "cleanup_drift",
+        "unlink_failure",
+        "readback_drift",
+        "parent_mode",
+    ],
+)
+def test_fixed_f7_admission_publication_is_atomic_no_clobber_and_crash_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+) -> None:
+    producer = _module("generate-runtime-admission")
+    gate = _module("runtime_identity_gate")
+    parent = tmp_path / "admissions"
+    parent.mkdir(mode=0o700)
+    output = parent / "runtime-admission.public-browser.f7aa2539.toml"
+    monkeypatch.setattr(producer, "PRESERVED_PUBLIC_ADMISSION", output)
+    body = b'schema = "synthetic-nonsecret-admission"\n'
+    other = b'concurrent = "synthetic-unknown"\n'
+    link = os.link
+    unlink = os.unlink
+    fsync = os.fsync
+    if case == "existing":
+        output.write_bytes(other)
+        output.chmod(0o400)
+    if case == "parent_mode":
+        parent.chmod(0o750)
+
+    file_synced = False
+
+    def raced_link(source: str, target: str, **kwargs: int | bool) -> None:
+        assert file_synced
+        assert output.exists() is (case == "existing")
+        if case == "race":
+            output.write_bytes(other)
+            output.chmod(0o400)
+        assert (parent / source).read_bytes() == body
+        link(source, target, **kwargs)
+        if case == "cleanup_drift":
+            temporary = parent / source
+            temporary.rename(parent / "retained-linked-owned-staging")
+            temporary.write_bytes(other)
+            temporary.chmod(0o400)
+
+    monkeypatch.setattr(producer.os, "link", raced_link)
+
+    def failed_unlink(path: str, **kwargs: int | bool) -> None:
+        if case == "unlink_failure":
+            raise OSError("synthetic interrupted unlink")
+        return unlink(path, **kwargs)
+
+    monkeypatch.setattr(producer.os, "unlink", failed_unlink)
+    tripped = False
+
+    def changed_fsync(descriptor: int) -> None:
+        nonlocal tripped, file_synced
+        result = fsync(descriptor)
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            file_synced = True
+        if case == "staging_drift" and not tripped:
+            tripped = True
+            (held,) = parent.iterdir()
+            held.rename(parent / "retained-owned-staging")
+            held.write_bytes(other)
+            held.chmod(0o400)
+        if case == "readback_drift" and stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            output.chmod(0o600)
+            output.write_bytes(other)
+            output.chmod(0o400)
+        return result
+
+    monkeypatch.setattr(producer.os, "fsync", changed_fsync)
+    if case == "absent":
+        producer._publish_preserved_admission(output, body, owner_uid=os.getuid())
+        assert output.read_bytes() == body
+        assert gate._trusted_file(output, os.getuid())
+        assert list(parent.iterdir()) == [output]
+    else:
+        with pytest.raises((OSError, ValueError)):
+            producer._publish_preserved_admission(output, body, owner_uid=os.getuid())
+        if case in {"existing", "race", "readback_drift"}:
+            assert output.read_bytes() == other
+        if case == "cleanup_drift":
+            assert output.read_bytes() == body
+            assert output.stat().st_nlink == 2
+            assert not gate._trusted_file(output, os.getuid())
+            unknown = [path for path in parent.iterdir() if path.name.startswith(".")]
+            assert len(unknown) == 1 and unknown[0].read_bytes() == other
+        if case == "unlink_failure":
+            assert output.read_bytes() == body
+            assert output.stat().st_nlink == 2
+            assert not gate._trusted_file(output, os.getuid())
+        if case in {"staging_drift", "parent_mode"}:
+            assert not output.exists()

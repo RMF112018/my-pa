@@ -302,6 +302,8 @@ def remote_access_context(
             write_allowed=authenticated.write_allowed,
         ),
         compact_publication=compact,
+        compact_operator_publication=compact
+        and settings.compact_operator_publication_for_client(authenticated.client_id),
     )
 
 

@@ -46,6 +46,9 @@ MAX_REMOTE_RESULT_BYTES: Final = (MAX_MANAGED_DOCUMENT_BYTES * 4 // 3) + (1 << 2
 _WRITE_PURPOSES: Final = frozenset(
     {
         Purpose.BOUNDED_ENROLLMENT,
+        Purpose.GOODNOTES_PULL,
+        Purpose.GOODNOTES_CORRECTION,
+        Purpose.GSQS_B0_EXECUTION,
         Purpose.CAPTURE_AUTHORING,
         Purpose.CANVAS_WORKSPACE_AUTHORING,
         Purpose.REVIEW_DISPOSITION,
@@ -114,6 +117,7 @@ class RemoteAccessContext:
     capability_purposes: frozenset[tuple[Capability, Purpose | None]] | None = None
     relationship_grant_profile: Literal["remote.operator"] | None = None
     compact_publication: bool = False
+    compact_operator_publication: bool = False
     authenticated_client_id: str | None = field(default=None, repr=False)
 
 
@@ -220,7 +224,7 @@ def is_remote_write(capability: Capability) -> bool:
     """Whether the current remote profile treats `capability` as a write.
 
     This is the purpose intersection `remote_tool_names` already uses, which is
-    stricter than `is_write_capability` for names such as `gsqs.start`.
+    also preserves the write gate for durable operator previews.
     """
     return bool(permitted_purposes(capability) & _WRITE_PURPOSES)
 
@@ -230,6 +234,7 @@ def remote_tool_names(
     *,
     writes_enabled: bool,
     relationship_grant_profile: Literal["remote.operator"] | None = None,
+    compact_operator_publication: bool = False,
 ) -> frozenset[str]:
     """Deterministically classify the canonical, composed capability set."""
 
@@ -239,8 +244,15 @@ def remote_tool_names(
         if capability.value not in composed:
             continue
         if is_operator_only(capability) and not (
-            relationship_grant_profile == "remote.operator"
-            and capability in _REMOTE_OPERATOR_IDENTITY_CAPABILITIES
+            (
+                compact_operator_publication
+                and capability
+                in _REMOTE_OPERATOR_IDENTITY_CAPABILITIES | {Capability.SOURCES_ENROLL}
+            )
+            or (
+                relationship_grant_profile == "remote.operator"
+                and capability in _REMOTE_OPERATOR_IDENTITY_CAPABILITIES
+            )
         ):
             continue
         if writes_enabled or not is_remote_write(capability):
@@ -280,6 +292,9 @@ def create_remote_mcp_app(
         writes_enabled=writes_enabled,
         relationship_grant_profile="remote.operator",
     )
+    compact_operator_profile = remote_tool_names(
+        service, writes_enabled=writes_enabled, compact_operator_publication=True
+    )
     serving = global_enabled and remote_enabled
 
     def access_for_request(context: ServerRequestContext[object]) -> McpAccess | None:
@@ -291,7 +306,9 @@ def create_remote_mcp_app(
             return None
         principal, granted = resolved.principal, resolved.allowed_capabilities
         request_profile = (
-            operator_profile
+            compact_operator_profile
+            if resolved.compact_publication and resolved.compact_operator_publication
+            else operator_profile
             if resolved.relationship_grant_profile == "remote.operator"
             else profile
         )

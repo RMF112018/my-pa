@@ -245,6 +245,23 @@ helper must authenticate the new source bundle and require the baked old-operato
 gate and cleanup before current target validation; the physical PostgreSQL
 resource gate remains required. Missing re-admission, unsupported source/version,
 private-file metadata refusal or combined-hash drift stops before quiescence.
+For this exact f7 public composition, the source-first helper prepares a missing
+versioned nonsecret admission after authenticating the new source and requiring
+immutable old-operator gate PASS plus verified owned cleanup, before completing
+its full old-runtime validation. It invokes only the reviewed current generator
+through the authenticated old wrapper; no new image or operator is needed.
+The producer fsyncs and verifies a transaction-owned fixed-parent sibling, then
+links it exclusively to the fixed leaf without replacing any existing artifact,
+unlinks only its owned sibling, fsyncs the parent and verifies root-owned mode
+0400 with one link and exact bytes. A crash between link and unlink leaves two
+links and refuses; it is an operator recovery stop, not automatic crash repair.
+An existing artifact is never overwritten: valid evidence is preserved and fully
+validated; invalid, linked, wrongly owned or over-permissive evidence refuses.
+Every original baseline and combined live gate still runs, and old canonical
+admissions remain byte-identical. Preparation failure or any later gate failure
+is a refusal, never partial PASS. The other thirteen package members remain off
+the NAS until the complete helper passes. No general preparation mode or caller
+selected output path is added.
 This preparation creates only nonsecret evidence; it grants no canonical
 publication authority and never copies the original protected environment.
 Select the fixed overlay consistently for the old pre-migration backup and the

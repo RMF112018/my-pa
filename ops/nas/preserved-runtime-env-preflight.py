@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Read-only, fixed-purpose pre-transfer check of a preserved NAS smoke runtime.
+"""Fixed-purpose pre-transfer check of a preserved NAS smoke runtime.
 
 Run as root with host Python 3.8 after verifying and cloning the new source
 bundle. This program deliberately accepts identities and a preserved source
-directory only; it cannot select a command, interpreter, Docker subcommand,
+directory only; it may prepare only the fixed missing f7 nonsecret public
+admission after the immutable old gate. It cannot select a command, interpreter, Docker subcommand,
 protected file, or lifecycle mode. All protected values stay in memory.
 """
 
@@ -50,6 +51,7 @@ RUNTIME_ADMISSION = Path("/etc/my-pa/runtime-admission.toml")
 INGRESS_MANIFEST = Path("/etc/my-pa/ingress-manifest.toml")
 CANONICAL_COMPOSE = Path("/etc/my-pa/compose.yml")
 SECRETS = Path("/volume1/my-pa/secrets")
+PRESERVED_PUBLIC_SOURCE = Path("/volume1/my-pa/runtime-f7aa2539-prod-20261011T171832Z")
 HEX40 = re.compile(r"[0-9a-f]{40}\Z")
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -1168,7 +1170,8 @@ def verify(
     _require(_trusted_file(canonical_compose, uid, limit=262144, stop=trust_stop) == compose_bytes)
     status_script = old_source / "ops/nas/status.sh"
     _trusted_file(status_script, uid, mode=(0o500, 0o700, 0o755), stop=trust_stop)
-    operator = _literal_toml(_trusted_file(operator_admission, uid, stop=trust_stop))
+    operator_bytes = _trusted_file(operator_admission, uid, stop=trust_stop)
+    operator = _literal_toml(operator_bytes)
     _require(set(operator) == OPERATOR_KEYS)
     _require(operator.get("schema") == "my-pa.nas-operator-runtime-admission.v1")
     _require(operator.get("status") == "admitted")
@@ -1209,7 +1212,8 @@ def verify(
         and old_manifest.get("docker_engine_name") == engine_name
     )
     _operator_image(operator["operator_image_id"], old_commit, old_tree, built_at, runner)
-    runtime = _literal_toml(_trusted_file(runtime_admission, uid, stop=trust_stop))
+    runtime_bytes = _trusted_file(runtime_admission, uid, stop=trust_stop)
+    runtime = _literal_toml(runtime_bytes)
     _require(
         runtime.get("schema") == "my-pa.nas-runtime-admission.v1"
         and runtime.get("status") == "admitted"
@@ -1337,10 +1341,46 @@ def verify(
         files = str(labels.get("com.docker.compose.project.config_files", "")).split(",")
         public_path = old_source / "ops/nas/compose.public-browser.example.yml"
         if str(public_path) in files:
+            _require(old_source == PRESERVED_PUBLIC_SOURCE)
             _require(files == [str(old_compose), str(public_path)])
             public_bytes = _trusted_file(
                 public_path, uid, mode=(0o400, 0o600, 0o644), stop=trust_stop
             )
+            _trusted_directory(public_admission.parent, uid, stop=trust_stop)
+            try:
+                public_admission.lstat()
+            except FileNotFoundError:
+                _source(new_source, new_commit, new_tree, uid, runner, trust_stop)
+                generator = new_source / "ops/nas/generate-runtime-admission.py"
+                _trusted_file(
+                    generator,
+                    uid,
+                    mode=(0o400, 0o600, 0o644, 0o500, 0o700, 0o755),
+                    stop=trust_stop,
+                )
+                # The verified new source and baked old gate/owned cleanup above
+                # authenticate preparation before any other candidate transfers.
+                # The producer owns only exclusive fixed-f7 no-clobber output.
+                runner(
+                    [
+                        str(wrapper),
+                        str(generator),
+                        str(old_compose),
+                        str(old_source / "ops/nas/compose.pilot.example.yml"),
+                        str(manifest),
+                        str(public_admission),
+                        "--public-browser-overlay",
+                        str(public_path),
+                        "--preserved-source",
+                        str(old_source),
+                    ],
+                    cwd=old_source,
+                    env=lifecycle,
+                    discard=True,
+                )
+            _require(_trusted_file(operator_admission, uid, stop=trust_stop) == operator_bytes)
+            _require(_trusted_file(runtime_admission, uid, stop=trust_stop) == runtime_bytes)
+            _require(_trusted_file(manifest, uid, stop=trust_stop) == manifest_bytes)
             reconciliation = _literal_toml(_trusted_file(public_admission, uid, stop=trust_stop))
             binding = reconciliation.get("public_browser", {})
             _require(
@@ -1408,6 +1448,10 @@ def verify(
                 env=lifecycle,
                 discard=True,
             )
+            _require(_trusted_file(operator_admission, uid, stop=trust_stop) == operator_bytes)
+            _require(_trusted_file(runtime_admission, uid, stop=trust_stop) == runtime_bytes)
+            _require(_trusted_file(manifest, uid, stop=trust_stop) == manifest_bytes)
+            _source(new_source, new_commit, new_tree, uid, runner, trust_stop)
         else:
             _require(files == [str(old_compose)])
             runner([str(status_script)], cwd=old_source, env=lifecycle, discard=True)

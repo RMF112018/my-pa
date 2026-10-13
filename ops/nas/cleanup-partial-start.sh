@@ -4,10 +4,18 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 . "$script_dir/tooling-common.sh"
 : "${MY_PA_NAS_COMPOSE_FILE:?exact NAS compose file required}"
 : "${MY_PA_LIFECYCLE_MODE:=smoke}"
+if [ -n "${MY_PA_NAS_PUBLIC_BROWSER_OVERLAY:-}" ] && [ "$MY_PA_LIFECYCLE_MODE" != smoke ]; then
+  echo "public browser cleanup requires the admitted smoke selection" >&2; exit 1
+fi
 nas_compose() {
   if [ "$MY_PA_LIFECYCLE_MODE" = pilot ]; then
     nas_docker compose --file "$MY_PA_NAS_COMPOSE_FILE" \
       --file "$script_dir/compose.pilot.example.yml" \
+      --profile nas-01-contract-only "$@"
+  elif [ -n "${MY_PA_NAS_PUBLIC_BROWSER_OVERLAY:-}" ]; then
+    [ "$MY_PA_NAS_PUBLIC_BROWSER_OVERLAY" = "$script_dir/compose.public-browser.example.yml" ] && \
+      [ -f "$MY_PA_NAS_PUBLIC_BROWSER_OVERLAY" ] && [ ! -L "$MY_PA_NAS_PUBLIC_BROWSER_OVERLAY" ] || exit 1
+    nas_docker compose --file "$MY_PA_NAS_COMPOSE_FILE" --file "$MY_PA_NAS_PUBLIC_BROWSER_OVERLAY" \
       --profile nas-01-contract-only "$@"
   else
     nas_docker compose --file "$MY_PA_NAS_COMPOSE_FILE" \
@@ -15,8 +23,8 @@ nas_compose() {
   fi
 }
 stop_failed=0
-nas_compose stop --timeout 60 || stop_failed=1
-if ! remaining=$(nas_compose ps --status running -q); then
+nas_compose stop --timeout 60 postgres gateway worker-enrollment worker-capture web proxy || stop_failed=1
+if ! remaining=$(nas_compose ps --status running -q postgres gateway worker-enrollment worker-capture web proxy); then
   echo "failed to verify partial-stack cleanup" >&2
   exit 1
 fi

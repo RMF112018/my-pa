@@ -40,8 +40,8 @@ def test_empty_eligible_set_publishes_no_facade() -> None:
     assert facade_tool_names(frozenset()) == frozenset()
 
 
-def test_gsqs_start_is_read_kind_on_the_remote_classifier() -> None:
-    assert facade_kind(Capability.GSQS_START) == "read"
+def test_gsqs_start_is_write_kind_on_the_remote_classifier() -> None:
+    assert facade_kind(Capability.GSQS_START) == "write"
 
 
 def test_merge_is_operator_kind() -> None:

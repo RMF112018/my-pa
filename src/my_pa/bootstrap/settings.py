@@ -399,6 +399,9 @@ class Settings(StrictModel):
     #: compact mode, even when this flag is true.
     mcp_chatllm_gateway_enabled: bool = False
     mcp_chatllm_gateway_oauth_client_ids: str = ""
+    #: Exact token-derived clients allowed the compact operator publication ceiling.
+    #: Empty defaults closed; grants and every application gate remain mandatory.
+    mcp_chatllm_operator_oauth_client_ids: str = ""
     #: Process-local gates for GoodNotes Durable Note Ingestion rollout (WP-15).
     #: All default off. True does not ingest, write canonical notes, deliver,
     #: call Abacus, mutate NAS, or change the existing TBR Task.
@@ -676,6 +679,14 @@ class Settings(StrictModel):
                 raise SettingsError(
                     "enabled GoodNotes pull requires a cursor signing key of 32 to 128 UTF-8 bytes"
                 )
+        if (
+            not self.chatllm_operator_oauth_client_id_set()
+            <= self.chatllm_gateway_oauth_client_id_set()
+        ):
+            raise SettingsError(
+                "MCP_CHATLLM_OPERATOR_OAUTH_CLIENT_IDS must be a subset of "
+                "MCP_CHATLLM_GATEWAY_OAUTH_CLIENT_IDS"
+            )
         self._check_knowledge_bindings()
         self._check_auth_mode()
         if self.remote_mcp_enabled and not all(
@@ -915,6 +926,16 @@ class Settings(StrictModel):
         against the token-derived client identifier; there is no glob or prefix.
         """
         return frozenset(_split_allowlist(self.mcp_chatllm_gateway_oauth_client_ids))
+
+    def chatllm_operator_oauth_client_id_set(self) -> frozenset[str]:
+        """Exact compact operator clients; no wildcard, payload identity or grant inference."""
+        return frozenset(_split_allowlist(self.mcp_chatllm_operator_oauth_client_ids))
+
+    def compact_operator_publication_for_client(self, authenticated_client_id: str) -> bool:
+        """Select the operator ceiling only for an explicitly bound compact client."""
+        return self.compact_publication_for_client(authenticated_client_id) and (
+            authenticated_client_id in self.chatllm_operator_oauth_client_id_set()
+        )
 
     def knowledge_discovery_oauth_client_id_set(self) -> frozenset[str]:
         """Exact OAuth client ids bound as Knowledge discovery clients. Empty binds none."""

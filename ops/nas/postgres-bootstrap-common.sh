@@ -33,8 +33,13 @@ export MY_PA_UID MY_PA_GID MY_PA_NAS_ENV_FILE MY_PA_WEB_ENV_FILE
 export MY_PA_PROXY_UID MY_PA_PROXY_GID MY_PA_PROXY_PORT MY_PA_TAILNET_HOST
 export MYPA_CANONICAL_ORIGIN MYPA_ENTRA_REDIRECT_URI MYPA_SESSION_SERVICE_SECRET
 
-"$NAS_PYTHON_BIN" "$script_dir/lifecycle_gate.py" "$MY_PA_NAS_COMPOSE_FILE" \
+if [ -n "${MY_PA_NAS_PUBLIC_BROWSER_OVERLAY:-}" ]; then
+  "$NAS_PYTHON_BIN" "$script_dir/lifecycle_gate.py" "$MY_PA_NAS_COMPOSE_FILE" \
+  "$script_dir/compose.pilot.example.yml" --image-manifest "$MY_PA_IMAGE_MANIFEST" --live --public-browser-overlay "$MY_PA_NAS_PUBLIC_BROWSER_OVERLAY"
+else
+  "$NAS_PYTHON_BIN" "$script_dir/lifecycle_gate.py" "$MY_PA_NAS_COMPOSE_FILE" \
   "$script_dir/compose.pilot.example.yml" --image-manifest "$MY_PA_IMAGE_MANIFEST" --live
+fi
 "$NAS_PYTHON_BIN" "$script_dir/postgres-bootstrap-identity-gate.py" \
   "$MY_PA_NAS_COMPOSE_FILE" "$MY_PA_IMAGE_MANIFEST" \
   --admission "$MY_PA_POSTGRES_BOOTSTRAP_ADMISSION"

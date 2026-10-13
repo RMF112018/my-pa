@@ -64,6 +64,8 @@ def verify(
     preserved_compose: Path,
     *,
     expected_current_source: Path | None = None,
+    public_browser_overlay: Path | None = None,
+    owner_uid: int = 0,
     runner: Runner = _run,
 ) -> list[str]:
     """Return every source-binding refusal without invoking runtime or firewall gates."""
@@ -88,6 +90,29 @@ def verify(
         errors.append("preserved_compose_path")
     errors.extend(_source_errors("current_gate", current_source, current_manifest, runner=runner))
     errors.extend(_source_errors("preserved", preserved_source, preserved_manifest, runner=runner))
+    if public_browser_overlay is not None:
+        from runtime_identity_gate import (
+            PRESERVED_PUBLIC_COMMIT,
+            PRESERVED_PUBLIC_TREE,
+            public_browser_binding,
+        )
+
+        try:
+            target_manifest = tomllib.loads(preserved_manifest.read_text(encoding="utf-8"))
+            if (
+                target_manifest.get("repository_commit") != PRESERVED_PUBLIC_COMMIT
+                or target_manifest.get("repository_tree") != PRESERVED_PUBLIC_TREE
+            ):
+                errors.append("preserved_public_source_binding")
+            public_browser_binding(
+                preserved_source,
+                public_browser_overlay,
+                target_manifest,
+                owner_uid=owner_uid,
+                runner=runner,
+            )
+        except (OSError, ValueError, subprocess.SubprocessError):
+            errors.append("preserved_public_overlay_binding")
     return errors
 
 
@@ -98,6 +123,7 @@ def main() -> int:
     parser.add_argument("preserved_source", type=Path)
     parser.add_argument("preserved_manifest", type=Path)
     parser.add_argument("preserved_compose", type=Path)
+    parser.add_argument("--public-browser-overlay", type=Path)
     args = parser.parse_args()
     errors = verify(
         args.current_source,
@@ -105,6 +131,7 @@ def main() -> int:
         args.preserved_source,
         args.preserved_manifest,
         args.preserved_compose,
+        public_browser_overlay=args.public_browser_overlay,
     )
     if errors:
         print("Preserved backup gate refused: " + ", ".join(dict.fromkeys(errors)))

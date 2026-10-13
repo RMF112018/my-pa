@@ -96,9 +96,37 @@
       /run/my-pa-input/operator-metadata.json
     current_ops="$current_source/ops/nas"
     . "$current_ops/tooling-common.sh"
+    if [ -n "${MY_PA_NAS_PUBLIC_BROWSER_OVERLAY:-}" ]; then
+      "$NAS_PYTHON_BIN" "$current_ops/preserved_backup_gate.py" \
+        "$current_source" "$MY_PA_CURRENT_GATE_IMAGE_MANIFEST" "$preserved_source" \
+        "$MY_PA_IMAGE_MANIFEST" "$preserved_compose" \
+        --public-browser-overlay "$MY_PA_NAS_PUBLIC_BROWSER_OVERLAY"
+    else
     "$NAS_PYTHON_BIN" "$current_ops/preserved_backup_gate.py" \
       "$current_source" "$MY_PA_CURRENT_GATE_IMAGE_MANIFEST" "$preserved_source" \
       "$MY_PA_IMAGE_MANIFEST" "$preserved_compose"
+    fi
+    if [ "$preserved_source" = /volume1/my-pa/runtime-f7aa2539-prod-20261011T171832Z ] && \
+      [ -z "${MY_PA_NAS_PUBLIC_BROWSER_OVERLAY:-}" ]; then
+      echo "preserved f7 public composition must be explicitly selected" >&2; exit 1
+    fi
+    if [ -n "${MY_PA_NAS_PUBLIC_BROWSER_OVERLAY:-}" ]; then
+      [ "$MY_PA_NAS_PUBLIC_BROWSER_OVERLAY" = "$preserved_ops/compose.public-browser.example.yml" ] || {
+        echo "preserved public overlay source mismatch" >&2; exit 1
+      }
+      # The baked current-operator gate has already authenticated current code.
+      # Preserve the old baseline; the versioned f7 reconciliation is independent.
+      "$NAS_PYTHON_BIN" "$current_ops/lifecycle_gate.py" \
+        "$current_ops/compose.example.yml" "$current_ops/compose.pilot.example.yml" \
+        --image-manifest "$MY_PA_CURRENT_GATE_IMAGE_MANIFEST" --live \
+        --public-browser-overlay "$current_ops/compose.public-browser.example.yml"
+      "$NAS_PYTHON_BIN" "$current_ops/lifecycle_gate.py" \
+        "$preserved_compose" "$preserved_pilot" --image-manifest "$MY_PA_IMAGE_MANIFEST" --live \
+        --preserved-source "$preserved_source" --public-browser-overlay "$MY_PA_NAS_PUBLIC_BROWSER_OVERLAY"
+      "$NAS_PYTHON_BIN" "$current_ops/runtime_identity_gate.py" \
+        "$preserved_compose" "$MY_PA_IMAGE_MANIFEST" --preserved-source "$preserved_source" \
+        --public-browser-overlay "$MY_PA_NAS_PUBLIC_BROWSER_OVERLAY"
+    else
     "$NAS_PYTHON_BIN" "$current_ops/lifecycle_gate.py" \
       "$current_ops/compose.example.yml" "$current_ops/compose.pilot.example.yml" \
       --image-manifest "$MY_PA_CURRENT_GATE_IMAGE_MANIFEST" --live
@@ -107,12 +135,18 @@
       --image-manifest "$MY_PA_IMAGE_MANIFEST" --live
     "$NAS_PYTHON_BIN" "$preserved_ops/runtime_identity_gate.py" \
       "$preserved_compose" "$MY_PA_IMAGE_MANIFEST"
+    fi
     "$NAS_PYTHON_BIN" "$preserved_ops/postgres-bootstrap-identity-gate.py" \
       "$preserved_compose" "$MY_PA_IMAGE_MANIFEST" \
       --admission "$MY_PA_POSTGRES_BOOTSTRAP_ADMISSION"
     nas_compose() {
-      nas_docker compose --file "$preserved_compose" \
-        --profile nas-01-contract-only "$@"
+      if [ -n "${MY_PA_NAS_PUBLIC_BROWSER_OVERLAY:-}" ]; then
+        nas_docker compose --env-file /volume1/my-pa/secrets/production.f7aa2539.env \
+          --file "$preserved_compose" --file "$MY_PA_NAS_PUBLIC_BROWSER_OVERLAY" \
+          --profile nas-01-contract-only "$@"
+      else
+        nas_docker compose --file "$preserved_compose" --profile nas-01-contract-only "$@"
+      fi
     }
     postgres_container_id=$(nas_compose ps -q postgres)
     [ -n "$postgres_container_id" ] || {

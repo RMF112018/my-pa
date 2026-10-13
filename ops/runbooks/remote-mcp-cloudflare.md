@@ -411,3 +411,71 @@ add `-f ops/nas/remote/compose.loopback.yml`; this publishes only
 service is that loopback URL, preserve the same two-route allowlist and 404
 catch-all, and verify from a second LAN host that the port is unreachable. A
 non-loopback bind is a failed deployment, not a supported fallback.
+
+### Explicit compact operator publication
+
+`MY_PA_MCP_CHATLLM_OPERATOR_OAUTH_CLIENT_IDS` is a non-secret, comma-separated
+exact OAuth client allowlist, empty by default. It must be a subset of
+`MY_PA_MCP_CHATLLM_GATEWAY_OAUTH_CLIENT_IDS`; the compact gateway must also be
+enabled. Match the authenticated token-derived client ID, never a request field.
+This separate ceiling can publish `sources.enroll` and the four identity correction
+names alongside ordinary capabilities. It creates no grants and changes neither
+principal identity nor domain, client/global write, source, composition or
+Knowledge gates. Existing clients and the ordinary `chatllm-data-v9` profile
+retain their existing behavior when this new setting is absent.
+
+For a full inventory, reconcile the ordinary profile first, then explicitly review
+individual purpose-bound grants for the 21 excluded names: the seven
+`constraint_sync.*`, four identity corrections, `sources.enroll`, three GoodNotes
+pull protocol names, two Knowledge discovery writes, two compatibility names and
+`gsqs.start/status`. Use the existing `grant` CLI for eligible individual grants.
+The two Knowledge discovery writes require the existing exact Knowledge Manager
+binding and `profile-apply`; raw `grant` refuses them. An ordinary profile diff
+flags other control-plane grants as unexpected, so it is not the full inventory
+acceptance check. Do not widen the ordinary profile or infer execution authority
+from publication. Each grant keeps its canonical permitted purpose, exact scope
+and resource and canonical write flag.
+
+The deployed inventory contained 190 names; current main adds
+`reports.types.create` (write) and `reports.types.list` (read). A full catalog check must enumerate each current capability and identify
+missing composition or authorization gates explicitly. Paginated `my_pa.describe`
+proves eligible contract exposure; successful metadata calls and isolated
+synthetic family tests provide separate execution evidence. Catalogs, missing
+argument errors and denied calls alone do not prove successful writes. No live
+source enrollment, identity correction, ingestion or campaign execution is needed
+for publication verification. GoodNotes correct/pull/complete and GSQS start use
+`my_pa.write` and remain behind the remote write gates.
+
+The explicit extra-grant manifest is below. Supply the actual public client ID,
+accepted scope and exact `/mcp` resource to each reviewed CLI invocation. `write`
+means include `--write` in `grant`. This table is planning evidence, not approval
+to execute an operation or disclose data.
+
+| Canonical capability | Purpose | Write | Installer |
+| --- | --- | --- | --- |
+| capabilities.get | status_observation | no | grant |
+| continuity.tasks.create | continuity_authoring | yes | grant |
+| constraint_sync.state | constraint_sync_read | no | grant |
+| constraint_sync.delta | constraint_sync_read | no | grant |
+| constraint_sync.conflicts | constraint_sync_read | no | grant |
+| constraint_sync.preview | constraint_sync_authoring | yes | grant |
+| constraint_sync.apply | constraint_sync_authoring | yes | grant |
+| constraint_sync.acknowledge | constraint_sync_authoring | yes | grant |
+| constraint_sync.resolve | constraint_sync_authoring | yes | grant |
+| entities.merge.preview | entity_identity_correction | yes | grant |
+| entities.merge | entity_identity_correction | yes | grant |
+| entities.split.preview | entity_identity_correction | yes | grant |
+| entities.split | entity_identity_correction | yes | grant |
+| sources.enroll | bounded_enrollment | yes | grant |
+| goodnotes.pull | goodnotes_pull | yes | grant |
+| goodnotes.complete | goodnotes_pull | yes | grant |
+| goodnotes.status | goodnotes_pull_observation | no | grant |
+| knowledge.assertions.submit | knowledge_assertion_observation | yes | manager profile-apply |
+| knowledge.discovery.checkpoint | knowledge_assertion_observation | yes | manager profile-apply |
+| gsqs.start | gsqs_b0_execution | yes | grant |
+| gsqs.status | gsqs_b0_observation | no | grant |
+
+Knowledge Manager binding still requires the Knowledge/RI composition and its
+checkpoint signing configuration. Identity correction, GoodNotes pull and other
+optional planes retain their separate gates. Missing prerequisites are incomplete
+activation, never a successful smaller substitute for the full inventory.

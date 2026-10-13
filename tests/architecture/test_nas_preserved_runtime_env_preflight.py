@@ -191,8 +191,10 @@ def _fixture(tmp_path):
         ),
     )
     secrets = _directory(root / "secrets")
-    nas = _file(secrets / "nas.aaaaaaaa.env", "MY_PA_DATABASE_URL=synthetic\n")
-    web = _file(secrets / "web.aaaaaaaa.env", "MYPA_WEBAUTHN_BFF_SECRET=synthetic\n")
+    nas = _file(secrets / ("nas." + OLD_COMMIT[:8] + ".env"), "MY_PA_DATABASE_URL=synthetic\n")
+    web = _file(
+        secrets / ("web." + OLD_COMMIT[:8] + ".env"), "MYPA_WEBAUTHN_BFF_SECRET=synthetic\n"
+    )
     container_id = "1" * 64
     ingress = _file(
         etc / "ingress-manifest.toml",
@@ -222,7 +224,7 @@ def _fixture(tmp_path):
         ),
     )
     production = _file(
-        secrets / "production.aaaaaaaa.env",
+        secrets / ("production." + OLD_COMMIT[:8] + ".env"),
         "\n".join(
             [
                 "MYPA_SOURCE_COMMIT=" + OLD_COMMIT,
@@ -1232,3 +1234,326 @@ def test_capture_within_limit_and_status_output_discarded(capsys):
     program = "import sys; print('private'); print('private', file=sys.stderr)"
     assert GATE._run([sys.executable, "-c", program], discard=True) == b""
     assert capsys.readouterr() == ("", "")
+
+
+@pytest.mark.parametrize("failure", ["none", "baked", "baseline", "current_gate", "pg_resource"])
+def test_f7_public_preflight_authenticates_baked_operator_before_current_target_gate(
+    tmp_path,
+    monkeypatch,
+    failure,
+):
+    monkeypatch.setattr(
+        sys.modules[__name__], "OLD_COMMIT", "f7aa253968362fb673e811bfc3de2afe84855ae7"
+    )
+    monkeypatch.setattr(
+        sys.modules[__name__], "OLD_TREE", "1debda7554f342048ca20dbed40f845af714ce5b"
+    )
+    new, old, paths, calls, _production, _operator, baseline, _ingress = _fixture(tmp_path)
+    monkeypatch.setattr(GATE, "PRESERVED_PUBLIC_SOURCE", old)
+    public = _file(
+        old / "ops/nas/compose.public-browser.example.yml", "synthetic tracked overlay", 0o644
+    )
+    current = _file(new / "ops/nas/runtime_identity_gate.py", "synthetic reviewed gate", 0o644)
+    current_pg = _file(new / "ops/nas/postgres_gate.py", "synthetic reviewed pg gate", 0o644)
+    reconciliation = _file(
+        tmp_path / "trusted/etc/public-admission.toml",
+        baseline.read_text()
+        + _toml(
+            {},
+            {
+                "public_browser": {
+                    "overlay_path": str(public),
+                    "overlay_sha256": hashlib.sha256(public.read_bytes()).hexdigest(),
+                    "repository_commit": OLD_COMMIT,
+                    "repository_tree": OLD_TREE,
+                    "previous_runtime_admission_sha256": "0" * 64
+                    if failure == "baseline"
+                    else hashlib.sha256(baseline.read_bytes()).hexdigest(),
+                },
+            },
+        ),
+    )
+    pg_cid = "9" * 64
+    resource = _file(
+        tmp_path / "trusted/etc/postgres-resources.toml",
+        _toml(
+            {
+                "postgres_container_id": pg_cid,
+                "postgres_image_id": "sha256:" + "f" * 64 if failure == "pg_resource" else IMAGE,
+            }
+        ),
+    )
+    original_runner = paths["runner"]
+    if failure == "baked":
+        original_runner.gate_state["exit"] = b"1\n"
+    web_cid = "8" * 64
+
+    def runner(argv, **kwargs):
+        if argv[:2] == [GATE.DOCKER, "ps"] and "label=com.docker.compose.service=web" in argv:
+            calls.append((argv, kwargs.get("cwd"), kwargs.get("env")))
+            return (web_cid + "\n").encode()
+        if argv[:2] == [GATE.DOCKER, "inspect"] and argv[-1] == web_cid:
+            calls.append((argv, kwargs.get("cwd"), kwargs.get("env")))
+            assert argv[3] == "{{json .Config.Labels}}"
+            return json.dumps(
+                {
+                    "com.docker.compose.project.config_files": str(
+                        old / "ops/nas/compose.example.yml"
+                    )
+                    + ","
+                    + str(public)
+                }
+            ).encode()
+        if len(argv) > 1 and argv[1] in {str(current), str(current_pg)}:
+            calls.append((argv, kwargs.get("cwd"), kwargs.get("env")))
+            prior = [command for command, _cwd, _env in calls]
+            assert any(command[:2] == [GATE.DOCKER, "wait"] for command in prior)
+            assert any(command[:2] == [GATE.DOCKER, "rm"] for command in prior)
+            assert kwargs["discard"] is True
+            if failure == "current_gate" and argv[1] == str(current):
+                raise GATE.RefusalError
+            return b""
+        return original_runner(argv, **kwargs)
+
+    paths.update(runner=runner, public_admission=reconciliation, postgres_resources=resource)
+    if failure == "none":
+        GATE.verify(new, NEW_COMMIT, NEW_TREE, old, **paths)
+    else:
+        with pytest.raises(GATE.RefusalError):
+            GATE.verify(new, NEW_COMMIT, NEW_TREE, old, **paths)
+    commands = [command for command, _cwd, _env in calls]
+    assert [str(old / "ops/nas/status.sh")] not in commands
+    current_calls = [
+        command for command in commands if len(command) > 1 and command[1] == str(current)
+    ]
+    if failure in {"baked", "baseline"}:
+        assert current_calls == []
+    elif failure == "none":
+        assert len(current_calls) == 1
+        assert current_calls[0][-1] == "--running"
+        assert "--preserved-source" in current_calls[0]
+        pg_calls = [
+            command for command in commands if len(command) > 1 and command[1] == str(current_pg)
+        ]
+        assert pg_calls[-1][-3:] == ["--live", "--container-id", pg_cid]
+    assert not any(SYNTHETIC_MARKER in str(command) for command in commands)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "missing",
+        "existing",
+        "baked",
+        "cleanup",
+        "producer",
+        "current_gate",
+        "pg_gate",
+        "baseline_drift",
+        "new_source_drift",
+        "wrong_source",
+        "existing_mode",
+        "existing_link",
+        "existing_invalid",
+    ],
+)
+def test_missing_f7_public_admission_preparation_keeps_full_preflight_gates(
+    tmp_path,
+    monkeypatch,
+    case,
+):
+    monkeypatch.setattr(
+        sys.modules[__name__], "OLD_COMMIT", "f7aa253968362fb673e811bfc3de2afe84855ae7"
+    )
+    monkeypatch.setattr(
+        sys.modules[__name__], "OLD_TREE", "1debda7554f342048ca20dbed40f845af714ce5b"
+    )
+    new, old, paths, calls, _production, operator, baseline, _ingress = _fixture(tmp_path)
+    monkeypatch.setattr(
+        GATE,
+        "PRESERVED_PUBLIC_SOURCE",
+        old if case != "wrong_source" else old.with_name("unsupported"),
+    )
+    public = _file(
+        old / "ops/nas/compose.public-browser.example.yml", "synthetic tracked overlay", 0o644
+    )
+    generator = _file(
+        new / "ops/nas/generate-runtime-admission.py", "synthetic reviewed producer", 0o644
+    )
+    current = _file(new / "ops/nas/runtime_identity_gate.py", "synthetic reviewed verifier", 0o644)
+    pg = _file(new / "ops/nas/postgres_gate.py", "synthetic reviewed PG verifier", 0o644)
+    admission = baseline.parent / "runtime-admission.public-browser.f7aa2539.toml"
+    original = baseline.read_bytes()
+    original_operator = operator.read_bytes()
+    body = (
+        original
+        + _toml(
+            {},
+            {
+                "public_browser": {
+                    "overlay_path": str(public),
+                    "overlay_sha256": hashlib.sha256(public.read_bytes()).hexdigest(),
+                    "repository_commit": OLD_COMMIT,
+                    "repository_tree": OLD_TREE,
+                    "previous_runtime_admission_sha256": hashlib.sha256(original).hexdigest(),
+                }
+            },
+        ).encode()
+    )
+    existing = case.startswith("existing")
+    if existing:
+        _file(admission, body.decode())
+        if case == "existing_mode":
+            admission.chmod(0o600)
+        if case == "existing_link":
+            target = admission.with_name("synthetic-linked-admission.toml")
+            admission.rename(target)
+            admission.symlink_to(target)
+        if case == "existing_invalid":
+            admission.chmod(0o600)
+            admission.write_bytes(body.replace(b"admitted", b"invalid"))
+            admission.chmod(0o400)
+        prior = admission.lstat()
+    resource = _file(
+        baseline.parent / "postgres-resources.toml",
+        _toml(
+            {
+                "postgres_container_id": "9" * 64,
+                "postgres_image_id": IMAGE,
+            }
+        ),
+    )
+    original_runner = paths["runner"]
+    if case == "baked":
+        original_runner.gate_state["exit"] = b"1\n"
+    if case == "cleanup":
+        cleanup = GATE._gate_absent
+
+        def refuse_cleanup(cid, name, runner):
+            cleanup(cid, name, runner)
+            return False
+
+        monkeypatch.setattr(GATE, "_gate_absent", refuse_cleanup)
+
+    def runner(argv, **kwargs):
+        if argv[:2] == [GATE.DOCKER, "ps"] and "label=com.docker.compose.service=web" in argv:
+            calls.append((argv, kwargs.get("cwd"), kwargs.get("env")))
+            return ("8" * 64 + "\n").encode()
+        if argv[:2] == [GATE.DOCKER, "inspect"] and argv[-1] == "8" * 64:
+            calls.append((argv, kwargs.get("cwd"), kwargs.get("env")))
+            return json.dumps(
+                {
+                    "com.docker.compose.project.config_files": str(
+                        old / "ops/nas/compose.example.yml"
+                    )
+                    + ","
+                    + str(public)
+                }
+            ).encode()
+        if len(argv) > 1 and argv[1] == str(generator):
+            calls.append((argv, kwargs.get("cwd"), kwargs.get("env")))
+            assert argv == [
+                str(old / "ops/nas/container-python.sh"),
+                str(generator),
+                str(old / "ops/nas/compose.example.yml"),
+                str(old / "ops/nas/compose.pilot.example.yml"),
+                str(paths["manifest"]),
+                str(admission),
+                "--public-browser-overlay",
+                str(public),
+                "--preserved-source",
+                str(old),
+            ]
+            assert kwargs["discard"] is True and kwargs["cwd"] == old
+            assert original_runner.gate_state["status"] == "absent"
+            before = [command for command, _cwd, _env in calls]
+            assert any(command[:2] == [GATE.DOCKER, "wait"] for command in before)
+            assert any(command[:2] == [GATE.DOCKER, "rm"] for command in before)
+            gate_cid = original_runner.gate_state["cid"]
+            gate_command = original_runner.gate_state["command"]
+            gate_name = gate_command[gate_command.index("--name") + 1]
+            assert any(
+                command[:2] == [GATE.DOCKER, "ps"] and "id=" + gate_cid in command
+                for command in before
+            )
+            assert any(
+                command[:2] == [GATE.DOCKER, "ps"] and "name=" + gate_name in command
+                for command in before
+            )
+            if case == "producer":
+                raise GATE.RefusalError
+            _file(admission, body.decode())
+            if case == "baseline_drift":
+                baseline.chmod(0o600)
+                baseline.write_bytes(original + b"# concurrent drift\n")
+                baseline.chmod(0o400)
+            return b""
+        if len(argv) > 1 and argv[1] in {str(current), str(pg)}:
+            calls.append((argv, kwargs.get("cwd"), kwargs.get("env")))
+            assert kwargs["discard"] is True
+            if (case == "current_gate" and argv[1] == str(current)) or (
+                case == "pg_gate" and argv[1] == str(pg)
+            ):
+                raise GATE.RefusalError
+            return b""
+        if (
+            original_runner.gate_state["command"] is not None
+            and case == "new_source_drift"
+            and argv[0] == GATE.GIT
+            and "status" in argv
+            and str(new) in argv
+        ):
+            calls.append((argv, kwargs.get("cwd"), kwargs.get("env")))
+            return b" M synthetic-source.py"
+        return original_runner(argv, **kwargs)
+
+    paths.update(runner=runner, public_admission=admission, postgres_resources=resource)
+    if case in {"missing", "existing"}:
+        GATE.verify(new, NEW_COMMIT, NEW_TREE, old, **paths)
+        assert admission.read_bytes() == body
+        assert admission.stat().st_mode & 0o777 == 0o400 and admission.stat().st_nlink == 1
+    else:
+        with pytest.raises(GATE.RefusalError):
+            GATE.verify(new, NEW_COMMIT, NEW_TREE, old, **paths)
+    commands = [command for command, _cwd, _env in calls]
+    prep_calls = [
+        command for command in commands if len(command) > 1 and command[1] == str(generator)
+    ]
+    assert bool(prep_calls) is (
+        case
+        not in {
+            "existing",
+            "existing_mode",
+            "existing_link",
+            "existing_invalid",
+            "baked",
+            "cleanup",
+            "wrong_source",
+            "new_source_drift",
+        }
+    )
+    if case in {"missing", "existing"}:
+        assert any(
+            len(command) > 1 and command[1] == str(current) and command[-1] == "--running"
+            for command in commands
+        )
+        assert any(
+            len(command) > 1
+            and command[1] == str(pg)
+            and command[-3:] == ["--live", "--container-id", "9" * 64]
+            for command in commands
+        )
+    if existing:
+        after = admission.lstat()
+        assert (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) == (
+            prior.st_dev,
+            prior.st_ino,
+            prior.st_size,
+            prior.st_mtime_ns,
+        )
+    if case != "baseline_drift":
+        assert baseline.read_bytes() == original
+    assert operator.read_bytes() == original_operator
+    assert not any(command == [str(old / "ops/nas/status.sh")] for command in commands)
+    assert not any("public-browser-edge" in command or "load" in command for command in commands)
+    assert not any(SYNTHETIC_MARKER in str(command) for command in commands)

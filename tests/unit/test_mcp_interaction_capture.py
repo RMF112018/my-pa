@@ -1090,6 +1090,7 @@ def test_enabled_the_app_is_wrapped_and_the_closer_stops_and_disposes(
     assert isinstance(builder, capture.ProcessRowBuilder)
     assert builder._command == capture._WORKER_COMMAND
     assert builder._timeout == gateway.INTERACTION_LOG_ROW_TIMEOUT_SECONDS == 30.0
+    assert builder._memory_limit == gateway.INTERACTION_LOG_WORKER_MEMORY_BYTES == 256 * 1024 * 1024
     assert builder.worker_pid is None  # started on the first row, not at composition
     writer = [t for t in threading.enumerate() if t.name == "mcp-interaction-writer"]
     assert writer
@@ -2031,3 +2032,78 @@ def test_dotted_and_invisibly_split_keys_are_credential_keys(key: str) -> None:
     redacted, count, _ = redact_json({key: "MARKERN2KEY", "max_tokens": 5, "api.version": 2})
     assert redacted == {key: REDACTED, "max_tokens": 5, "api.version": 2}
     assert count == 1
+
+
+def test_the_injected_facade_invoke_tools_are_the_facades_wrapper_tools() -> None:
+    """The façade's own catalogue is the source of truth for which tools carry a target.
+
+    Every façade tool whose input schema requires `capability` and `arguments`
+    names its canonical target there; the composition root must inject exactly
+    that set (re-checked after #327 added the compact operator publication).
+    """
+    from my_pa.adapters.mcp.chatllm_gateway import DESCRIBE_TOOL, compact_tools
+
+    every = frozenset({DESCRIBE_TOOL, READ_TOOL, WRITE_TOOL, OPERATOR_TOOL})
+    wrappers = frozenset(
+        tool.name
+        for tool in compact_tools(every)
+        if {"capability", "arguments"} <= set(tool.input_schema.get("required", ()))
+    )
+    assert (
+        wrappers
+        == gateway.FACADE_INVOKE_TOOLS
+        == frozenset({"my_pa.read", "my_pa.write", "my_pa.operator"})
+    )
+
+
+# ---- the row worker's address-space cap (review 7) ----
+
+#: Many tiny JSON objects: each costs far more as Python objects than as text
+#: (16 MiB of `[{},{},...]` peaked near 882 MiB of address space on Linux).
+_EMPTY_OBJECTS_4_MIB = b"[" + b"{}," * (4 * 1024 * 1024 // 3 - 1) + b"{}]"
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="only Linux enforces a lowered RLIMIT_AS; macOS refuses to lower it",
+)
+def test_a_row_past_the_worker_memory_cap_is_a_capture_error_and_the_worker_is_replaced() -> None:
+    stderr = io.StringIO()
+    rows: list[Mapping[str, object]] = []
+    builder = capture.ProcessRowBuilder(
+        timeout_seconds=60.0, memory_limit_bytes=128 * 1024 * 1024, stderr=stderr
+    )
+    recorder = InteractionRecorder(
+        rows.append, facade_invoke_tools=FACADE, stderr=stderr, builder=builder
+    )
+    recorder.start()
+    try:
+        recorder.submit(_exchange({"method": "before"}))
+        _wait_for(lambda: len(rows) == 1, timeout=60)
+        assert builder.memory_limited is True
+        first = builder.worker_pid
+        recorder.submit(_exchange(raw_request=_EMPTY_OBJECTS_4_MIB))
+        _wait_for(lambda: recorder.capture_errors == 1, timeout=60)
+        recorder.submit(_exchange({"method": "after"}))
+        _wait_for(lambda: len(rows) == 2, timeout=60)
+        assert builder.worker_pid not in {None, first}
+    finally:
+        recorder.stop(timeout=5)
+    assert [row["jsonrpc_method"] for row in rows] == ["before", "after"]
+    assert builder.start_attempts == 2  # one replacement, no breaker
+    assert "worker_start_failed" not in stderr.getvalue()
+
+
+def test_the_worker_reports_whether_its_memory_cap_is_in_force() -> None:
+    builder = capture.ProcessRowBuilder(memory_limit_bytes=256 * 1024 * 1024)
+    try:
+        builder(_exchange({"method": "m"}), facade_invoke_tools=FACADE)
+        assert builder.memory_limited is (sys.platform == "linux")
+    finally:
+        builder.close()
+    uncapped = capture.ProcessRowBuilder()
+    try:
+        uncapped(_exchange({"method": "m"}), facade_invoke_tools=FACADE)
+        assert uncapped.memory_limited is False
+    finally:
+        uncapped.close()

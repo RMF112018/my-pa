@@ -1178,16 +1178,42 @@ def _row_worker(connection: Connection) -> None:
         try:
             exchange = dataclasses.replace(header, request_body=request, response_body=response)
             row = build_interaction_row(exchange, **options)
+        except MemoryError:
+            # Past the address-space limit: say so and exit, so the parent
+            # replaces this (possibly fragmented) process with a fresh one.
+            del request, response
+            with contextlib.suppress(Exception):
+                connection.send(("memory", None))
+            return
         except Exception:
             connection.send(("error", None))
         else:
             connection.send(("ok", row))
 
 
-def _row_worker_main(descriptor: int) -> None:
-    """Entry point of the worker process: announce readiness, then serve rows."""
+def _limit_address_space(limit: int) -> bool:
+    """Cap this process's virtual address space at `limit` bytes (`RLIMIT_AS`).
+
+    Returns whether the cap is in force. Linux enforces it: an allocation past
+    it raises `MemoryError`. macOS does not support lowering `RLIMIT_AS` (the
+    call raises `ValueError`), so there the worker runs uncapped and says so.
+    """
+    if limit <= 0:
+        return False
+    try:
+        import resource  # POSIX-only; imported where the worker needs it
+
+        resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+    except (ImportError, ValueError, OSError):
+        return False
+    return True
+
+
+def _row_worker_main(descriptor: int, memory_limit: int = 0) -> None:
+    """Entry point of the worker process: cap memory, announce readiness, serve rows."""
     connection = Connection(descriptor)
-    connection.send(("ready", None))
+    capped = _limit_address_space(memory_limit)
+    connection.send(("ready", {"memory_limited": capped}))
     _row_worker(connection)
 
 
@@ -1200,7 +1226,8 @@ _WORKER_COMMAND: Final = (
     "-c",
     # The module's own name rather than a literal: the sibling-transport guard
     # matches any text naming the MCP transport package.
-    f"import sys; from {__name__} import _row_worker_main; _row_worker_main(int(sys.argv[1]))",
+    f"import sys; from {__name__} import _row_worker_main; "
+    "_row_worker_main(int(sys.argv[1]), int(sys.argv[2]))",
 )
 
 
@@ -1234,6 +1261,13 @@ class ProcessRowBuilder:
     are reported on `stderr` as a count-only `worker_start_failed` line, at the
     first and then at most once per 60 s.
 
+    **The worker's memory is capped** when `memory_limit_bytes` is set: it
+    lowers its own `RLIMIT_AS` before announcing itself. A row that needs more
+    raises `MemoryError` in the worker, which reports it and exits; the row
+    fails here (a counted capture error) and the next row starts a fresh worker.
+    It is not a failed start, so it never trips the breaker. Linux enforces the
+    cap; macOS cannot lower `RLIMIT_AS`, and `memory_limited` records which.
+
     **`close` never blocks.** It takes the builder's lock only briefly; if a
     round trip holds it, the worker is killed (which ends that round trip).
     Otherwise the socket is closed so the worker exits at EOF, then it is
@@ -1251,6 +1285,7 @@ class ProcessRowBuilder:
         breaker_seconds: float = 60.0,
         breaker_max_seconds: float = 900.0,
         worker_command: tuple[str, ...] = _WORKER_COMMAND,
+        memory_limit_bytes: int = 0,
         clock: Callable[[], float] = time.monotonic,
         stderr: TextIO | None = None,
     ) -> None:
@@ -1261,6 +1296,9 @@ class ProcessRowBuilder:
         self._breaker_initial = breaker_seconds
         self._breaker_max = breaker_max_seconds
         self._command = worker_command
+        self._memory_limit = memory_limit_bytes
+        #: Whether the running worker reported its address-space cap in force.
+        self.memory_limited: bool | None = None
         self._clock = clock
         self._stderr = stderr
         self._lock = threading.Lock()
@@ -1310,7 +1348,7 @@ class ProcessRowBuilder:
                 [package_root, *filter(None, [environment.get("PYTHONPATH")])]
             )
             process = subprocess.Popen(  # noqa: S603 - fixed interpreter and code, no shell
-                [*self._command, str(child.fileno())],
+                [*self._command, str(child.fileno()), str(self._memory_limit)],
                 pass_fds=(child.fileno(),),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
@@ -1320,9 +1358,10 @@ class ProcessRowBuilder:
             child.close()
             if not connection.poll(self._startup):
                 raise RowBuildFailedError("worker did not start in time")
-            status, _ = connection.recv()
+            status, facts = connection.recv()
             if status != "ready":
                 raise RowBuildFailedError("worker announced something else")
+            self.memory_limited = bool(isinstance(facts, dict) and facts.get("memory_limited"))
         except Exception as failure:
             with contextlib.suppress(Exception):
                 child.close()
@@ -1419,6 +1458,10 @@ class ProcessRowBuilder:
                 raise RowBuildFailedError("row worker failed") from failure
             finally:
                 watchdog.cancel()
+        if status == "memory":
+            with self._lock:
+                self._discard()
+            raise RowBuildFailedError("row exceeded the worker's memory limit")
         if status != "ok" or not isinstance(row, dict):
             raise RowBuildFailedError("row build raised in the worker")
         return row

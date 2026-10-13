@@ -340,6 +340,18 @@ FACADE_INVOKE_TOOLS: Final = frozenset({READ_TOOL, WRITE_TOOL, OPERATOR_TOOL})
 #: about 4 s; anything far slower is a defect, and a bound keeps it from
 #: blacking out the writer.
 INTERACTION_LOG_ROW_TIMEOUT_SECONDS: Final = 30.0
+#: Address-space cap (`RLIMIT_AS`) of the row worker, so the worker alone can
+#: never push the gateway container past its 768 MiB `mem_limit`. Budget,
+#: from measurements: the gateway process about 150 MiB; the recorder's queued
+#: bodies at most 64 MiB; the exchange the writer is sending at most 32 MiB;
+#: response bodies in flight across 8 concurrent calls up to about 190 MiB; a
+#: margin of about 80 MiB. That leaves 256 MiB for the worker, whose virtual
+#: size on Linux is about 30 MiB idle and about 94 MiB at peak for a 16 MiB text
+#: row. A row that needs more (a ~20 MiB list of records peaks near 346 MiB;
+#: 16 MiB of `[{},{},...]` near 882 MiB) fails with `MemoryError` in the worker:
+#: the row is dropped as a capture error and the worker is replaced. Enforced
+#: on Linux; macOS cannot lower `RLIMIT_AS`, so there the worker is uncapped.
+INTERACTION_LOG_WORKER_MEMORY_BYTES: Final = 256 * 1024 * 1024
 
 
 def _no_interaction_log() -> None:
@@ -372,7 +384,10 @@ def with_interaction_log(settings: Settings, app: AsgiApp) -> tuple[AsgiApp, Cal
         with engine.begin() as connection:
             insert_interaction(connection, row)
 
-    builder = ProcessRowBuilder(timeout_seconds=INTERACTION_LOG_ROW_TIMEOUT_SECONDS)
+    builder = ProcessRowBuilder(
+        timeout_seconds=INTERACTION_LOG_ROW_TIMEOUT_SECONDS,
+        memory_limit_bytes=INTERACTION_LOG_WORKER_MEMORY_BYTES,
+    )
     recorder = InteractionRecorder(sink, facade_invoke_tools=FACADE_INVOKE_TOOLS, builder=builder)
     recorder.start()
 

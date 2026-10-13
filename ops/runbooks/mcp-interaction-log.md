@@ -269,12 +269,34 @@ stored.
   parsing, redaction, hashing and capping happen there, so their CPU never
   holds the gateway's GIL. The worker is started with `subprocess` as
   `python -c "...import _row_worker_main..."` and imports only the capture
-  module — not the gateway — so it costs about 23 MiB idle and 63 MiB at peak
-  while building a 16 MiB row (measured; an earlier `multiprocessing` spawn
-  design re-imported the gateway and used 134 MiB idle, 174 MiB peak). The
-  writer thread only sends the bodies over a socket and waits for the row, then
-  inserts it on a dedicated engine with a 2-second statement timeout, separate
-  from the pools that serve requests.
+  module — not the gateway (an earlier `multiprocessing` spawn design
+  re-imported the gateway and used 134 MiB idle). The writer thread only sends
+  the bodies over a socket and waits for the row, then inserts it on a
+  dedicated engine with a 2-second statement timeout, separate from the pools
+  that serve requests.
+- **The worker's memory is capped.** It sets its own address-space limit
+  (`RLIMIT_AS`, `INTERACTION_LOG_WORKER_MEMORY_BYTES` = **256 MiB**) before it
+  serves rows, so the worker alone can never push the container past its
+  768 MiB `mem_limit`. The budget behind the number: the gateway process about
+  150 MiB, the queued bodies at most 64 MiB, the exchange being sent at most
+  32 MiB, response bodies in flight across 8 concurrent calls up to about
+  190 MiB, and about 80 MiB of margin. Peak worker memory depends on the shape
+  of the body, not only its size (measured on Linux, `python:3.12-slim`;
+  RSS / virtual size):
+
+  | Row being built | Peak worker memory | Under the 256 MiB cap |
+  |---|---|---|
+  | idle | about 20 / 30 MiB | — |
+  | 16 MiB plain text | about 63–84 / 94 MiB | built normally |
+  | ~20.7–20.9 MiB JSON list of records | about 201–333 / 346 MiB | refused |
+  | 16 MiB of `[{},{},…]` (pathological) | about 846–858 / 882 MiB | refused |
+
+  A row the cap refuses fails with `MemoryError` inside the worker: the worker
+  reports it and exits, the row is dropped and counted as a **capture error**,
+  and the next row starts a fresh worker. This is not a failed start, so it
+  never trips the start breaker. **The cap is enforced on Linux only**: macOS
+  cannot lower `RLIMIT_AS`, so on a developer Mac the worker runs uncapped (the
+  builder records this as `memory_limited = False`).
 - Measured with a 1 ms ticker thread in the gateway process, building a row
   in-thread stalled every other thread for 83 ms (1 MiB body) up to 1.34 s
   (16 MiB) idle, and up to 4.1 s under heavy CPU contention; through the worker
@@ -347,7 +369,10 @@ After enabling the log on the NAS (and after each deployment of it):
    `multiprocessing`.)
 4. Watch `docker stats` during a large response and confirm memory stays well
    under the container's 768m limit and latency is acceptable. The worker adds
-   about 23 MiB idle and up to about 63 MiB while building a 16 MiB row.
+   about 20 MiB idle, up to about 84 MiB for a 16 MiB text row, and never more
+   than its 256 MiB cap: a row that would need more (a large list of records,
+   many tiny objects) shows up as one `capture_error` and no row, while the
+   response itself is unaffected.
 5. Run `docker stop` and confirm it completes promptly and leaves no process
    behind.
 

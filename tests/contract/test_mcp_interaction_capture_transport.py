@@ -583,3 +583,103 @@ async def test_a_failing_submit_changes_no_response_and_is_counted(scene: Scene)
     assert len(offered) == 3
     assert recorder.capture_errors == 3
     assert rows == []
+
+
+@pytest.mark.anyio
+async def test_compact_operator_publication_calls_are_captured_with_their_canonical_capability(
+    scene: Scene,
+) -> None:
+    """#327's exact-client compact operator publication, end to end through the capture.
+
+    The operator ceiling publishes `my_pa.operator` (and `my_pa.write`) to the
+    one selected client; every invoke names its canonical target in
+    `arguments.capability`, which the row must record as `capability`, with the
+    façade tool as `tool_name` and the client as `oauth_client_id`.
+    """
+    granted = frozenset(
+        {
+            Capability.SOURCES_ENROLL.value,
+            Capability.CAPABILITIES_GET.value,
+            Capability.TASKS_CREATE.value,
+        }
+    )
+
+    def resolve(authorization: str | None) -> RemoteAccessContext | None:
+        if authorization != "Bearer operator":
+            return None
+        return RemoteAccessContext(
+            scene.principal,
+            authenticated_client_id=CLIENT,
+            allowed_capabilities=granted,
+            compact_publication=True,
+            compact_operator_publication=True,
+        )
+
+    app = create_remote_mcp_app(
+        build_service(scene.world, scene.providers),
+        resolve_access=resolve,
+        allowed_hosts=("testserver",),
+        remote_enabled=True,
+        writes_enabled=True,
+        resource=RESOURCE,
+        authorization_servers=("https://issuer.example.invalid",),
+        scopes=frozenset({"my-pa.read"}),
+    )
+    requests: list[tuple[str, str, object]] = [
+        ("POST", "Bearer operator", {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+        (
+            "POST",
+            "Bearer operator",
+            _call(
+                2,
+                OPERATOR_TOOL,
+                {"capability": Capability.SOURCES_ENROLL.value, "arguments": {"payload": {}}},
+            ),
+        ),
+        (
+            "POST",
+            "Bearer operator",
+            _call(
+                3,
+                WRITE_TOOL,
+                {"capability": Capability.TASKS_CREATE.value, "arguments": {"payload": {}}},
+            ),
+        ),
+        (
+            "POST",
+            "Bearer operator",
+            _call(4, READ_TOOL, {"capability": Capability.CAPABILITIES_GET.value, "arguments": {}}),
+        ),
+    ]
+    rows: list[Mapping[str, object]] = []
+    recorder = _recorder(rows)
+    recorder.start()
+    try:
+        responses = await _exchange(
+            McpInteractionCapture(app, recorder, path=MCP_PATH), app, requests
+        )
+    finally:
+        recorder.stop(timeout=5)
+    listed = {tool["name"] for tool in responses[0].json()["result"]["tools"]}
+    assert OPERATOR_TOOL in listed and WRITE_TOOL in listed
+    assert len(rows) == 4
+    assert all(row["oauth_client_id"] == CLIENT for row in rows)
+    operator, write, read = rows[1], rows[2], rows[3]
+    assert (operator["tool_name"], operator["capability"]) == (
+        OPERATOR_TOOL,
+        Capability.SOURCES_ENROLL.value,
+    )
+    assert (write["tool_name"], write["capability"]) == (WRITE_TOOL, Capability.TASKS_CREATE.value)
+    assert (read["tool_name"], read["capability"]) == (
+        READ_TOOL,
+        Capability.CAPABILITIES_GET.value,
+    )
+    assert read["outcome"] == "ok"
+    for row, response in zip(rows[1:], responses[1:], strict=True):
+        result = response.json()["result"]
+        expected = "tool_error" if result["isError"] else "ok"
+        assert row["outcome"] == expected
+        if result["isError"]:
+            problem = json.loads(result["content"][0]["text"])
+            code = (problem.get("error") or problem)["code"]
+            assert row["error_code"] == code

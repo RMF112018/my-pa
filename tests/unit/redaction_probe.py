@@ -140,6 +140,20 @@ def _decreasing_start_tokens(token: str) -> Any:  # noqa: ANN401
 _PATTERN_SHAPES: dict[str, list[Any]] = {
     "_BEARER": [_repeat("bearer "), _repeat("Bearer", " "), _decreasing_start_tokens("bearer")],
     "_BASIC": [_repeat("basic ", "a"), _repeat("Basic aaaaaaa"), _repeat("basic", " ")],
+    "_EQUALS_LINE": [
+        _repeat("\npassword", " "),
+        _repeat("\n" + " " * 70 + "token", "="),
+        _repeat("\nx_api_key", " " * 20, "="),
+        _repeat("\n" + "a" * 70 + "_token", "="),
+        _decreasing_start_tokens("\nclient_secret = "),
+    ],
+    "_BARE_PAIR": [
+        _repeat("password", ":"),
+        _repeat(" token", " " * 20),
+        _repeat("{a" * 40 + "_token", ":"),
+        _repeat(" x_api_key: ", "'"),
+        _decreasing_start_tokens(" client_secret: "),
+    ],
     "_COLON_LINE": [
         _repeat("\npassword", " "),
         _repeat("\n" + " " * 70 + "token", ":"),

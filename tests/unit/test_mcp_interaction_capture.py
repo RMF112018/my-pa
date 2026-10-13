@@ -14,7 +14,6 @@ import contextlib
 import hashlib
 import io
 import json
-import multiprocessing
 import os
 import signal
 import subprocess
@@ -1085,10 +1084,11 @@ def test_enabled_the_app_is_wrapped_and_the_closer_stops_and_disposes(
             "statement_timeout_ms": gateway.INTERACTION_LOG_STATEMENT_TIMEOUT_MS,
         }
     ]
-    # Rows are built in one spawned worker process, bounded per row.
+    # Rows are built in one worker process that imports only the capture
+    # module, bounded per row.
     builder = served.recorder._builder
     assert isinstance(builder, capture.ProcessRowBuilder)
-    assert builder._context.get_start_method() == "spawn"
+    assert builder._command == capture._WORKER_COMMAND
     assert builder._timeout == gateway.INTERACTION_LOG_ROW_TIMEOUT_SECONDS == 30.0
     assert builder.worker_pid is None  # started on the first row, not at composition
     writer = [t for t in threading.enumerate() if t.name == "mcp-interaction-writer"]
@@ -1638,8 +1638,9 @@ def test_colon_style_credential_lines_are_redacted(line: str) -> None:
     assert count == 1
 
 
-def test_colon_lines_do_not_touch_non_credential_keys_or_mid_line_text() -> None:
-    text = "status: open\npassword_hint: kept\nthe password: is a word here"
+def test_colon_lines_do_not_touch_non_credential_keys() -> None:
+    # A mid-line `password: x` *is* redacted, by the bare-pair rule.
+    text = "status: open\npassword_hint: kept\nthe password_hint: is a word here"
     assert redact_text(text) == (text, 0, False)
 
 
@@ -1675,8 +1676,6 @@ def test_write_failures_are_reported_at_the_first_and_then_rate_limited() -> Non
 
 
 # ---- rows built in a worker process; metadata/key coverage; capture errors (review 5) ----
-
-_SPAWN = multiprocessing.get_context("spawn")
 
 
 def _longest_stall_while(action: Any) -> float:  # noqa: ANN401
@@ -1720,7 +1719,7 @@ _STALL_BOUND_SECONDS = 0.25
 def test_building_a_16_mib_row_does_not_stall_the_gateway_process() -> None:
     raw = b"plain text " * (16 * 1024 * 1024 // 11)
     rows: list[Mapping[str, object]] = []
-    builder = capture.ProcessRowBuilder(_SPAWN, timeout_seconds=60.0)
+    builder = capture.ProcessRowBuilder(timeout_seconds=60.0)
     recorder = InteractionRecorder(
         rows.append, facade_invoke_tools=FACADE, stderr=io.StringIO(), builder=builder
     )
@@ -1744,7 +1743,7 @@ def test_building_a_16_mib_row_does_not_stall_the_gateway_process() -> None:
 def test_a_worker_timeout_or_crash_drops_the_row_counts_it_and_replaces_the_worker() -> None:
     stderr = io.StringIO()
     rows: list[Mapping[str, object]] = []
-    builder = capture.ProcessRowBuilder(_SPAWN, timeout_seconds=60.0)
+    builder = capture.ProcessRowBuilder(timeout_seconds=60.0)
     recorder = InteractionRecorder(
         rows.append, facade_invoke_tools=FACADE, stderr=stderr, builder=builder
     )
@@ -1754,9 +1753,10 @@ def test_a_worker_timeout_or_crash_drops_the_row_counts_it_and_replaces_the_work
         _wait_for(lambda: len(rows) == 1, timeout=60)
         first_pid = builder.worker_pid
         assert first_pid is not None
-        os.kill(first_pid, signal.SIGKILL)  # a crashed worker
-        _wait_for(lambda: not _pid_alive(first_pid))
-        recorder.submit(_exchange({"method": "lost"}))
+        # A worker that crashes while building a (large, slow) row.
+        recorder.submit(_exchange(raw_request=b"plain text " * (8 * 1024 * 1024 // 11)))
+        time.sleep(0.5)
+        os.kill(first_pid, signal.SIGKILL)
         _wait_for(lambda: recorder.capture_errors == 1, timeout=60)
         builder._timeout = 0.0  # every build now times out
         recorder.submit(_exchange({"method": "too slow"}))
@@ -1786,7 +1786,7 @@ def _pid_alive(pid: int) -> bool:
 
 
 def test_close_stops_the_worker_and_refuses_new_rows() -> None:
-    builder = capture.ProcessRowBuilder(_SPAWN, timeout_seconds=60.0)
+    builder = capture.ProcessRowBuilder(timeout_seconds=60.0)
     row = builder(_exchange({"method": "m"}), facade_invoke_tools=FACADE)
     assert row["jsonrpc_method"] == "m"
     pid = builder.worker_pid
@@ -1813,7 +1813,7 @@ def test_the_worker_builds_the_same_row_as_the_thread() -> None:
     exchange = _exchange(
         _call("my_pa.read", {"capability": "tasks.list", "password": "S"}), access=Access()
     )
-    builder = capture.ProcessRowBuilder(_SPAWN, timeout_seconds=60.0)
+    builder = capture.ProcessRowBuilder(timeout_seconds=60.0)
     try:
         remote = builder(exchange, facade_invoke_tools=FACADE, dropped_before=3)
     finally:
@@ -1899,3 +1899,135 @@ def test_capture_errors_are_throttled_and_carried_forward() -> None:
         "mcp-interaction-log capture_error dropped=0 write_failures=0 capture_errors=1"
     ]
     assert "MARKER" not in stderr.getvalue()
+
+
+# ---- bounded round trip and shutdown, start backoff, more key shapes (review 6) ----
+
+#: A worker that announces itself and then never reads: a send of a body larger
+#: than the socket buffer blocks until the worker is killed.
+_STUCK_WORKER = (
+    sys.executable,
+    "-c",
+    "import sys, time; from multiprocessing.connection import Connection; "
+    "c = Connection(int(sys.argv[1])); c.send(('ready', None)); time.sleep(600)",
+)
+#: A worker that dies before it announces itself.
+_DEAD_WORKER = (sys.executable, "-c", "raise SystemExit(3)")
+_SIXTEEN_MIB = b"plain text " * (16 * 1024 * 1024 // 11)
+
+
+def test_a_worker_that_stops_reading_fails_the_row_within_the_bound_and_is_replaced() -> None:
+    stderr = io.StringIO()
+    builder = capture.ProcessRowBuilder(timeout_seconds=2.0, worker_command=_STUCK_WORKER)
+    recorder = InteractionRecorder(
+        lambda _row: None, facade_invoke_tools=FACADE, stderr=stderr, builder=builder
+    )
+    recorder.start()
+    pids: list[int] = []
+    try:
+        began = time.monotonic()
+        recorder.submit(_exchange(raw_request=_SIXTEEN_MIB))
+        _wait_for(lambda: builder.worker_pid is not None, timeout=30)
+        pids.append(builder.worker_pid)  # type: ignore[arg-type]
+        _wait_for(lambda: recorder.capture_errors == 1, timeout=30)
+        elapsed = time.monotonic() - began
+        assert elapsed < 2.0 + 5.0, f"row failed after {elapsed:.1f}s"
+        recorder.submit(_exchange(raw_request=_SIXTEEN_MIB))
+        _wait_for(lambda: builder.start_attempts == 2, timeout=30)
+        _wait_for(lambda: builder.worker_pid not in {None, pids[0]}, timeout=30)
+        pids.append(builder.worker_pid)  # type: ignore[arg-type]
+        _wait_for(lambda: recorder.capture_errors == 2, timeout=30)
+    finally:
+        recorder.stop(timeout=1.0)
+    for pid in pids:
+        _wait_for(lambda pid=pid: not _pid_alive(pid), timeout=5)
+
+
+def test_stop_returns_within_its_bound_while_the_writer_is_blocked_sending() -> None:
+    builder = capture.ProcessRowBuilder(timeout_seconds=600.0, worker_command=_STUCK_WORKER)
+    recorder = InteractionRecorder(
+        lambda _row: None, facade_invoke_tools=FACADE, stderr=io.StringIO(), builder=builder
+    )
+    recorder.start()
+    recorder.submit(_exchange(raw_request=_SIXTEEN_MIB))
+    _wait_for(lambda: builder.worker_pid is not None, timeout=30)
+    pid = builder.worker_pid
+    assert pid is not None
+    time.sleep(0.5)  # the writer is now blocked in send_bytes
+    stopper = threading.Thread(target=recorder.stop, kwargs={"timeout": 1.0}, daemon=True)
+    began = time.monotonic()
+    stopper.start()
+    # stop's bound: its timeout, plus close's brief lock wait and kill wait.
+    stopper.join(1.0 + 0.2 + 0.5 + 3.0)
+    try:
+        assert not stopper.is_alive(), "stop() did not return within its bound"
+        assert time.monotonic() - began < 1.0 + 0.2 + 0.5 + 3.0
+        _wait_for(lambda: not _pid_alive(pid), timeout=5)
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, signal.SIGKILL)
+
+
+def test_failed_worker_starts_open_a_breaker_that_backs_off_and_doubles() -> None:
+    now = [1000.0]
+    stderr = io.StringIO()
+    builder = capture.ProcessRowBuilder(
+        worker_command=_DEAD_WORKER,
+        startup_seconds=10.0,
+        breaker_threshold=3,
+        breaker_seconds=60.0,
+        breaker_max_seconds=900.0,
+        clock=lambda: now[0],
+        stderr=stderr,
+    )
+
+    def attempt() -> None:
+        with pytest.raises(capture.RowBuildFailedError):
+            builder(_exchange(), facade_invoke_tools=FACADE)
+
+    for _ in range(5):
+        attempt()
+    assert builder.start_attempts == 3  # rows 4 and 5 failed at once: breaker open
+    now[0] += 61
+    attempt()
+    assert builder.start_attempts == 4  # one trial start after the cool-down
+    now[0] += 61
+    attempt()
+    assert builder.start_attempts == 4  # the failed trial doubled the cool-down to 120 s
+    now[0] += 60
+    attempt()
+    assert builder.start_attempts == 5
+    lines = stderr.getvalue().splitlines()
+    assert len(lines) >= 1
+    assert lines[0].startswith("mcp-interaction-log worker_start_failed start_failures=")
+    assert all(line.startswith("mcp-interaction-log worker_start_failed") for line in lines)
+    builder.close()
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'password = "MARKEREQ1"',
+        "  db_password=   MARKEREQ2 # comment",
+        "client_secret\t=\tMARKEREQ3",
+        "API_KEY = MARKEREQ4",
+    ],
+)
+def test_equals_style_credential_lines_are_redacted(line: str) -> None:
+    text, count, _ = redact_text(f"[section]\n{line}\nname = kept")
+    assert "MARKEREQ" not in text
+    assert text.endswith("\nname = kept")
+    assert count == 1
+
+
+def test_bare_unquoted_credential_values_are_redacted() -> None:
+    text, count, _ = redact_text("{user: bob, password: MARKERBARE, mode: x}")
+    assert text == f"{{user: bob, password: {REDACTED}, mode: x}}"
+    assert count == 1
+
+
+@pytest.mark.parametrize("key", ["api.key", "private.key", "pass​word", "access⁠token"])
+def test_dotted_and_invisibly_split_keys_are_credential_keys(key: str) -> None:
+    redacted, count, _ = redact_json({key: "MARKERN2KEY", "max_tokens": 5, "api.version": 2})
+    assert redacted == {key: REDACTED, "max_tokens": 5, "api.version": 2}
+    assert count == 1

@@ -17,16 +17,19 @@ app returns — so after the final response byte has been handed to the server �
 the captured exchange is offered to `InteractionRecorder` with `put_nowait`.
 One daemon writer thread takes it, has the row built, and hands the row to the
 injected sink. In the gateway the row is built by `ProcessRowBuilder` in one
-spawned child process: parsing, redaction, hashing and capping hold *that*
-process's GIL, never the gateway's. The writer thread only sends the bodies
-over a pipe and waits (both release the GIL). Measured with a 1 ms ticker
-thread: building a 16 MiB text body in-thread stalled the gateway's threads for
-about 1.3 s; through the worker the longest stall was under 2 ms idle and 35 ms
-under heavy CPU contention. A row that takes longer than its bound (30 s in the
-gateway), or a worker that crashes, kills that worker, drops that row and
-counts a capture error; the next row starts a fresh worker. Nothing here knows
-what the sink is; the composition root (`apps/gateway.py`) gives it one that
-appends through `infrastructure.persistence.mcp_interactions`.
+child process that imports only this module: parsing, redaction, hashing and
+capping hold *that* process's GIL, never the gateway's. The writer thread only
+sends the bodies over a socket and waits (both release the GIL), and the whole
+round trip, sends included, is bounded by a watchdog that kills the worker.
+Measured with a 1 ms ticker thread: building a 16 MiB text body in-thread
+stalled the gateway's threads for about 1.3 s; through the worker the longest
+stall was under 2 ms idle and 35 ms under heavy CPU contention. A row that
+takes longer than its bound (30 s in the gateway), a worker that stops reading
+or crashes, kills that worker, drops that row and counts a capture error; the
+next row starts a fresh worker, and repeated failed starts open a backing-off
+circuit breaker. Nothing here knows what the sink is; the composition root
+(`apps/gateway.py`) gives it one that appends through
+`infrastructure.persistence.mcp_interactions`.
 
 **Nothing here imports the MCP transport.** The captured path and the façade
 tool names whose `arguments.capability` names the canonical target are inputs:
@@ -57,33 +60,34 @@ that does get written, as `diagnostics.capture.dropped_before` and
 **Redaction, before truncation.** Headers are allowlisted (`STORED_HEADERS`);
 `authorization`, `cookie`, `set-cookie`, `proxy-authorization` and every other
 header are never stored. JSON bodies are walked: keys are normalised
-(lower-cased, `-`, `_` and spaces removed, so `accessToken` is `access_token`),
-and a value of any type under a key in `REDACTED_KEYS`, or one ending in a
-`REDACTED_KEY_SUFFIXES` entry (`auth_token`, `x_api_key`, ...), becomes
-`"[REDACTED]"`. Every string (and a body that is not JSON, or that overflowed
-the capture buffer, as a whole) goes through `_redact_string_patterns`: PEM
-private-key blocks; `"key": value` pairs for the same keys, where value is a
-string or a non-string scalar, plain, one escaping level down and Python-repr
-quoted (dotted keys such as `oauth.token` included, and escaped pairs at the
-four escaping levels the JSON path follows); a credential value cut off by the
-end of the text; `key=value` form and query-string pairs; the password in URL
-userinfo; credential header lines (`Cookie:`, `Set-Cookie:`, `Authorization:`
-of any scheme, `X-Api-Key:`, `*-Token:`, `*-Secret:`); colon-style `key: value`
-lines (YAML, logs); `Bearer` and `Basic` credentials; and JWTs inside dotted
-base64url runs. Object keys that are not credential keys go through the same
-patterns (a colliding result gets a ` #n` suffix), and every metadata column
-and stored header is redacted whole before it is cut to 256 characters. A
-string that is itself a JSON object or array (MCP `TextContent.text` carries
-the response envelope that way) is parsed, redacted the same way and
-re-serialised. Only then is the result cut to `BODY_CAP_BYTES`, so a credential
-beyond the cap never appears and one straddling it is never stored in part. NUL
-characters, which PostgreSQL text and JSONB cannot hold, are replaced and
-flagged, and so are `NaN`, `Infinity` and overflowing numbers, which JSONB
-refuses: they are kept as the strings they were written as
-(`non_finite_replaced`). Every pattern is linear by construction (the rules are
-in the comment above `_BEARER`, and a unit test probes every compiled pattern
-for quadratic growth); a text-path credential whose value is an array or object
-is a stated limit, not matched.
+(lower-cased; `-`, `_`, `.`, spaces and invisible format characters removed, so
+`accessToken`, `api.key` and `access_token` match), and a value of any type
+under a key in `REDACTED_KEYS`, or one ending in a `REDACTED_KEY_SUFFIXES`
+entry (`auth_token`, `x_api_key`, ...), becomes `"[REDACTED]"`. Every string
+(and a body that is not JSON, or that overflowed the capture buffer, as a
+whole) goes through `_redact_string_patterns`: PEM private-key blocks; `"key":
+value` pairs for the same keys, where value is a string or a non-string scalar,
+plain, one escaping level down and Python-repr quoted (dotted keys such as
+`oauth.token` included, and escaped pairs at the four escaping levels the JSON
+path follows); a credential value cut off by the end of the text; `key=value`
+form and query-string pairs; the password in URL userinfo; credential header
+lines (`Cookie:`, `Set-Cookie:`, `Authorization:` of any scheme, `X-Api-Key:`,
+`*-Token:`, `*-Secret:`); `key: value` and `key = value` lines (YAML, TOML,
+INI, logs); bare `key: value` pairs (relaxed JSON); `Bearer` and `Basic`
+credentials; and JWTs inside dotted base64url runs. Object keys that are not
+credential keys go through the same patterns (a colliding result gets a ` #n`
+suffix), and every metadata column and stored header is redacted whole before
+it is cut to 256 characters. A string that is itself a JSON object or array
+(MCP `TextContent.text` carries the response envelope that way) is parsed,
+redacted the same way and re-serialised. Only then is the result cut to
+`BODY_CAP_BYTES`, so a credential beyond the cap never appears and one
+straddling it is never stored in part. NUL characters, which PostgreSQL text
+and JSONB cannot hold, are replaced and flagged, and so are `NaN`, `Infinity`
+and overflowing numbers, which JSONB refuses: they are kept as the strings they
+were written as (`non_finite_replaced`). Every pattern is linear by
+construction (the rules are in the comment above `_BEARER`, and a unit test
+probes every compiled pattern for quadratic growth); a text-path credential
+whose value is an array or object is a stated limit, not matched.
 
 **What the digests are.** `request_sha256` / `response_sha256` are the SHA-256 of
 the *redacted, untruncated* body as this module serialises it — the compact
@@ -117,18 +121,21 @@ import dataclasses
 import hashlib
 import json
 import math
+import os
 import queue
 import re
+import socket
+import subprocess
 import sys
 import threading
 import time
+import unicodedata
 import uuid
 from collections.abc import Awaitable, Callable, Iterable, Mapping, MutableMapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from multiprocessing.connection import Connection
-from multiprocessing.context import BaseContext
-from multiprocessing.process import BaseProcess
+from pathlib import Path
 from typing import Any, Final, Protocol, TextIO
 
 __all__ = [
@@ -359,7 +366,7 @@ _PEM_PRIVATE_KEY: Final = re.compile(
     + "(?:-----END "
     + r"[A-Z ]{0,40}PRIVATE KEY(?: BLOCK)?-----|(?=-----)|\Z)"
 )
-_SEP: Final = r"[-_ ]?"
+_SEP: Final = r"[-_. ]?"
 
 
 def _key_pattern(prefix_class: str, separator: str) -> str:
@@ -379,7 +386,7 @@ def _key_pattern(prefix_class: str, separator: str) -> str:
 _KEY_PATTERN: Final = _key_pattern(r"[A-Za-z0-9_.\- ]", _SEP)
 #: In a query string or form body a key is one word (no spaces), so a run of
 #: spaces cannot make every position a candidate start.
-_FORM_KEY_PATTERN: Final = _key_pattern(r"[A-Za-z0-9_.\-]", r"[-_]?")
+_FORM_KEY_PATTERN: Final = _key_pattern(r"[A-Za-z0-9_.\-]", r"[-_.]?")
 #: A JSON scalar that is not a string.
 _SCALAR: Final = r"(?:-?\d[\d.eE+\-]*|true|false|null)"
 #: `"key": value` in plain JSON text, where value is a JSON string or scalar.
@@ -449,6 +456,24 @@ _COLON_LINE: Final = re.compile(
     r"(?![ \t]*\[REDACTED\])[^\r\n]+",
     re.IGNORECASE,
 )
+#: `key = value` at the start of a line, as TOML, INI and code write it
+#: (`password = "x"`, `db_password = x`). Same key grammar and bounds as
+#: `_COLON_LINE`; the value runs to the end of the line.
+_EQUALS_LINE: Final = re.compile(
+    r"(?m)^(?P<head>[ \t]{0,64}" + _FORM_KEY_PATTERN + r"[ \t]{0,16}=[ \t]{0,16})"
+    r"(?![ \t]*\[REDACTED\])[^\r\n]+",
+    re.IGNORECASE,
+)
+#: `key: value` with a bare (unquoted) value anywhere in a line, as invalid or
+#: relaxed JSON writes it (`{password: abc, ...}`). The key starts a word and is
+#: not quoted (quoted pairs are `_TEXT_PAIR`'s); the value is one run of
+#: characters up to whitespace, `,`, `}`, `]` or a quote, and does not start with
+#: a quote, `[` or `{`.
+_BARE_PAIR: Final = re.compile(
+    r"(?P<head>(?<![A-Za-z0-9_.\-\"'\\])" + _FORM_KEY_PATTERN + r"[ \t]{0,16}:[ \t]{0,16})"
+    r"(?![\"'\[{])[^\s,}\]\"']+",
+    re.IGNORECASE,
+)
 #: `key=value` in a query string or form body. The key starts only at the start
 #: of a word, and the value runs to `&`, whitespace, a quote or a backslash.
 _FORM_PAIR: Final = re.compile(
@@ -478,7 +503,16 @@ def _redact_dotted_run(match: re.Match[str], counter: list[int]) -> str:
 
 
 def _normalized_key(key: str) -> str:
-    return key.lower().replace("-", "").replace("_", "").replace(" ", "")
+    """Lower-cased, without `-`, `_`, `.`, spaces or invisible format characters.
+
+    `api.key`, `access-token`, `accessToken` and `pass\u200bword` (a zero-width
+    space, Unicode category Cf) all normalise to their plain spelling.
+    """
+    return "".join(
+        character
+        for character in key.lower()
+        if character not in "-_. " and unicodedata.category(character) != "Cf"
+    )
 
 
 def _is_credential_key(key: str) -> bool:
@@ -508,11 +542,15 @@ def _redact_string_patterns(value: str) -> tuple[str, int]:
         count += found
     value, found = _FORM_PAIR.subn(lambda match: f"{match.group('head')}{REDACTED}", value)
     count += found
+    value, found = _EQUALS_LINE.subn(lambda match: f"{match.group('head')}{REDACTED}", value)
+    count += found
     value, found = _URL_USERINFO.subn(lambda match: f"{match.group(1)}{REDACTED}@", value)
     count += found
     value, found = _HEADER_LINE.subn(lambda match: f"{match.group(1)}: {REDACTED}", value)
     count += found
     value, found = _COLON_LINE.subn(lambda match: f"{match.group('head')}{REDACTED}", value)
+    count += found
+    value, found = _BARE_PAIR.subn(lambda match: f"{match.group('head')}{REDACTED}", value)
     count += found
     value, found = _BEARER.subn(lambda match: f"{match.group(1)} {REDACTED}", value)
     count += found
@@ -1146,69 +1184,195 @@ def _row_worker(connection: Connection) -> None:
             connection.send(("ok", row))
 
 
+def _row_worker_main(descriptor: int) -> None:
+    """Entry point of the worker process: announce readiness, then serve rows."""
+    connection = Connection(descriptor)
+    connection.send(("ready", None))
+    _row_worker(connection)
+
+
+#: How the worker process is started: this interpreter, importing only this
+#: module (`-c`), with the socket descriptor appended as the last argument. A
+#: `multiprocessing` spawn would re-import the gateway's `__main__` in the child
+#: (about 134 MiB measured); this imports the capture module and the stdlib.
+_WORKER_COMMAND: Final = (
+    sys.executable,
+    "-c",
+    # The module's own name rather than a literal: the sibling-transport guard
+    # matches any text naming the MCP transport package.
+    f"import sys; from {__name__} import _row_worker_main; _row_worker_main(int(sys.argv[1]))",
+)
+
+
 class ProcessRowBuilder:
     """Builds rows in one child process, so their CPU never holds the gateway's GIL.
 
     Every regex and JSON step of `build_interaction_row` holds the GIL for its
     whole run (measured in-thread: a 16 MiB text body stalled a 1 ms ticker
-    for about 1.3 s). Here the writer thread only sends the bodies over a pipe
-    (`send_bytes`, which releases the GIL while it writes), waits with
+    for about 1.3 s). Here the writer thread only sends the bodies over a
+    socket (`send_bytes`, which releases the GIL while it writes), waits with
     `poll` (which releases it too) and unpickles the finished row.
 
-    One worker, started lazily on the first row from `context` (the
-    composition root passes a `spawn` context). Each row is bounded by
-    `timeout_seconds`: on a timeout, a crash or a broken pipe the worker is
-    killed, `RowBuildFailedError` is raised (the recorder counts a capture
-    error and drops that row, never retrying) and the next row starts a fresh
-    worker. `close` asks the worker to exit, then terminates and finally kills
-    it if it does not; after `close` no new worker is started.
+    **The worker** is one child process started with `subprocess` from
+    `_WORKER_COMMAND` on the first row; it imports only this module, so it does
+    not re-run the gateway's imports. It must announce itself within
+    `startup_seconds`.
+
+    **Every round trip is bounded.** A watchdog timer armed before the first
+    byte is sent kills the worker when `timeout_seconds` pass, which also
+    unblocks a send into a worker that has stopped reading (the write fails
+    with a broken pipe). A timeout, a crash, a broken pipe or a failed build
+    raises `RowBuildFailedError`: the recorder counts a capture error and drops
+    that row, never retrying. A dead or killed worker is replaced on the next
+    row.
+
+    **Start failures back off.** After `breaker_threshold` consecutive failed
+    starts, no start is attempted for `breaker_seconds`, doubling on each
+    further failed start up to `breaker_max_seconds`; meanwhile every row fails
+    at once (a counted capture error), so a broken worker cannot turn into a
+    respawn per request. A successful start resets the breaker. Failed starts
+    are reported on `stderr` as a count-only `worker_start_failed` line, at the
+    first and then at most once per 60 s.
+
+    **`close` never blocks.** It takes the builder's lock only briefly; if a
+    round trip holds it, the worker is killed (which ends that round trip).
+    Otherwise the socket is closed so the worker exits at EOF, then it is
+    terminated and finally killed, each wait bounded by `exit_seconds`. After
+    `close` no worker is started.
     """
 
     def __init__(
         self,
-        context: BaseContext,
         *,
         timeout_seconds: float = 30.0,
-        exit_seconds: float = 1.0,
+        startup_seconds: float = 20.0,
+        exit_seconds: float = 0.5,
+        breaker_threshold: int = 3,
+        breaker_seconds: float = 60.0,
+        breaker_max_seconds: float = 900.0,
+        worker_command: tuple[str, ...] = _WORKER_COMMAND,
+        clock: Callable[[], float] = time.monotonic,
+        stderr: TextIO | None = None,
     ) -> None:
-        self._context = context
         self._timeout = timeout_seconds
+        self._startup = startup_seconds
         self._exit_seconds = exit_seconds
+        self._breaker_threshold = breaker_threshold
+        self._breaker_initial = breaker_seconds
+        self._breaker_max = breaker_max_seconds
+        self._command = worker_command
+        self._clock = clock
+        self._stderr = stderr
         self._lock = threading.Lock()
-        self._process: BaseProcess | None = None
+        self._process: subprocess.Popen[bytes] | None = None
         self._connection: Connection | None = None
         self._closed = False
+        self._start_failures = 0
+        self._consecutive_start_failures = 0
+        self._tripped = False
+        self._breaker_cooldown = breaker_seconds
+        self._suspended_until = 0.0
+        self._last_start_report: float | None = None
+        self.start_attempts = 0
 
     @property
     def worker_pid(self) -> int | None:
         process = self._process
         return None if process is None else process.pid
 
+    def _report_start_failure(self) -> None:
+        now = self._clock()
+        if self._last_start_report is not None and now - self._last_start_report < 60.0:
+            return
+        self._last_start_report = now
+        suspended = max(0.0, self._suspended_until - now)
+        stream = self._stderr if self._stderr is not None else sys.stderr
+        with contextlib.suppress(Exception):
+            print(
+                f"mcp-interaction-log worker_start_failed start_failures={self._start_failures} "
+                f"suspended_seconds={suspended:.0f}",
+                file=stream,
+                flush=True,
+            )
+
+    def _start(self) -> Connection:
+        """Start a worker and wait for it to announce itself; raise on failure."""
+        if self._clock() < self._suspended_until:
+            raise RowBuildFailedError("worker starts are suspended")
+        self.start_attempts += 1
+        parent, child = socket.socketpair()
+        process: subprocess.Popen[bytes] | None = None
+        connection = Connection(parent.detach())
+        try:
+            environment = dict(os.environ)
+            package_root = str(Path(__file__).resolve().parents[2])
+            environment["PYTHONPATH"] = os.pathsep.join(
+                [package_root, *filter(None, [environment.get("PYTHONPATH")])]
+            )
+            process = subprocess.Popen(  # noqa: S603 - fixed interpreter and code, no shell
+                [*self._command, str(child.fileno())],
+                pass_fds=(child.fileno(),),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=environment,
+            )
+            child.close()
+            if not connection.poll(self._startup):
+                raise RowBuildFailedError("worker did not start in time")
+            status, _ = connection.recv()
+            if status != "ready":
+                raise RowBuildFailedError("worker announced something else")
+        except Exception as failure:
+            with contextlib.suppress(Exception):
+                child.close()
+            with contextlib.suppress(Exception):
+                connection.close()
+            if process is not None:
+                self._kill(process)
+            self._start_failures += 1
+            self._consecutive_start_failures += 1
+            if self._tripped or self._consecutive_start_failures >= self._breaker_threshold:
+                if self._tripped:
+                    # The trial start after a cool-down failed: back off longer.
+                    self._breaker_cooldown = min(self._breaker_cooldown * 2, self._breaker_max)
+                self._suspended_until = self._clock() + self._breaker_cooldown
+                self._tripped = True
+            self._report_start_failure()
+            if isinstance(failure, RowBuildFailedError):
+                raise
+            raise RowBuildFailedError("worker failed to start") from failure
+        self._consecutive_start_failures = 0
+        self._tripped = False
+        self._breaker_cooldown = self._breaker_initial
+        self._process, self._connection = process, connection
+        return connection
+
     def _worker(self) -> Connection:
         if self._closed:
             raise RowBuildFailedError("row builder is closed")
-        if self._connection is None or self._process is None or not self._process.is_alive():
-            self._discard()
-            parent, child = self._context.Pipe(duplex=True)
-            process = self._context.Process(  # type: ignore[attr-defined]
-                target=_row_worker, args=(child,), name="mcp-interaction-rows", daemon=True
-            )
-            process.start()
-            child.close()
-            self._process, self._connection = process, parent
-        return self._connection
+        process, connection = self._process, self._connection
+        if connection is not None and process is not None and process.poll() is None:
+            return connection
+        self._discard()
+        return self._start()
+
+    def _kill(self, process: subprocess.Popen[bytes]) -> None:
+        """Kill `process` and reap it, waiting at most `exit_seconds`. Never raises."""
+        with contextlib.suppress(Exception):
+            process.kill()
+        with contextlib.suppress(Exception):
+            process.wait(self._exit_seconds)
 
     def _discard(self) -> None:
         """Kill and forget the current worker, if any."""
         process, connection = self._process, self._connection
         self._process, self._connection = None, None
+        if process is not None:
+            self._kill(process)
         if connection is not None:
             with contextlib.suppress(Exception):
                 connection.close()
-        if process is not None:
-            with contextlib.suppress(Exception):
-                process.kill()
-                process.join(self._exit_seconds)
 
     def __call__(
         self,
@@ -1233,11 +1397,18 @@ class ProcessRowBuilder:
         }
         with self._lock:
             connection = self._worker()
+            process = self._process
+            deadline = time.monotonic() + self._timeout
+            # Bounds the whole round trip, sends included: killing the worker
+            # makes a blocked send fail with a broken pipe.
+            watchdog = threading.Timer(self._timeout, self._kill, args=(process,))
+            watchdog.daemon = True
+            watchdog.start()
             try:
                 connection.send((header, options))
                 connection.send_bytes(exchange.request_body)
                 connection.send_bytes(exchange.response_body)
-                if not connection.poll(self._timeout):
+                if not connection.poll(max(0.0, deadline - time.monotonic())):
                     raise RowBuildFailedError("row build timed out")
                 status, row = connection.recv()
             except RowBuildFailedError:
@@ -1246,30 +1417,43 @@ class ProcessRowBuilder:
             except Exception as failure:
                 self._discard()
                 raise RowBuildFailedError("row worker failed") from failure
+            finally:
+                watchdog.cancel()
         if status != "ok" or not isinstance(row, dict):
             raise RowBuildFailedError("row build raised in the worker")
         return row
 
     def close(self) -> None:
-        """Stop the worker: ask, then terminate, then kill. Idempotent."""
+        """Stop the worker without ever blocking for long. Idempotent.
+
+        Bounded by about 0.2 s plus three `exit_seconds` waits.
+        """
         self._closed = True
-        process, connection = self._process, self._connection
-        if connection is not None:
-            with contextlib.suppress(Exception):
-                connection.send(None)
-        if process is not None:
-            with contextlib.suppress(Exception):
-                process.join(self._exit_seconds)
-                if process.is_alive():
-                    process.terminate()
-                    process.join(self._exit_seconds)
-                if process.is_alive():
-                    process.kill()
-                    process.join(self._exit_seconds)
-        if connection is not None:
-            with contextlib.suppress(Exception):
-                connection.close()
-        self._process, self._connection = None, None
+        acquired = self._lock.acquire(timeout=0.2)
+        try:
+            process, connection = self._process, self._connection
+            if process is None:
+                return
+            if not acquired:
+                # A round trip holds the lock and may be blocked in a send:
+                # killing the worker ends it; that thread then discards.
+                self._kill(process)
+                return
+            if connection is not None:
+                with contextlib.suppress(Exception):
+                    connection.close()  # the worker exits at EOF
+            self._process, self._connection = None, None
+            for stop in (None, process.terminate, process.kill):
+                if stop is not None:
+                    with contextlib.suppress(Exception):
+                        stop()
+                with contextlib.suppress(Exception):
+                    process.wait(self._exit_seconds)
+                if process.poll() is not None:
+                    return
+        finally:
+            if acquired:
+                self._lock.release()
 
 
 class InteractionRecorder:

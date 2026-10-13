@@ -86,14 +86,17 @@ them:
   `mcp-protocol-version`, `origin` and `content-length` are stored.
   `authorization`, `cookie`, `set-cookie`, `proxy-authorization` and every
   other header are never read into a row.
-- **JSON keys.** Keys are normalised — lower-cased, with `-`, `_` and spaces
-  removed, so `access_token`, `Access-Token` and `accessToken` are one key. A
+- **JSON keys.** Keys are normalised — lower-cased, with `-`, `_`, `.`, spaces
+  and invisible format characters (Unicode category Cf, such as a zero-width
+  space) removed, so `access_token`, `Access-Token`, `accessToken`, `api.key`
+  and `pass<zero-width space>word` match their plain spelling. A
   key is a credential key when its normalised form is one of `authorization`,
   `proxyauthorization`, `cookie`, `setcookie`, `accesstoken`, `refreshtoken`,
   `idtoken`, `token`, `bearer`, `clientsecret`, `secret`, `password`,
   `passphrase`, `apikey`, `privatekey`, `signingkey`, `codeverifier`,
   `assertion`, `clientassertion`, `sessiontoken`, `credential`, `credentials`,
-  `secretkey`, `accesskey`, `authorizationcode`, `secrets`, `pwd` or `passwd`,
+  `secretkey`, `accesskey`, `authorizationcode`, `secrets`, `pwd`, `passwd`,
+  `passcode`, `privatekeypem`, `authheader` or `authorizationheader`,
   **or ends with** `token`, `secret`, `secrets`, `password`, `passwd`,
   `passphrase`, `apikey`, `accesskey`, `secretkey`, `privatekey`,
   `signingkey`, `credential`, `credentials` or `cookie` (so `auth_token`,
@@ -155,8 +158,15 @@ them:
     it: at the start of a line (after at most 64 spaces or tabs), a credential
     key in its one-word form (`password`, `api_key`, `client_secret`,
     `x_api_key`, `DB_PASSWORD`, …), up to 16 spaces or tabs on each side of the
-    colon, then the value to the end of the line, which becomes `[REDACTED]`.
-    `password_hint:` and a `password:` in the middle of a line are not matched;
+    colon, then the value to the end of the line, which becomes `[REDACTED]`;
+    `password_hint:` is not matched;
+  - the same at the start of a line with `=`, as TOML, INI and code write it
+    (`password = "x"`, `db_password = x`, `API_KEY = x`): same key form and
+    bounds, the value to the end of the line;
+  - a bare `key: value` pair anywhere in a line, as relaxed JSON writes it
+    (`{password: abc, user: bob}`): the key starts a word and is unquoted, the
+    value is one run up to whitespace, `,`, `}`, `]` or a quote, and does not
+    start with a quote, `[` or `{`;
   - `Bearer <token>` becomes `Bearer [REDACTED]` (any case);
   - `Basic <base64>` becomes `Basic [REDACTED]`. Only the word `basic` is
     case-insensitive; the run must be eight or more base64 characters and
@@ -205,8 +215,9 @@ regardless.
 - On the text path a key is matched only as written without escapes: a key
   that itself contains an escaped quote or backslash (`"pass\"word"`), or a
   pair escaped at a level other than one, three, seven or fifteen backslashes,
-  is not recognised as a credential pair (the Bearer, Basic, JWT, userinfo and header rules still apply
-  to its value).
+  is not recognised as a credential pair (the Bearer, Basic, JWT, userinfo and
+  header rules still apply to its value). Zero-width characters inside a key
+  are only stripped on the JSON path.
 - `progressToken`, `lease_token` and `idempotency_token` are redacted although
   they are not secrets (over-redaction is the safe direction).
 
@@ -254,25 +265,44 @@ stored.
   holds only the writer thread for the operating system's connect timeout;
   meanwhile the queue fills and further exchanges are dropped and counted.
 - One daemon writer thread takes each queued exchange and has its row built
-  by **one spawned worker process** (`ProcessRowBuilder`, started on the first
-  row): parsing, redaction, hashing and capping happen there, so their CPU
-  never holds the gateway's GIL. The writer thread only sends the bodies over a
-  pipe and waits for the row, then inserts it on a dedicated engine with a
-  2-second statement timeout, separate from the pools that serve requests.
-  Measured with a 1 ms ticker thread in the gateway process, building a row
+  by **one worker process** (`ProcessRowBuilder`, started on the first row):
+  parsing, redaction, hashing and capping happen there, so their CPU never
+  holds the gateway's GIL. The worker is started with `subprocess` as
+  `python -c "...import _row_worker_main..."` and imports only the capture
+  module — not the gateway — so it costs about 23 MiB idle and 63 MiB at peak
+  while building a 16 MiB row (measured; an earlier `multiprocessing` spawn
+  design re-imported the gateway and used 134 MiB idle, 174 MiB peak). The
+  writer thread only sends the bodies over a socket and waits for the row, then
+  inserts it on a dedicated engine with a 2-second statement timeout, separate
+  from the pools that serve requests.
+- Measured with a 1 ms ticker thread in the gateway process, building a row
   in-thread stalled every other thread for 83 ms (1 MiB body) up to 1.34 s
   (16 MiB) idle, and up to 4.1 s under heavy CPU contention; through the worker
   the longest stall was 0.5–1.6 ms idle and at most 35 ms under the same
-  contention.
-- **A slow or crashed worker** costs one row, never a request: a row that takes
-  longer than 30 seconds to build, a worker that dies, or a broken pipe kills
-  the worker, drops that row and counts a **capture error**; there is no retry,
-  and the next row starts a fresh worker. Capture errors are reported like
-  drops — one count-only `mcp-interaction-log capture_error …` line at the
-  first, then at most one per 60 seconds — and the count since the last written
-  row rides on the next one as `diagnostics.capture.capture_errors_before`.
-  The worker is a `spawn` child, so it re-imports `apps/gateway.py` as its main
-  module (module-level imports only; nothing is started).
+  contention. These figures come from a 14-core development Mac. **Production
+  runs the gateway on a single-core cpuset**, where the worker and the gateway
+  share that core: the worker's CPU then competes with requests for time, but
+  never holds the gateway's GIL. An independent review measured about 7 s to
+  build a 16 MiB text row on that profile, inside the 30-second bound.
+- **Every worker round trip is bounded.** A watchdog armed before the first
+  byte is sent kills the worker after 30 seconds, which also ends a send into a
+  worker that has stopped reading. A row that times out, a worker that crashes
+  or stops reading, or a broken socket kills the worker, drops that row and
+  counts a **capture error**; there is no retry, and the next row starts a fresh
+  worker. Capture errors are reported like drops — one count-only
+  `mcp-interaction-log capture_error …` line at the first, then at most one per
+  60 seconds — and the count since the last written row rides on the next one
+  as `diagnostics.capture.capture_errors_before`.
+- **Failed worker starts back off.** A worker must announce itself within 20
+  seconds of starting. After three consecutive failed starts no start is
+  attempted for 60 seconds, then one trial start; each failed trial doubles the
+  pause, up to 15 minutes, and a successful start resets it. While starts are
+  paused every exchange is dropped at once as a capture error. Failed starts
+  print a count-only `mcp-interaction-log worker_start_failed
+  start_failures=<n> suspended_seconds=<s>` line, at the first and then at most
+  once per 60 seconds.
+- **Fallback: if the worker cannot run at all**, every exchange is a counted
+  capture error, the log stays empty, and responses are unaffected.
 - **If the database is unavailable or slow**, the insert fails, the row is
   dropped and counted, and nothing is retried. Requests are unaffected. The
   first write failure prints one count-only line on the container's standard
@@ -292,10 +322,34 @@ stored.
   The line is printed outside the recorder's lock and never carries a body,
   header or identifier.
 - On shutdown the writer gets up to 2 seconds to flush; anything still queued
-  is counted as dropped (`abandoned=<n>` on standard error). The worker process
-  is then asked to exit, terminated if it has not within one second, and killed
-  if it still has not; a row it was building is lost and counted as a capture
+  is counted as dropped (`abandoned=<n>` on standard error). The worker is then
+  stopped without ever blocking: if a row is in flight it is killed at once;
+  otherwise its socket is closed (it exits at end of input), then it is
+  terminated and finally killed, each wait at most 0.5 seconds. Shutdown of the
+  log therefore returns within its 2-second flush plus about 1.7 seconds in
+  every case. A row being built at that moment is lost and counted as a capture
   error. With the log disabled no worker process, thread or engine exists.
+
+## Operator post-deploy verification
+
+After enabling the log on the NAS (and after each deployment of it):
+
+1. Make one client call, then run
+   `docker logs <container> 2>&1 | grep mcp-interaction-log` and confirm there
+   is no `capture_error` or `worker_start_failed` line.
+2. Run `list` and confirm the call's row is there; run `show` on it and confirm
+   `diagnostics.capture.capture_errors_before` is `0`.
+3. List the processes in the container (`cat /proc/*/cmdline` with the uid of
+   each): confirm exactly one row worker child — a `python -c` command line
+   naming `_row_worker_main` — running as uid 10001 beside the gateway, and
+   that its PID stays the same across calls. (There is no `spawn_main` or
+   `resource_tracker` process: the worker is not started through
+   `multiprocessing`.)
+4. Watch `docker stats` during a large response and confirm memory stays well
+   under the container's 768m limit and latency is acceptable. The worker adds
+   about 23 MiB idle and up to about 63 MiB while building a 16 MiB row.
+5. Run `docker stop` and confirm it completes promptly and leaves no process
+   behind.
 
 ## Enable it in production
 

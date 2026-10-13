@@ -70,7 +70,7 @@ reach a file, and this process does not have one.
 **The one per-request record is opt-in and goes to the database.**
 `MY_PA_MCP_INTERACTION_LOG_ENABLED` (off by default) makes `mcp-remote` record
 each `/mcp` exchange, redacted and capped, in `observability.mcp_interactions`
-through its own bounded engine, one background writer thread and one spawned
+through its own bounded engine, one background writer thread and one
 row-building worker process (`with_interaction_log`). It writes no file and no
 log record; a failed write is a throttled, count-only line on standard error.
 """
@@ -78,7 +78,6 @@ log record; a failed write is a throttled, count-only line on standard error.
 from __future__ import annotations
 
 import argparse
-import multiprocessing
 import sys
 from collections.abc import Callable, Mapping
 from typing import Final, Literal
@@ -354,7 +353,8 @@ def with_interaction_log(settings: Settings, app: AsgiApp) -> tuple[AsgiApp, Cal
     pools so a slow log write can never hold a connection a request needs — a
     sink that appends one row per short transaction, and one recorder whose
     writer thread is started here. Rows are built in one child process
-    (`ProcessRowBuilder`, `spawn` context, started on the first row), so the
+    (`ProcessRowBuilder`, started on the first row, importing only the capture
+    module), so the
     redaction and JSON work never holds this process's GIL while requests are
     served. The returned closer stops the recorder with a bounded flush — which
     also stops the worker process — and disposes the engine.
@@ -370,10 +370,7 @@ def with_interaction_log(settings: Settings, app: AsgiApp) -> tuple[AsgiApp, Cal
         with engine.begin() as connection:
             insert_interaction(connection, row)
 
-    builder = ProcessRowBuilder(
-        multiprocessing.get_context("spawn"),
-        timeout_seconds=INTERACTION_LOG_ROW_TIMEOUT_SECONDS,
-    )
+    builder = ProcessRowBuilder(timeout_seconds=INTERACTION_LOG_ROW_TIMEOUT_SECONDS)
     recorder = InteractionRecorder(sink, facade_invoke_tools=FACADE_INVOKE_TOOLS, builder=builder)
     recorder.start()
 

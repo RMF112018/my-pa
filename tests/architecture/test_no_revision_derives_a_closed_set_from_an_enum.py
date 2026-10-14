@@ -824,9 +824,10 @@ def test_the_chain_is_readable_and_non_empty() -> None:
     # allowlist and the freeze ledger are untouched.
     # R8 adds immutable promotion receipts as revision92 on the existing head.
     # `cc373834a485` adds the Continuity Project 16-field admission as revision
-    # 114 and `a591b81f10a2` the Intelligence report type registry as 115.
-    assert len(revisions) == 115
-    assert len({revision for revision, _ in revisions}) == 115
+    # 114, `a591b81f10a2` the Intelligence report type registry as 115, and
+    # `c8f7ae406d47` the MCP interaction log as 116.
+    assert len(revisions) == 116
+    assert len({revision for revision, _ in revisions}) == 116
     assert {
         "9c6b4a18ed72",
         "1a4c9e77b2d5",

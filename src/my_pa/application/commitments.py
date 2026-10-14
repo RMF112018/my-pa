@@ -297,10 +297,17 @@ class CommitmentManagementService:
         client_context: str | None = None,
         active_uow: _ActiveCommitmentUnitOfWork | None = None,
         validate_first_write: Callable[[], None] | None = None,
+        validate_against_current: Callable[[Commitment], None] | None = None,
         source_capability: str | None = None,
         correlation_id: str | None = None,
     ) -> CommitmentMutationReceipt:
-        """Atomically update only the mutable Work-facing commitment fields."""
+        """Atomically update only the mutable Work-facing commitment fields.
+
+        `validate_against_current` runs on a first-time write once the stored
+        row has been read and locked, so a caller can validate a field only
+        when the request actually changes it (a re-pointed counterparty) and
+        never because it merely restates the stored value.
+        """
         allowed = {"summary", "due_at", "counterparty_entity_id"}
         if unknown := set(values) - allowed:
             raise ValueError(f"unknown commitment patch fields: {sorted(unknown)!r}")
@@ -330,6 +337,7 @@ class CommitmentManagementService:
             ),
             active_uow=active_uow,
             validate_first_write=validate_first_write,
+            validate_against_current=validate_against_current,
             source_capability=source_capability,
             correlation_id=correlation_id,
         )
@@ -397,6 +405,7 @@ class CommitmentManagementService:
         request_digest: str | None = None,
         active_uow: _ActiveCommitmentUnitOfWork | None = None,
         validate_first_write: Callable[[], None] | None = None,
+        validate_against_current: Callable[[Commitment], None] | None = None,
         source_capability: str | None = None,
         correlation_id: str | None = None,
     ) -> CommitmentMutationReceipt:
@@ -443,6 +452,8 @@ class CommitmentManagementService:
                     if commitment_id is not None
                     else None
                 )
+                if validate_against_current is not None and current is not None:
+                    validate_against_current(current)
                 version_mismatch = (
                     current is not None
                     and expected_version is not None

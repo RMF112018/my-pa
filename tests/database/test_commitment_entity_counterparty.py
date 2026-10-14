@@ -206,16 +206,20 @@ def test_a_counterparty_that_stops_being_current_is_unprojected_and_cannot_be_na
     read = runtime.ok(ReadCommitment(commitment_id=created["commitment_id"]), PRINCIPAL)
     assert read["commitment"]["counterparty_entity_id"] == first
     assert read["commitment"]["counterparty"] is None
+    # Naming the archived Entity again is a re-point for any commitment that
+    # does not already name it, and is refused exactly as a create is.
+    other = runtime.ok(_create(second, capture, "lapse-other"), PRINCIPAL)["commitment"]
     error = _refused(
         runtime,
         UpdateCommitment(
-            commitment_id=created["commitment_id"],
+            commitment_id=other["commitment_id"],
             expected_version=1,
             idempotency_key="cmt-cpty-update-0001",
             counterparty_entity_id=first,
         ),
     )
     assert error["code"] == "not_found", error
+    assert "counterparty_entity_id" in str(error), error
     updated = runtime.ok(
         UpdateCommitment(
             commitment_id=created["commitment_id"],
@@ -227,3 +231,58 @@ def test_a_counterparty_that_stops_being_current_is_unprojected_and_cannot_be_na
     )["commitment"]
     assert updated["counterparty_entity_id"] == second
     assert updated["counterparty"]["entity_id"] == second
+
+
+def _archived_counterparty_commitment(runtime: Runtime, key: str) -> tuple[str, str]:
+    """A commitment whose counterparty Entity has since been archived."""
+    counterparty = _entity(runtime, EntityType.ORGANIZATION, f"archived-{key}")
+    created = runtime.ok(_create(counterparty, _capture(runtime, key), key), PRINCIPAL)[
+        "commitment"
+    ]
+    runtime.ok(
+        ArchiveEntity(
+            entity_id=counterparty,
+            expected_version=1,
+            reason="Synthetic archive",
+            idempotency_key=f"cmt-cpty-archive-{key}",
+        ),
+        PRINCIPAL,
+    )
+    return str(created["commitment_id"]), counterparty
+
+
+def test_a_summary_edit_survives_an_archived_counterparty(runtime: Runtime) -> None:
+    """The obligation outlives its counterparty's currency: the field is not touched."""
+    commitment_id, counterparty = _archived_counterparty_commitment(runtime, "edit-omit")
+    updated = runtime.ok(
+        UpdateCommitment(
+            commitment_id=commitment_id,
+            expected_version=1,
+            idempotency_key="cmt-cpty-edit-omit-0001",
+            summary="Send the revised synthetic report",
+        ),
+        PRINCIPAL,
+    )["commitment"]
+    assert updated["title"] == "Send the revised synthetic report"
+    assert updated["counterparty_entity_id"] == counterparty
+    assert updated["version"] == 2
+
+
+def test_resending_the_unchanged_archived_counterparty_with_an_edit_succeeds(
+    runtime: Runtime,
+) -> None:
+    """The web edit form always resends the stored counterparty; that is no re-point."""
+    commitment_id, counterparty = _archived_counterparty_commitment(runtime, "edit-resend")
+    updated = runtime.ok(
+        UpdateCommitment(
+            commitment_id=commitment_id,
+            expected_version=1,
+            idempotency_key="cmt-cpty-edit-resend-0001",
+            summary="Send the revised synthetic report",
+            counterparty_entity_id=counterparty,
+        ),
+        PRINCIPAL,
+    )["commitment"]
+    assert updated["title"] == "Send the revised synthetic report"
+    assert updated["counterparty_entity_id"] == counterparty
+    assert updated["version"] == 2

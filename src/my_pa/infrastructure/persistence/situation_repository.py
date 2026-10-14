@@ -112,6 +112,9 @@ from my_pa.domain.situation.situation import (
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.domain.task.history import TaskMutationActor, TaskMutationOutcome
 from my_pa.domain.task.lifecycle import TaskOriginKind
+from my_pa.infrastructure.persistence.commitment_management import (
+    SqlCommitmentManagementRepository,
+)
 from my_pa.infrastructure.persistence.tables import (
     capture_review_decisions,
     commitments,
@@ -1236,6 +1239,15 @@ class SqlContinuityRepository(ContinuityRepository):
         project_id: str | None = None,
         situation_id: str | None = None,
     ) -> Commitment:
+        # The same counterparty gate `commitments.create` applies: under the
+        # Entity-mutation scope lock (so it serializes with an identity merge),
+        # the counterparty is a current `person` or `organization` Entity in
+        # this Principal. Absent, foreign, wrong-type and no-longer-current are
+        # one `UnknownScopeError`, as for every other scope this port names.
+        counterparties = SqlCommitmentManagementRepository(self._connection)
+        counterparties.serialize_counterparty(principal_id, counterparty_entity_id)
+        if counterparties.counterparty(principal_id, counterparty_entity_id) is None:
+            raise UnknownScopeError
         commitment_id = issue_identifier(IdKind.COMMITMENT)
         now = utc_now()
         self._connection.execute(

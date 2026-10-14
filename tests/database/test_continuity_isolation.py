@@ -475,6 +475,61 @@ def test_the_server_refuses_accepted_continuity_with_no_review_decision(
 # --- Control 3: nothing promotes itself -------------------------------------
 
 
+def _non_counterparty_entity(
+    connection: Connection, entity_id: str, *, entity_type: str, status: str
+) -> None:
+    """An Entity in Principal A that a Commitment may not name."""
+    connection.execute(
+        text(
+            f"INSERT INTO {SCHEMA}.entities (entity_id, principal_id, entity_type, "  # noqa: S608
+            "canonical_name, display_name, status, archived_from_status, created_at, "
+            "updated_at, version) VALUES (:entity_id, :principal_id, :entity_type, "
+            "'not a counterparty', 'Not A Counterparty', :status, :archived_from, "
+            "now(), now(), 1)"
+        ),
+        {
+            "entity_id": entity_id,
+            "principal_id": PRINCIPAL_A,
+            "entity_type": entity_type,
+            "status": status,
+            "archived_from": "active" if status == "archived" else None,
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("entity_id", "entity_type", "status"),
+    [
+        ("ent_archivedcpty0001aaaa", "organization", "archived"),
+        ("ent_teamnotcpty0001aaaa", "team_or_group", "active"),
+        ("ent_inactivecpty0001aaa", "person", "inactive"),
+    ],
+    ids=["archived", "wrong_type", "inactive"],
+)
+def test_proposing_a_commitment_refuses_a_non_counterparty_entity(
+    migrated_engine: Engine, entity_id: str, entity_type: str, status: str
+) -> None:
+    """The proposal path holds the same counterparty gate `commitments.create` does."""
+    with migrated_engine.begin() as connection:
+        _non_counterparty_entity(connection, entity_id, entity_type=entity_type, status=status)
+        foreign = _counterparty(connection, PRINCIPAL_B)
+    for named in (entity_id, foreign, "ent_absentcpty0001aaaaaa"):
+        with migrated_engine.begin() as connection, pytest.raises(UnknownScopeError):
+            SqlContinuityRepository(connection).propose_commitment(
+                principal_id=PRINCIPAL_A,
+                counterparty_entity_id=named,
+                direction=CommitmentDirection.OWED_BY_PRINCIPAL,
+                summary="Send Sample Counterparty the revised figure",
+                origin_evidence_ref=ORIGIN,
+                origin_evidence_kind=ClosureEvidenceKind.CAPTURE,
+            )
+    with migrated_engine.connect() as connection:
+        written = connection.execute(
+            text(f"SELECT count(*) FROM {SCHEMA}.commitments")  # noqa: S608
+        ).scalar_one()
+    assert written == 0
+
+
 def test_a_pulse_read_writes_nothing_at_all(migrated_engine: Engine) -> None:
     """Measured, not asserted: every continuity table counted on both sides.
 

@@ -6785,7 +6785,12 @@ class ContinuityRepository(ABC):
         project_id: str | None = None,
         situation_id: str | None = None,
     ) -> Commitment:
-        """Record one proposed social obligation, and its `opened` lifecycle row."""
+        """Record one proposed social obligation, and its `opened` lifecycle row.
+
+        `counterparty_entity_id` must name a current (`active`) `person` or
+        `organization` Entity in `principal_id`'s partition; anything else is
+        `UnknownScopeError` and writes nothing.
+        """
 
     @abstractmethod
     def propose_decision(

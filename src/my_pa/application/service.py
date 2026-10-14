@@ -4425,6 +4425,26 @@ class ApplicationService:
         if counterparty is None:
             raise NotFoundError(SafeDetail.COUNTERPARTY_ENTITY_ID)
 
+    @classmethod
+    def _require_repointed_counterparty(
+        cls,
+        unit_of_work: UnitOfWork,
+        principal_id: str,
+        current: Commitment,
+        requested_entity_id: str | None,
+    ) -> None:
+        """Validate the counterparty only when an update actually re-points it.
+
+        Restating the stored counterparty is not a re-point: an Entity that
+        stopped being current after the Commitment named it must not lock the
+        obligation against every later edit (the web edit form always resends
+        the stored value). A different Entity is validated, under the
+        Entity-mutation scope lock, exactly as a create's is.
+        """
+        if requested_entity_id is None or requested_entity_id == current.counterparty_entity_id:
+            return
+        cls._require_current_counterparty(unit_of_work, principal_id, requested_entity_id)
+
     def _require_commitment_create_eligibility(
         self,
         unit_of_work: UnitOfWork,
@@ -10833,11 +10853,11 @@ class ApplicationService:
                     active_uow=unit_of_work,
                     source_capability=command.capability.value,
                     correlation_id=authorization.correlation_id,
-                    validate_first_write=(
+                    validate_against_current=(
                         None
                         if command.counterparty_entity_id is None
-                        else lambda: self._require_current_counterparty(
-                            unit_of_work, principal_id, command.counterparty_entity_id or ""
+                        else lambda current: self._require_repointed_counterparty(
+                            unit_of_work, principal_id, current, command.counterparty_entity_id
                         )
                     ),
                 )

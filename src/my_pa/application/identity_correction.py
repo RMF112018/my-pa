@@ -3984,8 +3984,8 @@ class IdentityCorrectionService:
                 family=IdentityEffectFamily.ENTITY,
                 record_id=entity_id,
             )
+            # Every key names at least one Commitment (a GROUP BY count).
             for entity_id in sorted(commitment_counts)
-            if commitment_counts[entity_id] > 0
         ]
         conflicts.extend(commitment_conflicts)
         groups.append(

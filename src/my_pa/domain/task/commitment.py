@@ -53,7 +53,7 @@ class Commitment:
 
     commitment_id: str
     principal_id: str
-    counterparty_person_id: str
+    counterparty_entity_id: str
     direction: CommitmentDirection
     summary: str
     state: CommitmentState
@@ -73,7 +73,7 @@ class Commitment:
     def __post_init__(self) -> None:
         validate_identifier(self.commitment_id, IdKind.COMMITMENT)
         validate_identifier(self.principal_id, IdKind.PRINCIPAL)
-        validate_identifier(self.counterparty_person_id, IdKind.PERSON)
+        validate_identifier(self.counterparty_entity_id, IdKind.ENTITY)
         if not isinstance(self.direction, CommitmentDirection):
             raise ValueError("a commitment names which way the obligation runs")
         if not self.summary.strip():

@@ -5,13 +5,13 @@ import { decodeCommitmentsWaitingOn } from "./commitments.waiting_on";
 const ENTRY = {
   commitment_id: "cmt_aaaa0001aaaa0001aaaa0001",
   title: "Send the drawing",
-  counterparty_person_id: "per_aaaa0001aaaa0001aaaa0001",
+  counterparty_entity_id: "ent_aaaa0001aaaa0001aaaa0001",
   due_date: null,
   state: "open",
   follow_up_task_id: "tsk_aaaa0001aaaa0001aaaa0001",
   follow_up_task_title: "Check back",
   follow_up_task_state: "open",
-  counterparty: { person_id: "per_aaaa0001aaaa0001aaaa0001", display_name: "Synthetic B" },
+  counterparty: { entity_id: "ent_aaaa0001aaaa0001aaaa0001", display_name: "Synthetic B" },
 };
 
 describe("decodeCommitmentsWaitingOn", () => {

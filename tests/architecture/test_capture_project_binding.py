@@ -23,7 +23,10 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 #: `intelligence_artifact_current_head` index; `captures` is untouched.
 #: Moved by the Continuity Project 16-field addition, which appends columns to
 #: `projects` only; `captures` is untouched.
-TABLES_SHA256: Final = "d6a8e8d27c69dfc56f9855418da1dcd4a9f3282805451990f85b0115bf43d4bb"
+#: Moved by the Commitment counterparty Entity cutover (`commitments` swaps
+#: `counterparty_person_id` for `counterparty_entity_id` with its composite
+#: foreign key and index); `captures` is untouched.
+TABLES_SHA256: Final = "103244de1aa7f63d45a41a395f45009712738f13cf7ca122f16b1d422d3aae31"
 WP03_MIGRATION_SHA256: Final = "098edd98ccc1846b01c58f42e296e4751e7841b562a2827616cc4337e174c354"
 WP03_MIGRATION: Final = (
     ROOT / "migrations/versions/20260914_e6a4c2f91b73_project_controls_run01_integrity.py"

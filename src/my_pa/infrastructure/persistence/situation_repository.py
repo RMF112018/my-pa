@@ -1227,7 +1227,7 @@ class SqlContinuityRepository(ContinuityRepository):
         self,
         *,
         principal_id: str,
-        counterparty_person_id: str,
+        counterparty_entity_id: str,
         direction: CommitmentDirection,
         summary: str,
         origin_evidence_ref: str,
@@ -1242,7 +1242,7 @@ class SqlContinuityRepository(ContinuityRepository):
             insert(commitments).values(
                 commitment_id=commitment_id,
                 principal_id=principal_id,
-                counterparty_person_id=counterparty_person_id,
+                counterparty_entity_id=counterparty_entity_id,
                 direction=direction.value,
                 summary=summary,
                 state=CommitmentState.OPEN.value,
@@ -1285,7 +1285,7 @@ class SqlContinuityRepository(ContinuityRepository):
         return Commitment(
             commitment_id=commitment_id,
             principal_id=principal_id,
-            counterparty_person_id=counterparty_person_id,
+            counterparty_entity_id=counterparty_entity_id,
             direction=direction,
             summary=summary,
             state=CommitmentState.OPEN,
@@ -1748,7 +1748,7 @@ class SqlContinuityRepository(ContinuityRepository):
         return Commitment(
             commitment_id=mapping["commitment_id"],
             principal_id=mapping["principal_id"],
-            counterparty_person_id=mapping["counterparty_person_id"],
+            counterparty_entity_id=mapping["counterparty_entity_id"],
             direction=CommitmentDirection(mapping["direction"]),
             summary=mapping["summary"],
             state=CommitmentState(mapping["state"]),

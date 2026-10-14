@@ -179,11 +179,11 @@ class SafeDetail(StrEnum):
     MUTATIONS = "mutations"
     #: The Commitment plane's own fields (WP-TM-05), each naming a field and
     #: never its value, exactly as every member above does.
-    #: `COUNTERPARTY_PERSON_ID` says the counterparty identifier was rejected
+    #: `COUNTERPARTY_ENTITY_ID` says the counterparty identifier was rejected
     #: — malformed, or, where a caller supplied more than one plausible
     #: candidate for it, ambiguous. `COMMITMENT_ID` names the request field,
     #: exactly as `TASK_ID` does for the task plane.
-    COUNTERPARTY_PERSON_ID = "counterparty_person_id"
+    COUNTERPARTY_ENTITY_ID = "counterparty_entity_id"
     COMMITMENT_ID = "commitment_id"
     #: The GoodNotes semantic plane's own fields (GN-04). Each names a field and
     #: never its value. Transcription is data and is never echoed here.

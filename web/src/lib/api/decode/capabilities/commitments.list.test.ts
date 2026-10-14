@@ -6,14 +6,14 @@ export const COMMITMENT_LIST_ENTRY = {
   commitment_id: "cmt_aaaa0001aaaa0001aaaa0001",
   direction: "owed_by_principal",
   state: "open",
-  counterparty_person_id: "per_aaaa0001aaaa0001aaaa0001",
+  counterparty_entity_id: "ent_aaaa0001aaaa0001aaaa0001",
   title: "Send the drawing",
   description: null,
   due_date: null,
   created_at: "2026-01-01T00:00:00+00:00",
   updated_at: "2026-01-01T00:00:00+00:00",
   version: 1,
-  counterparty: { person_id: "per_aaaa0001aaaa0001aaaa0001", display_name: "Synthetic B" },
+  counterparty: { entity_id: "ent_aaaa0001aaaa0001aaaa0001", display_name: "Synthetic B" },
 };
 
 const VALID = {

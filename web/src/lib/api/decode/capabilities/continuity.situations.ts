@@ -66,7 +66,7 @@ export interface ContinuityTrace {
 
 export interface ContinuityWorkspaceCommitment {
   readonly commitment_id: string;
-  readonly counterparty_person_id: string | null;
+  readonly counterparty_entity_id: string | null;
   readonly summary: string;
   readonly direction: string;
   readonly state: string;
@@ -240,7 +240,7 @@ function decodeWorkspaceCommitment(
 ): DecodeResult<ContinuityWorkspaceCommitment> {
   const known = pick(input, [
     "commitment_id",
-    "counterparty_person_id",
+    "counterparty_entity_id",
     "summary",
     "direction",
     "state",
@@ -250,8 +250,8 @@ function decodeWorkspaceCommitment(
   if (!known.ok) return known;
   const commitmentId = requiredString(known.value.commitment_id);
   if (!commitmentId.ok) return commitmentId;
-  const counterpartyPersonId = requiredNullableString(known.value.counterparty_person_id);
-  if (!counterpartyPersonId.ok) return counterpartyPersonId;
+  const counterpartyEntityId = requiredNullableString(known.value.counterparty_entity_id);
+  if (!counterpartyEntityId.ok) return counterpartyEntityId;
   const summary = requiredString(known.value.summary);
   if (!summary.ok) return summary;
   const direction = requiredString(known.value.direction);
@@ -264,7 +264,7 @@ function decodeWorkspaceCommitment(
   if (!origin.ok) return origin;
   return ok({
     commitment_id: commitmentId.value,
-    counterparty_person_id: counterpartyPersonId.value,
+    counterparty_entity_id: counterpartyEntityId.value,
     summary: summary.value,
     direction: direction.value,
     state: state.value,

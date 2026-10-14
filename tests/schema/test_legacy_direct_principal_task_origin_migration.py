@@ -54,7 +54,7 @@ PREVIOUS: Final = "e6a4c2f91b73"
 #: Meeting records) is additive on `REVISION`, and `1d9b248e7f83` (WP-RE-01, Record
 #: Events) is additive on that, and `0641c354ca85` (CRL-WP-03, Capture lifecycle)
 #: on that, so `REVISION` is no longer the head.
-HEAD: Final = "a591b81f10a2"
+HEAD: Final = "5c1e7a9b3d42"
 
 PRINCIPAL: Final = "prn_aaaaaaaa11111111"
 TASK_LEGACY: Final = "tsk_aaaaaaaa11111111"
@@ -175,7 +175,8 @@ def test_the_revision_is_in_the_chain() -> None:
     script = ScriptDirectory.from_config(_config())
     assert len(list(script.get_heads())) == 1
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "cc373834a485"
+    assert script.get_revision(HEAD).down_revision == "a591b81f10a2"
+    assert script.get_revision("a591b81f10a2").down_revision == "cc373834a485"
     assert script.get_revision("cc373834a485").down_revision == "93f3aa113f58"
     assert script.get_revision("93f3aa113f58").down_revision == "6734f039f7a6"
     assert script.get_revision("6734f039f7a6").down_revision == "0641c354ca85"
@@ -311,6 +312,10 @@ def test_derive_pulse_succeeds_with_the_corrected_task(
         with engine.begin() as connection:
             _seed_the_three_tasks(connection)
         command.upgrade(_config(), REVISION)
+        # The live `SqlPulseRepository` reads the head-shaped `commitments`
+        # declaration (`5c1e7a9b3d42` renamed its counterparty column), so the
+        # read runs at head; the corrected tasks carry through unchanged.
+        command.upgrade(_config(), "head")
         with engine.connect() as connection:
             pulse = SqlPulseRepository(connection).derive_pulse(PRINCIPAL, WHEN)
         assert any(item.item_ref == TASK_LEGACY for item in pulse)
@@ -376,6 +381,9 @@ def test_context_prepare_continuity_path_does_not_raise(
         with engine.begin() as connection:
             _seed_the_three_tasks(connection)
         command.upgrade(_config(), REVISION)
+        # Read at head for the reason `test_derive_pulse_succeeds_with_the_corrected_task`
+        # gives: the live pulse derivation reads the head-shaped `commitments`.
+        command.upgrade(_config(), "head")
         authorization = Authorization(
             principal=Principal(
                 principal_id=PRINCIPAL, kind=PrincipalKind.OPERATOR, authenticated=True

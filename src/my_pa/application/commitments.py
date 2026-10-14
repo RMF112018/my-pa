@@ -110,7 +110,7 @@ def _commitment_created_values(commitment: Commitment) -> dict[str, object]:
     """WP-RE-02: the fields a create materializes (named only when non-null)."""
     return {
         "accepted_by_review_decision_id": commitment.accepted_by_review_decision_id,
-        "counterparty_person_id": commitment.counterparty_person_id,
+        "counterparty_entity_id": commitment.counterparty_entity_id,
         "direction": commitment.direction,
         "due_at": commitment.due_at,
         "evidence_state": commitment.evidence_state,
@@ -126,7 +126,7 @@ def _commitment_created_values(commitment: Commitment) -> dict[str, object]:
 def _commitment_patchable_values(commitment: Commitment) -> dict[str, object]:
     """The only patchable fields, compared field by field for an update."""
     return {
-        "counterparty_person_id": commitment.counterparty_person_id,
+        "counterparty_entity_id": commitment.counterparty_entity_id,
         "due_at": commitment.due_at,
         "summary": commitment.summary,
     }
@@ -205,7 +205,7 @@ class CommitmentManagementService:
         self,
         *,
         principal_id: str,
-        counterparty_person_id: str,
+        counterparty_entity_id: str,
         direction: CommitmentDirection,
         summary: str,
         origin_evidence_ref: str,
@@ -244,7 +244,7 @@ class CommitmentManagementService:
             return Commitment(
                 commitment_id=issue_identifier(IdKind.COMMITMENT),
                 principal_id=principal_id,
-                counterparty_person_id=counterparty_person_id,
+                counterparty_entity_id=counterparty_entity_id,
                 direction=direction,
                 summary=summary,
                 state=CommitmentState.OPEN,
@@ -269,7 +269,7 @@ class CommitmentManagementService:
             client_context=client_context,
             change=change,
             request_digest=_request_digest(
-                counterparty_person_id=counterparty_person_id,
+                counterparty_entity_id=counterparty_entity_id,
                 direction=direction,
                 summary=summary,
                 origin_evidence_ref=origin_evidence_ref,
@@ -301,7 +301,7 @@ class CommitmentManagementService:
         correlation_id: str | None = None,
     ) -> CommitmentMutationReceipt:
         """Atomically update only the mutable Work-facing commitment fields."""
-        allowed = {"summary", "due_at", "counterparty_person_id"}
+        allowed = {"summary", "due_at", "counterparty_entity_id"}
         if unknown := set(values) - allowed:
             raise ValueError(f"unknown commitment patch fields: {sorted(unknown)!r}")
         if clear_due_at and "due_at" in values:

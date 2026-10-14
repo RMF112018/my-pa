@@ -25,6 +25,7 @@ from alembic.config import Config
 from sqlalchemy import Connection, Engine, text
 
 from my_pa.application.commands import MergeEntities, PreviewEntityMerge
+from my_pa.application.commitments import CommitmentManagementService
 from my_pa.application.entity_authoring import EntityAuthoringService
 from my_pa.application.entity_governance import (
     EntityGovernanceService,
@@ -136,9 +137,14 @@ from my_pa.domain.relationship.proposal_payload import (
     EntityProposalPayload,
     dedupe_digest,
 )
+from my_pa.domain.situation.continuity import CommitmentDirection
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.domain.task.history import TaskMutationActor
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
+from my_pa.infrastructure.persistence.commitment_management import (
+    SqlAlchemyCommitmentManagementUnitOfWork,
+)
 from my_pa.infrastructure.persistence.entity import SqlEntityRepository
 from my_pa.infrastructure.persistence.entity_proposal_review import (
     entity_proposal_review_cases,
@@ -668,9 +674,10 @@ def test_a_preview_answers_for_every_family_the_contract_names(staged: Engine) -
     assert [group.family for group in report.groups] == list(MergeFamily)
     assert _group(report, MergeFamily.SURVIVOR_ENTITY) == (FamilyDisposition.UNCHANGED, 1)
     assert _group(report, MergeFamily.MERGED_AWAY_ENTITY) == (FamilyDisposition.TRANSFORMED, 1)
-    # The two planes section 20 names that nothing binds to an identity yet.
+    # Tasks name no Entity at all. Commitments name their counterparty by
+    # Entity, and none here names the merged-away one.
     assert _group(report, MergeFamily.TASK) == (FamilyDisposition.NOT_BOUND, 0)
-    assert _group(report, MergeFamily.COMMITMENT) == (FamilyDisposition.NOT_BOUND, 0)
+    assert _group(report, MergeFamily.COMMITMENT) == (FamilyDisposition.UNCHANGED, 0)
     assert _group(report, MergeFamily.DERIVED_CONTEXT) == (FamilyDisposition.NOT_BOUND, 0)
     assert _group(report, MergeFamily.RE_ENRICHMENT) == (FamilyDisposition.NOT_BOUND, 0)
 
@@ -1857,6 +1864,71 @@ def test_a_current_address_the_survivor_once_held_blocks_the_merge(staged: Engin
         "conflicted_identifier",
     ]
     assert _row_count(staged, "entities", "status = 'merged_redirect'") == 0
+
+
+def _commitment_naming(engine: Engine, counterparty_entity_id: str, key: str) -> str:
+    """One Commitment in Principal A whose counterparty is `counterparty_entity_id`."""
+    service = CommitmentManagementService(
+        unit_of_work=lambda: SqlAlchemyCommitmentManagementUnitOfWork(engine),
+        clock=lambda: WHEN,
+    )
+    return service.create_commitment(
+        principal_id=PRINCIPAL_A,
+        counterparty_entity_id=counterparty_entity_id,
+        direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+        summary=f"Synthetic obligation {key}",
+        origin_evidence_ref="cap_mergecmt0001mergecmt",
+        actor=TaskMutationActor.PRINCIPAL,
+        idempotency_key=f"merge-commitment-{key}",
+    ).commitment.commitment_id
+
+
+def _counterparties(engine: Engine) -> dict[str, str]:
+    with engine.connect() as connection:
+        rows = connection.execute(
+            text(
+                f"SELECT commitment_id, counterparty_entity_id FROM {SCHEMA}.commitments "  # noqa: S608
+                "WHERE principal_id = :principal_id"
+            ),
+            {"principal_id": PRINCIPAL_A},
+        ).all()
+    return {str(row.commitment_id): str(row.counterparty_entity_id) for row in rows}
+
+
+def test_a_commitment_naming_a_merged_away_counterparty_blocks_the_merge(staged: Engine) -> None:
+    """The Commitment family is bound and cannot yet be re-pointed reversibly: refused."""
+    _commitment_naming(staged, MERGED_ONE, "merged-1")
+    _commitment_naming(staged, MERGED_ONE, "merged-2")
+    _commitment_naming(staged, SURVIVOR, "survivor")
+    before = _counterparties(staged)
+    with staged.begin() as connection:
+        report = _previewed(connection)
+    assert _group(report, MergeFamily.COMMITMENT) == (FamilyDisposition.BLOCKED, 2)
+    assert [
+        (conflict.kind, conflict.family, conflict.record_id) for conflict in report.blockers
+    ] == [(IdentityConflictKind.UNSUPPORTED_FAMILY, IdentityEffectFamily.ENTITY, MERGED_ONE)]
+    with pytest.raises(ConflictError) as refused, staged.begin() as connection:
+        _applied(connection, report)
+    assert [detail.value for detail in refused.value.safe_details] == [
+        "identity_correction_conflict"
+    ]
+    assert _row_count(staged, "entities", "status = 'merged_redirect'") == 0
+    assert _row_count(staged, "entity_identity_operations") == 0
+    assert _counterparties(staged) == before
+
+
+def test_a_merge_whose_merged_away_entity_no_commitment_names_reports_commitments_unchanged(
+    staged: Engine,
+) -> None:
+    kept = _commitment_naming(staged, SURVIVOR, "survivor-only")
+    with staged.begin() as connection:
+        report = _previewed(connection)
+    assert _group(report, MergeFamily.COMMITMENT) == (FamilyDisposition.UNCHANGED, 0)
+    assert report.blockers == ()
+    with staged.begin() as connection:
+        _applied(connection, report)
+    assert _row_count(staged, "entities", "status = 'merged_redirect'") == 1
+    assert _counterparties(staged) == {kept: SURVIVOR}
 
 
 def test_an_assignment_deduplicates_and_a_scope_reparents(staged: Engine) -> None:

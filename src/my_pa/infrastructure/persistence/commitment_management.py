@@ -16,10 +16,11 @@ from __future__ import annotations
 from contextlib import AbstractContextManager
 from datetime import datetime
 from types import TracebackType
-from typing import Any
+from typing import Any, Final
 
 from sqlalchemy import Engine, and_, asc, desc, func, insert, or_, select, update
 from sqlalchemy.engine import Connection, Row
+from sqlalchemy.sql.elements import ColumnElement
 
 from my_pa.contracts.ports import (
     CommitmentManagementRepository,
@@ -28,6 +29,7 @@ from my_pa.contracts.ports import (
     RecordEventStager,
     WorkCursorError,
 )
+from my_pa.domain.relationship.entity import EntityStatus, EntityType
 from my_pa.domain.situation.continuity import (
     CommitmentDirection,
     CommitmentState,
@@ -38,6 +40,7 @@ from my_pa.domain.task.commitment import Commitment
 from my_pa.domain.task.commitment_history import CommitmentHistoryEntry, CommitmentMutationAction
 from my_pa.domain.task.history import TaskMutationActor
 from my_pa.domain.task.history import TaskMutationOutcome as _TaskMutationOutcome
+from my_pa.infrastructure.persistence.identifier_claim_lock import lock_entity_mutation_scopes
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
     partition_criterion,
@@ -50,10 +53,32 @@ from my_pa.infrastructure.persistence.record_events import (
 from my_pa.infrastructure.persistence.tables import (
     commitment_history,
     commitments,
-    relationship_people,
+    entities,
 )
 
 __all__ = ["SqlAlchemyCommitmentManagementUnitOfWork", "SqlCommitmentManagementRepository"]
+
+#: The Entity types a Commitment may name as its counterparty: an obligation
+#: runs between the Principal and a person or an organization, never a project,
+#: place or other Entity kind.
+COUNTERPARTY_ENTITY_TYPES: Final = frozenset({EntityType.PERSON, EntityType.ORGANIZATION})
+
+
+def _current_counterparty_criteria() -> tuple[ColumnElement[bool], ...]:
+    """What makes an Entity a *current* counterparty, beyond its partition.
+
+    `status = 'active'` and nothing else, the predicate
+    `entity_governance._require_current_entity` and the Knowledge Assertion
+    plane already use: `EntityStatus` itself says `inactive` and `historical`
+    record that an entity is no longer current, `merged_redirect` has been
+    folded into another, and `archived` is a soft-removal. Each of those is
+    answered exactly as an absent Entity, the same collapse the retired
+    Person counterparty gave a superseded Person.
+    """
+    return (
+        entities.c.entity_type.in_(sorted(member.value for member in COUNTERPARTY_ENTITY_TYPES)),
+        entities.c.status == EntityStatus.ACTIVE.value,
+    )
 
 
 class SqlCommitmentManagementRepository(CommitmentManagementRepository):
@@ -91,22 +116,22 @@ class SqlCommitmentManagementRepository(CommitmentManagementRepository):
         ).one_or_none()
         return None if row is None else _to_commitment(row)
 
-    def counterparty(self, principal_id: str, person_id: str) -> CounterpartyOption | None:
+    def serialize_counterparty(self, principal_id: str, entity_id: str) -> None:
+        lock_entity_mutation_scopes(self._connection, principal_id, (entity_id,))
+
+    def counterparty(self, principal_id: str, entity_id: str) -> CounterpartyOption | None:
         row = self._connection.execute(
-            select(
-                relationship_people.c.person_id,
-                relationship_people.c.display_name,
-            ).where(
-                partition_criterion(relationship_people, capture_context(principal_id)),
-                relationship_people.c.person_id == person_id,
-                relationship_people.c.superseded_by_person_id.is_(None),
+            select(entities.c.entity_id, entities.c.display_name).where(
+                partition_criterion(entities, capture_context(principal_id)),
+                entities.c.entity_id == entity_id,
+                *_current_counterparty_criteria(),
             )
         ).one_or_none()
         return (
             None
             if row is None
             else CounterpartyOption(
-                person_id=str(row.person_id), display_name=str(row.display_name)
+                entity_id=str(row.entity_id), display_name=str(row.display_name)
             )
         )
 
@@ -114,22 +139,19 @@ class SqlCommitmentManagementRepository(CommitmentManagementRepository):
         self, principal_id: str, *, limit: int
     ) -> tuple[CounterpartyOption, ...]:
         rows = self._connection.execute(
-            select(
-                relationship_people.c.person_id,
-                relationship_people.c.display_name,
-            )
+            select(entities.c.entity_id, entities.c.display_name)
             .where(
-                partition_criterion(relationship_people, capture_context(principal_id)),
-                relationship_people.c.superseded_by_person_id.is_(None),
+                partition_criterion(entities, capture_context(principal_id)),
+                *_current_counterparty_criteria(),
             )
             .order_by(
-                asc(func.lower(relationship_people.c.display_name)),
-                asc(relationship_people.c.person_id),
+                asc(func.lower(entities.c.display_name)),
+                asc(entities.c.entity_id),
             )
             .limit(limit)
         ).all()
         return tuple(
-            CounterpartyOption(person_id=str(row.person_id), display_name=str(row.display_name))
+            CounterpartyOption(entity_id=str(row.entity_id), display_name=str(row.display_name))
             for row in rows
         )
 
@@ -226,7 +248,7 @@ class SqlCommitmentManagementRepository(CommitmentManagementRepository):
             insert(commitments).values(
                 commitment_id=commitment.commitment_id,
                 principal_id=commitment.principal_id,
-                counterparty_person_id=commitment.counterparty_person_id,
+                counterparty_entity_id=commitment.counterparty_entity_id,
                 direction=commitment.direction.value,
                 summary=commitment.summary,
                 state=commitment.state.value,
@@ -255,7 +277,7 @@ class SqlCommitmentManagementRepository(CommitmentManagementRepository):
                 )
             )
             .values(
-                counterparty_person_id=commitment.counterparty_person_id,
+                counterparty_entity_id=commitment.counterparty_entity_id,
                 direction=commitment.direction.value,
                 summary=commitment.summary,
                 state=commitment.state.value,
@@ -435,7 +457,7 @@ def _to_commitment(row: Row[Any]) -> Commitment:
     return Commitment(
         commitment_id=mapping["commitment_id"],
         principal_id=mapping["principal_id"],
-        counterparty_person_id=mapping["counterparty_person_id"],
+        counterparty_entity_id=mapping["counterparty_entity_id"],
         direction=CommitmentDirection(mapping["direction"]),
         summary=mapping["summary"],
         state=CommitmentState(mapping["state"]),

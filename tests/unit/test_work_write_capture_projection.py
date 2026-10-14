@@ -113,10 +113,10 @@ def test_write_and_replay_labels_follow_current_lifecycle(
             title="Synthetic follow up", origin_evidence_ref=origin, idempotency_key="create-task"
         )
     else:
-        person = issue_identifier(IdKind.PERSON)
-        world.current_counterparties.add((principal.principal_id, person))
+        counterparty = issue_identifier(IdKind.ENTITY)
+        world.current_counterparties.add((principal.principal_id, counterparty))
         create = CreateCommitment(
-            counterparty_person_id=person,
+            counterparty_entity_id=counterparty,
             direction=CommitmentDirection.OWED_TO_PRINCIPAL,
             summary="Synthetic obligation",
             origin_evidence_ref=origin,

@@ -10,7 +10,7 @@ const LIST_FIELDS = {
   timezone: { gateway: "timezone", type: "string" },
 } as const;
 const CREATE_FIELDS = {
-  counterpartyPersonId: { gateway: "counterparty_person_id", type: "string" },
+  counterpartyEntityId: { gateway: "counterparty_entity_id", type: "string" },
   direction: { gateway: "direction", type: "string" },
   summary: { gateway: "summary", type: "string" },
   originEvidenceRef: { gateway: "origin_evidence_ref", type: "string" },

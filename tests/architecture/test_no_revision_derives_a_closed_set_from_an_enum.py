@@ -825,8 +825,9 @@ def test_the_chain_is_readable_and_non_empty() -> None:
     # R8 adds immutable promotion receipts as revision92 on the existing head.
     # `cc373834a485` adds the Continuity Project 16-field admission as revision
     # 114 and `a591b81f10a2` the Intelligence report type registry as 115.
-    assert len(revisions) == 115
-    assert len({revision for revision, _ in revisions}) == 115
+    # `5c1e7a9b3d42` (Commitment counterparty Entity cutover) is 116.
+    assert len(revisions) == 116
+    assert len({revision for revision, _ in revisions}) == 116
     assert {
         "9c6b4a18ed72",
         "1a4c9e77b2d5",

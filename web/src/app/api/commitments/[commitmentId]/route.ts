@@ -11,7 +11,7 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ c
     idempotencyKey: { gateway: "idempotency_key", type: "string" },
     summary: { gateway: "summary", type: "string" },
     dueAt: { gateway: "due_at", type: "string" },
-    counterpartyPersonId: { gateway: "counterparty_person_id", type: "string" },
+    counterpartyEntityId: { gateway: "counterparty_entity_id", type: "string" },
     clearDueAt: { gateway: "clear_due_at", type: "boolean" },
     clientContext: { gateway: "client_context", type: "string" },
   }, { commitment_id: commitmentId });

@@ -68,7 +68,7 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "b8e4d1a6c073"
 PULL_REVISION: Final = "6a2f9d1c4b80"
 PROMOTION_REVISION: Final = "a4d8e31b2c90"
-HEAD_REVISION: Final = "a591b81f10a2"
+HEAD_REVISION: Final = "5c1e7a9b3d42"
 CURRENT_HEAD_REVISION: Final = HEAD_REVISION
 GRAPH_REVISION: Final = "c3f8a1d07e94"
 #: What was head until `REVISION` stacked on it, and therefore the revision
@@ -86,8 +86,9 @@ PREVIOUS_REVISION: Final = "16f05c46b8c3"
 #: GoodNotes pull, promotion receipt, and canvas overlay successors. The
 #: Intelligence focus-area admission `93f3aa113f58` makes it 113, the Continuity
 #: Project sixteen-field admission `cc373834a485` makes it 114, and the
-#: Intelligence report type registry `a591b81f10a2` makes it 115.
-REVISION_FILE_COUNT: Final = 115
+#: Intelligence report type registry `a591b81f10a2` makes it 115, and the
+#: Commitment counterparty Entity cutover `5c1e7a9b3d42` makes it 116.
+REVISION_FILE_COUNT: Final = 116
 
 #: The revision's frozen salt, restated. If this and the revision ever disagree
 #: the expectations below stop matching, which is the point of restating it.
@@ -444,7 +445,8 @@ def test_the_revision_is_the_single_head_and_revises_the_prior_head() -> None:
     # labels), then `de5ec1c65857` (WP-TUX-01). Every edge below is retained
     # and the new ones are asserted, so the chain is still checked link by
     # link rather than loosened.
-    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == "cc373834a485"
+    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == "a591b81f10a2"
+    assert script.get_revision("a591b81f10a2").down_revision == "cc373834a485"
     assert script.get_revision("cc373834a485").down_revision == "93f3aa113f58"
     assert script.get_revision("93f3aa113f58").down_revision == "6734f039f7a6"
     assert script.get_revision("6734f039f7a6").down_revision == "0641c354ca85"

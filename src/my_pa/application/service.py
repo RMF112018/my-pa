@@ -1632,7 +1632,7 @@ def _commitment_view(
         commitment_id=commitment.commitment_id,
         direction=commitment.direction.value,
         state=commitment.state.value,
-        counterparty_person_id=commitment.counterparty_person_id,
+        counterparty_entity_id=commitment.counterparty_entity_id,
         title=commitment.summary,
         description=None,
         due_date=commitment.due_at.isoformat() if commitment.due_at is not None else None,
@@ -1659,7 +1659,7 @@ def _commitment_list_entry(
         commitment_id=commitment.commitment_id,
         direction=commitment.direction.value,
         state=commitment.state.value,
-        counterparty_person_id=commitment.counterparty_person_id,
+        counterparty_entity_id=commitment.counterparty_entity_id,
         title=commitment.summary,
         description=None,
         due_date=commitment.due_at.isoformat() if commitment.due_at is not None else None,
@@ -1675,12 +1675,12 @@ _COUNTERPARTY_OPTION_LIMIT: Final = 100
 
 
 def _counterparty_projection(
-    unit_of_work: UnitOfWork, principal_id: str, person_id: str
+    unit_of_work: UnitOfWork, principal_id: str, entity_id: str
 ) -> dict[str, str] | None:
-    option = unit_of_work.commitments.counterparty(principal_id, person_id)
+    option = unit_of_work.commitments.counterparty(principal_id, entity_id)
     if option is None:
         return None
-    return {"person_id": option.person_id, "display_name": option.display_name}
+    return {"entity_id": option.entity_id, "display_name": option.display_name}
 
 
 def _counterparty_options(
@@ -1692,7 +1692,7 @@ def _counterparty_options(
     truncated = len(found) > _COUNTERPARTY_OPTION_LIMIT
     return (
         [
-            {"person_id": option.person_id, "display_name": option.display_name}
+            {"entity_id": option.entity_id, "display_name": option.display_name}
             for option in found[:_COUNTERPARTY_OPTION_LIMIT]
         ],
         truncated,
@@ -1713,7 +1713,7 @@ def _commitment_public_view(
         closure_evidence_capture_state=_ref_state(resolved, commitment.closure_evidence_ref),
     ).to_canonical_dict()
     result["counterparty"] = _counterparty_projection(
-        unit_of_work, principal_id, commitment.counterparty_person_id
+        unit_of_work, principal_id, commitment.counterparty_entity_id
     )
     return result
 
@@ -1732,7 +1732,7 @@ def _commitment_public_list_entry(
         closure_evidence_capture_state=_ref_state(resolved, commitment.closure_evidence_ref),
     ).to_canonical_dict()
     result["counterparty"] = _counterparty_projection(
-        unit_of_work, principal_id, commitment.counterparty_person_id
+        unit_of_work, principal_id, commitment.counterparty_entity_id
     )
     return result
 
@@ -4406,18 +4406,24 @@ class ApplicationService:
 
     @staticmethod
     def _require_current_counterparty(
-        unit_of_work: UnitOfWork, principal_id: str, person_id: str
+        unit_of_work: UnitOfWork, principal_id: str, entity_id: str
     ) -> None:
-        """Fail closed unless ``person_id`` is current in this Principal's partition.
+        """Fail closed unless ``entity_id`` is a current counterparty Entity here.
 
-        The repository intentionally returns the same ``None`` for an absent,
-        foreign, or superseded Person.  Preserving that collapse here prevents
-        a Commitment write from becoming an identity-enumeration side channel.
+        Current means an `active` `person` or `organization` Entity in this
+        Principal's partition. The repository intentionally returns the same
+        ``None`` for an absent, foreign, wrong-type, or no-longer-current
+        Entity. Preserving that collapse here prevents a Commitment write from
+        becoming an identity-enumeration side channel.
         """
         with _translated():
-            counterparty = unit_of_work.commitments.counterparty(principal_id, person_id)
+            # The Entity-mutation scope lock first, so this write and an
+            # identity merge of the same Entity serialize (see
+            # `CommitmentManagementRepository.serialize_counterparty`).
+            unit_of_work.commitments.serialize_counterparty(principal_id, entity_id)
+            counterparty = unit_of_work.commitments.counterparty(principal_id, entity_id)
         if counterparty is None:
-            raise NotFoundError(SafeDetail.COUNTERPARTY_PERSON_ID)
+            raise NotFoundError(SafeDetail.COUNTERPARTY_ENTITY_ID)
 
     def _require_commitment_create_eligibility(
         self,
@@ -4425,10 +4431,10 @@ class ApplicationService:
         principal_id: str,
         *,
         evidence_ref: str,
-        counterparty_person_id: str,
+        counterparty_entity_id: str,
     ) -> None:
         self._require_work_evidence(unit_of_work, principal_id, evidence_ref)
-        self._require_current_counterparty(unit_of_work, principal_id, counterparty_person_id)
+        self._require_current_counterparty(unit_of_work, principal_id, counterparty_entity_id)
 
     def _capabilities_get(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: GetCapabilities
@@ -6294,7 +6300,7 @@ class ApplicationService:
                     "commitments": [
                         {
                             "commitment_id": item.commitment_id,
-                            "counterparty_person_id": item.counterparty_person_id,
+                            "counterparty_entity_id": item.counterparty_entity_id,
                             "summary": item.summary,
                             "direction": item.direction.value,
                             "state": item.state.value,
@@ -10651,7 +10657,7 @@ class ApplicationService:
             entry = WaitingOnEntry(
                 commitment_id=c.commitment_id,
                 title=c.summary,
-                counterparty_person_id=c.counterparty_person_id,
+                counterparty_entity_id=c.counterparty_entity_id,
                 due_date=c.due_at.isoformat() if c.due_at is not None else None,
                 state=c.state.value,
                 follow_up_task_id=follow_up_task_id,
@@ -10662,7 +10668,7 @@ class ApplicationService:
             ).to_canonical_dict()
             with _translated():
                 entry["counterparty"] = _counterparty_projection(
-                    unit_of_work, principal_id, c.counterparty_person_id
+                    unit_of_work, principal_id, c.counterparty_entity_id
                 )
             entries.append(entry)
         return _Result(
@@ -10691,7 +10697,7 @@ class ApplicationService:
             with _translated():
                 receipt = self._commitments.create_commitment(
                     principal_id=principal_id,
-                    counterparty_person_id=command.counterparty_person_id,
+                    counterparty_entity_id=command.counterparty_entity_id,
                     direction=command.direction,
                     summary=command.summary,
                     origin_evidence_ref=command.origin_evidence_ref,
@@ -10709,7 +10715,7 @@ class ApplicationService:
                         unit_of_work,
                         principal_id,
                         evidence_ref=command.origin_evidence_ref,
-                        counterparty_person_id=command.counterparty_person_id,
+                        counterparty_entity_id=command.counterparty_entity_id,
                     ),
                 )
         except CommitmentIdempotencyConflictError:
@@ -10811,8 +10817,8 @@ class ApplicationService:
             values["summary"] = command.summary
         if command.due_at is not None:
             values["due_at"] = command.due_at
-        if command.counterparty_person_id is not None:
-            values["counterparty_person_id"] = command.counterparty_person_id
+        if command.counterparty_entity_id is not None:
+            values["counterparty_entity_id"] = command.counterparty_entity_id
         try:
             with _translated():
                 receipt = self._commitments.update_commitment(
@@ -10829,9 +10835,9 @@ class ApplicationService:
                     correlation_id=authorization.correlation_id,
                     validate_first_write=(
                         None
-                        if command.counterparty_person_id is None
+                        if command.counterparty_entity_id is None
                         else lambda: self._require_current_counterparty(
-                            unit_of_work, principal_id, command.counterparty_person_id or ""
+                            unit_of_work, principal_id, command.counterparty_entity_id or ""
                         )
                     ),
                 )

@@ -1759,7 +1759,7 @@
       "commitment_id": "cmt_aaaa0001aaaa0001aaaa0001",
       "direction": "owed_to_principal",
       "state": "open",
-      "counterparty_person_id": "per_aaaa0001aaaa0001aaaa0001",
+      "counterparty_entity_id": "ent_aaaa0001aaaa0001aaaa0001",
       "title": "Send the drawing",
       "description": null,
       "due_date": "2026-01-02T00:00:00+00:00",
@@ -1774,14 +1774,14 @@
       "origin_evidence_capture_state": null,
       "closure_evidence_capture_state": null,
       "counterparty": {
-        "person_id": "per_aaaa0001aaaa0001aaaa0001",
+        "entity_id": "ent_aaaa0001aaaa0001aaaa0001",
         "display_name": "Synthetic B"
       }
     },
     "follow_up_task": null,
     "counterparty_options": [
       {
-        "person_id": "per_aaaa0001aaaa0001aaaa0001",
+        "entity_id": "ent_aaaa0001aaaa0001aaaa0001",
         "display_name": "Synthetic B"
       }
     ],
@@ -1793,7 +1793,7 @@
         "commitment_id": "cmt_aaaa0001aaaa0001aaaa0001",
         "direction": "owed_to_principal",
         "state": "open",
-        "counterparty_person_id": "per_aaaa0001aaaa0001aaaa0001",
+        "counterparty_entity_id": "ent_aaaa0001aaaa0001aaaa0001",
         "title": "Send the drawing",
         "description": null,
         "due_date": "2026-01-02T00:00:00+00:00",
@@ -1803,14 +1803,14 @@
         "origin_evidence_capture_state": null,
         "closure_evidence_capture_state": null,
         "counterparty": {
-          "person_id": "per_aaaa0001aaaa0001aaaa0001",
+          "entity_id": "ent_aaaa0001aaaa0001aaaa0001",
           "display_name": "Synthetic B"
         }
       }
     ],
     "counterparty_options": [
       {
-        "person_id": "per_aaaa0001aaaa0001aaaa0001",
+        "entity_id": "ent_aaaa0001aaaa0001aaaa0001",
         "display_name": "Synthetic B"
       }
     ],
@@ -1822,7 +1822,7 @@
         "commitment_id": "cmt_aaaa0001aaaa0001aaaa0001",
         "direction": "owed_to_principal",
         "state": "open",
-        "counterparty_person_id": "per_aaaa0001aaaa0001aaaa0001",
+        "counterparty_entity_id": "ent_aaaa0001aaaa0001aaaa0001",
         "title": "Send the drawing",
         "description": null,
         "due_date": "2026-01-02T00:00:00+00:00",
@@ -1832,14 +1832,14 @@
         "origin_evidence_capture_state": null,
         "closure_evidence_capture_state": null,
         "counterparty": {
-          "person_id": "per_aaaa0001aaaa0001aaaa0001",
+          "entity_id": "ent_aaaa0001aaaa0001aaaa0001",
           "display_name": "Synthetic B"
         }
       }
     ],
     "counterparty_options": [
       {
-        "person_id": "per_aaaa0001aaaa0001aaaa0001",
+        "entity_id": "ent_aaaa0001aaaa0001aaaa0001",
         "display_name": "Synthetic B"
       }
     ],
@@ -1867,7 +1867,7 @@
       {
         "commitment_id": "cmt_aaaa0001aaaa0001aaaa0001",
         "title": "Send the drawing",
-        "counterparty_person_id": "per_aaaa0001aaaa0001aaaa0001",
+        "counterparty_entity_id": "ent_aaaa0001aaaa0001aaaa0001",
         "due_date": "2026-01-02T00:00:00+00:00",
         "state": "open",
         "follow_up_task_id": "tsk_aaaa0001aaaa0001aaaa0001",
@@ -1876,7 +1876,7 @@
         "origin_evidence_capture_state": null,
         "closure_evidence_capture_state": null,
         "counterparty": {
-          "person_id": "per_aaaa0001aaaa0001aaaa0001",
+          "entity_id": "ent_aaaa0001aaaa0001aaaa0001",
           "display_name": "Synthetic B"
         }
       }
@@ -1887,7 +1887,7 @@
       "commitment_id": "cmt_aaaa0001aaaa0001aaaa0001",
       "direction": "owed_to_principal",
       "state": "open",
-      "counterparty_person_id": "per_aaaa0001aaaa0001aaaa0001",
+      "counterparty_entity_id": "ent_aaaa0001aaaa0001aaaa0001",
       "title": "Send the drawing",
       "description": null,
       "due_date": "2026-01-02T00:00:00+00:00",
@@ -1902,7 +1902,7 @@
       "origin_evidence_capture_state": null,
       "closure_evidence_capture_state": null,
       "counterparty": {
-        "person_id": "per_aaaa0001aaaa0001aaaa0001",
+        "entity_id": "ent_aaaa0001aaaa0001aaaa0001",
         "display_name": "Synthetic B"
       }
     },
@@ -1913,7 +1913,7 @@
       "commitment_id": "cmt_aaaa0001aaaa0001aaaa0001",
       "direction": "owed_to_principal",
       "state": "open",
-      "counterparty_person_id": "per_aaaa0001aaaa0001aaaa0001",
+      "counterparty_entity_id": "ent_aaaa0001aaaa0001aaaa0001",
       "title": "Send the drawing",
       "description": null,
       "due_date": "2026-01-02T00:00:00+00:00",
@@ -1928,7 +1928,7 @@
       "origin_evidence_capture_state": null,
       "closure_evidence_capture_state": null,
       "counterparty": {
-        "person_id": "per_aaaa0001aaaa0001aaaa0001",
+        "entity_id": "ent_aaaa0001aaaa0001aaaa0001",
         "display_name": "Synthetic B"
       }
     },
@@ -1952,7 +1952,7 @@
       "commitment_id": "cmt_aaaa0001aaaa0001aaaa0001",
       "direction": "owed_to_principal",
       "state": "closed",
-      "counterparty_person_id": "per_aaaa0001aaaa0001aaaa0001",
+      "counterparty_entity_id": "ent_aaaa0001aaaa0001aaaa0001",
       "title": "Send the drawing",
       "description": null,
       "due_date": "2026-01-02T00:00:00+00:00",
@@ -1967,7 +1967,7 @@
       "origin_evidence_capture_state": null,
       "closure_evidence_capture_state": null,
       "counterparty": {
-        "person_id": "per_aaaa0001aaaa0001aaaa0001",
+        "entity_id": "ent_aaaa0001aaaa0001aaaa0001",
         "display_name": "Synthetic B"
       }
     },

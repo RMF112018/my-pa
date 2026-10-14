@@ -401,7 +401,7 @@ def _capabilities_get() -> dict[str, Any]:
 
 def _counterparty_option() -> dict[str, str]:
     return {
-        "person_id": "per_aaaa0001aaaa0001aaaa0001",
+        "entity_id": "ent_aaaa0001aaaa0001aaaa0001",
         "display_name": "Synthetic B",
     }
 
@@ -418,7 +418,7 @@ def _commitment_public_payload(
         commitment_id="cmt_aaaa0001aaaa0001aaaa0001",
         direction="owed_to_principal",
         state=state,
-        counterparty_person_id="per_aaaa0001aaaa0001aaaa0001",
+        counterparty_entity_id="ent_aaaa0001aaaa0001aaaa0001",
         title="Send the drawing",
         description=None,
         due_date=datetime(2026, 1, 2, tzinfo=UTC).isoformat(),
@@ -441,7 +441,7 @@ def _commitment_list_entry_payload() -> dict[str, Any]:
         commitment_id="cmt_aaaa0001aaaa0001aaaa0001",
         direction="owed_to_principal",
         state="open",
-        counterparty_person_id="per_aaaa0001aaaa0001aaaa0001",
+        counterparty_entity_id="ent_aaaa0001aaaa0001aaaa0001",
         title="Send the drawing",
         description=None,
         due_date=datetime(2026, 1, 2, tzinfo=UTC).isoformat(),
@@ -922,7 +922,7 @@ def _commitments_waiting_on() -> dict[str, Any]:
     entry = WaitingOnEntry(
         commitment_id="cmt_aaaa0001aaaa0001aaaa0001",
         title="Send the drawing",
-        counterparty_person_id="per_aaaa0001aaaa0001aaaa0001",
+        counterparty_entity_id="ent_aaaa0001aaaa0001aaaa0001",
         due_date=datetime(2026, 1, 2, tzinfo=UTC).isoformat(),
         state="open",
         follow_up_task_id="tsk_aaaa0001aaaa0001aaaa0001",

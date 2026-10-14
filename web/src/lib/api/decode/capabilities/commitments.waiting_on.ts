@@ -16,7 +16,7 @@ import {
 export interface WaitingOnEntry {
   readonly commitment_id: string;
   readonly title: string;
-  readonly counterparty_person_id: string | null;
+  readonly counterparty_entity_id: string | null;
   readonly due_date: string | null;
   readonly state: CommitmentState;
   readonly follow_up_task_id: string | null;
@@ -32,7 +32,7 @@ export interface CommitmentsWaitingOnResult {
 const ENTRY_KEYS = [
   "commitment_id",
   "title",
-  "counterparty_person_id",
+  "counterparty_entity_id",
   "due_date",
   "state",
   "follow_up_task_id",
@@ -48,8 +48,8 @@ function decodeEntry(input: unknown): DecodeResult<WaitingOnEntry> {
   if (!commitmentId.ok) return commitmentId;
   const title = requiredString(known.value.title);
   if (!title.ok) return title;
-  const counterpartyPersonId = requiredNullableString(known.value.counterparty_person_id);
-  if (!counterpartyPersonId.ok) return counterpartyPersonId;
+  const counterpartyEntityId = requiredNullableString(known.value.counterparty_entity_id);
+  if (!counterpartyEntityId.ok) return counterpartyEntityId;
   const dueDate = requiredNullableString(known.value.due_date);
   if (!dueDate.ok) return dueDate;
   const state = oneOf(known.value.state, COMMITMENT_STATES);
@@ -65,7 +65,7 @@ function decodeEntry(input: unknown): DecodeResult<WaitingOnEntry> {
   return ok({
     commitment_id: commitmentId.value,
     title: title.value,
-    counterparty_person_id: counterpartyPersonId.value,
+    counterparty_entity_id: counterpartyEntityId.value,
     due_date: dueDate.value,
     state: state.value,
     follow_up_task_id: followUpId.value,

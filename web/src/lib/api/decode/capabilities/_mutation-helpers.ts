@@ -167,7 +167,7 @@ export type CommitmentState = (typeof COMMITMENT_STATES)[number];
 export const COMMITMENT_MUTATION_ACTIONS = ["create", "update", "close"] as const;
 
 export interface CounterpartyProjection {
-  readonly person_id: string;
+  readonly entity_id: string;
   readonly display_name: string;
 }
 
@@ -176,13 +176,13 @@ export function decodeCounterparty(
 ): DecodeResult<CounterpartyProjection | null> {
   if (value === undefined) return fail("a required field was missing");
   if (value === null) return ok(null);
-  const known = pick(value, ["person_id", "display_name"]);
+  const known = pick(value, ["entity_id", "display_name"]);
   if (!known.ok) return known;
-  const personId = requiredString(known.value.person_id);
-  if (!personId.ok) return personId;
+  const entityId = requiredString(known.value.entity_id);
+  if (!entityId.ok) return entityId;
   const displayName = requiredString(known.value.display_name);
   if (!displayName.ok) return displayName;
-  return ok({ person_id: personId.value, display_name: displayName.value });
+  return ok({ entity_id: entityId.value, display_name: displayName.value });
 }
 
 export interface TaskView {
@@ -408,7 +408,7 @@ export interface CommitmentView {
   readonly commitment_id: string;
   readonly direction: CommitmentDirection;
   readonly state: CommitmentState;
-  readonly counterparty_person_id: string | null;
+  readonly counterparty_entity_id: string | null;
   readonly title: string;
   readonly description: string | null;
   readonly due_date: string | null;
@@ -427,7 +427,7 @@ const COMMITMENT_VIEW_KEYS = [
   "commitment_id",
   "direction",
   "state",
-  "counterparty_person_id",
+  "counterparty_entity_id",
   "title",
   "description",
   "due_date",
@@ -451,8 +451,8 @@ export function decodeCommitmentView(input: unknown): DecodeResult<CommitmentVie
   if (!direction.ok) return direction;
   const state = oneOf(known.value.state, COMMITMENT_STATES);
   if (!state.ok) return state;
-  const counterpartyPersonId = requiredNullableString(known.value.counterparty_person_id);
-  if (!counterpartyPersonId.ok) return counterpartyPersonId;
+  const counterpartyEntityId = requiredNullableString(known.value.counterparty_entity_id);
+  if (!counterpartyEntityId.ok) return counterpartyEntityId;
   const title = requiredString(known.value.title);
   if (!title.ok) return title;
   const description = requiredNullableString(known.value.description);
@@ -481,7 +481,7 @@ export function decodeCommitmentView(input: unknown): DecodeResult<CommitmentVie
     commitment_id: commitmentId.value,
     direction: direction.value,
     state: state.value,
-    counterparty_person_id: counterpartyPersonId.value,
+    counterparty_entity_id: counterpartyEntityId.value,
     title: title.value,
     description: description.value,
     due_date: dueDate.value,

@@ -50,8 +50,8 @@ from my_pa.domain.situation.pulse_derivation import (
 from my_pa.domain.situation.situation import PulseReasonCode
 
 PRINCIPAL_A = "prn_aaaa0001aaaa0001aaaa0001"
-COUNTERPARTY_ONE = "per_counterparty0001aaaa"
-COUNTERPARTY_TWO = "per_counterparty0002bbbb"
+COUNTERPARTY_ONE = "ent_counterparty0001aaaa"
+COUNTERPARTY_TWO = "ent_counterparty0002bbbb"
 
 NOW = datetime(2026, 8, 10, 12, tzinfo=UTC)
 
@@ -71,7 +71,7 @@ def _commitment(
     return Commitment(
         commitment_id=identifier,
         principal_id=PRINCIPAL_A,
-        counterparty_person_id=counterparty,
+        counterparty_entity_id=counterparty,
         direction=CommitmentDirection.OWED_BY_PRINCIPAL,
         summary="Send Sample Counterparty the revised figure",
         state=CommitmentState.OPEN,

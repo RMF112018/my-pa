@@ -3213,6 +3213,24 @@ class EntitiesRepository(ABC):
         """
         return frozenset()
 
+    def commitments_naming_counterparties(
+        self, principal_id: str, entity_ids: frozenset[str]
+    ) -> Mapping[str, int]:
+        """How many of this Principal's Commitments name each of `entity_ids`.
+
+        Keyed by the named Entity, holding only Entities some Commitment names
+        as its `counterparty_entity_id`, whatever the Commitment's state. A
+        count rather than the rows, for `resolution_decisions_naming`'s
+        disclosure reason. Identity merge reports the sum as the `commitment`
+        family and each key as a blocking `unsupported_family` conflict,
+        because no Commitment effect family exists to re-point one with
+        reversible lineage; `apply` re-reads it under the participant
+        mutation-scope lock every Commitment counterparty write also takes.
+        In-memory repositories hold no Commitment plane and answer empty;
+        PostgreSQL reads `knowledge.commitments`.
+        """
+        return {}
+
     def reparent_entity_reference(
         self,
         principal_id: str,
@@ -6758,7 +6776,7 @@ class ContinuityRepository(ABC):
         self,
         *,
         principal_id: str,
-        counterparty_person_id: str,
+        counterparty_entity_id: str,
         direction: CommitmentDirection,
         summary: str,
         origin_evidence_ref: str,
@@ -7860,13 +7878,13 @@ class TaskManagementUnitOfWork(ABC):
 
 @dataclass(frozen=True, slots=True)
 class CounterpartyOption:
-    """A verified canonical Person identity paired with its display label."""
+    """A current counterparty Entity (`person` or `organization`) and its display label."""
 
-    person_id: str
+    entity_id: str
     display_name: str
 
     def __post_init__(self) -> None:
-        validate_identifier(self.person_id, IdKind.PERSON)
+        validate_identifier(self.entity_id, IdKind.ENTITY)
         if not self.display_name.strip():
             raise ValueError("a counterparty display name is not blank")
 
@@ -7892,19 +7910,33 @@ class CommitmentManagementRepository(ABC):
     def get(self, principal_id: str, commitment_id: str) -> CommitmentAggregate | None:
         """One commitment in this Principal's partition, unlocked, or `None`."""
 
-    def counterparty(self, principal_id: str, person_id: str) -> CounterpartyOption | None:
-        """One current canonical Person label in this Principal's partition.
+    def serialize_counterparty(self, principal_id: str, entity_id: str) -> None:
+        """Hold the Entity-mutation scope lock on `entity_id` for this transaction.
 
-        The display name is mutable presentation metadata; callers retain and
-        submit ``person_id`` as the stable identity. ``None`` deliberately
-        covers absent, superseded, and another Principal's Person alike.
+        Taken by a Commitment write that names a counterparty, before it checks
+        that the Entity is current, so the write and an identity merge of that
+        Entity serialize: a merge that locked first is seen as a no-longer-current
+        counterparty, and one arriving later sees the Commitment and is refused.
+        In-memory repositories have no concurrent writer and do nothing.
+        """
+        return None
+
+    def counterparty(self, principal_id: str, entity_id: str) -> CounterpartyOption | None:
+        """One current counterparty Entity label in this Principal's partition.
+
+        Current means `status = 'active'` and `entity_type` is `person` or
+        `organization`. The display name is mutable presentation metadata;
+        callers retain and submit ``entity_id`` as the stable identity.
+        ``None`` deliberately covers absent, wrong-type, no-longer-current
+        (inactive, historical, merged-away or archived), and another
+        Principal's Entity alike.
         """
         return None
 
     def list_counterparties(
         self, principal_id: str, *, limit: int
     ) -> tuple[CounterpartyOption, ...]:
-        """A bounded alphabetical picker projection of current canonical People.
+        """A bounded alphabetical picker projection of current counterparty Entities.
 
         This is presentation support for the existing Commitment capability,
         not a new identity write path. Implementations must filter by the

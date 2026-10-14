@@ -492,7 +492,7 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         ),
         Capability.COMMITMENTS_WAITING_ON: WaitingOn(),
         Capability.COMMITMENTS_CREATE: CreateCommitment(
-            counterparty_person_id=issue_identifier(IdKind.PERSON),
+            counterparty_entity_id=issue_identifier(IdKind.ENTITY),
             direction=CommitmentDirection.OWED_TO_PRINCIPAL,
             summary="Denial-path commitment",
             origin_evidence_ref=issue_identifier(IdKind.CAPTURE),

@@ -52,7 +52,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "f7a2c9d51e64"
-CURRENT_HEAD: Final = "a591b81f10a2"
+CURRENT_HEAD: Final = "5c1e7a9b3d42"
 CAPTURE_LABELS: Final = "c1a8e4d70b29"
 WP_TUX_01: Final = "de5ec1c65857"
 WP_MCP_PROJ_01: Final = "9f2c8a1d4e70"
@@ -103,6 +103,11 @@ PROJECT_SIXTEEN_FIELDS_MIGRATION: Final = (
 #: additive head on the same precedent.
 INTELLIGENCE_REPORT_TYPE_MIGRATION: Final = (
     MIGRATIONS / "20261011_a591b81f10a2_intelligence_report_type_registry.py"
+)
+#: The Commitment counterparty Entity cutover (`5c1e7a9b3d42`), registered as an
+#: additive head on the same precedent.
+COMMITMENT_COUNTERPARTY_ENTITY_MIGRATION: Final = (
+    MIGRATIONS / "20261014_5c1e7a9b3d42_commitment_counterparty_entity.py"
 )
 #: The one sanctioned edit to a historical revision (operator ruling
 #: OPERATOR_RULING_WP04_A_to_E.md section E). Like D-48, the Meeting-records
@@ -183,9 +188,9 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_auth_identity_and_grants_migration.py",
     "tests/schema/test_canvas_workspace_migration.py",
     "tests/schema/test_capture_lifecycle_migration.py",
-    # The frozen capability set names the head as the forward `ALTER` that admits
-    # the two `reports.types.*` capabilities.
-    "tests/schema/test_capture_schema_migration.py",
+    # The Commitment counterparty Entity cutover's own revision module names
+    # the head as the revision it tests.
+    "tests/schema/test_commitment_counterparty_entity_migration.py",
     "tests/schema/test_constraint_management_migration.py",
     "tests/schema/test_constraint_read_capability_migration.py",
     "tests/schema/test_constraint_sync_migration.py",
@@ -204,11 +209,9 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_goodnotes_promotion_receipt_migration.py",
     "tests/schema/test_goodnotes_pull_migration.py",
     "tests/schema/test_goodnotes_semantic_proposal_migration.py",
-    # The Knowledge-table ledger keys the registry table by the revision that creates it.
-    "tests/schema/test_extraction_schema_migration.py",
     # The Intelligence focus-area revision module names the head it now sits under.
     "tests/schema/test_intelligence_focus_area_admission_migration.py",
-    # The Intelligence report type registry module names the head as the revision it tests.
+    # The Intelligence report type registry module names the head it now sits under.
     "tests/schema/test_intelligence_report_type_registry_migration.py",
     # KLP-WP-02's own revision module names the head as the revision it tests.
     "tests/schema/test_knowledge_assertion_migration.py",
@@ -301,7 +304,8 @@ def _literals(block: str) -> list[str]:
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [CURRENT_HEAD]
-    assert script.get_revision(CURRENT_HEAD).down_revision == "cc373834a485"
+    assert script.get_revision(CURRENT_HEAD).down_revision == "a591b81f10a2"
+    assert script.get_revision("a591b81f10a2").down_revision == "cc373834a485"
     assert script.get_revision("cc373834a485").down_revision == "93f3aa113f58"
     assert script.get_revision("93f3aa113f58").down_revision == "6734f039f7a6"
     assert script.get_revision("6734f039f7a6").down_revision == "0641c354ca85"
@@ -321,7 +325,7 @@ def test_revision_is_the_only_linear_head() -> None:
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 115
+    assert len(list(MIGRATIONS.glob("*.py"))) == 116
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -470,6 +474,7 @@ def test_no_historical_revision_was_edited() -> None:
         INTELLIGENCE_FOCUS_AREA_MIGRATION.relative_to(ROOT).as_posix(),
         PROJECT_SIXTEEN_FIELDS_MIGRATION.relative_to(ROOT).as_posix(),
         INTELLIGENCE_REPORT_TYPE_MIGRATION.relative_to(ROOT).as_posix(),
+        COMMITMENT_COUNTERPARTY_ENTITY_MIGRATION.relative_to(ROOT).as_posix(),
         # Not an additive head: the one sanctioned historical edit (see
         # `SANCTIONED_HISTORICAL_EDIT`; operator ruling section E).
         SANCTIONED_HISTORICAL_EDIT.relative_to(ROOT).as_posix(),

@@ -9,7 +9,7 @@ function commitment(overrides: Record<string, unknown> = {}) {
     commitment_id: "cmt_aaaaaaaa11111111",
     direction: "owed_to_principal",
     state: "closed",
-    counterparty_person_id: "per_aaaaaaaa11111111",
+    counterparty_entity_id: "ent_aaaaaaaa11111111",
     title: "Canonical",
     description: null,
     due_date: null,
@@ -21,7 +21,7 @@ function commitment(overrides: Record<string, unknown> = {}) {
     closure_evidence_ref: "cap_bbbbbbbb22222222",
     accepted_by_review_decision_id: null,
     closed_at: AT,
-    counterparty: { person_id: "per_aaaaaaaa11111111", display_name: "Ada" },
+    counterparty: { entity_id: "ent_aaaaaaaa11111111", display_name: "Ada" },
     ...overrides,
   };
 }

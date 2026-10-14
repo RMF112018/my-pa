@@ -41,7 +41,7 @@ Python that a query forgot is the leak, and a query filter with no Python
 counterpart is the one that reads as an accident.
 
 **§22.** Nothing here scores, ranks, or characterises a *person*. `priority` is a
-bounded rank on an item; a counterparty appears only as an opaque `per_…`
+bounded rank on an item; a counterparty appears only as an opaque `ent_…`
 reference in `basis_refs`, never as an input to the rank. There is no sentiment,
 no personality, no relationship score, and no aggregation across Principals — the
 function takes one Principal's rows and returns one Principal's items.

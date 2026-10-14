@@ -83,6 +83,7 @@ from tests.database.test_capture_lifecycle_publication_fences import (
     _Audit,
     _proposal,
 )
+from tests.database.test_commitment_entity_counterparty import seed_counterparty_entity
 
 pytestmark = pytest.mark.database
 
@@ -253,7 +254,7 @@ def test_read_surfaces_name_an_archived_root_without_rewriting_bytes(
     )
     commitment_id = commitments.create_commitment(
         principal_id=principal_id,
-        counterparty_person_id=issue_identifier(IdKind.PERSON),
+        counterparty_entity_id=seed_counterparty_entity(migrated_engine, principal_id),
         direction=CommitmentDirection.OWED_TO_PRINCIPAL,
         summary="ProvenanceNeedle commitment",
         origin_evidence_ref=capture_id,

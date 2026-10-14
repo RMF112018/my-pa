@@ -7,7 +7,7 @@ exit only).
 * **RE-AC-025** -- a create stages one `created` event at version 1.
 * **RE-AC-026** -- an update stages one `updated` event, only when APPLIED, whose
   `changed_fields` is the typed comparison over `{summary, due_at,
-  counterparty_person_id}`; a replay, a no-op and a stale rejection stage none.
+  counterparty_entity_id}`; a replay, a no-op and a stale rejection stage none.
 * **RE-AC-027** -- a close stages one `state_changed` event over the static set
   `{state, closed_at, closure_evidence_ref}`; closing again is a no-op and
   stages none.
@@ -58,7 +58,7 @@ def service(world: World) -> CommitmentManagementService:
 def _create(service: CommitmentManagementService, *, key: str | None = None) -> Commitment:
     return service.create_commitment(
         principal_id=PRINCIPAL,
-        counterparty_person_id=issue_identifier(IdKind.PERSON),
+        counterparty_entity_id=issue_identifier(IdKind.ENTITY),
         direction=CommitmentDirection.OWED_BY_PRINCIPAL,
         summary="Send the synthetic report",
         origin_evidence_ref=ORIGIN,
@@ -77,7 +77,7 @@ def test_a_create_stages_one_created_event(
 ) -> None:
     receipt = service.create_commitment(
         principal_id=PRINCIPAL,
-        counterparty_person_id=issue_identifier(IdKind.PERSON),
+        counterparty_entity_id=issue_identifier(IdKind.ENTITY),
         direction=CommitmentDirection.OWED_BY_PRINCIPAL,
         summary="Send the synthetic report",
         origin_evidence_ref=ORIGIN,
@@ -91,7 +91,7 @@ def test_a_create_stages_one_created_event(
     assert event.event_kind is RecordEventKind.CREATED
     assert event.record_version == 1
     assert event.changed_fields == (
-        "counterparty_person_id",
+        "counterparty_entity_id",
         "direction",
         "evidence_state",
         "opened_at",
@@ -159,7 +159,7 @@ def test_a_replayed_create_stages_nothing(
 ) -> None:
     service.create_commitment(
         principal_id=PRINCIPAL,
-        counterparty_person_id="per_cmtemit00000001",
+        counterparty_entity_id="ent_cmtemit00000001",
         direction=CommitmentDirection.OWED_BY_PRINCIPAL,
         summary="Send the synthetic report",
         origin_evidence_ref=ORIGIN,
@@ -169,7 +169,7 @@ def test_a_replayed_create_stages_nothing(
     world.record_events.clear()
     replay = service.create_commitment(
         principal_id=PRINCIPAL,
-        counterparty_person_id="per_cmtemit00000001",
+        counterparty_entity_id="ent_cmtemit00000001",
         direction=CommitmentDirection.OWED_BY_PRINCIPAL,
         summary="Send the synthetic report",
         origin_evidence_ref=ORIGIN,

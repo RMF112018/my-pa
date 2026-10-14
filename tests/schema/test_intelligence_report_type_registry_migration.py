@@ -59,6 +59,10 @@ from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 ROOT: Final = Path(__file__).resolve().parents[2]
 VERSIONS: Final = ROOT / "migrations" / "versions"
 REVISION: Final = "a591b81f10a2"
+#: The chain head: `5c1e7a9b3d42` (Commitment counterparty Entity cutover) is
+#: additive on this revision and touches neither the Intelligence plane nor
+#: `audit_events`.
+HEAD: Final = "5c1e7a9b3d42"
 PREVIOUS: Final = "cc373834a485"
 MIGRATION: Final = VERSIONS / "20261011_a591b81f10a2_intelligence_report_type_registry.py"
 PLANE_MIGRATION: Final = VERSIONS / "20260820_e9b2c4d7a150_admit_intelligence_artifact_plane.py"
@@ -134,10 +138,11 @@ def _flat(value: str) -> str:
 # ---- FAST: the graph and the freeze -----------------------------------------------
 
 
-def test_the_revision_is_the_single_head_directly_on_the_project_fields_revision() -> None:
+def test_the_revision_is_directly_on_the_project_fields_revision_under_one_later_head() -> None:
     """Re-parented onto `cc373834a485` (#325), which sits on the focus-area revision."""
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [REVISION]
+    assert script.get_heads() == [HEAD]
+    assert script.get_revision(HEAD).down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "93f3aa113f58"
     assert [path.name for path in VERSIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
@@ -532,14 +537,14 @@ def test_the_upgrade_seeds_builtins_for_existing_principals_only(engine: Engine)
 
 @pytest.mark.database
 def test_an_empty_plane_seeds_no_rows(engine: Engine) -> None:
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     assert _table_exists(engine)
     assert _registry(engine) == set()
 
 
 @pytest.mark.database
 def test_the_declaration_matches_the_migrated_table(engine: Engine) -> None:
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     with engine.connect() as connection:
         columns = list(
             connection.execute(
@@ -597,7 +602,7 @@ def test_the_declaration_matches_the_migrated_table(engine: Engine) -> None:
 def test_the_registry_checks_refuse_each_malformed_row(
     engine: Engine, kind: str, overrides: dict[str, object], constraint: str
 ) -> None:
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     assert _refused_type(engine, "prn_rtypes00000001", kind, **overrides) == constraint
 
 
@@ -605,7 +610,7 @@ def test_the_registry_checks_refuse_each_malformed_row(
 def test_the_registry_admits_client_and_builtin_rows_and_never_rewrites_one(
     engine: Engine,
 ) -> None:
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     principal = "prn_rtypes00000001"
     assert _refused_type(engine, principal, "weekly_digest", display_name="Weekly") is None
     assert _refused_type(engine, principal, "w" * 64) is None
@@ -702,7 +707,7 @@ def test_a_clean_downgrade_restores_every_check_exactly_and_upgrades_again(
     assert _head_index(engine) == HEAD_INDEX_BEFORE
     assert len(_admitted_capabilities(engine)) == 201
     principal = _seed(engine, "rt-round")
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     assert _head_index(engine) == HEAD_INDEX_AT
     after = _checks(engine)
     assert set(after) == set(before)
@@ -729,7 +734,7 @@ def test_a_clean_downgrade_restores_every_check_exactly_and_upgrades_again(
         ).scalar_one()
     assert kept == 1
 
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     assert _version(engine) == REVISION
     assert _registry(engine) == {
         (principal, kind.value, stage.value, "builtin")
@@ -766,7 +771,7 @@ def _plant_audit_create(connection: Connection, principal: str) -> None:
     ids=["client_type", "run_kind", "artifact_kind", "audit_list", "audit_create"],
 )
 def test_the_downgrade_refuses_while_registry_state_exists(engine: Engine, plant: object) -> None:
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     principal = _seed(engine, "rt-refuse")
     with engine.begin() as connection:
         plant(connection, principal)  # type: ignore[operator]

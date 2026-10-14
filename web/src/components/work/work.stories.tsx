@@ -30,8 +30,8 @@ const tasks: readonly TaskRow[] = [
 
 const commitment: CommitmentDetailContract = {
   commitment_id: "cmt_story000000000001", title: "Revised drawings from Sam", description: "Synthetic Storybook fixture.",
-  direction: "owed_to_principal", state: "open", counterparty_person_id: "per_story000000000001",
-  counterparty: { person_id: "per_story000000000001", display_name: "Sam Rivera" },
+  direction: "owed_to_principal", state: "open", counterparty_entity_id: "ent_story000000000001",
+  counterparty: { entity_id: "ent_story000000000001", display_name: "Sam Rivera" },
   due_date: "2026-08-22T16:00:00Z", created_at: "2026-08-20T12:00:00Z", updated_at: "2026-08-22T11:00:00Z",
   version: 2, evidence_state: "accepted", origin_evidence_ref: "cap_story_origin_0002",
   closure_evidence_ref: null, accepted_by_review_decision_id: "rdec_story0000000002", closed_at: null,

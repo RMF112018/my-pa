@@ -46,7 +46,7 @@ from tests.conftest import FakeRecordEventStager
 
 PRINCIPAL_A = issue_identifier(IdKind.PRINCIPAL)
 PRINCIPAL_B = issue_identifier(IdKind.PRINCIPAL)
-COUNTERPARTY = issue_identifier(IdKind.PERSON)
+COUNTERPARTY = issue_identifier(IdKind.ENTITY)
 ORIGIN = "cap_origin0001origin0001"
 NOW = datetime(2026, 8, 10, 12, tzinfo=UTC)
 
@@ -178,7 +178,7 @@ def test_create_commitment_produces_an_open_owed_to_principal_commitment() -> No
     world = _World()
     receipt = _service(world).create_commitment(
         principal_id=PRINCIPAL_A,
-        counterparty_person_id=COUNTERPARTY,
+        counterparty_entity_id=COUNTERPARTY,
         direction=CommitmentDirection.OWED_TO_PRINCIPAL,
         summary="Send permit log by Friday",
         origin_evidence_ref=ORIGIN,
@@ -199,7 +199,7 @@ def test_create_commitment_without_review_decision_produces_proposed_evidence_st
     world = _World()
     receipt = _service(world).create_commitment(
         principal_id=PRINCIPAL_A,
-        counterparty_person_id=COUNTERPARTY,
+        counterparty_entity_id=COUNTERPARTY,
         direction=CommitmentDirection.OWED_TO_PRINCIPAL,
         summary="Send permit log by Friday",
         origin_evidence_ref=ORIGIN,
@@ -213,7 +213,7 @@ def test_create_commitment_with_review_decision_produces_accepted_evidence_state
     decision_id = issue_identifier(IdKind.REVIEW_DECISION)
     receipt = _service(world).create_commitment(
         principal_id=PRINCIPAL_A,
-        counterparty_person_id=COUNTERPARTY,
+        counterparty_entity_id=COUNTERPARTY,
         direction=CommitmentDirection.OWED_TO_PRINCIPAL,
         summary="Send permit log by Friday",
         origin_evidence_ref=ORIGIN,
@@ -232,7 +232,7 @@ def test_close_commitment_transitions_state_and_advances_version() -> None:
     service = _service(world)
     created = service.create_commitment(
         principal_id=PRINCIPAL_A,
-        counterparty_person_id=COUNTERPARTY,
+        counterparty_entity_id=COUNTERPARTY,
         direction=CommitmentDirection.OWED_TO_PRINCIPAL,
         summary="Send permit log by Friday",
         origin_evidence_ref=ORIGIN,
@@ -257,7 +257,7 @@ def test_close_already_closed_commitment_is_no_op() -> None:
     service = _service(world)
     created = service.create_commitment(
         principal_id=PRINCIPAL_A,
-        counterparty_person_id=COUNTERPARTY,
+        counterparty_entity_id=COUNTERPARTY,
         direction=CommitmentDirection.OWED_TO_PRINCIPAL,
         summary="Send permit log by Friday",
         origin_evidence_ref=ORIGIN,
@@ -289,7 +289,7 @@ def test_version_conflict_raises_and_records_rejected_history() -> None:
     service = _service(world)
     created = service.create_commitment(
         principal_id=PRINCIPAL_A,
-        counterparty_person_id=COUNTERPARTY,
+        counterparty_entity_id=COUNTERPARTY,
         direction=CommitmentDirection.OWED_TO_PRINCIPAL,
         summary="Send permit log by Friday",
         origin_evidence_ref=ORIGIN,
@@ -337,7 +337,7 @@ def test_idempotency_key_reused_for_different_content_conflicts() -> None:
     key = _idempotency_key("create")
     service.create_commitment(
         principal_id=PRINCIPAL_A,
-        counterparty_person_id=COUNTERPARTY,
+        counterparty_entity_id=COUNTERPARTY,
         direction=CommitmentDirection.OWED_TO_PRINCIPAL,
         summary="Send permit log by Friday",
         origin_evidence_ref=ORIGIN,
@@ -353,7 +353,7 @@ def test_idempotency_key_reused_for_different_content_conflicts() -> None:
     with pytest.raises(CommitmentIdempotencyConflictError):
         service.create_commitment(
             principal_id=PRINCIPAL_A,
-            counterparty_person_id=COUNTERPARTY,
+            counterparty_entity_id=COUNTERPARTY,
             direction=CommitmentDirection.OWED_TO_PRINCIPAL,
             summary="A different summary the replay must not apply",
             origin_evidence_ref=ORIGIN,
@@ -371,7 +371,7 @@ def test_update_exact_replay_precedes_mutable_first_write_validation() -> None:
     service = _service(world)
     created = service.create_commitment(
         principal_id=PRINCIPAL_A,
-        counterparty_person_id=COUNTERPARTY,
+        counterparty_entity_id=COUNTERPARTY,
         direction=CommitmentDirection.OWED_TO_PRINCIPAL,
         summary="Old summary",
         origin_evidence_ref=ORIGIN,
@@ -383,7 +383,7 @@ def test_update_exact_replay_precedes_mutable_first_write_validation() -> None:
         commitment_id=created.commitment.commitment_id,
         expected_version=created.commitment.version,
         actor=TaskMutationActor.PRINCIPAL,
-        values={"counterparty_person_id": issue_identifier(IdKind.PERSON)},
+        values={"counterparty_entity_id": issue_identifier(IdKind.ENTITY)},
         idempotency_key=key,
         validate_first_write=lambda: None,
     )
@@ -396,7 +396,7 @@ def test_update_exact_replay_precedes_mutable_first_write_validation() -> None:
         commitment_id=created.commitment.commitment_id,
         expected_version=created.commitment.version,
         actor=TaskMutationActor.PRINCIPAL,
-        values={"counterparty_person_id": first.commitment.counterparty_person_id},
+        values={"counterparty_entity_id": first.commitment.counterparty_entity_id},
         idempotency_key=key,
         validate_first_write=no_longer_eligible,
     )
@@ -410,7 +410,7 @@ def test_update_commitment_is_one_atomic_versioned_mutation() -> None:
     service = _service(world)
     created = service.create_commitment(
         principal_id=PRINCIPAL_A,
-        counterparty_person_id=COUNTERPARTY,
+        counterparty_entity_id=COUNTERPARTY,
         direction=CommitmentDirection.OWED_TO_PRINCIPAL,
         summary="Old summary",
         origin_evidence_ref=ORIGIN,

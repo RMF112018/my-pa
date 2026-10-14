@@ -106,8 +106,15 @@ mcp_interactions = Table(
     Column("response_sha256", Text, nullable=False),
     Column("request_truncated", Boolean, nullable=False),
     Column("response_truncated", Boolean, nullable=False),
-    Column("request_body", JSONB(none_as_null=True)),
-    Column("response_body", JSONB(none_as_null=True)),
+    # Bare `JSONB`, not `JSONB(none_as_null=True)`: `JSONB.__init__` is untyped at
+    # the declared SQLAlchemy floor, so the call form fails `no-untyped-call` in
+    # the `dependency-floor` job alone (the trap `tables.py` records at
+    # `structured_content`), and a `# type: ignore` is itself an error at the
+    # installed version under `warn_unused_ignores`. Bare `JSONB` binds a Python
+    # `None` as the JSON value `null`, so `insert_interaction` omits an absent
+    # body from the statement and the server writes SQL NULL instead.
+    Column("request_body", JSONB),
+    Column("response_body", JSONB),
     Column("request_body_text", Text),
     Column("response_body_text", Text),
     Column("request_headers", JSONB, nullable=False),
@@ -118,6 +125,8 @@ mcp_interactions = Table(
 COLUMNS: Final = tuple(column.name for column in mcp_interactions.columns)
 #: What a caller supplies: every column except the DB-assigned `recorded_at`.
 INSERT_COLUMNS: Final = frozenset(COLUMNS) - {"recorded_at"}
+#: Nullable JSONB columns whose `None` must reach the server as SQL NULL.
+_NULLABLE_JSON_BODIES: Final = frozenset({"request_body", "response_body"})
 
 _SUMMARY_COLUMNS: Final = (
     "interaction_id",
@@ -218,8 +227,17 @@ def insert_interaction(connection: Connection, row: Mapping[str, object]) -> Non
     """Append one exchange. `row` must carry exactly `INSERT_COLUMNS`.
 
     `recorded_at` is refused here and, if supplied by any other path, overwritten
-    by the database. JSONB columns take Python mappings, sequences, scalars or
-    `None` and are bound as JSON, never interpolated.
+    by the database. JSONB columns take Python mappings, sequences or scalars and
+    are bound as JSON, never interpolated.
+
+    A `None` body (`request_body` / `response_body`) is omitted from the
+    statement, so the column is SQL NULL -- never the JSON value `null`, which is
+    what bare `JSONB` would bind and which the body-form and truncation CHECKs
+    would read as a present body. **A wire body that is literally the JSON
+    `null` is therefore stored as SQL NULL too**, deliberately: the store has one
+    representation of "no JSON body", and that wire case stays distinguishable by
+    `diagnostics.capture.<side>_parse == "json"` with a non-zero byte count and
+    its digest. The key set is still validated on the caller's mapping.
     """
     keys = frozenset(row)
     if keys != INSERT_COLUMNS:
@@ -228,7 +246,12 @@ def insert_interaction(connection: Connection, row: Mapping[str, object]) -> Non
         raise ValueError(
             f"interaction row columns differ: missing={missing} unexpected={unexpected}"
         )
-    connection.execute(insert(mcp_interactions).values(dict(row)))
+    values = {
+        key: value
+        for key, value in row.items()
+        if not (key in _NULLABLE_JSON_BODIES and value is None)
+    }
+    connection.execute(insert(mcp_interactions).values(values))
 
 
 def purge_expired(connection: Connection, *, batch_size: int, dry_run: bool) -> PurgeResult:

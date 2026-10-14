@@ -162,6 +162,39 @@ def test_null_bodies_are_sql_null_not_json_null(db_engine: Engine) -> None:
     assert tuple(nulls) == (True, True)
 
 
+def test_a_wire_body_that_is_json_null_is_stored_as_sql_null(db_engine: Engine) -> None:
+    """The deliberate decision in `insert_interaction`'s docstring.
+
+    A wire body of literally `null` parses as JSON to Python `None`. The store
+    has one representation of "no JSON body", SQL NULL, so the row holds SQL
+    NULL -- never `'null'::jsonb` -- and the wire case stays legible from the
+    diagnostics (`*_parse == "json"`) and the non-zero byte count.
+    """
+    interaction_id = _insert(
+        db_engine,
+        request_body=None,
+        response_body=None,
+        request_bytes=4,
+        response_bytes=4,
+        diagnostics={"capture": {"request_parse": "json", "response_parse": "json"}},
+    )
+    with db_engine.connect() as connection:
+        stored = connection.execute(
+            text(
+                "SELECT request_body IS NULL, response_body IS NULL, "
+                "jsonb_typeof(request_body), jsonb_typeof(response_body) "
+                "FROM observability.mcp_interactions WHERE interaction_id = :id"
+            ),
+            {"id": interaction_id},
+        ).one()
+        shown = get_interaction(connection, interaction_id)
+    assert tuple(stored) == (True, True, None, None)
+    assert shown is not None
+    assert shown.request_body is None and shown.response_body is None
+    assert shown.diagnostics["capture"] == {"request_parse": "json", "response_parse": "json"}
+    assert shown.request_bytes == 4
+
+
 @pytest.mark.parametrize(
     "keys",
     [

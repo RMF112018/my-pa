@@ -52,7 +52,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "f7a2c9d51e64"
-CURRENT_HEAD: Final = "5c1e7a9b3d42"
+CURRENT_HEAD: Final = "b9025e7fb738"
 CAPTURE_LABELS: Final = "c1a8e4d70b29"
 WP_TUX_01: Final = "de5ec1c65857"
 WP_MCP_PROJ_01: Final = "9f2c8a1d4e70"
@@ -222,6 +222,8 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     # The MCP interaction log revision module names the head it now sits under.
     "tests/schema/test_mcp_interaction_log_migration.py",
     "tests/schema/test_meeting_records_migration.py",
+    # WP-MCP-PROJ-05's own revision module names the head as the revision it tests.
+    "tests/schema/test_reconcile_legacy_project_entity_links_migration.py",
     "tests/schema/test_record_event_truncate_refusal_migration.py",
     "tests/schema/test_record_events_migration.py",
     "tests/schema/test_oauth_refresh_migration.py",
@@ -309,7 +311,8 @@ def _literals(block: str) -> list[str]:
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [CURRENT_HEAD]
-    assert script.get_revision(CURRENT_HEAD).down_revision == "c8f7ae406d47"
+    assert script.get_revision(CURRENT_HEAD).down_revision == "5c1e7a9b3d42"
+    assert script.get_revision("5c1e7a9b3d42").down_revision == "c8f7ae406d47"
     assert script.get_revision("c8f7ae406d47").down_revision == "a591b81f10a2"
     assert script.get_revision("a591b81f10a2").down_revision == "cc373834a485"
     assert script.get_revision("cc373834a485").down_revision == "93f3aa113f58"
@@ -331,7 +334,7 @@ def test_revision_is_the_only_linear_head() -> None:
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 117
+    assert len(list(MIGRATIONS.glob("*.py"))) == 118
 
 
 # ---- the freeze -------------------------------------------------------------

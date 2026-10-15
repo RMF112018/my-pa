@@ -26,7 +26,7 @@ from my_pa.infrastructure.persistence.tables import project_entity_links, projec
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "9f2c8a1d4e70"
-CURRENT_HEAD: Final = "5c1e7a9b3d42"
+CURRENT_HEAD: Final = "b9025e7fb738"
 PREVIOUS_REVISION: Final = "de5ec1c65857"
 MIGRATION: Final = (
     ROOT / "migrations" / "versions" / "20260913_9f2c8a1d4e70_project_version_and_entity_bridge.py"
@@ -203,12 +203,22 @@ def test_empty_to_head_installs_version_and_bridge(disposable_database: str) -> 
 def test_previous_head_to_head_preserves_projects_and_participants(
     disposable_database: str,
 ) -> None:
+    """Pinned to `REVISION`, not `"head"`: this asserts `9f2c8a1d4e70`'s own
+    backfill, not the state of every revision later stacked on top.
+    `b9025e7fb738` (WP-MCP-PROJ-05), additive further up the chain, resolves
+    this exact `unresolved_missing` row by design -- that is its whole
+    purpose -- so following `"head"` here would make this test fail for a
+    reason outside what it is about. See
+    `test_reconcile_legacy_project_entity_links_migration.py` for the
+    assertions on what happens to this row once the chain reaches that
+    revision.
+    """
     engine = create_database_engine(disposable_database)
     try:
         command.upgrade(_config(), PREVIOUS_REVISION)
         with engine.begin() as connection:
             _seed_legacy_project(connection)
-        command.upgrade(_config(), "head")
+        command.upgrade(_config(), REVISION)
         with engine.connect() as connection:
             project = (
                 connection.execute(
@@ -441,12 +451,19 @@ def test_downgrade_refuses_bound_rows(disposable_database: str) -> None:
 
 @pytest.mark.database
 def test_downgrade_of_unresolved_rows_drops_the_bridge(disposable_database: str) -> None:
+    """Pinned to `REVISION`, not `"head"`, for the same reason the previous
+    test is: `b9025e7fb738` (WP-MCP-PROJ-05) binds this exact row once the
+    chain reaches it, and a bound row is precisely what `9f2c8a1d4e70`'s own
+    downgrade refuses to drop (`test_downgrade_refuses_bound_rows`). Stopping
+    at `REVISION` keeps this test about `9f2c8a1d4e70`'s downgrade on an
+    still-unresolved row, which is what it is named for.
+    """
     engine = create_database_engine(disposable_database)
     try:
         command.upgrade(_config(), PREVIOUS_REVISION)
         with engine.begin() as connection:
             _seed_legacy_project(connection)
-        command.upgrade(_config(), "head")
+        command.upgrade(_config(), REVISION)
         command.downgrade(_config(), PREVIOUS_REVISION)
         assert "project_entity_links" not in _tables(engine)
         columns = _columns(engine, "projects")

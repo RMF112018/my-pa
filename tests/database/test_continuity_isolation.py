@@ -74,7 +74,7 @@ DISPOSABLE_DATABASE: Final = "my_pa_continuity_isolation_test"
 PRINCIPAL_A: Final = "prn_aaaa0001aaaa0001aaaa0001"
 PRINCIPAL_B: Final = "prn_bbbb0002bbbb0002bbbb0002"
 
-COUNTERPARTY: Final = "per_counterparty0001aaaa"
+COUNTERPARTY: Final = "ent_counterparty0001aaaa"
 ORIGIN: Final = "cap_origin0001origin0001"
 
 NOW: Final = datetime(2026, 8, 10, 12, tzinfo=UTC)
@@ -202,13 +202,34 @@ def _stage_review_decision(
     return decision_id
 
 
+def _counterparty(connection: Connection, principal_id: str) -> str:
+    """This Principal's synthetic counterparty Entity, inserted once.
+
+    `knowledge.commitments.counterparty_entity_id` carries a composite foreign
+    key onto `entities (entity_id, principal_id)`, so each Principal names its
+    own Entity: one identifier cannot be shared across the partition.
+    """
+    entity_id = "ent_cpty" + principal_id.removeprefix("prn_")
+    connection.execute(
+        text(
+            f"INSERT INTO {SCHEMA}.entities (entity_id, principal_id, entity_type, "  # noqa: S608
+            "canonical_name, display_name, status, created_at, updated_at, version) "
+            "VALUES (:entity_id, :principal_id, 'person', 'sample counterparty', "
+            "'Sample Counterparty', 'active', now(), now(), 1) "
+            "ON CONFLICT (entity_id) DO NOTHING"
+        ),
+        {"entity_id": entity_id, "principal_id": principal_id},
+    )
+    return entity_id
+
+
 def _propose_commitment(
     connection: Connection, *, principal_id: str, due_at: datetime | None = None
 ) -> str:
     repository = SqlContinuityRepository(connection)
     commitment = repository.propose_commitment(
         principal_id=principal_id,
-        counterparty_person_id=COUNTERPARTY,
+        counterparty_entity_id=_counterparty(connection, principal_id),
         direction=CommitmentDirection.OWED_BY_PRINCIPAL,
         summary="Send Sample Counterparty the revised figure",
         origin_evidence_ref=ORIGIN,
@@ -441,7 +462,7 @@ def test_the_server_refuses_accepted_continuity_with_no_review_decision(
         connection.execute(
             text(
                 f"INSERT INTO {SCHEMA}.commitments (commitment_id, principal_id, "  # noqa: S608
-                "counterparty_person_id, direction, summary, state, evidence_state, "
+                "counterparty_entity_id, direction, summary, state, evidence_state, "
                 "origin_evidence_ref, opened_at, created_at, updated_at) VALUES "
                 "('cmt_forged0001forged0001', :principal_id, :counterparty, "
                 "'owed_by_principal', 'A forged acceptance', 'open', 'accepted', "
@@ -452,6 +473,61 @@ def test_the_server_refuses_accepted_continuity_with_no_review_decision(
 
 
 # --- Control 3: nothing promotes itself -------------------------------------
+
+
+def _non_counterparty_entity(
+    connection: Connection, entity_id: str, *, entity_type: str, status: str
+) -> None:
+    """An Entity in Principal A that a Commitment may not name."""
+    connection.execute(
+        text(
+            f"INSERT INTO {SCHEMA}.entities (entity_id, principal_id, entity_type, "  # noqa: S608
+            "canonical_name, display_name, status, archived_from_status, created_at, "
+            "updated_at, version) VALUES (:entity_id, :principal_id, :entity_type, "
+            "'not a counterparty', 'Not A Counterparty', :status, :archived_from, "
+            "now(), now(), 1)"
+        ),
+        {
+            "entity_id": entity_id,
+            "principal_id": PRINCIPAL_A,
+            "entity_type": entity_type,
+            "status": status,
+            "archived_from": "active" if status == "archived" else None,
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("entity_id", "entity_type", "status"),
+    [
+        ("ent_archivedcpty0001aaaa", "organization", "archived"),
+        ("ent_teamnotcpty0001aaaa", "team_or_group", "active"),
+        ("ent_inactivecpty0001aaa", "person", "inactive"),
+    ],
+    ids=["archived", "wrong_type", "inactive"],
+)
+def test_proposing_a_commitment_refuses_a_non_counterparty_entity(
+    migrated_engine: Engine, entity_id: str, entity_type: str, status: str
+) -> None:
+    """The proposal path holds the same counterparty gate `commitments.create` does."""
+    with migrated_engine.begin() as connection:
+        _non_counterparty_entity(connection, entity_id, entity_type=entity_type, status=status)
+        foreign = _counterparty(connection, PRINCIPAL_B)
+    for named in (entity_id, foreign, "ent_absentcpty0001aaaaaa"):
+        with migrated_engine.begin() as connection, pytest.raises(UnknownScopeError):
+            SqlContinuityRepository(connection).propose_commitment(
+                principal_id=PRINCIPAL_A,
+                counterparty_entity_id=named,
+                direction=CommitmentDirection.OWED_BY_PRINCIPAL,
+                summary="Send Sample Counterparty the revised figure",
+                origin_evidence_ref=ORIGIN,
+                origin_evidence_kind=ClosureEvidenceKind.CAPTURE,
+            )
+    with migrated_engine.connect() as connection:
+        written = connection.execute(
+            text(f"SELECT count(*) FROM {SCHEMA}.commitments")  # noqa: S608
+        ).scalar_one()
+    assert written == 0
 
 
 def test_a_pulse_read_writes_nothing_at_all(migrated_engine: Engine) -> None:

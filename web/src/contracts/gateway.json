@@ -201,12 +201,12 @@
     },
     "commitments.create": {
       "purpose": "commitment_authoring",
-      "payloadFields": ["counterparty_person_id", "direction", "summary", "origin_evidence_ref", "idempotency_key", "due_at", "project_id", "situation_id", "accepted_by_review_decision_id", "client_context"],
-      "probe": { "counterparty_person_id": "per_aaaaaaaa11111111", "direction": "owed_to_principal", "summary": "Synthetic commitment", "origin_evidence_ref": "cap_aaaaaaaa11111111", "idempotency_key": "idem-commitment-create-0001" }
+      "payloadFields": ["counterparty_entity_id", "direction", "summary", "origin_evidence_ref", "idempotency_key", "due_at", "project_id", "situation_id", "accepted_by_review_decision_id", "client_context"],
+      "probe": { "counterparty_entity_id": "ent_aaaaaaaa11111111", "direction": "owed_to_principal", "summary": "Synthetic commitment", "origin_evidence_ref": "cap_aaaaaaaa11111111", "idempotency_key": "idem-commitment-create-0001" }
     },
     "commitments.update": {
       "purpose": "commitment_authoring",
-      "payloadFields": ["commitment_id", "expected_version", "idempotency_key", "summary", "due_at", "counterparty_person_id", "clear_due_at", "client_context"],
+      "payloadFields": ["commitment_id", "expected_version", "idempotency_key", "summary", "due_at", "counterparty_entity_id", "clear_due_at", "client_context"],
       "probe": { "commitment_id": "cmt_aaaaaaaa11111111", "expected_version": 1, "idempotency_key": "idem-commitment-update-0001", "summary": "Updated synthetic commitment" }
     },
     "commitments.close": {

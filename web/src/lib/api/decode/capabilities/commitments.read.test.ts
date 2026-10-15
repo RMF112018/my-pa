@@ -7,7 +7,7 @@ export const COMMITMENT_VIEW = {
   commitment_id: "cmt_aaaa0001aaaa0001aaaa0001",
   direction: "owed_to_principal",
   state: "open",
-  counterparty_person_id: "per_aaaa0001aaaa0001aaaa0001",
+  counterparty_entity_id: "ent_aaaa0001aaaa0001aaaa0001",
   title: "Send the drawing",
   description: null,
   due_date: "2026-01-02T00:00:00+00:00",
@@ -19,7 +19,7 @@ export const COMMITMENT_VIEW = {
   closure_evidence_ref: null,
   accepted_by_review_decision_id: null,
   closed_at: null,
-  counterparty: { person_id: "per_aaaa0001aaaa0001aaaa0001", display_name: "Synthetic B" },
+  counterparty: { entity_id: "ent_aaaa0001aaaa0001aaaa0001", display_name: "Synthetic B" },
 };
 
 const VALID = {

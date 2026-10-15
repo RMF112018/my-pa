@@ -73,7 +73,7 @@ from tests.conftest import (
     operator,
 )
 
-COUNTERPARTY = issue_identifier(IdKind.PERSON)
+COUNTERPARTY = issue_identifier(IdKind.ENTITY)
 ORIGIN = "cap_origin0001origin0001"
 ACCEPTANCE = issue_identifier(IdKind.REVIEW_DECISION)
 
@@ -354,7 +354,7 @@ def test_waiting_on_excludes_proposed_commitments() -> None:
     create = service.invoke(
         metadata_for(Capability.COMMITMENTS_CREATE, Purpose.COMMITMENT_AUTHORING, principal),
         CreateCommitment(
-            counterparty_person_id=COUNTERPARTY,
+            counterparty_entity_id=COUNTERPARTY,
             direction=CommitmentDirection.OWED_TO_PRINCIPAL,
             summary="Unreviewed permit promise",
             origin_evidence_ref=ORIGIN,
@@ -382,14 +382,14 @@ def test_commitment_writes_require_a_current_same_principal_counterparty() -> No
     principal = operator()
     other_principal = operator()
     world.work_evidence_refs.add((principal.principal_id, ORIGIN))
-    current = issue_identifier(IdKind.PERSON)
-    foreign = issue_identifier(IdKind.PERSON)
-    replacement = issue_identifier(IdKind.PERSON)
+    current = issue_identifier(IdKind.ENTITY)
+    foreign = issue_identifier(IdKind.ENTITY)
+    replacement = issue_identifier(IdKind.ENTITY)
     world.current_counterparties.add((principal.principal_id, current))
     world.current_counterparties.add((other_principal.principal_id, foreign))
 
     create_command = CreateCommitment(
-        counterparty_person_id=current,
+        counterparty_entity_id=current,
         direction=CommitmentDirection.OWED_TO_PRINCIPAL,
         summary="Current counterparty",
         origin_evidence_ref=ORIGIN,
@@ -403,19 +403,19 @@ def test_commitment_writes_require_a_current_same_principal_counterparty() -> No
     assert created.error is None, created.error
     assert created.result is not None
 
-    for person_id in (issue_identifier(IdKind.PERSON), foreign):
+    for entity_id in (issue_identifier(IdKind.ENTITY), foreign):
         refused = service.invoke(
             metadata_for(Capability.COMMITMENTS_CREATE, Purpose.COMMITMENT_AUTHORING, principal),
             dataclasses.replace(
                 create_command,
-                counterparty_person_id=person_id,
-                idempotency_key=_idempotency_key(f"refused-{person_id[-4:]}"),
+                counterparty_entity_id=entity_id,
+                idempotency_key=_idempotency_key(f"refused-{entity_id[-4:]}"),
             ),
             principal=principal,
         )
         assert refused.error is not None
         assert refused.error.code is ErrorCode.NOT_FOUND
-        assert refused.error.safe_details == ("counterparty_person_id",)
+        assert refused.error.safe_details == ("counterparty_entity_id",)
 
     world.current_counterparties.remove((principal.principal_id, current))
     replay = service.invoke(
@@ -432,20 +432,20 @@ def test_commitment_writes_require_a_current_same_principal_counterparty() -> No
         UpdateCommitment(
             commitment_id=commitment["commitment_id"],
             expected_version=commitment["version"],
-            counterparty_person_id=replacement,
+            counterparty_entity_id=replacement,
             idempotency_key=_idempotency_key("refused-update-counterparty"),
         ),
         principal=principal,
     )
     assert refused_update.error is not None
     assert refused_update.error.code is ErrorCode.NOT_FOUND
-    assert refused_update.error.safe_details == ("counterparty_person_id",)
+    assert refused_update.error.safe_details == ("counterparty_entity_id",)
 
     world.current_counterparties.add((principal.principal_id, replacement))
     update_command = UpdateCommitment(
         commitment_id=commitment["commitment_id"],
         expected_version=commitment["version"],
-        counterparty_person_id=replacement,
+        counterparty_entity_id=replacement,
         idempotency_key=_idempotency_key("accepted-update-counterparty"),
     )
     accepted_update = service.invoke(
@@ -455,7 +455,7 @@ def test_commitment_writes_require_a_current_same_principal_counterparty() -> No
     )
     assert accepted_update.error is None, accepted_update.error
     assert accepted_update.result is not None
-    assert accepted_update.result["commitment"]["counterparty_person_id"] == replacement
+    assert accepted_update.result["commitment"]["counterparty_entity_id"] == replacement
 
     world.current_counterparties.remove((principal.principal_id, replacement))
     update_replay = service.invoke(
@@ -480,7 +480,7 @@ def test_sarah_permit_log_scenario() -> None:
         Capability.COMMITMENTS_CREATE, Purpose.COMMITMENT_AUTHORING, principal_a
     )
     create_cmd = CreateCommitment(
-        counterparty_person_id=COUNTERPARTY,
+        counterparty_entity_id=COUNTERPARTY,
         direction=CommitmentDirection.OWED_TO_PRINCIPAL,
         summary="Send permit log by Friday",
         origin_evidence_ref=ORIGIN,
@@ -598,7 +598,7 @@ def test_sarah_permit_log_scenario() -> None:
 
 
 def test_counterparty_picker_queries_are_principal_scoped() -> None:
-    """The picker cannot label a Person outside the authenticated partition."""
+    """The picker cannot label an Entity outside the authenticated partition."""
     from dataclasses import dataclass
 
     from sqlalchemy.sql.elements import ClauseElement
@@ -609,12 +609,12 @@ def test_counterparty_picker_queries_are_principal_scoped() -> None:
 
     @dataclass(frozen=True)
     class Row:
-        person_id: str
+        entity_id: str
         display_name: str
 
     class Result:
         def all(self) -> list[Row]:
-            return [Row("per_aaaaaaaa11111111", "Sam Rivera")]
+            return [Row("ent_aaaaaaaa11111111", "Sam Rivera")]
 
         def one_or_none(self) -> None:
             return None
@@ -630,16 +630,19 @@ def test_counterparty_picker_queries_are_principal_scoped() -> None:
     connection = Connection()
     repository = SqlCommitmentManagementRepository(connection)  # type: ignore[arg-type]
     options = repository.list_counterparties("prn_aaaaaaaa11111111", limit=101)
-    assert [(item.person_id, item.display_name) for item in options] == [
-        ("per_aaaaaaaa11111111", "Sam Rivera")
+    assert [(item.entity_id, item.display_name) for item in options] == [
+        ("ent_aaaaaaaa11111111", "Sam Rivera")
     ]
     list_sql = str(connection.statements[0].compile(compile_kwargs={"literal_binds": True}))
-    assert "relationship_people.principal_id = 'prn_aaaaaaaa11111111'" in list_sql
-    assert "relationship_people.superseded_by_person_id IS NULL" in list_sql
-    assert "ORDER BY lower(knowledge.relationship_people.display_name) ASC" in list_sql
+    assert "entities.principal_id = 'prn_aaaaaaaa11111111'" in list_sql
+    assert "entities.entity_type IN ('organization', 'person')" in list_sql
+    assert "entities.status = 'active'" in list_sql
+    assert "ORDER BY lower(knowledge.entities.display_name) ASC" in list_sql
     assert "LIMIT 101" in list_sql
 
-    assert repository.counterparty("prn_aaaaaaaa11111111", "per_bbbbbbbb22222222") is None
+    assert repository.counterparty("prn_aaaaaaaa11111111", "ent_bbbbbbbb22222222") is None
     lookup_sql = str(connection.statements[1].compile(compile_kwargs={"literal_binds": True}))
-    assert "relationship_people.principal_id = 'prn_aaaaaaaa11111111'" in lookup_sql
-    assert "relationship_people.person_id = 'per_bbbbbbbb22222222'" in lookup_sql
+    assert "entities.principal_id = 'prn_aaaaaaaa11111111'" in lookup_sql
+    assert "entities.entity_id = 'ent_bbbbbbbb22222222'" in lookup_sql
+    assert "entities.entity_type IN ('organization', 'person')" in lookup_sql
+    assert "entities.status = 'active'" in lookup_sql

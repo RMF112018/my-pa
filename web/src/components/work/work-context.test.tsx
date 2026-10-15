@@ -44,8 +44,8 @@ const TASK = {
 
 const COMMITMENT = {
   commitment_id: "cmt_aaaaaaaa11111111", title: "Return revised permit log", description: null,
-  direction: "owed_to_principal", state: "open", counterparty_person_id: "per_aaaaaaaa11111111",
-  counterparty: { person_id: "per_aaaaaaaa11111111", display_name: "Sam Rivera" },
+  direction: "owed_to_principal", state: "open", counterparty_entity_id: "ent_aaaaaaaa11111111",
+  counterparty: { entity_id: "ent_aaaaaaaa11111111", display_name: "Sam Rivera" },
   due_date: null, created_at: "2026-08-20T12:00:00Z", updated_at: "2026-08-22T12:00:00Z",
   version: 2, evidence_state: "proposed", origin_evidence_ref: "cap_origin0002origin0002",
   closure_evidence_ref: null, accepted_by_review_decision_id: null, closed_at: null,
@@ -204,10 +204,10 @@ describe("Commitment detail Counterparty control", () => {
     expect(counterparty.tagName).toBe("SELECT");
     expect(counterparty.required).toBe(true);
     expect(Array.from(counterparty.options).map((option) => [option.value, option.textContent])).toEqual([
-      [COMMITMENT.counterparty.person_id, COMMITMENT.counterparty.display_name],
+      [COMMITMENT.counterparty.entity_id, COMMITMENT.counterparty.display_name],
     ]);
-    expect(counterparty.value).toBe(COMMITMENT.counterparty_person_id);
-    await userEvent.selectOptions(counterparty, COMMITMENT.counterparty.person_id);
-    expect(counterparty.value).toBe(COMMITMENT.counterparty_person_id);
+    expect(counterparty.value).toBe(COMMITMENT.counterparty_entity_id);
+    await userEvent.selectOptions(counterparty, COMMITMENT.counterparty.entity_id);
+    expect(counterparty.value).toBe(COMMITMENT.counterparty_entity_id);
   });
 });

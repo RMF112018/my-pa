@@ -1174,8 +1174,8 @@ function CommitmentCreate({ onDone }: { onDone: () => void }) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const note = String(form.get("origin"));
-    const counterpartyPersonId = String(form.get("counterparty") ?? "");
-    if (!counterparties.some((item) => item.person_id === counterpartyPersonId)) {
+    const counterpartyEntityId = String(form.get("counterparty") ?? "");
+    if (!counterparties.some((item) => item.entity_id === counterpartyEntityId)) {
       setStatus("Choose a verified counterparty from the list.");
       return;
     }
@@ -1185,7 +1185,7 @@ function CommitmentCreate({ onDone }: { onDone: () => void }) {
       setStatus("Creating commitment…");
       const payload = {
         summary: form.get("summary"),
-        counterpartyPersonId,
+        counterpartyEntityId,
         direction: form.get("direction"),
         dueAt: form.get("dueAt") ? new Date(String(form.get("dueAt"))).toISOString() : undefined,
         originEvidenceRef: origin,
@@ -1219,9 +1219,9 @@ function CommitmentCreate({ onDone }: { onDone: () => void }) {
             required
             disabled={Boolean(optionsStatus) || counterparties.length === 0}
           >
-            <option value="">Choose a person</option>
+            <option value="">Choose a person or organization</option>
             {counterparties.map((item) => (
-              <option key={item.person_id} value={item.person_id}>
+              <option key={item.entity_id} value={item.entity_id}>
                 {item.display_name}
               </option>
             ))}
@@ -1243,11 +1243,11 @@ function CommitmentCreate({ onDone }: { onDone: () => void }) {
         </p>
       ) : counterparties.length === 0 ? (
         <p role="status" className="text-sm text-muted">
-          No verified relationship people are available for selection.
+          No people or organizations are available for selection.
         </p>
       ) : optionsTruncated ? (
         <p role="status" className="text-sm text-muted">
-          Showing the first 100 verified people.
+          Showing the first 100 people and organizations.
         </p>
       ) : null}
       <Labeled label="Origin note" hint="Saved through Quick Capture before the commitment is attempted.">

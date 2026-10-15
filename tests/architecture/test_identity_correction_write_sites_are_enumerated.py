@@ -66,6 +66,10 @@ READS: Final = frozenset(
         "assignment",
         "assignments",
         "assignments_scoped_by",
+        # The read-only count behind the `commitment` family's BLOCKED
+        # disposition and its `unsupported_family` blocker. A
+        # merge never re-points a Commitment, so no M-/S- write is enumerated.
+        "commitments_naming_counterparties",
         "communication_methods",
         # WP-RE-04 Phase 4B: the owning-memory and memory-facts reads the
         # merge/split Record Events are built from (OD-2 (b), OD-8).

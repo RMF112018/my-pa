@@ -2959,10 +2959,10 @@ class _CommitmentsRead(CommitmentManagementRepository):
             None,
         )
 
-    def counterparty(self, principal_id: str, person_id: str) -> CounterpartyOption | None:
-        if (principal_id, person_id) not in self._world.current_counterparties:
+    def counterparty(self, principal_id: str, entity_id: str) -> CounterpartyOption | None:
+        if (principal_id, entity_id) not in self._world.current_counterparties:
             return None
-        return CounterpartyOption(person_id=person_id, display_name="Synthetic counterparty")
+        return CounterpartyOption(entity_id=entity_id, display_name="Synthetic counterparty")
 
     def list_commitments(
         self,
@@ -10655,7 +10655,7 @@ def staged_task(scene: Scene, *, title: str = "a synthetic task") -> TaskV2:
 def staged_commitment(
     scene: Scene,
     *,
-    counterparty_person_id: str | None = None,
+    counterparty_entity_id: str | None = None,
     summary: str = "a synthetic commitment",
 ) -> CommitmentV2:
     """One stored commitment inside `scene`'s world, so the reads have an answer.
@@ -10670,13 +10670,13 @@ def staged_commitment(
     if existing is not None:
         return existing
     scene.world.work_evidence_refs.add((scene.principal.principal_id, "cap_origin0001origin0001"))
-    person_id = counterparty_person_id or issue_identifier(IdKind.PERSON)
-    scene.world.current_counterparties.add((scene.principal.principal_id, person_id))
+    entity_id = counterparty_entity_id or issue_identifier(IdKind.ENTITY)
+    scene.world.current_counterparties.add((scene.principal.principal_id, entity_id))
     receipt = CommitmentManagementService(
         unit_of_work=lambda: FakeCommitmentManagementUnitOfWork(scene.world)
     ).create_commitment(
         principal_id=scene.principal.principal_id,
-        counterparty_person_id=person_id,
+        counterparty_entity_id=entity_id,
         direction=CommitmentDirection.OWED_BY_PRINCIPAL,
         summary=summary,
         origin_evidence_ref="cap_origin0001origin0001",

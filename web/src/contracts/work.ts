@@ -2,7 +2,7 @@ export type TaskLifecycle = "open" | "in_progress" | "waiting" | "blocked" | "co
 export type TaskPriority = "p1" | "p2" | "p3" | "p4";
 
 export interface CounterpartyOption {
-  person_id: string;
+  entity_id: string;
   display_name: string;
 }
 
@@ -23,7 +23,7 @@ export interface TaskDetail extends TaskRow {
 }
 export interface CommitmentRow {
   commitment_id: string; direction: "owed_by_principal" | "owed_to_principal"; state: "open" | "closed";
-  counterparty_person_id: string | null; title: string; description: string | null; due_date: string | null;
+  counterparty_entity_id: string | null; title: string; description: string | null; due_date: string | null;
   created_at: string; updated_at: string; version: number;
   counterparty: CounterpartyOption | null;
 }
@@ -36,7 +36,7 @@ export type CommitmentFollowUp =
   | { state: "empty" }
   | { state: "unavailable"; reason: string };
 export interface WaitingOnRow {
-  commitment_id: string; title: string; counterparty_person_id: string | null;
+  commitment_id: string; title: string; counterparty_entity_id: string | null;
   due_date: string | null; state: "open";
   follow_up_task_id: string | null; follow_up_task_title: string | null;
   follow_up_task_state: TaskLifecycle | null;

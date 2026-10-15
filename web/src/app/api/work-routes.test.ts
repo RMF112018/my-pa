@@ -66,7 +66,7 @@ function commitmentView(overrides: Record<string, unknown> = {}) {
     commitment_id: "cmt_aaaaaaaa11111111",
     direction: "owed_to_principal",
     state: "open",
-    counterparty_person_id: null,
+    counterparty_entity_id: null,
     title: "Canonical",
     description: null,
     due_date: null,

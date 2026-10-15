@@ -267,6 +267,7 @@ from my_pa.infrastructure.persistence.tables import (
     capture_spans,
     capture_versions,
     captures,
+    commitments,
     enrollments,
     entities,
     entity_addresses,
@@ -5553,6 +5554,23 @@ class SqlEntityRepository(EntitiesRepository):
         )
         rows = self._connection.execute(live.union(proposed)).scalars().all()
         return frozenset(str(row) for row in rows)
+
+    def commitments_naming_counterparties(
+        self, principal_id: str, entity_ids: frozenset[str]
+    ) -> Mapping[str, int]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        named = _validated_entity_set(entity_ids)
+        if not named:
+            return {}
+        rows = self._connection.execute(
+            select(commitments.c.counterparty_entity_id, func.count())
+            .where(
+                _mine(commitments, principal_id),
+                commitments.c.counterparty_entity_id.in_(named),
+            )
+            .group_by(commitments.c.counterparty_entity_id)
+        ).all()
+        return {str(entity_id): int(count) for entity_id, count in rows}
 
     def serialize_identifier_entity_scopes(
         self, principal_id: str, entity_ids: frozenset[str]

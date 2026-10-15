@@ -270,22 +270,6 @@ def build_world(rt: Runtime) -> World:
         CreateCapture(text="Synthetic routing capture", idempotency_key="recr-capture-0001")
     )
     ids[F.CAPTURE] = capture["capture_id"]
-    # The production Commitment writer, on its own unit of work: the public
-    # create also requires a legacy counterparty row this plane does not seed.
-    commitments = CommitmentManagementService(
-        unit_of_work=lambda: SqlAlchemyCommitmentManagementUnitOfWork(rt.engine),
-        clock=lambda: WHEN,
-    )
-    ids[F.COMMITMENT] = commitments.create_commitment(
-        principal_id=PRINCIPAL,
-        counterparty_person_id="per_recrrouting0001",
-        direction=CommitmentDirection.OWED_BY_PRINCIPAL,
-        summary="Send the synthetic report",
-        origin_evidence_ref=capture["capture_id"],
-        actor=TaskMutationActor.PRINCIPAL,
-        idempotency_key="recr-commitment-0001",
-        source_capability="commitments.create",
-    ).commitment.commitment_id
     project = rt.ok(CreateProject(name="Routing Tower", idempotency_key="recr-project-0001"))[
         "project_id"
     ]
@@ -334,6 +318,23 @@ def build_world(rt: Runtime) -> World:
         )
     )["entity_id"]
     version = {"person": person_created["entity_version"], "organization": 1}
+    # The production Commitment writer, on its own unit of work, naming the
+    # organization Entity just created as its counterparty (the composite
+    # foreign key onto `entities` requires one in this Principal).
+    commitments = CommitmentManagementService(
+        unit_of_work=lambda: SqlAlchemyCommitmentManagementUnitOfWork(rt.engine),
+        clock=lambda: WHEN,
+    )
+    ids[F.COMMITMENT] = commitments.create_commitment(
+        principal_id=PRINCIPAL,
+        counterparty_entity_id=organization,
+        direction=CommitmentDirection.OWED_BY_PRINCIPAL,
+        summary="Send the synthetic report",
+        origin_evidence_ref=capture["capture_id"],
+        actor=TaskMutationActor.PRINCIPAL,
+        idempotency_key="recr-commitment-0001",
+        source_capability="commitments.create",
+    ).commitment.commitment_id
 
     def step(result: dict[str, Any]) -> str:
         """The child's id; and the person's version, which every child write advances."""

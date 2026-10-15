@@ -1,10 +1,11 @@
 """Seed only the Principal-scoped reference row the Work browser suite needs.
 
-The browser must select a verified Person before it can create a Commitment.
-An empty database migrated to head correctly contains no such Person, so the
-real-stack harness inserts one synthetic, Principal-bound option before the
-gateway starts.  No Task, Commitment, evidence record, or expected outcome is
-seeded; those are all created through the browser/BFF during the tests.
+The browser must select a current counterparty Entity before it can create a
+Commitment. An empty database migrated to head correctly contains no Entity, so
+the real-stack harness inserts one synthetic, Principal-bound `person` Entity
+before the gateway starts. No Task, Commitment, evidence record, or expected
+outcome is seeded; those are all created through the browser/BFF during the
+tests.
 """
 
 from __future__ import annotations
@@ -12,73 +13,46 @@ from __future__ import annotations
 import os
 from datetime import UTC, datetime
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, insert
 
 from my_pa.bootstrap.gateway import local_principal
-from my_pa.domain.relationship.identity import (
-    IdentityCandidateSet,
-    IdentityObservation,
-    IdentityResolution,
-    ResolutionAction,
-)
+from my_pa.domain.relationship.entity import EntityStatus, EntityType
+from my_pa.domain.relationship.normalization import normalize_name
 from my_pa.infrastructure.persistence.commitment_management import (
     SqlCommitmentManagementRepository,
 )
-from my_pa.infrastructure.persistence.relationships import SqlRelationshipRepository
+from my_pa.infrastructure.persistence.tables import entities
+
+COUNTERPARTY_ENTITY_ID = "ent_e2e000000000001"
+COUNTERPARTY_DISPLAY_NAME = "E2E Synthetic Counterparty"
 
 
 def main() -> None:
     database_url = os.environ["MY_PA_DATABASE_URL"]
     principal_id = local_principal().principal_id
-    observed_at = datetime(2026, 8, 22, 12, tzinfo=UTC)
-    observation = IdentityObservation(
-        observation_id="iobs_e2e000000000001",
-        source_id="src_e2e000000000001",
-        source_object_id="obj_e2e000000000001",
-        source_version="e2e-v1",
-        observed_at=observed_at,
-        display_name="E2E Synthetic Counterparty",
-    )
+    created_at = datetime(2026, 8, 22, 12, tzinfo=UTC)
     with create_engine(database_url).begin() as connection:
-        repository = SqlRelationshipRepository(connection, principal_id=principal_id)
-        repository.record_observations("contacts", (observation,))
-        candidate = IdentityCandidateSet(
-            candidate_set_id="dups_e2e000000000001",
-            person_ids=(),
-            observation_ids=(observation.observation_id,),
-            created_at=observed_at,
-        )
-        review_id = repository.open_identity_review(
-            candidate,
-            ResolutionAction.LINK_OBSERVATION,
-        )
-        decision_id = repository.decide_identity_review(
-            review_id,
-            disposition="accept",
-            principal_id=principal_id,
-            decided_at=observed_at,
-        )
-        repository.apply_resolution(
-            IdentityResolution(
-                resolution_id="ires_e2e000000000001",
-                action=ResolutionAction.LINK_OBSERVATION,
-                review_case_id=review_id,
-                decision_id=decision_id,
-                retained_person_id="per_e2e000000000001",
-                prior_person_id=None,
-                observation_ids=(observation.observation_id,),
-                decided_at=observed_at,
-            ),
-            display_name="E2E Synthetic Counterparty",
+        connection.execute(
+            insert(entities).values(
+                entity_id=COUNTERPARTY_ENTITY_ID,
+                principal_id=principal_id,
+                entity_type=EntityType.PERSON.value,
+                canonical_name=normalize_name(COUNTERPARTY_DISPLAY_NAME),
+                display_name=COUNTERPARTY_DISPLAY_NAME,
+                status=EntityStatus.ACTIVE.value,
+                created_at=created_at,
+                updated_at=created_at,
+                version=1,
+            )
         )
         options = SqlCommitmentManagementRepository(connection).list_counterparties(
             principal_id,
             limit=2,
         )
-        if [(option.person_id, option.display_name) for option in options] != [
-            ("per_e2e000000000001", "E2E Synthetic Counterparty")
+        if [(option.entity_id, option.display_name) for option in options] != [
+            (COUNTERPARTY_ENTITY_ID, COUNTERPARTY_DISPLAY_NAME)
         ]:
-            raise RuntimeError("the governed synthetic counterparty is not Principal-visible")
+            raise RuntimeError("the synthetic counterparty Entity is not Principal-visible")
 
 
 if __name__ == "__main__":

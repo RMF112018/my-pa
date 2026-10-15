@@ -42,7 +42,7 @@ from my_pa.domain.situation.continuity import (
 )
 
 PRINCIPAL_A = "prn_aaaa0001aaaa0001aaaa0001"
-COUNTERPARTY = "per_counterparty0001aaaa"
+COUNTERPARTY = "ent_counterparty0001aaaa"
 REVIEW_DECISION = "rdec_review0001review0001"
 ORIGIN = "cap_origin0001origin0001"
 WHEN = datetime(2026, 8, 10, 12, tzinfo=UTC)
@@ -52,7 +52,7 @@ def _commitment(**overrides: object) -> Commitment:
     fields: dict[str, object] = {
         "commitment_id": "cmt_base00001base00001aa",
         "principal_id": PRINCIPAL_A,
-        "counterparty_person_id": COUNTERPARTY,
+        "counterparty_entity_id": COUNTERPARTY,
         "direction": CommitmentDirection.OWED_BY_PRINCIPAL,
         "summary": "Send Sample Counterparty the revised figure",
         "state": CommitmentState.OPEN,
@@ -111,9 +111,9 @@ def test_a_closed_commitment_carries_the_evidence_that_closed_it() -> None:
 def test_a_commitment_requires_a_counterparty_and_a_direction() -> None:
     """What separates a Commitment from a Task, asserted rather than described."""
     with pytest.raises(ValueError):
-        _commitment(counterparty_person_id="")
+        _commitment(counterparty_entity_id="")
     with pytest.raises(ValueError):
-        _commitment(counterparty_person_id="not-an-identifier")
+        _commitment(counterparty_entity_id="not-an-identifier")
     with pytest.raises(ValueError, match="which way the obligation runs"):
         _commitment(direction="owed_by_principal")
 
@@ -130,7 +130,7 @@ def test_a_commitment_requires_a_counterparty_and_a_direction() -> None:
         created_at=WHEN,
         updated_at=WHEN,
     )
-    assert not hasattr(task, "counterparty_person_id")
+    assert not hasattr(task, "counterparty_entity_id")
 
 
 def test_every_continuity_object_cites_the_evidence_it_was_read_out_of() -> None:

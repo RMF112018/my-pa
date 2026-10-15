@@ -7041,13 +7041,20 @@ native_live_activation_gates = Table(
 # ---------------------------------------------------------------------------
 
 #: `Commitment`: a social obligation between the Principal and one counterparty.
-#: `counterparty_person_id` carries the `per_…` shape CHECK and **no foreign
-#: key**, for two reasons stated rather than assumed. First,
-#: `relationship_people` is itself principal-partitioned, so a foreign key would
-#: be satisfiable across the partition and one Principal could learn that
-#: another's Person row exists by observing which insert succeeded. Second, an
-#: obligation has to be recordable before the identity plane has resolved the
-#: person it is owed to, and a foreign key would drop the obligation instead.
+#: `counterparty_entity_id` carries the `ent_…` shape CHECK and a **composite**
+#: foreign key `(counterparty_entity_id, principal_id)` onto
+#: `an_entity_is_identified_within_its_principal`, created by revision
+#: `5c1e7a9b3d42`, which replaced the original `counterparty_person_id`
+#: (`IdKind.PERSON`, no foreign key). A plain `entity_id` foreign key would be
+#: satisfiable across the partition and would let one Principal learn that
+#: another's Entity row exists by observing which insert succeeded; the
+#: composite one fails the same way for an absent and for a foreign Entity. The
+#: Person counterparty it replaces could only be minted by the Graph-sourced
+#: identity-resolution pipeline, so no Commitment could ever be recorded; an
+#: Entity is minted locally by `entities.create`. That the Entity is a `person`
+#: or `organization` and is still `active` is an application check at write
+#: time (`SqlCommitmentManagementRepository.counterparty`), not a constraint: an
+#: Entity that later stops being current must not invalidate the obligation.
 #: `origin_evidence_ref` is NOT NULL: a commitment nobody can trace back to
 #: something said or written would be this product asserting an obligation on a
 #: person's behalf.
@@ -7056,7 +7063,7 @@ commitments = Table(
     METADATA,
     Column("commitment_id", Text, primary_key=True),
     Column("principal_id", Text, nullable=False),
-    Column("counterparty_person_id", Text, nullable=False),
+    Column("counterparty_entity_id", Text, nullable=False),
     Column("direction", Text, nullable=False),
     Column("summary", Text, nullable=False),
     Column("state", Text, nullable=False, server_default=text("'open'")),
@@ -7077,7 +7084,7 @@ commitments = Table(
     Column("version", Integer, nullable=False, server_default=text("1")),
     _is_identifier("commitment_id", IdKind.COMMITMENT),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
-    _is_identifier("counterparty_person_id", IdKind.PERSON),
+    _is_identifier("counterparty_entity_id", IdKind.ENTITY),
     _one_of("state", CommitmentState, name="a_commitment_state_is_known"),
     _one_of("evidence_state", ContinuityEvidenceState, name="a_commitment_evidence_state_is_known"),
     _one_of("direction", CommitmentDirection, name="a_commitment_direction_is_known"),
@@ -7111,9 +7118,15 @@ commitments = Table(
         "commitment_id",
         name="commitments_principal_commitment_is_unique",
     ),
+    ForeignKeyConstraint(
+        ["counterparty_entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        name="a_commitment_counterparty_is_an_entity_of_its_principal",
+    ),
     Index("commitments_by_principal", "principal_id"),
     Index("commitments_by_principal_state", "principal_id", "state"),
     Index("commitments_by_principal_evidence_state", "principal_id", "evidence_state"),
+    Index("commitments_by_counterparty_entity", "counterparty_entity_id"),
 )
 
 #: `Decision`: one decision the Principal holds. `awaiting_authority_ref` is the
@@ -12016,10 +12029,9 @@ project_constraints = Table(
 #: Who is in the ball court and who is responsible, as rows rather than as two
 #: columns, because either can be several and either can be a person this build
 #: has not resolved to an Entity yet. `entity_id` carries the `ent_` shape CHECK
-#: and **no foreign key**, for the reason `commitments.counterparty_person_id`
-#: gives: `entities` is itself Principal-partitioned, so a foreign key would be
-#: satisfiable across the partition and one Principal could learn that another's
-#: row exists by observing which insert succeeded.
+#: and **no foreign key**: `entities` is itself Principal-partitioned, so a
+#: plain foreign key would be satisfiable across the partition and one Principal
+#: could learn that another's row exists by observing which insert succeeded.
 project_constraint_parties = Table(
     "project_constraint_parties",
     METADATA,

@@ -1603,11 +1603,11 @@ describe("Work surface", () => {
   });
 
   it("uses the dedicated Waiting On endpoint and truthfully disables unsupported search", async () => {
-    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ waiting_on: [{ commitment_id: "cmt_aaaaaaaa11111111", title: "Revised schedule", counterparty_person_id: "per_aaaaaaaa11111111", counterparty: { person_id: "per_aaaaaaaa11111111", display_name: "Sam Rivera" }, due_date: null, state: "open", follow_up_task_id: "tsk_aaaaaaaa11111111", follow_up_task_title: "Ask Sam", follow_up_task_state: "waiting" }] }), { status: 200, headers: { "content-type": "application/json" } }));
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ waiting_on: [{ commitment_id: "cmt_aaaaaaaa11111111", title: "Revised schedule", counterparty_entity_id: "ent_aaaaaaaa11111111", counterparty: { entity_id: "ent_aaaaaaaa11111111", display_name: "Sam Rivera" }, due_date: null, state: "open", follow_up_task_id: "tsk_aaaaaaaa11111111", follow_up_task_title: "Ask Sam", follow_up_task_state: "waiting" }] }), { status: 200, headers: { "content-type": "application/json" } }));
     vi.stubGlobal("fetch", fetcher); history.replaceState(null, "", "/work?view=commitments&commitment=waiting-on&q=Sam"); renderFromUrl();
     expect(await screen.findByText(/Sam Rivera · waiting on · open/)).toBeTruthy();
     expect(screen.getByText(/Follow-up: Ask Sam · waiting/)).toBeTruthy();
-    expect(screen.queryByText(/per_aaaaaaaa|cmt_aaaaaaaa|tsk_aaaaaaaa/)).toBeNull();
+    expect(screen.queryByText(/ent_aaaaaaaa|cmt_aaaaaaaa|tsk_aaaaaaaa/)).toBeNull();
     expect(screen.getByText("Search is unavailable for the dedicated Waiting On view.")).toBeTruthy();
     expect(screen.getByRole("textbox", { name: "Search commitments" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Search" })).toBeDisabled();
@@ -1615,7 +1615,7 @@ describe("Work surface", () => {
   });
 
   it("offers only human-readable verified counterparty and Commitment choices", async () => {
-    const commitment = { commitment_id: "cmt_aaaaaaaa11111111", title: "Revised schedule", direction: "owed_to_principal", state: "open", counterparty_person_id: "per_aaaaaaaa11111111", counterparty: { person_id: "per_aaaaaaaa11111111", display_name: "Sam Rivera" }, description: null, due_date: null, created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-21T12:00:00Z", version: 1 };
+    const commitment = { commitment_id: "cmt_aaaaaaaa11111111", title: "Revised schedule", direction: "owed_to_principal", state: "open", counterparty_entity_id: "ent_aaaaaaaa11111111", counterparty: { entity_id: "ent_aaaaaaaa11111111", display_name: "Sam Rivera" }, description: null, due_date: null, created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-21T12:00:00Z", version: 1 };
     const fetcher = vi.fn<typeof fetch>(async (input) => String(input).startsWith("/api/commitments")
       ? new Response(JSON.stringify({ commitments: [commitment], counterparty_options: [commitment.counterparty], counterparty_options_truncated: false }), { status: 200, headers: { "content-type": "application/json" } })
       : new Response(JSON.stringify({ tasks: [] }), { status: 200, headers: { "content-type": "application/json" } }));
@@ -2094,7 +2094,7 @@ describe("Work bench controls on the shared Select primitive", () => {
     return vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ tasks: [bulkTask] }), { status: 200, headers: { "content-type": "application/json" } }));
   }
 
-  const commitmentCounterparty = { person_id: "per_aaaaaaaa11111111", display_name: "Sam Rivera" };
+  const commitmentCounterparty = { entity_id: "ent_aaaaaaaa11111111", display_name: "Sam Rivera" };
 
   async function openCommitmentForm(fetcher: ReturnType<typeof vi.fn<typeof fetch>>) {
     vi.stubGlobal("fetch", fetcher);
@@ -2201,19 +2201,19 @@ describe("Work bench controls on the shared Select primitive", () => {
     expect(counterparty).toHaveAttribute("name", "counterparty");
     expect(counterparty).toBeRequired();
     await waitFor(() => expect(optionEntries(counterparty)).toEqual([
-      ["", "Choose a person"],
-      ["per_aaaaaaaa11111111", "Sam Rivera"],
+      ["", "Choose a person or organization"],
+      ["ent_aaaaaaaa11111111", "Sam Rivera"],
     ]));
   });
 
-  it("still disables Counterparty when no verified relationship people are available", async () => {
+  it("still disables Counterparty when no people or organizations are available", async () => {
     const fetcher = commitmentFetcher((path) => path.startsWith("/api/commitments")
       ? new Response(JSON.stringify({ commitments: [], counterparty_options: [], counterparty_options_truncated: false }), { status: 200, headers: { "content-type": "application/json" } })
       : undefined);
     await openCommitmentForm(fetcher);
     const counterparty = (await screen.findByLabelText("Counterparty")) as HTMLSelectElement;
     await waitFor(() => expect(counterparty).toBeDisabled());
-    expect(screen.getByText("No verified relationship people are available for selection.")).toBeTruthy();
+    expect(screen.getByText("No people or organizations are available for selection.")).toBeTruthy();
   });
 
   it("keeps Direction a native combobox named direction with its exact option copy and order", async () => {
@@ -2238,7 +2238,7 @@ describe("Work bench controls on the shared Select primitive", () => {
     const counterparty = (await screen.findByLabelText("Counterparty")) as HTMLSelectElement;
     await waitFor(() => expect(counterparty.options).toHaveLength(2));
     await userEvent.type(screen.getByLabelText("Summary"), "Revised schedule");
-    await userEvent.selectOptions(counterparty, "per_aaaaaaaa11111111");
+    await userEvent.selectOptions(counterparty, "ent_aaaaaaaa11111111");
     await userEvent.selectOptions(screen.getByLabelText("Direction"), "owed_by_principal");
     await userEvent.type(screen.getByLabelText(/Origin note/), "Agreed on the call");
     await userEvent.click(screen.getByRole("button", { name: "Create commitment" }));
@@ -2246,7 +2246,7 @@ describe("Work bench controls on the shared Select primitive", () => {
     const createCall = fetcher.mock.calls.find(([path, init]) => String(path) === "/api/commitments" && init?.method === "POST");
     expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
       summary: "Revised schedule",
-      counterpartyPersonId: "per_aaaaaaaa11111111",
+      counterpartyEntityId: "ent_aaaaaaaa11111111",
       direction: "owed_by_principal",
     });
   });

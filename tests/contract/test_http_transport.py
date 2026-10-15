@@ -739,7 +739,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.COMMITMENTS_HISTORY: {"commitment_id": commitment.commitment_id},
         Capability.COMMITMENTS_WAITING_ON: {},
         Capability.COMMITMENTS_CREATE: {
-            "counterparty_person_id": commitment.counterparty_person_id,
+            "counterparty_entity_id": commitment.counterparty_entity_id,
             "direction": "owed_by_principal",
             "summary": "HTTP commitment-plane commitment",
             "origin_evidence_ref": "cap_origin0001origin0001",
@@ -1557,12 +1557,12 @@ def commands_for(
     record: KnowledgeRecord,
     capture_id: str,
     bulk_operation_id: str,
-    counterparty_person_id: str,
+    counterparty_entity_id: str,
     feedback_target_id: str,
 ) -> dict[Capability, Command]:
     """The same requests, written as commands rather than as JSON.
 
-    `capture_id`, `bulk_operation_id`, and `counterparty_person_id` are
+    `capture_id`, `bulk_operation_id`, and `counterparty_entity_id` are
     parameters rather than staged or minted here: the payload table and this
     table have to name the *same* capture, bulk operation, and counterparty or
     the comparison below would be between two different requests, and each
@@ -1805,7 +1805,7 @@ def commands_for(
         ),
         Capability.COMMITMENTS_WAITING_ON: WaitingOn(),
         Capability.COMMITMENTS_CREATE: CreateCommitment(
-            counterparty_person_id=counterparty_person_id,
+            counterparty_entity_id=counterparty_entity_id,
             direction=CommitmentDirection.OWED_BY_PRINCIPAL,
             summary="HTTP commitment-plane commitment",
             origin_evidence_ref="cap_origin0001origin0001",
@@ -2782,7 +2782,7 @@ def test_commitment_create_refuses_a_superseded_counterparty_without_disclosure(
     scene, _ = staged
     commitment = staged_commitment(scene)
     scene.world.current_counterparties.remove(
-        (scene.principal.principal_id, commitment.counterparty_person_id)
+        (scene.principal.principal_id, commitment.counterparty_entity_id)
     )
     reply = wire.send(
         Capability.COMMITMENTS_CREATE.value,
@@ -2790,7 +2790,7 @@ def test_commitment_create_refuses_a_superseded_counterparty_without_disclosure(
             Capability.COMMITMENTS_CREATE,
             scene,
             {
-                "counterparty_person_id": commitment.counterparty_person_id,
+                "counterparty_entity_id": commitment.counterparty_entity_id,
                 "direction": "owed_to_principal",
                 "summary": "Synthetic refused commitment",
                 "origin_evidence_ref": "cap_origin0001origin0001",
@@ -2800,7 +2800,7 @@ def test_commitment_create_refuses_a_superseded_counterparty_without_disclosure(
     )
     assert reply.status == 404
     assert reply.document()["error"]["code"] == "not_found"
-    assert reply.document()["error"]["safe_details"] == ["counterparty_person_id"]
+    assert reply.document()["error"]["safe_details"] == ["counterparty_entity_id"]
 
 
 @pytest.mark.parametrize(
@@ -2827,7 +2827,7 @@ def test_commitment_create_refuses_a_superseded_counterparty_without_disclosure(
         (
             Capability.COMMITMENTS_CREATE,
             lambda scene, reference: {
-                "counterparty_person_id": staged_commitment(scene).counterparty_person_id,
+                "counterparty_entity_id": staged_commitment(scene).counterparty_entity_id,
                 "direction": "owed_by_principal",
                 "summary": "Replay survives superseded evidence",
                 "origin_evidence_ref": reference,
@@ -3620,7 +3620,7 @@ def test_normalisation_builds_the_pair_a_hand_written_request_builds(
     document = document_for(capability, scene, payloads[capability])
     capture_id = str(payloads[Capability.CAPTURE_READ]["capture_id"])
     bulk_operation_id = str(payloads[Capability.TASKS_BULK_CONFIRM]["bulk_operation_id"])
-    counterparty_person_id = str(payloads[Capability.COMMITMENTS_CREATE]["counterparty_person_id"])
+    counterparty_entity_id = str(payloads[Capability.COMMITMENTS_CREATE]["counterparty_entity_id"])
     feedback_target_id = str(payloads[Capability.CONTEXT_FEEDBACK]["target_id"])
     metadata, command = normalize(capability.value, document)
     assert (
@@ -3630,7 +3630,7 @@ def test_normalisation_builds_the_pair_a_hand_written_request_builds(
             record,
             capture_id,
             bulk_operation_id,
-            counterparty_person_id,
+            counterparty_entity_id,
             feedback_target_id,
         )[capability]
     )

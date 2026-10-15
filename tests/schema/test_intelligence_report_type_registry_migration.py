@@ -137,11 +137,13 @@ def _flat(value: str) -> str:
 def test_the_revision_is_the_single_head_directly_on_the_project_fields_revision() -> None:
     """Re-parented onto `cc373834a485` (#325), which sits on the focus-area revision.
 
-    `c8f7ae406d47` (the MCP interaction log) is additive on this revision, so it
-    is no longer the head; it sits directly beneath the single head.
+    `c8f7ae406d47` (the MCP interaction log) is additive on this revision and
+    `5c1e7a9b3d42` (the Commitment counterparty Entity cutover) on that, so it is
+    no longer the head; the chain holds one head two links above it.
     """
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == ["c8f7ae406d47"]
+    assert script.get_heads() == ["5c1e7a9b3d42"]
+    assert script.get_revision("5c1e7a9b3d42").down_revision == "c8f7ae406d47"
     assert script.get_revision("c8f7ae406d47").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "93f3aa113f58"

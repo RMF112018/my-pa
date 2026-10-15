@@ -33,7 +33,7 @@ class CommitmentView:
     commitment_id: str
     direction: str
     state: str
-    counterparty_person_id: str | None
+    counterparty_entity_id: str | None
     title: str
     description: str | None
     due_date: str | None
@@ -59,7 +59,7 @@ class CommitmentListEntry:
     commitment_id: str
     direction: str
     state: str
-    counterparty_person_id: str | None
+    counterparty_entity_id: str | None
     title: str
     description: str | None
     due_date: str | None
@@ -84,7 +84,7 @@ class WaitingOnEntry:
 
     commitment_id: str
     title: str
-    counterparty_person_id: str | None
+    counterparty_entity_id: str | None
     due_date: str | None
     state: str
     follow_up_task_id: str | None

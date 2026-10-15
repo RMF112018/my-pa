@@ -110,7 +110,7 @@ def _commitment_created_values(commitment: Commitment) -> dict[str, object]:
     """WP-RE-02: the fields a create materializes (named only when non-null)."""
     return {
         "accepted_by_review_decision_id": commitment.accepted_by_review_decision_id,
-        "counterparty_person_id": commitment.counterparty_person_id,
+        "counterparty_entity_id": commitment.counterparty_entity_id,
         "direction": commitment.direction,
         "due_at": commitment.due_at,
         "evidence_state": commitment.evidence_state,
@@ -126,7 +126,7 @@ def _commitment_created_values(commitment: Commitment) -> dict[str, object]:
 def _commitment_patchable_values(commitment: Commitment) -> dict[str, object]:
     """The only patchable fields, compared field by field for an update."""
     return {
-        "counterparty_person_id": commitment.counterparty_person_id,
+        "counterparty_entity_id": commitment.counterparty_entity_id,
         "due_at": commitment.due_at,
         "summary": commitment.summary,
     }
@@ -205,7 +205,7 @@ class CommitmentManagementService:
         self,
         *,
         principal_id: str,
-        counterparty_person_id: str,
+        counterparty_entity_id: str,
         direction: CommitmentDirection,
         summary: str,
         origin_evidence_ref: str,
@@ -244,7 +244,7 @@ class CommitmentManagementService:
             return Commitment(
                 commitment_id=issue_identifier(IdKind.COMMITMENT),
                 principal_id=principal_id,
-                counterparty_person_id=counterparty_person_id,
+                counterparty_entity_id=counterparty_entity_id,
                 direction=direction,
                 summary=summary,
                 state=CommitmentState.OPEN,
@@ -269,7 +269,7 @@ class CommitmentManagementService:
             client_context=client_context,
             change=change,
             request_digest=_request_digest(
-                counterparty_person_id=counterparty_person_id,
+                counterparty_entity_id=counterparty_entity_id,
                 direction=direction,
                 summary=summary,
                 origin_evidence_ref=origin_evidence_ref,
@@ -297,11 +297,18 @@ class CommitmentManagementService:
         client_context: str | None = None,
         active_uow: _ActiveCommitmentUnitOfWork | None = None,
         validate_first_write: Callable[[], None] | None = None,
+        validate_against_current: Callable[[Commitment], None] | None = None,
         source_capability: str | None = None,
         correlation_id: str | None = None,
     ) -> CommitmentMutationReceipt:
-        """Atomically update only the mutable Work-facing commitment fields."""
-        allowed = {"summary", "due_at", "counterparty_person_id"}
+        """Atomically update only the mutable Work-facing commitment fields.
+
+        `validate_against_current` runs on a first-time write once the stored
+        row has been read and locked, so a caller can validate a field only
+        when the request actually changes it (a re-pointed counterparty) and
+        never because it merely restates the stored value.
+        """
+        allowed = {"summary", "due_at", "counterparty_entity_id"}
         if unknown := set(values) - allowed:
             raise ValueError(f"unknown commitment patch fields: {sorted(unknown)!r}")
         if clear_due_at and "due_at" in values:
@@ -330,6 +337,7 @@ class CommitmentManagementService:
             ),
             active_uow=active_uow,
             validate_first_write=validate_first_write,
+            validate_against_current=validate_against_current,
             source_capability=source_capability,
             correlation_id=correlation_id,
         )
@@ -397,6 +405,7 @@ class CommitmentManagementService:
         request_digest: str | None = None,
         active_uow: _ActiveCommitmentUnitOfWork | None = None,
         validate_first_write: Callable[[], None] | None = None,
+        validate_against_current: Callable[[Commitment], None] | None = None,
         source_capability: str | None = None,
         correlation_id: str | None = None,
     ) -> CommitmentMutationReceipt:
@@ -443,6 +452,8 @@ class CommitmentManagementService:
                     if commitment_id is not None
                     else None
                 )
+                if validate_against_current is not None and current is not None:
+                    validate_against_current(current)
                 version_mismatch = (
                     current is not None
                     and expected_version is not None

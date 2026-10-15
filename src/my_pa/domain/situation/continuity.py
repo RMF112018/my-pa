@@ -10,10 +10,11 @@ counterparty and a direction — who owes what to whom — and that distinction 
 the reason it is a separate type rather than a `kind` column on `Task`. A Task is
 work the Principal holds alone; a Commitment is work that another person is
 entitled to expect, so closing one silently is a different kind of failure. The
-counterparty is a `per_…` reference and **carries no foreign key**, for the same
-reason `Situation.object_refs` carries none and for one more: `relationship_people`
-is itself principal-partitioned, so a foreign key would let one Principal learn
-that another Principal's Person row exists by observing which insert succeeds.
+counterparty is an `ent_…` reference to a `person` or `organization` Entity in
+the same Principal. The schema holds it to that Principal with a composite
+`(counterparty_entity_id, principal_id)` foreign key, so an insert naming another
+Principal's Entity fails exactly as one naming no Entity does, and the existence
+of another Principal's row is never observable through which insert succeeds.
 
 **Accepted-only continuity.** Every object here carries `evidence_state`, a closed
 two-member vocabulary, and it is `PROPOSED` unless a human accepted it. Continuity
@@ -249,7 +250,7 @@ class Commitment:
 
     commitment_id: str
     principal_id: str
-    counterparty_person_id: str
+    counterparty_entity_id: str
     direction: CommitmentDirection
     summary: str
     state: CommitmentState
@@ -268,7 +269,7 @@ class Commitment:
     def __post_init__(self) -> None:
         _require_identifier(self.commitment_id, IdKind.COMMITMENT, "a commitment identifier")
         _require_identifier(self.principal_id, IdKind.PRINCIPAL, "a principal identifier")
-        _require_identifier(self.counterparty_person_id, IdKind.PERSON, "a commitment counterparty")
+        _require_identifier(self.counterparty_entity_id, IdKind.ENTITY, "a commitment counterparty")
         if not isinstance(self.direction, CommitmentDirection):
             raise ValueError("a commitment names which way the obligation runs")
         if not self.summary.strip():

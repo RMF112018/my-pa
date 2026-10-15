@@ -66,9 +66,13 @@ def _config() -> Config:
     return Config(str(ROOT / "alembic.ini"), output_buffer=io.StringIO())
 
 
-def test_the_revision_is_the_single_head_on_the_report_type_registry() -> None:
+def test_the_revision_is_on_the_report_type_registry_under_one_later_head() -> None:
+    """`5c1e7a9b3d42` (Commitment counterparty Entity cutover) is additive on this
+    revision, so it is no longer the head; it sits directly beneath the single head.
+    """
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [REVISION]
+    assert script.get_heads() == ["5c1e7a9b3d42"]
+    assert script.get_revision("5c1e7a9b3d42").down_revision == REVISION
     revision = script.get_revision(REVISION)
     assert revision is not None
     assert revision.down_revision == PREVIOUS

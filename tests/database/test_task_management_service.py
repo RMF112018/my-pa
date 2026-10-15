@@ -46,6 +46,7 @@ from my_pa.application.tasks import (
 )
 from my_pa.contracts.ports import BulkIdempotencyConflictError, WorkCursorError
 from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.relationship.entity import EntityType
 from my_pa.domain.situation.continuity import (
     CommitmentDirection,
     CommitmentState,
@@ -76,6 +77,7 @@ from my_pa.infrastructure.persistence.task_management import (
     SqlAlchemyTaskManagementUnitOfWork,
     SqlTaskManagementRepository,
 )
+from tests.database.test_commitment_entity_counterparty import seed_counterparty_entity
 
 pytestmark = pytest.mark.database
 
@@ -546,9 +548,13 @@ def test_sql_commitment_cursors_refuse_absent_and_foreign_anchors(
         unit_of_work=lambda: SqlAlchemyCommitmentManagementUnitOfWork(migrated_engine),
         clock=lambda: datetime(2026, 8, 10, 12, tzinfo=UTC),
     )
+    counterparty_a = seed_counterparty_entity(migrated_engine, PRINCIPAL_A)
+    counterparty_b = seed_counterparty_entity(
+        migrated_engine, PRINCIPAL_B, entity_type=EntityType.ORGANIZATION
+    )
     mine = service.create_commitment(
         principal_id=PRINCIPAL_A,
-        counterparty_person_id=issue_identifier(IdKind.PERSON),
+        counterparty_entity_id=counterparty_a,
         direction=CommitmentDirection.OWED_TO_PRINCIPAL,
         summary="Mine",
         origin_evidence_ref=ORIGIN,
@@ -557,7 +563,7 @@ def test_sql_commitment_cursors_refuse_absent_and_foreign_anchors(
     )
     foreign = service.create_commitment(
         principal_id=PRINCIPAL_B,
-        counterparty_person_id=issue_identifier(IdKind.PERSON),
+        counterparty_entity_id=counterparty_b,
         direction=CommitmentDirection.OWED_TO_PRINCIPAL,
         summary="Foreign",
         origin_evidence_ref=ORIGIN,
@@ -566,7 +572,7 @@ def test_sql_commitment_cursors_refuse_absent_and_foreign_anchors(
     )
     accepted = service.create_commitment(
         principal_id=PRINCIPAL_A,
-        counterparty_person_id=issue_identifier(IdKind.PERSON),
+        counterparty_entity_id=counterparty_a,
         direction=CommitmentDirection.OWED_TO_PRINCIPAL,
         summary="Accepted",
         origin_evidence_ref=ORIGIN,
@@ -576,7 +582,7 @@ def test_sql_commitment_cursors_refuse_absent_and_foreign_anchors(
     )
     wrong_direction = service.create_commitment(
         principal_id=PRINCIPAL_A,
-        counterparty_person_id=issue_identifier(IdKind.PERSON),
+        counterparty_entity_id=counterparty_a,
         direction=CommitmentDirection.OWED_BY_PRINCIPAL,
         summary="Needle wrong direction",
         origin_evidence_ref=ORIGIN,
@@ -585,7 +591,7 @@ def test_sql_commitment_cursors_refuse_absent_and_foreign_anchors(
     )
     wrong_state = service.create_commitment(
         principal_id=PRINCIPAL_A,
-        counterparty_person_id=issue_identifier(IdKind.PERSON),
+        counterparty_entity_id=counterparty_a,
         direction=CommitmentDirection.OWED_TO_PRINCIPAL,
         summary="Needle wrong state",
         origin_evidence_ref=ORIGIN,
@@ -603,7 +609,7 @@ def test_sql_commitment_cursors_refuse_absent_and_foreign_anchors(
     needle = tuple(
         service.create_commitment(
             principal_id=PRINCIPAL_A,
-            counterparty_person_id=issue_identifier(IdKind.PERSON),
+            counterparty_entity_id=counterparty_a,
             direction=CommitmentDirection.OWED_TO_PRINCIPAL,
             summary=f"Needle continuation {index}",
             origin_evidence_ref=ORIGIN,

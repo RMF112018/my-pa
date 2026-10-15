@@ -38,6 +38,7 @@ from my_pa.infrastructure.persistence.commitment_management import (
 )
 from my_pa.infrastructure.persistence.tables import commitment_history
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
+from tests.database.test_commitment_entity_counterparty import seed_counterparty_entity
 from tests.database.test_task_record_events import assert_gap_free, feed, next_sequence
 
 pytestmark = pytest.mark.database
@@ -78,7 +79,9 @@ def _create(harness: _Harness, principal: str, key: str | None = None) -> Any:  
     return harness.call(
         harness.service.create_commitment,
         principal_id=principal,
-        counterparty_person_id="per_rcevwp02cmt00001",
+        counterparty_entity_id=seed_counterparty_entity(
+            harness.engine, principal, entity_id="ent_" + principal.removeprefix("prn_")
+        ),
         direction=CommitmentDirection.OWED_BY_PRINCIPAL,
         summary="Send the synthetic report",
         origin_evidence_ref=ORIGIN,

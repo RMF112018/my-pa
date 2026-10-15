@@ -3123,11 +3123,13 @@ class WaitingOn:
 class CreateCommitment:
     """`commitments.create`: create a new commitment.
 
-    `counterparty_person_id` and `origin_evidence_ref` are required and have
+    `counterparty_entity_id` and `origin_evidence_ref` are required and have
     no default: a commitment that did not name who the obligation runs
     against, or what prompted its creation, would be exactly the kind of
     unjustified row the append-only history exists to prevent — the identical
-    reasoning `CreateTask` gives for `origin_evidence_ref`.
+    reasoning `CreateTask` gives for `origin_evidence_ref`. The counterparty is
+    an `ent_…` identifier naming a current `person` or `organization` Entity in
+    the caller's own Principal, the kind `entities.create` mints locally.
 
     `idempotency_key` is required and has no default, for the identical
     reason `CreateTask` requires it.
@@ -3140,7 +3142,7 @@ class CreateCommitment:
 
     capability: ClassVar[Capability] = Capability.COMMITMENTS_CREATE
 
-    counterparty_person_id: str
+    counterparty_entity_id: str
     direction: CommitmentDirection
     summary: str
     origin_evidence_ref: str
@@ -3152,7 +3154,7 @@ class CreateCommitment:
     client_context: str | None = None
 
     def __post_init__(self) -> None:
-        _identifier(self.counterparty_person_id, IdKind.PERSON, SafeDetail.COUNTERPARTY_PERSON_ID)
+        _identifier(self.counterparty_entity_id, IdKind.ENTITY, SafeDetail.COUNTERPARTY_ENTITY_ID)
         if not isinstance(self.direction, CommitmentDirection):
             raise InvalidRequestError(SafeDetail.SELECTOR)
         _text(self.summary, SafeDetail.TITLE)
@@ -3187,7 +3189,7 @@ class UpdateCommitment:
     idempotency_key: str
     summary: str | None = None
     due_at: datetime | None = None
-    counterparty_person_id: str | None = None
+    counterparty_entity_id: str | None = None
     clear_due_at: bool = False
     client_context: str | None = None
 
@@ -3202,16 +3204,16 @@ class UpdateCommitment:
                 raise InvalidRequestError(SafeDetail.TITLE)
         if self.due_at is not None:
             _moment(self.due_at, SafeDetail.DUE_AT)
-        if self.counterparty_person_id is not None:
+        if self.counterparty_entity_id is not None:
             _identifier(
-                self.counterparty_person_id, IdKind.PERSON, SafeDetail.COUNTERPARTY_PERSON_ID
+                self.counterparty_entity_id, IdKind.ENTITY, SafeDetail.COUNTERPARTY_ENTITY_ID
             )
         if self.clear_due_at and self.due_at is not None:
             raise InvalidRequestError(SafeDetail.DUE_AT)
         if (
             self.summary is None
             and self.due_at is None
-            and self.counterparty_person_id is None
+            and self.counterparty_entity_id is None
             and not self.clear_due_at
         ):
             raise InvalidRequestError(SafeDetail.SELECTOR)

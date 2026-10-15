@@ -3969,6 +3969,32 @@ class IdentityCorrectionService:
         )
 
         groups.extend(_UNBOUND_GROUPS)
+        # Commitments name their counterparty by Entity, so a merged-away
+        # counterparty is a materially affected Commitment this phase cannot
+        # re-point with reversible lineage (there is no Commitment effect
+        # family). One blocking `unsupported_family` conflict per merged-away
+        # Entity a Commitment names, so `apply` is refused rather than leaving a
+        # Commitment naming a `merged_redirect` Entity. None named: `UNCHANGED`.
+        commitment_counts = self._entities.commitments_naming_counterparties(
+            principal_id, merged_entity_ids
+        )
+        commitment_conflicts = [
+            IdentityConflict(
+                kind=IdentityConflictKind.UNSUPPORTED_FAMILY,
+                family=IdentityEffectFamily.ENTITY,
+                record_id=entity_id,
+            )
+            # Every key names at least one Commitment (a GROUP BY count).
+            for entity_id in sorted(commitment_counts)
+        ]
+        conflicts.extend(commitment_conflicts)
+        groups.append(
+            MergeAffectedGroup(
+                MergeFamily.COMMITMENT,
+                FamilyDisposition.BLOCKED if commitment_conflicts else FamilyDisposition.UNCHANGED,
+                sum(commitment_counts.values()),
+            )
+        )
         groups.append(
             MergeAffectedGroup(
                 MergeFamily.SOURCE_LINK,
@@ -4558,31 +4584,32 @@ def _disposition(changed: bool) -> FamilyDisposition:
     return FamilyDisposition.TRANSFORMED if changed else FamilyDisposition.UNCHANGED
 
 
-#: The two families section 20 names that the schema gives no way to reach.
+#: The one family section 20 names that the schema gives no way to reach.
 #:
-#: `tasks` carries no entity reference at all, and `commitments` names a
-#: counterparty under `IdKind.PERSON` -- the WP-9 person substrate, not
-#: `IdKind.ENTITY` -- with no foreign key to `entities`. So there is no binding
-#: for a merge to find, and section 20's "linked Tasks/Commitments where current
-#: repository bindings exist" is answered by saying which bindings do not.
+#: `tasks` carries no entity reference at all, so there is no binding for a
+#: merge to find, and section 20's "linked Tasks/Commitments where current
+#: repository bindings exist" is answered for Tasks by saying the binding does
+#: not exist.
 #:
 #: Reported rather than omitted, because the difference between "this merge
-#: touches no commitment" and "nothing connects a commitment to an identity yet"
-#: is exactly what a later work package changes, and a report that omitted the
-#: family would look identical before and after.
+#: touches no task" and "nothing connects a task to an identity yet" is exactly
+#: what a later work package changes, and a report that omitted the family would
+#: look identical before and after.
 #:
-#: **This is also how a split discharges RI v0.2 section 15.4's "avoid
-#: duplicating commitments silently".** It is discharged structurally rather
-#: than by a rule the inversion has to remember: with no binding for a merge to
-#: find, there is no commitment in any effect for a split to invert and no
-#: commitment an operator's disposition could reach. Verified at this revision --
-#: `knowledge.commitments.counterparty_person_id` is `IdKind.PERSON` with no
-#: foreign key to `knowledge.entities`, and `knowledge.tasks` names no entity at
-#: all -- and it stops being true the moment either binding is added, which is
-#: the change that would turn these two members into `TRANSFORMED`.
+#: **Commitments are no longer here.** Revision `5c1e7a9b3d42` replaced
+#: `knowledge.commitments.counterparty_person_id` (`IdKind.PERSON`, no foreign
+#: key) with `counterparty_entity_id`, an `IdKind.ENTITY` with a composite
+#: foreign key to `knowledge.entities`, so the binding exists and `_analyse`
+#: reads it: a merge whose merged-away Entity is some Commitment's counterparty
+#: reports the family `BLOCKED` with that count and raises an
+#: `unsupported_family` conflict, because this phase records no Commitment
+#: effect and so cannot re-point one with reversible lineage. That is also how a
+#: split still discharges RI v0.2 section 15.4's "avoid duplicating commitments
+#: silently": no applied merge ever moved a Commitment, so no effect exists for
+#: a split to invert. Turning the family `TRANSFORMED` (a Commitment effect
+#: family, re-pointing, and its split inversion) is a later work package.
 _UNBOUND_GROUPS: Final[tuple[MergeAffectedGroup, ...]] = (
     MergeAffectedGroup(MergeFamily.TASK, FamilyDisposition.NOT_BOUND, 0),
-    MergeAffectedGroup(MergeFamily.COMMITMENT, FamilyDisposition.NOT_BOUND, 0),
 )
 
 

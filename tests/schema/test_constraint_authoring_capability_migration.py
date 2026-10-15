@@ -52,7 +52,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "f7a2c9d51e64"
-CURRENT_HEAD: Final = "c8f7ae406d47"
+CURRENT_HEAD: Final = "5c1e7a9b3d42"
 CAPTURE_LABELS: Final = "c1a8e4d70b29"
 WP_TUX_01: Final = "de5ec1c65857"
 WP_MCP_PROJ_01: Final = "9f2c8a1d4e70"
@@ -107,6 +107,11 @@ INTELLIGENCE_REPORT_TYPE_MIGRATION: Final = (
 #: The MCP interaction log (`c8f7ae406d47`), registered as an additive head on
 #: the same precedent.
 MCP_INTERACTION_LOG_MIGRATION: Final = MIGRATIONS / "20261011_c8f7ae406d47_mcp_interaction_log.py"
+#: The Commitment counterparty Entity cutover (`5c1e7a9b3d42`), registered as an
+#: additive head on the same precedent.
+COMMITMENT_COUNTERPARTY_ENTITY_MIGRATION: Final = (
+    MIGRATIONS / "20261014_5c1e7a9b3d42_commitment_counterparty_entity.py"
+)
 #: The one sanctioned edit to a historical revision (operator ruling
 #: OPERATOR_RULING_WP04_A_to_E.md section E). Like D-48, the Meeting-records
 #: work freezes `a_managed_document_is_identified_within_its_owner` out of
@@ -177,7 +182,6 @@ CONSTRAINT_TABLES: Final[frozenset[str]] = frozenset(
 #: named list rather than a repository-wide scan.
 HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     # Names the head only in a comment explaining its own revision-count bump.
-    "tests/architecture/test_mcp_interactions_have_one_delete.py",
     "tests/architecture/test_no_revision_derives_a_closed_set_from_an_enum.py",
     "tests/database/test_cli_auth.py",
     "tests/database/test_entities_graph_vocabulary_migration.py",
@@ -187,6 +191,9 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_auth_identity_and_grants_migration.py",
     "tests/schema/test_canvas_workspace_migration.py",
     "tests/schema/test_capture_lifecycle_migration.py",
+    # The Commitment counterparty Entity cutover's own revision module names
+    # the head as the revision it tests.
+    "tests/schema/test_commitment_counterparty_entity_migration.py",
     "tests/schema/test_constraint_management_migration.py",
     "tests/schema/test_constraint_read_capability_migration.py",
     "tests/schema/test_constraint_sync_migration.py",
@@ -212,7 +219,7 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_intelligence_report_type_registry_migration.py",
     "tests/schema/test_knowledge_assertion_migration.py",
     "tests/schema/test_legacy_direct_principal_task_origin_migration.py",
-    # The MCP interaction log revision module names the head as the revision it tests.
+    # The MCP interaction log revision module names the head it now sits under.
     "tests/schema/test_mcp_interaction_log_migration.py",
     "tests/schema/test_meeting_records_migration.py",
     "tests/schema/test_record_event_truncate_refusal_migration.py",
@@ -302,7 +309,8 @@ def _literals(block: str) -> list[str]:
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [CURRENT_HEAD]
-    assert script.get_revision(CURRENT_HEAD).down_revision == "a591b81f10a2"
+    assert script.get_revision(CURRENT_HEAD).down_revision == "c8f7ae406d47"
+    assert script.get_revision("c8f7ae406d47").down_revision == "a591b81f10a2"
     assert script.get_revision("a591b81f10a2").down_revision == "cc373834a485"
     assert script.get_revision("cc373834a485").down_revision == "93f3aa113f58"
     assert script.get_revision("93f3aa113f58").down_revision == "6734f039f7a6"
@@ -323,7 +331,7 @@ def test_revision_is_the_only_linear_head() -> None:
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 116
+    assert len(list(MIGRATIONS.glob("*.py"))) == 117
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -473,6 +481,7 @@ def test_no_historical_revision_was_edited() -> None:
         PROJECT_SIXTEEN_FIELDS_MIGRATION.relative_to(ROOT).as_posix(),
         INTELLIGENCE_REPORT_TYPE_MIGRATION.relative_to(ROOT).as_posix(),
         MCP_INTERACTION_LOG_MIGRATION.relative_to(ROOT).as_posix(),
+        COMMITMENT_COUNTERPARTY_ENTITY_MIGRATION.relative_to(ROOT).as_posix(),
         # Not an additive head: the one sanctioned historical edit (see
         # `SANCTIONED_HISTORICAL_EDIT`; operator ruling section E).
         SANCTIONED_HISTORICAL_EDIT.relative_to(ROOT).as_posix(),

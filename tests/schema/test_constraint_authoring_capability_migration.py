@@ -112,6 +112,12 @@ MCP_INTERACTION_LOG_MIGRATION: Final = MIGRATIONS / "20261011_c8f7ae406d47_mcp_i
 COMMITMENT_COUNTERPARTY_ENTITY_MIGRATION: Final = (
     MIGRATIONS / "20261014_5c1e7a9b3d42_commitment_counterparty_entity.py"
 )
+#: WP-MCP-PROJ-05's additive head (`b9025e7fb738`, legacy Project-Entity
+#: bridge reconciliation), registered as this branch's additive head on the
+#: same precedent.
+RECONCILE_LEGACY_PROJECT_ENTITY_LINKS_MIGRATION: Final = (
+    MIGRATIONS / "20261015_b9025e7fb738_reconcile_legacy_project_entity_links.py"
+)
 #: The one sanctioned edit to a historical revision (operator ruling
 #: OPERATOR_RULING_WP04_A_to_E.md section E). Like D-48, the Meeting-records
 #: work freezes `a_managed_document_is_identified_within_its_owner` out of
@@ -485,6 +491,7 @@ def test_no_historical_revision_was_edited() -> None:
         INTELLIGENCE_REPORT_TYPE_MIGRATION.relative_to(ROOT).as_posix(),
         MCP_INTERACTION_LOG_MIGRATION.relative_to(ROOT).as_posix(),
         COMMITMENT_COUNTERPARTY_ENTITY_MIGRATION.relative_to(ROOT).as_posix(),
+        RECONCILE_LEGACY_PROJECT_ENTITY_LINKS_MIGRATION.relative_to(ROOT).as_posix(),
         # Not an additive head: the one sanctioned historical edit (see
         # `SANCTIONED_HISTORICAL_EDIT`; operator ruling section E).
         SANCTIONED_HISTORICAL_EDIT.relative_to(ROOT).as_posix(),

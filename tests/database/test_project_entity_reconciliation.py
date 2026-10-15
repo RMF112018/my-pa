@@ -96,9 +96,7 @@ def _demote_to_unresolved_missing(
             )
 
 
-def _seed_second_unresolved_project(
-    runtime: _Runtime, *, project_id: str, name: str
-) -> None:
+def _seed_second_unresolved_project(runtime: _Runtime, *, project_id: str, name: str) -> None:
     """A second legacy-shaped row, inserted directly rather than through authoring.
 
     Used only by the ordering-trap test, where two rows must exist with the
@@ -224,13 +222,17 @@ def test_zero_candidate_branch_mints_a_project_entity_and_binds_it(runtime: _Run
     assert len(minted) == 1
     entity_id = minted[0].detail[0]
     with runtime.work_engine.connect() as connection:
-        entity = connection.execute(
-            text(
-                f"SELECT entity_type, canonical_name, display_name, status, version "  # noqa: S608
-                f"FROM {SCHEMA}.entities WHERE entity_id = :entity_id"
-            ),
-            {"entity_id": entity_id},
-        ).mappings().one()
+        entity = (
+            connection.execute(
+                text(
+                    f"SELECT entity_type, canonical_name, display_name, status, version "  # noqa: S608
+                    f"FROM {SCHEMA}.entities WHERE entity_id = :entity_id"
+                ),
+                {"entity_id": entity_id},
+            )
+            .mappings()
+            .one()
+        )
     assert entity["entity_type"] == EntityType.PROJECT.value
     assert entity["status"] == "active"
     assert int(entity["version"]) == 1
@@ -410,13 +412,17 @@ def test_regression_creation_time_mint_still_works_and_is_untouched(runtime: _Ru
     assert state == "bound"
     assert entity_id is not None
     with runtime.work_engine.connect() as connection:
-        entity = connection.execute(
-            text(
-                f"SELECT entity_type, status, version FROM {SCHEMA}.entities "  # noqa: S608
-                "WHERE entity_id = :entity_id"
-            ),
-            {"entity_id": entity_id},
-        ).mappings().one()
+        entity = (
+            connection.execute(
+                text(
+                    f"SELECT entity_type, status, version FROM {SCHEMA}.entities "  # noqa: S608
+                    "WHERE entity_id = :entity_id"
+                ),
+                {"entity_id": entity_id},
+            )
+            .mappings()
+            .one()
+        )
     assert entity["entity_type"] == EntityType.PROJECT.value
     assert entity["status"] == "active"
     assert int(entity["version"]) == 1

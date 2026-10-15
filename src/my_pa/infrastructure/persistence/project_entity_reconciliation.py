@@ -156,9 +156,7 @@ def reconcile_project_entity_links(
         project_entity_links.c.project_entity_id,
     ).order_by(project_entity_links.c.principal_id, project_entity_links.c.project_id)
     if principal_id is not None:
-        link_rows_query = link_rows_query.where(
-            project_entity_links.c.principal_id == principal_id
-        )
+        link_rows_query = link_rows_query.where(project_entity_links.c.principal_id == principal_id)
     # Listed once, up front, in a deterministic order. Each row is still
     # resolved with a *fresh* candidate query at the time it is processed
     # (not from this snapshot), which is what lets an earlier row's mint

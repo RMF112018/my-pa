@@ -144,13 +144,17 @@ def _link_row(
     engine: Engine, *, project_id: str, principal_id: str = PRINCIPAL
 ) -> dict[str, object]:
     with engine.connect() as connection:
-        row = connection.execute(
-            text(
-                "SELECT linkage_state, project_entity_id FROM knowledge.project_entity_links "
-                "WHERE principal_id = :principal_id AND project_id = :project_id"
-            ),
-            {"principal_id": principal_id, "project_id": project_id},
-        ).mappings().one()
+        row = (
+            connection.execute(
+                text(
+                    "SELECT linkage_state, project_entity_id FROM knowledge.project_entity_links "
+                    "WHERE principal_id = :principal_id AND project_id = :project_id"
+                ),
+                {"principal_id": principal_id, "project_id": project_id},
+            )
+            .mappings()
+            .one()
+        )
         return dict(row)
 
 
@@ -196,11 +200,7 @@ def test_revision_takes_the_narrow_python_import_exception_and_nothing_else() ->
         "alembic",
         "my_pa.infrastructure.persistence.project_entity_reconciliation",
     }
-    my_pa_froms = [
-        node
-        for node in import_froms
-        if node.module and node.module.startswith("my_pa")
-    ]
+    my_pa_froms = [node for node in import_froms if node.module and node.module.startswith("my_pa")]
     assert {node.module for node in my_pa_froms} == {
         "my_pa.infrastructure.persistence.project_entity_reconciliation"
     }
@@ -279,13 +279,17 @@ def test_predecessor_to_head_mints_and_binds_when_no_candidate_exists(
         assert link["linkage_state"] == "bound"
         assert link["project_entity_id"] is not None
         with engine.connect() as connection:
-            entity = connection.execute(
-                text(
-                    "SELECT entity_type, canonical_name, display_name, status, version "
-                    "FROM knowledge.entities WHERE entity_id = :entity_id"
-                ),
-                {"entity_id": link["project_entity_id"]},
-            ).mappings().one()
+            entity = (
+                connection.execute(
+                    text(
+                        "SELECT entity_type, canonical_name, display_name, status, version "
+                        "FROM knowledge.entities WHERE entity_id = :entity_id"
+                    ),
+                    {"entity_id": link["project_entity_id"]},
+                )
+                .mappings()
+                .one()
+            )
         assert entity["entity_type"] == "project"
         assert entity["canonical_name"] == "harbour tower"
         assert entity["display_name"] == "Harbour Tower"
@@ -322,10 +326,16 @@ def test_predecessor_to_head_flags_ambiguous_and_never_auto_binds(
         # was minted: exactly the one row seeded before upgrading survives.
         assert _entity_count(engine) == 1
         with engine.connect() as connection:
-            untouched = connection.execute(
-                text("SELECT display_name, version FROM knowledge.entities WHERE entity_id = :id"),
-                {"id": ENTITY_EXISTING},
-            ).mappings().one()
+            untouched = (
+                connection.execute(
+                    text(
+                        "SELECT display_name, version FROM knowledge.entities WHERE entity_id = :id"
+                    ),
+                    {"id": ENTITY_EXISTING},
+                )
+                .mappings()
+                .one()
+            )
         assert untouched["display_name"] == "Harbour Tower (pre-existing)"
         assert int(untouched["version"]) == 1
     finally:

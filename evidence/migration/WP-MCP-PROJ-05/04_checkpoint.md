@@ -5,7 +5,7 @@
   6a67da38 (offline fail-closed), plus this evidence commit.
 - Migration: `b9025e7fb738`, single head. No schema change.
 - Verified locally (PG 15, isolated instance): targeted reconciliation, schema and
-  participation tests pass (23). Full `tests/schema -m database` sweep: see
+  participation tests pass (23). Full `tests/schema -m database` sweep: 31 failed / 1018 passed on branch; the same 31 (all in test_native_source_schema_migration.py and test_wp12_slice_c_admission.py) fail identically at base 4e6b4f62, so none is caused by this change. Earlier note:
   04b below / PR description for the base-vs-branch comparison.
 - NOT done: PR, merge, production migration, production read-back, and the pending
   participation write for the person named in the original failed request.

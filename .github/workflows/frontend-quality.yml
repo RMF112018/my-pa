@@ -137,7 +137,7 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install -e ".[dev]" >/dev/null 2>&1
         working-directory: .
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "20"
       - run: npm ci >/dev/null 2>&1
@@ -473,7 +473,7 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "20"
           cache: npm
@@ -495,7 +495,7 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "20"
           cache: npm
@@ -516,7 +516,7 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "20"
           cache: npm
@@ -539,7 +539,7 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install -e ".[dev]"
       - run: python -m pytest tests/unit/test_webauthn_ceremony.py tests/unit/test_session_service_auth.py tests/unit/test_session_service_isolation.py tests/unit/test_auth_grants.py tests/unit/test_auth_state.py tests/unit/test_user_account_identity.py tests/unit/test_webauthn_http.py tests/unit/test_cli_auth.py tests/contract/test_bff_success_decoder_parity.py -q
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "20"
           cache: npm
@@ -564,7 +564,7 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install -e ".[dev]"
       - run: python -m pytest tests/unit/test_webauthn_ceremony.py tests/unit/test_session_service_auth.py tests/unit/test_session_service_isolation.py tests/unit/test_auth_grants.py tests/unit/test_auth_state.py tests/unit/test_user_account_identity.py tests/unit/test_webauthn_http.py tests/unit/test_cli_auth.py -q
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "20"
           cache: npm
@@ -606,7 +606,7 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install -e ".[dev]"
         working-directory: .
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "20"
           cache: npm
@@ -674,7 +674,7 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install -e ".[dev]"
         working-directory: .
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "20"
           cache: npm
@@ -724,7 +724,7 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install -e ".[dev]"
         working-directory: .
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "20"
           cache: npm
@@ -799,7 +799,7 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install -e ".[dev]"
         working-directory: .
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "20"
           cache: npm
@@ -893,7 +893,7 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install -e ".[dev]"
         working-directory: .
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "20"
           cache: npm
@@ -944,7 +944,7 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install -e ".[dev]"
         working-directory: .
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "20"
           cache: npm
@@ -1042,7 +1042,7 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install -e ".[dev]"
         working-directory: .
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "20"
           cache: npm
@@ -1076,7 +1076,7 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "20"
           cache: npm
@@ -1118,7 +1118,7 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install -e ".[dev]"
         working-directory: .
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "20"
           cache: npm

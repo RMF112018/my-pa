@@ -42,7 +42,8 @@ def _config(buffer: io.StringIO | None = None) -> Config:
 def test_the_revision_is_on_the_record_event_revision_under_the_capture_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == ["5c1e7a9b3d42"]
-    assert script.get_revision("5c1e7a9b3d42").down_revision == "a591b81f10a2"
+    assert script.get_revision("5c1e7a9b3d42").down_revision == "c8f7ae406d47"
+    assert script.get_revision("c8f7ae406d47").down_revision == "a591b81f10a2"
     assert script.get_revision("a591b81f10a2").down_revision == "cc373834a485"
     assert script.get_revision("cc373834a485").down_revision == "93f3aa113f58"
     assert script.get_revision("0641c354ca85").down_revision == REVISION

@@ -1,8 +1,14 @@
 """Name a Commitment's counterparty by Entity instead of by Person.
 
 Revision ID: 5c1e7a9b3d42
-Revises: a591b81f10a2
+Revises: c8f7ae406d47
 Create Date: 2026-10-14
+
+Written against `a591b81f10a2` and re-parented onto `c8f7ae406d47` (the MCP
+interaction log, #331) when that revision landed on `a591b81f10a2` first, so the
+chain keeps one head; `c8f7ae406d47` creates only the `observability` schema and
+touches neither `knowledge.commitments` nor `knowledge.entities`, so nothing below
+changes.
 
 `knowledge.commitments.counterparty_person_id` (created by `8f2b6c4d1a37`) held
 an `IdKind.PERSON` identifier with no foreign key. A Person is minted only by
@@ -56,7 +62,7 @@ from typing import Final
 from alembic import op
 
 revision: str = "5c1e7a9b3d42"
-down_revision: str | tuple[str, ...] | None = "a591b81f10a2"
+down_revision: str | tuple[str, ...] | None = "c8f7ae406d47"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

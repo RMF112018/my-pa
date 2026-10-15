@@ -129,6 +129,31 @@ accepted-content search deliberately remain on the ordinary `review.list`,
 `review.decide`, and `knowledge.search` capability surfaces exposed by
 `invoke.py`; this operational trigger does not create a parallel workflow.
 
+## `mcp_interactions.py` — the remote MCP interaction log
+
+Reads and purges `observability.mcp_interactions`, the default-off log the
+remote gateway writes when `MY_PA_MCP_INTERACTION_LOG_ENABLED` is true.
+
+```text
+python apps/cli/mcp_interactions.py list [--limit N]
+python apps/cli/mcp_interactions.py show <interaction-id> [--json]
+python apps/cli/mcp_interactions.py search [--client ID] [--tool NAME] \
+    [--capability NAME] [--correlation-id ID] [--since ISO8601 | --last 2h] \
+    [--until ISO8601] [--outcome O] [--limit N]
+python apps/cli/mcp_interactions.py purge [--dry-run] [--batch-size N]
+```
+
+`list` and `search` print one summary line per exchange and never a body;
+`show` prints the full record, redacted bodies included, which is what the
+operator's 2026-10-11 risk acceptance stores them for. `purge` deletes one
+bounded batch of rows older than the fixed 14 days per run and exits 3 while
+more remain, like `knowledge_source_profiles.py drain-revalidation`. It refuses
+(exit 1) outside a local-operator process and builds no capability; it is
+registered in `tests/architecture/test_operator_commands_are_not_capabilities.py`
+with the store readers and purge it may name.
+[`ops/runbooks/mcp-interaction-log.md`](/ops/runbooks/mcp-interaction-log.md)
+covers enabling the log, reading it and scheduling the purge.
+
 ## `sources.py` — the source configuration plane
 
 `sources.py` configures a root as a source and observes it, which is the

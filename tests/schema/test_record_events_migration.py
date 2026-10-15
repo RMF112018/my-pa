@@ -131,7 +131,8 @@ def test_the_revision_is_directly_on_7d9a450dfd07_under_one_later_head() -> None
     script = ScriptDirectory.from_config(_config())
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "a591b81f10a2"
+    assert script.get_revision(HEAD).down_revision == "c8f7ae406d47"
+    assert script.get_revision("c8f7ae406d47").down_revision == "a591b81f10a2"
     assert script.get_revision("a591b81f10a2").down_revision == "cc373834a485"
     assert script.get_revision("cc373834a485").down_revision == "93f3aa113f58"
     assert script.get_revision("93f3aa113f58").down_revision == "6734f039f7a6"

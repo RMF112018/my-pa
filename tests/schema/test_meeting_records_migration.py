@@ -150,7 +150,8 @@ def _offline(target: str, *, down: bool = False) -> str:
 def test_the_revision_is_the_single_head_directly_on_the_previous_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "a591b81f10a2"
+    assert script.get_revision(HEAD).down_revision == "c8f7ae406d47"
+    assert script.get_revision("c8f7ae406d47").down_revision == "a591b81f10a2"
     assert script.get_revision("a591b81f10a2").down_revision == "cc373834a485"
     assert script.get_revision("cc373834a485").down_revision == "93f3aa113f58"
     assert script.get_revision("93f3aa113f58").down_revision == "6734f039f7a6"
@@ -163,7 +164,7 @@ def test_the_revision_is_the_single_head_directly_on_the_previous_head() -> None
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 116
+    assert len(list(MIGRATIONS.glob("*.py"))) == 117
 
 
 # ---- the freeze -------------------------------------------------------------

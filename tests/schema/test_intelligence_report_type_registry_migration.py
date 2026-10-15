@@ -59,10 +59,6 @@ from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 ROOT: Final = Path(__file__).resolve().parents[2]
 VERSIONS: Final = ROOT / "migrations" / "versions"
 REVISION: Final = "a591b81f10a2"
-#: The chain head: `5c1e7a9b3d42` (Commitment counterparty Entity cutover) is
-#: additive on this revision and touches neither the Intelligence plane nor
-#: `audit_events`.
-HEAD: Final = "5c1e7a9b3d42"
 PREVIOUS: Final = "cc373834a485"
 MIGRATION: Final = VERSIONS / "20261011_a591b81f10a2_intelligence_report_type_registry.py"
 PLANE_MIGRATION: Final = VERSIONS / "20260820_e9b2c4d7a150_admit_intelligence_artifact_plane.py"
@@ -138,11 +134,17 @@ def _flat(value: str) -> str:
 # ---- FAST: the graph and the freeze -----------------------------------------------
 
 
-def test_the_revision_is_directly_on_the_project_fields_revision_under_one_later_head() -> None:
-    """Re-parented onto `cc373834a485` (#325), which sits on the focus-area revision."""
+def test_the_revision_is_the_single_head_directly_on_the_project_fields_revision() -> None:
+    """Re-parented onto `cc373834a485` (#325), which sits on the focus-area revision.
+
+    `c8f7ae406d47` (the MCP interaction log) is additive on this revision and
+    `5c1e7a9b3d42` (the Commitment counterparty Entity cutover) on that, so it is
+    no longer the head; the chain holds one head two links above it.
+    """
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == REVISION
+    assert script.get_heads() == ["5c1e7a9b3d42"]
+    assert script.get_revision("5c1e7a9b3d42").down_revision == "c8f7ae406d47"
+    assert script.get_revision("c8f7ae406d47").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "93f3aa113f58"
     assert [path.name for path in VERSIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]

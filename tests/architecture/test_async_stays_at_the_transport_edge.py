@@ -37,6 +37,10 @@ APPS = ROOT / "apps"
 ASYNC_SUBTREE = PACKAGE / "adapters" / "mcp"
 OAUTH_ADAPTER = PACKAGE / "adapters" / "http" / "oauth.py"
 EVAL_MCP_ADAPTER = PACKAGE / "adapters" / "gsqs_remote_eval_mcp.py"
+#: ASGI middleware around the remote MCP app (`MY_PA_MCP_INTERACTION_LOG_ENABLED`).
+#: ASGI is a coroutine interface, so a tee over it cannot be synchronous; it is
+#: admitted as one more exact, counted edge rather than as a subtree.
+INTERACTION_CAPTURE = PACKAGE / "adapters" / "mcp_interaction_capture.py"
 
 #: Every node that makes a module asynchronous. `AsyncFunctionDef` is the
 #: coroutine, and the other three are the statements that can only appear inside
@@ -67,7 +71,8 @@ def test_there_is_async_to_confine() -> None:
     [
         p
         for p in _modules(PACKAGE)
-        if not p.is_relative_to(ASYNC_SUBTREE) and p != OAUTH_ADAPTER and p != EVAL_MCP_ADAPTER
+        if not p.is_relative_to(ASYNC_SUBTREE)
+        and p not in {OAUTH_ADAPTER, EVAL_MCP_ADAPTER, INTERACTION_CAPTURE}
     ],
     ids=lambda p: str(p.name),
 )
@@ -129,6 +134,15 @@ def test_the_eval_mcp_async_surface_is_exact_and_bounded() -> None:
     assert found.count("AsyncFunctionDef") == 9, found
     assert found.count("Await") == 9, found
     assert found.count("AsyncWith") == 2, found
+    assert found.count("AsyncFor") == 0, found
+
+
+def test_the_interaction_capture_async_surface_is_exact_and_bounded() -> None:
+    """The ASGI `__call__`, its two tees and the lifespan tee; one await each, plus the app."""
+    found = _async_nodes(INTERACTION_CAPTURE)
+    assert found.count("AsyncFunctionDef") == 4, found
+    assert found.count("Await") == 6, found
+    assert found.count("AsyncWith") == 0, found
     assert found.count("AsyncFor") == 0, found
 
 

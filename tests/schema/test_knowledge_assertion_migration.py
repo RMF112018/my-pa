@@ -186,7 +186,8 @@ def test_the_revision_is_directly_on_0641c354ca85_under_one_later_head() -> None
     """AC-076: one current head; the revision was generated from the sole head."""
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "a591b81f10a2"
+    assert script.get_revision(HEAD).down_revision == "c8f7ae406d47"
+    assert script.get_revision("c8f7ae406d47").down_revision == "a591b81f10a2"
     assert script.get_revision("a591b81f10a2").down_revision == "cc373834a485"
     assert script.get_revision("cc373834a485").down_revision == "93f3aa113f58"
     assert script.get_revision("93f3aa113f58").down_revision == REVISION
@@ -197,9 +198,9 @@ def test_the_revision_is_directly_on_0641c354ca85_under_one_later_head() -> None
     assert migration_contract["current_head"] == PREVIOUS
     files = sorted(VERSIONS.glob("*.py"))
     # R6 counted 112 files at this revision; `93f3aa113f58`, `cc373834a485`,
-    # `a591b81f10a2` and `HEAD` are the four files added since.
+    # `a591b81f10a2`, `c8f7ae406d47` and `HEAD` are the five files added since.
     assert migration_contract["expected_post_r6_revision_file_count"] == 112
-    assert len(files) == 116
+    assert len(files) == 117
     assert [path.name for path in VERSIONS.glob("*_knowledge_assertion_layer.py")] == [
         MIGRATION.name
     ]

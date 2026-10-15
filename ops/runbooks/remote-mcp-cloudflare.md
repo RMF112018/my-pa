@@ -356,7 +356,12 @@ my-pa-mcp-remote`; this does not start the tunnel. The origin-only profile may
 be stopped with the same files and `down` only when the remote-edge network and
 firewall were never admitted. An admitted remote-edge deployment must use the
 ordered teardown below. Use bounded logs (`logs --tail 100`) and do not enable
-request-body or authorization-header logging.
+request-body or authorization-header logging. The one sanctioned exception is
+the redacted, operator-accepted `/mcp` interaction log
+(`MY_PA_MCP_INTERACTION_LOG_ENABLED`, default `false`), which stores to
+PostgreSQL rather than to container logs and never stores the authorization
+header; enabling it, reading it and its 14-day purge are
+[`mcp-interaction-log.md`](mcp-interaction-log.md).
 
 ## Rollback
 

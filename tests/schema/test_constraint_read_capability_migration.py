@@ -186,7 +186,8 @@ def test_revision_sits_on_the_single_head_chain() -> None:
     # this revision, so the head is no longer its direct child. The path from
     # head down to this revision is asserted link by link rather than loosened
     # to mere reachability, which would be the weaker claim.
-    assert script.get_revision(CURRENT_HEAD).down_revision == "a591b81f10a2"
+    assert script.get_revision(CURRENT_HEAD).down_revision == "c8f7ae406d47"
+    assert script.get_revision("c8f7ae406d47").down_revision == "a591b81f10a2"
     assert script.get_revision("a591b81f10a2").down_revision == "cc373834a485"
     assert script.get_revision("cc373834a485").down_revision == "93f3aa113f58"
     assert script.get_revision("93f3aa113f58").down_revision == "6734f039f7a6"

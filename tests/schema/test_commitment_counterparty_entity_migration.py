@@ -28,7 +28,7 @@ from my_pa.infrastructure.persistence.tables import commitments
 ROOT: Final = Path(__file__).resolve().parents[2]
 VERSIONS: Final = ROOT / "migrations" / "versions"
 REVISION: Final = "5c1e7a9b3d42"
-PREVIOUS: Final = "a591b81f10a2"
+PREVIOUS: Final = "c8f7ae406d47"
 MIGRATION: Final = VERSIONS / "20261014_5c1e7a9b3d42_commitment_counterparty_entity.py"
 RESTRICT_VIOLATION: Final = "23001"
 FOREIGN_KEY_VIOLATION: Final = "23503"
@@ -65,10 +65,11 @@ def _config() -> Config:
 # ---- FAST: the graph, the freeze and the declaration --------------------------------
 
 
-def test_the_revision_is_the_single_head_directly_on_the_report_type_registry() -> None:
+def test_the_revision_is_the_single_head_directly_on_the_mcp_interaction_log() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [REVISION]
     assert script.get_revision(REVISION).down_revision == PREVIOUS
+    assert script.get_revision(PREVIOUS).down_revision == "a591b81f10a2"
     assert [path.name for path in VERSIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
 
 

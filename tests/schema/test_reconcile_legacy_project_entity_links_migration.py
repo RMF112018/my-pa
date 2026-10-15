@@ -49,8 +49,8 @@ WHEN: Final = "2026-09-13 12:00:00+00"
 PARTICIPANTS: Final = "[]"
 
 
-def _config() -> Config:
-    return Config(str(ROOT / "alembic.ini"), output_buffer=io.StringIO())
+def _config(output_buffer: io.StringIO | None = None) -> Config:
+    return Config(str(ROOT / "alembic.ini"), output_buffer=output_buffer or io.StringIO())
 
 
 @pytest.fixture
@@ -213,6 +213,29 @@ def test_revision_adds_no_ddl() -> None:
     source = MIGRATION.read_text(encoding="utf-8")
     for token in ("CREATE TABLE", "ALTER TABLE", "DROP TABLE", "CREATE INDEX", "DROP INDEX"):
         assert token not in source
+
+
+def test_offline_mode_fails_closed_instead_of_reconciling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--sql` has no connection to read or write against; it must not try.
+
+    `reconcile_project_entity_links` mints opaque identifiers and branches on
+    live candidate-count data -- neither is reproducible as static SQL a
+    script could emit instead -- so this revision's `upgrade()` checks
+    `context.is_offline_mode()` and raises instead, the same
+    `DO $$ BEGIN RAISE EXCEPTION ...; END $$` pattern `8e1c4a7b2d90` uses for
+    its own offline-unsafe step. Asserted by running `--sql` for real and
+    reading the emitted script, not by inspecting source text, so a future
+    edit that silently drops the branch fails this test rather than only a
+    reviewer's eye.
+    """
+    monkeypatch.setenv("MY_PA_DATABASE_URL", "postgresql+psycopg://localhost/my_pa")
+    buffer = io.StringIO()
+    command.upgrade(_config(buffer), "head", sql=True)
+    emitted = buffer.getvalue()
+    assert "RAISE EXCEPTION" in emitted
+    assert "b9025e7fb738 requires online Alembic execution" in emitted
 
 
 # ---- b. empty-to-head ---------------------------------------------------------

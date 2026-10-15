@@ -41,6 +41,27 @@ already refuses that case at read time, and revalidating it is out of this
 revision's scope. It does not change `continuity_authoring.py`'s forward path,
 which was already correct. It adds no DDL, no table, no capability.
 
+**Offline mode (`alembic upgrade --sql`) fails closed, on purpose, following
+`8e1c4a7b2d90`'s precedent (see that revision's own `upgrade()`, which fails
+closed for a different reason — a digest an offline script cannot
+recompute).** Offline mode renders static SQL without a live connection;
+`op.get_bind()` still returns an object, but it backs no real database, so
+`connection.execute(...)` inside `reconcile_project_entity_links` has nothing
+to read or write against. Unlike a migration that only needs a connection to
+run deterministic, reviewable SQL a human could read off the generated
+script, this reconciliation cannot be re-expressed as static SQL at all: it
+mints opaque identifiers through `issue_identifier` (`secrets.token_hex`
+under it, by construction never reproducible from a script), and it branches
+per row on live candidate-count data with a genuine ordering dependency
+across rows in the same pass (see the reconciliation module's docstring).
+There is no deterministic SQL text that script could emit instead. So
+`upgrade()` checks `context.is_offline_mode()` and emits the same
+`DO $$ BEGIN RAISE EXCEPTION ...; END $$` fail-closed block `8e1c4a7b2d90`
+uses, naming this revision, instead of calling the real function; normal
+online Alembic execution takes the other branch. `downgrade()` needs no such
+branch: it already executes nothing in either mode, so there is nothing for
+offline mode to fail against.
+
 **`downgrade()` is a documented no-op, following `6f6ead27d122`'s precedent
 exactly rather than `9f2c8a1d4e70`'s conditional refusal.** A conditional
 refusal (downgrade only when some row changed) was considered and rejected:
@@ -64,7 +85,7 @@ no-op rather than a refusal that would never actually trigger.
 
 from __future__ import annotations
 
-from alembic import op
+from alembic import context, op
 
 from my_pa.infrastructure.persistence.project_entity_reconciliation import (
     reconcile_project_entity_links,
@@ -77,8 +98,24 @@ depends_on: str | None = None
 
 
 def upgrade() -> None:
-    connection = op.get_bind()
-    reconcile_project_entity_links(connection)
+    if context.is_offline_mode():
+        # Offline mode renders static SQL with no live connection to read or
+        # write against, and this reconciliation has no deterministic SQL
+        # equivalent to emit instead: it mints opaque identifiers through
+        # `issue_identifier` (never reproducible from a script) and branches
+        # per row on live candidate-count data with a genuine ordering
+        # dependency across rows in the same pass. Fail closed, the same
+        # pattern `8e1c4a7b2d90` uses for its own offline-unsafe step. Normal
+        # online Alembic execution takes the other branch.
+        op.execute(
+            "DO $$ BEGIN RAISE EXCEPTION "
+            "'b9025e7fb738 requires online Alembic execution for legacy "
+            "Project-Entity bridge reconciliation'; "
+            "END $$"
+        )
+    else:
+        connection = op.get_bind()
+        reconcile_project_entity_links(connection)
 
 
 def downgrade() -> None:

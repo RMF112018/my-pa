@@ -825,10 +825,11 @@ def test_the_chain_is_readable_and_non_empty() -> None:
     # R8 adds immutable promotion receipts as revision92 on the existing head.
     # `cc373834a485` adds the Continuity Project 16-field admission as revision
     # 114, `a591b81f10a2` the Intelligence report type registry as 115, and
-    # `c8f7ae406d47` the MCP interaction log as 116, and `5c1e7a9b3d42` (the
-    # Commitment counterparty Entity cutover) as 117.
-    assert len(revisions) == 117
-    assert len({revision for revision, _ in revisions}) == 117
+    # `c8f7ae406d47` the MCP interaction log as 116, `5c1e7a9b3d42` (the
+    # Commitment counterparty Entity cutover) as 117, and `b9025e7fb738`
+    # (WP-MCP-PROJ-05, legacy Project-Entity bridge reconciliation) as 118.
+    assert len(revisions) == 118
+    assert len({revision for revision, _ in revisions}) == 118
     assert {
         "9c6b4a18ed72",
         "1a4c9e77b2d5",

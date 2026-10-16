@@ -22,7 +22,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "a1c9e4b72f80"
-CURRENT_HEAD_REVISION: Final = "5c1e7a9b3d42"
+CURRENT_HEAD_REVISION: Final = "b9025e7fb738"
 PREVIOUS: Final = "2774329487be"
 MIGRATION: Final = (
     ROOT / "migrations/versions/20260906_a1c9e4b72f80_admit_goodnotes_browser_contracts.py"

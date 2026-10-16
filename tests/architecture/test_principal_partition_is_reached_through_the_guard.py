@@ -336,6 +336,18 @@ QUARANTINED: Final = {
         "below. The write stamps the authenticated Principal and recalls by "
         "that same partition; there is no caller-supplied owner field."
     ),
+    "infrastructure/persistence/project_entity_reconciliation.py": (
+        "WP-MCP-PROJ-05. Mirrors `continuity_authoring.py`'s "
+        "`_mint_bound_project_entity` candidate-search shape by design (the "
+        "task this module completes requires matching that shape exactly), so "
+        "it inherits the same hand-written `principal_id` comparisons against "
+        "`projects`, `entities`, and `project_entity_links`, registered in "
+        "HAND_WRITTEN_COMPARISONS below. The connection is handed in by the "
+        "caller (a migration's `upgrade()`, today; a future admin capability's "
+        "unit of work, eventually) rather than resolved through "
+        "`SqlAlchemyUnitOfWork`, so there is no `invoke` dispatch point here "
+        "for `principal_scope` to intervene at."
+    ),
     "infrastructure/persistence/task_management.py": (
         "scopes `tasks` and `task_history` by hand-written `principal_id` "
         "comparisons, registered in HAND_WRITTEN_COMPARISONS below, exactly the "
@@ -667,6 +679,13 @@ HAND_WRITTEN_COMPARISONS: Final = {
     "infrastructure/persistence/continuity_authoring.py": (
         ("continuity_authoring_submissions", "principal_id"),
         ("entities", "principal_id"),
+    ),
+    "infrastructure/persistence/project_entity_reconciliation.py": (
+        ("entities", "principal_id"),
+        ("project_entity_links", "principal_id"),
+        ("project_entity_links", "principal_id"),
+        ("project_entity_links", "principal_id"),
+        ("projects", "principal_id"),
     ),
     "infrastructure/persistence/remote_identity.py": (("remote_clients", "principal_id"),),
     "infrastructure/persistence/user_accounts.py": (

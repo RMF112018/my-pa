@@ -427,7 +427,7 @@ jobs:
       - name: Preserve only quiescent schema-validated diagnostic evidence (one day)
         id: evidence
         if: always() && steps.investigation.outputs.safe_evidence == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ${{ steps.investigation.outputs.artifact_name }}
           path: web/.wp03-main-ci-diagnostic-v1.jsonl

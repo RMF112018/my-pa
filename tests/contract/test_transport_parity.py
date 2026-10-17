@@ -2000,6 +2000,71 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "idempotency_key": "parity-issues-project-links-end-0001",
             "reason": "the parity issue left the project",
         },
+        # Record lineage S1, memberships, associations, the reverse read and note history.
+        Capability.ISSUES_MEMBERSHIPS_ADD: {
+            "issue_id": "sit_parityissue0001",
+            "member": {"family": "task", "record_id": "tsk_paritytask00001"},
+            "role": "work",
+            "idempotency_key": "parity-issues-memberships-add-0001",
+        },
+        Capability.ISSUES_MEMBERSHIPS_END: {
+            "link_id": "irl_paritylink00001",
+            "expected_revision": 1,
+            "idempotency_key": "parity-issues-memberships-end-0001",
+            "reason": "the parity task left the issue",
+        },
+        Capability.RECORDS_ASSOCIATIONS_ASSERT: {
+            "from_record": {"family": "commitment", "record_id": "cmt_paritycommitment01"},
+            "to_record": {"family": "meeting_note_version", "record_id": "mnote_paritynote00001"},
+            "relation_type": "originated_from",
+            "idempotency_key": "parity-records-associations-assert-0001",
+            "evidence_anchors": [
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_paritymeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_paritynote00001",
+                    "source_sha256": "a" * 64,
+                    "passage_start_cp": 0,
+                    "passage_end_cp": 4,
+                    "passage_sha256": "b" * 64,
+                    "role": "origin",
+                }
+            ],
+        },
+        Capability.RECORDS_ASSOCIATIONS_CORRECT: {
+            "link_id": "irl_paritylink00001",
+            "expected_revision": 1,
+            "idempotency_key": "parity-records-associations-correct-0001",
+            "reason": "the parity origin passage was narrowed",
+            "evidence_anchors": [
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_paritymeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_paritynote00001",
+                    "source_sha256": "a" * 64,
+                    "passage_start_cp": 0,
+                    "passage_end_cp": 4,
+                    "passage_sha256": "b" * 64,
+                    "role": "origin",
+                }
+            ],
+        },
+        Capability.RECORDS_ASSOCIATIONS_END: {
+            "link_id": "irl_paritylink00001",
+            "expected_revision": 1,
+            "idempotency_key": "parity-records-associations-end-0001",
+            "reason": "the parity association was wrong",
+        },
+        Capability.RECORDS_LINEAGE: {
+            "origin": {"family": "task", "record_id": "tsk_paritytask00001"}
+        },
+        Capability.MEETINGS_NOTES_VERSIONS: {"meeting_id": "mtg_paritymeeting0001"},
+        Capability.MEETINGS_NOTES_READ_VERSION: {
+            "meeting_id": "mtg_paritymeeting0001",
+            "note_version_id": "mnote_paritynote00001",
+        },
     }
 
 
@@ -2135,7 +2200,7 @@ def test_there_are_three_transports_to_compare() -> None:
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
     # The command union and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 199, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 207, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -2475,6 +2540,16 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         Capability.ISSUES_UPDATE,
         Capability.ISSUES_PROJECT_LINKS_ADD,
         Capability.ISSUES_PROJECT_LINKS_END,
+        # Record lineage S1: memberships, associations, the reverse read and note
+        # history, behind the same switch.
+        Capability.ISSUES_MEMBERSHIPS_ADD,
+        Capability.ISSUES_MEMBERSHIPS_END,
+        Capability.RECORDS_ASSOCIATIONS_ASSERT,
+        Capability.RECORDS_ASSOCIATIONS_CORRECT,
+        Capability.RECORDS_ASSOCIATIONS_END,
+        Capability.RECORDS_LINEAGE,
+        Capability.MEETINGS_NOTES_VERSIONS,
+        Capability.MEETINGS_NOTES_READ_VERSION,
     }
 )
 
@@ -3064,7 +3139,7 @@ def test_declared_unwired_capabilities_stay_separate_from_positive_parity(
     from my_pa.application.errors import UnsupportedError
 
     assert set(Capability) - set(_HANDLERS) == FUTURE_CAPABILITIES
-    assert len(IMPLEMENTED_CAPABILITIES) == 198
+    assert len(IMPLEMENTED_CAPABILITIES) == 206
     assert set(_BUILDERS) == set(IMPLEMENTED_CAPABILITIES)
     assert {Capability(tool.name) for tool in TOOLS} == set(IMPLEMENTED_CAPABILITIES)
 

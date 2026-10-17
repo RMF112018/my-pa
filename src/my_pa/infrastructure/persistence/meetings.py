@@ -72,6 +72,8 @@ from my_pa.contracts.ports import (
     MeetingEntityState,
     MeetingListPage,
     MeetingNoteRecord,
+    MeetingNoteVersionPage,
+    MeetingNoteVersionRecord,
     MeetingRecord,
     MeetingRepository,
     MeetingWriteRequestRecord,
@@ -291,6 +293,32 @@ def _has_no_successor() -> ColumnElement[bool]:
             _SUCCESSOR.c.supersedes_note_version_id == meeting_note_versions.c.note_version_id,
         )
         .exists()
+    )
+
+
+#: The columns of one note version as the S1 note-history reads return it.
+_NOTE_HISTORY_COLUMNS: Final = (
+    meeting_note_versions.c.note_version_id,
+    meeting_note_versions.c.meeting_id,
+    meeting_note_versions.c.version_number,
+    meeting_note_versions.c.supersedes_note_version_id,
+    meeting_note_versions.c.content_sha256,
+    meeting_note_versions.c.content_markdown,
+    meeting_note_versions.c.recorded_at,
+)
+
+
+def _to_note_version(row: Row[Any]) -> MeetingNoteVersionRecord:
+    mapping = row._mapping
+    return MeetingNoteVersionRecord(
+        note_version_id=mapping["note_version_id"],
+        meeting_id=mapping["meeting_id"],
+        version_number=mapping["version_number"],
+        supersedes_note_version_id=mapping["supersedes_note_version_id"],
+        content_sha256=mapping["content_sha256"],
+        body=mapping["content_markdown"],
+        recorded_at=mapping["recorded_at"],
+        is_current=bool(mapping["is_current"]),
     )
 
 
@@ -968,6 +996,64 @@ class SqlMeetingRepository(MeetingRepository):
             body_markdown=mapping["content_markdown"],
             recorded_at=mapping["recorded_at"],
         )
+
+    # --- note history (record lineage S1 contract section 7.2) -----------------
+
+    def meeting_is_owned(self, principal_id: str, meeting_id: str) -> bool:
+        row = self._connection.execute(
+            principal_scoped(
+                select(meetings.c.meeting_id), meetings, capture_context(principal_id)
+            ).where(meetings.c.meeting_id == meeting_id)
+        ).first()
+        return row is not None
+
+    def list_note_versions(
+        self, principal_id: str, meeting_id: str, *, page_size: int, after: str | None
+    ) -> MeetingNoteVersionPage:
+        criteria: list[ColumnElement[bool]] = [meeting_note_versions.c.meeting_id == meeting_id]
+        if after is not None:
+            anchor = self._connection.execute(
+                principal_scoped(
+                    select(meeting_note_versions.c.version_number),
+                    meeting_note_versions,
+                    capture_context(principal_id),
+                ).where(
+                    meeting_note_versions.c.meeting_id == meeting_id,
+                    meeting_note_versions.c.note_version_id == after,
+                )
+            ).one_or_none()
+            if anchor is None:
+                raise MeetingCursorError()
+            criteria.append(meeting_note_versions.c.version_number < anchor.version_number)
+        rows = self._connection.execute(
+            principal_scoped(
+                select(*_NOTE_HISTORY_COLUMNS, _has_no_successor().label("is_current")),
+                meeting_note_versions,
+                capture_context(principal_id),
+            )
+            .where(*criteria)
+            .order_by(meeting_note_versions.c.version_number.desc())
+            .limit(page_size + 1)
+        ).all()
+        return MeetingNoteVersionPage(
+            entries=tuple(_to_note_version(row) for row in rows[:page_size]),
+            has_more=len(rows) > page_size,
+        )
+
+    def read_note_version(
+        self, principal_id: str, meeting_id: str, note_version_id: str
+    ) -> MeetingNoteVersionRecord | None:
+        row = self._connection.execute(
+            principal_scoped(
+                select(*_NOTE_HISTORY_COLUMNS, _has_no_successor().label("is_current")),
+                meeting_note_versions,
+                capture_context(principal_id),
+            ).where(
+                meeting_note_versions.c.meeting_id == meeting_id,
+                meeting_note_versions.c.note_version_id == note_version_id,
+            )
+        ).one_or_none()
+        return None if row is None else _to_note_version(row)
 
     def read_meeting(self, principal_id: str, meeting_id: str) -> MeetingView | None:
         row = self._connection.execute(

@@ -64,7 +64,7 @@ _FEATURE_BY_FAMILY: Final[Mapping[str, str]] = {
     "project_controls": "constraints",
     "meetings": "meetings",
     "record_events": "record_events",
-    # Record lineage S1 (contract section 7): `records` joins with its names.
+    # Record lineage S1 (contract section 7); `meetings.notes.*` stays `meetings`.
     "issues": "lineage",
     "records": "lineage",
 }

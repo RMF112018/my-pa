@@ -88,6 +88,7 @@ from my_pa.contracts.ports import (
     PulseRepository,
     RecordEventReader,
     RecordEventStager,
+    RecordLineageRepository,
     RelationshipMemoryProposalRepository,
     RelationshipMemoryRepository,
     RepositoryFailureError,
@@ -224,6 +225,7 @@ from my_pa.infrastructure.persistence.record_events import (
     SqlRecordEventWriter,
     flush_record_events,
 )
+from my_pa.infrastructure.persistence.record_lineage import SqlRecordLineageRepository
 from my_pa.infrastructure.persistence.registry import (
     UnknownSourceError,
     get_source,
@@ -1489,6 +1491,11 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def issues(self) -> IssueRepository:
         """The record lineage S1 Issue plane, on this transaction's connection."""
         return SqlIssueRepository(self._open)
+
+    @property
+    def record_lineage(self) -> RecordLineageRepository:
+        """Record lineage S1 links and the reverse read, on this transaction's connection."""
+        return SqlRecordLineageRepository(self._open)
 
     @property
     def identity_history(self) -> SqlIdentityHistoryQuery:

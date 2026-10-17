@@ -987,6 +987,27 @@ class Capability(StrEnum):
     ISSUES_UPDATE = "issues.update"
     ISSUES_PROJECT_LINKS_ADD = "issues.project_links.add"
     ISSUES_PROJECT_LINKS_END = "issues.project_links.end"
+    #: Record lineage S1 (S1 contract sections 3.1 and 7): Issue memberships and
+    #: semantic associations, both `record_links` roots with immutable
+    #: revisions and evidence. The two membership writes map to
+    #: `Purpose.ISSUE_AUTHORING`; the three association writes to
+    #: `Purpose.RECORD_LINEAGE_AUTHORING`. All five are attested
+    #: (local-operator only, contract section 6.1), scopeless, and withheld
+    #: unless `MY_PA_LINEAGE_ENABLED` is on.
+    ISSUES_MEMBERSHIPS_ADD = "issues.memberships.add"
+    ISSUES_MEMBERSHIPS_END = "issues.memberships.end"
+    RECORDS_ASSOCIATIONS_ASSERT = "records.associations.assert"
+    RECORDS_ASSOCIATIONS_CORRECT = "records.associations.correct"
+    RECORDS_ASSOCIATIONS_END = "records.associations.end"
+    #: Record lineage S1 (contract section 7.2): the bounded, single-page,
+    #: Issue-scoped reverse read. No body and no title but an Issue's own.
+    RECORDS_LINEAGE = "records.lineage"
+    #: Record lineage S1 (contract section 7.2): a Meeting's note version
+    #: history (metadata only, under `meeting_read`) and one exact note version
+    #: (digest, and the body only on request, under
+    #: `meeting_note_history_read`).
+    MEETINGS_NOTES_VERSIONS = "meetings.notes.versions"
+    MEETINGS_NOTES_READ_VERSION = "meetings.notes.read_version"
 
 
 class NativeSourceCapability(StrEnum):
@@ -1536,6 +1557,19 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.ISSUES_UPDATE: frozenset({Purpose.ISSUE_AUTHORING}),
         Capability.ISSUES_PROJECT_LINKS_ADD: frozenset({Purpose.ISSUE_AUTHORING}),
         Capability.ISSUES_PROJECT_LINKS_END: frozenset({Purpose.ISSUE_AUTHORING}),
+        Capability.ISSUES_MEMBERSHIPS_ADD: frozenset({Purpose.ISSUE_AUTHORING}),
+        Capability.ISSUES_MEMBERSHIPS_END: frozenset({Purpose.ISSUE_AUTHORING}),
+        # The association writes and the lineage read carry a purpose pair of
+        # their own: a grant issued to author Issues must not assert lineage
+        # between other records, nor read it.
+        Capability.RECORDS_ASSOCIATIONS_ASSERT: frozenset({Purpose.RECORD_LINEAGE_AUTHORING}),
+        Capability.RECORDS_ASSOCIATIONS_CORRECT: frozenset({Purpose.RECORD_LINEAGE_AUTHORING}),
+        Capability.RECORDS_ASSOCIATIONS_END: frozenset({Purpose.RECORD_LINEAGE_AUTHORING}),
+        Capability.RECORDS_LINEAGE: frozenset({Purpose.RECORD_LINEAGE_READ}),
+        # Version metadata is a Meeting read; a historical body is a widening
+        # over `meeting_read` and carries its own purpose.
+        Capability.MEETINGS_NOTES_VERSIONS: frozenset({Purpose.MEETING_READ}),
+        Capability.MEETINGS_NOTES_READ_VERSION: frozenset({Purpose.MEETING_NOTE_HISTORY_READ}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),
@@ -1702,6 +1736,14 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ISSUES_UPDATE,
         Capability.ISSUES_PROJECT_LINKS_ADD,
         Capability.ISSUES_PROJECT_LINKS_END,
+        # Record lineage S1: the five link writes each append an immutable
+        # root, revision or evidence row; `records.lineage` and the two note
+        # reads stay out.
+        Capability.ISSUES_MEMBERSHIPS_ADD,
+        Capability.ISSUES_MEMBERSHIPS_END,
+        Capability.RECORDS_ASSOCIATIONS_ASSERT,
+        Capability.RECORDS_ASSOCIATIONS_CORRECT,
+        Capability.RECORDS_ASSOCIATIONS_END,
     }
 )
 
@@ -1807,6 +1849,11 @@ _ADDITIVE_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         # `issues.update` and `issues.project_links.end` change existing state.
         Capability.ISSUES_CREATE,
         Capability.ISSUES_PROJECT_LINKS_ADD,
+        # `issues.memberships.add` and `records.associations.assert` insert a
+        # new link root (or answer an existing one, `created: false`, writing
+        # only their own request row); `.end` and `.correct` change a link.
+        Capability.ISSUES_MEMBERSHIPS_ADD,
+        Capability.RECORDS_ASSOCIATIONS_ASSERT,
     }
 )
 

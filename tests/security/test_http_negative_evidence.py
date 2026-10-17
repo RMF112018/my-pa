@@ -289,6 +289,16 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         Capability.ISSUES_UPDATE,
         Capability.ISSUES_PROJECT_LINKS_ADD,
         Capability.ISSUES_PROJECT_LINKS_END,
+        # Record lineage S1: memberships, associations, the reverse read and note
+        # history, behind the same switch.
+        Capability.ISSUES_MEMBERSHIPS_ADD,
+        Capability.ISSUES_MEMBERSHIPS_END,
+        Capability.RECORDS_ASSOCIATIONS_ASSERT,
+        Capability.RECORDS_ASSOCIATIONS_CORRECT,
+        Capability.RECORDS_ASSOCIATIONS_END,
+        Capability.RECORDS_LINEAGE,
+        Capability.MEETINGS_NOTES_VERSIONS,
+        Capability.MEETINGS_NOTES_READ_VERSION,
     }
 )
 
@@ -1384,6 +1394,71 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "idempotency_key": "wire-issues-project-links-end-0001",
             "reason": "the wire issue left the project",
         },
+        # Record lineage S1, memberships, associations, the reverse read and note history.
+        Capability.ISSUES_MEMBERSHIPS_ADD: {
+            "issue_id": "sit_wireissue0001",
+            "member": {"family": "task", "record_id": "tsk_wiretask00001"},
+            "role": "work",
+            "idempotency_key": "wire-issues-memberships-add-0001",
+        },
+        Capability.ISSUES_MEMBERSHIPS_END: {
+            "link_id": "irl_wirelink00001",
+            "expected_revision": 1,
+            "idempotency_key": "wire-issues-memberships-end-0001",
+            "reason": "the wire task left the issue",
+        },
+        Capability.RECORDS_ASSOCIATIONS_ASSERT: {
+            "from_record": {"family": "commitment", "record_id": "cmt_wirecommitment01"},
+            "to_record": {"family": "meeting_note_version", "record_id": "mnote_wirenote00001"},
+            "relation_type": "originated_from",
+            "idempotency_key": "wire-records-associations-assert-0001",
+            "evidence_anchors": [
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_wiremeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_wirenote00001",
+                    "source_sha256": "a" * 64,
+                    "passage_start_cp": 0,
+                    "passage_end_cp": 4,
+                    "passage_sha256": "b" * 64,
+                    "role": "origin",
+                }
+            ],
+        },
+        Capability.RECORDS_ASSOCIATIONS_CORRECT: {
+            "link_id": "irl_wirelink00001",
+            "expected_revision": 1,
+            "idempotency_key": "wire-records-associations-correct-0001",
+            "reason": "the wire origin passage was narrowed",
+            "evidence_anchors": [
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_wiremeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_wirenote00001",
+                    "source_sha256": "a" * 64,
+                    "passage_start_cp": 0,
+                    "passage_end_cp": 4,
+                    "passage_sha256": "b" * 64,
+                    "role": "origin",
+                }
+            ],
+        },
+        Capability.RECORDS_ASSOCIATIONS_END: {
+            "link_id": "irl_wirelink00001",
+            "expected_revision": 1,
+            "idempotency_key": "wire-records-associations-end-0001",
+            "reason": "the wire association was wrong",
+        },
+        Capability.RECORDS_LINEAGE: {
+            "origin": {"family": "task", "record_id": "tsk_wiretask00001"}
+        },
+        Capability.MEETINGS_NOTES_VERSIONS: {"meeting_id": "mtg_wiremeeting0001"},
+        Capability.MEETINGS_NOTES_READ_VERSION: {
+            "meeting_id": "mtg_wiremeeting0001",
+            "note_version_id": "mnote_wirenote00001",
+        },
     }
 
 
@@ -2070,6 +2145,16 @@ SCOPED_CAPABILITIES = [
         Capability.ISSUES_UPDATE,
         Capability.ISSUES_PROJECT_LINKS_ADD,
         Capability.ISSUES_PROJECT_LINKS_END,
+        # Record lineage S1: memberships, associations, the reverse read and note
+        # history, behind the same switch.
+        Capability.ISSUES_MEMBERSHIPS_ADD,
+        Capability.ISSUES_MEMBERSHIPS_END,
+        Capability.RECORDS_ASSOCIATIONS_ASSERT,
+        Capability.RECORDS_ASSOCIATIONS_CORRECT,
+        Capability.RECORDS_ASSOCIATIONS_END,
+        Capability.RECORDS_LINEAGE,
+        Capability.MEETINGS_NOTES_VERSIONS,
+        Capability.MEETINGS_NOTES_READ_VERSION,
     }
 ]
 

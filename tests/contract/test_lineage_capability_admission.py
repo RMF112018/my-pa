@@ -1,7 +1,7 @@
 """Record lineage S1 capability admission and old-client compatibility (AT-023, FAST).
 
 S1 contract sections 6.1, 7, 7.5 and 8, for the names the Issue slice declares
-(the six `issues.` names) and the compatibility rule every S1 slice inherits:
+(the six Issue-plane names) and the compatibility rule every S1 slice inherits:
 
 * every declared S1 name is `CHATLLM_OPERATOR_DECISION_REQUIRED`, scopeless,
   not operator-only, in the `lineage` gateway feature, and in no ChatLLM data
@@ -13,7 +13,7 @@ S1 contract sections 6.1, 7, 7.5 and 8, for the names the Issue slice declares
   only, and `context.prepare` never offers an Issue `situation_id`;
 * the lineage authority derivation never reads the Knowledge allowlists.
 
-`test_note_body_needs_the_history_purpose` joins with `meetings.notes.*`. The
+`test_note_body_needs_the_history_purpose` covers `meetings.notes.read_version`. The
 switch test's name set grows with each slice: it reads the declared part of the
 contract's fourteen-name set, so a name declared later is covered the moment it
 exists. Every identity here is synthetic.
@@ -44,19 +44,27 @@ from my_pa.adapters.mcp.tools import payload_schema_for
 from my_pa.adapters.normalization import normalize
 from my_pa.adapters.remote_request import _IDEMPOTENT_REMOTE_CAPABILITIES
 from my_pa.application.commands import (
+    AddIssueMembership,
     AddIssueProjectLink,
+    AssertRecordAssociation,
     Command,
+    CorrectRecordAssociation,
     CreateCommitment,
     CreateIssue,
     CreateSituation,
     CreateTask,
+    EndIssueMembership,
     EndIssueProjectLink,
+    EndRecordAssociation,
     GetCapabilities,
     ListIssues,
+    ListMeetingNoteVersions,
     ListSituations,
     PrepareContext,
     ReadIssue,
     ReadMeeting,
+    ReadMeetingNoteVersion,
+    ReadRecordLineage,
     RecordTask,
     UpdateIssue,
 )
@@ -131,6 +139,22 @@ _S1_ADDITIVE: Final = frozenset(
 _RATIONALE: Final = "record lineage S1; exposure is an operator decision (ADR-015, OD-07)"
 _ISSUE: Final = "sit_lineagefast00001"
 _PROJECT: Final = "prj_lineagefast00001"
+_TASK: Final = "tsk_lineagefast00001"
+_COMMITMENT: Final = "cmt_lineagefast00001"
+_MEETING: Final = "mtg_lineagefast00001"
+_NOTE: Final = "mnote_lineagefast00001"
+_LINK: Final = "irl_lineagefast00001"
+_PASSAGE_ANCHOR: Final[dict[str, object]] = {
+    "family": "meeting_note_version",
+    "root_id": _MEETING,
+    "version_kind": "immutable_version",
+    "version_id": _NOTE,
+    "source_sha256": "a" * 64,
+    "passage_start_cp": 0,
+    "passage_end_cp": 4,
+    "passage_sha256": "b" * 64,
+    "role": "origin",
+}
 _CLIENT: Final = "synthetic-lineage-fast-client"
 
 
@@ -169,6 +193,39 @@ def _samples() -> dict[Capability, Command]:
             expected_membership_revision=1,
             idempotency_key="fast-end",
             reason="synthetic",
+        ),
+        Capability.ISSUES_MEMBERSHIPS_ADD: AddIssueMembership(
+            issue_id=_ISSUE,
+            member={"family": "task", "record_id": _TASK},
+            role="work",
+            idempotency_key="fast-member-add",
+        ),
+        Capability.ISSUES_MEMBERSHIPS_END: EndIssueMembership(
+            link_id=_LINK, expected_revision=1, idempotency_key="fast-member-end", reason="x"
+        ),
+        Capability.RECORDS_ASSOCIATIONS_ASSERT: AssertRecordAssociation(
+            from_record={"family": "commitment", "record_id": _COMMITMENT},
+            to_record={"family": "meeting_note_version", "record_id": _NOTE},
+            relation_type="originated_from",
+            idempotency_key="fast-assert",
+            evidence_anchors=(_PASSAGE_ANCHOR,),
+        ),
+        Capability.RECORDS_ASSOCIATIONS_CORRECT: CorrectRecordAssociation(
+            link_id=_LINK,
+            expected_revision=1,
+            idempotency_key="fast-correct",
+            reason="synthetic",
+            evidence_anchors=(_PASSAGE_ANCHOR,),
+        ),
+        Capability.RECORDS_ASSOCIATIONS_END: EndRecordAssociation(
+            link_id=_LINK, expected_revision=1, idempotency_key="fast-assoc-end", reason="x"
+        ),
+        Capability.RECORDS_LINEAGE: ReadRecordLineage(
+            origin={"family": "task", "record_id": _TASK}
+        ),
+        Capability.MEETINGS_NOTES_VERSIONS: ListMeetingNoteVersions(meeting_id=_MEETING),
+        Capability.MEETINGS_NOTES_READ_VERSION: ReadMeetingNoteVersion(
+            meeting_id=_MEETING, note_version_id=_NOTE
         ),
     }
 
@@ -266,6 +323,41 @@ _BASE_PAYLOADS: Final[dict[str, dict[str, object]]] = {
         "idempotency_key": "fast-end",
         "reason": "synthetic",
     },
+    "issues.memberships.add": {
+        "issue_id": _ISSUE,
+        "member": {"family": "task", "record_id": _TASK},
+        "role": "work",
+        "idempotency_key": "fast-member-add",
+    },
+    "issues.memberships.end": {
+        "link_id": _LINK,
+        "expected_revision": 1,
+        "idempotency_key": "fast-member-end",
+        "reason": "synthetic",
+    },
+    "records.associations.assert": {
+        "from_record": {"family": "commitment", "record_id": _COMMITMENT},
+        "to_record": {"family": "meeting_note_version", "record_id": _NOTE},
+        "relation_type": "originated_from",
+        "idempotency_key": "fast-assert",
+        "evidence_anchors": [_PASSAGE_ANCHOR],
+    },
+    "records.associations.correct": {
+        "link_id": _LINK,
+        "expected_revision": 1,
+        "idempotency_key": "fast-correct",
+        "reason": "synthetic",
+        "evidence_anchors": [_PASSAGE_ANCHOR],
+    },
+    "records.associations.end": {
+        "link_id": _LINK,
+        "expected_revision": 1,
+        "idempotency_key": "fast-assoc-end",
+        "reason": "synthetic",
+    },
+    "records.lineage": {"origin": {"family": "task", "record_id": _TASK}},
+    "meetings.notes.versions": {"meeting_id": _MEETING},
+    "meetings.notes.read_version": {"meeting_id": _MEETING, "note_version_id": _NOTE},
 }
 _SERVER_OWNED: Final = (
     "principal_id",
@@ -311,6 +403,23 @@ def test_s1_requests_reject_server_owned_fields(name: str) -> None:
         for owned in ("version_no", "source_version_no", "anchor_id", "principal_id"):
             with pytest.raises(InvalidRequestError):
                 normalize(name, _arguments({**base, "evidence_anchor": {**_ANCHOR, owned: 1}}))
+    if "evidence_anchors" in base:
+        for owned in ("version_no", "source_version_no", "anchor_id", "principal_id"):
+            with pytest.raises(InvalidRequestError):
+                normalize(
+                    name,
+                    _arguments({**base, "evidence_anchors": [{**_PASSAGE_ANCHOR, owned: 1}]}),
+                )
+    for nested in ("member", "origin", "from_record", "to_record"):
+        if nested in base:
+            # A record reference is exactly `{family, record_id}`: no selector,
+            # no version, no Principal.
+            for owned in ("selector", "principal_id", "version_no"):
+                with pytest.raises(InvalidRequestError):
+                    normalize(
+                        name,
+                        _arguments({**base, nested: {**base[nested], owned: "root"}}),  # type: ignore[dict-item]
+                    )
 
 
 #: The existing v1 request shapes S1 promises not to change (section 8), as
@@ -414,6 +523,45 @@ def test_context_prepare_returns_no_issue_situation_id(scene: Scene) -> None:
     rendered = json.dumps(envelope.to_canonical_dict()["result"])
     assert context in rendered
     assert issue not in rendered
+
+
+# ---- note history purpose ------------------------------------------------------
+
+
+def test_note_body_needs_the_history_purpose(scene: Scene) -> None:
+    """Section 7: a historical note body is a widening over `meeting_read`.
+
+    `meetings.notes.read_version` is admitted under `meeting_note_history_read`
+    only, so a caller holding the ordinary Meeting read purpose is denied
+    before the handler, while version metadata stays a Meeting read.
+    """
+    read_version = Capability.MEETINGS_NOTES_READ_VERSION
+    assert permitted_purposes(read_version) == frozenset({Purpose.MEETING_NOTE_HISTORY_READ})
+    assert permitted_purposes(Capability.MEETINGS_NOTES_VERSIONS) == frozenset(
+        {Purpose.MEETING_READ}
+    )
+    assert Purpose.MEETING_NOTE_HISTORY_READ not in permitted_purposes(Capability.MEETINGS_READ)
+    assert Purpose.MEETING_NOTE_HISTORY_READ not in remote_mcp._WRITE_PURPOSES
+    service = _lineage_service(scene)
+    command = _samples()[read_version]
+    denied = service.invoke(
+        metadata_for(read_version, Purpose.MEETING_READ, scene.principal),
+        command,
+        principal=scene.principal,
+    )
+    assert _code(denied) == "denied"
+    # A remote grant of the Meeting read purpose for this capability is
+    # refused the same way: the grant cannot name a purpose the capability
+    # does not admit.
+    remote = service.invoke(
+        metadata_for(read_version, Purpose.MEETING_READ, scene.principal),
+        command,
+        principal=scene.principal,
+        transport=CaptureTransport.REMOTE_CLIENT,
+        capability_grants=frozenset({(read_version, Purpose.MEETING_READ)}),
+        authenticated_client_id=_CLIENT,
+    )
+    assert _code(remote) == "denied"
 
 
 # ---- the admission switch -----------------------------------------------------

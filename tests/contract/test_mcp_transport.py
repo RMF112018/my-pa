@@ -137,7 +137,7 @@ def test_tools_list_publishes_exactly_the_local_capability_set(
         for capability in HANDLER_CAPABILITIES
         if capability not in _AUTHENTICATED_CLIENT_CAPABILITIES
     ]
-    assert len(listed.tools) == 193
+    assert len(listed.tools) == 201
     assert all(tool.description for tool in listed.tools), "a tool has no description"
 
 
@@ -146,7 +146,7 @@ def test_handler_unwired_capabilities_publish_no_mcp_tools() -> None:
     assert {tool.name for tool in TOOLS} == {
         capability.value for capability in HANDLER_CAPABILITIES
     }
-    assert len(TOOLS) == 198
+    assert len(TOOLS) == 206
     assert not {capability.value for capability in HANDLER_UNWIRED_CAPABILITIES} & {
         tool.name for tool in TOOLS
     }
@@ -587,7 +587,11 @@ _COMPOSED_CAPABILITIES: Final = (
         }
         # Record lineage S1: the lineage plane, on its own default-off switch.
     )
-    | frozenset(capability for capability in Capability if capability.value.startswith("issues."))
+    | frozenset(
+        capability
+        for capability in Capability
+        if capability.value.startswith(("issues.", "records.", "meetings.notes."))
+    )
 )
 
 _AUTHENTICATED_CLIENT_CAPABILITIES: Final = frozenset(

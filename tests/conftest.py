@@ -133,6 +133,7 @@ from my_pa.contracts.ports import (
     RecordEventPage,
     RecordEventReader,
     RecordEventStager,
+    RecordLineageRepository,
     RelationshipMemoryProposalRepository,
     RelationshipMemoryRepository,
     RelationshipWriteRequest,
@@ -9778,6 +9779,11 @@ class FakeUnitOfWork(UnitOfWork):
         FAST world refuses any use rather than answering with invented rows.
         """
         return cast("IssueRepository", _UnmodelledPlane("issues"))
+
+    @property
+    def record_lineage(self) -> RecordLineageRepository:
+        """Record lineage S1 links: not modelled in FAST worlds, as `issues`."""
+        return cast("RecordLineageRepository", _UnmodelledPlane("record_lineage"))
 
     @property
     def identity_history(self) -> object:

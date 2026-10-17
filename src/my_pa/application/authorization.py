@@ -54,12 +54,14 @@ from my_pa.application.commands import (
     AddEntityAlias,
     AddEntityCommunicationMethod,
     AddEntityName,
+    AddIssueMembership,
     AddIssueProjectLink,
     ApplyConstraintSync,
     ArchiveCapture,
     ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
+    AssertRecordAssociation,
     BeginIntelligenceCycle,
     BindEntityIdentifier,
     BulkConfirmTasks,
@@ -74,6 +76,7 @@ from my_pa.application.commands import (
     CompleteGoodNotesPull,
     ConfigureProjectControls,
     CorrectGoodNotes,
+    CorrectRecordAssociation,
     CreateCapture,
     CreateCommitment,
     CreateConstraintCategory,
@@ -101,7 +104,9 @@ from my_pa.application.commands import (
     EndEntityAssignment,
     EndEntityParticipation,
     EndEntityRelationship,
+    EndIssueMembership,
     EndIssueProjectLink,
+    EndRecordAssociation,
     EnrollSource,
     FetchSource,
     GetCanvasWorkspace,
@@ -147,6 +152,7 @@ from my_pa.application.commands import (
     ListIssues,
     ListKnowledgeAssertions,
     ListManagedDocuments,
+    ListMeetingNoteVersions,
     ListMeetings,
     ListPortfolioConstraints,
     ListProjects,
@@ -183,9 +189,11 @@ from my_pa.application.commands import (
     ReadKnowledgeAssertion,
     ReadManagedDocument,
     ReadMeeting,
+    ReadMeetingNoteVersion,
     ReadPortfolioConstraintOverview,
     ReadProject,
     ReadProjectControlsStatus,
+    ReadRecordLineage,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
@@ -691,6 +699,16 @@ def _requested_scope(
             | UpdateIssue()
             | AddIssueProjectLink()
             | EndIssueProjectLink()
+            # Memberships, associations, the lineage read and the note-history
+            # reads name the same partition's product-owned rows.
+            | AddIssueMembership()
+            | EndIssueMembership()
+            | AssertRecordAssociation()
+            | CorrectRecordAssociation()
+            | EndRecordAssociation()
+            | ReadRecordLineage()
+            | ListMeetingNoteVersions()
+            | ReadMeetingNoteVersion()
         ):
             return frozenset()
         case CreateCapture():

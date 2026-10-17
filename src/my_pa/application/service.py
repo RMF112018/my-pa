@@ -124,12 +124,14 @@ from my_pa.application.authorization import Authorization, authorize
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
 from my_pa.application.capture_lifecycle import transition_capture
 from my_pa.application.commands import (
+    MAX_ISSUE_PAGE_SIZE,
     MAX_KNOWLEDGE_PAGE_SIZE,
     AcknowledgeConstraintSync,
     AddEntityAddress,
     AddEntityAlias,
     AddEntityCommunicationMethod,
     AddEntityName,
+    AddIssueMembership,
     AddIssueProjectLink,
     ApplyConstraintSync,
     ArchiveCapture,
@@ -137,6 +139,7 @@ from my_pa.application.commands import (
     ArchiveManagedDocument,
     ArchiveManagedDocumentCommand,
     ArchiveRelationshipMemory,
+    AssertRecordAssociation,
     BeginIntelligenceCycle,
     BindEntityIdentifier,
     BulkConfirmTasks,
@@ -151,6 +154,7 @@ from my_pa.application.commands import (
     CompleteGoodNotesPull,
     ConfigureProjectControls,
     CorrectGoodNotes,
+    CorrectRecordAssociation,
     CreateCapture,
     CreateCommitment,
     CreateConstraintCategory,
@@ -179,7 +183,9 @@ from my_pa.application.commands import (
     EndEntityAssignment,
     EndEntityParticipation,
     EndEntityRelationship,
+    EndIssueMembership,
     EndIssueProjectLink,
+    EndRecordAssociation,
     EnrollSource,
     FetchSource,
     GetCanvasWorkspace,
@@ -226,6 +232,7 @@ from my_pa.application.commands import (
     ListKnowledgeAssertions,
     ListManagedDocuments,
     ListManagedDocumentsCommand,
+    ListMeetingNoteVersions,
     ListMeetings,
     ListPortfolioConstraints,
     ListProjects,
@@ -263,9 +270,11 @@ from my_pa.application.commands import (
     ReadManagedDocument,
     ReadManagedDocumentCommand,
     ReadMeeting,
+    ReadMeetingNoteVersion,
     ReadPortfolioConstraintOverview,
     ReadProject,
     ReadProjectControlsStatus,
+    ReadRecordLineage,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
@@ -527,6 +536,7 @@ from my_pa.application.record_events import (
     record_event_page_size,
     record_event_provenance,
 )
+from my_pa.application.record_lineage import AssociationResult, RecordLineageApplication
 from my_pa.application.relationship_memory import (
     ArchiveMemoryCommand,
     CreateMemoryCommand,
@@ -616,6 +626,7 @@ from my_pa.contracts.v1.documents import (
     ManagedDocumentVersionView,
 )
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
+from my_pa.contracts.v1.meetings import MeetingNoteVersionEntry, MeetingNoteVersionView
 from my_pa.contracts.v1.reveal import RevealView
 from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.contracts.v1.tasks import (
@@ -690,7 +701,7 @@ from my_pa.domain.knowledge_assertion.vocabulary import (
     KnowledgeReviewAuthorityClass,
     KnowledgeReviewRequirement,
 )
-from my_pa.domain.lineage.vocabulary import SituationKind
+from my_pa.domain.lineage.vocabulary import EvidenceAvailability, SituationKind
 from my_pa.domain.meeting.model import (
     MAX_MEETING_PAGE_SIZE,
     MeetingCursorError,
@@ -4062,6 +4073,9 @@ class ApplicationService:
         #: Record lineage S1's Issue use cases, held on the same terms as
         #: `_meetings`: stateless, no clock, no transaction of its own.
         self._issues = IssueApplication()
+        #: Record lineage S1's memberships, associations and reverse read, on
+        #: the same terms.
+        self._record_lineage = RecordLineageApplication()
         #: WP-RI-A-02's entity authoring service, held for the reason the two
         #: above are: it is stateless and takes its port as an argument.
         self._entity_authoring = EntityAuthoringService()
@@ -13198,16 +13212,19 @@ class ApplicationService:
     ) -> _Result:
         """`issues.read`: one Issue and its Project links, or `not_found`."""
         self._lineage_plane()
-        if command.include_members:
-            # Issue memberships are the `issues.memberships.*` slice; until it is
-            # composed this build cannot answer them and says so.
-            raise UnsupportedError()
+        principal_id = authorization.principal.principal_id
         with _translated(), _lineage_translated():
-            view = self._issues.read_issue(
-                unit_of_work, authorization.principal.principal_id, command.issue_id
-            )
+            view = self._issues.read_issue(unit_of_work, principal_id, command.issue_id)
+            payload: dict[str, Any] = {"issue": view.to_canonical_dict()}
+            if command.include_members:
+                # Section 7.2: the active memberships, at most 100, oldest first.
+                members, truncated = self._record_lineage.memberships(
+                    unit_of_work, principal_id, command.issue_id
+                )
+                payload["memberships"] = [member.to_canonical_dict() for member in members]
+                payload["memberships_truncated"] = truncated
         return _Result(
-            payload={"issue": view.to_canonical_dict()},
+            payload=payload,
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
         )
 
@@ -13286,6 +13303,208 @@ class ApplicationService:
                 authorization.at,
             )
         return self._project_link_result(authorization, written)
+
+    # ---- record lineage S1: memberships, associations, the reverse read --------
+    #
+    # Five attested writes and one read over `RecordLineageApplication`, in the
+    # Issue handlers' shape: the switch first (section 7.5), then the attested
+    # authority (section 6.1: `denied` unless local operator, before any row and
+    # before the replay lookup), then the application in `invoke`'s transaction.
+
+    def _issues_memberships_add(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: AddIssueMembership
+    ) -> _Result:
+        """`issues.memberships.add`: an Issue membership of a non-Project record."""
+        self._lineage_plane()
+        authority = attested_lineage_authority(authorization)
+        with _translated(), _lineage_translated():
+            written = self._record_lineage.add_membership(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.lineage_request(),
+                command.idempotency_key,
+                authority,
+                authorization.at,
+            )
+        return self._association_result(authorization, "membership", written)
+
+    def _issues_memberships_end(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: EndIssueMembership
+    ) -> _Result:
+        """`issues.memberships.end`: end an active membership at its expected revision."""
+        self._lineage_plane()
+        authority = attested_lineage_authority(authorization)
+        with _translated(), _lineage_translated():
+            written = self._record_lineage.end_membership(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.lineage_request(),
+                command.idempotency_key,
+                authority,
+                authorization.at,
+            )
+        return self._association_result(authorization, "membership", written)
+
+    def _records_associations_assert(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: AssertRecordAssociation,
+    ) -> _Result:
+        """`records.associations.assert`: a semantic association, or the active one."""
+        self._lineage_plane()
+        authority = attested_lineage_authority(authorization)
+        with _translated(), _lineage_translated():
+            written = self._record_lineage.assert_association(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.lineage_request(),
+                command.idempotency_key,
+                authority,
+                authorization.at,
+            )
+        return self._association_result(authorization, "association", written)
+
+    def _records_associations_correct(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: CorrectRecordAssociation,
+    ) -> _Result:
+        """`records.associations.correct`: replace an association's evidence set."""
+        self._lineage_plane()
+        authority = attested_lineage_authority(authorization)
+        with _translated(), _lineage_translated():
+            written = self._record_lineage.correct_association(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.lineage_request(),
+                command.idempotency_key,
+                authority,
+                authorization.at,
+            )
+        return self._association_result(authorization, "association", written)
+
+    def _records_associations_end(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: EndRecordAssociation
+    ) -> _Result:
+        """`records.associations.end`: end a semantic association."""
+        self._lineage_plane()
+        authority = attested_lineage_authority(authorization)
+        with _translated(), _lineage_translated():
+            written = self._record_lineage.end_association(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.lineage_request(),
+                command.idempotency_key,
+                authority,
+                authorization.at,
+            )
+        return self._association_result(authorization, "association", written)
+
+    def _records_lineage(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadRecordLineage
+    ) -> _Result:
+        """`records.lineage`: the bounded, Issue-scoped reverse read."""
+        self._lineage_plane()
+        with _translated(), _lineage_translated():
+            view = self._record_lineage.read_lineage(
+                unit_of_work, authorization.principal.principal_id, command.lineage_request()
+            )
+        return _Result(
+            payload=view.to_canonical_dict(),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+        )
+
+    def _meetings_notes_versions(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListMeetingNoteVersions,
+    ) -> _Result:
+        """`meetings.notes.versions`: note version metadata, newest first; no body or digest."""
+        self._lineage_plane()
+        principal_id = authorization.principal.principal_id
+        with _translated(), _meeting_translated():
+            meetings = unit_of_work.meetings
+            if not meetings.meeting_is_owned(principal_id, command.meeting_id):
+                raise NotFoundError(SafeDetail.MEETING_ID)
+            page = meetings.list_note_versions(
+                principal_id,
+                command.meeting_id,
+                page_size=min(self._page_size(command.page_size), MAX_ISSUE_PAGE_SIZE),
+                after=command.after,
+            )
+        entries = [
+            MeetingNoteVersionEntry(
+                note_version_id=note.note_version_id,
+                version_number=note.version_number,
+                supersedes_note_version_id=note.supersedes_note_version_id,
+                character_count=len(note.body),
+                recorded_at=note.recorded_at,
+                is_current=note.is_current,
+            ).to_canonical_dict()
+            for note in page.entries
+        ]
+        return _Result(
+            payload={
+                "meeting_id": command.meeting_id,
+                "versions": entries,
+                "next_cursor": (
+                    page.entries[-1].note_version_id if page.has_more and page.entries else None
+                ),
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_MEETING_TRUST_BASIS),
+        )
+
+    def _meetings_notes_read_version(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReadMeetingNoteVersion,
+    ) -> _Result:
+        """`meetings.notes.read_version`: one exact note version; the body only on request."""
+        self._lineage_plane()
+        with _translated(), _meeting_translated():
+            note = unit_of_work.meetings.read_note_version(
+                authorization.principal.principal_id, command.meeting_id, command.note_version_id
+            )
+        if note is None:
+            # Not this Meeting's, not this Principal's, or absent: one answer.
+            raise NotFoundError(SafeDetail.NOTE_VERSION_ID)
+        view = MeetingNoteVersionView(
+            note_version_id=note.note_version_id,
+            meeting_id=note.meeting_id,
+            version_number=note.version_number,
+            supersedes_note_version_id=note.supersedes_note_version_id,
+            content_sha256=note.content_sha256,
+            character_count=len(note.body),
+            recorded_at=note.recorded_at,
+            is_current=note.is_current,
+            body_markdown=note.body if command.include_body else None,
+        )
+        return _Result(
+            payload={
+                "note": view.to_canonical_dict(),
+                "evidence_availability": EvidenceAvailability.AVAILABLE.value,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_MEETING_TRUST_BASIS),
+        )
+
+    @staticmethod
+    def _association_result(
+        authorization: Authorization, key: str, written: AssociationResult
+    ) -> _Result:
+        payload: dict[str, Any] = {
+            key: written.association.to_canonical_dict(),
+            "replayed": written.replayed,
+        }
+        if written.created is not None:
+            payload["created"] = written.created
+        return _Result(
+            payload=payload,
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+        )
 
     @staticmethod
     def _issue_revision_result(
@@ -15403,6 +15622,14 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.ISSUES_UPDATE: ApplicationService._issues_update,
         Capability.ISSUES_PROJECT_LINKS_ADD: ApplicationService._issues_project_links_add,
         Capability.ISSUES_PROJECT_LINKS_END: ApplicationService._issues_project_links_end,
+        Capability.ISSUES_MEMBERSHIPS_ADD: ApplicationService._issues_memberships_add,
+        Capability.ISSUES_MEMBERSHIPS_END: ApplicationService._issues_memberships_end,
+        Capability.RECORDS_ASSOCIATIONS_ASSERT: ApplicationService._records_associations_assert,
+        Capability.RECORDS_ASSOCIATIONS_CORRECT: ApplicationService._records_associations_correct,
+        Capability.RECORDS_ASSOCIATIONS_END: ApplicationService._records_associations_end,
+        Capability.RECORDS_LINEAGE: ApplicationService._records_lineage,
+        Capability.MEETINGS_NOTES_VERSIONS: ApplicationService._meetings_notes_versions,
+        Capability.MEETINGS_NOTES_READ_VERSION: ApplicationService._meetings_notes_read_version,
         Capability.RECORD_EVENTS_LIST: ApplicationService._record_events_list,
         Capability.RECORD_EVENTS_PROVENANCE: ApplicationService._record_events_provenance,
         Capability.KNOWLEDGE_ASSERTIONS_READ: ApplicationService._knowledge_assertions_read,

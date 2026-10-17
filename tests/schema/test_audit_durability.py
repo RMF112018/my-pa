@@ -64,6 +64,7 @@ from my_pa.contracts.ports import (
     ProjectRepository,
     PulseRepository,
     RecordEventStager,
+    RecordLineageRepository,
     ReviewRepository,
     SearchOutcome,
     SituationRepository,
@@ -285,6 +286,10 @@ class _FailsAfterTheWork(UnitOfWork):
     @property
     def issues(self) -> IssueRepository:
         return self._inner.issues
+
+    @property
+    def record_lineage(self) -> RecordLineageRepository:
+        return self._inner.record_lineage
 
     @property
     def audit(self) -> AuditSink:

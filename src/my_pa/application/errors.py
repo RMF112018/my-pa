@@ -533,6 +533,33 @@ class SafeDetail(StrEnum):
     STATE = "state"
     EXPECTED_MEMBERSHIP_REVISION = "expected_membership_revision"
     EVIDENCE_ANCHOR = "evidence_anchor"
+    #: Record lineage S1, memberships, associations and the lineage read (S1
+    #: contract sections 3.1, 3.2, 7.2 and 7.3). `ENDPOINT` an endpoint that
+    #: exists but is not linkable (a context Situation, an archived Task, a
+    #: restricted Capture version); `MEMBER`, `FROM_RECORD`, `TO_RECORD` and
+    #: `ORIGIN` the subject of an absent, foreign or wrong-parent record;
+    #: `RELATION_TYPE` a pair outside the section 3.1 matrix;
+    #: `EVIDENCE_ANCHORS` an evidence set that is malformed, repeats an anchor,
+    #: misses its relation's rule or does not match its source; `LINK_ID` an
+    #: absent, foreign or wrong-kind link; `EXPECTED_REVISION` a malformed link
+    #: precondition (a stale one is `conflict` / `stale_version`);
+    #: `CONTEXT_ISSUE_ID` an absent, foreign or mismatched Issue context;
+    #: `MAX_DEPTH`, `INCLUDE_BODY` and `NOTE_VERSION_ID` the read fields of
+    #: those names. `ROLE`, `ISSUE_ID`, `MEETING_ID`, `REASON` and `CURSOR` are
+    #: reused, not redeclared.
+    ENDPOINT = "endpoint"
+    MEMBER = "member"
+    FROM_RECORD = "from"
+    TO_RECORD = "to"
+    ORIGIN = "origin"
+    RELATION_TYPE = "relation_type"
+    EVIDENCE_ANCHORS = "evidence_anchors"
+    LINK_ID = "link_id"
+    EXPECTED_REVISION = "expected_revision"
+    CONTEXT_ISSUE_ID = "context_issue_id"
+    MAX_DEPTH = "max_depth"
+    INCLUDE_BODY = "include_body"
+    NOTE_VERSION_ID = "note_version_id"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

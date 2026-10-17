@@ -57,12 +57,14 @@ from my_pa.application.commands import (
     AddEntityAlias,
     AddEntityCommunicationMethod,
     AddEntityName,
+    AddIssueMembership,
     AddIssueProjectLink,
     ApplyConstraintSync,
     ArchiveCapture,
     ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
+    AssertRecordAssociation,
     BeginIntelligenceCycle,
     BindEntityIdentifier,
     BulkConfirmTasks,
@@ -77,6 +79,7 @@ from my_pa.application.commands import (
     CompleteGoodNotesPull,
     ConfigureProjectControls,
     CorrectGoodNotes,
+    CorrectRecordAssociation,
     CreateCapture,
     CreateCommitment,
     CreateConstraintCategory,
@@ -104,7 +107,9 @@ from my_pa.application.commands import (
     EndEntityAssignment,
     EndEntityParticipation,
     EndEntityRelationship,
+    EndIssueMembership,
     EndIssueProjectLink,
+    EndRecordAssociation,
     EnrollSource,
     FetchSource,
     GetCanvasWorkspace,
@@ -150,6 +155,7 @@ from my_pa.application.commands import (
     ListIssues,
     ListKnowledgeAssertions,
     ListManagedDocuments,
+    ListMeetingNoteVersions,
     ListMeetings,
     ListPortfolioConstraints,
     ListProjects,
@@ -186,9 +192,11 @@ from my_pa.application.commands import (
     ReadKnowledgeAssertion,
     ReadManagedDocument,
     ReadMeeting,
+    ReadMeetingNoteVersion,
     ReadPortfolioConstraintOverview,
     ReadProject,
     ReadProjectControlsStatus,
+    ReadRecordLineage,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
@@ -1265,6 +1273,72 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             idempotency_key="policy-issues-project-links-end",
             reason="the policy issue left the project",
         ),
+        # Record lineage S1, memberships, associations, the reverse read and note history.
+        Capability.ISSUES_MEMBERSHIPS_ADD: AddIssueMembership(
+            issue_id="sit_policyissue0001",
+            member={"family": "task", "record_id": "tsk_policytask00001"},
+            role="work",
+            idempotency_key="policy-issues-memberships-add-0001",
+        ),
+        Capability.ISSUES_MEMBERSHIPS_END: EndIssueMembership(
+            link_id="irl_policylink00001",
+            expected_revision=1,
+            idempotency_key="policy-issues-memberships-end-0001",
+            reason="the policy task left the issue",
+        ),
+        Capability.RECORDS_ASSOCIATIONS_ASSERT: AssertRecordAssociation(
+            from_record={"family": "commitment", "record_id": "cmt_policycommitment01"},
+            to_record={"family": "meeting_note_version", "record_id": "mnote_policynote00001"},
+            relation_type="originated_from",
+            idempotency_key="policy-records-associations-assert-0001",
+            evidence_anchors=(
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_policymeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_policynote00001",
+                    "source_sha256": "a" * 64,
+                    "passage_start_cp": 0,
+                    "passage_end_cp": 4,
+                    "passage_sha256": "b" * 64,
+                    "role": "origin",
+                },
+            ),
+        ),
+        Capability.RECORDS_ASSOCIATIONS_CORRECT: CorrectRecordAssociation(
+            link_id="irl_policylink00001",
+            expected_revision=1,
+            idempotency_key="policy-records-associations-correct-0001",
+            reason="the policy origin passage was narrowed",
+            evidence_anchors=(
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_policymeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_policynote00001",
+                    "source_sha256": "a" * 64,
+                    "passage_start_cp": 0,
+                    "passage_end_cp": 4,
+                    "passage_sha256": "b" * 64,
+                    "role": "origin",
+                },
+            ),
+        ),
+        Capability.RECORDS_ASSOCIATIONS_END: EndRecordAssociation(
+            link_id="irl_policylink00001",
+            expected_revision=1,
+            idempotency_key="policy-records-associations-end-0001",
+            reason="the policy association was wrong",
+        ),
+        Capability.RECORDS_LINEAGE: ReadRecordLineage(
+            origin={"family": "task", "record_id": "tsk_policytask00001"}
+        ),
+        Capability.MEETINGS_NOTES_VERSIONS: ListMeetingNoteVersions(
+            meeting_id="mtg_policymeeting0001"
+        ),
+        Capability.MEETINGS_NOTES_READ_VERSION: ReadMeetingNoteVersion(
+            meeting_id="mtg_policymeeting0001", note_version_id="mnote_policynote00001"
+        ),
     }
 
 
@@ -1710,6 +1784,15 @@ SCOPED_CAPABILITIES = [
         Capability.ISSUES_UPDATE,
         Capability.ISSUES_PROJECT_LINKS_ADD,
         Capability.ISSUES_PROJECT_LINKS_END,
+        # Record lineage S1: the eight remaining S1 names, also in `_SCOPELESS`.
+        Capability.ISSUES_MEMBERSHIPS_ADD,
+        Capability.ISSUES_MEMBERSHIPS_END,
+        Capability.RECORDS_ASSOCIATIONS_ASSERT,
+        Capability.RECORDS_ASSOCIATIONS_CORRECT,
+        Capability.RECORDS_ASSOCIATIONS_END,
+        Capability.RECORDS_LINEAGE,
+        Capability.MEETINGS_NOTES_VERSIONS,
+        Capability.MEETINGS_NOTES_READ_VERSION,
     }
 ]
 
@@ -2005,6 +2088,15 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.ISSUES_UPDATE,
         Capability.ISSUES_PROJECT_LINKS_ADD,
         Capability.ISSUES_PROJECT_LINKS_END,
+        # Record lineage S1: the eight remaining S1 names, also in `_SCOPELESS`.
+        Capability.ISSUES_MEMBERSHIPS_ADD,
+        Capability.ISSUES_MEMBERSHIPS_END,
+        Capability.RECORDS_ASSOCIATIONS_ASSERT,
+        Capability.RECORDS_ASSOCIATIONS_CORRECT,
+        Capability.RECORDS_ASSOCIATIONS_END,
+        Capability.RECORDS_LINEAGE,
+        Capability.MEETINGS_NOTES_VERSIONS,
+        Capability.MEETINGS_NOTES_READ_VERSION,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

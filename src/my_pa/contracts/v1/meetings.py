@@ -4,7 +4,11 @@ Eight models: `MeetingView` for a full read and every write result,
 `MeetingListEntry` for a `meetings.list`/`meetings.search` row, `MeetingSeriesView`,
 the three child views a full read nests (`MeetingAttendeeView`,
 `MeetingAttachmentView`, `MeetingNoteView`), and the two immutable history
-receipts (`MeetingHistoryView`, `MeetingSeriesHistoryView`).
+receipts (`MeetingHistoryView`, `MeetingSeriesHistoryView`). Record lineage S1
+(S1 contract section 7.2) appends the two note-history shapes:
+`MeetingNoteVersionEntry` (a `meetings.notes.versions` row: no body and no
+digest) and `MeetingNoteVersionView` (`meetings.notes.read_version`: the stored
+content digest, and the body only when the caller asked for it).
 
 **What these models cannot carry is the point of them.**
 
@@ -64,6 +68,8 @@ __all__ = [
     "MeetingAttendeeView",
     "MeetingHistoryView",
     "MeetingListEntry",
+    "MeetingNoteVersionEntry",
+    "MeetingNoteVersionView",
     "MeetingNoteView",
     "MeetingSeriesHistoryView",
     "MeetingSeriesView",
@@ -356,3 +362,57 @@ class MeetingSeriesHistoryView(StrictModel):
         validate_identifier(self.meeting_series_id, IdKind.MEETING_SERIES)
         _check_versions(self.action, self.outcome, self.before_version, self.after_version)
         return self
+
+
+class MeetingNoteVersionEntry(StrictModel):
+    """One note version as `meetings.notes.versions` lists it: no body, no digest."""
+
+    note_version_id: str
+    version_number: int = _Version
+    supersedes_note_version_id: str | None
+    character_count: int = Field(ge=1, le=MAX_MEETING_NOTES_CHARACTERS)
+    recorded_at: UtcDatetime
+    is_current: bool
+
+    @model_validator(mode="after")
+    def _check(self) -> MeetingNoteVersionEntry:
+        validate_identifier(self.note_version_id, IdKind.MEETING_NOTE_VERSION)
+        if self.supersedes_note_version_id is not None:
+            validate_identifier(self.supersedes_note_version_id, IdKind.MEETING_NOTE_VERSION)
+        return self
+
+
+class MeetingNoteVersionView(StrictModel):
+    """One exact note version as `meetings.notes.read_version` answers it.
+
+    `content_sha256` is the stored digest of the exact body; `body_markdown` is
+    present only when the request asked for it (`include_body`), and is then
+    the exact stored text.
+    """
+
+    note_version_id: str
+    meeting_id: str
+    version_number: int = _Version
+    supersedes_note_version_id: str | None
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    character_count: int = Field(ge=1, le=MAX_MEETING_NOTES_CHARACTERS)
+    recorded_at: UtcDatetime
+    is_current: bool
+    body_markdown: str | None = Field(
+        default=None, min_length=1, max_length=MAX_MEETING_NOTES_CHARACTERS
+    )
+
+    @model_validator(mode="after")
+    def _check(self) -> MeetingNoteVersionView:
+        validate_identifier(self.note_version_id, IdKind.MEETING_NOTE_VERSION)
+        validate_identifier(self.meeting_id, IdKind.MEETING)
+        if self.supersedes_note_version_id is not None:
+            validate_identifier(self.supersedes_note_version_id, IdKind.MEETING_NOTE_VERSION)
+        return self
+
+    def to_canonical_dict(self) -> dict[str, object]:
+        """The JSON-mode representation; `body_markdown` only when it was asked for."""
+        dumped = self.model_dump(mode="json")
+        if self.body_markdown is None:
+            del dumped["body_markdown"]
+        return dumped

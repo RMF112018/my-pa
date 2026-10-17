@@ -931,6 +931,16 @@ _POST_KLP_CAPABILITIES: Final = frozenset(
         "issues.update",
         "issues.project_links.add",
         "issues.project_links.end",
+        # Record lineage S1, memberships, associations, the reverse read and
+        # note history.
+        "issues.memberships.add",
+        "issues.memberships.end",
+        "records.associations.assert",
+        "records.associations.correct",
+        "records.associations.end",
+        "records.lineage",
+        "meetings.notes.versions",
+        "meetings.notes.read_version",
     }
 )
 _EVENT: Final = "rcev_fastworld000000001"

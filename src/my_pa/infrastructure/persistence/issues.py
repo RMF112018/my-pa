@@ -283,6 +283,9 @@ class SqlIssueRepository(IssueRepository):
                     request.c.result_issue_id,
                     request.c.result_issue_version,
                     request.c.result_membership_event_id,
+                    request.c.result_link_id,
+                    request.c.result_link_revision_no,
+                    request.c.result_created,
                 ).where(
                     _mine(request, principal_id),
                     request.c.capability == capability,
@@ -304,6 +307,9 @@ class SqlIssueRepository(IssueRepository):
             result_issue_id=winner.result_issue_id,
             result_issue_version=winner.result_issue_version,
             result_membership_event_id=winner.result_membership_event_id,
+            result_link_id=winner.result_link_id,
+            result_link_revision_no=winner.result_link_revision_no,
+            result_created=winner.result_created,
         )
 
     def complete_write_request(
@@ -317,6 +323,9 @@ class SqlIssueRepository(IssueRepository):
         result_issue_id: str | None = None,
         result_issue_version: int | None = None,
         result_membership_event_id: str | None = None,
+        result_link_id: str | None = None,
+        result_link_revision_no: int | None = None,
+        result_created: bool | None = None,
     ) -> None:
         request = lineage_write_requests
         completed = _run(
@@ -333,6 +342,9 @@ class SqlIssueRepository(IssueRepository):
                     result_issue_id=result_issue_id,
                     result_issue_version=result_issue_version,
                     result_membership_event_id=result_membership_event_id,
+                    result_link_id=result_link_id,
+                    result_link_revision_no=result_link_revision_no,
+                    result_created=result_created,
                     completed_at=completed_at,
                 )
                 .returning(request.c.capability)

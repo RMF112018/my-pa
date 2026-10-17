@@ -76,7 +76,7 @@ _MEETINGS = _MEETING_READS | _MEETING_WRITES
 
 def test_policy_covers_every_public_capability_exactly_once() -> None:
     assert set(CHATLLM_CAPABILITY_POLICY) == set(Capability)
-    assert len(CHATLLM_CAPABILITY_POLICY) == 198
+    assert len(CHATLLM_CAPABILITY_POLICY) == 206
     assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v9"
 
 
@@ -92,9 +92,10 @@ def test_classification_counts_match_the_approved_plan() -> None:
     assert counts[ChatLLMCapabilityClass.COMPATIBILITY_ONLY] == 2
     # KLP-WP-04 (chatllm-data-v7): submit and checkpoint are excluded, 15 -> 17.
     assert counts[ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED] == 17
-    # Record lineage S1: the six `issues.` names are an operator decision
-    # (ADR-015, OD-07), 2 -> 8; no data-class member moves, so no profile bump.
-    assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 8
+    # Record lineage S1: the six Issue-plane names are an operator decision
+    # (ADR-015, OD-07), 2 -> 8, and the eight remaining S1 names 8 -> 16; no
+    # data-class member moves, so no profile bump.
+    assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 16
     assert counts[ChatLLMCapabilityClass.RETIRED] == 0
 
 
@@ -149,7 +150,14 @@ def test_report_authoring_writes_are_data_required() -> None:
 
 def test_the_six_meeting_capabilities_are_data_required_on_the_core_plane() -> None:
     assert len(_MEETINGS) == 6
-    named = {capability for capability in Capability if capability.value.startswith("meetings.")}
+    # Record lineage S1's `meetings.notes.*` reads share the family but are an
+    # operator decision (ADR-015, OD-07), not core-plane data.
+    named = {
+        capability
+        for capability in Capability
+        if capability.value.startswith("meetings.")
+        and not capability.value.startswith("meetings.notes.")
+    }
     assert named == _MEETINGS
     for capability in _MEETINGS:
         policy = CHATLLM_CAPABILITY_POLICY[capability]

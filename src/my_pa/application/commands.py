@@ -55,10 +55,25 @@ from my_pa.application.issues import (
     ProjectLinkAddRequest,
     ProjectLinkEndRequest,
 )
-from my_pa.application.lineage_endpoints import parse_evidence_anchor
+from my_pa.application.lineage_endpoints import (
+    EvidenceAnchorInput,
+    parse_evidence_anchor,
+    parse_evidence_anchors,
+    parse_record_ref,
+)
 from my_pa.application.record_events import (
     MAX_RECORD_EVENT_CURSOR_CHARACTERS,
     requested_families,
+)
+from my_pa.application.record_lineage import (
+    DEFAULT_LINEAGE_DEPTH,
+    MAX_LINEAGE_DEPTH,
+    AssociationAssertRequest,
+    AssociationCorrectRequest,
+    AssociationEndRequest,
+    LineageReadRequest,
+    MembershipAddRequest,
+    MembershipEndRequest,
 )
 from my_pa.domain.capture.display_label import normalize_display_label
 from my_pa.domain.capture.errors import CaptureBoundsError, CaptureError
@@ -129,13 +144,22 @@ from my_pa.domain.knowledge_assertion.vocabulary import (
     KnowledgeSubjectKind,
 )
 from my_pa.domain.lineage.model import (
+    MAX_EVIDENCE_ANCHORS,
     MAX_ISSUE_DESCRIPTION_CHARACTERS,
     MAX_ISSUE_TITLE_CHARACTERS,
     MAX_LINEAGE_IDEMPOTENCY_KEY_CHARACTERS,
     MAX_LINEAGE_REASON_CHARACTERS,
+    RecordRef,
+)
+from my_pa.domain.lineage.vocabulary import (
+    RELATION_MATRIX,
+    EvidenceSourceFamily,
+    MemberRole,
+    RecordFamily,
+    RelationType,
+    SourceVersionKind,
 )
 from my_pa.domain.lineage.vocabulary import EvidenceRole as LineageEvidenceRole
-from my_pa.domain.lineage.vocabulary import EvidenceSourceFamily, SourceVersionKind
 from my_pa.domain.meeting.model import (
     DEFAULT_MEETING_PAGE_SIZE,
     MAX_ATTENDEE_DISPLAY_NAME_CHARACTERS,
@@ -12359,6 +12383,414 @@ class EndIssueProjectLink:
         )
 
 
+# --- Record lineage S1: memberships, associations, the reverse read and note
+# history (S1 contract sections 3.1, 7.1 and 7.2) ---------------------------------
+#
+# Eight commands. A record reference is `{family, record_id}`; an evidence set is
+# a list of section 7.1 `EvidenceAnchorInput` documents. What is decidable from
+# the request alone is refused here: types, bounds, prefixes, the matrix's
+# families, a repeated anchor identity. Existence, ownership, linkability and the
+# evidence rules against the stored sources are the application's
+# (`application.record_lineage`). `records.associations.assert` names its
+# endpoints `from_record` and `to_record`: `from` is a Python keyword and every
+# payload key here is a dataclass field (`adapters.mcp.tools.payload_schema_for`).
+
+_RECORD_REF_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["family", "record_id"],
+        "properties": {
+            "family": {"type": "string", "enum": [member.value for member in RecordFamily]},
+            "record_id": {"type": "string", "description": "An identifier of that family."},
+        },
+    }
+)
+
+_EVIDENCE_ANCHORS_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "array",
+        "maxItems": MAX_EVIDENCE_ANCHORS,
+        "items": dict(_EVIDENCE_ANCHOR_SCHEMA),
+        "description": (
+            "Evidence: exact Meeting note or Capture versions, each with an optional "
+            "code-point passage, or legacy Capture roots (corroborates/contradicts only). "
+            "No anchor may repeat another's source and passage."
+        ),
+    }
+)
+
+
+def _record_ref(value: object, detail: SafeDetail) -> RecordRef:
+    return parse_record_ref(value, detail)
+
+
+def _anchor_set(value: object, *, minimum: int) -> tuple[EvidenceAnchorInput, ...]:
+    return parse_evidence_anchors(value, SafeDetail.EVIDENCE_ANCHORS, minimum=minimum)
+
+
+def _link_revision(value: object) -> int:
+    if type(value) is not int or value < 1:
+        raise InvalidRequestError(SafeDetail.EXPECTED_REVISION)
+    return value
+
+
+def _member_role(value: object) -> MemberRole:
+    if isinstance(value, str):
+        for role in MemberRole:
+            if role.value == value:
+                return role
+    raise invalid_choice(SafeDetail.ROLE, [role.value for role in MemberRole])
+
+
+def _semantic_relation(value: object) -> RelationType:
+    admitted = [relation for relation in RelationType if relation is not RelationType.ISSUE_MEMBER]
+    if isinstance(value, str):
+        for relation in admitted:
+            if relation.value == value:
+                return relation
+    raise invalid_choice(SafeDetail.RELATION_TYPE, [relation.value for relation in admitted])
+
+
+#: The families an Issue membership may name (section 3.1, `issue_member` to).
+_MEMBER_FAMILIES: Final = RELATION_MATRIX[RelationType.ISSUE_MEMBER][2]
+
+
+@dataclass(frozen=True, slots=True)
+class AddIssueMembership:
+    """`issues.memberships.add`: make a record of yours a member of one of your Issues.
+
+    Local operator only. `member` is a Meeting, Meeting note version, Task,
+    Commitment, Constraint or Capture version; a Project's scope is
+    `issues.project_links.add`. An active membership with the same member and
+    role is returned with `created: false` and never changes.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_MEMBERSHIPS_ADD
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue."),
+            "member": _RECORD_REF_SCHEMA,
+            "role": {"type": "string", "enum": [role.value for role in MemberRole]},
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "evidence_anchors": _EVIDENCE_ANCHORS_SCHEMA,
+        }
+    )
+
+    issue_id: str
+    member: dict[str, object]
+    role: str
+    idempotency_key: str
+    evidence_anchors: tuple[dict[str, object], ...] = field(default=(), repr=False)
+
+    def __post_init__(self) -> None:
+        _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
+        self.lineage_request()
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def lineage_request(self) -> MembershipAddRequest:
+        """The parsed request this command states."""
+        member = _record_ref(self.member, SafeDetail.MEMBER)
+        if member.family not in _MEMBER_FAMILIES:
+            raise InvalidRequestError(SafeDetail.MEMBER)
+        return MembershipAddRequest(
+            issue_id=self.issue_id,
+            member=member,
+            role=_member_role(self.role),
+            evidence_anchors=_anchor_set(self.evidence_anchors, minimum=0),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class EndIssueMembership:
+    """`issues.memberships.end`: end an active Issue membership.
+
+    Local operator only. `expected_revision` is the membership's current
+    revision; a stale one is conflict. A semantic association's id is
+    invalid_request.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_MEMBERSHIPS_END
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "link_id": _issue_id_schema(IdKind.RECORD_LINK, "The membership link."),
+            "expected_revision": {"type": "integer", "minimum": 1},
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "reason": _LINEAGE_REASON_SCHEMA,
+        }
+    )
+
+    link_id: str
+    expected_revision: int
+    idempotency_key: str
+    reason: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        self.lineage_request()
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def lineage_request(self) -> MembershipEndRequest:
+        """The parsed request this command states."""
+        return MembershipEndRequest(
+            link_id=_identifier(self.link_id, IdKind.RECORD_LINK, SafeDetail.LINK_ID),
+            expected_revision=_link_revision(self.expected_revision),
+            reason=_lineage_reason(self.reason),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AssertRecordAssociation:
+    """`records.associations.assert`: assert that one record of yours relates to another.
+
+    Local operator only. `originated_from`: a Commitment, Task or Constraint
+    from an exact Meeting note or Capture version, with an `origin` anchor on a
+    passage of that version. `discusses`: a Meeting or note version discusses
+    an Issue, Task, Commitment or Constraint, with a `discussion` anchor on that
+    note (or a note of that Meeting). `context_issue_id` scopes the
+    association to one of your Issues. The same active meaning returns the
+    existing association with `created: false`.
+    """
+
+    capability: ClassVar[Capability] = Capability.RECORDS_ASSOCIATIONS_ASSERT
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "from_record": _RECORD_REF_SCHEMA,
+            "to_record": _RECORD_REF_SCHEMA,
+            "relation_type": {"type": "string", "enum": ["discusses", "originated_from"]},
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "evidence_anchors": {**_EVIDENCE_ANCHORS_SCHEMA, "minItems": 1},
+            "context_issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue it belongs to."),
+        }
+    )
+
+    from_record: dict[str, object]
+    to_record: dict[str, object]
+    relation_type: str
+    idempotency_key: str
+    evidence_anchors: tuple[dict[str, object], ...] = field(repr=False)
+    context_issue_id: str | None = None
+
+    def __post_init__(self) -> None:
+        self.lineage_request()
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def lineage_request(self) -> AssociationAssertRequest:
+        """The parsed request this command states."""
+        relation = _semantic_relation(self.relation_type)
+        from_ref = _record_ref(self.from_record, SafeDetail.FROM_RECORD)
+        to_ref = _record_ref(self.to_record, SafeDetail.TO_RECORD)
+        _kind, sources, targets = RELATION_MATRIX[relation]
+        if from_ref.family not in sources or to_ref.family not in targets:
+            raise InvalidRequestError(SafeDetail.RELATION_TYPE)
+        if self.context_issue_id is not None:
+            _identifier(self.context_issue_id, IdKind.SITUATION, SafeDetail.CONTEXT_ISSUE_ID)
+        return AssociationAssertRequest(
+            from_ref=from_ref,
+            to_ref=to_ref,
+            relation_type=relation,
+            evidence_anchors=_anchor_set(self.evidence_anchors, minimum=1),
+            context_issue_id=self.context_issue_id,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CorrectRecordAssociation:
+    """`records.associations.correct`: replace a semantic association's evidence set.
+
+    Local operator only. The supplied set is the complete new set, satisfies
+    the relation's rule and differs from the current one. The association's
+    endpoints and meaning never change.
+    """
+
+    capability: ClassVar[Capability] = Capability.RECORDS_ASSOCIATIONS_CORRECT
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "link_id": _issue_id_schema(IdKind.RECORD_LINK, "The association."),
+            "expected_revision": {"type": "integer", "minimum": 1},
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "reason": _LINEAGE_REASON_SCHEMA,
+            "evidence_anchors": {**_EVIDENCE_ANCHORS_SCHEMA, "minItems": 1},
+        }
+    )
+
+    link_id: str
+    expected_revision: int
+    idempotency_key: str
+    reason: str = field(repr=False)
+    evidence_anchors: tuple[dict[str, object], ...] = field(repr=False)
+
+    def __post_init__(self) -> None:
+        self.lineage_request()
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def lineage_request(self) -> AssociationCorrectRequest:
+        """The parsed request this command states."""
+        return AssociationCorrectRequest(
+            link_id=_identifier(self.link_id, IdKind.RECORD_LINK, SafeDetail.LINK_ID),
+            expected_revision=_link_revision(self.expected_revision),
+            reason=_lineage_reason(self.reason),
+            evidence_anchors=_anchor_set(self.evidence_anchors, minimum=1),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class EndRecordAssociation:
+    """`records.associations.end`: end a semantic association.
+
+    Local operator only. An ended association is final; asserting the same
+    meaning again creates a new one.
+    """
+
+    capability: ClassVar[Capability] = Capability.RECORDS_ASSOCIATIONS_END
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "link_id": _issue_id_schema(IdKind.RECORD_LINK, "The association."),
+            "expected_revision": {"type": "integer", "minimum": 1},
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "reason": _LINEAGE_REASON_SCHEMA,
+            "evidence_anchors": _EVIDENCE_ANCHORS_SCHEMA,
+        }
+    )
+
+    link_id: str
+    expected_revision: int
+    idempotency_key: str
+    reason: str = field(repr=False)
+    evidence_anchors: tuple[dict[str, object], ...] = field(default=(), repr=False)
+
+    def __post_init__(self) -> None:
+        self.lineage_request()
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def lineage_request(self) -> AssociationEndRequest:
+        """The parsed request this command states."""
+        return AssociationEndRequest(
+            link_id=_identifier(self.link_id, IdKind.RECORD_LINK, SafeDetail.LINK_ID),
+            expected_revision=_link_revision(self.expected_revision),
+            reason=_lineage_reason(self.reason),
+            evidence_anchors=_anchor_set(self.evidence_anchors, minimum=0),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ReadRecordLineage:
+    """`records.lineage`: the Issue-scoped lineage around one record of yours.
+
+    Returns the Issues the record belongs to and, for the one selected (or the
+    only one), the records and recorded associations reachable within
+    `max_depth` (0..4, default 4). With several candidate Issues and no
+    `issue_id`, only the candidates are returned. One bounded page: no body, no
+    title but an Issue's own, and `complete_state` says what the answer can claim.
+    """
+
+    capability: ClassVar[Capability] = Capability.RECORDS_LINEAGE
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "origin": _RECORD_REF_SCHEMA,
+            "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue to read lineage under."),
+            "max_depth": {"type": "integer", "minimum": 0, "maximum": 4, "default": 4},
+        }
+    )
+
+    origin: dict[str, object]
+    issue_id: str | None = None
+    max_depth: int | None = None
+
+    def __post_init__(self) -> None:
+        self.lineage_request()
+
+    def lineage_request(self) -> LineageReadRequest:
+        """The parsed request this command states."""
+        if self.issue_id is not None:
+            _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
+        depth: object = self.max_depth
+        if depth is None:
+            depth = DEFAULT_LINEAGE_DEPTH
+        if type(depth) is not int or not 0 <= depth <= MAX_LINEAGE_DEPTH:
+            raise InvalidRequestError(SafeDetail.MAX_DEPTH)
+        return LineageReadRequest(
+            origin=_record_ref(self.origin, SafeDetail.ORIGIN),
+            issue_id=self.issue_id,
+            max_depth=depth,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ListMeetingNoteVersions:
+    """`meetings.notes.versions`: the note versions of one Meeting of yours, newest first.
+
+    Metadata only: no body and no digest. `after` is the last
+    `note_version_id` of the previous page, otherwise invalid_request.
+    """
+
+    capability: ClassVar[Capability] = Capability.MEETINGS_NOTES_VERSIONS
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "meeting_id": _meeting_id_schema(IdKind.MEETING, "The Meeting."),
+            "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_ISSUE_PAGE_SIZE,
+                "default": DEFAULT_ISSUE_PAGE_SIZE,
+            },
+            "after": _meeting_id_schema(
+                IdKind.MEETING_NOTE_VERSION, "Keyset cursor: the last note_version_id shown."
+            ),
+        }
+    )
+
+    meeting_id: str
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.meeting_id, IdKind.MEETING, SafeDetail.MEETING_ID)
+        sized = _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if sized is not None and sized > MAX_ISSUE_PAGE_SIZE:
+            raise InvalidRequestError(SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.MEETING_NOTE_VERSION, SafeDetail.CURSOR)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadMeetingNoteVersion:
+    """`meetings.notes.read_version`: one exact note version of one Meeting of yours.
+
+    Returns its stored content digest, and the exact body only when
+    `include_body` is true. A note version of another Meeting, or of another
+    Principal, is not_found.
+    """
+
+    capability: ClassVar[Capability] = Capability.MEETINGS_NOTES_READ_VERSION
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "meeting_id": _meeting_id_schema(IdKind.MEETING, "The Meeting."),
+            "note_version_id": _meeting_id_schema(
+                IdKind.MEETING_NOTE_VERSION, "The note version of that Meeting."
+            ),
+            "include_body": {"type": "boolean", "default": False},
+        }
+    )
+
+    meeting_id: str
+    note_version_id: str
+    include_body: bool = False
+
+    def __post_init__(self) -> None:
+        _identifier(self.meeting_id, IdKind.MEETING, SafeDetail.MEETING_ID)
+        _identifier(self.note_version_id, IdKind.MEETING_NOTE_VERSION, SafeDetail.NOTE_VERSION_ID)
+        if not isinstance(self.include_body, bool):
+            raise InvalidRequestError(SafeDetail.INCLUDE_BODY)
+
+
 type Command = (
     GetCapabilities
     | ListSources
@@ -12558,6 +12990,14 @@ type Command = (
     | UpdateIssue
     | AddIssueProjectLink
     | EndIssueProjectLink
+    | AddIssueMembership
+    | EndIssueMembership
+    | AssertRecordAssociation
+    | CorrectRecordAssociation
+    | EndRecordAssociation
+    | ReadRecordLineage
+    | ListMeetingNoteVersions
+    | ReadMeetingNoteVersion
 )
 
 

@@ -112,11 +112,19 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesSemanticProposal,
     GoodNotesSemanticReviewCase,
 )
-from my_pa.domain.lineage.model import EvidenceAnchor
+from my_pa.domain.lineage.model import EvidenceAnchor, RecordRef
 from my_pa.domain.lineage.vocabulary import (
+    AcceptanceBasis,
     IssueProjectMembershipAction,
     IssueProjectMembershipState,
     IssueRevisionAction,
+    LinkLifecycleState,
+    LinkRevisionAction,
+    MemberRole,
+    RecordFamily,
+    RecordLinkKind,
+    RelationType,
+    SituationKind,
 )
 from my_pa.domain.meeting.model import (
     MeetingListRequest,
@@ -408,9 +416,15 @@ __all__ = [
     "KnowledgeSubmitRequest",
     "KnowledgeSupersessionGuardError",
     "KnowledgeTriggerNotFoundError",
+    "LineageEndpoint",
     "LineageIdempotencyConflictError",
+    "LineageLinkEvidence",
+    "LineageNoteVersionRef",
+    "LineageResolvedRecord",
     "LineageSourceVersion",
     "LineageWriteRequestRecord",
+    "LinkHeadRecord",
+    "LinkRevisionRecord",
     "ManagedAdmission",
     "ManagedByteStore",
     "ManagedDocumentRepository",
@@ -421,6 +435,8 @@ __all__ = [
     "MeetingEntityState",
     "MeetingListPage",
     "MeetingNoteRecord",
+    "MeetingNoteVersionPage",
+    "MeetingNoteVersionRecord",
     "MeetingRecord",
     "MeetingRepository",
     "MeetingWriteRequestRecord",
@@ -440,6 +456,8 @@ __all__ = [
     "RecordEventReader",
     "RecordEventStager",
     "RecordEventWriter",
+    "RecordLineageRepository",
+    "RecordLinkRecord",
     "RelationshipEventRepository",
     "RelationshipRepository",
     "RelationshipWriteRequest",
@@ -6279,6 +6297,17 @@ class UnitOfWork(ABC):
         """
 
     @property
+    @abstractmethod
+    def record_lineage(self) -> RecordLineageRepository:
+        """The record lineage S1 links, evidence and reverse read, inside this transaction.
+
+        On the general unit of work beside `issues`: a membership or association
+        write reserves its request through `issues`, shares its endpoints and
+        evidence sources, and writes its root, revision, evidence and head here,
+        all in the one transaction `invoke` already owns.
+        """
+
+    @property
     def identity_history(self) -> object:
         """The optional Principal-scoped identity-history read projection.
 
@@ -8719,6 +8748,33 @@ class MeetingListPage:
     has_more: bool
 
 
+@dataclass(frozen=True, slots=True)
+class MeetingNoteVersionRecord:
+    """One immutable `meeting_note_versions` row (record lineage S1 contract 7.2).
+
+    `body` is the exact stored text; it leaves the application only through
+    `meetings.notes.read_version` with `include_body`. `is_current` says no
+    later version supersedes this one.
+    """
+
+    note_version_id: str
+    meeting_id: str
+    version_number: int
+    supersedes_note_version_id: str | None
+    content_sha256: str
+    body: str
+    recorded_at: datetime
+    is_current: bool
+
+
+@dataclass(frozen=True, slots=True)
+class MeetingNoteVersionPage:
+    """One page of a Meeting's note versions, newest first, and whether more follow."""
+
+    entries: tuple[MeetingNoteVersionRecord, ...]
+    has_more: bool
+
+
 class MeetingRepository(ABC):
     """The Meeting records tables, on the general unit of work's connection.
 
@@ -8980,6 +9036,28 @@ class MeetingRepository(ABC):
         outside the filter set (and, with `query`, outside the match set).
         """
 
+    # --- note history (record lineage S1 contract section 7.2) ----------------
+
+    @abstractmethod
+    def meeting_is_owned(self, principal_id: str, meeting_id: str) -> bool:
+        """Whether this Principal holds the Meeting, in any status. Nonlocking."""
+
+    @abstractmethod
+    def list_note_versions(
+        self, principal_id: str, meeting_id: str, *, page_size: int, after: str | None
+    ) -> MeetingNoteVersionPage:
+        """One page of the Meeting's note versions, `version_number DESC`.
+
+        Raises `MeetingCursorError` when `after` names no note version of this
+        Meeting and Principal.
+        """
+
+    @abstractmethod
+    def read_note_version(
+        self, principal_id: str, meeting_id: str, note_version_id: str
+    ) -> MeetingNoteVersionRecord | None:
+        """One note version under that Meeting of this Principal, or `None`."""
+
 
 # --- Record lineage S1: the Issue plane (S1 contract sections 6 and 7) ---------
 #
@@ -9012,6 +9090,9 @@ class LineageWriteRequestRecord:
     result_issue_id: str | None = None
     result_issue_version: int | None = None
     result_membership_event_id: str | None = None
+    result_link_id: str | None = None
+    result_link_revision_no: int | None = None
+    result_created: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -9136,6 +9217,9 @@ class IssueRepository(ABC):
         result_issue_id: str | None = None,
         result_issue_version: int | None = None,
         result_membership_event_id: str | None = None,
+        result_link_id: str | None = None,
+        result_link_revision_no: int | None = None,
+        result_created: bool | None = None,
     ) -> None:
         """Complete this transaction's reservation with its one result group."""
 
@@ -9254,3 +9338,203 @@ class IssueRepository(ABC):
         self, principal_id: str, anchor: EvidenceAnchor, *, anchor_id: str, recorded_at: datetime
     ) -> str:
         """Reuse the anchor with this identity, or insert it; return its `anchor_id`."""
+
+
+# --- Record lineage S1: memberships, associations and the reverse read ---------
+#
+# S1 contract sections 3.1, 3.2, 6.2, 6.3 and 7.2. As for the Issue plane, no
+# value carries a `principal_id`; every method takes it as a parameter and runs
+# on the general unit of work's connection inside `invoke`'s one transaction.
+
+
+@dataclass(frozen=True, slots=True)
+class LineageEndpoint:
+    """One endpoint row after section 3.2 step 2: locked, owned, under its parent.
+
+    Only the facts the step 3 linkability check needs: the Situation's kind,
+    whether a Task is archived, a note version's Meeting, and a Capture
+    version's root and classification.
+    """
+
+    family: RecordFamily
+    record_id: str
+    situation_kind: SituationKind | None = None
+    task_archived: bool = False
+    meeting_id: str | None = None
+    capture_id: str | None = None
+    classification: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RecordLinkRecord:
+    """One immutable `record_links` root."""
+
+    link_id: str
+    kind: RecordLinkKind
+    from_ref: RecordRef
+    to_ref: RecordRef
+    relation_type: RelationType
+    member_role: MemberRole | None
+    context_issue_id: str | None
+    normalized_identity: str
+    authority_class: str
+    decision_channel: str
+    source_capability: str
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class LineageLinkEvidence:
+    """One evidence row of a link revision: its anchor and the anchor's role there."""
+
+    anchor_id: str
+    anchor: EvidenceAnchor
+
+
+@dataclass(frozen=True, slots=True)
+class LinkRevisionRecord:
+    """One immutable `record_link_revisions` row with its frozen evidence set.
+
+    `evidence` is in the section 5.1 canonical order (the stored `ordinal`).
+    """
+
+    link_id: str
+    revision_no: int
+    revision_id: str
+    predecessor_revision_no: int | None
+    action: LinkRevisionAction
+    lifecycle_state: LinkLifecycleState
+    acceptance_basis: AcceptanceBasis
+    authority_class: str
+    decision_channel: str
+    source_capability: str
+    reason: str | None
+    evidence_set_digest: str
+    recorded_at: datetime
+    evidence: tuple[LineageLinkEvidence, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class LinkHeadRecord:
+    """A link root with its current head revision number and lifecycle state."""
+
+    link: RecordLinkRecord
+    revision_no: int
+    lifecycle_state: LinkLifecycleState
+
+
+@dataclass(frozen=True, slots=True)
+class LineageNoteVersionRef:
+    """One note version of a Meeting, as the reverse read's virtual edges need it."""
+
+    note_version_id: str
+    meeting_id: str
+    version_number: int
+
+
+@dataclass(frozen=True, slots=True)
+class LineageResolvedRecord:
+    """One record as the reverse read re-resolves it in its native table.
+
+    `meeting_id` for a note version; `title`, `state` and `situation_kind` for a
+    Situation; `capture_id` and `capture_archived` for a Capture version.
+    """
+
+    ref: RecordRef
+    meeting_id: str | None = None
+    situation_kind: SituationKind | None = None
+    title: str | None = None
+    state: str | None = None
+    capture_id: str | None = None
+    capture_archived: bool = False
+
+
+class RecordLineageRepository(ABC):
+    """Record links, their revisions, evidence and heads, and the reverse read.
+
+    The write operations are S1 contract section 6.2 steps 3 to 5 for the five
+    link writes: share an endpoint (`FOR SHARE`, existence under its parent);
+    take the identity advisory lock; lock a head `FOR UPDATE`; insert a root
+    with revision 1, its evidence and its head, or append the next revision
+    and advance the head. Request reservation and evidence anchors are the
+    `IssueRepository`'s, on the same connection. Reads take no locks.
+    """
+
+    @abstractmethod
+    def capture_version_root(self, principal_id: str, version_id: str) -> str | None:
+        """The Capture root of one owned Capture version, without a lock, or `None`."""
+
+    @abstractmethod
+    def share_endpoint(
+        self, principal_id: str, family: RecordFamily, record_id: str
+    ) -> LineageEndpoint | None:
+        """`FOR SHARE` on one owned endpoint row of `family`, or `None`.
+
+        A Situation of either kind answers (the application refuses a context
+        one as not linkable); a Capture version's root is shared first by the
+        caller (`IssueRepository.share_capture_root`).
+        """
+
+    @abstractmethod
+    def lock_identity(self, principal_id: str, normalized_identity: str) -> None:
+        """`pg_advisory_xact_lock` on the lineage namespace and this identity."""
+
+    @abstractmethod
+    def active_head_by_identity(
+        self, principal_id: str, normalized_identity: str
+    ) -> LinkHeadRecord | None:
+        """The active head with this identity, locked `FOR UPDATE`, or `None`."""
+
+    @abstractmethod
+    def lock_head(self, principal_id: str, link_id: str) -> LinkHeadRecord | None:
+        """One owned link's head, locked `FOR UPDATE`, with its root; or `None`."""
+
+    @abstractmethod
+    def insert_link(
+        self, principal_id: str, link: RecordLinkRecord, revision: LinkRevisionRecord
+    ) -> None:
+        """Insert a root, its revision 1, that revision's evidence and the head."""
+
+    @abstractmethod
+    def append_revision(self, principal_id: str, revision: LinkRevisionRecord) -> None:
+        """Append the next revision and its evidence, and advance the head to it."""
+
+    @abstractmethod
+    def read_link(self, principal_id: str, link_id: str) -> RecordLinkRecord | None:
+        """One owned link root without a lock, or `None`."""
+
+    @abstractmethod
+    def read_revision(
+        self, principal_id: str, link_id: str, revision_no: int
+    ) -> LinkRevisionRecord | None:
+        """One immutable link revision with its evidence, or `None`."""
+
+    @abstractmethod
+    def archived_capture_roots(
+        self, principal_id: str, capture_ids: Collection[str]
+    ) -> frozenset[str]:
+        """The named owned Capture roots whose lifecycle projection is archived now."""
+
+    @abstractmethod
+    def active_links_incident(
+        self, principal_id: str, refs: Collection[RecordRef]
+    ) -> tuple[LinkHeadRecord, ...]:
+        """Every active link with an endpoint in `refs`, ordered `(created_at, link_id)`."""
+
+    @abstractmethod
+    def issue_memberships(
+        self, principal_id: str, issue_id: str, *, limit: int
+    ) -> tuple[LinkHeadRecord, ...]:
+        """The Issue's active membership links, `(created_at, link_id)`, at most `limit`."""
+
+    @abstractmethod
+    def resolve_records(
+        self, principal_id: str, refs: Collection[RecordRef]
+    ) -> Mapping[RecordRef, LineageResolvedRecord]:
+        """Each named record that resolves in its native table for this Principal."""
+
+    @abstractmethod
+    def note_versions_of(
+        self, principal_id: str, meeting_ids: Collection[str]
+    ) -> Mapping[str, tuple[LineageNoteVersionRef, ...]]:
+        """Each named Meeting's note versions, `version_number` ascending."""

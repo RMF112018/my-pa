@@ -88,8 +88,12 @@ async def test_full_inventory_catalog_without_execution(scene: Scene) -> None:
     names = await _session(app, exercise)
     assert names == {c.value for c in ALL}
     # The deployed 190 remain individually present after main added report types
-    # and record lineage S1 added the `issues.` names.
-    deployed = {c.value for c in ALL if not c.value.startswith(("reports.types.", "issues."))}
+    # and record lineage S1 added the `issues.`, `records.` and `meetings.notes.` names.
+    deployed = {
+        c.value
+        for c in ALL
+        if not c.value.startswith(("reports.types.", "issues.", "records.", "meetings.notes."))
+    }
     assert len(deployed) == 190
     assert deployed <= names
 

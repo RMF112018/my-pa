@@ -267,7 +267,25 @@ def _restore(runtime: LineageRuntime, root: str, key: str, revision: int = 1) ->
 def test_an_archived_capture_root_is_capture_withdrawn(runtime: LineageRuntime) -> None:
     root, version, _ = capture(runtime, "cap-archived")
     c1 = commitment(runtime, "cap-archived")
+    issue = runtime.issue("cap-archived")
     _archive(runtime, root, "cap-archived")
+    withdrawn = {"code": "denied", "safe_details": ["capture_withdrawn"]}
+    # As an endpoint only (a membership of the Capture version, no evidence).
+    endpoint = _refused_cleanly(runtime, membership(issue, "capture_version", version, "cap-ep"))
+    assert {key: endpoint[key] for key in withdrawn} == withdrawn
+    # As evidence only (a membership of a Commitment citing the version).
+    anchored = _refused_cleanly(
+        runtime,
+        membership(
+            issue,
+            "commitment",
+            c1,
+            "cap-anchor",
+            anchors=(capture_anchor(root, version, NOTE_BODY, role="corroborates"),),
+        ),
+    )
+    assert {key: anchored[key] for key in withdrawn} == withdrawn
+    # As both: an origin on the archived version.
     error = _refused_cleanly(
         runtime,
         originated_from(

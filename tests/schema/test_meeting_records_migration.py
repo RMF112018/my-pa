@@ -72,7 +72,7 @@ PREVIOUS: Final = "6f6ead27d122"
 #: The chain head these tests run against. `1d9b248e7f83` (WP-RE-01, Record
 #: Events) is additive on `REVISION`, and `0641c354ca85` (CRL-WP-03, Capture
 #: lifecycle) is additive on that, so `REVISION` is no longer the head.
-HEAD: Final = "b9025e7fb738"
+HEAD: Final = "264310e0416a"
 #: The revision that last stated `capability_is_known` and `purpose_is_known`,
 #: and therefore the only correct source for this revision's BEFORE literals.
 VOCABULARY_PREDECESSOR: Final = "e6a4c2f91b73"
@@ -100,6 +100,12 @@ TRIGGERS: Final[dict[str, str]] = {
     "meeting_write_requests_complete_once": "meeting_write_request_completes_once",
 }
 OWNER_UNIQUE: Final = "a_managed_document_is_identified_within_its_owner"
+#: Declared on a Meeting table but added by a later revision, so absent from
+#: this one's frozen text: `264310e0416a` (record lineage S1) adds the note
+#: digest unique the evidence-anchor foreign key targets.
+ADDED_BY_LATER_REVISIONS: Final = frozenset(
+    {"a_meeting_note_digest_is_identified_within_its_meeting"}
+)
 ADMITTED_CAPABILITIES: Final = frozenset(
     {
         "meetings.create",
@@ -150,7 +156,8 @@ def _offline(target: str, *, down: bool = False) -> str:
 def test_the_revision_is_the_single_head_directly_on_the_previous_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "5c1e7a9b3d42"
+    assert script.get_revision(HEAD).down_revision == "b9025e7fb738"
+    assert script.get_revision("b9025e7fb738").down_revision == "5c1e7a9b3d42"
     assert script.get_revision("5c1e7a9b3d42").down_revision == "c8f7ae406d47"
     assert script.get_revision("c8f7ae406d47").down_revision == "a591b81f10a2"
     assert script.get_revision("a591b81f10a2").down_revision == "cc373834a485"
@@ -165,7 +172,7 @@ def test_the_revision_is_the_single_head_directly_on_the_previous_head() -> None
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 118
+    assert len(list(MIGRATIONS.glob("*.py"))) == 119
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -198,6 +205,9 @@ def test_the_frozen_ddl_names_every_declared_table_constraint_and_index() -> Non
             assert re.search(rf"\b{column.name}\b", source), (table.name, column.name)
         for constraint in table.constraints:
             if constraint.name is not None and not str(constraint.name).startswith("_"):
+                if str(constraint.name) in ADDED_BY_LATER_REVISIONS:
+                    assert str(constraint.name) not in source
+                    continue
                 assert str(constraint.name) in source, (table.name, constraint.name)
         for index in table.indexes:
             assert f"INDEX {index.name} ON knowledge.{table.name}" in _WHITESPACE.sub(

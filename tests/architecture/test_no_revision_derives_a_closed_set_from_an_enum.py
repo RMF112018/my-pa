@@ -827,9 +827,10 @@ def test_the_chain_is_readable_and_non_empty() -> None:
     # 114, `a591b81f10a2` the Intelligence report type registry as 115, and
     # `c8f7ae406d47` the MCP interaction log as 116, `5c1e7a9b3d42` (the
     # Commitment counterparty Entity cutover) as 117, and `b9025e7fb738`
-    # (WP-MCP-PROJ-05, legacy Project-Entity bridge reconciliation) as 118.
-    assert len(revisions) == 118
-    assert len({revision for revision, _ in revisions}) == 118
+    # (WP-MCP-PROJ-05, legacy Project-Entity bridge reconciliation) as 118,
+    # and `264310e0416a` (record lineage S1, ADR-015) as 119.
+    assert len(revisions) == 119
+    assert len({revision for revision, _ in revisions}) == 119
     assert {
         "9c6b4a18ed72",
         "1a4c9e77b2d5",

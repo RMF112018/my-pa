@@ -162,6 +162,11 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # `capture_versions` aliases of its capture analogue -- through
         # `partition_criterion`. It writes no hand-written partition comparison.
         "infrastructure/persistence/record_events.py",
+        # Record lineage S1 (ADR-015). Its read-only head rebuild scopes
+        # `record_links` through `principal_scoped` and joins
+        # `record_link_revisions` by `matching_partition_criterion`. It writes no
+        # hand-written partition comparison.
+        "infrastructure/persistence/record_lineage.py",
         # KLP-WP-03's Knowledge Assertion plane. Every SELECT and UPDATE scopes
         # each table and alias it names through `partition_criterion`, every
         # INSERT (including the `ON CONFLICT` reservation and evidence upserts)
@@ -423,6 +428,12 @@ STATEMENT_LEVEL: Final = frozenset(
 #: modules is reached only through an application path that has already resolved
 #: the Principal, which is the same argument the `QUARANTINED` entries make.
 PER_MODULE_ONLY: Final = {
+    "infrastructure/persistence/record_lineage.py": (
+        "record lineage S1: the read-only head rebuild scopes `record_links` through "
+        "`principal_scoped` and joins `record_link_revisions` by "
+        "`matching_partition_criterion`. It has not joined a dedicated statement-level "
+        "scanner."
+    ),
     "infrastructure/persistence/knowledge_assertions.py": (
         "KLP-WP-03: every read, lock and control UPDATE composes `partition_criterion` "
         "on each table and alias it names (the remote `withheld_remote` predicate "

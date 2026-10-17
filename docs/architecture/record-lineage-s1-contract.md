@@ -58,7 +58,7 @@ Reserved for later slices, not added in S1: `irp` (S3 proposal), `ldec` (S3 prop
 decision), `ihnd` (S2 responsibility/handoff event; replaces the package's colliding
 `ires`), `irec` (S3 Record Event receipt). An Issue keeps its `sit_` identifier; there
 is no `issue_` kind. Existing kinds used: `sit`, `prj`, `psit`, `mtg`, `mnote`, `tsk`,
-`cmt`, `cst`, `prn`.
+`cmt`, `cst`, `cap`, `capver`, `prn`.
 
 ## 3. Closed vocabularies
 
@@ -84,10 +84,10 @@ is also exactly what the S1 database CHECKs admit; a later slice widens both tog
 | `EvidenceSourceFamily` | `meeting_note_version`, `capture_version`, `capture` (root only, `legacy_unversioned`) | `managed_document_version`, `knowledge_assertion`, `external_version` |
 | `SourceVersionKind` | `immutable_version`, `legacy_unversioned` | `aggregate_version`, `external_version` |
 | `EvidenceRole` | `origin`, `corroborates`, `contradicts`, `discussion`, `handoff`, `resolution` | — |
-| `EvidenceAvailability` (read only) | `available`, `legacy_unversioned` | `archived`, `restricted`, `redacted`, `unavailable`, `withdrawn`, `superseded` |
+| `EvidenceAvailability` (read only) | `available`, `archived`, `legacy_unversioned` | `restricted`, `redacted`, `unavailable`, `withdrawn`, `superseded` |
 | `LineageCompleteness` (read only) | `complete`, `truncated_budget`, `unresolved_ambiguity`, `partial_native_history` | `restricted_evidence`, `scope_changed_restart_required`, `source_not_integrated`, `not_reportable` |
 | `NativeVirtualEdge` (read only) | `meeting_note_version_of` | `follow_up`, `constraint_follow_up`, `meeting_in_series`, `project_issue`, `entity_member_of` |
-| Authority class (reused, `KnowledgeReviewAuthorityClass`) | `local_operator`, `ordinary_reviewer` (`remote_operator_attested` is unreachable in S1, section 6.1) | — |
+| Authority class (reused, `KnowledgeReviewAuthorityClass`) | `local_operator`, `ordinary_reviewer` (`remote_operator_attested` is unreachable in S1, section 6.1); attested tables admit only `local_operator` (CHECK, section 4.2), `ordinary_reviewer` appears only on Issue revisions | — |
 | Decision channel (reused, `KnowledgeDecisionChannel`) | `local_cli`, `local_web`, `local_unattested`, `remote_interactive`, `remote_operator_review` | — |
 
 ### 3.1 S1 relation matrix (the closed policy)
@@ -108,7 +108,10 @@ or passage. It is admitted only with role `corroborates` or `contradicts`, never
 toward any "≥1 anchor" rule above, is reported with availability `legacy_unversioned`,
 and can never satisfy an exact-version or closure requirement (S2's Issue close refuses
 it). It exists so a Work record's legacy `origin_evidence_ref = cap_…` can be cited
-honestly, not upgraded.
+honestly, not upgraded. Because a root has no classification of its own, a legacy root
+is refused (`invalid_request` / `evidence_anchors`, after the ownership check) when **any**
+version of it is `restricted_local` (F21); checked under the root's `FOR SHARE`, so a
+concurrent revise cannot slip a restricted version in before commit.
 
 ### 3.2 Endpoint linkability (S1)
 
@@ -136,7 +139,9 @@ of a note anchor).
 One Alembic revision, `down_revision = "b9025e7fb738"`, the new single head
 (file `migrations/versions/<date>_<rev>_record_lineage_s1.py`). Frozen literal DDL; no
 domain or persistence import; declarations mirrored in
-`infrastructure/persistence/tables.py` with the `TABLES_SHA256` pin updated. Names
+`infrastructure/persistence/tables.py` with the `TABLES_SHA256` pin updated — **except**
+the one constraint marked database-only in section 4.1, which a historical revision
+would otherwise emit. Names
 below are the constraint/trigger names to use. Every new table is in schema
 `knowledge`, has `principal_id text NOT NULL` with `_is_identifier(…, PRINCIPAL)`, an
 `_is_identifier` CHECK on every identifier column, and every foreign key is
@@ -169,7 +174,7 @@ columns are `text` with the Meeting digest pattern `^[0-9a-f]{64}$`.
 
 **`capture_versions`**
 
-- `UNIQUE (version_id, capture_id, owner_principal_id, content_sha256)` `a_capture_version_digest_is_identified_within_its_capture` — the Capture-version anchor target (W1 §7 item 6). Additive; `capture_versions` is append-only already, so adding the constraint rewrites nothing.
+- `UNIQUE (version_id, capture_id, owner_principal_id, content_sha256)` `a_capture_version_digest_is_identified_within_its_capture` — the Capture-version anchor target (W1 §7 item 6). Additive; `capture_versions` is append-only already, so adding the constraint rewrites nothing. **Database-only (F20):** it is added by the S1 revision with `ALTER TABLE … ADD CONSTRAINT` and is **not** declared on `capture_versions` in `tables.py`, because historical revision `1a4c9e77b2d5` builds `capture_versions` from the live declaration and would then emit it at base (breaking `migration_empty_to_head` and changing a historical revision). A comment beside the `capture_versions` declaration records it, as the `captures` comment records `0641c354ca85`'s root unique. The anchor FK declared in `tables.py` may still reference it, as the lifecycle FKs reference that root unique.
 - The existing `capture_id → captures ON DELETE CASCADE` is **left unchanged**: it is not required to change, because `capture_versions` already refuses `DELETE` by trigger (`1a4c9e77b2d5`) and the new anchor FK is `RESTRICT`, so a `captures` delete that would cascade into an evidenced version fails rather than removing it. `src/` has no Capture hard-delete path.
 - The legacy root anchor targets the existing `UNIQUE (capture_id, owner_principal_id)` added by `0641c354ca85` (database-only; look up its name in that revision).
 
@@ -216,7 +221,8 @@ FKs: `(principal_id, project_id, issue_id) → project_situations (principal_id,
 `(principal_id, evidence_anchor_id) → lineage_evidence_anchors`. CHECKs: revision 1
 ⇔ `action = 'assert'` with no predecessor; `revision_no > 1` ⇒ predecessor `= revision_no - 1`;
 `action = 'end'` ⇔ `state = 'ended'`; `action = 'end'` ⇒ `reason IS NOT NULL`.
-Trigger `a_membership_event_follows_its_predecessor` (`BEFORE INSERT`): `end` needs an
+CHECK `a_lineage_row_is_local_operator_attested` as on `record_links`. Trigger
+`a_membership_event_follows_its_predecessor` (`BEFORE INSERT`): `end` needs an
 `active` predecessor, `reinstate` an `ended` one.
 
 **`record_links`** (immutable root)
@@ -235,7 +241,8 @@ Trigger `a_membership_event_follows_its_predecessor` (`BEFORE INSERT`): `end` ne
 FK `(context_issue_id, principal_id, context_issue_kind) → situations (situation_id, principal_id, kind)`.
 CHECKs: `a_membership_link_is_issue_scoped` — `kind <> 'issue_membership' OR (from_family = 'situation' AND relation_type = 'issue_member' AND context_issue_id = from_id AND member_role IS NOT NULL)`;
 `a_semantic_link_is_not_a_membership` — `kind <> 'semantic' OR (relation_type <> 'issue_member' AND member_role IS NULL)`;
-`a_record_link_pair_is_admitted` — the section 3.1 matrix as a disjunction. Trigger
+`a_record_link_pair_is_admitted` — the section 3.1 matrix as a disjunction;
+`a_lineage_row_is_local_operator_attested` — `authority_class = 'local_operator' AND decision_channel IN ('local_cli','local_web')` (F21; the same CHECK, same name, on `record_link_revisions` and `issue_project_membership_events`; it is widened only together with the ADR-015 amendment a remote attested writer needs). Trigger
 `a_record_link_identity_is_canonical` (`BEFORE INSERT`): `normalized_identity` must
 equal `knowledge.lineage_record_link_identity(...)` over the row's columns (section 5.5),
 so a writer that serializes differently cannot create a second active head for one
@@ -260,7 +267,8 @@ meaning. Indexes
 
 FKs to `record_links (principal_id, link_id)` and to self on the predecessor. CHECK
 `a_link_revision_follows_its_predecessor`: `(revision_no = 1 AND action = 'assert' AND predecessor_revision_no IS NULL AND lifecycle_state = 'active') OR (revision_no > 1 AND predecessor_revision_no = revision_no - 1 AND action <> 'assert')`;
-`action = 'end'` ⇔ `lifecycle_state = 'ended'`; `action IN ('end','correct_evidence')` ⇒ `reason IS NOT NULL`.
+`action = 'end'` ⇔ `lifecycle_state = 'ended'`; `action IN ('end','correct_evidence')` ⇒ `reason IS NOT NULL`;
+`a_lineage_row_is_local_operator_attested` as on `record_links`.
 Trigger `a_link_revision_follows_an_active_predecessor` (`BEFORE INSERT`). Constraint
 trigger `a_link_head_is_its_latest_revision` (deferred): the head's `revision_no`
 equals the link's maximum revision at commit.
@@ -404,10 +412,12 @@ The revision defines two `IMMUTABLE` SQL functions,
 `knowledge.lineage_record_link_identity(kind, relation_type, from_family, from_id, to_family, to_id, member_role, context_issue_id)`
 and `knowledge.lineage_anchor_identity(source_family, source_root_id, source_version_kind, source_version_id, source_version_no, source_sha256, passage_start_cp, passage_end_cp, passage_sha256)`,
 that build the section 5.1/5.3 strings by concatenation in sorted-key order, with
-`to_json(value)::text` for each string (or `null`) and the integer's text for numbers —
+`coalesce(to_json(value)::text, 'null')` for each string and `coalesce(value::text, 'null')`
+for each integer (a bare `to_json(NULL)` is SQL `NULL` and would null the whole string) —
 byte-identical to `canonical.py` for the ASCII inputs above. The two `BEFORE INSERT`
 triggers in section 4.2 compare against them. Golden vectors are shared: the same fixture
-file drives the Python unit test and the SQL parity test (section 10).
+file drives the Python unit test and the SQL parity test (section 10). `downgrade()` drops
+both functions after their triggers.
 
 ## 6. Authority, locks and the transaction
 
@@ -506,7 +516,7 @@ Issue reads never return a body.
 - Request models are `StrictModel` (unknown field ⇒ `invalid_request`). No request carries `principal_id`, `actor_class`, `authority_class`, `decision_channel`, `acceptance_basis`, `review_decision_id`, `recorded_at` or a `selector` (S1 is `root` only).
 - `RecordRef` = `{family: RecordFamily, record_id: str}`.
 - `EvidenceAnchorInput` = `{family: "meeting_note_version"|"capture_version"|"capture", root_id: mtg_|cap_, version_kind: "immutable_version"|"legacy_unversioned", version_id?: mnote_|capver_, source_sha256?: hex64, passage_start_cp?: int >= 0, passage_end_cp?: int >= 1, passage_sha256?: hex64, role: EvidenceRole}`; `version_no` is not accepted. `immutable_version` requires `version_id` and `source_sha256`; `legacy_unversioned` (family `capture` only) forbids `version_id`, digests and passage.
-- `EvidenceAnchorView` = `{anchor_id, family, root_id, version_kind, version_id, source_version_no (server-derived), passage_start_cp, passage_end_cp, role, availability: "available"|"legacy_unversioned"}`. **No `source_sha256` and no `passage_sha256`** (F11): a short passage's digest is brute-forceable, so digests are revealed only by `meetings.notes.read_version` (note content digest) and the existing Capture read surfaces under their own grants. Offsets and version ids remain.
+- `EvidenceAnchorView` = `{anchor_id, family, root_id, version_kind, version_id, source_version_no (server-derived), passage_start_cp, passage_end_cp, role, availability: "available"|"archived"|"legacy_unversioned"}`. `availability` is computed **at read time** (F19): `archived` when the anchor's Capture root (for `capture_version` and legacy `capture` anchors) is currently archived in its lifecycle projection; else `legacy_unversioned` for a legacy root; else `available`. Note anchors are always `available`. Archiving or restoring the Capture writes no lineage row and changes no revision, digest or link; a restore returns the anchor to `available` (or `legacy_unversioned`). This is ADR-015 decision 8: availability is reported, never written back. **No `source_sha256` and no `passage_sha256`** (F11): a short passage's digest is brute-forceable, so digests are revealed only by `meetings.notes.read_version` (note content digest) and the existing Capture read surfaces under their own grants. Offsets and version ids remain.
 - `AssociationView` = `{link_id, kind, relation_type, from: RecordRef, to: RecordRef, member_role, context_issue_id, revision_no, lifecycle_state, acceptance_basis, authority_class, evidence_set_digest, evidence: [EvidenceAnchorView], created_at, recorded_at}` (`recorded_at` of the revision shown). `evidence_set_digest` is a digest over the whole set including the version digests; it cannot be inverted to a passage and stays.
 - `IssueView` = `{issue_id, kind: "issue_workstream", version, state, title, description, opened_at, created_at, updated_at, project_links: [ProjectLinkView], project_links_truncated: bool}`; at most 100 links, active first, then `project_id`.
 - `ProjectLinkView` = `{project_id, project_situation_id, state: "active"|"ended", membership_revision_no, acceptance_basis, evidence_anchor_id, recorded_at}`.
@@ -592,7 +602,7 @@ Algorithm (deterministic, Principal-scoped, current state, active links only):
 2. Matching Issues. Let the root's **pair set** *P* be the root alone, plus its Meeting when the root is a note version, plus every note version of the root when the root is a Meeting. The matching Issues are: the root itself if it is an Issue; Issues with an active membership of any member of *P*; the `context_issue_id` of every active semantic link incident to any member of *P*; and the Issue `to` endpoint of every active `discusses` link from any member of *P*. The pair extension applies to all three sources alike, so M1 and N1 always match the same Issues.
 3. `issue_id` given and not matching ⇒ `not_found`. Not given: exactly one ⇒ selected; more than one ⇒ return the candidates (sorted, at most 20), `complete_state = unresolved_ambiguity`, no traversal; none ⇒ one hop over active semantic links incident to the root with `context_issue_id IS NULL`, plus its virtual note edge, no expansion.
 4. With Issue *I* selected, breadth-first from the root to `max_depth`, following only: *I*'s active membership links; active semantic links whose `context_issue_id = I`, whose endpoint is *I*, or whose context is null and whose two endpoints are both in *I* (*I*, an active member, or a member of the pair set of an active member); and `meeting_note_version_of` between a reached node and its pair. Links scoped to another Issue are never followed.
-5. Re-resolve every reached node in its native table; a node that no longer resolves is dropped with its edges and sets `partial_native_history`.
+5. Re-resolve every reached node in its native table; a node that no longer resolves is dropped with its edges and sets `partial_native_history`. A `capture_version` node whose Capture root is currently archived is kept and carries `availability: "archived"` (nodes gain an `availability` field for this family only); its anchors read `archived` as in section 7.1.
 6. Budgets (design values, not benchmarks): 250 nodes, 400 edges (typed plus virtual), 512 KiB serialized. Reaching one stops expansion and sets `truncated_budget`. Expansion order: frontier by `(depth, family, record_id)`, edges by `(created_at, link_id)`, virtual edges by `version_number`. Output order: nodes by `(depth, family, record_id)`, edges by `link_id`.
 7. No body, no title other than an Issue's own title and state, and no hidden count is returned; `next_cursor` is always `null` in S1 and does not imply completeness.
 
@@ -681,7 +691,7 @@ must be added with `git add -f` and checked with `git ls-tree`.
   (Issue pages are S3). Then each typed edge between the record and the Issue context:
   - the membership role, or the relation type with its direction in words ("originated from", "discussed in");
   - `lifecycle_state`, `acceptance_basis` and `authority_class`, as plain words;
-  - each evidence anchor, as "Meeting note version *n*, characters *start*–*end*" (or "Capture version *n*", or "Capture, version not recorded" for a legacy root), from `source_version_no` and the offsets in the view. A
+  - each evidence anchor, as "Meeting note version *n*, characters *start*–*end*" (or "Capture version *n*", or "Capture, version not recorded" for a legacy root, with "Capture archived" appended when `availability` is `archived`), from `source_version_no` and the offsets in the view. A
     button opens the note-version read in an inline disclosure; the body appears only
     after that explicit action.
 - **Several Issues** (`unresolved_ambiguity`): the candidates (title, state) as a
@@ -719,13 +729,22 @@ must be added with `git add -f` and checked with `git ls-tree`.
   either way.
 - Docs: `ops/runbooks/gateway-operations.md` gains the variable beside
   `MY_PA_KNOWLEDGE_ASSERTIONS_ENABLED`.
+- **Test environments:** the e2e stack harness `web/e2e/stack.sh` sets
+  `MY_PA_LINEAGE_ENABLED=true` beside `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED=true`, so
+  the playwright rows of section 10 run with the plane on; BFF and component vitest
+  tests mock the gateway and need no variable; Python database tests compose the service
+  with `lineage_enabled=True` explicitly, except the switch-off tests.
 
 ## 8. Old-client compatibility rule (v1)
 
 S1 adds capabilities and changes **no** existing request or response, so no version
 negotiation is introduced. `continuity.situations` and `continuity.situations.create`
-keep their exact keys (an Issue appears in `continuity.situations` as a Situation, with
-no `kind` or `version` key); `meetings.read`'s `MeetingNoteView` keeps omitting
+keep their exact keys and shape. **Selection rule (F22):** `continuity.situations`
+selects context Situations only — Issue-kind Situations are excluded from its result
+(the handler's query adds `kind = 'context'`; the frames/traces/work workspace beside it
+is unchanged), so the listing never offers a value the section 8 writers refuse. Context
+Situations are listed exactly as before. Issues are reached through `issues.list` and
+`issues.read`; `meetings.read`'s `MeetingNoteView` keeps omitting
 `content_sha256`; `tasks.create`/`commitments.create` keep the `cap_`/`asrt_`
 `origin_evidence_ref` rule and still refuse `mnote_`;
 
@@ -741,7 +760,9 @@ answers today. Context Situations behave as before, so no existing request chang
 meaning; the only new refusal names an object that did not exist before S1. The internal
 `SituationService` frame/decision writers are unreachable from any capability and refuse
 Issues in their repository methods (section 9). Native Issue association therefore has one
-route, the attested ledger.
+route, the attested ledger. Conversation pins (`_PIN_KINDS` admits `IdKind.SITUATION`,
+`application/commands.py`) may still pin an Issue: a pin is a context-preference
+bookmark, not an association, and no lineage read or later backfill treats it as one.
 
 For the web client, `web/src/contracts/gateway.json`
 keeps every existing entry, its decoder and its `success.json` fixture byte-for-byte; S1
@@ -787,19 +808,19 @@ implementers; a renamed test must update this table in the same commit.
 | --- | --- | --- | --- |
 | AT-001 (stages 1–3 + reverse roots) | `tests/integration/test_issue_lineage_s1_vertical.py` | `test_m1_alone_creates_no_link`; `test_c1_originates_from_an_exact_n1_passage`; `test_reverse_read_from_m1_n1_c1_and_issue_yields_one_graph` (the section 7.2 fixture); `test_m1_reaches_c1_through_the_pair_set_without_an_m1_membership`; `test_a_link_scoped_to_another_issue_is_not_followed_from_the_pair`; `test_n1b_does_not_retarget_c1`; `test_a_meeting_in_two_issues_requires_an_issue_choice` | database |
 | AT-002 | `tests/database/test_meeting_note_lineage_asof.py` | `test_origin_anchor_survives_a_later_note_replace`; `test_origin_anchor_survives_a_later_note_append`; `test_read_version_returns_the_original_body_and_digest`; `test_versions_list_carries_no_body_or_digest`; `test_a_digest_of_the_newer_note_is_refused_for_the_older_version` | database |
-| AT-003 | `tests/integration/test_work_evidence_note_version.py` | `test_an_exact_note_passage_is_admitted_as_origin_evidence`; `test_a_note_version_under_another_meeting_is_not_found`; `test_a_spoofed_source_digest_is_refused`; `test_a_spoofed_passage_digest_is_refused`; `test_a_passage_outside_the_body_is_refused`; `test_a_hash_of_the_normalized_passage_is_refused`; `test_a_foreign_principal_note_is_not_found`; `test_a_refused_evidence_write_leaves_no_row_or_request`; `test_legacy_work_origin_evidence_ref_is_unchanged`; `test_an_exact_capture_version_passage_is_admitted_as_origin_evidence`; `test_a_capture_version_under_another_capture_is_not_found`; `test_a_spoofed_capture_digest_is_refused`; `test_an_archived_capture_root_is_capture_withdrawn`; `test_a_restricted_capture_version_is_refused`; `test_a_legacy_capture_root_is_admitted_only_as_corroboration`; `test_a_legacy_capture_root_never_satisfies_an_origin_rule`; `test_a_legacy_anchor_reads_as_legacy_unversioned` | database |
+| AT-003 | `tests/integration/test_work_evidence_note_version.py` | `test_an_exact_note_passage_is_admitted_as_origin_evidence`; `test_a_note_version_under_another_meeting_is_not_found`; `test_a_spoofed_source_digest_is_refused`; `test_a_spoofed_passage_digest_is_refused`; `test_a_passage_outside_the_body_is_refused`; `test_a_hash_of_the_normalized_passage_is_refused`; `test_a_foreign_principal_note_is_not_found`; `test_a_refused_evidence_write_leaves_no_row_or_request`; `test_legacy_work_origin_evidence_ref_is_unchanged`; `test_an_exact_capture_version_passage_is_admitted_as_origin_evidence`; `test_a_capture_version_under_another_capture_is_not_found`; `test_a_spoofed_capture_digest_is_refused`; `test_an_archived_capture_root_is_capture_withdrawn`; `test_a_restricted_capture_version_is_refused`; `test_a_legacy_capture_root_is_admitted_only_as_corroboration`; `test_a_legacy_root_with_a_restricted_version_is_refused`; `test_an_anchor_reads_archived_after_its_capture_is_archived`; `test_an_anchor_reads_available_again_after_restore`; `test_archive_and_restore_write_no_lineage_row`; `test_a_legacy_capture_root_never_satisfies_an_origin_rule`; `test_a_legacy_anchor_reads_as_legacy_unversioned` | database |
 | AT-004 | `tests/database/test_lineage_revision_evidence.py` | `test_each_revision_reads_its_own_evidence_set`; `test_the_stored_digest_rebuilds_from_stored_rows`; `test_evidence_cannot_be_added_to_a_committed_revision`; `test_identical_evidence_has_one_digest_across_revisions`; `test_a_mixed_note_capture_and_legacy_set_rebuilds_its_digest`; `test_the_same_anchor_twice_in_one_set_is_refused`; `test_overlapping_anchor_reuse_in_two_transactions_does_not_deadlock` | database |
 | AT-004 / AT-010 (encodings) | `tests/unit/test_lineage_canonical.py` | `test_evidence_set_digest_golden_vectors`; `test_request_digest_golden_vectors`; `test_normalized_identity_golden_vectors`; `test_anchor_order_is_total_with_nulls_first`; `test_passage_hash_counts_code_points_not_bytes_or_graphemes`; `test_request_digest_does_not_nfc_normalize`; `test_anchor_identity_excludes_role` | FAST |
 | AT-004 / AT-012 (SQL parity) | `tests/database/test_lineage_canonical_sql_parity.py` | `test_sql_link_identity_matches_the_golden_vectors`; `test_sql_anchor_identity_matches_the_golden_vectors`; `test_a_non_canonical_link_identity_is_refused`; `test_a_non_canonical_anchor_identity_is_refused` | database |
 | AT-009 | `tests/security/test_lineage_reference_isolation.py` | `test_absent_and_foreign_endpoints_answer_alike`; `test_a_context_situation_is_not_an_issue_endpoint`; `test_a_wrong_parent_note_version_is_not_found`; `test_an_archived_task_is_not_linkable`; `test_a_foreign_issue_context_is_not_found`; `test_a_lineage_read_of_a_foreign_root_is_not_found`; `test_a_linked_native_record_cannot_be_deleted`; `test_no_row_is_written_for_a_refused_reference`; `test_a_foreign_archived_task_answers_not_found`; `test_a_foreign_context_situation_answers_not_found`; `test_read_version_of_a_foreign_note_is_not_found`; `test_read_version_under_the_wrong_meeting_is_not_found`; `test_a_foreign_capture_root_anchor_is_not_found` | database |
 | AT-010 | `tests/concurrency/test_lineage_idempotency.py` | `test_identical_replay_returns_one_root_revision_and_request`; `test_same_key_different_payload_is_conflict`; `test_distinct_keys_same_identity_return_the_existing_association`; `test_a_duplicate_assert_never_changes_authority`; `test_concurrent_identical_asserts_create_one_active_head`; `test_a_stale_expected_revision_is_conflict`; `test_concurrent_issue_updates_admit_one`; `test_concurrent_project_link_adds_admit_one`; `test_a_replay_rebuilds_the_original_response_after_the_link_moved_on`; `test_a_replay_reports_the_recorded_created_flag`; `test_nfd_and_nfc_titles_under_one_key_conflict` | database |
 | AT-012 (races, two connections) | `tests/concurrency/test_lineage_endpoint_races.py` | `test_a_native_delete_waiting_on_an_assert_is_refused_after_the_assert_commits`; `test_an_assert_waiting_on_a_native_delete_answers_not_found_after_the_delete_commits`; `test_an_assert_proceeds_after_a_native_delete_rolls_back`; `test_task_archive_racing_a_membership_add_serializes` (`tasks.transition` to archived vs `issues.memberships.add`; either one membership plus a later archive, or `invalid_request` / `endpoint` and no rows); `test_capture_archive_racing_a_capture_anchor_serializes`; `test_a_lineage_deadlock_answers_conflict_and_writes_nothing`; `test_the_native_side_of_a_lineage_deadlock_is_recorded` (residual pin, section 6.2) | database |
-| AT-012 | `tests/database/test_lineage_integrity_guards.py` | `test_immutable_lineage_tables_refuse_update_and_delete` (parametrized, 6 tables); `test_lineage_tables_refuse_truncate` (8 tables); `test_a_head_admits_only_the_next_revision`; `test_a_head_cannot_lag_its_revisions_at_commit`; `test_a_write_request_completes_once`; `test_a_write_request_is_never_committed_reserved`; `test_an_issue_cannot_change_without_a_matching_revision`; `test_a_situation_kind_is_fixed`; `test_cross_principal_foreign_keys_refuse`; `test_an_anchor_binds_the_note_digest_and_parent`; `test_an_anchor_binds_the_capture_version_digest_and_parent`; `test_an_anchor_binds_exactly_its_family`; `test_the_anchor_trigger_verifies_the_passage`; `test_rebuilt_heads_equal_stored_heads` (calls `rebuild_link_heads`) | database |
-| AT-012 (migration) | `tests/schema/test_record_lineage_s1_migration.py` | FAST: `test_the_revision_is_the_single_head_on_b9025e7fb738`; `test_the_revision_imports_no_domain_module`; `test_frozen_ddl_names_every_declared_constraint`; `test_before_vocabulary_is_a_byte_copy`; `test_at_vocabulary_adds_exactly_the_s1_names`; `test_offline_downgrade_refuses_first`. DB: `test_empty_to_head` (`migration_empty_to_head`); `test_previous_head_with_rows_upgrades`, `test_upgrade_refuses_a_cross_principal_project_situation`, `test_existing_situations_and_project_links_survive_unchanged`, `test_capture_versions_gain_only_the_digest_unique`, `test_downgrade_refuses_while_lineage_rows_exist` (`migration`) | FAST + migration markers |
-| AT-023 (S1) | `tests/contract/test_lineage_capability_admission.py` | `test_s1_capabilities_are_operator_decision_required`; `test_no_s1_capability_is_in_the_chatllm_data_profile`; `test_s1_requests_reject_server_owned_fields`; `test_existing_v1_shapes_are_unchanged`; `test_an_issue_in_continuity_situations_has_exactly_the_old_keys`; `test_switch_off_withholds_every_s1_capability`; `test_note_body_needs_the_history_purpose`; `test_lineage_authority_ignores_the_knowledge_manager_allowlist` | FAST |
+| AT-012 | `tests/database/test_lineage_integrity_guards.py` | `test_immutable_lineage_tables_refuse_update_and_delete` (parametrized, 6 tables); `test_lineage_tables_refuse_truncate` (8 tables); `test_a_head_admits_only_the_next_revision`; `test_a_head_cannot_lag_its_revisions_at_commit`; `test_a_write_request_completes_once`; `test_a_write_request_is_never_committed_reserved`; `test_an_issue_cannot_change_without_a_matching_revision`; `test_a_situation_kind_is_fixed`; `test_cross_principal_foreign_keys_refuse`; `test_an_anchor_binds_the_note_digest_and_parent`; `test_an_anchor_binds_the_capture_version_digest_and_parent`; `test_an_anchor_binds_exactly_its_family`; `test_attested_tables_refuse_a_non_local_operator_row`; `test_the_anchor_trigger_verifies_the_passage`; `test_rebuilt_heads_equal_stored_heads` (calls `rebuild_link_heads`) | database |
+| AT-012 (migration) | `tests/schema/test_record_lineage_s1_migration.py` | FAST: `test_the_revision_is_the_single_head_on_b9025e7fb738`; `test_the_revision_imports_no_domain_module`; `test_frozen_ddl_names_every_declared_constraint`; `test_before_vocabulary_is_a_byte_copy`; `test_at_vocabulary_adds_exactly_the_s1_names`; `test_offline_downgrade_refuses_first`. DB: `test_empty_to_head` (`migration_empty_to_head`); `test_previous_head_with_rows_upgrades`, `test_upgrade_refuses_a_cross_principal_project_situation`, `test_existing_situations_and_project_links_survive_unchanged`, `test_capture_versions_gain_only_the_digest_unique` (also asserts the `tables.py` declaration does not carry it and that `1a4c9e77b2d5` emits byte-identical offline DDL before and after S1), `test_downgrade_refuses_while_lineage_rows_exist` (`migration`) | FAST + migration markers |
+| AT-023 (S1) | `tests/contract/test_lineage_capability_admission.py` | `test_s1_capabilities_are_operator_decision_required`; `test_no_s1_capability_is_in_the_chatllm_data_profile`; `test_s1_requests_reject_server_owned_fields`; `test_existing_v1_shapes_are_unchanged`; `test_continuity_situations_keeps_exactly_the_old_keys`; `test_continuity_situations_excludes_issues_and_keeps_contexts`; `test_switch_off_withholds_every_s1_capability`; `test_note_body_needs_the_history_purpose`; `test_lineage_authority_ignores_the_knowledge_manager_allowlist` | FAST |
 | AT-023 (S1, DB) | `tests/database/test_lineage_attested_writes.py` | `test_an_ordinary_remote_client_is_denied_accepted_lineage_writes`; `test_a_local_operator_write_records_its_class_and_channel`; `test_an_operator_review_client_cannot_call_any_s1_write`; `test_a_replayed_attested_write_from_an_ordinary_client_is_denied_before_the_replay_lookup`; `test_switch_off_answers_unsupported_and_writes_nothing`; `test_work_and_memory_writers_refuse_an_issue_situation_id`; `test_work_writers_still_accept_a_context_situation_id`; `test_a_foreign_issue_situation_id_answers_as_before` | database |
 | AT-024 (S1, server) | `tests/contract/test_lineage_read_contract.py` | `test_edges_carry_relation_direction_basis_and_evidence`; `test_reads_carry_no_body_or_hidden_count_and_only_issue_titles`; `test_views_carry_no_source_or_passage_digest`; `test_anchor_views_carry_the_server_derived_version_number`; `test_completeness_is_stated_even_with_a_null_cursor` | FAST |
-| AT-024 (S1, web component) | `web/src/components/work/related-issues.test.tsx` | `renders the related Issue with relation, direction, basis and actor class`; `lists candidate Issues as a radio group and re-queries with the chosen issueId`; `shows the empty message when no Issue matches`; `shows the partial and truncated messages without hidden counts`; `shows the unavailable message on not_found, denied and unavailable`; `opens a note-version anchor only on explicit action`; `labels a legacy capture anchor as version not recorded`; `renders nothing when the capability is unsupported`; `issues exactly one lineage request per render` | vitest |
+| AT-024 (S1, web component) | `web/src/components/work/related-issues.test.tsx` | `renders the related Issue with relation, direction, basis and actor class`; `lists candidate Issues as a radio group and re-queries with the chosen issueId`; `shows the empty message when no Issue matches`; `shows the partial and truncated messages without hidden counts`; `shows the unavailable message on not_found, denied and unavailable`; `opens a note-version anchor only on explicit action`; `labels a legacy capture anchor as version not recorded`; `labels an archived capture anchor as capture archived`; `renders nothing when the capability is unsupported`; `issues exactly one lineage request per render` | vitest |
 | AT-024 (S1, mounting) | `web/src/components/work/work-detail.related-issues.test.tsx`; `web/src/app/(app)/work/projects/[projectId]/constraints/constraint-inspector.related-issues.test.tsx` | `mounts the related-Issue panel on the Task detail`; `mounts the related-Issue panel on the Commitment detail`; `mounts the related-Issue panel in the Constraint inspector` | vitest |
 | AT-024 (S1, browser) | `web/e2e/lineage-related-issues.spec.ts` | `related Issues on a Task are keyboard reachable and readable at phone width`; `an ambiguous record asks for an Issue before showing lineage` | playwright (own `npm run e2e`, seeded synthetic data) |
 | AT-023 (S1, BFF) | `web/src/app/api/records/related-issues-route.test.ts`; `web/src/app/api/meetings/note-version-route.test.ts` | `calls records.lineage once with origin and max_depth 1`; `refuses a family outside task, commitment and constraint without a gateway call`; `refuses unknown query fields`; `calls meetings.notes.read_version only with an explicit includeBody` | vitest |

@@ -17,6 +17,8 @@ import type { MeetingsSeriesUpdateResult } from "./capabilities/meetings.series.
 import type { DocumentsReadResult } from "./capabilities/documents.read";
 import type { DocumentsArchiveResult } from "./capabilities/documents.archive";
 import type { DocumentsRestoreResult } from "./capabilities/documents.restore";
+import type { RecordsLineageResult } from "./capabilities/records.lineage";
+import type { MeetingsNotesReadVersionResult } from "./capabilities/meetings.notes.read_version";
 import contract from "@/contracts/gateway.json";
 import type { CanvasWorkspaceGetResult } from "./capabilities/canvas.workspace.get";
 import type { CanvasWorkspacePutResult } from "./capabilities/canvas.workspace.put";
@@ -133,6 +135,8 @@ export type CapabilityResults = {
   readonly "documents.read": DocumentsReadResult;
   readonly "documents.archive": DocumentsArchiveResult;
   readonly "documents.restore": DocumentsRestoreResult;
+  readonly "records.lineage": RecordsLineageResult;
+  readonly "meetings.notes.read_version": MeetingsNotesReadVersionResult;
   readonly "canvas.workspace.get": CanvasWorkspaceGetResult;
   readonly "canvas.workspace.put": CanvasWorkspacePutResult;
   readonly "capabilities.get": CapabilitiesGetResult;

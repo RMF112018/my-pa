@@ -26,6 +26,7 @@ from typing import Any, Final, cast
 
 from my_pa.application.authorization import Authorization
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
+from my_pa.application.commands import ReadMeetingNoteVersion, ReadRecordLineage
 from my_pa.application.constraint_management import (
     ConstraintCategoryMutationResult,
     ConstraintCategoryReorderResult,
@@ -59,6 +60,7 @@ from my_pa.contracts.ports import (
     KnowledgeAssertionRow,
     KnowledgeReviewCaseRow,
     KnowledgeReviewDecisionResult,
+    MeetingNoteVersionRecord,
     MutationRecordFamily,
     UnitOfWork,
 )
@@ -86,6 +88,15 @@ from my_pa.contracts.v1.meetings import (
     MeetingSeriesView,
     MeetingView,
 )
+from my_pa.contracts.v1.record_lineage import (
+    AssociationView,
+    EvidenceAnchorView,
+    LineageIssueMatch,
+    LineageNodeView,
+    LineageView,
+    RecordRefView,
+    VirtualEdgeView,
+)
 from my_pa.contracts.v1.reveal import RevealView
 from my_pa.contracts.v1.tasks import (
     TaskCommentView,
@@ -105,6 +116,20 @@ from my_pa.domain.goodnotes.models import GoodNotesPageRaster, GoodNotesPageWork
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.intelligence.catalog import CycleState, ResolverSetId
 from my_pa.domain.intelligence.models import IntelligenceCycleRun
+from my_pa.domain.lineage.vocabulary import (
+    AcceptanceBasis,
+    EvidenceAvailability,
+    EvidenceRole,
+    EvidenceSourceFamily,
+    LineageCompleteness,
+    LinkLifecycleState,
+    MemberRole,
+    NativeVirtualEdge,
+    RecordFamily,
+    RecordLinkKind,
+    RelationType,
+    SourceVersionKind,
+)
 from my_pa.domain.meeting.model import (
     AttendeeResponseStatus,
     MeetingActor,
@@ -1721,6 +1746,146 @@ def _wp03b_success_payloads() -> dict[str, dict[str, Any]]:
     }
 
 
+# --- record lineage S1 (contract sections 7.2 and 7.4) ------------------------
+#
+# Both through the real handlers on an uninitialized service: the switch is set
+# on, and the only collaborators are synthetic in-memory values, so the payload
+# is exactly what `_records_lineage` / `_meetings_notes_read_version` publish.
+
+LINEAGE_ISSUE_ID: Final = "sit_aaaaaaaa11111111"
+LINEAGE_TASK_ID: Final = "tsk_aaaaaaaa11111111"
+LINEAGE_MEETING_ID: Final = "mtg_aaaaaaaa11111111"
+LINEAGE_NOTE_VERSION_ID: Final = "mnote_aaaaaaaa11111111"
+LINEAGE_NOTE_BODY: Final = "Synthetic note: pour the north slab after the inspection."
+
+
+def _lineage_service() -> tuple[ApplicationService, Authorization]:
+    service = object.__new__(ApplicationService)
+    service._lineage_enabled = True
+    authorization = cast(
+        Authorization,
+        SimpleNamespace(at=AT, principal=SimpleNamespace(principal_id="prn_aaaaaaaa11111111")),
+    )
+    return service, authorization
+
+
+def _records_lineage() -> dict[str, Any]:
+    """One selected Issue, a membership and an originating note passage, one hop out."""
+    task = RecordRefView(family=RecordFamily.TASK, record_id=LINEAGE_TASK_ID)
+    issue = RecordRefView(family=RecordFamily.SITUATION, record_id=LINEAGE_ISSUE_ID)
+    note = RecordRefView(
+        family=RecordFamily.MEETING_NOTE_VERSION, record_id=LINEAGE_NOTE_VERSION_ID
+    )
+    meeting = RecordRefView(family=RecordFamily.MEETING, record_id=LINEAGE_MEETING_ID)
+    membership = AssociationView(
+        link_id="irl_aaaaaaaa11111111",
+        kind=RecordLinkKind.ISSUE_MEMBERSHIP,
+        relation_type=RelationType.ISSUE_MEMBER,
+        from_ref=issue,
+        to_ref=task,
+        member_role=MemberRole.WORK,
+        context_issue_id=None,
+        revision_no=1,
+        lifecycle_state=LinkLifecycleState.ACTIVE,
+        acceptance_basis=AcceptanceBasis.USER_CONFIRMED,
+        authority_class="local_operator",
+        evidence_set_digest=DIGEST,
+        evidence=(),
+        created_at=AT,
+        recorded_at=AT,
+    )
+    origin = AssociationView(
+        link_id="irl_bbbbbbbb22222222",
+        kind=RecordLinkKind.SEMANTIC,
+        relation_type=RelationType.ORIGINATED_FROM,
+        from_ref=task,
+        to_ref=note,
+        member_role=None,
+        context_issue_id=LINEAGE_ISSUE_ID,
+        revision_no=1,
+        lifecycle_state=LinkLifecycleState.ACTIVE,
+        acceptance_basis=AcceptanceBasis.USER_CONFIRMED,
+        authority_class="local_operator",
+        evidence_set_digest="b" * 64,
+        evidence=(
+            EvidenceAnchorView(
+                anchor_id="ian_aaaaaaaa11111111",
+                family=EvidenceSourceFamily.MEETING_NOTE_VERSION,
+                root_id=LINEAGE_MEETING_ID,
+                version_kind=SourceVersionKind.IMMUTABLE_VERSION,
+                version_id=LINEAGE_NOTE_VERSION_ID,
+                source_version_no=1,
+                passage_start_cp=16,
+                passage_end_cp=36,
+                role=EvidenceRole.ORIGIN,
+                availability=EvidenceAvailability.AVAILABLE,
+            ),
+        ),
+        created_at=AT,
+        recorded_at=AT,
+    )
+    view = LineageView(
+        root=task,
+        selected_issue_id=LINEAGE_ISSUE_ID,
+        issues_matching_root=(
+            LineageIssueMatch(issue_id=LINEAGE_ISSUE_ID, title="Synthetic Issue", state="open"),
+        ),
+        nodes=(
+            LineageNodeView(family=RecordFamily.TASK, record_id=LINEAGE_TASK_ID, depth=0),
+            LineageNodeView(
+                family=RecordFamily.MEETING_NOTE_VERSION,
+                record_id=LINEAGE_NOTE_VERSION_ID,
+                depth=1,
+                meeting_id=LINEAGE_MEETING_ID,
+            ),
+            LineageNodeView(
+                family=RecordFamily.SITUATION,
+                record_id=LINEAGE_ISSUE_ID,
+                depth=1,
+                title="Synthetic Issue",
+                state="open",
+            ),
+            LineageNodeView(family=RecordFamily.MEETING, record_id=LINEAGE_MEETING_ID, depth=2),
+        ),
+        typed_edges=(membership, origin),
+        virtual_native_edges=(
+            VirtualEdgeView(
+                edge_type=NativeVirtualEdge.MEETING_NOTE_VERSION_OF, from_ref=note, to_ref=meeting
+            ),
+        ),
+        complete_state=LineageCompleteness.COMPLETE,
+    )
+    service, authorization = _lineage_service()
+    service._record_lineage = cast(Any, SimpleNamespace(read_lineage=lambda *_: view))
+    command = ReadRecordLineage(
+        origin={"family": "task", "record_id": LINEAGE_TASK_ID}, max_depth=1
+    )
+    unit_of_work = cast(UnitOfWork, SimpleNamespace())
+    return service._records_lineage(unit_of_work, authorization, command).payload
+
+
+def _meetings_notes_read_version() -> dict[str, Any]:
+    """The exact note version with its body, as the panel's explicit open asks for it."""
+    record = MeetingNoteVersionRecord(
+        note_version_id=LINEAGE_NOTE_VERSION_ID,
+        meeting_id=LINEAGE_MEETING_ID,
+        version_number=1,
+        supersedes_note_version_id=None,
+        content_sha256=hashlib.sha256(LINEAGE_NOTE_BODY.encode("utf-8")).hexdigest(),
+        body=LINEAGE_NOTE_BODY,
+        recorded_at=AT,
+        is_current=False,
+    )
+    service, authorization = _lineage_service()
+    unit_of_work = cast(
+        UnitOfWork, SimpleNamespace(meetings=SimpleNamespace(read_note_version=lambda *_: record))
+    )
+    command = ReadMeetingNoteVersion(
+        meeting_id=LINEAGE_MEETING_ID, note_version_id=LINEAGE_NOTE_VERSION_ID, include_body=True
+    )
+    return service._meetings_notes_read_version(unit_of_work, authorization, command).payload
+
+
 def python_success_payloads() -> dict[str, dict[str, Any]]:
     """Capability name → gateway `result` dict the matching Vitest decoder must accept."""
     entity_id = _entity_id()
@@ -1886,6 +2051,8 @@ def python_success_payloads() -> dict[str, dict[str, Any]]:
         "constraint_categories.update": _constraint_categories_update(),
         "constraint_categories.deactivate": _constraint_categories_deactivate(),
         "constraint_categories.reorder": _constraint_categories_reorder(),
+        "records.lineage": _records_lineage(),
+        "meetings.notes.read_version": _meetings_notes_read_version(),
     }
 
 

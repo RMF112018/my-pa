@@ -4418,5 +4418,134 @@
   "documents.restore": {
     "state": "active",
     "changed": false
+  },
+  "records.lineage": {
+    "root": {
+      "family": "task",
+      "record_id": "tsk_aaaaaaaa11111111"
+    },
+    "selected_issue_id": "sit_aaaaaaaa11111111",
+    "issues_matching_root": [
+      {
+        "issue_id": "sit_aaaaaaaa11111111",
+        "title": "Synthetic Issue",
+        "state": "open"
+      }
+    ],
+    "nodes": [
+      {
+        "family": "task",
+        "record_id": "tsk_aaaaaaaa11111111",
+        "depth": 0
+      },
+      {
+        "family": "meeting_note_version",
+        "record_id": "mnote_aaaaaaaa11111111",
+        "depth": 1,
+        "meeting_id": "mtg_aaaaaaaa11111111"
+      },
+      {
+        "family": "situation",
+        "record_id": "sit_aaaaaaaa11111111",
+        "depth": 1,
+        "title": "Synthetic Issue",
+        "state": "open"
+      },
+      {
+        "family": "meeting",
+        "record_id": "mtg_aaaaaaaa11111111",
+        "depth": 2
+      }
+    ],
+    "typed_edges": [
+      {
+        "link_id": "irl_aaaaaaaa11111111",
+        "kind": "issue_membership",
+        "relation_type": "issue_member",
+        "from": {
+          "family": "situation",
+          "record_id": "sit_aaaaaaaa11111111"
+        },
+        "to": {
+          "family": "task",
+          "record_id": "tsk_aaaaaaaa11111111"
+        },
+        "member_role": "work",
+        "context_issue_id": null,
+        "revision_no": 1,
+        "lifecycle_state": "active",
+        "acceptance_basis": "user_confirmed",
+        "authority_class": "local_operator",
+        "evidence_set_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence": [],
+        "created_at": "2026-08-09T12:00:00.000Z",
+        "recorded_at": "2026-08-09T12:00:00.000Z"
+      },
+      {
+        "link_id": "irl_bbbbbbbb22222222",
+        "kind": "semantic",
+        "relation_type": "originated_from",
+        "from": {
+          "family": "task",
+          "record_id": "tsk_aaaaaaaa11111111"
+        },
+        "to": {
+          "family": "meeting_note_version",
+          "record_id": "mnote_aaaaaaaa11111111"
+        },
+        "member_role": null,
+        "context_issue_id": "sit_aaaaaaaa11111111",
+        "revision_no": 1,
+        "lifecycle_state": "active",
+        "acceptance_basis": "user_confirmed",
+        "authority_class": "local_operator",
+        "evidence_set_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "evidence": [
+          {
+            "anchor_id": "ian_aaaaaaaa11111111",
+            "family": "meeting_note_version",
+            "root_id": "mtg_aaaaaaaa11111111",
+            "version_kind": "immutable_version",
+            "version_id": "mnote_aaaaaaaa11111111",
+            "source_version_no": 1,
+            "passage_start_cp": 16,
+            "passage_end_cp": 36,
+            "role": "origin",
+            "availability": "available"
+          }
+        ],
+        "created_at": "2026-08-09T12:00:00.000Z",
+        "recorded_at": "2026-08-09T12:00:00.000Z"
+      }
+    ],
+    "virtual_native_edges": [
+      {
+        "edge_type": "meeting_note_version_of",
+        "from": {
+          "family": "meeting_note_version",
+          "record_id": "mnote_aaaaaaaa11111111"
+        },
+        "to": {
+          "family": "meeting",
+          "record_id": "mtg_aaaaaaaa11111111"
+        }
+      }
+    ],
+    "complete_state": "complete",
+    "next_cursor": null
+  },
+  "meetings.notes.read_version": {
+    "note": {
+      "note_version_id": "mnote_aaaaaaaa11111111",
+      "meeting_id": "mtg_aaaaaaaa11111111",
+      "version_number": 1,
+      "supersedes_note_version_id": null,
+      "content_sha256": "5d5ee03e664ea8ddac5907ce97995a9598b7aeef1e6e55e98df36d8f16a6a08d",
+      "character_count": 57,
+      "recorded_at": "2026-08-09T12:00:00.000Z",
+      "is_current": false,
+      "body_markdown": "Synthetic note: pour the north slab after the inspection."
+    },
+    "evidence_availability": "available"
   }
 }

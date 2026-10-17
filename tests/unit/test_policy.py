@@ -545,8 +545,8 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # purpose, two pairs.
     # Record lineage S1 adds the six Issue names and the `issue_read`/
     # `issue_authoring` pair, each name mapped to exactly one of the pair.
-    # Unioned: 198 capabilities, 54 purposes, 200 permitted pairs; then its eight
-    # remaining names and three purposes: 206 capabilities, 57 purposes, 208 pairs.
+    # Unioned: 198 capabilities, 54 purposes, 200 permitted pairs; then its remaining
+    # S1 names and their purposes: 206 capabilities, 57 purposes, 208 pairs.
     assert len(PERMITTED_PAIRS) == 208
     assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 208 == 11534
 

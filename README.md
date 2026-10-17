@@ -157,7 +157,7 @@ default process publishes a manifest
 in which 113 of the 206 capabilities are `available` and 93 — the six `documents.`
 names, the fifty-five `entities.` names, the nine `relationship_memory.`
 names and (KLP-WP-03/04/05) the seven `knowledge.assertions.` names with `knowledge.discovery.checkpoint` and `record_events.provenance`, nine
-Knowledge Assertion plane names, and the fourteen record lineage S1 names (`issues.`, `records.` and `meetings.notes.`), which is now the whole of the withheld figure — are
+Knowledge Assertion plane names, and the record lineage S1 `issues.`, `records.` and `meetings.notes.` names, which is now the whole of the withheld figure — are
 `not_implemented`, and readiness is `degraded` with the limitation
 `93 of 206 capabilities are unwired.` Derived by building the manifest both ways
 from the dispatch table, exactly as `_capabilities_get` does:

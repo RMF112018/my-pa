@@ -458,3 +458,45 @@ def test_an_absent_root_and_an_unmatched_issue_are_not_found() -> None:
     )
     with pytest.raises(InvalidRequestError):
         _read(context, _ISSUE)
+
+
+def test_the_exact_byte_bound_trims_what_the_estimate_admitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The per-item estimate admits an evidence-heavy edge; the exact bound trims it."""
+    source = _Source()
+    source.issue(_ISSUE)
+    source.plain(_COMMITMENT)
+    source.plain(_MEETING)
+    source.note(_NOTE, _MEETING, 1)
+    source.link(1, RelationType.ISSUE_MEMBER, _ISSUE, _COMMITMENT, role=MemberRole.WORK)
+    anchors = tuple(
+        EvidenceAnchor(
+            source_family=EvidenceSourceFamily.MEETING_NOTE_VERSION,
+            source_root_id=_MEETING.record_id,
+            source_version_kind=SourceVersionKind.IMMUTABLE_VERSION,
+            source_version_id=_NOTE.record_id,
+            source_version_no=1,
+            source_sha256="c" * 64,
+            passage_start_cp=start,
+            passage_end_cp=start + 4,
+            passage_sha256="d" * 64,
+            role=EvidenceRole.ORIGIN,
+        )
+        for start in range(24)
+    )
+    source.link(
+        2,
+        RelationType.ORIGINATED_FROM,
+        _COMMITMENT,
+        _NOTE,
+        context=_ISSUE.record_id,
+        anchors=anchors,
+    )
+    unbounded = _read(source, _ISSUE)
+    size = len(json.dumps(unbounded, separators=(",", ":")))
+    assert unbounded["complete_state"] == "complete"
+    monkeypatch.setattr(lineage_module, "MAX_LINEAGE_BYTES", size - 1)
+    bounded = _read(source, _ISSUE)
+    assert bounded["complete_state"] == "truncated_budget"
+    assert len(json.dumps(bounded, separators=(",", ":"))) < size

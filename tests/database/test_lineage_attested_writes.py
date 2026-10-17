@@ -423,3 +423,149 @@ def test_a_replayed_attested_write_from_an_ordinary_client_is_denied_before_the_
     assert again["replayed"] is True and again["membership"] == added["membership"]
     replayed = runtime.ok(writes[2], surface=OperatorSurface.HTTP_GATEWAY)
     assert replayed["replayed"] is True and replayed["association"] == asserted["association"]
+
+
+# ---- I5 hardening: replay ordering for every S1 write ------------------------------
+
+
+def _committed_writes(runtime: LineageRuntime, key: str) -> list[tuple[Any, dict[str, Any]]]:
+    """All nine S1 writes, each committed once by a local operator, with its answer."""
+    gateway = OperatorSurface.HTTP_GATEWAY
+    project = runtime.project(f"replay-all-{key}")
+    meeting_id, note_id = meeting(runtime, f"replay-all-{key}")
+    c1 = commitment(runtime, f"replay-all-{key}")
+    committed: list[tuple[Any, dict[str, Any]]] = []
+
+    def commit(command: Any) -> dict[str, Any]:  # noqa: ANN401
+        answer = runtime.ok(command, surface=gateway)
+        committed.append((command, answer))
+        return answer
+
+    issue = commit(
+        CreateIssue(title=f"Synthetic replay {key}", idempotency_key=f"lineage-ra-{key}-create")
+    )["issue"]["issue_id"]
+    commit(
+        UpdateIssue(
+            issue_id=issue,
+            expected_version=1,
+            idempotency_key=f"lineage-ra-{key}-update",
+            state="active",
+        )
+    )
+    commit(_link(issue, project, f"ra-{key}"))
+    commit(
+        EndIssueProjectLink(
+            issue_id=issue,
+            project_id=project,
+            expected_membership_revision=1,
+            idempotency_key=f"lineage-ra-{key}-link-end",
+            reason="synthetic end",
+        )
+    )
+    member = commit(membership(issue, "meeting", meeting_id, f"ra-{key}", role="discussion"))[
+        "membership"
+    ]["link_id"]
+    commit(
+        EndIssueMembership(
+            link_id=member,
+            expected_revision=1,
+            idempotency_key=f"lineage-ra-{key}-member-end",
+            reason="synthetic end",
+        )
+    )
+    link = commit(
+        originated_from(
+            "commitment",
+            c1,
+            "meeting_note_version",
+            note_id,
+            f"ra-{key}",
+            (note_anchor(meeting_id, note_id, NOTE_BODY),),
+        )
+    )["association"]["link_id"]
+    commit(
+        CorrectRecordAssociation(
+            link_id=link,
+            expected_revision=1,
+            idempotency_key=f"lineage-ra-{key}-correct",
+            reason="a narrower synthetic passage",
+            evidence_anchors=(note_anchor(meeting_id, note_id, NOTE_BODY, passage="façade"),),
+        )
+    )
+    commit(
+        EndRecordAssociation(
+            link_id=link,
+            expected_revision=2,
+            idempotency_key=f"lineage-ra-{key}-end",
+            reason="synthetic end",
+        )
+    )
+    assert {command.capability.value for command, _ in committed} == S1_WRITES
+    return committed
+
+
+def _without_replayed(answer: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in answer.items() if key != "replayed"}
+
+
+def test_every_replayed_attested_write_is_denied_before_the_replay_lookup(
+    runtime: LineageRuntime,
+) -> None:
+    """Section 6.1: authority is derived before the request row is read, for all seven.
+
+    The membership and association asserts are pinned above; this extends the
+    ordering to `issues.project_links.add/end`, `issues.memberships.end` and
+    `records.associations.correct/end`. A replay of exactly what the operator
+    committed is `denied` for an ordinary remote client and for an unstamped
+    local caller, writes nothing, and the operator's own replay still answers
+    the original. The two recorded writes (`issues.create`/`update`) admit any
+    caller, so an ordinary client's replay of them is a replay.
+    """
+    committed = _committed_writes(runtime, "attested")
+    before = all_lineage_counts(runtime.engine)
+    attested = 0
+    for command, original in committed:
+        capability = command.capability.value
+        if capability in {"issues.create", "issues.update"}:
+            again = runtime.ok(command, remote_client=REMOTE_CLIENT)
+            assert again["replayed"] is True, capability
+            assert _without_replayed(again) == _without_replayed(original), capability
+            continue
+        attested += 1
+        for kwargs in ({"remote_client": REMOTE_CLIENT}, {}):
+            error = runtime.refused(command, **kwargs)
+            assert error["code"] == "denied", (capability, kwargs)
+        assert all_lineage_counts(runtime.engine) == before, capability
+        again = runtime.ok(command, surface=OperatorSurface.HTTP_GATEWAY)
+        assert again["replayed"] is True, capability
+        assert _without_replayed(again) == _without_replayed(original), capability
+    assert attested == 7
+    assert all_lineage_counts(runtime.engine) == before
+
+
+def test_switch_off_answers_unsupported_even_for_a_committed_replay(
+    disposable_database: str,
+) -> None:
+    """Section 7.5: the switch is checked before the reservation, so no replay answers.
+
+    Every one of the nine writes, committed while the plane was on, is
+    resubmitted byte-for-byte with the plane off by the same local operator:
+    each answers `unsupported` (never the stored replay), and no row moves.
+    """
+    on = LineageRuntime(disposable_database)
+    off = LineageRuntime(disposable_database, lineage_enabled=False)
+    try:
+        committed = _committed_writes(on, "switch-off")
+        before = all_lineage_counts(off.engine)
+        for command, _original in committed:
+            error = off.refused(command, surface=OperatorSurface.HTTP_GATEWAY)
+            assert error["code"] == "unsupported", command.capability.value
+        assert all_lineage_counts(off.engine) == before
+        # Turning the plane back on changes no row: the original replays.
+        command, original = committed[-1]
+        again = on.ok(command, surface=OperatorSurface.HTTP_GATEWAY)
+        assert again["replayed"] is True
+        assert _without_replayed(again) == _without_replayed(original)
+    finally:
+        on.close()
+        off.close()

@@ -28,14 +28,16 @@ refusal of wrong-parent, stale-digest and foreign-Principal references.
 non-terminal states), native Issue↔Project links with an append-only event ledger,
 Issue memberships, three semantic relation types, exact Meeting note version evidence,
 immutable roots/revisions/evidence/heads, idempotency and CAS, a bounded single-page
-`records.lineage`, and two Meeting note history reads.
+`records.lineage`, two Meeting note history reads, and the minimal WP-06A related-Issue
+display on the Task, Commitment and Constraint record views (section 7.4).
 
 **Not in S1** (section 11 lists the owner slice): Issue close/reopen, history and
 bitemporal reads, proposals and review, contest/reinstate/replacement corrections,
 the other four semantic types, Capture/Managed Document/Knowledge Assertion/external
 evidence, version selectors other than `root`, cursors on `records.lineage`, Record
 Event emission, composite Work/Meeting/Constraint writes, responsibility/handoff,
-backfill, Program reads, role-separated grants and any browser UI.
+backfill, Program reads, role-separated grants, the S3 Issue timeline/graph UI, and a
+Meeting record view (none exists in `web/` to extend; section 7.4).
 
 ## 2. Identifier kinds
 
@@ -485,8 +487,9 @@ terminal in S1; re-asserting the same meaning creates a new root.
 `cursor`, `page_size`, `valid_at`, `known_at` and `include` are refused in S1. Out:
 
 ```text
-{root: RecordRef, selected_issue_id: sit_|null, issues_matching_root: [sit_] (<= 20),
- nodes: [{family, record_id, depth, meeting_id (note versions only)}],
+{root: RecordRef, selected_issue_id: sit_|null,
+ issues_matching_root: [{issue_id, title, state}] (<= 20),
+ nodes: [{family, record_id, depth, meeting_id (note versions only), title and state (Issue nodes only)}],
  typed_edges: [AssociationView],
  virtual_native_edges: [{edge_type: "meeting_note_version_of", from: RecordRef(meeting_note_version), to: RecordRef(meeting)}],
  complete_state: complete|truncated_budget|unresolved_ambiguity|partial_native_history,
@@ -501,7 +504,7 @@ Algorithm (deterministic, Principal-scoped, current state, active links only):
 4. With Issue *I* selected, breadth-first from the root to `max_depth`, following only: *I*'s active membership links; active semantic links whose `context_issue_id = I`, whose endpoint is *I*, or whose context is null and whose two endpoints are both in *I* (*I*, an active member, or a note version/Meeting paired with an active member); and `meeting_note_version_of` between a reached node and its pair. Links scoped to another Issue are never followed.
 5. Re-resolve every reached node in its native table; a node that no longer resolves is dropped with its edges and sets `partial_native_history`.
 6. Budgets (design values, not benchmarks): 250 nodes, 400 edges (typed plus virtual), 512 KiB serialized. Reaching one stops expansion and sets `truncated_budget`. Expansion order: frontier by `(depth, family, record_id)`, edges by `(created_at, link_id)`, virtual edges by `version_number`. Output order: nodes by `(depth, family, record_id)`, edges by `link_id`.
-7. No body, title or hidden count is returned; `next_cursor` is always `null` in S1 and does not imply completeness.
+7. No body, no title other than an Issue's own title and state, and no hidden count is returned; `next_cursor` is always `null` in S1 and does not imply completeness.
 
 **`meetings.notes.versions`** — in `{meeting_id, page_size? (1..100, default 25), after? (mnote_)}`;
 out `{meeting_id, versions: [{note_version_id, version_number, supersedes_note_version_id, content_sha256, character_count, recorded_at, is_current}], next_cursor}`
@@ -523,6 +526,74 @@ A note version that is not this Meeting's, or not this Principal's, is `not_foun
 
 New `SafeDetail` members are added with the code that reports them.
 
+### 7.4 Minimal WP-06A related-Issue display (S1)
+
+Plan 03 WP-06A S1 card, bounded to the record views that exist in `web/` at the basis
+commit. Read-only: no write control, no graph, no timeline.
+
+**Where.** One new component, `web/src/components/work/related-issues.tsx`
+(`RelatedIssuesPanel`), mounted in:
+
+- the Task detail: `TaskDetailViewInner` in `web/src/components/work/work-detail.tsx` (serves `/work/tasks/[taskId]` and the Work-hosted sheet);
+- the Commitment detail: `CommitmentDetailView` in the same file (serves `/work/commitments/[commitmentId]`);
+- the Constraint detail: `ConstraintInspector` in `web/src/app/(app)/work/projects/[projectId]/constraints/constraint-inspector.tsx`.
+
+`web/` has no Meeting record view (only the BFF route
+`web/src/app/api/meetings/[meetingId]/route.ts`). Building one is new UX outside this
+card, so the Meeting display moves to the S3 WP-06A stage. This is a limit set by what
+the repository contains, recorded in section 12.
+
+**BFF (server-batched, one call per view).**
+
+- `GET /api/records/[family]/[recordId]/related-issues?issueId=`: new
+  `web/src/app/api/records/[family]/[recordId]/related-issues/route.ts`, using
+  `workGet(request, "related-issues", "records.lineage", { issueId: { gateway: "issue_id", type: "string" } }, { origin: { family, record_id: recordId }, max_depth: 1 }, { strictQuery: true })`.
+  `family` is allow-listed to `task`, `commitment` and `constraint`; anything else is a
+  local `invalid_request` without a gateway call.
+- `GET /api/meetings/[meetingId]/notes/[noteVersionId]?includeBody=true`: new
+  `web/src/app/api/meetings/[meetingId]/notes/[noteVersionId]/route.ts`, calling
+  `meetings.notes.read_version`. It is called only when the user opens an anchor.
+- The panel never calls `issues.read`, never fetches per Issue or per edge, and never
+  joins records client-side. Everything it renders comes from the one `records.lineage`
+  response (Issue title and state on Issue nodes, section 7.2) and, on demand, the one
+  note-version read.
+
+**Contract and decoders.** `web/src/contracts/gateway.json` gains two entries:
+
+- `records.lineage`: purpose `record_lineage_read`; `payloadFields` `origin`, `issue_id`, `max_depth`.
+- `meetings.notes.read_version`: purpose `meeting_note_history_read`; `payloadFields` `meeting_id`, `note_version_id`, `include_body`.
+
+Each entry has a synthetic `probe`. Decoders
+`web/src/lib/api/decode/capabilities/records.lineage.ts` and
+`meetings.notes.read_version.ts` are strict (unknown keys refused) and decode the
+section 7.2 shapes. They are registered in `web/src/lib/api/decode/index.ts` and
+`types.ts`. `web/src/lib/api/decode/fixtures/python/success.json` is regenerated with
+exactly the two new keys. Client calls go through a new `fetchRelatedIssues` /
+`fetchNoteVersion` pair in `web/src/lib/api/work-client.ts`. New files under `web/`
+must be added with `git add -f` and checked with `git ls-tree`.
+
+**What it shows.**
+
+- **One Issue** (the selected or only match): the Issue title and state, as plain text
+  (Issue pages are S3). Then each typed edge between the record and the Issue context:
+  - the membership role, or the relation type with its direction in words ("originated from", "discussed in");
+  - `lifecycle_state`, `acceptance_basis` and `authority_class`, as plain words;
+  - each evidence anchor, as "Meeting note version *n*, characters *start*–*end*". A
+    button opens the note-version read in an inline disclosure; the body appears only
+    after that explicit action.
+- **Several Issues** (`unresolved_ambiguity`): the candidates (title, state) as a
+  labelled radio group. Choosing one re-queries with `issueId`. No Issue is chosen for
+  the user.
+- **No match:** "No related Issue is recorded for this record."
+- **Incomplete or failed reads:**
+  - `partial_native_history`: "Some related records could not be shown."
+  - `truncated_budget`: "Only part of this record's lineage is shown."
+  - a gateway `not_found`, `denied` or `unavailable`: "Related Issues are unavailable."
+  - never a count of what is hidden.
+- **Accessibility:** a `section` with a heading, the choices as a radio group, the
+  disclosure as a button with `aria-expanded`, usable at phone width, and no state
+  conveyed by colour alone.
+
 ## 8. Old-client compatibility rule (v1)
 
 S1 adds capabilities and changes **no** existing request or response, so no version
@@ -531,7 +602,9 @@ keep their exact keys (an Issue appears in `continuity.situations` as a Situatio
 no `kind` or `version` key); `meetings.read`'s `MeetingNoteView` keeps omitting
 `content_sha256`; `tasks.create`/`commitments.create` keep the `cap_`/`asrt_`
 `origin_evidence_ref` rule and still refuse `mnote_`; `web/src/contracts/gateway.json`
-and the strict decoders are untouched (no new BFF capability in S1). Any later change
+keeps every existing entry, its decoder and its `success.json` fixture byte-for-byte; S1
+adds exactly two entries (`records.lineage`, `meetings.notes.read_version`; 105 → 107
+entries) with their own decoders. Any later change
 to an existing contract needs an explicit negotiated version and a strict-client
 regression fixture.
 
@@ -574,13 +647,18 @@ implementers; a renamed test must update this table in the same commit.
 | AT-012 (migration) | `tests/schema/test_record_lineage_s1_migration.py` | FAST: `test_the_revision_is_the_single_head_on_b9025e7fb738`; `test_the_revision_imports_no_domain_module`; `test_frozen_ddl_names_every_declared_constraint`; `test_before_vocabulary_is_a_byte_copy`; `test_at_vocabulary_adds_exactly_the_s1_names`; `test_offline_downgrade_refuses_first`. DB: `test_empty_to_head` (`migration_empty_to_head`); `test_previous_head_with_rows_upgrades`, `test_upgrade_refuses_a_cross_principal_project_situation`, `test_existing_situations_and_project_links_survive_unchanged`, `test_downgrade_refuses_while_lineage_rows_exist` (`migration`) | FAST + migration markers |
 | AT-023 (S1) | `tests/contract/test_lineage_capability_admission.py` | `test_s1_capabilities_are_operator_decision_required`; `test_no_s1_capability_is_in_the_chatllm_data_profile`; `test_s1_requests_reject_server_owned_fields`; `test_existing_v1_shapes_are_unchanged`; `test_note_body_needs_the_history_purpose`; `test_lineage_authority_ignores_the_knowledge_manager_allowlist` | FAST |
 | AT-023 (S1, DB) | `tests/database/test_lineage_attested_writes.py` | `test_an_ordinary_remote_client_is_denied_accepted_lineage_writes`; `test_a_local_operator_write_records_its_class_and_channel` | database |
-| AT-024 (S1: server contract only) | `tests/contract/test_lineage_read_contract.py` | `test_edges_carry_relation_direction_basis_and_evidence`; `test_reads_carry_no_body_title_or_hidden_count`; `test_completeness_is_stated_even_with_a_null_cursor` | FAST |
+| AT-024 (S1, server) | `tests/contract/test_lineage_read_contract.py` | `test_edges_carry_relation_direction_basis_and_evidence`; `test_reads_carry_no_body_or_hidden_count_and_only_issue_titles`; `test_completeness_is_stated_even_with_a_null_cursor` | FAST |
+| AT-024 (S1, web component) | `web/src/components/work/related-issues.test.tsx` | `renders the related Issue with relation, direction, basis and actor class`; `lists candidate Issues as a radio group and re-queries with the chosen issueId`; `shows the empty message when no Issue matches`; `shows the partial and truncated messages without hidden counts`; `shows the unavailable message on not_found, denied and unavailable`; `opens a note-version anchor only on explicit action`; `issues exactly one lineage request per render` | vitest |
+| AT-024 (S1, mounting) | `web/src/components/work/work-detail.related-issues.test.tsx`; `web/src/app/(app)/work/projects/[projectId]/constraints/constraint-inspector.related-issues.test.tsx` | `mounts the related-Issue panel on the Task detail`; `mounts the related-Issue panel on the Commitment detail`; `mounts the related-Issue panel in the Constraint inspector` | vitest |
+| AT-024 (S1, browser) | `web/e2e/lineage-related-issues.spec.ts` | `related Issues on a Task are keyboard reachable and readable at phone width`; `an ambiguous record asks for an Issue before showing lineage` | playwright (own `npm run e2e`, seeded synthetic data) |
+| AT-023 (S1, BFF) | `web/src/app/api/records/related-issues-route.test.ts`; `web/src/app/api/meetings/note-version-route.test.ts` | `calls records.lineage once with origin and max_depth 1`; `refuses a family outside task, commitment and constraint without a gateway call`; `refuses unknown query fields`; `calls meetings.notes.read_version only with an explicit includeBody` | vitest |
+| AT-023 (S1, strict client) | `web/src/lib/api/decode/capabilities/records.lineage.test.ts`; `web/src/lib/api/decode/capabilities/meetings.notes.read_version.test.ts`; existing `web/src/lib/api/decode/registry.test.ts`; existing `tests/contract/test_bff_gateway_contract_parity.py`, `tests/contract/test_bff_success_decoder_parity.py` | `decodes the S1 lineage response`; `refuses an unknown key`; `decodes a note version with and without a body`; the existing registry and parity tests stay green with exactly two new entries and every existing entry unchanged | vitest + FAST |
 | AT-026 (S1) | existing `tests/database/test_record_event_provenance.py` | existing `test_unknown_foreign_withheld_and_non_knowledge_events_answer_alike` (must stay green, unchanged) | database |
-| AT-026 (S1) | `tests/architecture/test_record_lineage_s1_scope.py` | `test_s1_adds_no_record_event_family`; `test_every_s1_crosswalk_test_exists` (parses this table) | FAST |
+| AT-026 (S1) | `tests/architecture/test_record_lineage_s1_scope.py` | `test_s1_adds_no_record_event_family`; `test_every_s1_crosswalk_test_exists` (parses this table: Python rows by function name, vitest/playwright rows by test title) | FAST |
 | (domain, unmapped) | `tests/unit/test_issue_lifecycle.py` | `test_allowed_state_moves`; `test_refused_state_moves`; `test_update_action_follows_the_state_move` | FAST |
 
 **Not S1:** AT-001 stages 4–14 and AT-005, AT-006 (full), AT-007, AT-017 → S2;
-AT-008, AT-011, AT-013, AT-014, AT-016, AT-024 browser/UI, AT-025, AT-001 full
+AT-008, AT-011, AT-013, AT-014, AT-016, AT-024 Meeting view, timeline and graph, AT-025, AT-001 full
 reverse-root equivalence → S3; AT-015, AT-018, AT-019, AT-022, AT-023 Commitment v2 →
 Program/report work packages; AT-020, AT-021 → out of scope until OD-06.
 
@@ -596,7 +674,7 @@ Program/report work packages; AT-020, AT-021 → out of scope until OD-06.
 | `records.associations.propose`/`review`, proposal roots/decisions/heads (`irp`, `ldec`) | S3 |
 | Record Event family for lineage, `link_mutation_event_receipts` (`irec`) | S3 |
 | Lineage runtime-role provisioning and privilege gate | CR-014 follow-up, operator-gated |
-| Minimal related-Issue UI (WP-06A S1 part) | follow-on UI work package on this contract |
+| Meeting record view and its related-Issue display; Issue pages, timeline and graph (WP-06A S3 stage) | S3 |
 | Backfill/dry-run (WP-03B), Program, report manifest, finance, P6 | own work packages; finance/P6 gated by OD-06 |
 
 ## 12. W1 divergences — resolution
@@ -625,7 +703,9 @@ in `meetings.list`; Project link and membership writes do not bump the Issue ver
 use their own revision CAS; Project link evidence is optional because S1's only
 evidence family is Meeting notes; the meeting-note anchor binding is inline columns
 with a digest-bearing composite FK rather than a separate binding table; the package's
-`hidden_node_count` is omitted because hidden counts must not be disclosed.
+`hidden_node_count` is omitted because hidden counts must not be disclosed. The WP-06A S1 display covers the Task, Commitment and Constraint
+views only, because `web/` has no Meeting record view to extend; `records.lineage`
+returns Issue titles (and only Issue titles) so the display needs no per-Issue read.
 
 ## 13. Operator gates that remain
 

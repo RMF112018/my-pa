@@ -8,6 +8,11 @@ deployment, backfill or production use. Where it differs from the review package
 (`MYPA-LINEAGE-ADVERSARIAL-REVIEW-20261017-001`, documents 02, 03, 04 and 07), this
 document controls for S1 and section 12 records why.
 
+**Implementation:** S1 is implemented on `feat/lineage-s1-integration` (workers I1 to I5)
+and exercised only against isolated synthetic test databases; it is not merged, migrated
+anywhere live, granted, exposed or deployed. Sections 4.3, 6.2, 7.2, 7.4 and 7.5 carry
+"as implemented" notes where the code resolved a point this contract left open.
+
 **Basis:** `feat/lineage-s1-integration@253b7d445db521ac7354843ed4e9a84bd8aae7f3`
 (tree `188035885e68c0b35bdb9a64469abc2e37b12c74`), Alembic single head
 `b9025e7fb738`, repository truth in
@@ -124,7 +129,7 @@ becomes the S3 `restricted` availability and remote withholding (section 11).
 | `situation` | `situations` | `kind = 'issue_workstream'`; a context Situation is `invalid_request` / `endpoint` | `FOR UPDATE` when the write changes the Issue, else `FOR SHARE` |
 | `meeting` | `meetings` | any `status` | `FOR SHARE` |
 | `meeting_note_version` | `meeting_note_versions` | always (immutable) | `FOR SHARE` |
-| `task` | `tasks` | `archived_at IS NULL`, else `invalid_request` / `endpoint` | `FOR SHARE` |
+| `task` | `tasks` | `archived_at IS NULL`, else `invalid_request` / `endpoint` (a Task is archived by `tasks.update` with `archived: true`, the repository's only archive route) | `FOR SHARE` |
 | `commitment` | `commitments` | any `state` and `evidence_state` (acceptance of the Commitment is its own) | `FOR SHARE` |
 | `constraint` | `project_constraints` | any state | `FOR SHARE` |
 | `capture_version` | `capture_versions` (partition `owner_principal_id`) | its Capture root is neither archived nor withdrawn (lifecycle projection, as `accepts_work_evidence_reference`), else `denied` / `capture_withdrawn`; `classification` is `synthetic_test` or `private_local`, else `invalid_request` / `endpoint` (restricted evidence is S3) | root via `share_capture_root` (`FOR SHARE`, which archive's `FOR NO KEY UPDATE` waits on), version row `FOR SHARE` |
@@ -359,6 +364,11 @@ exactly one result group, the one its capability produces. Trigger
 - No role grants change (ADR-015 decision 10). The triggers bind **DML** by every role, the owner included; the table owner and a superuser can still `ALTER TABLE … DISABLE TRIGGER` or drop them, so S1's immutability is a DML guarantee, not a DDL one. Closing that gap is the CR-014 role-separation follow-up (owner/migrator/runtime, the `record_event_roles.py` pattern), operator-gated.
 - `downgrade()` first refuses (`restrict_violation`) while any row exists in the 8 new tables, any Situation has `kind = 'issue_workstream'`, or any `audit_events` row names an S1 capability or purpose; only then drops in reverse order.
 - The revision restates `capability_is_known` and `purpose_is_known` on `knowledge.audit_events` (BEFORE texts byte copies of the latest restating revision, AT texts add exactly the S1 names sorted), and `_CURRENT_AUDIT_CAPABILITIES` moves with it (W1 §2.2 "Schema").
+  The schema-ahead gap this opened (`tests/schema/lineage_schema_ahead_contract.py`, the
+  Knowledge precedent's shape) is **closed** on the implementation branch: the domain
+  declares all 14 capability and 5 purpose names, both declared sets equal the full S1
+  sets and `LINEAGE_S1_DECLARED_BY_DOMAIN` is true, measured (not trusted) by
+  `tests/schema/test_record_lineage_s1_migration.py`.
 
 ## 5. Canonical encodings
 
@@ -463,6 +473,13 @@ the repository's idiom for a lost race; the request row rolls back with everythi
 wrapper, so the native side of such a deadlock may surface as `internal_error` rather than
 `conflict`. S1 does not change native writers; the residual is pinned by a test that
 records the native side's code as observed, and fixing it is a separate work package.
+The pin (`test_the_native_side_of_a_lineage_deadlock_is_recorded`) drives the native side
+at the **SQL level** on a second connection (`SELECT … FOR UPDATE` on the Task, then an
+`UPDATE` of the Issue row), not through a native capability, and observes the raw
+`40P01`; the lineage side, through `ApplicationService.invoke`, commits. Which side
+PostgreSQL aborts is made deterministic by setting `deadlock_timeout` per session, which
+needs a **superuser** test role: CI's `my_pa` service user is one, and a local run needs
+the same (for example an `initdb` cluster whose bootstrap user runs the tests).
 
 ### 6.3 Transaction order (02 §2.4, S1 form)
 
@@ -571,8 +588,12 @@ with `created: false`; its authority and evidence never change.
 **`issues.memberships.end`** — in `{link_id, expected_revision, idempotency_key, reason}`;
 out `{membership, replayed}`. A semantic link id is `invalid_request` / `link_id`.
 
-**`records.associations.assert`** — in `{from: RecordRef, to: RecordRef, relation_type, idempotency_key, evidence_anchors ([1..32]), context_issue_id?}`;
-out `{association, created, replayed}`. `relation_type = issue_member` is
+**`records.associations.assert`** — in `{from_record: RecordRef, to_record: RecordRef, relation_type, idempotency_key, evidence_anchors ([1..32]), context_issue_id?}`;
+out `{association, created, replayed}`. The **request** keys are `from_record`/`to_record`
+(`from` is a Python keyword and every payload key is a command dataclass field, the
+`payload_schema_for` rule); the **view** keys of `AssociationView` and of a virtual edge
+stay `from`/`to` (section 7.1). An unknown `from`/`to` key in the request is
+`invalid_request` like any unknown field. `relation_type = issue_member` is
 `invalid_request`. `context_issue_id` must be an Issue; for `discusses` with an Issue
 `to`, a supplied context must equal it. Duplicate active identity ⇒ existing
 association, `created: false`.
@@ -606,6 +627,15 @@ Algorithm (deterministic, Principal-scoped, current state, active links only):
 2. Matching Issues. Let the root's **pair set** *P* be the root alone, plus its Meeting when the root is a note version, plus every note version of the root when the root is a Meeting. The matching Issues are: the root itself if it is an Issue; Issues with an active membership of any member of *P*; the `context_issue_id` of every active semantic link incident to any member of *P*; and the Issue `to` endpoint of every active `discusses` link from any member of *P*. The pair extension applies to all three sources alike, so M1 and N1 always match the same Issues.
 3. `issue_id` given and not matching ⇒ `not_found`. Not given: exactly one ⇒ selected; more than one ⇒ return the candidates (sorted, at most 20), `complete_state = unresolved_ambiguity`, no traversal; none ⇒ one hop over active semantic links incident to the root with `context_issue_id IS NULL`, plus its virtual note edge, no expansion.
 4. With Issue *I* selected, breadth-first from the root to `max_depth`, following only: *I*'s active membership links; active semantic links whose `context_issue_id = I`, whose endpoint is *I*, or whose context is null and whose two endpoints are both in *I* (*I*, an active member, or a member of the pair set of an active member); and `meeting_note_version_of` between a reached node and its pair. Links scoped to another Issue are never followed.
+   **As implemented** (`application/record_lineage.py`, the I3 resolution of this step):
+   expanding a node expands its pair set — a note version also follows the followable
+   links incident to its Meeting, and a Meeting those incident to its note versions; a
+   followed link adds its far endpoint and, when it was reached through a pair member,
+   that member as nodes. A reached note version always reaches its Meeting (next depth)
+   along `meeting_note_version_of`. A reached Meeting does **not** make its other note
+   versions nodes: they appear only as its virtual edges (step 6 order). So in the AT-001
+   fixture every root yields {I, M1, N1, C1} and N1b is a virtual edge of M1 only. With no
+   Issue matched (step 3), the one hop also reaches a note-version root's Meeting.
 5. Re-resolve every reached node in its native table; a node that no longer resolves is dropped with its edges and sets `partial_native_history`. A `capture_version` node whose Capture root is currently archived is kept and carries `availability: "archived"` (nodes gain an `availability` field for this family only); its anchors read `archived` as in section 7.1.
 6. Budgets (design values, not benchmarks): 250 nodes, 400 edges (typed plus virtual), 512 KiB serialized. Reaching one stops expansion and sets `truncated_budget`. Expansion order: frontier by `(depth, family, record_id)`, edges by `(created_at, link_id)`, virtual edges by `version_number`. Output order: nodes by `(depth, family, record_id)`, edges by `link_id`.
 7. No body, no title other than an Issue's own title and state, and no hidden count is returned; `next_cursor` is always `null` in S1 and does not imply completeness.
@@ -623,11 +653,17 @@ selectable from M1 when `issue_id = I` is given.
 **`meetings.notes.versions`** — in `{meeting_id, page_size? (1..100, default 25), after? (mnote_)}`;
 out `{meeting_id, versions: [{note_version_id, version_number, supersedes_note_version_id, character_count, recorded_at, is_current}], next_cursor}`
 ordered `version_number DESC`. No body and no digest; `content_sha256` is returned only by
-`meetings.notes.read_version`.
+`meetings.notes.read_version`. The page cap is 100: a `page_size` above it is
+`invalid_request` / `page_size` (never clamped), an omitted one is 25, and the size used is
+further bounded by the process `max_page_size`. An absent or foreign Meeting is `not_found`
+/ `meeting_id`; an `after` that is not a note version of this Meeting is `invalid_request`
+/ `cursor`.
 
 **`meetings.notes.read_version`** — in `{meeting_id, note_version_id, include_body? = false}`;
 out `{note: {note_version_id, meeting_id, version_number, supersedes_note_version_id, content_sha256, character_count, recorded_at, is_current, body_markdown (only when include_body)}, evidence_availability: "available"}`.
-A note version that is not this Meeting's, or not this Principal's, is `not_found`.
+A note version that is not this Meeting's, or not this Principal's, is `not_found`, with
+the one safe detail `note_version_id` for absent, foreign and wrong-Meeting alike (the
+Meeting is not checked separately, so an absent Meeting answers the same).
 
 ### 7.3 Errors
 
@@ -670,6 +706,16 @@ the repository contains, recorded in section 12.
 - `GET /api/meetings/[meetingId]/notes/[noteVersionId]?includeBody=true`: new
   `web/src/app/api/meetings/[meetingId]/notes/[noteVersionId]/route.ts`, calling
   `meetings.notes.read_version`. It is called only when the user opens an anchor.
+- **As implemented (I4):** `recordId` must carry the family's prefix (`tsk`, `cmt`,
+  `cst`), `meetingId` `mtg` and `noteVersionId` `mnote`, and `issueId` must match
+  `^sit_[A-Za-z0-9]{8,64}$`; each is otherwise a local `invalid_request` without a gateway
+  call. `includeBody` is required (`strictQuery`). After the strict decode, each route
+  applies a **projection guard**: a lineage answer whose `root` is not the requested
+  record, or a note answer for another Meeting or note version, or one carrying
+  `body_markdown` when `includeBody` was not `true`, is refused as
+  `upstream_contract_invalid` (503, `unavailable`) rather than passed on. The browser
+  client (`fetchRelatedIssues` / `fetchNoteVersion`) decodes the route's result **strictly
+  again**, so a route that drifted from the contract fails closed in the client too.
 - The panel never calls `issues.read`, never fetches per Issue or per edge, and never
   joins records client-side. Everything it renders comes from the one `records.lineage`
   response (Issue title and state on Issue nodes, section 7.2) and, on demand, the one
@@ -697,10 +743,16 @@ must be added with `git add -f` and checked with `git ls-tree`.
   - `lifecycle_state`, `acceptance_basis` and `authority_class`, as plain words;
   - each evidence anchor, as "Meeting note version *n*, characters *start*–*end*" (or "Capture version *n*", or "Capture, version not recorded" for a legacy root, with "Capture archived" appended when `availability` is `archived`), from `source_version_no` and the offsets in the view. A
     button opens the note-version read in an inline disclosure; the body appears only
-    after that explicit action.
+    after that explicit action. Once open, the cited passage (the anchor's offsets
+    applied to the returned body as Unicode code points, as the server counts them) is
+    shown first as "Cited passage", then the whole note version text.
 - **Several Issues** (`unresolved_ambiguity`): the candidates (title, state) as a
   labelled radio group. Choosing one re-queries with `issueId`. No Issue is chosen for
-  the user.
+  the user. The radio group **stays visible** after a choice (its legend drops the
+  "Choose one" prompt) whenever the answer still lists more than one candidate; while
+  the re-query is in flight the group stays mounted with a "Reading related Issues…"
+  status (the previous Issue's edges are hidden), so the chosen radio keeps its focus
+  and checked state.
 - **No match:** "No related Issue is recorded for this record."
 - **Incomplete or failed reads:**
   - `partial_native_history`: "Some related records could not be shown."
@@ -724,8 +776,13 @@ must be added with `git add -f` and checked with `git ls-tree`.
   `_LINEAGE_CAPABILITIES` set), exactly as it subtracts `_KNOWLEDGE_ASSERTION_CAPABILITIES`,
   so they are absent from `capabilities.get`, readiness's implemented set, the MCP tool list
   and the ChatLLM profile. An invocation of any of them — read or write — answers
-  `unsupported` and writes nothing; each S1 handler also checks the switch first, before
-  authority or reservation (defence in depth). The section 8 refusal of Issue
+  `unsupported` and writes nothing. **The invocation guard is the handler floor**: as for
+  every other switched plane in `application/service.py`, `available_capabilities`
+  governs publication and the manifest, not dispatch, so each S1 handler checks the
+  switch first (`_lineage_plane`), before authority, reservation or a replay lookup — a
+  byte-identical replay of a write committed while the switch was on answers
+  `unsupported` (I5 prove-red: removing one handler's check reddens
+  `test_switch_off_answers_unsupported_even_for_a_committed_replay`). The section 8 refusal of Issue
   `situation_id` references stays on whatever the switch says (an Issue created while on
   must not become a Work hint after it is turned off).
 - **On:** the 14 names are served subject to the ordinary grant, purpose and section 6.1
@@ -835,6 +892,7 @@ implementers; a renamed test must update this table in the same commit.
 | AT-023 (S1, strict client) | `web/src/lib/api/decode/capabilities/records.lineage.test.ts`; `web/src/lib/api/decode/capabilities/meetings.notes.read_version.test.ts`; existing `web/src/lib/api/decode/registry.test.ts`; existing `tests/contract/test_bff_gateway_contract_parity.py`, `tests/contract/test_bff_success_decoder_parity.py` | `decodes the S1 lineage response`; `refuses an unknown key`; `decodes a note version with and without a body`; the existing registry and parity tests stay green with exactly two new entries and every existing entry unchanged | vitest + FAST |
 | AT-026 (S1) | existing `tests/database/test_record_event_provenance.py` | existing `test_unknown_foreign_withheld_and_non_knowledge_events_answer_alike` (must stay green, unchanged) | database |
 | AT-026 (S1) | `tests/architecture/test_record_lineage_s1_scope.py` | `test_s1_adds_no_record_event_family`; `test_every_s1_crosswalk_test_exists` (parses this table: Python rows by function name, vitest/playwright rows by test title) | FAST |
+| AT-009 / AT-023 / AT-002 (I5 hardening, extras) | `tests/security/test_lineage_reference_isolation.py`; `tests/database/test_lineage_attested_writes.py`; `tests/database/test_meeting_note_lineage_asof.py` | `test_every_s1_capability_answers_a_foreign_subject_like_an_absent_one`; `test_no_s1_answer_carries_a_source_digest_or_body_except_read_version`; `test_every_replayed_attested_write_is_denied_before_the_replay_lookup`; `test_switch_off_answers_unsupported_even_for_a_committed_replay`; `test_versions_list_defaults_to_twenty_five_per_page` | database |
 | (domain, unmapped) | `tests/unit/test_issue_lifecycle.py` | `test_allowed_state_moves`; `test_refused_state_moves`; `test_update_action_follows_the_state_move` | FAST |
 
 **Not S1:** AT-001 stages 4–14 and AT-005, AT-006 (full), AT-007, AT-017 → S2;

@@ -548,7 +548,7 @@ def test_switch_off_answers_unsupported_even_for_a_committed_replay(
 ) -> None:
     """Section 7.5: the switch is checked before the reservation, so no replay answers.
 
-    Every one of the nine writes, committed while the plane was on, is
+    Every one of the nine S1 lineage writes, committed while the plane was on, is
     resubmitted byte-for-byte with the plane off by the same local operator:
     each answers `unsupported` (never the stored replay), and no row moves.
     """

@@ -19,7 +19,7 @@
 | [`system-context.md`](system-context.md) | Current repository architecture |
 | [`module-boundaries.md`](module-boundaries.md) | Present — proposed for repository review |
 | [`data-authority.md`](data-authority.md) | Present — proposed for repository review |
-| [`record-lineage-s1-contract.md`](record-lineage-s1-contract.md) | Proposed — Slice S1 implementation contract under ADR-015; not implemented |
+| [`record-lineage-s1-contract.md`](record-lineage-s1-contract.md) | Proposed — Slice S1 implementation contract under ADR-015; S1 implemented on branch `feat/lineage-s1-integration`, test-isolated, not deployed |
 | [`../security/threat-model.md`](../security/threat-model.md) | Present — proposed for repository review |
 | [`../decisions/ADR-003-product-owned-user-authored-source-records.md`](../decisions/ADR-003-product-owned-user-authored-source-records.md) | Accepted — the third authority class |
 | [`../decisions/ADR-008-nas-runtime-topology.md`](../decisions/ADR-008-nas-runtime-topology.md) | Accepted — staged NAS target topology; not deployed |

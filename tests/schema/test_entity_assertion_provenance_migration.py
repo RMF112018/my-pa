@@ -275,7 +275,7 @@ def test_downgrading_one_step_removes_exactly_these_two_tables(migrated_engine: 
         "knowledge_discovery_checkpoint_requests",
         # The Intelligence report type registry's table, stacked above.
         "intelligence_report_types",
-        # Record lineage S1 (`264310e0416a`) stacks its eight tables.
+        # The record lineage S1 revision stacks its eight tables.
         "issue_revisions",
         "issue_project_membership_events",
         "lineage_evidence_anchors",

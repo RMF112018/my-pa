@@ -227,7 +227,7 @@ def test_head_admits_every_declared_capability_and_purpose() -> None:
     admitted the KLP names ahead of the domain. The names it
     admits beyond `Capability` are the native-host names and exactly the current
     KLP schema-ahead gap (`tests/schema/knowledge_schema_ahead_contract.py`).
-    Record lineage S1's names are admitted by the later `264310e0416a`, which
+    Record lineage S1's names are admitted by the later S1 revision, which
     `tests/schema/test_record_lineage_s1_migration.py` holds; whichever of them
     the domain declares is set aside here.
     """

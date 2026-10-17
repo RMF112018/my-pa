@@ -287,7 +287,7 @@ ADMITTED_LATER_CAPABILITIES: Final = (
             "reports.types.create",
             "reports.types.list",
         }
-        # Record lineage S1: admitted by `264310e0416a` and declared by the S1 slices.
+        # Record lineage S1: admitted by the S1 revision and declared by the S1 slices.
     )
     | LINEAGE_S1_CAPABILITIES
 )

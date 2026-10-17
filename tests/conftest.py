@@ -10312,6 +10312,7 @@ def build_service(
     relationship_identity_correction_enabled: bool = True,
     producer_origins: ProducerOriginRegistry | None = None,
     knowledge_assertions_enabled: bool = False,
+    lineage_enabled: bool = False,
     constraint_management_unit_of_work: (
         Callable[[], ConstraintManagementUnitOfWork] | None
     ) = _COMPOSE_CONSTRAINTS,
@@ -10416,6 +10417,10 @@ def build_service(
         knowledge_assertions_enabled=(
             relationship_intelligence_enabled and knowledge_assertions_enabled
         ),
+        # Record lineage S1: off by default for the Knowledge reason above --
+        # this `World` models no Issue rows (`FakeUnitOfWork.issues` refuses any
+        # use). A FAST test about publication or the switch passes `True`.
+        lineage_enabled=lineage_enabled,
         gsqs_b0_ports=WorkflowPorts(
             session_factory=lambda rasters: DiskContentSession(rasters),
             case_count=2,

@@ -81,7 +81,7 @@ Derived from the two most recent analogous additions: `d6c706bb` (6
 2. `domain/identity/purpose.py:14` — new `Purpose` if needed (e.g. `issue_read`/`issue_authoring`).
 3. `domain/identity/chatllm_capability_policy.py` — exactly one classification set; a missing entry fails import (`:1-6`). Bump `CHATLLM_DATA_PROFILE_VERSION` (`:18`) when the data profile changes. Family is the first dotted segment (`:356-366`).
 4. `domain/policy/decision.py:148` `_SCOPELESS` — product-owned records carry no source scope.
-5. `application/authorization.py:370-` `_requested_scope` match arm (cf. `ReadMeeting()` at `:655`).
+5. `application/authorization.py:370` `_requested_scope` match arm (cf. `ReadMeeting()` at `application/authorization.py:655`).
 6. `domain/record_events.py:900` `RECORD_EVENT_FAMILY_READS` / `:978` routing — only if a new Record Event family is admitted (also a `record_family` CHECK change, `tables.py:14118`).
 
 **Application / adapters**
@@ -124,7 +124,7 @@ the generic pattern `^[a-z]+_[A-Za-z0-9]{8,64}$`):
 | Proposed | Status |
 | --- | --- |
 | `irl`, `irv`, `ian`, `irp`, `irec`, `irs` | **free** (not an `IdKind`; no quoted `<p>_` literal anywhere in `src`, `tests`, `web/src`, `migrations`) |
-| `ires` | **COLLIDES** — `IdKind.IDENTITY_RESOLUTION = "ires"` (`identifiers.py:90`, discussed `:343`) |
+| `ires` | **COLLIDES** — `IdKind.IDENTITY_RESOLUTION = "ires"` (`src/my_pa/domain/common/identifiers.py:90`, discussed `src/my_pa/domain/common/identifiers.py:343`) |
 | `rlnk`, `rlrv`, `mnotev`, `rlink`, `ilnk`, `lrev`, `lanc`, `lreq`, `lprp`, `ldec`, `ihnd`, `isnap`, `lsnap`, `ipme`, `brun`, `bitm` (candidate alternatives checked) | free |
 | `mnote`, `capver`, `mdver` | **existing** native version kinds (`MEETING_NOTE_VERSION`, `CAPTURE_VERSION`, `MANAGED_DOCUMENT_VERSION`), correctly referenced by the package as existing, not new |
 
@@ -137,18 +137,18 @@ Schema for all tables: `knowledge` (`tables.py:356`).
 
 | Family | Table (decl.) | PK | Principal column | Version / CAS | Archive / merge / terminal state | Composite principal targets & FKs |
 | --- | --- | --- | --- | --- | --- | --- |
-| Situation (`sit`) | `situations` `:2978-3002` | `situation_id` | `principal_id` | **none** (no `version`, no `kind`) | `state` ∈ open/active/suspended/closed; closed ⇔ `closed_at` | **No** `UNIQUE(situation_id, principal_id)`; inbound FKs are single-column (`commitments.situation_id :7073`, `tasks :7236`, `decisions :7147`, `project_situations :3218`, `frames :3012`) |
-| Project (`prj`) | `projects` `:3067-3144` | `project_id` | `principal_id` | `version` + `project_history` `:3150` | state active/on_hold/closed | `UNIQUE(project_id, principal_id)` `a_project_is_identified_within_its_principal` `:3124` |
-| Project↔Situation (`psit`) | `project_situations` `:3208-3239` | `project_situation_id` | `principal_id` | none | none (no end/effective columns) | single-column FKs to `projects.project_id`, `situations.situation_id`; `UNIQUE(project_id, situation_id)`; nullable `association_evidence_ref` (added `8f2b6c4d1a37`); **no** composite principal FK, no triplet unique |
-| Meeting (`mtg`) | `meetings` `:13519-13618` | `meeting_id` | `principal_id` | `version` + `meeting_history` `:13770` | `status` scheduled/cancelled | `UNIQUE(meeting_id, principal_id)` `:13571`; composite FKs to series and project |
-| Meeting note version (`mnote`) | `meeting_note_versions` `:13823-13905` | `note_version_id` | `principal_id` | immutable chain: `version_number`, unique `supersedes_note_version_id` | n/a (append-only trigger) | `UNIQUE(note_version_id, meeting_id, principal_id)` `:13853` — the exact target the spec's `lineage_meeting_note_anchor_binding` FK needs; composite FK to `meetings` and to its `meeting_history` receipt, all `RESTRICT` |
-| Capture (`cap`) | `captures` `:1059-1067` | `capture_id` | **`owner_principal_id`** | no column; version = `max(version_number)` | lifecycle is a projection of append-only `capture_lifecycle_events` `:1420` | `UNIQUE(capture_id, owner_principal_id)` added by ALTER in `0641c354ca85` (deliberately not declared, `:1049-1053`) |
-| Capture version (`capver`) | `capture_versions` `:1105-1164` | `version_id` | `owner_principal_id` | `version_number`, `UNIQUE(capture_id, version_number)` | append-only trigger `capture_versions_are_append_only` (`1a4c9e77b2d5:174,289`) | FK to `captures.capture_id` **`ON DELETE CASCADE`**; **no** `UNIQUE(version_id, capture_id, owner_principal_id)` composite target |
-| Commitment (`cmt`) | `commitments` `:7061-7130` | `commitment_id` | `principal_id` | `version` + `commitment_history` `:7642` | `state` open/closed; `evidence_state` proposed/accepted (independent) | `UNIQUE(principal_id, commitment_id)` (**column order principal first**) `:7116`; composite counterparty FK; `project_id`, `situation_id` single-column FKs |
-| Task (`tsk`) | `tasks` `:7224-7360` | `task_id` | `principal_id` | `version` + `task_history` `:7482` | `state` open/closed, `lifecycle_state` (6), `archived_at` | `UNIQUE(principal_id, task_id)` `:7339`; composite FKs `(principal_id, commitment_id)` and `(project_id, principal_id)`; `situation_id` single-column; `role` ∈ {`follow_up`} |
-| Constraint (`cst`) | `project_constraints` `:11876-12027` | `constraint_id` | `principal_id` | `version` + `current_revision_id` → `project_constraint_revisions` (deferred) + `project_constraint_history` | 7 states incl. closed/void (`domain/project_controls/constraint.py:62-71`) | `UNIQUE(principal_id, constraint_id)` `:11983`; composite FKs to project and category; `crel_` relationships `:12503` |
-| Entity (`ent`) | `entities` `:3279-3349` | `entity_id` | `principal_id` | `version` | `merged_redirect` with `superseded_by_entity_id`; `archived` | `UNIQUE(entity_id, principal_id)` `:3333` |
-| Record Event (`rcev`) | `record_events` `:14083-14169` | `event_id` | `principal_id` | `sequence_number` per Principal | append-only + TRUNCATE refusal | `UNIQUE(event_id, principal_id)` `:14147` — matches spec's `link_mutation_event_receipts` FK target |
+| Situation (`sit`) | `situations` `tables.py:2978-3002` | `situation_id` | `principal_id` | **none** (no `version`, no `kind`) | `state` ∈ open/active/suspended/closed; closed ⇔ `closed_at` | **No** `UNIQUE(situation_id, principal_id)`; inbound FKs are single-column (`commitments.situation_id :7073`, `tasks :7236`, `decisions :7147`, `project_situations :3218`, `frames :3012`) |
+| Project (`prj`) | `projects` `tables.py:3067-3144` | `project_id` | `principal_id` | `version` + `project_history` `tables.py:3150` | state active/on_hold/closed | `UNIQUE(project_id, principal_id)` `a_project_is_identified_within_its_principal` `tables.py:3124` |
+| Project↔Situation (`psit`) | `project_situations` `tables.py:3208-3239` | `project_situation_id` | `principal_id` | none | none (no end/effective columns) | single-column FKs to `projects.project_id`, `situations.situation_id`; `UNIQUE(project_id, situation_id)`; nullable `association_evidence_ref` (added `8f2b6c4d1a37`); **no** composite principal FK, no triplet unique |
+| Meeting (`mtg`) | `meetings` `tables.py:13519-13618` | `meeting_id` | `principal_id` | `version` + `meeting_history` `tables.py:13770` | `status` scheduled/cancelled | `UNIQUE(meeting_id, principal_id)` `tables.py:13571`; composite FKs to series and project |
+| Meeting note version (`mnote`) | `meeting_note_versions` `tables.py:13823-13905` | `note_version_id` | `principal_id` | immutable chain: `version_number`, unique `supersedes_note_version_id` | n/a (append-only trigger) | `UNIQUE(note_version_id, meeting_id, principal_id)` `tables.py:13853` — the exact target the spec's `lineage_meeting_note_anchor_binding` FK needs; composite FK to `meetings` and to its `meeting_history` receipt, all `RESTRICT` |
+| Capture (`cap`) | `captures` `tables.py:1059-1067` | `capture_id` | **`owner_principal_id`** | no column; version = `max(version_number)` | lifecycle is a projection of append-only `capture_lifecycle_events` `tables.py:1420` | `UNIQUE(capture_id, owner_principal_id)` added by ALTER in `0641c354ca85` (deliberately not declared, `tables.py:1049-1053`) |
+| Capture version (`capver`) | `capture_versions` `tables.py:1105-1164` | `version_id` | `owner_principal_id` | `version_number`, `UNIQUE(capture_id, version_number)` | append-only trigger `capture_versions_are_append_only` (`1a4c9e77b2d5:174,289`) | FK to `captures.capture_id` **`ON DELETE CASCADE`**; **no** `UNIQUE(version_id, capture_id, owner_principal_id)` composite target |
+| Commitment (`cmt`) | `commitments` `tables.py:7061-7130` | `commitment_id` | `principal_id` | `version` + `commitment_history` `tables.py:7642` | `state` open/closed; `evidence_state` proposed/accepted (independent) | `UNIQUE(principal_id, commitment_id)` (**column order principal first**) `tables.py:7116`; composite counterparty FK; `project_id`, `situation_id` single-column FKs |
+| Task (`tsk`) | `tasks` `tables.py:7224-7360` | `task_id` | `principal_id` | `version` + `task_history` `tables.py:7482` | `state` open/closed, `lifecycle_state` (6), `archived_at` | `UNIQUE(principal_id, task_id)` `tables.py:7339`; composite FKs `(principal_id, commitment_id)` and `(project_id, principal_id)`; `situation_id` single-column; `role` ∈ {`follow_up`} |
+| Constraint (`cst`) | `project_constraints` `tables.py:11876-12027` | `constraint_id` | `principal_id` | `version` + `current_revision_id` → `project_constraint_revisions` (deferred) + `project_constraint_history` | 7 states incl. closed/void (`domain/project_controls/constraint.py:62-71`) | `UNIQUE(principal_id, constraint_id)` `tables.py:11983`; composite FKs to project and category; `crel_` relationships `tables.py:12503` |
+| Entity (`ent`) | `entities` `tables.py:3279-3349` | `entity_id` | `principal_id` | `version` | `merged_redirect` with `superseded_by_entity_id`; `archived` | `UNIQUE(entity_id, principal_id)` `tables.py:3333` |
+| Record Event (`rcev`) | `record_events` `tables.py:14083-14169` | `event_id` | `principal_id` | `sequence_number` per Principal | append-only + TRUNCATE refusal | `UNIQUE(event_id, principal_id)` `tables.py:14147` — matches spec's `link_mutation_event_receipts` FK target |
 
 Composite-FK column-order note: `projects`, `meetings`, `entities`,
 `record_events`, `meeting_note_versions` uniques are `(id, principal_id)`;
@@ -161,7 +161,7 @@ inserts one immutable full-body row (`infrastructure/persistence/meetings.py:924
 body exactly (`domain/meeting/model.py:630-650`); bodies are 1..100000 characters,
 stored exactly, no normalization (`:404-410`); `content_sha256 =
 sha256(body.encode("utf-8"))` (`:653-655`). Only the current head is readable
-(`current_note`, `meetings.py:945-970`; view `contracts/v1/meetings.py:144-156`,
+(`current_note`, `src/my_pa/infrastructure/persistence/meetings.py:945-970`; view `contracts/v1/meetings.py:144-156`,
 which exposes `note_version_id`, `version_number`, body and `recorded_at` but **not**
 `content_sha256`). There is no capability that reads a non-current version.
 
@@ -179,12 +179,12 @@ Assertion `kasr_`); anything else, including `capver_` and `mnote_`, is
 other family answers `not_found(subject)`. Confirmed. The Capture-event case is
 already exercised by
 `tests/database/test_record_event_provenance.py::test_unknown_foreign_withheld_and_non_knowledge_events_answer_alike`
-(`:629-653`, creates a Capture and asserts its event answers exactly as unknown,
+(`tests/database/test_record_event_provenance.py:629-653`, creates a Capture and asserts its event answers exactly as unknown,
 remote and local).
 
 **Situation write paths (material).** The only authorized Situation capabilities are
-`continuity.situations` (list, `service.py:6282`) and `continuity.situations.create`
-(`service.py:6756`, via `continuity_authoring.author_situation`,
+`continuity.situations` (list, `src/my_pa/application/service.py:6282`) and `continuity.situations.create`
+(`src/my_pa/application/service.py:6756`, via `continuity_authoring.author_situation`,
 `infrastructure/persistence/continuity_authoring.py:312-345`, idempotency in
 `continuity_authoring_submissions` `tables.py:7622`). `SqlSituationRepository.close_situation`
 (`situation_repository.py:280-334`, no CAS, no row lock) and
@@ -210,7 +210,7 @@ check `:59-104`, `ruff check .`, `ruff format --check .`, bare `mypy`, FAST pyte
 `-m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"`);
 `dependency-floor` (`:308`, installs `name==floor` pins derived from `pyproject.toml`
 — SQLAlchemy 2.0.32, alembic 1.13, psycopg 3.2.1, pydantic 2.12 — then bare `mypy` and
-FAST at the floor); `database-current-head` (`:589`, PG 17, `-m "(database_clone or database_transactional) and not recovery and not e2e and not migration_edge and not migration_empty_to_head and not migration"`);
+FAST at the floor); `database-current-head` (`.github/workflows/repository-checks.yml:589`, PG 17, `-m "(database_clone or database_transactional) and not recovery and not e2e and not migration_edge and not migration_empty_to_head and not migration"`);
 `database-recovery` (`-m recovery`); `migration-empty-to-head` (`-m migration_empty_to_head`);
 `migration-edge` (`-m "migration_edge or migration"`); `web-security` (`npm ci`, tests,
 lint, typecheck, build).
@@ -261,8 +261,8 @@ file.
 | Need in spec §2 | Repo precedent |
 | --- | --- |
 | Row-level immutable ledger (`BEFORE UPDATE OR DELETE … RAISE … restrict_violation`) | `migrations/versions/20260927_7d9a450dfd07_meeting_records.py:619-640,713-726` (`meeting_history`, `meeting_note_versions`, `meeting_series_history`); test `tests/schema/test_meeting_records_migration.py::test_the_ledgers_are_append_only` |
-| `reserved → completed` exactly once (spec `record_link_requests`) | `7d9a450dfd07:642-668` `meeting_write_request_completes_once()`; test `::test_a_write_request_completes_exactly_once`. Same-transaction guarantee: Knowledge `knowledge_submission_is_never_left_reserved` `CONSTRAINT TRIGGER … AFTER INSERT DEFERRABLE INITIALLY DEFERRED` (`migrations/versions/20261004_6734f039f7a6_knowledge_assertion_layer.py:1811-1828`); test `tests/schema/test_knowledge_assertion_migration.py::test_a_submission_completes_once_and_is_never_committed_reserved` (`:2870`) |
-| Controls-only mutation / insert-only registries | `6734f039f7a6:1783-1950` (`*_mutates_controls_only`, `*_is_insert_only`, `*_is_append_only`); tests `:2458`, `:2545`, `:2765`, `:3065` |
+| `reserved → completed` exactly once (spec `record_link_requests`) | `7d9a450dfd07:642-668` `meeting_write_request_completes_once()`; test `::test_a_write_request_completes_exactly_once`. Same-transaction guarantee: Knowledge `knowledge_submission_is_never_left_reserved` `CONSTRAINT TRIGGER … AFTER INSERT DEFERRABLE INITIALLY DEFERRED` (`migrations/versions/20261004_6734f039f7a6_knowledge_assertion_layer.py:1811-1828`); test `tests/schema/test_knowledge_assertion_migration.py::test_a_submission_completes_once_and_is_never_committed_reserved` (`tests/schema/test_knowledge_assertion_migration.py:2870`) |
+| Controls-only mutation / insert-only registries | `6734f039f7a6:1783-1950` (`*_mutates_controls_only`, `*_is_insert_only`, `*_is_append_only`); tests `tests/schema/test_knowledge_assertion_migration.py:2458`, `tests/schema/test_knowledge_assertion_migration.py:2545`, `tests/schema/test_knowledge_assertion_migration.py:2765`, `tests/schema/test_knowledge_assertion_migration.py:3065` |
 | `BEFORE TRUNCATE` statement trigger | `migrations/versions/20261002_c8e4a1b70d35_record_event_truncate_refusal.py` (only Record Event relations have one; Meeting and Knowledge ledgers do **not**); test `tests/schema/test_record_event_truncate_refusal_migration.py` |
 | Role separation (owner / migrator / runtime, NOLOGIN, runtime least privilege) | `infrastructure/database/record_event_roles.py:1-80` (`my_pa_owner`, `my_pa_migrator`, `my_pa_runtime`), gate `record_event_privilege_gate.py`; test `tests/database/test_record_event_role_privileges.py` (`:116` runtime cannot truncate/update/delete; `:145` owner reaches refusal triggers). It is the **only** role provisioner; the Knowledge layer has none. |
 | Code-level never-rewritten scan | `tests/architecture/test_record_events_are_never_rewritten.py` |
@@ -282,12 +282,12 @@ Next ADR number: `ADR-015` is free (`docs/decisions/` holds ADR-001..ADR-014; in
 6. **`capture_versions` has no composite `(version_id, capture_id, owner_principal_id)` unique and cascades on Capture delete**; a `capver_` evidence binding with `RESTRICT` (spec §2.1) needs a new unique and cannot rely on the existing FK's delete behaviour. The partition column is `owner_principal_id`, not `principal_id`.
 7. **`asrt_` Work evidence is a capture assertion** (`capture_assertions`), not a Knowledge Assertion (`kasr_`); spec §2.1/CR-003 "Knowledge Assertion (read/evidence only)" is a different plane from today's accepted `asrt_`.
 8. **`meetings.read` view omits `content_sha256`**; a client cannot obtain the stored digest today, so N1 evidence anchoring needs the proposed version read (CR-003) or server-side digest resolution.
-9. **No common endpoint lock helper exists** (spec §2.1 "established lock helpers"): locking is per plane — `FOR UPDATE`/`FOR SHARE` in Meeting persistence (sorted Entity `FOR SHARE`), `pg_advisory_xact_lock` in `constraints.py:2851`, `identifier_claim_lock.py:39`, `entity_reenrichment.py:330`, `native_sources.py:571`. A lineage lock order must be designed, not reused.
+9. **No common endpoint lock helper exists** (spec §2.1 "established lock helpers"): locking is per plane — `FOR UPDATE`/`FOR SHARE` in Meeting persistence (sorted Entity `FOR SHARE`), `pg_advisory_xact_lock` in `src/my_pa/infrastructure/persistence/constraints.py:2851`, `identifier_claim_lock.py:39`, `src/my_pa/infrastructure/persistence/entity_reenrichment.py:330`, `src/my_pa/infrastructure/persistence/native_sources.py:571`. A lineage lock order must be designed, not reused.
 10. **TRUNCATE refusal and role separation exist only for Record Events**; spec §2 "additional mandatory operations" requires both for every new immutable table — new work, modelled on `c8e4a1b70d35` and `record_event_roles.py`.
 11. **`reports.types.*` exists in code** (DATA_REQUIRED); RV-CKPT-01/COORDINATION-RESPONSE say it is absent from the eligible live profile — consistent only with a pre-`a591b81f10a2` runtime (unverified).
 12. **AT-026 Capture-provenance case is already covered** by an existing database test (section 4); the package's `NEW_PROPOSED_PATH tests/contract/test_record_event_provenance_scope.py` does not exist and would partly duplicate it.
 13. **07 identifier pattern `^[a-z]+_[A-Za-z0-9]{8,64}$`** is looser than repo truth (closed `IdKind` prefix, 72-character cap).
-14. Spec line anchors checked and matching at this commit: `situation.py:382-418`, `situation_repository.py:243-336`, `tables.py:3208-3239`, `3357-3395`, `7061-7130`, `13823-13900`, `unit_of_work.py:547-576`, `1193-`, `service.py:4390-4407`, `meetings.py:924-970`, `record_events.py:608-644`, `domain/record_events.py:130-162`, `authorization.py:769-`, `task.py:50`, `commitment.py:45`, `commands.py:3123`. Approximate: `situation_repository.py:670-730` (actual `link_situation` `:649-720`); `commands.py:12135-12180` (the internal `OpenSituationCommand`/`CloseSituationCommand` at `:12133`/`:12154`, not reachable by capability).
+14. Spec line anchors checked and matching at this commit: `situation.py:382-418`, `situation_repository.py:243-336`, `tables.py:3208-3239`, `3357-3395`, `7061-7130`, `13823-13900`, `unit_of_work.py:547-576`, `1193-`, `src/my_pa/application/service.py:4390-4407`, `src/my_pa/infrastructure/persistence/meetings.py:924-970`, `src/my_pa/application/record_events.py:608-644`, `domain/record_events.py:130-162`, `authorization.py:769-`, `task.py:50`, `commitment.py:45`, `commands.py:3123`. Approximate: `situation_repository.py:670-730` (actual `link_situation` `:649-720`); `commands.py:12135-12180` (the internal `OpenSituationCommand`/`CloseSituationCommand` at `:12133`/`:12154`, not reachable by capability).
 
 ## 8. Commands run (worktree, foreground)
 

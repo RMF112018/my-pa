@@ -199,7 +199,12 @@ def test_overlapping_anchor_reuse_in_two_transactions_does_not_deadlock(
     for round_no in range(3):
         barrier = Barrier(2)
 
-        def write(index: int, anchors: tuple[dict[str, object], ...]) -> Any:  # noqa: ANN401
+        def write(
+            index: int,
+            anchors: tuple[dict[str, object], ...],
+            barrier: Barrier = barrier,
+            round_no: int = round_no,
+        ) -> Any:  # noqa: ANN401
             command = membership(
                 issue,
                 "commitment",

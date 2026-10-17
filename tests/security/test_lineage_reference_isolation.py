@@ -18,14 +18,6 @@ from typing import Any
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
-
-from my_pa.application.commands import (
-    AssertRecordAssociation,
-    CreateSituation,
-    ReadMeetingNoteVersion,
-    ReadRecordLineage,
-    UpdateTask,
-)
 from tests.database.lineage_issue_harness import OTHER_PRINCIPAL, PRINCIPAL, LineageRuntime
 from tests.database.lineage_record_harness import (
     GATEWAY,
@@ -39,6 +31,14 @@ from tests.database.lineage_record_harness import (
     note_anchor,
     originated_from,
     task,
+)
+
+from my_pa.application.commands import (
+    AssertRecordAssociation,
+    CreateSituation,
+    ReadMeetingNoteVersion,
+    ReadRecordLineage,
+    UpdateTask,
 )
 
 pytestmark = pytest.mark.database

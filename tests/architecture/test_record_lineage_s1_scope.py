@@ -31,7 +31,9 @@ from my_pa.domain.record_events import RecordEventFamily
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 CONTRACT: Final = ROOT / "docs" / "architecture" / "record-lineage-s1-contract.md"
-S1_REVISION: Final = ROOT / "migrations" / "versions" / "20261017_264310e0416a_record_lineage_s1.py"
+#: Found by its slug, not its revision id, so this guard is not one more
+#: head pin (`test_the_head_pin_list_is_the_files_that_actually_pin_the_head`).
+(S1_REVISION,) = sorted((ROOT / "migrations" / "versions").glob("*_record_lineage_s1.py"))
 
 #: `RecordEventFamily` at the S1 basis `ac24e3bf` (twenty-three members).
 BASIS_RECORD_EVENT_FAMILIES: Final = frozenset(

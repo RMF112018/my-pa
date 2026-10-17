@@ -64,6 +64,7 @@ from my_pa.application.commands import (
     AddEntityAlias,
     AddEntityCommunicationMethod,
     AddEntityName,
+    AddIssueProjectLink,
     ApplyConstraintSync,
     ArchiveCapture,
     ArchiveEntity,
@@ -94,6 +95,7 @@ from my_pa.application.commands import (
     CreateEntityParticipation,
     CreateEntityProposal,
     CreateEntityRelationship,
+    CreateIssue,
     CreateKnowledgeAssertion,
     CreateManagedDocument,
     CreateMeeting,
@@ -110,6 +112,7 @@ from my_pa.application.commands import (
     EndEntityAssignment,
     EndEntityParticipation,
     EndEntityRelationship,
+    EndIssueProjectLink,
     EnrollSource,
     FetchSource,
     GetCanvasWorkspace,
@@ -152,6 +155,7 @@ from my_pa.application.commands import (
     ListGoodNotesPages,
     ListGoodNotesRuns,
     ListIntelligenceArtifacts,
+    ListIssues,
     ListKnowledgeAssertions,
     ListManagedDocuments,
     ListMeetings,
@@ -185,6 +189,7 @@ from my_pa.application.commands import (
     ReadConstraintSyncState,
     ReadGoodNotes,
     ReadIntelligenceArtifact,
+    ReadIssue,
     ReadKnowledge,
     ReadKnowledgeAssertion,
     ReadManagedDocument,
@@ -248,6 +253,7 @@ from my_pa.application.commands import (
     UpdateConstraint,
     UpdateConstraintCategory,
     UpdateEntity,
+    UpdateIssue,
     UpdateMeeting,
     UpdateMeetingSeries,
     UpdateProject,
@@ -2509,6 +2515,20 @@ def _update_meeting_series(payload: Mapping[str, Any]) -> Command:
     return UpdateMeetingSeries(**_meeting_shapes(payload))
 
 
+def _update_issue(payload: Mapping[str, Any]) -> Command:
+    """`issues.update`: `clear_fields` becomes a tuple; nothing else converts.
+
+    A server-owned field -- `principal_id`, an authority class, a decision
+    channel, `recorded_at` -- reaches the frozen dataclass as an unexpected
+    keyword and is refused there (S1 contract section 7.1).
+    """
+    converted = dict(payload)
+    clears = converted.get("clear_fields")
+    if isinstance(clears, list):
+        converted["clear_fields"] = tuple(clears)
+    return UpdateIssue(**converted)
+
+
 _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = MappingProxyType(
     {
         Capability.CAPABILITIES_GET: _get_capabilities,
@@ -2709,6 +2729,12 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT: lambda payload: CheckpointKnowledgeDiscovery(
             **payload
         ),
+        Capability.ISSUES_CREATE: lambda payload: CreateIssue(**payload),
+        Capability.ISSUES_READ: lambda payload: ReadIssue(**payload),
+        Capability.ISSUES_LIST: lambda payload: ListIssues(**payload),
+        Capability.ISSUES_UPDATE: _update_issue,
+        Capability.ISSUES_PROJECT_LINKS_ADD: lambda payload: AddIssueProjectLink(**payload),
+        Capability.ISSUES_PROJECT_LINKS_END: lambda payload: EndIssueProjectLink(**payload),
     }
 )
 

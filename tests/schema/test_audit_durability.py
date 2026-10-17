@@ -55,6 +55,7 @@ from my_pa.contracts.ports import (
     EntitiesRepository,
     EvidenceUnavailableError,
     GoodNotesSemanticRepository,
+    IssueRepository,
     KnowledgeRecord,
     KnowledgeRepository,
     ManagedDocumentRepository,
@@ -280,6 +281,10 @@ class _FailsAfterTheWork(UnitOfWork):
     @property
     def meetings(self) -> MeetingRepository:
         return self._inner.meetings
+
+    @property
+    def issues(self) -> IssueRepository:
+        return self._inner.issues
 
     @property
     def audit(self) -> AuditSink:

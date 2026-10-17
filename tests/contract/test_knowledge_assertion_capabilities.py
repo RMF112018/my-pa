@@ -920,7 +920,19 @@ def _gate_authorization(
 #: The capability count before the Knowledge layer (README/matrix pin: 181).
 _PRE_KLP_CAPABILITIES: Final = 181
 #: Capabilities admitted after the Knowledge layer, none of them a Knowledge name.
-_POST_KLP_CAPABILITIES: Final = frozenset({"reports.types.create", "reports.types.list"})
+_POST_KLP_CAPABILITIES: Final = frozenset(
+    {
+        "reports.types.create",
+        "reports.types.list",
+        # Record lineage S1, the Issue plane.
+        "issues.create",
+        "issues.read",
+        "issues.list",
+        "issues.update",
+        "issues.project_links.add",
+        "issues.project_links.end",
+    }
+)
 _EVENT: Final = "rcev_fastworld000000001"
 
 

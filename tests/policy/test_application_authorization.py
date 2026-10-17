@@ -57,6 +57,7 @@ from my_pa.application.commands import (
     AddEntityAlias,
     AddEntityCommunicationMethod,
     AddEntityName,
+    AddIssueProjectLink,
     ApplyConstraintSync,
     ArchiveCapture,
     ArchiveEntity,
@@ -86,6 +87,7 @@ from my_pa.application.commands import (
     CreateEntityParticipation,
     CreateEntityProposal,
     CreateEntityRelationship,
+    CreateIssue,
     CreateKnowledgeAssertion,
     CreateManagedDocument,
     CreateMeeting,
@@ -102,6 +104,7 @@ from my_pa.application.commands import (
     EndEntityAssignment,
     EndEntityParticipation,
     EndEntityRelationship,
+    EndIssueProjectLink,
     EnrollSource,
     FetchSource,
     GetCanvasWorkspace,
@@ -144,6 +147,7 @@ from my_pa.application.commands import (
     ListGoodNotesPages,
     ListGoodNotesRuns,
     ListIntelligenceArtifacts,
+    ListIssues,
     ListKnowledgeAssertions,
     ListManagedDocuments,
     ListMeetings,
@@ -177,6 +181,7 @@ from my_pa.application.commands import (
     ReadConstraintSyncState,
     ReadGoodNotes,
     ReadIntelligenceArtifact,
+    ReadIssue,
     ReadKnowledge,
     ReadKnowledgeAssertion,
     ReadManagedDocument,
@@ -239,6 +244,7 @@ from my_pa.application.commands import (
     UpdateConstraint,
     UpdateConstraintCategory,
     UpdateEntity,
+    UpdateIssue,
     UpdateMeeting,
     UpdateMeetingSeries,
     UpdateProject,
@@ -1233,6 +1239,32 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         Capability.RECORD_EVENTS_PROVENANCE: GetRecordEventProvenance(
             event_id="rcev_policyknowledge0001"
         ),
+        # Record lineage S1, the Issue plane: well-formed, so the only thing
+        # wrong in a denial test is the authority.
+        Capability.ISSUES_CREATE: CreateIssue(
+            title="A policy issue", idempotency_key="policy-issues-create"
+        ),
+        Capability.ISSUES_READ: ReadIssue(issue_id="sit_policyissue0001"),
+        Capability.ISSUES_LIST: ListIssues(),
+        Capability.ISSUES_UPDATE: UpdateIssue(
+            issue_id="sit_policyissue0001",
+            expected_version=1,
+            idempotency_key="policy-issues-update",
+            title="A policy issue, retitled",
+        ),
+        Capability.ISSUES_PROJECT_LINKS_ADD: AddIssueProjectLink(
+            issue_id="sit_policyissue0001",
+            project_id="prj_policyproject0001",
+            expected_membership_revision=0,
+            idempotency_key="policy-issues-project-links-add",
+        ),
+        Capability.ISSUES_PROJECT_LINKS_END: EndIssueProjectLink(
+            issue_id="sit_policyissue0001",
+            project_id="prj_policyproject0001",
+            expected_membership_revision=1,
+            idempotency_key="policy-issues-project-links-end",
+            reason="the policy issue left the project",
+        ),
     }
 
 
@@ -1671,6 +1703,13 @@ SCOPED_CAPABILITIES = [
         Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
         # KLP-WP-05: provenance, also in `_SCOPELESS`.
         Capability.RECORD_EVENTS_PROVENANCE,
+        # Record lineage S1: the six Issue names, also in `_SCOPELESS`.
+        Capability.ISSUES_CREATE,
+        Capability.ISSUES_READ,
+        Capability.ISSUES_LIST,
+        Capability.ISSUES_UPDATE,
+        Capability.ISSUES_PROJECT_LINKS_ADD,
+        Capability.ISSUES_PROJECT_LINKS_END,
     }
 ]
 
@@ -1959,6 +1998,13 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
         # KLP-WP-05: provenance, also in `_SCOPELESS`.
         Capability.RECORD_EVENTS_PROVENANCE,
+        # Record lineage S1: the six Issue names, also in `_SCOPELESS`.
+        Capability.ISSUES_CREATE,
+        Capability.ISSUES_READ,
+        Capability.ISSUES_LIST,
+        Capability.ISSUES_UPDATE,
+        Capability.ISSUES_PROJECT_LINKS_ADD,
+        Capability.ISSUES_PROJECT_LINKS_END,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

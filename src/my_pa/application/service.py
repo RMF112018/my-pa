@@ -130,6 +130,7 @@ from my_pa.application.commands import (
     AddEntityAlias,
     AddEntityCommunicationMethod,
     AddEntityName,
+    AddIssueProjectLink,
     ApplyConstraintSync,
     ArchiveCapture,
     ArchiveEntity,
@@ -160,6 +161,7 @@ from my_pa.application.commands import (
     CreateEntityParticipation,
     CreateEntityProposal,
     CreateEntityRelationship,
+    CreateIssue,
     CreateKnowledgeAssertion,
     CreateManagedDocument,
     CreateManagedDocumentCommand,
@@ -177,6 +179,7 @@ from my_pa.application.commands import (
     EndEntityAssignment,
     EndEntityParticipation,
     EndEntityRelationship,
+    EndIssueProjectLink,
     EnrollSource,
     FetchSource,
     GetCanvasWorkspace,
@@ -219,6 +222,7 @@ from my_pa.application.commands import (
     ListGoodNotesPages,
     ListGoodNotesRuns,
     ListIntelligenceArtifacts,
+    ListIssues,
     ListKnowledgeAssertions,
     ListManagedDocuments,
     ListManagedDocumentsCommand,
@@ -253,6 +257,7 @@ from my_pa.application.commands import (
     ReadConstraintSyncState,
     ReadGoodNotes,
     ReadIntelligenceArtifact,
+    ReadIssue,
     ReadKnowledge,
     ReadKnowledgeAssertion,
     ReadManagedDocument,
@@ -319,6 +324,7 @@ from my_pa.application.commands import (
     UpdateConstraint,
     UpdateConstraintCategory,
     UpdateEntity,
+    UpdateIssue,
     UpdateMeeting,
     UpdateMeetingSeries,
     UpdateProject,
@@ -475,6 +481,7 @@ from my_pa.application.intelligence import (
     resolve_set,
     search_artifacts,
 )
+from my_pa.application.issues import IssueApplication, IssueRevisionResult, ProjectLinkResult
 from my_pa.application.knowledge_assertions import (
     DEFAULT_KNOWLEDGE_PAGE_SIZE,
     KNOWLEDGE_PROMOTING_DISPOSITIONS,
@@ -506,6 +513,7 @@ from my_pa.application.knowledge_assertions import (
 from my_pa.application.knowledge_assertions import submission_view as knowledge_submission_view
 from my_pa.application.knowledge_assertions import submit_request as knowledge_submit_request
 from my_pa.application.knowledge_assertions import submit_view as knowledge_submit_view
+from my_pa.application.lineage_authority import attested_lineage_authority, lineage_authority
 from my_pa.application.managed_documents import ManagedDocumentService
 from my_pa.application.meetings import (
     MeetingApplication,
@@ -547,6 +555,7 @@ from my_pa.contracts.ports import (
     EntitySummary,
     EvidenceUnavailableError,
     GoodNotesPullRepositoryConflictError,
+    IssueCursorError,
     KnowledgeAssertionRepository,
     KnowledgeCaptureWithdrawnError,
     KnowledgeCheckpointKindMismatchError,
@@ -561,6 +570,7 @@ from my_pa.contracts.ports import (
     KnowledgeSubjectNotCanonicalError,
     KnowledgeSupersessionGuardError,
     KnowledgeTriggerNotFoundError,
+    LineageIdempotencyConflictError,
     ManagedByteStore,
     MeetingListPage,
     MemoryDetail,
@@ -680,6 +690,7 @@ from my_pa.domain.knowledge_assertion.vocabulary import (
     KnowledgeReviewAuthorityClass,
     KnowledgeReviewRequirement,
 )
+from my_pa.domain.lineage.vocabulary import SituationKind
 from my_pa.domain.meeting.model import (
     MAX_MEETING_PAGE_SIZE,
     MeetingCursorError,
@@ -3255,6 +3266,32 @@ def _meeting_translated() -> Iterator[None]:
         raise failure
 
 
+#: An Issue, its revisions and its native Project links are ADR-003 product-owned
+#: records of this Principal's own partition, read through no configured source.
+_LINEAGE_TRUST_BASIS: Final = ("principal_partition",)
+
+
+@contextmanager
+def _lineage_translated() -> Iterator[None]:
+    """Classify the lineage port's own refusals (S1 contract section 7.3).
+
+    A key reused for another request is `conflict` / `idempotency_conflict`, and
+    an `issues.list` cursor outside the Principal or the filter set is
+    `invalid_request` / `cursor`. Used *inside* `_translated`, which maps every
+    other port failure -- including a deadlock or serialization victim, which
+    is `conflict` with `after_refresh` guidance (section 6.2).
+    """
+    failure: ApplicationError | None = None
+    try:
+        yield
+    except LineageIdempotencyConflictError:
+        failure = ConflictError(SafeDetail.IDEMPOTENCY_CONFLICT)
+    except IssueCursorError:
+        failure = InvalidRequestError(SafeDetail.CURSOR)
+    if failure is not None:
+        raise failure
+
+
 def _report_type_payload(definition: ReportTypeDefinition) -> dict[str, Any]:
     """One report type as `reports.types.create` and `reports.types.list` publish it."""
     return {
@@ -3896,6 +3933,7 @@ class ApplicationService:
         relationship_intelligence_writes_enabled: bool = False,
         relationship_memory_enabled: bool = False,
         knowledge_assertions_enabled: bool = False,
+        lineage_enabled: bool = False,
         knowledge_discovery_client_ids: frozenset[str] = frozenset(),
         knowledge_operator_review_client_ids: frozenset[str] = frozenset(),
         knowledge_manager_client_ids: frozenset[str] = frozenset(),
@@ -3944,6 +3982,12 @@ class ApplicationService:
         #: plane as well (`Settings._check` refuses the switch without it): an
         #: assertion's Entity subject is proven by reading the entity tables.
         self._knowledge_assertions_enabled = knowledge_assertions_enabled
+        #: Record lineage S1 (contract section 7.5): whether this build serves the
+        #: lineage plane. Default `False`; no dependency on another switch. Off
+        #: withholds every `_LINEAGE_CAPABILITIES` name here, and each lineage
+        #: handler asks again first (`_lineage_plane`), before authority or
+        #: reservation, because the HTTP transport routes into `_HANDLERS`.
+        self._lineage_enabled = lineage_enabled
         #: KLP-WP-04 (R6 section 6.1): the exact discovery allowlist the second
         #: service gate reads. Empty -- the default -- refuses every submit and
         #: checkpoint, so an unconfigured build fails closed for the role.
@@ -4015,6 +4059,9 @@ class ApplicationService:
         #: composition condition withholds it, so `available_capabilities` has no
         #: Meeting branch.
         self._meetings = MeetingApplication()
+        #: Record lineage S1's Issue use cases, held on the same terms as
+        #: `_meetings`: stateless, no clock, no transaction of its own.
+        self._issues = IssueApplication()
         #: WP-RI-A-02's entity authoring service, held for the reason the two
         #: above are: it is stateless and takes its port as an argument.
         self._entity_authoring = EntityAuthoringService()
@@ -4125,6 +4172,11 @@ class ApplicationService:
         # feed's visible families (KLP-AC-141).
         if not (self._knowledge_assertions_enabled and self._relationship_intelligence_enabled):
             served -= _KNOWLEDGE_ASSERTION_CAPABILITIES
+        # Record lineage S1 (contract section 7.5): its own switch withholds every
+        # lineage name from `capabilities.get`, readiness, the MCP tool list and
+        # the ChatLLM profile.
+        if not self._lineage_enabled:
+            served -= _LINEAGE_CAPABILITIES
         # A proposal surface without a trusted server registration would
         # advertise a write every authenticated caller can only be denied.
         # Withhold both producer capabilities when composition has no exact
@@ -4387,6 +4439,24 @@ class ApplicationService:
     # ---- the source and knowledge planes -----------------------------------
 
     @staticmethod
+    def _refuse_an_issue_situation(
+        unit_of_work: UnitOfWork, principal_id: str, situation_id: str | None
+    ) -> None:
+        """Refuse an Issue named as a Work `situation_id` (S1 contract section 8, F04).
+
+        Principal-scoped: a foreign or absent `sit_` resolves to nothing here and
+        keeps answering exactly what it answered before S1; a context Situation
+        passes unchanged. Only this Principal's Issue is `invalid_request` /
+        `situation_id`, whatever the lineage switch says.
+        """
+        if situation_id is None:
+            return
+        with _translated():
+            situation = unit_of_work.situations.get_situation(principal_id, situation_id)
+        if situation is not None and situation.kind is SituationKind.ISSUE_WORKSTREAM:
+            raise InvalidRequestError(SafeDetail.SITUATION_ID)
+
+    @staticmethod
     def _require_work_evidence(unit_of_work: UnitOfWork, principal_id: str, reference: str) -> None:
         """Fail closed unless Work evidence belongs to this Principal.
 
@@ -4452,7 +4522,9 @@ class ApplicationService:
         *,
         evidence_ref: str,
         counterparty_entity_id: str,
+        situation_id: str | None = None,
     ) -> None:
+        self._refuse_an_issue_situation(unit_of_work, principal_id, situation_id)
         self._require_work_evidence(unit_of_work, principal_id, evidence_ref)
         self._require_current_counterparty(unit_of_work, principal_id, counterparty_entity_id)
 
@@ -6813,6 +6885,7 @@ class ApplicationService:
                 unit_of_work.situations.get_situation(principal_id, command.situation_id) is None
             ):
                 raise NotFoundError(SafeDetail.SITUATION_ID)
+            self._refuse_an_issue_situation(unit_of_work, principal_id, command.situation_id)
             authoring = unit_of_work.continuity_authoring
             object_id = issue_identifier(IdKind.TASK)
             try:
@@ -9855,6 +9928,9 @@ class ApplicationService:
                         unit_of_work.projects.get_project(principal_id, command.project_id) is None
                     ):
                         raise NotFoundError(SafeDetail.PROJECT_ID)
+                    self._refuse_an_issue_situation(
+                        unit_of_work, principal_id, command.situation_id
+                    )
                     if evidence_gate is not None:
                         evidence_gate()
 
@@ -10736,6 +10812,7 @@ class ApplicationService:
                         principal_id,
                         evidence_ref=command.origin_evidence_ref,
                         counterparty_entity_id=command.counterparty_entity_id,
+                        situation_id=command.situation_id,
                     ),
                 )
         except CommitmentIdempotencyConflictError:
@@ -13084,6 +13161,152 @@ class ApplicationService:
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_MEETING_TRUST_BASIS),
         )
 
+    # ---- the record lineage S1 Issue plane (ADR-015) ----------------------------
+    #
+    # Six handlers over `IssueApplication`, in the Meeting shape: the command
+    # states the parsed request, the handler passes it with the Principal and
+    # the unit of work `invoke` opened, and presents what comes back. Each one
+    # first asks `_lineage_plane` (section 7.5: switch off is `unsupported`,
+    # before authority or reservation), and a write derives its authority pair
+    # next (section 6.1: an attested write is `denied` here unless local
+    # operator, before any row and before any replay lookup).
+
+    def _lineage_plane(self) -> None:
+        """Refuse unless the lineage plane is composed (S1 contract section 7.5)."""
+        if not self._lineage_enabled:
+            raise UnsupportedError()
+
+    def _issues_create(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: CreateIssue
+    ) -> _Result:
+        """`issues.create`: one Issue, version 1, `open`."""
+        self._lineage_plane()
+        authority = lineage_authority(authorization)
+        with _translated(), _lineage_translated():
+            written = self._issues.create_issue(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.issue_request(),
+                command.idempotency_key,
+                authority,
+                authorization.at,
+            )
+        return self._issue_revision_result(authorization, written)
+
+    def _issues_read(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadIssue
+    ) -> _Result:
+        """`issues.read`: one Issue and its Project links, or `not_found`."""
+        self._lineage_plane()
+        if command.include_members:
+            # Issue memberships are the `issues.memberships.*` slice; until it is
+            # composed this build cannot answer them and says so.
+            raise UnsupportedError()
+        with _translated(), _lineage_translated():
+            view = self._issues.read_issue(
+                unit_of_work, authorization.principal.principal_id, command.issue_id
+            )
+        return _Result(
+            payload={"issue": view.to_canonical_dict()},
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+        )
+
+    def _issues_list(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListIssues
+    ) -> _Result:
+        """`issues.list`: one keyset page of Issues, newest first."""
+        self._lineage_plane()
+        request = command.issue_request()
+        request = replace(request, page_size=min(request.page_size, self._limits.max_page_size))
+        with _translated(), _lineage_translated():
+            entries, next_cursor = self._issues.list_issues(
+                unit_of_work, authorization.principal.principal_id, request
+            )
+        return _Result(
+            payload={
+                "issues": [entry.to_canonical_dict() for entry in entries],
+                "next_cursor": next_cursor,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+        )
+
+    def _issues_update(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: UpdateIssue
+    ) -> _Result:
+        """`issues.update`: the next revision of an Issue, under its expected version."""
+        self._lineage_plane()
+        authority = lineage_authority(authorization)
+        with _translated(), _lineage_translated():
+            written = self._issues.update_issue(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.issue_request(),
+                command.idempotency_key,
+                authority,
+                authorization.at,
+            )
+        return self._issue_revision_result(authorization, written)
+
+    def _issues_project_links_add(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: AddIssueProjectLink,
+    ) -> _Result:
+        """`issues.project_links.add`: assert or reinstate a native Project link."""
+        self._lineage_plane()
+        authority = attested_lineage_authority(authorization)
+        with _translated(), _lineage_translated():
+            written = self._issues.add_project_link(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.issue_request(),
+                command.idempotency_key,
+                authority,
+                authorization.at,
+            )
+        return self._project_link_result(authorization, written)
+
+    def _issues_project_links_end(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: EndIssueProjectLink,
+    ) -> _Result:
+        """`issues.project_links.end`: end an active native Project link."""
+        self._lineage_plane()
+        authority = attested_lineage_authority(authorization)
+        with _translated(), _lineage_translated():
+            written = self._issues.end_project_link(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.issue_request(),
+                command.idempotency_key,
+                authority,
+                authorization.at,
+            )
+        return self._project_link_result(authorization, written)
+
+    @staticmethod
+    def _issue_revision_result(
+        authorization: Authorization, written: IssueRevisionResult
+    ) -> _Result:
+        return _Result(
+            payload={"issue": written.issue.to_canonical_dict(), "replayed": written.replayed},
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+        )
+
+    @staticmethod
+    def _project_link_result(authorization: Authorization, written: ProjectLinkResult) -> _Result:
+        return _Result(
+            payload={
+                "project_link": written.project_link.to_canonical_dict(),
+                "issue_id": written.issue_id,
+                "replayed": written.replayed,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+        )
+
     # ---- the Record Event change feed (WP-RE-06) ------------------------------
 
     # ---- the Knowledge Assertion plane (KLP-WP-03) ---------------------------
@@ -15174,6 +15397,12 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.MEETINGS_SEARCH: ApplicationService._meetings_search,
         Capability.MEETINGS_UPDATE: ApplicationService._meetings_update,
         Capability.MEETINGS_SERIES_UPDATE: ApplicationService._meetings_series_update,
+        Capability.ISSUES_CREATE: ApplicationService._issues_create,
+        Capability.ISSUES_READ: ApplicationService._issues_read,
+        Capability.ISSUES_LIST: ApplicationService._issues_list,
+        Capability.ISSUES_UPDATE: ApplicationService._issues_update,
+        Capability.ISSUES_PROJECT_LINKS_ADD: ApplicationService._issues_project_links_add,
+        Capability.ISSUES_PROJECT_LINKS_END: ApplicationService._issues_project_links_end,
         Capability.RECORD_EVENTS_LIST: ApplicationService._record_events_list,
         Capability.RECORD_EVENTS_PROVENANCE: ApplicationService._record_events_provenance,
         Capability.KNOWLEDGE_ASSERTIONS_READ: ApplicationService._knowledge_assertions_read,
@@ -15306,6 +15535,34 @@ _KNOWLEDGE_ASSERTION_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         # switch withholds it with the rest (KLP-AC-105 name set).
         Capability.RECORD_EVENTS_PROVENANCE,
     }
+)
+
+#: Record lineage S1 (ADR-015; S1 contract section 7.5): the exact S1 name set the
+#: `lineage_enabled` switch withholds, written out one at a time. The set is
+#: the contract's exact S1 set, named as strings because the S1 application
+#: slices declare their `Capability` members in turn (the Issue plane first);
+#: `_LINEAGE_CAPABILITIES` is the declared part of it, so a name declared later
+#: is withheld the moment it exists and no lineage name can be served unswitched.
+_LINEAGE_CAPABILITY_NAMES: Final[frozenset[str]] = frozenset(
+    {
+        "issues.create",
+        "issues.read",
+        "issues.list",
+        "issues.update",
+        "issues.project_links.add",
+        "issues.project_links.end",
+        "issues.memberships.add",
+        "issues.memberships.end",
+        "records.associations.assert",
+        "records.associations.correct",
+        "records.associations.end",
+        "records.lineage",
+        "meetings.notes.versions",
+        "meetings.notes.read_version",
+    }
+)
+_LINEAGE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    capability for capability in Capability if capability.value in _LINEAGE_CAPABILITY_NAMES
 )
 
 #: KLP-WP-04: the bound discovery client's two writes. Withheld from every

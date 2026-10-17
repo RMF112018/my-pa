@@ -43,6 +43,8 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, Table, insert, text, update
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError, IntegrityError
+from tests.schema.lineage_schema_ahead_contract import S1_CAPABILITIES as LINEAGE_S1_CAPABILITIES
+from tests.schema.lineage_schema_ahead_contract import S1_PURPOSES as LINEAGE_S1_PURPOSES
 
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
@@ -262,37 +264,44 @@ def test_the_at_texts_add_exactly_the_meeting_vocabulary_and_stay_sorted() -> No
 
 #: What the next vocabulary restatement (`1d9b248e7f83`, WP-RE-06) admits; this
 #: revision's AT set is every name declared *before* it.
-ADMITTED_LATER_CAPABILITIES: Final = frozenset(
-    {
-        "record_events.list",
-        "capture.archive",
-        "capture.restore",
-        # KLP-WP-03: admitted by the Knowledge revision `6734f039f7a6` (KLP-WP-02)
-        # and declared since.
-        "knowledge.assertions.read",
-        "knowledge.assertions.list",
-        "knowledge.assertions.search",
-        "knowledge.assertions.history",
-        "knowledge.assertions.reveal",
-        "knowledge.assertions.create",
-        # KLP-WP-04: the discovery pair, admitted by the same revision.
-        "knowledge.assertions.submit",
-        "knowledge.discovery.checkpoint",
-        # KLP-WP-05: the provenance read, admitted by the same revision.
-        "record_events.provenance",
-        # The report type registry, admitted by `a591b81f10a2`.
-        "reports.types.create",
-        "reports.types.list",
-    }
+ADMITTED_LATER_CAPABILITIES: Final = (
+    frozenset(
+        {
+            "record_events.list",
+            "capture.archive",
+            "capture.restore",
+            # KLP-WP-03: admitted by the Knowledge revision `6734f039f7a6` (KLP-WP-02)
+            # and declared since.
+            "knowledge.assertions.read",
+            "knowledge.assertions.list",
+            "knowledge.assertions.search",
+            "knowledge.assertions.history",
+            "knowledge.assertions.reveal",
+            "knowledge.assertions.create",
+            # KLP-WP-04: the discovery pair, admitted by the same revision.
+            "knowledge.assertions.submit",
+            "knowledge.discovery.checkpoint",
+            # KLP-WP-05: the provenance read, admitted by the same revision.
+            "record_events.provenance",
+            # The report type registry, admitted by `a591b81f10a2`.
+            "reports.types.create",
+            "reports.types.list",
+        }
+        # Record lineage S1: admitted by `264310e0416a` and declared by the S1 slices.
+    )
+    | LINEAGE_S1_CAPABILITIES
 )
-ADMITTED_LATER_PURPOSES: Final = frozenset(
-    {
-        "record_event_read",
-        "knowledge_assertion_read",
-        "knowledge_assertion_authoring",
-        "knowledge_assertion_observation",
-        "record_event_provenance_read",
-    }
+ADMITTED_LATER_PURPOSES: Final = (
+    frozenset(
+        {
+            "record_event_read",
+            "knowledge_assertion_read",
+            "knowledge_assertion_authoring",
+            "knowledge_assertion_observation",
+            "record_event_provenance_read",
+        }
+    )
+    | LINEAGE_S1_PURPOSES
 )
 
 

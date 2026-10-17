@@ -9,12 +9,16 @@ the Knowledge gap (`knowledge_schema_ahead_contract`) **union** this gap. The
 precedent is the Knowledge revision `6734f039f7a6`, which admitted its
 vocabulary ahead of the domain the same way.
 
-`LINEAGE_S1_DECLARED_BY_DOMAIN` is the one switch: the change that declares the
-nineteen members flips it to `True`, which empties the gap. The gap is measured,
-not trusted: `tests/schema/test_record_lineage_s1_migration.py` holds the
-switch equal to what the domain actually declares, so declaring the members
-without flipping it (or flipping it early) reddens in FAST. This is a helper
-module, not a test module: pytest does not collect it.
+The S1 application slices declare the members in turn, so the gap shrinks in
+steps rather than all at once. `S1_CAPABILITIES_DECLARED_BY_DOMAIN` and
+`S1_PURPOSES_DECLARED_BY_DOMAIN` name exactly the S1 values the domain declares
+right now (the Issue plane's names and purposes first); the gap is the
+rest. The slice that declares the remaining members adds them here, which
+empties the gap and makes `LINEAGE_S1_DECLARED_BY_DOMAIN` true. The gap is
+measured, not trusted: `tests/schema/test_record_lineage_s1_migration.py` holds
+both declared sets equal to what `Capability` and `Purpose` actually declare,
+so declaring a member without listing it here (or listing it early) reddens in
+FAST. This is a helper module, not a test module: pytest does not collect it.
 """
 
 from __future__ import annotations
@@ -22,10 +26,6 @@ from __future__ import annotations
 from typing import Final, Literal
 
 LineageGapFamily = Literal["capability", "purpose"]
-
-#: Flipped to `True` by the S1 change that declares the members below in
-#: `domain/identity/operation.py` and `domain/identity/purpose.py`.
-LINEAGE_S1_DECLARED_BY_DOMAIN: Final[bool] = False
 
 S1_CAPABILITIES: Final[frozenset[str]] = frozenset(
     {
@@ -56,8 +56,31 @@ S1_PURPOSES: Final[frozenset[str]] = frozenset(
 )
 
 
+#: The S1 capability names `domain/identity/operation.py` declares right now:
+#: the Issue plane (`issues.*` without memberships). The `issues.memberships.*`,
+#: `records.*` and `meetings.notes.*` names join when they are declared.
+S1_CAPABILITIES_DECLARED_BY_DOMAIN: Final[frozenset[str]] = frozenset(
+    {
+        "issues.create",
+        "issues.read",
+        "issues.list",
+        "issues.update",
+        "issues.project_links.add",
+        "issues.project_links.end",
+    }
+)
+#: The S1 purposes `domain/identity/purpose.py` declares right now.
+S1_PURPOSES_DECLARED_BY_DOMAIN: Final[frozenset[str]] = frozenset({"issue_authoring", "issue_read"})
+
+#: True exactly when the domain declares every S1 value, so the gap is empty.
+LINEAGE_S1_DECLARED_BY_DOMAIN: Final[bool] = (
+    S1_CAPABILITIES_DECLARED_BY_DOMAIN == S1_CAPABILITIES
+    and S1_PURPOSES_DECLARED_BY_DOMAIN == S1_PURPOSES
+)
+
+
 def lineage_admitted_ahead(family: LineageGapFamily) -> frozenset[str]:
     """The S1 values of one family the database admits ahead of the domain right now."""
-    if LINEAGE_S1_DECLARED_BY_DOMAIN:
-        return frozenset()
-    return S1_CAPABILITIES if family == "capability" else S1_PURPOSES
+    if family == "capability":
+        return S1_CAPABILITIES - S1_CAPABILITIES_DECLARED_BY_DOMAIN
+    return S1_PURPOSES - S1_PURPOSES_DECLARED_BY_DOMAIN

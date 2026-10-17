@@ -143,7 +143,7 @@ def test_handler_unwired_capabilities_publish_no_mcp_tools() -> None:
     assert {tool.name for tool in TOOLS} == {
         capability.value for capability in HANDLER_CAPABILITIES
     }
-    assert len(TOOLS) == 192
+    assert len(TOOLS) == 198
     assert not {capability.value for capability in HANDLER_UNWIRED_CAPABILITIES} & {
         tool.name for tool in TOOLS
     }
@@ -684,6 +684,8 @@ def test_a_child_with_a_managed_root_publishes_every_locally_available_capabilit
         # KLP-WP-03: the Knowledge Assertion plane, which requires the entity
         # plane above and withholds its names unless on.
         MY_PA_KNOWLEDGE_ASSERTIONS_ENABLED="true",
+        # Record lineage S1: the lineage plane's own switch, no dependency.
+        MY_PA_LINEAGE_ENABLED="true",
     )
     expected = [
         capability.value

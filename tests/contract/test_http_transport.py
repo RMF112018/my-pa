@@ -91,6 +91,7 @@ from my_pa.application.commands import (
     AddEntityAlias,
     AddEntityCommunicationMethod,
     AddEntityName,
+    AddIssueProjectLink,
     ApplyConstraintSync,
     ArchiveCapture,
     ArchiveEntity,
@@ -120,6 +121,7 @@ from my_pa.application.commands import (
     CreateEntityParticipation,
     CreateEntityProposal,
     CreateEntityRelationship,
+    CreateIssue,
     CreateKnowledgeAssertion,
     CreateManagedDocument,
     CreateMeeting,
@@ -136,6 +138,7 @@ from my_pa.application.commands import (
     EndEntityAssignment,
     EndEntityParticipation,
     EndEntityRelationship,
+    EndIssueProjectLink,
     EnrollSource,
     FetchSource,
     GetCanvasWorkspace,
@@ -178,6 +181,7 @@ from my_pa.application.commands import (
     ListGoodNotesPages,
     ListGoodNotesRuns,
     ListIntelligenceArtifacts,
+    ListIssues,
     ListKnowledgeAssertions,
     ListManagedDocuments,
     ListMeetings,
@@ -211,6 +215,7 @@ from my_pa.application.commands import (
     ReadConstraintSyncState,
     ReadGoodNotes,
     ReadIntelligenceArtifact,
+    ReadIssue,
     ReadKnowledge,
     ReadKnowledgeAssertion,
     ReadManagedDocument,
@@ -274,6 +279,7 @@ from my_pa.application.commands import (
     UpdateConstraint,
     UpdateConstraintCategory,
     UpdateEntity,
+    UpdateIssue,
     UpdateMeeting,
     UpdateMeetingSeries,
     UpdateProject,
@@ -429,6 +435,13 @@ _UNCOMPOSED_CAPABILITIES = frozenset(
         Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
         # KLP-WP-05: provenance, on the same switch.
         Capability.RECORD_EVENTS_PROVENANCE,
+        # Record lineage S1: the Issue plane, behind `MY_PA_LINEAGE_ENABLED` (off here).
+        Capability.ISSUES_CREATE,
+        Capability.ISSUES_READ,
+        Capability.ISSUES_LIST,
+        Capability.ISSUES_UPDATE,
+        Capability.ISSUES_PROJECT_LINKS_ADD,
+        Capability.ISSUES_PROJECT_LINKS_END,
     }
 )
 
@@ -1549,6 +1562,32 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "idempotency_key": "http-knowledge-checkpoint",
         },
         Capability.RECORD_EVENTS_PROVENANCE: {"event_id": "rcev_httpknowledge0001"},
+        # Record lineage S1, the Issue plane.
+        Capability.ISSUES_CREATE: {
+            "title": "A http issue",
+            "idempotency_key": "http-issues-create-0001",
+        },
+        Capability.ISSUES_READ: {"issue_id": "sit_httpissue0001"},
+        Capability.ISSUES_LIST: {},
+        Capability.ISSUES_UPDATE: {
+            "issue_id": "sit_httpissue0001",
+            "expected_version": 1,
+            "idempotency_key": "http-issues-update-0001",
+            "title": "A http issue, retitled",
+        },
+        Capability.ISSUES_PROJECT_LINKS_ADD: {
+            "issue_id": "sit_httpissue0001",
+            "project_id": "prj_httpproject0001",
+            "expected_membership_revision": 0,
+            "idempotency_key": "http-issues-project-links-add-0001",
+        },
+        Capability.ISSUES_PROJECT_LINKS_END: {
+            "issue_id": "sit_httpissue0001",
+            "project_id": "prj_httpproject0001",
+            "expected_membership_revision": 1,
+            "idempotency_key": "http-issues-project-links-end-0001",
+            "reason": "the http issue left the project",
+        },
     }
 
 
@@ -2567,6 +2606,31 @@ def commands_for(
         ),
         Capability.RECORD_EVENTS_PROVENANCE: GetRecordEventProvenance(
             event_id="rcev_httpknowledge0001"
+        ),
+        # Record lineage S1, the Issue plane.
+        Capability.ISSUES_CREATE: CreateIssue(
+            title="A http issue", idempotency_key="http-issues-create-0001"
+        ),
+        Capability.ISSUES_READ: ReadIssue(issue_id="sit_httpissue0001"),
+        Capability.ISSUES_LIST: ListIssues(),
+        Capability.ISSUES_UPDATE: UpdateIssue(
+            issue_id="sit_httpissue0001",
+            expected_version=1,
+            idempotency_key="http-issues-update-0001",
+            title="A http issue, retitled",
+        ),
+        Capability.ISSUES_PROJECT_LINKS_ADD: AddIssueProjectLink(
+            issue_id="sit_httpissue0001",
+            project_id="prj_httpproject0001",
+            expected_membership_revision=0,
+            idempotency_key="http-issues-project-links-add-0001",
+        ),
+        Capability.ISSUES_PROJECT_LINKS_END: EndIssueProjectLink(
+            issue_id="sit_httpissue0001",
+            project_id="prj_httpproject0001",
+            expected_membership_revision=1,
+            idempotency_key="http-issues-project-links-end-0001",
+            reason="the http issue left the project",
         ),
     }
 

@@ -84,6 +84,7 @@ from my_pa.contracts.ports import (
     EnrollmentRepository,
     EntitiesRepository,
     GoodNotesSemanticRepository,
+    IssueRepository,
     KnowledgeRepository,
     ManagedDocumentRepository,
     MeetingRepository,
@@ -232,6 +233,10 @@ class _HoldsItsConnection(UnitOfWork):
     @property
     def meetings(self) -> MeetingRepository:
         return self._inner.meetings
+
+    @property
+    def issues(self) -> IssueRepository:
+        return self._inner.issues
 
     @property
     def audit(self) -> AuditSink:

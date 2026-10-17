@@ -422,3 +422,12 @@ class Purpose(StrEnum):
     # submission lineage. A read-only purpose of its own, used by exactly
     # `record_events.provenance` (R5 profile table, matrix `purposes`).
     RECORD_EVENT_PROVENANCE_READ = "record_event_provenance_read"
+    # Record lineage S1 (ADR-015; S1 contract section 7), on `D-91`: would reuse
+    # widen the grant? `meeting_read`/`continuity` purposes would: an Issue is
+    # its own plane with its own revisions and native Project scope, and a
+    # grant issued to read Meetings or context Situations must not read Issues,
+    # nor the reverse. A read/authoring pair of its own, on the capture plane's
+    # split: a grant issued to read must never also create. `issue_authoring`
+    # is a remote-write purpose (`adapters.mcp.remote._WRITE_PURPOSES`).
+    ISSUE_READ = "issue_read"
+    ISSUE_AUTHORING = "issue_authoring"

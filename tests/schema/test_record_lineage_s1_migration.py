@@ -335,22 +335,21 @@ def test_at_vocabulary_adds_exactly_the_s1_names() -> None:
 
 
 def test_the_s1_schema_ahead_gap_is_measured() -> None:
-    """The S1 names are admitted ahead of the domain, and the switch says so.
+    """The S1 names not yet declared are admitted ahead of the domain, exactly.
 
-    `lineage_schema_ahead_contract.LINEAGE_S1_DECLARED_BY_DOMAIN` must equal
-    what `Capability` and `Purpose` actually declare: every S1 name, or none.
+    `lineage_schema_ahead_contract`'s declared sets must equal what
+    `Capability` and `Purpose` actually declare of the S1 names, and the gap
+    must be exactly the S1 names they do not declare yet.
     """
     declared = {capability.value for capability in Capability}
     purposes = {purpose.value for purpose in Purpose}
-    if lineage_gap.LINEAGE_S1_DECLARED_BY_DOMAIN:
-        assert declared >= S1_CAPABILITIES
-        assert purposes >= S1_PURPOSES
-        assert not lineage_gap.lineage_admitted_ahead("capability")
-    else:
-        assert not S1_CAPABILITIES & declared
-        assert not S1_PURPOSES & purposes
-        assert lineage_gap.lineage_admitted_ahead("capability") == S1_CAPABILITIES
-        assert lineage_gap.lineage_admitted_ahead("purpose") == S1_PURPOSES
+    assert S1_CAPABILITIES & declared == lineage_gap.S1_CAPABILITIES_DECLARED_BY_DOMAIN
+    assert S1_PURPOSES & purposes == lineage_gap.S1_PURPOSES_DECLARED_BY_DOMAIN
+    assert lineage_gap.lineage_admitted_ahead("capability") == S1_CAPABILITIES - declared
+    assert lineage_gap.lineage_admitted_ahead("purpose") == S1_PURPOSES - purposes
+    assert lineage_gap.LINEAGE_S1_DECLARED_BY_DOMAIN is (
+        declared >= S1_CAPABILITIES and purposes >= S1_PURPOSES
+    )
     assert len(S1_CAPABILITIES) == 14
     assert len(S1_PURPOSES) == 5
 

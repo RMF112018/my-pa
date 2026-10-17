@@ -48,6 +48,14 @@ from my_pa.application import goodnotes_note_unit_contract as _note_unit
 from my_pa.application.errors import InvalidRequestError, SafeDetail, invalid_choice
 from my_pa.application.goodnotes_pull_orchestration import MAX_PULL_BATCH_SIZE
 from my_pa.application.identity_correction import ConflictChoice
+from my_pa.application.issues import (
+    IssueCreateRequest,
+    IssueListRequest,
+    IssueUpdateRequest,
+    ProjectLinkAddRequest,
+    ProjectLinkEndRequest,
+)
+from my_pa.application.lineage_endpoints import parse_evidence_anchor
 from my_pa.application.record_events import (
     MAX_RECORD_EVENT_CURSOR_CHARACTERS,
     requested_families,
@@ -120,6 +128,14 @@ from my_pa.domain.knowledge_assertion.vocabulary import (
     KnowledgeOwnerRefKind,
     KnowledgeSubjectKind,
 )
+from my_pa.domain.lineage.model import (
+    MAX_ISSUE_DESCRIPTION_CHARACTERS,
+    MAX_ISSUE_TITLE_CHARACTERS,
+    MAX_LINEAGE_IDEMPOTENCY_KEY_CHARACTERS,
+    MAX_LINEAGE_REASON_CHARACTERS,
+)
+from my_pa.domain.lineage.vocabulary import EvidenceRole as LineageEvidenceRole
+from my_pa.domain.lineage.vocabulary import EvidenceSourceFamily, SourceVersionKind
 from my_pa.domain.meeting.model import (
     DEFAULT_MEETING_PAGE_SIZE,
     MAX_ATTENDEE_DISPLAY_NAME_CHARACTERS,
@@ -262,6 +278,7 @@ from my_pa.domain.situation.situation import (
     ProjectSector,
     ProjectState,
     ProjectType,
+    SituationState,
     is_storable_project_value,
 )
 from my_pa.domain.task.comment import (
@@ -11909,6 +11926,439 @@ class CheckpointKnowledgeDiscovery:
         _idempotency_key(self.idempotency_key)
 
 
+# --- Record lineage S1: the Issue plane (S1 contract section 7.2) -------------
+#
+# Six commands, each a frozen dataclass whose fields are exactly the section 7.2
+# request fields: an unknown field -- `principal_id`, an authority class, a
+# decision channel, an acceptance basis, a `recorded_at` or a selector -- is an
+# unexpected keyword and `invalid_request` (`adapters.normalization._command`).
+# Validation here is what is decidable from the request alone: types, bounds,
+# identifier prefixes and the anchor shape. Existence, ownership, versions and
+# state moves are the application's (`application.issues`).
+
+
+def _issue_id_schema(kind: IdKind, description: str) -> dict[str, object]:
+    return {
+        "type": "string",
+        "pattern": f"^{kind.value}_[A-Za-z0-9]{{8,64}}$",
+        "description": description,
+    }
+
+
+_ISSUE_IDEMPOTENCY_KEY_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": MAX_LINEAGE_IDEMPOTENCY_KEY_CHARACTERS,
+        "description": (
+            "Caller-chosen replay key, 1..128 characters. The same key with the same "
+            "request replays the original result; with a different request it is conflict."
+        ),
+    }
+)
+
+_ISSUE_TITLE_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": MAX_ISSUE_TITLE_CHARACTERS,
+        "description": "The Issue title, not blank, stored exactly as sent.",
+    }
+)
+
+_ISSUE_DESCRIPTION_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {"type": "string", "maxLength": MAX_ISSUE_DESCRIPTION_CHARACTERS}
+)
+
+_LINEAGE_REASON_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {"type": "string", "minLength": 1, "maxLength": MAX_LINEAGE_REASON_CHARACTERS}
+)
+
+#: `issues.project_links.add`'s optional `evidence_anchor` (section 7.1).
+_EVIDENCE_ANCHOR_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["family", "root_id", "version_kind", "role"],
+        "properties": {
+            "family": {
+                "type": "string",
+                "enum": [member.value for member in EvidenceSourceFamily],
+            },
+            "root_id": {"type": "string", "description": "The Meeting or Capture root."},
+            "version_kind": {
+                "type": "string",
+                "enum": [member.value for member in SourceVersionKind],
+            },
+            "version_id": {"type": "string", "description": "The note or Capture version."},
+            "source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "passage_start_cp": {"type": "integer", "minimum": 0},
+            "passage_end_cp": {"type": "integer", "minimum": 1},
+            "passage_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "role": {
+                "type": "string",
+                "enum": [member.value for member in LineageEvidenceRole],
+            },
+        },
+        "description": (
+            "Optional evidence for the link: an exact Meeting note or Capture version "
+            "(with an optional code-point passage), or a legacy Capture root."
+        ),
+    }
+)
+
+
+def _lineage_key(value: str) -> str:
+    """The lineage bounds on a key `_idempotency_key` already admitted.
+
+    1..128 characters (`lineage_write_requests.idempotency_key`) and storable
+    as text.
+    """
+    if len(value) > MAX_LINEAGE_IDEMPOTENCY_KEY_CHARACTERS:
+        raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+    return _storable_text(value, SafeDetail.IDEMPOTENCY_KEY)
+
+
+def _issue_title(value: object) -> str:
+    title = _storable_text(value, SafeDetail.TITLE)
+    if not title.strip() or len(title) > MAX_ISSUE_TITLE_CHARACTERS:
+        raise InvalidRequestError(SafeDetail.TITLE)
+    return title
+
+
+def _issue_description(value: object) -> str | None:
+    description = _optional_storable_text(value, SafeDetail.DESCRIPTION)
+    if description is not None and len(description) > MAX_ISSUE_DESCRIPTION_CHARACTERS:
+        raise InvalidRequestError(SafeDetail.DESCRIPTION)
+    return description
+
+
+def _lineage_reason(value: object) -> str:
+    reason = _storable_text(value, SafeDetail.REASON)
+    if not 1 <= len(reason) <= MAX_LINEAGE_REASON_CHARACTERS:
+        raise InvalidRequestError(SafeDetail.REASON)
+    return reason
+
+
+def _issue_state(value: object, admitted: frozenset[SituationState]) -> SituationState | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        for state in admitted:
+            if state.value == value:
+                return state
+    raise invalid_choice(SafeDetail.STATE, sorted(state.value for state in admitted))
+
+
+def _membership_revision(value: object, minimum: int) -> int:
+    if type(value) is not int or value < minimum:
+        raise InvalidRequestError(SafeDetail.EXPECTED_MEMBERSHIP_REVISION)
+    return value
+
+
+#: The states an `issues.update` may name, and an `issues.list` may filter by.
+_ISSUE_UPDATE_STATES: Final = frozenset({SituationState.ACTIVE, SituationState.SUSPENDED})
+_ISSUE_LIST_STATES: Final = frozenset(
+    {SituationState.OPEN, SituationState.ACTIVE, SituationState.SUSPENDED}
+)
+#: The only field `issues.update` can clear.
+_ISSUE_CLEARABLE_FIELDS: Final = frozenset({"description"})
+#: `issues.list` page bounds (section 7.2).
+DEFAULT_ISSUE_PAGE_SIZE: Final = 25
+MAX_ISSUE_PAGE_SIZE: Final = 100
+
+
+@dataclass(frozen=True, slots=True)
+class CreateIssue:
+    """`issues.create`: open one Issue (version 1, `open`) with a title and description.
+
+    No Project and no members: a Project link is `issues.project_links.add`. The
+    same `idempotency_key` with the same request replays the original revision;
+    with a different request it is conflict. Off unless the lineage plane is on.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_CREATE
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "title": _ISSUE_TITLE_SCHEMA,
+            "description": _ISSUE_DESCRIPTION_SCHEMA,
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+        }
+    )
+
+    title: str = field(repr=False)
+    idempotency_key: str
+    description: str | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        _lineage_key(_idempotency_key(self.idempotency_key))
+        _issue_title(self.title)
+        _issue_description(self.description)
+
+    def issue_request(self) -> IssueCreateRequest:
+        """The parsed request this command states."""
+        return IssueCreateRequest(title=self.title, description=self.description)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadIssue:
+    """`issues.read`: one Issue of yours with its native Project links.
+
+    A context Situation, and an Issue another Principal holds, are answered
+    exactly as an absent one: not_found.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_READ
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue to read."),
+            "include_members": {
+                "type": "boolean",
+                "default": False,
+                "description": "Also return the Issue's active memberships.",
+            },
+        }
+    )
+
+    issue_id: str
+    include_members: bool = False
+
+    def __post_init__(self) -> None:
+        _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
+        if not isinstance(self.include_members, bool):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+
+
+@dataclass(frozen=True, slots=True)
+class ListIssues:
+    """`issues.list`: one keyset page of your Issues, newest first.
+
+    Optionally only one state, or only Issues with an active link to one
+    Project. `after` is the last `issue_id` of the previous page under the same
+    filters, otherwise invalid_request.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_LIST
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_ISSUE_PAGE_SIZE,
+                "default": DEFAULT_ISSUE_PAGE_SIZE,
+            },
+            "after": _issue_id_schema(
+                IdKind.SITUATION, "Keyset cursor: the last issue_id of the previous page."
+            ),
+            "state": {"type": "string", "enum": ["open", "active", "suspended"]},
+            "project_id": _issue_id_schema(
+                IdKind.PROJECT, "Only Issues with an active link to this Project."
+            ),
+        }
+    )
+
+    page_size: int | None = None
+    after: str | None = None
+    state: str | None = None
+    project_id: str | None = None
+
+    def __post_init__(self) -> None:
+        sized = _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if sized is not None and sized > MAX_ISSUE_PAGE_SIZE:
+            raise InvalidRequestError(SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.SITUATION, SafeDetail.CURSOR)
+        if self.project_id is not None:
+            _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _issue_state(self.state, _ISSUE_LIST_STATES)
+
+    def issue_request(self) -> IssueListRequest:
+        """The parsed request this command states."""
+        return IssueListRequest(
+            page_size=DEFAULT_ISSUE_PAGE_SIZE if self.page_size is None else self.page_size,
+            after=self.after,
+            state=_issue_state(self.state, _ISSUE_LIST_STATES),
+            project_id=self.project_id,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateIssue:
+    """`issues.update`: change an Issue's title, description or non-terminal state.
+
+    `expected_version` is the version you read; a stale one is conflict and
+    writes nothing. Allowed state moves: open to active, open or active to
+    suspended, suspended to active. `clear_fields` may name `description`. A
+    request that changes nothing, or both sets and clears the description, is
+    invalid_request. Closing an Issue is not available.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_UPDATE
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue to change."),
+            "expected_version": {"type": "integer", "minimum": 1},
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "title": _ISSUE_TITLE_SCHEMA,
+            "description": _ISSUE_DESCRIPTION_SCHEMA,
+            "state": {"type": "string", "enum": ["active", "suspended"]},
+            "clear_fields": {
+                "type": "array",
+                "uniqueItems": True,
+                "items": {"type": "string", "enum": ["description"]},
+            },
+        }
+    )
+
+    issue_id: str
+    expected_version: int
+    idempotency_key: str
+    title: str | None = field(default=None, repr=False)
+    description: str | None = field(default=None, repr=False)
+    state: str | None = None
+    clear_fields: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
+        _expected_version(self.expected_version)
+        _lineage_key(_idempotency_key(self.idempotency_key))
+        if self.title is not None:
+            _issue_title(self.title)
+        _issue_description(self.description)
+        _issue_state(self.state, _ISSUE_UPDATE_STATES)
+        # `object`, for the reason `_idempotency_key` gives: the annotation says
+        # what a well-formed request holds, not what a transport delivered.
+        clears: object = self.clear_fields
+        if (
+            not isinstance(clears, tuple)
+            or not all(isinstance(name, str) for name in clears)
+            or not set(clears) <= _ISSUE_CLEARABLE_FIELDS
+            or len(set(clears)) != len(clears)
+        ):
+            raise InvalidRequestError(SafeDetail.CLEAR_FIELDS)
+        if self.description is not None and "description" in self.clear_fields:
+            raise InvalidRequestError(SafeDetail.CLEAR_FIELDS)
+        if (
+            self.title is None
+            and self.description is None
+            and self.state is None
+            and not self.clear_fields
+        ):
+            raise InvalidRequestError(SafeDetail.MUTATIONS)
+
+    def issue_request(self) -> IssueUpdateRequest:
+        """The parsed request this command states."""
+        return IssueUpdateRequest(
+            issue_id=self.issue_id,
+            expected_version=self.expected_version,
+            title=self.title,
+            description=self.description,
+            state=_issue_state(self.state, _ISSUE_UPDATE_STATES),
+            clear_fields=tuple(sorted(self.clear_fields)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AddIssueProjectLink:
+    """`issues.project_links.add`: link an Issue to a Project of yours, or relink it.
+
+    Local operator only. `expected_membership_revision` 0 asserts a new link (no
+    link may exist); n reinstates a link whose latest event is n and ended. An
+    active link is conflict. The Issue's version does not change.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_PROJECT_LINKS_ADD
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue."),
+            "project_id": _issue_id_schema(IdKind.PROJECT, "A Project of yours."),
+            "expected_membership_revision": {"type": "integer", "minimum": 0},
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "evidence_anchor": _EVIDENCE_ANCHOR_SCHEMA,
+            "reason": _LINEAGE_REASON_SCHEMA,
+        }
+    )
+
+    issue_id: str
+    project_id: str
+    expected_membership_revision: int
+    idempotency_key: str
+    evidence_anchor: dict[str, object] | None = field(default=None, repr=False)
+    reason: str | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
+        _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _membership_revision(self.expected_membership_revision, 0)
+        _lineage_key(_idempotency_key(self.idempotency_key))
+        if self.reason is not None:
+            _lineage_reason(self.reason)
+        self.issue_request()
+
+    def issue_request(self) -> ProjectLinkAddRequest:
+        """The parsed request this command states."""
+        return ProjectLinkAddRequest(
+            issue_id=self.issue_id,
+            project_id=self.project_id,
+            expected_membership_revision=self.expected_membership_revision,
+            evidence_anchor=(
+                None
+                if self.evidence_anchor is None
+                else parse_evidence_anchor(self.evidence_anchor, SafeDetail.EVIDENCE_ANCHOR)
+            ),
+            reason=self.reason,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class EndIssueProjectLink:
+    """`issues.project_links.end`: end an Issue's active link to a Project.
+
+    Local operator only. The link's latest event must be
+    `expected_membership_revision` and active, otherwise conflict. The link row
+    is never deleted; a later `issues.project_links.add` can reinstate it.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_PROJECT_LINKS_END
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue."),
+            "project_id": _issue_id_schema(IdKind.PROJECT, "The linked Project."),
+            "expected_membership_revision": {"type": "integer", "minimum": 1},
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "reason": _LINEAGE_REASON_SCHEMA,
+        }
+    )
+
+    issue_id: str
+    project_id: str
+    expected_membership_revision: int
+    idempotency_key: str
+    reason: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
+        _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _membership_revision(self.expected_membership_revision, 1)
+        _lineage_key(_idempotency_key(self.idempotency_key))
+        _lineage_reason(self.reason)
+
+    def issue_request(self) -> ProjectLinkEndRequest:
+        """The parsed request this command states."""
+        return ProjectLinkEndRequest(
+            issue_id=self.issue_id,
+            project_id=self.project_id,
+            expected_membership_revision=self.expected_membership_revision,
+            reason=self.reason,
+        )
+
+
 type Command = (
     GetCapabilities
     | ListSources
@@ -12102,6 +12552,12 @@ type Command = (
     | CreateKnowledgeAssertion
     | SubmitKnowledgeAssertion
     | CheckpointKnowledgeDiscovery
+    | CreateIssue
+    | ReadIssue
+    | ListIssues
+    | UpdateIssue
+    | AddIssueProjectLink
+    | EndIssueProjectLink
 )
 
 

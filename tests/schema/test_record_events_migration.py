@@ -46,6 +46,8 @@ from sqlalchemy import Engine, insert, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
 from tests.schema.knowledge_schema_ahead_contract import current_gap
+from tests.schema.lineage_schema_ahead_contract import S1_CAPABILITIES as LINEAGE_S1_CAPABILITIES
+from tests.schema.lineage_schema_ahead_contract import S1_PURPOSES as LINEAGE_S1_PURPOSES
 from tests.schema.test_meeting_records_migration import _audit, _seed_meeting
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
@@ -225,17 +227,21 @@ def test_head_admits_every_declared_capability_and_purpose() -> None:
     admitted the KLP names ahead of the domain. The names it
     admits beyond `Capability` are the native-host names and exactly the current
     KLP schema-ahead gap (`tests/schema/knowledge_schema_ahead_contract.py`).
+    Record lineage S1's names are admitted by the later `264310e0416a`, which
+    `tests/schema/test_record_lineage_s1_migration.py` holds; whichever of them
+    the domain declares is set aside here.
     """
     source = HEAD_MIGRATION.read_text(encoding="utf-8")
     at = set(_literals(_constant(source, "_CAPABILITIES_AT_THIS_REVISION")))
     purposes_at = set(_literals(_constant(source, "_PURPOSES_AT_THIS_REVISION")))
-    declared = {capability.value for capability in Capability}
+    declared = {capability.value for capability in Capability} - LINEAGE_S1_CAPABILITIES
+    purposes = {purpose.value for purpose in Purpose} - LINEAGE_S1_PURPOSES
     assert declared <= at
-    assert {purpose.value for purpose in Purpose} <= purposes_at
+    assert purposes <= purposes_at
     assert at - declared == {capability.value for capability in NativeSourceCapability} | set(
         current_gap()["capability"]
     )
-    assert purposes_at - {purpose.value for purpose in Purpose} == set(current_gap()["purpose"])
+    assert purposes_at - purposes == set(current_gap()["purpose"])
 
 
 def test_the_downgrade_refusal_names_the_new_vocabulary() -> None:

@@ -153,6 +153,10 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # correlated predicate between two tables composes
         # `matching_partition_criterion`. No hand-written partition comparison.
         "infrastructure/persistence/meetings.py",
+        # Record lineage S1's Issue plane, in the same shape: every SELECT and
+        # UPDATE composes `_mine` or `principal_scoped`, every INSERT `_bound`,
+        # and every correlated predicate `matching_partition_criterion`.
+        "infrastructure/persistence/issues.py",
         # WP-RE-01's Record Event feed. Its two writes -- the allocator
         # upsert on `record_event_sequences` and the ordered insert into
         # `record_events` -- both compose `_bound` over `principal_bound_values`.
@@ -489,6 +493,13 @@ PER_MODULE_ONLY: Final = {
         "Meeting-table predicates use `matching_partition_criterion`; not yet in "
         "a dedicated statement-level scanner."
     ),
+    "infrastructure/persistence/issues.py": (
+        "every SELECT/UPDATE composes `_mine` over `partition_criterion` or "
+        "`principal_scoped`, every INSERT composes `_bound` over "
+        "`principal_bound_values`, correlated event/link predicates use "
+        "`matching_partition_criterion`; not yet in a dedicated statement-level "
+        "scanner."
+    ),
     "infrastructure/persistence/continuity_read.py": (
         "one helper applies partition_criterion to every read-model table; the "
         "remaining expressions only map the already-scoped rows."
@@ -789,6 +800,9 @@ HAND_WRITTEN_COMPARISONS: Final = {
         ("situations", "principal_id"),
         ("situations", "principal_id"),
         ("situations", "principal_id"),
+        ("situations", "principal_id"),
+        # Record lineage S1: `propose_decision` refuses an Issue context, read
+        # inside the caller's partition (S1 contract section 9).
         ("situations", "principal_id"),
         ("table", "principal_id"),
         ("table", "principal_id"),

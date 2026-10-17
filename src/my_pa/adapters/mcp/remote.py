@@ -74,6 +74,9 @@ _WRITE_PURPOSES: Final = frozenset(
         # KLP-WP-04 (KLP-AC-016/103): the discovery pair's purpose. Without it
         # submit and checkpoint would be classified remote reads.
         Purpose.KNOWLEDGE_ASSERTION_OBSERVATION,
+        # Record lineage S1 (contract section 7). Without it the four Issue
+        # writes would be classified remote reads. `issue_read` stays out.
+        Purpose.ISSUE_AUTHORING,
         Purpose.CONTEXT_PREFERENCE,
         Purpose.GOODNOTES_PROPOSAL,
         Purpose.REPORT_AUTHORING,

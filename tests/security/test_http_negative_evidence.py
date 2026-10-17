@@ -282,6 +282,13 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
         # KLP-WP-05: provenance, on the same terms.
         Capability.RECORD_EVENTS_PROVENANCE,
+        # Record lineage S1: the Issue plane, behind `MY_PA_LINEAGE_ENABLED` (off here).
+        Capability.ISSUES_CREATE,
+        Capability.ISSUES_READ,
+        Capability.ISSUES_LIST,
+        Capability.ISSUES_UPDATE,
+        Capability.ISSUES_PROJECT_LINKS_ADD,
+        Capability.ISSUES_PROJECT_LINKS_END,
     }
 )
 
@@ -1351,6 +1358,32 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "idempotency_key": "wire-knowledge-checkpoint",
         },
         Capability.RECORD_EVENTS_PROVENANCE: {"event_id": "rcev_wireknowledge00001"},
+        # Record lineage S1, the Issue plane.
+        Capability.ISSUES_CREATE: {
+            "title": "A wire issue",
+            "idempotency_key": "wire-issues-create-0001",
+        },
+        Capability.ISSUES_READ: {"issue_id": "sit_wireissue0001"},
+        Capability.ISSUES_LIST: {},
+        Capability.ISSUES_UPDATE: {
+            "issue_id": "sit_wireissue0001",
+            "expected_version": 1,
+            "idempotency_key": "wire-issues-update-0001",
+            "title": "A wire issue, retitled",
+        },
+        Capability.ISSUES_PROJECT_LINKS_ADD: {
+            "issue_id": "sit_wireissue0001",
+            "project_id": "prj_wireproject0001",
+            "expected_membership_revision": 0,
+            "idempotency_key": "wire-issues-project-links-add-0001",
+        },
+        Capability.ISSUES_PROJECT_LINKS_END: {
+            "issue_id": "sit_wireissue0001",
+            "project_id": "prj_wireproject0001",
+            "expected_membership_revision": 1,
+            "idempotency_key": "wire-issues-project-links-end-0001",
+            "reason": "the wire issue left the project",
+        },
     }
 
 
@@ -2030,6 +2063,13 @@ SCOPED_CAPABILITIES = [
         Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
         # KLP-WP-05: provenance, on the same terms.
         Capability.RECORD_EVENTS_PROVENANCE,
+        # Record lineage S1: the Issue plane, behind `MY_PA_LINEAGE_ENABLED` (off here).
+        Capability.ISSUES_CREATE,
+        Capability.ISSUES_READ,
+        Capability.ISSUES_LIST,
+        Capability.ISSUES_UPDATE,
+        Capability.ISSUES_PROJECT_LINKS_ADD,
+        Capability.ISSUES_PROJECT_LINKS_END,
     }
 ]
 
@@ -2327,6 +2367,12 @@ KNOWLEDGE_AUTHORING_EXEMPTION = frozenset({Capability.KNOWLEDGE_ASSERTIONS_CREAT
 #: and no enrollment.
 REPORT_TYPE_AUTHORING_EXEMPTION = frozenset({Capability.REPORTS_TYPES_CREATE})
 
+#: Record lineage S1's two Issue writes the substring proxy refuses --
+#: `issues.create` and `issues.update` -- on the same reading: they write the
+#: acting Principal's own Issue rows and revisions and reach no source provider
+#: and no enrollment. The two `issues.project_links.` writes carry no listed verb.
+ISSUE_AUTHORING_EXEMPTION = frozenset({Capability.ISSUES_CREATE, Capability.ISSUES_UPDATE})
+
 
 def test_the_transport_routes_no_mutating_capability() -> None:
     """One route, one method, and no name that mutates a *source*.
@@ -2377,6 +2423,7 @@ def test_the_transport_routes_no_mutating_capability() -> None:
         | MEETING_AUTHORING_EXEMPTION
         | KNOWLEDGE_AUTHORING_EXEMPTION
         | REPORT_TYPE_AUTHORING_EXEMPTION
+        | ISSUE_AUTHORING_EXEMPTION
     )
     checked = [c for c in _BUILDERS if c not in exempt]
     assert len(checked) == len(IMPLEMENTED_CAPABILITIES) - len(exempt)

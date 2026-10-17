@@ -22,6 +22,7 @@ from my_pa.contracts.ports import (
     EntitiesRepository,
     GoodNotesProposalAdmission,
     GoodNotesSemanticRepository,
+    IssueRepository,
     KnowledgeRepository,
     ManagedDocumentRepository,
     MeetingRepository,
@@ -223,6 +224,10 @@ class GsqsB0EvaluationUnitOfWork(UnitOfWork):
     @property
     def meetings(self) -> MeetingRepository:
         return cast(MeetingRepository, self._unused)
+
+    @property
+    def issues(self) -> IssueRepository:
+        return cast(IssueRepository, self._unused)
 
     @property
     def context_runs(self) -> ContextRunRepository:

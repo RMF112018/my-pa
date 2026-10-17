@@ -510,6 +510,14 @@ _ORDINAL_UNITS = (
     # ninety-two; dense through a hundred-ninety-third.
     "hundred-ninety-second",
     "hundred-ninety-third",
+    # Record lineage S1 adds the six `issues.` names and takes the public set
+    # to one hundred and ninety-eight; dense through a hundred-ninety-ninth.
+    "hundred-ninety-fourth",
+    "hundred-ninety-fifth",
+    "hundred-ninety-sixth",
+    "hundred-ninety-seventh",
+    "hundred-ninety-eighth",
+    "hundred-ninety-ninth",
 )
 
 

@@ -350,6 +350,11 @@ EXEMPT_PROPERTIES: Final[frozenset[tuple[str, str]]] = frozenset(
         ("meetings.update", "virtual_meeting_url"),
         ("meetings.list", "sort_direction"),
         ("meetings.search", "sort_direction"),
+        # Record lineage S1: an evidence anchor's `root_id` is the opaque `mtg_`
+        # or `cap_` identifier of the anchor's source root, validated for its
+        # family's prefix and resolved only inside the caller's partition. It is
+        # matched only because "root" is in the vocabulary; it names no path.
+        ("issues.project_links.add", "root_id"),
     }
 )
 
@@ -652,7 +657,8 @@ def test_the_location_scan_would_catch_one() -> None:
     # fields (operator ruling B1): `location_text`/`virtual_meeting_url` on
     # create and update, `sort_direction` on list and search. Plus KLP-WP-04's two
     # `source_profile_id` fields (an opaque `kdsp_` profile, "file" in "profile").
-    assert len(EXEMPT_PROPERTIES) == 22
+    # Plus record lineage S1's evidence-anchor `root_id` (an opaque `mtg_`/`cap_`).
+    assert len(EXEMPT_PROPERTIES) == 23
     for tool_name, property_name in EXEMPT_PROPERTIES:
         tool = next(entry for entry in TOOLS if entry.name == tool_name)
         assert property_name in set(_schema_property_names(tool.input_schema))

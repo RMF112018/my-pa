@@ -287,6 +287,15 @@ _OPERATOR_DECISION_REQUIRED: Final[frozenset[Capability]] = frozenset(
     {
         Capability.GSQS_START,
         Capability.GSQS_STATUS,
+        # Record lineage S1 (ADR-015, OD-07; S1 contract section 7): ChatLLM
+        # exposure of the lineage plane is an operator decision. The
+        # `records.*` and `meetings.notes.*` names join when they are declared.
+        Capability.ISSUES_CREATE,
+        Capability.ISSUES_READ,
+        Capability.ISSUES_LIST,
+        Capability.ISSUES_UPDATE,
+        Capability.ISSUES_PROJECT_LINKS_ADD,
+        Capability.ISSUES_PROJECT_LINKS_END,
     }
 )
 
@@ -325,6 +334,9 @@ _GSQS_EXCLUSION: Final = "GSQS campaign lifecycle held out pending reclassificat
 _KNOWLEDGE_DISCOVERY_EXCLUSION: Final = (
     "bound Knowledge discovery-client control plane (exact allowlist and profile only)"
 )
+_LINEAGE_S1_EXCLUSION: Final = (
+    "record lineage S1; exposure is an operator decision (ADR-015, OD-07)"
+)
 
 _EXCLUSION_RATIONALE: Final[Mapping[Capability, str]] = MappingProxyType(
     {
@@ -349,6 +361,12 @@ _EXCLUSION_RATIONALE: Final[Mapping[Capability, str]] = MappingProxyType(
         Capability.GSQS_START: _GSQS_EXCLUSION,
         Capability.GSQS_STATUS: _GSQS_EXCLUSION,
         Capability.SOURCES_ENROLL: "operator-only source enrollment / authority expansion",
+        Capability.ISSUES_CREATE: _LINEAGE_S1_EXCLUSION,
+        Capability.ISSUES_READ: _LINEAGE_S1_EXCLUSION,
+        Capability.ISSUES_LIST: _LINEAGE_S1_EXCLUSION,
+        Capability.ISSUES_UPDATE: _LINEAGE_S1_EXCLUSION,
+        Capability.ISSUES_PROJECT_LINKS_ADD: _LINEAGE_S1_EXCLUSION,
+        Capability.ISSUES_PROJECT_LINKS_END: _LINEAGE_S1_EXCLUSION,
     }
 )
 

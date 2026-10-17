@@ -521,6 +521,18 @@ class SafeDetail(StrEnum):
     #: selector), `REASON` and `IDEMPOTENCY_KEY` are reused, not redeclared.
     EXPECTED_LIFECYCLE_REVISION = "expected_lifecycle_revision"
     CAPTURE_WITHDRAWN = "capture_withdrawn"
+    #: Record lineage S1, the Issue plane (S1 contract sections 7.2 and 7.3).
+    #: `ISSUE_ID` is the subject of an absent, foreign or context-Situation
+    #: Issue; `STATE` a refused state value or move; `EXPECTED_MEMBERSHIP_REVISION`
+    #: a malformed Project-link precondition (a stale one is `conflict` /
+    #: `stale_version`); `EVIDENCE_ANCHOR` a Project link's anchor that is
+    #: malformed or does not match its source. `TITLE`, `DESCRIPTION`,
+    #: `PROJECT_ID`, `EXPECTED_VERSION`, `CLEAR_FIELDS`, `REASON`, `CURSOR`,
+    #: `PAGE_SIZE` and `IDEMPOTENCY_KEY` are reused, not redeclared.
+    ISSUE_ID = "issue_id"
+    STATE = "state"
+    EXPECTED_MEMBERSHIP_REVISION = "expected_membership_revision"
+    EVIDENCE_ANCHOR = "evidence_anchor"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

@@ -76,9 +76,9 @@ All three transports call one function — `adapters.normalization.normalize` �
 and none of them can build a request value of its own. A request that HTTP
 refuses, MCP and the CLI refuse, with the same code, the same message, the same
 `safe_details`, and the same audit event. That is `SPEC-AC-001`, and
-The public vocabulary declares one hundred and ninety-two capabilities.
+The public vocabulary declares one hundred and ninety-eight capabilities.
 `tests/contract/test_transport_parity.py` distinguishes that vocabulary from
-the one hundred and ninety-two command-backed names and holds positive request
+the one hundred and ninety-eight command-backed names and holds positive request
 and response parity over the latter set. Its
 separate unwired contract is vacuous now that no declared name is left without one,
 without an MCP tool or command schema, while the generic HTTP/CLI name path
@@ -187,13 +187,14 @@ one declared capability, `tools`, and nothing else.
 ## The tool list
 
 `tools/list` returns the tools **this process can serve**, and that is not the
-same as the tools this build implements. The build declares **192** capability
-names; 192 have application commands/handlers and no declared name is left without one.
+same as the tools this build implements. The build declares **198** capability
+names; 198 have application commands/handlers and no declared name is left without one.
 The measured application composition with GoodNotes pull enabled has
-**113 application-available capabilities**: 192 implemented handlers less the six
+**113 application-available capabilities**: 198 implemented handlers less the six
 `documents.`, fifty-five `entities.`, nine `relationship_memory.`, and the seven
 `knowledge.assertions.`, one `knowledge.discovery.checkpoint` and one
-`record_events.provenance` handlers whose composition gates remain off. A local stdio MCP session has no authenticated
+`record_events.provenance` handlers and the six record lineage `issues.` handlers
+(`MY_PA_LINEAGE_ENABLED`) whose composition gates remain off. A local stdio MCP session has no authenticated
 client identity, so it additionally withholds the three client-bound GoodNotes
 pull operations and publishes **110 tools**. An authenticated MCP client against
 that same 113-capability application composition sees all 113. These figures are
@@ -215,7 +216,7 @@ the plane switch alone still withholds its write half — and the nine
 `relationship_memory.` names, which need the plane variable *and*
 `MY_PA_RELATIONSHIP_MEMORY_ENABLED`; and the seven `knowledge.assertions.` names and `knowledge.discovery.checkpoint`, which need
 `MY_PA_KNOWLEDGE_ASSERTIONS_ENABLED` and the plane variable; a fully composed authenticated child publishes
-all 192 implemented tools, every declared name now having a handler. An operator who expects `documents.create`
+all 198 implemented tools, every declared name now having a handler. An operator who expects `documents.create`
 on the list and does not find it should look at that variable first — it is the
 only thing that decides it. (Pointing the plane at real storage is `EXT-10` and
 remains operator-gated; `docs/operations/mcv-limitations.md` section 13 states
@@ -227,7 +228,7 @@ Measured against a real child process — `.venv/bin/python apps/gateway.py mcp`
 (unconfigured local stdio: 110, with the three authenticated-client capabilities
 absent) and
 `::test_a_child_with_a_managed_root_publishes_every_locally_available_capability`
-(fully feature-composed local stdio: 187, excluding those three and the two
+(fully feature-composed local stdio: 193, excluding those three and the two
 KLP-WP-04 Knowledge discovery capabilities, which are served only to an
 authenticated remote client).
 
@@ -272,7 +273,7 @@ that names it again is refused.
 ## Calling a tool
 
 **Current-state correction (2026-08-28):** the tool list is derived from all
-**192** implemented capability commands from the **192** declared names, and the schema has
+**198** implemented capability commands from the **198** declared names, and the schema has
 **one hundred and nineteen** revisions at head `264310e0416a` (`264310e0416a` is additive on `b9025e7fb738` for record lineage Slice S1 (ADR-015: Issue Situations, typed record links with exact evidence anchors, and their database guards); `b9025e7fb738` is additive on `5c1e7a9b3d42` for WP-MCP-PROJ-05 legacy Project-Entity bridge reconciliation; `5c1e7a9b3d42` is additive on `c8f7ae406d47` and replaces `knowledge.commitments.counterparty_person_id` with `counterparty_entity_id` (an `ent_` identifier with a composite foreign key onto `entities (entity_id, principal_id)`), refusing in both directions while any Commitment row exists; `c8f7ae406d47` is additive on `a591b81f10a2` and adds the append-only `observability.mcp_interactions` MCP interaction log; `a591b81f10a2` is additive on `cc373834a485` for the Intelligence report type registry; `cc373834a485` is additive on `93f3aa113f58` and adds sixteen fields to `knowledge.projects` -- `aliases`, `project_number`, `sector`, `type`, `address`, `city`, `county`, `address_state`, `zip`, `value`, and six independent schedule dates -- with `project_number` unique per Principal; `93f3aa113f58` is additive on `6734f039f7a6` for Intelligence focus-area admission; `6734f039f7a6` is additive on `0641c354ca85` for KLP-WP-02 Knowledge Assertion layer; `0641c354ca85` is additive on `c8e4a1b70d35` for CRL-WP-03 Capture lifecycle; `c8e4a1b70d35` is additive on `1d9b248e7f83` for RE-DBH-01 Record Event TRUNCATE refusal; `1d9b248e7f83` is additive on `7d9a450dfd07` for WP-RE-01 Record Events; `7d9a450dfd07` is additive on `6f6ead27d122` for WP-MTG-04 Meeting records; `6f6ead27d122` is additive on `e6a4c2f91b73` for CCA-005 WP-TUX-01 legacy direct-Principal origin reconciliation; `e6a4c2f91b73` is additive on `c4f1a8e52d90` for R01-WP03 integrity; `c4f1a8e52d90` is additive on `b3e9d7a41c25` for WP-MCP-PROJ-03 continuity.projects.update/close and project_history; `b3e9d7a41c25` is additive on `9f2c8a1d4e70` for WP-MCP-PROJ-02 continuity.projects.read and the Project list keyset index; `9f2c8a1d4e70` is additive on `de5ec1c65857` for WP-MCP-PROJ-01 Project.version and the Continuity Project↔Entity bridge; `de5ec1c65857` is additive on `c1a8e4d70b29` for WP-TUX-01 task origin/closure/comments; `c1a8e4d70b29` is additive on `b8e4d6f20a11` for append-only `knowledge.capture_labels`; `b8e4d6f20a11` is additive on `f7a2c9d51e64` for the bounded Constraint synchronization backend; `f7a2c9d51e64` is additive on `4e9a1c7b2d60` and widens the two frozen `audit_events` closed sets to admit the twelve Constraint Management authoring capabilities together with the single `constraint_authoring` purpose, and no Constraint synchronisation vocabulary (PC-CM-IMP-WP07); `4e9a1c7b2d60` is additive on `c5b71e0a8d43` and normalizes account identity plus one-time digest-backed auth grants targeting the fixed local operator; `c5b71e0a8d43` is additive on `a1c9e4b72f80` and admits the six Constraint Management read capabilities `constraints.read`, `constraints.list`, `constraints.search`, `constraints.history`, `constraints.overview`, and `constraint_categories.list` together with the single `constraint_read` purpose, and no Constraint authoring or synchronisation vocabulary (PC-CM-IMP-WP04); `a1c9e4b72f80` is additive on `2774329487be` and admits `goodnotes.notebooks.list`, `goodnotes.pages.list`, `goodnotes.runs.list`, `goodnotes.read`, `goodnotes.search`, and `goodnotes.correct` together with `goodnotes_browse`, `goodnotes_read`, and `goodnotes_correction`; `2774329487be` is additive on `e8f2a6c9d104` and adds the fourteen-table Constraint-management plane (PC-CM-IMP-WP02); `e8f2a6c9d104` is additive on `d4e8b1c7a902` and adds immutable GoodNotes client lease policy and client-scoped attempt/completion uniqueness; `d4e8b1c7a902` is additive on `a4d8e31b2c90` and adds the Principal-partitioned canvas workspace overlay; `6a2f9d1c4b80` is additive on `c3f8a1d07e94` and adds five Principal-partitioned, content-free GoodNotes pull and semantic-review ledger tables while admitting `goodnotes.pull`, `goodnotes.complete`, and `goodnotes.status` to the frozen audit vocabulary; `c3f8a1d07e94` admits `entities.graph` on `b8e4d1a6c073`; corrected 2026-09-03 from
 eighty-eight at `16f05c46b8c3`, on which `b8e4d1a6c073` is additive and
 backfills one `display`-typed `entity_names` row per active `entities` row --

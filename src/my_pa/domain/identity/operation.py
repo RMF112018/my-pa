@@ -970,6 +970,23 @@ class Capability(StrEnum):
     #: `record_events.list` is: an event names a product-owned record of the
     #: acting Principal's own partition and no configured source.
     RECORD_EVENTS_PROVENANCE = "record_events.provenance"
+    #: Record lineage S1 (ADR-015; S1 contract section 7): the Issue plane. An
+    #: Issue is a `situations` row of kind `issue_workstream` with its own
+    #: immutable revisions; its native Project scope is an append-only event
+    #: ledger over `project_situations`. Two reads map to `Purpose.ISSUE_READ`
+    #: and the four writes to `Purpose.ISSUE_AUTHORING`, and to nothing else.
+    #: The two `issues.project_links.*` writes are attested: local-operator only
+    #: (contract section 6.1). None is operator-only in the `_OPERATOR_ONLY`
+    #: sense -- the attestation rule is the application's, applied per request
+    #: -- and every one is scopeless: an Issue is a product-owned record of the
+    #: Principal's own partition. All six are withheld unless
+    #: `MY_PA_LINEAGE_ENABLED` is on (contract section 7.5).
+    ISSUES_CREATE = "issues.create"
+    ISSUES_READ = "issues.read"
+    ISSUES_LIST = "issues.list"
+    ISSUES_UPDATE = "issues.update"
+    ISSUES_PROJECT_LINKS_ADD = "issues.project_links.add"
+    ISSUES_PROJECT_LINKS_END = "issues.project_links.end"
 
 
 class NativeSourceCapability(StrEnum):
@@ -1510,6 +1527,15 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         # `record_event_read`: a grant issued to list the feed must never also
         # disclose submission lineage, and the reverse.
         Capability.RECORD_EVENTS_PROVENANCE: frozenset({Purpose.RECORD_EVENT_PROVENANCE_READ}),
+        # Record lineage S1: each Issue name maps to exactly one purpose of the
+        # plane's read/authoring pair, so a grant issued to read Issues cannot
+        # change one.
+        Capability.ISSUES_READ: frozenset({Purpose.ISSUE_READ}),
+        Capability.ISSUES_LIST: frozenset({Purpose.ISSUE_READ}),
+        Capability.ISSUES_CREATE: frozenset({Purpose.ISSUE_AUTHORING}),
+        Capability.ISSUES_UPDATE: frozenset({Purpose.ISSUE_AUTHORING}),
+        Capability.ISSUES_PROJECT_LINKS_ADD: frozenset({Purpose.ISSUE_AUTHORING}),
+        Capability.ISSUES_PROJECT_LINKS_END: frozenset({Purpose.ISSUE_AUTHORING}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),
@@ -1670,6 +1696,12 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         # So both are destructive, and the matrix says the same.
         Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
         Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
+        # Record lineage S1: the four Issue writes each append an immutable
+        # revision or membership event; the two reads stay out.
+        Capability.ISSUES_CREATE,
+        Capability.ISSUES_UPDATE,
+        Capability.ISSUES_PROJECT_LINKS_ADD,
+        Capability.ISSUES_PROJECT_LINKS_END,
     }
 )
 
@@ -1769,6 +1801,12 @@ _ADDITIVE_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         # mutation or Record Event. It never enriches, supersedes or transitions
         # an existing assertion.
         Capability.KNOWLEDGE_ASSERTIONS_CREATE,
+        # Record lineage S1 (contract section 7): `issues.create` inserts a new
+        # Issue and its first revision; `issues.project_links.add` inserts a
+        # Project link or appends a `reinstate` event, and never rewrites a row.
+        # `issues.update` and `issues.project_links.end` change existing state.
+        Capability.ISSUES_CREATE,
+        Capability.ISSUES_PROJECT_LINKS_ADD,
     }
 )
 

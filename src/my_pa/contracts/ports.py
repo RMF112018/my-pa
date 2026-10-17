@@ -112,6 +112,12 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesSemanticProposal,
     GoodNotesSemanticReviewCase,
 )
+from my_pa.domain.lineage.model import EvidenceAnchor
+from my_pa.domain.lineage.vocabulary import (
+    IssueProjectMembershipAction,
+    IssueProjectMembershipState,
+    IssueRevisionAction,
+)
 from my_pa.domain.meeting.model import (
     MeetingListRequest,
     MeetingSearchRequest,
@@ -365,6 +371,11 @@ __all__ = [
     "FrameRepository",
     "InitialAlias",
     "InitialIdentifier",
+    "IssueCursorError",
+    "IssueListPage",
+    "IssueRecord",
+    "IssueRepository",
+    "IssueRevisionRecord",
     "KnowledgeAssertionHistory",
     "KnowledgeAssertionPage",
     "KnowledgeAssertionRepository",
@@ -397,6 +408,9 @@ __all__ = [
     "KnowledgeSubmitRequest",
     "KnowledgeSupersessionGuardError",
     "KnowledgeTriggerNotFoundError",
+    "LineageIdempotencyConflictError",
+    "LineageSourceVersion",
+    "LineageWriteRequestRecord",
     "ManagedAdmission",
     "ManagedByteStore",
     "ManagedDocumentRepository",
@@ -414,6 +428,7 @@ __all__ = [
     "Operation",
     "OperationQueue",
     "PortError",
+    "ProjectLinkEventRecord",
     "ProjectRepository",
     "ProposalAdmissionConflictError",
     "PulseRepository",
@@ -6254,6 +6269,16 @@ class UnitOfWork(ABC):
         """
 
     @property
+    @abstractmethod
+    def issues(self) -> IssueRepository:
+        """The record lineage S1 Issue plane, inside this transaction.
+
+        On the general unit of work for the reason `meetings` is: an Issue write
+        reserves its request, locks, writes its revision or membership event and
+        completes its request in the one transaction `invoke` already owns.
+        """
+
+    @property
     def identity_history(self) -> object:
         """The optional Principal-scoped identity-history read projection.
 
@@ -6453,7 +6478,14 @@ class SituationRepository(ABC):
     def list_situations(
         self, principal_id: str, state_filter: SituationState | None = None
     ) -> tuple[Situation, ...]:
-        """One page of this Principal's Situations, newest first."""
+        """One page of this Principal's context Situations, newest first.
+
+        Selects `kind = 'context'` only (record lineage S1 contract section 8,
+        F22): an Issue (`kind = 'issue_workstream'`) is never listed here, so
+        `continuity.situations` and `context.prepare`'s continuity gather never
+        offer a `situation_id` the Work and Memory writers refuse. Issues are
+        reached through `issues.list` and `issues.read`.
+        """
 
 
 class FrameRepository(ABC):
@@ -8947,3 +8979,278 @@ class MeetingRepository(ABC):
         Raises `MeetingCursorError` when the anchor is absent, foreign, or
         outside the filter set (and, with `query`, outside the match set).
         """
+
+
+# --- Record lineage S1: the Issue plane (S1 contract sections 6 and 7) ---------
+#
+# The values below cross the Issue port. None carries a `principal_id`: the
+# Principal is a parameter on every `IssueRepository` method, taken from the
+# authenticated request, and the repository stamps it on every write and
+# constrains every read by it. Every method runs on the general unit of work's
+# connection, inside the one transaction `ApplicationService.invoke` opened.
+
+
+class LineageIdempotencyConflictError(PortError):
+    """One lineage idempotency key was reused with a different request digest."""
+
+
+class IssueCursorError(PortError):
+    """An `issues.list` `after` anchor is absent, foreign or outside the filter."""
+
+
+@dataclass(frozen=True, slots=True)
+class LineageWriteRequestRecord:
+    """One completed `lineage_write_requests` row, as a replay reads it.
+
+    Only completed rows cross the port: an incomplete reservation behind a
+    conflicting insert is an internal failure, never a replay.
+    """
+
+    capability: str
+    request_digest: str
+    completed_at: datetime
+    result_issue_id: str | None = None
+    result_issue_version: int | None = None
+    result_membership_event_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class IssueRecord:
+    """The `situations` row of one Issue (`kind = 'issue_workstream'`)."""
+
+    issue_id: str
+    version: int
+    state: SituationState
+    title: str
+    description: str | None
+    opened_at: datetime
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class IssueRevisionRecord:
+    """One immutable `issue_revisions` row."""
+
+    issue_id: str
+    version: int
+    revision_id: str
+    predecessor_version: int | None
+    action: IssueRevisionAction
+    state: SituationState
+    title: str
+    description: str | None
+    authority_class: str
+    decision_channel: str
+    source_capability: str
+    recorded_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectLinkEventRecord:
+    """One immutable `issue_project_membership_events` row, with its link's `psit_`.
+
+    `project_situation_id` is the `project_situations` row the event's triplet
+    names; it never changes after the link's first event.
+    """
+
+    membership_event_id: str
+    project_id: str
+    issue_id: str
+    project_situation_id: str
+    revision_no: int
+    predecessor_revision_no: int | None
+    action: IssueProjectMembershipAction
+    state: IssueProjectMembershipState
+    evidence_anchor_id: str | None
+    reason: str | None
+    acceptance_basis: str
+    authority_class: str
+    decision_channel: str
+    source_capability: str
+    recorded_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class IssueListPage:
+    """One bounded keyset page of Issues, and whether another page follows."""
+
+    entries: tuple[IssueRecord, ...]
+    has_more: bool
+
+
+@dataclass(frozen=True, slots=True)
+class LineageSourceVersion:
+    """One evidence source version, read under `FOR SHARE` (S1 contract 3.2, 5.2).
+
+    `body` is the exact stored text (`meeting_note_versions.content_markdown`
+    or `capture_versions.content`), read only to verify a passage digest and
+    never returned. `classification` is the Capture version's, `None` for a
+    Meeting note version.
+    """
+
+    version_number: int
+    content_sha256: str
+    body: str
+    classification: str | None = None
+
+
+class IssueRepository(ABC):
+    """The Issue plane's rows, on the general unit of work's connection.
+
+    The operation set is S1 contract section 6.2's lock order for the Issue and
+    Project-link writes: reserve and complete a `lineage_write_requests` row;
+    lock an Issue `FOR UPDATE` (a write that changes it) or `FOR SHARE`; share
+    the Project and every evidence source; claim the `project_situations`
+    triplet row `FOR UPDATE`; write the Issue, its immutable revision, the link
+    and its immutable membership event, and a reused-or-inserted evidence
+    anchor; and read. Reads take no locks.
+    """
+
+    @abstractmethod
+    def reserve_write_request(
+        self,
+        principal_id: str,
+        capability: str,
+        idempotency_key: str,
+        request_digest: str,
+        *,
+        created_at: datetime,
+    ) -> LineageWriteRequestRecord | None:
+        """Reserve the request identity, or answer the committed winner.
+
+        `None` when this call reserved it. A completed winner with the same
+        digest is returned for replay; one with another digest raises
+        `LineageIdempotencyConflictError`.
+        """
+
+    @abstractmethod
+    def complete_write_request(
+        self,
+        principal_id: str,
+        capability: str,
+        idempotency_key: str,
+        *,
+        request_digest: str,
+        completed_at: datetime,
+        result_issue_id: str | None = None,
+        result_issue_version: int | None = None,
+        result_membership_event_id: str | None = None,
+    ) -> None:
+        """Complete this transaction's reservation with its one result group."""
+
+    @abstractmethod
+    def insert_issue(
+        self, principal_id: str, issue: IssueRecord, revision: IssueRevisionRecord
+    ) -> None:
+        """Insert a new Issue `situations` row and its first revision."""
+
+    @abstractmethod
+    def lock_issue(
+        self, principal_id: str, issue_id: str, *, for_update: bool
+    ) -> IssueRecord | None:
+        """Lock one Issue of this Principal, or `None` (absent, foreign or context)."""
+
+    @abstractmethod
+    def update_issue(
+        self, principal_id: str, issue: IssueRecord, revision: IssueRevisionRecord
+    ) -> None:
+        """Write the Issue's next revision and the matching `situations` row."""
+
+    @abstractmethod
+    def read_issue(self, principal_id: str, issue_id: str) -> IssueRecord | None:
+        """One Issue of this Principal without a lock, or `None`."""
+
+    @abstractmethod
+    def read_issue_revision(
+        self, principal_id: str, issue_id: str, version: int
+    ) -> IssueRevisionRecord | None:
+        """One immutable Issue revision, or `None`."""
+
+    @abstractmethod
+    def list_issues(
+        self,
+        principal_id: str,
+        *,
+        page_size: int,
+        after: str | None,
+        state: SituationState | None,
+        project_id: str | None,
+    ) -> IssueListPage:
+        """One keyset page ordered `(created_at DESC, situation_id DESC)`.
+
+        Raises `IssueCursorError` when `after` names no Issue inside the same
+        filter set.
+        """
+
+    @abstractmethod
+    def project_links(
+        self, principal_id: str, issue_id: str, *, limit: int
+    ) -> tuple[ProjectLinkEventRecord, ...]:
+        """The latest event of each of the Issue's Project links, at most `limit`.
+
+        Ordered active first, then by `project_id`.
+        """
+
+    @abstractmethod
+    def share_project(self, principal_id: str, project_id: str) -> bool:
+        """`FOR SHARE` on a Project of this Principal; `False` when it has none."""
+
+    @abstractmethod
+    def claim_project_link(
+        self,
+        principal_id: str,
+        *,
+        project_id: str,
+        issue_id: str,
+        project_situation_id: str,
+        linked_at: datetime,
+        association_evidence_ref: str | None,
+    ) -> str:
+        """Insert the triplet row unless one stands, lock it `FOR UPDATE`, return its id."""
+
+    @abstractmethod
+    def latest_membership_event(
+        self, principal_id: str, project_id: str, issue_id: str
+    ) -> ProjectLinkEventRecord | None:
+        """The latest event of one Project link, or `None` when it has none."""
+
+    @abstractmethod
+    def insert_membership_event(self, principal_id: str, event: ProjectLinkEventRecord) -> None:
+        """Append one immutable Project-link membership event."""
+
+    @abstractmethod
+    def read_membership_event(
+        self, principal_id: str, membership_event_id: str
+    ) -> ProjectLinkEventRecord | None:
+        """One immutable membership event, or `None`."""
+
+    @abstractmethod
+    def share_note_version(
+        self, principal_id: str, meeting_id: str, note_version_id: str
+    ) -> LineageSourceVersion | None:
+        """`FOR SHARE` on a Meeting note version under that Meeting, or `None`."""
+
+    @abstractmethod
+    def share_capture_root(self, principal_id: str, capture_id: str) -> bool:
+        """`FOR SHARE` on a Capture root of this Principal; `False` when it has none."""
+
+    @abstractmethod
+    def share_capture_version(
+        self, principal_id: str, capture_id: str, version_id: str
+    ) -> LineageSourceVersion | None:
+        """`FOR SHARE` on a Capture version under that Capture root, or `None`."""
+
+    @abstractmethod
+    def capture_root_is_archived(self, principal_id: str, capture_id: str) -> bool:
+        """Whether the owned root's current lifecycle projection is archived."""
+
+    @abstractmethod
+    def capture_root_has_restricted_version(self, principal_id: str, capture_id: str) -> bool:
+        """Whether any committed version of the owned root is `restricted_local`."""
+
+    @abstractmethod
+    def admit_anchor(
+        self, principal_id: str, anchor: EvidenceAnchor, *, anchor_id: str, recorded_at: datetime
+    ) -> str:
+        """Reuse the anchor with this identity, or insert it; return its `anchor_id`."""

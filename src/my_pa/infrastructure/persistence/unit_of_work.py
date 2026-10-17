@@ -76,6 +76,7 @@ from my_pa.contracts.ports import (
     EntitiesRepository,
     EvidenceUnavailableError,
     GoodNotesSemanticRepository,
+    IssueRepository,
     KnowledgeAssertionRepository,
     KnowledgeRecord,
     KnowledgeRepository,
@@ -202,6 +203,7 @@ from my_pa.infrastructure.persistence.goodnotes_durable_note import PostgresDura
 from my_pa.infrastructure.persistence.goodnotes_pull import SqlGoodNotesPullRepository
 from my_pa.infrastructure.persistence.goodnotes_semantics import SqlGoodNotesSemanticRepository
 from my_pa.infrastructure.persistence.intelligence import SqlIntelligenceStore
+from my_pa.infrastructure.persistence.issues import SqlIssueRepository
 from my_pa.infrastructure.persistence.jobs import enqueue_job, job_for
 from my_pa.infrastructure.persistence.knowledge import (
     corpus_coverage,
@@ -1482,6 +1484,11 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def meetings(self) -> MeetingRepository:
         """The Meeting records rows, on this transaction's connection (WP-MTG-02)."""
         return SqlMeetingRepository(self._open)
+
+    @property
+    def issues(self) -> IssueRepository:
+        """The record lineage S1 Issue plane, on this transaction's connection."""
+        return SqlIssueRepository(self._open)
 
     @property
     def identity_history(self) -> SqlIdentityHistoryQuery:

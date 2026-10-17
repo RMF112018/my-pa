@@ -54,6 +54,7 @@ from my_pa.application.commands import (
     AddEntityAlias,
     AddEntityCommunicationMethod,
     AddEntityName,
+    AddIssueProjectLink,
     ApplyConstraintSync,
     ArchiveCapture,
     ArchiveEntity,
@@ -83,6 +84,7 @@ from my_pa.application.commands import (
     CreateEntityParticipation,
     CreateEntityProposal,
     CreateEntityRelationship,
+    CreateIssue,
     CreateKnowledgeAssertion,
     CreateManagedDocument,
     CreateMeeting,
@@ -99,6 +101,7 @@ from my_pa.application.commands import (
     EndEntityAssignment,
     EndEntityParticipation,
     EndEntityRelationship,
+    EndIssueProjectLink,
     EnrollSource,
     FetchSource,
     GetCanvasWorkspace,
@@ -141,6 +144,7 @@ from my_pa.application.commands import (
     ListGoodNotesPages,
     ListGoodNotesRuns,
     ListIntelligenceArtifacts,
+    ListIssues,
     ListKnowledgeAssertions,
     ListManagedDocuments,
     ListMeetings,
@@ -174,6 +178,7 @@ from my_pa.application.commands import (
     ReadConstraintSyncState,
     ReadGoodNotes,
     ReadIntelligenceArtifact,
+    ReadIssue,
     ReadKnowledge,
     ReadKnowledgeAssertion,
     ReadManagedDocument,
@@ -236,6 +241,7 @@ from my_pa.application.commands import (
     UpdateConstraint,
     UpdateConstraintCategory,
     UpdateEntity,
+    UpdateIssue,
     UpdateMeeting,
     UpdateMeetingSeries,
     UpdateProject,
@@ -676,6 +682,15 @@ def _requested_scope(
             # Principal, and never a configured source or an enrollment.
             | SubmitKnowledgeAssertion()
             | CheckpointKnowledgeDiscovery()
+            # Record lineage S1: an Issue, its revisions and its native Project
+            # links are product-owned rows of the acting Principal and never a
+            # configured source.
+            | CreateIssue()
+            | ReadIssue()
+            | ListIssues()
+            | UpdateIssue()
+            | AddIssueProjectLink()
+            | EndIssueProjectLink()
         ):
             return frozenset()
         case CreateCapture():

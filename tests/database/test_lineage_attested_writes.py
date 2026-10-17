@@ -12,10 +12,11 @@ S1 contract sections 6.1, 7.5 and 8 against PostgreSQL through
   context Situation, and answer a foreign Issue exactly as before S1;
 * `SqlSituationRepository.list_situations` omits an Issue row (R1-F26).
 
-The `issues.memberships.*` and `records.associations.*` rows of this module
-(`test_an_operator_review_client_cannot_call_any_s1_write`,
-`test_a_replayed_attested_write_from_an_ordinary_client_is_denied_before_the_replay_lookup`)
-join with those capabilities. Every identity here is synthetic.
+The `issues.memberships.*` and `records.associations.*` rows (worker I3): an
+operator-review client can call no S1 write, a replay of an attested write
+from an ordinary client is denied before the replay lookup, an ordinary remote
+client is denied the membership and association writes, and the switch-off
+row covers all fourteen S1 names. Every identity here is synthetic.
 """
 
 from __future__ import annotations
@@ -28,18 +29,27 @@ from sqlalchemy import select
 
 from my_pa.application.commands import (
     AddIssueProjectLink,
+    CorrectRecordAssociation,
     CreateCommitment,
     CreateIssue,
     CreateRelationshipMemory,
     CreateSituation,
     CreateTask,
+    EndIssueMembership,
     EndIssueProjectLink,
+    EndRecordAssociation,
     ListIssues,
+    ListMeetingNoteVersions,
     ReadIssue,
+    ReadMeetingNoteVersion,
+    ReadRecordLineage,
     RecordTask,
     UpdateIssue,
 )
+from my_pa.bootstrap.knowledge_discovery_profiles import resolve_knowledge_client_overlay
+from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.operator_surface import OperatorSurface
+from my_pa.domain.lineage.vocabulary import LINEAGE_WRITE_CAPABILITIES as S1_WRITES
 from my_pa.domain.situation.continuity import CommitmentDirection
 from my_pa.domain.task.lifecycle import TaskOriginKind
 from my_pa.infrastructure.persistence.situation_repository import SqlSituationRepository
@@ -51,7 +61,17 @@ from tests.database.lineage_issue_harness import (
     LineageRuntime,
     lineage_row_counts,
 )
+from tests.database.lineage_record_harness import (
+    NOTE_BODY,
+    all_lineage_counts,
+    commitment,
+    meeting,
+    membership,
+    note_anchor,
+    originated_from,
+)
 from tests.database.test_commitment_entity_counterparty import seed_counterparty_entity
+from tests.schema.lineage_schema_ahead_contract import S1_CAPABILITIES
 
 pytestmark = pytest.mark.database
 
@@ -123,6 +143,14 @@ def test_an_ordinary_remote_client_is_denied_accepted_lineage_writes(
     unstamped = runtime.refused(_link(issue, project, "unstamped"))
     assert unstamped["code"] == "denied"
     assert lineage_row_counts(runtime.engine) == before
+    # The membership and association writes are attested the same way.
+    link_writes = _link_writes(runtime, "remote", local_link=None)
+    links_before = all_lineage_counts(runtime.engine)
+    for command in link_writes:
+        for kwargs in ({"remote_client": REMOTE_CLIENT}, {}):
+            error = runtime.refused(command, **kwargs)
+            assert error["code"] == "denied", command.capability.value
+    assert all_lineage_counts(runtime.engine) == links_before
 
 
 def test_switch_off_answers_unsupported_and_writes_nothing(disposable_database: str) -> None:
@@ -131,7 +159,6 @@ def test_switch_off_answers_unsupported_and_writes_nothing(disposable_database: 
     try:
         issue = on.issue("switch-off")
         project = on.project("switch-off")
-        before = lineage_row_counts(off.engine)
         commands: list[Any] = [
             CreateIssue(title="Never written", idempotency_key="lineage-off-create"),
             ReadIssue(issue_id=issue),
@@ -150,13 +177,21 @@ def test_switch_off_answers_unsupported_and_writes_nothing(disposable_database: 
                 idempotency_key="lineage-off-end",
                 reason="never ended",
             ),
+            *_link_writes(on, "off", local_link=None),
+            ReadRecordLineage(origin={"family": "situation", "record_id": issue}),
+            ListMeetingNoteVersions(meeting_id=_SYNTHETIC_MEETING),
+            ReadMeetingNoteVersion(meeting_id=_SYNTHETIC_MEETING, note_version_id=_SYNTHETIC_NOTE),
+            ReadIssue(issue_id=issue, include_members=True),
         ]
+        assert {command.capability.value for command in commands} == S1_CAPABILITIES
+        before = lineage_row_counts(off.engine)
         for command in commands:
             # The switch is checked before authority: even the operator surface
             # an attested write needs answers `unsupported`.
             error = off.refused(command, surface=OperatorSurface.HTTP_GATEWAY)
             assert error["code"] == "unsupported", command.capability.value
         assert lineage_row_counts(off.engine) == before
+        assert all_lineage_counts(off.engine)["record_links"] == 0
     finally:
         on.close()
         off.close()
@@ -269,3 +304,122 @@ def test_list_situations_omits_an_issue_row(runtime: LineageRuntime) -> None:
     # one to refuse), and maps its kind and version.
     assert fetched is not None
     assert fetched.kind.value == "issue_workstream" and fetched.version == 1
+
+
+# ---- memberships and associations (worker I3) -----------------------------------
+
+_SYNTHETIC_MEETING = "mtg_lineageattest0001"
+_SYNTHETIC_NOTE = "mnote_lineageattest0001"
+_SYNTHETIC_LINK = "irl_lineageattest0001"
+
+
+def _link_writes(runtime: LineageRuntime, key: str, *, local_link: str | None) -> list[Any]:
+    """The five S1 link writes, well formed; `.end`/`.correct` name `local_link`."""
+    issue = runtime.issue(f"links-{key}")
+    meeting_id, note_id = meeting(runtime, f"links-{key}")
+    c1 = commitment(runtime, f"links-{key}")
+    anchor = note_anchor(meeting_id, note_id, NOTE_BODY)
+    link = local_link or _SYNTHETIC_LINK
+    return [
+        membership(issue, "meeting", meeting_id, f"links-{key}", role="discussion"),
+        EndIssueMembership(
+            link_id=link,
+            expected_revision=1,
+            idempotency_key=f"lineage-links-{key}-member-end",
+            reason="synthetic",
+        ),
+        originated_from(
+            "commitment", c1, "meeting_note_version", note_id, f"links-{key}", (anchor,)
+        ),
+        CorrectRecordAssociation(
+            link_id=link,
+            expected_revision=1,
+            idempotency_key=f"lineage-links-{key}-correct",
+            reason="synthetic",
+            evidence_anchors=(note_anchor(meeting_id, note_id, NOTE_BODY, passage="façade"),),
+        ),
+        EndRecordAssociation(
+            link_id=link,
+            expected_revision=1,
+            idempotency_key=f"lineage-links-{key}-end",
+            reason="synthetic",
+        ),
+    ]
+
+
+class _Allowlists:
+    """The four Knowledge allowlists, with the client bound to operator review."""
+
+    def __init__(self, client: str) -> None:
+        self._client = client
+
+    def knowledge_discovery_oauth_client_id_set(self) -> frozenset[str]:
+        return frozenset()
+
+    def knowledge_operator_review_oauth_client_id_set(self) -> frozenset[str]:
+        return frozenset({self._client})
+
+    def chatllm_gateway_oauth_client_id_set(self) -> frozenset[str]:
+        return frozenset()
+
+    def knowledge_manager_oauth_client_id_set(self) -> frozenset[str]:
+        return frozenset()
+
+
+def test_an_operator_review_client_cannot_call_any_s1_write(disposable_database: str) -> None:
+    runtime = LineageRuntime(
+        disposable_database, knowledge_operator_review_client_ids=frozenset({REMOTE_CLIENT})
+    )
+    try:
+        writes = [capability for capability in Capability if capability.value in S1_WRITES]
+        assert len(writes) == 9
+        # The remote composition narrows an operator-review client to its
+        # Knowledge profile: no S1 capability survives, so none is published or
+        # granted to it.
+        allowed, pairs = resolve_knowledge_client_overlay(
+            _Allowlists(REMOTE_CLIENT),
+            REMOTE_CLIENT,
+            frozenset(Capability),
+            frozenset((capability, None) for capability in Capability),
+        )
+        assert not allowed & frozenset(writes)
+        assert not {capability for capability, _ in pairs} & frozenset(writes)
+        # And even granted directly, the service refuses every attested write
+        # (both Knowledge allowlists are empty for lineage, section 6.1) and
+        # writes nothing.
+        before = all_lineage_counts(runtime.engine)
+        for command in _link_writes(runtime, "review", local_link=None):
+            error = runtime.refused(command, remote_client=REMOTE_CLIENT)
+            assert error["code"] == "denied", command.capability.value
+        issue = runtime.issue("review-project")
+        project = runtime.project("review-project")
+        error = runtime.refused(_link(issue, project, "review"), remote_client=REMOTE_CLIENT)
+        assert error["code"] == "denied"
+        seeded = all_lineage_counts(runtime.engine)
+        assert seeded["record_links"] == before["record_links"]
+        assert (
+            seeded["issue_project_membership_events"] == before["issue_project_membership_events"]
+        )
+    finally:
+        runtime.close()
+
+
+def test_a_replayed_attested_write_from_an_ordinary_client_is_denied_before_the_replay_lookup(
+    runtime: LineageRuntime,
+) -> None:
+    writes = _link_writes(runtime, "replay", local_link=None)
+    added = runtime.ok(writes[0], surface=OperatorSurface.HTTP_GATEWAY)
+    asserted = runtime.ok(writes[2], surface=OperatorSurface.HTTP_GATEWAY)
+    before = all_lineage_counts(runtime.engine)
+    for command in (writes[0], writes[2]):
+        # The same key and payload a local operator committed: a replay for the
+        # operator, `denied` for an ordinary remote client and for an unstamped
+        # local caller, which never reach the request row.
+        for kwargs in ({"remote_client": REMOTE_CLIENT}, {}):
+            error = runtime.refused(command, **kwargs)
+            assert error["code"] == "denied", command.capability.value
+    assert all_lineage_counts(runtime.engine) == before
+    again = runtime.ok(writes[0], surface=OperatorSurface.HTTP_GATEWAY)
+    assert again["replayed"] is True and again["membership"] == added["membership"]
+    replayed = runtime.ok(writes[2], surface=OperatorSurface.HTTP_GATEWAY)
+    assert replayed["replayed"] is True and replayed["association"] == asserted["association"]

@@ -138,6 +138,9 @@ DEFAULT_LINEAGE_DEPTH: Final = 4
 MAX_LINEAGE_NODES: Final = 250
 MAX_LINEAGE_EDGES: Final = 400
 MAX_LINEAGE_BYTES: Final = 512 * 1024
+#: A typed edge's serialized size as the expansion estimates it before the
+#: edge's evidence is read; the exact bound is applied to the finished answer.
+_EDGE_ESTIMATE: Final = 768
 
 
 # ------------------------------------------------------------------- requests
@@ -877,7 +880,7 @@ class _Graph:
     def follow(self, head: LinkHeadRecord) -> bool:
         if head.link.link_id in self.links:
             return True
-        if not self.budget.admit(edges=1, size=2048):
+        if not self.budget.admit(edges=1, size=_EDGE_ESTIMATE):
             return False
         self.links[head.link.link_id] = head
         return True

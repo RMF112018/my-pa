@@ -1,0 +1,229 @@
+{
+  "_comment": "Golden vectors of the record lineage S1 canonical encodings (S1 contract section 5). Every expected string is hand-written; every digest is SHA-256 over the domain separator and that hand-written string. Shared by tests/unit/test_lineage_canonical.py and tests/database/test_lineage_canonical_sql_parity.py. All identifiers are synthetic.",
+  "record_link_identities": [
+    {
+      "name": "issue_membership_of_a_commitment",
+      "input": {
+        "kind": "issue_membership",
+        "relation_type": "issue_member",
+        "from_family": "situation",
+        "from_id": "sit_issue0001AAAA",
+        "to_family": "commitment",
+        "to_id": "cmt_commit0001AAAA",
+        "member_role": "work",
+        "context_issue_id": "sit_issue0001AAAA"
+      },
+      "expected": "{\"context_issue_id\":\"sit_issue0001AAAA\",\"from\":{\"family\":\"situation\",\"record_id\":\"sit_issue0001AAAA\",\"selector\":\"root\"},\"kind\":\"issue_membership\",\"member_role\":\"work\",\"relation_type\":\"issue_member\",\"schema_version\":1,\"to\":{\"family\":\"commitment\",\"record_id\":\"cmt_commit0001AAAA\",\"selector\":\"root\"}}"
+    },
+    {
+      "name": "originated_from_in_an_issue_context",
+      "input": {
+        "kind": "semantic",
+        "relation_type": "originated_from",
+        "from_family": "commitment",
+        "from_id": "cmt_commit0001AAAA",
+        "to_family": "meeting_note_version",
+        "to_id": "mnote_note0001AAAA",
+        "member_role": null,
+        "context_issue_id": "sit_issue0001AAAA"
+      },
+      "expected": "{\"context_issue_id\":\"sit_issue0001AAAA\",\"from\":{\"family\":\"commitment\",\"record_id\":\"cmt_commit0001AAAA\",\"selector\":\"root\"},\"kind\":\"semantic\",\"member_role\":null,\"relation_type\":\"originated_from\",\"schema_version\":1,\"to\":{\"family\":\"meeting_note_version\",\"record_id\":\"mnote_note0001AAAA\",\"selector\":\"root\"}}"
+    },
+    {
+      "name": "discusses_without_a_context",
+      "input": {
+        "kind": "semantic",
+        "relation_type": "discusses",
+        "from_family": "meeting",
+        "from_id": "mtg_meeting0001AA",
+        "to_family": "task",
+        "to_id": "tsk_task0001AAAA",
+        "member_role": null,
+        "context_issue_id": null
+      },
+      "expected": "{\"context_issue_id\":null,\"from\":{\"family\":\"meeting\",\"record_id\":\"mtg_meeting0001AA\",\"selector\":\"root\"},\"kind\":\"semantic\",\"member_role\":null,\"relation_type\":\"discusses\",\"schema_version\":1,\"to\":{\"family\":\"task\",\"record_id\":\"tsk_task0001AAAA\",\"selector\":\"root\"}}"
+    }
+  ],
+  "anchor_identities": [
+    {
+      "name": "note_version_passage",
+      "input": {
+        "source_family": "meeting_note_version",
+        "source_root_id": "mtg_meeting0001AA",
+        "source_version_kind": "immutable_version",
+        "source_version_id": "mnote_note0001AAAA",
+        "source_version_no": 2,
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "passage_start_cp": 3,
+        "passage_end_cp": 17,
+        "passage_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "expected": "{\"passage_end_cp\":17,\"passage_sha256\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"passage_start_cp\":3,\"source_family\":\"meeting_note_version\",\"source_root_id\":\"mtg_meeting0001AA\",\"source_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"source_version_id\":\"mnote_note0001AAAA\",\"source_version_kind\":\"immutable_version\",\"source_version_no\":2}"
+    },
+    {
+      "name": "capture_version_whole",
+      "input": {
+        "source_family": "capture_version",
+        "source_root_id": "cap_capture0001AA",
+        "source_version_kind": "immutable_version",
+        "source_version_id": "capver_version0001",
+        "source_version_no": 1,
+        "source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "passage_start_cp": null,
+        "passage_end_cp": null,
+        "passage_sha256": null
+      },
+      "expected": "{\"passage_end_cp\":null,\"passage_sha256\":null,\"passage_start_cp\":null,\"source_family\":\"capture_version\",\"source_root_id\":\"cap_capture0001AA\",\"source_sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"source_version_id\":\"capver_version0001\",\"source_version_kind\":\"immutable_version\",\"source_version_no\":1}"
+    },
+    {
+      "name": "legacy_capture_root",
+      "input": {
+        "source_family": "capture",
+        "source_root_id": "cap_capture0001AA",
+        "source_version_kind": "legacy_unversioned",
+        "source_version_id": null,
+        "source_version_no": null,
+        "source_sha256": null,
+        "passage_start_cp": null,
+        "passage_end_cp": null,
+        "passage_sha256": null
+      },
+      "expected": "{\"passage_end_cp\":null,\"passage_sha256\":null,\"passage_start_cp\":null,\"source_family\":\"capture\",\"source_root_id\":\"cap_capture0001AA\",\"source_sha256\":null,\"source_version_id\":null,\"source_version_kind\":\"legacy_unversioned\",\"source_version_no\":null}"
+    }
+  ],
+  "evidence_sets": [
+    {
+      "name": "empty",
+      "input": [],
+      "canonical": "{\"anchors\":[],\"schema_version\":1}",
+      "digest": "170495f3e5a95cbcec05af17ff7e3496d8ebfce34e99ab75bb62ff58252773ee"
+    },
+    {
+      "name": "mixed_note_capture_and_legacy",
+      "input": [
+        {
+          "source_family": "meeting_note_version",
+          "source_root_id": "mtg_meeting0001AA",
+          "source_version_kind": "immutable_version",
+          "source_version_id": "mnote_note0001AAAA",
+          "source_version_no": 2,
+          "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "passage_start_cp": 3,
+          "passage_end_cp": 17,
+          "passage_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "role": "discussion"
+        },
+        {
+          "source_family": "capture",
+          "source_root_id": "cap_capture0001AA",
+          "source_version_kind": "legacy_unversioned",
+          "source_version_id": null,
+          "source_version_no": null,
+          "source_sha256": null,
+          "passage_start_cp": null,
+          "passage_end_cp": null,
+          "passage_sha256": null,
+          "role": "corroborates"
+        },
+        {
+          "source_family": "capture_version",
+          "source_root_id": "cap_capture0001AA",
+          "source_version_kind": "immutable_version",
+          "source_version_id": "capver_version0001",
+          "source_version_no": 1,
+          "source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "passage_start_cp": null,
+          "passage_end_cp": null,
+          "passage_sha256": null,
+          "role": "origin"
+        }
+      ],
+      "canonical": "{\"anchors\":[{\"passage_end_cp\":null,\"passage_sha256\":null,\"passage_start_cp\":null,\"role\":\"corroborates\",\"source_family\":\"capture\",\"source_root_id\":\"cap_capture0001AA\",\"source_sha256\":null,\"source_version_id\":null,\"source_version_kind\":\"legacy_unversioned\",\"source_version_no\":null},{\"passage_end_cp\":null,\"passage_sha256\":null,\"passage_start_cp\":null,\"role\":\"origin\",\"source_family\":\"capture_version\",\"source_root_id\":\"cap_capture0001AA\",\"source_sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"source_version_id\":\"capver_version0001\",\"source_version_kind\":\"immutable_version\",\"source_version_no\":1},{\"passage_end_cp\":17,\"passage_sha256\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"passage_start_cp\":3,\"role\":\"discussion\",\"source_family\":\"meeting_note_version\",\"source_root_id\":\"mtg_meeting0001AA\",\"source_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"source_version_id\":\"mnote_note0001AAAA\",\"source_version_kind\":\"immutable_version\",\"source_version_no\":2}],\"schema_version\":1}",
+      "digest": "403b84e7b7d0d7c0ae30775a545b3be5f1fda2622097a3bb230e01803535bda8"
+    },
+    {
+      "name": "null_passage_first_then_numeric_start",
+      "input": [
+        {
+          "source_family": "meeting_note_version",
+          "source_root_id": "mtg_meeting0001AA",
+          "source_version_kind": "immutable_version",
+          "source_version_id": "mnote_note0001AAAA",
+          "source_version_no": 2,
+          "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "passage_start_cp": 10,
+          "passage_end_cp": 12,
+          "passage_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "role": "origin"
+        },
+        {
+          "source_family": "meeting_note_version",
+          "source_root_id": "mtg_meeting0001AA",
+          "source_version_kind": "immutable_version",
+          "source_version_id": "mnote_note0001AAAA",
+          "source_version_no": 2,
+          "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "passage_start_cp": 3,
+          "passage_end_cp": 17,
+          "passage_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "role": "origin"
+        },
+        {
+          "source_family": "meeting_note_version",
+          "source_root_id": "mtg_meeting0001AA",
+          "source_version_kind": "immutable_version",
+          "source_version_id": "mnote_note0001AAAA",
+          "source_version_no": 2,
+          "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "passage_start_cp": null,
+          "passage_end_cp": null,
+          "passage_sha256": null,
+          "role": "origin"
+        }
+      ],
+      "canonical": "{\"anchors\":[{\"passage_end_cp\":null,\"passage_sha256\":null,\"passage_start_cp\":null,\"role\":\"origin\",\"source_family\":\"meeting_note_version\",\"source_root_id\":\"mtg_meeting0001AA\",\"source_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"source_version_id\":\"mnote_note0001AAAA\",\"source_version_kind\":\"immutable_version\",\"source_version_no\":2},{\"passage_end_cp\":17,\"passage_sha256\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"passage_start_cp\":3,\"role\":\"origin\",\"source_family\":\"meeting_note_version\",\"source_root_id\":\"mtg_meeting0001AA\",\"source_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"source_version_id\":\"mnote_note0001AAAA\",\"source_version_kind\":\"immutable_version\",\"source_version_no\":2},{\"passage_end_cp\":12,\"passage_sha256\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"passage_start_cp\":10,\"role\":\"origin\",\"source_family\":\"meeting_note_version\",\"source_root_id\":\"mtg_meeting0001AA\",\"source_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"source_version_id\":\"mnote_note0001AAAA\",\"source_version_kind\":\"immutable_version\",\"source_version_no\":2}],\"schema_version\":1}",
+      "digest": "247e51d7c4380ff9a9a8d2cc01d2aa57a1fc565e55654d7acb16701acd0952f9"
+    }
+  ],
+  "request_digests": [
+    {
+      "name": "create_nfc_title",
+      "capability": "issues.create",
+      "principal_id": "prn_principal0001A",
+      "request": {
+        "title": "Café review",
+        "description": null
+      },
+      "canonical": "{\"capability\":\"issues.create\",\"principal_id\":\"prn_principal0001A\",\"request\":{\"description\":null,\"title\":\"Café review\"}}",
+      "digest": "75c14da4be53034b5845d0b7c9836f423d518584ceb3dbb8e94cd3ee2689eea2"
+    },
+    {
+      "name": "create_nfd_title",
+      "capability": "issues.create",
+      "principal_id": "prn_principal0001A",
+      "request": {
+        "title": "Café review",
+        "description": null
+      },
+      "canonical": "{\"capability\":\"issues.create\",\"principal_id\":\"prn_principal0001A\",\"request\":{\"description\":null,\"title\":\"Café review\"}}",
+      "digest": "b31a12868c6bb517accbbdea2f38ff779d08206c35687902066c5cbd09705d2e"
+    },
+    {
+      "name": "update_with_clear_fields",
+      "capability": "issues.update",
+      "principal_id": "prn_principal0001A",
+      "request": {
+        "issue_id": "sit_issue0001AAAA",
+        "expected_version": 3,
+        "title": null,
+        "description": null,
+        "state": "active",
+        "clear_fields": [
+          "description"
+        ]
+      },
+      "canonical": "{\"capability\":\"issues.update\",\"principal_id\":\"prn_principal0001A\",\"request\":{\"clear_fields\":[\"description\"],\"description\":null,\"expected_version\":3,\"issue_id\":\"sit_issue0001AAAA\",\"state\":\"active\",\"title\":null}}",
+      "digest": "13f22daca5005acc90e0a799a80d1869f5137de925b450485ea65018ceada1d6"
+    }
+  ]
+}

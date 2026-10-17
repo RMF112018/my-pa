@@ -488,6 +488,20 @@ class IdKind(StrEnum):
     KNOWLEDGE_DISCOVERY_CHECKPOINT = "kdcp"
     KNOWLEDGE_DISCOVERY_CHECKPOINT_REQUEST = "kdcpr"
     KNOWLEDGE_DISCOVERY_SOURCE_PROFILE = "kdsp"
+    #: Record lineage, Slice S1 (ADR-015, S1 contract section 2): one immutable
+    #: Issue revision, one Issue↔Project membership event, one association
+    #: root, one association revision and one evidence anchor. An Issue keeps
+    #: its `sit` identifier (there is no `issue` kind). `ires` is deliberately
+    #: not used: it is `IDENTITY_RESOLUTION`. Checked against every prior member
+    #: of this enum before use (a grep of each quoted value over `src`, `tests`,
+    #: `web/src` and `migrations`, and the uniqueness assertion in
+    #: `tests/unit/test_identifiers.py`): none collides, and none is a
+    #: prefix-with-underscore of another kind.
+    ISSUE_REVISION = "irs"
+    ISSUE_PROJECT_MEMBERSHIP_EVENT = "ipme"
+    RECORD_LINK = "irl"
+    RECORD_LINK_REVISION = "irv"
+    LINEAGE_EVIDENCE_ANCHOR = "ian"
 
 
 class InvalidIdentifierError(ValueError):

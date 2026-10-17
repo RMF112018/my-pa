@@ -1,3 +1,10 @@
+import {
+  decodeMeetingsNotesReadVersion,
+  type MeetingsNotesReadVersionResult,
+} from "@/lib/api/decode/capabilities/meetings.notes.read_version";
+import { decodeRecordsLineage, type RecordsLineageResult } from "@/lib/api/decode/capabilities/records.lineage";
+import type { Decoder } from "@/lib/api/decode/types";
+
 export type ApiFailure = Error & { status?: number; code?: string; errorClass?: string; current?: unknown };
 
 function contractFailure(message: string): ApiFailure {
@@ -62,6 +69,47 @@ export async function workRequest<T>(
     throw error;
   }
   return body as T;
+}
+
+/** The record views that carry a related-Issue panel (S1 contract section 7.4). */
+export type RelatedIssuesFamily = "task" | "commitment" | "constraint";
+
+/**
+ * A BFF route answer is the capability result plus the route's own `shape` and
+ * `disclosure`. The client decodes the result strictly again rather than
+ * trusting the route, so a view never renders a shape it was not promised.
+ */
+async function decodedRead<T>(path: string, decode: Decoder<T>): Promise<T> {
+  const { shape, disclosure, ...result } = await workRequest<Record<string, unknown>>(path);
+  void disclosure;
+  if (shape !== "backend") throw contractFailure("the route did not answer from the backend");
+  const decoded = decode(result);
+  if (!decoded.ok) throw contractFailure("the route success did not match the capability contract");
+  return decoded.value;
+}
+
+/** One `records.lineage` read for one record view, through its BFF route. */
+export async function fetchRelatedIssues(
+  family: RelatedIssuesFamily,
+  recordId: string,
+  issueId?: string,
+): Promise<RecordsLineageResult> {
+  const query = issueId === undefined ? "" : `?issueId=${encodeURIComponent(issueId)}`;
+  return decodedRead(
+    `/api/records/${encodeURIComponent(family)}/${encodeURIComponent(recordId)}/related-issues${query}`,
+    decodeRecordsLineage,
+  );
+}
+
+/** One exact note version, body included; only on an explicit open. */
+export async function fetchNoteVersion(
+  meetingId: string,
+  noteVersionId: string,
+): Promise<MeetingsNotesReadVersionResult> {
+  return decodedRead(
+    `/api/meetings/${encodeURIComponent(meetingId)}/notes/${encodeURIComponent(noteVersionId)}?includeBody=true`,
+    decodeMeetingsNotesReadVersion,
+  );
 }
 
 export async function captureEvidence(note: string, purpose: string, idempotencyKey = mutationKey(purpose)): Promise<string> {

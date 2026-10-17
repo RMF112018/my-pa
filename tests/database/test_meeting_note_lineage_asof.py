@@ -143,3 +143,24 @@ def test_a_digest_of_the_newer_note_is_refused_for_the_older_version(
     assert error["code"] == "invalid_request"
     assert error["safe_details"] == ["evidence_anchors"]
     assert all_lineage_counts(runtime.engine) == before
+
+
+def test_versions_list_defaults_to_twenty_five_per_page(runtime: LineageRuntime) -> None:
+    """Section 7.2: `page_size` defaults to 25 (as published), not the process default.
+
+    The harness's process default page size is 50, so a list without
+    `page_size` over 26 versions shows whether the S1 default or the
+    process-wide one applies.
+    """
+    m1, n1 = meeting(runtime, "versions-default")
+    for index in range(2, 27):
+        revise_notes(runtime, m1, f"versions-default-{index}", body=f"Synthetic note {index}.")
+    first = runtime.ok(ListMeetingNoteVersions(meeting_id=m1))
+    assert len(first["versions"]) == 25
+    assert [row["version_number"] for row in first["versions"]] == list(range(26, 1, -1))
+    assert first["next_cursor"] == first["versions"][-1]["note_version_id"]
+    rest = runtime.ok(ListMeetingNoteVersions(meeting_id=m1, after=first["next_cursor"]))
+    assert [row["note_version_id"] for row in rest["versions"]] == [n1]
+    assert rest["next_cursor"] is None
+    whole = runtime.ok(ListMeetingNoteVersions(meeting_id=m1, page_size=100))
+    assert len(whole["versions"]) == 26 and whole["next_cursor"] is None

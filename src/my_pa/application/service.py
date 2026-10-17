@@ -124,6 +124,7 @@ from my_pa.application.authorization import Authorization, authorize
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
 from my_pa.application.capture_lifecycle import transition_capture
 from my_pa.application.commands import (
+    DEFAULT_ISSUE_PAGE_SIZE,
     MAX_ISSUE_PAGE_SIZE,
     MAX_KNOWLEDGE_PAGE_SIZE,
     AcknowledgeConstraintSync,
@@ -13432,7 +13433,13 @@ class ApplicationService:
             page = meetings.list_note_versions(
                 principal_id,
                 command.meeting_id,
-                page_size=min(self._page_size(command.page_size), MAX_ISSUE_PAGE_SIZE),
+                # Section 7.2: the S1 default (25), not the process default.
+                page_size=min(
+                    self._page_size(
+                        DEFAULT_ISSUE_PAGE_SIZE if command.page_size is None else command.page_size
+                    ),
+                    MAX_ISSUE_PAGE_SIZE,
+                ),
                 after=command.after,
             )
         entries = [

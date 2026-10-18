@@ -707,6 +707,15 @@ way the S1 scope guard parses S1 §10.
 | AT-024 (S2, web component) | existing `web/src/components/work/related-issues.test.tsx` | `renders delegated, escalated, blocking and resolving relations in words`; `renders a closed Issue as closed` | vitest |
 | AT-026 (S2) | `tests/architecture/test_record_lineage_s2_scope.py` | `test_s2_adds_no_record_event_family`; `test_every_s2_crosswalk_test_exists`; `test_s2_modules_stage_no_lineage_record_event`; `test_the_web_lineage_decoder_admits_exactly_the_server_vocabulary` (added by K4, section 8) | FAST |
 
+**As implemented (K4).** Every row above exists (`test_every_s2_crosswalk_test_exists`)
+and executes: the 14 Python modules collect 171 tests (parametrized cases included), all
+selected by their tier markers, and at the K4 head all 171 pass with none skipped; the 4
+vitest titles pass in `npm test`. Two tests not named by the package were added and are
+listed in their rows (`test_assert_admits_exactly_the_s2_relations_it_writes`, K3;
+`test_the_web_lineage_decoder_admits_exactly_the_server_vocabulary`, K4). In AT-001 a
+note version that no link names (N1b, and J's own note) is reached only as its
+Meeting's virtual edge, never as a node, as S1 section 7.2 resolved.
+
 **S1 regressions (binding, must stay green; unchanged except the listed lockstep
 moves, R2-F08):** every test of S1 §10 and every v1 suite. The only edits admitted,
 each keeping its test name and changing only the moved literal or set:

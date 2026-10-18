@@ -76,7 +76,7 @@ _MEETINGS = _MEETING_READS | _MEETING_WRITES
 
 def test_policy_covers_every_public_capability_exactly_once() -> None:
     assert set(CHATLLM_CAPABILITY_POLICY) == set(Capability)
-    assert len(CHATLLM_CAPABILITY_POLICY) == 206
+    assert len(CHATLLM_CAPABILITY_POLICY) == 214
     assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v9"
 
 
@@ -94,8 +94,9 @@ def test_classification_counts_match_the_approved_plan() -> None:
     assert counts[ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED] == 17
     # Record lineage S1: the six Issue-plane names are an operator decision
     # (ADR-015, OD-07), 2 -> 8, and the eight remaining S1 names 8 -> 16; no
-    # data-class member moves, so no profile bump.
-    assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 16
+    # data-class member moves, so no profile bump. Record lineage S2's
+    # names are the same operator decision, 16 -> 24; still no profile bump.
+    assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 24
     assert counts[ChatLLMCapabilityClass.RETIRED] == 0
 
 

@@ -107,12 +107,14 @@ from my_pa.application.commands import (
     CloseCommitment,
     CloseConstraint,
     CloseConstraintWithFollowUp,
+    CloseIssue,
     CloseProject,
     Command,
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
     ConfigureProjectControls,
     CorrectGoodNotes,
+    CorrectIssueMembership,
     CorrectRecordAssociation,
     CreateCapture,
     CreateCommitment,
@@ -125,6 +127,8 @@ from my_pa.application.commands import (
     CreateEntityProposal,
     CreateEntityRelationship,
     CreateIssue,
+    CreateIssueWorkCommitment,
+    CreateIssueWorkTask,
     CreateKnowledgeAssertion,
     CreateManagedDocument,
     CreateMeeting,
@@ -186,6 +190,7 @@ from my_pa.application.commands import (
     ListGoodNotesPages,
     ListGoodNotesRuns,
     ListIntelligenceArtifacts,
+    ListIssueHandoffs,
     ListIssues,
     ListKnowledgeAssertions,
     ListManagedDocuments,
@@ -222,6 +227,7 @@ from my_pa.application.commands import (
     ReadGoodNotes,
     ReadIntelligenceArtifact,
     ReadIssue,
+    ReadIssueClosureReadiness,
     ReadKnowledge,
     ReadKnowledgeAssertion,
     ReadManagedDocument,
@@ -234,8 +240,10 @@ from my_pa.application.commands import (
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
+    RecordIssueHandoff,
     RecordTask,
     ReopenConstraint,
+    ReopenIssue,
     ReorderConstraintCategories,
     Representation,
     ResolveConstraintSyncConflict,
@@ -460,6 +468,15 @@ _UNCOMPOSED_CAPABILITIES = frozenset(
         Capability.RECORDS_LINEAGE,
         Capability.MEETINGS_NOTES_VERSIONS,
         Capability.MEETINGS_NOTES_READ_VERSION,
+        # Record lineage S2, behind the same switch.
+        Capability.ISSUES_CLOSE,
+        Capability.ISSUES_REOPEN,
+        Capability.ISSUES_CLOSURE_READINESS,
+        Capability.ISSUES_MEMBERSHIPS_CORRECT,
+        Capability.ISSUES_HANDOFFS_RECORD,
+        Capability.ISSUES_HANDOFFS_LIST,
+        Capability.ISSUES_WORK_CREATE_TASK,
+        Capability.ISSUES_WORK_CREATE_COMMITMENT,
     }
 )
 
@@ -1671,6 +1688,66 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "meeting_id": "mtg_httpmeeting0001",
             "note_version_id": "mnote_httpnote00001",
         },
+        # Record lineage S2: close, reopen, readiness and membership correction.
+        Capability.ISSUES_CLOSE: {
+            "issue_id": "sit_httpissue0001",
+            "expected_version": 1,
+            "idempotency_key": "http-issues-close-0001",
+            "outcome": "the http issue was resolved",
+            "closure_evidence_anchors": [
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_httpmeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_httpnote00001",
+                    "source_sha256": "a" * 64,
+                    "passage_start_cp": 0,
+                    "passage_end_cp": 4,
+                    "passage_sha256": "b" * 64,
+                    "role": "resolution",
+                }
+            ],
+        },
+        Capability.ISSUES_REOPEN: {
+            "issue_id": "sit_httpissue0001",
+            "expected_version": 2,
+            "idempotency_key": "http-issues-reopen-0001",
+            "reason": "the http issue recurred",
+        },
+        Capability.ISSUES_CLOSURE_READINESS: {"issue_id": "sit_httpissue0001"},
+        Capability.ISSUES_MEMBERSHIPS_CORRECT: {
+            "link_id": "irl_httplink00001",
+            "expected_revision": 1,
+            "idempotency_key": "http-issues-memberships-correct-0001",
+            "reason": "the http task was resolved",
+        },
+        Capability.ISSUES_HANDOFFS_RECORD: {
+            "issue_id": "sit_httpissue0001",
+            "commitment_id": "cmt_httpcommitment01",
+            "from_side": "counterparty",
+            "effective_at": "2026-08-09T12:00:00+00:00",
+            "reason": "the http counterparty handed back",
+            "evidence_anchor": {
+                "family": "meeting_note_version",
+                "root_id": "mtg_httpmeeting0001",
+                "version_kind": "immutable_version",
+                "version_id": "mnote_httpnote00001",
+                "source_sha256": "a" * 64,
+                "role": "handoff",
+            },
+            "idempotency_key": "http-issues-handoffs-record-0001",
+        },
+        Capability.ISSUES_HANDOFFS_LIST: {"issue_id": "sit_httpissue0001"},
+        Capability.ISSUES_WORK_CREATE_TASK: {
+            "issue_id": "sit_httpissue0001",
+            "idempotency_key": "http-issues-work-create-task-0001",
+            "task": {"title": "the http task", "origin_kind": "direct_principal"},
+        },
+        Capability.ISSUES_WORK_CREATE_COMMITMENT: {
+            "issue_id": "sit_httpissue0001",
+            "idempotency_key": "http-issues-work-create-commitment-0001",
+            "commitment": {"summary": "the http commitment"},
+        },
     }
 
 
@@ -2780,6 +2857,68 @@ def commands_for(
         ),
         Capability.MEETINGS_NOTES_READ_VERSION: ReadMeetingNoteVersion(
             meeting_id="mtg_httpmeeting0001", note_version_id="mnote_httpnote00001"
+        ),
+        # Record lineage S2.
+        Capability.ISSUES_CLOSE: CloseIssue(
+            issue_id="sit_httpissue0001",
+            expected_version=1,
+            idempotency_key="http-issues-close-0001",
+            outcome="the http issue was resolved",
+            closure_evidence_anchors=(
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_httpmeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_httpnote00001",
+                    "source_sha256": "a" * 64,
+                    "passage_start_cp": 0,
+                    "passage_end_cp": 4,
+                    "passage_sha256": "b" * 64,
+                    "role": "resolution",
+                },
+            ),
+        ),
+        Capability.ISSUES_REOPEN: ReopenIssue(
+            issue_id="sit_httpissue0001",
+            expected_version=2,
+            idempotency_key="http-issues-reopen-0001",
+            reason="the http issue recurred",
+        ),
+        Capability.ISSUES_CLOSURE_READINESS: ReadIssueClosureReadiness(
+            issue_id="sit_httpissue0001"
+        ),
+        Capability.ISSUES_MEMBERSHIPS_CORRECT: CorrectIssueMembership(
+            link_id="irl_httplink00001",
+            expected_revision=1,
+            idempotency_key="http-issues-memberships-correct-0001",
+            reason="the http task was resolved",
+        ),
+        Capability.ISSUES_HANDOFFS_RECORD: RecordIssueHandoff(
+            issue_id="sit_httpissue0001",
+            commitment_id="cmt_httpcommitment01",
+            from_side="counterparty",
+            effective_at="2026-08-09T12:00:00+00:00",
+            reason="the http counterparty handed back",
+            evidence_anchor={
+                "family": "meeting_note_version",
+                "root_id": "mtg_httpmeeting0001",
+                "version_kind": "immutable_version",
+                "version_id": "mnote_httpnote00001",
+                "source_sha256": "a" * 64,
+                "role": "handoff",
+            },
+            idempotency_key="http-issues-handoffs-record-0001",
+        ),
+        Capability.ISSUES_HANDOFFS_LIST: ListIssueHandoffs(issue_id="sit_httpissue0001"),
+        Capability.ISSUES_WORK_CREATE_TASK: CreateIssueWorkTask(
+            issue_id="sit_httpissue0001",
+            idempotency_key="http-issues-work-create-task-0001",
+            task={"title": "the http task", "origin_kind": "direct_principal"},
+        ),
+        Capability.ISSUES_WORK_CREATE_COMMITMENT: CreateIssueWorkCommitment(
+            issue_id="sit_httpissue0001",
+            idempotency_key="http-issues-work-create-commitment-0001",
+            commitment={"summary": "the http commitment"},
         ),
     }
 

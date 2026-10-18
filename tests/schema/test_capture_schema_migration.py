@@ -28,8 +28,8 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with two hundred and six capabilities and
-fifty-seven purposes now declared in the domain. If this reddens, the freeze has been undone
+emits what it emitted on the day it merged, with two hundred and fourteen capabilities and
+fifty-eight purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
 
@@ -222,6 +222,22 @@ LINEAGE_TRIGGERS: Final[frozenset[str]] = frozenset(
         "a_link_head_follows_its_revisions",
         "a_lineage_write_request_completes_once",
         "a_lineage_write_request_is_never_left_reserved",
+        # Record lineage S2 (`d020b532ad7d`).
+        *(
+            f"{table}_{suffix}"
+            for table in (
+                "issue_revision_evidence",
+                "issue_responsibility_events",
+                "lineage_write_request_links",
+            )
+            for suffix in ("are_append_only", "refuse_truncate")
+        ),
+        "an_issue_closure_follows_its_predecessor",
+        "an_issue_revision_evidence_set_is_frozen",
+        "a_resolution_link_states_its_purpose",
+        "a_handoff_follows_its_predecessor",
+        "a_handoff_is_effective_in_order",
+        "a_composite_request_names_its_links",
     }
 )
 
@@ -522,6 +538,16 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "records.lineage",
         "meetings.notes.versions",
         "meetings.notes.read_version",
+        # Record lineage S2, admitted by its revision with the domain declaring
+        # every name in the same change.
+        "issues.close",
+        "issues.reopen",
+        "issues.closure_readiness",
+        "issues.memberships.correct",
+        "issues.handoffs.record",
+        "issues.handoffs.list",
+        "issues.work.create_task",
+        "issues.work.create_commitment",
     }
 )
 

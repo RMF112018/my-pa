@@ -284,6 +284,10 @@ def test_downgrading_one_step_removes_exactly_these_two_tables(migrated_engine: 
         "record_link_revision_evidence",
         "record_link_heads",
         "lineage_write_requests",
+        # Record lineage S2 (`d020b532ad7d`) stacks its three tables.
+        "issue_revision_evidence",
+        "issue_responsibility_events",
+        "lineage_write_request_links",
     }
     assert {
         "entities",

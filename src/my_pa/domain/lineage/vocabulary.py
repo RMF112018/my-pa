@@ -1,4 +1,4 @@
-"""Closed vocabularies of record lineage, Slice S1 (S1 contract section 3).
+"""Closed vocabularies of record lineage, Slices S1 and S2 (S1 and S2 contracts, section 3).
 
 Each enum here holds exactly what S1 admits, which is also exactly what the S1
 database CHECKs admit (`docs/architecture/record-lineage-s1-contract.md`
@@ -16,6 +16,13 @@ members, `ISSUE_STATES`), and the authority class and decision channel are the
 Knowledge plane's `KnowledgeReviewAuthorityClass` and
 `KnowledgeDecisionChannel` (`ISSUE_AUTHORITY_CLASSES`,
 `ATTESTED_AUTHORITY_CLASSES`, `ATTESTED_DECISION_CHANNELS`).
+
+**S2** (`docs/architecture/record-lineage-s2-contract.md` section 3) widens
+the Issue states (`closed`), the Issue revision actions (`closed`, `reopened`,
+`corrected`) and the relation types (`delegated_from`, `escalated_from`,
+`blocks`, `created_to_resolve`), adds the handoff holder vocabulary and the
+read-only closure blockers, and widens the capability sets the S2 revision
+(`d020b532ad7d`) restates as frozen literals, in the same change.
 
 Pure data: this module persists nothing and grants nothing.
 """
@@ -35,19 +42,28 @@ from my_pa.domain.knowledge_assertion.vocabulary import (
 __all__ = [
     "ATTESTED_AUTHORITY_CLASSES",
     "ATTESTED_DECISION_CHANNELS",
+    "COMPOSITE_CAPABILITIES",
+    "COMPOSITE_ONLY_RELATIONS",
+    "HANDOFF_CAPABILITIES",
     "ISSUE_AUTHORITY_CLASSES",
     "ISSUE_REVISION_CAPABILITIES",
     "ISSUE_STATES",
     "LINEAGE_WRITE_CAPABILITIES",
     "LINK_REVISION_CAPABILITIES",
+    "MANDATORY_MEMBER_ROLES",
     "MEMBERSHIP_EVENT_CAPABILITIES",
+    "MEMBER_VERSION_CAPABILITIES",
     "RECORD_FAMILY_ID_KINDS",
     "RECORD_LINK_CAPABILITIES",
     "RELATION_MATRIX",
+    "S1_LINEAGE_WRITE_CAPABILITIES",
     "AcceptanceBasis",
     "EvidenceAvailability",
     "EvidenceRole",
     "EvidenceSourceFamily",
+    "HandoffHolderKind",
+    "HandoffSide",
+    "IssueClosureBlocker",
     "IssueProjectMembershipAction",
     "IssueProjectMembershipState",
     "IssueRevisionAction",
@@ -73,12 +89,20 @@ class SituationKind(StrEnum):
 
 
 class IssueRevisionAction(StrEnum):
-    """Why an Issue revision was written (S1: no close, reopen or correction)."""
+    """Why an Issue revision was written.
+
+    S2 adds `closed` (`issues.close`), `reopened` (`issues.reopen`) and
+    `corrected` (an `issues.update` of a closed Issue's title or description,
+    which keeps it closed).
+    """
 
     CREATED = "created"
     UPDATED = "updated"
     ACTIVATED = "activated"
     SUSPENDED = "suspended"
+    CLOSED = "closed"
+    REOPENED = "reopened"
+    CORRECTED = "corrected"
 
 
 class IssueProjectMembershipAction(StrEnum):
@@ -116,11 +140,15 @@ class RecordLinkKind(StrEnum):
 
 
 class RelationType(StrEnum):
-    """The S1 relation types (section 3.1)."""
+    """The S1 relation types (S1 section 3.1) and the four S2 adds (S2 section 3.1)."""
 
     ISSUE_MEMBER = "issue_member"
     ORIGINATED_FROM = "originated_from"
     DISCUSSES = "discusses"
+    DELEGATED_FROM = "delegated_from"
+    ESCALATED_FROM = "escalated_from"
+    BLOCKS = "blocks"
+    CREATED_TO_RESOLVE = "created_to_resolve"
 
 
 class MemberRole(StrEnum):
@@ -211,11 +239,42 @@ class NativeVirtualEdge(StrEnum):
     MEETING_NOTE_VERSION_OF = "meeting_note_version_of"
 
 
-#: The Issue states S1 admits on `issue_revisions` (no `closed` before S2).
-#: Spelled rather than read off `SituationState`, because `domain.situation`
-#: imports `SituationKind` from here; `tests/unit/test_lineage_canonical.py`
-#: holds the three to a subset of that enum.
-ISSUE_STATES: Final[frozenset[str]] = frozenset({"open", "active", "suspended"})
+class HandoffHolderKind(StrEnum):
+    """Who holds a Commitment's next management action in one handoff event (S2 3.4)."""
+
+    PRINCIPAL = "principal"
+    ENTITY = "entity"
+
+
+class HandoffSide(StrEnum):
+    """Request only: the side a handoff's responsibility leaves (S2 section 3.4)."""
+
+    PRINCIPAL = "principal"
+    COUNTERPARTY = "counterparty"
+
+
+class IssueClosureBlocker(StrEnum):
+    """Read-only: why one mandatory member blocks an Issue's close (S2 section 3.3).
+
+    Declared in the order the gate reports them: the native conditions first,
+    then the resolution-evidence conditions.
+    """
+
+    NATIVE_OPEN = "native_open"
+    NATIVE_TERMINAL_UNSUCCESSFUL = "native_terminal_unsuccessful"
+    NATIVE_NOT_ACCEPTED = "native_not_accepted"
+    ROLE_FAMILY_NOT_CLOSABLE = "role_family_not_closable"
+    RESOLUTION_EVIDENCE_MISSING = "resolution_evidence_missing"
+    RESOLUTION_EVIDENCE_UNAVAILABLE = "resolution_evidence_unavailable"
+    RESOLUTION_EVIDENCE_CONTRADICTED = "resolution_evidence_contradicted"
+    RESOLUTION_EVIDENCE_STALE = "resolution_evidence_stale"
+
+
+#: The Issue states admitted on `issue_revisions`: S1's three non-terminal
+#: states and, from S2, `closed`. Spelled rather than read off
+#: `SituationState`, because `domain.situation` imports `SituationKind` from
+#: here; `tests/unit/test_lineage_canonical.py` holds the four to that enum.
+ISSUE_STATES: Final[frozenset[str]] = frozenset({"open", "active", "suspended", "closed"})
 
 #: The authority classes an Issue revision may record. `remote_operator_attested`
 #: is unreachable in S1 (contract section 6.1).
@@ -237,26 +296,67 @@ ATTESTED_DECISION_CHANNELS: Final[frozenset[str]] = frozenset(
 )
 
 #: The capabilities that write an Issue revision.
-ISSUE_REVISION_CAPABILITIES: Final[frozenset[str]] = frozenset({"issues.create", "issues.update"})
+ISSUE_REVISION_CAPABILITIES: Final[frozenset[str]] = frozenset(
+    {"issues.create", "issues.update", "issues.close", "issues.reopen"}
+)
 
 #: The capabilities that write an Issue↔Project membership event.
 MEMBERSHIP_EVENT_CAPABILITIES: Final[frozenset[str]] = frozenset(
     {"issues.project_links.add", "issues.project_links.end"}
 )
 
+#: The two S2 composite writes (S2 section 6.4): a native Work create, its
+#: Issue membership and its association intents in one unit of work.
+COMPOSITE_CAPABILITIES: Final[frozenset[str]] = frozenset(
+    {"issues.work.create_task", "issues.work.create_commitment"}
+)
+
 #: The capabilities that create a record link root.
-RECORD_LINK_CAPABILITIES: Final[frozenset[str]] = frozenset(
-    {"issues.memberships.add", "records.associations.assert"}
+RECORD_LINK_CAPABILITIES: Final[frozenset[str]] = (
+    frozenset({"issues.memberships.add", "records.associations.assert"}) | COMPOSITE_CAPABILITIES
 )
 
 #: The capabilities that write a record link revision.
 LINK_REVISION_CAPABILITIES: Final[frozenset[str]] = RECORD_LINK_CAPABILITIES | frozenset(
-    {"issues.memberships.end", "records.associations.correct", "records.associations.end"}
+    {
+        "issues.memberships.end",
+        "issues.memberships.correct",
+        "records.associations.correct",
+        "records.associations.end",
+    }
 )
 
-#: The nine S1 write capabilities (`lineage_write_requests.capability`).
+#: The capabilities whose link revision may record the member's observed native
+#: `version` (`record_link_revisions.member_native_version`, S2 section 3.3).
+MEMBER_VERSION_CAPABILITIES: Final[frozenset[str]] = (
+    frozenset({"issues.memberships.add", "issues.memberships.correct"}) | COMPOSITE_CAPABILITIES
+)
+
+#: The capability that appends a responsibility handoff event (S2 section 3.4).
+HANDOFF_CAPABILITIES: Final[frozenset[str]] = frozenset({"issues.handoffs.record"})
+
+#: The nine S1 write capabilities, as S1 named them.
+S1_LINEAGE_WRITE_CAPABILITIES: Final[frozenset[str]] = frozenset(
+    {
+        "issues.create",
+        "issues.update",
+        "issues.project_links.add",
+        "issues.project_links.end",
+        "issues.memberships.add",
+        "issues.memberships.end",
+        "records.associations.assert",
+        "records.associations.correct",
+        "records.associations.end",
+    }
+)
+
+#: The fifteen lineage write capabilities (`lineage_write_requests.capability`):
+#: S1's nine and S2's six.
 LINEAGE_WRITE_CAPABILITIES: Final[frozenset[str]] = (
-    ISSUE_REVISION_CAPABILITIES | MEMBERSHIP_EVENT_CAPABILITIES | LINK_REVISION_CAPABILITIES
+    ISSUE_REVISION_CAPABILITIES
+    | MEMBERSHIP_EVENT_CAPABILITIES
+    | LINK_REVISION_CAPABILITIES
+    | HANDOFF_CAPABILITIES
 )
 
 #: The identifier kind every endpoint family's record id carries.
@@ -270,6 +370,17 @@ RECORD_FAMILY_ID_KINDS: Final[MappingProxyType[RecordFamily, IdKind]] = MappingP
         RecordFamily.CONSTRAINT: IdKind.PROJECT_CONSTRAINT,
         RecordFamily.CAPTURE_VERSION: IdKind.CAPTURE_VERSION,
     }
+)
+
+#: The membership roles the closure gate evaluates (S2 section 3.3).
+MANDATORY_MEMBER_ROLES: Final[frozenset[MemberRole]] = frozenset(
+    {MemberRole.WORK, MemberRole.CONSTRAINT}
+)
+
+#: The relations only a composite's own transaction may write (S2 section 3.1):
+#: `records.associations.assert` refuses them as it refuses `issue_member`.
+COMPOSITE_ONLY_RELATIONS: Final[frozenset[RelationType]] = frozenset(
+    {RelationType.DELEGATED_FROM, RelationType.CREATED_TO_RESOLVE}
 )
 
 #: The section 3.1 relation matrix: `relation -> (kind, from families, to families)`.
@@ -311,6 +422,27 @@ RELATION_MATRIX: Final[
                     RecordFamily.CONSTRAINT,
                 }
             ),
+        ),
+        # S2 section 3.1.
+        RelationType.DELEGATED_FROM: (
+            RecordLinkKind.SEMANTIC,
+            frozenset({RecordFamily.COMMITMENT}),
+            frozenset({RecordFamily.TASK}),
+        ),
+        RelationType.ESCALATED_FROM: (
+            RecordLinkKind.SEMANTIC,
+            frozenset({RecordFamily.CONSTRAINT}),
+            frozenset({RecordFamily.TASK}),
+        ),
+        RelationType.BLOCKS: (
+            RecordLinkKind.SEMANTIC,
+            frozenset({RecordFamily.TASK, RecordFamily.CONSTRAINT}),
+            frozenset({RecordFamily.TASK, RecordFamily.CONSTRAINT}),
+        ),
+        RelationType.CREATED_TO_RESOLVE: (
+            RecordLinkKind.SEMANTIC,
+            frozenset({RecordFamily.TASK, RecordFamily.COMMITMENT}),
+            frozenset({RecordFamily.SITUATION, RecordFamily.CONSTRAINT}),
         ),
     }
 )

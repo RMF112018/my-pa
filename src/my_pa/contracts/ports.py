@@ -9093,11 +9093,19 @@ class LineageWriteRequestRecord:
     result_link_id: str | None = None
     result_link_revision_no: int | None = None
     result_created: bool | None = None
+    #: Record lineage S2 (S2 contract section 4.1): a handoff's event and a
+    #: composite's native record (its links are in `lineage_write_request_links`).
+    result_handoff_id: str | None = None
+    result_record_family: str | None = None
+    result_record_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class IssueRecord:
-    """The `situations` row of one Issue (`kind = 'issue_workstream'`)."""
+    """The `situations` row of one Issue (`kind = 'issue_workstream'`).
+
+    `closed_at` and `outcome` are set exactly while the Issue is `closed` (S2).
+    """
 
     issue_id: str
     version: int
@@ -9107,6 +9115,8 @@ class IssueRecord:
     opened_at: datetime
     created_at: datetime
     updated_at: datetime
+    closed_at: datetime | None = None
+    outcome: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -9125,6 +9135,15 @@ class IssueRevisionRecord:
     decision_channel: str
     source_capability: str
     recorded_at: datetime
+    #: Record lineage S2 (S2 contract section 4.1): a `closed` revision's
+    #: `closed_at` and `outcome` (a `corrected` one copies them), a `reopened`
+    #: one's `reason`, and a closing or reopening revision's evidence set in
+    #: canonical order with its stored digest (withheld from every view).
+    closed_at: datetime | None = None
+    outcome: str | None = None
+    reason: str | None = None
+    evidence: tuple[LineageLinkEvidence, ...] = ()
+    evidence_set_digest: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -9220,6 +9239,9 @@ class IssueRepository(ABC):
         result_link_id: str | None = None,
         result_link_revision_no: int | None = None,
         result_created: bool | None = None,
+        result_handoff_id: str | None = None,
+        result_record_family: str | None = None,
+        result_record_id: str | None = None,
     ) -> None:
         """Complete this transaction's reservation with its one result group."""
 
@@ -9249,7 +9271,16 @@ class IssueRepository(ABC):
     def read_issue_revision(
         self, principal_id: str, issue_id: str, version: int
     ) -> IssueRevisionRecord | None:
-        """One immutable Issue revision, or `None`."""
+        """One immutable Issue revision with its evidence set, or `None`."""
+
+    @abstractmethod
+    def latest_closing_revision(
+        self, principal_id: str, issue_id: str, *, at_or_below: int
+    ) -> IssueRevisionRecord | None:
+        """The latest `closed` revision at or below `at_or_below`, with its evidence, or `None`.
+
+        Record lineage S2 (S2 contract section 7.1, `IssueClosureView`).
+        """
 
     @abstractmethod
     def list_issues(
@@ -9363,6 +9394,14 @@ class LineageEndpoint:
     meeting_id: str | None = None
     capture_id: str | None = None
     classification: str | None = None
+    #: Record lineage S2: a Situation's `state` (the closed-Issue rule, S2
+    #: section 3.2), and a Task's, Commitment's or Constraint's native lifecycle
+    #: token, acceptance and `version`, read under the same `FOR SHARE` (the
+    #: membership `member_native_version` and the closure gate, S2 section 3.3).
+    situation_state: str | None = None
+    native_state: str | None = None
+    evidence_state: str | None = None
+    native_version: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -9412,6 +9451,9 @@ class LinkRevisionRecord:
     evidence_set_digest: str
     recorded_at: datetime
     evidence: tuple[LineageLinkEvidence, ...]
+    #: Record lineage S2 (S2 contract section 3.3): the member's native
+    #: `version` a membership writer observed; `None` for every other revision.
+    member_native_version: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -9526,6 +9568,28 @@ class RecordLineageRepository(ABC):
         self, principal_id: str, issue_id: str, *, limit: int
     ) -> tuple[LinkHeadRecord, ...]:
         """The Issue's active membership links, `(created_at, link_id)`, at most `limit`."""
+
+    def mandatory_memberships(
+        self, principal_id: str, issue_id: str, *, share: bool
+    ) -> tuple[LinkHeadRecord, ...]:
+        """The Issue's active `work` and `constraint` memberships, by `link_id`.
+
+        Record lineage S2 (S2 contract sections 3.3 and 6.2 step 5): `share`
+        takes each head `FOR SHARE` in that order (`issues.close`); a read
+        (`issues.closure_readiness`) takes none. Non-abstract with a
+        `NotImplementedError` default, so a read-only S1 source (the
+        `records.lineage` traversal fakes) need not implement the S2 gate reads.
+        """
+        raise NotImplementedError
+
+    def native_members(
+        self, principal_id: str, refs: Collection[RecordRef]
+    ) -> Mapping[RecordRef, LineageEndpoint]:
+        """Each named member's native facts, without a lock (S2 `issues.closure_readiness`).
+
+        Non-abstract with a `NotImplementedError` default, on the same terms.
+        """
+        raise NotImplementedError
 
     @abstractmethod
     def resolve_records(

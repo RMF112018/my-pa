@@ -2065,6 +2065,66 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "meeting_id": "mtg_paritymeeting0001",
             "note_version_id": "mnote_paritynote00001",
         },
+        # Record lineage S2: close, reopen, readiness and membership correction.
+        Capability.ISSUES_CLOSE: {
+            "issue_id": "sit_parityissue0001",
+            "expected_version": 1,
+            "idempotency_key": "parity-issues-close-0001",
+            "outcome": "the parity issue was resolved",
+            "closure_evidence_anchors": [
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_paritymeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_paritynote00001",
+                    "source_sha256": "a" * 64,
+                    "passage_start_cp": 0,
+                    "passage_end_cp": 4,
+                    "passage_sha256": "b" * 64,
+                    "role": "resolution",
+                }
+            ],
+        },
+        Capability.ISSUES_REOPEN: {
+            "issue_id": "sit_parityissue0001",
+            "expected_version": 2,
+            "idempotency_key": "parity-issues-reopen-0001",
+            "reason": "the parity issue recurred",
+        },
+        Capability.ISSUES_CLOSURE_READINESS: {"issue_id": "sit_parityissue0001"},
+        Capability.ISSUES_MEMBERSHIPS_CORRECT: {
+            "link_id": "irl_paritylink00001",
+            "expected_revision": 1,
+            "idempotency_key": "parity-issues-memberships-correct-0001",
+            "reason": "the parity task was resolved",
+        },
+        Capability.ISSUES_HANDOFFS_RECORD: {
+            "issue_id": "sit_parityissue0001",
+            "commitment_id": "cmt_paritycommitment01",
+            "from_side": "counterparty",
+            "effective_at": "2026-08-09T12:00:00+00:00",
+            "reason": "the parity counterparty handed back",
+            "evidence_anchor": {
+                "family": "meeting_note_version",
+                "root_id": "mtg_paritymeeting0001",
+                "version_kind": "immutable_version",
+                "version_id": "mnote_paritynote00001",
+                "source_sha256": "a" * 64,
+                "role": "handoff",
+            },
+            "idempotency_key": "parity-issues-handoffs-record-0001",
+        },
+        Capability.ISSUES_HANDOFFS_LIST: {"issue_id": "sit_parityissue0001"},
+        Capability.ISSUES_WORK_CREATE_TASK: {
+            "issue_id": "sit_parityissue0001",
+            "idempotency_key": "parity-issues-work-create-task-0001",
+            "task": {"title": "the parity task", "origin_kind": "direct_principal"},
+        },
+        Capability.ISSUES_WORK_CREATE_COMMITMENT: {
+            "issue_id": "sit_parityissue0001",
+            "idempotency_key": "parity-issues-work-create-commitment-0001",
+            "commitment": {"summary": "the parity commitment"},
+        },
     }
 
 
@@ -2200,7 +2260,7 @@ def test_there_are_three_transports_to_compare() -> None:
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
     # The command union and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 207, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 215, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -2550,6 +2610,15 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         Capability.RECORDS_LINEAGE,
         Capability.MEETINGS_NOTES_VERSIONS,
         Capability.MEETINGS_NOTES_READ_VERSION,
+        # Record lineage S2, behind the same switch.
+        Capability.ISSUES_CLOSE,
+        Capability.ISSUES_REOPEN,
+        Capability.ISSUES_CLOSURE_READINESS,
+        Capability.ISSUES_MEMBERSHIPS_CORRECT,
+        Capability.ISSUES_HANDOFFS_RECORD,
+        Capability.ISSUES_HANDOFFS_LIST,
+        Capability.ISSUES_WORK_CREATE_TASK,
+        Capability.ISSUES_WORK_CREATE_COMMITMENT,
     }
 )
 
@@ -3139,7 +3208,7 @@ def test_declared_unwired_capabilities_stay_separate_from_positive_parity(
     from my_pa.application.errors import UnsupportedError
 
     assert set(Capability) - set(_HANDLERS) == FUTURE_CAPABILITIES
-    assert len(IMPLEMENTED_CAPABILITIES) == 206
+    assert len(IMPLEMENTED_CAPABILITIES) == 214
     assert set(_BUILDERS) == set(IMPLEMENTED_CAPABILITIES)
     assert {Capability(tool.name) for tool in TOOLS} == set(IMPLEMENTED_CAPABILITIES)
 

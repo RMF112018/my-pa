@@ -26,6 +26,11 @@ existence check: a context Situation and an archived Task are
 `require_relation_evidence`) are section 3.1, `invalid_request` /
 `relation_type` and `invalid_request` / `evidence_anchors`.
 
+**The closed-Issue rule** (`require_open_issues`, S2 contract section 3.2): an
+Issue in state `closed` named as an endpoint, a membership owner or a
+`context_issue_id` of a lineage write is `conflict` / `state`, checked after
+every existence check (so a foreign closed Issue is `not_found`).
+
 **Parse** (`parse_evidence_anchor`): exactly the section 7.1 keys; `family` is
 `meeting_note_version`, `capture_version` or `capture`; `immutable_version`
 requires `version_id` and `source_sha256`; `legacy_unversioned` is the `capture`
@@ -52,12 +57,14 @@ from datetime import datetime
 from typing import Final, Literal
 
 from my_pa.application.errors import (
+    ConflictError,
     DeniedError,
     InvalidRequestError,
     NotFoundError,
     SafeDetail,
 )
 from my_pa.contracts.ports import (
+    IssueRecord,
     IssueRepository,
     LineageEndpoint,
     LineageSourceVersion,
@@ -86,6 +93,7 @@ from my_pa.domain.lineage.vocabulary import (
     SituationKind,
     SourceVersionKind,
 )
+from my_pa.domain.situation.situation import SituationState
 from my_pa.domain.source.registry import issue_identifier
 
 __all__ = [
@@ -96,6 +104,7 @@ __all__ = [
     "LockedLineageSources",
     "admit_evidence_anchor",
     "admit_evidence_set",
+    "anchor_input_of",
     "anchor_inputs_document",
     "bind_evidence_anchor",
     "insert_evidence_anchor",
@@ -106,6 +115,7 @@ __all__ = [
     "parse_record_ref",
     "relation_kind",
     "require_linkable",
+    "require_open_issues",
     "require_relation_evidence",
 ]
 
@@ -166,6 +176,26 @@ class EvidenceAnchorInput:
             "passage_sha256": self.passage_sha256,
             "role": self.role.value,
         }
+
+
+def anchor_input_of(anchor: EvidenceAnchor) -> EvidenceAnchorInput:
+    """A stored anchor as an input, so its source can be locked in section 6.2 order.
+
+    S2 `issues.close` shares the source of every `resolution` anchor in every
+    mandatory member's head revision (R2-F06); those anchors are already bound,
+    so only their source identity is needed here.
+    """
+    return EvidenceAnchorInput(
+        family=anchor.source_family,
+        root_id=anchor.source_root_id,
+        version_kind=anchor.source_version_kind,
+        version_id=anchor.source_version_id,
+        source_sha256=anchor.source_sha256,
+        passage_start_cp=anchor.passage_start_cp,
+        passage_end_cp=anchor.passage_end_cp,
+        passage_sha256=anchor.passage_sha256,
+        role=anchor.role,
+    )
 
 
 def _member[MemberT](value: object, vocabulary: type[MemberT], detail: SafeDetail) -> MemberT:
@@ -537,11 +567,13 @@ class LockedLineageSources:
     """Everything one link write names, locked and proven to exist (section 3.2 step 2).
 
     `endpoints` maps each named endpoint to its locked row; `evidence` holds
-    one locked source per anchor, in the input order.
+    one locked source per anchor, in the input order; `issues` maps each
+    named Issue (`issue_ids`) to its locked row.
     """
 
     endpoints: Mapping[RecordRef, LineageEndpoint] = field(default_factory=dict)
     evidence: tuple[LockedEvidenceSource, ...] = ()
+    issues: Mapping[str, IssueRecord] = field(default_factory=dict)
 
 
 def _evidence_targets(anchor: EvidenceAnchorInput, detail: SafeDetail) -> list[_LockTarget]:
@@ -636,10 +668,13 @@ def lock_lineage_sources(
         targets.extend(_evidence_targets(anchor, anchor_detail))
     locked_endpoints: dict[RecordRef, LineageEndpoint] = {}
     locked_evidence: dict[int, LockedEvidenceSource] = {}
+    locked_issues: dict[str, IssueRecord] = {}
     for target in sorted(targets, key=_LockTarget.order):
         if target.kind == "issue":
-            if issues.lock_issue(principal_id, target.identifier, for_update=False) is None:
+            issue = issues.lock_issue(principal_id, target.identifier, for_update=False)
+            if issue is None:
                 raise NotFoundError(target.refusal)
+            locked_issues[target.identifier] = issue
         elif target.kind == "capture_root":
             if not issues.share_capture_root(principal_id, target.identifier):
                 raise NotFoundError(target.refusal)
@@ -655,7 +690,23 @@ def lock_lineage_sources(
     return LockedLineageSources(
         endpoints=locked_endpoints,
         evidence=tuple(locked_evidence[id(anchor)] for anchor in anchors),
+        issues=locked_issues,
     )
+
+
+def require_open_issues(locked: LockedLineageSources) -> None:
+    """S2 section 3.2: no lineage write names a closed Issue (`conflict` / `state`).
+
+    Called once every target is locked and proven to exist, so an absent or
+    foreign closed Issue has already answered `not_found`. Covers the Issues a
+    write names (an owner or a context) and every Situation endpoint.
+    """
+    closed = SituationState.CLOSED.value
+    if any(issue.state is SituationState.CLOSED for issue in locked.issues.values()) or any(
+        endpoint.family is RecordFamily.SITUATION and endpoint.situation_state == closed
+        for endpoint in locked.endpoints.values()
+    ):
+        raise ConflictError(SafeDetail.STATE)
 
 
 def _lock_one_source(

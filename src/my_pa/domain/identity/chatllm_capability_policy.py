@@ -303,6 +303,15 @@ _OPERATOR_DECISION_REQUIRED: Final[frozenset[Capability]] = frozenset(
         Capability.RECORDS_LINEAGE,
         Capability.MEETINGS_NOTES_VERSIONS,
         Capability.MEETINGS_NOTES_READ_VERSION,
+        # Record lineage S2 (S2 contract section 7): the same operator decision.
+        Capability.ISSUES_CLOSE,
+        Capability.ISSUES_REOPEN,
+        Capability.ISSUES_CLOSURE_READINESS,
+        Capability.ISSUES_MEMBERSHIPS_CORRECT,
+        Capability.ISSUES_HANDOFFS_RECORD,
+        Capability.ISSUES_HANDOFFS_LIST,
+        Capability.ISSUES_WORK_CREATE_TASK,
+        Capability.ISSUES_WORK_CREATE_COMMITMENT,
     }
 )
 
@@ -344,6 +353,9 @@ _KNOWLEDGE_DISCOVERY_EXCLUSION: Final = (
 _LINEAGE_S1_EXCLUSION: Final = (
     "record lineage S1; exposure is an operator decision (ADR-015, OD-07)"
 )
+_LINEAGE_S2_EXCLUSION: Final = (
+    "record lineage S2; exposure is an operator decision (ADR-015, OD-07)"
+)
 
 _EXCLUSION_RATIONALE: Final[Mapping[Capability, str]] = MappingProxyType(
     {
@@ -382,6 +394,14 @@ _EXCLUSION_RATIONALE: Final[Mapping[Capability, str]] = MappingProxyType(
         Capability.RECORDS_LINEAGE: _LINEAGE_S1_EXCLUSION,
         Capability.MEETINGS_NOTES_VERSIONS: _LINEAGE_S1_EXCLUSION,
         Capability.MEETINGS_NOTES_READ_VERSION: _LINEAGE_S1_EXCLUSION,
+        Capability.ISSUES_CLOSE: _LINEAGE_S2_EXCLUSION,
+        Capability.ISSUES_REOPEN: _LINEAGE_S2_EXCLUSION,
+        Capability.ISSUES_CLOSURE_READINESS: _LINEAGE_S2_EXCLUSION,
+        Capability.ISSUES_MEMBERSHIPS_CORRECT: _LINEAGE_S2_EXCLUSION,
+        Capability.ISSUES_HANDOFFS_RECORD: _LINEAGE_S2_EXCLUSION,
+        Capability.ISSUES_HANDOFFS_LIST: _LINEAGE_S2_EXCLUSION,
+        Capability.ISSUES_WORK_CREATE_TASK: _LINEAGE_S2_EXCLUSION,
+        Capability.ISSUES_WORK_CREATE_COMMITMENT: _LINEAGE_S2_EXCLUSION,
     }
 )
 

@@ -1,4 +1,4 @@
-"""Issue memberships, semantic associations and the reverse read (record lineage S1).
+"""Issue memberships, semantic associations and the reverse read (record lineage S1 and S2).
 
 S1 contract sections 3.1, 3.2, 5, 6 and 7.2. `RecordLineageApplication` is
 stateless, takes the unit of work `ApplicationService.invoke` has **already
@@ -17,6 +17,16 @@ matrix and evidence rule; the identity advisory lock; the head `FOR UPDATE`;
 the anchors in canonical order, then the root, revision, evidence and head (or
 the next revision and the head advanced); completion with `result_created`
 where the capability has one.
+
+**S2** (S2 contract sections 3.2, 3.3 and 6.2): every link write refuses a
+closed Issue it names (`conflict` / `state`, `require_open_issues`); the
+revisions take the link's owning or context Issue (and any Issue endpoint)
+`FOR SHARE`, so they serialize with an `issues.close`; every membership
+revision on a Task, Commitment or Constraint member records the member's
+native `version` observed under its `FOR SHARE` (`member_native_version`);
+`issues.memberships.correct` replaces a membership's evidence set, admitting
+an identical set only as a re-affirmation after the member's native version
+moved; and `records.associations.assert` refuses the composite-only relations.
 
 **The reverse read** (`read_lineage`, section 7.2) is current-state,
 Principal-scoped, active links only, lock-free, and bounded: matching Issues
@@ -58,10 +68,12 @@ from my_pa.application.lineage_endpoints import (
     lock_lineage_sources,
     relation_kind,
     require_linkable,
+    require_open_issues,
     require_relation_evidence,
 )
 from my_pa.contracts.ports import (
     IssueRepository,
+    LineageEndpoint,
     LineageLinkEvidence,
     LineageResolvedRecord,
     LineageWriteRequestRecord,
@@ -87,8 +99,10 @@ from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import ensure_utc
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.lineage.canonical import evidence_set_digest, normalized_identity, request_digest
+from my_pa.domain.lineage.closure import VERSIONED_MEMBER_FAMILIES, has_resolution_anchor
 from my_pa.domain.lineage.model import EvidenceAnchor, RecordRef
 from my_pa.domain.lineage.vocabulary import (
+    COMPOSITE_ONLY_RELATIONS,
     AcceptanceBasis,
     EvidenceAvailability,
     EvidenceSourceFamily,
@@ -120,14 +134,19 @@ __all__ = [
     "AssociationResult",
     "LineageReadRequest",
     "MembershipAddRequest",
+    "MembershipCorrectRequest",
     "MembershipEndRequest",
     "RecordLineageApplication",
+    "anchor_view",
     "association_view",
+    "evidence_availability",
+    "member_native_version",
     "traverse_lineage",
 ]
 
 _MEMBERSHIP_ADD: Final = Capability.ISSUES_MEMBERSHIPS_ADD.value
 _MEMBERSHIP_END: Final = Capability.ISSUES_MEMBERSHIPS_END.value
+_MEMBERSHIP_CORRECT: Final = Capability.ISSUES_MEMBERSHIPS_CORRECT.value
 _ASSERT: Final = Capability.RECORDS_ASSOCIATIONS_ASSERT.value
 _CORRECT: Final = Capability.RECORDS_ASSOCIATIONS_CORRECT.value
 _END: Final = Capability.RECORDS_ASSOCIATIONS_END.value
@@ -141,6 +160,10 @@ MAX_LINEAGE_BYTES: Final = 512 * 1024
 #: A typed edge's serialized size as the expansion estimates it before the
 #: edge's evidence is read; the exact bound is applied to the finished answer.
 _EDGE_ESTIMATE: Final = 768
+
+#: S2 section 3.1 relations `records.associations.assert` will admit once their
+#: assert-time rules are implemented; refused until then.
+_NOT_YET_ASSERTABLE: Final = frozenset({RelationType.ESCALATED_FROM, RelationType.BLOCKS})
 
 
 # ------------------------------------------------------------------- requests
@@ -163,6 +186,16 @@ class MembershipEndRequest:
     link_id: str
     expected_revision: int
     reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class MembershipCorrectRequest:
+    """`issues.memberships.correct`, parsed (S2 section 7.2): the complete new set."""
+
+    link_id: str
+    expected_revision: int
+    reason: str
+    evidence_anchors: tuple[EvidenceAnchorInput, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -249,7 +282,7 @@ def _assert_document(request: AssociationAssertRequest) -> dict[str, object]:
 
 
 def _revise_document(
-    request: AssociationCorrectRequest | AssociationEndRequest,
+    request: AssociationCorrectRequest | AssociationEndRequest | MembershipCorrectRequest,
 ) -> dict[str, object]:
     return {
         "link_id": request.link_id,
@@ -262,7 +295,9 @@ def _revise_document(
 # ---------------------------------------------------------------------- views
 
 
-def _availability(anchor: EvidenceAnchor, archived: Collection[str]) -> EvidenceAvailability:
+def evidence_availability(
+    anchor: EvidenceAnchor, archived: Collection[str]
+) -> EvidenceAvailability:
     """Section 7.1 (F19): computed at read time, never written back."""
     if anchor.source_family is EvidenceSourceFamily.MEETING_NOTE_VERSION:
         return EvidenceAvailability.AVAILABLE
@@ -273,7 +308,8 @@ def _availability(anchor: EvidenceAnchor, archived: Collection[str]) -> Evidence
     return EvidenceAvailability.AVAILABLE
 
 
-def _anchor_view(cited: LineageLinkEvidence, archived: Collection[str]) -> EvidenceAnchorView:
+def anchor_view(cited: LineageLinkEvidence, archived: Collection[str]) -> EvidenceAnchorView:
+    """One cited anchor's view, its availability computed against the archive set now."""
     anchor = cited.anchor
     return EvidenceAnchorView(
         anchor_id=cited.anchor_id,
@@ -285,8 +321,19 @@ def _anchor_view(cited: LineageLinkEvidence, archived: Collection[str]) -> Evide
         passage_start_cp=anchor.passage_start_cp,
         passage_end_cp=anchor.passage_end_cp,
         role=anchor.role,
-        availability=_availability(anchor, archived),
+        availability=evidence_availability(anchor, archived),
     )
+
+
+def member_native_version(endpoint: LineageEndpoint) -> int | None:
+    """The native `version` a membership revision records (S2 section 3.3).
+
+    A Task, Commitment or Constraint member's `version`, read under the
+    writer's `FOR SHARE`; `None` for every other family.
+    """
+    if endpoint.family in VERSIONED_MEMBER_FAMILIES:
+        return endpoint.native_version
+    return None
 
 
 def _ref_view(ref: RecordRef) -> RecordRefView:
@@ -309,7 +356,7 @@ def association_view(
         lifecycle_state=revision.lifecycle_state,
         acceptance_basis=revision.acceptance_basis,
         authority_class=revision.authority_class,
-        evidence=tuple(_anchor_view(cited, archived) for cited in revision.evidence),
+        evidence=tuple(anchor_view(cited, archived) for cited in revision.evidence),
         created_at=link.created_at,
         recorded_at=revision.recorded_at,
     )
@@ -409,7 +456,9 @@ class RecordLineageApplication:
             endpoints=((request.member, SafeDetail.MEMBER),),
             anchors=request.evidence_anchors,
         )
-        require_linkable(issues, principal_id, locked.endpoints[request.member])
+        require_open_issues(locked)
+        member = locked.endpoints[request.member]
+        require_linkable(issues, principal_id, member)
         anchors = admit_evidence_set(issues, principal_id, locked.evidence)
         identity = normalized_identity(
             kind=kind,
@@ -434,7 +483,15 @@ class RecordLineageApplication:
             created_at=at,
         )
         return self._assert_root(
-            uow, principal_id, _MEMBERSHIP_ADD, idempotency_key, digest, root, anchors, at
+            uow,
+            principal_id,
+            _MEMBERSHIP_ADD,
+            idempotency_key,
+            digest,
+            root,
+            anchors,
+            at,
+            member_version=member_native_version(member),
         )
 
     def assert_association(
@@ -456,7 +513,15 @@ class RecordLineageApplication:
         if prior is not None:
             return _replayed(uow, principal_id, prior)
         kind = relation_kind(request.relation_type, request.from_ref, request.to_ref)
-        if kind is not RecordLinkKind.SEMANTIC:
+        if kind is not RecordLinkKind.SEMANTIC or request.relation_type in COMPOSITE_ONLY_RELATIONS:
+            # `issue_member`, and (S2 section 3.1) `delegated_from` and
+            # `created_to_resolve`, which only the creating transaction attests.
+            raise InvalidRequestError(SafeDetail.RELATION_TYPE)
+        if request.relation_type in _NOT_YET_ASSERTABLE:
+            # S2 section 3.1's `escalated_from` and `blocks` rules (Project
+            # qualification, cycle refusal) are not implemented in this
+            # change; until they are, both are refused rather than admitted
+            # without them.
             raise InvalidRequestError(SafeDetail.RELATION_TYPE)
         context = request.context_issue_id
         if (
@@ -477,6 +542,7 @@ class RecordLineageApplication:
             ),
             anchors=request.evidence_anchors,
         )
+        require_open_issues(locked)
         for ref in (request.from_ref, request.to_ref):
             require_linkable(issues, principal_id, locked.endpoints[ref])
         anchors = admit_evidence_set(issues, principal_id, locked.evidence)
@@ -517,8 +583,14 @@ class RecordLineageApplication:
         root: RecordLinkRecord,
         anchors: tuple[EvidenceAnchor, ...],
         at: datetime,
+        *,
+        member_version: int | None = None,
     ) -> AssociationResult:
-        """Section 6.2 steps 4 and 5, then the writes: a new root, or the active one."""
+        """Section 6.2 steps 4 and 5, then the writes: a new root, or the active one.
+
+        `member_version` is the member's observed native `version` a new
+        membership's revision 1 records (S2 section 3.3); `None` otherwise.
+        """
         issues, lineage = uow.issues, uow.record_lineage
         lineage.lock_identity(principal_id, root.normalized_identity)
         existing = lineage.active_head_by_identity(principal_id, root.normalized_identity)
@@ -555,6 +627,7 @@ class RecordLineageApplication:
             evidence_set_digest=evidence_set_digest(anchors),
             recorded_at=at,
             evidence=_inserted(issues, principal_id, anchors, at),
+            member_native_version=member_version,
         )
         lineage.insert_link(principal_id, root, revision)
         issues.complete_write_request(
@@ -593,6 +666,38 @@ class RecordLineageApplication:
             expected_revision=request.expected_revision,
             reason=request.reason,
             evidence=(),
+            idempotency_key=idempotency_key,
+            digest=digest,
+            authority=authority,
+            now=now,
+        )
+
+    def correct_membership(
+        self,
+        uow: UnitOfWork,
+        principal_id: str,
+        request: MembershipCorrectRequest,
+        idempotency_key: str,
+        authority: LineageAuthority,
+        now: datetime,
+    ) -> AssociationResult:
+        """Replace a membership's evidence set (S2 section 7.2); root, role and identity stay.
+
+        The set is the complete new set (0..32, any role) and differs from the
+        head's, except the section 3.3 re-affirmation. The revision records the
+        member's native `version` observed now.
+        """
+        digest = request_digest(_MEMBERSHIP_CORRECT, principal_id, _revise_document(request))
+        return self._revise(
+            uow,
+            principal_id,
+            capability=_MEMBERSHIP_CORRECT,
+            kind=RecordLinkKind.ISSUE_MEMBERSHIP,
+            action=LinkRevisionAction.CORRECT_EVIDENCE,
+            link_id=request.link_id,
+            expected_revision=request.expected_revision,
+            reason=request.reason,
+            evidence=request.evidence_anchors,
             idempotency_key=idempotency_key,
             digest=digest,
             authority=authority,
@@ -682,9 +787,22 @@ class RecordLineageApplication:
             raise NotFoundError(SafeDetail.LINK_ID)
         if link.kind is not kind:
             # A membership id given to `records.associations.*`, or a semantic
-            # link id given to `issues.memberships.end`.
+            # link id given to `issues.memberships.end`/`.correct`.
             raise InvalidRequestError(SafeDetail.LINK_ID)
-        locked = lock_lineage_sources(issues, lineage, principal_id, anchors=evidence)
+        records_member = capability == _MEMBERSHIP_CORRECT
+        locked = lock_lineage_sources(
+            issues,
+            lineage,
+            principal_id,
+            # S2 section 6.2 step 3: the owning or context Issue, and an Issue
+            # endpoint, so a revision serializes with `issues.close`.
+            issue_ids=_named_issues(link),
+            # The member's native row, to read the version it records.
+            endpoints=((link.to_ref, SafeDetail.MEMBER),) if records_member else (),
+            anchors=evidence,
+        )
+        require_open_issues(locked)
+        observed = member_native_version(locked.endpoints[link.to_ref]) if records_member else None
         lineage.lock_identity(principal_id, link.normalized_identity)
         head = lineage.lock_head(principal_id, link_id)
         if head is None:
@@ -699,7 +817,14 @@ class RecordLineageApplication:
         if action is LinkRevisionAction.CORRECT_EVIDENCE:
             require_relation_evidence(link.relation_type, link.from_ref, link.to_ref, anchors)
             current = _revision_of(lineage, principal_id, link_id, head.revision_no)
-            if current.evidence_set_digest == digest_of_set:
+            # S2 section 3.3 re-affirmation: the same set again, with a
+            # `resolution` anchor, once the member's native version has moved.
+            reaffirmed = (
+                records_member
+                and current.member_native_version != observed
+                and has_resolution_anchor(anchors)
+            )
+            if current.evidence_set_digest == digest_of_set and not reaffirmed:
                 raise InvalidRequestError(SafeDetail.EVIDENCE_ANCHORS)
         revision = LinkRevisionRecord(
             link_id=link_id,
@@ -720,6 +845,7 @@ class RecordLineageApplication:
             evidence_set_digest=digest_of_set,
             recorded_at=at,
             evidence=_inserted(issues, principal_id, anchors, at),
+            member_native_version=observed,
         )
         lineage.append_revision(principal_id, revision)
         issues.complete_write_request(
@@ -750,6 +876,24 @@ class RecordLineageApplication:
     ) -> LineageView:
         """`records.lineage` (section 7.2)."""
         return traverse_lineage(uow.record_lineage, principal_id, request)
+
+
+def _named_issues(link: RecordLinkRecord) -> tuple[tuple[str, SafeDetail], ...]:
+    """The Issues a link names: its owner or context, and any Issue endpoint, once each."""
+    named: dict[str, SafeDetail] = {}
+    if link.context_issue_id is not None:
+        named[link.context_issue_id] = (
+            SafeDetail.ISSUE_ID
+            if link.kind is RecordLinkKind.ISSUE_MEMBERSHIP
+            else SafeDetail.CONTEXT_ISSUE_ID
+        )
+    for ref, detail in (
+        (link.from_ref, SafeDetail.FROM_RECORD),
+        (link.to_ref, SafeDetail.TO_RECORD),
+    ):
+        if ref.family is RecordFamily.SITUATION:
+            named.setdefault(ref.record_id, detail)
+    return tuple(named.items())
 
 
 def _inserted(

@@ -447,7 +447,7 @@ nothing; an `issues.update` on a non-closed Issue stays a recorded write, as in 
 
 **The invariant, stated precisely (R2-F14, option a).** No attested result is ever
 returned to, and no attested row is ever written for, a caller that is not
-local-operator. For the 6 S2 writes above, attestation is derived before any row and
+local-operator. For the writes listed above (the S2 set), attestation is derived before any row and
 before the replay lookup (S1 §6.1). For `issues.update`, whose attestation depends on
 the Issue's state, it is derived at the two points where that state is known: (1) on a
 **replay hit** whose stored result (`result_issue_id`, `result_issue_version`) names a

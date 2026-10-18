@@ -9,6 +9,8 @@ S2 contract sections 6.1, 7, 7.1, 7.5 and 8:
   other capability's;
 * the close, reopen, readiness and membership-correction requests refuse every
   server-owned field, an exception/override field and any unknown key;
+* `records.associations.assert` publishes and parses exactly the S2 relations
+  it may write (`escalated_from`, `blocks`), never a creation relation;
 * the S1 Issue and association views keep every S1 key; `IssueView` gains
   exactly `closure`;
 * `lineage_enabled` off withholds all eight S2 names from the published surface
@@ -45,6 +47,7 @@ from my_pa.adapters.mcp.tools import payload_schema_for
 from my_pa.adapters.normalization import normalize
 from my_pa.adapters.remote_request import _IDEMPOTENT_REMOTE_CAPABILITIES
 from my_pa.application.commands import (
+    AssertRecordAssociation,
     CloseIssue,
     Command,
     CorrectIssueMembership,
@@ -86,6 +89,7 @@ from my_pa.domain.identity.operation import (
 )
 from my_pa.domain.identity.operator_surface import OperatorSurface
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.lineage.vocabulary import COMPOSITE_ONLY_RELATIONS, RelationType
 from my_pa.domain.policy.decision import _SCOPELESS
 
 S2_NAMES: Final = frozenset(
@@ -274,6 +278,55 @@ def test_s2_requests_reject_server_owned_fields(name: str) -> None:
         ):
             with pytest.raises(InvalidRequestError):
                 normalize(name, _arguments(name, broken))
+
+
+def test_assert_admits_exactly_the_s2_relations_it_writes() -> None:
+    """`records.associations.assert` widens to `escalated_from` and `blocks` only (S2 7.2).
+
+    The published schema names every relation the assert writes and no
+    creation relation (`delegated_from`, `created_to_resolve` are the
+    composites' own); the request parses each S2 relation in its matrix pair
+    and refuses one outside it before anything runs.
+    """
+    schema = AssertRecordAssociation.mcp_payload_properties["relation_type"]
+    published = list(schema["enum"])  # type: ignore[index]
+    assert published == ["blocks", "discusses", "escalated_from", "originated_from"]
+    semantic = {relation.value for relation in RelationType} - {"issue_member"}
+    assert set(published) == semantic - {relation.value for relation in COMPOSITE_ONLY_RELATIONS}
+    anchor = {**_ANCHOR, "role": "corroborates"}
+    payloads = {
+        "escalated_from": (
+            ("constraint", "cst_lineages2fast0001"),
+            ("task", "tsk_lineages2fast0001"),
+        ),
+        "blocks": (("task", "tsk_lineages2fast0001"), ("constraint", "cst_lineages2fast0001")),
+    }
+    for relation, (source, target) in payloads.items():
+        payload: dict[str, object] = {
+            "from_record": {"family": source[0], "record_id": source[1]},
+            "to_record": {"family": target[0], "record_id": target[1]},
+            "relation_type": relation,
+            "idempotency_key": f"fast-s2-assert-{relation}",
+            "evidence_anchors": [anchor],
+            "context_issue_id": _ISSUE,
+        }
+        name = "records.associations.assert"
+        _metadata, command = normalize(name, _arguments(name, payload))
+        assert isinstance(command, AssertRecordAssociation)
+        assert command.lineage_request().relation_type.value == relation
+        # The reverse escalation is outside the matrix; a reversed `blocks` is
+        # another `blocks`.
+        reverse = {
+            **payload,
+            "from_record": payload["to_record"],
+            "to_record": payload["from_record"],
+        }
+        if relation == "escalated_from":
+            with pytest.raises(InvalidRequestError):
+                normalize(name, _arguments(name, reverse))
+        for field in _SERVER_OWNED:
+            with pytest.raises(InvalidRequestError):
+                normalize(name, _arguments(name, {**payload, field: "server-owned"}))
 
 
 def test_s1_lineage_views_keep_every_s1_key() -> None:

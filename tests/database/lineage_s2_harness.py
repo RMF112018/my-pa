@@ -7,7 +7,8 @@ plane composed beside the general unit of work, Work and Constraint members
 driven to their native terminal states through their own v1 capabilities, and
 the S2 requests (`issues.close`, `issues.reopen`, `issues.memberships.correct`,
 and the handoff and composite requests `handoff`, `work_task`,
-`work_commitment`).
+`work_commitment`), and `assertion` for the `escalated_from` and `blocks`
+asserts.
 
 Every identity and every body here is synthetic.
 """
@@ -20,6 +21,8 @@ from typing import Any, Final
 from sqlalchemy import Engine, func, insert, select
 
 from my_pa.application.commands import (
+    AddIssueProjectLink,
+    AssertRecordAssociation,
     CloseCommitment,
     CloseConstraint,
     CloseIssue,
@@ -76,6 +79,7 @@ __all__ = [
     "REVIEW_DECISION",
     "S2Runtime",
     "all_s2_counts",
+    "assertion",
     "close",
     "correct",
     "handoff",
@@ -257,6 +261,18 @@ class S2Runtime(LineageRuntime):
         written = self.ok(membership(issue_id, family, record_id, key, role=role), surface=GATEWAY)
         return str(written["membership"]["link_id"])
 
+    def link_project(self, issue_id: str, project_id: str, key: str) -> None:
+        """`issues.project_links.add` of a Project not yet linked to the Issue."""
+        self.ok(
+            AddIssueProjectLink(
+                issue_id=issue_id,
+                project_id=project_id,
+                expected_membership_revision=0,
+                idempotency_key=f"s2-plink-{key}",
+            ),
+            surface=GATEWAY,
+        )
+
     def issue_version(self, issue_id: str) -> int:
         return int(self.ok(ReadIssue(issue_id=issue_id))["issue"]["version"])
 
@@ -364,6 +380,26 @@ def handoff(
         idempotency_key=f"s2-handoff-{key}",
         reason=reason,
         evidence_anchor=anchor,
+    )
+
+
+def assertion(
+    relation: str,
+    source: tuple[str, str],
+    target: tuple[str, str],
+    key: str,
+    anchors: tuple[dict[str, object], ...],
+    *,
+    context: str | None = None,
+) -> AssertRecordAssociation:
+    """`records.associations.assert` of `source` -> `target` (each `(family, record_id)`)."""
+    return AssertRecordAssociation(
+        from_record={"family": source[0], "record_id": source[1]},
+        to_record={"family": target[0], "record_id": target[1]},
+        relation_type=relation,
+        idempotency_key=f"s2-assoc-{key}",
+        evidence_anchors=anchors,
+        context_issue_id=context,
     )
 
 

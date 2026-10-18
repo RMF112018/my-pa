@@ -843,7 +843,9 @@ def test_downgrade_refuses_while_lineage_rows_exist(
     with pytest.raises(DBAPIError) as refused:
         command.downgrade(_config(), PREVIOUS)
     assert "refusing to downgrade 264310e0416a" in str(refused.value)
-    _assert_present(engine)
+    # Each revision runs in its own transaction: the S2 revision, holding no S2
+    # row, unwound first, and this one refused.
+    _assert_present(engine, at=REVISION)
 
 
 @pytest.mark.database
@@ -863,7 +865,9 @@ def test_downgrade_refuses_while_an_audit_event_names_the_s1_vocabulary(
     with pytest.raises(DBAPIError) as refused:
         command.downgrade(_config(), PREVIOUS)
     assert "refusing to downgrade 264310e0416a" in str(refused.value)
-    _assert_present(engine)
+    # Each revision runs in its own transaction: the S2 revision, holding no S2
+    # row, unwound first, and this one refused.
+    _assert_present(engine, at=REVISION)
 
 
 @pytest.mark.database

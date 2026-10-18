@@ -22,6 +22,7 @@ from my_pa.contracts.ports import (
     EntitiesRepository,
     GoodNotesProposalAdmission,
     GoodNotesSemanticRepository,
+    IssueHandoffRepository,
     IssueRepository,
     KnowledgeRepository,
     ManagedDocumentRepository,
@@ -233,6 +234,10 @@ class GsqsB0EvaluationUnitOfWork(UnitOfWork):
     @property
     def record_lineage(self) -> RecordLineageRepository:
         return cast(RecordLineageRepository, self._unused)
+
+    @property
+    def issue_handoffs(self) -> IssueHandoffRepository:
+        return cast(IssueHandoffRepository, self._unused)
 
     @property
     def context_runs(self) -> ContextRunRepository:

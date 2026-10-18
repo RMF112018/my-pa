@@ -20,8 +20,10 @@ really overlap:
 Every outcome is checked as an invariant over both orders, since PostgreSQL
 does not promise which waiter is granted first. Each wait is bounded and each
 thread joined with a timeout, so a build that takes no lock reports rather
-than hangs. The `blocks` and handoff races are the composite and relation
-workers' (S2 contract section 9: K2, K3). Every identity is synthetic.
+than hangs. Two handoffs of one Commitment's chain serialize on the chain's
+advisory key, so the second re-reads the chain the first extended. The
+`blocks` race is the relation worker's (S2 contract section 9, K3). Every
+identity is synthetic.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
+from datetime import datetime, timedelta
 from typing import Any, Final
 
 import pytest
@@ -40,6 +43,7 @@ from tests.database.lineage_s2_harness import (
     all_s2_counts,
     close,
     correct,
+    handoff,
     reopen,
 )
 
@@ -311,3 +315,31 @@ def test_close_racing_a_resolution_source_archive_serializes(runtime: S2Runtime)
         # The archive committed first: the gate saw the evidence unavailable.
         assert _detail(closed) == ("conflict", ["closure_gate"])
         assert _state(runtime, issue) == ("open", 1)
+
+
+def test_concurrent_handoffs_on_one_commitment_admit_one(runtime: S2Runtime) -> None:
+    """Both read the chain under its advisory key: the second sees the first's event."""
+    issue = runtime.issue("race-handoff")
+    commitment = runtime.commitment("race-handoff")
+    runtime.member(issue, "commitment", commitment, "race-handoff", "work")
+    created = datetime.fromisoformat(str(runtime.commitment_view(commitment)["created_at"]))
+    effective = (created + timedelta(milliseconds=1)).isoformat()
+    anchor = runtime.handoff_anchor("race-handoff")
+    before = all_s2_counts(runtime.engine)["issue_responsibility_events"]
+    first, second = _race(
+        runtime,
+        "SELECT commitment_id FROM knowledge.commitments WHERE commitment_id = :id FOR UPDATE",
+        {"id": commitment},
+        [
+            _invoke(
+                runtime, handoff(issue, commitment, "counterparty", effective, "race-a", anchor)
+            ),
+            _invoke(
+                runtime, handoff(issue, commitment, "counterparty", effective, "race-b", anchor)
+            ),
+        ],
+    )
+    outcomes = sorted([_detail(first), _detail(second)], key=lambda item: item is not None)
+    # The loser re-read the chain: the Principal holds now, so `from` is the wrong side.
+    assert outcomes == [None, ("invalid_request", ["from"])]
+    assert all_s2_counts(runtime.engine)["issue_responsibility_events"] == before + 1

@@ -139,7 +139,9 @@ __all__ = [
     "RecordLineageApplication",
     "anchor_view",
     "association_view",
+    "association_views",
     "evidence_availability",
+    "insert_new_link",
     "member_native_version",
     "traverse_lineage",
 ]
@@ -382,6 +384,15 @@ def _views(
     return tuple(association_view(link, revision, archived) for link, revision in pairs)
 
 
+def association_views(
+    lineage: RecordLineageRepository,
+    principal_id: str,
+    pairs: Sequence[tuple[RecordLinkRecord, LinkRevisionRecord]],
+) -> tuple[AssociationView, ...]:
+    """Each `(root, revision)` as an `AssociationView`, availability computed now."""
+    return _views(lineage, principal_id, pairs)
+
+
 def _revision_of(
     lineage: RecordLineageRepository, principal_id: str, link_id: str, revision_no: int
 ) -> LinkRevisionRecord:
@@ -612,24 +623,9 @@ class RecordLineageApplication:
             )
             (view,) = _views(lineage, principal_id, [(existing.link, revision)])
             return AssociationResult(association=view, created=False, replayed=False)
-        revision = LinkRevisionRecord(
-            link_id=root.link_id,
-            revision_no=1,
-            revision_id=issue_identifier(IdKind.RECORD_LINK_REVISION),
-            predecessor_revision_no=None,
-            action=LinkRevisionAction.ASSERT,
-            lifecycle_state=LinkLifecycleState.ACTIVE,
-            acceptance_basis=AcceptanceBasis.USER_CONFIRMED,
-            authority_class=root.authority_class,
-            decision_channel=root.decision_channel,
-            source_capability=capability,
-            reason=None,
-            evidence_set_digest=evidence_set_digest(anchors),
-            recorded_at=at,
-            evidence=_inserted(issues, principal_id, anchors, at),
-            member_native_version=member_version,
+        revision = insert_new_link(
+            uow, principal_id, root, anchors, at, member_version=member_version
         )
-        lineage.insert_link(principal_id, root, revision)
         issues.complete_write_request(
             principal_id,
             capability,
@@ -876,6 +872,46 @@ class RecordLineageApplication:
     ) -> LineageView:
         """`records.lineage` (section 7.2)."""
         return traverse_lineage(uow.record_lineage, principal_id, request)
+
+
+def insert_new_link(
+    uow: UnitOfWork,
+    principal_id: str,
+    root: RecordLinkRecord,
+    anchors: tuple[EvidenceAnchor, ...],
+    at: datetime,
+    *,
+    reason: str | None = None,
+    member_version: int | None = None,
+) -> LinkRevisionRecord:
+    """Write a new root and its revision 1 (`assert`, `active`): anchors, root, revision, head.
+
+    The root-writing step `_assert_root` and the S2 composites share (S2
+    section 6.4). The caller holds the root's identity advisory lock and has
+    proven no active head carries that identity. `reason` is revision 1's
+    (a `created_to_resolve` purpose, S2 section 3.1; else `None`);
+    `member_version` the member's observed native `version` a membership's
+    revision 1 records (S2 section 3.3; else `None`).
+    """
+    revision = LinkRevisionRecord(
+        link_id=root.link_id,
+        revision_no=1,
+        revision_id=issue_identifier(IdKind.RECORD_LINK_REVISION),
+        predecessor_revision_no=None,
+        action=LinkRevisionAction.ASSERT,
+        lifecycle_state=LinkLifecycleState.ACTIVE,
+        acceptance_basis=AcceptanceBasis.USER_CONFIRMED,
+        authority_class=root.authority_class,
+        decision_channel=root.decision_channel,
+        source_capability=root.source_capability,
+        reason=reason,
+        evidence_set_digest=evidence_set_digest(anchors),
+        recorded_at=at,
+        evidence=_inserted(uow.issues, principal_id, anchors, at),
+        member_native_version=member_version,
+    )
+    uow.record_lineage.insert_link(principal_id, root, revision)
+    return revision
 
 
 def _named_issues(link: RecordLinkRecord) -> tuple[tuple[str, SafeDetail], ...]:

@@ -32,22 +32,25 @@ inside the payload the caller controls.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import math
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import Enum, StrEnum
 from types import MappingProxyType
-from typing import Any, ClassVar, Final
+from typing import Any, ClassVar, Final, get_type_hints
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from my_pa.application import goodnotes_note_unit_contract as _note_unit
 from my_pa.application.errors import InvalidRequestError, SafeDetail, invalid_choice
 from my_pa.application.goodnotes_pull_orchestration import MAX_PULL_BATCH_SIZE
 from my_pa.application.identity_correction import ConflictChoice
+from my_pa.application.issue_handoffs import HandoffListRequest, HandoffRecordRequest
+from my_pa.application.issue_work import AssociationIntent, WorkCompositeRequest
 from my_pa.application.issues import (
     IssueCloseRequest,
     IssueCreateRequest,
@@ -157,6 +160,7 @@ from my_pa.domain.lineage.model import (
 from my_pa.domain.lineage.vocabulary import (
     RELATION_MATRIX,
     EvidenceSourceFamily,
+    HandoffSide,
     MemberRole,
     RecordFamily,
     RelationType,
@@ -12804,10 +12808,8 @@ class ReadMeetingNoteVersion:
 # Eight commands. What is decidable from the request alone is refused here; the
 # gate, the closed-Issue rule, existence and the evidence rules against stored
 # sources are the application's (`application.issues`,
-# `application.record_lineage`). The handoff and composite commands carry their
-# S2 field shapes with only identifier and key checks: their application use
-# cases are not implemented in this change and their handlers answer
-# `unsupported` after the switch and the authority (record lineage S2, K2).
+# `application.record_lineage`, `application.issue_handoffs`,
+# `application.issue_work`).
 
 _CLOSURE_EVIDENCE_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
     {
@@ -12996,8 +12998,15 @@ class CorrectIssueMembership:
 class RecordIssueHandoff:
     """`issues.handoffs.record`: record that a Commitment's next action changed hands.
 
-    Local operator only. Not available in this build: the request is accepted
-    for its shape and answered unsupported.
+    Local operator only. Within one of your Issues, the next management action
+    on one Commitment member moves from the side `from_side` names -- the
+    Principal or the counterparty -- to the other side, effective at
+    `effective_at` (with an offset, never in the future, never before the
+    Commitment's creation or the previous handoff). The server resolves both
+    holders: the leaving one is the chain's last holder, the arriving one the
+    Principal or the Commitment's current counterparty. Exactly one exact
+    evidence anchor with role handoff. Nothing native changes, and a handoff
+    is never inferred from a close, a create or a membership change.
     """
 
     capability: ClassVar[Capability] = Capability.ISSUES_HANDOFFS_RECORD
@@ -13006,10 +13015,24 @@ class RecordIssueHandoff:
         {
             "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue."),
             "commitment_id": _issue_id_schema(IdKind.COMMITMENT, "A Commitment member."),
-            "from_side": {"type": "string", "enum": ["principal", "counterparty"]},
-            "effective_at": {"type": "string", "format": "date-time"},
+            "from_side": {
+                "type": "string",
+                "enum": [side.value for side in HandoffSide],
+                "description": "The side the responsibility leaves.",
+            },
+            "effective_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "When the handoff took effect, ISO-8601 with an offset.",
+            },
             "reason": _LINEAGE_REASON_SCHEMA,
-            "evidence_anchor": _EVIDENCE_ANCHOR_SCHEMA,
+            "evidence_anchor": {
+                **_EVIDENCE_ANCHOR_SCHEMA,
+                "description": (
+                    "Exactly one exact Meeting note or Capture version (immutable_version) "
+                    "with role handoff."
+                ),
+            },
             "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
         }
     )
@@ -13023,17 +13046,61 @@ class RecordIssueHandoff:
     evidence_anchor: dict[str, object] = field(repr=False)
 
     def __post_init__(self) -> None:
-        _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
-        _identifier(self.commitment_id, IdKind.COMMITMENT, SafeDetail.COMMITMENT_ID)
+        self.handoff_request()
         _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def handoff_request(self) -> HandoffRecordRequest:
+        """The parsed request this command states."""
+        anchor = parse_evidence_anchor(self.evidence_anchor, SafeDetail.EVIDENCE_ANCHOR)
+        if (
+            anchor.role is not LineageEvidenceRole.HANDOFF
+            or anchor.version_kind is not SourceVersionKind.IMMUTABLE_VERSION
+        ):
+            raise InvalidRequestError(SafeDetail.EVIDENCE_ANCHOR)
+        return HandoffRecordRequest(
+            issue_id=_identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID),
+            commitment_id=_identifier(
+                self.commitment_id, IdKind.COMMITMENT, SafeDetail.COMMITMENT_ID
+            ),
+            side=_handoff_side(self.from_side),
+            effective_at=_aware_instant(self.effective_at, SafeDetail.EFFECTIVE_AT),
+            reason=_blank_refused_reason(self.reason),
+            evidence_anchor=anchor,
+        )
+
+
+def _handoff_side(value: object) -> HandoffSide:
+    if isinstance(value, str):
+        for side in HandoffSide:
+            if side.value == value:
+                return side
+    # The request field is `from_side` (`from` is a Python keyword); the
+    # refusal names the contract's `from` (S2 section 7.3).
+    raise invalid_choice(SafeDetail.FROM_RECORD, [side.value for side in HandoffSide])
+
+
+def _aware_instant(value: object, detail: SafeDetail) -> datetime:
+    """An ISO-8601 instant with an offset (or an aware `datetime`), else `invalid_request`."""
+    instant: datetime | None = None
+    if isinstance(value, datetime):
+        instant = value
+    elif isinstance(value, str):
+        try:
+            instant = datetime.fromisoformat(value)
+        except ValueError:
+            instant = None
+    if instant is None or instant.tzinfo is None or instant.utcoffset() is None:
+        raise InvalidRequestError(detail)
+    return instant
 
 
 @dataclass(frozen=True, slots=True)
 class ListIssueHandoffs:
     """`issues.handoffs.list`: one page of an Issue's handoffs, oldest first.
 
-    Not available in this build: the request is accepted for its shape and
-    answered unsupported.
+    Ordered by when each was recorded; `commitment_id` narrows to one
+    Commitment's chain. An owned Commitment with no handoff in this Issue
+    answers an empty page.
     """
 
     capability: ClassVar[Capability] = Capability.ISSUES_HANDOFFS_LIST
@@ -13060,6 +13127,10 @@ class ListIssueHandoffs:
     after: str | None = None
 
     def __post_init__(self) -> None:
+        self.handoff_request()
+
+    def handoff_request(self) -> HandoffListRequest:
+        """The parsed request this command states."""
         _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
         if self.commitment_id is not None:
             _identifier(self.commitment_id, IdKind.COMMITMENT, SafeDetail.COMMITMENT_ID)
@@ -13068,22 +13139,249 @@ class ListIssueHandoffs:
             raise InvalidRequestError(SafeDetail.PAGE_SIZE)
         if self.after is not None:
             _identifier(self.after, IdKind.ISSUE_HANDOFF, SafeDetail.CURSOR)
+        return HandoffListRequest(
+            issue_id=self.issue_id,
+            commitment_id=self.commitment_id,
+            page_size=DEFAULT_ISSUE_PAGE_SIZE if sized is None else sized,
+            after=self.after,
+        )
 
 
-_COMPOSITE_OBJECT_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
-    {"type": "object", "description": "The native create request, without idempotency_key."}
+# --- the composite Work writes (S2 contract section 6.4) -----------------------
+#
+# The nested `task` / `commitment` object is exactly the v1 `tasks.create` /
+# `commitments.create` payload without `idempotency_key` and `situation_id`
+# (and, for a Task, without `accepted_by_review_decision_id`, R2-F04). It is
+# converted the way `adapters.normalization` converts the v1 payload (strings
+# to enum members and instants) and handed to the v1 command class itself, so
+# every v1 shape rule and refusal applies unchanged; an excluded or unknown key
+# is `invalid_request`, as an unknown v1 field is.
+
+#: The v1 create fields each composite's nested object refuses (section 6.4).
+_COMPOSITE_REFUSED_TASK_FIELDS: Final = frozenset(
+    {"idempotency_key", "situation_id", "accepted_by_review_decision_id"}
 )
-_ASSOCIATION_INTENTS_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
-    {"type": "array", "maxItems": 4, "items": {"type": "object"}}
+_COMPOSITE_REFUSED_COMMITMENT_FIELDS: Final = frozenset({"idempotency_key", "situation_id"})
+
+#: The relations each composite's intents may name (section 6.4).
+_TASK_INTENT_RELATIONS: Final = (RelationType.ORIGINATED_FROM, RelationType.CREATED_TO_RESOLVE)
+_COMMITMENT_INTENT_RELATIONS: Final = (
+    RelationType.ORIGINATED_FROM,
+    RelationType.DELEGATED_FROM,
+    RelationType.CREATED_TO_RESOLVE,
 )
+_INTENT_KEYS: Final = frozenset({"relation_type", "to_record", "evidence_anchors", "purpose"})
+#: At most this many association intents in one composite (section 6.4).
+MAX_ASSOCIATION_INTENTS: Final = 4
+
+
+def _nested_field_schema(annotation: object) -> dict[str, object]:
+    """The wire schema of one v1 create field, as the v1 tool publishes it."""
+    optional = [
+        member for member in getattr(annotation, "__args__", ()) if member is not type(None)
+    ]
+    shown = optional[0] if len(optional) == 1 else annotation
+    if shown is datetime:
+        return {"type": "string", "format": "date-time"}
+    if isinstance(shown, type) and issubclass(shown, StrEnum):
+        return {"type": "string", "enum": [member.value for member in shown]}
+    return {"type": "string"}
+
+
+def _nested_object_schema(
+    command: type, refused: frozenset[str], description: str
+) -> dict[str, object]:
+    """The nested native object's schema: the v1 create fields less `refused`."""
+    hints = get_type_hints(command)
+    properties: dict[str, object] = {}
+    required: list[str] = []
+    for item in dataclasses.fields(command):
+        if item.name in refused:
+            continue
+        properties[item.name] = _nested_field_schema(hints[item.name])
+        if item.default is dataclasses.MISSING and item.default_factory is dataclasses.MISSING:
+            required.append(item.name)
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": required,
+        "properties": properties,
+        "description": description,
+    }
+
+
+def _intents_schema(relations: tuple[RelationType, ...]) -> dict[str, object]:
+    return {
+        "type": "array",
+        "maxItems": MAX_ASSOCIATION_INTENTS,
+        "items": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["relation_type", "to_record"],
+            "properties": {
+                "relation_type": {
+                    "type": "string",
+                    "enum": [relation.value for relation in relations],
+                },
+                "to_record": dict(_RECORD_REF_SCHEMA),
+                "evidence_anchors": dict(_EVIDENCE_ANCHORS_SCHEMA),
+                "purpose": {
+                    **_LINEAGE_REASON_SCHEMA,
+                    "description": "Required for created_to_resolve: what the record resolves.",
+                },
+            },
+        },
+        "description": (
+            "Associations from the new record, scoped to the Issue: originated_from an "
+            "exact note or Capture version, created_to_resolve the Issue or a Constraint "
+            "member (with a purpose)"
+            + (
+                ", delegated_from a Task member (owed_to_principal only)."
+                if RelationType.DELEGATED_FROM in relations
+                else "."
+            )
+        ),
+    }
+
+
+def _native_moment(converted: dict[str, Any], detail: SafeDetail) -> None:
+    supplied = converted.get("due_at")
+    if isinstance(supplied, str):
+        try:
+            converted["due_at"] = datetime.fromisoformat(supplied)
+        except ValueError:
+            raise InvalidRequestError(detail) from None
+
+
+def _native_member[EnumT: StrEnum](
+    converted: dict[str, Any], name: str, enum: type[EnumT], detail: SafeDetail
+) -> None:
+    named = converted.get(name)
+    if isinstance(named, str):
+        try:
+            converted[name] = enum(named)
+        except ValueError:
+            raise invalid_choice(detail, enum) from None
+
+
+def _nested_native(document: object, command: type, refused: frozenset[str]) -> dict[str, Any]:
+    """The nested object as a dict, or `invalid_request` for a refused or unknown key."""
+    if not isinstance(document, Mapping):
+        raise InvalidRequestError()
+    admitted = {item.name for item in dataclasses.fields(command)} - refused
+    if not set(document) <= admitted:
+        raise InvalidRequestError()
+    return dict(document)
+
+
+def _built[NativeT](build: Callable[..., NativeT], converted: dict[str, Any], key: str) -> NativeT:
+    try:
+        return build(**converted, idempotency_key=key)
+    except TypeError:
+        # A missing required field, as for the v1 payload.
+        pass
+    raise InvalidRequestError()
+
+
+def _native_document(native: object, refused: frozenset[str]) -> dict[str, object]:
+    """The native command's fields as the request digest holds them (S2 section 5)."""
+    document: dict[str, object] = {}
+    for item in dataclasses.fields(native):  # type: ignore[arg-type]
+        if item.name in refused:
+            continue
+        value = getattr(native, item.name)
+        if isinstance(value, datetime):
+            value = value.astimezone(UTC).isoformat()
+        elif isinstance(value, StrEnum):
+            value = value.value
+        document[item.name] = value
+    return document
+
+
+def _association_intents(
+    value: object, family: RecordFamily, relations: tuple[RelationType, ...]
+) -> tuple[AssociationIntent, ...]:
+    """Section 6.4's intent list: shape, admitted relation, matrix pair, no repeat."""
+    if not isinstance(value, tuple | list) or len(value) > MAX_ASSOCIATION_INTENTS:
+        raise InvalidRequestError(SafeDetail.ASSOCIATION_INTENTS)
+    parsed: list[AssociationIntent] = []
+    for document in value:
+        if (
+            not isinstance(document, Mapping)
+            or not set(document) <= _INTENT_KEYS
+            or not {"relation_type", "to_record"} <= set(document)
+        ):
+            raise InvalidRequestError(SafeDetail.ASSOCIATION_INTENTS)
+        relation = next(
+            (item for item in relations if item.value == document.get("relation_type")), None
+        )
+        if relation is None:
+            raise InvalidRequestError(SafeDetail.ASSOCIATION_INTENTS)
+        to_ref = _record_ref(document.get("to_record"), SafeDetail.TO_RECORD)
+        _kind, sources, targets = RELATION_MATRIX[relation]
+        if family not in sources or to_ref.family not in targets:
+            raise InvalidRequestError(SafeDetail.ASSOCIATION_INTENTS)
+        purpose = document.get("purpose")
+        if relation is RelationType.CREATED_TO_RESOLVE:
+            if purpose is None:
+                raise InvalidRequestError(SafeDetail.PURPOSE)
+            stated = _storable_text(purpose, SafeDetail.PURPOSE)
+            if not stated.strip() or len(stated) > MAX_LINEAGE_REASON_CHARACTERS:
+                raise InvalidRequestError(SafeDetail.PURPOSE)
+            purpose = stated
+        elif purpose is not None:
+            raise InvalidRequestError(SafeDetail.ASSOCIATION_INTENTS)
+        parsed.append(
+            AssociationIntent(
+                relation_type=relation,
+                to_ref=to_ref,
+                evidence_anchors=_anchor_set(document.get("evidence_anchors", ()), minimum=0),
+                purpose=purpose,
+            )
+        )
+    if len({(intent.relation_type, intent.to_ref) for intent in parsed}) != len(parsed):
+        # From the one new record within the one Issue: a repeated relation
+        # and target is a repeated normalized identity.
+        raise InvalidRequestError(SafeDetail.ASSOCIATION_INTENTS)
+    return tuple(parsed)
+
+
+def _issue_work_request(
+    *,
+    capability: Capability,
+    issue_id: str,
+    family: RecordFamily,
+    native_key: str,
+    native: CreateTask | CreateCommitment,
+    refused: frozenset[str],
+    membership_evidence_anchors: object,
+    association_intents: object,
+    relations: tuple[RelationType, ...],
+) -> WorkCompositeRequest:
+    return WorkCompositeRequest(
+        capability=capability.value,
+        issue_id=_identifier(issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID),
+        family=family,
+        native_key=native_key,
+        native_document=MappingProxyType(_native_document(native, refused)),
+        project_id=native.project_id,
+        direction=native.direction if isinstance(native, CreateCommitment) else None,
+        membership_evidence_anchors=_anchor_set(membership_evidence_anchors, minimum=0),
+        association_intents=_association_intents(association_intents, family, relations),
+    )
 
 
 @dataclass(frozen=True, slots=True)
 class CreateIssueWorkTask:
     """`issues.work.create_task`: create a Task as work of one of your Issues.
 
-    Local operator only. Not available in this build: the request is accepted
-    for its shape and answered unsupported.
+    Local operator only. `task` is the tasks.create payload without
+    idempotency_key, situation_id and accepted_by_review_decision_id (a Task
+    is accepted only by direct_principal origin). One transaction creates the
+    Task exactly as tasks.create would, its work membership in the Issue, and
+    up to four associations from it (originated_from, created_to_resolve). A
+    project_id needs an active Project link to the Issue. Replays return the
+    original answer; read the Task itself with tasks.read.
     """
 
     capability: ClassVar[Capability] = Capability.ISSUES_WORK_CREATE_TASK
@@ -13092,9 +13390,14 @@ class CreateIssueWorkTask:
         {
             "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue."),
             "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
-            "task": _COMPOSITE_OBJECT_SCHEMA,
+            "task": _nested_object_schema(
+                CreateTask,
+                _COMPOSITE_REFUSED_TASK_FIELDS,
+                "The tasks.create request, without idempotency_key, situation_id and "
+                "accepted_by_review_decision_id.",
+            ),
             "membership_evidence_anchors": _EVIDENCE_ANCHORS_SCHEMA,
-            "association_intents": _ASSOCIATION_INTENTS_SCHEMA,
+            "association_intents": _intents_schema(_TASK_INTENT_RELATIONS),
         }
     )
 
@@ -13105,16 +13408,45 @@ class CreateIssueWorkTask:
     association_intents: tuple[dict[str, object], ...] = field(default=(), repr=False)
 
     def __post_init__(self) -> None:
-        _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
+        self.work_request()
         _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def native_command(self) -> CreateTask:
+        """The v1 `tasks.create` command the nested object states, under this key."""
+        converted = _nested_native(self.task, CreateTask, _COMPOSITE_REFUSED_TASK_FIELDS)
+        _native_moment(converted, SafeDetail.DUE_AT)
+        _native_member(converted, "priority", TaskPriority, SafeDetail.PRIORITY)
+        _native_member(converted, "role", TaskRole, SafeDetail.SELECTOR)
+        _native_member(converted, "origin_kind", TaskOriginKind, SafeDetail.ORIGIN_KIND)
+        return _built(CreateTask, converted, self.idempotency_key)
+
+    def work_request(self) -> WorkCompositeRequest:
+        """The parsed request this command states."""
+        return _issue_work_request(
+            capability=self.capability,
+            issue_id=self.issue_id,
+            family=RecordFamily.TASK,
+            native_key="task",
+            native=self.native_command(),
+            refused=_COMPOSITE_REFUSED_TASK_FIELDS,
+            membership_evidence_anchors=self.membership_evidence_anchors,
+            association_intents=self.association_intents,
+            relations=_TASK_INTENT_RELATIONS,
+        )
 
 
 @dataclass(frozen=True, slots=True)
 class CreateIssueWorkCommitment:
     """`issues.work.create_commitment`: create a Commitment as work of one of your Issues.
 
-    Local operator only. Not available in this build: the request is accepted
-    for its shape and answered unsupported.
+    Local operator only. `commitment` is the commitments.create payload without
+    idempotency_key and situation_id. One transaction creates the Commitment
+    exactly as commitments.create would, its work membership in the Issue, and
+    up to four associations from it (originated_from, delegated_from a Task
+    member -- only for owed_to_principal -- and created_to_resolve). A
+    project_id needs an active Project link to the Issue. No handoff is
+    written. Replays return the original answer; read the Commitment itself
+    with commitments.read.
     """
 
     capability: ClassVar[Capability] = Capability.ISSUES_WORK_CREATE_COMMITMENT
@@ -13123,9 +13455,13 @@ class CreateIssueWorkCommitment:
         {
             "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue."),
             "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
-            "commitment": _COMPOSITE_OBJECT_SCHEMA,
+            "commitment": _nested_object_schema(
+                CreateCommitment,
+                _COMPOSITE_REFUSED_COMMITMENT_FIELDS,
+                "The commitments.create request, without idempotency_key and situation_id.",
+            ),
             "membership_evidence_anchors": _EVIDENCE_ANCHORS_SCHEMA,
-            "association_intents": _ASSOCIATION_INTENTS_SCHEMA,
+            "association_intents": _intents_schema(_COMMITMENT_INTENT_RELATIONS),
         }
     )
 
@@ -13136,8 +13472,31 @@ class CreateIssueWorkCommitment:
     association_intents: tuple[dict[str, object], ...] = field(default=(), repr=False)
 
     def __post_init__(self) -> None:
-        _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
+        self.work_request()
         _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def native_command(self) -> CreateCommitment:
+        """The v1 `commitments.create` command the nested object states, under this key."""
+        converted = _nested_native(
+            self.commitment, CreateCommitment, _COMPOSITE_REFUSED_COMMITMENT_FIELDS
+        )
+        _native_moment(converted, SafeDetail.DUE_AT)
+        _native_member(converted, "direction", CommitmentDirection, SafeDetail.SELECTOR)
+        return _built(CreateCommitment, converted, self.idempotency_key)
+
+    def work_request(self) -> WorkCompositeRequest:
+        """The parsed request this command states."""
+        return _issue_work_request(
+            capability=self.capability,
+            issue_id=self.issue_id,
+            family=RecordFamily.COMMITMENT,
+            native_key="commitment",
+            native=self.native_command(),
+            refused=_COMPOSITE_REFUSED_COMMITMENT_FIELDS,
+            membership_evidence_anchors=self.membership_evidence_anchors,
+            association_intents=self.association_intents,
+            relations=_COMMITMENT_INTENT_RELATIONS,
+        )
 
 
 type Command = (

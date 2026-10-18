@@ -76,6 +76,7 @@ from my_pa.contracts.ports import (
     EntitiesRepository,
     EvidenceUnavailableError,
     GoodNotesSemanticRepository,
+    IssueHandoffRepository,
     IssueRepository,
     KnowledgeAssertionRepository,
     KnowledgeRecord,
@@ -204,6 +205,7 @@ from my_pa.infrastructure.persistence.goodnotes_durable_note import PostgresDura
 from my_pa.infrastructure.persistence.goodnotes_pull import SqlGoodNotesPullRepository
 from my_pa.infrastructure.persistence.goodnotes_semantics import SqlGoodNotesSemanticRepository
 from my_pa.infrastructure.persistence.intelligence import SqlIntelligenceStore
+from my_pa.infrastructure.persistence.issue_handoffs import SqlIssueHandoffRepository
 from my_pa.infrastructure.persistence.issues import SqlIssueRepository
 from my_pa.infrastructure.persistence.jobs import enqueue_job, job_for
 from my_pa.infrastructure.persistence.knowledge import (
@@ -1496,6 +1498,11 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def record_lineage(self) -> RecordLineageRepository:
         """Record lineage S1 links and the reverse read, on this transaction's connection."""
         return SqlRecordLineageRepository(self._open)
+
+    @property
+    def issue_handoffs(self) -> IssueHandoffRepository:
+        """Record lineage S2 responsibility handoffs, on this transaction's connection."""
+        return SqlIssueHandoffRepository(self._open)
 
     @property
     def identity_history(self) -> SqlIdentityHistoryQuery:

@@ -5,7 +5,9 @@ S1 harnesses (`lineage_issue_harness.LineageRuntime`,
 `lineage_record_harness`) with what the closure gate needs: the Constraint
 plane composed beside the general unit of work, Work and Constraint members
 driven to their native terminal states through their own v1 capabilities, and
-the S2 requests (`issues.close`, `issues.reopen`, `issues.memberships.correct`).
+the S2 requests (`issues.close`, `issues.reopen`, `issues.memberships.correct`,
+and the handoff and composite requests `handoff`, `work_task`,
+`work_commitment`).
 
 Every identity and every body here is synthetic.
 """
@@ -24,6 +26,8 @@ from my_pa.application.commands import (
     CorrectIssueMembership,
     CreateCommitment,
     CreateConstraintCategory,
+    CreateIssueWorkCommitment,
+    CreateIssueWorkTask,
     CreatePublishedConstraint,
     CreateTask,
     ReadCommitment,
@@ -31,6 +35,7 @@ from my_pa.application.commands import (
     ReadIssue,
     ReadIssueClosureReadiness,
     ReadTask,
+    RecordIssueHandoff,
     ReopenIssue,
     TransitionTask,
 )
@@ -68,12 +73,16 @@ from tests.database.test_commitment_entity_counterparty import seed_counterparty
 
 __all__ = [
     "GATEWAY",
+    "REVIEW_DECISION",
     "S2Runtime",
     "all_s2_counts",
     "close",
     "correct",
+    "handoff",
     "reopen",
     "resolution_anchor",
+    "work_commitment",
+    "work_task",
 ]
 
 _T0: Final = datetime(2026, 9, 2, 15, tzinfo=UTC)
@@ -254,6 +263,17 @@ class S2Runtime(LineageRuntime):
     def readiness(self, issue_id: str) -> dict[str, Any]:
         return self.ok(ReadIssueClosureReadiness(issue_id=issue_id))
 
+    def commitment_view(self, commitment_id: str, *, principal_id: str = PRINCIPAL) -> Any:  # noqa: ANN401
+        """`commitments.read`'s Commitment view."""
+        return self.ok(ReadCommitment(commitment_id=commitment_id), principal_id=principal_id)[
+            "commitment"
+        ]
+
+    def handoff_anchor(self, key: str) -> dict[str, object]:
+        """An exact note anchor with role `handoff`."""
+        meeting_id, note_id = meeting(self, key)
+        return resolution_anchor(meeting_id, note_id, role="handoff")
+
     def evidence_source(self, key: str) -> tuple[str, str, dict[str, object]]:
         """A Meeting note and an exact `resolution` anchor on it."""
         meeting_id, note_id = meeting(self, key)
@@ -323,6 +343,64 @@ def reopen(
         idempotency_key=f"s2-reopen-{key}",
         reason=reason,
         evidence_anchors=anchors,
+    )
+
+
+def handoff(
+    issue_id: str,
+    commitment_id: str,
+    side: str,
+    effective_at: str,
+    key: str,
+    anchor: dict[str, object],
+    *,
+    reason: str = "The next action moved.",
+) -> RecordIssueHandoff:
+    return RecordIssueHandoff(
+        issue_id=issue_id,
+        commitment_id=commitment_id,
+        from_side=side,
+        effective_at=effective_at,
+        idempotency_key=f"s2-handoff-{key}",
+        reason=reason,
+        evidence_anchor=anchor,
+    )
+
+
+def work_task(
+    issue_id: str,
+    key: str,
+    task: dict[str, object] | None = None,
+    *,
+    membership_anchors: tuple[dict[str, object], ...] = (),
+    intents: tuple[dict[str, object], ...] = (),
+) -> CreateIssueWorkTask:
+    """`issues.work.create_task`; the default Task is a direct-Principal one."""
+    return CreateIssueWorkTask(
+        issue_id=issue_id,
+        idempotency_key=f"s2-work-task-{key}",
+        task=task
+        if task is not None
+        else {"title": f"Synthetic task {key}", "origin_kind": "direct_principal"},
+        membership_evidence_anchors=membership_anchors,
+        association_intents=intents,
+    )
+
+
+def work_commitment(
+    issue_id: str,
+    key: str,
+    commitment: dict[str, object],
+    *,
+    membership_anchors: tuple[dict[str, object], ...] = (),
+    intents: tuple[dict[str, object], ...] = (),
+) -> CreateIssueWorkCommitment:
+    return CreateIssueWorkCommitment(
+        issue_id=issue_id,
+        idempotency_key=f"s2-work-commitment-{key}",
+        commitment=commitment,
+        membership_evidence_anchors=membership_anchors,
+        association_intents=intents,
     )
 
 

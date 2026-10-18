@@ -6308,6 +6308,17 @@ class UnitOfWork(ABC):
         """
 
     @property
+    @abstractmethod
+    def issue_handoffs(self) -> IssueHandoffRepository:
+        """The record lineage S2 responsibility handoff ledger, inside this transaction.
+
+        On the general unit of work beside `issues` and `record_lineage`, for
+        the reason they are: a handoff reserves its request, shares its Issue,
+        Commitment and evidence source, and appends its event in the one
+        transaction `invoke` already owns.
+        """
+
+    @property
     def identity_history(self) -> object:
         """The optional Principal-scoped identity-history read projection.
 
@@ -9370,6 +9381,35 @@ class IssueRepository(ABC):
     ) -> str:
         """Reuse the anchor with this identity, or insert it; return its `anchor_id`."""
 
+    # --- record lineage S2 (S2 contract sections 4.2, 6.2 and 6.4) ------------
+
+    @abstractmethod
+    def share_active_project_link(self, principal_id: str, project_id: str, issue_id: str) -> bool:
+        """Whether the Project's link to the Issue is active, its triplet row `FOR SHARE`.
+
+        The composites' Project qualification (section 6.4): the triplet row
+        an `issues.project_links.end` claims `FOR UPDATE` is shared, so the
+        answer cannot change before commit. `False` when no triplet row or no
+        active latest event exists, for an absent, foreign or unlinked Project
+        alike.
+        """
+
+    @abstractmethod
+    def insert_write_request_links(
+        self,
+        principal_id: str,
+        capability: str,
+        idempotency_key: str,
+        links: Sequence[tuple[int, str, int]],
+    ) -> None:
+        """Record a composite request's `(ordinal, link_id, revision_no)` rows."""
+
+    @abstractmethod
+    def write_request_links(
+        self, principal_id: str, capability: str, idempotency_key: str
+    ) -> tuple[tuple[int, str, int], ...]:
+        """A completed composite request's `(ordinal, link_id, revision_no)` rows, by ordinal."""
+
 
 # --- Record lineage S1: memberships, associations and the reverse read ---------
 #
@@ -9591,6 +9631,18 @@ class RecordLineageRepository(ABC):
         """
         raise NotImplementedError
 
+    def active_membership(
+        self, principal_id: str, issue_id: str, member: RecordRef
+    ) -> LinkHeadRecord | None:
+        """The Issue's active `issue_member` head naming `member`, any role, or `None`.
+
+        Record lineage S2 (S2 contract sections 3.1 and 3.4): a handoff's
+        Commitment, a `delegated_from` Task and a `created_to_resolve`
+        Constraint must each be an active member of the Issue. Without a lock;
+        non-abstract with a `NotImplementedError` default, on the same terms.
+        """
+        raise NotImplementedError
+
     @abstractmethod
     def resolve_records(
         self, principal_id: str, refs: Collection[RecordRef]
@@ -9602,3 +9654,95 @@ class RecordLineageRepository(ABC):
         self, principal_id: str, meeting_ids: Collection[str]
     ) -> Mapping[str, tuple[LineageNoteVersionRef, ...]]:
         """Each named Meeting's note versions, `version_number` ascending."""
+
+
+# --- Record lineage S2: the responsibility handoff ledger ---------------------
+#
+# S2 contract sections 3.4, 4.2 and 6.2. On the general unit of work beside
+# `issues` and `record_lineage`: a handoff reserves its request through
+# `issues`, shares its Issue, Commitment and evidence source, takes the chain's
+# advisory key here, reads the chain's last event and appends the next one, all
+# in the one transaction `invoke` already owns.
+
+
+class HandoffSequenceConflictError(PortError):
+    """Another handoff of the same chain took this sequence number. Retryable."""
+
+
+@dataclass(frozen=True, slots=True)
+class HandoffRecord:
+    """One immutable `issue_responsibility_events` row with its evidence anchor.
+
+    A holder is the Principal (`*_holder_kind = 'principal'`, entity `None`)
+    or one Entity. `evidence` carries the one anchor, with role `handoff`.
+    """
+
+    handoff_id: str
+    issue_id: str
+    commitment_id: str
+    sequence_no: int
+    predecessor_sequence_no: int | None
+    from_holder_kind: str
+    from_entity_id: str | None
+    to_holder_kind: str
+    to_entity_id: str | None
+    effective_at: datetime
+    recorded_at: datetime
+    evidence: LineageLinkEvidence
+    reason: str
+    acceptance_basis: str
+    authority_class: str
+    decision_channel: str
+    source_capability: str
+
+
+@dataclass(frozen=True, slots=True)
+class HandoffPage:
+    """One `issues.handoffs.list` page, `(recorded_at, handoff_id)` ascending."""
+
+    handoffs: tuple[HandoffRecord, ...]
+    has_more: bool
+
+
+class IssueHandoffRepository(ABC):
+    """The handoff ledger's rows, on the general unit of work's connection.
+
+    Written here and nowhere else: `issue_responsibility_events`. The caller
+    sequences the section 6.2 locks: the chain's advisory key (`lock_chain`)
+    is taken after every `FOR SHARE` and before the chain's last event is read.
+    Reads take no locks.
+    """
+
+    @abstractmethod
+    def lock_chain(self, principal_id: str, issue_id: str, commitment_id: str) -> None:
+        """`pg_advisory_xact_lock` on `principal_id:handoff:issue_id:commitment_id`."""
+
+    @abstractmethod
+    def latest_event(
+        self, principal_id: str, issue_id: str, commitment_id: str
+    ) -> HandoffRecord | None:
+        """The chain's last event (highest `sequence_no`), or `None` for an empty chain."""
+
+    @abstractmethod
+    def insert_event(self, principal_id: str, event: HandoffRecord) -> None:
+        """Append one event; a taken sequence number is `HandoffSequenceConflictError`."""
+
+    @abstractmethod
+    def read_event(self, principal_id: str, handoff_id: str) -> HandoffRecord | None:
+        """One owned event with its anchor, or `None`."""
+
+    @abstractmethod
+    def list_events(
+        self,
+        principal_id: str,
+        issue_id: str,
+        *,
+        commitment_id: str | None,
+        page_size: int,
+        after: str | None,
+    ) -> HandoffPage:
+        """One keyset page of the Issue's events (optionally one Commitment's).
+
+        Raises `IssueCursorError` when `after` names no event inside the same
+        filter set.
+        """

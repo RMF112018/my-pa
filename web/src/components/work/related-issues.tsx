@@ -2,7 +2,8 @@
 
 /**
  * The related-Issue panel of one Task, Commitment or Constraint view (record
- * lineage S1 contract section 7.4, plan WP-06A S1 card).
+ * lineage S1 contract section 7.4, plan WP-06A S1 card; the S2 relations and the
+ * `closed` Issue state are worded per S2 contract section 7.4).
  *
  * Read-only and server-batched: everything it renders comes from one
  * `records.lineage` answer for this record (one hop, optionally under a chosen
@@ -65,10 +66,22 @@ function relationWords(edge: AssociationView, root: RecordRef): string {
   }
   const outgoing = sameRef(edge.from, root);
   const other = outgoing ? edge.to : edge.from;
-  if (edge.relation_type === "originated_from") {
-    return outgoing ? `Originated from ${FAMILY_WORDS[other.family]}` : `Origin of ${FAMILY_WORDS[other.family]}`;
+  const family = FAMILY_WORDS[other.family];
+  switch (edge.relation_type) {
+    case "originated_from":
+      return outgoing ? `Originated from ${family}` : `Origin of ${family}`;
+    // S2 (contract section 7.4): the direction is read from which endpoint this record is.
+    case "delegated_from":
+      return outgoing ? `Delegated from ${family}` : `Delegated to ${family}`;
+    case "escalated_from":
+      return outgoing ? `Escalated from ${family}` : `Escalated to ${family}`;
+    case "blocks":
+      return outgoing ? `Blocks ${family}` : `Blocked by ${family}`;
+    case "created_to_resolve":
+      return outgoing ? `Created to resolve ${family}` : `${family.charAt(0).toUpperCase()}${family.slice(1)} was created to resolve it`;
+    default:
+      return outgoing ? `Discusses ${family}` : `Discussed in ${family}`;
   }
-  return outgoing ? `Discusses ${FAMILY_WORDS[other.family]}` : `Discussed in ${FAMILY_WORDS[other.family]}`;
 }
 
 /** "Meeting note version n, characters a–b", "Capture version n", or the legacy wording. */

@@ -74,9 +74,11 @@ is not a defect.
 
 ## 3. What is implemented
 
-Four hundred and four Python modules under `src/my_pa` and seven hundred and seventy-three test modules —
+Four hundred and four Python modules under `src/my_pa` and seven hundred and seventy-five test modules —
 
-**Current-tree remeasurement (record lineage S2 handoffs and composites, branch `feat/lineage-s2-workflow`, worker K2, 2026-10-18):** the two commands below count 404 source modules and 773 test modules: the 401/770 below plus `src/my_pa/application/issue_handoffs.py`, `src/my_pa/application/issue_work.py` and `src/my_pa/infrastructure/persistence/issue_handoffs.py`, and `tests/integration/test_responsibility_handoff.py`, `tests/database/test_issue_work_composites.py` and `tests/database/test_lineage_s2_relation_rules.py`. This is file-inventory evidence, not a test PASS receipt.
+**Current-tree remeasurement (record lineage S2 relations and Meeting isolation, branch `feat/lineage-s2-workflow`, worker K3, 2026-10-18):** the two commands below count 404 source modules and 775 test modules: the 404/773 below plus `tests/integration/test_issue_context_isolation.py` and `tests/integration/test_shared_issue_crossproject.py`; no source module is added. This is file-inventory evidence, not a test PASS receipt.
+
+**Historical remeasurement (record lineage S2 handoffs and composites, branch `feat/lineage-s2-workflow`, worker K2, 2026-10-18):** the two commands below counted 404 source modules and 773 test modules: the 401/770 below plus `src/my_pa/application/issue_handoffs.py`, `src/my_pa/application/issue_work.py` and `src/my_pa/infrastructure/persistence/issue_handoffs.py`, and `tests/integration/test_responsibility_handoff.py`, `tests/database/test_issue_work_composites.py` and `tests/database/test_lineage_s2_relation_rules.py`. This is file-inventory evidence, not a test PASS receipt.
 
 **Historical remeasurement (record lineage S2 schema, close and registration, branch `feat/lineage-s2-workflow`, worker K1, 2026-10-18):** the two commands below counted 401 source modules and 770 test modules: the 399/763 below plus `src/my_pa/domain/lineage/closure.py` and `src/my_pa/domain/lineage/handoff.py`, and `tests/schema/test_record_lineage_s2_migration.py`, `tests/unit/test_issue_closure_gate.py`, `tests/contract/test_lineage_s2_capability_admission.py`, `tests/database/test_lineage_s2_integrity_guards.py`, `tests/database/test_lineage_s2_attested_writes.py`, `tests/integration/test_issue_close_reopen.py` and `tests/concurrency/test_issue_close_races.py`. This is file-inventory evidence, not a test PASS receipt.
 

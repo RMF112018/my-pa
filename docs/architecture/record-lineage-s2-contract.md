@@ -84,7 +84,7 @@ literals and imports nothing from `src/`).
 
 | Vocabulary | S1 admits | S2 adds | Still later |
 | --- | --- | --- | --- |
-| Issue state (`SituationState`) | `open`, `active`, `suspended` | `closed` | — |
+| Issue states (`ISSUE_STATES`, a subset of `SituationState`, which already has `closed`) | `open`, `active`, `suspended` | `closed` | — |
 | `IssueRevisionAction` | `created`, `updated`, `activated`, `suspended` | `closed`, `reopened`, `corrected` | — |
 | `RelationType` | `issue_member`, `originated_from`, `discusses` | `delegated_from`, `escalated_from`, `blocks`, `created_to_resolve` | `related_context` (S3) |
 | `MemberRole` | 6 members (S1 §3) | — | `decision` (S3, with `continuity_decision`) |
@@ -95,7 +95,7 @@ literals and imports nothing from `src/`).
 | `EvidenceRole` | 6 members incl. `handoff`, `resolution` | — (S2 gives `handoff` and `resolution` their first rules) | — |
 | `HandoffHolderKind` (new) | — | `principal`, `entity` | `unassigned` (not scheduled) |
 | `HandoffSide` (new, request only) | — | `principal`, `counterparty` | — |
-| `IssueClosureBlocker` (new, read only) | — | `native_open`, `native_terminal_unsuccessful`, `native_not_accepted`, `role_family_not_closable`, `resolution_evidence_missing`, `resolution_evidence_unavailable`, `resolution_evidence_contradicted` | — |
+| `IssueClosureBlocker` (new, read only) | — | `native_open`, `native_terminal_unsuccessful`, `native_not_accepted`, `role_family_not_closable`, `resolution_evidence_missing`, `resolution_evidence_unavailable`, `resolution_evidence_contradicted`, `resolution_evidence_stale` | — |
 | `NativeVirtualEdge` (read only) | `meeting_note_version_of` | — | the rest (S3) |
 | `LineageCompleteness` (read only) | 4 members | — | the rest (S3) |
 
@@ -115,7 +115,7 @@ The S1 §3.1 rows are unchanged. Each added row is a `semantic` link.
 | Relation | From | To | Written by | Rule (application; refused with `invalid_request` / the named detail unless stated) |
 | --- | --- | --- | --- | --- |
 | `delegated_from` | `commitment` | `task` | `issues.work.create_commitment` only | context = the composite's Issue; ≥1 `immutable_version` anchor with role `origin` (`evidence_anchors`); the new Commitment's `direction` is `owed_to_principal` (`direction`); the Task is an active `issue_member` of the Issue (`to_record`), not terminal and not archived (`endpoint`) |
-| `escalated_from` | `constraint` | `task` | `records.associations.assert` (and `correct`/`end`) | `context_issue_id` required (`context_issue_id`); ≥1 `immutable_version` anchor with role `origin` (`evidence_anchors`); the Constraint is not `draft` (`endpoint`) and its `created_at` is not before the Task's (`relation_type`); its `project_id` has an **active** Project link to the context Issue (`project_id`); the Task is an active `issue_member` of the context Issue (`to_record`) |
+| `escalated_from` | `constraint` | `task` | `records.associations.assert` (and `correct`/`end`) | `context_issue_id` required (`context_issue_id`); ≥1 `immutable_version` anchor with role `origin` (`evidence_anchors`); the Constraint is not `draft` (`endpoint`) and its `created_at` is not before the Task's (`from_record`); its `project_id` has an **active** Project link to the context Issue (`project_id`); the Task is an active `issue_member` of the context Issue (`to_record`) |
 | `blocks` | `task`, `constraint` | `task`, `constraint` | `records.associations.assert` (and `correct`/`end`) | `context_issue_id` optional; ≥1 `immutable_version` anchor with role `corroborates` (`evidence_anchors`); `from` ≠ `to` (`to_record`; also a database CHECK); no cycle over the Principal's active `blocks` heads (`blocks_cycle`, section 6.3) |
 | `created_to_resolve` | `task`, `commitment` | `situation` (Issue), `constraint` | the 2 composites only | context = the composite's Issue; a `purpose` text (1..2000) stored as revision 1's `reason` (`purpose`; also a database trigger); 0..32 anchors, any role; a `situation` target equals the composite's Issue (`to_record`); a `constraint` target is an active `issue_member` of it (`to_record`) |
 
@@ -123,8 +123,18 @@ The S1 §3.1 rows are unchanged. Each added row is a `semantic` link.
 `invalid_request` / `relation_type` exactly as it refuses `issue_member`: they assert
 that a record was *created* by delegation or for a purpose, which only the creating
 transaction can attest. `escalated_from` is an explicit later assertion because the
-Constraint plane owns its own transaction (section 12, D-03). `records.associations.correct`
-keeps each relation's rule (S1 behaviour); `end` is as S1.
+Constraint plane owns its own transaction (section 12, D-03).
+
+**Assert-time versus correction-time rules (R2-F07).** A correction
+(`records.associations.correct`) re-applies **only the evidence-anchor rules** of its
+relation (the anchor count, roles and kinds above, with S1 anchor admission), exactly
+as S1 `_revise` re-applies `require_relation_evidence`. The state, membership, Project
+and time rules (Task not terminal or archived, active membership, active Project link,
+Constraint not `draft`, `created_at` order, Commitment direction, no `blocks` cycle) are
+**assert-time only**: they describe the world when the relation was asserted, and a
+later native change (T1 completing at stage 11) must not make C2's `delegated_from`
+evidence uncorrectable. A correction never re-runs the cycle search, because it changes
+no endpoint. `end` is as S1.
 
 **Cycle rule.** Only `blocks` is cycle-sensitive. `delegated_from` (Commitment → Task)
 and `escalated_from` (Constraint → Task) are bipartite and single-hop, so no cycle
@@ -174,6 +184,29 @@ with `issues.memberships.correct` (section 7.2) after the native close; it prove
 member's resolution independently of the native record, as stages 4, 10, 11 and 13 of
 AT-001 do.
 
+**The evidence is bound to the native close it proves (R2-F01, option b).** Task,
+Commitment and Constraint each carry a monotonic native `version` (the optimistic
+concurrency counter `tasks.transition`, `commitments.close` and `constraints.close`
+check as `expected_version`), and every membership writer reads it under its section 6.2
+step 3 `FOR SHARE`, so it cannot change while the write is in flight. Every membership
+revision written by `issues.memberships.add`, `issues.memberships.correct` or a
+composite whose member is a Task, Commitment or Constraint stores that observed value in
+`record_link_revisions.member_native_version` (section 4.1); `end` revisions and other
+families store null. The gate requires the head revision's `member_native_version` to
+**equal** the member's current native `version`; otherwise the member carries
+`resolution_evidence_stale`. So evidence recorded before a reopen and re-close (X1 v5,
+reopened v6, re-closed v7), or while T1 was still open, never satisfies the later
+close. The rule is deliberately conservative: *any* native change after the evidence was
+recorded (an archive of a completed Task, a Constraint commentary update) also makes it
+stale, and the operator re-affirms.
+
+**Re-affirmation.** `issues.memberships.correct` normally refuses a set whose digest
+equals the head's (S1 rule). It admits an identical set when the head's
+`member_native_version` differs from the member's current native `version` and the set
+contains ≥1 `resolution` anchor: the new `correct_evidence` revision carries the same
+digest and the new observed version. Any other same-digest correction is still
+`invalid_request` / `evidence_anchors`.
+
 **The Issue's own closure evidence** (`issues.close`): 1..32 anchors, ≥1 with role
 `resolution` and `immutable_version`, none with role `contradicts`, admitted by the S1
 anchor rules (so an archived Capture root is `denied` / `capture_withdrawn`, a
@@ -186,9 +219,16 @@ change a native state).
 unknown key is `invalid_request`), consults no allowlist and accepts no risk. A member
 that will never be satisfied (a cancelled Task, a void Constraint) leaves the gate
 closed until the operator ends that membership with `issues.memberships.end` and a
-reason — an attested, recorded change of scope, not an exception. Closing or reopening
+reason — an attested, recorded change of scope, not an exception (this reading of OD-03
+is recorded as section 12, D-16). Closing or reopening
 an Issue changes no Task, Commitment, Constraint, membership, link or Project link;
 closing a member never closes or reopens the Issue.
+
+**Contested evidence (forward obligation).** S2 approximates OD-03's "contested
+evidence blocks closure" with `contradicts` anchors, the only contradiction S2 can
+record. When S3 admits `contest` / `contested`, a contested mandatory membership, a
+contested closure-set anchor's link and a contested resolution anchor **must** become
+gate blockers in the same change; S3 may not ship `contested` without them.
 
 **The frozen closed Issue.** While an Issue is `closed`, `issues.update` (other than a
 correction), `issues.project_links.add/end`, `issues.memberships.add/end/correct`,
@@ -207,10 +247,16 @@ reason, by the local operator. It is **never inferred**: `commitments.close`,
 none, and a handoff changes no native field (C1 stays closed, its counterparty and
 direction unchanged).
 
-- **Subject:** a Commitment that is an active `issue_member` of the Issue (`invalid_request` / `commitment_id` otherwise). Tasks are Principal-held and Constraints carry native ball-in-court, so neither is a handoff subject in S2.
-- **Holders:** exactly the Principal and the Commitment's current `counterparty_entity_id`, in either order. The request names only the side the responsibility leaves (`from: principal | counterparty`); the server resolves both holders, so a client never supplies an Entity or Principal identifier and no other party can be named.
-- **Sequence:** per `(issue, commitment)`, `sequence_no` 1, 2, …; event *n* > 1 must leave the holder event *n − 1* arrived at (a database trigger). A counterparty re-pointed by `commitments.update` between events breaks the chain and the next handoff is `conflict` / `stale_version`; the operator records nothing silently.
-- **Time:** `effective_at` is client-stated business time, at or before the server's `recorded_at` (`invalid_request` / `effective_at`; also a CHECK); `recorded_at` is server-stamped. No `valid_at` read exists in S2.
+- **Subject:** a Commitment of the Principal, checked in the S1 §3.2 order: the `cmt_` prefix (`invalid_request`), then Principal-scoped existence (absent and foreign alike `not_found` / `commitment_id`), and only then active `issue_member` of the Issue (`invalid_request` / `commitment_id` otherwise). Tasks are Principal-held and Constraints carry native ball-in-court, so neither is a handoff subject in S2.
+- **Holders (R2-F02, option a).** The request names only the side the responsibility leaves (`from: principal | counterparty`); the server resolves both holders, so a client never supplies an Entity or Principal identifier.
+  - The **leaving** holder is, for event 1, the Principal or the Commitment's current `counterparty_entity_id`; for event *n* > 1 it is **the chain's last holder** (event *n − 1*'s `to` holder), and `from` must name that holder's side (`principal` for a Principal holder, `counterparty` for an Entity holder), else `invalid_request` / `from`.
+  - The **arriving** holder is the Principal when the leaving one is an Entity, and the Commitment's **current** `counterparty_entity_id` when the leaving one is the Principal.
+  - So a counterparty re-pointed by `commitments.update` from P1 to P1′ never wedges the chain: with P1 holding, the next event records P1 → Principal; with the Principal holding, it records Principal → P1′. Each is explicit, and a former counterparty can only ever *leave*.
+  - **No reachable state is unrecoverable.** The only refusals are `invalid_request` / `from` (the request named the wrong side; restate it), `conflict` / `stale_version` (a concurrent event took the sequence number; re-read and retry) and the time rule below. The trigger's predecessor equality (section 4.2) holds by construction.
+  - **Identity merge (affected family).** A future Commitment or Entity identity-merge work package (Commitment merge is currently BLOCKED in `application/identity_correction.py`) must treat `issue_responsibility_events.from_entity_id`, `to_entity_id` and `commitment_id` as an affected family: the rows are immutable, so a merge redirects reads, never rewrites them.
+- **Sequence:** per `(issue, commitment)`, `sequence_no` 1, 2, …; event *n* > 1 must leave the holder event *n − 1* arrived at (a database trigger).
+- **Time (R2-F03).** `effective_at` is client-stated business time and must be at or before the server's `recorded_at` (a CHECK), at or after the Commitment's `created_at`, and at or after event *n − 1*'s `effective_at` (a database trigger, `a_handoff_is_effective_in_order`); every violation is `invalid_request` / `effective_at`. So valid-time order never contradicts sequence order. `recorded_at` is server-stamped. No `valid_at` read exists in S2.
+- **No correction in S2 (interim rule).** A handoff cannot be corrected or voided in S2: a mis-recorded event **stands** as recorded, and the operator must not record a reverse handoff to "undo" it, because that would assert a business event that never happened. Handoff correction/void (an append-only correcting event that S3's `valid_at` reads honour) is owned by S3 (section 11).
 - **Evidence:** exactly 1 `EvidenceAnchorInput` with role `handoff` and `immutable_version`, admitted by the S1 anchor rules.
 
 Several Commitments can have independent handoff chains at once, and a Principal can
@@ -250,7 +296,7 @@ restores the S1 body byte for byte.
   - `a_reopening_states_its_reason` — `(action = 'reopened') = (reason IS NOT NULL)`;
   - `an_issue_revision_evidence_is_bounded` — `evidence_count BETWEEN 0 AND 32` and `(evidence_count = 0) = (evidence_set_digest IS NULL)` and digest `~ '^[0-9a-f]{64}$'`;
   - `only_closure_revisions_carry_evidence` — `action IN ('closed','reopened') OR evidence_count = 0`; `an_issue_closing_revision_has_evidence` — `action <> 'closed' OR evidence_count >= 1`;
-  - `an_issue_closure_is_operator_attested` — `action NOT IN ('closed','reopened') OR (authority_class = 'local_operator' AND decision_channel IN ('local_cli','local_web'))`.
+  - `an_issue_closure_is_operator_attested` — `action NOT IN ('closed','reopened','corrected') OR (authority_class = 'local_operator' AND decision_channel IN ('local_cli','local_web'))` (R2-F10: a correction of a closed Issue is attested too, so no remote or model client can rewrite a closed Issue's title or description).
 - New trigger `an_issue_closure_follows_its_predecessor` (`BEFORE INSERT`): for
   `version > 1` it reads the predecessor revision and requires: `closed` follows a
   non-closed state; `reopened` and `corrected` follow `closed`; every other action
@@ -277,6 +323,12 @@ restores the S1 body byte for byte.
 **`record_link_revisions`**
 
 - Widen `a_link_revision_capability_is_known` (+ `issues.memberships.correct`, the 2 composites).
+- `ADD COLUMN member_native_version integer` (null on every existing row), CHECK
+  `a_member_native_version_is_positive` (`member_native_version IS NULL OR member_native_version >= 1`)
+  and CHECK `only_membership_writes_record_a_member_version`
+  (`member_native_version IS NULL OR source_capability IN ('issues.memberships.add','issues.memberships.correct','issues.work.create_commitment','issues.work.create_task')`).
+  Which membership revisions must carry it (a Task, Commitment or Constraint member) is
+  an application rule (section 3.3), because the member family is on the root.
 - New trigger `a_resolution_link_states_its_purpose` (`BEFORE INSERT`): revision 1 of a
   root whose `relation_type = 'created_to_resolve'` requires `reason IS NOT NULL`.
 
@@ -343,7 +395,10 @@ same entity); `a_handoff_is_not_effective_after_recording` (`effective_at <= rec
 predecessor `= sequence_no - 1`); `a_lineage_row_is_local_operator_attested` (S1 name and
 text). Trigger `a_handoff_follows_its_predecessor` (`BEFORE INSERT`): event *n* > 1
 requires event *n − 1* to exist with `to_holder_kind = NEW.from_holder_kind` and
-`to_entity_id IS NOT DISTINCT FROM NEW.from_entity_id`. Index
+`to_entity_id IS NOT DISTINCT FROM NEW.from_entity_id`. Trigger
+`a_handoff_is_effective_in_order` (`BEFORE INSERT`): `NEW.effective_at` is at or after
+the Commitment's `created_at` and, for event *n* > 1, at or after event *n − 1*'s
+`effective_at` (`check_violation`). Index
 `issue_responsibility_events_by_issue (principal_id, issue_id, recorded_at, handoff_id)`.
 
 **`lineage_write_request_links`** (immutable; a composite request's links, for replay)
@@ -382,8 +437,10 @@ S1 §6.1 is reused: `lineage_authority` / `attested_lineage_authority`
 write is attested** (local-operator only, `denied` before any row and before any
 replay lookup): `issues.close`, `issues.reopen`, `issues.memberships.correct`,
 `issues.handoffs.record`, `issues.work.create_task`, `issues.work.create_commitment`.
-The `issues.update` correction of a closed Issue stays a recorded write (it changes
-title and description only). Stored acceptance basis is `user_confirmed`; the native
+An `issues.update` on a **closed** Issue (a correction, action `corrected`) is attested
+too (R2-F10): the handler derives `attested_lineage_authority` once it has locked the
+Issue and found it closed, so a correction from any other caller is `denied` and writes
+nothing; an `issues.update` on a non-closed Issue stays a recorded write, as in S1. Stored acceptance basis is `user_confirmed`; the native
 rows a composite creates are written with `TaskMutationActor.PRINCIPAL`, as the v1
 writers do.
 
@@ -391,8 +448,8 @@ writers do.
 
 1. Reserve the `lineage_write_requests` row.
 2. The Issue the write changes `FOR UPDATE`: only `issues.close`, `issues.reopen`, `issues.update`.
-3. `FOR SHARE`, ordered by `(family token, identifier)`: every other endpoint, **the context or owning Issue of every link write (new in S2, including S1's `issues.memberships.end` and `records.associations.correct/end`, so they serialize with a close)**, the Commitment of a handoff, the mandatory members' native rows (close), the `project_situations` triplet of a project-qualification check, and every evidence source (S1 rules).
-4. `pg_advisory_xact_lock(LINEAGE_ADVISORY_NAMESPACE, hashtext(key))` with key `principal_id || ':' || normalized_identity` (S1), `principal_id || ':blocks'` (every `blocks` assert, before the cycle search), or `principal_id || ':handoff:' || issue_id || ':' || commitment_id` (a handoff, before reading the latest event). Composite links take their identity locks in ordinal order.
+3. `FOR SHARE`, ordered by `(family token, identifier)`: every other endpoint, **the context or owning Issue of every link write (new in S2, including S1's `issues.memberships.end` and `records.associations.correct/end`, so they serialize with a close)**, the Commitment of a handoff, the member's native row for every membership write on a Task, Commitment or Constraint member (to read `member_native_version`, section 3.3), the mandatory members' native rows (close), the `project_situations` triplet of a project-qualification check, and every evidence source (S1 rules). **For `issues.close` the evidence sources are both the closure set's and the sources of every `resolution` anchor in every mandatory member's head revision** (the Capture root via `share_capture_root`, which an archive waits on; note versions are immutable and need only `FOR SHARE`), so a Capture archive cannot commit between the gate's availability check and the close (R2-F06).
+4. `pg_advisory_xact_lock(LINEAGE_ADVISORY_NAMESPACE, hashtext(key))` with key `principal_id || ':' || normalized_identity` (S1), `principal_id || ':blocks'` (every `blocks` assert, before the cycle search), or `principal_id || ':handoff:' || issue_id || ':' || commitment_id` (a handoff, before reading the latest event). **Total order (R2-F06):** within one write, advisory keys are taken sorted by `(class, key text)` with class order identity < `:blocks` < `:handoff:`; several identity keys (a composite's links) are taken in ascending `normalized_identity` byte order, not ordinal order. Every lineage writer follows this order, so two writers never wait on each other's advisory keys in opposite orders.
 5. Association heads `FOR UPDATE` (writers); for `issues.close`, every active membership head of the Issue `FOR SHARE`, ordered by `link_id`.
 6. Composite only: the native create (section 6.4) runs after steps 1–4 for its intents' targets and before its links' step 5.
 
@@ -422,7 +479,7 @@ lineage, all on the one `UnitOfWork` `invoke` opened:
 - **Membership.** Always written, as ordinal 1: `issue_member` from the Issue to the new record, role `work`, evidence `membership_evidence_anchors` (0..32, S1 membership rule).
 - **Intents.** 0..4 `association_intents`, each `{relation_type, to_record, evidence_anchors, purpose?}` with the new record as `from` and the composite's Issue as `context_issue_id`, refused as a whole when any is outside the section 3.1 rules or two share a normalized identity (`invalid_request` / `association_intents`). Admitted relations: `create_task` — `originated_from`, `created_to_resolve`; `create_commitment` — `originated_from`, `delegated_from`, `created_to_resolve`. `originated_from` keeps its S1 rule.
 - **Project qualification.** A nested `project_id`, when set, must have an active Project link to the Issue (`invalid_request` / `project_id`), so a cross-Project record joins an Issue only through a Project the Issue is scoped to (AT-017).
-- **Refused native fields.** The nested object refuses `idempotency_key` and `situation_id` (unknown field ⇒ `invalid_request`); `accepted_by_review_decision_id` keeps its v1 meaning for Commitments (section 12, D-05).
+- **Refused native fields.** Both nested objects refuse `idempotency_key` and `situation_id` (unknown field ⇒ `invalid_request`). The `task` object of `issues.work.create_task` **also refuses `accepted_by_review_decision_id`** (R2-F04): a Task has a native, non-client acceptance route — `origin_kind: direct_principal` creates it `accepted` with `acceptance_kind = direct_principal` and no review decision (`TaskManagementService.create_task`) — so a composite Task reaches the gate's `accepted` condition only that way; an evidence-origin composite Task is `proposed` and cannot satisfy the gate. The `commitment` object keeps `accepted_by_review_decision_id` with its v1 meaning, because a Commitment has **no** capability-reachable acceptance route other than that field (section 12, D-05 and D-17).
 - **Result and replay.** `{record: {family, record_id}, membership: AssociationView, associations: [AssociationView], replayed}`. The request row stores the record and each link revision; a replay rebuilds the views from those immutable revisions (S1 replay rule) and never re-runs the native create. The native record's own view is read with `tasks.read` / `commitments.read`; it is not echoed, so the composite response is byte-stable.
 
 ## 7. Capabilities — the exact S2 set
@@ -456,7 +513,7 @@ Commitments.
 
 ### 7.1 Shared shapes (additions to S1 §7.1)
 
-- Request models are `StrictModel`s / frozen command dataclasses as in S1; no request carries `principal_id`, any holder identifier, `actor_class`, `authority_class`, `decision_channel`, `acceptance_basis`, `review_decision_id` (except the v1 Commitment field inside a composite's nested object), `recorded_at`, `closed_at`, a selector or an exception/override field.
+- Request models are `StrictModel`s / frozen command dataclasses as in S1; no request carries `principal_id`, any holder identifier, `actor_class`, `authority_class`, `decision_channel`, `acceptance_basis`, `review_decision_id` (the one exception: `accepted_by_review_decision_id` inside `issues.work.create_commitment`'s nested `commitment` object, section 6.4), `recorded_at`, `closed_at`, a selector or an exception/override field.
 - `IssueClosureView` = `{version, closed_at, outcome, evidence: [EvidenceAnchorView]}` — the latest `closed` revision at or below the current version (a `corrected` revision copies its `closed_at`/`outcome`, the evidence stays the closing revision's). No digest.
 - `IssueView` (S1) gains exactly one key, `closure: IssueClosureView | null` (non-null only while `state = closed`). Every S1 key keeps its meaning; `state` may now be `closed`.
 - `IssueRevisionView` keeps exactly its S1 keys; `state` and `action` admit the S2 values.
@@ -484,9 +541,9 @@ S1 rules with any role and stored as the revision's evidence set. Writes action 
 `active`, clears `closed_at`/`outcome` on `situations`. Reopens no member, link or
 native record.
 
-**`issues.update` (S2 delta)** — on a closed Issue: `title`/`description`/`clear_fields`
-only (a `state` is `invalid_request` / `state`), action `corrected`, state stays
-`closed`, `closed_at`/`outcome` copied. `state: closed` is never admitted
+**`issues.update` (S2 delta)** — on a closed Issue: attested (section 6.1, else
+`denied`), `title`/`description`/`clear_fields` only (a `state` is `invalid_request` /
+`state`), action `corrected`, state stays `closed`, `closed_at`/`outcome` copied. `state: closed` is never admitted
 (`invalid_request` / `state`); closing is `issues.close` only. Otherwise S1.
 
 **`issues.closure_readiness`** — in `{issue_id}`; out
@@ -500,9 +557,11 @@ satisfied members are not listed. A closed Issue answers `ready: false`, `blocke
 out `{membership: AssociationView, replayed}`. Membership links only (a semantic id is
 `invalid_request` / `link_id`, the S1 symmetric rule). The set is the complete new set,
 satisfies the membership rule (0..32, any role) and differs from the current digest
-(else `invalid_request` / `evidence_anchors`). Writes `correct_evidence`; root, role
-and identity never change. This is how resolution evidence (role `resolution`) is
-recorded on a mandatory member.
+(else `invalid_request` / `evidence_anchors`), except the section 3.3 re-affirmation (an
+identical set with ≥1 `resolution` anchor when the member's native `version` has moved
+since the head's `member_native_version`). Writes `correct_evidence` with the observed
+`member_native_version`; root, role and identity never change. This is how resolution
+evidence (role `resolution`) is recorded on a mandatory member, after its native close.
 
 **`issues.handoffs.record`** — in `{issue_id, commitment_id, from ("principal"|"counterparty"), effective_at (ISO-8601 with offset), reason (1..2000), evidence_anchor: EvidenceAnchorInput, idempotency_key}`;
 out `{handoff: HandoffView, replayed}`. Section 3.4 rules; the anchor's role must be
@@ -513,7 +572,10 @@ Writes event `sequence_no = latest + 1`.
 out `{handoffs: [HandoffView], next_cursor}` ordered `(recorded_at, handoff_id)`
 ascending, `next_cursor` the last `handoff_id` when more rows exist; `page_size` above
 100 is `invalid_request` / `page_size` (never clamped) and is further bounded by
-`max_page_size`; an `after` outside the filter is `invalid_request` / `cursor`.
+`max_page_size`; an `after` outside the filter is `invalid_request` / `cursor`. The
+Issue and a supplied `commitment_id` are checked in the S1 §3.2 order: an absent or
+foreign Issue or Commitment is `not_found` (`issue_id` / `commitment_id`), alike; an
+owned Commitment with no event in this Issue answers an empty page, never `not_found`.
 
 **`issues.work.create_task`** — in `{issue_id, idempotency_key, task: {the tasks.create payload without idempotency_key and situation_id}, membership_evidence_anchors? ([0..32]), association_intents? ([0..4])}`;
 out section 6.4. A follow-up Task (`role: follow_up`, `commitment_id`) of a **closed**
@@ -537,16 +599,18 @@ link revisions (6.2), the widened `relation_type` set on `records.associations.a
 | --- | --- |
 | an unsatisfied mandatory member at close | `conflict` / `closure_gate` |
 | a write naming a closed Issue (3.2); close of a closed or reopen of a non-closed Issue | `conflict` / `state` |
-| handoff chain broken (counterparty re-pointed, or a concurrent event) | `conflict` / `stale_version` |
+| a concurrent handoff took the sequence number | `conflict` / `stale_version` (retry after re-reading) |
+| handoff `from` names a side the chain's last holder is not on | `invalid_request` / `from` |
+| a correction of a closed Issue by a non-attested caller | `denied` |
 | closure set rule; handoff anchor role/kind | `invalid_request` / `closure_evidence_anchors`, `evidence_anchor` |
 | `blocks` would close a cycle or exceed the search bound | `invalid_request` / `blocks_cycle` |
-| `effective_at` after now; missing `purpose`; composite intent rule; project not linked | `invalid_request` / `effective_at`, `purpose`, `association_intents`, `project_id` |
+| `effective_at` after now, before the Commitment's creation or before the previous handoff's; missing `purpose`; composite intent rule; project not linked | `invalid_request` / `effective_at`, `purpose`, `association_intents`, `project_id` |
 | `delegated_from` direction | `invalid_request` / `direction` |
 | ordinary or remote caller on any S2 write | `denied` |
 | switch off | `unsupported` |
 
 New `SafeDetail` members (`closure_gate`, `closure_evidence_anchors`, `evidence_anchor`,
-`blocks_cycle`, `effective_at`, `purpose`, `association_intents`, `direction`, and any
+`blocks_cycle`, `effective_at`, `purpose`, `association_intents`, `direction`, `from`, and any
 other named here that is absent) are added with the code that reports them; reuse an
 existing member when one with the same token exists.
 
@@ -602,28 +666,33 @@ way the S1 scope guard parses S1 §10.
 | AT (S2 part) | Module | Test functions | Tier |
 | --- | --- | --- | --- |
 | AT-001 (all 14 stages, scenarios A, B, H) | `tests/integration/test_issue_lineage_14step.py` | `test_fourteen_stages_end_to_end_with_reconciliation_gates`; `test_stage_14_before_stage_13_is_refused_and_writes_nothing`; `test_closing_c1_records_no_handoff_and_creates_no_task`; `test_t1_follows_up_a_closed_c1_without_reopening_it`; `test_a_shared_series_a_links_no_other_issue`; `test_creating_x1_changes_no_task_or_issue_state`; `test_one_delegate_closing_leaves_the_other_open`; `test_m3_in_series_b_imports_no_series_sibling`; `test_completing_t1_changes_no_constraint_or_issue`; `test_m4_resolution_words_cannot_close_x1_or_the_issue`; `test_every_root_yields_the_same_current_issue_graph_after_stage_14`; `test_n1b_never_retargets_c1_across_the_workflow` | database |
-| AT-005 | `tests/integration/test_responsibility_handoff.py` | `test_closing_a_commitment_writes_no_handoff`; `test_an_explicit_handoff_records_counterparty_then_principal`; `test_a_handoff_needs_an_exact_handoff_anchor`; `test_a_handoff_names_only_the_principal_and_the_counterparty`; `test_a_handoff_chain_continues_from_the_last_holder`; `test_a_handoff_effective_after_now_is_refused`; `test_a_handoff_subject_must_be_an_active_member`; `test_a_follow_up_task_of_a_closed_commitment_is_admitted`; `test_two_delegations_create_two_independent_commitments`; `test_delegated_from_requires_an_owed_to_principal_commitment`; `test_creation_relations_are_refused_by_assert`; `test_completing_t1_closes_no_delegated_commitment`; `test_no_handoff_is_inferred_for_a_delegate`; `test_handoffs_list_returns_the_sequence_in_order` | database |
-| AT-005 / CR-006 (composites) | `tests/database/test_issue_work_composites.py` | `test_a_composite_writes_native_row_membership_and_links_atomically`; `test_a_refused_composite_writes_no_native_row_or_request`; `test_a_composite_replay_returns_the_original_result_without_a_native_write`; `test_a_composite_refuses_situation_id_and_idempotency_key_inside_the_native_object`; `test_a_composite_project_outside_the_issue_links_is_refused`; `test_a_composite_emits_only_its_native_record_event`; `test_a_composite_native_row_reads_like_a_v1_create`; `test_created_to_resolve_needs_a_purpose` | database |
+| AT-005 | `tests/integration/test_responsibility_handoff.py` | `test_closing_a_commitment_writes_no_handoff`; `test_an_explicit_handoff_records_counterparty_then_principal`; `test_a_handoff_needs_an_exact_handoff_anchor`; `test_a_handoff_names_only_the_principal_and_the_counterparty`; `test_a_handoff_chain_continues_from_the_last_holder`; `test_a_handoff_effective_after_now_is_refused`; `test_a_handoff_subject_must_be_an_active_member`; `test_a_follow_up_task_of_a_closed_commitment_is_admitted`; `test_two_delegations_create_two_independent_commitments`; `test_delegated_from_requires_an_owed_to_principal_commitment`; `test_creation_relations_are_refused_by_assert`; `test_completing_t1_closes_no_delegated_commitment`; `test_no_handoff_is_inferred_for_a_delegate`; `test_handoffs_list_returns_the_sequence_in_order`; `test_a_counterparty_repoint_leaves_the_chain_continuable`; `test_a_handoff_from_the_wrong_side_is_refused`; `test_a_handoff_effective_before_its_predecessor_is_refused`; `test_a_foreign_commitment_answers_like_an_absent_one_for_handoffs`; `test_handoffs_list_of_a_foreign_commitment_is_not_found` | database |
+| AT-005 / CR-006 (composites) | `tests/database/test_issue_work_composites.py` | `test_a_composite_writes_native_row_membership_and_links_atomically`; `test_a_refused_composite_writes_no_native_row_or_request`; `test_a_composite_replay_returns_the_original_result_without_a_native_write`; `test_a_composite_refuses_situation_id_and_idempotency_key_inside_the_native_object`; `test_a_composite_project_outside_the_issue_links_is_refused`; `test_a_composite_emits_only_its_native_record_event`; `test_a_composite_native_row_reads_like_a_v1_create`; `test_created_to_resolve_needs_a_purpose`; `test_a_composite_task_refuses_a_review_decision_id` | database |
 | AT-006 + WP-02D | `tests/integration/test_issue_context_isolation.py` | `test_a_meeting_with_three_issues_offers_three_choices`; `test_each_issue_returns_only_its_own_passage_links`; `test_one_shared_meeting_imports_no_other_issue_member`; `test_series_reassignment_changes_no_lineage_row_or_answer`; `test_a_cross_series_meeting_keeps_its_series_and_imports_no_sibling` | database |
-| AT-007 + AT-015 (S2) | `tests/integration/test_issue_close_reopen.py` | `test_close_requires_an_available_resolution_anchor`; `test_a_legacy_anchor_never_satisfies_closure`; `test_a_contradicting_anchor_refuses_closure`; `test_an_open_mandatory_member_refuses_closure`; `test_a_cancelled_task_member_refuses_closure`; `test_a_void_constraint_member_refuses_closure`; `test_a_proposed_closed_commitment_is_not_counted_accepted`; `test_a_member_without_resolution_evidence_refuses_closure`; `test_archived_resolution_evidence_refuses_closure`; `test_a_contradicted_member_refuses_closure`; `test_non_mandatory_members_do_not_gate_closure`; `test_ending_a_membership_is_the_only_way_past_an_unsatisfiable_member`; `test_close_changes_no_member_or_link`; `test_reopen_changes_no_member_or_link`; `test_a_reopened_constraint_does_not_reopen_the_issue`; `test_a_closed_issue_refuses_lineage_writes`; `test_closure_readiness_names_each_blocked_member`; `test_an_exception_field_is_refused`; `test_correcting_a_closed_issue_keeps_it_closed`; `test_closure_is_never_admitted_through_issues_update` | database |
-| AT-007 (races) | `tests/concurrency/test_issue_close_races.py` | `test_concurrent_closes_with_one_expected_version_admit_one`; `test_close_racing_a_membership_add_serializes`; `test_close_racing_a_membership_end_serializes`; `test_close_racing_a_constraint_reopen_serializes`; `test_concurrent_blocks_asserts_cannot_form_a_cycle`; `test_concurrent_handoffs_on_one_commitment_admit_one` | database |
+| AT-007 + AT-015 (S2) | `tests/integration/test_issue_close_reopen.py` | `test_close_requires_an_available_resolution_anchor`; `test_a_legacy_anchor_never_satisfies_closure`; `test_a_contradicting_anchor_refuses_closure`; `test_an_open_mandatory_member_refuses_closure`; `test_a_cancelled_task_member_refuses_closure`; `test_a_void_constraint_member_refuses_closure`; `test_a_proposed_closed_commitment_is_not_counted_accepted`; `test_a_member_without_resolution_evidence_refuses_closure`; `test_archived_resolution_evidence_refuses_closure`; `test_a_contradicted_member_refuses_closure`; `test_non_mandatory_members_do_not_gate_closure`; `test_ending_a_membership_is_the_only_way_past_an_unsatisfiable_member`; `test_close_changes_no_member_or_link`; `test_reopen_changes_no_member_or_link`; `test_a_reopened_constraint_does_not_reopen_the_issue`; `test_a_closed_issue_refuses_lineage_writes`; `test_closure_readiness_names_each_blocked_member`; `test_an_exception_field_is_refused`; `test_correcting_a_closed_issue_keeps_it_closed`; `test_closure_is_never_admitted_through_issues_update`; `test_resolution_evidence_recorded_before_a_reclose_refuses_closure`; `test_resolution_evidence_recorded_while_the_task_was_open_refuses_closure`; `test_a_same_set_reaffirmation_after_a_reclose_is_admitted`; `test_a_correction_of_a_closed_issue_needs_the_local_operator` | database |
+| AT-007 (races) | `tests/concurrency/test_issue_close_races.py` | `test_concurrent_closes_with_one_expected_version_admit_one`; `test_close_racing_a_membership_add_serializes`; `test_close_racing_a_membership_end_serializes`; `test_close_racing_a_constraint_reopen_serializes`; `test_concurrent_blocks_asserts_cannot_form_a_cycle`; `test_concurrent_handoffs_on_one_commitment_admit_one`; `test_close_racing_a_resolution_source_archive_serializes`; `test_concurrent_reopens_with_one_expected_version_admit_one` | database |
 | AT-017 (scenario D) | `tests/integration/test_shared_issue_crossproject.py` | `test_one_issue_links_two_projects_once_each`; `test_two_constraints_in_two_projects_are_independent_members`; `test_closing_one_constraint_closes_neither_the_other_nor_the_issue`; `test_an_escalation_outside_a_linked_project_is_refused`; `test_project_links_create_no_generic_membership` | database |
-| WP-02C relation rules | `tests/database/test_lineage_s2_relation_rules.py` | `test_s2_relations_are_admitted_only_in_the_matrix`; `test_escalated_from_needs_an_origin_anchor_and_a_context`; `test_escalated_from_refuses_a_draft_or_an_older_constraint`; `test_blocks_needs_corroborating_evidence`; `test_a_blocks_self_loop_is_refused`; `test_a_blocks_cycle_is_refused`; `test_a_blocks_search_past_its_bound_is_refused`; `test_task_completion_closes_no_constraint_or_issue`; `test_a_correction_keeps_each_s2_relation_rule` | database |
-| AT-012 (S2 guards) | `tests/database/test_lineage_s2_integrity_guards.py` | `test_s2_immutable_tables_refuse_update_and_delete` (3 tables); `test_s2_tables_refuse_truncate` (3 tables, each holding a row); `test_an_issue_cannot_close_without_a_matching_revision`; `test_a_closure_revision_follows_the_lifecycle`; `test_a_closed_revision_carries_its_closure_fields`; `test_a_closing_revision_has_evidence`; `test_issue_closure_evidence_is_frozen`; `test_an_issue_closure_row_is_local_operator_attested`; `test_a_handoff_follows_its_predecessor_holder`; `test_a_handoff_changes_its_holder`; `test_a_handoff_cannot_be_effective_after_recording`; `test_a_blocks_root_cannot_name_itself`; `test_a_creation_link_needs_its_composite`; `test_created_to_resolve_revision_one_states_its_purpose`; `test_a_composite_request_names_its_record_and_links`; `test_an_s2_write_request_completes_once`; `test_closure_evidence_digest_rebuilds_from_stored_rows` | database |
+| WP-02C relation rules | `tests/database/test_lineage_s2_relation_rules.py` | `test_s2_relations_are_admitted_only_in_the_matrix`; `test_escalated_from_needs_an_origin_anchor_and_a_context`; `test_escalated_from_refuses_a_draft_or_an_older_constraint`; `test_blocks_needs_corroborating_evidence`; `test_a_blocks_self_loop_is_refused`; `test_a_blocks_cycle_is_refused`; `test_a_blocks_search_past_its_bound_is_refused`; `test_task_completion_closes_no_constraint_or_issue`; `test_a_correction_reapplies_only_the_evidence_rules`; `test_lineage_writes_leave_constraint_bic_unchanged` | database |
+| AT-012 (S2 guards) | `tests/database/test_lineage_s2_integrity_guards.py` | `test_s2_immutable_tables_refuse_update_and_delete` (3 tables); `test_s2_tables_refuse_truncate` (3 tables, each holding a row); `test_an_issue_cannot_close_without_a_matching_revision`; `test_a_closure_revision_follows_the_lifecycle`; `test_a_closed_revision_carries_its_closure_fields`; `test_a_closing_revision_has_evidence`; `test_issue_closure_evidence_is_frozen`; `test_an_issue_closure_row_is_local_operator_attested`; `test_a_handoff_follows_its_predecessor_holder`; `test_a_handoff_changes_its_holder`; `test_a_handoff_cannot_be_effective_after_recording`; `test_a_handoff_cannot_be_effective_before_its_commitment`; `test_a_member_native_version_is_recorded_only_by_membership_writes`; `test_a_blocks_root_cannot_name_itself`; `test_a_creation_link_needs_its_composite`; `test_created_to_resolve_revision_one_states_its_purpose`; `test_a_composite_request_names_its_record_and_links`; `test_an_s2_write_request_completes_once`; `test_closure_evidence_digest_rebuilds_from_stored_rows` | database |
 | AT-012 (migration) | `tests/schema/test_record_lineage_s2_migration.py` | FAST: `test_the_revision_is_the_single_head_on_264310e0416a`; `test_the_revision_imports_no_domain_module`; `test_frozen_ddl_names_every_declared_constraint`; `test_before_texts_are_byte_copies_of_the_s1_texts`; `test_at_vocabulary_adds_exactly_the_s2_names`; `test_offline_downgrade_refuses_first`. DB: `test_empty_to_head`; `test_s1_head_with_rows_upgrades_unchanged`; `test_downgrade_refuses_while_s2_rows_exist`; `test_downgrade_restores_every_s1_text` | FAST + migration markers |
-| AT-023 (S2) | `tests/contract/test_lineage_s2_capability_admission.py` | `test_s2_capabilities_are_operator_decision_required`; `test_s2_requests_reject_server_owned_fields`; `test_existing_v1_shapes_are_unchanged_by_s2`; `test_s1_lineage_views_keep_every_s1_key`; `test_switch_off_withholds_every_s2_capability`; `test_composite_native_objects_mirror_the_v1_requests`; `test_issue_work_authoring_is_its_own_purpose` | FAST |
+| AT-023 (S2) | `tests/contract/test_lineage_s2_capability_admission.py` | `test_s2_capabilities_are_operator_decision_required`; `test_s2_requests_reject_server_owned_fields`; `test_existing_v1_shapes_are_unchanged_by_s2`; `test_s1_lineage_views_keep_every_s1_key`; `test_switch_off_withholds_every_s2_capability`; `test_composite_native_objects_mirror_the_v1_requests` (expected difference, exactly: both objects lack `idempotency_key` and `situation_id`; the `task` object also lacks `accepted_by_review_decision_id`); `test_issue_work_authoring_is_its_own_purpose` | FAST |
 | AT-023 (S2, DB) | `tests/database/test_lineage_s2_attested_writes.py` | `test_an_ordinary_remote_client_is_denied_every_s2_write`; `test_a_replayed_s2_write_from_an_ordinary_client_is_denied_before_the_replay_lookup`; `test_switch_off_answers_unsupported_for_every_s2_capability`; `test_every_s2_capability_answers_a_foreign_subject_like_an_absent_one` | database |
-| (domain) | `tests/unit/test_issue_closure_gate.py` | `test_mandatory_roles_are_work_and_constraint`; `test_member_blockers_by_family_and_state`; `test_resolution_evidence_rules`; `test_close_reopen_and_correct_moves`; `test_handoff_holders_are_the_principal_and_the_counterparty` | FAST |
+| (domain) | `tests/unit/test_issue_closure_gate.py` | `test_mandatory_roles_are_work_and_constraint`; `test_member_blockers_by_family_and_state`; `test_resolution_evidence_rules`; `test_close_reopen_and_correct_moves`; `test_handoff_holders_follow_the_chain_and_the_current_counterparty` | FAST |
 | AT-024 (S2, web decoder) | existing `web/src/lib/api/decode/capabilities/records.lineage.test.ts` | `decodes the S2 relation types and a closed Issue`; `refuses a relation type outside the S2 vocabulary` | vitest |
 | AT-024 (S2, web component) | existing `web/src/components/work/related-issues.test.tsx` | `renders delegated, escalated, blocking and resolving relations in words`; `renders a closed Issue as closed` | vitest |
 | AT-026 (S2) | `tests/architecture/test_record_lineage_s2_scope.py` | `test_s2_adds_no_record_event_family`; `test_every_s2_crosswalk_test_exists`; `test_s2_modules_stage_no_lineage_record_event` | FAST |
 
-**S1 regressions (binding, must stay green unchanged):** every test of S1 §10, with
-two named exceptions that move in lockstep and keep their names: the S1 migration
-test's head/count assertions (`test_the_revision_is_the_single_head_on_b9025e7fb738`
-keeps asserting the S1 revision's place in the chain and the moved head literal; the
-head-pin list adds the S2 revision), and the `records.lineage` decoder/component tests,
-which gain cases without losing any. Also existing and binding:
+**S1 regressions (binding, must stay green; unchanged except the listed lockstep
+moves, R2-F08):** every test of S1 §10 and every v1 suite. The only edits admitted,
+each keeping its test name and changing only the moved literal or set:
+
+- `tests/unit/test_lineage_canonical.py` `test_issue_states_are_the_non_terminal_situation_states`: its oracle moves from `SituationState − {closed}` to all 4 `SituationState` members (the name stays; the docstring states S2 admits `closed`).
+- `tests/schema/test_record_lineage_s1_migration.py` `test_the_revision_is_the_single_head_on_b9025e7fb738`: keeps asserting the S1 revision's place in the chain; its head literal and revision count (119 → 120) move.
+- **Head pins:** every file named by the head-pin list (`test_the_head_pin_list_is_the_files_that_actually_pin_the_head`, 49 test files under `tests/` cite `264310e0416a` at the basis, including v1 suites such as `tests/schema/test_work_task_commitment_migration.py`) moves its head literal to the S2 revision, and only that literal; the list gains the S2 migration test.
+- **Count pins:** tests and docs pinning the capability count (206), purpose count (57), audit-vocabulary count (217), revision count and `TABLES_SHA256` move to the S2 values (section 7), and only those literals.
+- The `records.lineage` decoder and component tests gain cases without losing any.
+
+No other S1 or v1 test is edited. Also existing and binding:
 `tests/contract/test_bff_gateway_contract_parity.py`,
 `tests/contract/test_bff_success_decoder_parity.py`,
 `web/src/lib/api/decode/registry.test.ts`, and the v1 Work, Constraint and Meeting
@@ -631,8 +700,13 @@ suites (no v1 test edited).
 
 **AT-001 stage → call map** (synthetic Principal A and B; Series A and B; M1..M4 with
 note versions N1..N4 and N1b; C1..C3; T1; X1 in Project P linked to I; counterparties
-P1..P3 as `ent_` rows from the existing Entity fixtures; Commitments accepted with a
-synthetic `rdec_` as v1 tests do; E0, E1 synthetic Capture versions):
+P1..P3 as `ent_` rows from the existing Entity fixtures; E0, E1 synthetic Capture
+versions). **Acceptance (R2-F04):** T1 is created `origin_kind: direct_principal`, so it
+is natively `accepted` (`acceptance_kind = direct_principal`) with no review decision;
+C1, C2 and C3 carry a synthetic `rdec_` in the nested `accepted_by_review_decision_id`,
+the only route a Commitment has to `accepted` (section 12, D-05, D-17). Each
+`memberships.correct` with a `resolution` anchor runs after its member's native close,
+so its `member_native_version` is the closed version:
 
 | Stage | Calls | Gate asserted after the stage |
 | --- | --- | --- |
@@ -672,6 +746,14 @@ unreachable hazard, never as "covered"):
 | `an_issue_revision_evidence_set_is_frozen` | drop either trigger | `test_issue_closure_evidence_is_frozen` |
 | `an_issue_closure_is_operator_attested` | drop the CHECK | `test_an_issue_closure_row_is_local_operator_attested` |
 | `a_handoff_follows_its_predecessor` | return NEW unconditionally | `test_a_handoff_follows_its_predecessor_holder` |
+| `a_handoff_is_effective_in_order` | drop the trigger (application check bypassed by a direct insert) | `test_a_handoff_cannot_be_effective_before_its_commitment` (and, at the capability, `test_a_handoff_effective_before_its_predecessor_is_refused` with the application check removed instead) |
+| `only_membership_writes_record_a_member_version` | drop the CHECK | `test_a_member_native_version_is_recorded_only_by_membership_writes` |
+| gate: stale resolution evidence | skip the `member_native_version` equality | `test_resolution_evidence_recorded_before_a_reclose_refuses_closure` (the T1-open variant `test_resolution_evidence_recorded_while_the_task_was_open_refuses_closure` reddens with it) |
+| re-affirmation admission | keep refusing every same-digest correction | `test_a_same_set_reaffirmation_after_a_reclose_is_admitted` |
+| handoff leaving side from the chain | resolve the leaving side from the current counterparty | `test_a_counterparty_repoint_leaves_the_chain_continuable` |
+| close shares member resolution sources | share only the closure set's sources | `test_close_racing_a_resolution_source_archive_serializes` |
+| corrected revisions attested (`an_issue_closure_is_operator_attested` covers `corrected`; handler derives attested authority) | drop `corrected` from the CHECK and use `lineage_authority` | `test_a_correction_of_a_closed_issue_needs_the_local_operator` |
+| composite Task refuses a review decision id | admit the field | `test_a_composite_task_refuses_a_review_decision_id` |
 | `a_handoff_changes_its_holder` / `a_handoff_is_not_effective_after_recording` | drop each CHECK in turn | `test_a_handoff_changes_its_holder` / `test_a_handoff_cannot_be_effective_after_recording` |
 | `a_blocks_link_names_two_records` | drop the CHECK (application check bypassed by a direct insert) | `test_a_blocks_root_cannot_name_itself` |
 | `a_creation_link_is_written_by_its_composite` | drop the CHECK | `test_a_creation_link_needs_its_composite` |
@@ -707,7 +789,10 @@ v2 → Program/report work packages; AT-020, AT-021 → out of scope until OD-06
 | A composite Constraint create (needs the Constraint plane to accept a joined unit of work) | a Constraint-plane decision, not scheduled |
 | A closure exception authority (OD-03) | not built; operator decision |
 | Proposals and review (`irp`, `ldec`), Record Event family for lineage (`irec`) | S3 |
-| Verified native Commitment acceptance (a review decision that must exist) | ADR-006 / Work follow-up, not scheduled (section 12, D-05) |
+| Verified native Commitment acceptance (a review decision that must exist), and the same for v1 evidence-origin Tasks | ADR-006 / Work follow-up, not scheduled (section 12, D-05, D-17) |
+| Handoff correction/void (an append-only correcting event honoured by `valid_at` reads); until then a mis-recorded handoff stands and no reverse handoff may be recorded to undo it (section 3.4) | S3 |
+| Past Constraint ball-in-court (WP-02C "present/past BIC"): BIC stays native and unchanged by lineage (`test_lineage_writes_leave_constraint_bic_unchanged`); reading a past BIC is a `valid_at` read | S3 |
+| `contested` as a closure-gate blocker (mandatory once `contest` is admitted, section 3.3) | S3 |
 | Issue pages with close/reopen/handoff controls; the Meeting record view | S3 (WP-06A) |
 | Runtime-role provisioning, remote attested lineage writer, native writers through `is_transaction_conflict` | as S1 §11 |
 | Backfill, Program, report manifest, finance, P6 | as S1 §11 |
@@ -717,10 +802,10 @@ v2 → Program/report work packages; AT-020, AT-021 → out of scope until OD-06
 | # | Package says | Repository truth | Resolution |
 | --- | --- | --- | --- |
 | D-01 | CR-006: `association_intents` on the existing Work/Meeting/Constraint writers | ADR-015 decision 13 forbids a silent extra field on a v1 contract; the v1 handlers are shared with the strict web client | 2 new composite capabilities; the v1 writers are untouched |
-| D-02 | CR-005 `issue_responsibility_events` with `before/after_holder_kind ∈ principal, entity, unassigned`, `action_ref`, `cause_anchor_id`, `accepted_at` | `ires` collides (S1 §2); Tasks are Principal-held; a Commitment has exactly one counterparty | `ihnd`; subject = a Commitment member; holders = the Principal and its counterparty only, resolved by the server; `unassigned` and `accepted_at` dropped (acceptance is the attested write) |
+| D-02 | CR-005 `issue_responsibility_events` with `before/after_holder_kind ∈ principal, entity, unassigned`, `action_ref`, `cause_anchor_id`, `accepted_at` | `ires` collides (S1 §2); Tasks are Principal-held; a Commitment has exactly one counterparty | `ihnd`; subject = a Commitment member; holders = the Principal and a counterparty (the leaving side from the chain's last holder, an arriving counterparty from the current one), resolved by the server; `unassigned` and `accepted_at` dropped (acceptance is the attested write) |
 | D-03 | CR-006: X1 created with its escalation in one UOW | `ConstraintManagementService.create_published` takes no `active_uow` by design (its docstring) and the general `UnitOfWork` has no Constraint repository | X1 is created by v1 `constraints.create_published`; `escalated_from` is an explicit, evidenced, Project-qualified assertion afterwards; the intermediate state (X1 not yet in the Issue) is honest and visible |
 | D-04 | WP-02B: avoid the "single open follow-up" assumption; "do not prohibit follow-up solely because C1 is closed" | `tasks.create` validates only same-Principal Commitment existence (`_validate_task_commitment_state`), so a closed C1 is admitted; no unique index limits follow-ups; `commitments.read` shows one `follow_up_task_*` (`get_follow_up_for_commitment`: latest created) | nothing to unblock; the v1 single-follow-up display is a v1 read property left unchanged; lineage never relies on it |
-| D-05 | OD-03 / CR-004: acceptance is server-derived | v1 `commitments.create` admits a client-supplied `accepted_by_review_decision_id` checked only for its `rdec_` pattern | the gate reads native `evidence_state` as native truth (AT-015 needs exactly that); the unverified v1 acceptance is a pre-existing residual recorded here and in section 11, not widened by S2 (composites keep the v1 field and meaning, under attested local-operator authority) |
+| D-05 | OD-03 / CR-004: acceptance is server-derived | v1 `commitments.create` admits a client-supplied `accepted_by_review_decision_id` checked only for its `rdec_` pattern | the gate reads native `evidence_state` as native truth (AT-015 needs exactly that); the unverified v1 acceptance is a pre-existing residual recorded here and in section 11, not widened by S2 (the Commitment composite keeps the v1 field and meaning, under attested local-operator authority). **The same residual applies to Tasks created by v1 `tasks.create`** with `origin_kind: evidence` and a client `accepted_by_review_decision_id` (`TaskManagementService.create_task` marks them `accepted`/`review` on the pattern-checked id) and then added as members; the Task composite refuses the field (D-17) |
 | D-06 | Stage 13: X1 closes "with verified source E1 approved under Constraint rules" | `constraints.close` takes no evidence; `project_constraint_evidence_links` admits only `cap_`/`asrt_`/`mdoc_`/`mdver_` refs and has no writer on the close path | X1's proof is an exact-version `resolution` anchor on its Issue membership (`issues.memberships.correct`); the Constraint plane is unchanged |
 | D-07 | `issues.close` "returns evaluated unresolved required memberships" | the error envelope carries one safe detail | refusal `conflict` / `closure_gate`, plus the read `issues.closure_readiness` listing blockers |
 | D-08 | `issues.history` in WP-01C | the S2 ATs need the closure basis, which `IssueView.closure` and the immutable revisions carry | `issues.history` stays S3 (S1 placed it there) |
@@ -731,6 +816,8 @@ v2 → Program/report work packages; AT-020, AT-021 → out of scope until OD-06
 | D-13 | AT-015 `tests/contract/test_commitment_project_scoping.py` | its Program v2 reads are a later work package | the S2 part lives in `tests/integration/test_issue_close_reopen.py` |
 | D-14 | S1 `records.lineage` web decoder is strict on `relation_type` and Issue `state` | S2 widens both server vocabularies | lockstep decoder widening on the unmerged branch (section 7.4) |
 | D-15 | Package composite "same UOW receipt" includes a Record Event and `link_mutation_event_receipts` | S1 defers lineage Record Events to S3 | composites emit only their native Record Event; lineage events stay S3 |
+| D-16 | OD-03 / stage 14: no unfulfilled mandatory duty "unless explicitly operator-authorized exception" | no exception authority exists, and S2 builds none | **interpretation:** ending a mandatory membership (`issues.memberships.end`, attested, with a reason) or recording work under a non-mandatory role is a recorded change of the Issue's scope, not an exception to the gate; it is visible in the membership revisions and their reasons. A future exception authority is a separate operator decision (section 13) |
+| D-17 | OD-03 / CR-004: acceptance must be server-derived, never a client field (R2-F04) | Tasks have a native non-client route (`origin_kind: direct_principal` ⇒ `accepted`, `acceptance_kind = direct_principal`, in `TaskManagementService.create_task`); Commitments have none reachable from a capability: `SqlSituationRepository.accept` verifies a `capture_review_decisions` row with an accepting disposition, but no application code calls it, and `commitments.create` takes the client `rdec_` | the Task composite refuses `accepted_by_review_decision_id`; the Commitment composite keeps it (D-05 residual); wiring a verified Commitment acceptance route is the section 11 Work follow-up |
 
 Lock and transaction rules not restated here are S1's, including its resolutions in
 S1 §12.

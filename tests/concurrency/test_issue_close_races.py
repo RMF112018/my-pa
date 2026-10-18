@@ -21,9 +21,10 @@ Every outcome is checked as an invariant over both orders, since PostgreSQL
 does not promise which waiter is granted first. Each wait is bounded and each
 thread joined with a timeout, so a build that takes no lock reports rather
 than hangs. Two handoffs of one Commitment's chain serialize on the chain's
-advisory key, so the second re-reads the chain the first extended. The
-`blocks` race is the relation worker's (S2 contract section 9, K3). Every
-identity is synthetic.
+advisory key, so the second re-reads the chain the first extended, and two
+`blocks` asserts that would together close a cycle serialize on the
+Principal's `:blocks` key, so the second's cycle search sees the first's
+edge. Every identity is synthetic.
 """
 
 from __future__ import annotations
@@ -36,11 +37,19 @@ from typing import Any, Final
 
 import pytest
 from sqlalchemy import Engine, text
-from tests.database.lineage_record_harness import NOTE_BODY, capture, capture_anchor, membership
+from tests.database.lineage_record_harness import (
+    NOTE_BODY,
+    capture,
+    capture_anchor,
+    meeting,
+    membership,
+    note_anchor,
+)
 from tests.database.lineage_s2_harness import (
     GATEWAY,
     S2Runtime,
     all_s2_counts,
+    assertion,
     close,
     correct,
     handoff,
@@ -343,3 +352,32 @@ def test_concurrent_handoffs_on_one_commitment_admit_one(runtime: S2Runtime) -> 
     # The loser re-read the chain: the Principal holds now, so `from` is the wrong side.
     assert outcomes == [None, ("invalid_request", ["from"])]
     assert all_s2_counts(runtime.engine)["issue_responsibility_events"] == before + 1
+
+
+def test_concurrent_blocks_asserts_cannot_form_a_cycle(runtime: S2Runtime) -> None:
+    """A -> B and B -> A at once: the `:blocks` key serializes the two cycle searches.
+
+    Both writers wait on the held Task, are released together, and then take
+    the Principal's `:blocks` key in turn; the second searches only after the
+    first committed, so it finds the edge and refuses (S2 section 3.1).
+    """
+    first_task, second_task = runtime.task("race-blocks-a"), runtime.task("race-blocks-b")
+    meeting_id, note_id = meeting(runtime, "race-blocks")
+    anchor = note_anchor(meeting_id, note_id, NOTE_BODY, role="corroborates", passage=None)
+    a, b = ("task", first_task), ("task", second_task)
+    first, second = _race(
+        runtime,
+        "SELECT task_id FROM knowledge.tasks WHERE task_id = :id FOR UPDATE",
+        {"id": first_task},
+        [
+            _invoke(runtime, assertion("blocks", a, b, "race-blocks-ab", (anchor,))),
+            _invoke(runtime, assertion("blocks", b, a, "race-blocks-ba", (anchor,))),
+        ],
+    )
+    outcomes = sorted([_detail(first), _detail(second)], key=lambda item: item is not None)
+    assert outcomes == [None, ("invalid_request", ["blocks_cycle"])]
+    with runtime.engine.connect() as connection:
+        written = connection.execute(
+            text("SELECT count(*) FROM knowledge.record_links WHERE relation_type = 'blocks'")
+        ).scalar_one()
+    assert written == 1

@@ -14,6 +14,10 @@ and `issues.work.create_commitment`:
   a write committed while it was on;
 * a foreign Issue or membership answers exactly like an absent one.
 
+The two relations `records.associations.assert` gains in S2 (`escalated_from`,
+`blocks`) are attested the same way, and a foreign Constraint or Task they name
+answers like an absent one.
+
 Every identity here is synthetic.
 """
 
@@ -28,12 +32,13 @@ import pytest
 from my_pa.application.commands import ListIssueHandoffs, ReadIssueClosureReadiness
 from my_pa.domain.task.lifecycle import TaskLifecycleState
 from tests.database.lineage_issue_harness import OTHER_PRINCIPAL, PRINCIPAL, REMOTE_CLIENT
-from tests.database.lineage_record_harness import capture
+from tests.database.lineage_record_harness import NOTE_BODY, capture, meeting, note_anchor
 from tests.database.lineage_s2_harness import (
     GATEWAY,
     REVIEW_DECISION,
     S2Runtime,
     all_s2_counts,
+    assertion,
     close,
     correct,
     handoff,
@@ -111,6 +116,34 @@ def _scene(runtime: S2Runtime, key: str) -> dict[str, Any]:
     }
 
 
+def _relations(runtime: S2Runtime, key: str) -> tuple[Any, Any]:
+    """An `escalated_from` and a `blocks` assert, each admissible for the operator."""
+    issue = runtime.issue(f"{key}-relations")
+    project = runtime.project_with_constraints(f"{key}-relations")
+    runtime.link_project(issue, project, f"{key}-relations")
+    task_id = runtime.task(f"{key}-relations")
+    runtime.member(issue, "task", task_id, f"{key}-relations", "work")
+    constraint = runtime.constraint(project, f"{key}-relations")
+    meeting_id, note_id = meeting(runtime, f"{key}-relations")
+    return (
+        assertion(
+            "escalated_from",
+            ("constraint", constraint),
+            ("task", task_id),
+            f"{key}-escalated",
+            (note_anchor(meeting_id, note_id, NOTE_BODY),),
+            context=issue,
+        ),
+        assertion(
+            "blocks",
+            ("task", task_id),
+            ("constraint", constraint),
+            f"{key}-blocks",
+            (note_anchor(meeting_id, note_id, NOTE_BODY, role="corroborates", passage=None),),
+        ),
+    )
+
+
 #: The S2 writes in the order a scene admits them (the close freezes the Issue).
 _WRITES: Final = ("correct", "handoff", "work_task", "work_commitment", "close", "reopen")
 
@@ -131,6 +164,15 @@ def test_an_ordinary_remote_client_is_denied_every_s2_write(runtime: S2Runtime) 
     # The reads are not attested: a recorded caller may evaluate the gate and list.
     assert runtime.ok(ReadIssueClosureReadiness(issue_id=scene["issue"]))["state"] == "closed"
     assert runtime.ok(ListIssueHandoffs(issue_id=scene["issue"]))["handoffs"] == []
+    # The S2 relations `records.associations.assert` admits are attested the same way.
+    relations = _relations(runtime, "deny")
+    before = all_s2_counts(runtime.engine)
+    for command in relations:
+        assert _code(runtime, command, remote_client=REMOTE_CLIENT)[0] == "denied"
+        assert _code(runtime, command)[0] == "denied"
+    assert all_s2_counts(runtime.engine) == before
+    for command in relations:
+        runtime.ok(command, surface=GATEWAY)
 
 
 def test_a_replayed_s2_write_from_an_ordinary_client_is_denied_before_the_replay_lookup(
@@ -246,3 +288,46 @@ def test_every_s2_capability_answers_a_foreign_subject_like_an_absent_one(
             ListIssueHandoffs(issue_id=own, commitment_id=commitment),
             principal_id=OTHER_PRINCIPAL,
         ) == ("not_found", ["commitment_id"])
+    # The S2 relations: a foreign Constraint or Task answers like an absent one,
+    # whatever else the caller names is its own.
+    escalated, blocks = _relations(runtime, "foreign")
+    own_issue = runtime.issue("foreign-relations", principal_id=OTHER_PRINCIPAL)
+    own_task = runtime.task("foreign-relations", principal_id=OTHER_PRINCIPAL)
+    meeting_id, note_id = meeting(runtime, "foreign-relations", principal_id=OTHER_PRINCIPAL)
+    own_origin = note_anchor(meeting_id, note_id, NOTE_BODY)
+    own_corroborates = note_anchor(
+        meeting_id, note_id, NOTE_BODY, role="corroborates", passage=None
+    )
+    for family, subject, absent, relation, anchor in (
+        (
+            "constraint",
+            escalated.from_record["record_id"],
+            "cst_lineages2absent0001",
+            "escalated_from",
+            own_origin,
+        ),
+        (
+            "task",
+            blocks.from_record["record_id"],
+            "tsk_lineages2absent0001",
+            "blocks",
+            own_corroborates,
+        ),
+    ):
+        answers = [
+            _code(
+                runtime,
+                assertion(
+                    relation,
+                    (family, record_id),
+                    ("task", own_task),
+                    f"foreign-{relation}-{record_id}",
+                    (anchor,),
+                    context=own_issue if relation == "escalated_from" else None,
+                ),
+                principal_id=OTHER_PRINCIPAL,
+                surface=GATEWAY,
+            )
+            for record_id in (subject, absent)
+        ]
+        assert answers == [("not_found", ["from"])] * 2, relation

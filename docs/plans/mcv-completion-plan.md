@@ -74,9 +74,11 @@ is not a defect.
 
 ## 3. What is implemented
 
-Four hundred and four Python modules under `src/my_pa` and seven hundred and seventy-five test modules —
+Four hundred and four Python modules under `src/my_pa` and seven hundred and seventy-seven test modules —
 
-**Current-tree remeasurement (record lineage S2 relations and Meeting isolation, branch `feat/lineage-s2-workflow`, worker K3, 2026-10-18):** the two commands below count 404 source modules and 775 test modules: the 404/773 below plus `tests/integration/test_issue_context_isolation.py` and `tests/integration/test_shared_issue_crossproject.py`; no source module is added. This is file-inventory evidence, not a test PASS receipt.
+**Current-tree remeasurement (record lineage S2 fourteen-stage workflow and web lockstep, branch `feat/lineage-s2-workflow`, worker K4, 2026-10-18):** the two commands below count 404 source modules and 777 test modules: the 404/775 below plus `tests/integration/test_issue_lineage_14step.py` and `tests/architecture/test_record_lineage_s2_scope.py`; no source module is added. This is file-inventory evidence, not a test PASS receipt.
+
+**Historical remeasurement (record lineage S2 relations and Meeting isolation, branch `feat/lineage-s2-workflow`, worker K3, 2026-10-18):** the two commands below counted 404 source modules and 775 test modules: the 404/773 below plus `tests/integration/test_issue_context_isolation.py` and `tests/integration/test_shared_issue_crossproject.py`; no source module is added. This is file-inventory evidence, not a test PASS receipt.
 
 **Historical remeasurement (record lineage S2 handoffs and composites, branch `feat/lineage-s2-workflow`, worker K2, 2026-10-18):** the two commands below counted 404 source modules and 773 test modules: the 401/770 below plus `src/my_pa/application/issue_handoffs.py`, `src/my_pa/application/issue_work.py` and `src/my_pa/infrastructure/persistence/issue_handoffs.py`, and `tests/integration/test_responsibility_handoff.py`, `tests/database/test_issue_work_composites.py` and `tests/database/test_lineage_s2_relation_rules.py`. This is file-inventory evidence, not a test PASS receipt.
 

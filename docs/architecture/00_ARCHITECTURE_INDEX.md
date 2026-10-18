@@ -20,7 +20,7 @@
 | [`module-boundaries.md`](module-boundaries.md) | Present — proposed for repository review |
 | [`data-authority.md`](data-authority.md) | Present — proposed for repository review |
 | [`record-lineage-s1-contract.md`](record-lineage-s1-contract.md) | Proposed — Slice S1 implementation contract under ADR-015; S1 implemented on branch `feat/lineage-s1-integration`, test-isolated, not deployed |
-| [`record-lineage-s2-contract.md`](record-lineage-s2-contract.md) | Proposed — Slice S2 implementation contract under ADR-015 (Issue close/reopen gate, handoff ledger, composite Work writes, S2 relation types); not implemented |
+| [`record-lineage-s2-contract.md`](record-lineage-s2-contract.md) | Proposed — Slice S2 implementation contract under ADR-015 (Issue close/reopen gate, handoff ledger, composite Work writes, S2 relation types); S2 implemented on branch `feat/lineage-s2-workflow`, test-isolated, not merged or deployed |
 | [`../security/threat-model.md`](../security/threat-model.md) | Present — proposed for repository review |
 | [`../decisions/ADR-003-product-owned-user-authored-source-records.md`](../decisions/ADR-003-product-owned-user-authored-source-records.md) | Accepted — the third authority class |
 | [`../decisions/ADR-008-nas-runtime-topology.md`](../decisions/ADR-008-nas-runtime-topology.md) | Accepted — staged NAS target topology; not deployed |

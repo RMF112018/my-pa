@@ -7,6 +7,10 @@ import { strictObject, nullable, arrayOf, checked, text, integer, enumeration, i
  * strictly: every object is reconstructed from its named keys and an unknown
  * key — a source, passage or evidence-set digest included — refuses the whole answer. The
  * Python models are `contracts/v1/record_lineage.py`.
+ *
+ * S2 (contract section 7.4) widens exactly two closed sets in lockstep with the
+ * server vocabulary: `relation_type` admits the four S2 relations and an Issue
+ * `state` admits `closed`. A value outside them still refuses the whole answer.
  */
 const invalid = () => closed("upstream_contract_invalid", "Invalid capability success contract");
 
@@ -17,7 +21,13 @@ const FAMILY_PREFIX: Readonly<Record<RecordFamily, string>> = {
   situation: "sit", meeting: "mtg", meeting_note_version: "mnote", task: "tsk",
   commitment: "cmt", constraint: "cst", capture_version: "capver",
 };
-const ISSUE_STATES = ["open", "active", "suspended"] as const;
+/** Python `domain/lineage/vocabulary.py` `ISSUE_STATES` (S2 admits `closed`). */
+export const ISSUE_STATES = ["open", "active", "suspended", "closed"] as const;
+/** Python `RelationType`: the 3 S1 relations and the 4 S2 adds (S2 section 3.1). */
+export const RELATION_TYPES = [
+  "issue_member", "originated_from", "discusses",
+  "delegated_from", "escalated_from", "blocks", "created_to_resolve",
+] as const;
 const MAX_ISSUE_TITLE_CHARACTERS = 500;
 
 function prefixed(value: string, prefix: string): boolean {
@@ -57,7 +67,7 @@ const evidenceAnchor = checked(strictObject({
 const association = strictObject({
   link_id: identifier("irl"),
   kind: enumeration(["issue_membership", "semantic"]),
-  relation_type: enumeration(["issue_member", "originated_from", "discusses"]),
+  relation_type: enumeration(RELATION_TYPES),
   from: recordRef,
   to: recordRef,
   member_role: nullable(enumeration(["origin_evidence", "discussion", "work", "constraint", "supporting_evidence", "reference"])),

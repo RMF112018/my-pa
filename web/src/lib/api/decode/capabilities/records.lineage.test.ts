@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import fixtures from "../fixtures/python/success.json";
-import { decodeRecordsLineage } from "./records.lineage";
+import { decodeRecordsLineage, ISSUE_STATES, RELATION_TYPES } from "./records.lineage";
 
 const canonical = fixtures["records.lineage"];
 type Json = Record<string, unknown>;
@@ -66,6 +66,46 @@ describe("records.lineage strict canonical success", () => {
     expect(decode(task).ok).toBe(false);
     const issue = payload(); (issue.nodes as Json[])[2]!.meeting_id = "mtg_aaaaaaaa11111111";
     expect(decode(issue).ok).toBe(false);
+  });
+
+  it("decodes the S2 relation types and a closed Issue", () => {
+    // The closed sets are exactly the server vocabulary (S2 section 7.4); the
+    // Python side of the equality is `test_record_lineage_s2_scope.py`.
+    expect([...RELATION_TYPES]).toEqual([
+      "issue_member", "originated_from", "discusses",
+      "delegated_from", "escalated_from", "blocks", "created_to_resolve",
+    ]);
+    expect([...ISSUE_STATES]).toEqual(["open", "active", "suspended", "closed"]);
+    for (const [relation, from, to] of [
+      ["delegated_from", { family: "commitment", record_id: "cmt_aaaaaaaa11111111" }, { family: "task", record_id: "tsk_aaaaaaaa11111111" }],
+      ["escalated_from", { family: "constraint", record_id: "cst_aaaaaaaa11111111" }, { family: "task", record_id: "tsk_aaaaaaaa11111111" }],
+      ["blocks", { family: "task", record_id: "tsk_aaaaaaaa11111111" }, { family: "constraint", record_id: "cst_aaaaaaaa11111111" }],
+      ["created_to_resolve", { family: "task", record_id: "tsk_aaaaaaaa11111111" }, { family: "situation", record_id: "sit_aaaaaaaa11111111" }],
+    ] as const) {
+      const value = payload();
+      const edge = (value.typed_edges as Json[])[1]!;
+      Object.assign(edge, { relation_type: relation, from, to });
+      const decoded = decode(value);
+      expect(decoded, relation).toEqual({ ok: true, value });
+    }
+    const closedIssue = payload();
+    (closedIssue.nodes as Json[])[2]!.state = "closed";
+    (closedIssue.issues_matching_root as Json[])[0]!.state = "closed";
+    expect(decode(closedIssue)).toEqual({ ok: true, value: closedIssue });
+  });
+
+  it("refuses a relation type outside the S2 vocabulary", () => {
+    // `related_context` is S3 (S2 section 11): the server never sends it in S2.
+    for (const relation of ["related_context", "follows_up", "Blocks", "", "contested"]) {
+      const value = payload(); (value.typed_edges as Json[])[1]!.relation_type = relation;
+      expect(decode(value).ok, relation).toBe(false);
+    }
+    for (const state of ["contested", "archived", "Closed"]) {
+      const node = payload(); (node.nodes as Json[])[2]!.state = state;
+      expect(decode(node).ok, state).toBe(false);
+      const match = payload(); (match.issues_matching_root as Json[])[0]!.state = state;
+      expect(decode(match).ok, state).toBe(false);
+    }
   });
 
   it("refuses identifiers of the wrong family, a non-null cursor and an unknown completeness", () => {

@@ -262,8 +262,10 @@ def _code(envelope: ResponseEnvelope) -> str | None:
 def test_s1_capabilities_are_operator_decision_required() -> None:
     declared = _declared()
     assert declared, "no S1 name is declared, so this test proves nothing"
-    assert declared == _LINEAGE_CAPABILITIES
-    assert _LINEAGE_CAPABILITY_NAMES == S1_NAMES
+    # S2 widens the switch's set by its own names (S2 contract 7.5); the
+    # S1 part of it is unchanged.
+    assert declared == {c for c in _LINEAGE_CAPABILITIES if c.value in S1_NAMES}
+    assert S1_NAMES <= _LINEAGE_CAPABILITY_NAMES
     for capability in declared:
         policy = CHATLLM_CAPABILITY_POLICY[capability]
         assert policy.classification is ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED

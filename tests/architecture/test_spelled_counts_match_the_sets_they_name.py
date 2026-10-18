@@ -529,6 +529,16 @@ _ORDINAL_UNITS = (
     "two-hundred-fifth",
     "two-hundred-sixth",
     "two-hundred-seventh",
+    # Record lineage S2 takes the public set to two hundred and fourteen; dense
+    # through the two-hundred-fifteenth.
+    "two-hundred-eighth",
+    "two-hundred-ninth",
+    "two-hundred-tenth",
+    "two-hundred-eleventh",
+    "two-hundred-twelfth",
+    "two-hundred-thirteenth",
+    "two-hundred-fourteenth",
+    "two-hundred-fifteenth",
 )
 
 

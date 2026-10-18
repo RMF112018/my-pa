@@ -80,6 +80,7 @@ from my_pa.application.commands import (
     CloseCommitment,
     CloseConstraint,
     CloseConstraintWithFollowUp,
+    CloseIssue,
     CloseProject,
     Command,
     CommitIntelligenceArtifact,
@@ -87,6 +88,7 @@ from my_pa.application.commands import (
     ConfigureProjectControls,
     ConstraintUpdateField,
     CorrectGoodNotes,
+    CorrectIssueMembership,
     CorrectRecordAssociation,
     CreateCapture,
     CreateCommitment,
@@ -99,6 +101,8 @@ from my_pa.application.commands import (
     CreateEntityProposal,
     CreateEntityRelationship,
     CreateIssue,
+    CreateIssueWorkCommitment,
+    CreateIssueWorkTask,
     CreateKnowledgeAssertion,
     CreateManagedDocument,
     CreateMeeting,
@@ -160,6 +164,7 @@ from my_pa.application.commands import (
     ListGoodNotesPages,
     ListGoodNotesRuns,
     ListIntelligenceArtifacts,
+    ListIssueHandoffs,
     ListIssues,
     ListKnowledgeAssertions,
     ListManagedDocuments,
@@ -196,6 +201,7 @@ from my_pa.application.commands import (
     ReadGoodNotes,
     ReadIntelligenceArtifact,
     ReadIssue,
+    ReadIssueClosureReadiness,
     ReadKnowledge,
     ReadKnowledgeAssertion,
     ReadManagedDocument,
@@ -208,8 +214,10 @@ from my_pa.application.commands import (
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
+    RecordIssueHandoff,
     RecordTask,
     ReopenConstraint,
+    ReopenIssue,
     ReorderConstraintCategories,
     Representation,
     ResolveConstraintSyncConflict,
@@ -2537,17 +2545,28 @@ def _update_issue(payload: Mapping[str, Any]) -> Command:
     return UpdateIssue(**converted)
 
 
+#: Record lineage S1 and S2: the list-valued lineage payload keys that become
+#: tuples. Nothing else converts.
+_LINEAGE_LIST_KEYS: Final = (
+    "evidence_anchors",
+    "closure_evidence_anchors",
+    "membership_evidence_anchors",
+    "association_intents",
+)
+
+
 def _with_evidence_tuple(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Record lineage S1: an `evidence_anchors` list becomes a tuple; nothing else converts.
+    """Record lineage: an evidence-set (or intent) list becomes a tuple; nothing else converts.
 
     A server-owned field reaches the frozen dataclass as an unexpected keyword
     and is refused there (S1 contract section 7.1), and a malformed anchor is
     refused by the command's own parse.
     """
     converted = dict(payload)
-    anchors = converted.get("evidence_anchors")
-    if isinstance(anchors, list):
-        converted["evidence_anchors"] = tuple(anchors)
+    for key in _LINEAGE_LIST_KEYS:
+        value = converted.get(key)
+        if isinstance(value, list):
+            converted[key] = tuple(value)
     return converted
 
 
@@ -2773,6 +2792,20 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.RECORDS_LINEAGE: lambda payload: ReadRecordLineage(**payload),
         Capability.MEETINGS_NOTES_VERSIONS: lambda payload: ListMeetingNoteVersions(**payload),
         Capability.MEETINGS_NOTES_READ_VERSION: lambda payload: ReadMeetingNoteVersion(**payload),
+        Capability.ISSUES_CLOSE: lambda payload: CloseIssue(**_with_evidence_tuple(payload)),
+        Capability.ISSUES_REOPEN: lambda payload: ReopenIssue(**_with_evidence_tuple(payload)),
+        Capability.ISSUES_CLOSURE_READINESS: lambda payload: ReadIssueClosureReadiness(**payload),
+        Capability.ISSUES_MEMBERSHIPS_CORRECT: lambda payload: CorrectIssueMembership(
+            **_with_evidence_tuple(payload)
+        ),
+        Capability.ISSUES_HANDOFFS_RECORD: lambda payload: RecordIssueHandoff(**payload),
+        Capability.ISSUES_HANDOFFS_LIST: lambda payload: ListIssueHandoffs(**payload),
+        Capability.ISSUES_WORK_CREATE_TASK: lambda payload: CreateIssueWorkTask(
+            **_with_evidence_tuple(payload)
+        ),
+        Capability.ISSUES_WORK_CREATE_COMMITMENT: lambda payload: CreateIssueWorkCommitment(
+            **_with_evidence_tuple(payload)
+        ),
     }
 )
 

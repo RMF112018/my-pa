@@ -52,7 +52,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "f7a2c9d51e64"
-CURRENT_HEAD: Final = "264310e0416a"
+CURRENT_HEAD: Final = "d020b532ad7d"
 CAPTURE_LABELS: Final = "c1a8e4d70b29"
 WP_TUX_01: Final = "de5ec1c65857"
 WP_MCP_PROJ_01: Final = "9f2c8a1d4e70"
@@ -121,6 +121,8 @@ RECONCILE_LEGACY_PROJECT_ENTITY_LINKS_MIGRATION: Final = (
 #: Record lineage S1's additive head (`264310e0416a`, ADR-015), registered on
 #: the same precedent.
 RECORD_LINEAGE_S1_MIGRATION: Final = MIGRATIONS / "20261017_264310e0416a_record_lineage_s1.py"
+#: Record lineage S2's additive head (`d020b532ad7d`, ADR-015), on the same precedent.
+RECORD_LINEAGE_S2_MIGRATION: Final = MIGRATIONS / "20261018_d020b532ad7d_record_lineage_s2.py"
 #: The one sanctioned edit to a historical revision (operator ruling
 #: OPERATOR_RULING_WP04_A_to_E.md section E). Like D-48, the Meeting-records
 #: work freezes `a_managed_document_is_identified_within_its_owner` out of
@@ -190,9 +192,6 @@ CONSTRAINT_TABLES: Final[frozenset[str]] = frozenset(
 #: Fixed and written out, so the recurrence guard below is a bounded check over a
 #: named list rather than a repository-wide scan.
 HEAD_PIN_FILES: Final[tuple[str, ...]] = (
-    # Names the record lineage S1 revision as the one admitted to touch
-    # `project_constraints`, which it is while that revision is the head.
-    "tests/architecture/test_constraint_read_plane_boundaries.py",
     # Names the head only in a comment explaining its own revision-count bump.
     "tests/architecture/test_no_revision_derives_a_closed_set_from_an_enum.py",
     "tests/database/test_cli_auth.py",
@@ -240,6 +239,8 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_reconcile_legacy_project_entity_links_migration.py",
     # Record lineage S1's own revision module names the head as the revision it tests.
     "tests/schema/test_record_lineage_s1_migration.py",
+    # Record lineage S2's own revision module names the head as the revision it tests.
+    "tests/schema/test_record_lineage_s2_migration.py",
     "tests/schema/test_record_event_truncate_refusal_migration.py",
     "tests/schema/test_record_events_migration.py",
     "tests/schema/test_oauth_refresh_migration.py",
@@ -327,7 +328,8 @@ def _literals(block: str) -> list[str]:
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [CURRENT_HEAD]
-    assert script.get_revision(CURRENT_HEAD).down_revision == "b9025e7fb738"
+    assert script.get_revision(CURRENT_HEAD).down_revision == "264310e0416a"
+    assert script.get_revision("264310e0416a").down_revision == "b9025e7fb738"
     assert script.get_revision("b9025e7fb738").down_revision == "5c1e7a9b3d42"
     assert script.get_revision("5c1e7a9b3d42").down_revision == "c8f7ae406d47"
     assert script.get_revision("c8f7ae406d47").down_revision == "a591b81f10a2"
@@ -351,7 +353,7 @@ def test_revision_is_the_only_linear_head() -> None:
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 119
+    assert len(list(MIGRATIONS.glob("*.py"))) == 120
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -504,6 +506,7 @@ def test_no_historical_revision_was_edited() -> None:
         COMMITMENT_COUNTERPARTY_ENTITY_MIGRATION.relative_to(ROOT).as_posix(),
         RECONCILE_LEGACY_PROJECT_ENTITY_LINKS_MIGRATION.relative_to(ROOT).as_posix(),
         RECORD_LINEAGE_S1_MIGRATION.relative_to(ROOT).as_posix(),
+        RECORD_LINEAGE_S2_MIGRATION.relative_to(ROOT).as_posix(),
         # Not an additive head: the one sanctioned historical edit (see
         # `SANCTIONED_HISTORICAL_EDIT`; operator ruling section E).
         SANCTIONED_HISTORICAL_EDIT.relative_to(ROOT).as_posix(),

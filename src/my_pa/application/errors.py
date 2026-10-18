@@ -560,6 +560,16 @@ class SafeDetail(StrEnum):
     MAX_DEPTH = "max_depth"
     INCLUDE_BODY = "include_body"
     NOTE_VERSION_ID = "note_version_id"
+    #: Record lineage S2, the Issue close (S2 contract sections 3.3, 7.2 and
+    #: 7.3). `CLOSURE_GATE` an unsatisfied mandatory member at close (`conflict`;
+    #: `issues.closure_readiness` lists the blockers); `CLOSURE_EVIDENCE_ANCHORS`
+    #: a closure evidence set that is malformed, does not match its sources or
+    #: holds no available exact `resolution` anchor; `OUTCOME` a malformed close
+    #: outcome. `STATE`, `REASON` and `EVIDENCE_ANCHORS` are reused for the
+    #: closed-Issue rule, the reopening reason and its evidence.
+    CLOSURE_GATE = "closure_gate"
+    CLOSURE_EVIDENCE_ANCHORS = "closure_evidence_anchors"
+    OUTCOME = "outcome"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

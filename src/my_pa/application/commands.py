@@ -49,8 +49,10 @@ from my_pa.application.errors import InvalidRequestError, SafeDetail, invalid_ch
 from my_pa.application.goodnotes_pull_orchestration import MAX_PULL_BATCH_SIZE
 from my_pa.application.identity_correction import ConflictChoice
 from my_pa.application.issues import (
+    IssueCloseRequest,
     IssueCreateRequest,
     IssueListRequest,
+    IssueReopenRequest,
     IssueUpdateRequest,
     ProjectLinkAddRequest,
     ProjectLinkEndRequest,
@@ -73,6 +75,7 @@ from my_pa.application.record_lineage import (
     AssociationEndRequest,
     LineageReadRequest,
     MembershipAddRequest,
+    MembershipCorrectRequest,
     MembershipEndRequest,
 )
 from my_pa.domain.capture.display_label import normalize_display_label
@@ -12080,10 +12083,11 @@ def _membership_revision(value: object, minimum: int) -> int:
     return value
 
 
-#: The states an `issues.update` may name, and an `issues.list` may filter by.
+#: The states an `issues.update` may name, and an `issues.list` may filter by
+#: (S2 adds `closed` to the filter; closing is `issues.close` only).
 _ISSUE_UPDATE_STATES: Final = frozenset({SituationState.ACTIVE, SituationState.SUSPENDED})
 _ISSUE_LIST_STATES: Final = frozenset(
-    {SituationState.OPEN, SituationState.ACTIVE, SituationState.SUSPENDED}
+    {SituationState.OPEN, SituationState.ACTIVE, SituationState.SUSPENDED, SituationState.CLOSED}
 )
 #: The only field `issues.update` can clear.
 _ISSUE_CLEARABLE_FIELDS: Final = frozenset({"description"})
@@ -12177,7 +12181,7 @@ class ListIssues:
             "after": _issue_id_schema(
                 IdKind.SITUATION, "Keyset cursor: the last issue_id of the previous page."
             ),
-            "state": {"type": "string", "enum": ["open", "active", "suspended"]},
+            "state": {"type": "string", "enum": ["open", "active", "suspended", "closed"]},
             "project_id": _issue_id_schema(
                 IdKind.PROJECT, "Only Issues with an active link to this Project."
             ),
@@ -12217,7 +12221,9 @@ class UpdateIssue:
     writes nothing. Allowed state moves: open to active, open or active to
     suspended, suspended to active. `clear_fields` may name `description`. A
     request that changes nothing, or both sets and clears the description, is
-    invalid_request. Closing an Issue is not available.
+    invalid_request. Closing is issues.close and reopening issues.reopen; on a
+    closed Issue this is a correction of its title or description (local
+    operator only; no state) and the Issue stays closed.
     """
 
     capability: ClassVar[Capability] = Capability.ISSUES_UPDATE
@@ -12791,6 +12797,349 @@ class ReadMeetingNoteVersion:
             raise InvalidRequestError(SafeDetail.INCLUDE_BODY)
 
 
+# --- Record lineage S2: close, reopen, closure readiness, membership correction,
+# handoffs and the composite Work writes (S2 contract sections 3.3, 3.4, 6.4 and
+# 7.2) ----------------------------------------------------------------------------
+#
+# Eight commands. What is decidable from the request alone is refused here; the
+# gate, the closed-Issue rule, existence and the evidence rules against stored
+# sources are the application's (`application.issues`,
+# `application.record_lineage`). The handoff and composite commands carry their
+# S2 field shapes with only identifier and key checks: their application use
+# cases are not implemented in this change and their handlers answer
+# `unsupported` after the switch and the authority (record lineage S2, K2).
+
+_CLOSURE_EVIDENCE_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        **_EVIDENCE_ANCHORS_SCHEMA,
+        "minItems": 1,
+        "description": (
+            "The Issue's closure evidence: at least one exact Meeting note or Capture "
+            "version with role resolution, and none with role contradicts."
+        ),
+    }
+)
+
+
+def _lineage_outcome(value: object) -> str:
+    outcome = _storable_text(value, SafeDetail.OUTCOME)
+    if not outcome.strip() or len(outcome) > MAX_LINEAGE_REASON_CHARACTERS:
+        raise InvalidRequestError(SafeDetail.OUTCOME)
+    return outcome
+
+
+def _blank_refused_reason(value: object) -> str:
+    reason = _lineage_reason(value)
+    if not reason.strip():
+        raise InvalidRequestError(SafeDetail.REASON)
+    return reason
+
+
+@dataclass(frozen=True, slots=True)
+class CloseIssue:
+    """`issues.close`: close one of your Issues behind its closure gate.
+
+    Local operator only. Every active work or constraint member must be
+    natively closed (and accepted, for a Task or Commitment) and carry
+    available, current resolution evidence on its membership, otherwise
+    conflict (`issues.closure_readiness` lists what blocks). The closure
+    evidence needs at least one exact resolution anchor and no contradicting
+    one. There is no exception: a member that will never be satisfied is ended
+    with issues.memberships.end. Closing changes no member, link or record.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_CLOSE
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue to close."),
+            "expected_version": {"type": "integer", "minimum": 1},
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "outcome": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": MAX_LINEAGE_REASON_CHARACTERS,
+                "description": "How the Issue was resolved.",
+            },
+            "closure_evidence_anchors": _CLOSURE_EVIDENCE_SCHEMA,
+        }
+    )
+
+    issue_id: str
+    expected_version: int
+    idempotency_key: str
+    outcome: str = field(repr=False)
+    closure_evidence_anchors: tuple[dict[str, object], ...] = field(repr=False)
+
+    def __post_init__(self) -> None:
+        self.issue_request()
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def issue_request(self) -> IssueCloseRequest:
+        """The parsed request this command states."""
+        return IssueCloseRequest(
+            issue_id=_identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID),
+            expected_version=_expected_version(self.expected_version),
+            outcome=_lineage_outcome(self.outcome),
+            closure_evidence_anchors=parse_evidence_anchors(
+                self.closure_evidence_anchors, SafeDetail.CLOSURE_EVIDENCE_ANCHORS, minimum=1
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ReopenIssue:
+    """`issues.reopen`: reopen one of your closed Issues, with a reason.
+
+    Local operator only. The Issue becomes active and its closure is cleared;
+    no member, link or record is reopened or changed. Optional evidence anchors
+    of any role are recorded with the reopening.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_REOPEN
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "issue_id": _issue_id_schema(IdKind.SITUATION, "The closed Issue."),
+            "expected_version": {"type": "integer", "minimum": 1},
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "reason": _LINEAGE_REASON_SCHEMA,
+            "evidence_anchors": _EVIDENCE_ANCHORS_SCHEMA,
+        }
+    )
+
+    issue_id: str
+    expected_version: int
+    idempotency_key: str
+    reason: str = field(repr=False)
+    evidence_anchors: tuple[dict[str, object], ...] = field(default=(), repr=False)
+
+    def __post_init__(self) -> None:
+        self.issue_request()
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def issue_request(self) -> IssueReopenRequest:
+        """The parsed request this command states."""
+        return IssueReopenRequest(
+            issue_id=_identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID),
+            expected_version=_expected_version(self.expected_version),
+            reason=_blank_refused_reason(self.reason),
+            evidence_anchors=_anchor_set(self.evidence_anchors, minimum=0),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ReadIssueClosureReadiness:
+    """`issues.closure_readiness`: whether one of your Issues could close now, and why not.
+
+    Read-only and current: lists each blocked work or constraint member with
+    every reason. Says nothing about closure evidence, which issues.close is
+    given. A closed Issue answers not ready with no blockers.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_CLOSURE_READINESS
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {"issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue to evaluate.")}
+    )
+
+    issue_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class CorrectIssueMembership:
+    """`issues.memberships.correct`: replace a membership's evidence set.
+
+    Local operator only. The supplied set (0..32 anchors, any role) is the
+    complete new set and differs from the current one, except an identical set
+    with a resolution anchor after the member's own record changed (a
+    re-affirmation). This is how resolution evidence is recorded on a work or
+    constraint member after its native close. The member and role never change.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_MEMBERSHIPS_CORRECT
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "link_id": _issue_id_schema(IdKind.RECORD_LINK, "The membership link."),
+            "expected_revision": {"type": "integer", "minimum": 1},
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "reason": _LINEAGE_REASON_SCHEMA,
+            "evidence_anchors": _EVIDENCE_ANCHORS_SCHEMA,
+        }
+    )
+
+    link_id: str
+    expected_revision: int
+    idempotency_key: str
+    reason: str = field(repr=False)
+    evidence_anchors: tuple[dict[str, object], ...] = field(default=(), repr=False)
+
+    def __post_init__(self) -> None:
+        self.lineage_request()
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def lineage_request(self) -> MembershipCorrectRequest:
+        """The parsed request this command states."""
+        return MembershipCorrectRequest(
+            link_id=_identifier(self.link_id, IdKind.RECORD_LINK, SafeDetail.LINK_ID),
+            expected_revision=_link_revision(self.expected_revision),
+            reason=_lineage_reason(self.reason),
+            evidence_anchors=_anchor_set(self.evidence_anchors, minimum=0),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RecordIssueHandoff:
+    """`issues.handoffs.record`: record that a Commitment's next action changed hands.
+
+    Local operator only. Not available in this build: the request is accepted
+    for its shape and answered unsupported.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_HANDOFFS_RECORD
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue."),
+            "commitment_id": _issue_id_schema(IdKind.COMMITMENT, "A Commitment member."),
+            "from_side": {"type": "string", "enum": ["principal", "counterparty"]},
+            "effective_at": {"type": "string", "format": "date-time"},
+            "reason": _LINEAGE_REASON_SCHEMA,
+            "evidence_anchor": _EVIDENCE_ANCHOR_SCHEMA,
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+        }
+    )
+
+    issue_id: str
+    commitment_id: str
+    from_side: str
+    effective_at: str
+    idempotency_key: str
+    reason: str = field(repr=False)
+    evidence_anchor: dict[str, object] = field(repr=False)
+
+    def __post_init__(self) -> None:
+        _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
+        _identifier(self.commitment_id, IdKind.COMMITMENT, SafeDetail.COMMITMENT_ID)
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+
+@dataclass(frozen=True, slots=True)
+class ListIssueHandoffs:
+    """`issues.handoffs.list`: one page of an Issue's handoffs, oldest first.
+
+    Not available in this build: the request is accepted for its shape and
+    answered unsupported.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_HANDOFFS_LIST
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue."),
+            "commitment_id": _issue_id_schema(IdKind.COMMITMENT, "Only this Commitment's."),
+            "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_ISSUE_PAGE_SIZE,
+                "default": DEFAULT_ISSUE_PAGE_SIZE,
+            },
+            "after": _issue_id_schema(
+                IdKind.ISSUE_HANDOFF, "Keyset cursor: the last handoff_id shown."
+            ),
+        }
+    )
+
+    issue_id: str
+    commitment_id: str | None = None
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
+        if self.commitment_id is not None:
+            _identifier(self.commitment_id, IdKind.COMMITMENT, SafeDetail.COMMITMENT_ID)
+        sized = _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if sized is not None and sized > MAX_ISSUE_PAGE_SIZE:
+            raise InvalidRequestError(SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.ISSUE_HANDOFF, SafeDetail.CURSOR)
+
+
+_COMPOSITE_OBJECT_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {"type": "object", "description": "The native create request, without idempotency_key."}
+)
+_ASSOCIATION_INTENTS_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {"type": "array", "maxItems": 4, "items": {"type": "object"}}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class CreateIssueWorkTask:
+    """`issues.work.create_task`: create a Task as work of one of your Issues.
+
+    Local operator only. Not available in this build: the request is accepted
+    for its shape and answered unsupported.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_WORK_CREATE_TASK
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue."),
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "task": _COMPOSITE_OBJECT_SCHEMA,
+            "membership_evidence_anchors": _EVIDENCE_ANCHORS_SCHEMA,
+            "association_intents": _ASSOCIATION_INTENTS_SCHEMA,
+        }
+    )
+
+    issue_id: str
+    idempotency_key: str
+    task: dict[str, object] = field(repr=False)
+    membership_evidence_anchors: tuple[dict[str, object], ...] = field(default=(), repr=False)
+    association_intents: tuple[dict[str, object], ...] = field(default=(), repr=False)
+
+    def __post_init__(self) -> None:
+        _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+
+@dataclass(frozen=True, slots=True)
+class CreateIssueWorkCommitment:
+    """`issues.work.create_commitment`: create a Commitment as work of one of your Issues.
+
+    Local operator only. Not available in this build: the request is accepted
+    for its shape and answered unsupported.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_WORK_CREATE_COMMITMENT
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue."),
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "commitment": _COMPOSITE_OBJECT_SCHEMA,
+            "membership_evidence_anchors": _EVIDENCE_ANCHORS_SCHEMA,
+            "association_intents": _ASSOCIATION_INTENTS_SCHEMA,
+        }
+    )
+
+    issue_id: str
+    idempotency_key: str
+    commitment: dict[str, object] = field(repr=False)
+    membership_evidence_anchors: tuple[dict[str, object], ...] = field(default=(), repr=False)
+    association_intents: tuple[dict[str, object], ...] = field(default=(), repr=False)
+
+    def __post_init__(self) -> None:
+        _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+
 type Command = (
     GetCapabilities
     | ListSources
@@ -12998,6 +13347,14 @@ type Command = (
     | ReadRecordLineage
     | ListMeetingNoteVersions
     | ReadMeetingNoteVersion
+    | CloseIssue
+    | ReopenIssue
+    | ReadIssueClosureReadiness
+    | CorrectIssueMembership
+    | RecordIssueHandoff
+    | ListIssueHandoffs
+    | CreateIssueWorkTask
+    | CreateIssueWorkCommitment
 )
 
 

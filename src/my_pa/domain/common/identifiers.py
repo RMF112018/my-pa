@@ -502,6 +502,13 @@ class IdKind(StrEnum):
     RECORD_LINK = "irl"
     RECORD_LINK_REVISION = "irv"
     LINEAGE_EVIDENCE_ANCHOR = "ian"
+    #: Record lineage, Slice S2 (S2 contract section 2): one immutable
+    #: responsibility handoff event (`issue_responsibility_events.handoff_id`).
+    #: Checked against every prior member of this enum before use (a grep of
+    #: `ihnd` over `src`, `tests`, `web/src` and `migrations`, and the
+    #: uniqueness assertion in `tests/unit/test_identifiers.py`): it collides
+    #: with none, no member is a prefix of it, and it is a prefix of none.
+    ISSUE_HANDOFF = "ihnd"
 
 
 class InvalidIdentifierError(ValueError):

@@ -1,4 +1,4 @@
-"""The Issue use cases of record lineage S1 (S1 contract sections 6 and 7.2).
+"""The Issue use cases of record lineage (S1 contract sections 6 and 7.2; S2 contract 3.3, 6, 7.2).
 
 `IssueApplication` is stateless. Every method takes the unit of work that
 `ApplicationService.invoke` has **already opened**, the authenticated
@@ -19,16 +19,27 @@ a value: an absent, foreign or context-Situation Issue is `not_found` /
 `issue_id`; a stale `expected_version` or `expected_membership_revision`, an
 already-active Project link and a key reused for another request are
 `conflict`; a refused value or state move is `invalid_request`.
+
+**S2** adds `issues.close` behind the OD-03 gate (section 3.3: every mandatory
+member natively closed, accepted where the family has acceptance, and proven
+by available, current, uncontradicted resolution evidence; no exception, no
+cascade), `issues.reopen`, the read-only `issues.closure_readiness`, the
+`corrected` revision of a closed Issue's `issues.update` (attested, R2-F10 and
+R2-F14), `IssueView.closure`, and the closed-Issue rule on the Project-link
+writes (section 3.2). Closing or reopening changes no member, link or native
+record.
 """
 
 from __future__ import annotations
 
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Final
 
 from my_pa.application.errors import (
     ConflictError,
+    DeniedError,
     InvalidRequestError,
     NotFoundError,
     SafeDetail,
@@ -36,36 +47,71 @@ from my_pa.application.errors import (
 from my_pa.application.lineage_endpoints import (
     EvidenceAnchorInput,
     admit_evidence_anchor,
+    admit_evidence_set,
+    anchor_input_of,
+    anchor_inputs_document,
+    insert_evidence_anchor,
     lock_evidence_source,
+    lock_lineage_sources,
 )
+from my_pa.application.record_lineage import anchor_view, evidence_availability
 from my_pa.contracts.ports import (
     IssueListPage,
     IssueRecord,
     IssueRepository,
     IssueRevisionRecord,
+    LineageEndpoint,
+    LineageLinkEvidence,
     LineageWriteRequestRecord,
+    LinkHeadRecord,
+    LinkRevisionRecord,
     ProjectLinkEventRecord,
+    RecordLineageRepository,
     RepositoryFailureError,
     UnitOfWork,
 )
 from my_pa.contracts.v1.issues import (
+    MAX_CLOSURE_BLOCKERS,
     MAX_ISSUE_PROJECT_LINKS,
+    ClosureBlockerView,
+    IssueClosureView,
     IssueListEntry,
+    IssueReopeningView,
     IssueRevisionView,
     IssueView,
     ProjectLinkView,
 )
+from my_pa.contracts.v1.record_lineage import EvidenceAnchorView, RecordRefView
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import ensure_utc
 from my_pa.domain.identity.operation import Capability
-from my_pa.domain.lineage.canonical import request_digest
+from my_pa.domain.lineage.canonical import evidence_set_digest, request_digest
+from my_pa.domain.lineage.closure import (
+    MemberNativeFacts,
+    MembershipHeadEvidence,
+    has_resolution_anchor,
+    member_blockers,
+)
+from my_pa.domain.lineage.model import EvidenceAnchor, RecordRef
 from my_pa.domain.lineage.vocabulary import (
+    ATTESTED_AUTHORITY_CLASSES,
+    ATTESTED_DECISION_CHANNELS,
     AcceptanceBasis,
+    EvidenceRole,
+    EvidenceSourceFamily,
+    IssueClosureBlocker,
     IssueProjectMembershipAction,
     IssueProjectMembershipState,
     IssueRevisionAction,
+    RecordFamily,
 )
-from my_pa.domain.situation.issue_lifecycle import IssueStateMoveError, issue_update_action
+from my_pa.domain.situation.issue_lifecycle import (
+    IssueStateMoveError,
+    issue_close_action,
+    issue_correction_action,
+    issue_reopen_action,
+    issue_update_action,
+)
 from my_pa.domain.situation.situation import SituationState
 from my_pa.domain.source.registry import issue_identifier
 
@@ -76,8 +122,13 @@ if TYPE_CHECKING:
 
 __all__ = [
     "IssueApplication",
+    "IssueCloseRequest",
+    "IssueCloseResult",
+    "IssueClosureReadiness",
     "IssueCreateRequest",
     "IssueListRequest",
+    "IssueReopenRequest",
+    "IssueReopenResult",
     "IssueRevisionResult",
     "IssueUpdateRequest",
     "ProjectLinkAddRequest",
@@ -89,6 +140,8 @@ _CREATE: Final = Capability.ISSUES_CREATE.value
 _UPDATE: Final = Capability.ISSUES_UPDATE.value
 _LINK_ADD: Final = Capability.ISSUES_PROJECT_LINKS_ADD.value
 _LINK_END: Final = Capability.ISSUES_PROJECT_LINKS_END.value
+_CLOSE: Final = Capability.ISSUES_CLOSE.value
+_REOPEN: Final = Capability.ISSUES_REOPEN.value
 
 
 # ------------------------------------------------------------------- requests
@@ -136,6 +189,26 @@ class ProjectLinkAddRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class IssueCloseRequest:
+    """`issues.close`, parsed: the outcome and the closure evidence set (1..32)."""
+
+    issue_id: str
+    expected_version: int
+    outcome: str
+    closure_evidence_anchors: tuple[EvidenceAnchorInput, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class IssueReopenRequest:
+    """`issues.reopen`, parsed: the reason and the optional evidence set (0..32)."""
+
+    issue_id: str
+    expected_version: int
+    reason: str
+    evidence_anchors: tuple[EvidenceAnchorInput, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ProjectLinkEndRequest:
     """`issues.project_links.end`, parsed."""
 
@@ -154,6 +227,36 @@ class IssueRevisionResult:
 
     issue: IssueRevisionView
     replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class IssueCloseResult:
+    """What `issues.close` answers."""
+
+    issue: IssueRevisionView
+    closure: IssueClosureView
+    replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class IssueReopenResult:
+    """What `issues.reopen` answers."""
+
+    issue: IssueRevisionView
+    reopening: IssueReopeningView
+    replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class IssueClosureReadiness:
+    """What `issues.closure_readiness` answers (no locks, current state)."""
+
+    issue_id: str
+    version: int
+    state: str
+    ready: bool
+    blockers: tuple[ClosureBlockerView, ...]
+    blockers_truncated: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,6 +298,24 @@ def _link_add_document(request: ProjectLinkAddRequest) -> dict[str, object]:
     }
 
 
+def _close_document(request: IssueCloseRequest) -> dict[str, object]:
+    return {
+        "issue_id": request.issue_id,
+        "expected_version": request.expected_version,
+        "outcome": request.outcome,
+        "closure_evidence_anchors": anchor_inputs_document(request.closure_evidence_anchors),
+    }
+
+
+def _reopen_document(request: IssueReopenRequest) -> dict[str, object]:
+    return {
+        "issue_id": request.issue_id,
+        "expected_version": request.expected_version,
+        "reason": request.reason,
+        "evidence_anchors": anchor_inputs_document(request.evidence_anchors),
+    }
+
+
 def _link_end_document(request: ProjectLinkEndRequest) -> dict[str, object]:
     return {
         "issue_id": request.issue_id,
@@ -216,7 +337,7 @@ def _revision_view(issue: IssueRecord, revision: IssueRevisionRecord) -> IssueRe
     return IssueRevisionView(
         issue_id=revision.issue_id,
         version=revision.version,
-        state=revision.state.value,  # type: ignore[arg-type]
+        state=revision.state.value,
         title=revision.title,
         description=revision.description,
         revision_id=revision.revision_id,
@@ -239,9 +360,10 @@ def _link_view(event: ProjectLinkEventRecord) -> ProjectLinkView:
     )
 
 
-def _replayed_revision(
+def _stored_revision(
     issues: IssueRepository, principal_id: str, prior: LineageWriteRequestRecord
-) -> IssueRevisionResult:
+) -> tuple[IssueRecord, IssueRevisionRecord]:
+    """The Issue and the immutable revision a completed request names."""
     if prior.result_issue_id is None or prior.result_issue_version is None:
         raise RepositoryFailureError
     issue = issues.read_issue(principal_id, prior.result_issue_id)
@@ -250,7 +372,124 @@ def _replayed_revision(
     )
     if issue is None or revision is None:
         raise RepositoryFailureError
+    return issue, revision
+
+
+def _replayed_revision(
+    issues: IssueRepository, principal_id: str, prior: LineageWriteRequestRecord
+) -> IssueRevisionResult:
+    issue, revision = _stored_revision(issues, principal_id, prior)
     return IssueRevisionResult(issue=_revision_view(issue, revision), replayed=True)
+
+
+def _require_attested(authority: LineageAuthority) -> None:
+    """S2 section 6.1: `denied` unless the derived pair is local-operator attested."""
+    if (
+        authority.authority_class.value not in ATTESTED_AUTHORITY_CLASSES
+        or authority.decision_channel.value not in ATTESTED_DECISION_CHANNELS
+    ):
+        raise DeniedError()
+
+
+def _capture_roots(evidence: Sequence[LineageLinkEvidence]) -> frozenset[str]:
+    return frozenset(
+        cited.anchor.source_root_id
+        for cited in evidence
+        if cited.anchor.source_family is not EvidenceSourceFamily.MEETING_NOTE_VERSION
+    )
+
+
+def _evidence_views(
+    lineage: RecordLineageRepository, principal_id: str, evidence: Sequence[LineageLinkEvidence]
+) -> tuple[EvidenceAnchorView, ...]:
+    archived = lineage.archived_capture_roots(principal_id, _capture_roots(evidence))
+    return tuple(anchor_view(cited, archived) for cited in evidence)
+
+
+def _closure_view(
+    lineage: RecordLineageRepository, principal_id: str, closing: IssueRevisionRecord
+) -> IssueClosureView:
+    """`IssueClosureView` from the closing revision; no digest (FR1-F05)."""
+    if closing.closed_at is None or closing.outcome is None:
+        raise RepositoryFailureError
+    return IssueClosureView(
+        version=closing.version,
+        closed_at=closing.closed_at,
+        outcome=closing.outcome,
+        evidence=_evidence_views(lineage, principal_id, closing.evidence),
+    )
+
+
+def _reopening_view(
+    lineage: RecordLineageRepository, principal_id: str, revision: IssueRevisionRecord
+) -> IssueReopeningView:
+    if revision.reason is None:
+        raise RepositoryFailureError
+    return IssueReopeningView(
+        reason=revision.reason,
+        evidence=_evidence_views(lineage, principal_id, revision.evidence),
+    )
+
+
+def _inserted(
+    issues: IssueRepository, principal_id: str, anchors: Sequence[EvidenceAnchor], at: datetime
+) -> tuple[LineageLinkEvidence, ...]:
+    """Reuse-or-insert each anchor in canonical order (S1 section 5.1 anchor writes)."""
+    return tuple(
+        LineageLinkEvidence(
+            anchor_id=insert_evidence_anchor(issues, principal_id, anchor, recorded_at=at),
+            anchor=anchor,
+        )
+        for anchor in anchors
+    )
+
+
+def _head_revision(
+    lineage: RecordLineageRepository, principal_id: str, head: LinkHeadRecord
+) -> LinkRevisionRecord:
+    revision = lineage.read_revision(principal_id, head.link.link_id, head.revision_no)
+    if revision is None:
+        raise RepositoryFailureError
+    return revision
+
+
+def _native_facts(ref: RecordRef, endpoint: LineageEndpoint | None) -> MemberNativeFacts:
+    if endpoint is None:
+        return MemberNativeFacts(
+            family=ref.family, native_state=None, evidence_state=None, version=None
+        )
+    return MemberNativeFacts(
+        family=ref.family,
+        native_state=endpoint.native_state,
+        evidence_state=endpoint.evidence_state,
+        version=endpoint.native_version,
+    )
+
+
+def _blockers_of(
+    head: LinkHeadRecord,
+    endpoint: LineageEndpoint | None,
+    revision: LinkRevisionRecord,
+    archived: Collection[str],
+) -> tuple[IssueClosureBlocker, ...]:
+    """Section 3.3 for one mandatory membership: every reason it blocks the close."""
+    return member_blockers(
+        _native_facts(head.link.to_ref, endpoint),
+        MembershipHeadEvidence(
+            anchors=tuple(cited.anchor for cited in revision.evidence),
+            member_native_version=revision.member_native_version,
+        ),
+        lambda anchor: evidence_availability(anchor, archived),
+    )
+
+
+def _resolution_roots(revisions: Sequence[LinkRevisionRecord]) -> frozenset[str]:
+    return frozenset(
+        cited.anchor.source_root_id
+        for revision in revisions
+        for cited in revision.evidence
+        if cited.anchor.source_family is not EvidenceSourceFamily.MEETING_NOTE_VERSION
+    )
 
 
 def _replayed_link(
@@ -330,16 +569,28 @@ class IssueApplication:
     # --- issues.read / issues.list -------------------------------------------
 
     def read_issue(self, uow: UnitOfWork, principal_id: str, issue_id: str) -> IssueView:
-        """One Issue with at most 100 Project links. A context Situation is `not_found`."""
+        """One Issue with at most 100 Project links. A context Situation is `not_found`.
+
+        A closed Issue carries `closure` (S2 section 7.1): its latest `closed`
+        revision's basis.
+        """
         issues = uow.issues
         issue = issues.read_issue(principal_id, issue_id)
         if issue is None:
             raise NotFoundError(SafeDetail.ISSUE_ID)
+        closure: IssueClosureView | None = None
+        if issue.state is SituationState.CLOSED:
+            closing = issues.latest_closing_revision(
+                principal_id, issue_id, at_or_below=issue.version
+            )
+            if closing is None:
+                raise RepositoryFailureError
+            closure = _closure_view(uow.record_lineage, principal_id, closing)
         links = issues.project_links(principal_id, issue_id, limit=MAX_ISSUE_PROJECT_LINKS + 1)
         return IssueView(
             issue_id=issue.issue_id,
             version=issue.version,
-            state=issue.state.value,  # type: ignore[arg-type]
+            state=issue.state.value,
             title=issue.title,
             description=issue.description,
             opened_at=issue.opened_at,
@@ -347,6 +598,7 @@ class IssueApplication:
             updated_at=issue.updated_at,
             project_links=tuple(_link_view(event) for event in links[:MAX_ISSUE_PROJECT_LINKS]),
             project_links_truncated=len(links) > MAX_ISSUE_PROJECT_LINKS,
+            closure=closure,
         )
 
     def list_issues(
@@ -364,7 +616,7 @@ class IssueApplication:
             IssueListEntry(
                 issue_id=issue.issue_id,
                 version=issue.version,
-                state=issue.state.value,  # type: ignore[arg-type]
+                state=issue.state.value,
                 title=issue.title,
                 updated_at=issue.updated_at,
             )
@@ -384,7 +636,13 @@ class IssueApplication:
         authority: LineageAuthority,
         now: datetime,
     ) -> IssueRevisionResult:
-        """Write the next revision and the `situations` row (`version + 1`)."""
+        """Write the next revision and the `situations` row (`version + 1`).
+
+        On a closed Issue (S2 section 7.2) the update is a correction: attested
+        (`denied` otherwise, R2-F10), title/description/`clear_fields` only, the
+        Issue stays closed with its `closed_at` and `outcome`. A replay of a
+        `corrected` revision derives attestation before it answers (R2-F14).
+        """
         at = ensure_utc(now)
         issues = uow.issues
         digest = request_digest(_UPDATE, principal_id, _update_document(request))
@@ -392,10 +650,16 @@ class IssueApplication:
             principal_id, _UPDATE, idempotency_key, digest, created_at=at
         )
         if prior is not None:
-            return _replayed_revision(issues, principal_id, prior)
+            stored_issue, stored = _stored_revision(issues, principal_id, prior)
+            if stored.action is IssueRevisionAction.CORRECTED:
+                _require_attested(authority)
+            return IssueRevisionResult(issue=_revision_view(stored_issue, stored), replayed=True)
         current = issues.lock_issue(principal_id, request.issue_id, for_update=True)
         if current is None:
             raise NotFoundError(SafeDetail.ISSUE_ID)
+        closed = current.state is SituationState.CLOSED
+        if closed:
+            _require_attested(authority)
         if current.version != request.expected_version:
             raise ConflictError(SafeDetail.STALE_VERSION)
         title = current.title if request.title is None else request.title
@@ -409,7 +673,11 @@ class IssueApplication:
         moved = state is not current.state
         refused = False
         try:
-            action = issue_update_action(current.state, request.state if moved else None)
+            action = (
+                issue_correction_action(current.state, request.state)
+                if closed
+                else issue_update_action(current.state, request.state if moved else None)
+            )
         except IssueStateMoveError:
             refused = True
             action = IssueRevisionAction.UPDATED
@@ -440,6 +708,9 @@ class IssueApplication:
             decision_channel=authority.decision_channel.value,
             source_capability=_UPDATE,
             recorded_at=at,
+            # A correction copies the closure it corrects (both `None` otherwise).
+            closed_at=current.closed_at,
+            outcome=current.outcome,
         )
         issues.update_issue(principal_id, updated, revision)
         issues.complete_write_request(
@@ -452,6 +723,290 @@ class IssueApplication:
             result_issue_version=version,
         )
         return IssueRevisionResult(issue=_revision_view(updated, revision), replayed=False)
+
+    # --- issues.close / issues.reopen / issues.closure_readiness (S2) -----------
+
+    def close_issue(
+        self,
+        uow: UnitOfWork,
+        principal_id: str,
+        request: IssueCloseRequest,
+        idempotency_key: str,
+        authority: LineageAuthority,
+        now: datetime,
+    ) -> IssueCloseResult:
+        """Close an Issue behind the OD-03 gate (S2 sections 3.3, 6.2 and 7.2).
+
+        Lock order: the request row; the Issue `FOR UPDATE`; `FOR SHARE` in
+        `(family token, identifier)` order over every mandatory member's native
+        row, the closure set's sources and the source of every `resolution`
+        anchor in every mandatory member's head revision (R2-F06); then every
+        mandatory membership head `FOR SHARE` by `link_id`. The membership set
+        is stable once the Issue is locked: every membership writer shares it.
+        """
+        at = ensure_utc(now)
+        issues, lineage = uow.issues, uow.record_lineage
+        digest = request_digest(_CLOSE, principal_id, _close_document(request))
+        prior = issues.reserve_write_request(
+            principal_id, _CLOSE, idempotency_key, digest, created_at=at
+        )
+        if prior is not None:
+            stored_issue, stored = _stored_revision(issues, principal_id, prior)
+            return IssueCloseResult(
+                issue=_revision_view(stored_issue, stored),
+                closure=_closure_view(lineage, principal_id, stored),
+                replayed=True,
+            )
+        current = issues.lock_issue(principal_id, request.issue_id, for_update=True)
+        if current is None:
+            raise NotFoundError(SafeDetail.ISSUE_ID)
+        if current.version != request.expected_version:
+            raise ConflictError(SafeDetail.STALE_VERSION)
+        refused = False
+        try:
+            action = issue_close_action(current.state)
+        except IssueStateMoveError:
+            refused = True
+            action = IssueRevisionAction.CLOSED
+        if refused:
+            raise ConflictError(SafeDetail.STATE)
+        heads = lineage.mandatory_memberships(principal_id, request.issue_id, share=False)
+        revisions = {
+            head.link.link_id: _head_revision(lineage, principal_id, head) for head in heads
+        }
+        resolution_sources = tuple(
+            anchor_input_of(cited.anchor)
+            for revision in revisions.values()
+            for cited in revision.evidence
+            if cited.anchor.role is EvidenceRole.RESOLUTION
+        )
+        closure_set = request.closure_evidence_anchors
+        locked = lock_lineage_sources(
+            issues,
+            lineage,
+            principal_id,
+            endpoints=tuple((head.link.to_ref, SafeDetail.MEMBER) for head in heads),
+            anchors=closure_set + resolution_sources,
+            anchor_detail=SafeDetail.CLOSURE_EVIDENCE_ANCHORS,
+        )
+        shared = lineage.mandatory_memberships(principal_id, request.issue_id, share=True)
+        if [(head.link.link_id, head.revision_no) for head in shared] != [
+            (head.link.link_id, head.revision_no) for head in heads
+        ]:
+            # Unreachable while every membership writer shares the Issue.
+            raise ConflictError(SafeDetail.STALE_VERSION)
+        anchors = admit_evidence_set(
+            issues,
+            principal_id,
+            locked.evidence[: len(closure_set)],
+            detail=SafeDetail.CLOSURE_EVIDENCE_ANCHORS,
+        )
+        if not has_resolution_anchor(anchors) or any(
+            anchor.role is EvidenceRole.CONTRADICTS for anchor in anchors
+        ):
+            raise InvalidRequestError(SafeDetail.CLOSURE_EVIDENCE_ANCHORS)
+        archived = lineage.archived_capture_roots(
+            principal_id, _resolution_roots(tuple(revisions.values()))
+        )
+        for head in heads:
+            if _blockers_of(
+                head,
+                locked.endpoints.get(head.link.to_ref),
+                revisions[head.link.link_id],
+                archived,
+            ):
+                raise ConflictError(SafeDetail.CLOSURE_GATE)
+        version = current.version + 1
+        revision = IssueRevisionRecord(
+            issue_id=current.issue_id,
+            version=version,
+            revision_id=issue_identifier(IdKind.ISSUE_REVISION),
+            predecessor_version=current.version,
+            action=action,
+            state=SituationState.CLOSED,
+            title=current.title,
+            description=current.description,
+            authority_class=authority.authority_class.value,
+            decision_channel=authority.decision_channel.value,
+            source_capability=_CLOSE,
+            recorded_at=at,
+            closed_at=at,
+            outcome=request.outcome,
+            evidence=_inserted(issues, principal_id, anchors, at),
+            evidence_set_digest=evidence_set_digest(anchors),
+        )
+        updated = replace(
+            current,
+            version=version,
+            state=SituationState.CLOSED,
+            updated_at=at,
+            closed_at=at,
+            outcome=request.outcome,
+        )
+        issues.update_issue(principal_id, updated, revision)
+        issues.complete_write_request(
+            principal_id,
+            _CLOSE,
+            idempotency_key,
+            request_digest=digest,
+            completed_at=at,
+            result_issue_id=current.issue_id,
+            result_issue_version=version,
+        )
+        return IssueCloseResult(
+            issue=_revision_view(updated, revision),
+            closure=_closure_view(lineage, principal_id, revision),
+            replayed=False,
+        )
+
+    def reopen_issue(
+        self,
+        uow: UnitOfWork,
+        principal_id: str,
+        request: IssueReopenRequest,
+        idempotency_key: str,
+        authority: LineageAuthority,
+        now: datetime,
+    ) -> IssueReopenResult:
+        """Reopen a closed Issue (S2 section 7.2): `active`, closure cleared, nothing else.
+
+        Reopens no member, link or native record. The optional evidence set is
+        admitted by the S1 rules with any role and frozen on the revision.
+        """
+        at = ensure_utc(now)
+        issues, lineage = uow.issues, uow.record_lineage
+        digest = request_digest(_REOPEN, principal_id, _reopen_document(request))
+        prior = issues.reserve_write_request(
+            principal_id, _REOPEN, idempotency_key, digest, created_at=at
+        )
+        if prior is not None:
+            stored_issue, stored = _stored_revision(issues, principal_id, prior)
+            return IssueReopenResult(
+                issue=_revision_view(stored_issue, stored),
+                reopening=_reopening_view(lineage, principal_id, stored),
+                replayed=True,
+            )
+        current = issues.lock_issue(principal_id, request.issue_id, for_update=True)
+        if current is None:
+            raise NotFoundError(SafeDetail.ISSUE_ID)
+        if current.version != request.expected_version:
+            raise ConflictError(SafeDetail.STALE_VERSION)
+        refused = False
+        try:
+            action = issue_reopen_action(current.state)
+        except IssueStateMoveError:
+            refused = True
+            action = IssueRevisionAction.REOPENED
+        if refused:
+            raise ConflictError(SafeDetail.STATE)
+        locked = lock_lineage_sources(
+            issues, lineage, principal_id, anchors=request.evidence_anchors
+        )
+        anchors = admit_evidence_set(issues, principal_id, locked.evidence)
+        version = current.version + 1
+        revision = IssueRevisionRecord(
+            issue_id=current.issue_id,
+            version=version,
+            revision_id=issue_identifier(IdKind.ISSUE_REVISION),
+            predecessor_version=current.version,
+            action=action,
+            state=SituationState.ACTIVE,
+            title=current.title,
+            description=current.description,
+            authority_class=authority.authority_class.value,
+            decision_channel=authority.decision_channel.value,
+            source_capability=_REOPEN,
+            recorded_at=at,
+            reason=request.reason,
+            evidence=_inserted(issues, principal_id, anchors, at),
+            evidence_set_digest=evidence_set_digest(anchors) if anchors else None,
+        )
+        updated = replace(
+            current,
+            version=version,
+            state=SituationState.ACTIVE,
+            updated_at=at,
+            closed_at=None,
+            outcome=None,
+        )
+        issues.update_issue(principal_id, updated, revision)
+        issues.complete_write_request(
+            principal_id,
+            _REOPEN,
+            idempotency_key,
+            request_digest=digest,
+            completed_at=at,
+            result_issue_id=current.issue_id,
+            result_issue_version=version,
+        )
+        return IssueReopenResult(
+            issue=_revision_view(updated, revision),
+            reopening=_reopening_view(lineage, principal_id, revision),
+            replayed=False,
+        )
+
+    def closure_readiness(
+        self, uow: UnitOfWork, principal_id: str, issue_id: str
+    ) -> IssueClosureReadiness:
+        """Evaluate the gate without writing or locking (S2 section 7.2).
+
+        Says nothing about the closure evidence `issues.close` is given. A
+        closed Issue answers `ready: false` and no blockers.
+        """
+        issues, lineage = uow.issues, uow.record_lineage
+        issue = issues.read_issue(principal_id, issue_id)
+        if issue is None:
+            raise NotFoundError(SafeDetail.ISSUE_ID)
+        if issue.state is SituationState.CLOSED:
+            return IssueClosureReadiness(
+                issue_id=issue.issue_id,
+                version=issue.version,
+                state=issue.state.value,
+                ready=False,
+                blockers=(),
+                blockers_truncated=False,
+            )
+        heads = lineage.mandatory_memberships(principal_id, issue_id, share=False)
+        natives = lineage.native_members(principal_id, {head.link.to_ref for head in heads})
+        revisions = {
+            head.link.link_id: _head_revision(lineage, principal_id, head) for head in heads
+        }
+        archived = lineage.archived_capture_roots(
+            principal_id, _resolution_roots(tuple(revisions.values()))
+        )
+        blocked: list[ClosureBlockerView] = []
+        for head in heads:
+            member = head.link.to_ref
+            native = natives.get(member)
+            reasons = _blockers_of(head, native, revisions[head.link.link_id], archived)
+            if not reasons or head.link.member_role is None:
+                continue
+            blocked.append(
+                ClosureBlockerView(
+                    link_id=head.link.link_id,
+                    member=RecordRefView(family=member.family, record_id=member.record_id),
+                    role=head.link.member_role,
+                    native_state=None if native is None else native.native_state,
+                    evidence_state=(
+                        native.evidence_state
+                        if native is not None
+                        and member.family in (RecordFamily.TASK, RecordFamily.COMMITMENT)
+                        else None
+                    ),
+                    reasons=reasons,
+                )
+            )
+        blocked.sort(
+            key=lambda view: (view.member.family.value, view.member.record_id, view.link_id)
+        )
+        return IssueClosureReadiness(
+            issue_id=issue.issue_id,
+            version=issue.version,
+            state=issue.state.value,
+            ready=not blocked,
+            blockers=tuple(blocked[:MAX_CLOSURE_BLOCKERS]),
+            blockers_truncated=len(blocked) > MAX_CLOSURE_BLOCKERS,
+        )
 
     # --- issues.project_links.add / end ----------------------------------------
 
@@ -619,8 +1174,12 @@ class IssueApplication:
         )
         if not issues.share_project(principal_id, project_id):
             raise NotFoundError(SafeDetail.PROJECT_ID)
-        if issues.lock_issue(principal_id, issue_id, for_update=False) is None:
+        issue = issues.lock_issue(principal_id, issue_id, for_update=False)
+        if issue is None:
             raise NotFoundError(SafeDetail.ISSUE_ID)
+        if issue.state is SituationState.CLOSED:
+            # S2 section 3.2: a closed Issue's Project scope is frozen.
+            raise ConflictError(SafeDetail.STATE)
         if locked is None:
             return None
         # Only after every existence check (section 3.2 check order): the

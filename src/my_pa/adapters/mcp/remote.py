@@ -80,6 +80,8 @@ _WRITE_PURPOSES: Final = frozenset(
         # Record lineage S1: the three association writes' purpose.
         # `record_lineage_read` and `meeting_note_history_read` stay out.
         Purpose.RECORD_LINEAGE_AUTHORING,
+        # Record lineage S2: the two composite Work writes' purpose.
+        Purpose.ISSUE_WORK_AUTHORING,
         Purpose.CONTEXT_PREFERENCE,
         Purpose.GOODNOTES_PROPOSAL,
         Purpose.REPORT_AUTHORING,

@@ -149,12 +149,14 @@ from my_pa.application.commands import (
     CloseCommitment,
     CloseConstraint,
     CloseConstraintWithFollowUp,
+    CloseIssue,
     CloseProject,
     Command,
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
     ConfigureProjectControls,
     CorrectGoodNotes,
+    CorrectIssueMembership,
     CorrectRecordAssociation,
     CreateCapture,
     CreateCommitment,
@@ -167,6 +169,8 @@ from my_pa.application.commands import (
     CreateEntityProposal,
     CreateEntityRelationship,
     CreateIssue,
+    CreateIssueWorkCommitment,
+    CreateIssueWorkTask,
     CreateKnowledgeAssertion,
     CreateManagedDocument,
     CreateManagedDocumentCommand,
@@ -229,6 +233,7 @@ from my_pa.application.commands import (
     ListGoodNotesPages,
     ListGoodNotesRuns,
     ListIntelligenceArtifacts,
+    ListIssueHandoffs,
     ListIssues,
     ListKnowledgeAssertions,
     ListManagedDocuments,
@@ -266,6 +271,7 @@ from my_pa.application.commands import (
     ReadGoodNotes,
     ReadIntelligenceArtifact,
     ReadIssue,
+    ReadIssueClosureReadiness,
     ReadKnowledge,
     ReadKnowledgeAssertion,
     ReadManagedDocument,
@@ -279,8 +285,10 @@ from my_pa.application.commands import (
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
+    RecordIssueHandoff,
     RecordTask,
     ReopenConstraint,
+    ReopenIssue,
     ReorderConstraintCategories,
     Representation,
     ResolveConstraintSyncConflict,
@@ -13403,6 +13411,145 @@ class ApplicationService:
             )
         return self._association_result(authorization, "association", written)
 
+    # ---- record lineage S2 (ADR-015; S2 contract section 7) -------------------
+    #
+    # Eight handlers in the S1 shape: the switch first (section 7.5), then, for a
+    # write, the attested authority (section 6.1: `denied` unless local operator,
+    # before any row and before the replay lookup), then the application in
+    # `invoke`'s transaction. The handoff and composite use cases are not
+    # implemented in this change: after the switch and the authority their
+    # handlers answer `unsupported`, writing nothing (record lineage S2, K2).
+
+    def _issues_close(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: CloseIssue
+    ) -> _Result:
+        """`issues.close`: close an Issue behind the OD-03 gate."""
+        self._lineage_plane()
+        authority = attested_lineage_authority(authorization)
+        with _translated(), _lineage_translated():
+            written = self._issues.close_issue(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.issue_request(),
+                command.idempotency_key,
+                authority,
+                authorization.at,
+            )
+        return _Result(
+            payload={
+                "issue": written.issue.to_canonical_dict(),
+                "closure": written.closure.to_canonical_dict(),
+                "replayed": written.replayed,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+        )
+
+    def _issues_reopen(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReopenIssue
+    ) -> _Result:
+        """`issues.reopen`: reopen a closed Issue; nothing else changes."""
+        self._lineage_plane()
+        authority = attested_lineage_authority(authorization)
+        with _translated(), _lineage_translated():
+            written = self._issues.reopen_issue(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.issue_request(),
+                command.idempotency_key,
+                authority,
+                authorization.at,
+            )
+        return _Result(
+            payload={
+                "issue": written.issue.to_canonical_dict(),
+                "reopening": written.reopening.to_canonical_dict(),
+                "replayed": written.replayed,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+        )
+
+    def _issues_closure_readiness(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReadIssueClosureReadiness,
+    ) -> _Result:
+        """`issues.closure_readiness`: the gate's current answer, without writing."""
+        self._lineage_plane()
+        with _translated(), _lineage_translated():
+            readiness = self._issues.closure_readiness(
+                unit_of_work, authorization.principal.principal_id, command.issue_id
+            )
+        return _Result(
+            payload={
+                "issue_id": readiness.issue_id,
+                "version": readiness.version,
+                "state": readiness.state,
+                "ready": readiness.ready,
+                "blockers": [blocker.to_canonical_dict() for blocker in readiness.blockers],
+                "blockers_truncated": readiness.blockers_truncated,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+        )
+
+    def _issues_memberships_correct(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: CorrectIssueMembership,
+    ) -> _Result:
+        """`issues.memberships.correct`: replace a membership's evidence set."""
+        self._lineage_plane()
+        authority = attested_lineage_authority(authorization)
+        with _translated(), _lineage_translated():
+            written = self._record_lineage.correct_membership(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.lineage_request(),
+                command.idempotency_key,
+                authority,
+                authorization.at,
+            )
+        return self._association_result(authorization, "membership", written)
+
+    def _issues_handoffs_record(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: RecordIssueHandoff
+    ) -> _Result:
+        """`issues.handoffs.record`: not implemented in this change (`unsupported`)."""
+        del unit_of_work, command
+        self._lineage_plane()
+        attested_lineage_authority(authorization)
+        raise UnsupportedError()
+
+    def _issues_handoffs_list(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListIssueHandoffs
+    ) -> _Result:
+        """`issues.handoffs.list`: not implemented in this change (`unsupported`)."""
+        del unit_of_work, authorization, command
+        self._lineage_plane()
+        raise UnsupportedError()
+
+    def _issues_work_create_task(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: CreateIssueWorkTask
+    ) -> _Result:
+        """`issues.work.create_task`: not implemented in this change (`unsupported`)."""
+        del unit_of_work, command
+        self._lineage_plane()
+        attested_lineage_authority(authorization)
+        raise UnsupportedError()
+
+    def _issues_work_create_commitment(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: CreateIssueWorkCommitment,
+    ) -> _Result:
+        """`issues.work.create_commitment`: not implemented in this change (`unsupported`)."""
+        del unit_of_work, command
+        self._lineage_plane()
+        attested_lineage_authority(authorization)
+        raise UnsupportedError()
+
     def _records_lineage(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadRecordLineage
     ) -> _Result:
@@ -15635,6 +15782,14 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.RECORDS_ASSOCIATIONS_CORRECT: ApplicationService._records_associations_correct,
         Capability.RECORDS_ASSOCIATIONS_END: ApplicationService._records_associations_end,
         Capability.RECORDS_LINEAGE: ApplicationService._records_lineage,
+        Capability.ISSUES_CLOSE: ApplicationService._issues_close,
+        Capability.ISSUES_REOPEN: ApplicationService._issues_reopen,
+        Capability.ISSUES_CLOSURE_READINESS: ApplicationService._issues_closure_readiness,
+        Capability.ISSUES_MEMBERSHIPS_CORRECT: ApplicationService._issues_memberships_correct,
+        Capability.ISSUES_HANDOFFS_RECORD: ApplicationService._issues_handoffs_record,
+        Capability.ISSUES_HANDOFFS_LIST: ApplicationService._issues_handoffs_list,
+        Capability.ISSUES_WORK_CREATE_TASK: ApplicationService._issues_work_create_task,
+        Capability.ISSUES_WORK_CREATE_COMMITMENT: ApplicationService._issues_work_create_commitment,
         Capability.MEETINGS_NOTES_VERSIONS: ApplicationService._meetings_notes_versions,
         Capability.MEETINGS_NOTES_READ_VERSION: ApplicationService._meetings_notes_read_version,
         Capability.RECORD_EVENTS_LIST: ApplicationService._record_events_list,
@@ -15771,8 +15926,8 @@ _KNOWLEDGE_ASSERTION_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     }
 )
 
-#: Record lineage S1 (ADR-015; S1 contract section 7.5): the exact S1 name set the
-#: `lineage_enabled` switch withholds, written out one at a time. The set is
+#: Record lineage S1 and S2 (ADR-015; S1 and S2 contract section 7.5): the exact
+#: 22-name set the `lineage_enabled` switch withholds, written out one at a time. The set is
 #: the contract's exact S1 set, named as strings because the S1 application
 #: slices declare their `Capability` members in turn (the Issue plane first);
 #: `_LINEAGE_CAPABILITIES` is the declared part of it, so a name declared later
@@ -15793,6 +15948,15 @@ _LINEAGE_CAPABILITY_NAMES: Final[frozenset[str]] = frozenset(
         "records.lineage",
         "meetings.notes.versions",
         "meetings.notes.read_version",
+        # Record lineage S2 (S2 contract section 7.5).
+        "issues.close",
+        "issues.reopen",
+        "issues.closure_readiness",
+        "issues.memberships.correct",
+        "issues.handoffs.record",
+        "issues.handoffs.list",
+        "issues.work.create_task",
+        "issues.work.create_commitment",
     }
 )
 _LINEAGE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(

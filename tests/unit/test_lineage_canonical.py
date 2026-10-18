@@ -197,4 +197,5 @@ def test_an_evidence_set_repeating_an_anchor_identity_is_refused() -> None:
 
 
 def test_issue_states_are_the_non_terminal_situation_states() -> None:
-    assert frozenset(ISSUE_STATES) == {state.value for state in SituationState} - {"closed"}
+    """S1 admitted the three non-terminal states; S2 admits `closed`, so all four now."""
+    assert frozenset(ISSUE_STATES) == {state.value for state in SituationState}

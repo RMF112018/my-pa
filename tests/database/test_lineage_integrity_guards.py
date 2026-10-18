@@ -644,14 +644,23 @@ def test_lineage_tables_refuse_truncate(db_engine: Engine, world: World, table: 
     satisfies that check) with only `table`'s refusal enabled, and rolls back.
     """
     del world
+    # Record lineage S2's three tables reference these eight, so the probe
+    # truncates them too (their own refusals disabled) to pass the same check.
+    referencing = (
+        "issue_revision_evidence",
+        "issue_responsibility_events",
+        "lineage_write_request_links",
+    )
 
     def truncate(c: Connection) -> None:
-        for other in ALL_TABLES:
+        for other in (*ALL_TABLES, *referencing):
             if other != table:
                 c.execute(
                     text(f"ALTER TABLE knowledge.{other} DISABLE TRIGGER {other}_refuse_truncate")
                 )
-        c.execute(text("TRUNCATE " + ", ".join(f"knowledge.{t}" for t in ALL_TABLES)))
+        c.execute(
+            text("TRUNCATE " + ", ".join(f"knowledge.{t}" for t in (*ALL_TABLES, *referencing)))
+        )
 
     _refused(db_engine, truncate, RESTRICT, f"{table} refuses TRUNCATE")
 

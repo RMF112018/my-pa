@@ -222,7 +222,7 @@ LINEAGE_TRIGGERS: Final[frozenset[str]] = frozenset(
         "a_link_head_follows_its_revisions",
         "a_lineage_write_request_completes_once",
         "a_lineage_write_request_is_never_left_reserved",
-        # Record lineage S2 (`d020b532ad7d`).
+        # Record lineage S2.
         *(
             f"{table}_{suffix}"
             for table in (

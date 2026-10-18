@@ -9,8 +9,11 @@ run, grant, deployment, backfill or production use. Where it differs from the re
 package (`MYPA-LINEAGE-ADVERSARIAL-REVIEW-20261017-001`, documents 02, 03, 04, 06 and
 07), this document controls for S2 and section 12 records why.
 
-**Not yet implemented.** Nothing in this document exists in `src/`, `migrations/`,
-`tests/` or `web/` at the basis commit; every path named below as new is a target.
+**Implementation:** S2 is implemented on `feat/lineage-s2-workflow` (workers K1 to K4,
+revision `d020b532ad7d`) and exercised only against isolated synthetic test databases
+and mocked web gateways; it is not merged, migrated anywhere live, granted, exposed or
+deployed. Sections 6.1, 7.2, 7.4, 8 and 10 carry "as implemented" notes where the code
+resolved a point this contract left open; the paths named below as new now exist.
 
 **Basis:** `feat/lineage-s2-workflow@75dcd96ae1807238a68d5804ef1ad79973600920`
 (tree `3be1a1827939e9beee4f4c831500209f3515bc8c`), the S1 head on
@@ -447,7 +450,10 @@ nothing; an `issues.update` on a non-closed Issue stays a recorded write, as in 
 
 **The invariant, stated precisely (R2-F14, option a).** No attested result is ever
 returned to, and no attested row is ever written for, a caller that is not
-local-operator. For the writes listed above (the S2 set), attestation is derived before any row and
+local-operator. (Precisely: no attested *write response*, first-time or replayed. The
+rows an attested write produced are still served by the reads — `issues.read`,
+`issues.list` and `issues.handoffs.list` — to any caller holding `issue_read`, as
+intended; R2-F17.) For the writes listed above (the S2 set), attestation is derived before any row and
 before the replay lookup (S1 §6.1). For `issues.update`, whose attestation depends on
 the Issue's state, it is derived at the two points where that state is known: (1) on a
 **replay hit** whose stored result (`result_issue_id`, `result_issue_version`) names a
@@ -580,7 +586,8 @@ evidence (role `resolution`) is recorded on a mandatory member, after its native
 **`issues.handoffs.record`** — in `{issue_id, commitment_id, from ("principal"|"counterparty"), effective_at (ISO-8601 with offset), reason (1..2000), evidence_anchor: EvidenceAnchorInput, idempotency_key}`;
 out `{handoff: HandoffView, replayed}`. Section 3.4 rules; the anchor's role must be
 `handoff` and its kind `immutable_version` (`invalid_request` / `evidence_anchor`).
-Writes event `sequence_no = latest + 1`.
+Writes event `sequence_no = latest + 1`. **As implemented (K2):** the request key is
+`from_side` (`from` is a Python keyword); its refusal still names `from`.
 
 **`issues.handoffs.list`** — in `{issue_id, commitment_id?, page_size? (1..100, default 25), after? (ihnd_)}`;
 out `{handoffs: [HandoffView], next_cursor}` ordered `(recorded_at, handoff_id)`
@@ -637,6 +644,10 @@ closed sets, so the decoder moves in the same change:
 - `web/src/lib/api/decode/capabilities/records.lineage.ts`: `relation_type` admits the 4 S2 types; `ISSUE_STATES` admits `closed`. Nothing else changes; an unknown value still refuses the whole answer.
 - `web/src/components/work/related-issues.tsx`: direction words "delegated from", "escalated from", "blocks" / "blocked by" (by which endpoint is the viewed record), "created to resolve"; a `closed` Issue reads "closed".
 - `web/src/lib/api/decode/fixtures/python/success.json` keeps its keys (no new key); the parity tests stay green.
+- **As implemented (K4):** the decoder exports the two widened closed sets as
+  `RELATION_TYPES` and `ISSUE_STATES`; the panel words an incoming
+  `created_to_resolve` (the viewed Constraint is the target) as "A Task was created to
+  resolve it" (or "A Commitment …"). `gateway.json` still holds 107 entries.
 
 This is admissible only because `records.lineage` was added by S1 on this unmerged,
 undeployed branch line; once any lineage contract is deployed, a widening needs a
@@ -654,7 +665,7 @@ paths untouched.
 ## 8. Old-client compatibility rule
 
 - **v1 shapes are byte-identical.** No v1 request or response changes: `tasks.*`, `commitments.*` (including `commitments.read`'s single `follow_up_task_*` fields, section 12, D-04), `constraints.*`, `meetings.*`, `continuity.*`. A row created by a composite is indistinguishable in every v1 read from a `tasks.create` / `commitments.create` row with the same fields; the only trace is the native Record Event's `source_capability` string, a field whose v1 type is an unconstrained bounded operation name.
-- **The strict web client** keeps every `gateway.json` entry, decoder and `success.json` key byte-for-byte except the 2 enum widenings of section 7.4 in the S1-added `records.lineage` decoder, guarded by a vitest that the decoder's closed sets equal the server vocabulary.
+- **The strict web client** keeps every `gateway.json` entry, decoder and `success.json` key byte-for-byte except the 2 enum widenings of section 7.4 in the S1-added `records.lineage` decoder, guarded by a vitest that the decoder's closed sets equal the server vocabulary. **As implemented (K4):** the vitest pins the literals from the web side and the FAST `test_the_web_lineage_decoder_admits_exactly_the_server_vocabulary` (`tests/architecture/test_record_lineage_s2_scope.py`) reads the decoder source and compares both sets with `RelationType` and `ISSUE_STATES`, so the equality is checked across the language boundary.
 - **S1 lineage contracts** (server-only, never deployed): widened only by the additions section 7 lists; no S1 key is removed, renamed or re-meant.
 - **`continuity.situations`** still lists context Situations only; a closed Issue is still an Issue and never appears there.
 - Any later change to a deployed contract needs an explicit negotiated version and a strict-client regression fixture (S1 §8).
@@ -686,15 +697,15 @@ way the S1 scope guard parses S1 §10.
 | AT-007 + AT-015 (S2) | `tests/integration/test_issue_close_reopen.py` | `test_close_requires_an_available_resolution_anchor`; `test_a_legacy_anchor_never_satisfies_closure`; `test_a_contradicting_anchor_refuses_closure`; `test_an_open_mandatory_member_refuses_closure`; `test_a_cancelled_task_member_refuses_closure`; `test_a_void_constraint_member_refuses_closure`; `test_a_proposed_closed_commitment_is_not_counted_accepted`; `test_a_member_without_resolution_evidence_refuses_closure`; `test_archived_resolution_evidence_refuses_closure`; `test_a_contradicted_member_refuses_closure`; `test_non_mandatory_members_do_not_gate_closure`; `test_ending_a_membership_is_the_only_way_past_an_unsatisfiable_member`; `test_close_changes_no_member_or_link`; `test_reopen_changes_no_member_or_link`; `test_a_reopened_constraint_does_not_reopen_the_issue`; `test_a_closed_issue_refuses_lineage_writes`; `test_closure_readiness_names_each_blocked_member`; `test_an_exception_field_is_refused`; `test_correcting_a_closed_issue_keeps_it_closed`; `test_closure_is_never_admitted_through_issues_update`; `test_resolution_evidence_recorded_before_a_reclose_refuses_closure`; `test_resolution_evidence_recorded_while_the_task_was_open_refuses_closure`; `test_a_same_set_reaffirmation_after_a_reclose_is_admitted`; `test_a_correction_of_a_closed_issue_needs_the_local_operator` (both cases: a first-time correction and a byte-identical replay of an operator's committed correction by a non-attested caller, each `denied`) | database |
 | AT-007 (races) | `tests/concurrency/test_issue_close_races.py` | `test_concurrent_closes_with_one_expected_version_admit_one`; `test_close_racing_a_membership_add_serializes`; `test_close_racing_a_membership_end_serializes`; `test_close_racing_a_constraint_reopen_serializes`; `test_concurrent_blocks_asserts_cannot_form_a_cycle`; `test_concurrent_handoffs_on_one_commitment_admit_one`; `test_close_racing_a_resolution_source_archive_serializes`; `test_concurrent_reopens_with_one_expected_version_admit_one` | database |
 | AT-017 (scenario D) | `tests/integration/test_shared_issue_crossproject.py` | `test_one_issue_links_two_projects_once_each`; `test_two_constraints_in_two_projects_are_independent_members`; `test_closing_one_constraint_closes_neither_the_other_nor_the_issue`; `test_an_escalation_outside_a_linked_project_is_refused`; `test_project_links_create_no_generic_membership` | database |
-| WP-02C relation rules | `tests/database/test_lineage_s2_relation_rules.py` | `test_s2_relations_are_admitted_only_in_the_matrix`; `test_escalated_from_needs_an_origin_anchor_and_a_context`; `test_escalated_from_refuses_a_draft_or_an_older_constraint`; `test_blocks_needs_corroborating_evidence`; `test_a_blocks_self_loop_is_refused`; `test_a_blocks_cycle_is_refused`; `test_a_blocks_search_past_its_bound_is_refused`; `test_task_completion_closes_no_constraint_or_issue`; `test_a_correction_reapplies_only_the_evidence_rules`; `test_lineage_writes_leave_constraint_bic_unchanged` | database |
+| WP-02C relation rules | `tests/database/test_lineage_s2_relation_rules.py` | `test_s2_relations_are_admitted_only_in_the_matrix`; `test_escalated_from_needs_an_origin_anchor_and_a_context`; `test_escalated_from_refuses_a_draft_or_an_older_constraint`; `test_blocks_needs_corroborating_evidence`; `test_a_blocks_self_loop_is_refused`; `test_a_blocks_cycle_is_refused`; `test_a_blocks_search_past_its_bound_is_refused`; `test_task_completion_closes_no_constraint_or_issue`; `test_a_correction_reapplies_only_the_evidence_rules`; `test_lineage_writes_leave_constraint_bic_unchanged` (as implemented: the direct-insert refusal of a context-free escalation by `an_escalation_is_issue_scoped` is asserted inside `test_escalated_from_needs_an_origin_anchor_and_a_context`) | database |
 | AT-012 (S2 guards) | `tests/database/test_lineage_s2_integrity_guards.py` | `test_s2_immutable_tables_refuse_update_and_delete` (3 tables); `test_s2_tables_refuse_truncate` (3 tables, each holding a row); `test_an_issue_cannot_close_without_a_matching_revision`; `test_a_closure_revision_follows_the_lifecycle`; `test_a_closed_revision_carries_its_closure_fields`; `test_a_closing_revision_has_evidence`; `test_issue_closure_evidence_is_frozen`; `test_an_issue_closure_row_is_local_operator_attested`; `test_a_handoff_follows_its_predecessor_holder`; `test_a_handoff_changes_its_holder`; `test_a_handoff_cannot_be_effective_after_recording`; `test_a_handoff_cannot_be_effective_before_its_commitment`; `test_a_handoff_cannot_be_effective_before_its_predecessor`; `test_a_member_native_version_is_recorded_only_by_membership_writes`; `test_a_blocks_root_cannot_name_itself`; `test_a_creation_link_needs_its_composite`; `test_created_to_resolve_revision_one_states_its_purpose`; `test_a_composite_request_names_its_record_and_links`; `test_an_s2_write_request_completes_once`; `test_closure_evidence_digest_rebuilds_from_stored_rows` | database |
 | AT-012 (migration) | `tests/schema/test_record_lineage_s2_migration.py` | FAST: `test_the_revision_is_the_single_head_on_264310e0416a`; `test_the_revision_imports_no_domain_module`; `test_frozen_ddl_names_every_declared_constraint`; `test_before_texts_are_byte_copies_of_the_s1_texts`; `test_at_vocabulary_adds_exactly_the_s2_names`; `test_offline_downgrade_refuses_first`. DB: `test_empty_to_head`; `test_s1_head_with_rows_upgrades_unchanged`; `test_downgrade_refuses_while_s2_rows_exist`; `test_downgrade_restores_every_s1_text` | FAST + migration markers |
-| AT-023 (S2) | `tests/contract/test_lineage_s2_capability_admission.py` | `test_s2_capabilities_are_operator_decision_required`; `test_s2_requests_reject_server_owned_fields`; `test_existing_v1_shapes_are_unchanged_by_s2`; `test_s1_lineage_views_keep_every_s1_key`; `test_switch_off_withholds_every_s2_capability`; `test_composite_native_objects_mirror_the_v1_requests` (expected difference, exactly: both objects lack `idempotency_key` and `situation_id`; the `task` object also lacks `accepted_by_review_decision_id`); `test_issue_work_authoring_is_its_own_purpose` | FAST |
+| AT-023 (S2) | `tests/contract/test_lineage_s2_capability_admission.py` | `test_s2_capabilities_are_operator_decision_required`; `test_s2_requests_reject_server_owned_fields`; `test_existing_v1_shapes_are_unchanged_by_s2`; `test_s1_lineage_views_keep_every_s1_key`; `test_switch_off_withholds_every_s2_capability`; `test_composite_native_objects_mirror_the_v1_requests` (expected difference, exactly: both objects lack `idempotency_key` and `situation_id`; the `task` object also lacks `accepted_by_review_decision_id`); `test_issue_work_authoring_is_its_own_purpose`; `test_assert_admits_exactly_the_s2_relations_it_writes` (added by K3: the assert's published `relation_type` set is the semantic relations less the composite-only ones) | FAST |
 | AT-023 (S2, DB) | `tests/database/test_lineage_s2_attested_writes.py` | `test_an_ordinary_remote_client_is_denied_every_s2_write`; `test_a_replayed_s2_write_from_an_ordinary_client_is_denied_before_the_replay_lookup`; `test_switch_off_answers_unsupported_for_every_s2_capability`; `test_every_s2_capability_answers_a_foreign_subject_like_an_absent_one` | database |
 | (domain) | `tests/unit/test_issue_closure_gate.py` | `test_mandatory_roles_are_work_and_constraint`; `test_member_blockers_by_family_and_state`; `test_resolution_evidence_rules`; `test_close_reopen_and_correct_moves`; `test_handoff_holders_follow_the_chain_and_the_current_counterparty` | FAST |
 | AT-024 (S2, web decoder) | existing `web/src/lib/api/decode/capabilities/records.lineage.test.ts` | `decodes the S2 relation types and a closed Issue`; `refuses a relation type outside the S2 vocabulary` | vitest |
 | AT-024 (S2, web component) | existing `web/src/components/work/related-issues.test.tsx` | `renders delegated, escalated, blocking and resolving relations in words`; `renders a closed Issue as closed` | vitest |
-| AT-026 (S2) | `tests/architecture/test_record_lineage_s2_scope.py` | `test_s2_adds_no_record_event_family`; `test_every_s2_crosswalk_test_exists`; `test_s2_modules_stage_no_lineage_record_event` | FAST |
+| AT-026 (S2) | `tests/architecture/test_record_lineage_s2_scope.py` | `test_s2_adds_no_record_event_family`; `test_every_s2_crosswalk_test_exists`; `test_s2_modules_stage_no_lineage_record_event`; `test_the_web_lineage_decoder_admits_exactly_the_server_vocabulary` (added by K4, section 8) | FAST |
 
 **S1 regressions (binding, must stay green; unchanged except the listed lockstep
 moves, R2-F08):** every test of S1 §10 and every v1 suite. The only edits admitted,

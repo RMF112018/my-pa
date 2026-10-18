@@ -546,3 +546,44 @@ def test_no_s1_answer_carries_a_source_digest_or_body_except_read_version(
     assert "body_markdown" not in bare["note"] and NOTE_BODY not in json.dumps(bare)
     full = runtime.ok(ReadMeetingNoteVersion(meeting_id=m1, note_version_id=n1, include_body=True))
     assert full["note"]["body_markdown"] == NOTE_BODY
+
+
+def test_a_link_id_of_the_other_kind_is_invalid_request(runtime: LineageRuntime) -> None:
+    """FR1-F03: each writer refuses the other plane's link (section 7.2)."""
+    issue = runtime.issue("other-kind")
+    m1, n1 = meeting(runtime, "other-kind")
+    c1 = commitment(runtime, "other-kind")
+    member = runtime.ok(
+        membership(issue, "meeting", m1, "other-kind", role="discussion"), surface=GATEWAY
+    )["membership"]["link_id"]
+    semantic = runtime.ok(
+        originated_from(
+            "commitment",
+            c1,
+            "meeting_note_version",
+            n1,
+            "other-kind",
+            (note_anchor(m1, n1, NOTE_BODY),),
+        ),
+        surface=GATEWAY,
+    )["association"]["link_id"]
+    commands = [
+        EndIssueMembership(
+            link_id=semantic, expected_revision=1, idempotency_key="lineage-ok-1", reason="x"
+        ),
+        CorrectRecordAssociation(
+            link_id=member,
+            expected_revision=1,
+            idempotency_key="lineage-ok-2",
+            reason="x",
+            evidence_anchors=(note_anchor(m1, n1, NOTE_BODY, role="discussion"),),
+        ),
+        EndRecordAssociation(
+            link_id=member, expected_revision=1, idempotency_key="lineage-ok-3", reason="x"
+        ),
+    ]
+    for command in commands:
+        assert _error(runtime, command) == {
+            "code": "invalid_request",
+            "safe_details": ["link_id"],
+        }, command.capability.value

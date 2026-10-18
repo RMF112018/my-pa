@@ -20,7 +20,12 @@ import pytest
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError
 
-from my_pa.application.commands import CorrectRecordAssociation
+from my_pa.application.commands import (
+    CorrectRecordAssociation,
+    EndRecordAssociation,
+    ReadIssue,
+    ReadRecordLineage,
+)
 from my_pa.application.errors import InvalidRequestError, SafeDetail
 from my_pa.contracts.ports import LinkRevisionRecord
 from my_pa.domain.lineage.canonical import evidence_set_digest
@@ -137,7 +142,8 @@ def test_identical_evidence_has_one_digest_across_revisions(runtime: LineageRunt
             surface=GATEWAY,
         )
         links.append(written["association"])
-    assert links[0]["evidence_set_digest"] == links[1]["evidence_set_digest"]
+    stored = [_revision(runtime, link["link_id"], 1).evidence_set_digest for link in links]
+    assert stored[0] == stored[1]
     assert links[0]["evidence"][0]["anchor_id"] == links[1]["evidence"][0]["anchor_id"]
     with runtime.engine.connect() as connection:
         anchors = connection.execute(
@@ -174,7 +180,7 @@ def test_a_mixed_note_capture_and_legacy_set_rebuilds_its_digest(runtime: Lineag
     assert evidence_set_digest(cited.anchor for cited in revision.evidence) == (
         revision.evidence_set_digest
     )
-    assert written["membership"]["evidence_set_digest"] == revision.evidence_set_digest
+    assert "evidence_set_digest" not in written["membership"]
 
 
 def test_the_same_anchor_twice_in_one_set_is_refused(runtime: LineageRuntime) -> None:
@@ -226,3 +232,50 @@ def test_overlapping_anchor_reuse_in_two_transactions_does_not_deadlock(
             select(func.count()).select_from(lineage_evidence_anchors)
         ).scalar_one()
     assert anchors == 3
+
+
+def _keys(document: object) -> set[str]:
+    if isinstance(document, dict):
+        return set(document) | {key for value in document.values() for key in _keys(value)}
+    if isinstance(document, list):
+        return {key for item in document for key in _keys(item)}
+    return set()
+
+
+def test_no_view_carries_the_evidence_set_digest(runtime: LineageRuntime) -> None:
+    """FR1-F05: the stored set digest is withheld from every write and read answer."""
+    link_id, m1, n1, c1 = _origin_link(runtime, "withheld")
+    issue = runtime.issue("withheld")
+    answers = [
+        runtime.ok(membership(issue, "commitment", c1, "withheld"), surface=GATEWAY),
+        runtime.ok(
+            CorrectRecordAssociation(
+                link_id=link_id,
+                expected_revision=1,
+                idempotency_key="lineage-withheld-correct",
+                reason="narrowed",
+                evidence_anchors=(note_anchor(m1, n1, NOTE_BODY, passage="façade"),),
+            ),
+            surface=GATEWAY,
+        ),
+        runtime.ok(ReadIssue(issue_id=issue, include_members=True)),
+        runtime.ok(ReadRecordLineage(origin={"family": "commitment", "record_id": c1})),
+        runtime.ok(
+            EndRecordAssociation(
+                link_id=link_id,
+                expected_revision=2,
+                idempotency_key="lineage-withheld-end",
+                reason="ended",
+            ),
+            surface=GATEWAY,
+        ),
+    ]
+    for answer in answers:
+        keys = _keys(answer)
+        assert "evidence" in keys or "typed_edges" in keys
+        assert "evidence_set_digest" not in keys
+    # It is still stored and still rebuilds.
+    revision = _revision(runtime, link_id, 3)
+    assert evidence_set_digest(cited.anchor for cited in revision.evidence) == (
+        revision.evidence_set_digest
+    )

@@ -4476,7 +4476,6 @@
         "lifecycle_state": "active",
         "acceptance_basis": "user_confirmed",
         "authority_class": "local_operator",
-        "evidence_set_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "evidence": [],
         "created_at": "2026-08-09T12:00:00.000Z",
         "recorded_at": "2026-08-09T12:00:00.000Z"
@@ -4499,7 +4498,6 @@
         "lifecycle_state": "active",
         "acceptance_basis": "user_confirmed",
         "authority_class": "local_operator",
-        "evidence_set_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "evidence": [
           {
             "anchor_id": "ian_aaaaaaaa11111111",

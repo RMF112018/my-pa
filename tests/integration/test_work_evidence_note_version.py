@@ -20,9 +20,12 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
+from sqlalchemy import text
 
 from my_pa.application.commands import (
     ArchiveCapture,
+    AssertRecordAssociation,
+    CorrectRecordAssociation,
     CreateCommitment,
     ReadIssue,
     RestoreCapture,
@@ -43,6 +46,8 @@ from tests.database.lineage_record_harness import (
     note_anchor,
     originated_from,
     restricted_capture_version,
+    revise_notes,
+    task,
 )
 from tests.database.test_commitment_entity_counterparty import seed_counterparty_entity
 
@@ -412,14 +417,25 @@ def test_an_anchor_reads_available_again_after_restore(runtime: LineageRuntime) 
 def test_archive_and_restore_write_no_lineage_row(runtime: LineageRuntime) -> None:
     issue, root, _ = _availability_fixture(runtime, "avail-rows")
     before = all_lineage_counts(runtime.engine)
-    digest = runtime.ok(ReadIssue(issue_id=issue, include_members=True))["memberships"][0][
-        "evidence_set_digest"
-    ]
+    stored = _stored_digests(runtime)
     _archive(runtime, root, "avail-rows")
     _restore(runtime, root, "avail-rows")
     assert all_lineage_counts(runtime.engine) == before
+    assert _stored_digests(runtime) == stored
     member = runtime.ok(ReadIssue(issue_id=issue, include_members=True))["memberships"][0]
-    assert member["evidence_set_digest"] == digest and member["revision_no"] == 1
+    assert member["revision_no"] == 1
+
+
+def _stored_digests(runtime: LineageRuntime) -> list[tuple[str, int, str]]:
+    """Every stored revision digest (the views withhold it, FR1-F05)."""
+    with runtime.engine.connect() as connection:
+        rows = connection.execute(
+            text(
+                "SELECT link_id, revision_no, evidence_set_digest "
+                "FROM knowledge.record_link_revisions ORDER BY link_id, revision_no"
+            )
+        ).all()
+    return [(row[0], row[1], row[2]) for row in rows]
 
 
 def test_a_legacy_capture_root_never_satisfies_an_origin_rule(runtime: LineageRuntime) -> None:
@@ -437,3 +453,141 @@ def test_a_legacy_capture_root_never_satisfies_an_origin_rule(runtime: LineageRu
 def test_a_legacy_anchor_reads_as_legacy_unversioned(runtime: LineageRuntime) -> None:
     issue, _root, _ = _availability_fixture(runtime, "legacy-reads")
     assert _availabilities(runtime, issue)["capture"] == "legacy_unversioned"
+
+
+# --- section 3.1 relation evidence rules (FR1-F01) ---------------------------------
+
+#: A later body of the same Meeting note, so the sibling version is a real one.
+_REVISED = NOTE_BODY + " Revised."
+
+
+def test_an_origin_anchor_on_a_sibling_note_version_is_refused(runtime: LineageRuntime) -> None:
+    m1, n1 = meeting(runtime, "sibling-origin")
+    n1b = revise_notes(runtime, m1, "sibling-origin", body=_REVISED)
+    c1 = commitment(runtime, "sibling-origin")
+    # A well-formed origin on N1b, a sibling of the `to` version N1.
+    error = _refused_cleanly(
+        runtime,
+        _note_origin(runtime, "sibling-origin", note_anchor(m1, n1b, _REVISED), n1, c1),
+    )
+    assert error["code"] == "invalid_request" and error["safe_details"] == ["evidence_anchors"]
+
+
+def test_an_origin_needs_the_origin_role(runtime: LineageRuntime) -> None:
+    m1, n1 = meeting(runtime, "origin-role")
+    c1 = commitment(runtime, "origin-role")
+    anchor = note_anchor(m1, n1, NOTE_BODY, role="corroborates")
+    error = _refused_cleanly(runtime, _note_origin(runtime, "origin-role", anchor, n1, c1))
+    assert error["code"] == "invalid_request" and error["safe_details"] == ["evidence_anchors"]
+
+
+def test_a_whole_version_origin_is_refused(runtime: LineageRuntime) -> None:
+    m1, n1 = meeting(runtime, "whole-version")
+    c1 = commitment(runtime, "whole-version")
+    anchor = note_anchor(m1, n1, NOTE_BODY, passage=None)
+    error = _refused_cleanly(runtime, _note_origin(runtime, "whole-version", anchor, n1, c1))
+    assert error["code"] == "invalid_request" and error["safe_details"] == ["evidence_anchors"]
+
+
+def _discusses(
+    from_family: str,
+    from_id: str,
+    to_family: str,
+    to_id: str,
+    key: str,
+    anchor: dict[str, object],
+    context_issue_id: str | None = None,
+) -> AssertRecordAssociation:
+    return AssertRecordAssociation(
+        from_record={"family": from_family, "record_id": from_id},
+        to_record={"family": to_family, "record_id": to_id},
+        relation_type="discusses",
+        idempotency_key=f"lineage-discusses-{key}",
+        evidence_anchors=(anchor,),
+        context_issue_id=context_issue_id,
+    )
+
+
+def test_a_discussion_anchor_on_another_meetings_note_is_refused(runtime: LineageRuntime) -> None:
+    m1, n1 = meeting(runtime, "discuss-other-1")
+    n1b = revise_notes(runtime, m1, "discuss-other-1", body=_REVISED)
+    m2, n2 = meeting(runtime, "discuss-other-2")
+    target = task(runtime, "discuss-other")
+    refused = {"code": "invalid_request", "safe_details": ["evidence_anchors"]}
+    # A Meeting `from` cited by a note of another Meeting.
+    other_meeting = _refused_cleanly(
+        runtime,
+        _discusses(
+            "meeting",
+            m1,
+            "task",
+            target,
+            "other-meeting",
+            note_anchor(m2, n2, NOTE_BODY, role="discussion"),
+        ),
+    )
+    assert {key: other_meeting[key] for key in refused} == refused
+    # A note-version `from` cited by a sibling note of the same Meeting.
+    sibling = _refused_cleanly(
+        runtime,
+        _discusses(
+            "meeting_note_version",
+            n1,
+            "task",
+            target,
+            "sibling-note",
+            note_anchor(m1, n1b, _REVISED, role="discussion"),
+        ),
+    )
+    assert {key: sibling[key] for key in refused} == refused
+    # The exact rule admits its own note.
+    runtime.ok(
+        _discusses(
+            "meeting",
+            m1,
+            "task",
+            target,
+            "own-note",
+            note_anchor(m1, n1, NOTE_BODY, role="discussion"),
+        ),
+        surface=GATEWAY,
+    )
+
+
+def test_a_discusses_context_other_than_its_issue_is_refused(runtime: LineageRuntime) -> None:
+    issue = runtime.issue("discuss-context-i")
+    other = runtime.issue("discuss-context-j")
+    m1, n1 = meeting(runtime, "discuss-context")
+    error = _refused_cleanly(
+        runtime,
+        _discusses(
+            "meeting",
+            m1,
+            "situation",
+            issue,
+            "discuss-context",
+            note_anchor(m1, n1, NOTE_BODY, role="discussion"),
+            context_issue_id=other,
+        ),
+    )
+    assert error["code"] == "invalid_request" and error["safe_details"] == ["context_issue_id"]
+
+
+def test_a_correction_must_keep_its_relation_rule(runtime: LineageRuntime) -> None:
+    m1, n1 = meeting(runtime, "correct-rule")
+    c1 = commitment(runtime, "correct-rule")
+    written = runtime.ok(
+        _note_origin(runtime, "correct-rule", note_anchor(m1, n1, NOTE_BODY), n1, c1),
+        surface=GATEWAY,
+    )
+    error = _refused_cleanly(
+        runtime,
+        CorrectRecordAssociation(
+            link_id=written["association"]["link_id"],
+            expected_revision=1,
+            idempotency_key="lineage-correct-rule",
+            reason="the origin was replaced by a corroboration",
+            evidence_anchors=(note_anchor(m1, n1, NOTE_BODY, role="corroborates"),),
+        ),
+    )
+    assert error["code"] == "invalid_request" and error["safe_details"] == ["evidence_anchors"]

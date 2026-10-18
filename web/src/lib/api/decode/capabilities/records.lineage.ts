@@ -1,11 +1,11 @@
 import { closed } from "../primitives";
 import type { Decoder } from "../types";
-import { strictObject, nullable, arrayOf, checked, text, integer, enumeration, identifier, digest, timestamp, type Decoded } from "./continuity.projects.create";
+import { strictObject, nullable, arrayOf, checked, text, integer, enumeration, identifier, timestamp, type Decoded } from "./continuity.projects.create";
 
 /*
  * `records.lineage` (record lineage S1 contract sections 7.1 and 7.2), decoded
  * strictly: every object is reconstructed from its named keys and an unknown
- * key — a source or passage digest included — refuses the whole answer. The
+ * key — a source, passage or evidence-set digest included — refuses the whole answer. The
  * Python models are `contracts/v1/record_lineage.py`.
  */
 const invalid = () => closed("upstream_contract_invalid", "Invalid capability success contract");
@@ -66,7 +66,6 @@ const association = strictObject({
   lifecycle_state: enumeration(["active", "ended"]),
   acceptance_basis: enumeration(["user_confirmed"]),
   authority_class: text(1),
-  evidence_set_digest: digest,
   evidence: arrayOf(evidenceAnchor, 32),
   created_at: timestamp,
   recorded_at: timestamp,

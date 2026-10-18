@@ -270,7 +270,7 @@ def test_edges_carry_relation_direction_basis_and_evidence() -> None:
     assert origin["acceptance_basis"] == "user_confirmed"
     assert origin["authority_class"] == "local_operator"
     assert origin["context_issue_id"] == _ISSUE.record_id
-    assert len(origin["evidence_set_digest"]) == 64
+    assert "evidence_set_digest" not in origin
     (anchor,) = origin["evidence"]
     assert anchor["role"] == "origin" and anchor["availability"] == "available"
     memberships = [edge for edge in answer["typed_edges"] if edge["kind"] == "issue_membership"]
@@ -322,8 +322,10 @@ def test_views_carry_no_source_or_passage_digest() -> None:
             availability="available",
             source_sha256="e" * 64,  # type: ignore[call-arg]
         )
-    # The whole-set digest stays: it cannot be inverted to a passage.
-    assert all(len(edge["evidence_set_digest"]) == 64 for edge in answer["typed_edges"])
+    # The stored whole-set digest is withheld too (FR1-F05): it is built over the
+    # withheld digests and the shown fields, so it would confirm a guessed body.
+    assert "evidence_set_digest" not in keys
+    assert "evidence_set_digest" not in AssociationView.model_fields
 
 
 def test_anchor_views_carry_the_server_derived_version_number() -> None:

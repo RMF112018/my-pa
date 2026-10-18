@@ -22,6 +22,7 @@ row covers all fourteen S1 names. Every identity here is synthetic.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from functools import partial
 from typing import Any
 
 import pytest
@@ -47,12 +48,17 @@ from my_pa.application.commands import (
     UpdateIssue,
 )
 from my_pa.bootstrap.knowledge_discovery_profiles import resolve_knowledge_client_overlay
+from my_pa.contracts.ports import UnknownScopeError
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.operator_surface import OperatorSurface
 from my_pa.domain.lineage.vocabulary import LINEAGE_WRITE_CAPABILITIES as S1_WRITES
-from my_pa.domain.situation.continuity import CommitmentDirection
+from my_pa.domain.situation.continuity import ClosureEvidenceKind, CommitmentDirection
 from my_pa.domain.task.lifecycle import TaskOriginKind
-from my_pa.infrastructure.persistence.situation_repository import SqlSituationRepository
+from my_pa.infrastructure.persistence.situation_repository import (
+    SqlFrameRepository,
+    SqlProjectRepository,
+    SqlSituationRepository,
+)
 from my_pa.infrastructure.persistence.tables import issue_project_membership_events
 from tests.database.lineage_issue_harness import (
     OTHER_PRINCIPAL,
@@ -569,3 +575,46 @@ def test_switch_off_answers_unsupported_even_for_a_committed_replay(
     finally:
         on.close()
         off.close()
+
+
+def test_frame_and_project_link_writers_refuse_an_issue(runtime: LineageRuntime) -> None:
+    """FR1-F04 (section 9): the internal frame and legacy Project-link writers refuse an Issue.
+
+    Both are reached only through the internal `SituationService`; each answers
+    an Issue exactly as an absent Situation, in the writer's own statement,
+    while a context Situation is still admitted.
+    """
+    issue = runtime.issue("f04-internal")
+    context = _context_situation(runtime, "f04-internal")
+    project = runtime.project("f04-internal")
+    for situation_id, admitted in ((issue, False), (context, True)):
+        with runtime.engine.connect() as connection:
+            transaction = connection.begin()
+            try:
+                enter = partial(
+                    SqlFrameRepository(connection).enter_frame,
+                    principal_id=PRINCIPAL,
+                    situation_id=situation_id,
+                    label="Synthetic frame",
+                    evidence_refs=(),
+                    alternatives=(),
+                    obligations=(),
+                    uncertainty=None,
+                    next_authority=None,
+                )
+                link = partial(
+                    SqlProjectRepository(connection).link_situation,
+                    principal_id=PRINCIPAL,
+                    project_id=project,
+                    situation_id=situation_id,
+                    evidence_kind=ClosureEvidenceKind.REVIEW_DECISION,
+                    evidence_ref="rdec_lineagef04internal",
+                )
+                for write in (enter, link):
+                    if admitted:
+                        write()
+                    else:
+                        with pytest.raises(UnknownScopeError):
+                            write()
+            finally:
+                transaction.rollback()

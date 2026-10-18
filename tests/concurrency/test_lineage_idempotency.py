@@ -32,6 +32,7 @@ from sqlalchemy import Engine, func, select, text
 from tests.database.lineage_issue_harness import LineageRuntime, lineage_row_counts
 from tests.database.lineage_record_harness import (
     NOTE_BODY,
+    all_lineage_counts,
     commitment,
     meeting,
     membership,
@@ -43,6 +44,7 @@ from my_pa.application.commands import (
     AddIssueProjectLink,
     CorrectRecordAssociation,
     CreateIssue,
+    EndIssueMembership,
     EndIssueProjectLink,
     EndRecordAssociation,
     UpdateIssue,
@@ -465,3 +467,90 @@ def test_association_stale_revision_and_replay_after_end(runtime: LineageRuntime
     # Re-asserting the same meaning after the end is a new root.
     fresh = runtime.ok(_assert(ids, "assoc-stale-new"), surface=_GATEWAY)
     assert fresh["created"] is True and fresh["association"]["link_id"] != link_id
+
+
+# ---- link-revision CAS and the correct no-op refusal (FR1-F02) ------------------
+
+
+def _correct(
+    link_id: str, key: str, anchor: dict[str, object], expected: int = 1
+) -> CorrectRecordAssociation:
+    return CorrectRecordAssociation(
+        link_id=link_id,
+        expected_revision=expected,
+        idempotency_key=f"lineage-{key}",
+        reason="the synthetic origin passage changed",
+        evidence_anchors=(anchor,),
+    )
+
+
+def test_a_stale_expected_revision_on_an_active_link_is_conflict(runtime: LineageRuntime) -> None:
+    ids = _origin_fixture(runtime, "cas-active")
+    link_id = runtime.ok(_assert(ids, "cas-active"), surface=_GATEWAY)["association"]["link_id"]
+    narrower = note_anchor(ids["m1"], ids["n1"], NOTE_BODY, passage="façade")
+    corrected = runtime.ok(_correct(link_id, "cas-active-1", narrower), surface=_GATEWAY)
+    assert corrected["association"]["revision_no"] == 2
+    assert corrected["association"]["lifecycle_state"] == "active"
+    issue = runtime.issue("cas-active")
+    member = runtime.ok(
+        membership(issue, "meeting", ids["m1"], "cas-active", role="discussion"), surface=_GATEWAY
+    )["membership"]["link_id"]
+    before = all_lineage_counts(runtime.engine)
+    stale = [
+        _correct(link_id, "cas-active-2", ids["anchor"], expected=1),
+        EndRecordAssociation(
+            link_id=link_id,
+            expected_revision=1,
+            idempotency_key="lineage-cas-active-end",
+            reason="stale",
+        ),
+        EndIssueMembership(
+            link_id=member,
+            expected_revision=2,
+            idempotency_key="lineage-cas-active-member-end",
+            reason="stale",
+        ),
+    ]
+    for command in stale:
+        error = runtime.refused(command, surface=_GATEWAY)
+        assert error["code"] == "conflict", command.capability.value
+        assert error["safe_details"] == ["stale_version"], command.capability.value
+    assert all_lineage_counts(runtime.engine) == before
+
+
+_HOLD_HEAD: Final = (
+    "SELECT link_id FROM knowledge.record_link_heads WHERE link_id = :link_id FOR UPDATE"
+)
+
+
+def test_concurrent_corrects_with_one_expected_revision_admit_one(
+    runtime: LineageRuntime,
+) -> None:
+    ids = _origin_fixture(runtime, "cas-race")
+    link_id = runtime.ok(_assert(ids, "cas-race"), surface=_GATEWAY)["association"]["link_id"]
+    sets = [
+        note_anchor(ids["m1"], ids["n1"], NOTE_BODY, passage="façade"),
+        note_anchor(ids["m1"], ids["n1"], NOTE_BODY, passage="survey"),
+    ]
+
+    def writer(index: int) -> Callable[[], ResponseEnvelope]:
+        return lambda: runtime.invoke(
+            _correct(link_id, f"cas-race-{index}", sets[index]), surface=_GATEWAY
+        )
+
+    answers = _race(runtime, _HOLD_HEAD, {"link_id": link_id}, [writer(0), writer(1)])
+    errors = [_error(answer) for answer in answers]
+    assert sorted(error is None for error in errors) == [False, True]
+    loser = next(error for error in errors if error is not None)
+    assert loser["code"] == "conflict" and loser["safe_details"] == ["stale_version"]
+    assert _count(runtime.engine, record_link_revisions) == 2
+
+
+def test_a_correction_to_the_same_evidence_is_refused(runtime: LineageRuntime) -> None:
+    ids = _origin_fixture(runtime, "cas-same")
+    link_id = runtime.ok(_assert(ids, "cas-same"), surface=_GATEWAY)["association"]["link_id"]
+    before = all_lineage_counts(runtime.engine)
+    error = runtime.refused(_correct(link_id, "cas-same", ids["anchor"]), surface=_GATEWAY)
+    assert error["code"] == "invalid_request"
+    assert error["safe_details"] == ["evidence_anchors"]
+    assert all_lineage_counts(runtime.engine) == before

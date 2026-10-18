@@ -1789,7 +1789,6 @@ def _records_lineage() -> dict[str, Any]:
         lifecycle_state=LinkLifecycleState.ACTIVE,
         acceptance_basis=AcceptanceBasis.USER_CONFIRMED,
         authority_class="local_operator",
-        evidence_set_digest=DIGEST,
         evidence=(),
         created_at=AT,
         recorded_at=AT,
@@ -1806,7 +1805,6 @@ def _records_lineage() -> dict[str, Any]:
         lifecycle_state=LinkLifecycleState.ACTIVE,
         acceptance_basis=AcceptanceBasis.USER_CONFIRMED,
         authority_class="local_operator",
-        evidence_set_digest="b" * 64,
         evidence=(
             EvidenceAnchorView(
                 anchor_id="ian_aaaaaaaa11111111",

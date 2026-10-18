@@ -309,7 +309,6 @@ def association_view(
         lifecycle_state=revision.lifecycle_state,
         acceptance_basis=revision.acceptance_basis,
         authority_class=revision.authority_class,
-        evidence_set_digest=revision.evidence_set_digest,
         evidence=tuple(_anchor_view(cited, archived) for cited in revision.evidence),
         created_at=link.created_at,
         recorded_at=revision.recorded_at,

@@ -10,8 +10,9 @@ membership or semantic association at one revision with its evidence; and the
 * no `source_sha256` and no `passage_sha256` on an anchor -- a short passage's
   digest is brute-forceable, so digests are revealed only by
   `meetings.notes.read_version` and the Capture read surfaces under their own
-  grants. `evidence_set_digest` stays: it covers the whole set including the
-  version digests and cannot be inverted to a passage;
+  grants. The stored `evidence_set_digest` is withheld too (FR1-F05): it is
+  built over those digests and every other anchor field the view shows, so a
+  caller could confirm a guessed low-entropy body through it;
 * `source_version_no` is the server-derived version number of the bound row,
   never a client's;
 * no body, no title but an Issue's own, and no count of anything withheld;
@@ -119,7 +120,6 @@ class AssociationView(StrictModel):
     lifecycle_state: LinkLifecycleState
     acceptance_basis: AcceptanceBasis
     authority_class: str
-    evidence_set_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     evidence: tuple[EvidenceAnchorView, ...] = Field(max_length=32)
     created_at: UtcDatetime
     recorded_at: UtcDatetime

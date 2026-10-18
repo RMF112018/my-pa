@@ -515,6 +515,15 @@ def _is_discussion_of(anchor: EvidenceAnchor, from_ref: RecordRef) -> bool:
     return anchor.source_root_id == from_ref.record_id
 
 
+#: S2 section 3.1: the relations whose rule is "at least one exact-version
+#: anchor with this role".
+_EXACT_ROLE_RULES: Final[Mapping[RelationType, EvidenceRole]] = {
+    RelationType.DELEGATED_FROM: EvidenceRole.ORIGIN,
+    RelationType.ESCALATED_FROM: EvidenceRole.ORIGIN,
+    RelationType.BLOCKS: EvidenceRole.CORROBORATES,
+}
+
+
 def require_relation_evidence(
     relation: RelationType,
     from_ref: RecordRef,
@@ -528,16 +537,18 @@ def require_relation_evidence(
     or on a note version of the `from` Meeting. `issue_member` needs none. A
     legacy Capture root never satisfies either rule.
 
-    S2 (section 3.1): `delegated_from` needs an `origin` anchor on an exact
-    version (`immutable_version`); `created_to_resolve` admits any set. This
-    is the rule a correction re-applies (R2-F07); the assert-time rules are
-    the composite's.
+    S2 (section 3.1): `delegated_from` and `escalated_from` need an `origin`
+    anchor on an exact version (`immutable_version`), `blocks` a
+    `corroborates` one; `created_to_resolve` admits any set. This is the rule
+    a correction re-applies (R2-F07); the assert-time rules are the
+    composite's and `records.associations.assert`'s.
     """
     if relation is RelationType.ORIGINATED_FROM:
         satisfied = any(_is_exact_origin(anchor, to_ref) for anchor in anchors)
-    elif relation is RelationType.DELEGATED_FROM:
+    elif relation in _EXACT_ROLE_RULES:
+        role = _EXACT_ROLE_RULES[relation]
         satisfied = any(
-            anchor.role is EvidenceRole.ORIGIN
+            anchor.role is role
             and anchor.source_version_kind is SourceVersionKind.IMMUTABLE_VERSION
             for anchor in anchors
         )

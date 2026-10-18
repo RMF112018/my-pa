@@ -74,9 +74,11 @@ is not a defect.
 
 ## 3. What is implemented
 
-Three hundred and ninety-nine Python modules under `src/my_pa` and seven hundred and sixty-three test modules —
+Four hundred and one Python modules under `src/my_pa` and seven hundred and seventy test modules —
 
-**Current-tree remeasurement (record lineage S1 hardening, branch `feat/lineage-s1-integration`, worker I5, 2026-10-17):** the two commands below count 399 source modules and 763 test modules: the 399/762 below plus `tests/architecture/test_record_lineage_s1_scope.py`; no source module is added. This is file-inventory evidence, not a test PASS receipt.
+**Current-tree remeasurement (record lineage S2 schema, close and registration, branch `feat/lineage-s2-workflow`, worker K1, 2026-10-18):** the two commands below count 401 source modules and 770 test modules: the 399/763 below plus `src/my_pa/domain/lineage/closure.py` and `src/my_pa/domain/lineage/handoff.py`, and `tests/schema/test_record_lineage_s2_migration.py`, `tests/unit/test_issue_closure_gate.py`, `tests/contract/test_lineage_s2_capability_admission.py`, `tests/database/test_lineage_s2_integrity_guards.py`, `tests/database/test_lineage_s2_attested_writes.py`, `tests/integration/test_issue_close_reopen.py` and `tests/concurrency/test_issue_close_races.py`. This is file-inventory evidence, not a test PASS receipt.
+
+**Historical remeasurement (record lineage S1 hardening, branch `feat/lineage-s1-integration`, worker I5, 2026-10-17):** the two commands below counted 399 source modules and 763 test modules: the 399/762 below plus `tests/architecture/test_record_lineage_s1_scope.py`; no source module is added. This is file-inventory evidence, not a test PASS receipt.
 
 **Historical remeasurement (record lineage S1 memberships, associations, reverse read and note history, branch `feat/lineage-s1-integration`, worker I3, 2026-10-17):** the two commands below count 399 source modules and 762 test modules: the 397/755 below plus `src/my_pa/application/record_lineage.py` and `src/my_pa/contracts/v1/record_lineage.py`, and `tests/integration/test_issue_lineage_s1_vertical.py`, `tests/integration/test_work_evidence_note_version.py`, `tests/database/test_meeting_note_lineage_asof.py`, `tests/database/test_lineage_revision_evidence.py`, `tests/security/test_lineage_reference_isolation.py`, `tests/concurrency/test_lineage_endpoint_races.py` and `tests/contract/test_lineage_read_contract.py`. This is file-inventory evidence, not a test PASS receipt.
 

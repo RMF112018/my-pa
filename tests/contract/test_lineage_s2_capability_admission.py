@@ -14,13 +14,17 @@ S2 contract sections 6.1, 7, 7.1, 7.5 and 8:
 * `lineage_enabled` off withholds all eight S2 names from the published surface
   and answers `unsupported` to each, before authority.
 
-The composite native-object mirror and the v1 shape freeze for the composite
-writers are the composite worker's (S2 contract section 9, K2). Every
-identity here is synthetic.
+* the v1 Work create requests and views the composites run through keep
+  every field, and each composite's nested object is exactly its v1 create
+  request less `idempotency_key` and `situation_id` (and, for a Task,
+  `accepted_by_review_decision_id`).
+
+Every identity here is synthetic.
 """
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import UTC, datetime
 from typing import Any, Final
 
@@ -37,14 +41,17 @@ from tests.conftest import (
 from my_pa.adapters.mcp import remote as remote_mcp
 from my_pa.adapters.mcp.chatllm_gateway import _FEATURE_BY_FAMILY
 from my_pa.adapters.mcp.server import published_tools
+from my_pa.adapters.mcp.tools import payload_schema_for
 from my_pa.adapters.normalization import normalize
 from my_pa.adapters.remote_request import _IDEMPOTENT_REMOTE_CAPABILITIES
 from my_pa.application.commands import (
     CloseIssue,
     Command,
     CorrectIssueMembership,
+    CreateCommitment,
     CreateIssueWorkCommitment,
     CreateIssueWorkTask,
+    CreateTask,
     GetCapabilities,
     ListIssueHandoffs,
     ReadIssueClosureReadiness,
@@ -53,14 +60,18 @@ from my_pa.application.commands import (
 )
 from my_pa.application.errors import InvalidRequestError
 from my_pa.application.service import _LINEAGE_CAPABILITIES, ApplicationService
+from my_pa.contracts.v1.commitments import CommitmentView
 from my_pa.contracts.v1.issues import (
     ClosureBlockerView,
+    HandoffHolderView,
+    HandoffView,
     IssueClosureView,
     IssueListEntry,
     IssueRevisionView,
     IssueView,
 )
 from my_pa.contracts.v1.record_lineage import AssociationView, EvidenceAnchorView
+from my_pa.contracts.v1.tasks import TaskView
 from my_pa.domain.identity.chatllm_capability_policy import (
     CHATLLM_CAPABILITY_POLICY,
     CHATLLM_DATA_PROFILE_VERSION,
@@ -181,6 +192,31 @@ _BASE_PAYLOADS: Final[dict[str, dict[str, object]]] = {
         "reason": "Resolution recorded.",
         "evidence_anchors": [_ANCHOR],
     },
+    "issues.handoffs.record": {
+        "issue_id": _ISSUE,
+        "commitment_id": _COMMITMENT,
+        "from_side": "counterparty",
+        "effective_at": "2026-10-18T12:00:00+00:00",
+        "reason": "Moved.",
+        "evidence_anchor": {**_ANCHOR, "role": "handoff"},
+        "idempotency_key": "fast-s2-handoff",
+    },
+    "issues.handoffs.list": {"issue_id": _ISSUE},
+    "issues.work.create_task": {
+        "issue_id": _ISSUE,
+        "idempotency_key": "fast-s2-task",
+        "task": {"title": "Synthetic", "origin_kind": "direct_principal"},
+    },
+    "issues.work.create_commitment": {
+        "issue_id": _ISSUE,
+        "idempotency_key": "fast-s2-commitment",
+        "commitment": {
+            "counterparty_entity_id": "ent_lineages2fast0001",
+            "direction": "owed_to_principal",
+            "summary": "Synthetic",
+            "origin_evidence_ref": "cap_lineages2fast0001",
+        },
+    },
 }
 _SERVER_OWNED: Final = (
     "principal_id",
@@ -221,6 +257,14 @@ def test_s2_requests_reject_server_owned_fields(name: str) -> None:
             for owned in ("version_no", "source_version_no", "anchor_id", "principal_id"):
                 with pytest.raises(InvalidRequestError):
                     normalize(name, _arguments(name, {**base, key: [{**_ANCHOR, owned: 1}]}))
+    for nested in ("task", "commitment"):
+        if nested in base:
+            # Inside the native object, every server-owned field is refused too
+            # (`accepted_by_review_decision_id` is the Commitment's v1 field).
+            for field in (*_SERVER_OWNED, "idempotency_key", "situation_id"):
+                document = {**base[nested], field: "server-owned"}  # type: ignore[dict-item]
+                with pytest.raises(InvalidRequestError):
+                    normalize(name, _arguments(name, {**base, nested: document}))
     if name == "issues.close":
         # An empty closure set, a blank outcome and a state are refused by shape.
         for broken in (
@@ -338,10 +382,14 @@ def _samples() -> dict[Capability, Command]:
         ),
         Capability.ISSUES_HANDOFFS_LIST: ListIssueHandoffs(issue_id=_ISSUE),
         Capability.ISSUES_WORK_CREATE_TASK: CreateIssueWorkTask(
-            issue_id=_ISSUE, idempotency_key="fast-s2-task", task={"title": "x"}
+            issue_id=_ISSUE,
+            idempotency_key="fast-s2-task",
+            task=dict(_BASE_PAYLOADS["issues.work.create_task"]["task"]),  # type: ignore[call-overload]
         ),
         Capability.ISSUES_WORK_CREATE_COMMITMENT: CreateIssueWorkCommitment(
-            issue_id=_ISSUE, idempotency_key="fast-s2-commitment", commitment={"summary": "x"}
+            issue_id=_ISSUE,
+            idempotency_key="fast-s2-commitment",
+            commitment=dict(_BASE_PAYLOADS["issues.work.create_commitment"]["commitment"]),  # type: ignore[call-overload]
         ),
     }
 
@@ -392,3 +440,181 @@ def test_switch_off_withholds_every_s2_capability(scene: Scene) -> None:
             operator_surface=OperatorSurface.HTTP_GATEWAY,
         )
         assert _code(envelope) == "unsupported", capability.value
+
+
+# ---- the composites and the v1 shapes ---------------------------------------------
+
+
+def _names(shape: type) -> frozenset[str]:
+    if dataclasses.is_dataclass(shape):
+        return frozenset(item.name for item in dataclasses.fields(shape))
+    return frozenset(shape.model_fields)  # type: ignore[attr-defined]
+
+
+#: The v1 Work create requests and views at the S2 basis (S2 contract section 8).
+_V1_TASK_CREATE: Final = frozenset(
+    {
+        "title",
+        "idempotency_key",
+        "origin_kind",
+        "origin_evidence_ref",
+        "description",
+        "priority",
+        "due_at",
+        "project_id",
+        "situation_id",
+        "accepted_by_review_decision_id",
+        "commitment_id",
+        "role",
+        "client_context",
+    }
+)
+_V1_COMMITMENT_CREATE: Final = frozenset(
+    {
+        "counterparty_entity_id",
+        "direction",
+        "summary",
+        "origin_evidence_ref",
+        "idempotency_key",
+        "due_at",
+        "project_id",
+        "situation_id",
+        "accepted_by_review_decision_id",
+        "client_context",
+    }
+)
+_V1_TASK_VIEW: Final = frozenset(
+    {
+        "acceptance_kind",
+        "accepted_by_review_decision_id",
+        "archived_at",
+        "closed_at",
+        "closure_evidence_capture_state",
+        "closure_evidence_ref",
+        "closure_history_id",
+        "commitment_id",
+        "created_at",
+        "deferred_until",
+        "description",
+        "due_at",
+        "evidence_state",
+        "lifecycle_state",
+        "opened_at",
+        "origin_evidence_capture_state",
+        "origin_evidence_ref",
+        "origin_kind",
+        "priority",
+        "project_id",
+        "recurrence_id",
+        "role",
+        "scheduled_at",
+        "situation_id",
+        "task_id",
+        "title",
+        "updated_at",
+        "version",
+    }
+)
+_V1_COMMITMENT_VIEW: Final = frozenset(
+    {
+        "accepted_by_review_decision_id",
+        "closed_at",
+        "closure_evidence_capture_state",
+        "closure_evidence_ref",
+        "commitment_id",
+        "counterparty_entity_id",
+        "created_at",
+        "description",
+        "direction",
+        "due_date",
+        "evidence_state",
+        "origin_evidence_capture_state",
+        "origin_evidence_ref",
+        "state",
+        "title",
+        "updated_at",
+        "version",
+    }
+)
+
+
+def test_existing_v1_shapes_are_unchanged_by_s2() -> None:
+    """No v1 Work request or view gains, loses or re-means a field (section 8)."""
+    assert _names(CreateTask) == _V1_TASK_CREATE
+    assert _names(CreateCommitment) == _V1_COMMITMENT_CREATE
+    assert _names(TaskView) == _V1_TASK_VIEW
+    assert _names(CommitmentView) == _V1_COMMITMENT_VIEW
+    # The published v1 tools are the same shapes: required fields included.
+    task_schema = payload_schema_for(CreateTask)
+    commitment_schema = payload_schema_for(CreateCommitment)
+    assert set(task_schema["properties"]) == _V1_TASK_CREATE
+    assert set(task_schema["required"]) == {"title", "idempotency_key"}
+    assert set(commitment_schema["properties"]) == _V1_COMMITMENT_CREATE
+    assert set(commitment_schema["required"]) == {
+        "counterparty_entity_id",
+        "direction",
+        "summary",
+        "origin_evidence_ref",
+        "idempotency_key",
+    }
+    # The v1 commands' own capability names: a composite is a new name, not a mode.
+    assert CreateTask.capability is Capability.TASKS_CREATE
+    assert CreateCommitment.capability is Capability.COMMITMENTS_CREATE
+    # The handoff view's keys (S2 section 7.1), with `from`/`to` on the wire.
+    assert _names(HandoffView) == {
+        "handoff_id",
+        "issue_id",
+        "commitment_id",
+        "sequence_no",
+        "from_holder",
+        "to_holder",
+        "effective_at",
+        "recorded_at",
+        "reason",
+        "evidence",
+        "acceptance_basis",
+        "authority_class",
+    }
+    assert _names(HandoffHolderView) == {"kind", "entity_id"}
+
+
+def _wire(schema: dict[str, Any]) -> dict[str, Any]:
+    """A property's wire shape: what a caller may send, without its prose."""
+    return {key: value for key, value in schema.items() if key in {"type", "enum", "format"}}
+
+
+def test_composite_native_objects_mirror_the_v1_requests() -> None:
+    """Each nested object is its v1 create request less exactly the refused fields."""
+    for composite, nested, v1, refused in (
+        (
+            CreateIssueWorkTask,
+            "task",
+            CreateTask,
+            {"idempotency_key", "situation_id", "accepted_by_review_decision_id"},
+        ),
+        (
+            CreateIssueWorkCommitment,
+            "commitment",
+            CreateCommitment,
+            {"idempotency_key", "situation_id"},
+        ),
+    ):
+        v1_schema = payload_schema_for(v1)
+        published = payload_schema_for(composite)["properties"][nested]
+        assert published["type"] == "object"
+        assert published["additionalProperties"] is False
+        assert set(v1_schema["properties"]) - set(published["properties"]) == refused
+        assert set(published["properties"]) <= set(v1_schema["properties"])
+        assert set(published["required"]) == set(v1_schema["required"]) - refused
+        for name, shape in published["properties"].items():
+            assert _wire(shape) == _wire(v1_schema["properties"][name]), (nested, name)
+    # The nested object is built by the v1 command class itself.
+    command = CreateIssueWorkTask(
+        issue_id=_ISSUE,
+        idempotency_key="fast-s2-mirror",
+        task={"title": "Synthetic", "origin_kind": "direct_principal", "priority": "p2"},
+    )
+    native = command.native_command()
+    assert isinstance(native, CreateTask)
+    assert native.idempotency_key == "fast-s2-mirror"
+    assert native.situation_id is None and native.accepted_by_review_decision_id is None

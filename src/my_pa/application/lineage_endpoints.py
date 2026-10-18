@@ -527,9 +527,20 @@ def require_relation_evidence(
     version; `discusses` a `discussion` note anchor on the `from` note version
     or on a note version of the `from` Meeting. `issue_member` needs none. A
     legacy Capture root never satisfies either rule.
+
+    S2 (section 3.1): `delegated_from` needs an `origin` anchor on an exact
+    version (`immutable_version`); `created_to_resolve` admits any set. This
+    is the rule a correction re-applies (R2-F07); the assert-time rules are
+    the composite's.
     """
     if relation is RelationType.ORIGINATED_FROM:
         satisfied = any(_is_exact_origin(anchor, to_ref) for anchor in anchors)
+    elif relation is RelationType.DELEGATED_FROM:
+        satisfied = any(
+            anchor.role is EvidenceRole.ORIGIN
+            and anchor.source_version_kind is SourceVersionKind.IMMUTABLE_VERSION
+            for anchor in anchors
+        )
     elif relation is RelationType.DISCUSSES:
         satisfied = any(_is_discussion_of(anchor, from_ref) for anchor in anchors)
     else:

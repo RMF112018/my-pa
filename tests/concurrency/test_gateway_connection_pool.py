@@ -84,6 +84,7 @@ from my_pa.contracts.ports import (
     EnrollmentRepository,
     EntitiesRepository,
     GoodNotesSemanticRepository,
+    IssueHandoffRepository,
     IssueRepository,
     KnowledgeRepository,
     ManagedDocumentRepository,
@@ -242,6 +243,10 @@ class _HoldsItsConnection(UnitOfWork):
     @property
     def record_lineage(self) -> RecordLineageRepository:
         return self._inner.record_lineage
+
+    @property
+    def issue_handoffs(self) -> IssueHandoffRepository:
+        return self._inner.issue_handoffs
 
     @property
     def audit(self) -> AuditSink:

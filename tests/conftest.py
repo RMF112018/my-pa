@@ -102,6 +102,7 @@ from my_pa.contracts.ports import (
     GoodNotesProposalAdmission,
     GoodNotesProposalConflictError,
     GoodNotesSemanticRepository,
+    IssueHandoffRepository,
     IssueRepository,
     KnowledgeRecord,
     KnowledgeRepository,
@@ -9784,6 +9785,11 @@ class FakeUnitOfWork(UnitOfWork):
     def record_lineage(self) -> RecordLineageRepository:
         """Record lineage S1 links: not modelled in FAST worlds, as `issues`."""
         return cast("RecordLineageRepository", _UnmodelledPlane("record_lineage"))
+
+    @property
+    def issue_handoffs(self) -> IssueHandoffRepository:
+        """Record lineage S2 handoffs: not modelled in FAST worlds, as `issues`."""
+        return cast("IssueHandoffRepository", _UnmodelledPlane("issue_handoffs"))
 
     @property
     def identity_history(self) -> object:

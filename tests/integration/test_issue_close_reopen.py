@@ -16,6 +16,7 @@ moves the Issue. Every identity and every body is synthetic.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
@@ -60,8 +61,11 @@ from tests.database.lineage_s2_harness import (
     all_s2_counts,
     close,
     correct,
+    handoff,
     reopen,
     resolution_anchor,
+    work_commitment,
+    work_task,
 )
 
 pytestmark = pytest.mark.database
@@ -533,10 +537,37 @@ def test_a_closed_issue_refuses_lineage_writes(runtime: S2Runtime) -> None:
     _, link = _completed_task_member(runtime, issue, "frozen")
     meeting_id, note_id = meeting(runtime, "frozen-m")
     project = runtime.project("frozen")
+    # A Commitment member under a non-mandatory role, so the close is admitted.
+    commitment = runtime.commitment("frozen-c")
+    runtime.member(issue, "commitment", commitment, "frozen-c", "discussion")
+    created = datetime.fromisoformat(str(runtime.commitment_view(commitment)["created_at"]))
+    handoff_anchor = runtime.handoff_anchor("frozen-handoff")
+    origin, _, _ = capture(runtime, "frozen-c2-origin")
     _ok(runtime, close(issue, 1, "frozen", _closure_set(runtime, "frozen")))
     before = all_s2_counts(runtime.engine)
     other_task = runtime.task("frozen-other")
     refused = [
+        handoff(
+            issue,
+            commitment,
+            "counterparty",
+            (created + timedelta(milliseconds=1)).isoformat(),
+            "frozen",
+            handoff_anchor,
+        ),
+        work_task(issue, "frozen"),
+        work_commitment(
+            issue,
+            "frozen",
+            {
+                "counterparty_entity_id": runtime.commitment_view(commitment)[
+                    "counterparty_entity_id"
+                ],
+                "direction": "owed_to_principal",
+                "summary": "Synthetic frozen commitment",
+                "origin_evidence_ref": origin,
+            },
+        ),
         membership(issue, "task", other_task, "frozen-add", role="work"),
         EndIssueMembership(
             link_id=link, expected_revision=2, idempotency_key="s2-frozen-end", reason="Out."

@@ -28,7 +28,7 @@ into the port's conflict, so the application answers `conflict` (section 6.2).
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Any, Final, cast
 
@@ -83,6 +83,7 @@ from my_pa.infrastructure.persistence.tables import (
     issue_revision_evidence,
     issue_revisions,
     lineage_evidence_anchors,
+    lineage_write_request_links,
     lineage_write_requests,
     meeting_note_versions,
     project_situations,
@@ -946,3 +947,65 @@ class SqlIssueRepository(IssueRepository):
         if row is None:
             raise RepositoryFailureError
         return str(row.anchor_id)
+
+    # --- record lineage S2: Project qualification and composite request links --
+
+    def share_active_project_link(self, principal_id: str, project_id: str, issue_id: str) -> bool:
+        triplet = _run(
+            lambda: self._connection.execute(
+                principal_scoped(
+                    select(project_situations.c.project_situation_id).where(
+                        project_situations.c.project_id == project_id,
+                        project_situations.c.situation_id == issue_id,
+                    ),
+                    project_situations,
+                    capture_context(principal_id),
+                ).with_for_update(read=True)
+            ).one_or_none()
+        )
+        if triplet is None:
+            return False
+        latest = self.latest_membership_event(principal_id, project_id, issue_id)
+        return latest is not None and latest.state is IssueProjectMembershipState.ACTIVE
+
+    def insert_write_request_links(
+        self,
+        principal_id: str,
+        capability: str,
+        idempotency_key: str,
+        links: Sequence[tuple[int, str, int]],
+    ) -> None:
+        if not links:
+            return
+        rows = [
+            _bound(
+                lineage_write_request_links,
+                principal_id,
+                {
+                    "capability": capability,
+                    "idempotency_key": idempotency_key,
+                    "ordinal": ordinal,
+                    "link_id": link_id,
+                    "revision_no": revision_no,
+                },
+            )
+            for ordinal, link_id, revision_no in links
+        ]
+        _run(lambda: self._connection.execute(insert(lineage_write_request_links), rows))
+
+    def write_request_links(
+        self, principal_id: str, capability: str, idempotency_key: str
+    ) -> tuple[tuple[int, str, int], ...]:
+        links = lineage_write_request_links
+        rows = _run(
+            lambda: self._connection.execute(
+                select(links.c.ordinal, links.c.link_id, links.c.revision_no)
+                .where(
+                    _mine(links, principal_id),
+                    links.c.capability == capability,
+                    links.c.idempotency_key == idempotency_key,
+                )
+                .order_by(links.c.ordinal)
+            ).all()
+        )
+        return tuple((int(row.ordinal), str(row.link_id), int(row.revision_no)) for row in rows)

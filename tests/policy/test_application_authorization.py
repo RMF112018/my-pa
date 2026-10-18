@@ -1407,7 +1407,12 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         Capability.ISSUES_WORK_CREATE_COMMITMENT: CreateIssueWorkCommitment(
             issue_id="sit_policyissue0001",
             idempotency_key="policy-issues-work-create-commitment-0001",
-            commitment={"summary": "the policy commitment"},
+            commitment={
+                "counterparty_entity_id": "ent_policycounterparty01",
+                "direction": "owed_to_principal",
+                "summary": "the policy commitment",
+                "origin_evidence_ref": "cap_policyorigin00001",
+            },
         ),
     }
 

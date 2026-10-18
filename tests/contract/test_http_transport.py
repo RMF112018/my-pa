@@ -1746,7 +1746,12 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.ISSUES_WORK_CREATE_COMMITMENT: {
             "issue_id": "sit_httpissue0001",
             "idempotency_key": "http-issues-work-create-commitment-0001",
-            "commitment": {"summary": "the http commitment"},
+            "commitment": {
+                "counterparty_entity_id": "ent_httpcounterparty01",
+                "direction": "owed_to_principal",
+                "summary": "the http commitment",
+                "origin_evidence_ref": "cap_httporigin00001",
+            },
         },
     }
 
@@ -2918,7 +2923,12 @@ def commands_for(
         Capability.ISSUES_WORK_CREATE_COMMITMENT: CreateIssueWorkCommitment(
             issue_id="sit_httpissue0001",
             idempotency_key="http-issues-work-create-commitment-0001",
-            commitment={"summary": "the http commitment"},
+            commitment={
+                "counterparty_entity_id": "ent_httpcounterparty01",
+                "direction": "owed_to_principal",
+                "summary": "the http commitment",
+                "origin_evidence_ref": "cap_httporigin00001",
+            },
         ),
     }
 

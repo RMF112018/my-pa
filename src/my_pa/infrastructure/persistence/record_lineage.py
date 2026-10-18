@@ -652,6 +652,26 @@ class SqlRecordLineageRepository(RecordLineageRepository):
         rows = self._rows(statement)
         return tuple(_to_head(row) for row in rows)
 
+    def active_membership(
+        self, principal_id: str, issue_id: str, member: RecordRef
+    ) -> LinkHeadRecord | None:
+        rows = self._rows(
+            select(*_HEAD_COLUMNS)
+            .select_from(_heads_with_links())
+            .where(
+                _mine(record_link_heads, principal_id),
+                record_link_heads.c.lifecycle_state == LinkLifecycleState.ACTIVE.value,
+                record_links.c.kind == RecordLinkKind.ISSUE_MEMBERSHIP.value,
+                record_links.c.from_family == RecordFamily.SITUATION.value,
+                record_links.c.from_id == issue_id,
+                record_links.c.to_family == member.family.value,
+                record_links.c.to_id == member.record_id,
+            )
+            .order_by(record_links.c.created_at, record_links.c.link_id)
+            .limit(1)
+        )
+        return _to_head(rows[0]) if rows else None
+
     def resolve_records(
         self, principal_id: str, refs: Collection[RecordRef]
     ) -> Mapping[RecordRef, LineageResolvedRecord]:

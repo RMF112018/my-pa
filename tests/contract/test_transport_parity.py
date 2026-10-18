@@ -2123,7 +2123,12 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.ISSUES_WORK_CREATE_COMMITMENT: {
             "issue_id": "sit_parityissue0001",
             "idempotency_key": "parity-issues-work-create-commitment-0001",
-            "commitment": {"summary": "the parity commitment"},
+            "commitment": {
+                "counterparty_entity_id": "ent_paritycounterparty01",
+                "direction": "owed_to_principal",
+                "summary": "the parity commitment",
+                "origin_evidence_ref": "cap_parityorigin00001",
+            },
         },
     }
 

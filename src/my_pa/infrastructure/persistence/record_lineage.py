@@ -30,7 +30,10 @@ rewrite: repair is an operator-gated migration.
 **Locks** are section 6.2's and the application sequences them: endpoints and
 Capture versions `FOR SHARE`; the identity advisory lock
 (`LINEAGE_ADVISORY_NAMESPACE`, the two-key form, so it shares no key space with
-any single-key advisory lock in `src/`); the head `FOR UPDATE`. Reads take no
+any single-key advisory lock in `src/`); S2's `principal_id || ':blocks'` key
+on the same namespace, which every `blocks` assert takes before its cycle
+search (`blocks_successors` is that search's one step); the head `FOR UPDATE`.
+Reads take no
 locks. Every statement runs through `issues._run`, so a deadlock or
 serialization victim is `TransactionConflictError` and answers `conflict`.
 """
@@ -197,11 +200,17 @@ def _endpoint_columns(family: RecordFamily) -> tuple[Any, ...]:
             tasks.c.lifecycle_state,
             tasks.c.evidence_state,
             tasks.c.version,
+            tasks.c.created_at,
         )
     if family is RecordFamily.COMMITMENT:
         return (commitments.c.state, commitments.c.evidence_state, commitments.c.version)
     if family is RecordFamily.CONSTRAINT:
-        return (project_constraints.c.lifecycle_state, project_constraints.c.version)
+        return (
+            project_constraints.c.lifecycle_state,
+            project_constraints.c.version,
+            project_constraints.c.created_at,
+            project_constraints.c.project_id,
+        )
     if family is RecordFamily.MEETING_NOTE_VERSION:
         return (meeting_note_versions.c.meeting_id,)
     if family is RecordFamily.CAPTURE_VERSION:
@@ -226,6 +235,7 @@ def _to_endpoint(family: RecordFamily, record_id: str, row: Row[Any]) -> Lineage
             native_state=mapping["lifecycle_state"],
             evidence_state=mapping["evidence_state"],
             native_version=mapping["version"],
+            created_at=mapping["created_at"],
         )
     if family is RecordFamily.COMMITMENT:
         return LineageEndpoint(
@@ -241,6 +251,8 @@ def _to_endpoint(family: RecordFamily, record_id: str, row: Row[Any]) -> Lineage
             record_id=record_id,
             native_state=mapping["lifecycle_state"],
             native_version=mapping["version"],
+            created_at=mapping["created_at"],
+            project_id=mapping["project_id"],
         )
     if family is RecordFamily.MEETING_NOTE_VERSION:
         return LineageEndpoint(family=family, record_id=record_id, meeting_id=mapping["meeting_id"])
@@ -333,6 +345,43 @@ class SqlRecordLineageRepository(RecordLineageRepository):
                     "identity": normalized_identity,
                 },
             )
+        )
+
+    def lock_blocks(self, principal_id: str) -> None:
+        _run(
+            lambda: self._connection.execute(
+                text(
+                    "SELECT pg_advisory_xact_lock(CAST(:namespace AS integer), "
+                    "hashtext(CAST(:principal_id AS text) || CAST(:suffix AS text)))"
+                ),
+                {
+                    "namespace": LINEAGE_ADVISORY_NAMESPACE,
+                    "principal_id": principal_id,
+                    "suffix": ":blocks",
+                },
+            )
+        )
+
+    def blocks_successors(
+        self, principal_id: str, refs: Collection[RecordRef]
+    ) -> tuple[RecordRef, ...]:
+        if not refs:
+            return ()
+        pairs = sorted({(ref.family.value, ref.record_id) for ref in refs})
+        rows = self._rows(
+            select(record_links.c.to_family, record_links.c.to_id)
+            .select_from(_heads_with_links())
+            .where(
+                _mine(record_link_heads, principal_id),
+                record_link_heads.c.lifecycle_state == LinkLifecycleState.ACTIVE.value,
+                record_links.c.relation_type == RelationType.BLOCKS.value,
+                tuple_(record_links.c.from_family, record_links.c.from_id).in_(pairs),
+            )
+            .distinct()
+            .order_by(record_links.c.to_family, record_links.c.to_id)
+        )
+        return tuple(
+            RecordRef(family=RecordFamily(row.to_family), record_id=row.to_id) for row in rows
         )
 
     def active_head_by_identity(

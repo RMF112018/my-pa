@@ -26,7 +26,10 @@ revision on a Task, Commitment or Constraint member records the member's
 native `version` observed under its `FOR SHARE` (`member_native_version`);
 `issues.memberships.correct` replaces a membership's evidence set, admitting
 an identical set only as a re-affirmation after the member's native version
-moved; and `records.associations.assert` refuses the composite-only relations.
+moved; and `records.associations.assert` refuses the composite-only relations
+and admits `escalated_from` (Issue-scoped, Project-qualified, after its Task)
+and `blocks` (no self-loop; a bounded cycle search under the Principal's
+`:blocks` advisory key).
 
 **The reverse read** (`read_lineage`, section 7.2) is current-state,
 Principal-scoped, active links only, lock-free, and bounded: matching Issues
@@ -117,6 +120,7 @@ from my_pa.domain.lineage.vocabulary import (
     SituationKind,
     SourceVersionKind,
 )
+from my_pa.domain.project_controls.constraint import ConstraintLifecycleState
 from my_pa.domain.source.registry import issue_identifier
 
 if TYPE_CHECKING:
@@ -124,6 +128,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DEFAULT_LINEAGE_DEPTH",
+    "MAX_BLOCKS_SEARCH",
     "MAX_LINEAGE_BYTES",
     "MAX_LINEAGE_DEPTH",
     "MAX_LINEAGE_EDGES",
@@ -143,6 +148,7 @@ __all__ = [
     "evidence_availability",
     "insert_new_link",
     "member_native_version",
+    "require_no_blocks_cycle",
     "traverse_lineage",
 ]
 
@@ -163,9 +169,10 @@ MAX_LINEAGE_BYTES: Final = 512 * 1024
 #: edge's evidence is read; the exact bound is applied to the finished answer.
 _EDGE_ESTIMATE: Final = 768
 
-#: S2 section 3.1 relations `records.associations.assert` will admit once their
-#: assert-time rules are implemented; refused until then.
-_NOT_YET_ASSERTABLE: Final = frozenset({RelationType.ESCALATED_FROM, RelationType.BLOCKS})
+#: S2 section 3.1: the most records one `blocks` cycle search visits. A search
+#: that would visit more before its frontier is exhausted refuses the assert
+#: (`invalid_request` / `blocks_cycle`): an undecidable answer is a refusal.
+MAX_BLOCKS_SEARCH: Final = 1000
 
 
 # ------------------------------------------------------------------- requests
@@ -528,13 +535,10 @@ class RecordLineageApplication:
             # `issue_member`, and (S2 section 3.1) `delegated_from` and
             # `created_to_resolve`, which only the creating transaction attests.
             raise InvalidRequestError(SafeDetail.RELATION_TYPE)
-        if request.relation_type in _NOT_YET_ASSERTABLE:
-            # S2 section 3.1's `escalated_from` and `blocks` rules (Project
-            # qualification, cycle refusal) are not implemented in this
-            # change; until they are, both are refused rather than admitted
-            # without them.
-            raise InvalidRequestError(SafeDetail.RELATION_TYPE)
         context = request.context_issue_id
+        if request.relation_type is RelationType.ESCALATED_FROM and context is None:
+            # S2 section 3.1: an escalation is always Issue-scoped.
+            raise InvalidRequestError(SafeDetail.CONTEXT_ISSUE_ID)
         if (
             context is not None
             and request.relation_type is RelationType.DISCUSSES
@@ -558,6 +562,19 @@ class RecordLineageApplication:
             require_linkable(issues, principal_id, locked.endpoints[ref])
         anchors = admit_evidence_set(issues, principal_id, locked.evidence)
         require_relation_evidence(request.relation_type, request.from_ref, request.to_ref, anchors)
+        blocks: tuple[RecordRef, RecordRef] | None = None
+        if request.relation_type is RelationType.ESCALATED_FROM and context is not None:
+            _require_escalation(
+                uow,
+                principal_id,
+                context,
+                locked.endpoints[request.from_ref],
+                locked.endpoints[request.to_ref],
+            )
+        elif request.relation_type is RelationType.BLOCKS:
+            if request.from_ref == request.to_ref:
+                raise InvalidRequestError(SafeDetail.TO_RECORD)
+            blocks = (request.from_ref, request.to_ref)
         identity = normalized_identity(
             kind=kind,
             relation_type=request.relation_type,
@@ -581,7 +598,7 @@ class RecordLineageApplication:
             created_at=at,
         )
         return self._assert_root(
-            uow, principal_id, _ASSERT, idempotency_key, digest, root, anchors, at
+            uow, principal_id, _ASSERT, idempotency_key, digest, root, anchors, at, blocks=blocks
         )
 
     @staticmethod
@@ -596,14 +613,20 @@ class RecordLineageApplication:
         at: datetime,
         *,
         member_version: int | None = None,
+        blocks: tuple[RecordRef, RecordRef] | None = None,
     ) -> AssociationResult:
         """Section 6.2 steps 4 and 5, then the writes: a new root, or the active one.
 
         `member_version` is the member's observed native `version` a new
         membership's revision 1 records (S2 section 3.3); `None` otherwise.
+        `blocks` is a new `blocks` link's `(from, to)` (S2 section 3.1): the
+        Principal's `:blocks` key is taken after the identity key (S2 section
+        6.2 step 4 order), and a new link is written only when no cycle forms.
         """
         issues, lineage = uow.issues, uow.record_lineage
         lineage.lock_identity(principal_id, root.normalized_identity)
+        if blocks is not None:
+            lineage.lock_blocks(principal_id)
         existing = lineage.active_head_by_identity(principal_id, root.normalized_identity)
         if existing is not None:
             # The active link with this meaning answers; its authority and
@@ -623,6 +646,8 @@ class RecordLineageApplication:
             )
             (view,) = _views(lineage, principal_id, [(existing.link, revision)])
             return AssociationResult(association=view, created=False, replayed=False)
+        if blocks is not None:
+            require_no_blocks_cycle(lineage, principal_id, *blocks)
         revision = insert_new_link(
             uow, principal_id, root, anchors, at, member_version=member_version
         )
@@ -912,6 +937,62 @@ def insert_new_link(
     )
     uow.record_lineage.insert_link(principal_id, root, revision)
     return revision
+
+
+def _require_escalation(
+    uow: UnitOfWork,
+    principal_id: str,
+    issue_id: str,
+    constraint: LineageEndpoint,
+    task: LineageEndpoint,
+) -> None:
+    """S2 section 3.1's `escalated_from` assert-time rules, after the evidence rule.
+
+    The Constraint is not `draft` (`endpoint`) and was not created before the
+    Task (`from`); its Project has an active link to the context Issue, the
+    triplet shared (`project_id`); the Task is an active member of that Issue
+    (`to`). A correction never re-runs these (R2-F07).
+    """
+    if constraint.native_state == ConstraintLifecycleState.DRAFT.value:
+        raise InvalidRequestError(SafeDetail.ENDPOINT)
+    if (
+        constraint.created_at is None
+        or task.created_at is None
+        or constraint.created_at < task.created_at
+    ):
+        raise InvalidRequestError(SafeDetail.FROM_RECORD)
+    if constraint.project_id is None or not uow.issues.share_active_project_link(
+        principal_id, constraint.project_id, issue_id
+    ):
+        raise InvalidRequestError(SafeDetail.PROJECT_ID)
+    task_ref = RecordRef(family=RecordFamily.TASK, record_id=task.record_id)
+    if uow.record_lineage.active_membership(principal_id, issue_id, task_ref) is None:
+        raise InvalidRequestError(SafeDetail.TO_RECORD)
+
+
+def require_no_blocks_cycle(
+    lineage: RecordLineageRepository, principal_id: str, from_ref: RecordRef, to_ref: RecordRef
+) -> None:
+    """S2 section 3.1's cycle rule: `from` must not be reachable from `to`.
+
+    Breadth-first over the Principal's active `blocks` heads in any context,
+    under the `:blocks` key the caller holds. At most `MAX_BLOCKS_SEARCH`
+    records are visited; a search that would visit more before its frontier is
+    exhausted refuses, like a cycle (`invalid_request` / `blocks_cycle`).
+    """
+    seen = {to_ref}
+    frontier: set[RecordRef] = {to_ref}
+    while frontier:
+        reached: set[RecordRef] = set()
+        for ref in lineage.blocks_successors(principal_id, frontier):
+            if ref == from_ref:
+                raise InvalidRequestError(SafeDetail.BLOCKS_CYCLE)
+            if ref not in seen:
+                seen.add(ref)
+                if len(seen) > MAX_BLOCKS_SEARCH:
+                    raise InvalidRequestError(SafeDetail.BLOCKS_CYCLE)
+                reached.add(ref)
+        frontier = reached
 
 
 def _named_issues(link: RecordLinkRecord) -> tuple[tuple[str, SafeDetail], ...]:

@@ -583,6 +583,10 @@ class SafeDetail(StrEnum):
     EFFECTIVE_AT = "effective_at"
     ASSOCIATION_INTENTS = "association_intents"
     DIRECTION = "direction"
+    #: Record lineage S2, `blocks` (S2 contract sections 3.1 and 7.3): an
+    #: assert that would close a cycle over the Principal's active `blocks`
+    #: links, or whose search reached its bound before it could decide.
+    BLOCKS_CYCLE = "blocks_cycle"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

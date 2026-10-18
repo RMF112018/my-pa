@@ -12558,7 +12558,12 @@ class AssertRecordAssociation:
     from an exact Meeting note or Capture version, with an `origin` anchor on a
     passage of that version. `discusses`: a Meeting or note version discusses
     an Issue, Task, Commitment or Constraint, with a `discussion` anchor on that
-    note (or a note of that Meeting). `context_issue_id` scopes the
+    note (or a note of that Meeting). `escalated_from`: a published Constraint
+    escalated from a Task, in a required `context_issue_id` whose Project
+    links include the Constraint's Project and whose members include the
+    Task, with an exact-version `origin` anchor. `blocks`: a Task or
+    Constraint blocks another one (never itself, never closing a cycle), with
+    an exact-version `corroborates` anchor. `context_issue_id` scopes the
     association to one of your Issues. The same active meaning returns the
     existing association with `created: false`.
     """
@@ -12569,7 +12574,10 @@ class AssertRecordAssociation:
         {
             "from_record": _RECORD_REF_SCHEMA,
             "to_record": _RECORD_REF_SCHEMA,
-            "relation_type": {"type": "string", "enum": ["discusses", "originated_from"]},
+            "relation_type": {
+                "type": "string",
+                "enum": ["blocks", "discusses", "escalated_from", "originated_from"],
+            },
             "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
             "evidence_anchors": {**_EVIDENCE_ANCHORS_SCHEMA, "minItems": 1},
             "context_issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue it belongs to."),

@@ -9442,6 +9442,11 @@ class LineageEndpoint:
     native_state: str | None = None
     evidence_state: str | None = None
     native_version: int | None = None
+    #: Record lineage S2, the `escalated_from` assert-time rules (S2 section
+    #: 3.1): a Task's or Constraint's `created_at`, and a Constraint's
+    #: `project_id`, read under the same `FOR SHARE`.
+    created_at: datetime | None = None
+    project_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -9637,9 +9642,31 @@ class RecordLineageRepository(ABC):
         """The Issue's active `issue_member` head naming `member`, any role, or `None`.
 
         Record lineage S2 (S2 contract sections 3.1 and 3.4): a handoff's
-        Commitment, a `delegated_from` Task and a `created_to_resolve`
-        Constraint must each be an active member of the Issue. Without a lock;
-        non-abstract with a `NotImplementedError` default, on the same terms.
+        Commitment, a `delegated_from` or `escalated_from` Task and a
+        `created_to_resolve` Constraint must each be an active member of the
+        Issue. Without a lock; non-abstract with a `NotImplementedError`
+        default, on the same terms.
+        """
+        raise NotImplementedError
+
+    def lock_blocks(self, principal_id: str) -> None:
+        """`pg_advisory_xact_lock` on the lineage namespace and `principal_id || ':blocks'`.
+
+        Record lineage S2 (S2 contract sections 3.1 and 6.2 step 4): every
+        `blocks` assert takes it after its identity key and before its cycle
+        search, so two asserts never search concurrently. Non-abstract with a
+        `NotImplementedError` default, on the same terms as `active_membership`.
+        """
+        raise NotImplementedError
+
+    def blocks_successors(
+        self, principal_id: str, refs: Collection[RecordRef]
+    ) -> tuple[RecordRef, ...]:
+        """The `to` records of every active `blocks` head whose `from` is in `refs`.
+
+        Any context, distinct, ordered by `(family, record_id)`; no lock (the
+        caller holds the `:blocks` key). The `blocks` cycle search's one step
+        (S2 contract section 3.1). Non-abstract, on the same terms.
         """
         raise NotImplementedError
 

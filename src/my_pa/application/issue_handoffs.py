@@ -28,10 +28,28 @@ responsibility leaves; the leaving holder is the chain's last holder (or, for
 event 1, the Principal or the Commitment's current counterparty) and the
 arriving one the other side, with the counterparty read now. A request naming
 the wrong side is `invalid_request` / `from`.
+
+**S3** (S3 contract sections 3.3, 3.4, 7.1 and 7.4). `issues.handoffs.correct`
+appends one immutable correction -- `retime` (a new current effective time) or
+`void` (the event did not happen; only the chain's last live event, and
+terminal) -- and never changes the event. Its order: request digest;
+reservation (a replay answers from the stored correction, with the handoff as
+it stood right after it); the commit mark; the handoff by Principal-scoped
+existence (`not_found` / `handoff_id`); its Issue, Commitment and the anchor's
+source `FOR SHARE`; the closed-Issue rule (`conflict` / `state`); the anchor;
+the chain's `:handoff:` key (so a correction and a new handoff of one chain
+serialize); the chain and its corrections; a voided event is `conflict` /
+`state`; then the section 3.3 rules. The chain **skips voided events**: a new
+handoff follows the last live event (its arriving holder, at or after its
+current effective time) and, when none is live, the S2 event-1 rule.
+`issues.handoffs.list` answers as known at `known_at` (section 3.4):
+events and corrections with a mark at or below `W(T_k)`, or pre-S3 rows
+recorded by `T_k`.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Final
@@ -46,22 +64,35 @@ from my_pa.application.lineage_endpoints import (
 )
 from my_pa.application.record_lineage import anchor_view
 from my_pa.contracts.ports import (
+    HandoffCorrectionRecord,
     HandoffRecord,
     HandoffSequenceConflictError,
     LineageLinkEvidence,
     RepositoryFailureError,
     UnitOfWork,
 )
-from my_pa.contracts.v1.issues import HandoffHolderView, HandoffView
+from my_pa.contracts.v1.issues import HandoffCorrectionView, HandoffHolderView, HandoffView
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import ensure_utc
 from my_pa.domain.identity.operation import Capability
+from my_pa.domain.lineage.asof import CutAfterNowError, effective_known_at
 from my_pa.domain.lineage.canonical import request_digest
-from my_pa.domain.lineage.handoff import HandoffHolder, HandoffSideError, resolve_handoff
+from my_pa.domain.lineage.handoff import (
+    ChainEvent,
+    HandoffCorrectionFact,
+    HandoffHolder,
+    HandoffSideError,
+    can_void,
+    chain_state,
+    last_live,
+    resolve_handoff,
+    retime_in_order,
+)
 from my_pa.domain.lineage.model import RecordRef
 from my_pa.domain.lineage.vocabulary import (
     AcceptanceBasis,
     EvidenceSourceFamily,
+    HandoffCorrectionAction,
     HandoffHolderKind,
     HandoffSide,
     RecordFamily,
@@ -74,6 +105,8 @@ if TYPE_CHECKING:
 __all__ = [
     "DEFAULT_HANDOFF_PAGE_SIZE",
     "MAX_HANDOFF_PAGE_SIZE",
+    "HandoffCorrectRequest",
+    "HandoffCorrectResult",
     "HandoffListRequest",
     "HandoffListResult",
     "HandoffRecordRequest",
@@ -83,6 +116,7 @@ __all__ = [
 ]
 
 _RECORD: Final = Capability.ISSUES_HANDOFFS_RECORD.value
+_CORRECT: Final = Capability.ISSUES_HANDOFFS_CORRECT.value
 
 #: `issues.handoffs.list` page bounds (section 7.2).
 DEFAULT_HANDOFF_PAGE_SIZE: Final = 25
@@ -103,12 +137,24 @@ class HandoffRecordRequest:
 
 @dataclass(frozen=True, slots=True)
 class HandoffListRequest:
-    """`issues.handoffs.list`, parsed."""
+    """`issues.handoffs.list`, parsed. S3 adds `known_at` (an aware instant or `None`)."""
 
     issue_id: str
     commitment_id: str | None
     page_size: int
     after: str | None
+    known_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class HandoffCorrectRequest:
+    """`issues.handoffs.correct`, parsed: `effective_at` is set exactly for a `retime`."""
+
+    handoff_id: str
+    action: HandoffCorrectionAction
+    effective_at: datetime | None
+    reason: str
+    evidence_anchor: EvidenceAnchorInput
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,10 +167,20 @@ class HandoffResult:
 
 @dataclass(frozen=True, slots=True)
 class HandoffListResult:
-    """One `issues.handoffs.list` page and its keyset cursor."""
+    """One `issues.handoffs.list` page, its keyset cursor and its `known_at` (`T_k`)."""
 
     handoffs: tuple[HandoffView, ...]
     next_cursor: str | None
+    known_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class HandoffCorrectResult:
+    """What `issues.handoffs.correct` answers: the correction and the handoff after it."""
+
+    correction: HandoffCorrectionView
+    handoff: HandoffView
+    replayed: bool
 
 
 def _instant(value: datetime) -> str:
@@ -144,6 +200,72 @@ def handoff_document(request: HandoffRecordRequest) -> dict[str, object]:
     }
 
 
+def correction_document(request: HandoffCorrectRequest) -> dict[str, object]:
+    """The correction request as its digest holds it (S3 section 5)."""
+    return {
+        "handoff_id": request.handoff_id,
+        "action": request.action.value,
+        "effective_at": None if request.effective_at is None else _instant(request.effective_at),
+        "reason": request.reason,
+        "evidence_anchor": request.evidence_anchor.digest_document(),
+    }
+
+
+def _facts(corrections: Sequence[HandoffCorrectionRecord]) -> tuple[HandoffCorrectionFact, ...]:
+    return tuple(
+        HandoffCorrectionFact(
+            correction_no=correction.correction_no,
+            action=HandoffCorrectionAction(correction.action),
+            corrected_effective_at=correction.corrected_effective_at,
+        )
+        for correction in corrections
+    )
+
+
+def _chain(
+    events: Sequence[HandoffRecord],
+    corrections: Mapping[str, Sequence[HandoffCorrectionRecord]],
+) -> tuple[ChainEvent, ...]:
+    """Each event of one chain folded with its corrections (section 3.3)."""
+    return tuple(
+        chain_state(
+            event.sequence_no,
+            event.effective_at,
+            _facts(corrections.get(event.handoff_id, ())),
+        )
+        for event in events
+    )
+
+
+def _archived(uow: UnitOfWork, principal_id: str, cited: LineageLinkEvidence) -> frozenset[str]:
+    anchor = cited.anchor
+    roots = (
+        frozenset()
+        if anchor.source_family is EvidenceSourceFamily.MEETING_NOTE_VERSION
+        else frozenset({anchor.source_root_id})
+    )
+    return uow.record_lineage.archived_capture_roots(principal_id, roots)
+
+
+def _correction_view(
+    uow: UnitOfWork, principal_id: str, correction: HandoffCorrectionRecord
+) -> HandoffCorrectionView:
+    """One correction's view; its anchor's availability computed now (S1 F19)."""
+    return HandoffCorrectionView(
+        correction_id=correction.correction_id,
+        handoff_id=correction.handoff_id,
+        correction_no=correction.correction_no,
+        action=HandoffCorrectionAction(correction.action),
+        effective_at=correction.corrected_effective_at,
+        reason=correction.reason,
+        evidence=anchor_view(
+            correction.evidence, _archived(uow, principal_id, correction.evidence)
+        ),
+        recorded_at=correction.recorded_at,
+        authority_class=correction.authority_class,
+    )
+
+
 def _holder(kind: str, entity_id: str | None) -> HandoffHolder:
     return HandoffHolder(kind=HandoffHolderKind(kind), entity_id=entity_id)
 
@@ -152,15 +274,15 @@ def _holder_view(kind: str, entity_id: str | None) -> HandoffHolderView:
     return HandoffHolderView(kind=HandoffHolderKind(kind), entity_id=entity_id)
 
 
-def _view(uow: UnitOfWork, principal_id: str, event: HandoffRecord) -> HandoffView:
-    """One event's view; its anchor's availability computed now (S1 F19)."""
-    anchor = event.evidence.anchor
-    roots = (
-        frozenset()
-        if anchor.source_family is EvidenceSourceFamily.MEETING_NOTE_VERSION
-        else frozenset({anchor.source_root_id})
-    )
-    archived = uow.record_lineage.archived_capture_roots(principal_id, roots)
+def _view(
+    uow: UnitOfWork,
+    principal_id: str,
+    event: HandoffRecord,
+    corrections: Sequence[HandoffCorrectionRecord] = (),
+) -> HandoffView:
+    """One event's view with its known corrections; its anchor's availability computed now."""
+    archived = _archived(uow, principal_id, event.evidence)
+    folded = chain_state(event.sequence_no, event.effective_at, _facts(corrections))
     return HandoffView(
         handoff_id=event.handoff_id,
         issue_id=event.issue_id,
@@ -174,6 +296,12 @@ def _view(uow: UnitOfWork, principal_id: str, event: HandoffRecord) -> HandoffVi
         evidence=anchor_view(event.evidence, archived),
         acceptance_basis=AcceptanceBasis(event.acceptance_basis),
         authority_class=event.authority_class,
+        current_effective_at=folded.current_effective_at,
+        voided=folded.voided,
+        correction_ids=tuple(
+            correction.correction_id
+            for correction in sorted(corrections, key=lambda item: item.correction_no)
+        ),
     )
 
 
@@ -231,15 +359,31 @@ class IssueHandoffApplication:
             raise InvalidRequestError(SafeDetail.EFFECTIVE_AT)
         handoffs.lock_chain(principal_id, request.issue_id, request.commitment_id)
         last = handoffs.latest_event(principal_id, request.issue_id, request.commitment_id)
-        if last is not None and effective_at < last.effective_at:
+        # S3 section 3.3: the chain skips voided events. The new event follows
+        # the last live one (its holder, at or after its current effective
+        # time); with none live, the S2 event-1 rule applies.
+        events = handoffs.chain_events(principal_id, request.issue_id, request.commitment_id)
+        chain = _chain(
+            events,
+            handoffs.corrections_of(
+                principal_id, [event.handoff_id for event in events], current=True
+            ),
+        )
+        live = last_live(chain)
+        holder = (
+            None
+            if live is None
+            else next(event for event in events if event.sequence_no == live.sequence_no)
+        )
+        if live is not None and effective_at < live.current_effective_at:
             raise InvalidRequestError(SafeDetail.EFFECTIVE_AT)
         refused = False
         try:
             leaving, arriving = resolve_handoff(
                 request.side,
                 last_holder=None
-                if last is None
-                else _holder(last.to_holder_kind, last.to_entity_id),
+                if holder is None
+                else _holder(holder.to_holder_kind, holder.to_entity_id),
                 counterparty_entity_id=commitment.counterparty_entity_id,
             )
         except HandoffSideError:
@@ -286,7 +430,11 @@ class IssueHandoffApplication:
         return HandoffResult(handoff=_view(uow, principal_id, event), replayed=False)
 
     def list_handoffs(
-        self, uow: UnitOfWork, principal_id: str, request: HandoffListRequest
+        self,
+        uow: UnitOfWork,
+        principal_id: str,
+        request: HandoffListRequest,
+        now: datetime,
     ) -> HandoffListResult:
         """One keyset page, `(recorded_at, handoff_id)` ascending; lock-free.
 
@@ -300,15 +448,175 @@ class IssueHandoffApplication:
             and uow.commitments.get(principal_id, request.commitment_id) is None
         ):
             raise NotFoundError(SafeDetail.COMMITMENT_ID)
-        page = uow.issue_handoffs.list_events(
+        # S3 section 3.4: events and corrections as known at `T_k`.
+        known_at = _known_at(uow, principal_id, request.known_at, now)
+        watermark = (
+            None
+            if known_at is None
+            else uow.record_lineage.commit_watermark(principal_id, known_at)
+        )
+        page = uow.issue_handoffs.known_events(
             principal_id,
             request.issue_id,
             commitment_id=request.commitment_id,
             page_size=request.page_size,
             after=request.after,
+            watermark=watermark,
+            at=known_at,
         )
-        views = tuple(_view(uow, principal_id, event) for event in page.handoffs)
+        corrections = uow.issue_handoffs.corrections_of(
+            principal_id,
+            [event.handoff_id for event in page.handoffs],
+            watermark=watermark,
+            at=known_at,
+        )
+        views = tuple(
+            _view(uow, principal_id, event, corrections.get(event.handoff_id, ()))
+            for event in page.handoffs
+        )
         return HandoffListResult(
             handoffs=views,
             next_cursor=views[-1].handoff_id if page.has_more and views else None,
+            known_at=known_at,
         )
+
+    # --- issues.handoffs.correct (S3 section 3.3) --------------------------------
+
+    def correct_handoff(
+        self,
+        uow: UnitOfWork,
+        principal_id: str,
+        request: HandoffCorrectRequest,
+        idempotency_key: str,
+        authority: LineageAuthority,
+        now: datetime,
+    ) -> HandoffCorrectResult:
+        """Append one `retime` or `void` correction of one handoff event."""
+        at = ensure_utc(now)
+        issues, lineage, handoffs = uow.issues, uow.record_lineage, uow.issue_handoffs
+        digest = request_digest(_CORRECT, principal_id, correction_document(request))
+        prior = issues.reserve_write_request(
+            principal_id, _CORRECT, idempotency_key, digest, created_at=at
+        )
+        if prior is not None:
+            return _replayed_correction(uow, principal_id, prior.result_handoff_correction_id)
+        # S3 section 6.2 step 1b: the commit mark, before any other lock.
+        lineage.take_commit_mark(principal_id)
+        event = handoffs.read_event(principal_id, request.handoff_id)
+        if event is None:
+            raise NotFoundError(SafeDetail.HANDOFF_ID)
+        subject = RecordRef(family=RecordFamily.COMMITMENT, record_id=event.commitment_id)
+        locked = lock_lineage_sources(
+            issues,
+            lineage,
+            principal_id,
+            issue_ids=((event.issue_id, SafeDetail.ISSUE_ID),),
+            endpoints=((subject, SafeDetail.COMMITMENT_ID),),
+            anchors=(request.evidence_anchor,),
+            anchor_detail=SafeDetail.EVIDENCE_ANCHOR,
+        )
+        # S3 section 3.2: a closed Issue's handoffs are frozen; reopen first.
+        require_open_issues(locked)
+        (anchor,) = admit_evidence_set(
+            issues, principal_id, locked.evidence, detail=SafeDetail.EVIDENCE_ANCHOR
+        )
+        commitment = uow.commitments.get(principal_id, event.commitment_id)
+        if commitment is None:
+            # Shared above under the same Principal: unreachable.
+            raise NotFoundError(SafeDetail.COMMITMENT_ID)
+        handoffs.lock_chain(principal_id, event.issue_id, event.commitment_id)
+        events = handoffs.chain_events(principal_id, event.issue_id, event.commitment_id)
+        existing = handoffs.corrections_of(
+            principal_id, [item.handoff_id for item in events], current=True
+        )
+        chain = _chain(events, existing)
+        target = next(item for item in chain if item.sequence_no == event.sequence_no)
+        if target.voided:
+            raise ConflictError(SafeDetail.STATE)
+        effective_at = None if request.effective_at is None else ensure_utc(request.effective_at)
+        if request.action is HandoffCorrectionAction.VOID:
+            if not can_void(chain, event.sequence_no):
+                raise InvalidRequestError(SafeDetail.HANDOFF_ID)
+        elif effective_at is None or not retime_in_order(
+            chain,
+            event.sequence_no,
+            effective_at,
+            commitment_created_at=commitment.created_at,
+            recorded_at=at,
+        ):
+            raise InvalidRequestError(SafeDetail.EFFECTIVE_AT)
+        earlier = existing.get(event.handoff_id, ())
+        number = len(earlier) + 1
+        correction = HandoffCorrectionRecord(
+            correction_id=issue_identifier(IdKind.ISSUE_HANDOFF_CORRECTION),
+            handoff_id=event.handoff_id,
+            correction_no=number,
+            predecessor_correction_no=None if number == 1 else number - 1,
+            action=request.action.value,
+            corrected_effective_at=effective_at,
+            evidence=LineageLinkEvidence(
+                anchor_id=insert_evidence_anchor(issues, principal_id, anchor, recorded_at=at),
+                anchor=anchor,
+            ),
+            reason=request.reason,
+            acceptance_basis=AcceptanceBasis.USER_CONFIRMED.value,
+            authority_class=authority.authority_class.value,
+            decision_channel=authority.decision_channel.value,
+            source_capability=_CORRECT,
+            recorded_at=at,
+        )
+        handoffs.insert_correction(principal_id, correction)
+        issues.complete_write_request(
+            principal_id,
+            _CORRECT,
+            idempotency_key,
+            request_digest=digest,
+            completed_at=at,
+            result_handoff_correction_id=correction.correction_id,
+        )
+        return HandoffCorrectResult(
+            correction=_correction_view(uow, principal_id, correction),
+            handoff=_view(uow, principal_id, event, (*earlier, correction)),
+            replayed=False,
+        )
+
+
+def _known_at(
+    uow: UnitOfWork, principal_id: str, requested: datetime | None, now: datetime
+) -> datetime | None:
+    """`T_k` for a handoff read (S3 section 3.4); `invalid_request` / `known_at` after now."""
+    try:
+        return effective_known_at(
+            None if requested is None else ensure_utc(requested),
+            now=ensure_utc(now),
+            horizon=uow.record_lineage.commit_horizon(principal_id),
+        )
+    except CutAfterNowError as error:
+        raise InvalidRequestError(SafeDetail.KNOWN_AT) from error
+
+
+def _replayed_correction(
+    uow: UnitOfWork, principal_id: str, correction_id: str | None
+) -> HandoffCorrectResult:
+    """Section 6.3 replay: the stored correction and the handoff as it stood right after it."""
+    if correction_id is None:
+        raise RepositoryFailureError
+    handoffs = uow.issue_handoffs
+    correction = handoffs.read_correction(principal_id, correction_id)
+    if correction is None:
+        raise RepositoryFailureError
+    event = handoffs.read_event(principal_id, correction.handoff_id)
+    if event is None:
+        raise RepositoryFailureError
+    upto = tuple(
+        item
+        for item in handoffs.corrections_of(principal_id, (event.handoff_id,), current=True).get(
+            event.handoff_id, ()
+        )
+        if item.correction_no <= correction.correction_no
+    )
+    return HandoffCorrectResult(
+        correction=_correction_view(uow, principal_id, correction),
+        handoff=_view(uow, principal_id, event, upto),
+        replayed=True,
+    )

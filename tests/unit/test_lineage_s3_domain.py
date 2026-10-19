@@ -5,7 +5,9 @@ part of the crosswalk row: the knowledge cut rules (`domain.lineage.asof`), the
 completeness precedence, and the backfill source document against the shared
 golden vectors (`tests/fixtures/lineage_backfill_source_vectors.json`, which
 `tests/database/test_lineage_backfill_digest_parity.py` holds the SQL functions
-to). Every value is synthetic.
+to). Worker L2's part (sections 3.1 to 3.3): the link transition table, the
+`related_context` canonical order, the one "in the Issue's context" predicate
+and the handoff chain that skips voided events. Every value is synthetic.
 """
 
 from __future__ import annotations
@@ -37,8 +39,34 @@ from my_pa.domain.lineage.backfill import (
     source_digest,
     source_document,
 )
-from my_pa.domain.lineage.model import InvalidLineageValueError
-from my_pa.domain.lineage.vocabulary import LineageCompleteness
+from my_pa.domain.lineage.canonical import normalized_identity, related_context_order
+from my_pa.domain.lineage.closure import (
+    LINK_TRANSITIONS,
+    in_issue_context,
+    is_contest_evidence,
+    link_transition,
+)
+from my_pa.domain.lineage.handoff import (
+    HandoffCorrectionFact,
+    can_void,
+    chain_state,
+    last_live,
+    retime_in_order,
+)
+from my_pa.domain.lineage.model import EvidenceAnchor, InvalidLineageValueError, RecordRef
+from my_pa.domain.lineage.vocabulary import (
+    LIVE_LINK_STATES,
+    EvidenceRole,
+    EvidenceSourceFamily,
+    HandoffCorrectionAction,
+    LineageCompleteness,
+    LinkLifecycleState,
+    LinkRevisionAction,
+    RecordFamily,
+    RecordLinkKind,
+    RelationType,
+    SourceVersionKind,
+)
 from my_pa.domain.lineage_backfill.vocabulary import BackfillSourceKind
 
 VECTORS: Final = (
@@ -237,3 +265,193 @@ def test_backfill_source_document_golden_vectors() -> None:
     )
     with pytest.raises(InvalidLineageValueError):
         plan_digest(run_id="lbfr_lineages3vec0001", validator_version=1, items=items * 2)
+
+
+# ---- sections 3.1 to 3.3 (worker L2): transitions, order, context, chain -------------
+
+_ISSUE: Final = "sit_lineages3domain0001"
+_OTHER_ISSUE: Final = "sit_lineages3domain0002"
+
+
+def _ref(family: RecordFamily, suffix: str) -> RecordRef:
+    prefix = {
+        RecordFamily.SITUATION: "sit",
+        RecordFamily.MEETING: "mtg",
+        RecordFamily.MEETING_NOTE_VERSION: "mnote",
+        RecordFamily.TASK: "tsk",
+        RecordFamily.COMMITMENT: "cmt",
+        RecordFamily.CONSTRAINT: "cst",
+        RecordFamily.CAPTURE_VERSION: "capver",
+    }[family]
+    return RecordRef(family=family, record_id=f"{prefix}_{suffix}")
+
+
+def _anchor(role: EvidenceRole, kind: SourceVersionKind) -> EvidenceAnchor:
+    exact = kind is SourceVersionKind.IMMUTABLE_VERSION
+    return EvidenceAnchor(
+        source_family=(
+            EvidenceSourceFamily.MEETING_NOTE_VERSION if exact else EvidenceSourceFamily.CAPTURE
+        ),
+        source_root_id="mtg_lineages3domain0001" if exact else "cap_lineages3domain0001",
+        source_version_kind=kind,
+        source_version_id="mnote_lineages3domain0001" if exact else None,
+        source_version_no=1 if exact else None,
+        source_sha256="0" * 64 if exact else None,
+        passage_start_cp=None,
+        passage_end_cp=None,
+        passage_sha256=None,
+        role=role,
+    )
+
+
+def test_link_transition_table() -> None:
+    active, contested, ended = (
+        LinkLifecycleState.ACTIVE,
+        LinkLifecycleState.CONTESTED,
+        LinkLifecycleState.ENDED,
+    )
+    # Section 3.1's table, exactly.
+    assert {
+        (action, state): link_transition(action, state)
+        for action in LINK_TRANSITIONS
+        for state in LinkLifecycleState
+    } == {
+        (LinkRevisionAction.CORRECT_EVIDENCE, active): active,
+        (LinkRevisionAction.CORRECT_EVIDENCE, contested): None,
+        (LinkRevisionAction.CORRECT_EVIDENCE, ended): None,
+        (LinkRevisionAction.END, active): ended,
+        (LinkRevisionAction.END, contested): ended,
+        (LinkRevisionAction.END, ended): None,
+        (LinkRevisionAction.CONTEST, active): contested,
+        (LinkRevisionAction.CONTEST, contested): None,
+        (LinkRevisionAction.CONTEST, ended): None,
+        (LinkRevisionAction.REINSTATE, active): None,
+        (LinkRevisionAction.REINSTATE, contested): active,
+        (LinkRevisionAction.REINSTATE, ended): None,
+    }
+    # `assert` writes revision 1 and is no transition; `ended` admits nothing.
+    assert link_transition(LinkRevisionAction.ASSERT, active) is None
+    assert set(LINK_TRANSITIONS) == set(LinkRevisionAction) - {LinkRevisionAction.ASSERT}
+    assert {active, contested} == LIVE_LINK_STATES
+    # The contest rule: an exact `contradicts` anchor, beside any other role.
+    exact = SourceVersionKind.IMMUTABLE_VERSION
+    legacy = SourceVersionKind.LEGACY_UNVERSIONED
+    assert is_contest_evidence([_anchor(EvidenceRole.CONTRADICTS, exact)])
+    assert is_contest_evidence(
+        [_anchor(EvidenceRole.CORROBORATES, exact), _anchor(EvidenceRole.CONTRADICTS, exact)]
+    )
+    assert not is_contest_evidence([_anchor(EvidenceRole.CONTRADICTS, legacy)])
+    assert not is_contest_evidence([_anchor(EvidenceRole.CORROBORATES, exact)])
+    assert not is_contest_evidence([])
+
+
+def test_related_context_canonical_order() -> None:
+    meeting = _ref(RecordFamily.MEETING, "lineages3order0001")
+    task = _ref(RecordFamily.TASK, "lineages3order0001")
+    # Family token first: "meeting" < "task".
+    assert related_context_order(task, meeting) == (meeting, task)
+    assert related_context_order(meeting, task) == (meeting, task)
+    # Then the identifier, by code point: "B" (66) sorts before "a" (97).
+    upper = RecordRef(family=RecordFamily.TASK, record_id="tsk_Blineages3order01")
+    lower = RecordRef(family=RecordFamily.TASK, record_id="tsk_alineages3order01")
+    assert related_context_order(lower, upper) == (upper, lower)
+    assert related_context_order(upper, lower) == (upper, lower)
+    # Both request orders therefore have one identity.
+    identities = {
+        normalized_identity(
+            kind=RecordLinkKind.SEMANTIC,
+            relation_type=RelationType.RELATED_CONTEXT,
+            from_ref=pair[0],
+            to_ref=pair[1],
+            member_role=None,
+            context_issue_id=_ISSUE,
+        )
+        for pair in (related_context_order(lower, upper), related_context_order(upper, lower))
+    }
+    assert len(identities) == 1
+    # Equal endpoints come back as given (the application refuses them).
+    assert related_context_order(task, task) == (task, task)
+
+
+def test_in_issue_context_predicate() -> None:
+    issue = RecordRef(family=RecordFamily.SITUATION, record_id=_ISSUE)
+    member = _ref(RecordFamily.TASK, "lineages3ctx000001")
+    paired = _ref(RecordFamily.MEETING_NOTE_VERSION, "lineages3ctx000001")
+    outsider = _ref(RecordFamily.TASK, "lineages3ctx000002")
+    inside = frozenset({issue, member, paired})
+
+    def judged(
+        kind: RecordLinkKind, source: RecordRef, target: RecordRef, context: str | None
+    ) -> bool:
+        return in_issue_context(
+            kind=kind,
+            from_ref=source,
+            to_ref=target,
+            context_issue_id=context,
+            issue_id=_ISSUE,
+            inside=inside,
+        )
+
+    semantic, membership = RecordLinkKind.SEMANTIC, RecordLinkKind.ISSUE_MEMBERSHIP
+    # A membership: only from this Issue.
+    assert judged(membership, issue, member, _ISSUE)
+    other_issue = RecordRef(family=RecordFamily.SITUATION, record_id=_OTHER_ISSUE)
+    assert not judged(membership, other_issue, member, _OTHER_ISSUE)
+    # A semantic link scoped to this Issue, whatever its endpoints.
+    assert judged(semantic, outsider, outsider, _ISSUE)
+    # One naming this Issue as an endpoint, whatever its context.
+    assert judged(semantic, paired, issue, None)
+    assert judged(semantic, paired, issue, _OTHER_ISSUE)
+    # A null-context link with both endpoints inside; not with one outside.
+    assert judged(semantic, member, paired, None)
+    assert not judged(semantic, member, outsider, None)
+    # A link scoped to another Issue is never in this one's context, even inside.
+    assert not judged(semantic, member, paired, _OTHER_ISSUE)
+
+
+def test_handoff_chain_skips_voided_events() -> None:
+    created = datetime(2026, 10, 19, 9, tzinfo=UTC)
+    minute = timedelta(minutes=1)
+    retime = HandoffCorrectionFact(
+        correction_no=1,
+        action=HandoffCorrectionAction.RETIME,
+        corrected_effective_at=created + 5 * minute,
+    )
+    void = HandoffCorrectionFact(
+        correction_no=2, action=HandoffCorrectionAction.VOID, corrected_effective_at=None
+    )
+    # Folding: the latest retime moves the current time; a void makes the event voided.
+    folded = chain_state(2, created + 2 * minute, (void, retime))
+    assert (folded.effective_at, folded.current_effective_at, folded.voided) == (
+        created + 2 * minute,
+        created + 5 * minute,
+        True,
+    )
+    plain = chain_state(1, created + minute, ())
+    assert (plain.current_effective_at, plain.voided) == (created + minute, False)
+    chain = (
+        plain,
+        chain_state(2, created + 2 * minute, (void,)),
+        chain_state(3, created + 3 * minute, ()),
+    )
+    # The last live event is 3; with 3 gone too, it is 1 (2 is skipped).
+    assert last_live(chain) == chain[2]
+    assert last_live(chain[:2]) == chain[0]
+    assert last_live(chain, before=3) == chain[0]
+    assert last_live((chain[1],)) is None
+    # Only the last live event can be voided.
+    assert can_void(chain, 3)
+    assert not can_void(chain, 1)
+    assert can_void(chain[:2], 1)
+    assert not can_void(chain[:2], 2)
+    # A retime of 3 is bounded by the previous *live* event (1), not the voided 2.
+    recorded = created + 10 * minute
+    bounds = {"commitment_created_at": created, "recorded_at": recorded}
+    assert retime_in_order(chain, 3, created + 90 * timedelta(seconds=1), **bounds)
+    assert not retime_in_order(chain, 3, created + 30 * timedelta(seconds=1), **bounds)
+    # And a retime of 1 by the next live event (3).
+    assert retime_in_order(chain, 1, created + 170 * timedelta(seconds=1), **bounds)
+    assert not retime_in_order(chain, 1, created + 190 * timedelta(seconds=1), **bounds)
+    # Never before the Commitment's creation, never after its own recording.
+    assert not retime_in_order(chain, 1, created - minute, **bounds)
+    assert not retime_in_order((chain[2],), 3, recorded + minute, **bounds)

@@ -9595,7 +9595,12 @@ class RecordLineageRepository(ABC):
     def active_head_by_identity(
         self, principal_id: str, normalized_identity: str
     ) -> LinkHeadRecord | None:
-        """The active head with this identity, locked `FOR UPDATE`, or `None`."""
+        """The live head with this identity, locked `FOR UPDATE`, or `None`.
+
+        S3 section 3.1: *live* is `active` or `contested` (`LIVE_LINK_STATES`),
+        the states that hold an identity; the caller refuses a `contested` one
+        (`conflict` / `state`) rather than answering it as `created: false`.
+        """
 
     @abstractmethod
     def lock_head(self, principal_id: str, link_id: str) -> LinkHeadRecord | None:
@@ -9631,7 +9636,11 @@ class RecordLineageRepository(ABC):
     def active_links_incident(
         self, principal_id: str, refs: Collection[RecordRef]
     ) -> tuple[LinkHeadRecord, ...]:
-        """Every active link with an endpoint in `refs`, ordered `(created_at, link_id)`."""
+        """Every live link with an endpoint in `refs`, ordered `(created_at, link_id)`.
+
+        S3 section 9 (the one-line widening of the S1 head-based reader): live is
+        `active` or `contested`, so a contested link is followed and shown.
+        """
 
     @abstractmethod
     def issue_memberships(
@@ -9687,7 +9696,10 @@ class RecordLineageRepository(ABC):
     def blocks_successors(
         self, principal_id: str, refs: Collection[RecordRef]
     ) -> tuple[RecordRef, ...]:
-        """The `to` records of every active `blocks` head whose `from` is in `refs`.
+        """The `to` records of every live `blocks` head whose `from` is in `refs`.
+
+        S3 section 6.2 step 6: `active` and `contested` heads alike, so no cycle
+        can form through a contested link that a reinstate would revive.
 
         Any context, distinct, ordered by `(family, record_id)`; no lock (the
         caller holds the `:blocks` key). The `blocks` cycle search's one step
@@ -9733,6 +9745,19 @@ class RecordLineageRepository(ABC):
 
         Read without a lock; for an `at` at or before the horizon every such
         mark is committed. Non-abstract, on the same terms.
+        """
+        raise NotImplementedError
+
+    def links_in_issue_context(
+        self, principal_id: str, issue_id: str, inside: Collection[RecordRef]
+    ) -> tuple[LinkHeadRecord, ...]:
+        """S3 section 3.2's candidates: every live semantic link that may be in the context.
+
+        Its context is the Issue, or an endpoint is in `inside` (the Issue's
+        inside set, which holds the Issue itself); current heads, no lock,
+        ordered by `link_id` in code-point order. The caller decides membership
+        with `domain.lineage.closure.in_issue_context`. Non-abstract, on the
+        same terms.
         """
         raise NotImplementedError
 
@@ -9793,6 +9818,33 @@ class HandoffRecord:
     authority_class: str
     decision_channel: str
     source_capability: str
+    #: S3 section 4.1: the event's commit mark; null on a pre-S3 row.
+    commit_seq: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class HandoffCorrectionRecord:
+    """One immutable `issue_responsibility_corrections` row with its evidence anchor (S3 3.3).
+
+    `corrected_effective_at` is set exactly for a `retime`; `evidence` carries
+    the one anchor (role `handoff` for a retime, `contradicts` for a void).
+    `commit_seq` is the correction's commit mark (`None` only before insert).
+    """
+
+    correction_id: str
+    handoff_id: str
+    correction_no: int
+    predecessor_correction_no: int | None
+    action: str
+    corrected_effective_at: datetime | None
+    evidence: LineageLinkEvidence
+    reason: str
+    acceptance_basis: str
+    authority_class: str
+    decision_channel: str
+    source_capability: str
+    recorded_at: datetime
+    commit_seq: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -9845,6 +9897,61 @@ class IssueHandoffRepository(ABC):
         Raises `IssueCursorError` when `after` names no event inside the same
         filter set.
         """
+
+    # --- S3 (S3 contract sections 3.3 and 7.1): corrections and as-of reads -------
+    #
+    # Non-abstract: a fake that never corrects a handoff never needs them.
+
+    def known_events(
+        self,
+        principal_id: str,
+        issue_id: str,
+        *,
+        commitment_id: str | None,
+        page_size: int,
+        after: str | None,
+        watermark: int | None,
+        at: datetime | None,
+    ) -> HandoffPage:
+        """`list_events` restricted to the events known at the cut (S3 section 3.4).
+
+        Known: `commit_seq <= watermark`, or -- a pre-S3 row -- `recorded_at <=
+        at`; nothing is known at a `None` cut. Raises `IssueCursorError` when
+        `after` names no known event inside the same filter set.
+        """
+        raise NotImplementedError
+
+    def chain_events(
+        self, principal_id: str, issue_id: str, commitment_id: str
+    ) -> tuple[HandoffRecord, ...]:
+        """Every event of one chain, `sequence_no` ascending (current state, no lock)."""
+        raise NotImplementedError
+
+    def corrections_of(
+        self,
+        principal_id: str,
+        handoff_ids: Collection[str],
+        *,
+        watermark: int | None = None,
+        at: datetime | None = None,
+        current: bool = False,
+    ) -> Mapping[str, tuple[HandoffCorrectionRecord, ...]]:
+        """Each named event's corrections, `correction_no` ascending.
+
+        `current` reads every committed correction (the writers' view); else
+        only those known at the cut, by the `known_events` rule.
+        """
+        raise NotImplementedError
+
+    def read_correction(
+        self, principal_id: str, correction_id: str
+    ) -> HandoffCorrectionRecord | None:
+        """One owned correction with its anchor, or `None`."""
+        raise NotImplementedError
+
+    def insert_correction(self, principal_id: str, correction: HandoffCorrectionRecord) -> None:
+        """Append one correction; the commit mark is stamped by the database trigger."""
+        raise NotImplementedError
 
 
 # --- Record lineage S3: the Issue timeline and the backfill ledger ------------

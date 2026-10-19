@@ -28,6 +28,14 @@ cascade), `issues.reopen`, the read-only `issues.closure_readiness`, the
 R2-F14), `IssueView.closure`, and the closed-Issue rule on the Project-link
 writes (section 3.2). Closing or reopening changes no member, link or native
 record.
+
+**S3** (S3 contract section 3.2) adds one gate condition: no link in the
+Issue's context has a `contested` head (the one "in the Issue's context"
+predicate, `record_lineage.links_in_context`), so `issues.close` answers
+`conflict` / `closure_gate` and `issues.closure_readiness` lists the
+`contested_links` (at most 100, by `link_id`) and is not ready while any
+exist. The close also shares the endpoints of every in-context semantic link
+it evaluates.
 """
 
 from __future__ import annotations
@@ -54,7 +62,7 @@ from my_pa.application.lineage_endpoints import (
     lock_evidence_source,
     lock_lineage_sources,
 )
-from my_pa.application.record_lineage import anchor_view, evidence_availability
+from my_pa.application.record_lineage import anchor_view, evidence_availability, links_in_context
 from my_pa.contracts.ports import (
     IssueListPage,
     IssueRecord,
@@ -72,8 +80,10 @@ from my_pa.contracts.ports import (
 )
 from my_pa.contracts.v1.issues import (
     MAX_CLOSURE_BLOCKERS,
+    MAX_CONTESTED_LINKS,
     MAX_ISSUE_PROJECT_LINKS,
     ClosureBlockerView,
+    ContestedLinkView,
     IssueClosureView,
     IssueListEntry,
     IssueReopeningView,
@@ -103,6 +113,7 @@ from my_pa.domain.lineage.vocabulary import (
     IssueProjectMembershipAction,
     IssueProjectMembershipState,
     IssueRevisionAction,
+    LinkLifecycleState,
     RecordFamily,
 )
 from my_pa.domain.situation.issue_lifecycle import (
@@ -257,6 +268,9 @@ class IssueClosureReadiness:
     ready: bool
     blockers: tuple[ClosureBlockerView, ...]
     blockers_truncated: bool
+    #: S3 section 7.1: contested links in the Issue's context, by `link_id`.
+    contested_links: tuple[ContestedLinkView, ...] = ()
+    contested_links_truncated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -787,11 +801,21 @@ class IssueApplication:
             if cited.anchor.role is EvidenceRole.RESOLUTION
         )
         closure_set = request.closure_evidence_anchors
+        # S3 section 3.2: the live semantic links in the Issue's context. Every
+        # contest or reinstate of one shares this Issue, so they are stable once
+        # it is locked; their endpoints are shared with the members.
+        in_context = links_in_context(lineage, principal_id, request.issue_id)
+        issue_ref = RecordRef(family=RecordFamily.SITUATION, record_id=request.issue_id)
+        shared_refs = list(dict.fromkeys(head.link.to_ref for head in heads))
+        for head in in_context:
+            for ref in (head.link.from_ref, head.link.to_ref):
+                if ref != issue_ref and ref not in shared_refs:
+                    shared_refs.append(ref)
         locked = lock_lineage_sources(
             issues,
             lineage,
             principal_id,
-            endpoints=tuple((head.link.to_ref, SafeDetail.MEMBER) for head in heads),
+            endpoints=tuple((ref, SafeDetail.MEMBER) for ref in shared_refs),
             anchors=closure_set + resolution_sources,
             anchor_detail=SafeDetail.CLOSURE_EVIDENCE_ANCHORS,
         )
@@ -822,6 +846,9 @@ class IssueApplication:
                 archived,
             ):
                 raise ConflictError(SafeDetail.CLOSURE_GATE)
+        if any(head.lifecycle_state is LinkLifecycleState.CONTESTED for head in in_context):
+            # S3 section 3.2: a disputed claim in the Issue's context holds the close.
+            raise ConflictError(SafeDetail.CLOSURE_GATE)
         version = current.version + 1
         revision = IssueRevisionRecord(
             issue_id=current.issue_id,
@@ -1007,13 +1034,24 @@ class IssueApplication:
         blocked.sort(
             key=lambda view: (view.member.family.value, view.member.record_id, view.link_id)
         )
+        # S3 section 3.2: every contested link in the Issue's context, by `link_id`.
+        contested = sorted(
+            (
+                ContestedLinkView(link_id=head.link.link_id, relation_type=head.link.relation_type)
+                for head in links_in_context(lineage, principal_id, issue_id)
+                if head.lifecycle_state is LinkLifecycleState.CONTESTED
+            ),
+            key=lambda view: view.link_id,
+        )
         return IssueClosureReadiness(
             issue_id=issue.issue_id,
             version=issue.version,
             state=issue.state.value,
-            ready=not blocked,
+            ready=not blocked and not contested,
             blockers=tuple(blocked[:MAX_CLOSURE_BLOCKERS]),
             blockers_truncated=len(blocked) > MAX_CLOSURE_BLOCKERS,
+            contested_links=tuple(contested[:MAX_CONTESTED_LINKS]),
+            contested_links_truncated=len(contested) > MAX_CONTESTED_LINKS,
         )
 
     # --- issues.project_links.add / end ----------------------------------------

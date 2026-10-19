@@ -699,7 +699,7 @@ from my_pa.domain.common.identifiers import (
     validate_identifier,
 )
 from my_pa.domain.common.provenance import TrustLevel
-from my_pa.domain.common.time import format_rfc3339, utc_now
+from my_pa.domain.common.time import ensure_utc, format_rfc3339, utc_now
 from my_pa.domain.documents.managed import (
     DocumentState,
     ManagedDocumentConflictError,
@@ -13581,6 +13581,9 @@ class ApplicationService:
                 "ready": readiness.ready,
                 "blockers": [blocker.to_canonical_dict() for blocker in readiness.blockers],
                 "blockers_truncated": readiness.blockers_truncated,
+                # S3 section 7.1: contested links in the Issue's context.
+                "contested_links": [view.to_canonical_dict() for view in readiness.contested_links],
+                "contested_links_truncated": readiness.contested_links_truncated,
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
         )
@@ -13634,12 +13637,14 @@ class ApplicationService:
         request = replace(request, page_size=min(request.page_size, self._limits.max_page_size))
         with _translated(), _lineage_translated():
             page = self._issue_handoffs.list_handoffs(
-                unit_of_work, authorization.principal.principal_id, request
+                unit_of_work, authorization.principal.principal_id, request, authorization.at
             )
         return _Result(
             payload={
                 "handoffs": [view.to_canonical_dict() for view in page.handoffs],
                 "next_cursor": page.next_cursor,
+                # S3 section 7.1: the cut the page was read at (`T_k`).
+                "known_at": None if page.known_at is None else _lineage_instant(page.known_at),
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
         )
@@ -13736,10 +13741,9 @@ class ApplicationService:
     # Eight handlers in the S1 shape: the switch first (section 7.7), then, for
     # the two backfill names, the backfill sub-switch; then, for a write, the
     # attested authority (section 6.1: `denied` unless local operator, before any
-    # row and before the replay lookup). The use cases are not implemented in
-    # this change: after the switches and the authority each handler answers
-    # `unsupported`, writing nothing, until its worker lands it (the S2 K1
-    # precedent).
+    # row and before the replay lookup). A use case not yet landed answers
+    # `unsupported` after the switches and the authority, writing nothing,
+    # until its worker lands it (the S2 K1 precedent).
 
     def _records_associations_contest(
         self,
@@ -13747,11 +13751,19 @@ class ApplicationService:
         authorization: Authorization,
         command: ContestRecordAssociation,
     ) -> _Result:
-        """`records.associations.contest`: not implemented in this change (`unsupported`)."""
-        del unit_of_work, command
+        """`records.associations.contest`: dispute an active semantic association."""
         self._lineage_plane()
-        attested_lineage_authority(authorization)
-        raise UnsupportedError()
+        authority = attested_lineage_authority(authorization)
+        with _translated(), _lineage_translated():
+            written = self._record_lineage.contest_association(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.lineage_request(),
+                command.idempotency_key,
+                authority,
+                authorization.at,
+            )
+        return self._association_result(authorization, "association", written)
 
     def _records_associations_reinstate(
         self,
@@ -13759,11 +13771,19 @@ class ApplicationService:
         authorization: Authorization,
         command: ReinstateRecordAssociation,
     ) -> _Result:
-        """`records.associations.reinstate`: not implemented in this change (`unsupported`)."""
-        del unit_of_work, command
+        """`records.associations.reinstate`: resolve a contested association back to active."""
         self._lineage_plane()
-        attested_lineage_authority(authorization)
-        raise UnsupportedError()
+        authority = attested_lineage_authority(authorization)
+        with _translated(), _lineage_translated():
+            written = self._record_lineage.reinstate_association(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.lineage_request(),
+                command.idempotency_key,
+                authority,
+                authorization.at,
+            )
+        return self._association_result(authorization, "association", written)
 
     def _records_associations_history(
         self,
@@ -13795,11 +13815,26 @@ class ApplicationService:
     def _issues_handoffs_correct(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: CorrectIssueHandoff
     ) -> _Result:
-        """`issues.handoffs.correct`: not implemented in this change (`unsupported`)."""
-        del unit_of_work, command
+        """`issues.handoffs.correct`: retime or void one handoff, never rewriting it."""
         self._lineage_plane()
-        attested_lineage_authority(authorization)
-        raise UnsupportedError()
+        authority = attested_lineage_authority(authorization)
+        with _translated(), _lineage_translated():
+            written = self._issue_handoffs.correct_handoff(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.handoff_request(),
+                command.idempotency_key,
+                authority,
+                authorization.at,
+            )
+        return _Result(
+            payload={
+                "correction": written.correction.to_canonical_dict(),
+                "handoff": written.handoff.to_canonical_dict(),
+                "replayed": written.replayed,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+        )
 
     def _records_backfill_plan(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: PlanLineageBackfill
@@ -16255,6 +16290,16 @@ _LINEAGE_CAPABILITY_NAMES: Final[frozenset[str]] = frozenset(
 _LINEAGE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     capability for capability in Capability if capability.value in _LINEAGE_CAPABILITY_NAMES
 )
+
+
+def _lineage_instant(value: datetime) -> str:
+    """A lineage cut as RFC 3339 UTC with microseconds (S3 contract section 3.4).
+
+    Unlike a view's millisecond timestamps, a reported cut keeps every digit, so
+    passing it back as `known_at` reads exactly the same facts.
+    """
+    return ensure_utc(value).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
 
 #: Record lineage S3 (contract section 7.7): the two operator-only backfill
 #: names, withheld unless both `lineage_enabled` and `lineage_backfill_enabled`

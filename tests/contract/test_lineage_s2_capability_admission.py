@@ -290,10 +290,15 @@ def test_assert_admits_exactly_the_s2_relations_it_writes() -> None:
     and refuses one outside it before anything runs.
     """
     schema = AssertRecordAssociation.mcp_payload_properties["relation_type"]
-    published = list(schema["enum"])  # type: ignore[index]
+    # S3 lockstep (S3 contract section 3.1): the assert also publishes
+    # `related_context`; the S2 subset of the widened enum is unchanged.
+    published = [
+        relation
+        for relation in schema["enum"]  # type: ignore[index]
+        if relation != "related_context"
+    ]
     assert published == ["blocks", "discusses", "escalated_from", "originated_from"]
-    # The S2 subset of the widened vocabulary: S3 adds `related_context`, which
-    # the assert refuses until the S3 rules for it land (S3 contract section 3.1).
+    assert "related_context" in schema["enum"]  # type: ignore[index]
     semantic = {relation.value for relation in RelationType} - {"issue_member", "related_context"}
     assert set(published) == semantic - {relation.value for relation in COMPOSITE_ONLY_RELATIONS}
     anchor = {**_ANCHOR, "role": "corroborates"}
@@ -616,8 +621,11 @@ def test_existing_v1_shapes_are_unchanged_by_s2() -> None:
     # The v1 commands' own capability names: a composite is a new name, not a mode.
     assert CreateTask.capability is Capability.TASKS_CREATE
     assert CreateCommitment.capability is Capability.COMMITMENTS_CREATE
-    # The handoff view's keys (S2 section 7.1), with `from`/`to` on the wire.
-    assert _names(HandoffView) == {
+    # The handoff view's keys (S2 section 7.1), with `from`/`to` on the wire; S3
+    # lockstep (S3 contract sections 7.1 and 8.1): exactly 3 keys added, every
+    # S2 key kept with `effective_at` in its recorded meaning.
+    assert {"current_effective_at", "voided", "correction_ids"} <= _names(HandoffView)
+    assert _names(HandoffView) - {"current_effective_at", "voided", "correction_ids"} == {
         "handoff_id",
         "issue_id",
         "commitment_id",

@@ -49,7 +49,11 @@ from my_pa.application import goodnotes_note_unit_contract as _note_unit
 from my_pa.application.errors import InvalidRequestError, SafeDetail, invalid_choice
 from my_pa.application.goodnotes_pull_orchestration import MAX_PULL_BATCH_SIZE
 from my_pa.application.identity_correction import ConflictChoice
-from my_pa.application.issue_handoffs import HandoffListRequest, HandoffRecordRequest
+from my_pa.application.issue_handoffs import (
+    HandoffCorrectRequest,
+    HandoffListRequest,
+    HandoffRecordRequest,
+)
 from my_pa.application.issue_work import AssociationIntent, WorkCompositeRequest
 from my_pa.application.issues import (
     IssueCloseRequest,
@@ -149,6 +153,7 @@ from my_pa.domain.knowledge_assertion.vocabulary import (
     KnowledgeOwnerRefKind,
     KnowledgeSubjectKind,
 )
+from my_pa.domain.lineage.canonical import related_context_order
 from my_pa.domain.lineage.model import (
     MAX_EVIDENCE_ANCHORS,
     MAX_ISSUE_DESCRIPTION_CHARACTERS,
@@ -12458,10 +12463,7 @@ def _member_role(value: object) -> MemberRole:
 #: The relations `records.associations.assert` names. `related_context` (S3
 #: section 3.1) is in the vocabulary and the S3 schema, and is refused here
 #: until its rules (the in-context endpoints and the canonical order) land.
-_ASSERTABLE_RELATIONS: Final = frozenset(RelationType) - {
-    RelationType.ISSUE_MEMBER,
-    RelationType.RELATED_CONTEXT,
-}
+_ASSERTABLE_RELATIONS: Final = frozenset(RelationType) - {RelationType.ISSUE_MEMBER}
 
 
 def _semantic_relation(value: object) -> RelationType:
@@ -12574,9 +12576,13 @@ class AssertRecordAssociation:
     links include the Constraint's Project and whose members include the
     Task, with an exact-version `origin` anchor. `blocks`: a Task or
     Constraint blocks another one (never itself, never closing a cycle), with
-    an exact-version `corroborates` anchor. `context_issue_id` scopes the
-    association to one of your Issues. The same active meaning returns the
-    existing association with `created: false`.
+    an exact-version `corroborates` anchor. `related_context`: two distinct
+    Meetings, notes, Tasks, Commitments, Constraints or Capture versions that
+    both belong to the required `context_issue_id` relate within it, with an
+    exact-version `corroborates` anchor; it is stored once whichever order you
+    name them in. `context_issue_id` scopes the association to one of your
+    Issues. The same active meaning returns the existing association with
+    `created: false`; a contested one is refused.
     """
 
     capability: ClassVar[Capability] = Capability.RECORDS_ASSOCIATIONS_ASSERT
@@ -12587,7 +12593,13 @@ class AssertRecordAssociation:
             "to_record": _RECORD_REF_SCHEMA,
             "relation_type": {
                 "type": "string",
-                "enum": ["blocks", "discusses", "escalated_from", "originated_from"],
+                "enum": [
+                    "blocks",
+                    "discusses",
+                    "escalated_from",
+                    "originated_from",
+                    "related_context",
+                ],
             },
             "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
             "evidence_anchors": {**_EVIDENCE_ANCHORS_SCHEMA, "minItems": 1},
@@ -12616,6 +12628,10 @@ class AssertRecordAssociation:
             raise InvalidRequestError(SafeDetail.RELATION_TYPE)
         if self.context_issue_id is not None:
             _identifier(self.context_issue_id, IdKind.SITUATION, SafeDetail.CONTEXT_ISSUE_ID)
+        if relation is RelationType.RELATED_CONTEXT:
+            # S3 section 3.1: one stored order, before the request digest, so
+            # both orders are one request under one key.
+            from_ref, to_ref = related_context_order(from_ref, to_ref)
         return AssociationAssertRequest(
             from_ref=from_ref,
             to_ref=to_ref,
@@ -13113,6 +13129,12 @@ def _aware_instant(value: object, detail: SafeDetail) -> datetime:
     return instant
 
 
+#: An ISO-8601 instant with an offset (S3 `known_at`, `valid_at`, `effective_at`).
+_INSTANT_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {"type": "string", "format": "date-time", "description": "ISO-8601 with an offset."}
+)
+
+
 @dataclass(frozen=True, slots=True)
 class ListIssueHandoffs:
     """`issues.handoffs.list`: one page of an Issue's handoffs, oldest first.
@@ -13137,6 +13159,7 @@ class ListIssueHandoffs:
             "after": _issue_id_schema(
                 IdKind.ISSUE_HANDOFF, "Keyset cursor: the last handoff_id shown."
             ),
+            "known_at": _INSTANT_SCHEMA,
         }
     )
 
@@ -13144,6 +13167,7 @@ class ListIssueHandoffs:
     commitment_id: str | None = None
     page_size: int | None = None
     after: str | None = None
+    known_at: str | None = None
 
     def __post_init__(self) -> None:
         self.handoff_request()
@@ -13163,6 +13187,7 @@ class ListIssueHandoffs:
             commitment_id=self.commitment_id,
             page_size=DEFAULT_ISSUE_PAGE_SIZE if sized is None else sized,
             after=self.after,
+            known_at=_optional_instant(self.known_at, SafeDetail.KNOWN_AT),
         )
 
 
@@ -13536,9 +13561,6 @@ _LINEAGE_CURSOR: Final = re.compile(r"[A-Za-z0-9_-]{1,2048}")
 DEFAULT_BACKFILL_BATCH_SIZE: Final = 200
 MAX_BACKFILL_BATCH_SIZE: Final = 500
 
-_INSTANT_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
-    {"type": "string", "format": "date-time", "description": "ISO-8601 with an offset."}
-)
 _LINEAGE_CURSOR_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
     {
         "type": "string",
@@ -13808,13 +13830,19 @@ class CorrectIssueHandoff:
     effective_at: str | None = None
 
     def __post_init__(self) -> None:
-        _identifier(self.handoff_id, IdKind.ISSUE_HANDOFF, SafeDetail.HANDOFF_ID)
+        self.handoff_request()
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def handoff_request(self) -> HandoffCorrectRequest:
+        """The parsed request this command states."""
+        handoff_id = _identifier(self.handoff_id, IdKind.ISSUE_HANDOFF, SafeDetail.HANDOFF_ID)
         action = _handoff_correction_action(self.action)
+        effective_at: datetime | None = None
         if action is HandoffCorrectionAction.RETIME:
-            _aware_instant(self.effective_at, SafeDetail.EFFECTIVE_AT)
+            effective_at = _aware_instant(self.effective_at, SafeDetail.EFFECTIVE_AT)
         elif self.effective_at is not None:
             raise InvalidRequestError(SafeDetail.EFFECTIVE_AT)
-        _blank_refused_reason(self.reason)
+        reason = _blank_refused_reason(self.reason)
         anchor = parse_evidence_anchor(self.evidence_anchor, SafeDetail.EVIDENCE_ANCHOR)
         role = (
             LineageEvidenceRole.HANDOFF
@@ -13826,7 +13854,13 @@ class CorrectIssueHandoff:
             or anchor.version_kind is not SourceVersionKind.IMMUTABLE_VERSION
         ):
             raise InvalidRequestError(SafeDetail.EVIDENCE_ANCHOR)
-        _lineage_key(_idempotency_key(self.idempotency_key))
+        return HandoffCorrectRequest(
+            handoff_id=handoff_id,
+            action=action,
+            effective_at=effective_at,
+            reason=reason,
+            evidence_anchor=anchor,
+        )
 
 
 def _handoff_correction_action(value: object) -> HandoffCorrectionAction:

@@ -73,6 +73,7 @@ from my_pa.contracts.ports import (
 from my_pa.domain.capture.lifecycle import CaptureLifecycleState
 from my_pa.domain.lineage.model import RecordRef
 from my_pa.domain.lineage.vocabulary import (
+    LIVE_LINK_STATES,
     MANDATORY_MEMBER_ROLES,
     AcceptanceBasis,
     LinkLifecycleState,
@@ -134,6 +135,11 @@ _NATIVE: Final[Mapping[RecordFamily, tuple[Table, str]]] = {
     RecordFamily.CONSTRAINT: (project_constraints, "constraint_id"),
     RecordFamily.CAPTURE_VERSION: (capture_versions, "version_id"),
 }
+
+
+#: S3 section 3: the head states that hold an identity and are traversed, as
+#: stored tokens in a fixed order.
+_LIVE_STATES: Final = tuple(sorted(state.value for state in LIVE_LINK_STATES))
 
 
 def _mine(table: Table, principal_id: str) -> ColumnElement[bool]:
@@ -387,7 +393,8 @@ class SqlRecordLineageRepository(RecordLineageRepository):
             .select_from(_heads_with_links())
             .where(
                 _mine(record_link_heads, principal_id),
-                record_link_heads.c.lifecycle_state == LinkLifecycleState.ACTIVE.value,
+                # S3 section 6.2 step 6: contested `blocks` heads stay in the search.
+                record_link_heads.c.lifecycle_state.in_(_LIVE_STATES),
                 record_links.c.relation_type == RelationType.BLOCKS.value,
                 tuple_(record_links.c.from_family, record_links.c.from_id).in_(pairs),
             )
@@ -408,7 +415,8 @@ class SqlRecordLineageRepository(RecordLineageRepository):
                 .where(
                     _mine(record_link_heads, principal_id),
                     record_link_heads.c.normalized_identity == normalized_identity,
-                    record_link_heads.c.lifecycle_state == LinkLifecycleState.ACTIVE.value,
+                    # S3 section 3.1: a contested head still holds its identity.
+                    record_link_heads.c.lifecycle_state.in_(_LIVE_STATES),
                 )
                 .with_for_update(of=record_link_heads)
             ).one_or_none()
@@ -661,7 +669,8 @@ class SqlRecordLineageRepository(RecordLineageRepository):
                 .select_from(_heads_with_links())
                 .where(
                     _mine(record_link_heads, principal_id),
-                    record_link_heads.c.lifecycle_state == LinkLifecycleState.ACTIVE.value,
+                    # S3 section 9: live heads, so a contested link is followed and shown.
+                    record_link_heads.c.lifecycle_state.in_(_LIVE_STATES),
                     or_(
                         tuple_(record_links.c.from_family, record_links.c.from_id).in_(pairs),
                         tuple_(record_links.c.to_family, record_links.c.to_id).in_(pairs),
@@ -805,6 +814,30 @@ class SqlRecordLineageRepository(RecordLineageRepository):
                 )
             )
         return {meeting_id: tuple(versions) for meeting_id, versions in found.items()}
+
+    def links_in_issue_context(
+        self, principal_id: str, issue_id: str, inside: Collection[RecordRef]
+    ) -> tuple[LinkHeadRecord, ...]:
+        pairs = sorted(
+            {(ref.family.value, ref.record_id) for ref in inside}
+            | {(RecordFamily.SITUATION.value, issue_id)}
+        )
+        rows = self._rows(
+            select(*_HEAD_COLUMNS)
+            .select_from(_heads_with_links())
+            .where(
+                _mine(record_link_heads, principal_id),
+                record_link_heads.c.lifecycle_state.in_(_LIVE_STATES),
+                record_links.c.kind == RecordLinkKind.SEMANTIC.value,
+                or_(
+                    record_links.c.context_issue_id == issue_id,
+                    tuple_(record_links.c.from_family, record_links.c.from_id).in_(pairs),
+                    tuple_(record_links.c.to_family, record_links.c.to_id).in_(pairs),
+                ),
+            )
+            .order_by(record_links.c.link_id.collate("C"))
+        )
+        return tuple(_to_head(row) for row in rows)
 
     # --- the knowledge clock (S3 contract sections 3.4, 4.2 and 6.2) -------------
 

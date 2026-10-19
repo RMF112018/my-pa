@@ -31,6 +31,19 @@ and admits `escalated_from` (Issue-scoped, Project-qualified, after its Task)
 and `blocks` (no self-loop; a bounded cycle search under the Principal's
 `:blocks` advisory key).
 
+**S3** (S3 contract sections 3.1, 3.2, 6.2 and 7.4): `records.associations.contest`
+and `.reinstate` move a semantic link between `active` and `contested` under
+the transition table (`domain.lineage.closure.link_transition`); a contest
+needs an exact `contradicts` anchor and a reinstate re-applies the relation's
+own evidence rule. A contested link keeps its identity, so an assert of it is
+`conflict` / `state`. `related_context` is asserted Issue-scoped, with both
+endpoints inside the context Issue and an exact `corroborates` anchor, stored
+once in canonical order. Every semantic revision takes `FOR SHARE` on every
+Issue the link is in the context of (section 3.2's one predicate,
+`issues_in_context_of`) -- including the Issues a null-context link lies
+inside -- and a closed one refuses it (`conflict` / `state`), so a closed
+Issue never acquires or loses a dispute.
+
 **The reverse read** (`read_lineage`, section 7.2) is current-state,
 Principal-scoped, active links only, lock-free, and bounded: matching Issues
 from the root's pair set, one Issue selected (or the candidates, or one hop
@@ -102,7 +115,13 @@ from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import ensure_utc
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.lineage.canonical import evidence_set_digest, normalized_identity, request_digest
-from my_pa.domain.lineage.closure import VERSIONED_MEMBER_FAMILIES, has_resolution_anchor
+from my_pa.domain.lineage.closure import (
+    VERSIONED_MEMBER_FAMILIES,
+    has_resolution_anchor,
+    in_issue_context,
+    is_contest_evidence,
+    link_transition,
+)
 from my_pa.domain.lineage.model import EvidenceAnchor, RecordRef
 from my_pa.domain.lineage.vocabulary import (
     COMPOSITE_ONLY_RELATIONS,
@@ -147,6 +166,9 @@ __all__ = [
     "association_views",
     "evidence_availability",
     "insert_new_link",
+    "issue_inside_set",
+    "issues_in_context_of",
+    "links_in_context",
     "member_native_version",
     "require_no_blocks_cycle",
     "traverse_lineage",
@@ -158,6 +180,8 @@ _MEMBERSHIP_CORRECT: Final = Capability.ISSUES_MEMBERSHIPS_CORRECT.value
 _ASSERT: Final = Capability.RECORDS_ASSOCIATIONS_ASSERT.value
 _CORRECT: Final = Capability.RECORDS_ASSOCIATIONS_CORRECT.value
 _END: Final = Capability.RECORDS_ASSOCIATIONS_END.value
+_CONTEST: Final = Capability.RECORDS_ASSOCIATIONS_CONTEST.value
+_REINSTATE: Final = Capability.RECORDS_ASSOCIATIONS_REINSTATE.value
 
 #: `records.lineage` bounds (section 7.2; design values, not benchmarks).
 MAX_LINEAGE_DEPTH: Final = 4
@@ -550,6 +574,13 @@ class RecordLineageApplication:
             and context != request.to_ref.record_id
         ):
             raise InvalidRequestError(SafeDetail.CONTEXT_ISSUE_ID)
+        if request.relation_type is RelationType.RELATED_CONTEXT:
+            # S3 section 3.1: always Issue-scoped, between two distinct records
+            # (the command stored them in canonical order).
+            if context is None:
+                raise InvalidRequestError(SafeDetail.CONTEXT_ISSUE_ID)
+            if request.from_ref == request.to_ref:
+                raise InvalidRequestError(SafeDetail.TO_RECORD)
         locked = lock_lineage_sources(
             issues,
             lineage,
@@ -579,6 +610,13 @@ class RecordLineageApplication:
             if request.from_ref == request.to_ref:
                 raise InvalidRequestError(SafeDetail.TO_RECORD)
             blocks = (request.from_ref, request.to_ref)
+        elif request.relation_type is RelationType.RELATED_CONTEXT and context is not None:
+            # S3 section 3.1: both endpoints inside the context Issue now.
+            inside = issue_inside_set(lineage, principal_id, context)
+            if request.from_ref not in inside:
+                raise InvalidRequestError(SafeDetail.FROM_RECORD)
+            if request.to_ref not in inside:
+                raise InvalidRequestError(SafeDetail.TO_RECORD)
         identity = normalized_identity(
             kind=kind,
             relation_type=request.relation_type,
@@ -632,6 +670,9 @@ class RecordLineageApplication:
         if blocks is not None:
             lineage.lock_blocks(principal_id)
         existing = lineage.active_head_by_identity(principal_id, root.normalized_identity)
+        if existing is not None and existing.lifecycle_state is LinkLifecycleState.CONTESTED:
+            # S3 section 3.1: a disputed claim is never handed back as success.
+            raise ConflictError(SafeDetail.STATE)
         if existing is not None:
             # The active link with this meaning answers; its authority and
             # evidence never change, and only the request row is written.
@@ -783,6 +824,60 @@ class RecordLineageApplication:
             now=now,
         )
 
+    def contest_association(
+        self,
+        uow: UnitOfWork,
+        principal_id: str,
+        request: AssociationCorrectRequest,
+        idempotency_key: str,
+        authority: LineageAuthority,
+        now: datetime,
+    ) -> AssociationResult:
+        """Dispute an active semantic association (S3 section 3.1): it reads `contested`."""
+        digest = request_digest(_CONTEST, principal_id, _revise_document(request))
+        return self._revise(
+            uow,
+            principal_id,
+            capability=_CONTEST,
+            kind=RecordLinkKind.SEMANTIC,
+            action=LinkRevisionAction.CONTEST,
+            link_id=request.link_id,
+            expected_revision=request.expected_revision,
+            reason=request.reason,
+            evidence=request.evidence_anchors,
+            idempotency_key=idempotency_key,
+            digest=digest,
+            authority=authority,
+            now=now,
+        )
+
+    def reinstate_association(
+        self,
+        uow: UnitOfWork,
+        principal_id: str,
+        request: AssociationCorrectRequest,
+        idempotency_key: str,
+        authority: LineageAuthority,
+        now: datetime,
+    ) -> AssociationResult:
+        """Resolve a contested semantic association back to `active` (S3 section 3.1)."""
+        digest = request_digest(_REINSTATE, principal_id, _revise_document(request))
+        return self._revise(
+            uow,
+            principal_id,
+            capability=_REINSTATE,
+            kind=RecordLinkKind.SEMANTIC,
+            action=LinkRevisionAction.REINSTATE,
+            link_id=request.link_id,
+            expected_revision=request.expected_revision,
+            reason=request.reason,
+            evidence=request.evidence_anchors,
+            idempotency_key=idempotency_key,
+            digest=digest,
+            authority=authority,
+            now=now,
+        )
+
     @staticmethod
     def _revise(
         uow: UnitOfWork,
@@ -817,13 +912,24 @@ class RecordLineageApplication:
             # link id given to `issues.memberships.end`/`.correct`.
             raise InvalidRequestError(SafeDetail.LINK_ID)
         records_member = capability == _MEMBERSHIP_CORRECT
+        named = _named_issues(link)
+        if link.kind is RecordLinkKind.SEMANTIC:
+            # S3 section 3.2: every Issue the link is in the context of, including
+            # those a null-context link lies inside, so the frozen-closed rule
+            # holds and a contest serializes with `issues.close`.
+            already = {issue_id for issue_id, _ in named}
+            named = named + tuple(
+                (issue_id, SafeDetail.CONTEXT_ISSUE_ID)
+                for issue_id in sorted(issues_in_context_of(lineage, principal_id, link))
+                if issue_id not in already
+            )
         locked = lock_lineage_sources(
             issues,
             lineage,
             principal_id,
             # S2 section 6.2 step 3: the owning or context Issue, and an Issue
             # endpoint, so a revision serializes with `issues.close`.
-            issue_ids=_named_issues(link),
+            issue_ids=named,
             # The member's native row, to read the version it records.
             endpoints=((link.to_ref, SafeDetail.MEMBER),) if records_member else (),
             anchors=evidence,
@@ -834,13 +940,24 @@ class RecordLineageApplication:
         head = lineage.lock_head(principal_id, link_id)
         if head is None:
             raise RepositoryFailureError
-        if (
-            head.revision_no != expected_revision
-            or head.lifecycle_state is not LinkLifecycleState.ACTIVE
-        ):
+        if head.revision_no != expected_revision:
             raise ConflictError(SafeDetail.STALE_VERSION)
+        state = link_transition(action, head.lifecycle_state)
+        if state is None:
+            # S3 section 7.5: a contest of a non-active or a reinstate of a
+            # non-contested link is `state`; S1/S2 kept `stale_version` for a
+            # correction or end of a link that is no longer active.
+            raise ConflictError(
+                SafeDetail.STATE
+                if action in (LinkRevisionAction.CONTEST, LinkRevisionAction.REINSTATE)
+                else SafeDetail.STALE_VERSION
+            )
         anchors = admit_evidence_set(issues, principal_id, locked.evidence)
         digest_of_set = evidence_set_digest(anchors)
+        if action is LinkRevisionAction.CONTEST and not is_contest_evidence(anchors):
+            raise InvalidRequestError(SafeDetail.EVIDENCE_ANCHORS)
+        if action is LinkRevisionAction.REINSTATE:
+            require_relation_evidence(link.relation_type, link.from_ref, link.to_ref, anchors)
         if action is LinkRevisionAction.CORRECT_EVIDENCE:
             require_relation_evidence(link.relation_type, link.from_ref, link.to_ref, anchors)
             current = _revision_of(lineage, principal_id, link_id, head.revision_no)
@@ -859,11 +976,7 @@ class RecordLineageApplication:
             revision_id=issue_identifier(IdKind.RECORD_LINK_REVISION),
             predecessor_revision_no=head.revision_no,
             action=action,
-            lifecycle_state=(
-                LinkLifecycleState.ENDED
-                if action is LinkRevisionAction.END
-                else LinkLifecycleState.ACTIVE
-            ),
+            lifecycle_state=state,
             acceptance_basis=AcceptanceBasis.USER_CONFIRMED,
             authority_class=authority.authority_class.value,
             decision_channel=authority.decision_channel.value,
@@ -1017,6 +1130,119 @@ def _named_issues(link: RecordLinkRecord) -> tuple[tuple[str, SafeDetail], ...]:
         if ref.family is RecordFamily.SITUATION:
             named.setdefault(ref.record_id, detail)
     return tuple(named.items())
+
+
+# --- S3 section 3.2: inside sets and "in the Issue's context" (current heads) ------
+
+
+def _pair_set(
+    lineage: RecordLineageRepository, principal_id: str, ref: RecordRef
+) -> tuple[RecordRef, ...]:
+    """A record's pair set now: itself, its Meeting, or its Meeting's note versions."""
+    if ref.family is RecordFamily.MEETING_NOTE_VERSION:
+        record = lineage.resolve_records(principal_id, (ref,)).get(ref)
+        if record is not None and record.meeting_id is not None:
+            return (ref, RecordRef(family=RecordFamily.MEETING, record_id=record.meeting_id))
+        return (ref,)
+    if ref.family is RecordFamily.MEETING:
+        notes = lineage.note_versions_of(principal_id, (ref.record_id,)).get(ref.record_id, ())
+        return (
+            ref,
+            *(
+                RecordRef(family=RecordFamily.MEETING_NOTE_VERSION, record_id=note.note_version_id)
+                for note in notes
+            ),
+        )
+    return (ref,)
+
+
+def issue_inside_set(
+    lineage: RecordLineageRepository, principal_id: str, issue_id: str
+) -> frozenset[RecordRef]:
+    """Issue *I*'s inside set now: *I*, its active members and their pair sets."""
+    issue = RecordRef(family=RecordFamily.SITUATION, record_id=issue_id)
+    inside = {issue}
+    for head in lineage.active_links_incident(principal_id, (issue,)):
+        link = head.link
+        if link.kind is RecordLinkKind.ISSUE_MEMBERSHIP and link.from_ref == issue:
+            inside.update(_pair_set(lineage, principal_id, link.to_ref))
+    return frozenset(inside)
+
+
+def _issues_holding(
+    lineage: RecordLineageRepository, principal_id: str, ref: RecordRef
+) -> frozenset[str]:
+    """The Issues `ref` is inside now: itself, or those with an active member in its pair set.
+
+    The pair relation is symmetric (a note version and its Meeting), so `ref`
+    is in an active member's pair set exactly when that member is in `ref`'s.
+    """
+    pair = set(_pair_set(lineage, principal_id, ref))
+    holding = {ref.record_id} if ref.family is RecordFamily.SITUATION else set()
+    for head in lineage.active_links_incident(principal_id, pair):
+        link = head.link
+        if link.kind is RecordLinkKind.ISSUE_MEMBERSHIP and link.to_ref in pair:
+            holding.add(link.from_ref.record_id)
+    return frozenset(holding)
+
+
+def issues_in_context_of(
+    lineage: RecordLineageRepository, principal_id: str, link: RecordLinkRecord
+) -> frozenset[str]:
+    """Every Issue one link is in the context of now (section 3.2, current heads).
+
+    The candidates are its context, its Issue endpoints and, for a
+    null-context semantic link, the Issues both endpoints are inside; each is
+    kept only when `in_issue_context` says so against that Issue's inside set.
+    """
+    candidates: set[str] = set()
+    if link.context_issue_id is not None:
+        candidates.add(link.context_issue_id)
+    candidates.update(
+        ref.record_id
+        for ref in (link.from_ref, link.to_ref)
+        if ref.family is RecordFamily.SITUATION
+    )
+    if link.kind is RecordLinkKind.SEMANTIC and link.context_issue_id is None:
+        candidates.update(
+            _issues_holding(lineage, principal_id, link.from_ref)
+            & _issues_holding(lineage, principal_id, link.to_ref)
+        )
+    return frozenset(
+        issue_id
+        for issue_id in candidates
+        if in_issue_context(
+            kind=link.kind,
+            from_ref=link.from_ref,
+            to_ref=link.to_ref,
+            context_issue_id=link.context_issue_id,
+            issue_id=issue_id,
+            inside=(
+                issue_inside_set(lineage, principal_id, issue_id)
+                if link.context_issue_id is None
+                else frozenset()
+            ),
+        )
+    )
+
+
+def links_in_context(
+    lineage: RecordLineageRepository, principal_id: str, issue_id: str
+) -> tuple[LinkHeadRecord, ...]:
+    """Every live semantic link in Issue *I*'s context now, by `link_id` (code point)."""
+    inside = issue_inside_set(lineage, principal_id, issue_id)
+    return tuple(
+        head
+        for head in lineage.links_in_issue_context(principal_id, issue_id, inside)
+        if in_issue_context(
+            kind=head.link.kind,
+            from_ref=head.link.from_ref,
+            to_ref=head.link.to_ref,
+            context_issue_id=head.link.context_issue_id,
+            issue_id=issue_id,
+            inside=inside,
+        )
+    )
 
 
 def _inserted(

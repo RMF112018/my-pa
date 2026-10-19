@@ -901,7 +901,8 @@ AT-008, AT-011, AT-013, AT-014, AT-016, AT-024 Meeting view, timeline and graph,
 reverse-root equivalence → S3; AT-015, AT-018, AT-019, AT-022, AT-023 Commitment v2 →
 Program/report work packages; AT-020, AT-021 → out of scope until OD-06.
 The S2 tests are bound in the [S2 contract](record-lineage-s2-contract.md) section 10,
-not in this table.
+and the S3 tests in the [S3 contract](record-lineage-s3-contract.md) section 10, not in
+this table.
 
 ## 11. Deferred work and its owner slice
 
@@ -925,7 +926,13 @@ which narrows them: S2 admits `delegated_from`, `escalated_from`, `blocks` and
 `created_to_resolve`, and moves `related_context` and `contest`/`reinstate` to S3; the
 composite writes are `issues.work.create_task` and `issues.work.create_commitment` (no
 composite Constraint create); restricted-classification evidence stays S3 (S2
-contract sections 11 and 12).
+contract sections 11 and 12). The S3 rows are specified by the
+[S3 contract](record-lineage-s3-contract.md), which builds `issues.history`,
+`records.associations.history`, `known_at` / `valid_at` reads and grant-bound cursors on
+`records.lineage`, `issues.timeline`, `related_context`, `contest` / `reinstate`, the
+WP-03B backfill and the WP-06A Issue and Meeting views, and carries proposals and review,
+the lineage Record Event family, `list_for_record`, version selectors and the other
+native virtual edges (S3 contract sections 11 and 12).
 
 ## 12. W1 divergences — resolution
 

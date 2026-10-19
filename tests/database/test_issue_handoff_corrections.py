@@ -28,8 +28,7 @@ from datetime import datetime
 from typing import Any
 
 import pytest
-from sqlalchemy import event, text
-from sqlalchemy.engine import Connection
+from sqlalchemy import text
 
 from my_pa.application.commands import ListIssueHandoffs
 from my_pa.application.errors import InvalidRequestError
@@ -43,7 +42,9 @@ from tests.database.lineage_s3_harness import (
     contradicts,
     correct_handoff,
     mark_count,
+    mark_taken_first,
     shortly_after,
+    statements,
 )
 
 pytestmark = pytest.mark.database
@@ -129,23 +130,6 @@ def _shown(instant: str) -> str:
     return value.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
-@dataclass
-class _Statements:
-    seen: list[str] = field(default_factory=list)
-
-    def __call__(
-        self,
-        connection: Connection,
-        cursor: object,
-        statement: str,
-        parameters: object,
-        context: object,
-        executemany: bool,
-    ) -> None:
-        del connection, cursor, parameters, context, executemany
-        self.seen.append(statement)
-
-
 # ---- retime -------------------------------------------------------------------------------
 
 
@@ -189,9 +173,13 @@ def test_a_retime_needs_a_handoff_anchor_and_stays_in_order(runtime: S3Runtime) 
         ) == ("invalid_request", ["effective_at"]), name
     assert all_s3_counts(runtime.engine) == before
     marks = mark_count(runtime.engine)
-    written = _ok(
-        runtime, correct_handoff(middle, "retime", "in-order", anchor, effective_at=chain.at(250))
-    )
+    with statements(runtime.engine) as seen:
+        written = _ok(
+            runtime,
+            correct_handoff(middle, "retime", "in-order", anchor, effective_at=chain.at(250)),
+        )
+    # Section 6.2 step 1b: the mark right after the reservation, before any lock.
+    assert mark_taken_first(seen)
     assert written["replayed"] is False
     correction = written["correction"]
     assert (correction["handoff_id"], correction["correction_no"], correction["action"]) == (
@@ -230,17 +218,12 @@ def test_only_the_last_live_handoff_can_be_voided(runtime: S3Runtime) -> None:
     first, second = (event["handoff_id"] for event in chain.events)
     anchor = _void_anchor(runtime, "void-last")
     before = all_s3_counts(runtime.engine)
-    statements = _Statements()
-    event.listen(runtime.engine, "before_cursor_execute", statements)
-    try:
+    with statements(runtime.engine) as seen:
         refused = _refused(runtime, correct_handoff(first, "void", "first-early", anchor))
-    finally:
-        event.remove(runtime.engine, "before_cursor_execute", statements)
     # The application refuses it; no correction INSERT ever reaches the database.
     assert refused == ("invalid_request", ["handoff_id"])
     assert not any(
-        "INSERT INTO knowledge.issue_responsibility_corrections" in statement
-        for statement in statements.seen
+        "INSERT INTO knowledge.issue_responsibility_corrections" in statement for statement in seen
     )
     assert all_s3_counts(runtime.engine) == before
     voided = _ok(runtime, correct_handoff(second, "void", "second", anchor))

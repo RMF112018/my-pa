@@ -41,7 +41,9 @@ from tests.database.lineage_s3_harness import (
     contest,
     corroborates,
     mark_count,
+    mark_taken_first,
     reinstate,
+    statements,
 )
 
 pytestmark = pytest.mark.database
@@ -145,11 +147,18 @@ def test_contest_needs_a_contradicting_exact_anchor(runtime: S3Runtime) -> None:
 def test_contest_then_reinstate_restores_active(runtime: S3Runtime) -> None:
     scene = blocks_scene(runtime, "round-trip")
     marks = mark_count(runtime.engine)
-    contested = _ok(runtime, contest(scene["link"], 1, "round-trip", (scene["contradicts"],)))
+    with statements(runtime.engine) as contest_statements:
+        contested = _ok(runtime, contest(scene["link"], 1, "round-trip", (scene["contradicts"],)))
     assert contested["replayed"] is False
+    # Section 6.2 step 1b: the mark right after the reservation, before any lock.
+    assert mark_taken_first(contest_statements)
     assert contested["association"]["revision_no"] == 2
     assert contested["association"]["lifecycle_state"] == "contested"
-    reinstated = _ok(runtime, reinstate(scene["link"], 2, "round-trip", (scene["corroborates"],)))
+    with statements(runtime.engine) as reinstate_statements:
+        reinstated = _ok(
+            runtime, reinstate(scene["link"], 2, "round-trip", (scene["corroborates"],))
+        )
+    assert mark_taken_first(reinstate_statements)
     view = reinstated["association"]
     assert (view["link_id"], view["revision_no"], view["lifecycle_state"]) == (
         scene["link"],

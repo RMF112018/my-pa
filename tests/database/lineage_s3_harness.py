@@ -17,10 +17,12 @@ Every identity and every body here is synthetic.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Any, Final
 
-from sqlalchemy import Engine, func, insert, select, text
+from sqlalchemy import Engine, event, func, insert, select, text
 
 from my_pa.application.commands import (
     AssertRecordAssociation,
@@ -57,9 +59,11 @@ __all__ = [
     "corroborates",
     "direct_task",
     "mark_count",
+    "mark_taken_first",
     "reinstate",
     "related",
     "shortly_after",
+    "statements",
 ]
 
 #: The two S3 tables the L2 writes touch, beside every S1/S2 table.
@@ -86,6 +90,39 @@ def mark_count(engine: Engine, principal_id: str = PRINCIPAL) -> int:
                 {"p": principal_id},
             ).scalar_one()
         )
+
+
+@contextmanager
+def statements(engine: Engine) -> Iterator[list[str]]:
+    """Every statement `engine` sends inside the block, in order."""
+    seen: list[str] = []
+
+    def record(*arguments: Any) -> None:  # noqa: ANN401
+        seen.append(str(arguments[2]))
+
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        yield seen
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+
+
+_LOCKS: Final = ("FOR UPDATE", "FOR SHARE", "pg_advisory_xact_lock")
+
+
+def mark_taken_first(seen: list[str]) -> bool:
+    """S3 section 6.2 step 1b: the commit mark is the statement right after the reservation.
+
+    No statement up to the reservation takes a lock.
+    """
+    reservation = next(
+        index
+        for index, statement in enumerate(seen)
+        if "INSERT INTO knowledge.lineage_write_requests" in statement
+    )
+    return "knowledge.lineage_commit_mark(" in seen[reservation + 1] and not any(
+        lock in statement for statement in seen[: reservation + 1] for lock in _LOCKS
+    )
 
 
 class S3Runtime(S2Runtime):

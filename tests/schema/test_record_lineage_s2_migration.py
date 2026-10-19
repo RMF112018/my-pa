@@ -662,3 +662,210 @@ def test_downgrade_restores_every_s1_text(disposable_database: str, engine: Engi
     command.upgrade(_config(), "head")
     _assert_present(engine)
     assert _s1_texts(engine) == at_s2
+
+
+# ---- the downgrade refusal, one predicate family at a time (FR2-F01) ---------------------
+
+
+def _replica(connection: Connection) -> None:
+    """Silence every trigger (foreign keys, deferred set checks) for this transaction.
+
+    Each refusal case below seeds exactly one S2 fact, and several S2 rows
+    cannot exist alone while their triggers run (a closing revision's evidence,
+    a handoff's Commitment, a composite link's request). CHECKs still apply.
+    The disposable database's role is its superuser, as for the clone tier.
+    """
+    connection.execute(text("SET LOCAL session_replication_role = replica"))
+
+
+def _seed_revision_evidence(engine: Engine, world: object) -> None:
+    with engine.begin() as connection:
+        _replica(connection)
+        connection.execute(
+            insert(issue_revision_evidence).values(
+                principal_id=world.principal,  # type: ignore[attr-defined]
+                issue_id=world.issue,  # type: ignore[attr-defined]
+                version=1,
+                ordinal=1,
+                anchor_id=world.anchor,  # type: ignore[attr-defined]
+                role="resolution",
+            )
+        )
+
+
+def _seed_handoff(engine: Engine, world: object) -> None:
+    with engine.begin() as connection:
+        _replica(connection)
+        connection.execute(
+            insert(issue_responsibility_events).values(
+                principal_id=world.principal,  # type: ignore[attr-defined]
+                handoff_id="ihnd_lineages2mig0001",
+                issue_id=world.issue,  # type: ignore[attr-defined]
+                commitment_id="cmt_lineages2mig0001",
+                sequence_no=1,
+                predecessor_sequence_no=None,
+                from_holder_kind="entity",
+                from_entity_id="ent_lineages2mig0001",
+                to_holder_kind="principal",
+                to_entity_id=None,
+                effective_at=WHEN,
+                recorded_at=WHEN,
+                evidence_anchor_id=world.anchor,  # type: ignore[attr-defined]
+                reason="Synthetic handoff.",
+                acceptance_basis="user_confirmed",
+                authority_class="local_operator",
+                decision_channel="local_cli",
+                source_capability="issues.handoffs.record",
+            )
+        )
+
+
+def _seed_request_link(engine: Engine, world: object) -> None:
+    with engine.begin() as connection:
+        _replica(connection)
+        connection.execute(
+            insert(lineage_write_request_links).values(
+                principal_id=world.principal,  # type: ignore[attr-defined]
+                capability="issues.work.create_task",
+                idempotency_key="s2-mig-composite",
+                ordinal=1,
+                link_id=world.membership,  # type: ignore[attr-defined]
+                revision_no=1,
+            )
+        )
+
+
+def _seed_closed_revision(engine: Engine, world: object) -> None:
+    with engine.begin() as connection:
+        _replica(connection)
+        connection.execute(
+            text(
+                "INSERT INTO knowledge.issue_revisions (principal_id, issue_id, version, "
+                "revision_id, predecessor_version, action, state, title, authority_class, "
+                "decision_channel, source_capability, recorded_at, closed_at, outcome, "
+                "evidence_count, evidence_set_digest) VALUES (:p, :id, 2, "
+                "'irs_lineages2mig0009', 1, 'closed', 'closed', 'Synthetic issue', "
+                "'local_operator', 'local_cli', 'issues.close', now(), "
+                "'2026-10-18T12:00:00+00:00', 'Resolved.', 1, :digest)"
+            ),
+            {"p": world.principal, "id": world.issue, "digest": "d" * 64},  # type: ignore[attr-defined]
+        )
+
+
+def _seed_blocks_root(engine: Engine, world: object) -> None:
+    from tests.database.test_lineage_integrity_guards import _link_values, _task, _write_link
+
+    with engine.begin() as connection:
+        _replica(connection)
+        other = _task(connection, world.principal)  # type: ignore[attr-defined]
+        _write_link(
+            connection,
+            _link_values(
+                world.principal,  # type: ignore[attr-defined]
+                kind="semantic",
+                relation="blocks",
+                source=("task", world.task),  # type: ignore[attr-defined]
+                target=("task", other),
+            ),
+        )
+
+
+def _seed_member_version(engine: Engine, world: object) -> None:
+    """An S1 capability on the S2 schema: `issues.memberships.add` of a Task records its version."""
+    from tests.database.lineage_issue_harness import LineageRuntime
+    from tests.database.lineage_record_harness import GATEWAY, membership, task
+
+    del world
+    url = engine.url.render_as_string(hide_password=False)
+    runtime = LineageRuntime(url)
+    try:
+        issue = runtime.issue("s2-mig-member")
+        member = task(runtime, "s2-mig-member")
+        runtime.ok(membership(issue, "task", member, "s2-mig-member"), surface=GATEWAY)
+    finally:
+        runtime.close()
+    with engine.connect() as connection:
+        stored = connection.execute(
+            text(
+                "SELECT source_capability, member_native_version "
+                "FROM knowledge.record_link_revisions WHERE member_native_version IS NOT NULL"
+            )
+        ).all()
+        audited = set(
+            connection.execute(text("SELECT capability FROM knowledge.audit_events")).scalars()
+        )
+        requested = set(
+            connection.execute(
+                text("SELECT capability FROM knowledge.lineage_write_requests")
+            ).scalars()
+        )
+    # The only S2 trace is the observed version on an S1-capability revision.
+    assert [tuple(row) for row in stored] == [("issues.memberships.add", 1)]
+    assert not (audited | requested) & set(S2_CAPABILITIES)
+
+
+def _seed_s2_request(engine: Engine, world: object) -> None:
+    with engine.begin() as connection:
+        # A reserved request alone (its never-left-reserved trigger silenced).
+        _replica(connection)
+        connection.execute(
+            insert(lineage_write_requests).values(
+                principal_id=world.principal,  # type: ignore[attr-defined]
+                capability="issues.reopen",
+                idempotency_key="s2-mig-reserved",
+                request_digest="b" * 64,
+                created_at=WHEN,
+            )
+        )
+
+
+def _seed_s2_audit_capability(engine: Engine, world: object) -> None:
+    del world
+    with engine.begin() as connection:
+        _audit(
+            connection, capability="issues.close", purpose="issue_authoring", suffix="s2mig8001x"
+        )
+
+
+def _seed_s2_audit_purpose(engine: Engine, world: object) -> None:
+    del world
+    with engine.begin() as connection:
+        _audit(
+            connection,
+            capability="issues.read",
+            purpose="issue_work_authoring",
+            suffix="s2mig8002x",
+        )
+
+
+#: One case per `_REFUSE_DOWNGRADE` predicate family (and the audit purpose clause).
+_REFUSAL_CASES: Final = {
+    "issue_revision_evidence_row": _seed_revision_evidence,
+    "issue_responsibility_events_row": _seed_handoff,
+    "lineage_write_request_links_row": _seed_request_link,
+    "issue_revisions_s2_action_or_state": _seed_closed_revision,
+    "record_links_s2_relation_or_capability": _seed_blocks_root,
+    "record_link_revisions_member_native_version": _seed_member_version,
+    "lineage_write_requests_s2_capability": _seed_s2_request,
+    "audit_events_s2_capability": _seed_s2_audit_capability,
+    "audit_events_s2_purpose": _seed_s2_audit_purpose,
+}
+
+
+@pytest.mark.database
+@pytest.mark.migration
+@pytest.mark.parametrize("fact", sorted(_REFUSAL_CASES))
+def test_each_downgrade_refusal_family_alone_refuses(
+    disposable_database: str, engine: Engine, fact: str
+) -> None:
+    from tests.database.test_lineage_integrity_guards import _world
+
+    del disposable_database
+    command.upgrade(_config(), "head")
+    world = _world(engine, P)
+    _REFUSAL_CASES[fact](engine, world)
+    with pytest.raises(DBAPIError) as refused:
+        command.downgrade(_config(), PREVIOUS)
+    assert getattr(refused.value.orig, "sqlstate", None) == RESTRICT_VIOLATION
+    assert "refusing to downgrade d020b532ad7d" in str(refused.value)
+    _assert_present(engine)

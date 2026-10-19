@@ -28,7 +28,10 @@ from my_pa.application.commands import (
     AddIssueProjectLink,
     ArchiveCapture,
     AssertRecordAssociation,
+    CorrectRecordAssociation,
     EndIssueMembership,
+    EndIssueProjectLink,
+    EndRecordAssociation,
     ReadIssue,
     ReopenConstraint,
     UpdateIssue,
@@ -59,6 +62,7 @@ from tests.database.lineage_s2_harness import (
     GATEWAY,
     S2Runtime,
     all_s2_counts,
+    assertion,
     close,
     correct,
     handoff,
@@ -403,6 +407,32 @@ def test_a_same_set_reaffirmation_after_a_reclose_is_admitted(runtime: S2Runtime
     assert closed["issue"]["version"] == 4
 
 
+def test_a_same_set_correction_without_a_resolution_anchor_stays_refused(
+    runtime: S2Runtime,
+) -> None:
+    """Re-affirmation needs a `resolution` anchor in the set (S2 section 3.3, FR2-F03)."""
+    issue = runtime.issue("reaffirm-none")
+    task_id = runtime.task("reaffirm-none")
+    link = runtime.member(issue, "task", task_id, "reaffirm-none", "work")
+    meeting_id, note_id = meeting(runtime, "reaffirm-none")
+    anchors = (resolution_anchor(meeting_id, note_id, role="corroborates"),)
+    _ok(runtime, correct(link, 1, "reaffirm-none-1", anchors))
+    # The member's native version moves after the evidence was recorded.
+    runtime.transition(task_id, TaskLifecycleState.COMPLETED, "reaffirm-none")
+    before = all_s2_counts(runtime.engine)
+    assert _detail(_error(runtime, correct(link, 2, "reaffirm-none-2", anchors))) == (
+        "invalid_request",
+        ["evidence_anchors"],
+    )
+    assert all_s2_counts(runtime.engine) == before
+    membership_view = next(
+        view
+        for view in runtime.ok(ReadIssue(issue_id=issue, include_members=True))["memberships"]
+        if view["link_id"] == link
+    )
+    assert membership_view["revision_no"] == 2
+
+
 # ---- scope, no exception, no cascade ---------------------------------------------------
 
 
@@ -543,6 +573,22 @@ def test_a_closed_issue_refuses_lineage_writes(runtime: S2Runtime) -> None:
     created = datetime.fromisoformat(str(runtime.commitment_view(commitment)["created_at"]))
     handoff_anchor = runtime.handoff_anchor("frozen-handoff")
     origin, _, _ = capture(runtime, "frozen-c2-origin")
+    # Active at the close: a Project link, and a `blocks` link scoped to the Issue.
+    linked = runtime.project("frozen-linked")
+    runtime.link_project(issue, linked, "frozen-linked")
+    blocked_task, blocking_task = runtime.task("frozen-blocked"), runtime.task("frozen-blocking")
+    corroborates = note_anchor(meeting_id, note_id, NOTE_BODY, role="corroborates")
+    blocks = _ok(
+        runtime,
+        assertion(
+            "blocks",
+            ("task", blocking_task),
+            ("task", blocked_task),
+            "frozen-blocks",
+            (corroborates,),
+            context=issue,
+        ),
+    )["association"]["link_id"]
     _ok(runtime, close(issue, 1, "frozen", _closure_set(runtime, "frozen")))
     before = all_s2_counts(runtime.engine)
     other_task = runtime.task("frozen-other")
@@ -587,6 +633,30 @@ def test_a_closed_issue_refuses_lineage_writes(runtime: S2Runtime) -> None:
             evidence_anchors=(note_anchor(meeting_id, note_id, NOTE_BODY, role="discussion"),),
         ),
         close(issue, 2, "frozen-again", _closure_set(runtime, "frozen-again")),
+        # A semantic link whose context is the closed Issue, and a Project link
+        # active at the close (FR2-F02).
+        CorrectRecordAssociation(
+            link_id=blocks,
+            expected_revision=1,
+            idempotency_key="s2-frozen-blocks-correct",
+            reason="Re-evidenced.",
+            evidence_anchors=(
+                note_anchor(meeting_id, note_id, NOTE_BODY, role="corroborates", passage="pour"),
+            ),
+        ),
+        EndRecordAssociation(
+            link_id=blocks,
+            expected_revision=1,
+            idempotency_key="s2-frozen-blocks-end",
+            reason="No longer blocking.",
+        ),
+        EndIssueProjectLink(
+            issue_id=issue,
+            project_id=linked,
+            expected_membership_revision=1,
+            idempotency_key="s2-frozen-project-end",
+            reason="Out of scope.",
+        ),
     ]
     for command in refused:
         assert _detail(_error(runtime, command)) == ("conflict", ["state"]), command.capability

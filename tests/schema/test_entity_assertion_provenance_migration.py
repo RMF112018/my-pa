@@ -288,6 +288,12 @@ def test_downgrading_one_step_removes_exactly_these_two_tables(migrated_engine: 
         "issue_revision_evidence",
         "issue_responsibility_events",
         "lineage_write_request_links",
+        # Record lineage S3 stacks its five.
+        "lineage_commit_sequences",
+        "lineage_commit_marks",
+        "issue_responsibility_corrections",
+        "lineage_backfill_runs",
+        "lineage_backfill_items",
     }
     assert {
         "entities",

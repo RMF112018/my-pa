@@ -57,6 +57,8 @@ from sqlalchemy.exc import DBAPIError
 from tests.schema import knowledge_schema_ahead_contract as contract
 from tests.schema.lineage_s2_schema_ahead_contract import S2_CAPABILITIES as LINEAGE_S2_CAPABILITIES
 from tests.schema.lineage_s2_schema_ahead_contract import S2_PURPOSES as LINEAGE_S2_PURPOSES
+from tests.schema.lineage_s3_schema_ahead_contract import S3_CAPABILITIES as LINEAGE_S3_CAPABILITIES
+from tests.schema.lineage_s3_schema_ahead_contract import S3_PURPOSES as LINEAGE_S3_PURPOSES
 from tests.schema.lineage_schema_ahead_contract import S1_CAPABILITIES as LINEAGE_S1_CAPABILITIES
 from tests.schema.lineage_schema_ahead_contract import S1_PURPOSES as LINEAGE_S1_PURPOSES
 
@@ -2093,8 +2095,12 @@ _ADMITTED_AFTER_THIS_REVISION: Final = (
     | LINEAGE_S1_CAPABILITIES
     # The record lineage S2 revision restates them again with its own names.
     | LINEAGE_S2_CAPABILITIES
+    # And the record lineage S3 revision with its own.
+    | LINEAGE_S3_CAPABILITIES
 )
-_PURPOSES_ADMITTED_AFTER_THIS_REVISION: Final = LINEAGE_S1_PURPOSES | LINEAGE_S2_PURPOSES
+_PURPOSES_ADMITTED_AFTER_THIS_REVISION: Final = (
+    LINEAGE_S1_PURPOSES | LINEAGE_S2_PURPOSES | LINEAGE_S3_PURPOSES
+)
 
 
 def _assert_alters(connection: Connection) -> None:

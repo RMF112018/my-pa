@@ -131,7 +131,8 @@ def test_s2_capabilities_are_operator_decision_required() -> None:
     declared = _s2()
     assert {capability.value for capability in declared} == S2_NAMES
     assert declared <= _LINEAGE_CAPABILITIES
-    assert len(_LINEAGE_CAPABILITIES) == 22
+    # Record lineage S3 adds its own names to the same switch set, 22 -> 30.
+    assert len(_LINEAGE_CAPABILITIES) == 30
     for capability in declared:
         policy = CHATLLM_CAPABILITY_POLICY[capability]
         assert policy.classification is ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED
@@ -291,7 +292,9 @@ def test_assert_admits_exactly_the_s2_relations_it_writes() -> None:
     schema = AssertRecordAssociation.mcp_payload_properties["relation_type"]
     published = list(schema["enum"])  # type: ignore[index]
     assert published == ["blocks", "discusses", "escalated_from", "originated_from"]
-    semantic = {relation.value for relation in RelationType} - {"issue_member"}
+    # The S2 subset of the widened vocabulary: S3 adds `related_context`, which
+    # the assert refuses until the S3 rules for it land (S3 contract section 3.1).
+    semantic = {relation.value for relation in RelationType} - {"issue_member", "related_context"}
     assert set(published) == semantic - {relation.value for relation in COMPOSITE_ONLY_RELATIONS}
     anchor = {**_ANCHOR, "role": "corroborates"}
     payloads = {

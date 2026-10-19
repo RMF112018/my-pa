@@ -79,7 +79,9 @@ from my_pa.application.commands import (
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
     ConfigureProjectControls,
+    ContestRecordAssociation,
     CorrectGoodNotes,
+    CorrectIssueHandoff,
     CorrectIssueMembership,
     CorrectRecordAssociation,
     CreateCapture,
@@ -175,6 +177,7 @@ from my_pa.application.commands import (
     ListUnresolvedMentions,
     MergeEntities,
     ObserveEntityMention,
+    PlanLineageBackfill,
     PrepareContext,
     PreviewConstraintSync,
     PreviewEntityMerge,
@@ -194,6 +197,8 @@ from my_pa.application.commands import (
     ReadIntelligenceArtifact,
     ReadIssue,
     ReadIssueClosureReadiness,
+    ReadIssueHistory,
+    ReadIssueTimeline,
     ReadKnowledge,
     ReadKnowledgeAssertion,
     ReadManagedDocument,
@@ -202,15 +207,18 @@ from my_pa.application.commands import (
     ReadPortfolioConstraintOverview,
     ReadProject,
     ReadProjectControlsStatus,
+    ReadRecordAssociationHistory,
     ReadRecordLineage,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
     RecordIssueHandoff,
     RecordTask,
+    ReinstateRecordAssociation,
     ReopenConstraint,
     ReopenIssue,
     ReorderConstraintCategories,
+    ReportLineageBackfill,
     ResolveConstraintSyncConflict,
     ResolveEntity,
     ResolveIntelligenceSet,
@@ -1414,6 +1422,62 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
                 "origin_evidence_ref": "cap_policyorigin00001",
             },
         ),
+        # Record lineage S3 (S3 contract section 7).
+        Capability.RECORDS_ASSOCIATIONS_CONTEST: ContestRecordAssociation(
+            link_id="irl_policylink00001",
+            expected_revision=1,
+            idempotency_key="policy-records-associations-contest-0001",
+            reason="the policy association is disputed",
+            evidence_anchors=(
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_policymeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_policynote00001",
+                    "source_sha256": "a" * 64,
+                    "role": "contradicts",
+                },
+            ),
+        ),
+        Capability.RECORDS_ASSOCIATIONS_REINSTATE: ReinstateRecordAssociation(
+            link_id="irl_policylink00001",
+            expected_revision=2,
+            idempotency_key="policy-records-associations-reinstate-0001",
+            reason="the policy dispute was resolved",
+            evidence_anchors=(
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_policymeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_policynote00001",
+                    "source_sha256": "a" * 64,
+                    "role": "corroborates",
+                },
+            ),
+        ),
+        Capability.RECORDS_ASSOCIATIONS_HISTORY: ReadRecordAssociationHistory(
+            link_id="irl_policylink00001"
+        ),
+        Capability.ISSUES_HISTORY: ReadIssueHistory(issue_id="sit_policyissue0001"),
+        Capability.ISSUES_TIMELINE: ReadIssueTimeline(issue_id="sit_policyissue0001"),
+        Capability.ISSUES_HANDOFFS_CORRECT: CorrectIssueHandoff(
+            handoff_id="ihnd_policyhandoff0001",
+            action="void",
+            reason="the policy handoff did not happen",
+            evidence_anchor={
+                "family": "meeting_note_version",
+                "root_id": "mtg_policymeeting0001",
+                "version_kind": "immutable_version",
+                "version_id": "mnote_policynote00001",
+                "source_sha256": "a" * 64,
+                "role": "contradicts",
+            },
+            idempotency_key="policy-issues-handoffs-correct-0001",
+        ),
+        Capability.RECORDS_BACKFILL_PLAN: PlanLineageBackfill(
+            idempotency_key="policy-records-backfill-plan-0001"
+        ),
+        Capability.RECORDS_BACKFILL_REPORT: ReportLineageBackfill(run_id="lbfr_policyrun000001"),
     }
 
 
@@ -1877,6 +1941,15 @@ SCOPED_CAPABILITIES = [
         Capability.ISSUES_HANDOFFS_LIST,
         Capability.ISSUES_WORK_CREATE_TASK,
         Capability.ISSUES_WORK_CREATE_COMMITMENT,
+        # Record lineage S3: the eight S3 names, also in `_SCOPELESS`.
+        Capability.RECORDS_ASSOCIATIONS_CONTEST,
+        Capability.RECORDS_ASSOCIATIONS_REINSTATE,
+        Capability.RECORDS_ASSOCIATIONS_HISTORY,
+        Capability.ISSUES_HISTORY,
+        Capability.ISSUES_TIMELINE,
+        Capability.ISSUES_HANDOFFS_CORRECT,
+        Capability.RECORDS_BACKFILL_PLAN,
+        Capability.RECORDS_BACKFILL_REPORT,
     }
 ]
 
@@ -2190,6 +2263,15 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.ISSUES_HANDOFFS_LIST,
         Capability.ISSUES_WORK_CREATE_TASK,
         Capability.ISSUES_WORK_CREATE_COMMITMENT,
+        # Record lineage S3: the eight S3 names, also in `_SCOPELESS`.
+        Capability.RECORDS_ASSOCIATIONS_CONTEST,
+        Capability.RECORDS_ASSOCIATIONS_REINSTATE,
+        Capability.RECORDS_ASSOCIATIONS_HISTORY,
+        Capability.ISSUES_HISTORY,
+        Capability.ISSUES_TIMELINE,
+        Capability.ISSUES_HANDOFFS_CORRECT,
+        Capability.RECORDS_BACKFILL_PLAN,
+        Capability.RECORDS_BACKFILL_REPORT,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

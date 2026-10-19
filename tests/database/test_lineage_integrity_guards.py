@@ -650,6 +650,13 @@ def test_lineage_tables_refuse_truncate(db_engine: Engine, world: World, table: 
         "issue_revision_evidence",
         "issue_responsibility_events",
         "lineage_write_request_links",
+        # Record lineage S3's five tables reference these or are referenced by
+        # them (the commit marks), so they are truncated too, refusals disabled.
+        "lineage_commit_sequences",
+        "lineage_commit_marks",
+        "issue_responsibility_corrections",
+        "lineage_backfill_runs",
+        "lineage_backfill_items",
     )
 
     def truncate(c: Connection) -> None:

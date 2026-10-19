@@ -539,6 +539,16 @@ _ORDINAL_UNITS = (
     "two-hundred-thirteenth",
     "two-hundred-fourteenth",
     "two-hundred-fifteenth",
+    # Record lineage S3 takes it to two hundred and twenty-two; dense through
+    # the two-hundred-twenty-third.
+    "two-hundred-sixteenth",
+    "two-hundred-seventeenth",
+    "two-hundred-eighteenth",
+    "two-hundred-nineteenth",
+    "two-hundred-twentieth",
+    "two-hundred-twenty-first",
+    "two-hundred-twenty-second",
+    "two-hundred-twenty-third",
 )
 
 

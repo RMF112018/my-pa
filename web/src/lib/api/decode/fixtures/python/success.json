@@ -1834,6 +1834,54 @@
           "version": "v1",
           "availability": "available",
           "operator_only": false
+        },
+        {
+          "name": "records.associations.contest",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "records.associations.reinstate",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "records.associations.history",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "issues.history",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "issues.timeline",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "issues.handoffs.correct",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "records.backfill.plan",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": true
+        },
+        {
+          "name": "records.backfill.report",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": true
         }
       ],
       "content_types": [
@@ -1860,11 +1908,11 @@
     "readiness": {
       "state": "degraded",
       "contract_version": "v1",
-      "implemented_capabilities": 214,
-      "total_capabilities": 214,
+      "implemented_capabilities": 222,
+      "total_capabilities": 222,
       "limitations": [
         "Content types awaiting an operator decision: application/pdf. They are reported rather than silently skipped.",
-        "Listings stop at the page size; truncation is disclosed. These issue a continuation cursor: commitments.history, commitments.list, commitments.search, commitments.waiting_on, constraint_sync.conflicts, constraint_sync.delta, constraints.history, constraints.list, constraints.portfolio_list, constraints.portfolio_search, constraints.search, continuity.projects, entities.addresses.list, entities.aliases.list, entities.assignments.list, entities.communication.list, entities.graph, entities.identifiers.list, entities.identity_history, entities.names.list, entities.observations.list, entities.participations.list, entities.relationships, entities.search, entities.unresolved_mentions, goodnotes.notebooks.list, goodnotes.pages.list, goodnotes.pull, goodnotes.runs.list, goodnotes.search, issues.handoffs.list, issues.list, knowledge.assertions.list, knowledge.assertions.search, knowledge.search, meetings.list, meetings.notes.versions, meetings.search, record_events.list, relationship_memory.history, relationship_memory.list, relationship_memory.search, reports.list, review.list, tasks.comments.list, tasks.history, tasks.list, tasks.search. Every other listing does not, so a caller cannot ask for the next page.",
+        "Listings stop at the page size; truncation is disclosed. These issue a continuation cursor: commitments.history, commitments.list, commitments.search, commitments.waiting_on, constraint_sync.conflicts, constraint_sync.delta, constraints.history, constraints.list, constraints.portfolio_list, constraints.portfolio_search, constraints.search, continuity.projects, entities.addresses.list, entities.aliases.list, entities.assignments.list, entities.communication.list, entities.graph, entities.identifiers.list, entities.identity_history, entities.names.list, entities.observations.list, entities.participations.list, entities.relationships, entities.search, entities.unresolved_mentions, goodnotes.notebooks.list, goodnotes.pages.list, goodnotes.pull, goodnotes.runs.list, goodnotes.search, issues.handoffs.list, issues.history, issues.list, issues.timeline, knowledge.assertions.list, knowledge.assertions.search, knowledge.search, meetings.list, meetings.notes.versions, meetings.search, record_events.list, records.associations.history, records.backfill.report, relationship_memory.history, relationship_memory.list, relationship_memory.search, reports.list, review.list, tasks.comments.list, tasks.history, tasks.list, tasks.search. Every other listing does not, so a caller cannot ask for the next page.",
         "Model proposals and semantic retrieval are disabled; deterministic lexical retrieval remains active.",
         "Worker-plane health is unavailable, stale, absent for queued work, or reports dead-lettered work; inspect worker_planes."
       ]

@@ -1,0 +1,213 @@
+{
+  "_comment": "Record lineage S3 backfill source-document golden vectors (S3 contract sections 4.2 and 5). One file drives the Python unit test and the SQL parity test; every value is synthetic. `reference` is the work row's stored origin_evidence_ref where the item has one.",
+  "principal_id": "prn_lineages3vec0001",
+  "capture_content": "Pour the north slab after the inspection.",
+  "object_refs": [
+    "tsk_lineages3vec0001",
+    "Free text reference"
+  ],
+  "vectors": [
+    {
+      "name": "task_follow_up",
+      "input": {
+        "source_kind": "task_follow_up",
+        "source_family": "task",
+        "source_id": "tsk_lineages3vec0001",
+        "source_ref": "cmt_lineages3vec0001",
+        "source_version": 1,
+        "facts": {
+          "commitment_id": "cmt_lineages3vec0001"
+        }
+      },
+      "document": "{\"facts\":{\"commitment_id\":\"cmt_lineages3vec0001\"},\"schema_version\":1,\"source_family\":\"task\",\"source_id\":\"tsk_lineages3vec0001\",\"source_kind\":\"task_follow_up\",\"source_ref\":\"cmt_lineages3vec0001\",\"source_version\":1}",
+      "digest": "4e5cf50ef47359e2f37f2e1896b52f1f264d0e4008d6fad8712e8f41568747b2"
+    },
+    {
+      "name": "task_follow_up_absent_task",
+      "input": {
+        "source_kind": "task_follow_up",
+        "source_family": "task",
+        "source_id": "tsk_lineages3vec0099",
+        "source_ref": "cmt_lineages3vec0001",
+        "source_version": null,
+        "facts": {
+          "commitment_id": null
+        }
+      },
+      "document": "{\"facts\":{\"commitment_id\":null},\"schema_version\":1,\"source_family\":\"task\",\"source_id\":\"tsk_lineages3vec0099\",\"source_kind\":\"task_follow_up\",\"source_ref\":\"cmt_lineages3vec0001\",\"source_version\":null}",
+      "digest": "3572f9eca09063e0e67a593703f568004e3d06fc264429465ae76379d749b48d"
+    },
+    {
+      "name": "meeting_series",
+      "input": {
+        "source_kind": "meeting_series",
+        "source_family": "meeting",
+        "source_id": "mtg_lineages3vec0001",
+        "source_ref": "mser_lineages3vec0001",
+        "source_version": 1,
+        "facts": {
+          "series_id": "mser_lineages3vec0001"
+        }
+      },
+      "document": "{\"facts\":{\"series_id\":\"mser_lineages3vec0001\"},\"schema_version\":1,\"source_family\":\"meeting\",\"source_id\":\"mtg_lineages3vec0001\",\"source_kind\":\"meeting_series\",\"source_ref\":\"mser_lineages3vec0001\",\"source_version\":1}",
+      "digest": "1dc218cc4d3cfa3db97dd3f452accb484409487cd65bd1dcb262df87442f275b"
+    },
+    {
+      "name": "constraint_follow_up_absent",
+      "input": {
+        "source_kind": "constraint_follow_up",
+        "source_family": "constraint",
+        "source_id": "cst_lineages3vec0001",
+        "source_ref": "cst_lineages3vec0002",
+        "source_version": null,
+        "facts": {
+          "relationship_present": false
+        }
+      },
+      "document": "{\"facts\":{\"relationship_present\":false},\"schema_version\":1,\"source_family\":\"constraint\",\"source_id\":\"cst_lineages3vec0001\",\"source_kind\":\"constraint_follow_up\",\"source_ref\":\"cst_lineages3vec0002\",\"source_version\":null}",
+      "digest": "6f22274bf8e93bfba1276de6960cbb94de03aea5d1545ea61a89f152a7683778"
+    },
+    {
+      "name": "project_situation",
+      "input": {
+        "source_kind": "project_situation",
+        "source_family": "situation",
+        "source_id": "sit_lineages3vec0001",
+        "source_ref": "prj_lineages3vec0001",
+        "source_version": null,
+        "facts": {
+          "has_membership_event": false,
+          "link_present": true,
+          "project_principal_id": "prn_lineages3vec0001",
+          "situation_kind": "context",
+          "situation_principal_id": "prn_lineages3vec0001"
+        }
+      },
+      "document": "{\"facts\":{\"has_membership_event\":false,\"link_present\":true,\"project_principal_id\":\"prn_lineages3vec0001\",\"situation_kind\":\"context\",\"situation_principal_id\":\"prn_lineages3vec0001\"},\"schema_version\":1,\"source_family\":\"situation\",\"source_id\":\"sit_lineages3vec0001\",\"source_kind\":\"project_situation\",\"source_ref\":\"prj_lineages3vec0001\",\"source_version\":null}",
+      "digest": "3b5d174303621fbe97ad83f27b803bc0c5077d2952c6535524258d185fed28b5"
+    },
+    {
+      "name": "work_origin_capture_root",
+      "input": {
+        "source_kind": "work_origin_capture_root",
+        "source_family": "task",
+        "source_id": "tsk_lineages3vec0002",
+        "source_ref": "cap_lineages3vec0001",
+        "source_version": 1,
+        "facts": {
+          "origin_ref_sha256": "93868b15f7d5071bf27aa263386158088a25b0e2b4504972d8b2d133612065c7"
+        }
+      },
+      "document": "{\"facts\":{\"origin_ref_sha256\":\"93868b15f7d5071bf27aa263386158088a25b0e2b4504972d8b2d133612065c7\"},\"schema_version\":1,\"source_family\":\"task\",\"source_id\":\"tsk_lineages3vec0002\",\"source_kind\":\"work_origin_capture_root\",\"source_ref\":\"cap_lineages3vec0001\",\"source_version\":1}",
+      "digest": "328d938671feec916df1c0538da67f44102428d1b43b29b038aa0c6d17f2f82c",
+      "reference": "cap_lineages3vec0001"
+    },
+    {
+      "name": "work_origin_other_non_ascii_non_nfc",
+      "input": {
+        "source_kind": "work_origin_other",
+        "source_family": "task",
+        "source_id": "tsk_lineages3vec0003",
+        "source_ref": "free_text:8933a87d8c1ac329216324c7af06556f53716886867cb7b1011bbbf1db38d546",
+        "source_version": 1,
+        "facts": {
+          "origin_ref_sha256": "8933a87d8c1ac329216324c7af06556f53716886867cb7b1011bbbf1db38d546"
+        }
+      },
+      "document": "{\"facts\":{\"origin_ref_sha256\":\"8933a87d8c1ac329216324c7af06556f53716886867cb7b1011bbbf1db38d546\"},\"schema_version\":1,\"source_family\":\"task\",\"source_id\":\"tsk_lineages3vec0003\",\"source_kind\":\"work_origin_other\",\"source_ref\":\"free_text:8933a87d8c1ac329216324c7af06556f53716886867cb7b1011bbbf1db38d546\",\"source_version\":1}",
+      "digest": "63dc98f074c0582f28bd4e8a3b6dbd1e7a21549bd6ef5be2ce137bd939b72bbf",
+      "reference": "Cafe\u0301 au lait \u2014 notes"
+    },
+    {
+      "name": "work_origin_other_asrt_prefix_not_an_identifier",
+      "input": {
+        "source_kind": "work_origin_other",
+        "source_family": "task",
+        "source_id": "tsk_lineages3vec0004",
+        "source_ref": "free_text:bf310bf47e3e43047b3c17482d0f0352b60c496b5bf7afc6be734cd33c9907d4",
+        "source_version": 1,
+        "facts": {
+          "origin_ref_sha256": "bf310bf47e3e43047b3c17482d0f0352b60c496b5bf7afc6be734cd33c9907d4"
+        }
+      },
+      "document": "{\"facts\":{\"origin_ref_sha256\":\"bf310bf47e3e43047b3c17482d0f0352b60c496b5bf7afc6be734cd33c9907d4\"},\"schema_version\":1,\"source_family\":\"task\",\"source_id\":\"tsk_lineages3vec0004\",\"source_kind\":\"work_origin_other\",\"source_ref\":\"free_text:bf310bf47e3e43047b3c17482d0f0352b60c496b5bf7afc6be734cd33c9907d4\",\"source_version\":1}",
+      "digest": "7060245818a79536d653914eef2d7722cf9021692f763dd8ca0ce92bee93eb69",
+      "reference": "asrt_not-an-identifier"
+    },
+    {
+      "name": "work_origin_other_unsupported_kind",
+      "input": {
+        "source_kind": "work_origin_other",
+        "source_family": "task",
+        "source_id": "tsk_lineages3vec0005",
+        "source_ref": "prefix:mnote:da80d7c2b3337f32e09a418a764c6316b3a2e42fa12b6da4c551c9c3bfe04705",
+        "source_version": 1,
+        "facts": {
+          "origin_ref_sha256": "da80d7c2b3337f32e09a418a764c6316b3a2e42fa12b6da4c551c9c3bfe04705"
+        }
+      },
+      "document": "{\"facts\":{\"origin_ref_sha256\":\"da80d7c2b3337f32e09a418a764c6316b3a2e42fa12b6da4c551c9c3bfe04705\"},\"schema_version\":1,\"source_family\":\"task\",\"source_id\":\"tsk_lineages3vec0005\",\"source_kind\":\"work_origin_other\",\"source_ref\":\"prefix:mnote:da80d7c2b3337f32e09a418a764c6316b3a2e42fa12b6da4c551c9c3bfe04705\",\"source_version\":1}",
+      "digest": "76327bcd803a5ecc3302a27bb5634add7751d09460ec5d3d35e816d38147ddbd",
+      "reference": "mnote_lineages3vec0001"
+    },
+    {
+      "name": "situation_object_ref",
+      "input": {
+        "source_kind": "situation_object_ref",
+        "source_family": "situation",
+        "source_id": "sit_lineages3vec0002",
+        "source_ref": "tsk_lineages3vec0001",
+        "source_version": 1,
+        "facts": {
+          "object_refs_sha256": "3a922dc4678a1b0aa2c2ddb0e40f29b6cd35cbbe279b8211713e4590e6b1afe2",
+          "situation_kind": "context"
+        }
+      },
+      "document": "{\"facts\":{\"object_refs_sha256\":\"3a922dc4678a1b0aa2c2ddb0e40f29b6cd35cbbe279b8211713e4590e6b1afe2\",\"situation_kind\":\"context\"},\"schema_version\":1,\"source_family\":\"situation\",\"source_id\":\"sit_lineages3vec0002\",\"source_kind\":\"situation_object_ref\",\"source_ref\":\"tsk_lineages3vec0001\",\"source_version\":1}",
+      "digest": "29d1d6b119a28e0a1f367fb1379268f2a82e62c897887d71c5bcf0584294b7ab"
+    },
+    {
+      "name": "work_origin_assertion",
+      "input": {
+        "source_kind": "work_origin_assertion",
+        "source_family": "task",
+        "source_id": "tsk_lineages3vec0006",
+        "source_ref": "asrt_lineages3vec0001",
+        "source_version": 1,
+        "facts": {
+          "assertion_state": "accepted",
+          "origin_ref_sha256": "332cb56db5cab7db5d1162e5c4dee09bb7656ebc38211e9280c7a0dd2bb8ccc9",
+          "root_lifecycle_state": "active",
+          "spans": [
+            {
+              "derived_sha256": "5776660fa61fa51d2ba195b7a72a72232807c25fd5b2968a42e5738199674803",
+              "end_offset": 4,
+              "offset_basis": "unicode_code_point_v1",
+              "processing_text_id": null,
+              "quoted_text_sha256": "5776660fa61fa51d2ba195b7a72a72232807c25fd5b2968a42e5738199674803",
+              "span_id": "span_lineages3vec0001",
+              "start_offset": 0,
+              "version_id": "capver_lineages3vec0001"
+            },
+            {
+              "derived_sha256": null,
+              "end_offset": 99,
+              "offset_basis": "unicode_code_point_v1",
+              "processing_text_id": null,
+              "quoted_text_sha256": "2e9beaf965c87674bcb4d8d16dc14355873f16824c5bd145b8aa5fd6bdb9f28d",
+              "span_id": "span_lineages3vec0002",
+              "start_offset": 5,
+              "version_id": "capver_lineages3vec0001"
+            }
+          ],
+          "superseded_by_assertion_id": null,
+          "version_classification": "synthetic_test",
+          "version_id": "capver_lineages3vec0001"
+        }
+      },
+      "document": "{\"facts\":{\"assertion_state\":\"accepted\",\"origin_ref_sha256\":\"332cb56db5cab7db5d1162e5c4dee09bb7656ebc38211e9280c7a0dd2bb8ccc9\",\"root_lifecycle_state\":\"active\",\"spans\":[{\"derived_sha256\":\"5776660fa61fa51d2ba195b7a72a72232807c25fd5b2968a42e5738199674803\",\"end_offset\":4,\"offset_basis\":\"unicode_code_point_v1\",\"processing_text_id\":null,\"quoted_text_sha256\":\"5776660fa61fa51d2ba195b7a72a72232807c25fd5b2968a42e5738199674803\",\"span_id\":\"span_lineages3vec0001\",\"start_offset\":0,\"version_id\":\"capver_lineages3vec0001\"},{\"derived_sha256\":null,\"end_offset\":99,\"offset_basis\":\"unicode_code_point_v1\",\"processing_text_id\":null,\"quoted_text_sha256\":\"2e9beaf965c87674bcb4d8d16dc14355873f16824c5bd145b8aa5fd6bdb9f28d\",\"span_id\":\"span_lineages3vec0002\",\"start_offset\":5,\"version_id\":\"capver_lineages3vec0001\"}],\"superseded_by_assertion_id\":null,\"version_classification\":\"synthetic_test\",\"version_id\":\"capver_lineages3vec0001\"},\"schema_version\":1,\"source_family\":\"task\",\"source_id\":\"tsk_lineages3vec0006\",\"source_kind\":\"work_origin_assertion\",\"source_ref\":\"asrt_lineages3vec0001\",\"source_version\":1}",
+      "digest": "1c5b45b5f6d77219f1fe08fa61b486a088ff5d4f2b6cf144fd76d3bf92cb2bc1",
+      "reference": "asrt_lineages3vec0001"
+    }
+  ]
+}

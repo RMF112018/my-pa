@@ -308,6 +308,15 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         Capability.ISSUES_HANDOFFS_LIST,
         Capability.ISSUES_WORK_CREATE_TASK,
         Capability.ISSUES_WORK_CREATE_COMMITMENT,
+        # Record lineage S3, behind the same switch (and scopeless).
+        Capability.RECORDS_ASSOCIATIONS_CONTEST,
+        Capability.RECORDS_ASSOCIATIONS_REINSTATE,
+        Capability.RECORDS_ASSOCIATIONS_HISTORY,
+        Capability.ISSUES_HISTORY,
+        Capability.ISSUES_TIMELINE,
+        Capability.ISSUES_HANDOFFS_CORRECT,
+        Capability.RECORDS_BACKFILL_PLAN,
+        Capability.RECORDS_BACKFILL_REPORT,
     }
 )
 
@@ -1530,6 +1539,58 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
                 "origin_evidence_ref": "cap_wireorigin00001",
             },
         },
+        # Record lineage S3 (S3 contract section 7).
+        Capability.RECORDS_ASSOCIATIONS_CONTEST: {
+            "link_id": "irl_wirelink00001",
+            "expected_revision": 1,
+            "idempotency_key": "wire-records-associations-contest-0001",
+            "reason": "the wire association is disputed",
+            "evidence_anchors": [
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_wiremeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_wirenote00001",
+                    "source_sha256": "a" * 64,
+                    "role": "contradicts",
+                }
+            ],
+        },
+        Capability.RECORDS_ASSOCIATIONS_REINSTATE: {
+            "link_id": "irl_wirelink00001",
+            "expected_revision": 2,
+            "idempotency_key": "wire-records-associations-reinstate-0001",
+            "reason": "the wire dispute was resolved",
+            "evidence_anchors": [
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_wiremeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_wirenote00001",
+                    "source_sha256": "a" * 64,
+                    "role": "corroborates",
+                }
+            ],
+        },
+        Capability.RECORDS_ASSOCIATIONS_HISTORY: {"link_id": "irl_wirelink00001"},
+        Capability.ISSUES_HISTORY: {"issue_id": "sit_wireissue0001"},
+        Capability.ISSUES_TIMELINE: {"issue_id": "sit_wireissue0001"},
+        Capability.ISSUES_HANDOFFS_CORRECT: {
+            "handoff_id": "ihnd_wirehandoff0001",
+            "action": "void",
+            "reason": "the wire handoff did not happen",
+            "evidence_anchor": {
+                "family": "meeting_note_version",
+                "root_id": "mtg_wiremeeting0001",
+                "version_kind": "immutable_version",
+                "version_id": "mnote_wirenote00001",
+                "source_sha256": "a" * 64,
+                "role": "contradicts",
+            },
+            "idempotency_key": "wire-issues-handoffs-correct-0001",
+        },
+        Capability.RECORDS_BACKFILL_PLAN: {"idempotency_key": "wire-records-backfill-plan-0001"},
+        Capability.RECORDS_BACKFILL_REPORT: {"run_id": "lbfr_wirerun000001"},
     }
 
 
@@ -2235,6 +2296,15 @@ SCOPED_CAPABILITIES = [
         Capability.ISSUES_HANDOFFS_LIST,
         Capability.ISSUES_WORK_CREATE_TASK,
         Capability.ISSUES_WORK_CREATE_COMMITMENT,
+        # Record lineage S3, behind the same switch (and scopeless).
+        Capability.RECORDS_ASSOCIATIONS_CONTEST,
+        Capability.RECORDS_ASSOCIATIONS_REINSTATE,
+        Capability.RECORDS_ASSOCIATIONS_HISTORY,
+        Capability.ISSUES_HISTORY,
+        Capability.ISSUES_TIMELINE,
+        Capability.ISSUES_HANDOFFS_CORRECT,
+        Capability.RECORDS_BACKFILL_PLAN,
+        Capability.RECORDS_BACKFILL_REPORT,
     }
 ]
 

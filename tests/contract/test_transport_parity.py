@@ -2130,6 +2130,58 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
                 "origin_evidence_ref": "cap_parityorigin00001",
             },
         },
+        # Record lineage S3 (S3 contract section 7).
+        Capability.RECORDS_ASSOCIATIONS_CONTEST: {
+            "link_id": "irl_paritylink00001",
+            "expected_revision": 1,
+            "idempotency_key": "parity-records-associations-contest-0001",
+            "reason": "the parity association is disputed",
+            "evidence_anchors": [
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_paritymeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_paritynote00001",
+                    "source_sha256": "a" * 64,
+                    "role": "contradicts",
+                }
+            ],
+        },
+        Capability.RECORDS_ASSOCIATIONS_REINSTATE: {
+            "link_id": "irl_paritylink00001",
+            "expected_revision": 2,
+            "idempotency_key": "parity-records-associations-reinstate-0001",
+            "reason": "the parity dispute was resolved",
+            "evidence_anchors": [
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_paritymeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_paritynote00001",
+                    "source_sha256": "a" * 64,
+                    "role": "corroborates",
+                }
+            ],
+        },
+        Capability.RECORDS_ASSOCIATIONS_HISTORY: {"link_id": "irl_paritylink00001"},
+        Capability.ISSUES_HISTORY: {"issue_id": "sit_parityissue0001"},
+        Capability.ISSUES_TIMELINE: {"issue_id": "sit_parityissue0001"},
+        Capability.ISSUES_HANDOFFS_CORRECT: {
+            "handoff_id": "ihnd_parityhandoff0001",
+            "action": "void",
+            "reason": "the parity handoff did not happen",
+            "evidence_anchor": {
+                "family": "meeting_note_version",
+                "root_id": "mtg_paritymeeting0001",
+                "version_kind": "immutable_version",
+                "version_id": "mnote_paritynote00001",
+                "source_sha256": "a" * 64,
+                "role": "contradicts",
+            },
+            "idempotency_key": "parity-issues-handoffs-correct-0001",
+        },
+        Capability.RECORDS_BACKFILL_PLAN: {"idempotency_key": "parity-records-backfill-plan-0001"},
+        Capability.RECORDS_BACKFILL_REPORT: {"run_id": "lbfr_parityrun000001"},
     }
 
 
@@ -2265,7 +2317,7 @@ def test_there_are_three_transports_to_compare() -> None:
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
     # The command union and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 215, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 223, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -2624,6 +2676,15 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         Capability.ISSUES_HANDOFFS_LIST,
         Capability.ISSUES_WORK_CREATE_TASK,
         Capability.ISSUES_WORK_CREATE_COMMITMENT,
+        # Record lineage S3, behind the same switch.
+        Capability.RECORDS_ASSOCIATIONS_CONTEST,
+        Capability.RECORDS_ASSOCIATIONS_REINSTATE,
+        Capability.RECORDS_ASSOCIATIONS_HISTORY,
+        Capability.ISSUES_HISTORY,
+        Capability.ISSUES_TIMELINE,
+        Capability.ISSUES_HANDOFFS_CORRECT,
+        Capability.RECORDS_BACKFILL_PLAN,
+        Capability.RECORDS_BACKFILL_REPORT,
     }
 )
 
@@ -3213,7 +3274,7 @@ def test_declared_unwired_capabilities_stay_separate_from_positive_parity(
     from my_pa.application.errors import UnsupportedError
 
     assert set(Capability) - set(_HANDLERS) == FUTURE_CAPABILITIES
-    assert len(IMPLEMENTED_CAPABILITIES) == 214
+    assert len(IMPLEMENTED_CAPABILITIES) == 222
     assert set(_BUILDERS) == set(IMPLEMENTED_CAPABILITIES)
     assert {Capability(tool.name) for tool in TOOLS} == set(IMPLEMENTED_CAPABILITIES)
 

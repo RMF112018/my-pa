@@ -372,6 +372,11 @@ EXEMPT_PROPERTIES: Final[frozenset[tuple[str, str]]] = frozenset(
         ("issues.handoffs.record", "root_id"),
         ("issues.work.create_task", "root_id"),
         ("issues.work.create_commitment", "root_id"),
+        # Record lineage S3: the anchor sets of contest and reinstate, and the
+        # handoff correction's anchor.
+        ("records.associations.contest", "root_id"),
+        ("records.associations.reinstate", "root_id"),
+        ("issues.handoffs.correct", "root_id"),
     }
 )
 
@@ -677,8 +682,8 @@ def test_the_location_scan_would_catch_one() -> None:
     # Plus record lineage S1's evidence-anchor `root_id` (an opaque `mtg_`/`cap_`)
     # on the Project-link write and the four link writes that take anchors, and
     # on the S2 anchor-bearing writes. Plus the S2 Commitment composite's nested
-    # `commitments.create` `direction`.
-    assert len(EXEMPT_PROPERTIES) == 34
+    # `commitments.create` `direction`. Plus the S3 anchor-bearing writes.
+    assert len(EXEMPT_PROPERTIES) == 37
     for tool_name, property_name in EXEMPT_PROPERTIES:
         tool = next(entry for entry in TOOLS if entry.name == tool_name)
         assert property_name in set(_schema_property_names(tool.input_schema))

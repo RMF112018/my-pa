@@ -164,7 +164,7 @@ def test_the_derivation_finds_the_switches_the_published_surface_branches_on() -
     """
     variables = _switch_variables()
     assert variables, "no switch narrows the published surface, so this module proves nothing"
-    assert len(variables) == 7, (
+    assert len(variables) == 8, (
         "the published surface is narrowed by a different number of switches than "
         f"this guard knows about: {sorted(variables)}"
     )
@@ -178,6 +178,8 @@ def test_the_derivation_finds_the_switches_the_published_surface_branches_on() -
         "knowledge_assertions_enabled",
         # Record lineage S1 (contract section 7.5).
         "lineage_enabled",
+        # Record lineage S3 (contract section 7.7): the backfill sub-switch.
+        "lineage_backfill_enabled",
     }
 
 

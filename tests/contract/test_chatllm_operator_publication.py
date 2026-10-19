@@ -86,7 +86,12 @@ async def test_full_inventory_catalog_without_execution(scene: Scene) -> None:
                 return capabilities
 
     names = await _session(app, exercise)
-    assert names == {c.value for c in ALL}
+    # Record lineage S3: the operator-only backfill pair is never remotely
+    # published (local CLI only, S3 contract sections 6.1 and 8.3).
+    assert names == {c.value for c in ALL} - {
+        Capability.RECORDS_BACKFILL_PLAN.value,
+        Capability.RECORDS_BACKFILL_REPORT.value,
+    }
     # The deployed 190 remain individually present after main added report types
     # and record lineage S1 added the `issues.`, `records.` and `meetings.notes.` names.
     deployed = {

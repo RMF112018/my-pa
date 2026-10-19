@@ -378,7 +378,7 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "issue_revision_evidence",
         "issue_responsibility_events",
         "lineage_write_request_links",
-        # Record lineage S3 (`6f1476b8da52`) stacks its five.
+        # Record lineage S3 stacks its five.
         "lineage_commit_sequences",
         "lineage_commit_marks",
         "issue_responsibility_corrections",

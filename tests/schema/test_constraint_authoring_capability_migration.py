@@ -123,6 +123,8 @@ RECONCILE_LEGACY_PROJECT_ENTITY_LINKS_MIGRATION: Final = (
 RECORD_LINEAGE_S1_MIGRATION: Final = MIGRATIONS / "20261017_264310e0416a_record_lineage_s1.py"
 #: Record lineage S2's additive head (`d020b532ad7d`, ADR-015), on the same precedent.
 RECORD_LINEAGE_S2_MIGRATION: Final = MIGRATIONS / "20261018_d020b532ad7d_record_lineage_s2.py"
+#: Record lineage S3's additive head (`6f1476b8da52`, ADR-015), on the same precedent.
+RECORD_LINEAGE_S3_MIGRATION: Final = MIGRATIONS / "20261019_6f1476b8da52_record_lineage_s3.py"
 #: The one sanctioned edit to a historical revision (operator ruling
 #: OPERATOR_RULING_WP04_A_to_E.md section E). Like D-48, the Meeting-records
 #: work freezes `a_managed_document_is_identified_within_its_owner` out of
@@ -239,8 +241,10 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_reconcile_legacy_project_entity_links_migration.py",
     # Record lineage S1's own revision module names the head as the revision it tests.
     "tests/schema/test_record_lineage_s1_migration.py",
-    # Record lineage S2's own revision module names the head as the revision it tests.
+    # Record lineage S2's suite names the head the S3 revision now sits at.
     "tests/schema/test_record_lineage_s2_migration.py",
+    # Record lineage S3's own revision module names the head as the revision it tests.
+    "tests/schema/test_record_lineage_s3_migration.py",
     "tests/schema/test_record_event_truncate_refusal_migration.py",
     "tests/schema/test_record_events_migration.py",
     "tests/schema/test_oauth_refresh_migration.py",
@@ -508,6 +512,7 @@ def test_no_historical_revision_was_edited() -> None:
         RECONCILE_LEGACY_PROJECT_ENTITY_LINKS_MIGRATION.relative_to(ROOT).as_posix(),
         RECORD_LINEAGE_S1_MIGRATION.relative_to(ROOT).as_posix(),
         RECORD_LINEAGE_S2_MIGRATION.relative_to(ROOT).as_posix(),
+        RECORD_LINEAGE_S3_MIGRATION.relative_to(ROOT).as_posix(),
         # Not an additive head: the one sanctioned historical edit (see
         # `SANCTIONED_HISTORICAL_EDIT`; operator ruling section E).
         SANCTIONED_HISTORICAL_EDIT.relative_to(ROOT).as_posix(),

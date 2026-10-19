@@ -238,7 +238,7 @@ LINEAGE_TRIGGERS: Final[frozenset[str]] = frozenset(
         "a_handoff_follows_its_predecessor",
         "a_handoff_is_effective_in_order",
         "a_composite_request_names_its_links",
-        # Record lineage S3 (`6f1476b8da52`).
+        # Record lineage S3.
         "lineage_commit_marks_are_append_only",
         "issue_responsibility_corrections_are_append_only",
         *(

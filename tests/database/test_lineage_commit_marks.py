@@ -617,6 +617,14 @@ def test_every_fact_row_names_an_existing_mark(runtime: S2Runtime) -> None:
                 "digest": "e" * 64,
             },
         )
+        # The head follows, so nothing but the foreign key can refuse the row.
+        c.execute(
+            text(
+                "UPDATE knowledge.record_link_heads SET revision_no = :next, "
+                "lifecycle_state = 'ended' WHERE principal_id = :p AND link_id = :link"
+            ),
+            {"p": PRINCIPAL, "link": link[0], "next": link[1] + 1},
+        )
 
     _refused(engine, unmarked, FOREIGN_KEY, "a_lineage_fact_names_its_commit_mark")
 
@@ -671,18 +679,18 @@ def test_the_horizon_excludes_an_in_flight_write(runtime: S2Runtime) -> None:
         with engine.connect() as reader:
             known_at, watermark = _cut(reader)
             reader.commit()
-        # The reader neither waits nor sees it: its cut is the committed horizon.
-        assert (known_at, watermark) == before
+        # The reader neither waits nor sees it: the in-flight mark is beyond its cut.
+        assert watermark == before[1] == 1
         transaction.commit()
     finally:
         writer.close()
     with engine.connect() as reader:
         lineage = SqlRecordLineageRepository(reader)
-        # After the commit, the answer at that same cut is unchanged, forever.
+        # After the commit, the answer at that same cut is unchanged, forever:
+        # the in-flight mark was stamped after the committed horizon the cut read.
         assert known_at is not None
         assert lineage.commit_watermark(PRINCIPAL, known_at) == watermark == 1
-        marked = dict(_marks(engine))[2]
-        assert marked > known_at
+        assert dict(_marks(engine))[2] > known_at
         later = _cut(reader)
         reader.commit()
     assert later[1] == 2

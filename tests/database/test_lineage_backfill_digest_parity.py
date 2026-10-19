@@ -27,7 +27,7 @@ import pytest
 from sqlalchemy import Engine, insert, text
 from sqlalchemy.engine import Connection
 
-from my_pa.domain.lineage.backfill import SOURCE_DOMAIN, source_digest
+from my_pa.domain.lineage.backfill import SOURCE_DOMAIN, origin_reference, source_digest
 from my_pa.domain.lineage_backfill.vocabulary import BackfillSourceKind
 from my_pa.infrastructure.persistence.tables import (
     capture_assertion_spans,
@@ -306,6 +306,12 @@ def test_a_non_ascii_non_nfc_free_text_ref_digests_alike_in_sql_and_python(
         != hashlib.sha256(unicodedata.normalize("NFC", reference).encode("utf-8")).hexdigest()
     )
     assert vector["input"]["source_ref"] == f"free_text:{sql_digest}"
+    # The ledger token the backfill stores for it is the shape and that digest:
+    # never the text, nor any prefix of it.
+    kind, token = origin_reference(stored)
+    assert kind is BackfillSourceKind.WORK_ORIGIN_OTHER
+    assert token == f"free_text:{sql_digest}"
+    assert token.isascii() and reference[:8] not in token
     document = _sql(db_engine, "lineage_backfill_source_document", principal, vector["input"])
     assert document == vector["document"]
     assert document.isascii()

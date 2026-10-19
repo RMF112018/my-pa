@@ -530,6 +530,8 @@ class IssueApplication:
         )
         if prior is not None:
             return _replayed_revision(issues, principal_id, prior)
+        # S3 section 6.2 step 1b: the commit mark, before any other lock.
+        uow.record_lineage.take_commit_mark(principal_id)
         issue = IssueRecord(
             issue_id=issue_identifier(IdKind.SITUATION),
             version=1,
@@ -654,6 +656,8 @@ class IssueApplication:
             if stored.action is IssueRevisionAction.CORRECTED:
                 _require_attested(authority)
             return IssueRevisionResult(issue=_revision_view(stored_issue, stored), replayed=True)
+        # S3 section 6.2 step 1b: the commit mark, before any other lock.
+        uow.record_lineage.take_commit_mark(principal_id)
         current = issues.lock_issue(principal_id, request.issue_id, for_update=True)
         if current is None:
             raise NotFoundError(SafeDetail.ISSUE_ID)
@@ -757,6 +761,8 @@ class IssueApplication:
                 closure=_closure_view(lineage, principal_id, stored),
                 replayed=True,
             )
+        # S3 section 6.2 step 1b: the commit mark, before any other lock.
+        uow.record_lineage.take_commit_mark(principal_id)
         current = issues.lock_issue(principal_id, request.issue_id, for_update=True)
         if current is None:
             raise NotFoundError(SafeDetail.ISSUE_ID)
@@ -886,6 +892,8 @@ class IssueApplication:
                 reopening=_reopening_view(lineage, principal_id, stored),
                 replayed=True,
             )
+        # S3 section 6.2 step 1b: the commit mark, before any other lock.
+        uow.record_lineage.take_commit_mark(principal_id)
         current = issues.lock_issue(principal_id, request.issue_id, for_update=True)
         if current is None:
             raise NotFoundError(SafeDetail.ISSUE_ID)
@@ -1028,6 +1036,8 @@ class IssueApplication:
         )
         if prior is not None:
             return _replayed_link(issues, principal_id, prior)
+        # S3 section 6.2 step 1b: the commit mark, before any other lock.
+        uow.record_lineage.take_commit_mark(principal_id)
         anchor_id = self._share_link_ends(
             issues,
             principal_id,
@@ -1098,6 +1108,8 @@ class IssueApplication:
         )
         if prior is not None:
             return _replayed_link(issues, principal_id, prior)
+        # S3 section 6.2 step 1b: the commit mark, before any other lock.
+        uow.record_lineage.take_commit_mark(principal_id)
         self._share_link_ends(
             issues,
             principal_id,

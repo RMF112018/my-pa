@@ -23,10 +23,11 @@ const FAMILY_PREFIX: Readonly<Record<RecordFamily, string>> = {
 };
 /** Python `domain/lineage/vocabulary.py` `ISSUE_STATES` (S2 admits `closed`). */
 export const ISSUE_STATES = ["open", "active", "suspended", "closed"] as const;
-/** Python `RelationType`: the 3 S1 relations and the 4 S2 adds (S2 section 3.1). */
+/** Python `RelationType`: the 3 S1 relations, the 4 S2 adds (S2 section 3.1) and S3's 1 (S3 section 3.1). */
 export const RELATION_TYPES = [
   "issue_member", "originated_from", "discusses",
   "delegated_from", "escalated_from", "blocks", "created_to_resolve",
+  "related_context",
 ] as const;
 const MAX_ISSUE_TITLE_CHARACTERS = 500;
 

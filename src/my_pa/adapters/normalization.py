@@ -87,7 +87,9 @@ from my_pa.application.commands import (
     CompleteGoodNotesPull,
     ConfigureProjectControls,
     ConstraintUpdateField,
+    ContestRecordAssociation,
     CorrectGoodNotes,
+    CorrectIssueHandoff,
     CorrectIssueMembership,
     CorrectRecordAssociation,
     CreateCapture,
@@ -183,6 +185,7 @@ from my_pa.application.commands import (
     ListUnresolvedMentions,
     MergeEntities,
     ObserveEntityMention,
+    PlanLineageBackfill,
     PrepareContext,
     PreviewConstraintSync,
     PreviewEntityMerge,
@@ -202,6 +205,8 @@ from my_pa.application.commands import (
     ReadIntelligenceArtifact,
     ReadIssue,
     ReadIssueClosureReadiness,
+    ReadIssueHistory,
+    ReadIssueTimeline,
     ReadKnowledge,
     ReadKnowledgeAssertion,
     ReadManagedDocument,
@@ -210,15 +215,18 @@ from my_pa.application.commands import (
     ReadPortfolioConstraintOverview,
     ReadProject,
     ReadProjectControlsStatus,
+    ReadRecordAssociationHistory,
     ReadRecordLineage,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
     RecordIssueHandoff,
     RecordTask,
+    ReinstateRecordAssociation,
     ReopenConstraint,
     ReopenIssue,
     ReorderConstraintCategories,
+    ReportLineageBackfill,
     Representation,
     ResolveConstraintSyncConflict,
     ResolveEntity,
@@ -2806,6 +2814,21 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.ISSUES_WORK_CREATE_COMMITMENT: lambda payload: CreateIssueWorkCommitment(
             **_with_evidence_tuple(payload)
         ),
+        # Record lineage S3 (S3 contract section 7).
+        Capability.RECORDS_ASSOCIATIONS_CONTEST: lambda payload: ContestRecordAssociation(
+            **_with_evidence_tuple(payload)
+        ),
+        Capability.RECORDS_ASSOCIATIONS_REINSTATE: lambda payload: ReinstateRecordAssociation(
+            **_with_evidence_tuple(payload)
+        ),
+        Capability.RECORDS_ASSOCIATIONS_HISTORY: lambda payload: ReadRecordAssociationHistory(
+            **payload
+        ),
+        Capability.ISSUES_HISTORY: lambda payload: ReadIssueHistory(**payload),
+        Capability.ISSUES_TIMELINE: lambda payload: ReadIssueTimeline(**payload),
+        Capability.ISSUES_HANDOFFS_CORRECT: lambda payload: CorrectIssueHandoff(**payload),
+        Capability.RECORDS_BACKFILL_PLAN: lambda payload: PlanLineageBackfill(**payload),
+        Capability.RECORDS_BACKFILL_REPORT: lambda payload: ReportLineageBackfill(**payload),
     }
 )
 

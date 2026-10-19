@@ -464,6 +464,8 @@ class RecordLineageApplication:
         )
         if prior is not None:
             return _replayed(uow, principal_id, prior)
+        # S3 section 6.2 step 1b: the commit mark, before any other lock.
+        uow.record_lineage.take_commit_mark(principal_id)
         issue_ref = RecordRef(family=RecordFamily.SITUATION, record_id=request.issue_id)
         kind = relation_kind(RelationType.ISSUE_MEMBER, issue_ref, request.member)
         locked = lock_lineage_sources(
@@ -530,6 +532,8 @@ class RecordLineageApplication:
         )
         if prior is not None:
             return _replayed(uow, principal_id, prior)
+        # S3 section 6.2 step 1b: the commit mark, before any other lock.
+        uow.record_lineage.take_commit_mark(principal_id)
         kind = relation_kind(request.relation_type, request.from_ref, request.to_ref)
         if kind is not RecordLinkKind.SEMANTIC or request.relation_type in COMPOSITE_ONLY_RELATIONS:
             # `issue_member`, and (S2 section 3.1) `delegated_from` and
@@ -803,6 +807,8 @@ class RecordLineageApplication:
         )
         if prior is not None:
             return _replayed(uow, principal_id, prior)
+        # S3 section 6.2 step 1b: the commit mark, before any other lock.
+        uow.record_lineage.take_commit_mark(principal_id)
         link = lineage.read_link(principal_id, link_id)
         if link is None:
             raise NotFoundError(SafeDetail.LINK_ID)

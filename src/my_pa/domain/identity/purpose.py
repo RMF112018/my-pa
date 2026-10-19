@@ -451,3 +451,9 @@ class Purpose(StrEnum):
     # by exactly `issues.work.create_task` and `issues.work.create_commitment`;
     # a remote-write purpose.
     ISSUE_WORK_AUTHORING = "issue_work_authoring"
+    # Record lineage S3 (S3 contract section 7), on `D-91`: would reuse widen the
+    # grant? Any lineage or Issue purpose would: a backfill reads the whole native
+    # corpus of the Principal and writes a durable ledger, so no lineage or Issue
+    # grant may become one. A write purpose of its own, used by exactly
+    # `records.backfill.plan` and `records.backfill.report`, both operator-only.
+    LINEAGE_BACKFILL = "lineage_backfill"

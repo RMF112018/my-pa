@@ -155,7 +155,9 @@ from my_pa.application.commands import (
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
     ConfigureProjectControls,
+    ContestRecordAssociation,
     CorrectGoodNotes,
+    CorrectIssueHandoff,
     CorrectIssueMembership,
     CorrectRecordAssociation,
     CreateCapture,
@@ -253,6 +255,7 @@ from my_pa.application.commands import (
     ListUnresolvedMentions,
     MergeEntities,
     ObserveEntityMention,
+    PlanLineageBackfill,
     PrepareContext,
     PreviewConstraintSync,
     PreviewEntityMerge,
@@ -272,6 +275,8 @@ from my_pa.application.commands import (
     ReadIntelligenceArtifact,
     ReadIssue,
     ReadIssueClosureReadiness,
+    ReadIssueHistory,
+    ReadIssueTimeline,
     ReadKnowledge,
     ReadKnowledgeAssertion,
     ReadManagedDocument,
@@ -281,15 +286,18 @@ from my_pa.application.commands import (
     ReadPortfolioConstraintOverview,
     ReadProject,
     ReadProjectControlsStatus,
+    ReadRecordAssociationHistory,
     ReadRecordLineage,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
     RecordIssueHandoff,
     RecordTask,
+    ReinstateRecordAssociation,
     ReopenConstraint,
     ReopenIssue,
     ReorderConstraintCategories,
+    ReportLineageBackfill,
     Representation,
     ResolveConstraintSyncConflict,
     ResolveEntity,
@@ -717,7 +725,12 @@ from my_pa.domain.knowledge_assertion.vocabulary import (
     KnowledgeReviewRequirement,
 )
 from my_pa.domain.lineage.model import RecordRef
-from my_pa.domain.lineage.vocabulary import EvidenceAvailability, RecordFamily, SituationKind
+from my_pa.domain.lineage.vocabulary import (
+    LINEAGE_BACKFILL_CAPABILITIES,
+    EvidenceAvailability,
+    RecordFamily,
+    SituationKind,
+)
 from my_pa.domain.meeting.model import (
     MAX_MEETING_PAGE_SIZE,
     MeetingCursorError,
@@ -3961,6 +3974,7 @@ class ApplicationService:
         relationship_memory_enabled: bool = False,
         knowledge_assertions_enabled: bool = False,
         lineage_enabled: bool = False,
+        lineage_backfill_enabled: bool = False,
         knowledge_discovery_client_ids: frozenset[str] = frozenset(),
         knowledge_operator_review_client_ids: frozenset[str] = frozenset(),
         knowledge_manager_client_ids: frozenset[str] = frozenset(),
@@ -4015,6 +4029,12 @@ class ApplicationService:
         #: handler asks again first (`_lineage_plane`), before authority or
         #: reservation, because the HTTP transport routes into `_HANDLERS`.
         self._lineage_enabled = lineage_enabled
+        #: Record lineage S3 (contract section 7.7): the backfill sub-switch.
+        #: Default `False`. The two operator-only backfill capabilities are served
+        #: only while this *and* `lineage_enabled` are on, so enabling lineage
+        #: never enables a backfill; each backfill handler asks again
+        #: (`_lineage_backfill_plane`) after `_lineage_plane`.
+        self._lineage_backfill_enabled = lineage_backfill_enabled
         #: KLP-WP-04 (R6 section 6.1): the exact discovery allowlist the second
         #: service gate reads. Empty -- the default -- refuses every submit and
         #: checkpoint, so an unconfigured build fails closed for the role.
@@ -4209,6 +4229,11 @@ class ApplicationService:
         # the ChatLLM profile.
         if not self._lineage_enabled:
             served -= _LINEAGE_CAPABILITIES
+        # Record lineage S3 (contract section 7.7): the backfill sub-switch,
+        # subtracted after the lineage line as the entity write half is, so the
+        # two backfill names need both switches.
+        if not (self._lineage_enabled and self._lineage_backfill_enabled):
+            served -= _LINEAGE_BACKFILL_CAPABILITIES
         # A proposal surface without a trusted server registration would
         # advertise a write every authenticated caller can only be denied.
         # Withhold both producer capabilities when composition has no exact
@@ -13259,6 +13284,14 @@ class ApplicationService:
         if not self._lineage_enabled:
             raise UnsupportedError()
 
+    def _lineage_backfill_plane(self) -> None:
+        """Refuse unless the backfill sub-switch is on too (S3 contract section 7.7).
+
+        Asked after `_lineage_plane` and before authority, reservation or replay.
+        """
+        if not (self._lineage_enabled and self._lineage_backfill_enabled):
+            raise UnsupportedError()
+
     def _issues_create(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: CreateIssue
     ) -> _Result:
@@ -13697,6 +13730,98 @@ class ApplicationService:
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
         )
+
+    # ---- record lineage S3 (ADR-015; S3 contract section 7) -------------------
+    #
+    # Eight handlers in the S1 shape: the switch first (section 7.7), then, for
+    # the two backfill names, the backfill sub-switch; then, for a write, the
+    # attested authority (section 6.1: `denied` unless local operator, before any
+    # row and before the replay lookup). The use cases are not implemented in
+    # this change: after the switches and the authority each handler answers
+    # `unsupported`, writing nothing, until its worker lands it (the S2 K1
+    # precedent).
+
+    def _records_associations_contest(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ContestRecordAssociation,
+    ) -> _Result:
+        """`records.associations.contest`: not implemented in this change (`unsupported`)."""
+        del unit_of_work, command
+        self._lineage_plane()
+        attested_lineage_authority(authorization)
+        raise UnsupportedError()
+
+    def _records_associations_reinstate(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReinstateRecordAssociation,
+    ) -> _Result:
+        """`records.associations.reinstate`: not implemented in this change (`unsupported`)."""
+        del unit_of_work, command
+        self._lineage_plane()
+        attested_lineage_authority(authorization)
+        raise UnsupportedError()
+
+    def _records_associations_history(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReadRecordAssociationHistory,
+    ) -> _Result:
+        """`records.associations.history`: not implemented in this change (`unsupported`)."""
+        del unit_of_work, authorization, command
+        self._lineage_plane()
+        raise UnsupportedError()
+
+    def _issues_history(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadIssueHistory
+    ) -> _Result:
+        """`issues.history`: not implemented in this change (`unsupported`)."""
+        del unit_of_work, authorization, command
+        self._lineage_plane()
+        raise UnsupportedError()
+
+    def _issues_timeline(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadIssueTimeline
+    ) -> _Result:
+        """`issues.timeline`: not implemented in this change (`unsupported`)."""
+        del unit_of_work, authorization, command
+        self._lineage_plane()
+        raise UnsupportedError()
+
+    def _issues_handoffs_correct(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: CorrectIssueHandoff
+    ) -> _Result:
+        """`issues.handoffs.correct`: not implemented in this change (`unsupported`)."""
+        del unit_of_work, command
+        self._lineage_plane()
+        attested_lineage_authority(authorization)
+        raise UnsupportedError()
+
+    def _records_backfill_plan(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: PlanLineageBackfill
+    ) -> _Result:
+        """`records.backfill.plan`: not implemented in this change (`unsupported`)."""
+        del unit_of_work, command
+        self._lineage_plane()
+        self._lineage_backfill_plane()
+        attested_lineage_authority(authorization)
+        raise UnsupportedError()
+
+    def _records_backfill_report(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReportLineageBackfill,
+    ) -> _Result:
+        """`records.backfill.report`: not implemented in this change (`unsupported`)."""
+        del unit_of_work, authorization, command
+        self._lineage_plane()
+        self._lineage_backfill_plane()
+        raise UnsupportedError()
 
     def _records_lineage(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadRecordLineage
@@ -15938,6 +16063,16 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.ISSUES_HANDOFFS_LIST: ApplicationService._issues_handoffs_list,
         Capability.ISSUES_WORK_CREATE_TASK: ApplicationService._issues_work_create_task,
         Capability.ISSUES_WORK_CREATE_COMMITMENT: ApplicationService._issues_work_create_commitment,
+        Capability.RECORDS_ASSOCIATIONS_CONTEST: ApplicationService._records_associations_contest,
+        Capability.RECORDS_ASSOCIATIONS_REINSTATE: (
+            ApplicationService._records_associations_reinstate
+        ),
+        Capability.RECORDS_ASSOCIATIONS_HISTORY: ApplicationService._records_associations_history,
+        Capability.ISSUES_HISTORY: ApplicationService._issues_history,
+        Capability.ISSUES_TIMELINE: ApplicationService._issues_timeline,
+        Capability.ISSUES_HANDOFFS_CORRECT: ApplicationService._issues_handoffs_correct,
+        Capability.RECORDS_BACKFILL_PLAN: ApplicationService._records_backfill_plan,
+        Capability.RECORDS_BACKFILL_REPORT: ApplicationService._records_backfill_report,
         Capability.MEETINGS_NOTES_VERSIONS: ApplicationService._meetings_notes_versions,
         Capability.MEETINGS_NOTES_READ_VERSION: ApplicationService._meetings_notes_read_version,
         Capability.RECORD_EVENTS_LIST: ApplicationService._record_events_list,
@@ -16074,8 +16209,9 @@ _KNOWLEDGE_ASSERTION_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     }
 )
 
-#: Record lineage S1 and S2 (ADR-015; S1 and S2 contract section 7.5): the exact
-#: 22-name set the `lineage_enabled` switch withholds, written out one at a time. The set is
+#: Record lineage S1, S2 and S3 (ADR-015; S1 and S2 contract section 7.5, S3
+#: section 7.7): the exact 30-name set the `lineage_enabled` switch withholds,
+#: written out one at a time. The set is
 #: the contract's exact S1 set, named as strings because the S1 application
 #: slices declare their `Capability` members in turn (the Issue plane first);
 #: `_LINEAGE_CAPABILITIES` is the declared part of it, so a name declared later
@@ -16105,10 +16241,26 @@ _LINEAGE_CAPABILITY_NAMES: Final[frozenset[str]] = frozenset(
         "issues.handoffs.list",
         "issues.work.create_task",
         "issues.work.create_commitment",
+        # Record lineage S3 (S3 contract section 7.7).
+        "records.associations.contest",
+        "records.associations.reinstate",
+        "records.associations.history",
+        "issues.history",
+        "issues.timeline",
+        "issues.handoffs.correct",
+        "records.backfill.plan",
+        "records.backfill.report",
     }
 )
 _LINEAGE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     capability for capability in Capability if capability.value in _LINEAGE_CAPABILITY_NAMES
+)
+
+#: Record lineage S3 (contract section 7.7): the two operator-only backfill
+#: names, withheld unless both `lineage_enabled` and `lineage_backfill_enabled`
+#: are on (`LINEAGE_BACKFILL_CAPABILITIES`, as members).
+_LINEAGE_BACKFILL_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    capability for capability in Capability if capability.value in LINEAGE_BACKFILL_CAPABILITIES
 )
 
 #: KLP-WP-04: the bound discovery client's two writes. Withheld from every

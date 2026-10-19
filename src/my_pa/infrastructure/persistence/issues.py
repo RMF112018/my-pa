@@ -32,7 +32,7 @@ from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Any, Final, cast
 
-from sqlalchemy import ColumnElement, Table, and_, exists, insert, select, tuple_, update
+from sqlalchemy import ColumnElement, Table, and_, exists, func, insert, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection, Row
 from sqlalchemy.exc import DBAPIError
@@ -82,6 +82,7 @@ from my_pa.infrastructure.persistence.tables import (
     issue_project_membership_events,
     issue_revision_evidence,
     issue_revisions,
+    lineage_commit_marks,
     lineage_evidence_anchors,
     lineage_write_request_links,
     lineage_write_requests,
@@ -322,6 +323,10 @@ class SqlIssueRepository(IssueRepository):
                     request.c.result_handoff_id,
                     request.c.result_record_family,
                     request.c.result_record_id,
+                    request.c.result_handoff_correction_id,
+                    request.c.result_backfill_run_id,
+                    request.c.result_backfill_checkpoint,
+                    request.c.commit_seq,
                 ).where(
                     _mine(request, principal_id),
                     request.c.capability == capability,
@@ -349,6 +354,10 @@ class SqlIssueRepository(IssueRepository):
             result_handoff_id=winner.result_handoff_id,
             result_record_family=winner.result_record_family,
             result_record_id=winner.result_record_id,
+            result_handoff_correction_id=winner.result_handoff_correction_id,
+            result_backfill_run_id=winner.result_backfill_run_id,
+            result_backfill_checkpoint=winner.result_backfill_checkpoint,
+            commit_seq=winner.commit_seq,
         )
 
     def complete_write_request(
@@ -368,8 +377,22 @@ class SqlIssueRepository(IssueRepository):
         result_handoff_id: str | None = None,
         result_record_family: str | None = None,
         result_record_id: str | None = None,
+        result_handoff_correction_id: str | None = None,
+        result_backfill_run_id: str | None = None,
+        result_backfill_checkpoint: int | None = None,
     ) -> None:
         request = lineage_write_requests
+        marks = lineage_commit_marks
+        # S3 section 4.1: the mark this transaction took for the Principal, if any
+        # (`take_commit_mark`); none for a backfill plan, which writes no fact.
+        held_mark = (
+            select(marks.c.commit_seq)
+            .where(
+                _mine(marks, principal_id),
+                marks.c.recorded_xact == func.pg_current_xact_id(),
+            )
+            .scalar_subquery()
+        )
         completed = _run(
             lambda: self._connection.execute(
                 update(request)
@@ -390,6 +413,10 @@ class SqlIssueRepository(IssueRepository):
                     result_handoff_id=result_handoff_id,
                     result_record_family=result_record_family,
                     result_record_id=result_record_id,
+                    result_handoff_correction_id=result_handoff_correction_id,
+                    result_backfill_run_id=result_backfill_run_id,
+                    result_backfill_checkpoint=result_backfill_checkpoint,
+                    commit_seq=held_mark,
                     completed_at=completed_at,
                 )
                 .returning(request.c.capability)

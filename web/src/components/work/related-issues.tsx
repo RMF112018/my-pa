@@ -79,6 +79,9 @@ function relationWords(edge: AssociationView, root: RecordRef): string {
       return outgoing ? `Blocks ${family}` : `Blocked by ${family}`;
     case "created_to_resolve":
       return outgoing ? `Created to resolve ${family}` : `${family.charAt(0).toUpperCase()}${family.slice(1)} was created to resolve it`;
+    // S3 (contract section 3.1): symmetric, so both sides read the same.
+    case "related_context":
+      return `Related to ${family}`;
     default:
       return outgoing ? `Discusses ${family}` : `Discussed in ${family}`;
   }

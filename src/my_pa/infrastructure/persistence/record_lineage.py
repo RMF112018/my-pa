@@ -42,9 +42,21 @@ from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Final
 
-from sqlalchemy import ColumnElement, Table, and_, insert, or_, select, text, tuple_, update
+from sqlalchemy import (
+    ColumnElement,
+    Table,
+    and_,
+    func,
+    insert,
+    or_,
+    select,
+    text,
+    tuple_,
+    update,
+)
 from sqlalchemy.engine import Connection, Row
 
 from my_pa.contracts.ports import (
@@ -84,6 +96,8 @@ from my_pa.infrastructure.persistence.principal_scope import (
 from my_pa.infrastructure.persistence.tables import (
     capture_versions,
     commitments,
+    lineage_commit_marks,
+    lineage_commit_sequences,
     lineage_evidence_anchors,
     meeting_note_versions,
     meetings,
@@ -791,6 +805,67 @@ class SqlRecordLineageRepository(RecordLineageRepository):
                 )
             )
         return {meeting_id: tuple(versions) for meeting_id, versions in found.items()}
+
+    # --- the knowledge clock (S3 contract sections 3.4, 4.2 and 6.2) -------------
+
+    def take_commit_mark(self, principal_id: str) -> int:
+        # The allocator row stays locked until this transaction ends; a second
+        # call in the same transaction returns the mark it already holds.
+        mark = _run(
+            lambda: self._connection.execute(
+                text("SELECT knowledge.lineage_commit_mark(CAST(:principal_id AS text))"),
+                {"principal_id": principal_id},
+            ).scalar_one()
+        )
+        return int(mark)
+
+    def commit_horizon(self, principal_id: str) -> datetime | None:
+        sequences = lineage_commit_sequences
+        return _run(
+            lambda: self._connection.execute(
+                select(sequences.c.last_marked_at).where(_mine(sequences, principal_id))
+            ).scalar_one_or_none()
+        )
+
+    def commit_watermark(self, principal_id: str, at: datetime) -> int | None:
+        marks = lineage_commit_marks
+        found = _run(
+            lambda: self._connection.execute(
+                select(func.max(marks.c.commit_seq)).where(
+                    _mine(marks, principal_id), marks.c.marked_at <= at
+                )
+            ).scalar_one()
+        )
+        return None if found is None else int(found)
+
+    def link_states_known_at(
+        self,
+        principal_id: str,
+        link_ids: Collection[str],
+        *,
+        watermark: int | None,
+        at: datetime | None,
+    ) -> Mapping[str, tuple[int, LinkLifecycleState]]:
+        if not link_ids or at is None:
+            return {}
+        revisions = record_link_revisions
+        known = and_(revisions.c.commit_seq.is_(None), revisions.c.recorded_at <= at)
+        if watermark is not None:
+            known = or_(revisions.c.commit_seq <= watermark, known)
+        rows = self._rows(
+            select(revisions.c.link_id, revisions.c.revision_no, revisions.c.lifecycle_state)
+            .where(
+                _mine(revisions, principal_id),
+                revisions.c.link_id.in_(sorted(set(link_ids))),
+                known,
+            )
+            .distinct(revisions.c.link_id)
+            .order_by(revisions.c.link_id, revisions.c.revision_no.desc())
+        )
+        return {
+            row.link_id: (int(row.revision_no), LinkLifecycleState(row.lifecycle_state))
+            for row in rows
+        }
 
 
 # --- head rebuild parity ---------------------------------------------------------

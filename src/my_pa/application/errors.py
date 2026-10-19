@@ -587,6 +587,19 @@ class SafeDetail(StrEnum):
     #: assert that would close a cycle over the Principal's active `blocks`
     #: links, or whose search reached its bound before it could decide.
     BLOCKS_CYCLE = "blocks_cycle"
+    #: Record lineage S3 (S3 contract section 7.5). `KNOWN_AT` / `VALID_AT` a
+    #: malformed instant or one after now; `HANDOFF_ID` a handoff that is not
+    #: the chain's last live event for a void (and a malformed identifier);
+    #: `CHECKPOINT` a backfill checkpoint that moved or is malformed;
+    #: `BATCH_SIZE` a backfill batch outside 1..500; `CLASSIFICATION` a backfill
+    #: report filter outside the closed classes. `CURSOR`, `PAGE_SIZE`,
+    #: `RUN_ID`, `STATE`, `ACTION` and `EFFECTIVE_AT` are reused.
+    KNOWN_AT = "known_at"
+    VALID_AT = "valid_at"
+    HANDOFF_ID = "handoff_id"
+    CHECKPOINT = "checkpoint"
+    BATCH_SIZE = "batch_size"
+    CLASSIFICATION = "classification"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

@@ -76,7 +76,7 @@ principal is the only principal; no credential is issued, read, or required.
 `OPERATOR` rather than `GATEWAY` because the process *is* the operator's local
 transport — a `GATEWAY` principal cannot invoke `sources.enroll`, so the choice
 is between naming what this is and shipping a transport that cannot reach one of
-the 214 capabilities.
+the 222 capabilities.
 
 `entra` composes `entra_authenticator` instead and issues **no** process
 principal. Every request presents a bearer token, the token's validated
@@ -1114,6 +1114,9 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
             ),
             # Record lineage S1 (contract section 7.5): its own switch, no other.
             lineage_enabled=settings.lineage_enabled,
+            # Record lineage S3 (contract section 7.7): the backfill sub-switch,
+            # which the service conjoins with the lineage switch.
+            lineage_backfill_enabled=settings.lineage_backfill_enabled,
             # KLP-WP-04 (R6 section 6.1): the second service gate's allowlist.
             knowledge_discovery_client_ids=settings.knowledge_discovery_oauth_client_id_set(),
             # KLP-WP-04 slice C (R6 section 3.2): the operator-review allowlist the

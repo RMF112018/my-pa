@@ -204,6 +204,8 @@ class IssueHandoffApplication:
             if stored is None:
                 raise RepositoryFailureError
             return HandoffResult(handoff=_view(uow, principal_id, stored), replayed=True)
+        # S3 section 6.2 step 1b: the commit mark, before any other lock.
+        uow.record_lineage.take_commit_mark(principal_id)
         subject = RecordRef(family=RecordFamily.COMMITMENT, record_id=request.commitment_id)
         locked = lock_lineage_sources(
             issues,

@@ -6319,6 +6319,16 @@ class UnitOfWork(ABC):
         """
 
     @property
+    @abstractmethod
+    def issue_timeline(self) -> IssueTimelineRepository:
+        """The record lineage S3 Issue timeline reads, inside this transaction."""
+
+    @property
+    @abstractmethod
+    def lineage_backfill(self) -> LineageBackfillRepository:
+        """The record lineage S3 backfill dry-run ledger, inside this transaction."""
+
+    @property
     def identity_history(self) -> object:
         """The optional Principal-scoped identity-history read projection.
 
@@ -9109,6 +9119,13 @@ class LineageWriteRequestRecord:
     result_handoff_id: str | None = None
     result_record_family: str | None = None
     result_record_id: str | None = None
+    #: Record lineage S3 (S3 contract section 4.1): a handoff correction, a
+    #: backfill run and its checkpoint, and the commit mark the write took
+    #: (null for a backfill plan and for a pre-S3 row).
+    result_handoff_correction_id: str | None = None
+    result_backfill_run_id: str | None = None
+    result_backfill_checkpoint: int | None = None
+    commit_seq: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -9253,8 +9270,16 @@ class IssueRepository(ABC):
         result_handoff_id: str | None = None,
         result_record_family: str | None = None,
         result_record_id: str | None = None,
+        result_handoff_correction_id: str | None = None,
+        result_backfill_run_id: str | None = None,
+        result_backfill_checkpoint: int | None = None,
     ) -> None:
-        """Complete this transaction's reservation with its one result group."""
+        """Complete this transaction's reservation with its one result group.
+
+        S3 section 4.1: the row also records `commit_seq`, the commit mark this
+        transaction holds for the Principal (`take_commit_mark`), or null when
+        it took none -- a `records.backfill.plan`, which writes no fact.
+        """
 
     @abstractmethod
     def insert_issue(
@@ -9682,6 +9707,53 @@ class RecordLineageRepository(ABC):
     ) -> Mapping[str, tuple[LineageNoteVersionRef, ...]]:
         """Each named Meeting's note versions, `version_number` ascending."""
 
+    # --- the knowledge clock (S3 contract sections 3.4, 4.2 and 6.2) -------------
+
+    def take_commit_mark(self, principal_id: str) -> int:
+        """This transaction's commit mark for `principal_id`, allocating it on first use.
+
+        `knowledge.lineage_commit_mark`: the allocator row is locked from here
+        to commit, so every lineage writer calls this immediately after a
+        non-replay reservation and before any other lock (S3 section 6.2 step
+        1b). A second call in one transaction returns the same mark.
+        Non-abstract: a fake that writes no fact never needs it.
+        """
+        raise NotImplementedError
+
+    def commit_horizon(self, principal_id: str) -> datetime | None:
+        """`H`: the allocator row's committed `last_marked_at`, read without a lock.
+
+        `None` when the Principal has no allocator row, and so no lineage fact.
+        Non-abstract, on the same terms.
+        """
+        raise NotImplementedError
+
+    def commit_watermark(self, principal_id: str, at: datetime) -> int | None:
+        """`W(at)`: the largest mark of the Principal with `marked_at <= at`, or `None`.
+
+        Read without a lock; for an `at` at or before the horizon every such
+        mark is committed. Non-abstract, on the same terms.
+        """
+        raise NotImplementedError
+
+    def link_states_known_at(
+        self,
+        principal_id: str,
+        link_ids: Collection[str],
+        *,
+        watermark: int | None,
+        at: datetime | None,
+    ) -> Mapping[str, tuple[int, LinkLifecycleState]]:
+        """Each named link's revision known at the cut: `link_id -> (revision_no, state)`.
+
+        The as-of selection of S3 section 7.2 step 2, from revisions and never
+        from `record_link_heads`: the latest revision with `commit_seq <=
+        watermark`, or -- a row written before the S3 revision, with no mark --
+        with `recorded_at <= at` (section 3.4). A link with no revision known at
+        the cut is absent. No lock. Non-abstract, on the same terms.
+        """
+        raise NotImplementedError
+
 
 # --- Record lineage S2: the responsibility handoff ledger ---------------------
 #
@@ -9773,3 +9845,18 @@ class IssueHandoffRepository(ABC):
         Raises `IssueCursorError` when `after` names no event inside the same
         filter set.
         """
+
+
+# --- Record lineage S3: the Issue timeline and the backfill ledger ------------
+#
+# S3 contract section 9. Declared with the unit of work so every subclass
+# implements or stubs them from the start; the operations are the timeline
+# (section 7.3) and backfill (section 8.3) work packages'.
+
+
+class IssueTimelineRepository(ABC):  # noqa: B024 - its reads land with section 7.3
+    """The record lineage S3 Issue timeline reads (S3 contract section 7.3)."""
+
+
+class LineageBackfillRepository(ABC):  # noqa: B024 - its ledger lands with section 8.3
+    """The record lineage S3 backfill dry-run ledger (S3 contract section 8.3)."""

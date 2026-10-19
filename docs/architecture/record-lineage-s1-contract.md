@@ -930,7 +930,7 @@ contract sections 11 and 12). The S3 rows are specified by the
 [S3 contract](record-lineage-s3-contract.md), which builds `issues.history`,
 `records.associations.history`, `known_at` / `valid_at` reads and grant-bound cursors on
 `records.lineage`, `issues.timeline`, `related_context`, `contest` / `reinstate`, the
-WP-03B backfill and the WP-06A Issue and Meeting views, and carries proposals and review,
+WP-03B backfill dry run (no link materialized) and the WP-06A Issue and Meeting views, and carries proposals and review,
 the lineage Record Event family, `list_for_record`, version selectors and the other
 native virtual edges (S3 contract sections 11 and 12).
 

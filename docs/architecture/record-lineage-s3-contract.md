@@ -36,8 +36,9 @@ corpus in a dry run before any source-backed link is materialized.
 - a **knowledge clock** (section 4.2): every lineage write takes one per-Principal,
   commit-ordered **commit mark** from a row-locked allocator, and every lineage fact row
   carries its mark; `known_at` reads are anchored to the committed mark horizon, so a
-  later commit, including a late correction, never changes an answer already given for
-  a `known_at` at or before that horizon;
+  later commit, including a late correction, never changes the lineage facts of an answer already
+  given for a `known_at` at or before that horizon (the one named residual is the
+  note-version cut, section 3.4);
 - `records.lineage` widened (section 7.2): `known_at`, `valid_at`, `page_size` and an
   opaque grant-bound `cursor`; per-family visibility for remote readers; path
   explanations; `restricted_evidence` and `scope_changed_restart_required`; all 14
@@ -52,11 +53,11 @@ corpus in a dry run before any source-backed link is materialized.
 - `related_context` (symmetric, stored once in canonical order, Issue-scoped);
 - handoff correction (`issues.handoffs.correct`: `retime` or `void`, append-only,
   honoured by `known_at` / `valid_at` reads);
-- the WP-03B backfill (section 8.3): `records.backfill.plan` (dry run: a frozen
-  population, every item classified into one of the 5 classes, a ledger, resumable),
-  `records.backfill.report`, and `records.backfill.apply` (materializes only
-  `source_backed_accepted` items of a reviewed plan), all operator-only, attested and
-  invoked through the ordinary CLI transport; tests on synthetic fixtures only;
+- the WP-03B backfill **dry run** (section 8.3): `records.backfill.plan` (a frozen
+  population, every item classified into one of the 5 classes, a durable resumable
+  ledger) and `records.backfill.report`, both operator-only, behind their own switch
+  `MY_PA_LINEAGE_BACKFILL_ENABLED` (default off), invoked through the ordinary CLI
+  transport; it writes no link; tests on synthetic fixtures only;
 - WP-06A S3 (section 7.6): an Issues index, an accessible Issue view (breadcrumb,
   timeline, paged lineage table with path explanations, note-version drilldown against
   the current note, hidden-data and source-status messages, keyboard/phone/tablet), and
@@ -64,8 +65,9 @@ corpus in a dry run before any source-backed link is materialized.
 - the S3 part of AT-001 and AT-006, and AT-007 (contested), AT-008, AT-011, AT-013,
   AT-014, AT-016, AT-023, AT-024, AT-025, with AT-026 as a regression (section 10).
 
-**Not in S3** (section 11 lists the owner): proposals and review (`irp`, `ldec`); Record
-Event emission for lineage (`irec`); Decision membership; native virtual edges other
+**Not in S3** (section 11 lists the owner): materializing any backfill item (the
+backfill apply, an operator-gated later package with the binding requirements of section
+11); proposals and review (`irp`, `ldec`); Record Event emission for lineage (`irec`); Decision membership; native virtual edges other
 than `meeting_note_version_of`; `records.associations.list_for_record`; a valid-time
 interval on links; contesting memberships; verified Commitment acceptance; Constraint
 close evidence in the Constraint plane; any closure exception authority.
@@ -96,7 +98,7 @@ Widened in `domain/lineage/vocabulary.py` and in the S3 revision's CHECKs togeth
 | `RelationType` | 7 members | `related_context` | — |
 | `LinkRevisionAction` | `assert`, `end`, `correct_evidence` | `contest`, `reinstate` | — |
 | `LinkLifecycleState` | `active`, `ended` | `contested` | — |
-| `AcceptanceBasis` | `user_confirmed` | `source_backed_verified` (backfill apply only) | `review_accepted`, `system_deterministic` (proposals, not scheduled) |
+| `AcceptanceBasis` | `user_confirmed` | — | `source_backed_verified` (the deferred backfill apply), `review_accepted`, `system_deterministic` (not scheduled) |
 | `EvidenceAvailability` (read only) | `available`, `archived`, `legacy_unversioned` | `restricted` | `redacted`, `unavailable`, `withdrawn`, `superseded` |
 | `LineageCompleteness` (read only) | 4 members | `restricted_evidence`, `scope_changed_restart_required` | `source_not_integrated`, `not_reportable` (Program work) |
 | `NativeVirtualEdge` (read only) | `meeting_note_version_of` | — (section 12, D-05) | — |
@@ -104,10 +106,10 @@ Widened in `domain/lineage/vocabulary.py` and in the S3 revision's CHECKs togeth
 | `HandoffCorrectionAction` (new) | — | `retime`, `void` | — |
 | `TimelineEntryKind` (new, read only) | — | `issue_revision`, `project_link`, `membership`, `association`, `handoff`, `handoff_correction`, `native_event` | — |
 | `BackfillClass` (new) | — | `native_virtual_proven`, `source_backed_accepted`, `review_candidate`, `unresolved`, `refused` | — |
-| `BackfillSourceKind` (new) | — | `task_follow_up`, `constraint_follow_up`, `meeting_series`, `project_situation`, `work_origin_assertion`, `work_origin_capture_root`, `situation_object_ref` | — |
+| `BackfillSourceKind` (new) | — | `task_follow_up`, `constraint_follow_up`, `meeting_series`, `project_situation`, `work_origin_assertion`, `work_origin_capture_root`, `work_origin_other`, `situation_object_ref` | — |
 | `BackfillReason` (new) | — | section 8.3 table | — |
-| `BackfillRunState` (new) | — | `enumerated`, `classified`, `applying`, `applied` | — |
-| `BackfillApplyOutcome` (new) | — | `materialized`, `already_present`, `refused_at_apply` | — |
+| `BackfillRunState` (new) | — | `enumerated`, `classified` | `applying`, `applied` (the deferred apply) |
+| `ExistingLinkState` (new, read only) | — | `none`, `active`, `contested`, `ended` | — |
 
 `LineageCompleteness` precedence (one `complete_state`, every applicable code also in
 `qualifiers`): `scope_changed_restart_required` > `unresolved_ambiguity` >
@@ -119,18 +121,24 @@ New constants in `vocabulary.py`: `LIVE_LINK_STATES = {active, contested}` (the 
 that hold an identity and are traversed); `CONTESTABLE_RELATIONS` = every semantic
 relation; `LINEAGE_READ_GENERATION = 1` (bumped by any change to traversal, visibility,
 ordering or paging rules; bound in every cursor); `LINEAGE_FAMILY_READS` (section 6.4);
-`BACKFILL_VALIDATOR_VERSION = 1`; `ISSUE_REVISION_CAPABILITIES`,
-`LINK_REVISION_CAPABILITIES`, `RECORD_LINK_CAPABILITIES`, `HANDOFF_CAPABILITIES` and
-`LINEAGE_WRITE_CAPABILITIES` gain the section 7 names that write those rows (the last
-becomes the 20 lineage write names: S2's 15 plus `records.associations.contest`,
-`records.associations.reinstate`, `issues.handoffs.correct`, `records.backfill.plan`,
-`records.backfill.apply`).
+`BACKFILL_VALIDATOR_VERSION = 1`; `LINK_REVISION_CAPABILITIES` gains
+`records.associations.contest` and `records.associations.reinstate`; new
+`HANDOFF_CORRECTION_CAPABILITIES = {"issues.handoffs.correct"}` (the fact-writing set of
+the corrections table) and `BACKFILL_WRITE_CAPABILITIES = {"records.backfill.plan"}` (it
+writes ledger rows only, no fact and no mark); `LINEAGE_WRITE_CAPABILITIES`, the union of
+the fact-writing sets, gains both new sets and becomes the 19 lineage write names (S2's 15
+plus `records.associations.contest`, `records.associations.reinstate`,
+`issues.handoffs.correct`, `records.backfill.plan`); it is the set the
+`lineage_write_requests` capability CHECK admits. `RECORD_LINK_CAPABILITIES` is
+unchanged (no S3 write creates a root other than through `records.associations.assert`).
+`LINEAGE_BACKFILL_CAPABILITIES = {"records.backfill.plan", "records.backfill.report"}`
+(the sub-switch set, section 7.7).
 
 ### 3.1 S3 relation matrix addition and link transitions
 
 | Relation | From / To | Written by | Rule (application; `invalid_request` / named detail unless stated) |
 | --- | --- | --- | --- |
-| `related_context` (`semantic`, symmetric) | any 2 distinct records of `meeting`, `meeting_note_version`, `task`, `commitment`, `constraint`, `capture_version` | `records.associations.assert` (and `correct`/`contest`/`reinstate`/`end`) | `context_issue_id` required (`context_issue_id`); both endpoints are *inside* the context Issue at assert time — an active member or a member of an active member's pair set (S1 §7.2) — (`to_record` / `from_record`); ≥1 `immutable_version` anchor with role `corroborates` (`evidence_anchors`); the stored `from` is the endpoint with the smaller `(family token, record_id)` and `to` the larger — a request naming them the other way round is normalized, not refused, so both orders have one `normalized_identity`; `from` = `to` is refused (`to_record`; also a CHECK) |
+| `related_context` (`semantic`, symmetric) | any 2 distinct records of `meeting`, `meeting_note_version`, `task`, `commitment`, `constraint`, `capture_version` | `records.associations.assert` (and `correct`/`contest`/`reinstate`/`end`) | `context_issue_id` required (`context_issue_id`); both endpoints are *inside* the context Issue at assert time — an active member or a member of an active member's pair set (S1 §7.2) — (`to_record` / `from_record`); ≥1 `immutable_version` anchor with role `corroborates` (`evidence_anchors`); the stored `from` is the endpoint with the smaller `(family token, record_id)` and `to` the larger, compared by code point (Python `str` order; `COLLATE "C"` in SQL, section 4.1) — a request naming them the other way round is normalized, not refused, so both orders have one `normalized_identity`; `from` = `to` is refused (`to_record`; also a CHECK) |
 
 **Link transitions** (semantic links only; a membership `link_id` is
 `invalid_request` / `link_id` on `contest` and `reinstate`, the S1 symmetric rule):
@@ -151,18 +159,35 @@ the one-live-head database index covers `active` and `contested` (section 4.1).
 re-run the cycle search because a contested `blocks` head stays in the cycle search's
 input (section 6.2), so no cycle can have formed through it.
 
-### 3.2 The closure gate (S2 §3.3, extended)
+### 3.2 The closure gate (S2 §3.3, extended) and "in the Issue's context"
 
-The S2 gate is unchanged and gains one condition: **no link whose `context_issue_id` is
-the Issue has a `contested` head.** Memberships cannot be contested in S3 (their dispute
-is a `contradicts` anchor recorded by `issues.memberships.correct`, which S2 already
-reports as `resolution_evidence_contradicted`), and anchors are not links, so this one
-rule is the whole of S2's forward obligation (section 12, D-09). `issues.close` with a
-contested context link answers `conflict` / `closure_gate`; `issues.closure_readiness`
-gains `contested_links` (section 7.1) and is `ready: false` while it is non-empty. The
-frozen closed Issue (S2 §3.3) also refuses `contest`, `reinstate`, `correct` and `end`
-of any link in its context and `issues.handoffs.correct` of any of its handoffs
-(`conflict` / `state`), so a closed Issue cannot acquire a dispute; reopen first.
+**Definition, used everywhere below and nowhere narrowed.** A link is *in the context of
+Issue I* at a cut when it is one the S1 §7.2 step 4 traversal follows for I: a membership
+from I; or a semantic link whose `context_issue_id` is I; or a semantic link with an
+endpoint equal to I (whatever its context); or a semantic link with a null context whose 2
+endpoints are both *inside* I (I, an active member, or a member of an active member's
+pair set) at that cut. The cut is the current head state for writes and the gate, and the
+read's cut (section 3.4) for reads. This one predicate
+(`domain/lineage/closure.py::in_issue_context`, persistence `links_in_issue_context`) is
+used by the gate, by `contested_links` in readiness, by the frozen-closed refusals and by
+the timeline's `association` selection (section 7.3).
+
+The S2 gate is unchanged and gains one condition: **no link in the Issue's context has a
+`contested` head.** Memberships cannot be contested in S3 (their dispute is a
+`contradicts` anchor recorded by `issues.memberships.correct`, which S2 already reports
+as `resolution_evidence_contradicted`), and anchors are not links, so this one rule is the
+whole of S2's forward obligation (section 12, D-09). `issues.close` with a contested link
+in context answers `conflict` / `closure_gate`; `issues.closure_readiness` gains
+`contested_links` (section 7.1) and is `ready: false` while it is non-empty. The close's
+section 6.2 step 3 `FOR SHARE` set gains the endpoints of every in-context semantic link
+it evaluates, and every `contest` / `reinstate` takes `FOR SHARE` on every Issue the link
+is in the context of (its context Issue, and an Issue endpoint), so a contest and a close
+serialize. The frozen closed Issue (S2 §3.3) also refuses `contest`, `reinstate`,
+`correct` and `end` of any link in its context, including a null-context link with both
+endpoints inside it and a link naming it as an endpoint, and `issues.handoffs.correct`
+of any of its handoffs (`conflict` / `state`), so a closed Issue cannot acquire or lose
+a dispute; reopen first. A null-context link that is inside several Issues is refused
+while any of them is closed.
 
 ### 3.3 Handoff correction (CR-005 residual)
 
@@ -173,7 +198,7 @@ one handoff event; it never changes the event.
 - **`void`**: the event did not happen. Only the chain's **last live event** can be voided (`invalid_request` / `handoff_id` otherwise), so holder continuity is never broken. Evidence: exactly 1 `immutable_version` anchor with role `contradicts`.
 - **Live** = not voided by a correction known at the read's `known_at`. The *current effective time* of an event is the `effective_at` of its latest `retime` known at `known_at`, else its own.
 - A voided event is terminal: any further correction of it is `conflict` / `state`.
-- **The chain skips voided events** (replacing S2 §3.4's "event *n − 1*"): the leaving holder of a new handoff is the arrival holder of the chain's last live event (or the S2 initial rule when none is live), and its `effective_at` must be at or after that event's current effective time. `issues.handoffs.record` and the replaced database triggers (section 4.1) both apply this.
+- **The chain skips voided events** (replacing S2 §3.4's "event *n − 1*"): the leaving holder of a new handoff is the arrival holder of the chain's last live event and its `effective_at` must be at or after that event's current effective time. **When no earlier event is live** (every earlier event is voided, or there is none), the application applies the S2 event-1 rule (the leaving holder is the Principal or the Commitment's current counterparty, `from` names its side) and the effective time is bounded only by the Commitment's `created_at`; the database, as S2's trigger does for event 1, then checks no holder predecessor and checks `effective_at` against the Commitment's `created_at` only. `issues.handoffs.record` and the replaced database triggers (section 4.1) both apply this.
 - Corrections take the S2 `:handoff:` advisory key of their chain, so a correction and a new handoff of one chain serialize.
 
 ### 3.4 Time (ADR-015 decision 8, made concrete)
@@ -181,8 +206,10 @@ one handoff event; it never changes the event.
 - **Known time** is the commit mark (section 4.2). A fact is *known at `T`* iff its `commit_seq ≤ W(T)`, where `W(T)` is the largest mark of the Principal whose `marked_at ≤ T`; a fact written before the S3 revision (`commit_seq IS NULL`) is known at `T` iff its own `recorded_at ≤ T`.
 - **Effective `known_at`**: `T_k = min(requested known_at, or server now when omitted; H)`, where `H` is the committed horizon, the allocator row's `last_marked_at` read without a lock. A requested `known_at` after server now is `invalid_request` / `known_at`. A Principal with no allocator row has no lineage fact; `T_k` is then `null` and every lineage set is empty.
 - **Why this is commit-safe.** The allocator row is locked from allocation to commit, and `marked_at` is `greatest(clock_timestamp(), previous + 1 µs)` under that lock, so every mark that is not committed when `H` is read — one in flight, or any later one — has `marked_at > H`. Every fact known at a `T ≤ H` is therefore committed and immutable when it is read, and no later commit can add one. A transaction that began before `T` but commits later is invisible to every answer at `T`, now and forever (section 10, `test_the_horizon_excludes_an_in_flight_write`).
-- **Valid time.** A link revision, an Issue revision and a Project link event record no business-effective time; each takes effect when it became known (its mark). A handoff event takes effect at its current effective time. For a requested `valid_at` (`invalid_request` / `valid_at` after server now), the read uses `T_v = min(valid_at, T_k)` (default `T_k`): links, Issue revisions and Project link events at `W(T_v)`; handoffs and corrections known at `W(T_k)` and in effect at `T_v`. The response reports `known_at = T_k` and `valid_at = T_v`.
+- **Valid time.** A link revision, an Issue revision and a Project link event record no business-effective time; each takes effect when it became known (its mark). A handoff event takes effect at its current effective time. For a requested `valid_at` (`invalid_request` / `valid_at` after server now), the read uses `T_v = min(valid_at, T_k)` (default `T_k`): links, Issue revisions and Project link events at `W(T_v)`; handoffs and corrections known at `W(T_k)` and in effect at `T_v`. `T_v` is the **lineage-plane** valid cut only. The response reports `known_at = T_k`, `valid_at` = the requested `valid_at` (or `T_k` when omitted) and, when they differ, `lineage_valid_at = T_v` (otherwise `lineage_valid_at = valid_at`).
 - **What a late correction changes.** A correction recorded at `D + 5` that retimes a handoff to `D − 2` has a mark after `D + 5`: an answer at `known_at = D + 1` never contains it; an answer at `known_at = D + 6`, `valid_at = D − 1` does (AT-008).
+- **Meeting note versions are cut by their own `recorded_at`** (R3-F01). A note version is native and takes no mark, so a reached Meeting's note versions — in its `meeting_note_version_of` virtual edges and in its pair set (S1 §7.2) — are only those with `meeting_note_versions.recorded_at ≤ T_v`. **Residual (named, not commit-ordered):** `recorded_at` is the native writer's transaction stamp, not commit order (the D-01 reasoning), so a note save whose transaction began before an already-answered `T_v` and commits after the answer can make a later answer at that same cut include it; the window is that one native transaction's duration. A note saved after the cut never changes the answer (section 10, `test_a_note_saved_after_known_at_leaves_the_answer_unchanged`).
+- **The native plane has its own valid cut** (R3-F02). Native timeline entries (section 7.3) are never clamped to `T_k`: they are bounded by `occurred_at ≤ valid_at` (the requested value, itself at or before server now) under the Record Event watermark frozen on the first page. So a native change made after the last lineage write (after `H`) is shown at a later `valid_at`, which is how past ball-in-court is read.
 - **What is current, by design.** Evidence availability (ADR-015 decision 8), native existence re-resolution (S1 §7.2 step 5), the reader's grants (section 6.4) and native-plane timeline entries (section 7.3) are read as they are now; none of them is a fact of the lineage plane, and none rewrites one.
 
 ## 4. Schema — one additive revision
@@ -207,15 +234,14 @@ dropped and re-added under the **same name**; a replaced function is
 
 **`record_links`**
 
-- Widen `a_record_link_relation_type_is_known` (+ `related_context`), `a_record_link_pair_is_admitted` (+ the section 3.1 row: `from_family` and `to_family` each in the 6 families) and `a_record_link_capability_is_known` (+ `records.backfill.apply`).
-- New CHECK `a_related_context_is_canonical_and_scoped`: `relation_type <> 'related_context' OR (context_issue_id IS NOT NULL AND (from_family, from_id) < (to_family, to_id))`.
+- Widen `a_record_link_relation_type_is_known` (+ `related_context`) and `a_record_link_pair_is_admitted` (+ the section 3.1 row: `from_family` and `to_family` each in the 6 families). `a_record_link_capability_is_known` is unchanged.
+- New CHECK `a_related_context_is_canonical_and_scoped`: `relation_type <> 'related_context' OR (context_issue_id IS NOT NULL AND (from_family COLLATE "C", from_id COLLATE "C") < (to_family COLLATE "C", to_id COLLATE "C"))` — code-point order whatever the database collation (precedent `20260804_8c4d1e7a2b90`, `ORDER BY bucket_id COLLATE "C"`). Every SQL `ORDER BY` and keyset predicate that must match a Python order in this contract (section 7.2 output order and `p`, section 7.3 order, `link_id` orders) also uses `COLLATE "C"` on text keys.
 
 **`record_link_revisions`**
 
-- Widen `a_link_revision_action_is_known` (+ `contest`, `reinstate`), `a_link_revision_state_is_known` (+ `contested`), `a_link_revision_acceptance_basis_is_known` (+ `source_backed_verified`), `a_link_revision_capability_is_known` (+ `records.associations.contest`, `records.associations.reinstate`, `records.backfill.apply`) and `a_link_revision_states_its_reason` (`action NOT IN ('correct_evidence','end','contest','reinstate') OR reason IS NOT NULL`). `a_link_revision_ends_exactly_when_it_ends` is unchanged; new CHECKs `a_link_revision_contests_exactly_when_contested` (`(action = 'contest') = (lifecycle_state = 'contested')`) and `a_reinstatement_is_active` (`action <> 'reinstate' OR lifecycle_state = 'active'`).
-- New CHECK `a_source_backed_link_is_written_by_backfill`: `(acceptance_basis = 'source_backed_verified') = (source_capability = 'records.backfill.apply')`.
+- Widen `a_link_revision_action_is_known` (+ `contest`, `reinstate`), `a_link_revision_state_is_known` (+ `contested`), `a_link_revision_capability_is_known` (+ `records.associations.contest`, `records.associations.reinstate`) and `a_link_revision_states_its_reason` (`action NOT IN ('correct_evidence','end','contest','reinstate') OR reason IS NOT NULL`). `a_link_revision_ends_exactly_when_it_ends` is unchanged; new CHECKs `a_link_revision_contests_exactly_when_contested` (`(action = 'contest') = (lifecycle_state = 'contested')`) and `a_reinstatement_is_active` (`action <> 'reinstate' OR lifecycle_state = 'active'`).
 - `CREATE OR REPLACE FUNCTION knowledge.a_link_revision_follows_an_active_predecessor()` with the section 3.1 transition table (predecessor state `active` for `correct_evidence`, `contest`; `active` or `contested` for `end`; `contested` for `reinstate`).
-- `a_lineage_row_is_local_operator_attested` is unchanged: backfill apply writes `local_operator` / `local_cli`.
+- `a_lineage_row_is_local_operator_attested` and `a_link_revision_acceptance_basis_is_known` are unchanged.
 
 **`record_link_heads`** — widen `a_link_head_state_is_known` (+ `contested`); drop and recreate
 the partial unique index `record_link_one_active_identity (principal_id, normalized_identity) WHERE lifecycle_state IN ('active','contested')` under the same name.
@@ -223,8 +249,9 @@ the partial unique index `record_link_one_active_identity (principal_id, normali
 **`issue_responsibility_events`** — `CREATE OR REPLACE` both S2 functions so the chain
 skips voided events (section 3.3): `a_handoff_follows_its_predecessor()` compares
 `NEW`'s from-holder with the arrival holder of the latest event of the chain with
-`sequence_no < NEW.sequence_no` that has no `void` correction (the S2 initial-holder
-rule when there is none); `a_handoff_is_effective_in_order()` compares `NEW.effective_at`
+`sequence_no < NEW.sequence_no` that has no `void` correction, and admits any
+from-holder when there is no such event (S2 event-1 behaviour; the application rule of
+section 3.3 applies); `a_handoff_is_effective_in_order()` compares `NEW.effective_at`
 with that event's current effective time (its latest `retime`'s `effective_at`, else its
 own) and with the Commitment's `created_at`. The `predecessor_sequence_no` FK and CHECKs
 are unchanged (the ledger sequence still counts every event).
@@ -232,11 +259,11 @@ are unchanged (the ledger sequence still counts every event).
 **`lineage_write_requests`**
 
 - `ADD COLUMN commit_seq bigint` (FK to the mark, `UNIQUE (principal_id, commit_seq)`; set at completion by every write that took a mark — every write after the revision except `records.backfill.plan` — and null on a pre-S3 row), `result_handoff_correction_id text` (`ihcr`, FK), `result_backfill_run_id text` (`lbfr`, FK), `result_backfill_checkpoint integer` (`>= 0`).
-- Widen the capability CHECK (+ the 5 S3 writes), `an_incomplete_lineage_write_request_names_no_result` (+ the 4 new columns null), every S1/S2 completion CHECK (the 3 new result columns null), and add `a_completed_handoff_correction_names_its_correction` (`issues.handoffs.correct` ⇒ only `result_handoff_correction_id`), `a_completed_backfill_write_names_its_run` (`records.backfill.plan` / `apply` ⇒ only `result_backfill_run_id` and `result_backfill_checkpoint`), and `a_completed_link_write_names_its_revision` widened with `records.associations.contest` and `reinstate` (`result_created IS NULL`).
+- Widen the capability CHECK (+ the 4 S3 writes: `LINEAGE_WRITE_CAPABILITIES`), `an_incomplete_lineage_write_request_names_no_result` (+ the 4 new columns null), every S1/S2 completion CHECK (the 3 new result columns null), and add `a_completed_handoff_correction_names_its_correction` (`issues.handoffs.correct` ⇒ only `result_handoff_correction_id`), `a_completed_backfill_write_names_its_run` (`records.backfill.plan` ⇒ only `result_backfill_run_id` and `result_backfill_checkpoint`, and `commit_seq IS NULL`), and `a_completed_link_write_names_its_revision` widened with `records.associations.contest` and `reinstate` (`result_created IS NULL`).
 - `CREATE OR REPLACE FUNCTION knowledge.a_lineage_write_request_completes_once()` so the 4 new columns are among those that may change, only from reserved, only once.
 
 **`audit_events`** — `capability_is_known` and `purpose_is_known` restated (BEFORE texts
-byte copies of `d020b532ad7d`'s AT texts; AT texts add exactly the 9 section 7 names and
+byte copies of `d020b532ad7d`'s AT texts; AT texts add exactly the 8 section 7 names and
 `lineage_backfill`, sorted), `_CURRENT_AUDIT_CAPABILITIES` moving with them, under the
 schema-ahead precedent (S1 §4.3) with `tests/schema/lineage_s3_schema_ahead_contract.py`.
 
@@ -298,53 +325,65 @@ live event's current effective time or after the next live event's.
 **`lineage_backfill_runs`** (guarded mutable; section 8.3)
 
 Columns `principal_id`, `run_id` (`lbfr`, PK), `state` (`BackfillRunState`),
-`validator_version` (`= 1`), `commit_seq_cutoff bigint` (the Principal's `last_seq` at
-enumeration, 0 when none), `source_cutoff_at timestamptz` (statement time of the
-enumeration), `population_count integer (>= 0)`, `classified_count integer`,
-`applied_count integer`, `plan_digest text` (sha256 hex; set exactly when `state` leaves
-`enumerated`), `created_at`, `classified_at`, `applied_at`, `authority_class`,
+`validator_version` (`= 1`), `commit_seq_cutoff bigint` (the Principal's committed
+`last_seq` read in the enumerating statement, 0 when none; it is the lineage cut every
+item's `existing_link_*` columns are computed at, section 8.3), `source_cutoff_at
+timestamptz` (statement time of the enumeration), `population_count integer (>= 0)`,
+`classified_count integer`, `plan_digest text` (sha256 hex; set exactly when `state`
+becomes `classified`), `census jsonb` (the enumeration census of section 8.3, canonical,
+counts and tokens only), `created_at`, `classified_at`, `authority_class`,
 `decision_channel` (`a_lineage_row_is_local_operator_attested`). CHECKs:
-`0 <= classified_count <= population_count`; `state = 'enumerated'` ⇔
-`plan_digest IS NULL`; `state <> 'enumerated'` ⇒ `classified_count = population_count`;
-`applied_count >= 0`. Trigger `a_backfill_run_moves_forward` (`BEFORE UPDATE OR DELETE`):
-only `state` (forward along `enumerated → classified → applying → applied`, `classified →
-applied` admitted when nothing is to apply), `classified_count` (non-decreasing),
-`applied_count` (non-decreasing), `plan_digest` (once), `classified_at`, `applied_at`
-(once each) may change; `DELETE` refused.
+`0 <= classified_count <= population_count`; `(state = 'enumerated') = (plan_digest IS NULL)`;
+`state = 'classified'` ⇒ `classified_count = population_count`. Trigger
+`a_backfill_run_moves_forward` (`BEFORE UPDATE OR DELETE`): only `state` (from
+`enumerated` to `classified`, once), `classified_count` (non-decreasing), `plan_digest`
+and `classified_at` (once each) may change; `DELETE` refused.
 
 **`lineage_backfill_items`** (guarded mutable)
 
 | Column | Type / rule |
 | --- | --- |
 | `principal_id`, `run_id`, `item_no` (`>= 1`) | PK; FK `(principal_id, run_id) → lineage_backfill_runs` |
-| `source_kind`, `source_family`, `source_id`, `source_ref` | `BackfillSourceKind`; the native record and the referenced value (an identifier text, bounded 1..256); `UNIQUE (principal_id, run_id, source_kind, source_id, source_ref)` |
+| `source_kind`, `source_family`, `source_id`, `source_ref` | `BackfillSourceKind`; the native record and the referenced value (text bounded 1..256; a longer `origin_evidence_ref` is stored as its first 256 code points and classified `unresolved` / `origin_ref_unsupported`); `UNIQUE (principal_id, run_id, source_kind, source_id, source_ref)` |
 | `source_version` | native `version` at enumeration, null for a family without one |
-| `source_digest` | sha256 hex of the canonical source document (section 8.3) |
+| `source_digest` | sha256 hex, computed **in the enumerating statement** by `knowledge.lineage_backfill_source_digest` (below) |
 | `classification`, `reason` | `BackfillClass`, `BackfillReason`; null until classified, then set once |
-| `candidate_identity` | the candidate's `normalized_identity` (S1 §5.3) or null; non-null only for `source_backed_accepted` and `review_candidate` with a derivable link |
+| `candidate_identity` | the candidate's `normalized_identity` (S1 §5.3) or null; non-null only for `source_backed_accepted` and a `review_candidate` with a derivable link |
 | `candidate` | canonical JSON (S1 §5 rules) of the candidate link with its anchor objects, or null |
-| `quarantined` | `boolean NOT NULL DEFAULT false`; CHECK set ⇔ classification ∈ (`unresolved`, `refused`) or `apply_outcome = 'refused_at_apply'` |
-| `apply_outcome`, `result_link_id`, `result_revision_no` | null until applied; only for `source_backed_accepted`; `materialized` ⇔ both result columns set, FK → `record_link_revisions` |
-| `classified_at`, `applied_at` | |
+| `existing_link_id`, `existing_link_state` | the lowest `link_id` (`COLLATE "C"`) of any link with the candidate's `(from, relation_type, to)` endpoints, **in any context and any state**, known at `commit_seq_cutoff`, and its state there (`ExistingLinkState`, `none` when there is none); set with the classification |
+| `quarantined` | `boolean NOT NULL DEFAULT false`; CHECK `quarantined = (classification IN ('unresolved','refused'))` once classified |
+| `classified_at` | |
 
-Trigger `a_backfill_item_is_settled_once` (`BEFORE UPDATE OR DELETE`): classification
-columns change only from null, once; apply columns change only from null, once, and only
-on a `source_backed_accepted` item; `quarantined` only from false to true together with
-one of those changes; nothing else changes; `DELETE` refused.
+Trigger `a_backfill_item_is_settled_once` (`BEFORE UPDATE OR DELETE`): `classification`,
+`reason`, `candidate_identity`, `candidate`, `existing_link_id`, `existing_link_state`,
+`quarantined` and `classified_at` change only together, only from unclassified, once;
+nothing else changes; `DELETE` refused.
+
+**Function `knowledge.lineage_backfill_source_document(p_principal text, p_kind text, p_family text, p_source_id text, p_source_ref text) RETURNS text`**
+(`plpgsql`, `STABLE`, `SECURITY INVOKER`; frozen DDL, R3-F09): the canonical JSON of section
+5's source document, built per kind with a `CASE` by concatenation in sorted-key order with
+`coalesce(to_json(value)::text, 'null')` per string and `coalesce(value::text, 'null')` per
+integer (the S1 §5.5 technique), list facts aggregated with `ORDER BY … COLLATE "C"`; every
+fact is an identifier, closed token, integer or hex digest (ASCII), so it is byte-identical
+to `domain/lineage/backfill.py::source_document`. **`knowledge.lineage_backfill_source_digest(…same arguments…) RETURNS text`** =
+`encode(sha256(convert_to('lineage-backfill-source-v1' || chr(10) || lineage_backfill_source_document(…), 'UTF8')), 'hex')`.
+Golden vectors are shared: one fixture file drives the Python unit test and the SQL parity
+test (section 10). Enumeration stores the digest; classification recomputes it (SQL) and
+compares (section 8.3). `downgrade()` drops both functions after the tables.
 
 ### 4.3 Shared triggers, protection, downgrade
 
-- `lineage_rows_are_append_only()` attaches to `lineage_commit_marks` and `issue_responsibility_corrections`; `lineage_relations_refuse_truncate()` attaches to all 5 new tables (S1 semantics).
+- `lineage_rows_are_append_only()` attaches to `lineage_commit_marks` and `issue_responsibility_corrections`; `lineage_relations_refuse_truncate()` attaches to all 5 new tables (S1 semantics). The backfill tables are guarded mutable ledgers: a plan run is a durable write that `downgrade()` refuses on (section 8.3).
 - `a_linked_record_is_not_deleted` is unchanged.
 - No role grant changes; the S1 §4.3 DML-not-DDL and `TRUNCATE … CASCADE` residuals apply unchanged to the new tables.
-- `downgrade()` first refuses (`restrict_violation`) while any of these holds, each family alone sufficient: a `lineage_commit_marks` row; a `lineage_commit_sequences` row with `last_seq > 0`; an `issue_responsibility_corrections` row; a `lineage_backfill_runs` row; a `record_links` row with `related_context` or `records.backfill.apply`; a `record_link_revisions` row with an S3 action, state, basis or capability; a `lineage_write_requests` row naming an S3 capability; an `audit_events` row naming an S3 capability or `lineage_backfill`. Only then it drops the seeded allocator rows with their table, restores every widened CHECK, the index predicate and every replaced function to its S2 text, and drops the new columns, triggers, functions and tables in reverse order.
+- `downgrade()` first refuses (`restrict_violation`) while any of these holds, each family alone sufficient: a `lineage_commit_marks` row; a `lineage_commit_sequences` row with `last_seq > 0`; an `issue_responsibility_corrections` row; a `lineage_backfill_runs` row; a `record_links` row with `related_context`; a `record_link_revisions` row with an S3 action, state or capability; a `lineage_write_requests` row naming an S3 capability; an `audit_events` row naming an S3 capability or `lineage_backfill`. Only then it drops the seeded allocator rows with their table, restores every widened CHECK, the index predicate and every replaced function to its S2 text, and drops the new columns, triggers, functions and tables in reverse order.
 
 ## 5. Canonical encodings
 
 S1 §5 and S2 §5 are reused unchanged. Additions:
 
-- **Cursor** (records.lineage, issues.timeline): unpadded base64url of canonical JSON (`record_events.list` encoding: ASCII, sorted keys) `{"v": 1, "b": <64-hex binding>, "s": <64-hex scope digest>, "k": <T_k ISO-8601 UTC or null>, "t": <T_v or null>, "r": <rcev_ or null>, "p": <position>}`, at most 2048 characters. `b = sha256(canonical({"cursor_version": 1, "capability", "principal_id", "request": <the parsed request without cursor, optional fields null>, "known_at": k, "valid_at": t, "record_event_watermark": r}))`; `s = sha256(canonical({"grant_digest": <section 6.4 digest or null>, "generation": LINEAGE_READ_GENERATION}))`. `p` is the last emitted item's key: `"n:<family>:<record_id>"`, `"e:<link_id>"` or `"v:<note_version_id>"` (records.lineage), or the canonical JSON array `[at, plane_rank, kind_rank, entry_id]` (issues.timeline). `r` is the timeline's native watermark (section 7.3); null for records.lineage. No HMAC: no authority is carried (section 12, D-02).
-- **Backfill source digest**: `sha256(b"lineage-backfill-source-v1\n" + canonical_json({"schema_version": 1, "source_kind", "source_family", "source_id", "source_ref", "source_version", "facts": <the closed per-kind fact object of section 8.3>}))`. **Plan digest**: `sha256(b"lineage-backfill-plan-v1\n" + canonical_json({"schema_version": 1, "run_id", "validator_version", "items": [[item_no, source_digest, classification, reason, candidate_identity] in item_no order]}))`.
+- **Cursor** (records.lineage, issues.timeline): unpadded base64url of canonical JSON (`record_events.list` encoding: ASCII, sorted keys) `{"v": 1, "b": <64-hex binding>, "s": <64-hex scope digest>, "k": <T_k ISO-8601 UTC or null>, "t": <T_v or null>, "r": <rcev_ or null>, "p": <position>}`, at most 2048 characters. `b = sha256(canonical({"cursor_version": 1, "capability", "principal_id", "request": <the parsed request without cursor, optional fields null>, "known_at": k, "valid_at": t, "record_event_watermark": r}))`; `s = sha256(canonical({"grant_digest": <section 6.4 digest or null>, "generation": LINEAGE_READ_GENERATION}))`. `p` is the last emitted item's key: `"n:<family>:<record_id>"`, `"e:<link_id>"` or `"v:<note_version_id>"` (records.lineage), or the canonical JSON array `[at, plane_rank, kind_rank, entry_id]` (issues.timeline). `r` is the timeline's native watermark, computed under the reader's own Record Event visibility (section 7.3; never the Principal's latest event of any family); null for records.lineage. No HMAC: no authority is carried (section 12, D-02).
+- **Backfill source document and digest**: the document is `canonical_json({"schema_version": 1, "source_kind", "source_family", "source_id", "source_ref", "source_version", "facts": <the closed per-kind fact object of section 8.3>})` (ASCII only, so NFC is the identity); the digest is `sha256(b"lineage-backfill-source-v1\n" + document)`; both are computed in SQL by the section 4.2 functions and mirrored in Python with shared golden vectors. **Plan digest**: `sha256(b"lineage-backfill-plan-v1\n" + canonical_json({"schema_version": 1, "run_id", "validator_version", "items": [[item_no, source_digest, classification, reason, candidate_identity] in item_no order]}))`.
 - **Request digest** (S1 §5.4): `known_at`, `valid_at` and `effective_at` as the UTC ISO-8601 string of the parsed instant.
 
 ## 6. Authority, locks, visibility and the transaction
@@ -353,19 +392,27 @@ S1 §5 and S2 §5 are reused unchanged. Additions:
 
 S1 §6.1 / S2 §6.1 reused. **Every S3 write is attested** (local operator only, `denied`
 before any row and before any replay lookup): `records.associations.contest`,
-`records.associations.reinstate`, `issues.handoffs.correct`, `records.backfill.plan`,
-`records.backfill.apply`. The 3 backfill capabilities and `records.backfill.report` are
-also `_OPERATOR_ONLY`. Reads are open to any admitted caller holding their grant, with
-section 6.4 visibility; every S3 read handler re-checks a remote caller's grant on its
-own capability and purpose and answers `denied` without it (the G1-RD-008 precedent of
-`record_events.list`: `invoke` does not check the grant set).
+`records.associations.reinstate`, `issues.handoffs.correct`, `records.backfill.plan`.
+The 2 backfill capabilities are also `_OPERATOR_ONLY` and sit behind their own switch
+(section 7.7).
+
+**Remote read grant re-check (R3-F13).** `invoke` does not check the grant set
+(G1-RD-008), so every lineage read handler — the 3 S3 reads, the widened
+`records.lineage`, and the S1/S2 reads `issues.read`, `issues.list`,
+`issues.handoffs.list`, `issues.closure_readiness`, `meetings.notes.versions` and
+`meetings.notes.read_version` — re-checks that a remote caller holds a grant on that
+capability for one of its permitted purposes and otherwise answers **`unsupported`**,
+exactly as `_record_events_list` and `_knowledge_plane` do: the capability is hidden from
+a client that was never granted it rather than announced as forbidden. (A purpose the
+capability does not admit is still `denied` by `invoke`, as S1's
+`test_note_body_needs_the_history_purpose` pins.)
 
 ### 6.2 Lock order (S2 §6.2, extended)
 
 1. Reserve the `lineage_write_requests` row. A replay returns here.
-   1a. Backfill only: the run row `FOR UPDATE`.
+   1a. `records.backfill.plan` with a `run_id`: the run row `FOR UPDATE`.
    1b. **Every write that writes a fact row** (every S1, S2 and S3 lineage write except `records.backfill.plan`): `SELECT knowledge.lineage_commit_mark(:principal)` — the allocator row lock, held to commit. Taken before any other lock, it serializes a Principal's lineage writers; native writers never take it, so it adds no cycle with them, and no lineage writer waits on another's anchor or head while holding it (section 12, D-20).
-2. – 5. As S2 §6.2. Additions: `contest` / `reinstate` take the context Issue `FOR SHARE` (S2's rule for every link revision); `issues.handoffs.correct` takes the Issue and the Commitment `FOR SHARE`, then the chain's `:handoff:` advisory key, then reads the chain; backfill apply runs steps 3–5 per item in `item_no` order inside the one transaction.
+2. – 5. As S2 §6.2. Additions: `contest` / `reinstate` take `FOR SHARE` on every Issue the link is in the context of (section 3.2); `issues.handoffs.correct` takes the Issue and the Commitment `FOR SHARE`, then the chain's `:handoff:` advisory key, then reads the chain; `issues.close` also shares the endpoints of every in-context semantic link it evaluates.
 6. The `blocks` cycle search (S2 §3.1) reads `active` **and** `contested` `blocks` heads.
 
 Reads take no locks; the horizon is the allocator row's committed value. Because every
@@ -375,7 +422,7 @@ pre-S3 row, a multi-statement read under READ COMMITTED sees one consistent fact
 ### 6.3 Transaction order (S2 §6.3, extended)
 
 1. Switch (`_lineage_plane`), authority, strict parse.
-2. Request digest; reserve (replay: rebuild from the immutable rows the result names, including a backfill batch from its run and items at `result_backfill_checkpoint`).
+2. Request digest; reserve (replay: rebuild from the immutable rows the result names, including a backfill batch from its run and the items classified up to `result_backfill_checkpoint`, which never change once classified).
 3. Commit mark (6.2 step 1b).
 4. Locks; validation; write-specific checks (transition table 3.1; gate 3.2; correction rules 3.3; backfill 8.3).
 5. Write rows; complete the request row with its result and `commit_seq`; commit; deferred triggers verify.
@@ -398,7 +445,18 @@ family's reads (`LINEAGE_FAMILY_READS`, precedent `RECORD_EVENT_FAMILY_READS`):
 An evidence anchor is visible iff its source family is (`meeting_note_version` via the
 Meeting reads; `capture_version` and legacy `capture` via the Capture reads).
 
-**Rules (every S3 read and the widened `records.lineage`):** an invisible root is
+**S1/S2 Issue reads (R3-F13).** Section 6.4 also applies to `issues.read` (a membership
+whose member is invisible is withheld), `issues.list` and `issues.read` themselves (an
+Issue is served only when `situation` is visible, else `not_found` / `issue_id` or not
+listed), `issues.handoffs.list` (needs Commitment visibility, else `not_found` /
+`commitment_id`) and `issues.closure_readiness` (a blocker or contested link whose member
+or endpoint is invisible is withheld; `ready` is computed over everything, so it stays
+`false`). Each of these 4 answers gains one key, `restricted: bool`, true exactly when
+something was withheld (no count). At the basis no binding S1/S2 test invokes these reads
+as a remote caller (the remote lineage invocations are write refusals and S1's
+purpose-denial test); an implementer who finds one that this changes stops and reports it.
+
+**Rules (every lineage read):** an invisible root is
 `not_found` / `origin` (as absent); an invisible Issue is never a candidate, never
 selectable (`not_found` / `issue_id`) and never a timeline subject; an invisible node is
 not emitted, not expanded and not counted, and a typed edge is emitted only when both
@@ -413,15 +471,15 @@ forward rule): a local reader sees it so labelled; for a remote reader it is wit
 
 ## 7. Capabilities — the exact S3 set
 
-9 new `Capability` members (214 → 223; audit vocabulary 225 → 234) and 1 new `Purpose`
+8 new `Capability` members (214 → 222; audit vocabulary 225 → 233) and 1 new `Purpose`
 (58 → 59). All are `_SCOPELESS`, family `issues` or `records` → feature `lineage`, and
-join `_LINEAGE_CAPABILITIES` (22 → 31). The 6 lineage reads and writes below are
+join `_LINEAGE_CAPABILITIES` (22 → 30). The 6 lineage reads and writes below are
 classified `CHATLLM_OPERATOR_DECISION_REQUIRED` with rationale "record lineage S3;
-exposure is an operator decision (ADR-015, OD-07)"; the 3 backfill capabilities are
+exposure is an operator decision (ADR-015, OD-07)"; the 2 backfill capabilities are
 `CHATLLM_CONTROL_PLANE_EXCLUDED` with rationale "operator-only lineage backfill" and are
-`_OPERATOR_ONLY`. The 5 writes are in `_WRITE_CAPABILITIES` and
-`_IDEMPOTENT_REMOTE_CAPABILITIES`; `records.backfill.plan` and `records.backfill.apply`
-are also `_ADDITIVE_WRITE_CAPABILITIES`; `lineage_backfill` joins `_WRITE_PURPOSES`. No
+`_OPERATOR_ONLY`. The 4 writes are in `_WRITE_CAPABILITIES` and
+`_IDEMPOTENT_REMOTE_CAPABILITIES`; `records.backfill.plan` is also
+`_ADDITIVE_WRITE_CAPABILITIES`; `lineage_backfill` joins `_WRITE_PURPOSES`. No
 `CHATLLM_DATA_PROFILE_VERSION` change is expected; if the profile diff test says
 otherwise, bump it and record why.
 
@@ -435,70 +493,88 @@ otherwise, bump it and record why.
 | `issues.handoffs.correct` | W | `issue_authoring` | key, attested | retime or void one handoff |
 | `records.backfill.plan` | W | `lineage_backfill` (new) | key + `expected_checkpoint`, attested, operator-only | enumerate or classify the next batch |
 | `records.backfill.report` | R | `lineage_backfill` | operator-only | a run's counts and items |
-| `records.backfill.apply` | W | `lineage_backfill` | key + `expected_checkpoint` + `plan_digest`, attested, operator-only | materialize the next batch of `source_backed_accepted` items |
 
 `lineage_backfill` is its own purpose because a backfill reads the whole native corpus
-of the Principal and writes accepted links in bulk: no lineage or Issue grant may
-become one.
+of the Principal and writes a durable ledger: no lineage or Issue grant may become one.
 
 ### 7.1 Shared shapes (additions)
 
 - Requests are `StrictModel`s / frozen command dataclasses (S1 §7.1 rule; no server-owned field, no `commit_seq`, no `marked_at`, no `grant`).
-- `AssociationView` admits `related_context`, `contested`, `source_backed_verified`; `EvidenceAnchorView.availability` admits `restricted`. No key changes.
+- `AssociationView` admits `related_context` and `contested`; `EvidenceAnchorView.availability` admits `restricted`. No key changes.
 - The `issues.closure_readiness` answer (S2 §7.2) gains `contested_links: [{link_id, relation_type}]` (≤ 100, ordered by `link_id`) and `contested_links_truncated: bool`.
-- `HandoffView` (S2 §7.1) gains `recorded_effective_at` (the event's own value), `voided: bool` and `correction_ids: [ihcr_]` (≤ 32, in `correction_no` order); `effective_at` is the current effective time at the read's `known_at` (equal to `recorded_effective_at` when uncorrected). `issues.handoffs.list` gains `known_at?` and answers `known_at`; a voided event is still listed, `voided: true`.
+- `HandoffView` (S2 §7.1) keeps `effective_at` as recorded on the event (its S2 meaning, R3-F18) and gains `current_effective_at` (the current effective time at the read's `known_at`: the latest known `retime`'s value, else `effective_at`), `voided: bool` and `correction_ids: [ihcr_]` (≤ 32, in `correction_no` order). `issues.handoffs.list` gains `known_at?` and answers `known_at`; a voided event is still listed, `voided: true`.
 - `HandoffCorrectionView` = `{correction_id, handoff_id, correction_no, action, effective_at (retime) | null, reason, evidence: EvidenceAnchorView, recorded_at, authority_class}`.
 - `LineagePathStep` (on each lineage node) = `reached_from: RecordRef | null` (null for the root) and `reached_via: {"edge": "typed", "link_id": irl_} | {"edge": "virtual", "edge_type": "meeting_note_version_of"} | null`: the deterministic breadth-first parent (section 7.2), so following `reached_from` from any node reaches the root.
 
 ### 7.2 `records.lineage` (S1 §7.2, widened)
 
-**In:** `{origin, issue_id?, max_depth? (0..4, default 4), known_at?, valid_at?, page_size? (1..100), cursor?}`.
+**In:** `{origin, issue_id?, max_depth? (0..4, default 4), known_at?, valid_at?, page_size? (10..100), cursor?}`.
 `include` stays refused. `cursor` without `page_size` is `invalid_request` / `cursor`;
-`page_size` above 100 is `invalid_request` / `page_size` (never clamped).
+`page_size` outside 10..100 is `invalid_request` / `page_size` (never clamped). The
+minimum of 10 bounds the cost of paging (R3-F15): the repository has no per-Principal
+rate limiter (the `rate_limited` error code is used only by the WebAuthn adapter), and
+every page recomputes the bounded result, so a whole query costs at most 65 recomputations
+(650 items / 10), each under the step 5 deadline.
 
 **Out:**
 
 ```text
 {root, selected_issue_id, issues_matching_root (<= 20), nodes, typed_edges, virtual_native_edges,
- complete_state, qualifiers: [LineageCompleteness], known_at: T_k|null, valid_at: T_v|null,
- next_cursor: str|null}
+ complete_state, qualifiers: [LineageCompleteness], known_at: T_k|null, valid_at: instant|null,
+ lineage_valid_at: T_v|null, next_cursor: str|null}
 nodes[i] = S1 node keys + reached_from + reached_via
 ```
 
 **Algorithm** (S1 §7.2 steps 1–7 with these changes):
 
 1. Visibility (6.4) applies to the root, the candidate Issues and every node, edge and anchor.
-2. **As-of selection.** Compute `T_k`, `T_v`, `W(T_v)` once (from the cursor on later pages). Every link, membership and Issue title/state is read at `W(T_v)` from revisions — the latest revision of each link with `commit_seq ≤ W(T_v)` (or pre-S3 with `recorded_at ≤ T_v`) — never from `record_link_heads`. *Live* links are those whose selected revision is `active` or `contested`; they replace S1's "active". Issue nodes and candidates carry the title and state of the Issue revision selected the same way.
+2. **As-of selection.** Compute `T_k`, `T_v`, `W(T_v)` once (from the cursor on later pages). Every link, membership and Issue title/state is read at `W(T_v)` from revisions — the latest revision of each link with `commit_seq ≤ W(T_v)` (or pre-S3 with `recorded_at ≤ T_v`) — never from `record_link_heads`. *Live* links are those whose selected revision is `active` or `contested`; they replace S1's "active". Issue nodes and candidates carry the title and state of the Issue revision selected the same way. A reached Meeting's note versions — its pair set and its `meeting_note_version_of` virtual edges — are only those with `recorded_at ≤ T_v` (section 3.4, R3-F01, with its named residual).
 3. **Issue context is carried per breadth-first state.** Each frontier state is `(record, I)` with the one selected Issue *I*; the S1 followable rule is applied per state and *I* never changes, so a shared Meeting (or Project, Series or participant) never expands into another Issue's links (AT-006). `related_context` is followed like any context-scoped link, so it never bridges Issues.
 4. **Path explanations.** When a state first reaches a record, the edge and parent that reached it are recorded; ties are broken by the S1 expansion order (frontier `(depth, family, record_id)`, edges `(created_at, link_id)`, then the `meeting_note_version_of` step).
-5. **Budgets** (whole query, all pages): 250 nodes, 400 edges (typed plus virtual), 4 depth; per page at most `page_size` items and 512 KiB serialized; a traversal deadline of 2000 ms per page and a 2000 ms `SET LOCAL statement_timeout` per statement. Reaching the node or edge budget stops expansion and sets `truncated_budget`. Reaching the deadline sets `truncated_budget` and **ends paging** (`next_cursor: null`), because a time cut is not reproducible; a statement timeout is `unavailable`.
+5. **Budgets** (whole query, all pages): 250 nodes, 400 edges (typed plus virtual), 4 depth; per page at most `page_size` items and 512 KiB serialized; a traversal deadline of 2000 ms per page and a 2000 ms `SET LOCAL statement_timeout` per statement. Reaching the node or edge budget stops expansion and sets `truncated_budget`. Reaching the deadline sets `truncated_budget` and **ends paging** (`next_cursor: null`), because a time cut is not reproducible; a statement timeout is `unavailable`. The AT-016 benchmark records, at the `full` scale, the per-page p50/p95 and the total time to page a 650-item result at `page_size` 10 (65 recomputations); it is a recorded expectation, not a service level.
 6. **Output order and paging.** The bounded result is ordered nodes `(depth, family, record_id)`, then typed edges by `link_id`, then virtual edges by `(meeting_id, version_number)`. Without `page_size` the S1 single-page rule holds (everything in one answer, the S1 serialized-size loop, `next_cursor: null`). With `page_size` each page carries the next items after `p` until `page_size` items or 512 KiB, and the same top-level keys; `next_cursor` is non-null exactly when items remain.
-7. **Cursor checks, in this order** (precedent: record_events U-002): shape, length and version (`invalid_request` / `cursor`); `b` against the binding re-derived from this request and the carried `k`, `t` (`conflict` / `cursor` — another Principal's cursor or changed filters land here); `k` after the current horizon or `t` after `k` (`invalid_request` / `cursor`); `s` against the scope re-derived from the caller's **current** grants and generation — on mismatch the page answers `complete_state: scope_changed_restart_required`, no root, nodes, edges or candidates beyond the request's own `origin`, and `next_cursor: null`; finally `p` must be an item of the recomputed result (`invalid_request` / `cursor`). The whole bounded result is recomputed on each page under the frozen `T_k`, `T_v` and current visibility, so the union of pages equals the one-page answer when nothing was revoked.
+7. **Cursor checks, in this order** (precedent: record_events U-002): shape, length and version (`invalid_request` / `cursor`); `b` against the binding re-derived from this request and the carried `k`, `t` (`conflict` / `cursor` — another Principal's cursor or changed filters land here); `k` after the current horizon or `t` after `k` (`invalid_request` / `cursor`); `s` against the scope re-derived from the caller's **current** grants and generation — on mismatch the page answers `complete_state: scope_changed_restart_required`, no root, nodes, edges or candidates beyond the request's own `origin`, and `next_cursor: null`; finally `p` must be an item of the recomputed result. A `p` that is well formed and bound (it passed `b` and `s`, so this server emitted it) but is no longer in the recomputed result — a native record stopped resolving, or a capture version's availability changed what is visible, between pages — answers `scope_changed_restart_required` like a scope change (R3-F14), never `invalid_request`. The whole bounded result is recomputed on each page under the frozen `T_k`, `T_v` and current visibility; the union of pages equals the one-page answer **only while** no grant is revoked and no reached native record stops resolving between pages, and any such change surfaces as `scope_changed_restart_required` or, for an item later than `p`, as the S1 `partial_native_history` of the page that would have carried it.
 8. **Completeness**: `restricted_evidence` when anything was withheld (6.4); the S1 codes as before; `complete` only when nothing applies. `qualifiers` lists every applicable code, sorted by precedence.
 
-Native virtual edges stay `meeting_note_version_of` only (immutable); see section 12,
-D-05.
+Native virtual edges stay `meeting_note_version_of` only, cut by the note version's own
+`recorded_at` (step 2); see section 12, D-05.
 
 ### 7.3 `issues.timeline`, `issues.history`, `records.associations.history`
 
-**`issues.timeline`** — in `{issue_id, known_at?, valid_at?, page_size? (1..100, default 25), cursor?}`;
-out `{issue_id, known_at, valid_at, entries: [TimelineEntryView], complete_state, qualifiers, next_cursor}`.
+**`issues.timeline`** — in `{issue_id, known_at?, valid_at?, page_size? (10..100, default 25), cursor?}`;
+out `{issue_id, known_at, valid_at, lineage_valid_at, entries: [TimelineEntryView], complete_state, qualifiers, next_cursor}` (`valid_at` the requested value or `T_k`; `lineage_valid_at` = `T_v`, section 3.4).
 
 *Lineage plane*, as of section 3.4: the Issue's revisions (`issue_revision`); its Project
 link events (`project_link`); the revisions of its memberships (`membership`); the
-revisions of semantic links whose `context_issue_id` is the Issue or that name it as an
-endpoint (`association`); its handoff events (`handoff`, at their current effective time,
+revisions of every semantic link **in the Issue's context** at the read's cut (section
+3.2's one definition: context = I, an endpoint = I, or null context with both endpoints
+inside I) (`association`); its handoff events (`handoff`, at their current effective time,
 `voided` as known) and corrections (`handoff_correction`).
 
 *Native plane*, **only when `known_at` is omitted** (section 12, D-04): the Record Events
 of the Issue's members at `W(T_v)` — a Task, Commitment, Constraint or Meeting member by
 its own family, a note-version member by its Meeting, a Capture-version member by its
-Capture — with `sequence_number` at or below the watermark `r` frozen on the first page
-(the event id of the Principal's latest committed Record Event) and `occurred_at ≤ T_v`
-when `valid_at` is given; at most the first 250 members by `(family, record_id)` are
-covered, beyond that `truncated_budget`. With an explicit `known_at`, native entries are
-omitted and the answer carries `partial_native_history` whenever any member has a
-native family.
+Capture — with `occurred_at ≤ valid_at` (the **requested** `valid_at`, at or before
+server now; no bound when omitted), never clamped to `T_k` (R3-F02), and with
+`sequence_number` at or below the watermark `r` frozen on the first page. At most the
+first 250 members by `(family, record_id COLLATE "C")` are covered, beyond that
+`truncated_budget`. With an explicit `known_at`, native entries are omitted and the
+answer carries `partial_native_history` whenever any member has a native family.
+
+**Native-plane disclosure (R3-F03, R3-F04).** The native read is built with the Record
+Event reader's own predicate — `_visible(...)` in `infrastructure/persistence/record_events.py`
+with its `_withheld_remotely(...)` clauses (OD-8 restricted memory, the WP-RE-08 capture
+classification, the KLP-WP-03 assertion `withheld_remote`) — **imported, not copied**;
+the one admitted refactor is exporting that builder under a public name with no change
+to its body. For a remote reader `include_restricted_memory` is false and the families
+are the member families the reader can see (section 6.4 intersected with
+`RECORD_EVENT_FAMILY_READS`). A withheld event never reaches an entry, the member-budget
+`truncated_budget` count or the watermark. **`r` is computed exactly as
+`record_events.list` computes its high watermark** — the newest event under that same
+predicate and those same families, in the same statement as the first page — so the
+cursor names only an event `record_events.list` would show this reader; `r` is `null`
+when no such event exists, and later pages resolve it with the reader's
+`resolve_position` after the same visibility check (record_events U-002 step 3).
 
 `TimelineEntryView` = `{entry_id, kind, plane: "lineage"|"native", at, recorded_at, subject: RecordRef|null, action, historical_fields_partial: bool, …kind keys}` where `entry_id`
 is the row's own identifier (`irs_`, `ipme_`, `irv_`, `ihnd_`, `ihcr_`, `rcev_`), `at` is
@@ -569,19 +645,20 @@ closed), then section 3.3.
 | malformed, unknown-position or beyond-horizon cursor; cursor without `page_size` | `invalid_request` / `cursor` |
 | cursor bound to another request or Principal | `conflict` / `cursor` |
 | grants or generation changed under a cursor | success, `complete_state: scope_changed_restart_required`, nothing else disclosed |
-| remote read without its own grant | `denied` |
+| remote read without a grant on its own capability | `unsupported` (hides the capability; G1-RD-008 precedent) |
+| `page_size` outside 10..100 | `invalid_request` / `page_size` |
 | contest of a non-active, reinstate of a non-contested link; assert of a contested identity; correction of a voided handoff | `conflict` / `state` |
 | contested link in the Issue's context at close | `conflict` / `closure_gate` |
 | void of a handoff that is not the chain's last live event | `invalid_request` / `handoff_id` |
 | retime out of order | `invalid_request` / `effective_at` |
-| backfill checkpoint moved; plan digest differs | `conflict` / `checkpoint`, `plan_digest` |
+| backfill checkpoint moved | `conflict` / `checkpoint` |
 | backfill run absent or foreign | `not_found` / `run_id` |
-| backfill apply before the run is classified | `conflict` / `state` |
+| backfill switch off | `unsupported` |
 | ordinary or remote caller on an S3 write or backfill read | `denied` |
 | switch off | `unsupported` |
 
 New `SafeDetail` members (`known_at`, `valid_at`, `handoff_id`, `checkpoint`,
-`plan_digest`, `run_id`, and any other named here that is absent) are added with the
+`run_id`, and any other named here that is absent) are added with the
 code that reports them; reuse an existing member with the same token.
 
 ### 7.6 Web (WP-06A S3)
@@ -621,16 +698,27 @@ stay green.
 
 ### 7.7 Admission switch
 
-S1 §7.5 unchanged: `MY_PA_LINEAGE_ENABLED` (default off) withholds all 31 lineage
+S1 §7.5 unchanged: `MY_PA_LINEAGE_ENABLED` (default off) withholds all 30 lineage
 capabilities; every S3 handler calls `_lineage_plane` first. The S3 web routes render
 nothing (or "not available") on `unsupported`.
+
+**Backfill sub-switch (R3-F12).** `lineage_backfill_enabled: bool = False` in
+`bootstrap/settings.py`, env `MY_PA_LINEAGE_BACKFILL_ENABLED` (fails closed like every
+setting), passed by `bootstrap/gateway.py` to `ApplicationService`. Following the
+`_ENTITY_WRITE_CAPABILITIES` sub-switch precedent, `available_capabilities()` subtracts
+`LINEAGE_BACKFILL_CAPABILITIES` unless **both** switches are on (subtracted after the
+lineage line, as the entity write half is), and each backfill handler calls a
+`_lineage_backfill_plane()` guard after `_lineage_plane()` and before authority,
+reservation or replay, answering `unsupported`. Enabling lineage therefore never enables
+a backfill; `ops/runbooks/gateway-operations.md` gains the variable. Test environments
+turn it on only in the AT-025 and admission tests that need it.
 
 ## 8. Old-client rule, compatibility and the backfill
 
 ### 8.1 Old clients
 
 - **v1 shapes are byte-identical** (`tasks.*`, `commitments.*`, `constraints.*`, `meetings.*`, `continuity.*`, `record_events.list`). S3 changes no native writer and no native table.
-- **S1/S2 lineage contracts** (server-only, never deployed): widened only additively as section 7 lists; every key keeps its meaning. `records.lineage` without the S3 request fields answers the S1 single-page result with the 4 added top-level keys (`qualifiers`, `known_at`, `valid_at`, and a now-nullable-string `next_cursor`) and the 2 node keys; its remote visibility narrows to section 6.4 (no client holds a lineage grant; section 12, D-21).
+- **S1/S2 lineage contracts** (server-only, never deployed): widened only additively as section 7 lists; every key keeps its meaning. `records.lineage` without the S3 request fields answers the S1 single-page result with 4 added top-level keys (`qualifiers`, `known_at`, `valid_at`, `lineage_valid_at`), `next_cursor` now typed string-or-null (still `null` there), and the 2 node keys; `issues.read`, `issues.list`, `issues.handoffs.list` and `issues.closure_readiness` each gain `restricted` (section 6.4), the last also `contested_links` and `contested_links_truncated`, and `HandoffView` gains 3 keys with `effective_at` unchanged; its remote visibility narrows to section 6.4 (no client holds a lineage grant; section 12, D-21).
 - **The strict web client** keeps every existing `gateway.json` entry, decoder and `success.json` key byte for byte except the lockstep `records.lineage` widening (7.6), guarded by the S3 scope test that the decoder's closed sets equal the server vocabulary.
 - Any later change to a deployed contract needs a negotiated version (S1 §8).
 
@@ -640,88 +728,88 @@ The allocator (6.2 step 1b) serializes one Principal's lineage writes from their
 commit. S1/S2 behaviour and refusals are unchanged; concurrent writers now queue instead
 of interleaving. Writers of different Principals never wait on each other.
 
-### 8.3 The backfill (WP-03B, CR-014)
+### 8.3 The backfill dry run (WP-03B, CR-014)
 
-**Shape.** 3 operator-only, attested capabilities invoked through the ordinary CLI
-transport (`my-pa records.backfill.plan --payload …`; module-boundaries §5.7: the CLI is
-not a privileged bypass). Tests run them on synthetic fixtures only; no worker runs them
-against any other database (section 13).
+**Shape.** 2 operator-only capabilities behind the section 7.7 sub-switch, invoked
+through the ordinary CLI transport (`my-pa records.backfill.plan --payload …`;
+module-boundaries §5.7: the CLI is not a privileged bypass). `records.backfill.plan` is
+attested. **A plan run is a durable write, not a no-op**: its run and item rows are
+guarded ledger rows that refuse `DELETE` and `TRUNCATE` and make `downgrade()` refuse
+(section 4.3). It writes no link, no fact and no commit mark, and nothing in S3
+materializes an item (the apply is deferred, section 11). Tests run it on synthetic
+fixtures only; no worker runs it against any other database (section 13).
 
 **`records.backfill.plan`** — in `{run_id?: lbfr_ | null, expected_checkpoint?: int, batch_size? (1..500, default 200), idempotency_key}`;
 out `{run: BackfillRunView, items: [BackfillItemView] (this batch), replayed}`.
 
-- *No `run_id`*: creates a run and **enumerates the population in one `INSERT … SELECT` statement** (one snapshot) over the source kinds below, records `commit_seq_cutoff`, `source_cutoff_at` and `population_count`, state `enumerated`, checkpoint 0. Nothing is classified yet.
-- *With `run_id`*: requires `expected_checkpoint = classified_count` (`conflict` / `checkpoint`), classifies the next `batch_size` items in `item_no` order, advances `classified_count`; when every item is classified, sets `plan_digest` and state `classified`. Each call is one transaction: an interrupted call leaves the previous checkpoint, and calling again resumes. Classification of an item is a pure function of the item and the source state it reads, so a resumed run and an uninterrupted run produce identical items and `plan_digest` (AT-025).
-- It writes no link and takes no commit mark.
+- *No `run_id`*: creates a run and **enumerates the population in one `INSERT … SELECT` statement** (one snapshot) over the source kinds below, computing each item's `source_version` and `source_digest` in that statement (section 4.2 functions), and in the same statement the census and `commit_seq_cutoff`; state `enumerated`, checkpoint 0. Nothing is classified yet.
+- *With `run_id`*: requires `expected_checkpoint = classified_count` (`conflict` / `checkpoint`), classifies the next `batch_size` items in `item_no` order, advances `classified_count`; when every item is classified, sets `plan_digest` and state `classified`. Each call is one transaction: an interrupted call leaves the previous checkpoint, and calling again resumes. Classifying an item first recomputes `knowledge.lineage_backfill_source_digest` for it; a different digest is `unresolved` / `source_changed` (quarantined) whatever the source would otherwise classify as. Otherwise classification is a pure function of the stored source document, so a resumed run and an uninterrupted run produce identical items and `plan_digest` (AT-025).
+- **`commit_seq_cutoff`** is the lineage cut of the run: each item's `existing_link_id` / `existing_link_state` (section 4.2) is computed over link revisions known at it (section 3.4), so the report states, for every candidate, whether a link between the same endpoints already exists in any context and in which state, as it stood when the population was frozen — stable whatever lineage writes follow. It is the high-watermark reconciliation of WP-03B for the dry run; lineage writes after it are not this run's facts.
 
 **`records.backfill.report`** — in `{run_id, page_size? (1..100), after? (item_no), classification?}`;
-out `{run, counts: {per class, quarantined, materialized, already_present, refused_at_apply}, late_source_count, items, next_cursor}`.
+out `{run, census, counts: {per class, per reason, quarantined, per existing_link_state}, late_source_count, items, next_cursor}`.
 `late_source_count` counts in-scope sources present now that are not in the frozen
 population (written after enumeration; they belong to a new run, never to this one).
+`census` is the run's stored enumeration census: per source kind, the number of native
+rows examined, and the number enumerated (equal by construction: every in-scope row is
+enumerated, section below), plus per kind the reference-shape counts (`asrt_`, `cap_`,
+other prefix, not an identifier) of `origin_evidence_ref` and the `project_situation`
+consistency counts. Counts and tokens only; no identifier of a hidden row exists (the
+caller is the local operator over its own partition).
 
-**`records.backfill.apply`** — in `{run_id, expected_checkpoint (= applied_count), plan_digest, batch_size? (1..100, default 50), idempotency_key}`;
-the run must be `classified` or `applying` (`conflict` / `state`) and its `plan_digest`
-equal the request's (`conflict` / `plan_digest`), so only the exact plan the operator
-reviewed is applied. For the next `batch_size` `source_backed_accepted` items in
-`item_no` order, in one transaction (one commit mark): re-derive the source digest — a
-changed source is `refused_at_apply`, quarantined; re-run the S1 endpoint and anchor
-admission under the S1/S2 locks — a refusal is `refused_at_apply`, quarantined; an
-identity that already has a live head is `already_present` (no row; idempotent across
-runs); otherwise write the link through the shared root writer
-(`insert_new_link`, S2 §9) with `source_capability = records.backfill.apply`,
-`acceptance_basis = source_backed_verified`, `local_operator` / `local_cli`, no
-`context_issue_id`, and record `materialized` with the link revision. Advances
-`applied_count`; state `applying`, then `applied` when none remains.
-
-**Population and classification** (per Principal, at the enumeration snapshot):
+**Population and classification** (per Principal, at the enumeration snapshot). The
+denominator is **every** row of each listed shape — nothing is pre-filtered:
 
 | Source kind | Population | Classification and `reason` |
 | --- | --- | --- |
-| `task_follow_up` | each Task with a `commitment_id` | `native_virtual_proven` / `native_follow_up` — never materialized |
-| `constraint_follow_up` | each Constraint `FOLLOW_UP_OF` relationship row | `native_virtual_proven` / `native_constraint_follow_up` |
+| `task_follow_up` | each Task with a `commitment_id` | `native_virtual_proven` / `native_follow_up` — never a link |
+| `constraint_follow_up` | each `project_constraint_relationships` row of type `follow_up_of` | `native_virtual_proven` / `native_constraint_follow_up` |
 | `meeting_series` | each Meeting with a series | `native_virtual_proven` / `native_meeting_series` |
-| `project_situation` | each `project_situations` row naming a context Situation | `native_virtual_proven` / `native_project_situation` |
-| `work_origin_assertion` | each Task or Commitment whose `origin_evidence_ref` is `asrt_` | `source_backed_accepted` / `exact_original_span` when the assertion is `accepted` and not superseded, its Capture root is neither archived nor withdrawn, its version is not `restricted_local`, and it cites 1..32 spans with `processing_text_id IS NULL` and `offset_basis = unicode_code_point_v1` on that version whose re-derived slice of `capture_versions.content` hashes to `quoted_text_sha256` — candidate `originated_from` (record → `capture_version`) with one `origin` anchor per such span; `review_candidate` / `passage_unproven` when the version is exact but no span qualifies (or more than 32 do); `refused` / `assertion_not_current`, `source_withdrawn` or `source_restricted`; `unresolved` / `reference_unresolvable` when the `asrt_` does not resolve in the Principal |
-| `work_origin_capture_root` | each Task or Commitment whose `origin_evidence_ref` is `cap_` | `unresolved` / `no_exact_version` (a root pins no version; S1 §3.1) |
+| `project_situation` | each `project_situations` row | `native_virtual_proven` / `native_project_situation` when its Situation is a context Situation of the same Principal, its Project exists in the same Principal and (for an Issue) its membership-event ledger has an event for the triplet; otherwise `unresolved` / `project_situation_inconsistent` (quarantined). The S1 principal-composite foreign keys make most mismatches unrepresentable; the check is the census of what remains (orphan or Issue-ledger mismatch) |
+| `work_origin_assertion` | each Task or Commitment whose `origin_evidence_ref` begins `asrt_` | `source_backed_accepted` / `exact_original_span` when the assertion resolves in the Principal, is `accepted` and not superseded, its Capture root is neither archived nor withdrawn, its version is not `restricted_local`, and it cites (`capture_assertion_spans`) 1..32 spans with `processing_text_id IS NULL` and `offset_basis = unicode_code_point_v1` on that version whose re-derived slice of `capture_versions.content` hashes to `quoted_text_sha256` — candidate `originated_from` (record → `capture_version`) with one `origin` anchor per such span; `review_candidate` / `passage_unproven` when the version is exact but no span qualifies (or more than 32 do); `refused` / `assertion_not_current`, `source_withdrawn` or `source_restricted`; `unresolved` / `reference_unresolvable` when the `asrt_` does not resolve in the Principal |
+| `work_origin_capture_root` | each Task or Commitment whose `origin_evidence_ref` begins `cap_` | `unresolved` / `no_exact_version` (a root pins no version; S1 §3.1) |
+| `work_origin_other` | each Task or Commitment with any other non-null `origin_evidence_ref` (another prefix such as `mnote_`, `capver_`, `mdoc_`, `rdec_`, or free text) | `unresolved` / `origin_ref_unsupported` (quarantined): the reference is counted, never interpreted |
 | `situation_object_ref` | each element of a context Situation's `object_refs` | `review_candidate` / `object_ref_unproven` when it is the identifier of an owned record of a lineage family; `unresolved` / `reference_unresolvable` otherwise |
 
-`unresolved` and `refused` items are quarantined. `review_candidate` items are never
-materialized: the review path is the operator's own attested assert with evidence
+`unresolved` and `refused` items are quarantined. `source_backed_accepted` is a
+**classification in the report only**: S3 writes nothing for it. `review_candidate` items
+are reported only; the review path is the operator's own attested assert with evidence
 (S1/S2), after reading the report (section 12, D-07). No item is derived from words,
 names, a shared Project, Series, participant or date (OD-05). The source document
 (`facts`) per kind is the closed set of native values the classification reads (for
 `work_origin_assertion`: the assertion's `state`, `superseded_by_assertion_id`,
 `version_id`, root lifecycle state, version classification and each cited span's
-`span_id`, offsets, basis, processing text and digest); a source whose `source_version`
-or facts changed between enumeration and classification is `unresolved` /
-`source_changed`, quarantined. 100 % of the population is classified when the run is
-`classified` (`classified_count = population_count`, a CHECK).
+`span_id`, offsets, basis, processing text and digest; for `project_situation`: the
+Situation kind, both principals and whether the triplet has a membership event). 100 %
+of the population is classified when the run is `classified`
+(`classified_count = population_count`, a CHECK).
 
-`BackfillRunView` = `{run_id, state, validator_version, population_count, classified_count, applied_count, plan_digest, source_cutoff_at, created_at, classified_at, applied_at}`;
-`BackfillItemView` = `{item_no, source_kind, source_family, source_id, source_ref, classification, reason, quarantined, candidate_relation, apply_outcome, result_link_id}`.
-No body, title, description or other narrative is carried (the Constraint legacy-import
-redaction precedent).
+`BackfillRunView` = `{run_id, state, validator_version, population_count, classified_count, plan_digest, source_cutoff_at, created_at, classified_at}`;
+`BackfillItemView` = `{item_no, source_kind, source_family, source_id, source_ref, classification, reason, quarantined, candidate_relation, existing_link_id, existing_link_state}`,
+where `candidate_relation` is derived from `candidate` (its `relation_type`, null when
+there is no candidate) and is not a column. No body, title, description or other
+narrative is carried (the Constraint legacy-import redaction precedent).
 
 ## 9. File plan, registration and the work split
 
 New modules (resolve exact names against neighbours; no refactor beyond the extractions
 named):
 
-- `domain/lineage/vocabulary.py` (widened), `domain/lineage/asof.py` (pure: `KnowledgeCut`, `T_k`/`T_v` rules, precedence), `domain/lineage/cursor.py` (pure: encode, decode, binding, scope digest; golden vectors), `domain/lineage/handoff.py` (chain skips voided events; retime order), `domain/lineage/closure.py` (contested-link condition), `domain/lineage/backfill.py` (pure classification table and digests).
-- `application/record_lineage.py` (as-of traversal, paging, path explanations, contest/reinstate, `related_context`), `application/lineage_visibility.py` (section 6.4), `application/issue_timeline.py` (`issues.timeline`), `application/issues.py` (`issues.history`, readiness and close delta), `application/issue_handoffs.py` (`correct`, as-of list), `application/lineage_backfill.py` (plan, report, apply).
+- `domain/lineage/vocabulary.py` (widened), `domain/lineage/asof.py` (pure: `KnowledgeCut`, `T_k`/`T_v` rules, precedence), `domain/lineage/cursor.py` (pure: encode, decode, binding, scope digest; golden vectors), `domain/lineage/handoff.py` (chain skips voided events; retime order), `domain/lineage/closure.py` (contested-link condition), `domain/lineage/backfill.py` (pure source document and digests, mirroring the section 4.2 SQL functions; the classification table).
+- `application/record_lineage.py` (as-of traversal, paging, path explanations, contest/reinstate, `related_context`), `application/lineage_visibility.py` (section 6.4), `application/issue_timeline.py` (`issues.timeline`), `application/issues.py` (`issues.history`, readiness and close delta), `application/issue_handoffs.py` (`correct`, as-of list), `application/lineage_backfill.py` (plan, report).
 - `infrastructure/persistence/record_lineage.py` (as-of reads: `live_links_incident(principal, refs, cut)`, `link_revisions`, mark resolution, `take_commit_mark`), `infrastructure/persistence/issues.py` (history, as-of Issue revisions), `infrastructure/persistence/issue_handoffs.py` (corrections), `infrastructure/persistence/issue_timeline.py` (the lineage and native timeline reads, the Constraint revision snapshot join), `infrastructure/persistence/lineage_backfill.py`; `contracts/v1/record_lineage.py`, `contracts/v1/issues.py` (S3 views), `application/commands.py`, `adapters/normalization.py`, `application/service.py` handlers, `domain/identity/operation.py` / `purpose.py` / `chatllm_capability_policy.py` registrations, `ports.py` (`RecordLineageRepository`, `IssueRepository` additions; `UnitOfWork` gains abstract `issue_timeline` and `lineage_backfill`, implemented or stubbed in every subclass).
 - **Every writer calls `take_commit_mark` immediately after a non-replay reservation** (S1 `record_lineage.py` writers, S1/S2 `issues.py`, `issue_handoffs.py`, `issue_work.py`, and the S3 writers); the database trigger makes a missed call still correct but serializes later, so the call is required and pinned by a test.
-- Every W1 §2.2 / §5.4 registration step and count pin applies (capability 223, purpose 59, audit vocabulary 234, revision count 121, head literal and head-pin list, `TABLES_SHA256`, `TABLES_ABOVE`, principal-partition guard registry, spelled counts in `adapters/cli/app.py`, `bootstrap/gateway.py`, the architecture index and READMEs, `gateway.json` 110).
+- Every W1 §2.2 / §5.4 registration step and count pin applies (capability 222, purpose 59, audit vocabulary 233, revision count 121, head literal and head-pin list, `TABLES_SHA256`, `TABLES_ABOVE`, principal-partition guard registry, spelled counts in `adapters/cli/app.py`, `bootstrap/gateway.py`, the architecture index and READMEs, `gateway.json` 110).
 
 **Work split** (serial; each package testable alone; one worker at a time):
 
 | Worker | Owns | Delivers |
 | --- | --- | --- |
-| **L1** | the revision, `tables.py`, `IdKind`, vocabulary, all registries and count pins, `ports.py` stubs | section 4 in full; registration of all 9 names (unbuilt ones answer `unsupported` until their worker, and `capabilities.get` stays truthful); `take_commit_mark` and its call in every S1/S2 writer; mark resolution and horizon in persistence; `domain/lineage/asof.py`; tests: commit marks, S3 integrity guards, S3 migration, projection rebuild (AT-014), the S1/S2 lockstep moves |
-| **L2** | link and handoff writes | contest/reinstate and the transition table; `related_context`; the contested gate condition and readiness; handoff correction and the as-of `issues.handoffs.list`; tests: contest/reinstate, related context, handoff corrections, S3 races, S3 attested writes (writes part) |
-| **L3** | the as-of read core | widened `records.lineage` (as-of, visibility, paging, cursor, path explanations, budgets, deadline); `issues.history`; `records.associations.history`; `domain/lineage/cursor.py`; tests: bitemporal (AT-008), reverse roots (AT-001 S3), cursor revocation (AT-011, lineage part), isolation (AT-006 S3), history, bounds, query plans, benchmark |
-| **L4** | the timeline | `issues.timeline` (lineage and native planes, Constraint snapshots, its cursor); tests: native history coverage (AT-013), timeline rows of AT-001/AT-006/AT-011 |
-| **L5** | the backfill | the 3 backfill capabilities and `domain/lineage/backfill.py`; tests: AT-025 |
+| **L1** | the revision, `tables.py`, `IdKind`, vocabulary, all registries, settings and count pins, `ports.py` stubs | section 4 in full, including the 2 backfill SQL functions with `domain/lineage/backfill.py::source_document` and their shared golden vectors; registration of all 8 names and the backfill sub-switch (unbuilt ones answer `unsupported` until their worker, and `capabilities.get` stays truthful); `take_commit_mark` and its call in every S1/S2 writer; mark resolution and horizon in persistence; `domain/lineage/asof.py`; tests: commit marks, S3 integrity guards, S3 migration, backfill digest parity, the S1/S2 lockstep moves |
+| **L2** | link and handoff writes | contest/reinstate and the transition table; `related_context`; the in-context predicate (section 3.2) and the contested gate, readiness and frozen-closed rules; the one-line widening of the S1 head-based reader (`active_links_incident` selects `LIVE_LINK_STATES`), so a contested link is followed and shown before L3 replaces that reader; handoff correction and the as-of `issues.handoffs.list`; tests: contest/reinstate, related context, handoff corrections, S3 races, S3 attested writes (writes part) |
+| **L3** | the as-of read core and visibility | widened `records.lineage` (as-of over revisions, note-version cut, visibility, paging, cursor, path explanations, budgets, deadline); section 6.4 visibility and the grant re-check on every lineage read, including the S1/S2 Issue reads; `issues.history`; `records.associations.history`; `domain/lineage/cursor.py`; tests: bitemporal (AT-008), projection rebuild (AT-014 rebuild row, which needs L2's contest and this read), reverse roots (AT-001 S3), cursor revocation (AT-011, lineage rows), isolation (AT-006 S3), history, bounds, query plans, benchmark, S3 attested writes (read rows) |
+| **L4** | the timeline | `issues.timeline` (lineage plane with the in-context predicate, native plane through the exported Record Event predicate, Constraint snapshots, its cursor and watermark); tests: AT-001/AT-013 timeline row, the timeline rows of AT-011 |
+| **L5** | the backfill dry run | `records.backfill.plan` and `records.backfill.report` on L1's functions; classification and census; tests: AT-025 |
 | **L6** | web, hardening, docs | section 7.6 in full, `gateway.json`, decoders, BFF routes, e2e and accessibility, the S3 scope guard, AT-023/AT-024 web rows, docs sync ("as implemented" notes), full tiers |
 
 ## 10. Acceptance-test crosswalk
@@ -735,25 +823,26 @@ way the S2 scope guard parses S2 §10.
 | --- | --- | --- | --- |
 | AT-014 (knowledge clock) | `tests/database/test_lineage_commit_marks.py` | `test_every_lineage_write_takes_exactly_one_commit_mark`; `test_every_writer_takes_its_mark_before_any_other_lock`; `test_a_replay_takes_no_commit_mark`; `test_a_refused_write_leaves_no_commit_mark`; `test_commit_marks_are_contiguous_and_strictly_increasing`; `test_a_fact_row_cannot_carry_a_forged_commit_seq`; `test_every_fact_row_names_an_existing_mark`; `test_the_horizon_excludes_an_in_flight_write`; `test_a_past_known_at_answer_never_changes_after_later_commits`; `test_pre_s3_rows_are_known_by_their_recorded_at` | database |
 | AT-014 (rebuild) | `tests/recovery/test_lineage_projection_rebuild.py` | `test_a_write_killed_before_commit_leaves_no_mark_head_or_request`; `test_rebuilt_heads_equal_stored_heads_after_s3_actions`; `test_the_as_of_read_at_the_horizon_equals_the_head_read`; `test_repeated_rebuilds_are_byte_identical`; `test_a_side_channel_head_edit_is_refused`; `test_marks_requests_and_facts_are_consistent` | database + recovery |
-| AT-008 | `tests/database/test_lineage_bitemporal.py` | `test_known_at_before_a_correction_shows_the_old_belief`; `test_known_at_after_a_correction_shows_the_corrected_past`; `test_a_retimed_handoff_moves_the_holder_only_for_later_knowledge`; `test_a_voided_handoff_is_present_before_and_absent_after_its_void`; `test_valid_at_is_bounded_by_known_at`; `test_known_at_or_valid_at_after_now_is_refused`; `test_a_link_revision_takes_effect_at_its_commit_mark`; `test_issue_titles_and_states_are_read_at_known_at`; `test_an_as_of_read_writes_nothing` | database |
+| AT-008 | `tests/database/test_lineage_bitemporal.py` | `test_known_at_before_a_correction_shows_the_old_belief`; `test_known_at_after_a_correction_shows_the_corrected_past`; `test_a_retimed_handoff_moves_the_holder_only_for_later_knowledge`; `test_a_voided_handoff_is_present_before_and_absent_after_its_void`; `test_lineage_valid_at_is_bounded_by_known_at`; `test_known_at_or_valid_at_after_now_is_refused`; `test_a_note_saved_after_known_at_leaves_the_answer_unchanged`; `test_a_link_revision_takes_effect_at_its_commit_mark`; `test_issue_titles_and_states_are_read_at_known_at`; `test_an_as_of_read_writes_nothing` | database |
 | S2 residual (handoff correction) | `tests/database/test_issue_handoff_corrections.py` | `test_a_retime_needs_a_handoff_anchor_and_stays_in_order`; `test_only_the_last_live_handoff_can_be_voided`; `test_a_void_needs_a_contradicting_anchor`; `test_a_voided_handoff_is_not_the_chain_holder`; `test_a_correction_of_a_voided_handoff_is_refused`; `test_a_correction_on_a_closed_issue_is_refused`; `test_handoffs_list_reports_corrections_at_known_at`; `test_a_foreign_handoff_answers_like_an_absent_one` | database |
-| AT-007 (S3) + S2 residual (contest) | `tests/database/test_lineage_contest_reinstate.py` | `test_contest_needs_a_contradicting_exact_anchor`; `test_contest_then_reinstate_restores_active`; `test_reinstate_reapplies_the_relation_evidence_rule`; `test_a_contested_identity_cannot_be_asserted_again`; `test_an_ended_link_cannot_be_reinstated`; `test_a_membership_cannot_be_contested`; `test_a_contested_link_in_the_issue_context_blocks_closure`; `test_closure_readiness_lists_contested_links`; `test_contest_in_a_closed_issue_context_is_refused`; `test_a_contested_blocks_link_still_refuses_a_cycle`; `test_a_contested_link_reads_as_contested_in_lineage` | database |
-| S2 residual (`related_context`) | `tests/database/test_related_context.py` | `test_related_context_is_stored_once_in_canonical_order`; `test_related_context_needs_a_context_and_both_endpoints_inside`; `test_related_context_needs_corroborating_exact_evidence`; `test_a_related_context_self_link_is_refused`; `test_related_context_is_never_followed_across_issues` | database |
-| AT-001 (S3 part) | `tests/integration/test_issue_lineage_reverse_roots.py` | `test_every_root_yields_the_same_graph_at_one_known_at_and_valid_at`; `test_the_stage_9_answer_is_unchanged_after_stage_14`; `test_paging_from_every_root_exhausts_to_the_one_page_answer`; `test_every_node_explains_its_path_to_the_root`; `test_a_remote_reader_without_the_meeting_grant_sees_no_note_node_and_no_count` | database |
-| AT-001 + AT-013 (timeline) | `tests/integration/test_issue_timeline.py` | `test_the_timeline_orders_the_fourteen_stages`; `test_a_renamed_task_is_a_partial_event_never_its_title`; `test_a_constraint_event_carries_its_recorded_ball_in_court`; `test_past_ball_in_court_is_read_at_valid_at`; `test_an_as_of_timeline_omits_native_events_and_says_partial`; `test_a_project_link_entry_carries_no_project_name`; `test_a_timeline_never_names_another_issues_record`; `test_timeline_pages_reconstruct_the_whole_timeline` | database |
-| AT-011 | `tests/security/test_lineage_cursor_revocation.py` | `test_pages_under_one_cursor_reconstruct_the_one_page_answer`; `test_a_write_between_pages_changes_no_later_page`; `test_a_revoked_family_grant_answers_restart_required_without_identifiers`; `test_a_revoked_read_grant_is_denied`; `test_a_cursor_of_another_principal_is_conflict`; `test_a_cursor_with_changed_filters_is_conflict`; `test_a_tampered_cursor_is_invalid_request`; `test_a_cursor_beyond_the_horizon_is_invalid_request`; `test_restricted_nodes_are_neither_counted_nor_identifiable`; `test_a_timeline_cursor_is_bound_and_revoked_the_same_way` | database |
+| AT-007 (S3) + S2 residual (contest) | `tests/database/test_lineage_contest_reinstate.py` | `test_contest_needs_a_contradicting_exact_anchor`; `test_contest_then_reinstate_restores_active`; `test_reinstate_reapplies_the_relation_evidence_rule`; `test_a_contested_identity_cannot_be_asserted_again`; `test_an_ended_link_cannot_be_reinstated`; `test_a_membership_cannot_be_contested`; `test_a_contested_link_in_the_issue_context_blocks_closure`; `test_closure_readiness_lists_contested_links`; `test_contest_in_a_closed_issue_context_is_refused`; `test_a_contested_blocks_link_still_refuses_a_cycle`; `test_a_contested_link_reads_as_contested_in_lineage`; `test_a_contested_link_naming_the_issue_as_endpoint_blocks_closure`; `test_a_contested_null_context_link_inside_the_issue_blocks_closure`; `test_a_closed_issue_refuses_contest_of_a_null_context_link_inside_it` | database |
+| S2 residual (`related_context`) | `tests/database/test_related_context.py` | `test_related_context_is_stored_once_in_canonical_order`; `test_related_context_needs_a_context_and_both_endpoints_inside`; `test_related_context_needs_corroborating_exact_evidence`; `test_a_related_context_self_link_is_refused`; `test_related_context_is_never_followed_across_issues`; `test_mixed_case_endpoints_are_ordered_by_code_point` | database |
+| AT-001 (S3 part) | `tests/integration/test_issue_lineage_reverse_roots.py` | `test_every_root_yields_the_same_graph_at_one_known_at_and_valid_at`; `test_the_stage_9_answer_of_the_12_stage_9_roots_is_unchanged_after_stage_14`; `test_m4_and_n4_at_the_stage_9_cut_match_no_issue`; `test_paging_from_every_root_exhausts_to_the_one_page_answer`; `test_every_node_explains_its_path_to_the_root`; `test_a_remote_reader_without_the_meeting_grant_sees_no_note_node_and_no_count` | database |
+| AT-001 + AT-013 (timeline) | `tests/integration/test_issue_timeline.py` | `test_the_timeline_orders_the_fourteen_stages`; `test_a_renamed_task_is_a_partial_event_never_its_title`; `test_a_constraint_event_carries_its_recorded_ball_in_court`; `test_past_ball_in_court_is_read_at_valid_at`; `test_an_as_of_timeline_omits_native_events_and_says_partial`; `test_a_project_link_entry_carries_no_project_name`; `test_a_timeline_never_names_another_issues_record`; `test_timeline_pages_reconstruct_the_whole_timeline`; `test_a_native_change_after_the_horizon_is_shown_at_a_later_valid_at`; `test_association_entries_use_the_issue_context_definition` | database |
+| AT-011 | `tests/security/test_lineage_cursor_revocation.py` | `test_pages_under_one_cursor_reconstruct_the_one_page_answer`; `test_a_write_between_pages_changes_no_later_page`; `test_a_revoked_family_grant_answers_restart_required_without_identifiers`; `test_a_revoked_read_grant_is_unsupported`; `test_a_cursor_of_another_principal_is_conflict`; `test_a_cursor_with_changed_filters_is_conflict`; `test_a_cursor_with_a_tampered_cut_is_conflict` (edits `k` or `t`, which `b` binds); `test_a_malformed_or_unknown_position_cursor_is_invalid_request` (edits the encoding, the version or `p`); `test_a_cursor_beyond_the_horizon_is_invalid_request` (a `k` re-bound by the test to a future instant); `test_a_vanished_emitted_item_answers_restart_required`; `test_restricted_nodes_are_neither_counted_nor_identifiable`; `test_a_timeline_cursor_is_bound_and_revoked_the_same_way`; `test_a_timeline_cursor_names_no_hidden_event`; `test_withheld_record_events_never_reach_a_timeline_entry_count_or_watermark`; `test_s1_and_s2_issue_reads_apply_family_visibility_for_remote_readers` | database |
 | AT-006 (S3 part) | `tests/integration/test_issue_context_isolation_asof.py` | `test_a_three_issue_meeting_pages_only_its_issue_at_known_at`; `test_a_shared_meeting_never_carries_another_issue_context_across_pages`; `test_an_issue_chosen_from_the_meeting_view_reads_only_its_records` | database |
 | AT-007 (history) | `tests/integration/test_issue_history.py` | `test_history_lists_every_revision_with_its_closure_basis`; `test_history_at_known_at_omits_later_revisions`; `test_history_pages_by_version`; `test_association_history_lists_every_revision_with_its_evidence`; `test_a_foreign_issue_or_link_history_is_not_found` | database |
-| AT-016 | `tests/database/test_lineage_bounds.py` | `test_each_page_stays_within_its_item_and_byte_budget`; `test_node_and_edge_budgets_answer_truncated_budget`; `test_a_deadline_hit_answers_truncated_budget_without_a_cursor`; `test_expansion_order_is_deterministic_on_a_dense_hub`; `test_a_high_degree_meeting_never_fans_out_to_other_issues` | database |
+| AT-016 | `tests/database/test_lineage_bounds.py` | `test_each_page_stays_within_its_item_and_byte_budget`; `test_node_and_edge_budgets_answer_truncated_budget`; `test_a_deadline_hit_answers_truncated_budget_without_a_cursor`; `test_expansion_order_is_deterministic_on_a_dense_hub`; `test_a_high_degree_meeting_never_fans_out_to_other_issues`; `test_page_size_below_the_minimum_is_refused`; `test_mixed_case_link_ids_page_in_code_point_order` | database |
 | AT-016 (plans) | `tests/database/test_lineage_query_plans.py` | `test_incident_link_reads_use_the_endpoint_indexes`; `test_as_of_revision_reads_use_the_revision_key`; `test_mark_resolution_uses_the_marked_at_index`; `test_timeline_reads_use_the_issue_and_record_event_indexes` | database |
-| AT-016 (benchmark, recorded, not an SLA) | `tests/database/test_lineage_benchmark.py` | `test_records_the_synthetic_scale_benchmark` (scale from `MY_PA_LINEAGE_BENCHMARK_SCALE`: `small` by default, `full` = 100000 records and 1000000 links, run once locally and recorded) | database + slow |
-| AT-025 | `tests/database/test_lineage_backfill.py` | `test_every_source_in_scope_is_classified_once`; `test_native_virtual_sources_are_never_materialized`; `test_an_exact_original_span_origin_is_source_backed`; `test_a_normalized_text_span_is_only_a_review_candidate`; `test_object_refs_are_never_accepted`; `test_a_capture_root_origin_is_unresolved`; `test_an_interrupted_plan_resumes_to_the_same_plan_digest`; `test_an_interrupted_apply_resumes_without_duplicates`; `test_a_second_run_materializes_nothing_new`; `test_a_source_changed_after_enumeration_is_quarantined`; `test_a_late_source_is_reported_not_classified`; `test_apply_needs_the_reviewed_plan_digest`; `test_no_candidate_comes_from_words_projects_series_or_dates`; `test_backfill_is_operator_only_and_attested` | database |
-| AT-012 (S3 guards) | `tests/database/test_lineage_s3_integrity_guards.py` | `test_s3_immutable_tables_refuse_update_and_delete` (2 tables); `test_s3_tables_refuse_truncate` (5 tables, each holding a row); `test_the_allocator_only_advances_by_one`; `test_a_commit_mark_is_its_allocation`; `test_a_link_revision_follows_the_s3_transitions`; `test_one_live_head_per_identity_includes_contested`; `test_a_related_context_root_is_canonical_and_scoped`; `test_a_source_backed_link_is_written_by_backfill`; `test_a_retime_must_stay_in_order_in_the_database`; `test_only_the_last_live_handoff_can_be_voided_in_the_database`; `test_new_handoffs_follow_the_last_live_holder`; `test_a_backfill_run_moves_forward_only`; `test_a_backfill_item_is_settled_once`; `test_an_s3_write_request_completes_once` | database |
+| AT-016 (benchmark, recorded, not an SLA) | `tests/database/test_lineage_benchmark.py` | `test_records_the_synthetic_scale_benchmark` (scale from `MY_PA_LINEAGE_BENCHMARK_SCALE`: `small` by default, `full` = 100000 records and 1000000 links, run once locally and recorded, including the per-page p50/p95 and total time to page 650 items at `page_size` 10) | database + slow |
+| AT-025 | `tests/database/test_lineage_backfill.py` | `test_every_source_in_scope_is_classified_once`; `test_every_origin_reference_is_enumerated_and_unsupported_ones_are_unresolved`; `test_a_plan_writes_no_link_fact_or_mark`; `test_an_exact_original_span_origin_is_source_backed_in_the_report_only`; `test_a_normalized_text_span_is_only_a_review_candidate`; `test_object_refs_are_never_accepted`; `test_a_capture_root_origin_is_unresolved`; `test_an_inconsistent_project_situation_is_quarantined`; `test_existing_links_are_reported_in_any_context_and_state_at_the_cutoff`; `test_an_interrupted_plan_resumes_to_the_same_plan_digest`; `test_a_source_changed_after_enumeration_is_quarantined`; `test_a_late_source_is_reported_not_classified`; `test_the_census_counts_every_examined_row`; `test_no_candidate_comes_from_words_projects_series_or_dates`; `test_backfill_is_operator_only_attested_and_behind_its_own_switch` | database |
+| AT-025 (digest parity) | `tests/database/test_lineage_backfill_digest_parity.py` | `test_sql_source_document_matches_the_golden_vectors`; `test_sql_source_digest_matches_python` | database |
+| AT-012 (S3 guards) | `tests/database/test_lineage_s3_integrity_guards.py` | `test_s3_immutable_tables_refuse_update_and_delete` (2 tables); `test_s3_tables_refuse_truncate` (5 tables, each holding a row); `test_the_allocator_only_advances_by_one`; `test_a_commit_mark_is_its_allocation`; `test_a_link_revision_follows_the_s3_transitions`; `test_one_live_head_per_identity_includes_contested`; `test_a_related_context_root_is_canonical_and_scoped`; `test_a_retime_must_stay_in_order_in_the_database`; `test_only_the_last_live_handoff_can_be_voided_in_the_database`; `test_new_handoffs_follow_the_last_live_holder`; `test_a_backfill_run_moves_forward_only`; `test_a_backfill_item_is_settled_once`; `test_an_s3_write_request_completes_once` | database |
 | AT-012 (migration) | `tests/schema/test_record_lineage_s3_migration.py` | FAST: `test_the_revision_is_the_single_head_on_d020b532ad7d`; `test_the_revision_imports_no_domain_module`; `test_frozen_ddl_names_every_declared_constraint`; `test_before_texts_are_byte_copies_of_the_s2_texts`; `test_at_vocabulary_adds_exactly_the_s3_names`; `test_offline_downgrade_refuses_first`. DB: `test_empty_to_head`; `test_s2_head_with_rows_upgrades_and_seeds_the_horizon`; `test_downgrade_refuses_while_s3_rows_exist`; `test_downgrade_restores_every_s2_text`; `test_each_downgrade_refusal_family_alone_refuses` (8 cases) | FAST + migration markers |
 | AT-012 (races) | `tests/concurrency/test_lineage_s3_races.py` | `test_two_writers_of_one_principal_serialize_on_the_allocator`; `test_writers_of_two_principals_do_not_wait`; `test_contest_racing_a_close_serializes`; `test_a_void_racing_a_new_handoff_serializes`; `test_a_reader_never_sees_a_half_committed_mark` | database |
-| AT-023 (S3) | `tests/contract/test_lineage_s3_capability_admission.py` | `test_s3_capabilities_are_operator_decision_required`; `test_backfill_capabilities_are_operator_only_and_control_plane_excluded`; `test_s3_requests_reject_server_owned_fields`; `test_existing_v1_shapes_are_unchanged_by_s3`; `test_s1_and_s2_views_keep_every_key`; `test_records_lineage_without_s3_fields_keeps_the_s1_answer`; `test_switch_off_withholds_every_s3_capability`; `test_the_web_routes_call_exactly_the_capabilities_mcp_serves` | FAST |
-| AT-023 (S3, DB) | `tests/database/test_lineage_s3_attested_writes.py` | `test_an_ordinary_remote_client_is_denied_every_s3_write`; `test_a_replayed_s3_write_from_an_ordinary_client_is_denied_before_the_replay_lookup`; `test_switch_off_answers_unsupported_for_every_s3_capability`; `test_every_s3_capability_answers_a_foreign_subject_like_an_absent_one`; `test_a_remote_s3_read_without_its_grant_is_denied`; `test_cross_principal_reads_disclose_nothing` | database |
-| (domain) | `tests/unit/test_lineage_s3_domain.py` | `test_cursor_golden_vectors_and_malformed_tokens`; `test_the_binding_changes_with_every_bound_field`; `test_the_scope_digest_changes_with_family_grants_and_generation`; `test_known_and_valid_cut_rules`; `test_link_transition_table`; `test_related_context_canonical_order`; `test_handoff_chain_skips_voided_events`; `test_backfill_classification_table`; `test_completeness_precedence` | FAST |
+| AT-023 (S3) | `tests/contract/test_lineage_s3_capability_admission.py` | `test_s3_capabilities_are_operator_decision_required`; `test_backfill_capabilities_are_operator_only_and_control_plane_excluded`; `test_the_backfill_sub_switch_withholds_both_backfill_capabilities`; `test_s3_requests_reject_server_owned_fields`; `test_existing_v1_shapes_are_unchanged_by_s3`; `test_s1_and_s2_views_keep_every_key`; `test_records_lineage_without_s3_fields_keeps_the_s1_answer`; `test_switch_off_withholds_every_s3_capability`; `test_the_web_routes_call_exactly_the_capabilities_mcp_serves` | FAST |
+| AT-023 (S3, DB) | `tests/database/test_lineage_s3_attested_writes.py` | `test_an_ordinary_remote_client_is_denied_every_s3_write`; `test_a_replayed_s3_write_from_an_ordinary_client_is_denied_before_the_replay_lookup`; `test_switch_off_answers_unsupported_for_every_s3_capability`; `test_every_s3_capability_answers_a_foreign_subject_like_an_absent_one`; `test_a_remote_lineage_read_without_its_grant_is_unsupported`; `test_cross_principal_reads_disclose_nothing` | database |
+| (domain) | `tests/unit/test_lineage_s3_domain.py` | `test_cursor_golden_vectors_and_malformed_tokens`; `test_the_binding_changes_with_every_bound_field`; `test_the_scope_digest_changes_with_family_grants_and_generation`; `test_known_and_valid_cut_rules`; `test_link_transition_table`; `test_related_context_canonical_order`; `test_in_issue_context_predicate`; `test_backfill_source_document_golden_vectors`; `test_handoff_chain_skips_voided_events`; `test_backfill_classification_table`; `test_completeness_precedence` | FAST |
 | AT-024 (S3, web decoders) | `web/src/lib/api/decode/capabilities/issues.timeline.test.ts`; `web/src/lib/api/decode/capabilities/issues.read.test.ts`; existing `web/src/lib/api/decode/capabilities/records.lineage.test.ts` | `decodes an Issue timeline page`; `refuses an unknown timeline entry kind`; `decodes an Issue with its Project links`; `decodes an S3 lineage page with a cursor and path steps`; `refuses a lifecycle state outside the S3 vocabulary` | vitest |
 | AT-024 (S3, web components) | `web/src/components/issues/issue-timeline.test.tsx`; `web/src/components/issues/issue-lineage-table.test.tsx`; `web/src/components/issues/note-version-drilldown.test.tsx`; existing `web/src/components/work/related-issues.test.tsx` | `renders timeline entries in server order and labels partial native entries`; `shows the hidden-data message without a count`; `requests the next timeline page with the cursor only`; `renders nodes with their path explanations and record links`; `shows the restricted, truncated and restart messages`; `opens a cited note version only on explicit action and offers the current note separately`; `renders a contested relation and a related context` | vitest |
 | AT-024 (S3, routes and views) | `web/src/app/api/issues/issue-routes.test.ts`; `web/src/app/(app)/work/meetings/[meetingId]/meeting-view.test.tsx` | `calls issues.timeline once per page with only the cursor and page size`; `calls records.lineage once with the Issue as origin`; `refuses unknown query fields and malformed cursors without a gateway call`; `mounts the related-Issue panel on the Meeting view` | vitest |
@@ -764,32 +853,37 @@ way the S2 scope guard parses S2 §10.
 **S1/S2 regressions (binding, unchanged except lockstep moves):** every test of S1 §10
 and S2 §10 and every v1 suite. Admitted edits, each keeping its test name and assertion:
 the head literal and revision count (120 → 121) in every head-pin file and the head-pin
-list (gaining the S3 migration test); count pins (`Capability` 214 → 223, `Purpose`
-58 → 59, audit vocabulary 225 → 234, `TABLES_SHA256`, permitted pairs, tool, builder,
+list (gaining the S3 migration test); count pins (`Capability` 214 → 222, `Purpose`
+58 → 59, audit vocabulary 225 → 233, `TABLES_SHA256`, permitted pairs, tool, builder,
 command-union, exempt-property, operator-decision and control-plane-excluded counts,
-`gateway.json` 107 → 110, docs count claims); registry additions for the 9 names in the
+`gateway.json` 107 → 110, docs count claims); registry additions for the 8 names in the
 suites S2 D-18 (c) lists; S1/S2 lineage tests narrowed to the S1/S2 subset of a widened
 set (`declared` switch sets, `S1_LINEAGE_WRITE_CAPABILITIES`, the S2 lineage write set,
 AT vocabulary checks of the S1/S2 migration suites); the S1/S2 migration suites accept a
 constraint, column, function body or index predicate owned by the S3 revision; the
 S1/S2 truncate probes also truncate the 5 S3 tables with their own refusals disabled;
 the S1 `records.lineage` read-contract tests accept the 4 added top-level keys and 2
-node keys. No assertion is removed without its S1/S2 equivalent, no skip or xfail is
+node keys, and the S1/S2 Issue-read and handoff contract tests the keys listed in section
+8.1. No assertion is removed without its S1/S2 equivalent, no skip or xfail is
 added. Also existing and binding: `tests/contract/test_bff_gateway_contract_parity.py`,
 `tests/contract/test_bff_success_decoder_parity.py`,
 `web/src/lib/api/decode/registry.test.ts`.
 
-**AT-001 S3 part, concretely.** On the S2 14-stage fixture: with `known_at` = the
-horizon after stage 14 and `valid_at` = the same, `records.lineage` from each of M1, M2,
-M3, M4, N1, N2, N3, N4, C1, C2, C3, T1, X1 and I returns one node set, one typed-edge
-`link_id` set, one virtual-edge set and `complete`; with `known_at` = the horizon after
-stage 9, every root returns the stage-9 graph, before and after stages 10–14 commit;
-paging each root with `page_size` 1 and following `next_cursor` to null yields exactly
-the one-page answer; every node's `reached_from` chain ends at its root; `issues.timeline`
-lists the stage writes in stage order; a remote reader holding `records.lineage`,
-`issues.read`, `tasks.read`, `commitments.read` and `constraints.read` but no Meeting
-read sees no Meeting or note node, no `discusses` edge, no note anchor, and
-`restricted_evidence`, with no count anywhere in the answer.
+**AT-001 S3 part, concretely.** On the S2 14-stage fixture:
+
+- With `known_at` = the horizon after stage 14 and `valid_at` = the same, `records.lineage` from each of M1, M2, M3, M4, N1, N2, N3, N4, C1, C2, C3, T1, X1 and I returns one node set, one typed-edge `link_id` set, one virtual-edge set and `complete`.
+- With `known_at` = `H₉`, the horizon after stage 9, the **12 roots that exist and are related at stage 9** (M1, M2, M3, N1, N2, N3, C1, C2, C3, T1, X1 and I) each return the stage-9 graph, both before and after stages 10–14 commit. That includes N1b exactly when its `recorded_at ≤ H₉`, under the note-version cut of section 3.4.
+- M4 and N4 exist only from stage 12. After stage 14, a read at `H₉` from either of them answers as follows:
+  - with `issue_id = I`: `not_found` / `issue_id` (no Issue matches at that cut);
+  - without it: no Issue context (`issues_matching_root: []`, the S1 one-hop read with nothing to follow), and no N4 virtual edge, because N4's `recorded_at` is after `H₉`.
+- Paging each root with `page_size` 10 and following `next_cursor` to null yields exactly the one-page answer.
+- Every node's `reached_from` chain ends at its root.
+- `issues.timeline` lists the stage writes in stage order.
+- A remote reader holding `records.lineage`, `issues.read`, `tasks.read`, `commitments.read` and `constraints.read`, but no Meeting read, sees:
+  - no Meeting or note node;
+  - no `discusses` edge;
+  - no note anchor;
+  - `restricted_evidence`, with no count anywhere in the answer.
 
 **Prove-red expectations** (break exactly that one guard, show the named test red for
 that reason, restore; a green prove-red is reported as redundancy, a masked test or an
@@ -802,7 +896,7 @@ unreachable hazard, never as "covered"):
 | `a_commit_sequence_advances_by_one` | return NEW unconditionally | `test_the_allocator_only_advances_by_one` |
 | `a_commit_mark_is_its_allocation` | return NEW unconditionally | `test_a_commit_mark_is_its_allocation` |
 | horizon cap on `known_at` | use server now instead of `last_marked_at` | `test_the_horizon_excludes_an_in_flight_write` |
-| `marked_at` monotonicity | use `clock_timestamp()` alone | `test_commit_marks_are_contiguous_and_strictly_increasing` |
+| `marked_at` monotonicity | use `clock_timestamp()` alone; the test seeds the allocator row with `last_marked_at` in the future, so only the `greatest(…)` term keeps the trigger satisfied | `test_commit_marks_are_contiguous_and_strictly_increasing` |
 | as-of selection | read heads instead of revisions at `W` | `test_a_past_known_at_answer_never_changes_after_later_commits` |
 | writer's early `take_commit_mark` | remove it from `issues.memberships.add` | `test_every_writer_takes_its_mark_before_any_other_lock` |
 | `a_link_revision_follows_an_active_predecessor` (S3 body) | admit `reinstate` from `active` | `test_a_link_revision_follows_the_s3_transitions` |
@@ -813,26 +907,36 @@ unreachable hazard, never as "covered"):
 | cycle search reads contested heads | read active heads only | `test_a_contested_blocks_link_still_refuses_a_cycle` |
 | `a_related_context_is_canonical_and_scoped` | drop the CHECK (direct insert) | `test_a_related_context_root_is_canonical_and_scoped` |
 | `related_context` inside rule | skip it | `test_related_context_needs_a_context_and_both_endpoints_inside` |
-| `a_source_backed_link_is_written_by_backfill` | drop the CHECK | `test_a_source_backed_link_is_written_by_backfill` |
 | `a_handoff_correction_is_admissible` | return NEW unconditionally | `test_a_retime_must_stay_in_order_in_the_database` |
-| void only the last live event (application) | skip the check (the trigger still refuses; report a green as the trigger masking it) | `test_only_the_last_live_handoff_can_be_voided` |
+| void only the last live event (application) | skip the check; the test asserts the application's `invalid_request` / `handoff_id` and that no correction `INSERT` was issued (a statement recorder on the connection), so the trigger's later refusal cannot mask the break | `test_only_the_last_live_handoff_can_be_voided` |
 | `a_handoff_follows_its_predecessor` (S3 body) | restore the S2 body | `test_new_handoffs_follow_the_last_live_holder` |
 | corrections honoured at `known_at` | ignore corrections in reads | `test_known_at_after_a_correction_shows_the_corrected_past` |
 | visibility pruning | emit invisible nodes | `test_restricted_nodes_are_neither_counted_nor_identifiable` |
 | scope digest | omit the grant digest from `s` | `test_a_revoked_family_grant_answers_restart_required_without_identifiers` |
 | binding digest | omit `principal_id` from `b` | `test_a_cursor_of_another_principal_is_conflict` |
 | horizon check on a cursor | skip it | `test_a_cursor_beyond_the_horizon_is_invalid_request` |
-| grant re-check in read handlers | skip it in `records.lineage` | `test_a_revoked_read_grant_is_denied` |
+| grant re-check in read handlers | skip it in `records.lineage`; skip it in `issues.read` | `test_a_revoked_read_grant_is_unsupported`; `test_s1_and_s2_issue_reads_apply_family_visibility_for_remote_readers` |
 | issue context per state | follow every live incident link | `test_a_shared_meeting_never_carries_another_issue_context_across_pages` |
 | deadline ends paging | keep the cursor on a deadline hit | `test_a_deadline_hit_answers_truncated_budget_without_a_cursor` |
 | native plane omitted at explicit `known_at` | include it | `test_an_as_of_timeline_omits_native_events_and_says_partial` |
 | native entries carry no values | render a current title | `test_a_renamed_task_is_a_partial_event_never_its_title` |
 | `a_backfill_run_moves_forward` / `a_backfill_item_is_settled_once` | return NEW unconditionally, each in turn | `test_a_backfill_run_moves_forward_only` / `test_a_backfill_item_is_settled_once` |
 | plan resumability | classify by wall time | `test_an_interrupted_plan_resumes_to_the_same_plan_digest` |
-| apply idempotency | skip the live-identity check | `test_a_second_run_materializes_nothing_new` |
 | source-changed quarantine | skip the digest re-derivation | `test_a_source_changed_after_enumeration_is_quarantined` |
-| plan digest binding | skip the comparison | `test_apply_needs_the_reviewed_plan_digest` |
 | span basis rule | admit a normalized-text span | `test_a_normalized_text_span_is_only_a_review_candidate` |
+| note-version cut (R3-F01) | read every current note version of a reached Meeting | `test_a_note_saved_after_known_at_leaves_the_answer_unchanged` |
+| native plane valid cut (R3-F02) | bound native entries by `T_v` | `test_a_native_change_after_the_horizon_is_shown_at_a_later_valid_at` |
+| Record Event withholding reused (R3-F03) | build the native read with family visibility only | `test_withheld_record_events_never_reach_a_timeline_entry_count_or_watermark` |
+| timeline watermark under the reader's predicate (R3-F04) | take `r` as the Principal's latest event | `test_a_timeline_cursor_names_no_hidden_event` |
+| in-context predicate (R3-F05) | use `context_issue_id = I` only, in the gate | `test_a_contested_null_context_link_inside_the_issue_blocks_closure` (the endpoint case `test_a_contested_link_naming_the_issue_as_endpoint_blocks_closure` reddens with it) |
+| in-context predicate in the frozen rule | use `context_issue_id = I` only, in the frozen-closed refusal | `test_a_closed_issue_refuses_contest_of_a_null_context_link_inside_it` |
+| backfill source digest SQL function (R3-F09) | change one fact's serialization in the SQL function | `test_sql_source_document_matches_the_golden_vectors` |
+| every origin reference enumerated (R3-F08) | enumerate only `asrt_` and `cap_` | `test_every_origin_reference_is_enumerated_and_unsupported_ones_are_unresolved` |
+| existing-link check in any context and state (R3-F07) | look for live heads with the candidate's identity only | `test_existing_links_are_reported_in_any_context_and_state_at_the_cutoff` |
+| `COLLATE "C"` (R3-F10) | drop it from the `related_context` CHECK; drop it from the edge ordering | `test_mixed_case_endpoints_are_ordered_by_code_point`; `test_mixed_case_link_ids_page_in_code_point_order` |
+| backfill sub-switch (R3-F12) | drop `_lineage_backfill_plane()` in the plan handler | `test_backfill_is_operator_only_attested_and_behind_its_own_switch` |
+| vanished emitted item (R3-F14) | answer `invalid_request` for an absent `p` | `test_a_vanished_emitted_item_answers_restart_required` |
+| page-size minimum (R3-F15) | admit `page_size` 1 | `test_page_size_below_the_minimum_is_refused` |
 | append-only / truncate on each new table | detach for one table | the parametrized case for that table |
 | attested S3 writes; switch | use `lineage_authority`; drop `_lineage_plane` in one handler | `test_an_ordinary_remote_client_is_denied_every_s3_write`; `test_switch_off_answers_unsupported_for_every_s3_capability` |
 | downgrade refusal, each family | delete that family's clause | the matching case of `test_each_downgrade_refusal_family_alone_refuses` |
@@ -857,7 +961,8 @@ Program/report work packages; AT-020, AT-021 → out of scope until OD-06.
 | Constraint close evidence in the Constraint plane (S2 D-06) | Constraint-plane decision; the membership `resolution` anchor stays the proof (D-12) |
 | A composite Constraint create; a closure exception authority | as S2 §11 |
 | Runtime-role provisioning; remote attested lineage writer; native writers through `is_transaction_conflict` | as S1 §11 |
-| Running the backfill against any real database; materializing any backfill item | operator gate (section 13) |
+| **The backfill apply** (materializing `source_backed_accepted` items; package WP-03B, CR-014) | an operator-gated later package (section 13; D-26). Binding requirements for it, from R3-F06/F07: it materializes only items of a `classified` run whose `plan_digest` the operator states; before writing, it looks for **any** link between the candidate's `(from, relation_type, to)` endpoints **in any context and any state**, answering `already_present` for a live one and a distinct `previously_ended` (never a re-write) for an ended one, so an operator's recorded end is never reversed and no context-scoped duplicate is created; it re-derives each source digest and refuses a changed source; it writes through `insert_new_link` under the S1/S2 locks with a new acceptance basis (`source_backed_verified`, then admitted with its CHECK) and a commit mark per transaction; and it requires an independent readback of a sample of every materialized class (CR-014 "one independent readback per accepted class") before a run is reported applied |
+| Running the backfill dry run against any real database | operator gate (section 13) |
 | Program, report manifest, finance, P6 | own work packages; finance/P6 gated by OD-06 |
 
 ## 12. Divergences — repository vs package, and resolutions
@@ -868,15 +973,15 @@ Program/report work packages; AT-020, AT-021 → out of scope until OD-06.
 | D-02 | §13: HMAC-signed cursor binding Principal, grant digest, root, Issue, filters, cutoff, projection version | `record_events.list` binds a SHA-256 binding and re-derives authority every call, so the token carries no authority and needs no secret | unsigned binding cursor (section 5); a forged token can only ask what the caller could ask directly; the horizon check refuses a future cut |
 | D-03 | `scope_changed_restart_required` on grant change; repository precedent answers `conflict` / `cursor` on any binding mismatch | both are needed: a different query is a client error, a revoked grant is not | `b` mismatch → `conflict` / `cursor`; `s` mismatch → a `scope_changed_restart_required` page that discloses nothing |
 | D-04 | merge native histories into as-of timelines | no native plane has a commit-ordered knowledge time (D-01) | native entries only in current timelines, bounded by the Record Event watermark frozen on page 1; as-of timelines omit them and say `partial_native_history` |
-| D-05 | native virtual edges `follow_up`, `constraint_follow_up`, `meeting_in_series`, `project_issue`, `entity_member_of` | `tasks.commitment_id` is mutable (`tasks.update` replaces it; `TaskManagementService.link_commitment` sets it) and none of these fields is versioned, so showing them would make an as-of answer change; Series must never propagate (WP-02D) | only the immutable `meeting_note_version_of`; the backfill classifies the others `native_virtual_proven` and never copies them |
+| D-05 | native virtual edges `follow_up`, `constraint_follow_up`, `meeting_in_series`, `project_issue`, `entity_member_of` | `tasks.commitment_id` is mutable (`tasks.update` replaces it; `TaskManagementService.link_commitment` sets it) and none of these fields is versioned, so showing them would make an as-of answer change; Series must never propagate (WP-02D) | only `meeting_note_version_of`, whose rows are immutable but whose *set* grows, so it is cut by the note version's own `recorded_at` (section 3.4, with the named residual that this cut is not commit-ordered: R3-F01); the backfill classifies the others `native_virtual_proven` and never copies them |
 | D-06 | `link_mutation_event_receipts` and a lineage Record Event family (D-15 of S2) | the changefeed contract, family reads, routing and role separation would all widen for no S3 AT | commit marks plus `lineage_write_requests.commit_seq` are the receipts; event/projection consistency is tested over marks, requests, facts and heads (AT-014) |
-| D-07 | WP-03B review queue; ADR-015 consequences "from S3, propose" | no proposal plane exists; building `irp`/`ldec` is a full review workflow | S3 builds no proposal capability; `review_candidate` items are reported only, and the review path is the operator's own attested assert; model clients stay read-only |
-| D-08 | operator-only CLI run | `adapters/cli/app.py`: the CLI invokes capabilities through `normalize`; it is not a privileged bypass | 3 operator-only, attested backfill capabilities, invoked from the CLI |
+| D-07 | WP-03B review queue; ADR-015 consequences "from S3, propose" | no proposal plane exists; building `irp`/`ldec` is a full review workflow | S3 builds no proposal capability; `review_candidate` and `source_backed_accepted` items are reported only, and the review path is the operator's own attested assert; model clients stay read-only |
+| D-08 | operator-only CLI run | `adapters/cli/app.py`: the CLI invokes capabilities through `normalize`; it is not a privileged bypass | 2 operator-only backfill capabilities (the plan attested), behind their own switch, invoked from the CLI |
 | D-09 | S2 §3.3: contested membership, closure-set anchor and resolution anchor must block | anchors are not links; a membership dispute is already a gate blocker through `contradicts` | contest is for semantic links; any contested link in the Issue's context blocks closure (section 3.2) |
 | D-10 | WP-02D / S2 D-11: Decision membership | no capability creates or reads a `cdec_` | carried (section 11) |
 | D-11 | close the client-supplied `rdec_` acceptance if possible | the only server check, `SqlSituationRepository.accept`, proves that *some* capture review case accepted something in the Principal's partition — `capture_review_decisions` binds a review case, never a Commitment — so checking the id would make the residual look closed without closing it | carried as an operator/Work decision; the S2 composite keeps its D-05 behaviour |
 | D-12 | stage 13 Constraint close "with verified source E1 approved under Constraint rules" | unchanged since S2 D-06 | carried; the membership `resolution` anchor stays X1's proof |
-| D-13 | WP-02C "present/past BIC" | `project_constraint_revisions` store `bic` per applied version; no capability reads a revision (`constraints.history` returns receipts only) | past ball-in-court is read from those immutable snapshots in the current `issues.timeline` with `valid_at`; the Constraint plane is unchanged |
+| D-13 | WP-02C "present/past BIC" | `project_constraint_revisions` keeps one immutable snapshot per applied version and `project_constraint_revision_parties` (role `bic`) its ball-in-court parties; no capability reads a revision (`constraints.history` returns receipts only) | past ball-in-court is read from those immutable snapshots in the current `issues.timeline` with `valid_at`; the Constraint plane is unchanged |
 | D-14 | `records.associations.assert` with `valid_from` / `valid_to` | no S1/S2 writer records a business time for a link | a link takes effect at its mark; `valid_at` bounds links by `min(valid_at, known_at)`; intervals carried |
 | D-15 | CR-007 edges ≤ 500, §13 edges 400; 2 s statement and 5 s request budgets | S1 fixed 400 | 400 kept; a 2000 ms traversal deadline per page that ends paging, and a 2000 ms statement timeout |
 | D-16 | test paths `tests/performance`, `tests/migration/test_lineage_backfill_resume.py`, `tests/end_to_end/…` | repository tiers select by marker; no `performance` marker exists | the section 10 modules and markers |
@@ -888,7 +993,15 @@ Program/report work packages; AT-020, AT-021 → out of scope until OD-06.
 | D-22 | void any handoff | voiding a middle event breaks holder continuity | only the chain's last live event can be voided |
 | D-23 | `historical_fields_partial` as a completeness code | it describes one entry, not the answer | a per-entry boolean |
 | D-24 | S2 §3.4 handoff chain uses event *n − 1* | voids exist from S3 | the S2 trigger functions are replaced to skip voided events; the ledger sequence is unchanged |
-| D-25 | S1/S2 §10 "no other test edited" | 9 names, 1 purpose, 5 tables, columns, triggers and a new head move registries and pins as in S2 D-18 | the section 10 lockstep list; each edit keeps its test name and assertion |
+| D-25 | S1/S2 §10 "no other test edited" | 8 names, 1 purpose, 5 tables, 2 SQL functions, columns, triggers and a new head move registries and pins as in S2 D-18 | the section 10 lockstep list; each edit keeps its test name and assertion |
+| D-26 | WP-03B: materialize `SOURCE_BACKED_ACCEPTED` links idempotently (package 03 §2: S3 is WP-03B "read/dry-run", "no automatic historical semantic acceptance") | a bulk materializer approved by one plan-digest attestation is acceptance by class, not by item (R3-F06) | S3 ships the dry run only (plan + report); the apply and `source_backed_verified` are an operator-gated later package with the section 11 binding requirements |
+| D-27 | CR-014 preflight: Principal, type, orphan, merge-redirect census | the enumerated families (Tasks, Commitments, Meetings, Constraint relationships, `project_situations`, context Situations) have no merge redirect (Commitment merge is BLOCKED in `application/identity_correction.py`; Entities are not enumerated); the S1 principal-composite foreign keys make Principal mismatch unrepresentable | the run's census (section 8.3) counts every examined row, reference shape and `project_situation` consistency; no merge-redirect census is built |
+| D-28 | independent sample readback | it reads back materialized links, and S3 materializes none | moves with the apply (section 11) |
+| D-29 | `known_at` / `valid_at` as one pair for every plane | the native plane has no commit-ordered time and is shown as currently recorded (D-04); clamping it to the lineage horizon hid native changes after the last lineage write (R3-F02) | lineage selection uses `T_v = min(valid_at, T_k)`; native entries use the requested `valid_at`; the answer reports both (`valid_at`, `lineage_valid_at`) |
+| D-30 | a remote reader lacking a grant is `denied` (the first draft of this contract) | `_record_events_list` and `_knowledge_plane` answer `unsupported` (R3-F13) | `unsupported` for a missing grant on the called capability; `denied` stays for a purpose the capability does not admit |
+| D-31 | S1/S2 Issue reads disclose member, endpoint and link ids to any holder of their grant | CR-008 visibility must hold on every lineage read, and no client holds a lineage grant | section 6.4 applies to `issues.read`, `issues.list`, `issues.handoffs.list` and `issues.closure_readiness`, each gaining `restricted` |
+| D-32 | page size 1..100 | full recomputation per page makes `page_size` 1 a cost amplifier, and the repository has no per-Principal rate limiter (`rate_limited` is a WebAuthn-adapter code only) | paged reads take `page_size` 10..100 (R3-F15) |
+| D-33 | S2 `HandoffView.effective_at` | corrections exist from S3 | `effective_at` keeps its recorded meaning; `current_effective_at` is added (R3-F18) |
 
 Lock and transaction rules not restated here are S1's and S2's, including S1 §12 and
 S2 §12.
@@ -896,8 +1009,9 @@ S2 §12.
 ## 13. Operator gates that remain
 
 Ratification of ADR-015 beyond the directive defaults; any live migration, grant,
-ChatLLM or client exposure, deployment (OD-07); **running the backfill against any
-real database and applying any item** (OD-05, OD-07); any closure exception or
+ChatLLM or client exposure, deployment (OD-07); **enabling `MY_PA_LINEAGE_BACKFILL_ENABLED` or
+running the backfill dry run against any real database, and the whole backfill apply
+package of section 11** (OD-05, OD-07); any closure exception or
 completeness-threshold risk acceptance (OD-03, OD-08); verified Commitment acceptance
 (D-11) as a Work decision; Constraint close evidence and a joined-transaction
 Constraint create as Constraint-plane decisions; a proposal/review plane; source

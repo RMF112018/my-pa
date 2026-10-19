@@ -61,7 +61,7 @@ from my_pa.application.commands import (
     RecordIssueHandoff,
     ReopenIssue,
 )
-from my_pa.application.errors import InvalidRequestError
+from my_pa.application.errors import ApplicationError, InvalidRequestError
 from my_pa.application.service import _LINEAGE_CAPABILITIES, ApplicationService
 from my_pa.contracts.v1.commitments import CommitmentView
 from my_pa.contracts.v1.issues import (
@@ -671,3 +671,55 @@ def test_composite_native_objects_mirror_the_v1_requests() -> None:
     assert isinstance(native, CreateTask)
     assert native.idempotency_key == "fast-s2-mirror"
     assert native.situation_id is None and native.accepted_by_review_decision_id is None
+
+
+def _refusal(name: str, payload: dict[str, object]) -> tuple[object, ...]:
+    """How `normalize` refuses a payload: the error class, its safe details and choices."""
+    with pytest.raises(ApplicationError) as refused:
+        normalize(name, _arguments(name, payload))
+    error = refused.value
+    return (type(error), error.safe_details, dict(error.allowed_values))
+
+
+#: Malformed values for the nested native fields the composites convert themselves.
+_MALFORMED: Final[dict[str, tuple[tuple[str, object], ...]]] = {
+    "task": (
+        ("due_at", "not-a-time"),
+        ("due_at", "2026-10-18T12:00:00"),
+        ("due_at", 17),
+        ("priority", "urgent"),
+        ("priority", 3),
+        ("role", "boss"),
+        ("origin_kind", "rumour"),
+        ("origin_kind", None),
+        ("title", ""),
+    ),
+    "commitment": (
+        ("due_at", "not-a-time"),
+        ("due_at", "2026-10-18T12:00:00"),
+        ("direction", "sideways"),
+        ("direction", None),
+        ("summary", ""),
+        ("counterparty_entity_id", "ent_not valid"),
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("composite", "nested", "v1"),
+    [
+        ("issues.work.create_task", "task", "tasks.create"),
+        ("issues.work.create_commitment", "commitment", "commitments.create"),
+    ],
+)
+def test_composite_native_objects_refuse_malformed_values_like_the_v1_requests(
+    composite: str, nested: str, v1: str
+) -> None:
+    """The composite's own conversion refuses exactly as the v1 normalizer does (FR2-F05)."""
+    base = _BASE_PAYLOADS[composite]
+    native = dict(base[nested])  # type: ignore[call-overload]
+    normalize(v1, _arguments(v1, {**native, "idempotency_key": "fast-s2-v1"}))
+    for field, value in _MALFORMED[nested]:
+        broken = {**native, field: value}
+        expected = _refusal(v1, {**broken, "idempotency_key": "fast-s2-v1"})
+        assert _refusal(composite, {**base, nested: broken}) == expected, (field, value)

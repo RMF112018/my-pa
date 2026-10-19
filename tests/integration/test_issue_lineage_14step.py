@@ -263,7 +263,21 @@ class Workflow:
         return {self.ref(_FAMILY[name[0]], name) for name in names}
 
     def from_issue(self) -> dict[str, Any]:
-        return graph(self.rt, self.ref("situation", "I"), self.ids["I"])
+        """The graph from I, with the evidence-availability dimension of each gate.
+
+        Package 04 section A compares evidence availability at every
+        intermediate gate: every anchor on every edge I's traversal returns is
+        `available` (nothing in this workflow is archived or withdrawn), and
+        from stage 3 on there is evidence to compare.
+        """
+        answer = graph(self.rt, self.ref("situation", "I"), self.ids["I"])
+        seen = [
+            anchor["availability"] for edge in answer["typed_edges"] for anchor in edge["evidence"]
+        ]
+        assert set(seen) <= {"available"}, seen
+        if "c1-origin" in self.links:
+            assert seen, "no evidence on I's graph after stage 3"
+        return answer
 
     def task(self, name: str) -> dict[str, Any]:
         return dict(self.rt.ok(ReadTask(task_id=self.ids[name]))["task"])
@@ -630,6 +644,7 @@ class Workflow:
         assert written["issue"]["version"] == version + 1
         assert (written["issue"]["state"], written["issue"]["action"]) == ("closed", "closed")
         closure = written["closure"]
+        assert {anchor["availability"] for anchor in closure["evidence"]} == {"available"}
         assert sorted(anchor["role"] for anchor in closure["evidence"]) == [
             "corroborates",
             "resolution",

@@ -70,10 +70,12 @@ describe("records.lineage strict canonical success", () => {
 
   it("decodes the S2 relation types and a closed Issue", () => {
     // The closed sets are exactly the server vocabulary (S2 section 7.4); the
-    // Python side of the equality is `test_record_lineage_s2_scope.py`.
+    // Python side of the equality is `test_record_lineage_s2_scope.py`. S3 widens
+    // the server vocabulary by `related_context` (S3 section 3.1), in lockstep.
     expect([...RELATION_TYPES]).toEqual([
       "issue_member", "originated_from", "discusses",
       "delegated_from", "escalated_from", "blocks", "created_to_resolve",
+      "related_context",
     ]);
     expect([...ISSUE_STATES]).toEqual(["open", "active", "suspended", "closed"]);
     for (const [relation, from, to] of [
@@ -95,8 +97,9 @@ describe("records.lineage strict canonical success", () => {
   });
 
   it("refuses a relation type outside the S2 vocabulary", () => {
-    // `related_context` is S3 (S2 section 11): the server never sends it in S2.
-    for (const relation of ["related_context", "follows_up", "Blocks", "", "contested"]) {
+    // `related_context` joined the server vocabulary in S3 (S3 section 3.1); a
+    // relation outside it still refuses the whole answer.
+    for (const relation of ["follows_up", "Blocks", "", "contested", "Related_context"]) {
       const value = payload(); (value.typed_edges as Json[])[1]!.relation_type = relation;
       expect(decode(value).ok, relation).toBe(false);
     }

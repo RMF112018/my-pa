@@ -46,6 +46,7 @@ export const LINEAGE_COMPLETENESS = [
   "complete", "truncated_budget", "unresolved_ambiguity", "partial_native_history",
   "restricted_evidence", "scope_changed_restart_required",
 ] as const;
+export type LineageCompleteness = (typeof LINEAGE_COMPLETENESS)[number];
 const MAX_ISSUE_TITLE_CHARACTERS = 500;
 /** S3 section 5: an opaque cursor is unpadded base64url, at most 2048 characters. */
 const LINEAGE_CURSOR = /^[A-Za-z0-9_-]{1,2048}$/;
@@ -54,7 +55,7 @@ function prefixed(value: string, prefix: string): boolean {
   return new RegExp(`^${prefix}_[A-Za-z0-9]{8,64}$`).exec(value)?.[0] === value;
 }
 
-const recordRef = checked(
+export const recordRef = checked(
   strictObject({ family: enumeration(RECORD_FAMILIES), record_id: text() }),
   (value) => prefixed(value.record_id, FAMILY_PREFIX[value.family]),
 );
@@ -66,7 +67,7 @@ const ANCHOR_PREFIX = {
   capture: { root: "cap", version: null },
 } as const;
 
-const evidenceAnchor = checked(strictObject({
+export const evidenceAnchor = checked(strictObject({
   anchor_id: identifier("ian"),
   family: enumeration(["meeting_note_version", "capture_version", "capture"]),
   root_id: text(),
@@ -84,7 +85,7 @@ const evidenceAnchor = checked(strictObject({
   return value.version_id === null || prefixed(value.version_id, expected.version);
 });
 
-const association = strictObject({
+export const association = strictObject({
   link_id: identifier("irl"),
   kind: enumeration(["issue_membership", "semantic"]),
   relation_type: enumeration(RELATION_TYPES),
@@ -101,7 +102,7 @@ const association = strictObject({
   recorded_at: timestamp,
 });
 
-const issueTitle = text(1, MAX_ISSUE_TITLE_CHARACTERS);
+export const issueTitle = text(1, MAX_ISSUE_TITLE_CHARACTERS);
 const issueMatch = strictObject({ issue_id: identifier("sit"), title: issueTitle, state: enumeration(ISSUE_STATES) });
 
 /*
@@ -164,7 +165,7 @@ const virtualEdge = checked(
 );
 
 /** S3: `next_cursor` is an opaque base64url token (at most 2048 characters) or `null`. */
-const lineageCursor: Decoder<string | null> = nullable(checked(text(1, 2048), (value) => LINEAGE_CURSOR.test(value)));
+export const lineageCursor: Decoder<string | null> = nullable(checked(text(1, 2048), (value) => LINEAGE_CURSOR.test(value)));
 
 const lineage = checked(strictObject({
   root: recordRef,
@@ -183,6 +184,7 @@ const lineage = checked(strictObject({
 }), (value) => value.typed_edges.length + value.virtual_native_edges.length <= 400 &&
   value.qualifiers.length >= 1 && value.qualifiers[0] === value.complete_state);
 
+export type RecordRefView = Decoded<typeof recordRef>;
 export type EvidenceAnchorView = Decoded<typeof evidenceAnchor>;
 export type AssociationView = Decoded<typeof association>;
 export type RecordsLineageResult = Decoded<typeof lineage>;

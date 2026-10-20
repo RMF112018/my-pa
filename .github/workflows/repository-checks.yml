@@ -15,14 +15,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  validate:
+  # `validate` is three jobs. On PR #337 (run 39283086971) the single 60-minute
+  # FAST job was cancelled by its timeout with no test failed, and S3 adds about
+  # a thousand FAST tests. The operator granted sharding authority on
+  # 2026-10-20 ("Shard FAST + migration-edge"); coverage reduction is still not
+  # authorized, and none is made:
+  #
+  # - `validate-static` runs every non-pytest step of the former job exactly
+  #   once (document/configuration validation, applicability, install, import
+  #   smoke, ruff, mypy, governance-candidate packaging) plus the partition
+  #   proof: `python -m tests.ci_shard verify` collects each sharded selection
+  #   unsharded and once per shard and fails unless the shards are pairwise
+  #   disjoint and their union is exactly the unsharded selection.
+  # - `validate-fast` runs the unchanged FAST `-m` expression as deterministic
+  #   file-level shards (`tests/ci_shard.py`), one matrix leg per shard. The
+  #   matrix size, the `/COUNT` in `CI_SHARD` and the verify step are pinned to
+  #   each other by `tests/architecture/test_ci_shards.py`.
+  # - `validate` is the required-check compatible aggregator, like
+  #   `database-tier`: it fails unless every needed result is exactly `success`
+  #   (failure, cancelled and skipped all fail).
+  #
+  # Per-shard budget: measured locally on 2026-10-20 (S2 head), each of the
+  # three FAST shards took 9.9-10.4 minutes including its roughly 2-minute
+  # collection. One file alone
+  # (`test_every_capability_reaching_a_memory_row_is_declared.py`, about 7
+  # minutes) bounds any file-level shard from below. CI has run 1.5-1.8x
+  # local, so about 16-19 minutes of pytest per leg is expected against a
+  # 35-minute timeout. Measurement headroom, not a performance SLA.
+  validate-static:
     runs-on: ubuntu-latest
-    # Provisional 60-minute measurement headroom for the complete FAST gate.
-    # The prior 40-minute budget was classified CI_TIMEOUT_BUDGET_STALE,
-    # corroborated by BASELINE_PREEXISTING_CI_FAILURE. Coverage reduction is
-    # not authorized. Continued exhaustion requires separate Linux hotspot,
-    # sharding, or optimization authority; this is not a performance SLA.
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -167,9 +189,105 @@ jobs:
           # rather than by a number that has to be maintained. `D-64`.
           python -m mypy
 
+      - name: Prove the CI test shards partition their selections
+        if: steps.fast.outputs.applicable == 'true'
+        shell: bash
+        run: |
+          # Collection only: no test runs here and no database is needed to
+          # collect the migration selection. Each command collects unsharded
+          # and once per shard, concurrently, and compares node-ID sets.
+          python -m tests.ci_shard verify --lane fast --shards 3 -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"
+          python -m tests.ci_shard verify --lane migration --shards 5 -m "migration_edge or migration"
+
+      - name: Package governance candidate
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: governance-candidate-${{ github.sha }}
+          path: |
+            .ai/project-sources/00_AEOS_MASTER_INDEX.md
+            .github/CODEOWNERS
+            .github/ISSUE_TEMPLATE/bounded-change.yml
+            .github/dependabot.yml
+            .github/pull_request_template.md
+            .github/workflows/repository-checks.yml
+            AGENTS.md
+            AI_OPERATING_MANUAL.md
+            CLAUDE.md
+            CONTRIBUTING.md
+            SECURITY.md
+            docs/00_REPOSITORY_SOURCE_INDEX.md
+            docs/governance/GOVERNANCE-AUDIT-MYPA-MCV-20260730.md
+          if-no-files-found: error
+          retention-days: 7
+          include-hidden-files: true
+
+  validate-fast:
+    # One leg per FAST shard; see the comment above `validate-static`. Each leg
+    # repeats only what running pytest needs: checkout identity, the
+    # applicability check (so a tree without `pyproject.toml` passes here
+    # exactly as the single job did) and the install. The failure-annotation
+    # ledger and `--durations=50` evidence are per leg.
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Record checkout identity
+        shell: bash
+        env:
+          INTENDED_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          HEAD="$(git rev-parse HEAD)"
+          TREE="$(git rev-parse 'HEAD^{tree}')"
+          echo "repository=${GITHUB_REPOSITORY}"
+          echo "checked_out_commit=${HEAD}"
+          echo "checked_out_tree=${TREE}"
+          echo "intended_commit=${INTENDED_COMMIT}"
+          echo "github_sha=${GITHUB_SHA}"
+          echo "github_ref=${GITHUB_REF:-}"
+          echo "event_name=${GITHUB_EVENT_NAME}"
+          git log -1 --format='subject=%s'
+          if [[ "${HEAD}" != "${INTENDED_COMMIT}" ]]; then
+            echo "::error::Checked-out HEAD is not the intended commit (${HEAD} != ${INTENDED_COMMIT})"
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Check Python FAST applicability
+        id: fast
+        shell: bash
+        run: |
+          if [[ ! -f pyproject.toml ]]; then
+            echo "No pyproject.toml yet; governance/configuration validation is the applicable gate."
+            exit 0
+          fi
+          echo "applicable=true" >> "$GITHUB_OUTPUT"
+
+      - name: Install Python FAST dependencies
+        if: steps.fast.outputs.applicable == 'true'
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
       - name: Test Python FAST tier
         if: steps.fast.outputs.applicable == 'true'
         shell: bash
+        env:
+          CI_SHARD: ${{ matrix.shard }}/3
         run: |
           [[ "${GITHUB_ACTIONS-}" == true ]] || exit 1
           [[ -n "${RUNNER_TEMP-}" && "$RUNNER_TEMP" == /* && -d "$RUNNER_TEMP" && ! -L "$RUNNER_TEMP" ]] || exit 1
@@ -182,7 +300,7 @@ jobs:
           exec 9<"$ledger" || exit 1
           export CI_PYTEST_FAILURE_LEDGER="$ledger"
           status=0
-          if python -m pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery" --durations=50 9<&-; then
+          if python -m pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery" --ci-shard "$CI_SHARD" --ci-shard-lane fast --durations=50 9<&-; then
             :
           else
             status=$?
@@ -232,27 +350,33 @@ jobs:
             exit "$status"
           fi
 
-      - name: Package governance candidate
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: governance-candidate-${{ github.sha }}
-          path: |
-            .ai/project-sources/00_AEOS_MASTER_INDEX.md
-            .github/CODEOWNERS
-            .github/ISSUE_TEMPLATE/bounded-change.yml
-            .github/dependabot.yml
-            .github/pull_request_template.md
-            .github/workflows/repository-checks.yml
-            AGENTS.md
-            AI_OPERATING_MANUAL.md
-            CLAUDE.md
-            CONTRIBUTING.md
-            SECURITY.md
-            docs/00_REPOSITORY_SOURCE_INDEX.md
-            docs/governance/GOVERNANCE-AUDIT-MYPA-MCV-20260730.md
-          if-no-files-found: error
-          retention-days: 7
-          include-hidden-files: true
+  validate:
+    # Required-check compatible aggregator over the split FAST gate. Does not
+    # check out or run pytest. `always()` so a failed, cancelled or skipped
+    # dependency is reported here as a failure rather than skipping the
+    # aggregator, which a required check would read as passing.
+    if: always()
+    needs:
+      - validate-static
+      - validate-fast
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Reconcile validate lanes
+        shell: bash
+        env:
+          STATIC: ${{ needs.validate-static.result }}
+          FAST: ${{ needs.validate-fast.result }}
+        run: |
+          set -euo pipefail
+          echo "validate-static=${STATIC}"
+          echo "validate-fast=${FAST}"
+          for result in "${STATIC}" "${FAST}"; do
+            if [[ "${result}" != "success" ]]; then
+              echo "::error::validate lane failed: ${result}"
+              exit 1
+            fi
+          done
 
   web-security:
     runs-on: ubuntu-latest
@@ -305,12 +429,20 @@ jobs:
           npm run typecheck
           npm run build
 
-  dependency-floor:
-    # **Forty minutes.** Both this job and `validate` run the whole FAST tier.
-    # `database-tier` is an aggregator over split lanes; each lane sizes its
-    # own timeout. A tier's budget is sized
-    # to the tier. Guard cost was cut in the same change that raised this, so
-    # the headroom is real rather than spent on arrival.
+  dependency-floor-fast:
+    # Both this job and `validate-fast` run the whole FAST selection, so both
+    # are sharded the same way, under the same operator authority (2026-10-20,
+    # "Shard FAST + migration-edge"; no coverage reduction): the same `-m`
+    # expression, the same file-level shards (`tests/ci_shard.py`), one matrix
+    # leg per shard, aggregated by `dependency-floor` below. S1 passed this job
+    # at 41 minutes unsharded; S3 adds about a thousand FAST tests, so leaving
+    # it whole would put the floor gate back at the 60-minute timeout that
+    # cancelled `validate` on PR #337.
+    #
+    # Every leg installs the floor, because every leg runs tests against it. The
+    # floor import smoke test and the floor `mypy` run once, in shard 1, and
+    # gate that leg; the matrix cannot drop shard 1 without
+    # `tests/architecture/test_ci_shards.py` failing.
     #
     # `pyproject.toml` declares a lower bound for every runtime dependency, but
     # an ordinary install resolves the newest release, so the bound is an
@@ -323,12 +455,14 @@ jobs:
     # green. `src/my_pa/contracts/v1/envelope.py` avoids that form for this
     # reason, and this job is what keeps that reason true.
     runs-on: ubuntu-latest
-    # Provisional 60-minute measurement headroom for the complete FAST gate.
-    # The prior 40-minute budget was classified CI_TIMEOUT_BUDGET_STALE,
-    # corroborated by BASELINE_PREEXISTING_CI_FAILURE. Coverage reduction is
-    # not authorized. Continued exhaustion requires separate Linux hotspot,
-    # sharding, or optimization authority; this is not a performance SLA.
-    timeout-minutes: 60
+    # Per-shard budget, as for `validate-fast`: the heaviest FAST shard is
+    # expected at about 16-19 minutes of pytest on CI (S1 ran this job whole in
+    # 41 minutes). Measurement headroom, not an SLA.
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -478,7 +612,7 @@ jobs:
           echo "applicable=true" >> "$GITHUB_OUTPUT"
 
       - name: Smoke-test contracts at the declared floor
-        if: steps.floor.outputs.applicable == 'true'
+        if: steps.floor.outputs.applicable == 'true' && matrix.shard == 1
         shell: bash
         run: |
           # Import the contracts, not just the package root: `my_pa/__init__.py`
@@ -506,7 +640,7 @@ jobs:
           "
 
       - name: Type-check at the declared floor
-        if: steps.floor.outputs.applicable == 'true'
+        if: steps.floor.outputs.applicable == 'true' && matrix.shard == 1
         shell: bash
         run: |
           # `mypy` with no path argument, deliberately: an explicit target
@@ -524,6 +658,8 @@ jobs:
       - name: Test Python FAST tier at the declared floor
         if: steps.floor.outputs.applicable == 'true'
         shell: bash
+        env:
+          CI_SHARD: ${{ matrix.shard }}/3
         run: |
           [[ "${GITHUB_ACTIONS-}" == true ]] || exit 1
           [[ -n "${RUNNER_TEMP-}" && "$RUNNER_TEMP" == /* && -d "$RUNNER_TEMP" && ! -L "$RUNNER_TEMP" ]] || exit 1
@@ -536,7 +672,7 @@ jobs:
           exec 9<"$ledger" || exit 1
           export CI_PYTEST_FAILURE_LEDGER="$ledger"
           status=0
-          if python -m pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery" --durations=50 9<&-; then
+          if python -m pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery" --ci-shard "$CI_SHARD" --ci-shard-lane fast --durations=50 9<&-; then
             :
           else
             status=$?
@@ -585,6 +721,29 @@ jobs:
             echo "::error title=pytest failed::phase=process; exitstatus=${status}"
             exit "$status"
           fi
+
+  dependency-floor:
+    # Required-check compatible aggregator over the sharded floor gate, with
+    # the same fail-closed rule as `validate` and `database-tier`.
+    if: always()
+    needs:
+      - dependency-floor-fast
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Reconcile dependency-floor shards
+        shell: bash
+        env:
+          FLOOR: ${{ needs.dependency-floor-fast.result }}
+        run: |
+          set -euo pipefail
+          echo "dependency-floor-fast=${FLOOR}"
+          for result in "${FLOOR}"; do
+            if [[ "${result}" != "success" ]]; then
+              echo "::error::dependency-floor lane failed: ${result}"
+              exit 1
+            fi
+          done
 
   database-current-head:
     # Ordinary current-schema tests. One Alembic upgrade per worker, then clones.
@@ -823,9 +982,27 @@ jobs:
           PGPASSWORD: ci_throwaway_not_a_secret
         run: python -m pytest -m migration_empty_to_head
 
-  migration-edge:
+  migration-edge-shard:
+    # `migration_edge or migration` as deterministic file-level shards
+    # (`tests/ci_shard.py`, lane `migration`), one matrix leg per shard, under
+    # the operator's 2026-10-20 sharding authority ("Shard FAST +
+    # migration-edge"; no coverage reduction). The single 60-minute job was
+    # cancelled by its timeout on PR #337 with no test failed. Each leg has its
+    # own throwaway PostgreSQL service, so legs share no database state. The
+    # partition proof for this selection runs in `validate-static`.
+    #
+    # Per-shard budget: measured locally on 2026-10-20 (S2 head, PostgreSQL
+    # 15), the five weight-balanced shards took 7.6-9.5 minutes each including
+    # collection, about 33 minutes of tests in all. The single job exceeded 60
+    # minutes on CI (PostgreSQL 17), so CI is at least about 1.7x local; at
+    # 1.7-2.2x a leg is expected at about 13-21 minutes of pytest against a
+    # 40-minute timeout. Measurement headroom, not an SLA.
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5]
     services:
       postgres:
         image: postgres:17
@@ -898,7 +1075,34 @@ jobs:
           MY_PA_DATABASE_URL: postgresql+psycopg://my_pa@localhost:5432/my_pa_ci
           MY_PA_MIGRATION_DATABASE_URL: postgresql+psycopg://my_pa@localhost:5432/my_pa_ci
           PGPASSWORD: ci_throwaway_not_a_secret
-        run: python -m pytest -m "migration_edge or migration"
+          CI_SHARD: ${{ matrix.shard }}/5
+        run: >-
+          python -m pytest -m "migration_edge or migration"
+          --ci-shard "$CI_SHARD" --ci-shard-lane migration --durations=50
+
+  migration-edge:
+    # Required-check compatible aggregator over the migration-edge shards.
+    # `database-tier` still needs this job, so it still fails closed on any
+    # shard that failed, was cancelled or was skipped.
+    if: always()
+    needs:
+      - migration-edge-shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Reconcile migration-edge shards
+        shell: bash
+        env:
+          SHARDS: ${{ needs.migration-edge-shard.result }}
+        run: |
+          set -euo pipefail
+          echo "migration-edge-shard=${SHARDS}"
+          for result in "${SHARDS}"; do
+            if [[ "${result}" != "success" ]]; then
+              echo "::error::migration-edge lane failed: ${result}"
+              exit 1
+            fi
+          done
 
   database-e2e:
     runs-on: ubuntu-latest

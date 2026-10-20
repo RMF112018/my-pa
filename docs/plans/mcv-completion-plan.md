@@ -74,9 +74,11 @@ is not a defect.
 
 ## 3. What is implemented
 
-Four hundred and four Python modules under `src/my_pa` and seven hundred and seventy-seven test modules —
+Four hundred and four Python modules under `src/my_pa` and seven hundred and seventy-eight test modules —
 
-**Current-tree remeasurement (record lineage S2 fourteen-stage workflow and web lockstep, branch `feat/lineage-s2-workflow`, worker K4, 2026-10-18):** the two commands below count 404 source modules and 777 test modules: the 404/775 below plus `tests/integration/test_issue_lineage_14step.py` and `tests/architecture/test_record_lineage_s2_scope.py`; no source module is added. This is file-inventory evidence, not a test PASS receipt.
+**Current-tree remeasurement (CI sharding, branch `feat/lineage-ci-shard`, worker K1, 2026-10-20):** the two commands below count 404 source modules and 778 test modules: the 404/777 below plus `tests/architecture/test_ci_shards.py`; no source module is added (`tests/ci_shard.py` is a pytest plugin, not a `test_*.py` module). This is file-inventory evidence, not a test PASS receipt.
+
+**Historical remeasurement (record lineage S2 fourteen-stage workflow and web lockstep, branch `feat/lineage-s2-workflow`, worker K4, 2026-10-18):** the two commands below counted 404 source modules and 777 test modules: the 404/775 below plus `tests/integration/test_issue_lineage_14step.py` and `tests/architecture/test_record_lineage_s2_scope.py`; no source module is added. This is file-inventory evidence, not a test PASS receipt.
 
 **Historical remeasurement (record lineage S2 relations and Meeting isolation, branch `feat/lineage-s2-workflow`, worker K3, 2026-10-18):** the two commands below counted 404 source modules and 775 test modules: the 404/773 below plus `tests/integration/test_issue_context_isolation.py` and `tests/integration/test_shared_issue_crossproject.py`; no source module is added. This is file-inventory evidence, not a test PASS receipt.
 

@@ -761,7 +761,8 @@ def test_closing_c1_records_no_handoff_and_creates_no_task(runtime: S2Runtime) -
     assert {name for name in before if before[name] != after[name]} == {"commitments"}
     assert flow.handoffs() == []
     page = runtime.ok(ListIssueHandoffs(issue_id=flow.ids["I"], commitment_id=flow.ids["C1"]))
-    assert page == {"handoffs": [], "next_cursor": None}
+    # S3 section 7.1 lockstep: the page also reports the cut it was read at.
+    assert page == {"handoffs": [], "next_cursor": None, "known_at": page["known_at"]}
 
 
 def test_t1_follows_up_a_closed_c1_without_reopening_it(runtime: S2Runtime) -> None:

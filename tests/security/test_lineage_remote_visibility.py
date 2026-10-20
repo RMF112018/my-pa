@@ -26,6 +26,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
+from sqlalchemy import text
 from tests.database.lineage_record_harness import NOTE_BODY, capture, capture_anchor
 from tests.database.lineage_s2_harness import close, handoff
 from tests.database.lineage_s3_harness import (
@@ -38,6 +39,8 @@ from tests.database.lineage_s3_harness import (
 )
 from tests.database.lineage_s3_read_harness import S3ReadRuntime, grant
 
+from my_pa.application import record_lineage as lineage_module
+from my_pa.application import service as service_module
 from my_pa.application.commands import (
     ListIssueHandoffs,
     ReadIssue,
@@ -46,6 +49,10 @@ from my_pa.application.commands import (
     ReadIssueTimeline,
     ReadRecordAssociationHistory,
 )
+from my_pa.application.issue_handoffs import IssueHandoffApplication
+from my_pa.infrastructure.persistence import issues as issues_persistence
+from my_pa.infrastructure.persistence.issue_handoffs import SqlIssueHandoffRepository
+from my_pa.infrastructure.persistence.record_lineage import SqlRecordLineageRepository
 
 pytestmark = pytest.mark.database
 
@@ -255,3 +262,105 @@ def test_history_reads_say_restricted_when_evidence_is_withheld(runtime: S3ReadR
         assert shown["restricted"] is False, name
         assert any(revision["evidence"] for revision in shown["revisions"]), name
         assert runtime.ok(command)["restricted"] is False, name
+
+
+# ---- FR3-F08: bounded scans --------------------------------------------------------------------
+
+
+def test_a_handoff_scan_stops_at_its_bound_without_naming_a_withheld_handoff(
+    runtime: S3ReadRuntime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Bound and batch moved down so 8 withheld handoffs exceed the bound.
+    monkeypatch.setattr(service_module, "_HANDOFF_SCAN_BATCH", 2)
+    monkeypatch.setattr(service_module, "_HANDOFF_SCAN_BOUND", 4)
+    scene = _handoff_issue(runtime, "rv-bound", "v" + "h" * 8 + "v")
+    calls: list[int] = []
+    original = IssueHandoffApplication.list_handoffs
+
+    def counted(self: IssueHandoffApplication, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        calls.append(1)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(IssueHandoffApplication, "list_handoffs", counted)
+    reader = grant("issues.handoffs.list", "issues.read", "commitments.read", "capture.read")
+    envelopes = []
+    after: str | None = None
+    requests = []
+    while True:
+        calls.clear()
+        envelope = runtime.invoke(
+            ListIssueHandoffs(issue_id=scene["issue"], page_size=1, after=after), grants=reader
+        ).to_canonical_dict()
+        requests.append(len(calls))
+        envelopes.append(envelope)
+        after = envelope["result"]["next_cursor"]
+        if after is None:
+            break
+        assert len(envelopes) < 10, "paging did not end"
+    rendered = json.dumps(envelopes)
+    for identifier in scene["hidden"]:
+        assert identifier not in rendered
+    # Bounded work: at most bound / batch repository reads per request.
+    assert max(requests) <= 2
+    first, last = envelopes[0], envelopes[-1]
+    assert [h["handoff_id"] for h in first["result"]["handoffs"]] == scene["shown"][:1]
+    assert first["result"]["next_cursor"] == scene["shown"][0]
+    assert first["disclosure"]["truncation"]["is_truncated"] is True
+    assert first["disclosure"]["truncation"]["reason"] == "visibility_scan_bound"
+    # Paging ends in a stated, non-identifying truncation.
+    assert last["result"]["handoffs"] == [] and last["result"]["restricted"] is True
+    assert last["disclosure"]["truncation"]["is_truncated"] is True
+    assert last["disclosure"]["truncation"]["next_cursor"] is None
+
+
+def test_a_membership_scan_stops_at_its_bound(
+    runtime: S3ReadRuntime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    issue = runtime.issue("rv-mbound")
+    meeting_id, _ = runtime.note("rv-mbound-m")
+    runtime.member(issue, "meeting", meeting_id, "rv-mbound-m", "discussion")
+    for number in range(6):
+        task = runtime.task(f"rv-mbound-{number}")
+        runtime.member(issue, "task", task, f"rv-mbound-{number}", "reference")
+    monkeypatch.setattr(lineage_module, "MEMBERSHIP_SCAN_BATCH", 2)
+    monkeypatch.setattr(lineage_module, "MAX_VISIBILITY_SCAN", 4)
+    calls: list[int] = []
+    original = SqlRecordLineageRepository.issue_memberships
+
+    def counted(self: SqlRecordLineageRepository, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        calls.append(1)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(SqlRecordLineageRepository, "issue_memberships", counted)
+    read = ReadIssue(issue_id=issue, include_members=True)
+    remote = runtime.ok(read, grants=grant("issues.read", "meetings.read"))
+    assert len(calls) == 2
+    assert [m["to"]["record_id"] for m in remote["memberships"]] == [meeting_id]
+    # Stopped at the bound: more may exist, and something was withheld.
+    assert (remote["memberships_truncated"], remote["restricted"]) == (True, True)
+    # Keyset batches: a local reader pages through all 7 in 4 reads.
+    calls.clear()
+    local = runtime.ok(read)
+    assert len(local["memberships"]) == 4 and local["memberships_truncated"] is True
+    monkeypatch.setattr(lineage_module, "MAX_VISIBILITY_SCAN", 400)
+    calls.clear()
+    whole = runtime.ok(read)
+    assert len(whole["memberships"]) == 7 and whole["memberships_truncated"] is False
+    assert len(calls) == 4
+
+
+def test_a_handoff_list_statement_timeout_answers_unavailable(
+    runtime: S3ReadRuntime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scene = _handoff_issue(runtime, "rv-hto", "v")
+    original = SqlIssueHandoffRepository.known_events
+
+    def slow(self: SqlIssueHandoffRepository, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        # Through the ledger's own statement runner, as its reads run.
+        issues_persistence._run(lambda: self._connection.execute(text("SELECT pg_sleep(0.5)")))
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(service_module, "LINEAGE_STATEMENT_TIMEOUT_MS", 50)
+    monkeypatch.setattr(SqlIssueHandoffRepository, "known_events", slow)
+    error = runtime.refused(ListIssueHandoffs(issue_id=scene["issue"]))
+    assert _code(error) == ("unavailable", [])

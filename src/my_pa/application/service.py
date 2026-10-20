@@ -566,7 +566,12 @@ from my_pa.application.record_events import (
     record_event_provenance,
     visible_families,
 )
-from my_pa.application.record_lineage import AssociationResult, RecordLineageApplication
+from my_pa.application.record_lineage import (
+    LINEAGE_STATEMENT_TIMEOUT_MS,
+    MAX_VISIBILITY_SCAN,
+    AssociationResult,
+    RecordLineageApplication,
+)
 from my_pa.application.relationship_memory import (
     ArchiveMemoryCommand,
     CreateMemoryCommand,
@@ -13357,6 +13362,8 @@ class ApplicationService:
         # FR3-F07: no Issue-family check -- the grant on `issues.read` that
         # `_lineage_read` required already makes the Issue family visible.
         with _translated(), _lineage_translated():
+            # FR3-F08: under the lineage read timeout (`unavailable`).
+            unit_of_work.record_lineage.bound_read_statements(LINEAGE_STATEMENT_TIMEOUT_MS)
             view = self._issues.read_issue(unit_of_work, principal_id, command.issue_id)
             restricted = False
             if view.closure is not None:
@@ -13731,11 +13738,19 @@ class ApplicationService:
         # are read at one frozen cut until `page_size + 1` visible entries are
         # found or the set ends, so neither `next_cursor` (always a shown
         # entry) nor the page sequence depends on any withheld entry.
+        # FR3-F08: batches of at least `_HANDOFF_SCAN_BATCH`, at most
+        # `_HANDOFF_SCAN_BOUND` entries read per request, and every statement
+        # under the lineage read timeout (`unavailable`). Reaching the bound
+        # answers what is shown, a cursor only from a shown entry, and an
+        # explicit truncation in the disclosure -- never a withheld identifier.
         shown: list[HandoffView] = []
         restricted = False
+        capped = False
+        scanned = 0
         known_at: datetime | None = None
-        batch = request
+        batch = replace(request, page_size=max(request.page_size + 1, _HANDOFF_SCAN_BATCH))
         with _translated(), _lineage_translated():
+            unit_of_work.record_lineage.bound_read_statements(LINEAGE_STATEMENT_TIMEOUT_MS)
             while True:
                 page = self._issue_handoffs.list_handoffs(
                     unit_of_work, principal_id, batch, authorization.at
@@ -13749,6 +13764,7 @@ class ApplicationService:
                     restricted = bool(page.handoffs)
                     break
                 for view in page.handoffs:
+                    scanned += 1
                     kept, withheld = _shown_anchors(
                         unit_of_work, principal_id, (view.evidence,), visibility
                     )
@@ -13758,9 +13774,13 @@ class ApplicationService:
                     shown.append(view.model_copy(update={"evidence": kept[0]}))
                 if len(shown) > request.page_size or page.next_cursor is None:
                     break
-                batch = replace(request, after=page.next_cursor, known_at=page.known_at)
+                if scanned >= _HANDOFF_SCAN_BOUND:
+                    capped = True
+                    break
+                batch = replace(batch, after=page.next_cursor, known_at=page.known_at)
         handoffs = tuple(shown[: request.page_size])
-        next_cursor = handoffs[-1].handoff_id if len(shown) > request.page_size else None
+        more = len(shown) > request.page_size or (capped and bool(handoffs))
+        next_cursor = handoffs[-1].handoff_id if more else None
         return _Result(
             payload={
                 "handoffs": [view.to_canonical_dict() for view in handoffs],
@@ -13769,7 +13789,17 @@ class ApplicationService:
                 # S3 section 7.1: the cut the page was read at (`T_k`).
                 "known_at": None if known_at is None else _lineage_instant(known_at),
             },
-            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_LINEAGE_TRUST_BASIS,
+                truncation=(
+                    Truncation(
+                        is_truncated=True, reason=_HANDOFF_SCAN_REASON, next_cursor=next_cursor
+                    )
+                    if capped
+                    else _NO_TRUNCATION
+                ),
+            ),
         )
 
     def _issues_work_create_task(
@@ -16513,6 +16543,14 @@ _LINEAGE_CAPABILITY_NAMES: Final[frozenset[str]] = frozenset(
 _LINEAGE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     capability for capability in Capability if capability.value in _LINEAGE_CAPABILITY_NAMES
 )
+
+
+#: S3 FR3-F08: `issues.handoffs.list` reads its visibility-filtered pages in
+#: batches of at least this many entries, and at most `MAX_VISIBILITY_SCAN`
+#: entries per request; reaching the bound is this stated truncation.
+_HANDOFF_SCAN_BATCH: Final = 100
+_HANDOFF_SCAN_BOUND: Final = MAX_VISIBILITY_SCAN
+_HANDOFF_SCAN_REASON: Final = "visibility_scan_bound"
 
 
 def _shown_anchors(

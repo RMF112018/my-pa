@@ -52,6 +52,7 @@ from sqlalchemy import (
     false,
     func,
     insert,
+    literal,
     or_,
     select,
     text,
@@ -721,23 +722,33 @@ class SqlRecordLineageRepository(RecordLineageRepository):
         return tuple(_to_head(row) for row in rows)
 
     def issue_memberships(
-        self, principal_id: str, issue_id: str, *, limit: int
+        self,
+        principal_id: str,
+        issue_id: str,
+        *,
+        limit: int,
+        after: tuple[datetime, str] | None = None,
     ) -> tuple[LinkHeadRecord, ...]:
-        rows = _bounded(
-            lambda: self._connection.execute(
-                select(*_HEAD_COLUMNS)
-                .select_from(_heads_with_links())
-                .where(
-                    _mine(record_link_heads, principal_id),
-                    record_link_heads.c.lifecycle_state == LinkLifecycleState.ACTIVE.value,
-                    record_links.c.kind == RecordLinkKind.ISSUE_MEMBERSHIP.value,
-                    record_links.c.from_family == RecordFamily.SITUATION.value,
-                    record_links.c.from_id == issue_id,
-                )
-                .order_by(record_links.c.created_at, record_links.c.link_id)
-                .limit(limit)
-            ).all()
+        statement = (
+            select(*_HEAD_COLUMNS)
+            .select_from(_heads_with_links())
+            .where(
+                _mine(record_link_heads, principal_id),
+                record_link_heads.c.lifecycle_state == LinkLifecycleState.ACTIVE.value,
+                record_links.c.kind == RecordLinkKind.ISSUE_MEMBERSHIP.value,
+                record_links.c.from_family == RecordFamily.SITUATION.value,
+                record_links.c.from_id == issue_id,
+            )
+            .order_by(record_links.c.created_at, record_links.c.link_id)
+            .limit(limit)
         )
+        if after is not None:
+            # The same key and collation as the order, so the keyset is exact.
+            statement = statement.where(
+                tuple_(record_links.c.created_at, record_links.c.link_id)
+                > tuple_(literal(after[0]), literal(after[1]))
+            )
+        rows = _bounded(lambda: self._connection.execute(statement).all())
         return tuple(_to_head(row) for row in rows)
 
     def mandatory_memberships(

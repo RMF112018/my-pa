@@ -57,6 +57,7 @@ from my_pa.contracts.ports import (
     LineageFactCut,
     LineageIdempotencyConflictError,
     LineageLinkEvidence,
+    LineageReadTimeoutError,
     LineageSourceVersion,
     LineageWriteRequestRecord,
     ProjectLinkEventRecord,
@@ -155,6 +156,10 @@ def _bound(table: Table, principal_id: str, values: dict[str, object]) -> dict[s
     return principal_bound_values(values, table, capture_context(principal_id))
 
 
+#: PostgreSQL's `query_canceled`: a statement that outran `statement_timeout`.
+_QUERY_CANCELED: Final = "57014"
+
+
 def _run[ResultT](statement: Callable[[], ResultT]) -> ResultT:
     """Run `statement`; a deadlock or serialization victim is `TransactionConflictError`.
 
@@ -162,12 +167,20 @@ def _run[ResultT](statement: Callable[[], ResultT]) -> ResultT:
     handler, so the driver error is not left in `__context__`.
     """
     conflict = False
+    timed_out = False
     try:
         return statement()
     except DBAPIError as error:
-        if not is_transaction_conflict(error):
+        if getattr(error.orig, "sqlstate", None) == _QUERY_CANCELED:
+            # S3 section 7.2 step 5 (FR3-F08): a lineage statement that outran
+            # its `statement_timeout` answers `unavailable`, never a fault.
+            timed_out = True
+        elif not is_transaction_conflict(error):
             raise
-        conflict = True
+        else:
+            conflict = True
+    if timed_out:
+        raise LineageReadTimeoutError("a lineage statement timed out")
     if conflict:
         raise TransactionConflictError("the transaction lost a race")
     raise AssertionError("unreachable")  # pragma: no cover

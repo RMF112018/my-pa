@@ -181,6 +181,8 @@ __all__ = [
     "MAX_LINEAGE_DEPTH",
     "MAX_LINEAGE_EDGES",
     "MAX_LINEAGE_NODES",
+    "MAX_VISIBILITY_SCAN",
+    "MEMBERSHIP_SCAN_BATCH",
     "AssociationAssertRequest",
     "AssociationCorrectRequest",
     "AssociationEndRequest",
@@ -233,6 +235,12 @@ MAX_LINEAGE_BYTES: Final = 512 * 1024
 #: A typed edge's serialized size as the expansion estimates it before the
 #: edge's evidence is read; the exact bound is applied to the finished answer.
 _EDGE_ESTIMATE: Final = 768
+
+#: S3 FR3-F08: the most entries one visibility-filtered list request reads
+#: (`issues.read` memberships, `issues.handoffs.list`), at the 400-edge budget's
+#: scale; and the keyset batch the membership read takes.
+MAX_VISIBILITY_SCAN: Final = 400
+MEMBERSHIP_SCAN_BATCH: Final = MAX_ISSUE_MEMBERSHIPS + 1
 
 #: S2 section 3.1: the most records one `blocks` cycle search visits. A search
 #: that would visit more before its frontier is exhausted refuses the assert
@@ -1090,21 +1098,34 @@ class RecordLineageApplication:
         """
         lineage = uow.record_lineage
         sees = visible if visible is not None else (lambda _ref: True)
-        limit = MAX_ISSUE_MEMBERSHIPS + 1
+        # FR3-F08: keyset batches, and at most `MAX_VISIBILITY_SCAN` memberships
+        # read per request; reaching the bound says `truncated` (more may exist).
+        seen: list[LinkHeadRecord] = []
+        scanned = 0
+        capped = False
+        after: tuple[datetime, str] | None = None
         while True:
-            heads = lineage.issue_memberships(principal_id, issue_id, limit=limit)
-            seen = [head for head in heads if sees(head.link.to_ref)]
-            if len(seen) > MAX_ISSUE_MEMBERSHIPS or len(heads) < limit:
+            heads = lineage.issue_memberships(
+                principal_id, issue_id, limit=MEMBERSHIP_SCAN_BATCH, after=after
+            )
+            for head in heads:
+                scanned += 1
+                if sees(head.link.to_ref):
+                    seen.append(head)
+                    if len(seen) > MAX_ISSUE_MEMBERSHIPS:
+                        break
+            if len(seen) > MAX_ISSUE_MEMBERSHIPS or len(heads) < MEMBERSHIP_SCAN_BATCH:
                 break
-            limit *= 2
+            if scanned >= MAX_VISIBILITY_SCAN:
+                capped = True
+                break
+            last = heads[-1].link
+            after = (last.created_at, last.link_id)
         shown = seen[:MAX_ISSUE_MEMBERSHIPS]
-        last = shown[-1] if shown else None
-        scanned = heads if len(seen) <= MAX_ISSUE_MEMBERSHIPS else heads[: heads.index(last) + 1]
-        withheld = len(scanned) > len(shown)
         return (
             _head_views(lineage, principal_id, shown),
-            len(seen) > MAX_ISSUE_MEMBERSHIPS,
-            withheld,
+            len(seen) > MAX_ISSUE_MEMBERSHIPS or capped,
+            scanned > len(seen),
         )
 
     def association_history(

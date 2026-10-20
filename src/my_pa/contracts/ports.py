@@ -9716,9 +9716,18 @@ class RecordLineageRepository(ABC):
 
     @abstractmethod
     def issue_memberships(
-        self, principal_id: str, issue_id: str, *, limit: int
+        self,
+        principal_id: str,
+        issue_id: str,
+        *,
+        limit: int,
+        after: tuple[datetime, str] | None = None,
     ) -> tuple[LinkHeadRecord, ...]:
-        """The Issue's active membership links, `(created_at, link_id)`, at most `limit`."""
+        """The Issue's active membership links, `(created_at, link_id)`, at most `limit`.
+
+        `after` is the `(created_at, link_id)` key of the last link already read
+        (S3 FR3-F08: the visibility-filtered read pages keyset-wise).
+        """
 
     def mandatory_memberships(
         self, principal_id: str, issue_id: str, *, share: bool

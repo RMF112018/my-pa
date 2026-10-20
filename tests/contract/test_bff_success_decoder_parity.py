@@ -1997,7 +1997,11 @@ def _issues_read() -> dict[str, Any]:
     )
     service, authorization = _lineage_service()
     service._issues = cast(Any, SimpleNamespace(read_issue=lambda *_: view))
-    unit_of_work = cast(UnitOfWork, SimpleNamespace())
+    # S3 FR3-F08 lockstep: the read sets the lineage statement timeout first.
+    unit_of_work = cast(
+        UnitOfWork,
+        SimpleNamespace(record_lineage=SimpleNamespace(bound_read_statements=lambda _ms: None)),
+    )
     command = ReadIssue(issue_id=LINEAGE_ISSUE_ID)
     return service._issues_read(unit_of_work, authorization, command).payload
 

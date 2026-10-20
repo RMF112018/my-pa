@@ -32,7 +32,13 @@ from typing import Any, Final
 import pytest
 from sqlalchemy import text
 from tests.database.lineage_issue_harness import OTHER_PRINCIPAL, PRINCIPAL
-from tests.database.lineage_s2_harness import handoff
+from tests.database.lineage_record_harness import (
+    capture,
+    legacy_anchor,
+    membership,
+    restricted_capture_version,
+)
+from tests.database.lineage_s2_harness import close, handoff
 from tests.database.lineage_s3_harness import GATEWAY, shortly_after
 from tests.database.lineage_s3_read_harness import (
     S3ReadRuntime,
@@ -50,6 +56,7 @@ from my_pa.application.commands import (
     ListIssues,
     ReadIssue,
     ReadIssueClosureReadiness,
+    ReadIssueHistory,
 )
 from my_pa.application.errors import InvalidRequestError, SafeDetail
 from my_pa.application.record_lineage import LineageReadRequest, lineage_request_document
@@ -466,3 +473,112 @@ def _keys(document: object) -> set[str]:
         for item in document:
             found |= _keys(item)
     return found
+
+
+# ---- anchors on the S1/S2 Issue reads (section 6.4; L3 corrective) ------------------------
+
+
+def test_a_handoff_whose_anchor_is_invisible_is_withheld_from_a_remote_reader(
+    runtime: S3ReadRuntime,
+) -> None:
+    issue = runtime.issue("cur-handoff-anchor")
+    commitment = runtime.commitment("cur-handoff-anchor")
+    runtime.member(issue, "commitment", commitment, "cur-handoff-anchor", "discussion")
+    created = str(runtime.commitment_view(commitment)["created_at"])
+    # The handoff's one required anchor is a Meeting note.
+    runtime.ok(
+        handoff(
+            issue,
+            commitment,
+            "counterparty",
+            shortly_after(created, 1000),
+            "cur-handoff-anchor",
+            runtime.handoff_anchor("cur-handoff-anchor-h"),
+        ),
+        surface=GATEWAY,
+    )
+    without_meetings = grant("issues.handoffs.list", "issues.read", "commitments.read")
+    hidden = runtime.ok(ListIssueHandoffs(issue_id=issue), grants=without_meetings)
+    assert (hidden["handoffs"], hidden["next_cursor"], hidden["restricted"]) == ([], None, True)
+    rendered = json.dumps(hidden)
+    assert "mtg_" not in rendered and "mnote_" not in rendered
+    named = runtime.ok(
+        ListIssueHandoffs(issue_id=issue, commitment_id=commitment), grants=without_meetings
+    )
+    assert (named["handoffs"], named["restricted"]) == ([], True)
+    shown = runtime.ok(
+        ListIssueHandoffs(issue_id=issue), grants=without_meetings | grant("meetings.read")
+    )
+    assert len(shown["handoffs"]) == 1 and shown["restricted"] is False
+    assert shown["handoffs"][0]["evidence"]["family"] == "meeting_note_version"
+
+
+def _closed_with_note_evidence(runtime: S3ReadRuntime, key: str) -> dict[str, Any]:
+    """An Issue with a Task member cited on a note, closed on a note's resolution anchor."""
+    issue = runtime.issue(key)
+    task = runtime.task(f"{key}-t")
+    meeting_id, note_id, anchor = runtime.evidence_source(f"{key}-member")
+    runtime.ok(
+        membership(issue, "task", task, f"{key}-t", role="reference", anchors=(anchor,)),
+        surface=GATEWAY,
+    )
+    _, _, closing = runtime.evidence_source(f"{key}-closure")
+    runtime.ok(close(issue, 1, key, (closing,)), surface=GATEWAY)
+    return {"issue": issue, "task": task, "meeting": meeting_id, "note": note_id}
+
+
+def test_issue_reads_withhold_invisible_closure_membership_and_history_anchors(
+    runtime: S3ReadRuntime,
+) -> None:
+    scene = _closed_with_note_evidence(runtime, "cur-issue-anchor")
+    issue = scene["issue"]
+    without_meetings = grant("issues.read", "issues.history", "tasks.read")
+    with_meetings = without_meetings | grant("meetings.read")
+    read = ReadIssue(issue_id=issue, include_members=True)
+    hidden = runtime.ok(read, grants=without_meetings)
+    assert hidden["issue"]["closure"]["evidence"] == []
+    (member,) = hidden["memberships"]
+    assert member["evidence"] == [] and hidden["restricted"] is True
+    assert "mnote_" not in json.dumps(hidden)
+    history = runtime.ok(ReadIssueHistory(issue_id=issue), grants=without_meetings)
+    assert [revision["evidence"] for revision in history["revisions"]] == [[], []]
+    assert "mnote_" not in json.dumps(history)
+    shown = runtime.ok(read, grants=with_meetings)
+    assert len(shown["issue"]["closure"]["evidence"]) == 1
+    assert len(shown["memberships"][0]["evidence"]) == 1 and shown["restricted"] is False
+    local = runtime.ok(read)
+    assert local["issue"]["closure"] == shown["issue"]["closure"]
+    shown_history = runtime.ok(ReadIssueHistory(issue_id=issue), grants=with_meetings)
+    assert [len(revision["evidence"]) for revision in shown_history["revisions"]] == [0, 1]
+
+
+def test_a_restricted_legacy_anchor_is_labelled_locally_and_withheld_remotely(
+    runtime: S3ReadRuntime,
+) -> None:
+    issue = runtime.issue("cur-legacy")
+    task = runtime.task("cur-legacy-t")
+    capture_id, version_id, _ = capture(runtime, "cur-legacy-c")
+    runtime.ok(
+        membership(
+            issue,
+            "task",
+            task,
+            "cur-legacy-t",
+            role="reference",
+            anchors=(legacy_anchor(capture_id),),
+        ),
+        surface=GATEWAY,
+    )
+    read = ReadIssue(issue_id=issue, include_members=True)
+    everything = grant("issues.read", "tasks.read", "capture.read")
+    before = runtime.ok(read)["memberships"][0]["evidence"]
+    assert [anchor["availability"] for anchor in before] == ["legacy_unversioned"]
+    assert len(runtime.ok(read, grants=everything)["memberships"][0]["evidence"]) == 1
+    # The Capture root now holds a `restricted_local` version (S1 F24's forward rule).
+    restricted_capture_version(runtime.engine, version_id)
+    local = runtime.ok(read)
+    assert [a["availability"] for a in local["memberships"][0]["evidence"]] == ["restricted"]
+    assert local["restricted"] is False
+    remote = runtime.ok(read, grants=everything)
+    assert remote["memberships"][0]["evidence"] == [] and remote["restricted"] is True
+    assert capture_id not in json.dumps(remote)

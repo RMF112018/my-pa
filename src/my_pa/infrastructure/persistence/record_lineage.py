@@ -599,7 +599,7 @@ class SqlRecordLineageRepository(RecordLineageRepository):
     # --- immutable reads --------------------------------------------------------
 
     def read_link(self, principal_id: str, link_id: str) -> RecordLinkRecord | None:
-        row = _run(
+        row = _bounded(
             lambda: self._connection.execute(
                 select(*_LINK_COLUMNS).where(
                     _mine(record_links, principal_id), record_links.c.link_id == link_id
@@ -612,7 +612,7 @@ class SqlRecordLineageRepository(RecordLineageRepository):
         self, principal_id: str, link_id: str, revision_no: int
     ) -> LinkRevisionRecord | None:
         revisions = record_link_revisions
-        row = _run(
+        row = _bounded(
             lambda: self._connection.execute(
                 select(*revisions.c).where(
                     _mine(revisions, principal_id),
@@ -625,7 +625,7 @@ class SqlRecordLineageRepository(RecordLineageRepository):
             return None
         evidence = record_link_revision_evidence
         anchors = lineage_evidence_anchors
-        cited = _run(
+        cited = _bounded(
             lambda: self._connection.execute(
                 select(
                     evidence.c.anchor_id,
@@ -683,7 +683,7 @@ class SqlRecordLineageRepository(RecordLineageRepository):
     ) -> frozenset[str]:
         if not capture_ids:
             return frozenset()
-        projections = _run(
+        projections = _bounded(
             lambda: latest_lifecycles(
                 self._connection, capture_ids, context=capture_context(principal_id)
             )
@@ -702,7 +702,7 @@ class SqlRecordLineageRepository(RecordLineageRepository):
         if not refs:
             return ()
         pairs = sorted({(ref.family.value, ref.record_id) for ref in refs})
-        rows = _run(
+        rows = _bounded(
             lambda: self._connection.execute(
                 select(*_HEAD_COLUMNS)
                 .select_from(_heads_with_links())
@@ -723,7 +723,7 @@ class SqlRecordLineageRepository(RecordLineageRepository):
     def issue_memberships(
         self, principal_id: str, issue_id: str, *, limit: int
     ) -> tuple[LinkHeadRecord, ...]:
-        rows = _run(
+        rows = _bounded(
             lambda: self._connection.execute(
                 select(*_HEAD_COLUMNS)
                 .select_from(_heads_with_links())
@@ -836,7 +836,7 @@ class SqlRecordLineageRepository(RecordLineageRepository):
         if not meeting_ids:
             return {}
         notes = meeting_note_versions
-        rows = _run(
+        rows = _bounded(
             lambda: self._connection.execute(
                 select(notes.c.note_version_id, notes.c.meeting_id, notes.c.version_number)
                 .where(_mine(notes, principal_id), notes.c.meeting_id.in_(sorted(set(meeting_ids))))
@@ -893,7 +893,7 @@ class SqlRecordLineageRepository(RecordLineageRepository):
 
     def commit_horizon(self, principal_id: str) -> datetime | None:
         sequences = lineage_commit_sequences
-        return _run(
+        return _bounded(
             lambda: self._connection.execute(
                 select(sequences.c.last_marked_at).where(_mine(sequences, principal_id))
             ).scalar_one_or_none()
@@ -901,7 +901,7 @@ class SqlRecordLineageRepository(RecordLineageRepository):
 
     def commit_watermark(self, principal_id: str, at: datetime) -> int | None:
         marks = lineage_commit_marks
-        found = _run(
+        found = _bounded(
             lambda: self._connection.execute(
                 select(func.max(marks.c.commit_seq)).where(
                     _mine(marks, principal_id), marks.c.marked_at <= at

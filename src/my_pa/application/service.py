@@ -109,7 +109,7 @@ import hashlib
 import hmac
 import json
 import sys
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, is_dataclass, replace
 from datetime import UTC, date, datetime, timedelta
@@ -610,6 +610,7 @@ from my_pa.contracts.ports import (
     KnowledgeSupersessionGuardError,
     KnowledgeTriggerNotFoundError,
     LineageIdempotencyConflictError,
+    LineageReadTimeoutError,
     ManagedByteStore,
     MeetingListPage,
     MemoryDetail,
@@ -656,6 +657,7 @@ from my_pa.contracts.v1.documents import (
 )
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
 from my_pa.contracts.v1.meetings import MeetingNoteVersionEntry, MeetingNoteVersionView
+from my_pa.contracts.v1.record_lineage import EvidenceAnchorView
 from my_pa.contracts.v1.reveal import RevealView
 from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.contracts.v1.tasks import (
@@ -734,6 +736,7 @@ from my_pa.domain.lineage.model import RecordRef
 from my_pa.domain.lineage.vocabulary import (
     LINEAGE_BACKFILL_CAPABILITIES,
     EvidenceAvailability,
+    EvidenceSourceFamily,
     RecordFamily,
     SituationKind,
 )
@@ -1406,6 +1409,10 @@ def _port_failure(error: PortError) -> ApplicationError:
     if isinstance(error, KnowledgeCheckpointKindMismatchError):
         return InvalidRequestError(SafeDetail.REPRESENTATION)
     if isinstance(error, EvidenceUnavailableError):
+        return UnavailableError()
+    # Record lineage S3 section 7.2 step 5: a bounded lineage read statement
+    # that outran its `statement_timeout` is `unavailable`, not a server fault.
+    if isinstance(error, LineageReadTimeoutError):
         return UnavailableError()
     return InternalError()
 
@@ -13346,13 +13353,10 @@ class ApplicationService:
         with _translated(), _lineage_translated():
             view = self._issues.read_issue(unit_of_work, principal_id, command.issue_id)
             restricted = False
-            if view.closure is not None and visibility.remote:
-                shown = tuple(
-                    anchor
-                    for anchor in view.closure.evidence
-                    if visibility.sees_family(ANCHOR_FAMILIES[anchor.family])
+            if view.closure is not None:
+                shown, restricted = _shown_anchors(
+                    unit_of_work, principal_id, view.closure.evidence, visibility
                 )
-                restricted = len(shown) < len(view.closure.evidence)
                 view = view.model_copy(
                     update={"closure": view.closure.model_copy(update={"evidence": shown})}
                 )
@@ -13366,17 +13370,14 @@ class ApplicationService:
                     member for member in members if visibility.sees_family(member.to_ref.family)
                 ]
                 restricted = restricted or len(visible_members) < len(members)
-                if visibility.remote:
-                    kept = []
-                    for member in visible_members:
-                        anchors = tuple(
-                            anchor
-                            for anchor in member.evidence
-                            if visibility.sees_family(ANCHOR_FAMILIES[anchor.family])
-                        )
-                        restricted = restricted or len(anchors) < len(member.evidence)
-                        kept.append(member.model_copy(update={"evidence": anchors}))
-                    visible_members = kept
+                kept = []
+                for member in visible_members:
+                    anchors, withheld = _shown_anchors(
+                        unit_of_work, principal_id, member.evidence, visibility
+                    )
+                    restricted = restricted or withheld
+                    kept.append(member.model_copy(update={"evidence": anchors}))
+                visible_members = kept
                 payload["memberships"] = [member.to_canonical_dict() for member in visible_members]
                 payload["memberships_truncated"] = truncated
             payload["restricted"] = restricted
@@ -13722,10 +13723,22 @@ class ApplicationService:
                 unit_of_work, authorization.principal.principal_id, request, authorization.at
             )
         handoffs, next_cursor, restricted = page.handoffs, page.next_cursor, False
+        # Section 6.4: a handoff's one required anchor cannot be dropped from its
+        # view, so an entry whose anchor the reader may not see is withheld whole.
+        shown_handoffs = []
+        for view in handoffs:
+            kept, withheld = _shown_anchors(
+                unit_of_work, authorization.principal.principal_id, (view.evidence,), visibility
+            )
+            if withheld or not kept:
+                restricted = True
+                continue
+            shown_handoffs.append(view.model_copy(update={"evidence": kept[0]}))
+        handoffs = tuple(shown_handoffs)
         if not visibility.sees_family(RecordFamily.COMMITMENT):
             if request.commitment_id is not None:
                 raise NotFoundError(SafeDetail.COMMITMENT_ID)
-            handoffs, next_cursor, restricted = (), None, bool(page.handoffs)
+            handoffs, next_cursor, restricted = (), None, restricted or bool(page.handoffs)
         return _Result(
             payload={
                 "handoffs": [view.to_canonical_dict() for view in handoffs],
@@ -16420,6 +16433,42 @@ _LINEAGE_CAPABILITY_NAMES: Final[frozenset[str]] = frozenset(
 _LINEAGE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     capability for capability in Capability if capability.value in _LINEAGE_CAPABILITY_NAMES
 )
+
+
+def _shown_anchors(
+    unit_of_work: UnitOfWork,
+    principal_id: str,
+    anchors: Sequence[EvidenceAnchorView],
+    visibility: LineageVisibility,
+) -> tuple[tuple[EvidenceAnchorView, ...], bool]:
+    """S3 section 6.4 over already-built anchor views: `(shown, withheld)`.
+
+    An anchor whose source family the reader may not see is withheld; a legacy
+    `capture` anchor whose root now holds a `restricted_local` version reads
+    `restricted` to a local reader and is withheld from a remote one (S1 F24's
+    forward rule).
+    """
+    legacy = {anchor.root_id for anchor in anchors if anchor.family is EvidenceSourceFamily.CAPTURE}
+    restricted_roots = (
+        unit_of_work.record_lineage.restricted_capture_roots(principal_id, legacy)
+        if legacy
+        else frozenset()
+    )
+    shown: list[EvidenceAnchorView] = []
+    withheld = False
+    for anchor in anchors:
+        is_restricted = (
+            anchor.family is EvidenceSourceFamily.CAPTURE and anchor.root_id in restricted_roots
+        )
+        if not visibility.sees_family(ANCHOR_FAMILIES[anchor.family]) or (
+            is_restricted and visibility.remote
+        ):
+            withheld = True
+            continue
+        if is_restricted:
+            anchor = anchor.model_copy(update={"availability": EvidenceAvailability.RESTRICTED})
+        shown.append(anchor)
+    return tuple(shown), withheld
 
 
 def _lineage_instant(value: datetime) -> str:

@@ -30,6 +30,7 @@ from sqlalchemy import Engine, delete, insert, select, text
 from my_pa.application import record_lineage as lineage_module
 from my_pa.application.commands import ReadRecordLineage
 from my_pa.application.errors import InvalidRequestError, SafeDetail
+from my_pa.infrastructure.persistence.record_lineage import SqlRecordLineageRepository
 from my_pa.infrastructure.persistence.tables import (
     record_link_heads,
     record_link_revision_evidence,
@@ -38,8 +39,13 @@ from my_pa.infrastructure.persistence.tables import (
 )
 from tests.database.lineage_record_harness import NOTE_BODY, note_anchor
 from tests.database.lineage_s2_harness import assertion
-from tests.database.lineage_s3_harness import GATEWAY
-from tests.database.lineage_s3_read_harness import S3ReadRuntime, node_set, union
+from tests.database.lineage_s3_harness import GATEWAY, all_s3_counts
+from tests.database.lineage_s3_read_harness import (
+    S3ReadRuntime,
+    lineage_request,
+    node_set,
+    union,
+)
 
 pytestmark = pytest.mark.database
 
@@ -276,3 +282,33 @@ def test_mixed_case_link_ids_page_in_code_point_order(
     assert reached == {("situation", issue)} | {
         ("task", by_link[link]) for link in sorted(chosen)[:4]
     }
+
+
+def test_a_statement_timeout_answers_unavailable(
+    runtime: S3ReadRuntime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """S3 section 7.2 step 5: a read statement past its timeout is `unavailable`.
+
+    Test-only seam: the timeout is lowered on the application module and the
+    incident-link read first runs one slow statement through the repository's
+    bounded runner; nothing here ships.
+    """
+    scene = _hub(runtime, "bnd-timeout", 1)
+    root = ("situation", scene["issue"])
+    original = SqlRecordLineageRepository.live_links_incident
+
+    def slow(self: SqlRecordLineageRepository, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        self._rows(text("SELECT pg_sleep(0.5)"))
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(lineage_module, "LINEAGE_STATEMENT_TIMEOUT_MS", 50)
+    monkeypatch.setattr(SqlRecordLineageRepository, "live_links_incident", slow)
+    before = all_s3_counts(runtime.engine)
+    for fields in ({}, {"page_size": 10}):
+        error = runtime.refused(lineage_request(root, fields)[0])
+        assert (error["code"], error.get("safe_details") or []) == ("unavailable", []), fields
+    assert all_s3_counts(runtime.engine) == before
+    # The default bound admits the same slow statement (the slow reads may
+    # still reach the traversal deadline, which truncates rather than fails).
+    monkeypatch.setattr(lineage_module, "LINEAGE_STATEMENT_TIMEOUT_MS", 2000)
+    assert runtime.lineage(root)["complete_state"] in {"complete", "truncated_budget"}

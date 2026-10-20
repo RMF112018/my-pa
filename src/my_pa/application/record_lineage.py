@@ -201,10 +201,12 @@ __all__ = [
     "evidence_availability",
     "insert_new_link",
     "issue_inside_set",
+    "issue_inside_set_at",
     "issues_in_context_of",
     "lineage_known_at",
     "lineage_request_document",
     "links_in_context",
+    "links_in_context_at",
     "member_native_version",
     "read_lineage_as_of",
     "require_no_blocks_cycle",
@@ -1376,6 +1378,62 @@ def links_in_context(
     return tuple(
         head
         for head in lineage.links_in_issue_context(principal_id, issue_id, inside)
+        if in_issue_context(
+            kind=head.link.kind,
+            from_ref=head.link.from_ref,
+            to_ref=head.link.to_ref,
+            context_issue_id=head.link.context_issue_id,
+            issue_id=issue_id,
+            inside=inside,
+        )
+    )
+
+
+def issue_inside_set_at(
+    lineage: RecordLineageRepository, principal_id: str, issue_id: str, cut: LineageFactCut
+) -> tuple[frozenset[RecordRef], tuple[LinkHeadRecord, ...]]:
+    """Issue *I*'s inside set at a read cut, and its memberships active then (section 3.2).
+
+    The memberships are those whose revision selected at `cut` is `active`
+    (from revisions, never from heads). A member's pair set is resolved now:
+    a note version and its Meeting are immutable, and no link known at the cut
+    can name a note version saved after it.
+    """
+    issue = RecordRef(family=RecordFamily.SITUATION, record_id=issue_id)
+    members = tuple(
+        head
+        for head in lineage.live_links_incident(principal_id, (issue,), cut)
+        if head.link.kind is RecordLinkKind.ISSUE_MEMBERSHIP
+        and head.link.from_ref == issue
+        and head.lifecycle_state is LinkLifecycleState.ACTIVE
+    )
+    inside = {issue}
+    for head in members:
+        inside.update(_pair_set(lineage, principal_id, head.link.to_ref))
+    return frozenset(inside), members
+
+
+def links_in_context_at(
+    lineage: RecordLineageRepository,
+    principal_id: str,
+    issue_id: str,
+    cut: LineageFactCut,
+    *,
+    inside: frozenset[RecordRef] | None = None,
+) -> tuple[LinkHeadRecord, ...]:
+    """Every link in Issue *I*'s context at a read cut, in any state then (section 3.2).
+
+    The as-of variant of `links_in_context`: the one `in_issue_context`
+    predicate against the inside set at the cut, over every link of either kind
+    known at the cut, each with its state then. A membership is in context only
+    from *I*. Ordered by `link_id` (code point). `inside` is the inside set at
+    `cut` when the caller already holds it.
+    """
+    if inside is None:
+        inside, _ = issue_inside_set_at(lineage, principal_id, issue_id, cut)
+    return tuple(
+        head
+        for head in lineage.links_in_issue_context_at(principal_id, issue_id, inside, cut)
         if in_issue_context(
             kind=head.link.kind,
             from_ref=head.link.from_ref,

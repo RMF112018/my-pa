@@ -360,6 +360,7 @@ __all__ = [
     "CommitmentManagementUnitOfWork",
     "ConstraintManagementRepository",
     "ConstraintManagementUnitOfWork",
+    "ConstraintRevisionSnapshot",
     "ContextPreferenceRepository",
     "ContextRunRepository",
     "ContinuityAuthoringRepository",
@@ -384,6 +385,7 @@ __all__ = [
     "IssueRecord",
     "IssueRepository",
     "IssueRevisionRecord",
+    "IssueTimelineRepository",
     "KnowledgeAssertionHistory",
     "KnowledgeAssertionPage",
     "KnowledgeAssertionRepository",
@@ -473,6 +475,8 @@ __all__ = [
     "SourceRepository",
     "TaskManagementRepository",
     "TaskManagementUnitOfWork",
+    "TimelineLinkRevision",
+    "TimelineNativeEvent",
     "TraceRepository",
     "TransactionConflictError",
     "UnitOfWork",
@@ -9610,6 +9614,15 @@ class LineageResolvedRecord:
     capture_id: str | None = None
     capture_archived: bool = False
 
+    @property
+    def parent_root_id(self) -> str | None:
+        """The native root a version lives under: a note's Meeting, a Capture version's Capture.
+
+        S3 section 7.3: the record whose Record Events a version member's
+        native timeline entries are; `None` for a record that is its own root.
+        """
+        return self.meeting_id if self.meeting_id is not None else self.capture_id
+
 
 class RecordLineageRepository(ABC):
     """Record links, their revisions, evidence and heads, and the reverse read.
@@ -9882,6 +9895,24 @@ class RecordLineageRepository(ABC):
         """
         raise NotImplementedError
 
+    def links_in_issue_context_at(
+        self,
+        principal_id: str,
+        issue_id: str,
+        inside: Collection[RecordRef],
+        cut: LineageFactCut,
+    ) -> tuple[LinkHeadRecord, ...]:
+        """`links_in_issue_context` at a read cut, in every state (S3 section 3.2).
+
+        The candidates -- context the Issue, or an endpoint in `inside` -- of
+        either kind, each with its revision selected at `cut` (from revisions,
+        never from heads; `active`, `contested` or `ended`). A link with no
+        revision known at the cut is absent. Ordered by `link_id` in code-point
+        order. The caller decides membership with `in_issue_context`. No lock.
+        Non-abstract, on the same terms.
+        """
+        raise NotImplementedError
+
     def link_revisions_known_at(
         self,
         principal_id: str,
@@ -10090,8 +10121,105 @@ class IssueHandoffRepository(ABC):
 # (section 7.3) and backfill (section 8.3) work packages'.
 
 
-class IssueTimelineRepository(ABC):  # noqa: B024 - its reads land with section 7.3
-    """The record lineage S3 Issue timeline reads (S3 contract section 7.3)."""
+@dataclass(frozen=True, slots=True)
+class TimelineLinkRevision:
+    """One link revision as a timeline entry needs it: its recorded values, no evidence."""
+
+    link_id: str
+    revision_no: int
+    revision_id: str
+    action: LinkRevisionAction
+    lifecycle_state: LinkLifecycleState
+    recorded_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class TimelineNativeEvent:
+    """One Record Event of an Issue's member, read under the feed's own predicate.
+
+    `sequence_number` orders the watermark and never leaves the application.
+    No field value of the record is carried: only the event's own columns.
+    """
+
+    event_id: str
+    sequence_number: int
+    record_family: RecordEventFamily
+    record_id: str
+    event_kind: RecordEventKind
+    record_version: int
+    changed_fields: tuple[str, ...]
+    source_capability: str
+    occurred_at: datetime
+    recorded_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ConstraintRevisionSnapshot:
+    """One immutable Constraint revision's state and its stored ball-in-court parties."""
+
+    constraint_id: str
+    version: int
+    lifecycle_state: str
+    bic: tuple[ConstraintPartyRow, ...]
+
+
+class IssueTimelineRepository(ABC):  # noqa: B024 - non-abstract reads, as RecordLineageRepository
+    """The record lineage S3 Issue timeline reads (S3 contract section 7.3).
+
+    Lock-free. The lineage-plane reads select facts known at a `LineageFactCut`
+    (section 3.4); the native-plane read applies the Record Event reader's own
+    visibility predicate, imported from the feed module. Non-abstract with
+    `NotImplementedError`, on the `RecordLineageRepository` terms, so a test
+    double implements only what it drives.
+    """
+
+    def issue_revisions(
+        self, principal_id: str, issue_id: str, cut: LineageFactCut
+    ) -> tuple[IssueRevisionRecord, ...]:
+        """Every revision of the Issue known at `cut`, by version, without evidence."""
+        raise NotImplementedError
+
+    def project_link_events(
+        self, principal_id: str, issue_id: str, cut: LineageFactCut
+    ) -> tuple[ProjectLinkEventRecord, ...]:
+        """Every Project link event of the Issue known at `cut`, by `(recorded_at, id)`."""
+        raise NotImplementedError
+
+    def link_revisions(
+        self, principal_id: str, link_ids: Collection[str], cut: LineageFactCut
+    ) -> Mapping[str, tuple[TimelineLinkRevision, ...]]:
+        """Each named link's revisions known at `cut`, by `revision_no`."""
+        raise NotImplementedError
+
+    def native_events(
+        self,
+        principal_id: str,
+        records: Collection[tuple[RecordEventFamily, str]],
+        *,
+        families: frozenset[RecordEventFamily],
+        include_restricted_memory: bool,
+        occurred_at_most: datetime | None,
+        sequence_at_most: int | None,
+    ) -> tuple[TimelineNativeEvent, ...]:
+        """The Record Events of `records` this reader may see, by sequence number.
+
+        One statement, the feed module's own `issue_member_events`, under the
+        feed's one visibility predicate (the family set and, remotely, every
+        withholding clause), bounded by
+        `occurred_at <= occurred_at_most` and `sequence_number <=
+        sequence_at_most` when given. A withheld event is simply absent.
+        """
+        raise NotImplementedError
+
+    def constraint_snapshots(
+        self, principal_id: str, versions: Collection[tuple[str, int]]
+    ) -> Mapping[tuple[str, int], ConstraintRevisionSnapshot]:
+        """Each named `(constraint_id, version)`'s stored revision snapshot, if one exists."""
+        raise NotImplementedError
+
+    def entity_labels(self, principal_id: str, entity_ids: Collection[str]) -> Mapping[str, str]:
+        """Display names of owned Entities (a party label's fallback, as `constraints.read`)."""
+        raise NotImplementedError
 
 
 class LineageBackfillRepository(ABC):  # noqa: B024 - its ledger lands with section 8.3

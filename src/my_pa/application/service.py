@@ -508,6 +508,7 @@ from my_pa.application.intelligence import (
     search_artifacts,
 )
 from my_pa.application.issue_handoffs import IssueHandoffApplication
+from my_pa.application.issue_timeline import NativeVisibility, read_issue_timeline
 from my_pa.application.issue_work import IssueWorkApplication, NativeCreated, WorkCompositeResult
 from my_pa.application.issues import IssueApplication, IssueRevisionResult, ProjectLinkResult
 from my_pa.application.knowledge_assertions import (
@@ -557,9 +558,12 @@ from my_pa.application.meetings import (
 from my_pa.application.model_gate import BoundedModelGate
 from my_pa.application.producer_origin import ProducerOriginError, ProducerOriginRegistry
 from my_pa.application.record_events import (
+    MemoryDisclosure,
     list_record_events,
+    memory_disclosure,
     record_event_page_size,
     record_event_provenance,
+    visible_families,
 )
 from my_pa.application.record_lineage import AssociationResult, RecordLineageApplication
 from my_pa.application.relationship_memory import (
@@ -13942,10 +13946,37 @@ class ApplicationService:
     def _issues_timeline(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadIssueTimeline
     ) -> _Result:
-        """`issues.timeline`: not implemented in this change (`unsupported`)."""
-        del unit_of_work, authorization, command
-        self._lineage_plane()
-        raise UnsupportedError()
+        """`issues.timeline`: one Issue's ordered lineage and native events (S3 section 7.3).
+
+        The switch and the remote grant re-check first (`_lineage_read`). The
+        native plane's Record Event visibility is re-derived here exactly as
+        `record_events.list` derives it -- the composed families a caller's
+        grants admit, and no restricted memory or capture for a remote caller
+        -- so the timeline never shows an event the feed would withhold.
+        """
+        visibility = self._lineage_read(authorization, command.capability)
+        grants = authorization.capability_grants
+        native = NativeVisibility(
+            families=visible_families(self.available_capabilities, grants),
+            include_restricted_memory=memory_disclosure(
+                grants,
+                remote_transport=authorization.transport is CaptureTransport.REMOTE_CLIENT,
+            )
+            is MemoryDisclosure.INCLUDE_RESTRICTED,
+        )
+        with _translated(), _lineage_translated():
+            view = read_issue_timeline(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.timeline_request(),
+                now=authorization.at,
+                visibility=visibility,
+                native=native,
+            )
+        return _Result(
+            payload=view.to_canonical_dict(),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+        )
 
     def _issues_handoffs_correct(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: CorrectIssueHandoff

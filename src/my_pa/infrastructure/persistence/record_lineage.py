@@ -990,6 +990,52 @@ class SqlRecordLineageRepository(RecordLineageRepository):
         )
         return tuple(_to_head(row) for row in rows)
 
+    def links_in_issue_context_at(
+        self,
+        principal_id: str,
+        issue_id: str,
+        inside: Collection[RecordRef],
+        cut: LineageFactCut,
+    ) -> tuple[LinkHeadRecord, ...]:
+        if cut.at is None:
+            return ()
+        pairs = sorted(
+            {(ref.family.value, ref.record_id) for ref in inside}
+            | {(RecordFamily.SITUATION.value, issue_id)}
+        )
+        revisions = record_link_revisions
+        selected = (
+            select(
+                *_LINK_COLUMNS,
+                revisions.c.revision_no.label("head_revision_no"),
+                revisions.c.lifecycle_state.label("head_lifecycle_state"),
+            )
+            .select_from(
+                record_links.join(
+                    revisions,
+                    and_(
+                        matching_partition_criterion(revisions, record_links),
+                        revisions.c.link_id == record_links.c.link_id,
+                    ),
+                )
+            )
+            .where(
+                _mine(record_links, principal_id),
+                or_(
+                    record_links.c.context_issue_id == issue_id,
+                    tuple_(record_links.c.from_family, record_links.c.from_id).in_(pairs),
+                    tuple_(record_links.c.to_family, record_links.c.to_id).in_(pairs),
+                ),
+                _known(revisions, cut),
+            )
+            # S3 section 3.2 at a read cut: the latest revision of each link known then.
+            .distinct(record_links.c.link_id)
+            .order_by(record_links.c.link_id, revisions.c.revision_no.desc())
+            .subquery("selected")
+        )
+        rows = self._rows(select(selected).order_by(selected.c.link_id.collate("C")))
+        return tuple(_to_head(row) for row in rows)
+
     def issues_known_at(
         self, principal_id: str, issue_ids: Collection[str], cut: LineageFactCut
     ) -> Mapping[str, LineageIssueAsOf]:

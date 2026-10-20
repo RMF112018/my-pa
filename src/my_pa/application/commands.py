@@ -54,6 +54,7 @@ from my_pa.application.issue_handoffs import (
     HandoffListRequest,
     HandoffRecordRequest,
 )
+from my_pa.application.issue_timeline import DEFAULT_TIMELINE_PAGE_SIZE, IssueTimelineRequest
 from my_pa.application.issue_work import AssociationIntent, WorkCompositeRequest
 from my_pa.application.issues import (
     IssueCloseRequest,
@@ -13830,12 +13831,21 @@ class ReadIssueTimeline:
     cursor: str | None = None
 
     def __post_init__(self) -> None:
+        self.timeline_request()
+
+    def timeline_request(self) -> IssueTimelineRequest:
+        """The parsed request this command states."""
         _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
-        _optional_instant(self.known_at, SafeDetail.KNOWN_AT)
-        _optional_instant(self.valid_at, SafeDetail.VALID_AT)
-        if self.cursor is not None and not isinstance(self.cursor, str):
-            raise InvalidRequestError(SafeDetail.CURSOR)
+        known_at = _optional_instant(self.known_at, SafeDetail.KNOWN_AT)
+        valid_at = _optional_instant(self.valid_at, SafeDetail.VALID_AT)
         _cursor_page(self.page_size, self.cursor)
+        return IssueTimelineRequest(
+            issue_id=self.issue_id,
+            known_at=known_at,
+            valid_at=valid_at,
+            page_size=DEFAULT_TIMELINE_PAGE_SIZE if self.page_size is None else self.page_size,
+            cursor=self.cursor,
+        )
 
 
 @dataclass(frozen=True, slots=True)

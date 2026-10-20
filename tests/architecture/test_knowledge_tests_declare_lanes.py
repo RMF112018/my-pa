@@ -13,7 +13,12 @@ from repository truth, and requires the two to agree:
 - each job's selection is the literal `python -m pytest -m <expression>` in
   `.github/workflows/repository-checks.yml`, parsed and evaluated here; job names
   are `repository-checks / <job id>` and the `name:` of each job in
-  `frontend-quality.yml`.
+  `frontend-quality.yml`. A matrix-sharded pytest job (`strategy.matrix.shard`,
+  `tests/ci_shard.py`) is attributed to the one aggregator that needs it, whose
+  name is the stable required check (`validate-fast` -> `validate`,
+  `dependency-floor-fast` -> `dependency-floor`, `migration-edge-shard` ->
+  `migration-edge`); the shards together run exactly that lane's selection,
+  which `tests/architecture/test_ci_shards.py` proves.
 
 It is written so later WPs need no edit: as each planned module appears on disk
 its declared markers are checked against its lane automatically, and a module
@@ -39,8 +44,10 @@ REPOSITORY_CHECKS: Final = ROOT / ".github" / "workflows" / "repository-checks.y
 FRONTEND_QUALITY: Final = ROOT / ".github" / "workflows" / "frontend-quality.yml"
 FIXTURES: Final = ROOT / "tests" / "db" / "fixtures.py"
 
-#: The repository-checks jobs that are pytest lanes (the others are web-security
-#: and the database-tier aggregator, neither of which runs pytest).
+#: The repository-checks pytest lanes, by the stable check name that gates them
+#: (the others are web-security, validate-static and the database-tier
+#: aggregator, none of which runs a pytest selection). `validate`,
+#: `dependency-floor` and `migration-edge` are aggregators over matrix shards.
 PYTEST_JOBS: Final = frozenset(
     {
         "validate",
@@ -145,8 +152,8 @@ def all_job_names() -> frozenset[str]:
 
 
 @cache
-def job_selectors() -> dict[str, str]:
-    """Job name -> its pytest `-m` expression, for every pytest lane."""
+def _raw_selectors() -> dict[str, str]:
+    """Job name -> its pytest `-m` expression, for every job that runs one."""
     selectors: dict[str, str] = {}
     for name, block in repository_jobs().items():
         flat = " ".join(block.split())
@@ -156,18 +163,54 @@ def job_selectors() -> dict[str, str]:
     return selectors
 
 
+def _needs(block: str) -> frozenset[str]:
+    prefix = next(iter(repository_jobs())).split(" / ")[0]
+    needs = re.search(r"^    needs:\s*\n((?:      - .+\n)+)", block, flags=re.MULTILINE)
+    if not needs:
+        return frozenset()
+    return frozenset(f"{prefix} / {job}" for job in re.findall(r"- (\S+)", needs.group(1)))
+
+
+@cache
+def sharded_lanes() -> dict[str, str]:
+    """Matrix-sharded pytest job -> the one aggregator (stable check) that needs it."""
+    owners: dict[str, str] = {}
+    for name, block in repository_jobs().items():
+        if name not in _raw_selectors():
+            continue
+        if not re.search(r"^      matrix:\s*\n        shard:", block, flags=re.MULTILINE):
+            continue
+        needing = [
+            other
+            for other, other_block in repository_jobs().items()
+            if other not in _raw_selectors() and name in _needs(other_block)
+        ]
+        assert len(needing) == 1, f"{name}: a sharded lane needs exactly one aggregator"
+        owners[name] = needing[0]
+    return owners
+
+
+@cache
+def job_selectors() -> dict[str, str]:
+    """Lane (stable check name) -> its pytest `-m` expression, for every pytest lane."""
+    selectors: dict[str, str] = {}
+    for name, expression in _raw_selectors().items():
+        lane = sharded_lanes().get(name, name)
+        assert lane not in selectors, f"{lane}: two pytest jobs claim one lane"
+        selectors[lane] = expression
+    return selectors
+
+
 @cache
 def aggregator_needs() -> dict[str, frozenset[str]]:
     """Jobs that run no pytest but aggregate other jobs via `needs:`."""
     found: dict[str, frozenset[str]] = {}
-    prefix = next(iter(repository_jobs())).split(" / ")[0]
     for name, block in repository_jobs().items():
-        if name in job_selectors():
+        if name in job_selectors() or name in _raw_selectors():
             continue
-        needs = re.search(r"^    needs:\s*\n((?:      - .+\n)+)", block, flags=re.MULTILINE)
+        needs = _needs(block)
         if needs:
-            jobs = re.findall(r"- (\S+)", needs.group(1))
-            found[name] = frozenset(f"{prefix} / {job}" for job in jobs)
+            found[name] = needs
     return found
 
 
@@ -319,6 +362,11 @@ def test_the_restated_auto_marking_matches_tests_db_fixtures() -> None:
 def test_the_pytest_lanes_and_aggregator_are_the_expected_jobs() -> None:
     prefix = "repository-checks"
     assert set(job_selectors()) == {f"{prefix} / {job}" for job in PYTEST_JOBS}
+    assert sharded_lanes() == {
+        f"{prefix} / validate-fast": f"{prefix} / validate",
+        f"{prefix} / dependency-floor-fast": f"{prefix} / dependency-floor",
+        f"{prefix} / migration-edge-shard": f"{prefix} / migration-edge",
+    }
     assert aggregator_needs()[f"{prefix} / database-tier"] == {
         f"{prefix} / {job}"
         for job in (

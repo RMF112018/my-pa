@@ -12,6 +12,7 @@ and the handoff chain that skips voided events. Every value is synthetic.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import unicodedata
@@ -46,6 +47,17 @@ from my_pa.domain.lineage.closure import (
     is_contest_evidence,
     link_transition,
 )
+from my_pa.domain.lineage.cursor import (
+    CursorMalformedError,
+    LineageCursor,
+    cursor_binding,
+    decode_cursor,
+    encode_cursor,
+    grant_digest,
+    instant_token,
+    parse_instant_token,
+    scope_digest,
+)
 from my_pa.domain.lineage.handoff import (
     HandoffCorrectionFact,
     can_void,
@@ -55,6 +67,7 @@ from my_pa.domain.lineage.handoff import (
 )
 from my_pa.domain.lineage.model import EvidenceAnchor, InvalidLineageValueError, RecordRef
 from my_pa.domain.lineage.vocabulary import (
+    LINEAGE_READ_GENERATION,
     LIVE_LINK_STATES,
     EvidenceRole,
     EvidenceSourceFamily,
@@ -455,3 +468,213 @@ def test_handoff_chain_skips_voided_events() -> None:
     # Never before the Commitment's creation, never after its own recording.
     assert not retime_in_order(chain, 1, created - minute, **bounds)
     assert not retime_in_order((chain[2],), 3, recorded + minute, **bounds)
+
+
+# ---- section 5: the lineage cursor (worker L3) ----------------------------------------
+
+_CURSOR_K: Final = datetime(2026, 10, 19, 12, 0, 0, 123456, tzinfo=UTC)
+_CURSOR_N: Final = datetime(2026, 10, 19, 12, 5, tzinfo=UTC)
+_CURSOR_REQUEST: Final = {
+    "origin": {"family": "task", "record_id": "tsk_cursorgolden01"},
+    "issue_id": None,
+    "max_depth": 4,
+    "known_at": None,
+    "valid_at": None,
+    "page_size": 10,
+}
+#: Golden tokens: a `records.lineage` cursor and an `issues.timeline` one (`n`
+#: null, a Record Event watermark, an array position). Recomputing them from the
+#: section 5 formula below must give these exact bytes.
+_GOLDEN_LINEAGE: Final = (
+    "eyJiIjoiMTlhODlmOTdkMDE4YzUzZDdjZGU4Yjg1ZjlmYTNmZGFkY2Y4Yzk4YmE5YWUyYTU1MjM0OGMxZjQzODg3"
+    "NmMwMiIsImsiOiIyMDI2LTEwLTE5VDEyOjAwOjAwLjEyMzQ1NloiLCJuIjoiMjAyNi0xMC0xOVQxMjowNTowMC4w"
+    "MDAwMDBaIiwicCI6ImU6aXJsX2N1cnNvcmdvbGRlbjAxIiwiciI6bnVsbCwicyI6ImUwMjUyZmY4ZjRhNjg5Yzdm"
+    "MWZhOTg5OGJjMDgwZTZlZTQzMDE3YTFjODFhY2YyYTdhMzNmMzc3YzM0MDRlY2UiLCJ0IjoiMjAyNi0xMC0xOVQx"
+    "MjowMDowMC4xMjM0NTZaIiwidiI6MX0"
+)
+_GOLDEN_TIMELINE: Final = (
+    "eyJiIjoiMTlhODlmOTdkMDE4YzUzZDdjZGU4Yjg1ZjlmYTNmZGFkY2Y4Yzk4YmE5YWUyYTU1MjM0OGMxZjQzODg3"
+    "NmMwMiIsImsiOm51bGwsIm4iOm51bGwsInAiOlsiMjAyNi0xMC0xOVQxMjowMDowMC4wMDAwMDBaIiwxLDYsInJj"
+    "ZXZfY3Vyc29yZ29sZGVuMDEiXSwiciI6InJjZXZfY3Vyc29yZ29sZGVuMDEiLCJzIjoiZTAyNTJmZjhmNGE2ODlj"
+    "N2YxZmE5ODk4YmMwODBlNmVlNDMwMTdhMWM4MWFjZjJhN2EzM2YzNzdjMzQwNGVjZSIsInQiOm51bGwsInYiOjF9"
+)
+
+
+def _sha(document: object) -> str:
+    return hashlib.sha256(
+        json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+    ).hexdigest()
+
+
+def _binding(**overrides: Any) -> str:  # noqa: ANN401
+    arguments: dict[str, Any] = {
+        "capability": "records.lineage",
+        "principal_id": "prn_lineagecursor01",
+        "request": _CURSOR_REQUEST,
+        "known_at": _CURSOR_K,
+        "lineage_valid_at": _CURSOR_K,
+        "native_cut_at": _CURSOR_N,
+        "record_event_watermark": None,
+    }
+    arguments.update(overrides)
+    return cursor_binding(**arguments)
+
+
+def _lineage_position(value: object) -> bool:
+    return isinstance(value, str) and value.startswith(("n:", "e:", "v:"))
+
+
+def test_cursor_golden_vectors_and_malformed_tokens() -> None:
+    binding = _binding()
+    # `b` is the section 5 formula, byte for byte.
+    assert binding == _sha(
+        {
+            "capability": "records.lineage",
+            "cursor_version": 1,
+            "known_at": "2026-10-19T12:00:00.123456Z",
+            "native_cut_at": "2026-10-19T12:05:00.000000Z",
+            "principal_id": "prn_lineagecursor01",
+            "record_event_watermark": None,
+            "request": _CURSOR_REQUEST,
+            "valid_at": "2026-10-19T12:00:00.123456Z",
+        }
+    )
+    scope = scope_digest(None)
+    assert scope == _sha({"generation": LINEAGE_READ_GENERATION, "grant_digest": None})
+    lineage = LineageCursor(
+        binding=binding,
+        scope=scope,
+        known_at=_CURSOR_K,
+        lineage_valid_at=_CURSOR_K,
+        native_cut_at=_CURSOR_N,
+        record_event_watermark=None,
+        position="e:irl_cursorgolden01",
+    )
+    assert encode_cursor(lineage) == _GOLDEN_LINEAGE
+    assert decode_cursor(_GOLDEN_LINEAGE, _lineage_position) == lineage
+    # A timeline cursor: no native cut, a watermark, an array position.
+    timeline = LineageCursor(
+        binding=binding,
+        scope=scope,
+        known_at=None,
+        lineage_valid_at=None,
+        native_cut_at=None,
+        record_event_watermark="rcev_cursorgolden01",
+        position=["2026-10-19T12:00:00.000000Z", 1, 6, "rcev_cursorgolden01"],
+    )
+    assert encode_cursor(timeline) == _GOLDEN_TIMELINE
+    assert decode_cursor(_GOLDEN_TIMELINE, lambda p: isinstance(p, list)) == timeline
+    assert instant_token(_CURSOR_K) == "2026-10-19T12:00:00.123456Z"
+    assert parse_instant_token("2026-10-19T12:00:00.123456Z") == _CURSOR_K
+    # Malformed: the encoding, the length, the keys, the version, a digest, an
+    # instant, the watermark and the position's shape each refuse.
+    document = json.loads(base64.urlsafe_b64decode(_GOLDEN_LINEAGE + "=="))
+
+    def token(**changes: object) -> str:
+        edited = {**document, **changes}
+        for key in [key for key, value in changes.items() if value is _DROP]:
+            del edited[key]
+        raw = json.dumps(edited, sort_keys=True, separators=(",", ":")).encode()
+        return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+    malformed: list[object] = [
+        None,
+        7,
+        "",
+        "not base64url!",
+        "x" * 2049,
+        base64.urlsafe_b64encode(b"[1,2]").decode().rstrip("="),
+        base64.urlsafe_b64encode(b"\xff\xfe").decode().rstrip("="),
+        token(v=2),
+        token(v="1"),
+        token(b="0" * 63),
+        token(s="Z" * 64),
+        token(k="2026-10-19T12:00:00Z"),
+        token(n="yesterday"),
+        token(r="rcpt_cursorgolden01"),
+        token(p="x:irl_cursorgolden01"),
+        token(p=["not", "a", "lineage", "key"]),
+        token(extra=1),
+        token(p=_DROP),
+    ]
+    for value in malformed:
+        with pytest.raises(CursorMalformedError):
+            decode_cursor(value, _lineage_position)
+    with pytest.raises(ValueError, match="2048"):
+        encode_cursor(replace_position(lineage, "e:" + "a" * 2100))
+
+
+_DROP: Final = object()
+
+
+def replace_position(cursor: LineageCursor, position: object) -> LineageCursor:
+    return LineageCursor(
+        binding=cursor.binding,
+        scope=cursor.scope,
+        known_at=cursor.known_at,
+        lineage_valid_at=cursor.lineage_valid_at,
+        native_cut_at=cursor.native_cut_at,
+        record_event_watermark=cursor.record_event_watermark,
+        position=position,
+    )
+
+
+def test_the_binding_changes_with_every_bound_field() -> None:
+    base = _binding()
+    later = _CURSOR_K + timedelta(microseconds=1)
+    variants = {
+        "capability": _binding(capability="issues.timeline"),
+        "principal": _binding(principal_id="prn_lineagecursor02"),
+        "origin": _binding(
+            request={**_CURSOR_REQUEST, "origin": {"family": "task", "record_id": "tsk_other0001"}}
+        ),
+        "issue_id": _binding(request={**_CURSOR_REQUEST, "issue_id": "sit_cursorgolden01"}),
+        "max_depth": _binding(request={**_CURSOR_REQUEST, "max_depth": 3}),
+        "requested_known_at": _binding(
+            request={**_CURSOR_REQUEST, "known_at": "2026-10-19T12:00:00.123456Z"}
+        ),
+        "requested_valid_at": _binding(
+            request={**_CURSOR_REQUEST, "valid_at": "2026-10-19T12:00:00.123456Z"}
+        ),
+        "page_size": _binding(request={**_CURSOR_REQUEST, "page_size": 11}),
+        "k": _binding(known_at=later),
+        "t": _binding(lineage_valid_at=later),
+        "n": _binding(native_cut_at=later),
+        "r": _binding(record_event_watermark="rcev_cursorgolden01"),
+    }
+    assert base not in variants.values()
+    assert len(set(variants.values())) == len(variants)
+    # Deterministic: the same inputs bind the same token.
+    assert _binding() == base
+
+
+def test_the_scope_digest_changes_with_family_grants_and_generation() -> None:
+    local = scope_digest(grant_digest(None, "records.lineage"))
+    assert grant_digest(None, "records.lineage") is None
+    called = [("records.lineage", "record_lineage_read")]
+    reads = [("issues.read", "issue_read"), ("tasks.read", "task_read")]
+    base = grant_digest([*called, *reads], "records.lineage")
+    # Order and duplicates do not matter; the set does.
+    assert base == grant_digest([*reversed(reads), *called, *called], "records.lineage")
+    # A grant outside the family reads and the called capability is not bound.
+    assert base == grant_digest(
+        [*called, *reads, ("record_events.list", "record_event_read")], "records.lineage"
+    )
+    digests = {
+        "base": base,
+        "a family read revoked": grant_digest([*called, reads[0]], "records.lineage"),
+        "a family read added": grant_digest(
+            [*called, *reads, ("meetings.read", "meeting_read")], "records.lineage"
+        ),
+        "a purpose changed": grant_digest(
+            [*called, ("issues.read", None), reads[1]], "records.lineage"
+        ),
+        "the called grant revoked": grant_digest(reads, "records.lineage"),
+        "no grant at all": grant_digest([], "records.lineage"),
+    }
+    assert len(set(digests.values())) == len(digests)
+    scopes = {scope_digest(value) for value in digests.values()} | {local}
+    assert len(scopes) == len(digests) + 1
+    # The read generation is bound too.
+    assert scope_digest(base, generation=LINEAGE_READ_GENERATION + 1) != scope_digest(base)
+    assert scope_digest(None, generation=2) != local

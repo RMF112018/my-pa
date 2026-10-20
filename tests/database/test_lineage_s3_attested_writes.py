@@ -14,13 +14,15 @@ S3 contract sections 6.1, 7.5 and 7.7 against PostgreSQL, through
   lineage on and the backfill sub-switch off, both backfill capabilities do;
 * a foreign link or handoff answers exactly like an absent one.
 
-The read rows of this crosswalk entry (`a remote lineage read without its
-grant`, `cross-principal reads`) are the read packages'. Every identity here is
+Worker L3's read rows: a remote lineage read without a grant on its own
+capability is `unsupported` (S3 section 6.1, R3-F13), and another Principal's
+reads of this Principal's subjects answer exactly like reads of absent ones. Every identity here is
 synthetic.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from typing import Any, Final
 
@@ -28,14 +30,28 @@ import pytest
 
 from my_pa.application.commands import (
     Command,
+    ListIssueHandoffs,
+    ListIssues,
+    ListMeetingNoteVersions,
     PlanLineageBackfill,
+    ReadIssue,
+    ReadIssueClosureReadiness,
     ReadIssueHistory,
     ReadIssueTimeline,
+    ReadMeetingNoteVersion,
     ReadRecordAssociationHistory,
+    ReadRecordLineage,
     ReportLineageBackfill,
 )
+from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
+from my_pa.domain.capture.submission import CaptureTransport
+from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.identity.operation import Capability, permitted_purposes
+from my_pa.domain.identity.principal import Principal, PrincipalKind
+from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.lineage.vocabulary import LINEAGE_BACKFILL_CAPABILITIES
-from tests.database.lineage_issue_harness import OTHER_PRINCIPAL, REMOTE_CLIENT
+from my_pa.domain.source.registry import issue_identifier
+from tests.database.lineage_issue_harness import OTHER_PRINCIPAL, PRINCIPAL, REMOTE_CLIENT, WHEN
 from tests.database.lineage_s2_harness import handoff
 from tests.database.lineage_s3_harness import (
     GATEWAY,
@@ -204,4 +220,142 @@ def test_every_s3_capability_answers_a_foreign_subject_like_an_absent_one(
             principal_id=OTHER_PRINCIPAL,
             surface=GATEWAY,
         ) == ("not_found", ["handoff_id"])
+    # Worker L3's reads: a foreign link's or Issue's history answers like an absent one.
+    for link in (foreign["link"], "irl_lineages3absent0001"):
+        assert _code(
+            runtime, ReadRecordAssociationHistory(link_id=link), principal_id=OTHER_PRINCIPAL
+        ) == ("not_found", ["link_id"])
+    for issue in (foreign["issue"], "sit_lineages3absent0001"):
+        assert _code(runtime, ReadIssueHistory(issue_id=issue), principal_id=OTHER_PRINCIPAL) == (
+            "not_found",
+            ["issue_id"],
+        )
     assert all_s3_counts(runtime.engine) == before
+
+
+# ---- the read rows (worker L3; S3 sections 6.1 and 6.4) -------------------------------
+
+
+def _lineage_reads(scene: dict[str, Any]) -> tuple[Command, ...]:
+    """Every S1, S2 and S3 lineage read L3 re-checks, on one scene's subjects.
+
+    `issues.timeline` is worker L4's read and joins this set with it.
+    """
+    return (
+        ReadRecordLineage(origin={"family": "situation", "record_id": scene["issue"]}),
+        ReadIssueHistory(issue_id=scene["issue"]),
+        ReadRecordAssociationHistory(link_id=scene["link"]),
+        ReadIssue(issue_id=scene["issue"], include_members=True),
+        ListIssues(),
+        ListIssueHandoffs(issue_id=scene["issue"]),
+        ReadIssueClosureReadiness(issue_id=scene["issue"]),
+        ListMeetingNoteVersions(meeting_id=scene["meeting"]),
+        ReadMeetingNoteVersion(meeting_id=scene["meeting"], note_version_id=scene["note"]),
+    )
+
+
+_FAMILY_READS: Final = (
+    "issues.read",
+    "issues.list",
+    "meetings.read",
+    "tasks.read",
+    "commitments.read",
+    "constraints.read",
+    "capture.read",
+)
+
+
+def test_a_remote_lineage_read_without_its_grant_is_unsupported(runtime: S3Runtime) -> None:
+    scene = _scene(runtime, "read-grant")
+    every_family = {(Capability(name), _purpose(name)) for name in _FAMILY_READS}
+    before = all_s3_counts(runtime.engine)
+    for command in _lineage_reads(scene):
+        name = command.capability.value
+        # Every family read, but not this capability: hidden, not forbidden.
+        without = frozenset(pair for pair in every_family if pair[0] is not command.capability)
+        error = _remote(runtime, command, without).to_canonical_dict()["error"]
+        assert (error["code"], error.get("safe_details") or []) == ("unsupported", []), name
+        # With its grant (and the family reads) the same caller is served.
+        granted = without | {(command.capability, _purpose(name))}
+        envelope = _remote(runtime, command, granted)
+        assert envelope.error is None, (name, envelope.error)
+    assert all_s3_counts(runtime.engine) == before
+
+
+def test_cross_principal_reads_disclose_nothing(runtime: S3Runtime) -> None:
+    scene = _scene(runtime, "read-cross")
+    runtime.issue("read-cross-other", principal_id=OTHER_PRINCIPAL)
+    absent = {
+        "issue": "sit_lineages3absent0001",
+        "link": "irl_lineages3absent0001",
+        "meeting": "mtg_lineages3absent0001",
+        "note": "mnote_lineages3absent0001",
+    }
+    for foreign, missing in zip(
+        _lineage_reads(scene), _lineage_reads({**scene, **absent}), strict=True
+    ):
+        name = foreign.capability.value
+        seen = _answer(runtime, foreign, principal_id=OTHER_PRINCIPAL)
+        assert seen == _answer(runtime, missing, principal_id=OTHER_PRINCIPAL), name
+        rendered = json.dumps(seen)
+        for identifier in (scene["link"], scene["meeting"], scene["note"], scene["handoff"]):
+            assert identifier not in rendered, name
+        if name == "issues.list":
+            assert seen["result"]["issues"] != [] and scene["issue"] not in rendered
+        else:
+            assert seen.get("code") == "not_found", (name, seen)
+    # A cursor of the owner's read is another Principal's binding.
+    page = runtime.ok(
+        ReadRecordLineage(origin={"family": "situation", "record_id": scene["issue"]}, page_size=10)
+    )
+    if page["next_cursor"] is not None:
+        error = runtime.refused(
+            ReadRecordLineage(
+                origin={"family": "situation", "record_id": scene["issue"]},
+                page_size=10,
+                cursor=page["next_cursor"],
+            ),
+            principal_id=OTHER_PRINCIPAL,
+        )
+        assert (error["code"], error["safe_details"]) == ("conflict", ["cursor"])
+
+
+def _answer(runtime: S3Runtime, command: Command, *, principal_id: str) -> dict[str, Any]:
+    """The answer without its request-scoped fields."""
+    envelope = runtime.invoke(command, principal_id=principal_id).to_canonical_dict()
+    error = envelope.get("error")
+    if error is not None:
+        return {"code": error["code"], "safe_details": error.get("safe_details")}
+    result = dict(envelope["result"])
+    result.pop("known_at", None)
+    result.pop("native_cut_at", None)
+    return {"result": result}
+
+
+def _purpose(name: str) -> Purpose:
+    return sorted(permitted_purposes(Capability(name)))[0]
+
+
+def _remote(
+    runtime: S3Runtime,
+    command: Command,
+    grants: frozenset[tuple[Capability, Purpose | None]],
+) -> ResponseEnvelope:
+    """`command` from an ordinary remote client holding exactly `grants`."""
+    return runtime.service.invoke(
+        RequestMetadata(
+            request_id=issue_identifier(IdKind.CORRELATION),
+            capability=command.capability,
+            purpose=_purpose(command.capability.value),
+            principal_id=PRINCIPAL,
+            requested_at=WHEN,
+        ),
+        command,
+        principal=Principal(
+            principal_id=PRINCIPAL, kind=PrincipalKind.OPERATOR, authenticated=True
+        ),
+        transport=CaptureTransport.REMOTE_CLIENT,
+        capability_grants=grants,
+        authenticated_client_id=REMOTE_CLIENT,
+        operator_surface=None,
+    )

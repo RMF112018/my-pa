@@ -7,7 +7,8 @@ golden vectors (`tests/fixtures/lineage_backfill_source_vectors.json`, which
 `tests/database/test_lineage_backfill_digest_parity.py` holds the SQL functions
 to). Worker L2's part (sections 3.1 to 3.3): the link transition table, the
 `related_context` canonical order, the one "in the Issue's context" predicate
-and the handoff chain that skips voided events. Every value is synthetic.
+and the handoff chain that skips voided events. Worker L5's part (section 8.3):
+the backfill classification table. Every value is synthetic.
 """
 
 from __future__ import annotations
@@ -22,6 +23,9 @@ from typing import Any, Final
 
 import pytest
 
+from my_pa.domain.capture.assertion import AssertionState
+from my_pa.domain.capture.lifecycle import CaptureLifecycleState
+from my_pa.domain.capture.span import OffsetBasis
 from my_pa.domain.lineage.asof import (
     COMPLETENESS_PRECEDENCE,
     CutAfterNowError,
@@ -32,8 +36,17 @@ from my_pa.domain.lineage.asof import (
     native_cut,
 )
 from my_pa.domain.lineage.backfill import (
+    ACCEPTED_ASSERTION_STATE,
+    ACTIVE_CAPTURE_ROOT_STATE,
+    EXACT_OFFSET_BASIS,
     PLAN_DOMAIN,
+    QUARANTINED_CLASSES,
     SOURCE_DOMAIN,
+    BackfillClassification,
+    CaptureVersionPin,
+    classify,
+    lineage_family_of_reference,
+    object_reference,
     origin_reference,
     plan_digest,
     reference_token,
@@ -678,3 +691,231 @@ def test_the_scope_digest_changes_with_family_grants_and_generation() -> None:
     # The read generation is bound too.
     assert scope_digest(base, generation=LINEAGE_READ_GENERATION + 1) != scope_digest(base)
     assert scope_digest(None, generation=2) != local
+
+
+# ---- section 8.3 (worker L5): the backfill classification table ----------------------
+
+_PRINCIPAL: Final = "prn_lineages3vec0001"
+_VERSION: Final = "capver_lineages3vec0001"
+_PIN: Final = CaptureVersionPin(
+    version_id=_VERSION,
+    capture_id="cap_lineages3vec0002",
+    version_number=1,
+    content_sha256="c" * 64,
+)
+
+
+def _span(span_id: str, **changes: object) -> dict[str, object]:
+    span: dict[str, object] = {
+        "derived_sha256": "d" * 64,
+        "end_offset": 4,
+        "offset_basis": "unicode_code_point_v1",
+        "processing_text_id": None,
+        "quoted_text_sha256": "d" * 64,
+        "span_id": span_id,
+        "start_offset": 0,
+        "version_id": _VERSION,
+    }
+    span.update(changes)
+    return span
+
+
+def _assertion_document(**changes: object) -> str:
+    facts: dict[str, object] = {
+        "assertion_state": "accepted",
+        "origin_ref_sha256": "e" * 64,
+        "root_lifecycle_state": "active",
+        "spans": [_span("span_lineages3cls0001")],
+        "superseded_by_assertion_id": None,
+        "version_classification": "synthetic_test",
+        "version_id": _VERSION,
+    }
+    facts.update(changes)
+    return source_document(
+        source_kind=BackfillSourceKind.WORK_ORIGIN_ASSERTION,
+        source_family="task",
+        source_id="tsk_lineages3cls0001",
+        source_ref="asrt_lineages3cls0001",
+        source_version=1,
+        facts=facts,
+    )
+
+
+def _settled(result: BackfillClassification) -> tuple[str, str, bool]:
+    return result.classification.value, result.reason.value, result.quarantined
+
+
+def test_backfill_classification_table() -> None:
+    # The native tokens the table compares are the Capture plane's own.
+    assert AssertionState.ACCEPTED.value == ACCEPTED_ASSERTION_STATE
+    assert CaptureLifecycleState.ACTIVE.value == ACTIVE_CAPTURE_ROOT_STATE
+    assert OffsetBasis.UNICODE_CODE_POINT_V1.value == EXACT_OFFSET_BASIS
+    assert {member.value for member in QUARANTINED_CLASSES} == {"unresolved", "refused"}
+
+    # Every golden-vector document classifies, by the table's row for its kind.
+    by_name = {vector["name"]: vector for vector in _vectors()["vectors"]}
+    expected = {
+        "task_follow_up": ("native_virtual_proven", "native_follow_up", False),
+        "task_follow_up_absent_task": ("unresolved", "reference_unresolvable", True),
+        "meeting_series": ("native_virtual_proven", "native_meeting_series", False),
+        "constraint_follow_up_absent": ("unresolved", "reference_unresolvable", True),
+        "project_situation": ("native_virtual_proven", "native_project_situation", False),
+        "work_origin_capture_root": ("unresolved", "no_exact_version", True),
+        "work_origin_other_non_ascii_non_nfc": ("unresolved", "origin_ref_unsupported", True),
+        "work_origin_other_asrt_prefix_not_an_identifier": (
+            "unresolved",
+            "origin_ref_unsupported",
+            True,
+        ),
+        "work_origin_other_unsupported_kind": ("unresolved", "origin_ref_unsupported", True),
+        "situation_object_ref": ("review_candidate", "object_ref_unproven", False),
+        # One span re-derives its quote, one lies outside the version: one anchor.
+        "work_origin_assertion": ("source_backed_accepted", "exact_original_span", False),
+    }
+    assert set(expected) == set(by_name)
+    for name, vector in by_name.items():
+        pin = None
+        if name == "work_origin_assertion":
+            pin = CaptureVersionPin(
+                version_id=_VERSION,
+                capture_id="cap_lineages3vec0002",
+                version_number=1,
+                content_sha256=hashlib.sha256(
+                    _vectors()["capture_content"].encode("utf-8")
+                ).hexdigest(),
+            )
+        result = classify(
+            vector["document"],
+            principal_id=_vectors()["principal_id"],
+            pin=pin,
+            owned_reference=name == "situation_object_ref",
+        )
+        assert _settled(result) == expected[name], name
+        assert (result.candidate is not None) is (name == "work_origin_assertion"), name
+    # An object ref is never accepted: unowned, or not a lineage record, it is unresolved.
+    objects = by_name["situation_object_ref"]["document"]
+    assert _settled(classify(objects, principal_id=_PRINCIPAL)) == (
+        "unresolved",
+        "reference_unresolvable",
+        True,
+    )
+    assert lineage_family_of_reference("tsk_lineages3vec0001") is RecordFamily.TASK
+    assert lineage_family_of_reference("prj_lineages3vec0001") is None
+    assert lineage_family_of_reference("free_text:" + "0" * 64) is None
+    assert object_reference("tsk_lineages3vec0001") == "tsk_lineages3vec0001"
+    assert object_reference("Free text") == "free_text:" + hashlib.sha256(b"Free text").hexdigest()
+
+    # A project link is proven only whole and inside the Principal.
+    project = json.loads(by_name["project_situation"]["document"])
+    for broken in (
+        {"link_present": False},
+        {"situation_kind": None},
+        {"project_principal_id": "prn_lineages3vec0002"},
+        {"situation_principal_id": "prn_lineages3vec0002"},
+        {"situation_kind": "issue_workstream"},
+    ):
+        document = source_document(
+            source_kind=BackfillSourceKind.PROJECT_SITUATION,
+            source_family="situation",
+            source_id=project["source_id"],
+            source_ref=project["source_ref"],
+            source_version=None,
+            facts={**project["facts"], **broken},
+        )
+        assert _settled(classify(document, principal_id=_PRINCIPAL)) == (
+            "unresolved",
+            "project_situation_inconsistent",
+            True,
+        ), broken
+    issue = source_document(
+        source_kind=BackfillSourceKind.PROJECT_SITUATION,
+        source_family="situation",
+        source_id=project["source_id"],
+        source_ref=project["source_ref"],
+        source_version=None,
+        facts={
+            **project["facts"],
+            "situation_kind": "issue_workstream",
+            "has_membership_event": True,
+        },
+    )
+    assert _settled(classify(issue, principal_id=_PRINCIPAL))[0] == "native_virtual_proven"
+
+    # The assertion row, in its order of refusals.
+    def assertion(document: str, pin: CaptureVersionPin | None = _PIN) -> tuple[str, str, bool]:
+        return _settled(classify(document, principal_id=_PRINCIPAL, pin=pin))
+
+    assert assertion(_assertion_document()) == (
+        "source_backed_accepted",
+        "exact_original_span",
+        False,
+    )
+    unresolvable = ("unresolved", "reference_unresolvable", True)
+    assert assertion(_assertion_document(assertion_state=None, version_id=None)) == unresolvable
+    assert assertion(_assertion_document(), pin=None) == unresolvable
+    assert assertion(_assertion_document(version_classification=None)) == unresolvable
+    not_current = ("refused", "assertion_not_current", True)
+    assert assertion(_assertion_document(assertion_state="superseded")) == not_current
+    assert (
+        assertion(_assertion_document(superseded_by_assertion_id="asrt_lineages3cls0002"))
+        == not_current
+    )
+    assert assertion(_assertion_document(root_lifecycle_state="archived")) == (
+        "refused",
+        "source_withdrawn",
+        True,
+    )
+    assert assertion(_assertion_document(version_classification="restricted_local")) == (
+        "refused",
+        "source_restricted",
+        True,
+    )
+    unproven = ("review_candidate", "passage_unproven", False)
+    for span in (
+        _span("span_lineages3cls0001", processing_text_id="ptext_lineages3cls0001"),
+        _span("span_lineages3cls0001", offset_basis="utf16_code_unit_v1"),
+        _span("span_lineages3cls0001", version_id="capver_lineages3cls0009"),
+        _span("span_lineages3cls0001", derived_sha256=None),
+        _span("span_lineages3cls0001", derived_sha256="f" * 64),
+    ):
+        assert assertion(_assertion_document(spans=[span])) == unproven, span
+    assert assertion(_assertion_document(spans=[])) == unproven
+    many = [_span(f"span_lineages3cls{n:04d}", start_offset=n, end_offset=n + 1) for n in range(33)]
+    assert assertion(_assertion_document(spans=many)) == unproven
+    assert assertion(_assertion_document(spans=many[:32]))[0] == "source_backed_accepted"
+
+    # The candidate: `originated_from` with one origin anchor per qualifying span,
+    # null context, and its identity the S1 normalized identity.
+    accepted = classify(_assertion_document(), principal_id=_PRINCIPAL, pin=_PIN)
+    assert accepted.candidate is not None
+    work = RecordRef(family=RecordFamily.TASK, record_id="tsk_lineages3cls0001")
+    version = RecordRef(family=RecordFamily.CAPTURE_VERSION, record_id=_VERSION)
+    assert accepted.candidate.identity == normalized_identity(
+        kind=RecordLinkKind.SEMANTIC,
+        relation_type=RelationType.ORIGINATED_FROM,
+        from_ref=work,
+        to_ref=version,
+        member_role=None,
+        context_issue_id=None,
+    )
+    candidate = json.loads(accepted.candidate.document)
+    (anchor,) = candidate.pop("evidence")
+    assert candidate == json.loads(accepted.candidate.identity)
+    assert anchor == {
+        "passage_end_cp": 4,
+        "passage_sha256": "d" * 64,
+        "passage_start_cp": 0,
+        "role": "origin",
+        "source_family": "capture_version",
+        "source_root_id": "cap_lineages3vec0002",
+        "source_sha256": "c" * 64,
+        "source_version_id": _VERSION,
+        "source_version_kind": "immutable_version",
+        "source_version_no": 1,
+    }
+    review = classify(_assertion_document(spans=[]), principal_id=_PRINCIPAL, pin=_PIN).candidate
+    assert review is not None and json.loads(review.document)["evidence"] == []
+    # Pure: the same document classifies alike, whatever the call.
+    assert classify(_assertion_document(), principal_id=_PRINCIPAL, pin=_PIN) == accepted
+    with pytest.raises(InvalidLineageValueError):
+        classify('{"schema_version": 2}', principal_id=_PRINCIPAL)

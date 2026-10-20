@@ -39,6 +39,8 @@ from my_pa.infrastructure.persistence.commitment_management import (
 from my_pa.infrastructure.persistence.constraints import SqlAlchemyConstraintManagementUnitOfWork
 from my_pa.infrastructure.persistence.tables import (
     issue_responsibility_corrections,
+    lineage_backfill_items,
+    lineage_backfill_runs,
     lineage_commit_marks,
     tasks,
 )
@@ -66,12 +68,18 @@ __all__ = [
     "statements",
 ]
 
-#: The two S3 tables the L2 writes touch, beside every S1/S2 table.
-_S3_TABLES: Final = (issue_responsibility_corrections, lineage_commit_marks)
+#: The S3 tables the L2 writes touch and the backfill ledger (L5), beside every
+#: S1/S2 table.
+_S3_TABLES: Final = (
+    issue_responsibility_corrections,
+    lineage_commit_marks,
+    lineage_backfill_runs,
+    lineage_backfill_items,
+)
 
 
 def all_s3_counts(engine: Engine) -> dict[str, int]:
-    """Row counts of every S1/S2 table, the correction table and the commit marks."""
+    """Row counts of every S1/S2 table, the correction table, the marks and the ledger."""
     counts = dict(all_s2_counts(engine))
     with engine.connect() as connection:
         for table in _S3_TABLES:

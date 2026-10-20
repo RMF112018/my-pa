@@ -14,6 +14,11 @@ S3 contract sections 6.1, 7.5 and 7.7 against PostgreSQL, through
   lineage on and the backfill sub-switch off, both backfill capabilities do;
 * a foreign link or handoff answers exactly like an absent one.
 
+Worker L5's rows (the backfill): an enumeration and a classifying batch replay
+byte for byte for the operator and are `denied` to anyone else, and another
+Principal's run answers `records.backfill.plan` and `records.backfill.report`
+exactly like an absent one.
+
 Worker L3's read rows (with worker L4's `issues.timeline` among the reads): a
 remote lineage read without a grant on its own capability is `unsupported` (S3
 section 6.1, R3-F13), and another Principal's reads of this Principal's
@@ -159,6 +164,27 @@ def test_a_replayed_s3_write_from_an_ordinary_client_is_denied_before_the_replay
         assert {k: v for k, v in replayed.items() if k != "replayed"} == {
             k: v for k, v in original.items() if k != "replayed"
         }, name
+    # Worker L5's write: an enumeration and a classifying batch, each replayed.
+    enumerated = runtime.ok(PlanLineageBackfill(idempotency_key="s3-replay-plan"), surface=GATEWAY)
+    batch = PlanLineageBackfill(
+        idempotency_key="s3-replay-plan-batch",
+        run_id=enumerated["run"]["run_id"],
+        expected_checkpoint=0,
+        batch_size=2,
+    )
+    classified = runtime.ok(batch, surface=GATEWAY)
+    for command, original in (
+        (PlanLineageBackfill(idempotency_key="s3-replay-plan"), enumerated),
+        (batch, classified),
+    ):
+        assert original["replayed"] is False
+        assert _code(runtime, command, remote_client=REMOTE_CLIENT)[0] == "denied"
+        assert _code(runtime, command)[0] == "denied"
+        replayed = runtime.ok(command, surface=GATEWAY)
+        assert replayed["replayed"] is True
+        assert {k: v for k, v in replayed.items() if k != "replayed"} == {
+            k: v for k, v in original.items() if k != "replayed"
+        }
 
 
 def test_switch_off_answers_unsupported_for_every_s3_capability(disposable_database: str) -> None:
@@ -236,6 +262,28 @@ def test_every_s3_capability_answers_a_foreign_subject_like_an_absent_one(
             "not_found",
             ["issue_id"],
         )
+    # Worker L5's backfill: another Principal's run answers exactly like an absent one.
+    run_id = runtime.ok(PlanLineageBackfill(idempotency_key="s3-foreign-plan"), surface=GATEWAY)[
+        "run"
+    ]["run_id"]
+    before = all_s3_counts(runtime.engine)
+    for subject in (run_id, _ABSENT_RUN):
+        assert _code(
+            runtime,
+            PlanLineageBackfill(
+                idempotency_key=f"s3-foreign-plan-{subject}",
+                run_id=subject,
+                expected_checkpoint=0,
+            ),
+            principal_id=OTHER_PRINCIPAL,
+            surface=GATEWAY,
+        ) == ("not_found", ["run_id"])
+        assert _code(
+            runtime,
+            ReportLineageBackfill(run_id=subject),
+            principal_id=OTHER_PRINCIPAL,
+            surface=GATEWAY,
+        ) == ("not_found", ["run_id"])
     assert all_s3_counts(runtime.engine) == before
 
 

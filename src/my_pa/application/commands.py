@@ -66,6 +66,11 @@ from my_pa.application.issues import (
     ProjectLinkAddRequest,
     ProjectLinkEndRequest,
 )
+from my_pa.application.lineage_backfill import (
+    DEFAULT_BACKFILL_BATCH,
+    BackfillPlanRequest,
+    BackfillReportRequest,
+)
 from my_pa.application.lineage_endpoints import (
     EvidenceAnchorInput,
     parse_evidence_anchor,
@@ -13589,7 +13594,7 @@ MIN_LINEAGE_PAGE_SIZE: Final = 10
 MAX_LINEAGE_CURSOR_CHARACTERS: Final = 2048
 _LINEAGE_CURSOR: Final = re.compile(r"[A-Za-z0-9_-]{1,2048}")
 #: S3 section 8.3: a plan classifies 1..500 items per call, 200 by default.
-DEFAULT_BACKFILL_BATCH_SIZE: Final = 200
+DEFAULT_BACKFILL_BATCH_SIZE: Final = DEFAULT_BACKFILL_BATCH
 MAX_BACKFILL_BATCH_SIZE: Final = 500
 
 _LINEAGE_CURSOR_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
@@ -13975,6 +13980,14 @@ class PlanLineageBackfill:
             raise InvalidRequestError(SafeDetail.BATCH_SIZE)
         _lineage_key(_idempotency_key(self.idempotency_key))
 
+    def plan_request(self) -> BackfillPlanRequest:
+        """The parsed request this command states."""
+        return BackfillPlanRequest(
+            run_id=self.run_id,
+            expected_checkpoint=self.expected_checkpoint,
+            batch_size=self.batch_size,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class ReportLineageBackfill:
@@ -14007,6 +14020,17 @@ class ReportLineageBackfill:
             member.value for member in BackfillClass
         }:
             raise invalid_choice(SafeDetail.CLASSIFICATION, [c.value for c in BackfillClass])
+
+    def report_request(self) -> BackfillReportRequest:
+        """The parsed request this command states."""
+        return BackfillReportRequest(
+            run_id=self.run_id,
+            page_size=DEFAULT_ISSUE_PAGE_SIZE if self.page_size is None else self.page_size,
+            after=self.after,
+            classification=(
+                None if self.classification is None else BackfillClass(self.classification)
+            ),
+        )
 
 
 type Command = (

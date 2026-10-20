@@ -18,34 +18,71 @@ item; this module states the byte encodings both halves of that agree on:
   `source_document` here is their mirror, held to them by shared golden vectors
   (`tests/fixtures/lineage_backfill_source_vectors.json`).
 * **the plan digest** (section 5) over a classified run's items.
+* **the classification table** (section 8.3, `classify`): one item's class,
+  reason and candidate link, a pure function of its stored source document --
+  plus, for a `work_origin_assertion` candidate, the cited Capture version's
+  immutable identity (`CaptureVersionPin`: root, number, content digest, which
+  an S1 anchor object needs and the document does not carry), and for a
+  `situation_object_ref`, whether the referenced record is owned by the
+  Principal (`owned_reference`; the frozen fact set carries only the
+  Situation's `object_refs` digest).
 
 Every value in a source document is an identifier, a closed token, an integer,
 a boolean or a hex digest, so the document is ASCII and NFC is the identity:
-`source_document` refuses anything else rather than normalize it.
-
-The classification table (section 8.3) is the backfill package's, not this
-module's: this module classifies nothing.
+`source_document` refuses anything else rather than normalize it. No item is
+ever derived from words, names, a shared Project, Series, participant or date
+(OD-05): the table reads only the closed facts of `SOURCE_FACT_KEYS`.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
 
+from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind, InvalidIdentifierError, parse_identifier
-from my_pa.domain.lineage.canonical import canonical_json
-from my_pa.domain.lineage.model import InvalidLineageValueError
-from my_pa.domain.lineage_backfill.vocabulary import BackfillSourceKind
+from my_pa.domain.lineage.canonical import (
+    anchor_object,
+    canonical_evidence,
+    canonical_json,
+    normalized_identity,
+)
+from my_pa.domain.lineage.model import EvidenceAnchor, InvalidLineageValueError, RecordRef
+from my_pa.domain.lineage.vocabulary import (
+    RECORD_FAMILY_ID_KINDS,
+    EvidenceRole,
+    EvidenceSourceFamily,
+    RecordFamily,
+    RecordLinkKind,
+    RelationType,
+    SituationKind,
+    SourceVersionKind,
+)
+from my_pa.domain.lineage_backfill.vocabulary import (
+    BackfillClass,
+    BackfillReason,
+    BackfillSourceKind,
+)
 
 __all__ = [
+    "MAX_CANDIDATE_SPANS",
     "PLAN_DOMAIN",
+    "QUARANTINED_CLASSES",
     "SOURCE_DOMAIN",
     "SOURCE_FACT_KEYS",
     "SOURCE_FAMILIES",
     "SPAN_FACT_KEYS",
+    "BackfillCandidate",
+    "BackfillClassification",
+    "CaptureVersionPin",
+    "classify",
+    "lineage_family_of_reference",
+    "object_reference",
     "origin_reference",
     "plan_digest",
     "reference_token",
@@ -186,6 +223,21 @@ def origin_reference(reference: str) -> tuple[BackfillSourceKind, str]:
     return BackfillSourceKind.WORK_ORIGIN_OTHER, reference_token(reference)
 
 
+def object_reference(reference: str) -> str:
+    """The `source_ref` of one element of a context Situation's `object_refs` (section 4.2).
+
+    An identifier of any `IdKind` is stored as itself (its kind decides the
+    classification); anything else as `free_text:<sha256 of its exact UTF-8
+    text>`, never the text. A non-string JSON element is tokenized from its
+    JSON text.
+    """
+    try:
+        parse_identifier(reference)
+    except InvalidIdentifierError:
+        return f"free_text:{_sha256_hex(reference)}"
+    return reference
+
+
 def _ascii(value: str, what: str) -> str:
     if not value.isascii():
         raise InvalidLineageValueError(f"a backfill source document holds ASCII only ({what})")
@@ -297,3 +349,254 @@ def plan_digest(
         }
     )
     return hashlib.sha256(PLAN_DOMAIN + document.encode("utf-8")).hexdigest()
+
+
+# --- the classification table (section 8.3) ---------------------------------------
+
+#: At most this many cited spans make one candidate's evidence set (S1 admission).
+MAX_CANDIDATE_SPANS: Final = 32
+#: The classes whose items are quarantined (section 8.3).
+QUARANTINED_CLASSES: Final = frozenset({BackfillClass.UNRESOLVED, BackfillClass.REFUSED})
+
+#: The native tokens the classification compares against, spelled here rather
+#: than imported from the Capture plane (a pure lineage module); the unit test
+#: holds each to its enum.
+ACCEPTED_ASSERTION_STATE: Final = "accepted"
+ACTIVE_CAPTURE_ROOT_STATE: Final = "active"
+EXACT_OFFSET_BASIS: Final = "unicode_code_point_v1"
+#: A Capture version an S1 link may name (`application.lineage_endpoints`).
+_LINKABLE_CLASSIFICATIONS: Final = frozenset(
+    {Classification.SYNTHETIC_TEST.value, Classification.PRIVATE_LOCAL.value}
+)
+#: The `IdKind` of each lineage record family, inverted: an object ref of one of
+#: these kinds names a lineage record.
+_LINEAGE_FAMILY_OF_KIND: Final[Mapping[IdKind, RecordFamily]] = MappingProxyType(
+    {kind: family for family, kind in RECORD_FAMILY_ID_KINDS.items()}
+)
+_WORK_FAMILIES: Final[Mapping[str, RecordFamily]] = MappingProxyType(
+    {"task": RecordFamily.TASK, "commitment": RecordFamily.COMMITMENT}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureVersionPin:
+    """A cited Capture version's immutable identity: its root, number and content digest."""
+
+    version_id: str
+    capture_id: str
+    version_number: int
+    content_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class BackfillCandidate:
+    """The link an item would materialize: endpoints, relation, and its anchor objects.
+
+    `identity` is its S1 section 5.3 `normalized_identity` (null context: the
+    backfill names no Issue); `document` the canonical JSON the ledger stores.
+    """
+
+    from_ref: RecordRef
+    relation_type: RelationType
+    to_ref: RecordRef
+    identity: str
+    document: str
+
+
+@dataclass(frozen=True, slots=True)
+class BackfillClassification:
+    """One item's settled class, reason and candidate (section 8.3)."""
+
+    classification: BackfillClass
+    reason: BackfillReason
+    candidate: BackfillCandidate | None = None
+
+    @property
+    def quarantined(self) -> bool:
+        """`unresolved` and `refused` items are quarantined."""
+        return self.classification in QUARANTINED_CLASSES
+
+
+def _settled(classification: BackfillClass, reason: BackfillReason) -> BackfillClassification:
+    return BackfillClassification(classification=classification, reason=reason)
+
+
+def _unresolvable() -> BackfillClassification:
+    return _settled(BackfillClass.UNRESOLVED, BackfillReason.REFERENCE_UNRESOLVABLE)
+
+
+def _origin_candidate(
+    work: RecordRef, pin: CaptureVersionPin, spans: Sequence[Mapping[str, object]]
+) -> BackfillCandidate:
+    """`work originated_from capture_version`, one `origin` anchor per qualifying span."""
+    to_ref = RecordRef(family=RecordFamily.CAPTURE_VERSION, record_id=pin.version_id)
+    anchors = canonical_evidence(
+        {
+            EvidenceAnchor(
+                source_family=EvidenceSourceFamily.CAPTURE_VERSION,
+                source_root_id=pin.capture_id,
+                source_version_kind=SourceVersionKind.IMMUTABLE_VERSION,
+                source_version_id=pin.version_id,
+                source_version_no=pin.version_number,
+                source_sha256=pin.content_sha256,
+                passage_start_cp=int(str(span["start_offset"])),
+                passage_end_cp=int(str(span["end_offset"])),
+                passage_sha256=str(span["quoted_text_sha256"]),
+                role=EvidenceRole.ORIGIN,
+            )
+            for span in spans
+        }
+    )
+    identity = normalized_identity(
+        kind=RecordLinkKind.SEMANTIC,
+        relation_type=RelationType.ORIGINATED_FROM,
+        from_ref=work,
+        to_ref=to_ref,
+        member_role=None,
+        context_issue_id=None,
+    )
+    document = canonical_json(
+        {**json.loads(identity), "evidence": [anchor_object(anchor) for anchor in anchors]}
+    )
+    return BackfillCandidate(
+        from_ref=work,
+        relation_type=RelationType.ORIGINATED_FROM,
+        to_ref=to_ref,
+        identity=identity,
+        document=document,
+    )
+
+
+def _qualifies(span: Mapping[str, object], version_id: object) -> bool:
+    """A cited span proves its passage: original text, code points, the exact version."""
+    start, end = span["start_offset"], span["end_offset"]
+    return (
+        span["processing_text_id"] is None
+        and span["offset_basis"] == EXACT_OFFSET_BASIS
+        and span["version_id"] == version_id
+        and isinstance(start, int)
+        and isinstance(end, int)
+        and not isinstance(start, bool)
+        and not isinstance(end, bool)
+        and 0 <= start < end
+        and span["derived_sha256"] is not None
+        and span["derived_sha256"] == span["quoted_text_sha256"]
+    )
+
+
+def _assertion(
+    source: Mapping[str, object], facts: Mapping[str, object], pin: CaptureVersionPin | None
+) -> BackfillClassification:
+    version_id = facts["version_id"]
+    if facts["assertion_state"] is None or version_id is None:
+        return _unresolvable()
+    if (
+        facts["assertion_state"] != ACCEPTED_ASSERTION_STATE
+        or facts["superseded_by_assertion_id"] is not None
+    ):
+        return _settled(BackfillClass.REFUSED, BackfillReason.ASSERTION_NOT_CURRENT)
+    if facts["version_classification"] is None or pin is None or pin.version_id != version_id:
+        return _unresolvable()
+    if facts["root_lifecycle_state"] != ACTIVE_CAPTURE_ROOT_STATE:
+        return _settled(BackfillClass.REFUSED, BackfillReason.SOURCE_WITHDRAWN)
+    if facts["version_classification"] not in _LINKABLE_CLASSIFICATIONS:
+        return _settled(BackfillClass.REFUSED, BackfillReason.SOURCE_RESTRICTED)
+    spans = facts["spans"]
+    if not isinstance(spans, list):
+        raise InvalidLineageValueError("a backfill span fact is a list")
+    qualifying = [span for span in spans if _qualifies(span, version_id)]
+    work = RecordRef(
+        family=_WORK_FAMILIES[str(source["source_family"])], record_id=str(source["source_id"])
+    )
+    if 1 <= len(qualifying) <= MAX_CANDIDATE_SPANS:
+        return BackfillClassification(
+            classification=BackfillClass.SOURCE_BACKED_ACCEPTED,
+            reason=BackfillReason.EXACT_ORIGINAL_SPAN,
+            candidate=_origin_candidate(work, pin, qualifying),
+        )
+    # The version is exact, the passage is not proven: the link is derivable and
+    # carries no anchor (the operator's review asserts with evidence).
+    return BackfillClassification(
+        classification=BackfillClass.REVIEW_CANDIDATE,
+        reason=BackfillReason.PASSAGE_UNPROVEN,
+        candidate=_origin_candidate(work, pin, ()),
+    )
+
+
+def _project_situation(principal_id: str, facts: Mapping[str, object]) -> BackfillClassification:
+    kind = facts["situation_kind"]
+    consistent = (
+        kind is not None
+        and facts["situation_principal_id"] == principal_id
+        and facts["project_principal_id"] == principal_id
+        and facts["link_present"] is True
+        and (kind != SituationKind.ISSUE_WORKSTREAM.value or facts["has_membership_event"] is True)
+    )
+    if consistent:
+        return _settled(
+            BackfillClass.NATIVE_VIRTUAL_PROVEN, BackfillReason.NATIVE_PROJECT_SITUATION
+        )
+    return _settled(BackfillClass.UNRESOLVED, BackfillReason.PROJECT_SITUATION_INCONSISTENT)
+
+
+def lineage_family_of_reference(reference: str) -> RecordFamily | None:
+    """The lineage family an object ref's identifier names, or `None`."""
+    try:
+        kind, _ = parse_identifier(reference)
+    except InvalidIdentifierError:
+        return None
+    return _LINEAGE_FAMILY_OF_KIND.get(kind)
+
+
+def classify(
+    document: str,
+    *,
+    principal_id: str,
+    pin: CaptureVersionPin | None = None,
+    owned_reference: bool = False,
+) -> BackfillClassification:
+    """Section 8.3's classification of one unchanged source, from its stored document.
+
+    `document` is the source document the database rebuilt for the item (its
+    digest already equal to the stored one; a changed source is the caller's
+    `unresolved` / `source_changed`). `pin` is the cited Capture version of a
+    `work_origin_assertion`; `owned_reference` says whether a
+    `situation_object_ref` names a record the Principal owns. Nothing else is
+    read: no words, names, Projects, Series, participants or dates.
+    """
+    source = json.loads(document)
+    if not isinstance(source, dict) or source.get("schema_version") != _SCHEMA_VERSION:
+        raise InvalidLineageValueError("a backfill source document is a v1 object")
+    kind = BackfillSourceKind(source["source_kind"])
+    facts = source["facts"]
+    if not isinstance(facts, dict) or set(facts) != SOURCE_FACT_KEYS[kind]:
+        raise InvalidLineageValueError("a backfill source carries exactly its kind's facts")
+    if kind is BackfillSourceKind.TASK_FOLLOW_UP:
+        if facts["commitment_id"] is None:
+            return _unresolvable()
+        return _settled(BackfillClass.NATIVE_VIRTUAL_PROVEN, BackfillReason.NATIVE_FOLLOW_UP)
+    if kind is BackfillSourceKind.CONSTRAINT_FOLLOW_UP:
+        if facts["relationship_present"] is not True:
+            return _unresolvable()
+        return _settled(
+            BackfillClass.NATIVE_VIRTUAL_PROVEN, BackfillReason.NATIVE_CONSTRAINT_FOLLOW_UP
+        )
+    if kind is BackfillSourceKind.MEETING_SERIES:
+        if facts["series_id"] is None:
+            return _unresolvable()
+        return _settled(BackfillClass.NATIVE_VIRTUAL_PROVEN, BackfillReason.NATIVE_MEETING_SERIES)
+    if kind is BackfillSourceKind.PROJECT_SITUATION:
+        return _project_situation(principal_id, facts)
+    if kind is BackfillSourceKind.WORK_ORIGIN_ASSERTION:
+        return _assertion(source, facts, pin)
+    if kind is BackfillSourceKind.WORK_ORIGIN_CAPTURE_ROOT:
+        # A root pins no version (S1 section 3.1).
+        return _settled(BackfillClass.UNRESOLVED, BackfillReason.NO_EXACT_VERSION)
+    if kind is BackfillSourceKind.WORK_ORIGIN_OTHER:
+        # Counted, never interpreted.
+        return _settled(BackfillClass.UNRESOLVED, BackfillReason.ORIGIN_REF_UNSUPPORTED)
+    # situation_object_ref: an owned lineage record is a review candidate, never accepted.
+    reference = str(source["source_ref"])
+    if lineage_family_of_reference(reference) is not None and owned_reference:
+        return _settled(BackfillClass.REVIEW_CANDIDATE, BackfillReason.OBJECT_REF_UNPROVEN)
+    return _unresolvable()

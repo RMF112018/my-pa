@@ -543,6 +543,7 @@ from my_pa.application.knowledge_assertions import submission_view as knowledge_
 from my_pa.application.knowledge_assertions import submit_request as knowledge_submit_request
 from my_pa.application.knowledge_assertions import submit_view as knowledge_submit_view
 from my_pa.application.lineage_authority import attested_lineage_authority, lineage_authority
+from my_pa.application.lineage_backfill import plan_backfill, report_backfill
 from my_pa.application.lineage_visibility import (
     ANCHOR_FAMILIES,
     LineageVisibility,
@@ -14005,12 +14006,28 @@ class ApplicationService:
     def _records_backfill_plan(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: PlanLineageBackfill
     ) -> _Result:
-        """`records.backfill.plan`: not implemented in this change (`unsupported`)."""
-        del unit_of_work, command
+        """`records.backfill.plan`: enumerate a dry run, or classify its next batch.
+
+        Both switches first (section 7.7), then the attested authority (section
+        6.1: `denied` unless local operator, before any row and before the
+        replay lookup). It writes ledger rows only: no link, fact or mark.
+        """
         self._lineage_plane()
         self._lineage_backfill_plane()
-        attested_lineage_authority(authorization)
-        raise UnsupportedError()
+        authority = attested_lineage_authority(authorization)
+        with _translated(), _lineage_translated():
+            written = plan_backfill(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.plan_request(),
+                command.idempotency_key,
+                authority,
+                authorization.at,
+            )
+        return _Result(
+            payload=written.to_payload(),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+        )
 
     def _records_backfill_report(
         self,
@@ -14018,11 +14035,22 @@ class ApplicationService:
         authorization: Authorization,
         command: ReportLineageBackfill,
     ) -> _Result:
-        """`records.backfill.report`: not implemented in this change (`unsupported`)."""
-        del unit_of_work, authorization, command
+        """`records.backfill.report`: one run's census, counts and items (section 8.3).
+
+        Both switches first, then the local-operator check: an ordinary or
+        remote caller is `denied` (section 7.5), whatever grants it holds.
+        """
         self._lineage_plane()
         self._lineage_backfill_plane()
-        raise UnsupportedError()
+        attested_lineage_authority(authorization)
+        with _translated(), _lineage_translated():
+            report = report_backfill(
+                unit_of_work, authorization.principal.principal_id, command.report_request()
+            )
+        return _Result(
+            payload=report.to_payload(),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+        )
 
     def _records_lineage(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadRecordLineage

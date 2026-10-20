@@ -112,6 +112,7 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesSemanticProposal,
     GoodNotesSemanticReviewCase,
 )
+from my_pa.domain.lineage.backfill import CaptureVersionPin
 from my_pa.domain.lineage.model import EvidenceAnchor, RecordRef
 from my_pa.domain.lineage.vocabulary import (
     AcceptanceBasis,
@@ -344,6 +345,13 @@ __all__ = [
     "AuditSink",
     "AuthoringConflictError",
     "AuthoringReceipt",
+    "BackfillCountRow",
+    "BackfillExistingLink",
+    "BackfillItemRecord",
+    "BackfillLinkEndpoints",
+    "BackfillPendingSource",
+    "BackfillRunRecord",
+    "BackfillSettlement",
     "CanvasWorkspaceConflictError",
     "CanvasWorkspaceRecord",
     "CanvasWorkspaceRepository",
@@ -418,6 +426,7 @@ __all__ = [
     "KnowledgeSubmitRequest",
     "KnowledgeSupersessionGuardError",
     "KnowledgeTriggerNotFoundError",
+    "LineageBackfillRepository",
     "LineageEndpoint",
     "LineageFactCut",
     "LineageIdempotencyConflictError",
@@ -10222,5 +10231,206 @@ class IssueTimelineRepository(ABC):  # noqa: B024 - non-abstract reads, as Recor
         raise NotImplementedError
 
 
-class LineageBackfillRepository(ABC):  # noqa: B024 - its ledger lands with section 8.3
-    """The record lineage S3 backfill dry-run ledger (S3 contract section 8.3)."""
+@dataclass(frozen=True, slots=True)
+class BackfillRunRecord:
+    """One `lineage_backfill_runs` row (S3 contract section 4.2). `census` is its stored object."""
+
+    run_id: str
+    state: str
+    validator_version: int
+    commit_seq_cutoff: int
+    source_cutoff_at: datetime
+    population_count: int
+    classified_count: int
+    plan_digest: str | None
+    census: Mapping[str, object]
+    created_at: datetime
+    classified_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class BackfillItemRecord:
+    """One `lineage_backfill_items` row, as the plan's batch and the report show it.
+
+    `candidate` is the stored canonical JSON (the view derives its relation
+    from it); every settled column is `None` while the item is unclassified.
+    """
+
+    item_no: int
+    source_kind: str
+    source_family: str
+    source_id: str
+    source_ref: str
+    source_version: int | None
+    source_digest: str
+    classification: str | None
+    reason: str | None
+    candidate_identity: str | None
+    candidate: str | None
+    existing_link_id: str | None
+    existing_link_state: str | None
+    quarantined: bool
+    classified_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class BackfillPendingSource:
+    """One unclassified item with its source rebuilt now (S3 contract section 8.3).
+
+    `current_digest` is `knowledge.lineage_backfill_source_digest` recomputed
+    for the item; `current_document` the matching source document.
+    """
+
+    item: BackfillItemRecord
+    current_digest: str
+    current_document: str
+
+
+@dataclass(frozen=True, slots=True)
+class BackfillSettlement:
+    """What one classified item is settled with, once."""
+
+    item_no: int
+    classification: str
+    reason: str
+    candidate_identity: str | None
+    candidate: str | None
+    existing_link_id: str | None
+    existing_link_state: str
+    quarantined: bool
+
+
+@dataclass(frozen=True, slots=True)
+class BackfillLinkEndpoints:
+    """A candidate's `(from, relation_type, to)` endpoints, compared in any context."""
+
+    from_family: str
+    from_id: str
+    relation_type: str
+    to_family: str
+    to_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class BackfillExistingLink:
+    """The lowest `link_id` between one candidate's endpoints known at a cutoff, and its state."""
+
+    link_id: str
+    lifecycle_state: str
+
+
+@dataclass(frozen=True, slots=True)
+class BackfillCountRow:
+    """One group of a run's classified items: how many share these settled values."""
+
+    classification: str
+    reason: str
+    existing_link_state: str
+    quarantined: bool
+    count: int
+
+
+class LineageBackfillRepository(ABC):  # noqa: B024 - non-abstract, as IssueTimelineRepository
+    """The record lineage S3 backfill dry-run ledger (S3 contract sections 4.2 and 8.3).
+
+    Every method runs on the general unit of work's connection, scoped to the
+    Principal it is given. It writes ledger rows only -- never a link, a fact
+    or a commit mark. Non-abstract with `NotImplementedError`, on the
+    `IssueTimelineRepository` terms, so a test double implements only what it
+    drives.
+    """
+
+    def enumerate_run(
+        self,
+        principal_id: str,
+        run_id: str,
+        *,
+        created_at: datetime,
+        authority_class: str,
+        decision_channel: str,
+    ) -> BackfillRunRecord:
+        """Create the run and freeze its whole population in one `INSERT ... SELECT`.
+
+        One statement, one snapshot: every in-scope source with its version and
+        `knowledge.lineage_backfill_source_digest`, the census and the
+        Principal's committed `last_seq` as `commit_seq_cutoff`.
+        """
+        raise NotImplementedError
+
+    def read_run(
+        self, principal_id: str, run_id: str, *, for_update: bool = False
+    ) -> BackfillRunRecord | None:
+        """One run of this Principal (`FOR UPDATE` when asked), or `None`."""
+        raise NotImplementedError
+
+    def pending_sources(
+        self, principal_id: str, run_id: str, *, after: int, limit: int
+    ) -> tuple[BackfillPendingSource, ...]:
+        """The next `limit` unclassified items after `after`, by `item_no`, sources rebuilt."""
+        raise NotImplementedError
+
+    def capture_version_pins(
+        self, principal_id: str, version_ids: Collection[str]
+    ) -> Mapping[str, CaptureVersionPin]:
+        """Each owned Capture version's immutable root, number and content digest."""
+        raise NotImplementedError
+
+    def owned_references(
+        self, principal_id: str, references: Collection[tuple[RecordFamily, str]]
+    ) -> frozenset[tuple[RecordFamily, str]]:
+        """Which of `references` name a record this Principal owns."""
+        raise NotImplementedError
+
+    def existing_links(
+        self, principal_id: str, endpoints: Collection[BackfillLinkEndpoints], *, cutoff: int
+    ) -> Mapping[BackfillLinkEndpoints, BackfillExistingLink]:
+        """Per endpoints, the lowest `link_id` (`COLLATE "C"`) known at `cutoff`, in any state.
+
+        Any context: the link's `context_issue_id` is not compared. Known at the
+        cutoff: a revision with `commit_seq <= cutoff`, or a pre-S3 revision.
+        """
+        raise NotImplementedError
+
+    def settle_items(
+        self,
+        principal_id: str,
+        run_id: str,
+        settlements: Sequence[BackfillSettlement],
+        *,
+        classified_at: datetime,
+    ) -> None:
+        """Settle each item once (`a_backfill_item_is_settled_once`)."""
+        raise NotImplementedError
+
+    def advance_run(
+        self,
+        principal_id: str,
+        run_id: str,
+        *,
+        classified_count: int,
+        plan_digest: str | None,
+        classified_at: datetime | None,
+    ) -> None:
+        """Move the run's checkpoint forward; with a plan digest, to `classified`."""
+        raise NotImplementedError
+
+    def items(
+        self,
+        principal_id: str,
+        run_id: str,
+        *,
+        after: int,
+        through: int | None = None,
+        limit: int | None = None,
+        classification: str | None = None,
+    ) -> tuple[BackfillItemRecord, ...]:
+        """Items with `after < item_no <= through`, by `item_no`, optionally of one class."""
+        raise NotImplementedError
+
+    def count_rows(self, principal_id: str, run_id: str) -> tuple[BackfillCountRow, ...]:
+        """The run's classified items grouped by their settled values."""
+        raise NotImplementedError
+
+    def late_source_count(self, principal_id: str, run_id: str) -> int:
+        """In-scope sources present now that the run's frozen population does not hold."""
+        raise NotImplementedError

@@ -58,6 +58,13 @@ def test_the_capture_census_at_this_head_is_the_three_lifecycle_modules() -> Non
     `infrastructure/persistence/record_lineage.py` shares a Capture version
     endpoint `FOR SHARE`, reads its root, and projects archived roots for the
     read-time evidence availability; neither calls a publication fence.
+    Record lineage S3's backfill dry run makes it 70:
+    `domain/lineage/backfill.py` carries a cited Capture version's immutable
+    `capture_id` into a candidate's anchor object (a pure value object), and
+    `infrastructure/persistence/lineage_backfill.py` reads a cited
+    `capture_versions` row's root, number and content digest and the
+    ownership of an object-ref'd version; neither calls a publication fence
+    (the dry run writes no link and publishes nothing).
     """
     import re
 
@@ -70,7 +77,7 @@ def test_the_capture_census_at_this_head_is_the_three_lifecycle_modules() -> Non
         for path in (ROOT / "src").rglob("*.py")
         if pattern.search(path.read_text(encoding="utf-8"))
     )
-    assert len(hits) == 68
+    assert len(hits) == 70
     assert "src/my_pa/domain/intelligence/catalog.py" in hits
     assert set(DELTA) <= set(hits)
     assert "src/my_pa/adapters/remote_request.py" in hits

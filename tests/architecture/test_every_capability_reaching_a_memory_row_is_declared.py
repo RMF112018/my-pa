@@ -3249,6 +3249,9 @@ def test_the_port_crossings_that_reach_a_memory_row_are_the_two_planes() -> None
     """
     crossings = _memory_reaching_port_methods()
     assert set(crossings) == {
+        # Record lineage S3: the Issue timeline's native plane is the feed
+        # module's own read under the OD-8 predicate (`issue_member_events`).
+        "IssueTimelineRepository",
         "KnowledgeAssertionRepository",
         "RecordEventReader",
         "RelationshipMemoryProposalRepository",
@@ -3262,6 +3265,11 @@ def test_the_port_crossings_that_reach_a_memory_row_are_the_two_planes() -> None
         "the producer's crossing is now "
         f"{sorted(crossings['RelationshipMemoryProposalRepository'])}; the whole claim about "
         "that port is that it has exactly one method and a producer can call nothing else"
+    )
+    assert crossings["IssueTimelineRepository"] == frozenset({"native_events"}), (
+        "the Issue timeline's crossings are now "
+        f"{sorted(crossings['IssueTimelineRepository'])}; only its native-plane read applies "
+        "the feed's OD-8 restricted-memory predicate"
     )
     # KLP-WP-05: `event_provenance` applies the same predicate to an event and
     # its cited triggers.

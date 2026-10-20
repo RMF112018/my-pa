@@ -60,6 +60,7 @@ from my_pa.contracts.ports import (
     ConstraintRevisionSnapshot,
     HandoffCorrectionRecord,
     HandoffRecord,
+    IssueTimelineRepository,
     LineageFactCut,
     LinkHeadRecord,
     RecordEventReader,
@@ -435,7 +436,7 @@ def _native_entries(
     events: Sequence[TimelineNativeEvent],
     subjects: Mapping[tuple[RecordEventFamily, str], RecordRef],
 ) -> list[TimelineEntryView]:
-    timeline = uow.issue_timeline
+    timeline: IssueTimelineRepository = uow.issue_timeline
     snapshots = timeline.constraint_snapshots(
         principal_id,
         [
@@ -594,7 +595,7 @@ def read_issue_timeline(
     `not_found` / `issue_id`, alike.
     """
     lineage = uow.record_lineage
-    timeline = uow.issue_timeline
+    timeline: IssueTimelineRepository = uow.issue_timeline
     lineage.bound_read_statements(LINEAGE_STATEMENT_TIMEOUT_MS)
     at = ensure_utc(now)
     issue = RecordRef(family=RecordFamily.SITUATION, record_id=request.issue_id)

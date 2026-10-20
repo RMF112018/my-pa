@@ -463,7 +463,7 @@ from my_pa.domain.task.role import TaskRole
 from my_pa.domain.task.task import Task as TaskV2
 from my_pa.infrastructure.providers.fixture import FixtureSourceProvider
 
-pytest_plugins = ("tests.db.fixtures",)
+pytest_plugins = ("tests.db.fixtures", "tests.ci_shard")
 
 # Tests may patch os globally while a failed report is being processed.
 _GITHUB_ACTIONS_OS_OPEN = os.open

@@ -74,9 +74,11 @@ is not a defect.
 
 ## 3. What is implemented
 
-Four hundred and sixteen Python modules under `src/my_pa` and eight hundred and one test modules —
+Four hundred and sixteen Python modules under `src/my_pa` and eight hundred and two test modules —
 
-**Current-tree remeasurement (record lineage S3 FR3 remote-visibility corrections, branch `feat/lineage-s3-graph`, worker L3, 2026-10-20):** the two commands below count 416 source modules and 801 test modules: the 416/800 below plus `tests/security/test_lineage_remote_visibility.py`. This is file-inventory evidence, not a test PASS receipt.
+**Current-tree remeasurement (CI sharding merged into `feat/lineage-s3-graph`, worker K1, 2026-10-20):** the two commands below count 416 source modules and 802 test modules: the 416/801 below plus `tests/architecture/test_ci_shards.py`; no source module is added (`tests/ci_shard.py` is a pytest plugin, not a `test_*.py` module). This is file-inventory evidence, not a test PASS receipt.
+
+**Historical remeasurement (record lineage S3 FR3 remote-visibility corrections, branch `feat/lineage-s3-graph`, worker L3, 2026-10-20):** the two commands below counted 416 source modules and 801 test modules: the 416/800 below plus `tests/security/test_lineage_remote_visibility.py`. This is file-inventory evidence, not a test PASS receipt.
 
 **Historical remeasurement (record lineage S3 web, hardening and docs, branch `feat/lineage-s3-graph`, worker L6, 2026-10-20):** the two commands below counted 416 source modules and 800 test modules: the 416/799 below plus `tests/architecture/test_record_lineage_s3_scope.py`. This is file-inventory evidence, not a test PASS receipt.
 

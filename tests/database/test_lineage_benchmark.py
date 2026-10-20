@@ -35,6 +35,12 @@ from tests.database.lineage_s3_read_harness import S3ReadRuntime
 
 pytestmark = [pytest.mark.database, pytest.mark.slow]
 
+#: Read once, at import, and removed from the environment: the settings loader
+#: fails closed on any `MY_PA_` variable it does not know, and the database
+#: fixtures load settings from the environment before this test runs.
+_SCALE: Final = os.environ.pop("MY_PA_LINEAGE_BENCHMARK_SCALE", "small")
+_REPORT: Final = os.environ.pop("MY_PA_LINEAGE_BENCHMARK_REPORT", "")
+
 _SCALES: Final = {"small": (2_000, 10_000), "full": (100_000, 1_000_000)}
 #: The Issue's own Task members (with the Issue: 250 nodes) and `blocks` links
 #: among them (with the 249 memberships: 400 typed edges).
@@ -57,6 +63,8 @@ def _seed(engine: Engine, issue: str, records: int, links: int) -> None:
     parameters = {"p": PRINCIPAL, "issue": issue, "past": _PAST}
     with engine.begin() as connection:
         connection.execute(text("SET LOCAL session_replication_role = replica"))
+        # A bulk seed, not a request: no per-statement timeout.
+        connection.execute(text("SET LOCAL statement_timeout = 0"))
         # Tasks: the Issue's members (bm...) and the background (bg...).
         connection.execute(
             text(
@@ -134,12 +142,13 @@ def _seed(engine: Engine, issue: str, records: int, links: int) -> None:
             parameters,
         )
     with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+        connection.execute(text("SET statement_timeout = 0"))
         for table in ("tasks", "record_links", "record_link_revisions", "record_link_heads"):
             connection.execute(text(f"ANALYZE knowledge.{table}"))
 
 
 def test_records_the_synthetic_scale_benchmark(runtime: S3ReadRuntime) -> None:
-    scale = os.environ.get("MY_PA_LINEAGE_BENCHMARK_SCALE", "small")
+    scale = _SCALE
     records, links = _SCALES[scale]
     issue = runtime.issue("bench")
     seeded = time.perf_counter()
@@ -177,9 +186,8 @@ def test_records_the_synthetic_scale_benchmark(runtime: S3ReadRuntime) -> None:
         "total_ms": round(1000 * total, 1),
     }
     print("lineage benchmark:", json.dumps(report, sort_keys=True))
-    target = os.environ.get("MY_PA_LINEAGE_BENCHMARK_REPORT")
-    if target:
-        Path(target).write_text(json.dumps(report, sort_keys=True, indent=2) + "\n")
+    if _REPORT:
+        Path(_REPORT).write_text(json.dumps(report, sort_keys=True, indent=2) + "\n")
     # A recorded expectation, not a service level: at the default scale the
     # answer is the whole budget, paged to the end. At `full` the numbers are
     # recorded as measured (a deadline hit would show as `truncated_budget`).

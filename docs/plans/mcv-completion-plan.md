@@ -74,9 +74,11 @@ is not a defect.
 
 ## 3. What is implemented
 
-Four hundred and sixteen Python modules under `src/my_pa` and seven hundred and ninety-nine test modules —
+Four hundred and sixteen Python modules under `src/my_pa` and eight hundred test modules —
 
-**Current-tree remeasurement (record lineage S3 backfill dry run, branch `feat/lineage-s3-graph`, worker L5, 2026-10-20):** the two commands below count 416 source modules and 799 test modules: the 414/798 below plus `src/my_pa/application/lineage_backfill.py` and `src/my_pa/contracts/v1/lineage_backfill.py`, and `tests/database/test_lineage_backfill.py`. This is file-inventory evidence, not a test PASS receipt.
+**Current-tree remeasurement (record lineage S3 web, hardening and docs, branch `feat/lineage-s3-graph`, worker L6, 2026-10-20):** the two commands below count 416 source modules and 800 test modules: the 416/799 below plus `tests/architecture/test_record_lineage_s3_scope.py`. This is file-inventory evidence, not a test PASS receipt.
+
+**Historical remeasurement (record lineage S3 backfill dry run, branch `feat/lineage-s3-graph`, worker L5, 2026-10-20):** the two commands below counted 416 source modules and 799 test modules: the 414/798 below plus `src/my_pa/application/lineage_backfill.py` and `src/my_pa/contracts/v1/lineage_backfill.py`, and `tests/database/test_lineage_backfill.py`. This is file-inventory evidence, not a test PASS receipt.
 
 **Historical remeasurement (record lineage S3 Issue timeline, branch `feat/lineage-s3-graph`, worker L4, 2026-10-20):** the two commands below counted 414 source modules and 798 test modules: the 412/797 below plus `src/my_pa/application/issue_timeline.py` and `src/my_pa/contracts/v1/issue_timeline.py`, and `tests/integration/test_issue_timeline.py`. This is file-inventory evidence, not a test PASS receipt.
 

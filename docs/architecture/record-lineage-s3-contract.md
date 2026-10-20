@@ -21,6 +21,11 @@ why.
 
 All counts in this file are digits on purpose (spelled-count guard).
 
+**As implemented.** Sections 3, 7.2, 7.3, 7.6, 9 and 10 carry "as implemented" notes, and
+section 12.1 lists every resolution the S3 workers (L1–L6) made where the code settled a
+point this contract left open or placed something elsewhere; each was accepted by the
+Orchestrator. After L6 `gateway.json` holds 110 entries.
+
 ## 1. What S3 is
 
 S3 is the historical and bounded-read slice (plan WP-03A in full, WP-03B, the S3 part of
@@ -91,7 +96,11 @@ S3: `sit`, `prj`, `psit`, `mtg`, `mnote`, `tsk`, `cmt`, `cst`, `cap`, `capver`, 
 ## 3. Closed vocabularies
 
 Widened in `domain/lineage/vocabulary.py` and in the S3 revision's CHECKs together
-(S1 §3 rule).
+(S1 §3 rule). **As implemented (L1):** the backfill vocabularies (`BackfillClass`,
+`BackfillSourceKind`, `BackfillReason`, `BackfillRunState`) and `BACKFILL_VALIDATOR_VERSION`
+live in `domain/lineage_backfill/vocabulary.py`, not in `domain/lineage/vocabulary.py`,
+because the binding S2 test forbids the token `meeting_series` under `domain/lineage`
+(section 12.1, D-34); every other row of the table is in `domain/lineage/vocabulary.py`.
 
 | Vocabulary | S1 + S2 admit | S3 adds | Still later |
 | --- | --- | --- | --- |
@@ -538,11 +547,16 @@ nodes[i] = S1 node keys + reached_from + reached_via
 4. **Path explanations.** When a state first reaches a record, the edge and parent that reached it are recorded; ties are broken by the S1 expansion order (frontier `(depth, family, record_id)`, edges `(created_at, link_id)`, then the `meeting_note_version_of` step).
 5. **Budgets** (whole query, all pages): 250 nodes, 400 edges (typed plus virtual), 4 depth; per page at most `page_size` items and 512 KiB serialized; a traversal deadline of 2000 ms per page and a 2000 ms `SET LOCAL statement_timeout` per statement. Reaching the node or edge budget stops expansion and sets `truncated_budget`. Reaching the deadline sets `truncated_budget` and **ends paging** (`next_cursor: null`), because a time cut is not reproducible; a statement timeout is `unavailable`. The AT-016 benchmark records, at the `full` scale, the per-page p50/p95 and the total time to page a 650-item result at `page_size` 10 (65 recomputations); it is a recorded expectation, not a service level.
 6. **Output order and paging.** The bounded result is ordered nodes `(depth, family, record_id)`, then typed edges by `link_id`, then virtual edges by `(meeting_id, version_number)`. Without `page_size` the S1 single-page rule holds (everything in one answer, the S1 serialized-size loop, `next_cursor: null`). With `page_size` each page carries the next items after `p` until `page_size` items or 512 KiB, and the same top-level keys; `next_cursor` is non-null exactly when items remain.
-7. **Cursor checks, in this order** (precedent: record_events U-002): shape, length and version (`invalid_request` / `cursor`); `b` against the binding re-derived from this request and the carried `k`, `t` (`conflict` / `cursor` — another Principal's cursor or changed filters land here); `k` after the current horizon, `t` after `k`, `n` after the current server time, or `n` after the request's own `known_at` or `valid_at` when either is given (`invalid_request` / `cursor`; `n` is never compared with `k`, because a current read's native cut is its read time and lies after `T_k = H` by design, R3-F25); `s` against the scope re-derived from the caller's **current** grants and generation — on mismatch the page answers `complete_state: scope_changed_restart_required`, no root, nodes, edges or candidates beyond the request's own `origin`, and `next_cursor: null`; finally `p`: a `p` of the wrong shape or prefix is `invalid_request` / `cursor` (checked with the shape, first); **every well-formed `p` that is not an item of the recomputed result answers `scope_changed_restart_required`** (R3-F14, R3-F23). Neither `b` nor `s` covers `p` and the cursor is unsigned (D-02), so the server cannot tell a `p` that vanished between pages (a native record stopped resolving, or visibility changed) from one a client edited; it does not try, and both get the restart answer, which discloses nothing (any absent `p`, hidden, nonexistent or vanished, answers alike). The whole bounded result is recomputed on each page under the frozen `T_k`, `T_v` and current visibility; the union of pages equals the one-page answer **only while** no grant is revoked and no reached native record stops resolving between pages, and any such change surfaces as `scope_changed_restart_required` or, for an item later than `p`, as the S1 `partial_native_history` of the page that would have carried it.
+7. **Cursor checks, in this order** (precedent: record_events U-002): shape, length and version (`invalid_request` / `cursor`); `b` against the binding re-derived from this request and the carried `k`, `t`, `n`, `r` (`conflict` / `cursor` — another Principal's cursor or changed filters land here); `k` after the current horizon, `t` after `k`, `n` after the current server time, or `n` after the request's own `known_at` or `valid_at` when either is given (`invalid_request` / `cursor`; `n` is never compared with `k`, because a current read's native cut is its read time and lies after `T_k = H` by design, R3-F25); `s` against the scope re-derived from the caller's **current** grants and generation — on mismatch the page answers `complete_state: scope_changed_restart_required`, no root, nodes, edges or candidates beyond the request's own `origin`, and `next_cursor: null`; finally `p`: a `p` of the wrong shape or prefix is `invalid_request` / `cursor` (checked with the shape, first); **every well-formed `p` that is not an item of the recomputed result answers `scope_changed_restart_required`** (R3-F14, R3-F23). Neither `b` nor `s` covers `p` and the cursor is unsigned (D-02), so the server cannot tell a `p` that vanished between pages (a native record stopped resolving, or visibility changed) from one a client edited; it does not try, and both get the restart answer, which discloses nothing (any absent `p`, hidden, nonexistent or vanished, answers alike). The whole bounded result is recomputed on each page under the frozen `T_k`, `T_v` and current visibility; the union of pages equals the one-page answer **only while** no grant is revoked and no reached native record stops resolving between pages, and any such change surfaces as `scope_changed_restart_required` or, for an item later than `p`, as the S1 `partial_native_history` of the page that would have carried it.
 8. **Completeness**: `restricted_evidence` when anything was withheld (6.4); the S1 codes as before; `complete` only when nothing applies. `qualifiers` lists every applicable code, sorted by precedence.
 
 Native virtual edges stay `meeting_note_version_of` only, cut by the note version's own
 `recorded_at` (step 2); see section 12, D-05.
+
+**As implemented (L3).** An origin that is not known at the cut answers `not_found` /
+`origin` (an Issue root whose first revision is after `T_k` included); a statement timeout
+is raised as `LineageReadTimeoutError` inside the bounded read runner every lineage read
+uses, and answers `unavailable` (section 12.1, D-38).
 
 ### 7.3 `issues.timeline`, `issues.history`, `records.associations.history`
 
@@ -571,7 +585,11 @@ Event reader's own predicate — `_visible(...)` in `infrastructure/persistence/
 with its `_withheld_remotely(...)` clauses (OD-8 restricted memory, the WP-RE-08 capture
 classification, the KLP-WP-03 assertion `withheld_remote`) — **imported, not copied**;
 the one admitted refactor is exporting that builder under a public name with no change
-to its body. For a remote reader `include_restricted_memory` is false and the families
+to its body. **As implemented (L4):** instead of exporting the builder, the native read
+itself is a function of the feed module, `record_events.issue_member_events`, which
+applies `_visible(...)` unchanged inside the module that owns it (the feed-tables guard
+and the `trigger_receipts` precedent keep feed SQL in that module);
+`infrastructure/persistence/issue_timeline.py` calls it (section 12.1, D-41). For a remote reader `include_restricted_memory` is false and the families
 are the member families the reader can see (section 6.4 intersected with
 `RECORD_EVENT_FAMILY_READS`). A withheld event never reaches an entry, the member-budget
 `truncated_budget` count or the watermark. **`r` is computed exactly as
@@ -622,6 +640,21 @@ later pages may include newer revisions (the S1 list rule).
 out `{link: {link_id, kind, relation_type, from, to, member_role, context_issue_id, created_at}, known_at, revisions: [{revision_no, revision_id, action, lifecycle_state, acceptance_basis, authority_class, reason, evidence: [EvidenceAnchorView], recorded_at}], next_cursor}`.
 Memberships and semantic links alike (a read). A link whose root is not known at
 `T_k`, or (remote) whose endpoint is invisible, is `not_found` / `link_id`.
+
+**As implemented (L4).** The timeline views are `contracts/v1/issue_timeline.py`
+(`IssueTimelineView`, `TimelineEntryView`, `TimelineNativeView`), beside rather than in
+`contracts/v1/issues.py`, so the S1 Issue shapes stay free of the Record Event vocabulary
+(the S1 scope guard). A native entry's subject is the member it is read for: a note
+version's Record Events are its Meeting's and a Capture version's its Capture's, found
+through the resolved record's `parent_root_id`. An `association` entry's `subject` is
+`null` (its endpoints are `from` and `to`); a `membership` entry's is the member. The
+cursor checks (section 7.2 step 7) run before the Issue's existence is read, so a
+malformed or foreign cursor answers alike for any `issue_id`. `issues.timeline` is
+declared in the memory-row capability registry and its RI-FINAL evidence delta (the
+`record_events.provenance` precedent): for a remote caller its native plane passes the
+feed's own visibility predicate, whose OD-8 term joins `relationship_memories` and
+`relationship_memory_versions`; its families are never `relationship_memory`, so the term
+matches no event and no memory column enters the answer (section 12.1, D-41).
 
 ### 7.4 Writes
 
@@ -703,6 +736,14 @@ stay green.
 - *Note drilldown*: the cited note version is opened only on explicit action; when it is not current, the view says "Version *n*; the current version is *m*" and offers a separate "Show the current note" action (`meetings.read`), never mixing the 2 bodies.
 - *Messages, never a count*: `restricted_evidence` — "Some related records or evidence are hidden by your access."; `scope_changed_restart_required` — "Your access changed. Start again." with a restart button; `truncated_budget` — "Only part of this Issue's lineage is shown."; `partial_native_history` (as-of timeline) — "Changes to related records are not shown for an earlier point in time."; anchor availability `archived`, `restricted`, `legacy_unversioned` in words.
 - *Accessibility*: sections with headings, keyboard-reachable controls, visible focus, no state by colour alone, usable at 375 px, tablet and desktop widths.
+
+**As implemented (L6).**
+
+- The decoders export their closed sets (`RELATION_TYPES`, `ISSUE_STATES`, `LINK_LIFECYCLE_STATES`, `EVIDENCE_AVAILABILITIES`, `LINEAGE_COMPLETENESS` in `records.lineage.ts`; `TIMELINE_ENTRY_KINDS`, `HANDOFF_CORRECTION_ACTIONS` in `issues.timeline.ts`), and `test_the_web_lineage_decoders_admit_exactly_the_server_vocabulary` compares each with its Python enum. `issues.read.ts` decodes both closed answers (with and without `include_members`); the web route asks without members and refuses an answer that carries them. A timeline entry's kind keys must be non-null on their own kind except `closed_at`, `outcome`, `member_role`, `corrected_effective_at` and `recorded_fields`.
+- `GET /api/issues` admits `pageSize` (1..100), `after` (`sit_`) and `state`; it does not admit `projectId` (the index has no Project filter). The timeline and lineage routes admit `pageSize` (10..100), `cursor` and `knownAt`, refuse a `cursor` without `pageSize`, and refuse `validAt` (no view asks for one). The lineage route's projection also refuses an answer under another selected Issue.
+- The Issue view's components are `components/issues/{issue-list,issue-view,issue-timeline,issue-lineage-table,note-version-drilldown,presentation}.tsx`; the Meeting view is `app/(app)/work/meetings/[meetingId]/meeting-view.tsx` beside its page. The lineage table is 2 tables (Records and Links) with the stacked layout below 640 px.
+- *Note drilldown wording:* before the current note is read the drilldown says "Version *n*; a later version is current" (the cited `meetings.notes.read_version` answer says only `is_current`); after the user asks for it with "Show the current note", it says "Version *n*; the current version is *m*" and shows the current body in its own region.
+- The S1 panel's selected Issue title is a link whose text is the S1 "Issue: *title*"; a contested link reads "*relation* (contested)". The related-issues route admits `meeting` (`mtg`), so the S1 route-test row that refused `meeting` now refuses a Meeting family with a Commitment id (section 10 note).
 
 ### 7.7 Admission switch
 
@@ -808,6 +849,7 @@ named):
 - `infrastructure/persistence/record_lineage.py` (as-of reads: `live_links_incident(principal, refs, cut)`, `link_revisions`, mark resolution, `take_commit_mark`), `infrastructure/persistence/issues.py` (history, as-of Issue revisions), `infrastructure/persistence/issue_handoffs.py` (corrections), `infrastructure/persistence/issue_timeline.py` (the lineage and native timeline reads, the Constraint revision snapshot join), `infrastructure/persistence/lineage_backfill.py`; `contracts/v1/record_lineage.py`, `contracts/v1/issues.py` (S3 views), `application/commands.py`, `adapters/normalization.py`, `application/service.py` handlers, `domain/identity/operation.py` / `purpose.py` / `chatllm_capability_policy.py` registrations, `ports.py` (`RecordLineageRepository`, `IssueRepository` additions; `UnitOfWork` gains abstract `issue_timeline` and `lineage_backfill`, implemented or stubbed in every subclass).
 - **Every writer calls `take_commit_mark` immediately after a non-replay reservation** (S1 `record_lineage.py` writers, S1/S2 `issues.py`, `issue_handoffs.py`, `issue_work.py`, and the S3 writers); the database trigger makes a missed call still correct but serializes later, so the call is required and pinned by a test.
 - Every W1 §2.2 / §5.4 registration step and count pin applies (capability 222, purpose 59, audit vocabulary 233, revision count 121, head literal and head-pin list, `TABLES_SHA256`, `TABLES_ABOVE`, principal-partition guard registry, spelled counts in `adapters/cli/app.py`, `bootstrap/gateway.py`, the architecture index and READMEs, `gateway.json` 110).
+- **As implemented.** Beside the modules above, S3 added `domain/lineage_backfill/__init__.py` and `domain/lineage_backfill/vocabulary.py` (L1, D-34), `contracts/v1/issue_timeline.py` (L4, section 7.3 note) and `contracts/v1/lineage_backfill.py` (L5), and the feed function `record_events.issue_member_events` in `infrastructure/persistence/record_events.py` (L4, D-41). `ports.py` methods a test double does not implement raise `NotImplementedError` by default (the K1 precedent; D-37). The web files are listed in the section 7.6 note.
 
 **Work split** (serial; each package testable alone; one worker at a time):
 
@@ -879,6 +921,18 @@ added. In particular the S1 vertical test
 binding and green unchanged (R3-F20). Also existing and binding: `tests/contract/test_bff_gateway_contract_parity.py`,
 `tests/contract/test_bff_success_decoder_parity.py`,
 `web/src/lib/api/decode/registry.test.ts`.
+
+**As implemented (L6).** Every row above exists (`test_every_s3_crosswalk_test_exists`,
+which skips no row and reads Python and TypeScript modules alike). The `AT-024 (S3,
+browser)` spec runs in each geometry project (`desktop`, `tablet`, `mobile`) with its own
+`npm run e2e`; the `mobile` project is the `Pixel 7` emulation profile, not a resized
+desktop window. Lockstep edits beyond the list above, each keeping its test name: the S1
+`web/src/app/api/records/related-issues-route.test.ts` row that refused family `meeting`
+now refuses a Meeting family with a Commitment id (section 7.6 admits `meeting`), with a
+new row proving `meeting` is admitted; `web/e2e/global-setup.ts` warms the 3 new pages;
+`success.json` and `tests/contract/test_bff_success_decoder_parity.py` gain the 3 new
+capabilities. The query-plan rows (`AT-016 (plans)`) were proved red by dropping each
+relied-on index in the test's scratch database (section 12.1, D-41).
 
 **AT-001 S3 part, concretely.** On the S2 14-stage fixture:
 
@@ -1015,6 +1069,25 @@ Program/report work packages; AT-020, AT-021 → out of scope until OD-06.
 | D-31 | S1/S2 Issue reads disclose member, endpoint and link ids to any holder of their grant | CR-008 visibility must hold on every lineage read, and no client holds a lineage grant | section 6.4 applies to `issues.read`, `issues.list`, `issues.handoffs.list` and `issues.closure_readiness`, each gaining `restricted` |
 | D-32 | page size 1..100 | full recomputation per page makes `page_size` 1 a cost amplifier, and the repository has no per-Principal rate limiter (`rate_limited` is a WebAuthn-adapter code only) | paged reads take `page_size` 10..100 (R3-F15) |
 | D-33 | S2 `HandoffView.effective_at` | corrections exist from S3 | `effective_at` keeps its recorded meaning; `current_effective_at` is added (R3-F18) |
+
+### 12.1 As implemented (S3 workers L1–L6)
+
+Every resolution below was reported in the worker's handoff and accepted by the
+Orchestrator; none changes a section 10 test name or a binding assertion.
+
+| # | Point | Contract text | As implemented | Residual |
+| --- | --- | --- | --- | --- |
+| D-34 | backfill vocabulary placement (L1) | section 3: widened in `domain/lineage/vocabulary.py` | `domain/lineage_backfill/vocabulary.py` holds the 4 backfill enums and `BACKFILL_VALIDATOR_VERSION`; `LINEAGE_BACKFILL_CAPABILITIES` and `BACKFILL_WRITE_CAPABILITIES` stay in `domain/lineage/vocabulary.py`. The binding S2 test forbids the token `meeting_series` under `domain/lineage`, and `BackfillSourceKind` has a `meeting_series` member | none |
+| D-35 | S1/S2 lockstep moves (L1) | section 10 lockstep list | the S1/S2 migration suites seed their rows by SQL under `session_replication_role = replica` and run their downgrade-refusal tests at `d020b532ad7d`; the S1 `records.lineage` vocabulary and the web `RELATION_TYPES` were widened by L1 ahead of L2 (S2 D-14 precedent) | none |
+| D-36 | completeness and source facts (L1) | sections 3 and 8.3 | `complete` is listed in `qualifiers` when it is the `complete_state` (`qualifiers[0]` is always the `complete_state`); the per-kind fact sets are the closed `SOURCE_FACT_KEYS` of `domain/lineage/backfill.py` | none |
+| D-37 | unbuilt names and port defaults (L1–L5) | section 9 | each worker's names answered `unsupported` until built, with `capabilities.get` truthful (the K1 precedent); port methods a double does not implement raise `NotImplementedError` | none; every S3 name is built at L5 |
+| D-38 | S3 write and read refusals (L2, L3) | sections 7.4, 7.5 | `contest` of a non-`active` and `reinstate` of a non-`contested` link answer `conflict` / `state`, while `correct` and `end` keep their S1 `conflict` / `stale_version` for a wrong `expected_revision`; `related_context` is normalized to canonical order by the command, then refused in the order context, self-link, evidence, inside; the frozen-closed rule also refuses `correct` / `end` of a null-context link inside the closed Issue; `known_at` is read at microsecond precision; a current `issues.handoffs.list` with no allocator row (`T_k` null) is empty; a replayed `issues.handoffs.correct` answers as of its own `correction_no`; an origin (or an Issue root) not known at the cut is `not_found` / `origin`, and an `issues.history` Issue not known at the cut answers `not_found`; a statement timeout is `LineageReadTimeoutError`, raised inside the bounded read runner every lineage read uses, answering `unavailable` | none |
+| D-39 | visibility of S1/S2 Issue reads (L3) | section 6.4 | a handoff view's evidence anchor and an `issues.read` closure anchor go through the same section 6.4 filter; a remote reader's handoff entry whose anchor is withheld is itself withheld and sets `restricted` | a local reader's `issues.read` labels a restricted legacy Capture anchor `restricted` rather than withholding it (S1 F24 forward rule) |
+| D-40 | benchmark and seeding (L3) | section 10, AT-016 benchmark | the benchmark seeds without a statement timeout and reads only its own `MY_PA_LINEAGE_BENCHMARK_*` variables; read-path tests seed volume by SQL under replica (synthetic databases only). Recorded locally at `small`: 650 items at `page_size` 10, p50 300 ms, p95 350 ms, 20 s total (not a service level) | the `full` scale was not run |
+| D-41 | timeline placement (L4) | section 7.3 | the native read is `record_events.issue_member_events` in the feed module (section 7.3 note); views in `contracts/v1/issue_timeline.py`; subjects resolved through `parent_root_id`; `association` entries carry `subject: null`; cursor checks run before the Issue's existence; `issues.timeline` declared in the memory-row registry and the RI-FINAL evidence delta. L6 proved the 4 query-plan rows red by dropping `record_links_outgoing`, the `record_link_revisions` primary key, `lineage_commit_marks_by_time`, `record_events_by_principal_record` and `issue_responsibility_events_by_issue` | none |
+| D-42 | backfill classification inputs (L5) | section 8.3: classification is a pure function of the stored source document | a `situation_object_ref` item's ownership (is the token an owned record of a lineage family) is read at classification time; a `work_origin_assertion` item's capture-version identity is read from the immutable version row; `project_situation` consistency reads the Situation kind and the Issue ledger | **named residual:** `situation_object_ref` classification is not purely a function of the stored document; an object deleted or created between enumeration and classification can change an item's class without changing its digest |
+| D-43 | backfill shapes (L5) | section 8.3 | refused assertions name the first failing rule (`assertion_not_current`, `source_withdrawn`, `source_restricted`, in that order); a `passage_unproven` candidate carries no anchors; an object-ref `source_ref` is the section 4.2 shape-and-digest token; the census and report shapes are the models of `contracts/v1/lineage_backfill.py`; an enumerating call answers `items: []` (nothing is classified yet) | none |
+| D-44 | web (L6) | section 7.6 | the section 7.6 note: drilldown wording before the current note is read, the routes' admitted query fields, the 2 lineage tables, the Meeting family admitted in the related-issues route | none |
 
 Lock and transaction rules not restated here are S1's and S2's, including S1 §12 and
 S2 §12.

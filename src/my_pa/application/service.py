@@ -661,6 +661,7 @@ from my_pa.contracts.v1.documents import (
     ManagedDocumentVersionView,
 )
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
+from my_pa.contracts.v1.issues import HandoffView
 from my_pa.contracts.v1.meetings import MeetingNoteVersionEntry, MeetingNoteVersionView
 from my_pa.contracts.v1.record_lineage import EvidenceAnchorView
 from my_pa.contracts.v1.reveal import RevealView
@@ -13353,8 +13354,8 @@ class ApplicationService:
         """
         visibility = self._lineage_read(authorization, command.capability)
         principal_id = authorization.principal.principal_id
-        if not visibility.sees_family(RecordFamily.SITUATION):
-            raise NotFoundError(SafeDetail.ISSUE_ID)
+        # FR3-F07: no Issue-family check -- the grant on `issues.read` that
+        # `_lineage_read` required already makes the Issue family visible.
         with _translated(), _lineage_translated():
             view = self._issues.read_issue(unit_of_work, principal_id, command.issue_id)
             restricted = False
@@ -13368,13 +13369,12 @@ class ApplicationService:
             payload: dict[str, Any] = {"issue": view.to_canonical_dict()}
             if command.include_members:
                 # Section 7.2: the active memberships, at most 100, oldest first.
-                members, truncated = self._record_lineage.memberships(
-                    unit_of_work, principal_id, command.issue_id
+                # S3 section 6.4 (FR3-F01): only visible members are shown or
+                # counted toward `memberships_truncated`.
+                visible_members, truncated, hidden = self._record_lineage.memberships(
+                    unit_of_work, principal_id, command.issue_id, visible=visibility.sees
                 )
-                visible_members = [
-                    member for member in members if visibility.sees_family(member.to_ref.family)
-                ]
-                restricted = restricted or len(visible_members) < len(members)
+                restricted = restricted or hidden
                 kept = []
                 for member in visible_members:
                     anchors, withheld = _shown_anchors(
@@ -13382,7 +13382,7 @@ class ApplicationService:
                     )
                     restricted = restricted or withheld
                     kept.append(member.model_copy(update={"evidence": anchors}))
-                visible_members = kept
+                visible_members = tuple(kept)
                 payload["memberships"] = [member.to_canonical_dict() for member in visible_members]
                 payload["memberships_truncated"] = truncated
             payload["restricted"] = restricted
@@ -13399,16 +13399,16 @@ class ApplicationService:
         S3 section 6.4: a remote reader without a grant on `issues.list` is
         `unsupported`; Issues are listed only while the Issue family is visible.
         """
-        visibility = self._lineage_read(authorization, command.capability)
+        self._lineage_read(authorization, command.capability)
         request = command.issue_request()
         request = replace(request, page_size=min(request.page_size, self._limits.max_page_size))
         with _translated(), _lineage_translated():
             entries, next_cursor = self._issues.list_issues(
                 unit_of_work, authorization.principal.principal_id, request
             )
+        # FR3-F07: the grant on `issues.list` `_lineage_read` required already
+        # makes the Issue family visible, so nothing on this page is withheld.
         restricted = False
-        if not visibility.sees_family(RecordFamily.SITUATION):
-            restricted, entries, next_cursor = bool(entries), (), None
         return _Result(
             payload={
                 "issues": [entry.to_canonical_dict() for entry in entries],
@@ -13723,34 +13723,51 @@ class ApplicationService:
             raise NotFoundError(SafeDetail.ISSUE_ID)
         request = command.handoff_request()
         request = replace(request, page_size=min(request.page_size, self._limits.max_page_size))
+        principal_id = authorization.principal.principal_id
+        commitments_visible = visibility.sees_family(RecordFamily.COMMITMENT)
+        # Section 6.4 (FR3-F01): a handoff's one required anchor cannot be
+        # dropped from its view, so an entry the reader may not see is withheld
+        # whole -- and the page is filled from the visible entries only. Batches
+        # are read at one frozen cut until `page_size + 1` visible entries are
+        # found or the set ends, so neither `next_cursor` (always a shown
+        # entry) nor the page sequence depends on any withheld entry.
+        shown: list[HandoffView] = []
+        restricted = False
+        known_at: datetime | None = None
+        batch = request
         with _translated(), _lineage_translated():
-            page = self._issue_handoffs.list_handoffs(
-                unit_of_work, authorization.principal.principal_id, request, authorization.at
-            )
-        handoffs, next_cursor, restricted = page.handoffs, page.next_cursor, False
-        # Section 6.4: a handoff's one required anchor cannot be dropped from its
-        # view, so an entry whose anchor the reader may not see is withheld whole.
-        shown_handoffs = []
-        for view in handoffs:
-            kept, withheld = _shown_anchors(
-                unit_of_work, authorization.principal.principal_id, (view.evidence,), visibility
-            )
-            if withheld or not kept:
-                restricted = True
-                continue
-            shown_handoffs.append(view.model_copy(update={"evidence": kept[0]}))
-        handoffs = tuple(shown_handoffs)
-        if not visibility.sees_family(RecordFamily.COMMITMENT):
-            if request.commitment_id is not None:
-                raise NotFoundError(SafeDetail.COMMITMENT_ID)
-            handoffs, next_cursor, restricted = (), None, restricted or bool(page.handoffs)
+            while True:
+                page = self._issue_handoffs.list_handoffs(
+                    unit_of_work, principal_id, batch, authorization.at
+                )
+                if known_at is None:
+                    known_at = page.known_at
+                if not commitments_visible:
+                    # After the application's own Issue and Commitment checks.
+                    if request.commitment_id is not None:
+                        raise NotFoundError(SafeDetail.COMMITMENT_ID)
+                    restricted = bool(page.handoffs)
+                    break
+                for view in page.handoffs:
+                    kept, withheld = _shown_anchors(
+                        unit_of_work, principal_id, (view.evidence,), visibility
+                    )
+                    if withheld or not kept:
+                        restricted = True
+                        continue
+                    shown.append(view.model_copy(update={"evidence": kept[0]}))
+                if len(shown) > request.page_size or page.next_cursor is None:
+                    break
+                batch = replace(request, after=page.next_cursor, known_at=page.known_at)
+        handoffs = tuple(shown[: request.page_size])
+        next_cursor = handoffs[-1].handoff_id if len(shown) > request.page_size else None
         return _Result(
             payload={
                 "handoffs": [view.to_canonical_dict() for view in handoffs],
                 "next_cursor": next_cursor,
                 "restricted": restricted,
                 # S3 section 7.1: the cut the page was read at (`T_k`).
-                "known_at": None if page.known_at is None else _lineage_instant(page.known_at),
+                "known_at": None if known_at is None else _lineage_instant(known_at),
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
         )
@@ -13915,6 +13932,8 @@ class ApplicationService:
                 ),
                 "revisions": [revision.to_canonical_dict() for revision in history.revisions],
                 "next_cursor": history.next_cursor,
+                # S3 section 6.4 (FR3-F04): whether evidence was withheld.
+                "restricted": history.restricted,
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
         )
@@ -13940,6 +13959,8 @@ class ApplicationService:
                 ),
                 "revisions": [revision.to_canonical_dict() for revision in history.revisions],
                 "next_cursor": history.next_cursor,
+                # S3 section 6.4 (FR3-F04): whether evidence was withheld.
+                "restricted": history.restricted,
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
         )

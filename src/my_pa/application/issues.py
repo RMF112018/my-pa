@@ -305,6 +305,8 @@ class IssueHistoryResult:
     known_at: datetime | None
     revisions: tuple[IssueHistoryEntryView, ...]
     next_cursor: int | None
+    #: S3 section 6.4 (FR3-F04): whether an anchor was withheld from this page.
+    restricted: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -687,7 +689,7 @@ class IssueApplication:
             principal_id, request.issue_id, cut, after=request.after, limit=request.page_size + 1
         )
         shown = revisions[: request.page_size]
-        sets, _ = visible_anchor_sets(
+        sets, withheld = visible_anchor_sets(
             uow.record_lineage,
             principal_id,
             [revision.evidence for revision in shown],
@@ -707,6 +709,7 @@ class IssueApplication:
                 for revision, evidence in zip(shown, sets, strict=True)
             ),
             next_cursor=shown[-1].version if len(revisions) > request.page_size and shown else None,
+            restricted=withheld,
         )
 
     def list_issues(

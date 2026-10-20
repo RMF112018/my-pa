@@ -347,6 +347,8 @@ class AssociationHistoryResult:
     known_at: datetime | None
     revisions: tuple[LinkHistoryRevisionView, ...]
     next_cursor: int | None
+    #: S3 section 6.4 (FR3-F04): whether an anchor was withheld from this page.
+    restricted: bool = False
 
 
 # --------------------------------------------------------------------- digest
@@ -1072,13 +1074,38 @@ class RecordLineageApplication:
     # --- reads ------------------------------------------------------------------
 
     def memberships(
-        self, uow: UnitOfWork, principal_id: str, issue_id: str
-    ) -> tuple[tuple[AssociationView, ...], bool]:
-        """An Issue's active memberships (at most 100) and whether more exist."""
+        self,
+        uow: UnitOfWork,
+        principal_id: str,
+        issue_id: str,
+        *,
+        visible: Callable[[RecordRef], bool] | None = None,
+    ) -> tuple[tuple[AssociationView, ...], bool, bool]:
+        """An Issue's active memberships the reader may see (at most 100).
+
+        Returns the views, whether more *visible* ones exist, and whether any
+        membership was withheld (S3 section 6.4, FR3-F01): a member the reader
+        may not see is neither shown nor counted toward `memberships_truncated`,
+        so the flag is no count oracle over hidden members.
+        """
         lineage = uow.record_lineage
-        heads = lineage.issue_memberships(principal_id, issue_id, limit=MAX_ISSUE_MEMBERSHIPS + 1)
-        shown = heads[:MAX_ISSUE_MEMBERSHIPS]
-        return _head_views(lineage, principal_id, shown), len(heads) > MAX_ISSUE_MEMBERSHIPS
+        sees = visible if visible is not None else (lambda _ref: True)
+        limit = MAX_ISSUE_MEMBERSHIPS + 1
+        while True:
+            heads = lineage.issue_memberships(principal_id, issue_id, limit=limit)
+            seen = [head for head in heads if sees(head.link.to_ref)]
+            if len(seen) > MAX_ISSUE_MEMBERSHIPS or len(heads) < limit:
+                break
+            limit *= 2
+        shown = seen[:MAX_ISSUE_MEMBERSHIPS]
+        last = shown[-1] if shown else None
+        scanned = heads if len(seen) <= MAX_ISSUE_MEMBERSHIPS else heads[: heads.index(last) + 1]
+        withheld = len(scanned) > len(shown)
+        return (
+            _head_views(lineage, principal_id, shown),
+            len(seen) > MAX_ISSUE_MEMBERSHIPS,
+            withheld,
+        )
 
     def association_history(
         self,
@@ -1099,6 +1126,10 @@ class RecordLineageApplication:
         link = lineage.read_link(principal_id, request.link_id)
         if link is None or not (visibility.sees(link.from_ref) and visibility.sees(link.to_ref)):
             raise NotFoundError(SafeDetail.LINK_ID)
+        if link.context_issue_id is not None and not visibility.sees_family(RecordFamily.SITUATION):
+            # FR3-F03 (S3 section 7.3): an Issue-scoped link names its Issue, which
+            # a reader without Issue visibility may not learn: answered as absent.
+            raise NotFoundError(SafeDetail.LINK_ID)
         known_at = lineage_known_at(uow, principal_id, request.known_at, now)
         cut = LineageFactCut(
             watermark=None
@@ -1115,7 +1146,7 @@ class RecordLineageApplication:
             principal_id, link.link_id, cut, after=request.after, limit=request.page_size + 1
         )
         shown = revisions[: request.page_size]
-        sets, _ = visible_anchor_sets(
+        sets, withheld = visible_anchor_sets(
             lineage, principal_id, [revision.evidence for revision in shown], visibility
         )
         return AssociationHistoryResult(
@@ -1147,6 +1178,7 @@ class RecordLineageApplication:
             next_cursor=(
                 shown[-1].revision_no if len(revisions) > request.page_size and shown else None
             ),
+            restricted=withheld,
         )
 
     def read_lineage(

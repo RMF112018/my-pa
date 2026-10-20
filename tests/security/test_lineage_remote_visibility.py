@@ -364,3 +364,20 @@ def test_a_handoff_list_statement_timeout_answers_unavailable(
     monkeypatch.setattr(SqlIssueHandoffRepository, "known_events", slow)
     error = runtime.refused(ListIssueHandoffs(issue_id=scene["issue"]))
     assert _code(error) == ("unavailable", [])
+
+
+def test_an_issue_read_statement_timeout_answers_unavailable(
+    runtime: S3ReadRuntime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    issue = runtime.issue("rv-ito")
+    original = issues_persistence.SqlIssueRepository.read_issue
+
+    def slow(self: Any, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        # Through the Issue repository's own statement runner, as its reads run.
+        issues_persistence._run(lambda: self._connection.execute(text("SELECT pg_sleep(0.5)")))
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(service_module, "LINEAGE_STATEMENT_TIMEOUT_MS", 50)
+    monkeypatch.setattr(issues_persistence.SqlIssueRepository, "read_issue", slow)
+    error = runtime.refused(ReadIssue(issue_id=issue, include_members=True))
+    assert _code(error) == ("unavailable", [])

@@ -40,7 +40,7 @@ serialization victim is `TransactionConflictError` and answers `conflict`.
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Final
@@ -49,6 +49,7 @@ from sqlalchemy import (
     ColumnElement,
     Table,
     and_,
+    false,
     func,
     insert,
     or_,
@@ -58,11 +59,15 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.engine import Connection, Row
+from sqlalchemy.exc import DBAPIError
 
 from my_pa.contracts.ports import (
     LineageEndpoint,
+    LineageFactCut,
+    LineageIssueAsOf,
     LineageLinkEvidence,
     LineageNoteVersionRef,
+    LineageReadTimeoutError,
     LineageResolvedRecord,
     LinkHeadRecord,
     LinkRevisionRecord,
@@ -71,6 +76,7 @@ from my_pa.contracts.ports import (
     RepositoryFailureError,
 )
 from my_pa.domain.capture.lifecycle import CaptureLifecycleState
+from my_pa.domain.common.classification import Classification
 from my_pa.domain.lineage.model import RecordRef
 from my_pa.domain.lineage.vocabulary import (
     LIVE_LINK_STATES,
@@ -97,6 +103,7 @@ from my_pa.infrastructure.persistence.principal_scope import (
 from my_pa.infrastructure.persistence.tables import (
     capture_versions,
     commitments,
+    issue_revisions,
     lineage_commit_marks,
     lineage_commit_sequences,
     lineage_evidence_anchors,
@@ -148,6 +155,38 @@ def _mine(table: Table, principal_id: str) -> ColumnElement[bool]:
 
 def _bound(table: Table, principal_id: str, values: dict[str, object]) -> dict[str, object]:
     return principal_bound_values(values, table, capture_context(principal_id))
+
+
+#: PostgreSQL's `query_canceled`: a statement that outran `statement_timeout`.
+_QUERY_CANCELED: Final = "57014"
+
+
+def _bounded[ResultT](statement: Callable[[], ResultT]) -> ResultT:
+    """`_run`, and a statement cancelled by its timeout is `LineageReadTimeoutError`.
+
+    S3 section 7.2 step 5: a bounded read's statement timeout answers
+    `unavailable`; any other store failure propagates as `_run` lets it.
+    """
+    timed_out = False
+    try:
+        return _run(statement)
+    except DBAPIError as error:
+        if getattr(error.orig, "sqlstate", None) != _QUERY_CANCELED:
+            raise
+        timed_out = True
+    if timed_out:
+        raise LineageReadTimeoutError("a bounded lineage read timed out")
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def _known(table: Table, cut: LineageFactCut) -> ColumnElement[bool]:
+    """S3 section 3.4: a fact row known at the cut (by its mark, or a pre-S3 row by time)."""
+    if cut.at is None:
+        return and_(false())
+    known: ColumnElement[bool] = and_(table.c.commit_seq.is_(None), table.c.recorded_at <= cut.at)
+    if cut.watermark is not None:
+        known = or_(table.c.commit_seq <= cut.watermark, known)
+    return known
 
 
 _LINK_COLUMNS: Final = (
@@ -293,7 +332,7 @@ class SqlRecordLineageRepository(RecordLineageRepository):
         self._connection = connection
 
     def _rows(self, statement: Any) -> Sequence[Row[Any]]:  # noqa: ANN401 - a SQLAlchemy select
-        return _run(lambda: self._connection.execute(statement).all())
+        return _bounded(lambda: self._connection.execute(statement).all())
 
     # --- endpoints (section 3.2 step 2, section 6.2 step 3) -----------------
 
@@ -899,6 +938,174 @@ class SqlRecordLineageRepository(RecordLineageRepository):
             row.link_id: (int(row.revision_no), LinkLifecycleState(row.lifecycle_state))
             for row in rows
         }
+
+    # --- the as-of read core (S3 contract sections 3.4, 6.4 and 7.2) --------------
+
+    def bound_read_statements(self, timeout_ms: int) -> None:
+        _run(
+            lambda: self._connection.execute(
+                text(f"SET LOCAL statement_timeout = {int(timeout_ms)}")
+            )
+        )
+
+    def live_links_incident(
+        self, principal_id: str, refs: Collection[RecordRef], cut: LineageFactCut
+    ) -> tuple[LinkHeadRecord, ...]:
+        if not refs or cut.at is None:
+            return ()
+        pairs = sorted({(ref.family.value, ref.record_id) for ref in refs})
+        revisions = record_link_revisions
+        selected = (
+            select(
+                *_LINK_COLUMNS,
+                revisions.c.revision_no.label("head_revision_no"),
+                revisions.c.lifecycle_state.label("head_lifecycle_state"),
+            )
+            .select_from(
+                record_links.join(
+                    revisions,
+                    and_(
+                        matching_partition_criterion(revisions, record_links),
+                        revisions.c.link_id == record_links.c.link_id,
+                    ),
+                )
+            )
+            .where(
+                _mine(record_links, principal_id),
+                or_(
+                    tuple_(record_links.c.from_family, record_links.c.from_id).in_(pairs),
+                    tuple_(record_links.c.to_family, record_links.c.to_id).in_(pairs),
+                ),
+                _known(revisions, cut),
+            )
+            # Section 7.2 step 2: the latest revision of each link known at the cut.
+            .distinct(record_links.c.link_id)
+            .order_by(record_links.c.link_id, revisions.c.revision_no.desc())
+            .subquery("selected")
+        )
+        rows = self._rows(
+            select(selected)
+            .where(selected.c.head_lifecycle_state.in_(_LIVE_STATES))
+            .order_by(selected.c.created_at, selected.c.link_id.collate("C"))
+        )
+        return tuple(_to_head(row) for row in rows)
+
+    def issues_known_at(
+        self, principal_id: str, issue_ids: Collection[str], cut: LineageFactCut
+    ) -> Mapping[str, LineageIssueAsOf]:
+        if not issue_ids or cut.at is None:
+            return {}
+        rows = self._rows(
+            select(
+                issue_revisions.c.issue_id,
+                issue_revisions.c.version,
+                issue_revisions.c.title,
+                issue_revisions.c.state,
+            )
+            .where(
+                _mine(issue_revisions, principal_id),
+                issue_revisions.c.issue_id.in_(sorted(set(issue_ids))),
+                _known(issue_revisions, cut),
+            )
+            .distinct(issue_revisions.c.issue_id)
+            .order_by(issue_revisions.c.issue_id, issue_revisions.c.version.desc())
+        )
+        return {
+            row.issue_id: LineageIssueAsOf(
+                issue_id=row.issue_id, version=int(row.version), title=row.title, state=row.state
+            )
+            for row in rows
+        }
+
+    def note_versions_until(
+        self, principal_id: str, meeting_ids: Collection[str], recorded_at_most: datetime
+    ) -> Mapping[str, tuple[LineageNoteVersionRef, ...]]:
+        if not meeting_ids:
+            return {}
+        notes = meeting_note_versions
+        rows = self._rows(
+            select(notes.c.note_version_id, notes.c.meeting_id, notes.c.version_number)
+            .where(
+                _mine(notes, principal_id),
+                notes.c.meeting_id.in_(sorted(set(meeting_ids))),
+                notes.c.recorded_at <= recorded_at_most,
+            )
+            .order_by(notes.c.meeting_id, notes.c.version_number)
+        )
+        found: dict[str, list[LineageNoteVersionRef]] = {}
+        for row in rows:
+            found.setdefault(row.meeting_id, []).append(
+                LineageNoteVersionRef(
+                    note_version_id=row.note_version_id,
+                    meeting_id=row.meeting_id,
+                    version_number=row.version_number,
+                )
+            )
+        return {meeting_id: tuple(versions) for meeting_id, versions in found.items()}
+
+    def note_version_recorded_at(
+        self, principal_id: str, note_version_ids: Collection[str]
+    ) -> Mapping[str, datetime]:
+        if not note_version_ids:
+            return {}
+        notes = meeting_note_versions
+        rows = self._rows(
+            select(notes.c.note_version_id, notes.c.recorded_at).where(
+                _mine(notes, principal_id),
+                notes.c.note_version_id.in_(sorted(set(note_version_ids))),
+            )
+        )
+        return {row.note_version_id: row.recorded_at for row in rows}
+
+    def link_revisions_known_at(
+        self,
+        principal_id: str,
+        link_id: str,
+        cut: LineageFactCut,
+        *,
+        after: int | None,
+        limit: int,
+    ) -> tuple[LinkRevisionRecord, ...]:
+        if cut.at is None:
+            return ()
+        revisions = record_link_revisions
+        statement = select(revisions.c.revision_no).where(
+            _mine(revisions, principal_id),
+            revisions.c.link_id == link_id,
+            _known(revisions, cut),
+        )
+        if after is not None:
+            statement = statement.where(revisions.c.revision_no > after)
+        numbers = [
+            int(row.revision_no)
+            for row in self._rows(statement.order_by(revisions.c.revision_no).limit(limit))
+        ]
+        found: list[LinkRevisionRecord] = []
+        for number in numbers:
+            revision = self.read_revision(principal_id, link_id, number)
+            if revision is None:
+                raise RepositoryFailureError
+            found.append(revision)
+        return tuple(found)
+
+    def restricted_capture_roots(
+        self, principal_id: str, capture_ids: Collection[str]
+    ) -> frozenset[str]:
+        if not capture_ids:
+            return frozenset()
+        rows = self._rows(
+            principal_scoped(
+                select(capture_versions.c.capture_id)
+                .where(
+                    capture_versions.c.capture_id.in_(sorted(set(capture_ids))),
+                    capture_versions.c.classification == Classification.RESTRICTED_LOCAL.value,
+                )
+                .distinct(),
+                capture_versions,
+                capture_context(principal_id),
+            )
+        )
+        return frozenset(str(row.capture_id) for row in rows)
 
 
 # --- head rebuild parity ---------------------------------------------------------

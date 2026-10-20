@@ -32,7 +32,18 @@ from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Any, Final, cast
 
-from sqlalchemy import ColumnElement, Table, and_, exists, func, insert, select, tuple_, update
+from sqlalchemy import (
+    ColumnElement,
+    Table,
+    and_,
+    exists,
+    func,
+    insert,
+    or_,
+    select,
+    tuple_,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection, Row
 from sqlalchemy.exc import DBAPIError
@@ -43,6 +54,7 @@ from my_pa.contracts.ports import (
     IssueRecord,
     IssueRepository,
     IssueRevisionRecord,
+    LineageFactCut,
     LineageIdempotencyConflictError,
     LineageLinkEvidence,
     LineageSourceVersion,
@@ -634,6 +646,39 @@ class SqlIssueRepository(IssueRepository):
         if row is None:
             return None
         return _to_revision(row, self._revision_evidence(principal_id, issue_id, row.version))
+
+    def issue_revisions_known_at(
+        self,
+        principal_id: str,
+        issue_id: str,
+        cut: LineageFactCut,
+        *,
+        after: int | None,
+        limit: int,
+    ) -> tuple[IssueRevisionRecord, ...]:
+        if cut.at is None:
+            return ()
+        revisions = issue_revisions
+        # S3 section 3.4: known by its mark, or (a pre-S3 row) by its own time.
+        known: ColumnElement[bool] = and_(
+            revisions.c.commit_seq.is_(None), revisions.c.recorded_at <= cut.at
+        )
+        if cut.watermark is not None:
+            known = or_(revisions.c.commit_seq <= cut.watermark, known)
+        statement = select(*revisions.c).where(
+            _mine(revisions, principal_id), revisions.c.issue_id == issue_id, known
+        )
+        if after is not None:
+            statement = statement.where(revisions.c.version > after)
+        rows = _run(
+            lambda: self._connection.execute(
+                statement.order_by(revisions.c.version).limit(limit)
+            ).all()
+        )
+        return tuple(
+            _to_revision(row, self._revision_evidence(principal_id, issue_id, row.version))
+            for row in rows
+        )
 
     def list_issues(
         self,

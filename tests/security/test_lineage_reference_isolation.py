@@ -452,8 +452,9 @@ def test_every_s1_capability_answers_a_foreign_subject_like_an_absent_one(
         assert foreign_answer == _answer(runtime, absent), capability
         if capability == "issues.list":
             # A filter or cursor names no record of yours either way.
+            # S3 section 8.1 lockstep: `issues.list` also states `restricted`.
             assert foreign_answer in (
-                {"result": {"issues": [], "next_cursor": None}},
+                {"result": {"issues": [], "next_cursor": None, "restricted": False}},
                 {"code": "invalid_request", "safe_details": ["cursor"]},
             ), foreign_answer
         else:

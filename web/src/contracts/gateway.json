@@ -1033,7 +1033,11 @@
       "payloadFields": [
         "origin",
         "issue_id",
-        "max_depth"
+        "max_depth",
+        "known_at",
+        "valid_at",
+        "page_size",
+        "cursor"
       ],
       "probe": {
         "origin": {

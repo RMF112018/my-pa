@@ -61,6 +61,7 @@ __all__ = [
     "HandoffHolderView",
     "HandoffView",
     "IssueClosureView",
+    "IssueHistoryEntryView",
     "IssueListEntry",
     "IssueReopeningView",
     "IssueRevisionView",
@@ -115,6 +116,21 @@ class IssueRevisionView(StrictModel):
     @classmethod
     def _revision_id(cls, value: str) -> str:
         return validate_identifier(value, IdKind.ISSUE_REVISION)
+
+
+class IssueHistoryEntryView(IssueRevisionView):
+    """One revision in `issues.history` (S3 section 7.3).
+
+    The S1 `IssueRevisionView` keys plus the revision's own closure basis:
+    `closed_at` and `outcome` (a `closed` or `corrected` revision), `reason`
+    (a `reopened` one) and its closing or reopening evidence set, each anchor
+    visibility-filtered (section 6.4). No digest (FR1-F05).
+    """
+
+    closed_at: UtcDatetime | None = None
+    outcome: str | None = None
+    reason: str | None = Field(default=None, max_length=MAX_LINEAGE_REASON_CHARACTERS)
+    evidence: tuple[EvidenceAnchorView, ...] = Field(default=(), max_length=MAX_EVIDENCE_ANCHORS)
 
 
 class ProjectLinkView(StrictModel):

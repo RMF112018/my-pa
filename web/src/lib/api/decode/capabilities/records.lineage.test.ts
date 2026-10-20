@@ -29,10 +29,12 @@ describe("records.lineage strict canonical success", () => {
       { issue_id: "sit_aaaaaaaa11111111", title: "First", state: "open" },
       { issue_id: "sit_bbbbbbbb22222222", title: "Second", state: "active" },
     ];
-    value.nodes = [{ family: "task", record_id: "tsk_aaaaaaaa11111111", depth: 0 }];
+    // S3 lockstep: every node states its path step (`null` on the root).
+    value.nodes = [{ family: "task", record_id: "tsk_aaaaaaaa11111111", depth: 0, reached_from: null, reached_via: null }];
     value.typed_edges = [];
     value.virtual_native_edges = [];
     value.complete_state = "unresolved_ambiguity";
+    value.qualifiers = ["unresolved_ambiguity"];
     expect(decode(value).ok).toBe(true);
     // A legacy Capture anchor and an archived Capture version node.
     const legacy = payload();
@@ -42,7 +44,11 @@ describe("records.lineage strict canonical success", () => {
       version_kind: "legacy_unversioned", version_id: null, source_version_no: null,
       passage_start_cp: null, passage_end_cp: null, role: "corroborates", availability: "archived",
     }];
-    (legacy.nodes as Json[]).push({ family: "capture_version", record_id: "capver_aaaaaaaa11111111", depth: 1, availability: "archived" });
+    (legacy.nodes as Json[]).push({
+      family: "capture_version", record_id: "capver_aaaaaaaa11111111", depth: 1, availability: "archived",
+      reached_from: { family: "task", record_id: "tsk_aaaaaaaa11111111" },
+      reached_via: { edge: "typed", link_id: "irl_bbbbbbbb22222222" },
+    });
     expect(decode(legacy).ok).toBe(true);
   });
 
@@ -118,8 +124,12 @@ describe("records.lineage strict canonical success", () => {
     expect(decode(anchor).ok).toBe(false);
     const virtual = payload(); ((virtual.virtual_native_edges as Json[])[0]!.to as Json).family = "task";
     expect(decode(virtual).ok).toBe(false);
-    const cursor = payload(); cursor.next_cursor = "sit_aaaaaaaa11111111";
-    expect(decode(cursor).ok).toBe(false);
+    // S3 lockstep (section 5): `next_cursor` may be an opaque base64url token,
+    // so the refused cursor is one that is not.
+    for (const next of ["sit aaaaaaaa", "", "x".repeat(2049), 7]) {
+      const cursor = payload(); cursor.next_cursor = next;
+      expect(decode(cursor).ok, String(next)).toBe(false);
+    }
     const state = payload(); state.complete_state = "partial";
     expect(decode(state).ok).toBe(false);
   });

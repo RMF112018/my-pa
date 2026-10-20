@@ -40,7 +40,7 @@ it evaluates.
 
 from __future__ import annotations
 
-from collections.abc import Collection, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Final
@@ -62,13 +62,21 @@ from my_pa.application.lineage_endpoints import (
     lock_evidence_source,
     lock_lineage_sources,
 )
-from my_pa.application.record_lineage import anchor_view, evidence_availability, links_in_context
+from my_pa.application.lineage_visibility import LineageVisibility
+from my_pa.application.record_lineage import (
+    anchor_view,
+    evidence_availability,
+    lineage_known_at,
+    links_in_context,
+    visible_anchor_sets,
+)
 from my_pa.contracts.ports import (
     IssueListPage,
     IssueRecord,
     IssueRepository,
     IssueRevisionRecord,
     LineageEndpoint,
+    LineageFactCut,
     LineageLinkEvidence,
     LineageWriteRequestRecord,
     LinkHeadRecord,
@@ -85,6 +93,7 @@ from my_pa.contracts.v1.issues import (
     ClosureBlockerView,
     ContestedLinkView,
     IssueClosureView,
+    IssueHistoryEntryView,
     IssueListEntry,
     IssueReopeningView,
     IssueRevisionView,
@@ -137,6 +146,8 @@ __all__ = [
     "IssueCloseResult",
     "IssueClosureReadiness",
     "IssueCreateRequest",
+    "IssueHistoryRequest",
+    "IssueHistoryResult",
     "IssueListRequest",
     "IssueReopenRequest",
     "IssueReopenResult",
@@ -271,6 +282,29 @@ class IssueClosureReadiness:
     #: S3 section 7.1: contested links in the Issue's context, by `link_id`.
     contested_links: tuple[ContestedLinkView, ...] = ()
     contested_links_truncated: bool = False
+    #: S3 section 6.4: whether a blocker or contested link was withheld from a
+    #: remote reader (`ready` is computed over everything).
+    restricted: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class IssueHistoryRequest:
+    """`issues.history`, parsed (S3 section 7.3)."""
+
+    issue_id: str
+    known_at: datetime | None
+    page_size: int
+    after: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class IssueHistoryResult:
+    """One page of an Issue's revisions as known at `known_at` (`T_k`)."""
+
+    issue_id: str
+    known_at: datetime | None
+    revisions: tuple[IssueHistoryEntryView, ...]
+    next_cursor: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -615,6 +649,64 @@ class IssueApplication:
             project_links=tuple(_link_view(event) for event in links[:MAX_ISSUE_PROJECT_LINKS]),
             project_links_truncated=len(links) > MAX_ISSUE_PROJECT_LINKS,
             closure=closure,
+        )
+
+    def issue_history(
+        self,
+        uow: UnitOfWork,
+        principal_id: str,
+        request: IssueHistoryRequest,
+        *,
+        now: datetime,
+        visibility: LineageVisibility,
+    ) -> IssueHistoryResult:
+        """`issues.history` (S3 section 7.3): the revisions known at `T_k`, by version.
+
+        An absent, foreign or context Situation, an Issue no revision of which
+        is known at `T_k`, and (remote) an Issue the reader may not see are
+        `not_found` / `issue_id`, alike. Each revision carries its closing or
+        reopening evidence, visibility-filtered (section 6.4).
+        """
+        issues = uow.issues
+        issue_ref = RecordRef(family=RecordFamily.SITUATION, record_id=request.issue_id)
+        issue = issues.read_issue(principal_id, request.issue_id)
+        if issue is None or not visibility.sees(issue_ref):
+            raise NotFoundError(SafeDetail.ISSUE_ID)
+        known_at = lineage_known_at(uow, principal_id, request.known_at, now)
+        cut = LineageFactCut(
+            watermark=None
+            if known_at is None
+            else uow.record_lineage.commit_watermark(principal_id, known_at),
+            at=known_at,
+        )
+        if not issues.issue_revisions_known_at(
+            principal_id, request.issue_id, cut, after=None, limit=1
+        ):
+            raise NotFoundError(SafeDetail.ISSUE_ID)
+        revisions = issues.issue_revisions_known_at(
+            principal_id, request.issue_id, cut, after=request.after, limit=request.page_size + 1
+        )
+        shown = revisions[: request.page_size]
+        sets, _ = visible_anchor_sets(
+            uow.record_lineage,
+            principal_id,
+            [revision.evidence for revision in shown],
+            visibility,
+        )
+        return IssueHistoryResult(
+            issue_id=request.issue_id,
+            known_at=known_at,
+            revisions=tuple(
+                IssueHistoryEntryView(
+                    **_revision_view(issue, revision).model_dump(),
+                    closed_at=revision.closed_at,
+                    outcome=revision.outcome,
+                    reason=revision.reason,
+                    evidence=evidence,
+                )
+                for revision, evidence in zip(shown, sets, strict=True)
+            ),
+            next_cursor=shown[-1].version if len(revisions) > request.page_size and shown else None,
         )
 
     def list_issues(
@@ -981,12 +1073,20 @@ class IssueApplication:
         )
 
     def closure_readiness(
-        self, uow: UnitOfWork, principal_id: str, issue_id: str
+        self,
+        uow: UnitOfWork,
+        principal_id: str,
+        issue_id: str,
+        *,
+        visible: Callable[[RecordRef], bool] | None = None,
     ) -> IssueClosureReadiness:
         """Evaluate the gate without writing or locking (S2 section 7.2).
 
         Says nothing about the closure evidence `issues.close` is given. A
-        closed Issue answers `ready: false` and no blockers.
+        closed Issue answers `ready: false` and no blockers. `visible` is the
+        reader's section 6.4 family visibility (S3): a blocker whose member, or
+        a contested link with an endpoint, it may not see is withheld and
+        `restricted` says so; `ready` is computed over everything.
         """
         issues, lineage = uow.issues, uow.record_lineage
         issue = issues.read_issue(principal_id, issue_id)
@@ -1035,23 +1135,36 @@ class IssueApplication:
             key=lambda view: (view.member.family.value, view.member.record_id, view.link_id)
         )
         # S3 section 3.2: every contested link in the Issue's context, by `link_id`.
-        contested = sorted(
+        disputed = sorted(
             (
-                ContestedLinkView(link_id=head.link.link_id, relation_type=head.link.relation_type)
+                head
                 for head in links_in_context(lineage, principal_id, issue_id)
                 if head.lifecycle_state is LinkLifecycleState.CONTESTED
             ),
-            key=lambda view: view.link_id,
+            key=lambda head: head.link.link_id,
         )
+        ready = not blocked and not disputed
+        sees = visible if visible is not None else (lambda _ref: True)
+        shown = [
+            view
+            for view in blocked
+            if sees(RecordRef(family=view.member.family, record_id=view.member.record_id))
+        ]
+        contested = [
+            ContestedLinkView(link_id=head.link.link_id, relation_type=head.link.relation_type)
+            for head in disputed
+            if sees(head.link.from_ref) and sees(head.link.to_ref)
+        ]
         return IssueClosureReadiness(
             issue_id=issue.issue_id,
             version=issue.version,
             state=issue.state.value,
-            ready=not blocked and not contested,
-            blockers=tuple(blocked[:MAX_CLOSURE_BLOCKERS]),
-            blockers_truncated=len(blocked) > MAX_CLOSURE_BLOCKERS,
+            ready=ready,
+            blockers=tuple(shown[:MAX_CLOSURE_BLOCKERS]),
+            blockers_truncated=len(shown) > MAX_CLOSURE_BLOCKERS,
             contested_links=tuple(contested[:MAX_CONTESTED_LINKS]),
             contested_links_truncated=len(contested) > MAX_CONTESTED_LINKS,
+            restricted=len(shown) < len(blocked) or len(contested) < len(disputed),
         )
 
     # --- issues.project_links.add / end ----------------------------------------

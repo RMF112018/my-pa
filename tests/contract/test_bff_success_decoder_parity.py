@@ -93,6 +93,7 @@ from my_pa.contracts.v1.record_lineage import (
     EvidenceAnchorView,
     LineageIssueMatch,
     LineageNodeView,
+    LineagePathEdgeView,
     LineageView,
     RecordRefView,
     VirtualEdgeView,
@@ -1762,9 +1763,15 @@ LINEAGE_NOTE_BODY: Final = "Synthetic note: pour the north slab after the inspec
 def _lineage_service() -> tuple[ApplicationService, Authorization]:
     service = object.__new__(ApplicationService)
     service._lineage_enabled = True
+    # S3 section 6.1 lockstep: a lineage read re-checks the caller's grant set
+    # (`None`: the local caller, which sees every family).
     authorization = cast(
         Authorization,
-        SimpleNamespace(at=AT, principal=SimpleNamespace(principal_id="prn_aaaaaaaa11111111")),
+        SimpleNamespace(
+            at=AT,
+            principal=SimpleNamespace(principal_id="prn_aaaaaaaa11111111"),
+            capability_grants=None,
+        ),
     )
     return service, authorization
 
@@ -1828,6 +1835,7 @@ def _records_lineage() -> dict[str, Any]:
         issues_matching_root=(
             LineageIssueMatch(issue_id=LINEAGE_ISSUE_ID, title="Synthetic Issue", state="open"),
         ),
+        # S3 section 7.1 lockstep: each node states the path step that reached it.
         nodes=(
             LineageNodeView(family=RecordFamily.TASK, record_id=LINEAGE_TASK_ID, depth=0),
             LineageNodeView(
@@ -1835,6 +1843,8 @@ def _records_lineage() -> dict[str, Any]:
                 record_id=LINEAGE_NOTE_VERSION_ID,
                 depth=1,
                 meeting_id=LINEAGE_MEETING_ID,
+                reached_from=task,
+                reached_via=LineagePathEdgeView(edge="typed", link_id="irl_bbbbbbbb22222222"),
             ),
             LineageNodeView(
                 family=RecordFamily.SITUATION,
@@ -1842,8 +1852,18 @@ def _records_lineage() -> dict[str, Any]:
                 depth=1,
                 title="Synthetic Issue",
                 state="open",
+                reached_from=task,
+                reached_via=LineagePathEdgeView(edge="typed", link_id="irl_aaaaaaaa11111111"),
             ),
-            LineageNodeView(family=RecordFamily.MEETING, record_id=LINEAGE_MEETING_ID, depth=2),
+            LineageNodeView(
+                family=RecordFamily.MEETING,
+                record_id=LINEAGE_MEETING_ID,
+                depth=2,
+                reached_from=note,
+                reached_via=LineagePathEdgeView(
+                    edge="virtual", edge_type=NativeVirtualEdge.MEETING_NOTE_VERSION_OF
+                ),
+            ),
         ),
         typed_edges=(membership, origin),
         virtual_native_edges=(
@@ -1852,9 +1872,15 @@ def _records_lineage() -> dict[str, Any]:
             ),
         ),
         complete_state=LineageCompleteness.COMPLETE,
+        # S3 section 7.2 lockstep: the qualifiers and the cuts the answer was read at.
+        qualifiers=(LineageCompleteness.COMPLETE,),
+        known_at=AT,
+        valid_at=AT,
+        lineage_valid_at=AT,
+        native_cut_at=AT,
     )
     service, authorization = _lineage_service()
-    service._record_lineage = cast(Any, SimpleNamespace(read_lineage=lambda *_: view))
+    service._record_lineage = cast(Any, SimpleNamespace(read_lineage=lambda *_, **__: view))
     command = ReadRecordLineage(
         origin={"family": "task", "record_id": LINEAGE_TASK_ID}, max_depth=1
     )

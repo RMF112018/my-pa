@@ -1912,7 +1912,7 @@
       "total_capabilities": 222,
       "limitations": [
         "Content types awaiting an operator decision: application/pdf. They are reported rather than silently skipped.",
-        "Listings stop at the page size; truncation is disclosed. These issue a continuation cursor: commitments.history, commitments.list, commitments.search, commitments.waiting_on, constraint_sync.conflicts, constraint_sync.delta, constraints.history, constraints.list, constraints.portfolio_list, constraints.portfolio_search, constraints.search, continuity.projects, entities.addresses.list, entities.aliases.list, entities.assignments.list, entities.communication.list, entities.graph, entities.identifiers.list, entities.identity_history, entities.names.list, entities.observations.list, entities.participations.list, entities.relationships, entities.search, entities.unresolved_mentions, goodnotes.notebooks.list, goodnotes.pages.list, goodnotes.pull, goodnotes.runs.list, goodnotes.search, issues.handoffs.list, issues.history, issues.list, issues.timeline, knowledge.assertions.list, knowledge.assertions.search, knowledge.search, meetings.list, meetings.notes.versions, meetings.search, record_events.list, records.associations.history, records.backfill.report, relationship_memory.history, relationship_memory.list, relationship_memory.search, reports.list, review.list, tasks.comments.list, tasks.history, tasks.list, tasks.search. Every other listing does not, so a caller cannot ask for the next page.",
+        "Listings stop at the page size; truncation is disclosed. These issue a continuation cursor: commitments.history, commitments.list, commitments.search, commitments.waiting_on, constraint_sync.conflicts, constraint_sync.delta, constraints.history, constraints.list, constraints.portfolio_list, constraints.portfolio_search, constraints.search, continuity.projects, entities.addresses.list, entities.aliases.list, entities.assignments.list, entities.communication.list, entities.graph, entities.identifiers.list, entities.identity_history, entities.names.list, entities.observations.list, entities.participations.list, entities.relationships, entities.search, entities.unresolved_mentions, goodnotes.notebooks.list, goodnotes.pages.list, goodnotes.pull, goodnotes.runs.list, goodnotes.search, issues.handoffs.list, issues.history, issues.list, issues.timeline, knowledge.assertions.list, knowledge.assertions.search, knowledge.search, meetings.list, meetings.notes.versions, meetings.search, record_events.list, records.associations.history, records.backfill.report, records.lineage, relationship_memory.history, relationship_memory.list, relationship_memory.search, reports.list, review.list, tasks.comments.list, tasks.history, tasks.list, tasks.search. Every other listing does not, so a caller cannot ask for the next page.",
         "Model proposals and semantic retrieval are disabled; deterministic lexical retrieval remains active.",
         "Worker-plane health is unavailable, stale, absent for queued work, or reports dead-lettered work; inspect worker_planes."
       ]
@@ -4532,25 +4532,51 @@
       {
         "family": "task",
         "record_id": "tsk_aaaaaaaa11111111",
-        "depth": 0
+        "depth": 0,
+        "reached_from": null,
+        "reached_via": null
       },
       {
         "family": "meeting_note_version",
         "record_id": "mnote_aaaaaaaa11111111",
         "depth": 1,
-        "meeting_id": "mtg_aaaaaaaa11111111"
+        "meeting_id": "mtg_aaaaaaaa11111111",
+        "reached_from": {
+          "family": "task",
+          "record_id": "tsk_aaaaaaaa11111111"
+        },
+        "reached_via": {
+          "edge": "typed",
+          "link_id": "irl_bbbbbbbb22222222"
+        }
       },
       {
         "family": "situation",
         "record_id": "sit_aaaaaaaa11111111",
         "depth": 1,
         "title": "Synthetic Issue",
-        "state": "open"
+        "state": "open",
+        "reached_from": {
+          "family": "task",
+          "record_id": "tsk_aaaaaaaa11111111"
+        },
+        "reached_via": {
+          "edge": "typed",
+          "link_id": "irl_aaaaaaaa11111111"
+        }
       },
       {
         "family": "meeting",
         "record_id": "mtg_aaaaaaaa11111111",
-        "depth": 2
+        "depth": 2,
+        "reached_from": {
+          "family": "meeting_note_version",
+          "record_id": "mnote_aaaaaaaa11111111"
+        },
+        "reached_via": {
+          "edge": "virtual",
+          "edge_type": "meeting_note_version_of"
+        }
       }
     ],
     "typed_edges": [
@@ -4626,6 +4652,13 @@
       }
     ],
     "complete_state": "complete",
+    "qualifiers": [
+      "complete"
+    ],
+    "known_at": "2026-08-09T12:00:00.000000Z",
+    "valid_at": "2026-08-09T12:00:00.000000Z",
+    "lineage_valid_at": "2026-08-09T12:00:00.000000Z",
+    "native_cut_at": "2026-08-09T12:00:00.000000Z",
     "next_cursor": null
   },
   "meetings.notes.read_version": {

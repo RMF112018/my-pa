@@ -417,9 +417,12 @@ __all__ = [
     "KnowledgeSupersessionGuardError",
     "KnowledgeTriggerNotFoundError",
     "LineageEndpoint",
+    "LineageFactCut",
     "LineageIdempotencyConflictError",
+    "LineageIssueAsOf",
     "LineageLinkEvidence",
     "LineageNoteVersionRef",
+    "LineageReadTimeoutError",
     "LineageResolvedRecord",
     "LineageSourceVersion",
     "LineageWriteRequestRecord",
@@ -9318,6 +9321,22 @@ class IssueRepository(ABC):
         Record lineage S2 (S2 contract section 7.1, `IssueClosureView`).
         """
 
+    def issue_revisions_known_at(
+        self,
+        principal_id: str,
+        issue_id: str,
+        cut: LineageFactCut,
+        *,
+        after: int | None,
+        limit: int,
+    ) -> tuple[IssueRevisionRecord, ...]:
+        """One Issue's revisions known at `cut`, by `version`, after `after`, with evidence.
+
+        `issues.history` (S3 contract section 7.3); at most `limit`. No lock.
+        Non-abstract: a fake that serves no history never needs it.
+        """
+        raise NotImplementedError
+
     @abstractmethod
     def list_issues(
         self,
@@ -9533,6 +9552,37 @@ class LinkHeadRecord:
     link: RecordLinkRecord
     revision_no: int
     lifecycle_state: LinkLifecycleState
+
+
+@dataclass(frozen=True, slots=True)
+class LineageFactCut:
+    """Which lineage fact rows a read selects (S3 contract section 3.4).
+
+    A row is known at the cut iff its `commit_seq <= watermark` (`W(at)`), or
+    -- a row written before the S3 revision, with no mark -- its own
+    `recorded_at <= at`. With `at` `None` (a Principal with no lineage fact)
+    nothing is known.
+    """
+
+    watermark: int | None
+    at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class LineageIssueAsOf:
+    """An Issue's title and state at a cut: its revision selected at that cut."""
+
+    issue_id: str
+    version: int
+    title: str
+    state: str
+
+
+class LineageReadTimeoutError(PortError):
+    """A bounded lineage read statement hit its `statement_timeout` (S3 section 7.2 step 5).
+
+    The read answers `unavailable`; the read's transaction is lost with it.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -9776,6 +9826,85 @@ class RecordLineageRepository(ABC):
         watermark`, or -- a row written before the S3 revision, with no mark --
         with `recorded_at <= at` (section 3.4). A link with no revision known at
         the cut is absent. No lock. Non-abstract, on the same terms.
+        """
+        raise NotImplementedError
+
+    # --- the as-of read core (S3 contract sections 3.4, 6.4 and 7.2; worker L3) ----
+
+    def bound_read_statements(self, timeout_ms: int) -> None:
+        """`SET LOCAL statement_timeout` for the rest of this read's transaction.
+
+        S3 section 7.2 step 5: a statement that runs longer raises
+        `LineageReadTimeoutError` (`unavailable`). Non-abstract, on the same
+        terms.
+        """
+        raise NotImplementedError
+
+    def live_links_incident(
+        self, principal_id: str, refs: Collection[RecordRef], cut: LineageFactCut
+    ) -> tuple[LinkHeadRecord, ...]:
+        """Every link incident to `refs` whose revision selected at `cut` is live.
+
+        S3 section 7.2 step 2: from revisions, never from `record_link_heads`
+        -- the latest revision of each link known at the cut; the returned
+        "head" is that revision's number and state, `active` or `contested`.
+        Ordered `(created_at, link_id)` in code-point order. No lock.
+        Non-abstract, on the same terms.
+        """
+        raise NotImplementedError
+
+    def issues_known_at(
+        self, principal_id: str, issue_ids: Collection[str], cut: LineageFactCut
+    ) -> Mapping[str, LineageIssueAsOf]:
+        """Each named Issue's revision selected at `cut` (its title and state then).
+
+        An Issue with no revision known at the cut is absent. No lock.
+        Non-abstract, on the same terms.
+        """
+        raise NotImplementedError
+
+    def note_versions_until(
+        self, principal_id: str, meeting_ids: Collection[str], recorded_at_most: datetime
+    ) -> Mapping[str, tuple[LineageNoteVersionRef, ...]]:
+        """`note_versions_of`, cut at the native cut (S3 section 3.4, R3-F01).
+
+        Only versions with `recorded_at <= recorded_at_most`, by version
+        number. Non-abstract, on the same terms.
+        """
+        raise NotImplementedError
+
+    def note_version_recorded_at(
+        self, principal_id: str, note_version_ids: Collection[str]
+    ) -> Mapping[str, datetime]:
+        """Each owned note version's own `recorded_at` (its native cut key).
+
+        Non-abstract, on the same terms.
+        """
+        raise NotImplementedError
+
+    def link_revisions_known_at(
+        self,
+        principal_id: str,
+        link_id: str,
+        cut: LineageFactCut,
+        *,
+        after: int | None,
+        limit: int,
+    ) -> tuple[LinkRevisionRecord, ...]:
+        """One link's revisions known at `cut`, by `revision_no`, after `after`.
+
+        `records.associations.history` (S3 section 7.3); at most `limit`.
+        Non-abstract, on the same terms.
+        """
+        raise NotImplementedError
+
+    def restricted_capture_roots(
+        self, principal_id: str, capture_ids: Collection[str]
+    ) -> frozenset[str]:
+        """The named Capture roots that currently hold any `restricted_local` version.
+
+        S1 F24's forward rule (S3 section 6.4): a legacy anchor on one reads
+        `restricted`. Non-abstract, on the same terms.
         """
         raise NotImplementedError
 

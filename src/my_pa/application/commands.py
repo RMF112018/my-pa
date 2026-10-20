@@ -58,6 +58,7 @@ from my_pa.application.issue_work import AssociationIntent, WorkCompositeRequest
 from my_pa.application.issues import (
     IssueCloseRequest,
     IssueCreateRequest,
+    IssueHistoryRequest,
     IssueListRequest,
     IssueReopenRequest,
     IssueUpdateRequest,
@@ -80,6 +81,7 @@ from my_pa.application.record_lineage import (
     AssociationAssertRequest,
     AssociationCorrectRequest,
     AssociationEndRequest,
+    AssociationHistoryRequest,
     LineageReadRequest,
     MembershipAddRequest,
     MembershipCorrectRequest,
@@ -12740,12 +12742,33 @@ class ReadRecordLineage:
             "origin": _RECORD_REF_SCHEMA,
             "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue to read lineage under."),
             "max_depth": {"type": "integer", "minimum": 0, "maximum": 4, "default": 4},
+            # S3 section 7.2: the cuts and the opaque, grant-bound page cursor.
+            "known_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "ISO-8601 with an offset.",
+            },
+            "valid_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "ISO-8601 with an offset.",
+            },
+            "page_size": {"type": "integer", "minimum": 10, "maximum": 100},
+            "cursor": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{1,2048}$",
+                "description": "The previous page's next_cursor, with the same request.",
+            },
         }
     )
 
     origin: dict[str, object]
     issue_id: str | None = None
     max_depth: int | None = None
+    known_at: str | None = None
+    valid_at: str | None = None
+    page_size: int | None = None
+    cursor: str | None = None
 
     def __post_init__(self) -> None:
         self.lineage_request()
@@ -12759,10 +12782,17 @@ class ReadRecordLineage:
             depth = DEFAULT_LINEAGE_DEPTH
         if type(depth) is not int or not 0 <= depth <= MAX_LINEAGE_DEPTH:
             raise InvalidRequestError(SafeDetail.MAX_DEPTH)
+        known_at = _optional_instant(self.known_at, SafeDetail.KNOWN_AT)
+        valid_at = _optional_instant(self.valid_at, SafeDetail.VALID_AT)
+        _cursor_page(self.page_size, self.cursor)
         return LineageReadRequest(
             origin=_record_ref(self.origin, SafeDetail.ORIGIN),
             issue_id=self.issue_id,
             max_depth=depth,
+            known_at=known_at,
+            valid_at=valid_at,
+            page_size=self.page_size,
+            cursor=self.cursor,
         )
 
 
@@ -13713,9 +13743,19 @@ class ReadRecordAssociationHistory:
     after: int | None = None
 
     def __post_init__(self) -> None:
+        self.history_request()
+
+    def history_request(self) -> AssociationHistoryRequest:
+        """The parsed request this command states."""
         _identifier(self.link_id, IdKind.RECORD_LINK, SafeDetail.LINK_ID)
-        _optional_instant(self.known_at, SafeDetail.KNOWN_AT)
+        known_at = _optional_instant(self.known_at, SafeDetail.KNOWN_AT)
         _history_page(self.page_size, self.after)
+        return AssociationHistoryRequest(
+            link_id=self.link_id,
+            known_at=known_at,
+            page_size=DEFAULT_ISSUE_PAGE_SIZE if self.page_size is None else self.page_size,
+            after=self.after,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -13742,9 +13782,19 @@ class ReadIssueHistory:
     after: int | None = None
 
     def __post_init__(self) -> None:
+        self.history_request()
+
+    def history_request(self) -> IssueHistoryRequest:
+        """The parsed request this command states."""
         _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
-        _optional_instant(self.known_at, SafeDetail.KNOWN_AT)
+        known_at = _optional_instant(self.known_at, SafeDetail.KNOWN_AT)
         _history_page(self.page_size, self.after)
+        return IssueHistoryRequest(
+            issue_id=self.issue_id,
+            known_at=known_at,
+            page_size=DEFAULT_ISSUE_PAGE_SIZE if self.page_size is None else self.page_size,
+            after=self.after,
+        )
 
 
 @dataclass(frozen=True, slots=True)

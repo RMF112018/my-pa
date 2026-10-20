@@ -168,7 +168,13 @@ def test_closing_a_commitment_writes_no_handoff(runtime: S2Runtime) -> None:
     assert _events(runtime) == 0
     page = _ok(runtime, ListIssueHandoffs(issue_id=issue, commitment_id=commitment))
     # S3 section 7.1 lockstep: the page also reports the cut it was read at.
-    assert page == {"handoffs": [], "next_cursor": None, "known_at": page["known_at"]}
+    assert page == {
+        "handoffs": [],
+        "next_cursor": None,
+        "known_at": page["known_at"],
+        # S3 section 6.4 lockstep: nothing withheld.
+        "restricted": False,
+    }
     after = runtime.commitment_view(commitment)
     assert after["state"] == "closed"
     assert after["counterparty_entity_id"] == before["counterparty_entity_id"]
@@ -464,7 +470,13 @@ def test_no_handoff_is_inferred_for_a_delegate(runtime: S2Runtime) -> None:
     assert _events(runtime) == 0
     empty = _ok(runtime, ListIssueHandoffs(issue_id=issue))
     # S3 section 7.1 lockstep: the page also reports the cut it was read at.
-    assert empty == {"handoffs": [], "next_cursor": None, "known_at": empty["known_at"]}
+    assert empty == {
+        "handoffs": [],
+        "next_cursor": None,
+        "known_at": empty["known_at"],
+        # S3 section 6.4 lockstep: nothing withheld.
+        "restricted": False,
+    }
 
 
 # ---- the ledger read and the chain rules ------------------------------------------------------
@@ -494,7 +506,13 @@ def test_handoffs_list_returns_the_sequence_in_order(runtime: S2Runtime) -> None
     assert [event["sequence_no"] for event in chain["handoffs"]] == [1, 2]
     quiet_page = _ok(runtime, ListIssueHandoffs(issue_id=issue, commitment_id=quiet))
     # S3 section 7.1 lockstep: the page also reports the cut it was read at.
-    assert quiet_page == {"handoffs": [], "next_cursor": None, "known_at": quiet_page["known_at"]}
+    assert quiet_page == {
+        "handoffs": [],
+        "next_cursor": None,
+        "known_at": quiet_page["known_at"],
+        # S3 section 6.4 lockstep: nothing withheld.
+        "restricted": False,
+    }
     assert _refused(
         runtime, ListIssueHandoffs(issue_id=issue, commitment_id=second, after=ids[0])
     ) == ("invalid_request", ["cursor"])

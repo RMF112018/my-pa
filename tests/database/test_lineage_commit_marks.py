@@ -43,6 +43,7 @@ from my_pa.application.commands import (
     EndIssueMembership,
     EndIssueProjectLink,
     EndRecordAssociation,
+    ReadRecordLineage,
     UpdateIssue,
 )
 from my_pa.domain.lineage.asof import effective_known_at
@@ -724,6 +725,21 @@ def test_a_past_known_at_answer_never_changes_after_later_commits(runtime: S2Run
         member: (1, LinkLifecycleState.ACTIVE),
         origin: (1, LinkLifecycleState.ACTIVE),
     }
+    # Worker L3: the same cut end to end -- `records.lineage` as of `known_at`.
+    assert known_at is not None
+    as_of = known_at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    # The membership from the Issue; the context-free origin link one hop from its note.
+    reads = (
+        ReadRecordLineage(origin={"family": "situation", "record_id": issue}, known_at=as_of),
+        ReadRecordLineage(
+            origin={"family": "meeting_note_version", "record_id": note_id}, known_at=as_of
+        ),
+    )
+    graphs = [runtime.ok(read) for read in reads]
+    assert [
+        {edge["link_id"]: edge["lifecycle_state"] for edge in graph["typed_edges"]}
+        for graph in graphs
+    ] == [{member: "active"}, {origin: "active"}]
     # Later commits end both links and add a new one.
     runtime.ok(
         EndRecordAssociation(
@@ -747,6 +763,7 @@ def test_a_past_known_at_answer_never_changes_after_later_commits(runtime: S2Run
         current = lineage.link_states_known_at(PRINCIPAL, links, watermark=now_watermark, at=now_at)
         reader.commit()
     assert again == answer
+    assert [runtime.ok(read) for read in reads] == graphs
     # The current read does see the later commits.
     assert current == {
         member: (2, LinkLifecycleState.ENDED),

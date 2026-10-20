@@ -250,4 +250,25 @@ describe("RelatedIssuesPanel", () => {
     expect(paths(fetchMock)).toEqual([LINEAGE_PATH]);
     expect(paths(fetchMock).some((path) => path.includes("/api/issues"))).toBe(false);
   });
+  it("renders a contested relation and a related context", async () => {
+    // AT-024 (S3, web component): a contested link says so in words, and the
+    // symmetric related context reads the same from either endpoint.
+    const answer = lineage();
+    const edge = (answer.typed_edges as Json[])[1]!;
+    Object.assign(edge, {
+      relation_type: "related_context",
+      lifecycle_state: "contested",
+      from: { family: "meeting", record_id: "mtg_aaaaaaaa11111111" },
+      to: { family: "task", record_id: TASK_ID },
+    });
+    stub(() => backend(answer));
+    render(<RelatedIssuesPanel family="task" recordId={TASK_ID} />);
+    const panel = await screen.findByRole("region", { name: "Related Issues" });
+    expect(await within(panel).findByText("Related to a Meeting (contested)")).toBeInTheDocument();
+    expect(within(panel).getByText(/State: contested · Basis: user confirmed/)).toBeInTheDocument();
+    // S3 section 7.6: the selected Issue's title opens the Issue view.
+    expect(within(panel).getByRole("link", { name: "Issue: Synthetic Issue" })).toHaveAttribute(
+      "href", "/work/issues/sit_aaaaaaaa11111111",
+    );
+  });
 });

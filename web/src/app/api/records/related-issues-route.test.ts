@@ -86,8 +86,10 @@ describe("GET /api/records/[family]/[recordId]/related-issues", () => {
   });
 
   it("refuses a family outside task, commitment and constraint without a gateway call", async () => {
+    // S3 lockstep (S3 contract section 7.6): the Meeting view now carries the
+    // panel, so `meeting` is admitted (proved by the test below) and left this list.
     for (const [family, recordId, field] of [
-      ["meeting", "mtg_aaaaaaaa11111111", "family"],
+      ["meeting", "cmt_aaaaaaaa11111111", "recordId"],
       ["meeting_note_version", "mnote_aaaaaaaa11111111", "family"],
       ["situation", "sit_aaaaaaaa11111111", "family"],
       ["capture_version", "capver_aaaaaaaa11111111", "family"],
@@ -105,6 +107,17 @@ describe("GET /api/records/[family]/[recordId]/related-issues", () => {
     }
     expect(requirePrincipal).not.toHaveBeenCalled();
     expect(invokeGateway).not.toHaveBeenCalled();
+  });
+
+  it("admits the Meeting view's family with its own prefix (S3 section 7.6)", async () => {
+    invokeGateway.mockResolvedValue({ ok: true, result: { ...LINEAGE, root: { family: "meeting", record_id: "mtg_aaaaaaaa11111111" } }, disclosure: {} });
+    const response = await read("meeting", "mtg_aaaaaaaa11111111");
+    expect(response.status).toBe(200);
+    expect(invokeGateway).toHaveBeenCalledOnce();
+    expect(invokeGateway).toHaveBeenCalledWith(PRINCIPAL, "records.lineage", {
+      origin: { family: "meeting", record_id: "mtg_aaaaaaaa11111111" },
+      max_depth: 1,
+    });
   });
 
   it("refuses unknown query fields", async () => {

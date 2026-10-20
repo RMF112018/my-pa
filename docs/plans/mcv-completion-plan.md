@@ -74,9 +74,11 @@ is not a defect.
 
 ## 3. What is implemented
 
-Four hundred and fourteen Python modules under `src/my_pa` and seven hundred and ninety-eight test modules —
+Four hundred and sixteen Python modules under `src/my_pa` and seven hundred and ninety-nine test modules —
 
-**Current-tree remeasurement (record lineage S3 Issue timeline, branch `feat/lineage-s3-graph`, worker L4, 2026-10-20):** the two commands below count 414 source modules and 798 test modules: the 412/797 below plus `src/my_pa/application/issue_timeline.py` and `src/my_pa/contracts/v1/issue_timeline.py`, and `tests/integration/test_issue_timeline.py`. This is file-inventory evidence, not a test PASS receipt.
+**Current-tree remeasurement (record lineage S3 backfill dry run, branch `feat/lineage-s3-graph`, worker L5, 2026-10-20):** the two commands below count 416 source modules and 799 test modules: the 414/798 below plus `src/my_pa/application/lineage_backfill.py` and `src/my_pa/contracts/v1/lineage_backfill.py`, and `tests/database/test_lineage_backfill.py`. This is file-inventory evidence, not a test PASS receipt.
+
+**Historical remeasurement (record lineage S3 Issue timeline, branch `feat/lineage-s3-graph`, worker L4, 2026-10-20):** the two commands below counted 414 source modules and 798 test modules: the 412/797 below plus `src/my_pa/application/issue_timeline.py` and `src/my_pa/contracts/v1/issue_timeline.py`, and `tests/integration/test_issue_timeline.py`. This is file-inventory evidence, not a test PASS receipt.
 
 **Historical remeasurement (record lineage S3 as-of read core and visibility, branch `feat/lineage-s3-graph`, worker L3, 2026-10-19):** the two commands below counted 412 source modules and 797 test modules: the 410/788 below plus `src/my_pa/domain/lineage/cursor.py` and `src/my_pa/application/lineage_visibility.py`, and `tests/database/test_lineage_bitemporal.py`, `tests/database/test_lineage_bounds.py`, `tests/database/test_lineage_query_plans.py`, `tests/database/test_lineage_benchmark.py`, `tests/integration/test_issue_lineage_reverse_roots.py`, `tests/integration/test_issue_context_isolation_asof.py`, `tests/integration/test_issue_history.py`, `tests/security/test_lineage_cursor_revocation.py` and `tests/recovery/test_lineage_projection_rebuild.py` (`tests/database/lineage_s3_read_harness.py` is a helper, not a `test_*.py`). This is file-inventory evidence, not a test PASS receipt.
 

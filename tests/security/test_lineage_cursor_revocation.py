@@ -17,8 +17,10 @@ rows (worker L3):
 * restricted nodes are neither counted nor identifiable;
 * the S1/S2 Issue reads apply section 6.4 to remote readers.
 
-The `issues.timeline` rows of this crosswalk entry are worker L4's. Every
-identity and every body is synthetic.
+The `issues.timeline` rows (worker L4): a timeline cursor is bound, checked and
+revoked the same way; its Record Event watermark names only an event the
+timeline itself could show this reader; and a withheld Record Event reaches no
+entry, count, state or watermark. Every identity and every body is synthetic.
 """
 
 from __future__ import annotations
@@ -57,12 +59,15 @@ from my_pa.application.commands import (
     ReadIssue,
     ReadIssueClosureReadiness,
     ReadIssueHistory,
+    ReadIssueTimeline,
 )
 from my_pa.application.errors import InvalidRequestError, SafeDetail
+from my_pa.application.issue_timeline import IssueTimelineRequest, timeline_request_document
 from my_pa.application.record_lineage import LineageReadRequest, lineage_request_document
 from my_pa.domain.lineage.cursor import cursor_binding, parse_instant_token
 from my_pa.domain.lineage.model import RecordRef
 from my_pa.domain.lineage.vocabulary import RecordFamily
+from my_pa.domain.task.lifecycle import TaskLifecycleState
 
 pytestmark = pytest.mark.database
 
@@ -582,3 +587,195 @@ def test_a_restricted_legacy_anchor_is_labelled_locally_and_withheld_remotely(
     remote = runtime.ok(read, grants=everything)
     assert remote["memberships"][0]["evidence"] == [] and remote["restricted"] is True
     assert capture_id not in json.dumps(remote)
+
+
+# ---- the issues.timeline rows (worker L4; S3 sections 5, 6.4 and 7.3) ----------------------
+
+#: Every family read and the timeline itself.
+_TIMELINE: Final = ("issues.timeline", *_ALL[1:])
+
+
+def _timeline_document(issue_id: str, page_size: int) -> dict[str, Any]:
+    return timeline_request_document(
+        IssueTimelineRequest(
+            issue_id=issue_id, known_at=None, valid_at=None, page_size=page_size, cursor=None
+        )
+    )
+
+
+def _timeline_rebound(token: str, issue_id: str, **cuts: object) -> str:
+    """A timeline token with its cuts changed *and* `b` recomputed for them."""
+    document = decoded(token)
+    document.update(cuts)
+    document["b"] = cursor_binding(
+        capability="issues.timeline",
+        principal_id=PRINCIPAL,
+        request=_timeline_document(issue_id, 10),
+        known_at=parse_instant_token(document["k"]),
+        lineage_valid_at=parse_instant_token(document["t"]),
+        native_cut_at=parse_instant_token(document["n"]),
+        record_event_watermark=document["r"],
+    )
+    return reencoded(document)
+
+
+def _timeline(issue_id: str, **fields: Any) -> ReadIssueTimeline:  # noqa: ANN401
+    return ReadIssueTimeline(issue_id=issue_id, **fields)
+
+
+def _timeline_restart(page: dict[str, Any], issue_id: str) -> None:
+    assert page["complete_state"] == "scope_changed_restart_required"
+    assert page["qualifiers"] == ["scope_changed_restart_required"]
+    assert (page["issue_id"], page["entries"], page["next_cursor"]) == (issue_id, [], None)
+
+
+def _newest_event(runtime: S3ReadRuntime, record_ids: list[str]) -> str:
+    """The Principal's newest Record Event among `record_ids` (straight from the feed table)."""
+    with runtime.engine.connect() as connection:
+        return str(
+            connection.execute(
+                text(
+                    "SELECT event_id FROM knowledge.record_events WHERE principal_id = :p "
+                    "AND record_id = ANY(:ids) ORDER BY sequence_number DESC LIMIT 1"
+                ),
+                {"p": PRINCIPAL, "ids": record_ids},
+            ).scalar_one()
+        )
+
+
+def _entry_ids(pages: list[dict[str, Any]]) -> list[str]:
+    return [entry["entry_id"] for page in pages for entry in page["entries"]]
+
+
+def test_a_timeline_cursor_is_bound_and_revoked_the_same_way(runtime: S3ReadRuntime) -> None:
+    scene = _scene(runtime, "tl-bound")
+    issue = scene["issue"]
+    whole = runtime.timeline(issue, page_size=100)
+    pages = runtime.timeline_pages(issue, page_size=10)
+    assert len(pages) >= 3 and _entry_ids(pages) == [e["entry_id"] for e in whole["entries"]]
+    first = pages[0]
+    cursor = first["next_cursor"]
+    document = decoded(cursor)
+    assert (document["k"], document["t"], document["n"]) == (
+        first["known_at"],
+        first["lineage_valid_at"],
+        None,
+    )
+    assert document["r"] is not None and document["r"].startswith("rcev_")
+    # Binding: another Principal, changed filters, an edited cut.
+    runtime.issue("tl-bound-b", principal_id=OTHER_PRINCIPAL)
+    error = runtime.refused(
+        _timeline(issue, page_size=10, cursor=cursor), principal_id=OTHER_PRINCIPAL
+    )
+    assert _code(error) == ("conflict", ["cursor"])
+    other_issue = runtime.issue("tl-bound-other")
+    for fields in (
+        {"issue_id": other_issue},
+        {"page_size": 11},
+        {"known_at": first["known_at"]},
+        {"valid_at": first["known_at"]},
+    ):
+        command = _timeline(**{"issue_id": issue, "page_size": 10, "cursor": cursor, **fields})
+        assert _code(runtime.refused(command)) == ("conflict", ["cursor"]), fields
+    earlier = (datetime.fromisoformat(document["k"]) - timedelta(seconds=1)).astimezone(UTC)
+    for key in ("k", "t"):
+        edited = reencoded({**document, key: earlier.strftime("%Y-%m-%dT%H:%M:%S.%fZ")})
+        error = runtime.refused(_timeline(issue, page_size=10, cursor=edited))
+        assert _code(error) == ("conflict", ["cursor"]), key
+    # Shape: malformed tokens, a lineage position, a note-version cut.
+    for token in (
+        "not-a-json-token",
+        reencoded({**document, "v": 2}),
+        reencoded({**document, "p": "n:task:" + scene["tasks"][0]}),
+        reencoded({**document, "p": [document["p"][0], 0, 6, document["p"][3]]}),
+        reencoded({**document, "p": [document["p"][0], 0, 0, "tsk_aaaaaaaa11111111"]}),
+        reencoded({**document, "n": document["k"]}),
+    ):
+        error = runtime.refused(_timeline(issue, page_size=10, cursor=token))
+        assert _code(error) == ("invalid_request", ["cursor"]), token
+    # Cuts: a `k` re-bound beyond the horizon, and a `t` after its `k`.
+    future = (datetime.now(UTC) + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    for cuts in ({"k": future, "t": future}, {"t": future}):
+        token = _timeline_rebound(cursor, issue, **cuts)
+        error = runtime.refused(_timeline(issue, page_size=10, cursor=token))
+        assert _code(error) == ("invalid_request", ["cursor"]), cuts
+    # A well-formed position of no entry answers the restart, disclosing nothing.
+    unknown = reencoded({**document, "p": [document["p"][0], 0, 2, "irv_neverexisted000001"]})
+    _timeline_restart(runtime.timeline(issue, page_size=10, cursor=unknown), issue)
+    # Grants: a revoked family read restarts; a revoked timeline grant is hidden.
+    remote = runtime.timeline(issue, page_size=10, grants=grant(*_TIMELINE))
+    narrowed = grant(*(name for name in _TIMELINE if name != "tasks.read"))
+    page = runtime.timeline(issue, page_size=10, cursor=remote["next_cursor"], grants=narrowed)
+    _timeline_restart(page, issue)
+    rendered = json.dumps(page)
+    for identifier in (scene["meeting"], *scene["tasks"]):
+        assert identifier not in rendered
+    again = runtime.timeline_pages(issue, page_size=10, grants=narrowed)
+    assert again[0]["complete_state"] == "restricted_evidence"
+    assert not any(task in json.dumps(again) for task in scene["tasks"])
+    without = grant(*_TIMELINE[1:])
+    for command in (_timeline(issue), _timeline(issue, page_size=10, cursor=remote["next_cursor"])):
+        assert _code(runtime.refused(command, grants=without)) == ("unsupported", [])
+
+
+def test_a_timeline_cursor_names_no_hidden_event(runtime: S3ReadRuntime) -> None:
+    scene = _scene(runtime, "tl-watermark")
+    issue = scene["issue"]
+    members = [scene["meeting"], *scene["tasks"]]
+    # The Principal's newest event is of a record outside the Issue.
+    outside = runtime.task("tl-watermark-outside")
+    assert _newest_event(runtime, [outside, *members]) == _newest_event(runtime, [outside])
+    pages = runtime.timeline_pages(issue, page_size=10)
+    watermark = decoded(pages[0]["next_cursor"])["r"]
+    assert watermark == _newest_event(runtime, members)
+    assert watermark in _entry_ids(pages)
+    # A remote reader without the Task read: the watermark is a Meeting event it is shown.
+    hidden = grant(*(name for name in _TIMELINE if name != "tasks.read"))
+    remote = runtime.timeline(issue, page_size=10, grants=hidden)
+    assert remote["next_cursor"] is None  # few enough entries for one page
+    shown = [entry["entry_id"] for entry in remote["entries"] if entry["plane"] == "native"]
+    assert shown and set(shown) <= set(_entry_ids(pages))
+    assert not any(task in json.dumps(remote) for task in scene["tasks"])
+    many = runtime.timeline(issue, page_size=10)
+    assert decoded(many["next_cursor"])["r"] == watermark
+    # After a later event of a member, a page of the first cursor keeps its watermark.
+    runtime.transition(scene["tasks"][0], TaskLifecycleState.IN_PROGRESS, "tl-watermark-move")
+    later = runtime.timeline(issue, page_size=10, cursor=pages[0]["next_cursor"])
+    assert later["entries"] == pages[1]["entries"]
+    if later["next_cursor"] is not None:
+        assert decoded(later["next_cursor"])["r"] == watermark
+
+
+def test_withheld_record_events_never_reach_a_timeline_entry_count_or_watermark(
+    runtime: S3ReadRuntime,
+) -> None:
+    scene = _scene(runtime, "tl-withheld")
+    issue = scene["issue"]
+    capture_id, version_id, _ = capture(runtime, "tl-withheld-c")
+    runtime.member(issue, "capture_version", version_id, "tl-withheld-c", "supporting_evidence")
+    # The Capture is restricted now: a remote reader of its events is withheld them.
+    restricted_capture_version(runtime.engine, version_id)
+    capture_event = _newest_event(runtime, [capture_id])
+    members = [scene["meeting"], *scene["tasks"]]
+    local = runtime.timeline_pages(issue, page_size=10)
+    local_entries = [entry for page in local for entry in page["entries"]]
+    assert capture_event in _entry_ids(local)
+    assert decoded(local[0]["next_cursor"])["r"] == capture_event
+    remote = runtime.timeline_pages(issue, page_size=10, grants=grant(*_TIMELINE))
+    remote_entries = [entry for page in remote for entry in page["entries"]]
+    rendered = json.dumps(remote)
+    assert capture_id not in rendered and capture_event not in rendered
+    assert decoded(remote[0]["next_cursor"])["r"] == _newest_event(runtime, members)
+    # Exactly the withheld events are missing: no other entry, and no count or state.
+    assert remote_entries == [
+        entry
+        for entry in local_entries
+        if not (entry["plane"] == "native" and entry["native"]["record_id"] == capture_id)
+    ]
+    assert {page["complete_state"] for page in remote} == {"complete"}
+    assert not {key for key in _keys(remote) if "count" in key or "hidden" in key}
+    # The capture version's membership itself is visible to a Capture reader.
+    assert any(
+        entry["kind"] == "membership" and entry["subject"]["record_id"] == version_id
+        for entry in remote_entries
+    )

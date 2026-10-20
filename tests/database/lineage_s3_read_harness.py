@@ -10,6 +10,7 @@ paging, cursor, visibility and history tests need:
 * `horizon` -- the Principal's committed lineage horizon `H`, as the
   microsecond RFC 3339 token every S3 answer reports a cut in;
 * `lineage` / `pages` -- `records.lineage`, one page or followed to the end;
+* `timeline` / `timeline_pages` -- `issues.timeline` likewise (package L4);
 * cursor surgery for the tamper tests (`decoded`, `reencoded`).
 
 Every identity and every body here is synthetic.
@@ -25,7 +26,7 @@ from typing import Any, Final
 
 from sqlalchemy import Engine, text
 
-from my_pa.application.commands import Command, ReadRecordLineage
+from my_pa.application.commands import Command, ReadIssueTimeline, ReadRecordLineage
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
 from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.common.identifiers import IdKind
@@ -129,7 +130,30 @@ class S3ReadRuntime(S3Runtime):
                 return found
             assert len(found) < 200, "paging did not end"
 
+    def timeline(self, issue_id: str, **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
+        """`issues.timeline` of `issue_id`; keyword arguments go to the command, then `invoke`."""
+        fields = {key: value for key, value in kwargs.items() if key in _TIMELINE_FIELDS}
+        rest = {key: value for key, value in kwargs.items() if key not in _TIMELINE_FIELDS}
+        return self.ok(ReadIssueTimeline(issue_id=issue_id, **fields), **rest)
 
+    def timeline_pages(self, issue_id: str, **kwargs: Any) -> list[dict[str, Any]]:  # noqa: ANN401
+        """Every page of `issues.timeline`, following `next_cursor` to `null`.
+
+        A cursor needs its page size (section 7.5), so the default 25 is stated.
+        """
+        kwargs.setdefault("page_size", 25)
+        found: list[dict[str, Any]] = []
+        cursor: str | None = None
+        while True:
+            page = self.timeline(issue_id, cursor=cursor, **kwargs)
+            found.append(page)
+            cursor = page["next_cursor"]
+            if cursor is None:
+                return found
+            assert len(found) < 200, "paging did not end"
+
+
+_TIMELINE_FIELDS: Final = frozenset({"known_at", "valid_at", "page_size", "cursor"})
 _COMMAND_FIELDS: Final = frozenset(
     {"issue_id", "max_depth", "known_at", "valid_at", "page_size", "cursor"}
 )

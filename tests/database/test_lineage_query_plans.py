@@ -8,8 +8,10 @@ links, the revision key for the as-of revision selection, and the
 statement whose predicate no index serves still plans a (penalized)
 sequential scan, which the assertions reject.
 
-The `issues.timeline` row of this crosswalk entry is worker L4's. Every
-identity and every body is synthetic.
+The `issues.timeline` row (worker L4): the timeline's lineage reads reach the
+Issue-keyed indexes (the revision key, the context index, the handoff Issue
+index) and its native read the Record Event `(principal, family, record)`
+index. Every identity and every body is synthetic.
 """
 
 from __future__ import annotations
@@ -23,9 +25,13 @@ from sqlalchemy import Connection, event, text
 from my_pa.contracts.ports import LineageFactCut
 from my_pa.domain.lineage.model import RecordRef
 from my_pa.domain.lineage.vocabulary import RecordFamily
+from my_pa.domain.record_events import RecordEventFamily
+from my_pa.infrastructure.persistence.issue_handoffs import SqlIssueHandoffRepository
+from my_pa.infrastructure.persistence.issue_timeline import SqlIssueTimelineRepository
 from my_pa.infrastructure.persistence.record_lineage import SqlRecordLineageRepository
 from tests.database.lineage_issue_harness import PRINCIPAL
-from tests.database.lineage_s3_harness import blocks_scene
+from tests.database.lineage_s2_harness import handoff
+from tests.database.lineage_s3_harness import GATEWAY, blocks_scene, shortly_after
 from tests.database.lineage_s3_read_harness import S3ReadRuntime
 
 pytestmark = pytest.mark.database
@@ -176,3 +182,119 @@ def test_mark_resolution_uses_the_marked_at_index(runtime: S3ReadRuntime) -> Non
         )
     assert "lineage_commit_marks_by_time" in plan, plan
     assert "Seq Scan on lineage_commit_marks" not in plan, plan
+
+
+def _event_volume(runtime: S3ReadRuntime, copies: int = 20000) -> None:
+    """Many synthetic Record Events of other records, so the record index means something.
+
+    Copies of one real event under fresh `rcev_` ids, record ids and sequence
+    numbers past the real ones; replica mode skips the feed's append-only
+    trigger for this bulk seed (a synthetic database only).
+    """
+    with runtime.engine.begin() as connection:
+        connection.execute(text("SET LOCAL session_replication_role = replica"))
+        connection.execute(
+            text(
+                "INSERT INTO knowledge.record_events (event_id, principal_id, sequence_number, "
+                "record_family, record_id, event_kind, record_version, changed_fields, "
+                "source_capability, source_receipt_id, actor_class, authority, classification, "
+                "correlation_id, causation_event_id, occurred_at, recorded_at) "
+                "SELECT 'rcev_vol' || n || 'x' || substr(e.event_id, 6, 20), e.principal_id, "
+                "1000000 + n, e.record_family, "
+                "'tsk_vol' || n || 'x' || substr(e.record_id, 5, 20), e.event_kind, "
+                "e.record_version, e.changed_fields, e.source_capability, NULL, "
+                "e.actor_class, e.authority, e.classification, NULL, NULL, e.occurred_at, "
+                "e.recorded_at FROM (SELECT * FROM knowledge.record_events "
+                "WHERE principal_id = :p AND record_family = 'task' LIMIT 1) AS e, "
+                "generate_series(1, :copies) AS n"
+            ),
+            {"p": PRINCIPAL, "copies": copies},
+        )
+    with runtime.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+        connection.execute(text("ANALYZE knowledge.record_events"))
+
+
+def _statement_plans(connection: Connection, run: Callable[[], object]) -> str:
+    """`_plans` for a step that is not a `SqlRecordLineageRepository` call."""
+    return _plans(connection, lambda _repository: run())
+
+
+def test_timeline_reads_use_the_issue_and_record_event_indexes(runtime: S3ReadRuntime) -> None:
+    scene = _scene(runtime)
+    issue = scene["issue"]
+    commitment = runtime.commitment("plan-tl")
+    runtime.member(issue, "commitment", commitment, "plan-tl", "discussion")
+    created = str(runtime.commitment_view(commitment)["created_at"])
+    runtime.ok(
+        handoff(
+            issue,
+            commitment,
+            "counterparty",
+            shortly_after(created, 10),
+            "plan-tl",
+            runtime.handoff_anchor("plan-tl-handoff"),
+        ),
+        surface=GATEWAY,
+    )
+    _event_volume(runtime)
+    inside = {
+        RecordRef(family=RecordFamily.SITUATION, record_id=issue),
+        RecordRef(family=RecordFamily.TASK, record_id=scene["first"]),
+        RecordRef(family=RecordFamily.TASK, record_id=scene["second"]),
+    }
+    members = [(RecordEventFamily.TASK, scene["first"]), (RecordEventFamily.TASK, scene["second"])]
+    with runtime.engine.connect() as connection:
+        cut = _cut(connection)
+        timeline = SqlIssueTimelineRepository(connection)
+        lineage = SqlRecordLineageRepository(connection)
+        handoffs = SqlIssueHandoffRepository(connection)
+        revisions = _statement_plans(
+            connection, lambda: timeline.issue_revisions(PRINCIPAL, issue, cut)
+        )
+        context = _statement_plans(
+            connection, lambda: lineage.links_in_issue_context_at(PRINCIPAL, issue, inside, cut)
+        )
+        events = _statement_plans(
+            connection,
+            lambda: handoffs.known_events(
+                PRINCIPAL,
+                issue,
+                commitment_id=None,
+                page_size=100,
+                after=None,
+                watermark=cut.watermark,
+                at=cut.at,
+            ),
+        )
+        native = _statement_plans(
+            connection,
+            lambda: timeline.native_events(
+                PRINCIPAL,
+                members,
+                families=frozenset({RecordEventFamily.TASK}),
+                include_restricted_memory=True,
+                occurred_at_most=None,
+                sequence_at_most=None,
+            ),
+        )
+        remote = _statement_plans(
+            connection,
+            lambda: timeline.native_events(
+                PRINCIPAL,
+                members,
+                families=frozenset({RecordEventFamily.TASK}),
+                include_restricted_memory=False,
+                occurred_at_most=cut.at,
+                sequence_at_most=10**9,
+            ),
+        )
+    assert "issue_revisions_pkey" in revisions, revisions
+    assert "Seq Scan on issue_revisions" not in revisions, revisions
+    assert "record_links_by_issue" in context, context
+    assert "Seq Scan on record_links " not in context, context
+    assert "record_link_revisions_pkey" in context, context
+    assert "issue_responsibility_events_by_issue" in events, events
+    assert "Seq Scan on issue_responsibility_events" not in events, events
+    for read in (native, remote):
+        assert "record_events_by_principal_record" in read, read
+        assert "Seq Scan on record_events" not in read, read

@@ -14,9 +14,10 @@ S3 contract sections 6.1, 7.5 and 7.7 against PostgreSQL, through
   lineage on and the backfill sub-switch off, both backfill capabilities do;
 * a foreign link or handoff answers exactly like an absent one.
 
-Worker L3's read rows: a remote lineage read without a grant on its own
-capability is `unsupported` (S3 section 6.1, R3-F13), and another Principal's
-reads of this Principal's subjects answer exactly like reads of absent ones. Every identity here is
+Worker L3's read rows (with worker L4's `issues.timeline` among the reads): a
+remote lineage read without a grant on its own capability is `unsupported` (S3
+section 6.1, R3-F13), and another Principal's reads of this Principal's
+subjects answer exactly like reads of absent ones. Every identity here is
 synthetic.
 """
 
@@ -230,6 +231,11 @@ def test_every_s3_capability_answers_a_foreign_subject_like_an_absent_one(
             "not_found",
             ["issue_id"],
         )
+        # Worker L4's read: a foreign Issue's timeline answers like an absent one.
+        assert _code(runtime, ReadIssueTimeline(issue_id=issue), principal_id=OTHER_PRINCIPAL) == (
+            "not_found",
+            ["issue_id"],
+        )
     assert all_s3_counts(runtime.engine) == before
 
 
@@ -244,6 +250,7 @@ def _lineage_reads(scene: dict[str, Any]) -> tuple[Command, ...]:
     return (
         ReadRecordLineage(origin={"family": "situation", "record_id": scene["issue"]}),
         ReadIssueHistory(issue_id=scene["issue"]),
+        ReadIssueTimeline(issue_id=scene["issue"]),
         ReadRecordAssociationHistory(link_id=scene["link"]),
         ReadIssue(issue_id=scene["issue"], include_members=True),
         ListIssues(),

@@ -76,6 +76,7 @@ from my_pa.contracts.ports import (
     EntitiesRepository,
     EvidenceUnavailableError,
     GoodNotesSemanticRepository,
+    IssueRepository,
     KnowledgeAssertionRepository,
     KnowledgeRecord,
     KnowledgeRepository,
@@ -87,6 +88,7 @@ from my_pa.contracts.ports import (
     PulseRepository,
     RecordEventReader,
     RecordEventStager,
+    RecordLineageRepository,
     RelationshipMemoryProposalRepository,
     RelationshipMemoryRepository,
     RepositoryFailureError,
@@ -202,6 +204,7 @@ from my_pa.infrastructure.persistence.goodnotes_durable_note import PostgresDura
 from my_pa.infrastructure.persistence.goodnotes_pull import SqlGoodNotesPullRepository
 from my_pa.infrastructure.persistence.goodnotes_semantics import SqlGoodNotesSemanticRepository
 from my_pa.infrastructure.persistence.intelligence import SqlIntelligenceStore
+from my_pa.infrastructure.persistence.issues import SqlIssueRepository
 from my_pa.infrastructure.persistence.jobs import enqueue_job, job_for
 from my_pa.infrastructure.persistence.knowledge import (
     corpus_coverage,
@@ -222,6 +225,7 @@ from my_pa.infrastructure.persistence.record_events import (
     SqlRecordEventWriter,
     flush_record_events,
 )
+from my_pa.infrastructure.persistence.record_lineage import SqlRecordLineageRepository
 from my_pa.infrastructure.persistence.registry import (
     UnknownSourceError,
     get_source,
@@ -1482,6 +1486,16 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def meetings(self) -> MeetingRepository:
         """The Meeting records rows, on this transaction's connection (WP-MTG-02)."""
         return SqlMeetingRepository(self._open)
+
+    @property
+    def issues(self) -> IssueRepository:
+        """The record lineage S1 Issue plane, on this transaction's connection."""
+        return SqlIssueRepository(self._open)
+
+    @property
+    def record_lineage(self) -> RecordLineageRepository:
+        """Record lineage S1 links and the reverse read, on this transaction's connection."""
+        return SqlRecordLineageRepository(self._open)
 
     @property
     def identity_history(self) -> SqlIdentityHistoryQuery:

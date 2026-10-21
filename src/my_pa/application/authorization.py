@@ -54,11 +54,14 @@ from my_pa.application.commands import (
     AddEntityAlias,
     AddEntityCommunicationMethod,
     AddEntityName,
+    AddIssueMembership,
+    AddIssueProjectLink,
     ApplyConstraintSync,
     ArchiveCapture,
     ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
+    AssertRecordAssociation,
     BeginIntelligenceCycle,
     BindEntityIdentifier,
     BulkConfirmTasks,
@@ -73,6 +76,7 @@ from my_pa.application.commands import (
     CompleteGoodNotesPull,
     ConfigureProjectControls,
     CorrectGoodNotes,
+    CorrectRecordAssociation,
     CreateCapture,
     CreateCommitment,
     CreateConstraintCategory,
@@ -83,6 +87,7 @@ from my_pa.application.commands import (
     CreateEntityParticipation,
     CreateEntityProposal,
     CreateEntityRelationship,
+    CreateIssue,
     CreateKnowledgeAssertion,
     CreateManagedDocument,
     CreateMeeting,
@@ -99,6 +104,9 @@ from my_pa.application.commands import (
     EndEntityAssignment,
     EndEntityParticipation,
     EndEntityRelationship,
+    EndIssueMembership,
+    EndIssueProjectLink,
+    EndRecordAssociation,
     EnrollSource,
     FetchSource,
     GetCanvasWorkspace,
@@ -141,8 +149,10 @@ from my_pa.application.commands import (
     ListGoodNotesPages,
     ListGoodNotesRuns,
     ListIntelligenceArtifacts,
+    ListIssues,
     ListKnowledgeAssertions,
     ListManagedDocuments,
+    ListMeetingNoteVersions,
     ListMeetings,
     ListPortfolioConstraints,
     ListProjects,
@@ -174,13 +184,16 @@ from my_pa.application.commands import (
     ReadConstraintSyncState,
     ReadGoodNotes,
     ReadIntelligenceArtifact,
+    ReadIssue,
     ReadKnowledge,
     ReadKnowledgeAssertion,
     ReadManagedDocument,
     ReadMeeting,
+    ReadMeetingNoteVersion,
     ReadPortfolioConstraintOverview,
     ReadProject,
     ReadProjectControlsStatus,
+    ReadRecordLineage,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
@@ -236,6 +249,7 @@ from my_pa.application.commands import (
     UpdateConstraint,
     UpdateConstraintCategory,
     UpdateEntity,
+    UpdateIssue,
     UpdateMeeting,
     UpdateMeetingSeries,
     UpdateProject,
@@ -676,6 +690,25 @@ def _requested_scope(
             # Principal, and never a configured source or an enrollment.
             | SubmitKnowledgeAssertion()
             | CheckpointKnowledgeDiscovery()
+            # Record lineage S1: an Issue, its revisions and its native Project
+            # links are product-owned rows of the acting Principal and never a
+            # configured source.
+            | CreateIssue()
+            | ReadIssue()
+            | ListIssues()
+            | UpdateIssue()
+            | AddIssueProjectLink()
+            | EndIssueProjectLink()
+            # Memberships, associations, the lineage read and the note-history
+            # reads name the same partition's product-owned rows.
+            | AddIssueMembership()
+            | EndIssueMembership()
+            | AssertRecordAssociation()
+            | CorrectRecordAssociation()
+            | EndRecordAssociation()
+            | ReadRecordLineage()
+            | ListMeetingNoteVersions()
+            | ReadMeetingNoteVersion()
         ):
             return frozenset()
         case CreateCapture():

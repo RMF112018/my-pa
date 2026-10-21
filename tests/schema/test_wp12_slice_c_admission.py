@@ -18,6 +18,7 @@ from alembic.config import Config
 from sqlalchemy import CheckConstraint, Engine, func, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 from tests.schema.knowledge_schema_ahead_contract import admitted_ahead
+from tests.schema.lineage_schema_ahead_contract import lineage_admitted_ahead
 
 from my_pa.application.apple_machine import AppleBridgeIdentity
 from my_pa.application.native_baseline import (
@@ -667,7 +668,9 @@ def test_current_metadata_capability_vocabulary_matches_alembic_head(c_engine: E
     # The live declaration follows the domain; the database runs ahead of it by
     # exactly the Knowledge schema-ahead gap row (KLP-WP-02, R6 section 12.1).
     assert metadata_values == expected
-    assert migrated_values == expected | admitted_ahead("capability")
+    assert migrated_values == expected | (
+        admitted_ahead("capability") | lineage_admitted_ahead("capability")
+    )
     assert {member.value for member in Capability} <= metadata_values
     assert {member.value for member in NativeSourceCapability} <= metadata_values
     assert "native_sources.delete" not in metadata_values

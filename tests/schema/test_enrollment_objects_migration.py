@@ -348,6 +348,15 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         # The Intelligence report type registry's table, stacked above by
         # the same argument.
         "intelligence_report_types",
+        # The record lineage S1 revision stacks its eight tables.
+        "issue_revisions",
+        "issue_project_membership_events",
+        "lineage_evidence_anchors",
+        "record_links",
+        "record_link_revisions",
+        "record_link_revision_evidence",
+        "record_link_heads",
+        "lineage_write_requests",
     }
 )
 

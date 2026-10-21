@@ -186,6 +186,41 @@ from my_pa.domain.intelligence.catalog import (
     ProvenanceRelation,
     ReportTypeOrigin,
 )
+from my_pa.domain.knowledge_assertion.vocabulary import KnowledgeDecisionChannel
+from my_pa.domain.lineage.model import (
+    MAX_EVIDENCE_ANCHORS,
+    MAX_ISSUE_DESCRIPTION_CHARACTERS,
+    MAX_ISSUE_TITLE_CHARACTERS,
+    MAX_LINEAGE_IDEMPOTENCY_KEY_CHARACTERS,
+    MAX_LINEAGE_REASON_CHARACTERS,
+    MAX_NORMALIZED_IDENTITY_CHARACTERS,
+)
+from my_pa.domain.lineage.vocabulary import (
+    ATTESTED_AUTHORITY_CLASSES,
+    ATTESTED_DECISION_CHANNELS,
+    ISSUE_AUTHORITY_CLASSES,
+    ISSUE_REVISION_CAPABILITIES,
+    ISSUE_STATES,
+    LINEAGE_WRITE_CAPABILITIES,
+    LINK_REVISION_CAPABILITIES,
+    MEMBERSHIP_EVENT_CAPABILITIES,
+    RECORD_FAMILY_ID_KINDS,
+    RECORD_LINK_CAPABILITIES,
+    RELATION_MATRIX,
+    AcceptanceBasis,
+    EvidenceSourceFamily,
+    IssueProjectMembershipAction,
+    IssueProjectMembershipState,
+    IssueRevisionAction,
+    LinkLifecycleState,
+    LinkRevisionAction,
+    MemberRole,
+    RecordFamily,
+    RecordLinkKind,
+    SituationKind,
+    SourceVersionKind,
+)
+from my_pa.domain.lineage.vocabulary import EvidenceRole as LineageEvidenceRole
 from my_pa.domain.meeting.model import (
     MAX_ATTENDEE_DISPLAY_NAME_CHARACTERS,
     MAX_ATTENDEE_EMAIL_CHARACTERS,
@@ -1102,6 +1137,15 @@ captures = Table(
 #: (`persistence/capture.py`, `persistence/capture_search.py`), and `QC-AC-013`
 #: stays provable across two processes (`tests/capture/test_owner_is_the_partition.py`).
 #: `docs/operations/mcv-limitations.md` section 2 records the history.
+#:
+#: Record lineage S1 revision `264310e0416a` adds one database-only constraint
+#: to this table -- `a_capture_version_digest_is_identified_within_its_capture
+#: UNIQUE (version_id, capture_id, owner_principal_id, content_sha256)`, the
+#: target of the `capture_version` evidence anchor's digest-bearing foreign key
+#: (`lineage_evidence_anchors`) -- by ALTER, and deliberately not here, for the
+#: reason the `captures` comment gives: historical revision `1a4c9e77b2d5`
+#: builds this table from this declaration, so declaring it here would change
+#: what that revision emits (S1 contract section 4.1, F20).
 capture_versions = Table(
     "capture_versions",
     METADATA,
@@ -2989,6 +3033,14 @@ situations = Table(
     Column("outcome", Text),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
+    #: Record lineage S1 (`264310e0416a`, OD-01): a context Situation or an
+    #: Issue, fixed at insert, and the Issue CAS version. Existing rows became
+    #: `context` at version 1. The `a_situation_kind_is_fixed` trigger keeps
+    #: `kind` fixed and a context row at its version; the deferred
+    #: `an_issue_matches_its_latest_revision` trigger holds an Issue row equal
+    #: to its revision at `version`.
+    Column("kind", Text, nullable=False, server_default=text("'context'")),
+    Column("version", Integer, nullable=False, server_default=text("1")),
     _is_identifier("situation_id", IdKind.SITUATION),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     CheckConstraint("length(trim(title)) > 0", name="a_situation_title_is_not_blank"),
@@ -2996,6 +3048,15 @@ situations = Table(
     CheckConstraint(
         "(state = 'closed') = (closed_at IS NOT NULL)",
         name="a_closed_situation_records_when_it_closed",
+    ),
+    _one_of("kind", SituationKind, name="a_situation_kind_is_known"),
+    CheckConstraint("version >= 1", name="a_situation_version_is_positive"),
+    UniqueConstraint(
+        "situation_id", "principal_id", name="a_situation_is_identified_within_its_principal"
+    ),
+    #: The target of every Issue-only foreign key: `(…, 'issue_workstream')`.
+    UniqueConstraint(
+        "situation_id", "principal_id", "kind", name="a_situation_is_identified_with_its_kind"
     ),
     Index("situations_by_principal", "principal_id"),
     Index("situations_by_principal_state", "principal_id", "state"),
@@ -3235,6 +3296,30 @@ project_situations = Table(
     _is_identifier("project_situation_id", IdKind.PROJECT_SITUATION),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     UniqueConstraint("project_id", "situation_id", name="a_situation_links_to_a_project_once"),
+    #: Record lineage S1 (`264310e0416a`): the triplet an Issue↔Project
+    #: membership event names, and same-Principal references to both ends. The
+    #: revision refuses to add them while any existing row names another
+    #: Principal's Project or Situation. The deferred
+    #: `an_issue_project_link_has_a_membership_event` trigger requires a
+    #: membership event for every row that names an Issue.
+    UniqueConstraint(
+        "principal_id",
+        "project_id",
+        "situation_id",
+        name="a_project_situation_is_identified_within_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["project_id", "principal_id"],
+        [f"{SCHEMA}.projects.project_id", f"{SCHEMA}.projects.principal_id"],
+        ondelete="RESTRICT",
+        name="a_project_situation_names_a_project_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["situation_id", "principal_id"],
+        [f"{SCHEMA}.situations.situation_id", f"{SCHEMA}.situations.principal_id"],
+        ondelete="RESTRICT",
+        name="a_project_situation_names_a_situation_of_its_principal",
+    ),
     Index("project_situations_by_principal", "principal_id"),
 )
 
@@ -13856,6 +13941,15 @@ meeting_note_versions = Table(
         "principal_id",
         name="a_meeting_note_is_identified_within_its_meeting",
     ),
+    #: Record lineage S1 (`264310e0416a`): the target of the note evidence
+    #: anchor's foreign key, so the server proves an anchor's digest.
+    UniqueConstraint(
+        "note_version_id",
+        "meeting_id",
+        "principal_id",
+        "content_sha256",
+        name="a_meeting_note_digest_is_identified_within_its_meeting",
+    ),
     UniqueConstraint(
         "meeting_id",
         "version_number",
@@ -16289,5 +16383,761 @@ knowledge_discovery_checkpoint_requests = Table(
         "scope_digest",
         "result_checkpoint_version",
         postgresql_where=text("result_private_envelope IS NOT NULL"),
+    ),
+)
+
+# --- Record lineage, Slice S1 (ADR-015; S1 contract section 4) --------------
+#
+# Eight tables, created by revision `264310e0416a` with frozen literal DDL and
+# the triggers a `Table` cannot declare: append-only refusal on the six
+# immutable tables, TRUNCATE refusal on all eight, the head and request
+# transitions, the deferred commit checks, the canonical-identity checks
+# against `knowledge.lineage_record_link_identity` and
+# `knowledge.lineage_anchor_identity`, the anchor passage check, and the
+# linked-record delete refusal on `situations`, `meetings`, `tasks`,
+# `commitments` and `project_constraints`. Every table is partitioned by
+# `principal_id`; every foreign key is `ON DELETE RESTRICT` and names the
+# referenced unique's columns in that unique's order.
+#
+# No column holds a body: an anchor binds a source version by identifier,
+# version number and digest, and a passage by code-point offsets and digest.
+
+#: Identifier shape of a column whose family is chosen by another column.
+_LINEAGE_SHA256: Final = "^[0-9a-f]{64}$"
+
+
+def _family_identifier(family_column: str, id_column: str, *, name: str) -> CheckConstraint:
+    """`id_column` carries the identifier kind its `family_column` names."""
+    branches = " OR ".join(
+        f"({family_column} = '{family.value}' AND {id_column} ~ "
+        f"'^{kind.value}_{_IDENTIFIER_SUFFIX}$')"
+        for family, kind in sorted(RECORD_FAMILY_ID_KINDS.items())
+    )
+    return CheckConstraint(branches, name=name)
+
+
+def _relation_matrix() -> str:
+    """The S1 relation matrix (section 3.1) as one disjunction."""
+    return " OR ".join(
+        f"(relation_type = '{relation.value}' AND kind = '{kind.value}' AND from_family IN "
+        f"({_literals(frozenset(f.value for f in sources))}) AND to_family IN "
+        f"({_literals(frozenset(f.value for f in targets))}))"
+        for relation, (kind, sources, targets) in sorted(RELATION_MATRIX.items())
+    )
+
+
+#: Section 4.2 `a_lineage_row_is_local_operator_attested` (F21): attested
+#: lineage rows are local-operator only, until an ADR-015 amendment widens it.
+def _local_operator_attested() -> CheckConstraint:
+    return CheckConstraint(
+        f"authority_class IN ({_literals(ATTESTED_AUTHORITY_CLASSES)}) "
+        f"AND decision_channel IN ({_literals(ATTESTED_DECISION_CHANNELS)})",
+        name="a_lineage_row_is_local_operator_attested",
+    )
+
+
+#: One immutable evidence anchor: an exact Meeting note version or Capture
+#: version (with an optional code-point passage), or a labelled
+#: `legacy_unversioned` Capture root. `anchor_identity` is the section 5.1
+#: canonical object without `role`, checked against
+#: `knowledge.lineage_anchor_identity` by `a_lineage_anchor_identity_is_canonical`;
+#: `a_lineage_anchor_passage_matches_its_source` checks `source_version_no` and
+#: the passage digest against the bound row. The binding columns carry the
+#: digest-bearing foreign keys, `MATCH SIMPLE`, so each applies only when its
+#: columns are set.
+lineage_evidence_anchors = Table(
+    "lineage_evidence_anchors",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("anchor_id", Text, nullable=False),
+    Column("source_family", Text, nullable=False),
+    Column("source_root_id", Text, nullable=False),
+    Column("source_version_kind", Text, nullable=False),
+    Column("source_version_id", Text),
+    Column("source_version_no", Integer),
+    Column("source_sha256", Text),
+    Column("passage_start_cp", Integer),
+    Column("passage_end_cp", Integer),
+    Column("passage_sha256", Text),
+    Column("meeting_id", Text),
+    Column("note_version_id", Text),
+    Column("capture_id", Text),
+    Column("capture_version_id", Text),
+    Column("anchor_identity", Text, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint("principal_id", "anchor_id"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("anchor_id", IdKind.LINEAGE_EVIDENCE_ANCHOR),
+    _is_identifier("meeting_id", IdKind.MEETING),
+    _is_identifier("note_version_id", IdKind.MEETING_NOTE_VERSION),
+    _is_identifier("capture_id", IdKind.CAPTURE),
+    _is_identifier("capture_version_id", IdKind.CAPTURE_VERSION),
+    CheckConstraint(
+        f"source_root_id ~ '^{IdKind.MEETING.value}_{_IDENTIFIER_SUFFIX}$' "
+        f"OR source_root_id ~ '^{IdKind.CAPTURE.value}_{_IDENTIFIER_SUFFIX}$'",
+        name="source_root_id_is_an_opaque_identifier",
+    ),
+    CheckConstraint(
+        f"source_version_id ~ '^{IdKind.MEETING_NOTE_VERSION.value}_{_IDENTIFIER_SUFFIX}$' "
+        f"OR source_version_id ~ '^{IdKind.CAPTURE_VERSION.value}_{_IDENTIFIER_SUFFIX}$'",
+        name="source_version_id_is_an_opaque_identifier",
+    ),
+    _one_of("source_family", EvidenceSourceFamily, name="a_lineage_anchor_source_family_is_known"),
+    _one_of(
+        "source_version_kind",
+        SourceVersionKind,
+        name="a_lineage_anchor_source_version_kind_is_known",
+    ),
+    CheckConstraint(
+        "source_version_no IS NULL OR source_version_no >= 1",
+        name="a_lineage_anchor_version_number_is_positive",
+    ),
+    CheckConstraint(
+        f"source_sha256 IS NULL OR source_sha256 ~ '{_LINEAGE_SHA256}'",
+        name="a_lineage_anchor_source_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "(passage_start_cp IS NULL AND passage_end_cp IS NULL AND passage_sha256 IS NULL) OR "
+        "(passage_start_cp IS NOT NULL AND passage_end_cp IS NOT NULL AND passage_sha256 IS NOT "
+        f"NULL AND 0 <= passage_start_cp AND passage_start_cp < passage_end_cp AND "
+        f"passage_sha256 ~ '{_LINEAGE_SHA256}')",
+        name="a_lineage_anchor_passage_is_whole",
+    ),
+    CheckConstraint(
+        "(source_family = 'meeting_note_version' AND source_version_kind = 'immutable_version' "
+        "AND meeting_id IS NOT NULL AND meeting_id = source_root_id AND note_version_id IS NOT "
+        "NULL AND note_version_id IS NOT DISTINCT FROM source_version_id AND source_version_no "
+        "IS NOT NULL AND source_sha256 IS NOT NULL AND capture_id IS NULL AND capture_version_id "
+        "IS NULL) OR (source_family = 'capture_version' AND source_version_kind = "
+        "'immutable_version' AND capture_id IS NOT NULL AND capture_id = source_root_id AND "
+        "capture_version_id IS NOT NULL AND capture_version_id IS NOT DISTINCT FROM "
+        "source_version_id AND source_version_no IS NOT NULL AND source_sha256 IS NOT NULL AND "
+        "meeting_id IS NULL AND note_version_id IS NULL) OR (source_family = 'capture' AND "
+        "source_version_kind = 'legacy_unversioned' AND capture_id IS NOT NULL AND capture_id = "
+        "source_root_id AND source_version_id IS NULL AND source_version_no IS NULL AND "
+        "source_sha256 IS NULL AND passage_start_cp IS NULL AND passage_end_cp IS NULL AND "
+        "passage_sha256 IS NULL AND meeting_id IS NULL AND note_version_id IS NULL AND "
+        "capture_version_id IS NULL)",
+        name="an_anchor_binds_exactly_its_family",
+    ),
+    UniqueConstraint(
+        "principal_id", "anchor_identity", name="a_lineage_anchor_is_identified_by_its_identity"
+    ),
+    ForeignKeyConstraint(
+        ["note_version_id", "meeting_id", "principal_id", "source_sha256"],
+        [
+            f"{SCHEMA}.meeting_note_versions.note_version_id",
+            f"{SCHEMA}.meeting_note_versions.meeting_id",
+            f"{SCHEMA}.meeting_note_versions.principal_id",
+            f"{SCHEMA}.meeting_note_versions.content_sha256",
+        ],
+        ondelete="RESTRICT",
+        name="a_lineage_anchor_binds_an_exact_meeting_note",
+    ),
+    #: References the database-only
+    #: `a_capture_version_digest_is_identified_within_its_capture` unique (see
+    #: the `capture_versions` comment).
+    ForeignKeyConstraint(
+        ["capture_version_id", "capture_id", "principal_id", "source_sha256"],
+        [
+            f"{SCHEMA}.capture_versions.version_id",
+            f"{SCHEMA}.capture_versions.capture_id",
+            f"{SCHEMA}.capture_versions.owner_principal_id",
+            f"{SCHEMA}.capture_versions.content_sha256",
+        ],
+        ondelete="RESTRICT",
+        name="a_lineage_anchor_binds_an_exact_capture_version",
+    ),
+    #: References the database-only `a_capture_is_identified_within_its_principal`
+    #: unique `0641c354ca85` adds to `captures`.
+    ForeignKeyConstraint(
+        ["capture_id", "principal_id"],
+        [f"{SCHEMA}.captures.capture_id", f"{SCHEMA}.captures.owner_principal_id"],
+        ondelete="RESTRICT",
+        name="a_lineage_anchor_names_a_capture_of_its_principal",
+    ),
+)
+
+#: One immutable Issue revision. Version 1 is `created` and `open`; each later
+#: version follows its predecessor. The Issue's `situations` row equals its
+#: revision at `situations.version` at commit (`an_issue_matches_its_latest_revision`)
+#: and no revision is ahead of it (`an_issue_revision_is_not_ahead_of_its_issue`).
+issue_revisions = Table(
+    "issue_revisions",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("issue_id", Text, nullable=False),
+    Column("version", Integer, nullable=False),
+    Column(
+        "issue_kind",
+        Text,
+        nullable=False,
+        server_default=text(f"'{SituationKind.ISSUE_WORKSTREAM.value}'"),
+    ),
+    Column("revision_id", Text, nullable=False),
+    Column("predecessor_version", Integer),
+    Column("action", Text, nullable=False),
+    Column("state", Text, nullable=False),
+    Column("title", Text, nullable=False),
+    Column("description", Text),
+    Column("authority_class", Text, nullable=False),
+    Column("decision_channel", Text, nullable=False),
+    Column("source_capability", Text, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint("principal_id", "issue_id", "version"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("issue_id", IdKind.SITUATION),
+    _is_identifier("revision_id", IdKind.ISSUE_REVISION),
+    CheckConstraint("version >= 1", name="an_issue_revision_version_is_positive"),
+    CheckConstraint(
+        f"issue_kind = '{SituationKind.ISSUE_WORKSTREAM.value}'",
+        name="an_issue_revision_names_an_issue",
+    ),
+    _one_of("action", IssueRevisionAction, name="an_issue_revision_action_is_known"),
+    _one_of("state", ISSUE_STATES, name="an_issue_revision_state_is_known"),
+    CheckConstraint(
+        f"length(trim(title)) BETWEEN 1 AND {MAX_ISSUE_TITLE_CHARACTERS}",
+        name="an_issue_revision_title_is_bounded",
+    ),
+    CheckConstraint(
+        f"description IS NULL OR length(description) <= {MAX_ISSUE_DESCRIPTION_CHARACTERS}",
+        name="an_issue_revision_description_is_bounded",
+    ),
+    _one_of(
+        "authority_class", ISSUE_AUTHORITY_CLASSES, name="an_issue_revision_authority_is_known"
+    ),
+    _one_of(
+        "decision_channel",
+        KnowledgeDecisionChannel,
+        name="an_issue_revision_decision_channel_is_known",
+    ),
+    _one_of(
+        "source_capability",
+        ISSUE_REVISION_CAPABILITIES,
+        name="an_issue_revision_capability_is_known",
+    ),
+    CheckConstraint(
+        "(version = 1 AND action = 'created' AND predecessor_version IS NULL AND state = 'open') "
+        "OR (version > 1 AND predecessor_version IS NOT DISTINCT FROM version - 1 AND action <> "
+        "'created')",
+        name="an_issue_revision_follows_its_predecessor",
+    ),
+    UniqueConstraint(
+        "principal_id", "revision_id", name="an_issue_revision_is_identified_within_its_principal"
+    ),
+    ForeignKeyConstraint(
+        ["issue_id", "principal_id", "issue_kind"],
+        [
+            f"{SCHEMA}.situations.situation_id",
+            f"{SCHEMA}.situations.principal_id",
+            f"{SCHEMA}.situations.kind",
+        ],
+        ondelete="RESTRICT",
+        name="an_issue_revision_names_an_issue_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "issue_id", "predecessor_version"],
+        [
+            f"{SCHEMA}.issue_revisions.principal_id",
+            f"{SCHEMA}.issue_revisions.issue_id",
+            f"{SCHEMA}.issue_revisions.version",
+        ],
+        ondelete="RESTRICT",
+        name="an_issue_revision_follows_a_revision_of_its_issue",
+    ),
+)
+
+#: One immutable event on an Issue's native Project link (`project_situations`
+#: triplet). Event 1 asserts; `end` needs an active predecessor and
+#: `reinstate` an ended one (`a_membership_event_follows_its_predecessor`).
+issue_project_membership_events = Table(
+    "issue_project_membership_events",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("membership_event_id", Text, nullable=False),
+    Column("project_id", Text, nullable=False),
+    Column("issue_id", Text, nullable=False),
+    Column(
+        "issue_kind",
+        Text,
+        nullable=False,
+        server_default=text(f"'{SituationKind.ISSUE_WORKSTREAM.value}'"),
+    ),
+    Column("revision_no", Integer, nullable=False),
+    Column("predecessor_revision_no", Integer),
+    Column("action", Text, nullable=False),
+    Column("state", Text, nullable=False),
+    Column("evidence_anchor_id", Text),
+    Column("reason", Text),
+    Column("acceptance_basis", Text, nullable=False),
+    Column("authority_class", Text, nullable=False),
+    Column("decision_channel", Text, nullable=False),
+    Column("source_capability", Text, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint("principal_id", "membership_event_id"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("membership_event_id", IdKind.ISSUE_PROJECT_MEMBERSHIP_EVENT),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _is_identifier("issue_id", IdKind.SITUATION),
+    _is_identifier("evidence_anchor_id", IdKind.LINEAGE_EVIDENCE_ANCHOR),
+    CheckConstraint(
+        f"issue_kind = '{SituationKind.ISSUE_WORKSTREAM.value}'",
+        name="a_membership_event_names_an_issue",
+    ),
+    CheckConstraint("revision_no >= 1", name="a_membership_event_revision_is_positive"),
+    _one_of("action", IssueProjectMembershipAction, name="a_membership_event_action_is_known"),
+    _one_of("state", IssueProjectMembershipState, name="a_membership_event_state_is_known"),
+    _one_of(
+        "acceptance_basis", AcceptanceBasis, name="a_membership_event_acceptance_basis_is_known"
+    ),
+    _one_of(
+        "source_capability",
+        MEMBERSHIP_EVENT_CAPABILITIES,
+        name="a_membership_event_capability_is_known",
+    ),
+    CheckConstraint(
+        f"reason IS NULL OR length(reason) BETWEEN 1 AND {MAX_LINEAGE_REASON_CHARACTERS}",
+        name="a_membership_event_reason_is_bounded",
+    ),
+    CheckConstraint(
+        "(revision_no = 1) = (action = 'assert' AND predecessor_revision_no IS NULL)",
+        name="only_the_first_membership_event_asserts",
+    ),
+    CheckConstraint(
+        "revision_no = 1 OR predecessor_revision_no IS NOT DISTINCT FROM revision_no - 1",
+        name="a_membership_event_follows_the_prior_revision",
+    ),
+    CheckConstraint(
+        "(action = 'end') = (state = 'ended')",
+        name="a_membership_event_ends_exactly_when_it_ends",
+    ),
+    CheckConstraint(
+        "action <> 'end' OR reason IS NOT NULL",
+        name="an_ended_membership_event_states_its_reason",
+    ),
+    _local_operator_attested(),
+    UniqueConstraint(
+        "principal_id",
+        "project_id",
+        "issue_id",
+        "revision_no",
+        name="one_membership_event_per_revision",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "project_id", "issue_id"],
+        [
+            f"{SCHEMA}.project_situations.principal_id",
+            f"{SCHEMA}.project_situations.project_id",
+            f"{SCHEMA}.project_situations.situation_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_membership_event_names_a_project_link_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["issue_id", "principal_id", "issue_kind"],
+        [
+            f"{SCHEMA}.situations.situation_id",
+            f"{SCHEMA}.situations.principal_id",
+            f"{SCHEMA}.situations.kind",
+        ],
+        ondelete="RESTRICT",
+        name="a_membership_event_names_an_issue_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "project_id", "issue_id", "predecessor_revision_no"],
+        [
+            f"{SCHEMA}.issue_project_membership_events.principal_id",
+            f"{SCHEMA}.issue_project_membership_events.project_id",
+            f"{SCHEMA}.issue_project_membership_events.issue_id",
+            f"{SCHEMA}.issue_project_membership_events.revision_no",
+        ],
+        ondelete="RESTRICT",
+        name="a_membership_event_follows_an_event_of_its_link",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "evidence_anchor_id"],
+        [
+            f"{SCHEMA}.lineage_evidence_anchors.principal_id",
+            f"{SCHEMA}.lineage_evidence_anchors.anchor_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_membership_event_cites_an_anchor_of_its_principal",
+    ),
+)
+
+#: One immutable association root: an Issue membership or a semantic link
+#: between two S1 endpoint roots, with its full `normalized_identity` (section
+#: 5.3), checked against `knowledge.lineage_record_link_identity` by
+#: `a_record_link_identity_is_canonical`. Endpoints are polymorphic, so they
+#: carry no foreign key; `a_linked_record_is_not_deleted` refuses deleting a
+#: native row a link names.
+record_links = Table(
+    "record_links",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("link_id", Text, nullable=False),
+    Column("kind", Text, nullable=False),
+    Column("from_family", Text, nullable=False),
+    Column("from_id", Text, nullable=False),
+    Column("to_family", Text, nullable=False),
+    Column("to_id", Text, nullable=False),
+    Column("relation_type", Text, nullable=False),
+    Column("member_role", Text),
+    Column("context_issue_id", Text),
+    Column("context_issue_kind", Text),
+    Column("normalized_identity", Text, nullable=False),
+    Column("authority_class", Text, nullable=False),
+    Column("decision_channel", Text, nullable=False),
+    Column("source_capability", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint("principal_id", "link_id"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("link_id", IdKind.RECORD_LINK),
+    _is_identifier("context_issue_id", IdKind.SITUATION),
+    _one_of("kind", RecordLinkKind, name="a_record_link_kind_is_known"),
+    _one_of("from_family", RecordFamily, name="a_record_link_from_family_is_known"),
+    _one_of("to_family", RecordFamily, name="a_record_link_to_family_is_known"),
+    _family_identifier("from_family", "from_id", name="from_id_is_an_opaque_identifier"),
+    _family_identifier("to_family", "to_id", name="to_id_is_an_opaque_identifier"),
+    _one_of(
+        "relation_type",
+        frozenset(relation.value for relation in RELATION_MATRIX),
+        name="a_record_link_relation_type_is_known",
+    ),
+    CheckConstraint(
+        f"member_role IS NULL OR member_role IN ({_literals(MemberRole)})",
+        name="a_record_link_member_role_is_known",
+    ),
+    CheckConstraint(
+        "(context_issue_id IS NULL) = (context_issue_kind IS NULL)",
+        name="a_record_link_context_is_whole",
+    ),
+    CheckConstraint(
+        "context_issue_kind IS NULL OR context_issue_kind = "
+        f"'{SituationKind.ISSUE_WORKSTREAM.value}'",
+        name="a_record_link_context_is_an_issue",
+    ),
+    CheckConstraint(
+        f"length(normalized_identity) BETWEEN 1 AND {MAX_NORMALIZED_IDENTITY_CHARACTERS}",
+        name="a_record_link_identity_is_bounded",
+    ),
+    _one_of(
+        "source_capability",
+        RECORD_LINK_CAPABILITIES,
+        name="a_record_link_capability_is_known",
+    ),
+    CheckConstraint(
+        "kind <> 'issue_membership' OR (from_family = 'situation' AND relation_type = "
+        "'issue_member' AND context_issue_id IS NOT DISTINCT FROM from_id AND member_role IS "
+        "NOT NULL)",
+        name="a_membership_link_is_issue_scoped",
+    ),
+    CheckConstraint(
+        "kind <> 'semantic' OR (relation_type <> 'issue_member' AND member_role IS NULL)",
+        name="a_semantic_link_is_not_a_membership",
+    ),
+    CheckConstraint(_relation_matrix(), name="a_record_link_pair_is_admitted"),
+    _local_operator_attested(),
+    ForeignKeyConstraint(
+        ["context_issue_id", "principal_id", "context_issue_kind"],
+        [
+            f"{SCHEMA}.situations.situation_id",
+            f"{SCHEMA}.situations.principal_id",
+            f"{SCHEMA}.situations.kind",
+        ],
+        ondelete="RESTRICT",
+        name="a_record_link_context_is_an_issue_of_its_principal",
+    ),
+    Index(
+        "record_links_outgoing",
+        "principal_id",
+        "from_family",
+        "from_id",
+        "kind",
+        "relation_type",
+        "link_id",
+    ),
+    Index(
+        "record_links_incoming",
+        "principal_id",
+        "to_family",
+        "to_id",
+        "kind",
+        "relation_type",
+        "link_id",
+    ),
+    Index("record_links_by_issue", "principal_id", "context_issue_id", "kind", "link_id"),
+)
+
+#: One immutable revision of a record link: `assert` at 1, then `end` or
+#: `correct_evidence` after an active predecessor
+#: (`a_link_revision_follows_an_active_predecessor`). Its evidence rows are
+#: frozen at commit to `evidence_count` (`a_link_revision_evidence_set_is_frozen`)
+#: and the head names the latest revision at commit
+#: (`a_link_head_is_its_latest_revision`).
+record_link_revisions = Table(
+    "record_link_revisions",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("link_id", Text, nullable=False),
+    Column("revision_no", Integer, nullable=False),
+    Column("revision_id", Text, nullable=False),
+    Column("predecessor_revision_no", Integer),
+    Column("action", Text, nullable=False),
+    Column("lifecycle_state", Text, nullable=False),
+    Column("acceptance_basis", Text, nullable=False),
+    Column("authority_class", Text, nullable=False),
+    Column("decision_channel", Text, nullable=False),
+    Column("source_capability", Text, nullable=False),
+    Column("reason", Text),
+    Column("evidence_count", SmallInteger, nullable=False),
+    Column("evidence_set_digest", Text, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint("principal_id", "link_id", "revision_no"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("link_id", IdKind.RECORD_LINK),
+    _is_identifier("revision_id", IdKind.RECORD_LINK_REVISION),
+    CheckConstraint("revision_no >= 1", name="a_link_revision_number_is_positive"),
+    _one_of("action", LinkRevisionAction, name="a_link_revision_action_is_known"),
+    _one_of("lifecycle_state", LinkLifecycleState, name="a_link_revision_state_is_known"),
+    _one_of("acceptance_basis", AcceptanceBasis, name="a_link_revision_acceptance_basis_is_known"),
+    _one_of(
+        "source_capability",
+        LINK_REVISION_CAPABILITIES,
+        name="a_link_revision_capability_is_known",
+    ),
+    CheckConstraint(
+        f"reason IS NULL OR length(reason) BETWEEN 1 AND {MAX_LINEAGE_REASON_CHARACTERS}",
+        name="a_link_revision_reason_is_bounded",
+    ),
+    CheckConstraint(
+        f"evidence_count BETWEEN 0 AND {MAX_EVIDENCE_ANCHORS}",
+        name="a_link_revision_evidence_count_is_bounded",
+    ),
+    CheckConstraint(
+        f"evidence_set_digest ~ '{_LINEAGE_SHA256}'",
+        name="a_link_revision_evidence_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "(revision_no = 1 AND action = 'assert' AND predecessor_revision_no IS NULL AND "
+        "lifecycle_state = 'active') OR (revision_no > 1 AND predecessor_revision_no IS NOT "
+        "DISTINCT FROM revision_no - 1 AND action <> 'assert')",
+        name="a_link_revision_follows_its_predecessor",
+    ),
+    CheckConstraint(
+        "(action = 'end') = (lifecycle_state = 'ended')",
+        name="a_link_revision_ends_exactly_when_it_ends",
+    ),
+    CheckConstraint(
+        "action NOT IN ('correct_evidence', 'end') OR reason IS NOT NULL",
+        name="a_link_revision_states_its_reason",
+    ),
+    _local_operator_attested(),
+    UniqueConstraint(
+        "principal_id", "revision_id", name="a_link_revision_is_identified_within_its_principal"
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "link_id"],
+        [f"{SCHEMA}.record_links.principal_id", f"{SCHEMA}.record_links.link_id"],
+        ondelete="RESTRICT",
+        name="a_link_revision_belongs_to_a_link_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "link_id", "predecessor_revision_no"],
+        [
+            f"{SCHEMA}.record_link_revisions.principal_id",
+            f"{SCHEMA}.record_link_revisions.link_id",
+            f"{SCHEMA}.record_link_revisions.revision_no",
+        ],
+        ondelete="RESTRICT",
+        name="a_link_revision_follows_a_revision_of_its_link",
+    ),
+)
+
+#: One immutable evidence row of one link revision: the anchor at its 1-based
+#: position in the section 5.1 canonical order, with its role. One anchor
+#: carries one role per revision.
+record_link_revision_evidence = Table(
+    "record_link_revision_evidence",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("link_id", Text, nullable=False),
+    Column("revision_no", Integer, nullable=False),
+    Column("ordinal", SmallInteger, nullable=False),
+    Column("anchor_id", Text, nullable=False),
+    Column("role", Text, nullable=False),
+    PrimaryKeyConstraint("principal_id", "link_id", "revision_no", "ordinal"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("link_id", IdKind.RECORD_LINK),
+    _is_identifier("anchor_id", IdKind.LINEAGE_EVIDENCE_ANCHOR),
+    CheckConstraint(
+        f"ordinal BETWEEN 1 AND {MAX_EVIDENCE_ANCHORS}",
+        name="a_link_evidence_ordinal_is_bounded",
+    ),
+    _one_of("role", LineageEvidenceRole, name="a_link_evidence_role_is_known"),
+    UniqueConstraint(
+        "principal_id",
+        "link_id",
+        "revision_no",
+        "anchor_id",
+        name="a_link_revision_cites_an_anchor_once",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "link_id", "revision_no"],
+        [
+            f"{SCHEMA}.record_link_revisions.principal_id",
+            f"{SCHEMA}.record_link_revisions.link_id",
+            f"{SCHEMA}.record_link_revisions.revision_no",
+        ],
+        ondelete="RESTRICT",
+        name="a_link_evidence_belongs_to_a_revision_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "anchor_id"],
+        [
+            f"{SCHEMA}.lineage_evidence_anchors.principal_id",
+            f"{SCHEMA}.lineage_evidence_anchors.anchor_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_link_evidence_cites_an_anchor_of_its_principal",
+    ),
+)
+
+#: The derived current head of each record link, verified by rebuild parity
+#: (`infrastructure.persistence.record_lineage.rebuild_link_heads`). It admits
+#: only the next revision (`a_link_head_follows_its_revisions`) and no delete,
+#: so it has no in-place repair; repair is an operator-gated migration. At
+#: most one active head per meaning (`record_link_one_active_identity`).
+record_link_heads = Table(
+    "record_link_heads",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("link_id", Text, nullable=False),
+    Column("revision_no", Integer, nullable=False),
+    Column("lifecycle_state", Text, nullable=False),
+    Column("normalized_identity", Text, nullable=False),
+    PrimaryKeyConstraint("principal_id", "link_id"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("link_id", IdKind.RECORD_LINK),
+    _one_of("lifecycle_state", LinkLifecycleState, name="a_link_head_state_is_known"),
+    CheckConstraint(
+        f"length(normalized_identity) BETWEEN 1 AND {MAX_NORMALIZED_IDENTITY_CHARACTERS}",
+        name="a_link_head_identity_is_bounded",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "link_id", "revision_no"],
+        [
+            f"{SCHEMA}.record_link_revisions.principal_id",
+            f"{SCHEMA}.record_link_revisions.link_id",
+            f"{SCHEMA}.record_link_revisions.revision_no",
+        ],
+        ondelete="RESTRICT",
+        name="a_link_head_names_a_revision_of_its_link",
+    ),
+    Index(
+        "record_link_one_active_identity",
+        "principal_id",
+        "normalized_identity",
+        unique=True,
+        postgresql_where=text("lifecycle_state = 'active'"),
+    ),
+)
+
+#: Idempotency of the nine S1 writes, scoped `(principal, capability, key)` as
+#: Meetings is (precedent `meeting_write_requests`). A reserved row carries no
+#: result; a completed row carries exactly the one result group its capability
+#: produces, and completes once (`a_lineage_write_request_completes_once`); no
+#: row commits reserved (`a_lineage_write_request_is_never_left_reserved`).
+lineage_write_requests = Table(
+    "lineage_write_requests",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("capability", Text, nullable=False),
+    Column("idempotency_key", Text, nullable=False),
+    Column("request_digest", Text, nullable=False),
+    Column("result_issue_id", Text),
+    Column("result_issue_version", Integer),
+    Column("result_link_id", Text),
+    Column("result_link_revision_no", Integer),
+    Column("result_membership_event_id", Text),
+    Column("result_created", Boolean),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("completed_at", DateTime(timezone=True)),
+    PrimaryKeyConstraint("principal_id", "capability", "idempotency_key"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("result_issue_id", IdKind.SITUATION),
+    _is_identifier("result_link_id", IdKind.RECORD_LINK),
+    _is_identifier("result_membership_event_id", IdKind.ISSUE_PROJECT_MEMBERSHIP_EVENT),
+    _one_of(
+        "capability",
+        LINEAGE_WRITE_CAPABILITIES,
+        name="a_lineage_write_request_capability_is_known",
+    ),
+    CheckConstraint(
+        f"length(idempotency_key) BETWEEN 1 AND {MAX_LINEAGE_IDEMPOTENCY_KEY_CHARACTERS}",
+        name="a_lineage_write_request_key_is_bounded",
+    ),
+    CheckConstraint(
+        f"request_digest ~ '{_LINEAGE_SHA256}'",
+        name="a_lineage_write_request_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "completed_at IS NOT NULL OR (result_issue_id IS NULL AND result_issue_version IS NULL "
+        "AND result_link_id IS NULL AND result_link_revision_no IS NULL AND "
+        "result_membership_event_id IS NULL AND result_created IS NULL)",
+        name="an_incomplete_lineage_write_request_names_no_result",
+    ),
+    CheckConstraint(
+        "completed_at IS NULL OR capability NOT IN ("
+        f"{_literals(ISSUE_REVISION_CAPABILITIES)}) OR (result_issue_id IS NOT NULL AND "
+        "result_issue_version IS NOT NULL AND result_link_id IS NULL AND "
+        "result_link_revision_no IS NULL AND result_membership_event_id IS NULL AND "
+        "result_created IS NULL)",
+        name="a_completed_issue_write_names_its_revision",
+    ),
+    CheckConstraint(
+        "completed_at IS NULL OR capability NOT IN ("
+        f"{_literals(MEMBERSHIP_EVENT_CAPABILITIES)}) OR (result_membership_event_id IS NOT "
+        "NULL AND result_issue_id IS NULL AND result_issue_version IS NULL AND result_link_id "
+        "IS NULL AND result_link_revision_no IS NULL AND result_created IS NULL)",
+        name="a_completed_project_link_write_names_its_event",
+    ),
+    CheckConstraint(
+        "completed_at IS NULL OR capability NOT IN ("
+        f"{_literals(LINK_REVISION_CAPABILITIES)}) OR (result_link_id IS NOT NULL AND "
+        "result_link_revision_no IS NOT NULL AND result_issue_id IS NULL AND "
+        "result_issue_version IS NULL AND result_membership_event_id IS NULL AND "
+        "(result_created IS NOT NULL) = (capability IN ("
+        f"{_literals(RECORD_LINK_CAPABILITIES)})))",
+        name="a_completed_link_write_names_its_revision",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "result_issue_id", "result_issue_version"],
+        [
+            f"{SCHEMA}.issue_revisions.principal_id",
+            f"{SCHEMA}.issue_revisions.issue_id",
+            f"{SCHEMA}.issue_revisions.version",
+        ],
+        ondelete="RESTRICT",
+        name="a_lineage_write_request_names_an_issue_revision",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "result_link_id", "result_link_revision_no"],
+        [
+            f"{SCHEMA}.record_link_revisions.principal_id",
+            f"{SCHEMA}.record_link_revisions.link_id",
+            f"{SCHEMA}.record_link_revisions.revision_no",
+        ],
+        ondelete="RESTRICT",
+        name="a_lineage_write_request_names_a_link_revision",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "result_membership_event_id"],
+        [
+            f"{SCHEMA}.issue_project_membership_events.principal_id",
+            f"{SCHEMA}.issue_project_membership_events.membership_event_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_lineage_write_request_names_a_membership_event",
     ),
 )

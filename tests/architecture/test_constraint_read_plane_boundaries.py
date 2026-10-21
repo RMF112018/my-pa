@@ -95,6 +95,12 @@ MIGRATIONS: Final = ROOT / "migrations" / "versions"
 WP02_CONSTRAINT_REVISION: Final = "2774329487be"
 WP11_CONSTRAINT_SYNC_REVISION: Final = "b8e4d6f20a11"
 RUN01_CONSTRAINT_INTEGRITY_REVISION: Final = "e6a4c2f91b73"
+#: Record lineage S1 (ADR-015, S1 contract section 4.3) names exactly one
+#: Constraint table, `project_constraints`, and only to attach the shared
+#: `a_linked_record_is_not_deleted` BEFORE DELETE trigger: no column, constraint
+#: or index of the Constraint plane changes. Admitted for that one table only
+#: (`test_the_lineage_revision_names_only_project_constraints`).
+RECORD_LINEAGE_S1_REVISION: Final = "264310e0416a"
 
 #: The fourteen tables WP02 installed, WP11's three additive sync tables,
 #: including the database-only quarantine for predecessor-unbound history, and
@@ -375,6 +381,7 @@ def _constraint_schema_revision_offenders(directory: Path) -> dict[str, list[str
         WP02_CONSTRAINT_REVISION,
         WP11_CONSTRAINT_SYNC_REVISION,
         RUN01_CONSTRAINT_INTEGRITY_REVISION,
+        RECORD_LINEAGE_S1_REVISION,
     }
     offenders: dict[str, list[str]] = {}
     for path in sorted(directory.glob("*.py")):
@@ -735,6 +742,19 @@ def test_only_bounded_constraint_schema_revisions_touch_constraint_tables() -> N
         _declared_revision(path) == RUN01_CONSTRAINT_INTEGRITY_REVISION
         for path in MIGRATIONS.glob("*.py")
     ), f"Run 01's revision {RUN01_CONSTRAINT_INTEGRITY_REVISION} is missing"
+
+
+def test_the_lineage_revision_names_only_project_constraints() -> None:
+    """The S1 admission above is one table wide, not a fourth open revision."""
+    (path,) = [
+        path
+        for path in MIGRATIONS.glob("*.py")
+        if _declared_revision(path) == RECORD_LINEAGE_S1_REVISION
+    ]
+    strings = _code_strings(_tree(path))
+    assert sorted(table for table in CONSTRAINT_TABLES if table in strings) == [
+        "project_constraints"
+    ]
 
 
 def test_a_fourth_revision_cannot_escape_by_touching_only_settings_history(

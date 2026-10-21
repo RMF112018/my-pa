@@ -26,7 +26,13 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 #: Moved by the Commitment counterparty Entity cutover (`commitments` swaps
 #: `counterparty_person_id` for `counterparty_entity_id` with its composite
 #: foreign key and index); `captures` is untouched.
-TABLES_SHA256: Final = "103244de1aa7f63d45a41a395f45009712738f13cf7ca122f16b1d422d3aae31"
+#: Moved by the record lineage S1 revision (ADR-015), which declares the
+#: eight lineage tables, `situations.kind`/`version` with their uniques, the
+#: `project_situations` triplet unique and same-Principal foreign keys, the
+#: `meeting_note_versions` digest unique, and a comment beside
+#: `capture_versions` naming its database-only digest unique; `captures` is
+#: untouched.
+TABLES_SHA256: Final = "7b4b52d5e33ed8e9ffbcf2a8f8c112b82edd3d6cc82ffe5d4bbefd0b63bd581b"
 WP03_MIGRATION_SHA256: Final = "098edd98ccc1846b01c58f42e296e4751e7841b562a2827616cc4337e174c354"
 WP03_MIGRATION: Final = (
     ROOT / "migrations/versions/20260914_e6a4c2f91b73_project_controls_run01_integrity.py"

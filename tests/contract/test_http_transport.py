@@ -91,11 +91,14 @@ from my_pa.application.commands import (
     AddEntityAlias,
     AddEntityCommunicationMethod,
     AddEntityName,
+    AddIssueMembership,
+    AddIssueProjectLink,
     ApplyConstraintSync,
     ArchiveCapture,
     ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
+    AssertRecordAssociation,
     BeginIntelligenceCycle,
     BindEntityIdentifier,
     BulkConfirmTasks,
@@ -110,6 +113,7 @@ from my_pa.application.commands import (
     CompleteGoodNotesPull,
     ConfigureProjectControls,
     CorrectGoodNotes,
+    CorrectRecordAssociation,
     CreateCapture,
     CreateCommitment,
     CreateConstraintCategory,
@@ -120,6 +124,7 @@ from my_pa.application.commands import (
     CreateEntityParticipation,
     CreateEntityProposal,
     CreateEntityRelationship,
+    CreateIssue,
     CreateKnowledgeAssertion,
     CreateManagedDocument,
     CreateMeeting,
@@ -136,6 +141,9 @@ from my_pa.application.commands import (
     EndEntityAssignment,
     EndEntityParticipation,
     EndEntityRelationship,
+    EndIssueMembership,
+    EndIssueProjectLink,
+    EndRecordAssociation,
     EnrollSource,
     FetchSource,
     GetCanvasWorkspace,
@@ -178,8 +186,10 @@ from my_pa.application.commands import (
     ListGoodNotesPages,
     ListGoodNotesRuns,
     ListIntelligenceArtifacts,
+    ListIssues,
     ListKnowledgeAssertions,
     ListManagedDocuments,
+    ListMeetingNoteVersions,
     ListMeetings,
     ListPortfolioConstraints,
     ListProjects,
@@ -211,13 +221,16 @@ from my_pa.application.commands import (
     ReadConstraintSyncState,
     ReadGoodNotes,
     ReadIntelligenceArtifact,
+    ReadIssue,
     ReadKnowledge,
     ReadKnowledgeAssertion,
     ReadManagedDocument,
     ReadMeeting,
+    ReadMeetingNoteVersion,
     ReadPortfolioConstraintOverview,
     ReadProject,
     ReadProjectControlsStatus,
+    ReadRecordLineage,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
@@ -274,6 +287,7 @@ from my_pa.application.commands import (
     UpdateConstraint,
     UpdateConstraintCategory,
     UpdateEntity,
+    UpdateIssue,
     UpdateMeeting,
     UpdateMeetingSeries,
     UpdateProject,
@@ -429,6 +443,23 @@ _UNCOMPOSED_CAPABILITIES = frozenset(
         Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
         # KLP-WP-05: provenance, on the same switch.
         Capability.RECORD_EVENTS_PROVENANCE,
+        # Record lineage S1: the Issue plane, behind `MY_PA_LINEAGE_ENABLED` (off here).
+        Capability.ISSUES_CREATE,
+        Capability.ISSUES_READ,
+        Capability.ISSUES_LIST,
+        Capability.ISSUES_UPDATE,
+        Capability.ISSUES_PROJECT_LINKS_ADD,
+        Capability.ISSUES_PROJECT_LINKS_END,
+        # Record lineage S1: memberships, associations, the reverse read and note
+        # history, behind the same switch.
+        Capability.ISSUES_MEMBERSHIPS_ADD,
+        Capability.ISSUES_MEMBERSHIPS_END,
+        Capability.RECORDS_ASSOCIATIONS_ASSERT,
+        Capability.RECORDS_ASSOCIATIONS_CORRECT,
+        Capability.RECORDS_ASSOCIATIONS_END,
+        Capability.RECORDS_LINEAGE,
+        Capability.MEETINGS_NOTES_VERSIONS,
+        Capability.MEETINGS_NOTES_READ_VERSION,
     }
 )
 
@@ -1549,6 +1580,97 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "idempotency_key": "http-knowledge-checkpoint",
         },
         Capability.RECORD_EVENTS_PROVENANCE: {"event_id": "rcev_httpknowledge0001"},
+        # Record lineage S1, the Issue plane.
+        Capability.ISSUES_CREATE: {
+            "title": "A http issue",
+            "idempotency_key": "http-issues-create-0001",
+        },
+        Capability.ISSUES_READ: {"issue_id": "sit_httpissue0001"},
+        Capability.ISSUES_LIST: {},
+        Capability.ISSUES_UPDATE: {
+            "issue_id": "sit_httpissue0001",
+            "expected_version": 1,
+            "idempotency_key": "http-issues-update-0001",
+            "title": "A http issue, retitled",
+        },
+        Capability.ISSUES_PROJECT_LINKS_ADD: {
+            "issue_id": "sit_httpissue0001",
+            "project_id": "prj_httpproject0001",
+            "expected_membership_revision": 0,
+            "idempotency_key": "http-issues-project-links-add-0001",
+        },
+        Capability.ISSUES_PROJECT_LINKS_END: {
+            "issue_id": "sit_httpissue0001",
+            "project_id": "prj_httpproject0001",
+            "expected_membership_revision": 1,
+            "idempotency_key": "http-issues-project-links-end-0001",
+            "reason": "the http issue left the project",
+        },
+        # Record lineage S1, memberships, associations, the reverse read and note history.
+        Capability.ISSUES_MEMBERSHIPS_ADD: {
+            "issue_id": "sit_httpissue0001",
+            "member": {"family": "task", "record_id": "tsk_httptask00001"},
+            "role": "work",
+            "idempotency_key": "http-issues-memberships-add-0001",
+        },
+        Capability.ISSUES_MEMBERSHIPS_END: {
+            "link_id": "irl_httplink00001",
+            "expected_revision": 1,
+            "idempotency_key": "http-issues-memberships-end-0001",
+            "reason": "the http task left the issue",
+        },
+        Capability.RECORDS_ASSOCIATIONS_ASSERT: {
+            "from_record": {"family": "commitment", "record_id": "cmt_httpcommitment01"},
+            "to_record": {"family": "meeting_note_version", "record_id": "mnote_httpnote00001"},
+            "relation_type": "originated_from",
+            "idempotency_key": "http-records-associations-assert-0001",
+            "evidence_anchors": [
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_httpmeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_httpnote00001",
+                    "source_sha256": "a" * 64,
+                    "passage_start_cp": 0,
+                    "passage_end_cp": 4,
+                    "passage_sha256": "b" * 64,
+                    "role": "origin",
+                }
+            ],
+        },
+        Capability.RECORDS_ASSOCIATIONS_CORRECT: {
+            "link_id": "irl_httplink00001",
+            "expected_revision": 1,
+            "idempotency_key": "http-records-associations-correct-0001",
+            "reason": "the http origin passage was narrowed",
+            "evidence_anchors": [
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_httpmeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_httpnote00001",
+                    "source_sha256": "a" * 64,
+                    "passage_start_cp": 0,
+                    "passage_end_cp": 4,
+                    "passage_sha256": "b" * 64,
+                    "role": "origin",
+                }
+            ],
+        },
+        Capability.RECORDS_ASSOCIATIONS_END: {
+            "link_id": "irl_httplink00001",
+            "expected_revision": 1,
+            "idempotency_key": "http-records-associations-end-0001",
+            "reason": "the http association was wrong",
+        },
+        Capability.RECORDS_LINEAGE: {
+            "origin": {"family": "task", "record_id": "tsk_httptask00001"}
+        },
+        Capability.MEETINGS_NOTES_VERSIONS: {"meeting_id": "mtg_httpmeeting0001"},
+        Capability.MEETINGS_NOTES_READ_VERSION: {
+            "meeting_id": "mtg_httpmeeting0001",
+            "note_version_id": "mnote_httpnote00001",
+        },
     }
 
 
@@ -2567,6 +2689,97 @@ def commands_for(
         ),
         Capability.RECORD_EVENTS_PROVENANCE: GetRecordEventProvenance(
             event_id="rcev_httpknowledge0001"
+        ),
+        # Record lineage S1, the Issue plane.
+        Capability.ISSUES_CREATE: CreateIssue(
+            title="A http issue", idempotency_key="http-issues-create-0001"
+        ),
+        Capability.ISSUES_READ: ReadIssue(issue_id="sit_httpissue0001"),
+        Capability.ISSUES_LIST: ListIssues(),
+        Capability.ISSUES_UPDATE: UpdateIssue(
+            issue_id="sit_httpissue0001",
+            expected_version=1,
+            idempotency_key="http-issues-update-0001",
+            title="A http issue, retitled",
+        ),
+        Capability.ISSUES_PROJECT_LINKS_ADD: AddIssueProjectLink(
+            issue_id="sit_httpissue0001",
+            project_id="prj_httpproject0001",
+            expected_membership_revision=0,
+            idempotency_key="http-issues-project-links-add-0001",
+        ),
+        Capability.ISSUES_PROJECT_LINKS_END: EndIssueProjectLink(
+            issue_id="sit_httpissue0001",
+            project_id="prj_httpproject0001",
+            expected_membership_revision=1,
+            idempotency_key="http-issues-project-links-end-0001",
+            reason="the http issue left the project",
+        ),
+        # Record lineage S1, memberships, associations, the reverse read and note history.
+        Capability.ISSUES_MEMBERSHIPS_ADD: AddIssueMembership(
+            issue_id="sit_httpissue0001",
+            member={"family": "task", "record_id": "tsk_httptask00001"},
+            role="work",
+            idempotency_key="http-issues-memberships-add-0001",
+        ),
+        Capability.ISSUES_MEMBERSHIPS_END: EndIssueMembership(
+            link_id="irl_httplink00001",
+            expected_revision=1,
+            idempotency_key="http-issues-memberships-end-0001",
+            reason="the http task left the issue",
+        ),
+        Capability.RECORDS_ASSOCIATIONS_ASSERT: AssertRecordAssociation(
+            from_record={"family": "commitment", "record_id": "cmt_httpcommitment01"},
+            to_record={"family": "meeting_note_version", "record_id": "mnote_httpnote00001"},
+            relation_type="originated_from",
+            idempotency_key="http-records-associations-assert-0001",
+            evidence_anchors=(
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_httpmeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_httpnote00001",
+                    "source_sha256": "a" * 64,
+                    "passage_start_cp": 0,
+                    "passage_end_cp": 4,
+                    "passage_sha256": "b" * 64,
+                    "role": "origin",
+                },
+            ),
+        ),
+        Capability.RECORDS_ASSOCIATIONS_CORRECT: CorrectRecordAssociation(
+            link_id="irl_httplink00001",
+            expected_revision=1,
+            idempotency_key="http-records-associations-correct-0001",
+            reason="the http origin passage was narrowed",
+            evidence_anchors=(
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_httpmeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_httpnote00001",
+                    "source_sha256": "a" * 64,
+                    "passage_start_cp": 0,
+                    "passage_end_cp": 4,
+                    "passage_sha256": "b" * 64,
+                    "role": "origin",
+                },
+            ),
+        ),
+        Capability.RECORDS_ASSOCIATIONS_END: EndRecordAssociation(
+            link_id="irl_httplink00001",
+            expected_revision=1,
+            idempotency_key="http-records-associations-end-0001",
+            reason="the http association was wrong",
+        ),
+        Capability.RECORDS_LINEAGE: ReadRecordLineage(
+            origin={"family": "task", "record_id": "tsk_httptask00001"}
+        ),
+        Capability.MEETINGS_NOTES_VERSIONS: ListMeetingNoteVersions(
+            meeting_id="mtg_httpmeeting0001"
+        ),
+        Capability.MEETINGS_NOTES_READ_VERSION: ReadMeetingNoteVersion(
+            meeting_id="mtg_httpmeeting0001", note_version_id="mnote_httpnote00001"
         ),
     }
 

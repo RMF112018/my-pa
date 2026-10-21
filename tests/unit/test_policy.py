@@ -440,6 +440,25 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         # `record_event_provenance_read`, and never under the feed's
         # `record_event_read` (the mismatch sweep below proves that pair denied).
         (Capability.RECORD_EVENTS_PROVENANCE, Purpose.RECORD_EVENT_PROVENANCE_READ),
+        # Record lineage S1, the Issue plane: the two reads under `issue_read`
+        # and the four writes under `issue_authoring`, and neither under both.
+        (Capability.ISSUES_READ, Purpose.ISSUE_READ),
+        (Capability.ISSUES_LIST, Purpose.ISSUE_READ),
+        (Capability.ISSUES_CREATE, Purpose.ISSUE_AUTHORING),
+        (Capability.ISSUES_UPDATE, Purpose.ISSUE_AUTHORING),
+        (Capability.ISSUES_PROJECT_LINKS_ADD, Purpose.ISSUE_AUTHORING),
+        (Capability.ISSUES_PROJECT_LINKS_END, Purpose.ISSUE_AUTHORING),
+        # Memberships under `issue_authoring`; associations and the lineage read
+        # under their own pair; note metadata under `meeting_read` and one exact
+        # note version under `meeting_note_history_read`.
+        (Capability.ISSUES_MEMBERSHIPS_ADD, Purpose.ISSUE_AUTHORING),
+        (Capability.ISSUES_MEMBERSHIPS_END, Purpose.ISSUE_AUTHORING),
+        (Capability.RECORDS_ASSOCIATIONS_ASSERT, Purpose.RECORD_LINEAGE_AUTHORING),
+        (Capability.RECORDS_ASSOCIATIONS_CORRECT, Purpose.RECORD_LINEAGE_AUTHORING),
+        (Capability.RECORDS_ASSOCIATIONS_END, Purpose.RECORD_LINEAGE_AUTHORING),
+        (Capability.RECORDS_LINEAGE, Purpose.RECORD_LINEAGE_READ),
+        (Capability.MEETINGS_NOTES_VERSIONS, Purpose.MEETING_READ),
+        (Capability.MEETINGS_NOTES_READ_VERSION, Purpose.MEETING_NOTE_HISTORY_READ),
     }
 )
 
@@ -524,9 +543,12 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # The report type registry adds `reports.types.create` under
     # `report_authoring` and `reports.types.list` under `report_read`, and no
     # purpose, two pairs.
-    # Unioned: 192 capabilities, 52 purposes, 194 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 194
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 194 == 9790
+    # Record lineage S1 adds the six Issue names and the `issue_read`/
+    # `issue_authoring` pair, each name mapped to exactly one of the pair.
+    # Unioned: 198 capabilities, 54 purposes, 200 permitted pairs; then its remaining
+    # S1 names and their purposes: 206 capabilities, 57 purposes, 208 pairs.
+    assert len(PERMITTED_PAIRS) == 208
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 208 == 11534
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

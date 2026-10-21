@@ -64,11 +64,14 @@ from my_pa.application.commands import (
     AddEntityAlias,
     AddEntityCommunicationMethod,
     AddEntityName,
+    AddIssueMembership,
+    AddIssueProjectLink,
     ApplyConstraintSync,
     ArchiveCapture,
     ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
+    AssertRecordAssociation,
     BeginIntelligenceCycle,
     BindEntityIdentifier,
     BulkConfirmTasks,
@@ -84,6 +87,7 @@ from my_pa.application.commands import (
     ConfigureProjectControls,
     ConstraintUpdateField,
     CorrectGoodNotes,
+    CorrectRecordAssociation,
     CreateCapture,
     CreateCommitment,
     CreateConstraintCategory,
@@ -94,6 +98,7 @@ from my_pa.application.commands import (
     CreateEntityParticipation,
     CreateEntityProposal,
     CreateEntityRelationship,
+    CreateIssue,
     CreateKnowledgeAssertion,
     CreateManagedDocument,
     CreateMeeting,
@@ -110,6 +115,9 @@ from my_pa.application.commands import (
     EndEntityAssignment,
     EndEntityParticipation,
     EndEntityRelationship,
+    EndIssueMembership,
+    EndIssueProjectLink,
+    EndRecordAssociation,
     EnrollSource,
     FetchSource,
     GetCanvasWorkspace,
@@ -152,8 +160,10 @@ from my_pa.application.commands import (
     ListGoodNotesPages,
     ListGoodNotesRuns,
     ListIntelligenceArtifacts,
+    ListIssues,
     ListKnowledgeAssertions,
     ListManagedDocuments,
+    ListMeetingNoteVersions,
     ListMeetings,
     ListPortfolioConstraints,
     ListProjects,
@@ -185,13 +195,16 @@ from my_pa.application.commands import (
     ReadConstraintSyncState,
     ReadGoodNotes,
     ReadIntelligenceArtifact,
+    ReadIssue,
     ReadKnowledge,
     ReadKnowledgeAssertion,
     ReadManagedDocument,
     ReadMeeting,
+    ReadMeetingNoteVersion,
     ReadPortfolioConstraintOverview,
     ReadProject,
     ReadProjectControlsStatus,
+    ReadRecordLineage,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
@@ -248,6 +261,7 @@ from my_pa.application.commands import (
     UpdateConstraint,
     UpdateConstraintCategory,
     UpdateEntity,
+    UpdateIssue,
     UpdateMeeting,
     UpdateMeetingSeries,
     UpdateProject,
@@ -2509,6 +2523,34 @@ def _update_meeting_series(payload: Mapping[str, Any]) -> Command:
     return UpdateMeetingSeries(**_meeting_shapes(payload))
 
 
+def _update_issue(payload: Mapping[str, Any]) -> Command:
+    """`issues.update`: `clear_fields` becomes a tuple; nothing else converts.
+
+    A server-owned field -- `principal_id`, an authority class, a decision
+    channel, `recorded_at` -- reaches the frozen dataclass as an unexpected
+    keyword and is refused there (S1 contract section 7.1).
+    """
+    converted = dict(payload)
+    clears = converted.get("clear_fields")
+    if isinstance(clears, list):
+        converted["clear_fields"] = tuple(clears)
+    return UpdateIssue(**converted)
+
+
+def _with_evidence_tuple(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Record lineage S1: an `evidence_anchors` list becomes a tuple; nothing else converts.
+
+    A server-owned field reaches the frozen dataclass as an unexpected keyword
+    and is refused there (S1 contract section 7.1), and a malformed anchor is
+    refused by the command's own parse.
+    """
+    converted = dict(payload)
+    anchors = converted.get("evidence_anchors")
+    if isinstance(anchors, list):
+        converted["evidence_anchors"] = tuple(anchors)
+    return converted
+
+
 _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = MappingProxyType(
     {
         Capability.CAPABILITIES_GET: _get_capabilities,
@@ -2709,6 +2751,28 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT: lambda payload: CheckpointKnowledgeDiscovery(
             **payload
         ),
+        Capability.ISSUES_CREATE: lambda payload: CreateIssue(**payload),
+        Capability.ISSUES_READ: lambda payload: ReadIssue(**payload),
+        Capability.ISSUES_LIST: lambda payload: ListIssues(**payload),
+        Capability.ISSUES_UPDATE: _update_issue,
+        Capability.ISSUES_PROJECT_LINKS_ADD: lambda payload: AddIssueProjectLink(**payload),
+        Capability.ISSUES_PROJECT_LINKS_END: lambda payload: EndIssueProjectLink(**payload),
+        Capability.ISSUES_MEMBERSHIPS_ADD: lambda payload: AddIssueMembership(
+            **_with_evidence_tuple(payload)
+        ),
+        Capability.ISSUES_MEMBERSHIPS_END: lambda payload: EndIssueMembership(**payload),
+        Capability.RECORDS_ASSOCIATIONS_ASSERT: lambda payload: AssertRecordAssociation(
+            **_with_evidence_tuple(payload)
+        ),
+        Capability.RECORDS_ASSOCIATIONS_CORRECT: lambda payload: CorrectRecordAssociation(
+            **_with_evidence_tuple(payload)
+        ),
+        Capability.RECORDS_ASSOCIATIONS_END: lambda payload: EndRecordAssociation(
+            **_with_evidence_tuple(payload)
+        ),
+        Capability.RECORDS_LINEAGE: lambda payload: ReadRecordLineage(**payload),
+        Capability.MEETINGS_NOTES_VERSIONS: lambda payload: ListMeetingNoteVersions(**payload),
+        Capability.MEETINGS_NOTES_READ_VERSION: lambda payload: ReadMeetingNoteVersion(**payload),
     }
 )
 

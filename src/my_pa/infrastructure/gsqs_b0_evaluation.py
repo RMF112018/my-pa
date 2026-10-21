@@ -22,6 +22,7 @@ from my_pa.contracts.ports import (
     EntitiesRepository,
     GoodNotesProposalAdmission,
     GoodNotesSemanticRepository,
+    IssueRepository,
     KnowledgeRepository,
     ManagedDocumentRepository,
     MeetingRepository,
@@ -29,6 +30,7 @@ from my_pa.contracts.ports import (
     PortError,
     ProjectRepository,
     PulseRepository,
+    RecordLineageRepository,
     ReviewRepository,
     SituationRepository,
     SourceProviders,
@@ -223,6 +225,14 @@ class GsqsB0EvaluationUnitOfWork(UnitOfWork):
     @property
     def meetings(self) -> MeetingRepository:
         return cast(MeetingRepository, self._unused)
+
+    @property
+    def issues(self) -> IssueRepository:
+        return cast(IssueRepository, self._unused)
+
+    @property
+    def record_lineage(self) -> RecordLineageRepository:
+        return cast(RecordLineageRepository, self._unused)
 
     @property
     def context_runs(self) -> ContextRunRepository:

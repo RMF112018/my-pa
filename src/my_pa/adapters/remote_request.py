@@ -290,6 +290,24 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         # field and replays on its candidate identity (principal, client,
         # profile, run, candidate -- `knowledge_submission_autonomous_candidate`).
         Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
+        # Record lineage S1 (contract section 7). The four Issue writes each
+        # require an `idempotency_key` arbitrated by `lineage_write_requests
+        # (principal_id, capability, idempotency_key)`; a remote caller cannot
+        # state one, so the server stamps this set's payload hash. The two
+        # attested Project-link writes are still refused remotely by the
+        # application (local operator only); they are here so their replay
+        # identity is the same on every transport.
+        Capability.ISSUES_CREATE,
+        Capability.ISSUES_UPDATE,
+        Capability.ISSUES_PROJECT_LINKS_ADD,
+        Capability.ISSUES_PROJECT_LINKS_END,
+        # The five attested link writes, on the same terms as the Project-link
+        # pair: refused remotely by the application, here for one replay identity.
+        Capability.ISSUES_MEMBERSHIPS_ADD,
+        Capability.ISSUES_MEMBERSHIPS_END,
+        Capability.RECORDS_ASSOCIATIONS_ASSERT,
+        Capability.RECORDS_ASSOCIATIONS_CORRECT,
+        Capability.RECORDS_ASSOCIATIONS_END,
         # **No keyless proposal or identity-correction write is here, and the reason is this set's
         # mechanism rather than a judgement about how replayable they are.**
         # Membership makes `compose_remote_arguments` derive a key and *insert it

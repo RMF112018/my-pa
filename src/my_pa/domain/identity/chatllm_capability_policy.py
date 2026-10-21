@@ -287,6 +287,22 @@ _OPERATOR_DECISION_REQUIRED: Final[frozenset[Capability]] = frozenset(
     {
         Capability.GSQS_START,
         Capability.GSQS_STATUS,
+        # Record lineage S1 (ADR-015, OD-07; S1 contract section 7): ChatLLM
+        # exposure of the lineage plane is an operator decision.
+        Capability.ISSUES_CREATE,
+        Capability.ISSUES_READ,
+        Capability.ISSUES_LIST,
+        Capability.ISSUES_UPDATE,
+        Capability.ISSUES_PROJECT_LINKS_ADD,
+        Capability.ISSUES_PROJECT_LINKS_END,
+        Capability.ISSUES_MEMBERSHIPS_ADD,
+        Capability.ISSUES_MEMBERSHIPS_END,
+        Capability.RECORDS_ASSOCIATIONS_ASSERT,
+        Capability.RECORDS_ASSOCIATIONS_CORRECT,
+        Capability.RECORDS_ASSOCIATIONS_END,
+        Capability.RECORDS_LINEAGE,
+        Capability.MEETINGS_NOTES_VERSIONS,
+        Capability.MEETINGS_NOTES_READ_VERSION,
     }
 )
 
@@ -325,6 +341,9 @@ _GSQS_EXCLUSION: Final = "GSQS campaign lifecycle held out pending reclassificat
 _KNOWLEDGE_DISCOVERY_EXCLUSION: Final = (
     "bound Knowledge discovery-client control plane (exact allowlist and profile only)"
 )
+_LINEAGE_S1_EXCLUSION: Final = (
+    "record lineage S1; exposure is an operator decision (ADR-015, OD-07)"
+)
 
 _EXCLUSION_RATIONALE: Final[Mapping[Capability, str]] = MappingProxyType(
     {
@@ -349,6 +368,20 @@ _EXCLUSION_RATIONALE: Final[Mapping[Capability, str]] = MappingProxyType(
         Capability.GSQS_START: _GSQS_EXCLUSION,
         Capability.GSQS_STATUS: _GSQS_EXCLUSION,
         Capability.SOURCES_ENROLL: "operator-only source enrollment / authority expansion",
+        Capability.ISSUES_CREATE: _LINEAGE_S1_EXCLUSION,
+        Capability.ISSUES_READ: _LINEAGE_S1_EXCLUSION,
+        Capability.ISSUES_LIST: _LINEAGE_S1_EXCLUSION,
+        Capability.ISSUES_UPDATE: _LINEAGE_S1_EXCLUSION,
+        Capability.ISSUES_PROJECT_LINKS_ADD: _LINEAGE_S1_EXCLUSION,
+        Capability.ISSUES_PROJECT_LINKS_END: _LINEAGE_S1_EXCLUSION,
+        Capability.ISSUES_MEMBERSHIPS_ADD: _LINEAGE_S1_EXCLUSION,
+        Capability.ISSUES_MEMBERSHIPS_END: _LINEAGE_S1_EXCLUSION,
+        Capability.RECORDS_ASSOCIATIONS_ASSERT: _LINEAGE_S1_EXCLUSION,
+        Capability.RECORDS_ASSOCIATIONS_CORRECT: _LINEAGE_S1_EXCLUSION,
+        Capability.RECORDS_ASSOCIATIONS_END: _LINEAGE_S1_EXCLUSION,
+        Capability.RECORDS_LINEAGE: _LINEAGE_S1_EXCLUSION,
+        Capability.MEETINGS_NOTES_VERSIONS: _LINEAGE_S1_EXCLUSION,
+        Capability.MEETINGS_NOTES_READ_VERSION: _LINEAGE_S1_EXCLUSION,
     }
 )
 

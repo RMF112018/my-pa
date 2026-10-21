@@ -306,6 +306,7 @@ setup_stage="gateway_start"
   MY_PA_WEBAUTHN_RP_NAME=my-pa \
   MY_PA_WEBAUTHN_ALLOWED_ORIGINS="http://localhost:3100 http://localhost:3101" \
   MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED=true \
+  MY_PA_LINEAGE_ENABLED=true \
   "${PYTHON}" apps/gateway.py run --port "${GATEWAY_PORT}"
 ) >"${GATEWAY_LOG}" 2>&1 &
 gateway_pid=$!

@@ -102,6 +102,7 @@ from my_pa.contracts.ports import (
     GoodNotesProposalAdmission,
     GoodNotesProposalConflictError,
     GoodNotesSemanticRepository,
+    IssueRepository,
     KnowledgeRecord,
     KnowledgeRepository,
     ManagedAdmission,
@@ -132,6 +133,7 @@ from my_pa.contracts.ports import (
     RecordEventPage,
     RecordEventReader,
     RecordEventStager,
+    RecordLineageRepository,
     RelationshipMemoryProposalRepository,
     RelationshipMemoryRepository,
     RelationshipWriteRequest,
@@ -256,6 +258,7 @@ from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.identity.user_account import CallerSuppliedPrincipalError
+from my_pa.domain.lineage.vocabulary import SituationKind
 from my_pa.domain.meeting.model import (
     MeetingAttachmentAvailability,
     MeetingCursorError,
@@ -4214,7 +4217,7 @@ class _Situations(SituationRepository):
         if not evidence_ref.strip():
             raise ValueError("closing a situation records the evidence that closed it")
         current = self.get_situation(principal_id, situation_id)
-        if current is None:
+        if current is None or current.kind is not SituationKind.CONTEXT:
             raise UnknownScopeError
         now = utc_now()
         closed = Situation(
@@ -4247,7 +4250,13 @@ class _Situations(SituationRepository):
         self, principal_id: str, state_filter: SituationState | None = None
     ) -> tuple[Situation, ...]:
         self._world.fail("list_situations")
-        rows = [row for row in self._world.situations if row.principal_id == principal_id]
+        # Context Situations only, as `SqlSituationRepository.list_situations`
+        # selects them (record lineage S1 contract section 8, F22).
+        rows = [
+            row
+            for row in self._world.situations
+            if row.principal_id == principal_id and row.kind is SituationKind.CONTEXT
+        ]
         if state_filter is not None:
             rows = [row for row in rows if row.state is state_filter]
         rows.sort(key=lambda row: row.created_at, reverse=True)
@@ -9605,6 +9614,16 @@ class _CaptureLifecycle(CaptureLifecycleRepository):
         return CaptureLifecycleJobResumption(resumed=0, still_paused=0)
 
 
+class _UnmodelledPlane:
+    """A repository a FAST `World` does not model; any use is a test defect."""
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+
+    def __getattr__(self, item: str) -> object:
+        raise NotImplementedError(f"the FAST world does not model {self._name}.{item}")
+
+
 class FakeUnitOfWork(UnitOfWork):
     """One transaction over a `World`, counting how it ended."""
 
@@ -9751,6 +9770,20 @@ class FakeUnitOfWork(UnitOfWork):
     def meetings(self) -> MeetingRepository:
         """The Meeting records plane over this `World` (WP-MTG-04, plan D-31)."""
         return cast("MeetingRepository", _Meetings(self._world))
+
+    @property
+    def issues(self) -> IssueRepository:
+        """The record lineage S1 Issue plane: not modelled in FAST worlds.
+
+        Every Issue capability runs against PostgreSQL (the database tier); a
+        FAST world refuses any use rather than answering with invented rows.
+        """
+        return cast("IssueRepository", _UnmodelledPlane("issues"))
+
+    @property
+    def record_lineage(self) -> RecordLineageRepository:
+        """Record lineage S1 links: not modelled in FAST worlds, as `issues`."""
+        return cast("RecordLineageRepository", _UnmodelledPlane("record_lineage"))
 
     @property
     def identity_history(self) -> object:
@@ -10285,6 +10318,7 @@ def build_service(
     relationship_identity_correction_enabled: bool = True,
     producer_origins: ProducerOriginRegistry | None = None,
     knowledge_assertions_enabled: bool = False,
+    lineage_enabled: bool = False,
     constraint_management_unit_of_work: (
         Callable[[], ConstraintManagementUnitOfWork] | None
     ) = _COMPOSE_CONSTRAINTS,
@@ -10389,6 +10423,10 @@ def build_service(
         knowledge_assertions_enabled=(
             relationship_intelligence_enabled and knowledge_assertions_enabled
         ),
+        # Record lineage S1: off by default for the Knowledge reason above --
+        # this `World` models no Issue rows (`FakeUnitOfWork.issues` refuses any
+        # use). A FAST test about publication or the switch passes `True`.
+        lineage_enabled=lineage_enabled,
         gsqs_b0_ports=WorkflowPorts(
             session_factory=lambda rasters: DiskContentSession(rasters),
             case_count=2,

@@ -367,6 +367,25 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         # argument -- an event, its mutation, submission and Review decision
         # are product-owned rows of the acting Principal's own partition.
         Capability.RECORD_EVENTS_PROVENANCE,
+        # Record lineage S1: an Issue, its revisions and its native Project
+        # links are product-owned rows of the acting Principal's own partition
+        # and belong to no configured source or enrollment.
+        Capability.ISSUES_CREATE,
+        Capability.ISSUES_READ,
+        Capability.ISSUES_LIST,
+        Capability.ISSUES_UPDATE,
+        Capability.ISSUES_PROJECT_LINKS_ADD,
+        Capability.ISSUES_PROJECT_LINKS_END,
+        # Record lineage S1: memberships, associations, the lineage read and
+        # the note-version reads name product-owned rows of the same partition.
+        Capability.ISSUES_MEMBERSHIPS_ADD,
+        Capability.ISSUES_MEMBERSHIPS_END,
+        Capability.RECORDS_ASSOCIATIONS_ASSERT,
+        Capability.RECORDS_ASSOCIATIONS_CORRECT,
+        Capability.RECORDS_ASSOCIATIONS_END,
+        Capability.RECORDS_LINEAGE,
+        Capability.MEETINGS_NOTES_VERSIONS,
+        Capability.MEETINGS_NOTES_READ_VERSION,
         # `context.feedback` names a ranking preference, not a source. The rows
         # it writes belong to the acting Principal's partition and carry no
         # `enrollment_id` and no grant a scope could be compared against.

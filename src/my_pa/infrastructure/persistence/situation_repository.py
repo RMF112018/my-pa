@@ -67,6 +67,7 @@ from my_pa.contracts.ports import (
 from my_pa.domain.capture.review import Disposition
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import utc_now
+from my_pa.domain.lineage.vocabulary import SituationKind
 from my_pa.domain.relationship.event import RelationshipEvent, RelationshipEventType
 from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
@@ -301,13 +302,16 @@ class SqlSituationRepository(SituationRepository):
             raise ValueError("closing a situation records the evidence that closed it")
         now = utc_now()
         # The WHERE clause carries `principal_id`, so an UPDATE against another
-        # Principal's Situation matches no row and is reported as not-found.
+        # Principal's Situation matches no row and is reported as not-found. It
+        # also carries `kind = 'context'` (record lineage S1 contract section 9):
+        # this no-CAS close never reaches an Issue, which answers as not-found.
         result = self._connection.execute(
             update(situations)
             .where(
                 and_(
                     situations.c.situation_id == situation_id,
                     situations.c.principal_id == principal_id,
+                    situations.c.kind == SituationKind.CONTEXT.value,
                 )
             )
             .values(
@@ -347,7 +351,12 @@ class SqlSituationRepository(SituationRepository):
     def list_situations(
         self, principal_id: str, state_filter: SituationState | None = None
     ) -> tuple[Situation, ...]:
-        criteria = [situations.c.principal_id == principal_id]
+        # Context Situations only (record lineage S1 contract section 8, F22):
+        # an Issue is reached through `issues.list`, never offered here.
+        criteria = [
+            situations.c.principal_id == principal_id,
+            situations.c.kind == SituationKind.CONTEXT.value,
+        ]
         if state_filter is not None:
             criteria.append(situations.c.state == state_filter.value)
         rows = self._connection.execute(
@@ -370,6 +379,8 @@ class SqlSituationRepository(SituationRepository):
             object_refs=_as_tuple(mapping["object_refs"]),
             closed_at=mapping["closed_at"],
             outcome=mapping["outcome"],
+            kind=SituationKind(mapping["kind"]),
+            version=mapping["version"],
         )
 
 
@@ -393,11 +404,13 @@ class SqlFrameRepository(FrameRepository):
     ) -> Frame:
         # A Frame may only be entered in a Situation this Principal owns; the
         # ownership check is a partition-scoped read, not a bare existence read.
+        # An Issue is refused like an absent Situation (S1 contract section 9).
         owner = self._connection.execute(
             select(situations.c.situation_id).where(
                 and_(
                     situations.c.situation_id == situation_id,
                     situations.c.principal_id == principal_id,
+                    situations.c.kind == SituationKind.CONTEXT.value,
                 )
             )
         ).one_or_none()
@@ -677,11 +690,14 @@ class SqlProjectRepository(ProjectRepository):
                 )
             )
         ).one_or_none()
+        # An Issue's Project scope is `issues.project_links.*` alone (S1
+        # contract section 9): this legacy writer refuses one as not-found.
         owned_situation = self._connection.execute(
             select(situations.c.situation_id).where(
                 and_(
                     situations.c.situation_id == situation_id,
                     situations.c.principal_id == principal_id,
+                    situations.c.kind == SituationKind.CONTEXT.value,
                 )
             )
         ).one_or_none()
@@ -1322,6 +1338,21 @@ class SqlContinuityRepository(ContinuityRepository):
         project_id: str | None = None,
         situation_id: str | None = None,
     ) -> Decision:
+        if situation_id is not None:
+            # An Issue is never a Decision's context (S1 contract section 9).
+            # Only an Issue of this Principal is refused here, so what any other
+            # `situation_id` answers is unchanged.
+            issue = self._connection.execute(
+                select(situations.c.situation_id).where(
+                    and_(
+                        situations.c.situation_id == situation_id,
+                        situations.c.principal_id == principal_id,
+                        situations.c.kind == SituationKind.ISSUE_WORKSTREAM.value,
+                    )
+                )
+            ).one_or_none()
+            if issue is not None:
+                raise UnknownScopeError
         decision_id = issue_identifier(IdKind.CONTINUITY_DECISION)
         now = utc_now()
         self._connection.execute(

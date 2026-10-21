@@ -1702,6 +1702,90 @@
           "version": "v1",
           "availability": "available",
           "operator_only": false
+        },
+        {
+          "name": "issues.create",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "issues.read",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "issues.list",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "issues.update",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "issues.project_links.add",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "issues.project_links.end",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "issues.memberships.add",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "issues.memberships.end",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "records.associations.assert",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "records.associations.correct",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "records.associations.end",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "records.lineage",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "meetings.notes.versions",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "meetings.notes.read_version",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
         }
       ],
       "content_types": [
@@ -1728,11 +1812,11 @@
     "readiness": {
       "state": "degraded",
       "contract_version": "v1",
-      "implemented_capabilities": 192,
-      "total_capabilities": 192,
+      "implemented_capabilities": 206,
+      "total_capabilities": 206,
       "limitations": [
         "Content types awaiting an operator decision: application/pdf. They are reported rather than silently skipped.",
-        "Listings stop at the page size; truncation is disclosed. These issue a continuation cursor: commitments.history, commitments.list, commitments.search, commitments.waiting_on, constraint_sync.conflicts, constraint_sync.delta, constraints.history, constraints.list, constraints.portfolio_list, constraints.portfolio_search, constraints.search, continuity.projects, entities.addresses.list, entities.aliases.list, entities.assignments.list, entities.communication.list, entities.graph, entities.identifiers.list, entities.identity_history, entities.names.list, entities.observations.list, entities.participations.list, entities.relationships, entities.search, entities.unresolved_mentions, goodnotes.notebooks.list, goodnotes.pages.list, goodnotes.pull, goodnotes.runs.list, goodnotes.search, knowledge.assertions.list, knowledge.assertions.search, knowledge.search, meetings.list, meetings.search, record_events.list, relationship_memory.history, relationship_memory.list, relationship_memory.search, reports.list, review.list, tasks.comments.list, tasks.history, tasks.list, tasks.search. Every other listing does not, so a caller cannot ask for the next page.",
+        "Listings stop at the page size; truncation is disclosed. These issue a continuation cursor: commitments.history, commitments.list, commitments.search, commitments.waiting_on, constraint_sync.conflicts, constraint_sync.delta, constraints.history, constraints.list, constraints.portfolio_list, constraints.portfolio_search, constraints.search, continuity.projects, entities.addresses.list, entities.aliases.list, entities.assignments.list, entities.communication.list, entities.graph, entities.identifiers.list, entities.identity_history, entities.names.list, entities.observations.list, entities.participations.list, entities.relationships, entities.search, entities.unresolved_mentions, goodnotes.notebooks.list, goodnotes.pages.list, goodnotes.pull, goodnotes.runs.list, goodnotes.search, issues.list, knowledge.assertions.list, knowledge.assertions.search, knowledge.search, meetings.list, meetings.notes.versions, meetings.search, record_events.list, relationship_memory.history, relationship_memory.list, relationship_memory.search, reports.list, review.list, tasks.comments.list, tasks.history, tasks.list, tasks.search. Every other listing does not, so a caller cannot ask for the next page.",
         "Model proposals and semantic retrieval are disabled; deterministic lexical retrieval remains active.",
         "Worker-plane health is unavailable, stale, absent for queued work, or reports dead-lettered work; inspect worker_planes."
       ]
@@ -4334,5 +4418,132 @@
   "documents.restore": {
     "state": "active",
     "changed": false
+  },
+  "records.lineage": {
+    "root": {
+      "family": "task",
+      "record_id": "tsk_aaaaaaaa11111111"
+    },
+    "selected_issue_id": "sit_aaaaaaaa11111111",
+    "issues_matching_root": [
+      {
+        "issue_id": "sit_aaaaaaaa11111111",
+        "title": "Synthetic Issue",
+        "state": "open"
+      }
+    ],
+    "nodes": [
+      {
+        "family": "task",
+        "record_id": "tsk_aaaaaaaa11111111",
+        "depth": 0
+      },
+      {
+        "family": "meeting_note_version",
+        "record_id": "mnote_aaaaaaaa11111111",
+        "depth": 1,
+        "meeting_id": "mtg_aaaaaaaa11111111"
+      },
+      {
+        "family": "situation",
+        "record_id": "sit_aaaaaaaa11111111",
+        "depth": 1,
+        "title": "Synthetic Issue",
+        "state": "open"
+      },
+      {
+        "family": "meeting",
+        "record_id": "mtg_aaaaaaaa11111111",
+        "depth": 2
+      }
+    ],
+    "typed_edges": [
+      {
+        "link_id": "irl_aaaaaaaa11111111",
+        "kind": "issue_membership",
+        "relation_type": "issue_member",
+        "from": {
+          "family": "situation",
+          "record_id": "sit_aaaaaaaa11111111"
+        },
+        "to": {
+          "family": "task",
+          "record_id": "tsk_aaaaaaaa11111111"
+        },
+        "member_role": "work",
+        "context_issue_id": null,
+        "revision_no": 1,
+        "lifecycle_state": "active",
+        "acceptance_basis": "user_confirmed",
+        "authority_class": "local_operator",
+        "evidence": [],
+        "created_at": "2026-08-09T12:00:00.000Z",
+        "recorded_at": "2026-08-09T12:00:00.000Z"
+      },
+      {
+        "link_id": "irl_bbbbbbbb22222222",
+        "kind": "semantic",
+        "relation_type": "originated_from",
+        "from": {
+          "family": "task",
+          "record_id": "tsk_aaaaaaaa11111111"
+        },
+        "to": {
+          "family": "meeting_note_version",
+          "record_id": "mnote_aaaaaaaa11111111"
+        },
+        "member_role": null,
+        "context_issue_id": "sit_aaaaaaaa11111111",
+        "revision_no": 1,
+        "lifecycle_state": "active",
+        "acceptance_basis": "user_confirmed",
+        "authority_class": "local_operator",
+        "evidence": [
+          {
+            "anchor_id": "ian_aaaaaaaa11111111",
+            "family": "meeting_note_version",
+            "root_id": "mtg_aaaaaaaa11111111",
+            "version_kind": "immutable_version",
+            "version_id": "mnote_aaaaaaaa11111111",
+            "source_version_no": 1,
+            "passage_start_cp": 16,
+            "passage_end_cp": 36,
+            "role": "origin",
+            "availability": "available"
+          }
+        ],
+        "created_at": "2026-08-09T12:00:00.000Z",
+        "recorded_at": "2026-08-09T12:00:00.000Z"
+      }
+    ],
+    "virtual_native_edges": [
+      {
+        "edge_type": "meeting_note_version_of",
+        "from": {
+          "family": "meeting_note_version",
+          "record_id": "mnote_aaaaaaaa11111111"
+        },
+        "to": {
+          "family": "meeting",
+          "record_id": "mtg_aaaaaaaa11111111"
+        }
+      }
+    ],
+    "complete_state": "complete",
+    "next_cursor": null
+  },
+  "meetings.notes.read_version": {
+    "note": {
+      "note_version_id": "mnote_aaaaaaaa11111111",
+      "meeting_id": "mtg_aaaaaaaa11111111",
+      "version_number": 1,
+      "supersedes_note_version_id": null,
+      "content_sha256": "5d5ee03e664ea8ddac5907ce97995a9598b7aeef1e6e55e98df36d8f16a6a08d",
+      "character_count": 57,
+      "recorded_at": "2026-08-09T12:00:00.000Z",
+      "is_current": false,
+      "body_markdown": "Synthetic note: pour the north slab after the inspection."
+    },
+    "evidence_availability": "available"
   }
 }

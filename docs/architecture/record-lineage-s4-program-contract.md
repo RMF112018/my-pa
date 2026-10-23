@@ -576,10 +576,16 @@ invisible — never only the headline metrics:
   `issue` family, `context` ⇒ the `situation` family; the kind is read in the same
   batched reference statement. Otherwise their v1 siblings' visibility (the grant)
   applies.
-- **`reports.manifest`**: a manifest whose `program.server` is non-null is returned in
-  full to a remote reader only if the reader **holds a `programs.overview` grant for
-  `program_reporting_read`** (capability separation, R4-F21) **and** currently sees
-  **every** family in `program.families_seen`; otherwise `manifest_state =
+- **`reports.manifest`**: a manifest whose `program.verification_state` is anything but
+  `not_attempted` (`verified_at_commit`, `changed_since_read` or `recompute_failed`) is
+  returned in full to a remote reader only if the reader **holds a `programs.overview`
+  grant for `program_reporting_read`** (capability separation, R4-F21) **and** currently
+  sees the `entity` and `project` families **and**, when `program.server` is non-null,
+  **every** family in `program.families_seen` (R4-F27: a `recompute_failed` manifest's
+  `program_not_found` / `program_invalid` token, and the mere presence of a server
+  section, would otherwise tell an unauthorised reader whether Entity ids exist and are
+  Programs). A manifest whose `program` is `null` or whose state is `not_attempted`
+  carries only producer-supplied content and is ungated. Otherwise `manifest_state =
   "restricted_evidence"` with `manifest_sha256` **and** `manifest_canonical` both `null`
   (R4-F20). The digest is withheld too because almost all of `M` is derivable from what
   such a reader can read, so the digest of a withheld text would let it test candidate
@@ -852,8 +858,9 @@ reads unchanged (section 12, D-22).
 manifest_sha256|null, manifest_canonical|null}`. `recorded` returns the stored row
 unchanged; an artifact with no row answers `manifest_unavailable_legacy` with 3 nulls
 and **writes nothing** (no backfill of legacy manifests exists or is planned); section
-6.2's grant and family rule may answer `restricted_evidence` (`manifest_sha256` and
-`manifest_canonical` both `null`). A client verifies by recomputing
+6.2's grant and family rule — applied to every manifest whose Program state is not
+`not_attempted`, `recompute_failed` included — may answer `restricted_evidence`
+(`manifest_sha256` and `manifest_canonical` both `null`). A client verifies by recomputing
 `sha256(b"report-manifest-v1\n" + manifest_canonical)`.
 
 `reports.read`, `reports.latest`, `reports.list`, `reports.search`,
@@ -970,7 +977,7 @@ scope guard parses S3 §10.
 | AT-022 (guards) | `tests/database/test_lineage_s4_integrity_guards.py` | `test_a_manifest_digest_must_be_its_canonical_text`; `test_a_manifest_names_its_own_artifact`; `test_every_artifact_committed_after_s4_has_a_manifest`; `test_manifests_refuse_update_and_delete`; `test_manifests_refuse_truncate` | database |
 | AT-012 (migration) | `tests/schema/test_record_lineage_s4_migration.py` | FAST: `test_the_revision_is_the_single_head_on_6f1476b8da52`; `test_the_revision_imports_no_domain_module`; `test_frozen_ddl_names_every_declared_constraint`; `test_before_texts_are_byte_copies_of_the_s3_texts`; `test_at_vocabulary_adds_exactly_the_s4_names`; `test_offline_downgrade_refuses_first`. DB: `test_empty_to_head`; `test_s3_head_with_artifacts_upgrades_and_leaves_them_legacy`; `test_downgrade_refuses_while_s4_rows_exist`; `test_downgrade_restores_every_s3_text`; `test_each_downgrade_refusal_family_alone_refuses` (2 cases) | FAST + migration markers |
 | AT-023 (S4) | `tests/contract/test_lineage_s4_capability_admission.py` | `test_s4_capabilities_are_operator_decision_required_reads`; `test_s4_registers_no_report_type_and_issues_no_grant`; `test_switch_off_withholds_every_s4_capability`; `test_program_reads_need_the_entity_plane_and_their_factory`; `test_s4_requests_reject_server_owned_fields`; `test_program_overview_admits_no_as_of`; `test_the_program_purpose_admits_exactly_the_program_reads`; `test_program_overview_needs_the_constraint_plane`; `test_create_database_engine_keeps_its_default_checkout_timeout` (30 s for every existing caller; 1 s only for the Program engine) | FAST |
-| AT-023 (S4, DB) | `tests/security/test_program_reporting_isolation.py` | `test_a_foreign_program_answers_like_an_absent_one`; `test_cross_principal_overviews_disclose_nothing`; `test_a_remote_read_without_its_grant_is_unsupported`; `test_a_remote_reader_without_entity_and_project_reads_sees_no_program`; `test_an_invisible_family_is_restricted_never_counted`; `test_an_invisible_constraint_family_hides_every_constraint_derived_field`; `test_an_invisible_issue_family_hides_the_lineage_horizon_and_legacy_links`; `test_v2_references_are_restricted_without_the_project_or_situation_family`; `test_an_issue_situation_reference_needs_the_issue_family`; `test_a_commit_outcome_reveals_nothing_beyond_the_callers_own_overview` (a remote producer missing the commitment family records exactly the totals its own `programs.overview` answers, with Commitment totals `restricted`; a remote producer `programs.overview` does not admit gets `not_attempted` whatever the Program ids name); `test_a_manifest_program_section_needs_every_family_it_was_computed_with`; `test_a_manifest_program_section_needs_the_program_grant`; `test_a_restricted_manifest_returns_no_digest`; `test_families_seen_names_only_the_overview_families`; `test_switch_off_answers_unsupported_for_every_s4_capability`; `test_a_program_statement_timeout_answers_unavailable` | database |
+| AT-023 (S4, DB) | `tests/security/test_program_reporting_isolation.py` | `test_a_foreign_program_answers_like_an_absent_one`; `test_cross_principal_overviews_disclose_nothing`; `test_a_remote_read_without_its_grant_is_unsupported`; `test_a_remote_reader_without_entity_and_project_reads_sees_no_program`; `test_an_invisible_family_is_restricted_never_counted`; `test_an_invisible_constraint_family_hides_every_constraint_derived_field`; `test_an_invisible_issue_family_hides_the_lineage_horizon_and_legacy_links`; `test_v2_references_are_restricted_without_the_project_or_situation_family`; `test_an_issue_situation_reference_needs_the_issue_family`; `test_a_commit_outcome_reveals_nothing_beyond_the_callers_own_overview` (a remote producer missing the commitment family records exactly the totals its own `programs.overview` answers, with Commitment totals `restricted`; a remote producer `programs.overview` does not admit gets `not_attempted` whatever the Program ids name); `test_a_manifest_program_section_needs_every_family_it_was_computed_with`; `test_a_manifest_program_section_needs_the_program_grant`; `test_a_failed_recompute_manifest_needs_the_program_grant_and_entity_family`; `test_a_restricted_manifest_returns_no_digest`; `test_families_seen_names_only_the_overview_families`; `test_switch_off_answers_unsupported_for_every_s4_capability`; `test_a_program_statement_timeout_answers_unavailable` | database |
 | (domain) | `tests/unit/test_program_domain.py` | `test_window_rule_table` (current and historical modes apply the same window, including a future end; historical mode additionally separates verified from unverified members, so a null-start active edge is a current member and historically `start_not_recorded`); `test_redirect_walk_bounds_and_cycles`; `test_constraint_source_state_table`; `test_bridge_resolution_counts`; `test_completeness_precedence`; `test_reportability_reasons_table`; `test_commitment_acceptance_proof_is_unverified_for_native_acceptance`; `test_a_proven_acceptance_would_report_the_distinct_total`; `test_overview_digest_golden_vectors` | FAST |
 | (domain) | `tests/unit/test_report_manifest_domain.py` | `test_manifest_golden_vectors` (including the exact instant format); `test_structured_content_digest_golden_vectors` (including an already-normal float and a non-ASCII string); `test_program_reference_block_shape`; `test_the_manifest_has_every_key`; `test_candidate_status_by_stage` | FAST |
 | AT-026 (S4) | `tests/architecture/test_record_lineage_s4_scope.py` | `test_every_s4_crosswalk_test_exists`; `test_s4_adds_no_record_event_family`; `test_s4_reads_stage_no_record_event`; `test_s4_changes_no_lineage_vocabulary` | FAST |
@@ -1075,6 +1082,7 @@ unreachable hazard, never as "covered"):
 | total budget (R4-F14, R4-F22) | drop the deadline check; or run each statement under the fixed 2000 ms instead of `min(2000, remaining)`; or build the Program engine with the default 30 s checkout timeout | `test_the_recompute_respects_its_total_budget` |
 | refusal checks before the recompute (R4-F25) | recompute before `get_cycle` | `test_a_refused_commit_never_recomputes` |
 | not served ⇒ not attempted (R4-F24) | admit the recompute on the switches alone | `test_not_attempted_when_programs_overview_is_not_served` |
+| gate every attempted recompute (R4-F27) | gate only manifests with a non-null `server` | `test_a_failed_recompute_manifest_needs_the_program_grant_and_entity_family` |
 | no digest under restriction (R4-F20) | return `manifest_sha256` under `restricted_evidence` | `test_a_restricted_manifest_returns_no_digest` |
 | Program grant on the manifest (R4-F21) | gate `program.server` on families alone | `test_a_manifest_program_section_needs_the_program_grant` |
 | overview families only (R4-F23) | record every visible section 6.2 family | `test_families_seen_names_only_the_overview_families` |

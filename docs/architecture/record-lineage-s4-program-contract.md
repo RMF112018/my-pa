@@ -265,7 +265,10 @@ targets' states by precedence `conflict` > `sync_degraded` > `unverified` > `in_
 `calendar_unconfigured` > `conflict` > `sync_degraded` > `unverified` > `never_synced` >
 `in_sync`. A run in flight (`active_run_id` set) is not consulted: the snapshot reads
 the last finished-or-previewed run named by `last_run_id`, and a preview already sets a
-pending `sync_state`, which reads `sync_degraded`. The per-Project answer also carries `constraint_last_run_sync_states` (the
+pending `sync_state`, which reads `sync_degraded`; a run whose lease expired is rewritten
+to `failed` / `partial` by the next preview (`infrastructure/persistence/constraints.py`,
+the lease-expiry branch of the preview write) and reads `sync_degraded` from then on.
+The per-Project answer also carries `constraint_last_run_sync_states` (the
 distinct persisted run states of its targets, sorted). The existing
 `ConstraintSyncHealthView` is still shown as `constraint_sync`, for continuity with
 `constraints.portfolio_overview`, and decides nothing.
@@ -498,8 +501,10 @@ CHECK of section 4.1 recomputes it). `M` has exactly these keys, every one prese
   value_state, reasons}]}` — the recomputed `programs.overview` answer **as served to the
   committing caller** (restricted families stay `restricted`, `not_reportable` values
   stay `null`), so it is the server's uncertified state at commit, never a certified
-  total (OD-08). `server` and `families_seen` (the sorted section 6.2 families visible to
-  that caller during the recompute) are non-null exactly for `verified_at_commit` and
+  total (OD-08). `families_seen` is the sorted subset of the overview's 5 families
+  {`entity`, `project`, `commitment`, `issue`, `constraint`} visible to that caller
+  during the recompute — never `situation`, from which no overview field derives
+  (R4-F23). `server` and `families_seen` are non-null exactly for `verified_at_commit` and
   `changed_since_read`; `recompute_failure` is non-null exactly for `recompute_failed`;
   `not_attempted` carries only the claim. `scope` is a Program id or `"portfolio"`.
 - Excluded by design: the mutable `artifact_state` after supersession and `is_current`
@@ -572,15 +577,21 @@ invisible — never only the headline metrics:
   batched reference statement. Otherwise their v1 siblings' visibility (the grant)
   applies.
 - **`reports.manifest`**: a manifest whose `program.server` is non-null is returned in
-  full to a remote reader only if the reader currently sees **every** family in
-  `program.families_seen`; otherwise `manifest_state = "restricted_evidence"`,
-  `manifest_sha256` given, `manifest_canonical` `null` (the canonical text cannot be
-  partially withheld without breaking its digest). A local reader sees it all.
+  full to a remote reader only if the reader **holds a `programs.overview` grant for
+  `program_reporting_read`** (capability separation, R4-F21) **and** currently sees
+  **every** family in `program.families_seen`; otherwise `manifest_state =
+  "restricted_evidence"` with `manifest_sha256` **and** `manifest_canonical` both `null`
+  (R4-F20). The digest is withheld too because almost all of `M` is derivable from what
+  such a reader can read, so the digest of a withheld text would let it test candidate
+  hidden totals offline; no other digest of the manifest (the 3 projected columns) is
+  returned either. The artifact's existence is already disclosed by `reports.read`. A
+  local reader sees it all.
 - **`reports.commit`**: the recompute (section 7.4) runs with the **committing caller's**
-  visibility and only for a caller `programs.overview` itself admits, so its recorded
-  outcome is exactly what one `programs.overview` call by that caller at that instant
-  would answer — no oracle for an invisible family or Program. A caller it does not
-  admit gets `not_attempted`, which depends only on its own grants.
+  visibility and only when `programs.overview` is served by this build and admits that
+  caller, so its recorded outcome is exactly what one `programs.overview` call by that
+  caller at that instant would answer — no oracle for an invisible family or Program.
+  Otherwise the commit records `not_attempted`, which depends only on the build and the
+  caller's own grants.
 
 ### 6.3 The Program read transaction and its own pool (R4-F05)
 
@@ -595,8 +606,8 @@ Task and Commitment unit-of-work factories are already drawn from the work engin
 does not add to that).
 
 **Design.** `bootstrap/gateway.py` builds a **third engine**, `program_read_engine =
-create_database_engine(url, statement_timeout_ms=2000)` — the audit-engine fix, with
-the S3 per-statement budget — only when `program_reporting_enabled` is on, and passes
+create_database_engine(url, statement_timeout_ms=2000, pool_timeout_seconds=1)` — the
+audit-engine fix, with the S3 per-statement budget and a 1 s checkout timeout — only when `program_reporting_enabled` is on, and passes
 `lambda: SqlAlchemyProgramReadUnitOfWork(program_read_engine)` to `ApplicationService`
 (`None` ⇒ the 2 Program reads are withheld). No other code draws from that pool.
 `GatewayRuntime` disposes it with the other 2.
@@ -604,10 +615,12 @@ the S3 per-statement budget — only when `program_reporting_enabled` is on, and
 1. `program_read_engine.connect().execution_options(isolation_level="REPEATABLE READ",
    postgresql_readonly=True)`, then `begin()`; the first query — the one that takes the
    snapshot — reads `statement_timestamp()` and `H` (section 3.4). A statement cancelled
-   by the engine's timeout, or a checkout that exceeds the pool's checkout timeout (the
-   `create_database_engine` default, `_POOL_TIMEOUT_SECONDS = 30`), answers
-   `unavailable` on the Program reads and is recorded as `recompute_failed` on a commit
-   (section 7.4).
+   by its timeout, or a checkout that exceeds the Program engine's 1 s checkout timeout,
+   answers `unavailable` on the Program reads and is recorded as `recompute_failed` on a
+   commit (section 7.4). **M1 adds `pool_timeout_seconds: float = _POOL_TIMEOUT_SECONDS`
+   to `infrastructure/database/engine.py::create_database_engine`** (R4-F22): the default
+   is the existing 30 s, so every existing caller is unchanged; only the Program engine
+   passes 1.
 2. It exposes, on that one connection: `program_membership`
    (`SqlProgramMembershipRepository`), `program_metrics` (`SqlProgramMetricsRepository`)
    and `constraints` (the existing `SqlConstraintManagementRepository(connection)`).
@@ -623,6 +636,11 @@ writers). The wait-for graph therefore has no cycle at any `C`. Each request hol
 most 1 Program-pool connection and only while it holds a work connection; the work pool
 caps those at 5 with no overflow, so in the gateway the 5-connection Program pool never
 queues: at `C > 5` the excess requests queue on the **work** pool, exactly as today.
+**Every composition that serves S4 is built by `build_gateway_runtime`** — the HTTP
+gateway and the stdio and remote MCP transports (`apps/gateway.py`) and `apps/cli/invoke.py`
+(one request at a time) — so the same per-process arithmetic holds in each; the only
+other `ApplicationService` composition, `apps/cli/gsqs_b0.py`, passes no Program factory,
+so `programs.*` are withheld there and a commit records `not_attempted` (R4-F22, R4-F24).
 Section 10 pins it with the gateway's own pools at `C = 5` and `C = 10` (the 10 complete;
 no Program-pool checkout waits). **Backends.** With the switch on, each process that
 composes the Program factory builds its own 5-connection Program pool: the gateway's
@@ -779,20 +797,32 @@ reads unchanged (section 12, D-22).
   `structured_content` (a pure check, before anything is read). Then **the recompute
   (R4-F14)**, in this exact order inside `commit_artifact`:
   1. the existing pure validations, then the replay lookup (`get_receipt`, a read); a
-     replay returns the stored receipt and recomputes nothing;
-  2. **the recompute** — before the commit's first write (`put_receipt`, `put_run`,
-     `put_artifact`, `mark_superseded`) and before any lock-taking statement. The
+     replay returns the stored receipt and recomputes nothing; then **every remaining
+     refusal check**, all reads: `get_cycle`, dependency validation, the
+     `automation_run_id` conflict and `current_head` with the stale
+     `supersedes_artifact_id` check (R4-F25) — so a commit about to be refused never
+     pays for a recompute;
+  2. **the recompute** — immediately before the commit's first write (`put_receipt`,
+     then `mark_superseded`, `put_run`, `put_artifact`) and before any lock-taking
+     statement. The
      request's own `UnitOfWork` transaction is open, as it is for every handler
      (`ApplicationService._run` opens it before authorization), but the commit path has
      written nothing and holds no row lock at this point; the recompute runs on its own
      **Program-pool** connection (section 6.3) — never on the work connection and never
      a second work-pool checkout — as a READ ONLY snapshot read, which never waits on a
-     row lock. It is admitted only for a caller `programs.overview` itself admits (its
-     remote grant re-check and the `entity` and `project` families, section 6.2); any
-     other caller gets `not_attempted`. It runs the `programs.overview` path for the
-     block's `program_entity_ids` with **the committing caller's** section 6.2
-     visibility, under a **total budget of 5000 ms** (a wall-clock deadline checked
-     before each statement, on top of the 2000 ms per-statement timeout);
+     row lock. It is attempted only when `programs.overview ∈ available_capabilities()`
+     (so the switches, the entity plane, the Program factory and the Constraint plane all
+     hold, section 7.6) **and** `programs.overview` admits the caller (its remote grant
+     re-check and the `entity` and `project` families, section 6.2); otherwise the
+     commit records `not_attempted` (R4-F24). It runs the `programs.overview` path for
+     the block's `program_entity_ids` with **the committing caller's** section 6.2
+     visibility under a **hard total budget of 5000 ms** (R4-F22): the clock starts
+     before the checkout; the checkout waits at most the Program engine's 1 s; before
+     each statement the remaining budget is computed, a non-positive remainder stops
+     with `budget_exceeded`, and the statement runs under `SET LOCAL statement_timeout =
+     min(2000, remaining)` ms. The true worst case is therefore 5000 ms plus the
+     round-trip latency of the `SET LOCAL` and rollback statements — never a 30 s
+     checkout and never a full 2000 ms statement started at the deadline;
   3. it records `verified_at_commit` when the recomputed `overview_sha256` equals the
      claimed one, else `changed_since_read`, and in both cases binds the `server` part of
      section 5.3 with `families_seen`. Any failure — budget exceeded, a statement
@@ -800,8 +830,17 @@ reads unchanged (section 12, D-22).
      absent or not program-typed — is **recorded** as `recompute_failed` with its
      `RecomputeFailure` token and **never refuses the commit**: a slow Program plane
      cannot fail an Intelligence commit;
-  4. the remaining reads and the writes of `commit_artifact` as before; `put_artifact`
-     receives the section and inserts the manifest in the commit's transaction.
+  4. the writes of `commit_artifact` as before; `put_artifact` receives the section and
+     inserts the manifest in the commit's transaction. Two same-key commits may both
+     recompute; the `put_receipt` loser replays the winner, whose manifest is the one
+     bound.
+  **Ordering of instants.** `report.committed_at` is the request's instant (`_now(at)`),
+  taken before the recompute, so `server.source_cutoff_at` is **later** than
+  `committed_at`; readers must not assume `cutoff ≤ committed_at` (R4-F25).
+  **Audit.** The recompute is not a capability invocation and writes no audit row of its
+  own: the record is the `reports.commit` audit row (its own capability and purpose, on
+  the audit engine) together with the manifest's `verification_state`,
+  `recompute_failure`, `families_seen` and `server.source_cutoff_at` (R4-F25).
   Nothing about the recompute appears in the `reports.commit` answer; it is readable only
   through `reports.manifest` under section 6.2.
 - **When the Program plane is not admitted**, the key is ordinary structured content:
@@ -813,8 +852,8 @@ reads unchanged (section 12, D-22).
 manifest_sha256|null, manifest_canonical|null}`. `recorded` returns the stored row
 unchanged; an artifact with no row answers `manifest_unavailable_legacy` with 3 nulls
 and **writes nothing** (no backfill of legacy manifests exists or is planned); section
-6.2's family rule may answer `restricted_evidence` (`manifest_sha256` given,
-`manifest_canonical` `null`). A client verifies by recomputing
+6.2's grant and family rule may answer `restricted_evidence` (`manifest_sha256` and
+`manifest_canonical` both `null`). A client verifies by recomputing
 `sha256(b"report-manifest-v1\n" + manifest_canonical)`.
 
 `reports.read`, `reports.latest`, `reports.list`, `reports.search`,
@@ -905,7 +944,7 @@ New modules (resolve exact names against neighbours; no refactor beyond those na
 
 | Worker | Owns | Delivers |
 | --- | --- | --- |
-| **M1** | the revision, `tables.py`, vocabulary, every registry, settings and switch, count pins, `ports.py` stubs, `program_reads.py` and the third engine in `bootstrap/gateway.py` | section 4 in full; `domain/program/vocabulary.py`; registration of all 7 names (unbuilt ones answer `unsupported` until their worker, `capabilities.get` truthful, S3 D-37); the read unit of work, its own pool and the factory wiring; the S1–S3 lockstep moves; tests: S4 migration, S4 integrity guards, admission (FAST rows), the Program pool test |
+| **M1** | the revision, `tables.py`, vocabulary, every registry, settings and switch, count pins, `ports.py` stubs, `program_reads.py`, the third engine in `bootstrap/gateway.py` and the `pool_timeout_seconds` parameter of `create_database_engine` (default unchanged) | section 4 in full; `domain/program/vocabulary.py`; registration of all 7 names (unbuilt ones answer `unsupported` until their worker, `capabilities.get` truthful, S3 D-37); the read unit of work, its own pool and the factory wiring; the S1–S3 lockstep moves; tests: S4 migration, S4 integrity guards, admission (FAST rows), the Program pool test |
 | **M2** | WP-04A | `domain/program/membership.py`, `application/program_membership.py`, `infrastructure/persistence/program_membership.py`, `contracts/v1/programs.py` (resolve part), the handler; tests: AT-018, the membership rows of the domain test, isolation rows for the resolver |
 | **M3** | Commitment v2 | `contracts/v1/commitments_v2.py`, `application/commitments_v2.py`, the 4 handlers, the `project_ids` predicate, the reference states and the batched reads; tests: AT-015, the strict old client, v2 statement counts, the v2 visibility rows |
 | **M4** | WP-04B overview | `domain/program/reportability.py`, `domain/program/digest.py`, `application/program_work.py`, `application/program_constraints.py`, `infrastructure/persistence/program_metrics.py`, `contracts/v1/programs.py` (overview part), the handler; tests: AT-019 (with the sync-state and legacy-link rows), snapshot, statement plan and query plans, remote visibility |
@@ -927,11 +966,11 @@ scope guard parses S3 §10.
 | AT-019 (snapshot) | `tests/concurrency/test_program_overview_snapshot.py` | `test_one_overview_reads_one_snapshot` (a Commitment and an Issue link committed by another connection between the overview's statements are absent from it); `test_lineage_known_at_matches_the_issue_links_read` | database |
 | AT-019 (plans) | `tests/database/test_program_overview_plans.py` | `test_the_overview_issues_a_constant_number_of_statements`; `test_membership_reads_use_the_relationship_and_bridge_indexes`; `test_metric_reads_are_principal_scoped_aggregates` | database |
 | AT-019 (pool) | `tests/concurrency/test_program_read_pool.py` | `test_five_concurrent_overviews_through_the_gateway_pools_complete_without_stall`; `test_ten_concurrent_overviews_queue_on_the_work_pool_and_complete`; `test_a_program_read_never_draws_from_the_work_pool`; `test_a_commit_recompute_draws_only_from_the_program_pool_and_completes_at_five` (5 concurrent `reports.commit` with a block, the barrier method of `tests/concurrency/test_gateway_connection_pool.py`); `test_no_program_checkout_waits_in_the_gateway` | database |
-| AT-022 | `tests/integration/test_report_manifest_integrity.py` | `test_every_new_artifact_has_a_manifest`; `test_a_structured_metric_change_with_the_same_markdown_changes_the_manifest`; `test_a_dependency_change_with_the_same_markdown_changes_the_manifest`; `test_the_markdown_digest_is_unchanged`; `test_the_manifest_digest_recomputes_from_the_stored_row`; `test_a_legacy_report_answers_unavailable_and_is_never_rewritten`; `test_a_verified_program_reference_binds_the_server_state_as_the_caller_sees_it`; `test_a_changed_program_source_is_recorded_with_the_server_state`; `test_a_failed_recompute_is_recorded_and_never_refuses_the_commit`; `test_the_recompute_runs_before_the_first_write_on_the_program_pool`; `test_the_recompute_respects_its_total_budget`; `test_a_collector_cannot_carry_a_program_reference`; `test_a_collector_candidate_is_never_typed`; `test_a_replayed_commit_writes_no_second_manifest`; `test_the_program_reference_is_ordinary_content_with_the_switch_off`; `test_a_report_reproduces_its_overview_digest_from_an_unchanged_state` | database |
+| AT-022 | `tests/integration/test_report_manifest_integrity.py` | `test_every_new_artifact_has_a_manifest`; `test_a_structured_metric_change_with_the_same_markdown_changes_the_manifest`; `test_a_dependency_change_with_the_same_markdown_changes_the_manifest`; `test_the_markdown_digest_is_unchanged`; `test_the_manifest_digest_recomputes_from_the_stored_row`; `test_a_legacy_report_answers_unavailable_and_is_never_rewritten`; `test_a_verified_program_reference_binds_the_server_state_as_the_caller_sees_it`; `test_a_changed_program_source_is_recorded_with_the_server_state`; `test_a_failed_recompute_is_recorded_and_never_refuses_the_commit`; `test_the_recompute_runs_before_the_first_write_on_the_program_pool`; `test_a_refused_commit_never_recomputes`; `test_the_recompute_respects_its_total_budget` (a statement started near the deadline is cancelled at the remaining budget; a checkout wait ends at 1 s; the whole recompute stays within 5000 ms plus round-trip latency); `test_not_attempted_when_programs_overview_is_not_served` (entity plane off, no Program factory, no Constraint factory, each in turn); `test_a_collector_cannot_carry_a_program_reference`; `test_a_collector_candidate_is_never_typed`; `test_a_replayed_commit_writes_no_second_manifest`; `test_the_program_reference_is_ordinary_content_with_the_switch_off`; `test_a_report_reproduces_its_overview_digest_from_an_unchanged_state` | database |
 | AT-022 (guards) | `tests/database/test_lineage_s4_integrity_guards.py` | `test_a_manifest_digest_must_be_its_canonical_text`; `test_a_manifest_names_its_own_artifact`; `test_every_artifact_committed_after_s4_has_a_manifest`; `test_manifests_refuse_update_and_delete`; `test_manifests_refuse_truncate` | database |
 | AT-012 (migration) | `tests/schema/test_record_lineage_s4_migration.py` | FAST: `test_the_revision_is_the_single_head_on_6f1476b8da52`; `test_the_revision_imports_no_domain_module`; `test_frozen_ddl_names_every_declared_constraint`; `test_before_texts_are_byte_copies_of_the_s3_texts`; `test_at_vocabulary_adds_exactly_the_s4_names`; `test_offline_downgrade_refuses_first`. DB: `test_empty_to_head`; `test_s3_head_with_artifacts_upgrades_and_leaves_them_legacy`; `test_downgrade_refuses_while_s4_rows_exist`; `test_downgrade_restores_every_s3_text`; `test_each_downgrade_refusal_family_alone_refuses` (2 cases) | FAST + migration markers |
-| AT-023 (S4) | `tests/contract/test_lineage_s4_capability_admission.py` | `test_s4_capabilities_are_operator_decision_required_reads`; `test_s4_registers_no_report_type_and_issues_no_grant`; `test_switch_off_withholds_every_s4_capability`; `test_program_reads_need_the_entity_plane_and_their_factory`; `test_s4_requests_reject_server_owned_fields`; `test_program_overview_admits_no_as_of`; `test_the_program_purpose_admits_exactly_the_program_reads`; `test_program_overview_needs_the_constraint_plane` | FAST |
-| AT-023 (S4, DB) | `tests/security/test_program_reporting_isolation.py` | `test_a_foreign_program_answers_like_an_absent_one`; `test_cross_principal_overviews_disclose_nothing`; `test_a_remote_read_without_its_grant_is_unsupported`; `test_a_remote_reader_without_entity_and_project_reads_sees_no_program`; `test_an_invisible_family_is_restricted_never_counted`; `test_an_invisible_constraint_family_hides_every_constraint_derived_field`; `test_an_invisible_issue_family_hides_the_lineage_horizon_and_legacy_links`; `test_v2_references_are_restricted_without_the_project_or_situation_family`; `test_an_issue_situation_reference_needs_the_issue_family`; `test_a_commit_outcome_reveals_nothing_beyond_the_callers_own_overview` (a remote producer missing the commitment family records exactly the totals its own `programs.overview` answers, with Commitment totals `restricted`; a remote producer `programs.overview` does not admit gets `not_attempted` whatever the Program ids name); `test_a_manifest_program_section_needs_every_family_it_was_computed_with`; `test_switch_off_answers_unsupported_for_every_s4_capability`; `test_a_program_statement_timeout_answers_unavailable` | database |
+| AT-023 (S4) | `tests/contract/test_lineage_s4_capability_admission.py` | `test_s4_capabilities_are_operator_decision_required_reads`; `test_s4_registers_no_report_type_and_issues_no_grant`; `test_switch_off_withholds_every_s4_capability`; `test_program_reads_need_the_entity_plane_and_their_factory`; `test_s4_requests_reject_server_owned_fields`; `test_program_overview_admits_no_as_of`; `test_the_program_purpose_admits_exactly_the_program_reads`; `test_program_overview_needs_the_constraint_plane`; `test_create_database_engine_keeps_its_default_checkout_timeout` (30 s for every existing caller; 1 s only for the Program engine) | FAST |
+| AT-023 (S4, DB) | `tests/security/test_program_reporting_isolation.py` | `test_a_foreign_program_answers_like_an_absent_one`; `test_cross_principal_overviews_disclose_nothing`; `test_a_remote_read_without_its_grant_is_unsupported`; `test_a_remote_reader_without_entity_and_project_reads_sees_no_program`; `test_an_invisible_family_is_restricted_never_counted`; `test_an_invisible_constraint_family_hides_every_constraint_derived_field`; `test_an_invisible_issue_family_hides_the_lineage_horizon_and_legacy_links`; `test_v2_references_are_restricted_without_the_project_or_situation_family`; `test_an_issue_situation_reference_needs_the_issue_family`; `test_a_commit_outcome_reveals_nothing_beyond_the_callers_own_overview` (a remote producer missing the commitment family records exactly the totals its own `programs.overview` answers, with Commitment totals `restricted`; a remote producer `programs.overview` does not admit gets `not_attempted` whatever the Program ids name); `test_a_manifest_program_section_needs_every_family_it_was_computed_with`; `test_a_manifest_program_section_needs_the_program_grant`; `test_a_restricted_manifest_returns_no_digest`; `test_families_seen_names_only_the_overview_families`; `test_switch_off_answers_unsupported_for_every_s4_capability`; `test_a_program_statement_timeout_answers_unavailable` | database |
 | (domain) | `tests/unit/test_program_domain.py` | `test_window_rule_table` (current and historical modes apply the same window, including a future end; historical mode additionally separates verified from unverified members, so a null-start active edge is a current member and historically `start_not_recorded`); `test_redirect_walk_bounds_and_cycles`; `test_constraint_source_state_table`; `test_bridge_resolution_counts`; `test_completeness_precedence`; `test_reportability_reasons_table`; `test_commitment_acceptance_proof_is_unverified_for_native_acceptance`; `test_a_proven_acceptance_would_report_the_distinct_total`; `test_overview_digest_golden_vectors` | FAST |
 | (domain) | `tests/unit/test_report_manifest_domain.py` | `test_manifest_golden_vectors` (including the exact instant format); `test_structured_content_digest_golden_vectors` (including an already-normal float and a non-ASCII string); `test_program_reference_block_shape`; `test_the_manifest_has_every_key`; `test_candidate_status_by_stage` | FAST |
 | AT-026 (S4) | `tests/architecture/test_record_lineage_s4_scope.py` | `test_every_s4_crosswalk_test_exists`; `test_s4_adds_no_record_event_family`; `test_s4_reads_stage_no_record_event`; `test_s4_changes_no_lineage_vocabulary` | FAST |
@@ -1033,7 +1072,12 @@ unreachable hazard, never as "covered"):
 | recompute with the caller's visibility (R4-F14) | recompute with local (full) visibility | `test_a_commit_outcome_reveals_nothing_beyond_the_callers_own_overview` |
 | recompute admission (R4-F14) | recompute for a caller `programs.overview` does not admit | `test_a_commit_outcome_reveals_nothing_beyond_the_callers_own_overview` |
 | failure recorded, never refused (R4-F14) | refuse the commit on a recompute error | `test_a_failed_recompute_is_recorded_and_never_refuses_the_commit` |
-| total budget (R4-F14) | drop the deadline check | `test_the_recompute_respects_its_total_budget` |
+| total budget (R4-F14, R4-F22) | drop the deadline check; or run each statement under the fixed 2000 ms instead of `min(2000, remaining)`; or build the Program engine with the default 30 s checkout timeout | `test_the_recompute_respects_its_total_budget` |
+| refusal checks before the recompute (R4-F25) | recompute before `get_cycle` | `test_a_refused_commit_never_recomputes` |
+| not served ⇒ not attempted (R4-F24) | admit the recompute on the switches alone | `test_not_attempted_when_programs_overview_is_not_served` |
+| no digest under restriction (R4-F20) | return `manifest_sha256` under `restricted_evidence` | `test_a_restricted_manifest_returns_no_digest` |
+| Program grant on the manifest (R4-F21) | gate `program.server` on families alone | `test_a_manifest_program_section_needs_the_program_grant` |
+| overview families only (R4-F23) | record every visible section 6.2 family | `test_families_seen_names_only_the_overview_families` |
 | verification compares | record `verified_at_commit` without comparing | `test_a_changed_program_source_is_recorded_with_the_server_state` |
 | manifest family gate (R4-F14) | release `program.server` to a reader missing a recorded family | `test_a_manifest_program_section_needs_every_family_it_was_computed_with` |
 | Issue reference by kind (R4-F17) | gate every `situation_reference` by the `situation` family | `test_an_issue_situation_reference_needs_the_issue_family` |

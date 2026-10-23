@@ -1042,13 +1042,13 @@ Program/report work packages; AT-020, AT-021 → out of scope until OD-06.
 | Valid-time intervals on links (`valid_from` / `valid_to`) | not scheduled (D-14) |
 | Contesting memberships | not scheduled; `contradicts` corrections serve (D-09) |
 | Native-plane entries in as-of timelines | needs a commit-ordered native knowledge time (D-04) |
-| Verified Commitment acceptance (S2 D-05, D-17) | operator/Work decision (D-11) |
+| Verified Commitment acceptance (S2 D-05, D-17) | operator/Work decision (D-11); until it lands, the [S4 contract](record-lineage-s4-program-contract.md) reports accepted Program totals as `not_reportable` / `acceptance_unverified` (S4 D-04) |
 | Constraint close evidence in the Constraint plane (S2 D-06) | Constraint-plane decision; the membership `resolution` anchor stays the proof (D-12) |
 | A composite Constraint create; a closure exception authority | as S2 §11 |
 | Runtime-role provisioning; remote attested lineage writer; native writers through `is_transaction_conflict` | as S1 §11 |
 | **The backfill apply** (materializing `source_backed_accepted` items; package WP-03B, CR-014) | an operator-gated later package (section 13; D-26). Binding requirements for it, from R3-F06/F07: it materializes only items of a `classified` run whose `plan_digest` the operator states; before writing, it looks for **any** link between the candidate's `(from, relation_type, to)` endpoints **in any context and any state**, answering `already_present` for a live one and a distinct `previously_ended` (never a re-write) for an ended one, so an operator's recorded end is never reversed and no context-scoped duplicate is created; it re-derives each source digest and refuses a changed source; it writes through `insert_new_link` under the S1/S2 locks with a new acceptance basis (`source_backed_verified`, then admitted with its CHECK) and a commit mark per transaction; and it requires an independent readback of a sample of every materialized class (CR-014 "one independent readback per accepted class") before a run is reported applied |
 | Running the backfill dry run against any real database | operator gate (section 13) |
-| Program, report manifest, finance, P6 | own work packages; finance/P6 gated by OD-06 |
+| Program, report manifest, finance, P6 | own work packages; finance/P6 gated by OD-06. Program membership, Program metrics and the report manifest (WP-04A/B/C): the [S4 contract](record-lineage-s4-program-contract.md); finance and P6 stay OD-06-gated (S4 section 11) |
 
 ## 12. Divergences — repository vs package, and resolutions
 

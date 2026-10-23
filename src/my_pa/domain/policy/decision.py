@@ -386,6 +386,16 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.RECORDS_LINEAGE,
         Capability.MEETINGS_NOTES_VERSIONS,
         Capability.MEETINGS_NOTES_READ_VERSION,
+        # Record lineage S2: the eight S2 names act on the same partition's
+        # product-owned Issue, link, handoff and Work rows.
+        Capability.ISSUES_CLOSE,
+        Capability.ISSUES_REOPEN,
+        Capability.ISSUES_CLOSURE_READINESS,
+        Capability.ISSUES_MEMBERSHIPS_CORRECT,
+        Capability.ISSUES_HANDOFFS_RECORD,
+        Capability.ISSUES_HANDOFFS_LIST,
+        Capability.ISSUES_WORK_CREATE_TASK,
+        Capability.ISSUES_WORK_CREATE_COMMITMENT,
         # `context.feedback` names a ranking preference, not a source. The rows
         # it writes belong to the acting Principal's partition and carry no
         # `enrollment_id` and no grant a scope could be compared against.

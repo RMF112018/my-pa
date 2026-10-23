@@ -578,6 +578,15 @@ SCOPED_CAPABILITIES = [
         Capability.RECORDS_LINEAGE,
         Capability.MEETINGS_NOTES_VERSIONS,
         Capability.MEETINGS_NOTES_READ_VERSION,
+        # Record lineage S2, behind the same switch.
+        Capability.ISSUES_CLOSE,
+        Capability.ISSUES_REOPEN,
+        Capability.ISSUES_CLOSURE_READINESS,
+        Capability.ISSUES_MEMBERSHIPS_CORRECT,
+        Capability.ISSUES_HANDOFFS_RECORD,
+        Capability.ISSUES_HANDOFFS_LIST,
+        Capability.ISSUES_WORK_CREATE_TASK,
+        Capability.ISSUES_WORK_CREATE_COMMITMENT,
     }
 ]
 
@@ -944,7 +953,16 @@ REPORT_TYPE_AUTHORING_EXEMPTION = frozenset({Capability.REPORTS_TYPES_CREATE})
 #: `issues.create` and `issues.update` -- on the same reading: they write the
 #: acting Principal's own Issue rows and revisions and reach no source provider
 #: and no enrollment. The two `issues.project_links.` writes carry no listed verb.
-ISSUE_AUTHORING_EXEMPTION = frozenset({Capability.ISSUES_CREATE, Capability.ISSUES_UPDATE})
+ISSUE_AUTHORING_EXEMPTION = frozenset(
+    {
+        Capability.ISSUES_CREATE,
+        Capability.ISSUES_UPDATE,
+        # Record lineage S2's composites create a Task or Commitment of the
+        # Principal's own partition with its Issue membership; no source moves.
+        Capability.ISSUES_WORK_CREATE_TASK,
+        Capability.ISSUES_WORK_CREATE_COMMITMENT,
+    }
+)
 
 
 def test_neither_transport_routes_a_mutating_capability() -> None:

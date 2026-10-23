@@ -32,7 +32,12 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 #: `meeting_note_versions` digest unique, and a comment beside
 #: `capture_versions` naming its database-only digest unique; `captures` is
 #: untouched.
-TABLES_SHA256: Final = "7b4b52d5e33ed8e9ffbcf2a8f8c112b82edd3d6cc82ffe5d4bbefd0b63bd581b"
+#: Moved by the record lineage S2 revision (ADR-015), which declares the three
+#: S2 tables, the closure columns and CHECKs of `issue_revisions`, the S2
+#: CHECKs of `record_links`, `record_link_revisions.member_native_version` and
+#: the handoff and composite result columns of `lineage_write_requests`;
+#: `captures` is untouched.
+TABLES_SHA256: Final = "1186d614dce9df80aabf44c471ceab97a5dd07a10b88fa21e40971872e5fa1c1"
 WP03_MIGRATION_SHA256: Final = "098edd98ccc1846b01c58f42e296e4751e7841b562a2827616cc4337e174c354"
 WP03_MIGRATION: Final = (
     ROOT / "migrations/versions/20260914_e6a4c2f91b73_project_controls_run01_integrity.py"

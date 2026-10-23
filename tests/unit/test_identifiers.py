@@ -250,6 +250,8 @@ def test_contract_prefixes_are_stable() -> None:
         "irl",
         "irv",
         "ian",
+        # Record lineage S2 (S2 contract section 2).
+        "ihnd",
     }
 
 

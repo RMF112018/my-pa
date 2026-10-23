@@ -444,3 +444,10 @@ class Purpose(StrEnum):
     # a widening over it. A read-only purpose of its own, used by exactly
     # `meetings.notes.read_version`.
     MEETING_NOTE_HISTORY_READ = "meeting_note_history_read"
+    # Record lineage S2 (S2 contract section 7), on `D-91`: would reuse widen
+    # the grant? `issue_authoring` would: the two composite writes create native
+    # Tasks and Commitments, and a grant issued to author Issues must not
+    # silently become a grant to create Work. A write purpose of its own, used
+    # by exactly `issues.work.create_task` and `issues.work.create_commitment`;
+    # a remote-write purpose.
+    ISSUE_WORK_AUTHORING = "issue_work_authoring"

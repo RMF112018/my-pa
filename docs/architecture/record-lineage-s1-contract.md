@@ -900,6 +900,8 @@ implementers; a renamed test must update this table in the same commit.
 AT-008, AT-011, AT-013, AT-014, AT-016, AT-024 Meeting view, timeline and graph, AT-025, AT-001 full
 reverse-root equivalence → S3; AT-015, AT-018, AT-019, AT-022, AT-023 Commitment v2 →
 Program/report work packages; AT-020, AT-021 → out of scope until OD-06.
+The S2 tests are bound in the [S2 contract](record-lineage-s2-contract.md) section 10,
+not in this table.
 
 ## 11. Deferred work and its owner slice
 
@@ -917,6 +919,13 @@ Program/report work packages; AT-020, AT-021 → out of scope until OD-06.
 | Routing native writers through `is_transaction_conflict` (section 6.2 residual) | separate work package |
 | Meeting record view and its related-Issue display; Issue pages, timeline and graph (WP-06A S3 stage) | S3 |
 | Backfill/dry-run (WP-03B), Program, report manifest, finance, P6 | own work packages; finance/P6 gated by OD-06 |
+
+The S2 rows above are specified by the [S2 contract](record-lineage-s2-contract.md),
+which narrows them: S2 admits `delegated_from`, `escalated_from`, `blocks` and
+`created_to_resolve`, and moves `related_context` and `contest`/`reinstate` to S3; the
+composite writes are `issues.work.create_task` and `issues.work.create_commitment` (no
+composite Constraint create); restricted-classification evidence stays S3 (S2
+contract sections 11 and 12).
 
 ## 12. W1 divergences — resolution
 

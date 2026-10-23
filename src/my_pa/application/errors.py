@@ -560,6 +560,33 @@ class SafeDetail(StrEnum):
     MAX_DEPTH = "max_depth"
     INCLUDE_BODY = "include_body"
     NOTE_VERSION_ID = "note_version_id"
+    #: Record lineage S2, the Issue close (S2 contract sections 3.3, 7.2 and
+    #: 7.3). `CLOSURE_GATE` an unsatisfied mandatory member at close (`conflict`;
+    #: `issues.closure_readiness` lists the blockers); `CLOSURE_EVIDENCE_ANCHORS`
+    #: a closure evidence set that is malformed, does not match its sources or
+    #: holds no available exact `resolution` anchor; `OUTCOME` a malformed close
+    #: outcome. `STATE`, `REASON` and `EVIDENCE_ANCHORS` are reused for the
+    #: closed-Issue rule, the reopening reason and its evidence.
+    CLOSURE_GATE = "closure_gate"
+    CLOSURE_EVIDENCE_ANCHORS = "closure_evidence_anchors"
+    OUTCOME = "outcome"
+    #: Record lineage S2, handoffs and the composite Work writes (S2 contract
+    #: sections 3.1, 3.4, 6.4 and 7.3). `EFFECTIVE_AT` a handoff's business
+    #: time that is malformed, after now, before its Commitment's creation or
+    #: before the previous handoff's; `ASSOCIATION_INTENTS` a composite's
+    #: intent list that is malformed, names a relation the composite does not
+    #: write, or repeats a meaning; `DIRECTION` a `delegated_from` Commitment
+    #: that is not owed to the Principal. `FROM_RECORD` (`from`, the side a
+    #: handoff leaves), `PURPOSE` (a `created_to_resolve` purpose),
+    #: `EVIDENCE_ANCHOR`, `COMMITMENT_ID`, `TO_RECORD` and `PROJECT_ID` are
+    #: reused, not redeclared.
+    EFFECTIVE_AT = "effective_at"
+    ASSOCIATION_INTENTS = "association_intents"
+    DIRECTION = "direction"
+    #: Record lineage S2, `blocks` (S2 contract sections 3.1 and 7.3): an
+    #: assert that would close a cycle over the Principal's active `blocks`
+    #: links, or whose search reached its bound before it could decide.
+    BLOCKS_CYCLE = "blocks_cycle"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

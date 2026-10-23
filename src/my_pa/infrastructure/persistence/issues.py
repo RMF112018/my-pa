@@ -1,12 +1,12 @@
 """The record lineage S1 Issue plane, behind `contracts.ports.IssueRepository`.
 
 Written here and nowhere else: Issue `situations` rows (`kind =
-'issue_workstream'`), `issue_revisions`, `project_situations` rows that name an
-Issue, `issue_project_membership_events`, the Issue and Project-link rows of
-`lineage_write_requests`, and the evidence anchors a Project link cites
-(`lineage_evidence_anchors`). Read and locked, never written: `projects`,
-`meeting_note_versions`, `captures`, `capture_versions` and the Capture
-lifecycle projection.
+'issue_workstream'`), `issue_revisions` and (S2) their closure evidence
+`issue_revision_evidence`, `project_situations` rows that name an Issue,
+`issue_project_membership_events`, the `lineage_write_requests` rows, and the
+evidence anchors every lineage write cites (`lineage_evidence_anchors`). Read
+and locked, never written: `projects`, `meeting_note_versions`, `captures`,
+`capture_versions` and the Capture lifecycle projection.
 
 **The partition is reached through the guard.** Every SELECT is built through
 `principal_scoped` or `_mine` (`partition_criterion`), every UPDATE composes
@@ -28,7 +28,7 @@ into the port's conflict, so the application answers `conflict` (section 6.2).
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Any, Final, cast
 
@@ -44,6 +44,7 @@ from my_pa.contracts.ports import (
     IssueRepository,
     IssueRevisionRecord,
     LineageIdempotencyConflictError,
+    LineageLinkEvidence,
     LineageSourceVersion,
     LineageWriteRequestRecord,
     ProjectLinkEventRecord,
@@ -56,10 +57,13 @@ from my_pa.domain.common.classification import Classification
 from my_pa.domain.lineage.canonical import anchor_identity
 from my_pa.domain.lineage.model import EvidenceAnchor
 from my_pa.domain.lineage.vocabulary import (
+    EvidenceRole,
+    EvidenceSourceFamily,
     IssueProjectMembershipAction,
     IssueProjectMembershipState,
     IssueRevisionAction,
     SituationKind,
+    SourceVersionKind,
 )
 from my_pa.domain.situation.situation import SituationState
 from my_pa.infrastructure.persistence.capture_lifecycle import (
@@ -76,8 +80,10 @@ from my_pa.infrastructure.persistence.principal_scope import (
 from my_pa.infrastructure.persistence.tables import (
     capture_versions,
     issue_project_membership_events,
+    issue_revision_evidence,
     issue_revisions,
     lineage_evidence_anchors,
+    lineage_write_request_links,
     lineage_write_requests,
     meeting_note_versions,
     project_situations,
@@ -105,6 +111,8 @@ _ISSUE_COLUMNS: Final = (
     situations.c.opened_at,
     situations.c.created_at,
     situations.c.updated_at,
+    situations.c.closed_at,
+    situations.c.outcome,
 )
 
 _EVENT_COLUMNS: Final = (
@@ -162,10 +170,30 @@ def _to_issue(row: Row[Any]) -> IssueRecord:
         opened_at=row.opened_at,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        closed_at=row.closed_at,
+        outcome=row.outcome,
     )
 
 
-def _to_revision(row: Row[Any]) -> IssueRevisionRecord:
+def anchor_from_row(row: Row[Any]) -> EvidenceAnchor:
+    """One stored anchor, with the role its evidence row gives it."""
+    return EvidenceAnchor(
+        source_family=EvidenceSourceFamily(row.source_family),
+        source_root_id=row.source_root_id,
+        source_version_kind=SourceVersionKind(row.source_version_kind),
+        source_version_id=row.source_version_id,
+        source_version_no=row.source_version_no,
+        source_sha256=row.source_sha256,
+        passage_start_cp=row.passage_start_cp,
+        passage_end_cp=row.passage_end_cp,
+        passage_sha256=row.passage_sha256,
+        role=EvidenceRole(row.role),
+    )
+
+
+def _to_revision(
+    row: Row[Any], evidence: tuple[LineageLinkEvidence, ...] = ()
+) -> IssueRevisionRecord:
     return IssueRevisionRecord(
         issue_id=row.issue_id,
         version=row.version,
@@ -179,6 +207,11 @@ def _to_revision(row: Row[Any]) -> IssueRevisionRecord:
         decision_channel=row.decision_channel,
         source_capability=row.source_capability,
         recorded_at=row.recorded_at,
+        closed_at=row.closed_at,
+        outcome=row.outcome,
+        reason=row.reason,
+        evidence=evidence,
+        evidence_set_digest=row.evidence_set_digest,
     )
 
 
@@ -286,6 +319,9 @@ class SqlIssueRepository(IssueRepository):
                     request.c.result_link_id,
                     request.c.result_link_revision_no,
                     request.c.result_created,
+                    request.c.result_handoff_id,
+                    request.c.result_record_family,
+                    request.c.result_record_id,
                 ).where(
                     _mine(request, principal_id),
                     request.c.capability == capability,
@@ -310,6 +346,9 @@ class SqlIssueRepository(IssueRepository):
             result_link_id=winner.result_link_id,
             result_link_revision_no=winner.result_link_revision_no,
             result_created=winner.result_created,
+            result_handoff_id=winner.result_handoff_id,
+            result_record_family=winner.result_record_family,
+            result_record_id=winner.result_record_id,
         )
 
     def complete_write_request(
@@ -326,6 +365,9 @@ class SqlIssueRepository(IssueRepository):
         result_link_id: str | None = None,
         result_link_revision_no: int | None = None,
         result_created: bool | None = None,
+        result_handoff_id: str | None = None,
+        result_record_family: str | None = None,
+        result_record_id: str | None = None,
     ) -> None:
         request = lineage_write_requests
         completed = _run(
@@ -345,6 +387,9 @@ class SqlIssueRepository(IssueRepository):
                     result_link_id=result_link_id,
                     result_link_revision_no=result_link_revision_no,
                     result_created=result_created,
+                    result_handoff_id=result_handoff_id,
+                    result_record_family=result_record_family,
+                    result_record_id=result_record_id,
                     completed_at=completed_at,
                 )
                 .returning(request.c.capability)
@@ -411,6 +456,8 @@ class SqlIssueRepository(IssueRepository):
                     state=issue.state.value,
                     version=issue.version,
                     updated_at=issue.updated_at,
+                    closed_at=issue.closed_at,
+                    outcome=issue.outcome,
                 )
                 .returning(situations.c.situation_id)
             ).first()
@@ -440,10 +487,73 @@ class SqlIssueRepository(IssueRepository):
                             "decision_channel": revision.decision_channel,
                             "source_capability": revision.source_capability,
                             "recorded_at": revision.recorded_at,
+                            "closed_at": revision.closed_at,
+                            "outcome": revision.outcome,
+                            "reason": revision.reason,
+                            "evidence_count": len(revision.evidence),
+                            "evidence_set_digest": revision.evidence_set_digest,
                         },
                     )
                 )
             )
+        )
+        rows = [
+            _bound(
+                issue_revision_evidence,
+                principal_id,
+                {
+                    "issue_id": revision.issue_id,
+                    "version": revision.version,
+                    "ordinal": ordinal,
+                    "anchor_id": cited.anchor_id,
+                    "role": cited.anchor.role.value,
+                },
+            )
+            for ordinal, cited in enumerate(revision.evidence, start=1)
+        ]
+        if rows:
+            _run(lambda: self._connection.execute(insert(issue_revision_evidence), rows))
+
+    def _revision_evidence(
+        self, principal_id: str, issue_id: str, version: int
+    ) -> tuple[LineageLinkEvidence, ...]:
+        evidence = issue_revision_evidence
+        anchors = lineage_evidence_anchors
+        cited = _run(
+            lambda: self._connection.execute(
+                select(
+                    evidence.c.anchor_id,
+                    evidence.c.role,
+                    anchors.c.source_family,
+                    anchors.c.source_root_id,
+                    anchors.c.source_version_kind,
+                    anchors.c.source_version_id,
+                    anchors.c.source_version_no,
+                    anchors.c.source_sha256,
+                    anchors.c.passage_start_cp,
+                    anchors.c.passage_end_cp,
+                    anchors.c.passage_sha256,
+                )
+                .select_from(
+                    evidence.join(
+                        anchors,
+                        and_(
+                            matching_partition_criterion(anchors, evidence),
+                            anchors.c.anchor_id == evidence.c.anchor_id,
+                        ),
+                    )
+                )
+                .where(
+                    _mine(evidence, principal_id),
+                    evidence.c.issue_id == issue_id,
+                    evidence.c.version == version,
+                )
+                .order_by(evidence.c.ordinal)
+            ).all()
+        )
+        return tuple(
+            LineageLinkEvidence(anchor_id=item.anchor_id, anchor=anchor_from_row(item))
+            for item in cited
         )
 
     def read_issue(self, principal_id: str, issue_id: str) -> IssueRecord | None:
@@ -471,7 +581,32 @@ class SqlIssueRepository(IssueRepository):
                 )
             ).one_or_none()
         )
-        return None if row is None else _to_revision(row)
+        if row is None:
+            return None
+        return _to_revision(row, self._revision_evidence(principal_id, issue_id, version))
+
+    def latest_closing_revision(
+        self, principal_id: str, issue_id: str, *, at_or_below: int
+    ) -> IssueRevisionRecord | None:
+        row = _run(
+            lambda: self._connection.execute(
+                principal_scoped(
+                    select(*issue_revisions.c)
+                    .where(
+                        issue_revisions.c.issue_id == issue_id,
+                        issue_revisions.c.action == IssueRevisionAction.CLOSED.value,
+                        issue_revisions.c.version <= at_or_below,
+                    )
+                    .order_by(issue_revisions.c.version.desc())
+                    .limit(1),
+                    issue_revisions,
+                    capture_context(principal_id),
+                )
+            ).one_or_none()
+        )
+        if row is None:
+            return None
+        return _to_revision(row, self._revision_evidence(principal_id, issue_id, row.version))
 
     def list_issues(
         self,
@@ -812,3 +947,65 @@ class SqlIssueRepository(IssueRepository):
         if row is None:
             raise RepositoryFailureError
         return str(row.anchor_id)
+
+    # --- record lineage S2: Project qualification and composite request links --
+
+    def share_active_project_link(self, principal_id: str, project_id: str, issue_id: str) -> bool:
+        triplet = _run(
+            lambda: self._connection.execute(
+                principal_scoped(
+                    select(project_situations.c.project_situation_id).where(
+                        project_situations.c.project_id == project_id,
+                        project_situations.c.situation_id == issue_id,
+                    ),
+                    project_situations,
+                    capture_context(principal_id),
+                ).with_for_update(read=True)
+            ).one_or_none()
+        )
+        if triplet is None:
+            return False
+        latest = self.latest_membership_event(principal_id, project_id, issue_id)
+        return latest is not None and latest.state is IssueProjectMembershipState.ACTIVE
+
+    def insert_write_request_links(
+        self,
+        principal_id: str,
+        capability: str,
+        idempotency_key: str,
+        links: Sequence[tuple[int, str, int]],
+    ) -> None:
+        if not links:
+            return
+        rows = [
+            _bound(
+                lineage_write_request_links,
+                principal_id,
+                {
+                    "capability": capability,
+                    "idempotency_key": idempotency_key,
+                    "ordinal": ordinal,
+                    "link_id": link_id,
+                    "revision_no": revision_no,
+                },
+            )
+            for ordinal, link_id, revision_no in links
+        ]
+        _run(lambda: self._connection.execute(insert(lineage_write_request_links), rows))
+
+    def write_request_links(
+        self, principal_id: str, capability: str, idempotency_key: str
+    ) -> tuple[tuple[int, str, int], ...]:
+        links = lineage_write_request_links
+        rows = _run(
+            lambda: self._connection.execute(
+                select(links.c.ordinal, links.c.link_id, links.c.revision_no)
+                .where(
+                    _mine(links, principal_id),
+                    links.c.capability == capability,
+                    links.c.idempotency_key == idempotency_key,
+                )
+                .order_by(links.c.ordinal)
+            ).all()
+        )
+        return tuple((int(row.ordinal), str(row.link_id), int(row.revision_no)) for row in rows)

@@ -65,8 +65,8 @@ MAX_ISSUE_MEMBERSHIPS = 100
 #: At most this many candidate Issues in one `records.lineage` (section 7.2).
 MAX_MATCHING_ISSUES = 20
 
-#: The Issue states S1 holds (section 3).
-_IssueState = Literal["open", "active", "suspended"]
+#: The Issue states: S1's three and, from S2, `closed` (S2 section 3).
+_IssueState = Literal["open", "active", "suspended", "closed"]
 
 
 class RecordRefView(StrictModel):

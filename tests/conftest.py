@@ -102,6 +102,7 @@ from my_pa.contracts.ports import (
     GoodNotesProposalAdmission,
     GoodNotesProposalConflictError,
     GoodNotesSemanticRepository,
+    IssueHandoffRepository,
     IssueRepository,
     KnowledgeRecord,
     KnowledgeRepository,
@@ -460,7 +461,7 @@ from my_pa.domain.task.role import TaskRole
 from my_pa.domain.task.task import Task as TaskV2
 from my_pa.infrastructure.providers.fixture import FixtureSourceProvider
 
-pytest_plugins = ("tests.db.fixtures",)
+pytest_plugins = ("tests.db.fixtures", "tests.ci_shard")
 
 # Tests may patch os globally while a failed report is being processed.
 _GITHUB_ACTIONS_OS_OPEN = os.open
@@ -9784,6 +9785,11 @@ class FakeUnitOfWork(UnitOfWork):
     def record_lineage(self) -> RecordLineageRepository:
         """Record lineage S1 links: not modelled in FAST worlds, as `issues`."""
         return cast("RecordLineageRepository", _UnmodelledPlane("record_lineage"))
+
+    @property
+    def issue_handoffs(self) -> IssueHandoffRepository:
+        """Record lineage S2 handoffs: not modelled in FAST worlds, as `issues`."""
+        return cast("IssueHandoffRepository", _UnmodelledPlane("issue_handoffs"))
 
     @property
     def identity_history(self) -> object:

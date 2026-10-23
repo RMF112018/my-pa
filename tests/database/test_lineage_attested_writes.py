@@ -51,7 +51,7 @@ from my_pa.bootstrap.knowledge_discovery_profiles import resolve_knowledge_clien
 from my_pa.contracts.ports import UnknownScopeError
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.operator_surface import OperatorSurface
-from my_pa.domain.lineage.vocabulary import LINEAGE_WRITE_CAPABILITIES as S1_WRITES
+from my_pa.domain.lineage.vocabulary import S1_LINEAGE_WRITE_CAPABILITIES as S1_WRITES
 from my_pa.domain.situation.continuity import ClosureEvidenceKind, CommitmentDirection
 from my_pa.domain.task.lifecycle import TaskOriginKind
 from my_pa.infrastructure.persistence.situation_repository import (

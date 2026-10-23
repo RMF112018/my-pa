@@ -1008,6 +1008,22 @@ class Capability(StrEnum):
     #: `meeting_note_history_read`).
     MEETINGS_NOTES_VERSIONS = "meetings.notes.versions"
     MEETINGS_NOTES_READ_VERSION = "meetings.notes.read_version"
+    #: Record lineage S2 (S2 contract section 7): Issue close and reopen behind
+    #: the OD-03 gate and its read-only evaluation; the membership evidence
+    #: correction; the responsibility handoff ledger; and the two composite
+    #: Work writes. The six writes are attested (local-operator only, S2
+    #: section 6.1); all eight are scopeless and withheld unless
+    #: `MY_PA_LINEAGE_ENABLED` is on. The composites map to
+    #: `Purpose.ISSUE_WORK_AUTHORING`, every other write to
+    #: `Purpose.ISSUE_AUTHORING` and both reads to `Purpose.ISSUE_READ`.
+    ISSUES_CLOSE = "issues.close"
+    ISSUES_REOPEN = "issues.reopen"
+    ISSUES_CLOSURE_READINESS = "issues.closure_readiness"
+    ISSUES_MEMBERSHIPS_CORRECT = "issues.memberships.correct"
+    ISSUES_HANDOFFS_RECORD = "issues.handoffs.record"
+    ISSUES_HANDOFFS_LIST = "issues.handoffs.list"
+    ISSUES_WORK_CREATE_TASK = "issues.work.create_task"
+    ISSUES_WORK_CREATE_COMMITMENT = "issues.work.create_commitment"
 
 
 class NativeSourceCapability(StrEnum):
@@ -1570,6 +1586,17 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         # over `meeting_read` and carries its own purpose.
         Capability.MEETINGS_NOTES_VERSIONS: frozenset({Purpose.MEETING_READ}),
         Capability.MEETINGS_NOTES_READ_VERSION: frozenset({Purpose.MEETING_NOTE_HISTORY_READ}),
+        # Record lineage S2 (S2 contract section 7). The composites write native
+        # Work rows, so a grant for Issue authoring must not silently become a
+        # grant to create Tasks and Commitments: their purpose is their own.
+        Capability.ISSUES_CLOSE: frozenset({Purpose.ISSUE_AUTHORING}),
+        Capability.ISSUES_REOPEN: frozenset({Purpose.ISSUE_AUTHORING}),
+        Capability.ISSUES_CLOSURE_READINESS: frozenset({Purpose.ISSUE_READ}),
+        Capability.ISSUES_MEMBERSHIPS_CORRECT: frozenset({Purpose.ISSUE_AUTHORING}),
+        Capability.ISSUES_HANDOFFS_RECORD: frozenset({Purpose.ISSUE_AUTHORING}),
+        Capability.ISSUES_HANDOFFS_LIST: frozenset({Purpose.ISSUE_READ}),
+        Capability.ISSUES_WORK_CREATE_TASK: frozenset({Purpose.ISSUE_WORK_AUTHORING}),
+        Capability.ISSUES_WORK_CREATE_COMMITMENT: frozenset({Purpose.ISSUE_WORK_AUTHORING}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),
@@ -1744,6 +1771,14 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.RECORDS_ASSOCIATIONS_ASSERT,
         Capability.RECORDS_ASSOCIATIONS_CORRECT,
         Capability.RECORDS_ASSOCIATIONS_END,
+        # Record lineage S2: the six writes; `issues.closure_readiness` and
+        # `issues.handoffs.list` stay out.
+        Capability.ISSUES_CLOSE,
+        Capability.ISSUES_REOPEN,
+        Capability.ISSUES_MEMBERSHIPS_CORRECT,
+        Capability.ISSUES_HANDOFFS_RECORD,
+        Capability.ISSUES_WORK_CREATE_TASK,
+        Capability.ISSUES_WORK_CREATE_COMMITMENT,
     }
 )
 
@@ -1854,6 +1889,12 @@ _ADDITIVE_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         # only their own request row); `.end` and `.correct` change a link.
         Capability.ISSUES_MEMBERSHIPS_ADD,
         Capability.RECORDS_ASSOCIATIONS_ASSERT,
+        # Record lineage S2: a handoff appends one immutable event; a composite
+        # inserts a native record, its membership and its links. Close, reopen
+        # and the membership correction change existing state.
+        Capability.ISSUES_HANDOFFS_RECORD,
+        Capability.ISSUES_WORK_CREATE_TASK,
+        Capability.ISSUES_WORK_CREATE_COMMITMENT,
     }
 )
 

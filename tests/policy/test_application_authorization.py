@@ -73,12 +73,14 @@ from my_pa.application.commands import (
     CloseCommitment,
     CloseConstraint,
     CloseConstraintWithFollowUp,
+    CloseIssue,
     CloseProject,
     Command,
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
     ConfigureProjectControls,
     CorrectGoodNotes,
+    CorrectIssueMembership,
     CorrectRecordAssociation,
     CreateCapture,
     CreateCommitment,
@@ -91,6 +93,8 @@ from my_pa.application.commands import (
     CreateEntityProposal,
     CreateEntityRelationship,
     CreateIssue,
+    CreateIssueWorkCommitment,
+    CreateIssueWorkTask,
     CreateKnowledgeAssertion,
     CreateManagedDocument,
     CreateMeeting,
@@ -152,6 +156,7 @@ from my_pa.application.commands import (
     ListGoodNotesPages,
     ListGoodNotesRuns,
     ListIntelligenceArtifacts,
+    ListIssueHandoffs,
     ListIssues,
     ListKnowledgeAssertions,
     ListManagedDocuments,
@@ -188,6 +193,7 @@ from my_pa.application.commands import (
     ReadGoodNotes,
     ReadIntelligenceArtifact,
     ReadIssue,
+    ReadIssueClosureReadiness,
     ReadKnowledge,
     ReadKnowledgeAssertion,
     ReadManagedDocument,
@@ -200,8 +206,10 @@ from my_pa.application.commands import (
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
+    RecordIssueHandoff,
     RecordTask,
     ReopenConstraint,
+    ReopenIssue,
     ReorderConstraintCategories,
     ResolveConstraintSyncConflict,
     ResolveEntity,
@@ -1339,6 +1347,73 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         Capability.MEETINGS_NOTES_READ_VERSION: ReadMeetingNoteVersion(
             meeting_id="mtg_policymeeting0001", note_version_id="mnote_policynote00001"
         ),
+        # Record lineage S2: the four wired names.
+        Capability.ISSUES_CLOSE: CloseIssue(
+            issue_id="sit_policyissue0001",
+            expected_version=1,
+            idempotency_key="policy-issues-close-0001",
+            outcome="the policy issue was resolved",
+            closure_evidence_anchors=(
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_policymeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_policynote00001",
+                    "source_sha256": "a" * 64,
+                    "passage_start_cp": 0,
+                    "passage_end_cp": 4,
+                    "passage_sha256": "b" * 64,
+                    "role": "resolution",
+                },
+            ),
+        ),
+        Capability.ISSUES_REOPEN: ReopenIssue(
+            issue_id="sit_policyissue0001",
+            expected_version=2,
+            idempotency_key="policy-issues-reopen-0001",
+            reason="the policy issue recurred",
+        ),
+        Capability.ISSUES_CLOSURE_READINESS: ReadIssueClosureReadiness(
+            issue_id="sit_policyissue0001"
+        ),
+        Capability.ISSUES_MEMBERSHIPS_CORRECT: CorrectIssueMembership(
+            link_id="irl_policylink00001",
+            expected_revision=1,
+            idempotency_key="policy-issues-memberships-correct-0001",
+            reason="the policy task was resolved",
+        ),
+        Capability.ISSUES_HANDOFFS_RECORD: RecordIssueHandoff(
+            issue_id="sit_policyissue0001",
+            commitment_id="cmt_policycommitment01",
+            from_side="counterparty",
+            effective_at="2026-08-09T12:00:00+00:00",
+            reason="the policy counterparty handed back",
+            evidence_anchor={
+                "family": "meeting_note_version",
+                "root_id": "mtg_policymeeting0001",
+                "version_kind": "immutable_version",
+                "version_id": "mnote_policynote00001",
+                "source_sha256": "a" * 64,
+                "role": "handoff",
+            },
+            idempotency_key="policy-issues-handoffs-record-0001",
+        ),
+        Capability.ISSUES_HANDOFFS_LIST: ListIssueHandoffs(issue_id="sit_policyissue0001"),
+        Capability.ISSUES_WORK_CREATE_TASK: CreateIssueWorkTask(
+            issue_id="sit_policyissue0001",
+            idempotency_key="policy-issues-work-create-task-0001",
+            task={"title": "the policy task", "origin_kind": "direct_principal"},
+        ),
+        Capability.ISSUES_WORK_CREATE_COMMITMENT: CreateIssueWorkCommitment(
+            issue_id="sit_policyissue0001",
+            idempotency_key="policy-issues-work-create-commitment-0001",
+            commitment={
+                "counterparty_entity_id": "ent_policycounterparty01",
+                "direction": "owed_to_principal",
+                "summary": "the policy commitment",
+                "origin_evidence_ref": "cap_policyorigin00001",
+            },
+        ),
     }
 
 
@@ -1793,6 +1868,15 @@ SCOPED_CAPABILITIES = [
         Capability.RECORDS_LINEAGE,
         Capability.MEETINGS_NOTES_VERSIONS,
         Capability.MEETINGS_NOTES_READ_VERSION,
+        # Record lineage S2: the eight S2 names, also in `_SCOPELESS`.
+        Capability.ISSUES_CLOSE,
+        Capability.ISSUES_REOPEN,
+        Capability.ISSUES_CLOSURE_READINESS,
+        Capability.ISSUES_MEMBERSHIPS_CORRECT,
+        Capability.ISSUES_HANDOFFS_RECORD,
+        Capability.ISSUES_HANDOFFS_LIST,
+        Capability.ISSUES_WORK_CREATE_TASK,
+        Capability.ISSUES_WORK_CREATE_COMMITMENT,
     }
 ]
 
@@ -2097,6 +2181,15 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.RECORDS_LINEAGE,
         Capability.MEETINGS_NOTES_VERSIONS,
         Capability.MEETINGS_NOTES_READ_VERSION,
+        # Record lineage S2: the eight S2 names, also in `_SCOPELESS`.
+        Capability.ISSUES_CLOSE,
+        Capability.ISSUES_REOPEN,
+        Capability.ISSUES_CLOSURE_READINESS,
+        Capability.ISSUES_MEMBERSHIPS_CORRECT,
+        Capability.ISSUES_HANDOFFS_RECORD,
+        Capability.ISSUES_HANDOFFS_LIST,
+        Capability.ISSUES_WORK_CREATE_TASK,
+        Capability.ISSUES_WORK_CREATE_COMMITMENT,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

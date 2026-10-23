@@ -30,7 +30,10 @@ rewrite: repair is an operator-gated migration.
 **Locks** are section 6.2's and the application sequences them: endpoints and
 Capture versions `FOR SHARE`; the identity advisory lock
 (`LINEAGE_ADVISORY_NAMESPACE`, the two-key form, so it shares no key space with
-any single-key advisory lock in `src/`); the head `FOR UPDATE`. Reads take no
+any single-key advisory lock in `src/`); S2's `principal_id || ':blocks'` key
+on the same namespace, which every `blocks` assert takes before its cycle
+search (`blocks_successors` is that search's one step); the head `FOR UPDATE`.
+Reads take no
 locks. Every statement runs through `issues._run`, so a deadlock or
 serialization victim is `TransactionConflictError` and answers `conflict`.
 """
@@ -56,11 +59,10 @@ from my_pa.contracts.ports import (
     RepositoryFailureError,
 )
 from my_pa.domain.capture.lifecycle import CaptureLifecycleState
-from my_pa.domain.lineage.model import EvidenceAnchor, RecordRef
+from my_pa.domain.lineage.model import RecordRef
 from my_pa.domain.lineage.vocabulary import (
+    MANDATORY_MEMBER_ROLES,
     AcceptanceBasis,
-    EvidenceRole,
-    EvidenceSourceFamily,
     LinkLifecycleState,
     LinkRevisionAction,
     MemberRole,
@@ -68,10 +70,9 @@ from my_pa.domain.lineage.vocabulary import (
     RecordLinkKind,
     RelationType,
     SituationKind,
-    SourceVersionKind,
 )
 from my_pa.infrastructure.persistence.capture_lifecycle import latest_lifecycles
-from my_pa.infrastructure.persistence.issues import _run
+from my_pa.infrastructure.persistence.issues import _run, anchor_from_row
 from my_pa.infrastructure.persistence.principal_scope import (
     PrincipalContext,
     capture_context,
@@ -189,19 +190,80 @@ _HEAD_COLUMNS: Final = (
 )
 
 
-def _to_anchor(row: Row[Any]) -> EvidenceAnchor:
-    return EvidenceAnchor(
-        source_family=EvidenceSourceFamily(row.source_family),
-        source_root_id=row.source_root_id,
-        source_version_kind=SourceVersionKind(row.source_version_kind),
-        source_version_id=row.source_version_id,
-        source_version_no=row.source_version_no,
-        source_sha256=row.source_sha256,
-        passage_start_cp=row.passage_start_cp,
-        passage_end_cp=row.passage_end_cp,
-        passage_sha256=row.passage_sha256,
-        role=EvidenceRole(row.role),
-    )
+def _endpoint_columns(family: RecordFamily) -> tuple[Any, ...]:
+    """The native columns one endpoint family's `LineageEndpoint` carries."""
+    if family is RecordFamily.SITUATION:
+        return (situations.c.kind, situations.c.state)
+    if family is RecordFamily.TASK:
+        return (
+            tasks.c.archived_at,
+            tasks.c.lifecycle_state,
+            tasks.c.evidence_state,
+            tasks.c.version,
+            tasks.c.created_at,
+        )
+    if family is RecordFamily.COMMITMENT:
+        return (commitments.c.state, commitments.c.evidence_state, commitments.c.version)
+    if family is RecordFamily.CONSTRAINT:
+        return (
+            project_constraints.c.lifecycle_state,
+            project_constraints.c.version,
+            project_constraints.c.created_at,
+            project_constraints.c.project_id,
+        )
+    if family is RecordFamily.MEETING_NOTE_VERSION:
+        return (meeting_note_versions.c.meeting_id,)
+    if family is RecordFamily.CAPTURE_VERSION:
+        return (capture_versions.c.capture_id, capture_versions.c.classification)
+    return ()
+
+
+def _to_endpoint(family: RecordFamily, record_id: str, row: Row[Any]) -> LineageEndpoint:
+    mapping = row._mapping
+    if family is RecordFamily.SITUATION:
+        return LineageEndpoint(
+            family=family,
+            record_id=record_id,
+            situation_kind=SituationKind(mapping["kind"]),
+            situation_state=mapping["state"],
+        )
+    if family is RecordFamily.TASK:
+        return LineageEndpoint(
+            family=family,
+            record_id=record_id,
+            task_archived=mapping["archived_at"] is not None,
+            native_state=mapping["lifecycle_state"],
+            evidence_state=mapping["evidence_state"],
+            native_version=mapping["version"],
+            created_at=mapping["created_at"],
+        )
+    if family is RecordFamily.COMMITMENT:
+        return LineageEndpoint(
+            family=family,
+            record_id=record_id,
+            native_state=mapping["state"],
+            evidence_state=mapping["evidence_state"],
+            native_version=mapping["version"],
+        )
+    if family is RecordFamily.CONSTRAINT:
+        return LineageEndpoint(
+            family=family,
+            record_id=record_id,
+            native_state=mapping["lifecycle_state"],
+            native_version=mapping["version"],
+            created_at=mapping["created_at"],
+            project_id=mapping["project_id"],
+        )
+    if family is RecordFamily.MEETING_NOTE_VERSION:
+        return LineageEndpoint(family=family, record_id=record_id, meeting_id=mapping["meeting_id"])
+    if family is RecordFamily.CAPTURE_VERSION:
+        return LineageEndpoint(
+            family=family,
+            record_id=record_id,
+            capture_id=mapping["capture_id"],
+            classification=mapping["classification"],
+        )
+    return LineageEndpoint(family=family, record_id=record_id)
 
 
 class SqlRecordLineageRepository(RecordLineageRepository):
@@ -233,44 +295,40 @@ class SqlRecordLineageRepository(RecordLineageRepository):
         self, principal_id: str, family: RecordFamily, record_id: str
     ) -> LineageEndpoint | None:
         table, column = _NATIVE[family]
-        extra: tuple[Any, ...] = ()
-        if family is RecordFamily.SITUATION:
-            extra = (situations.c.kind,)
-        elif family is RecordFamily.TASK:
-            extra = (tasks.c.archived_at,)
-        elif family is RecordFamily.MEETING_NOTE_VERSION:
-            extra = (meeting_note_versions.c.meeting_id,)
-        elif family is RecordFamily.CAPTURE_VERSION:
-            extra = (capture_versions.c.capture_id, capture_versions.c.classification)
         statement = principal_scoped(
-            select(table.c[column], *extra).where(table.c[column] == record_id),
+            select(table.c[column], *_endpoint_columns(family)).where(table.c[column] == record_id),
             table,
             capture_context(principal_id),
         ).with_for_update(read=True)
         row = _run(lambda: self._connection.execute(statement).one_or_none())
         if row is None:
             return None
-        mapping = row._mapping
-        if family is RecordFamily.SITUATION:
-            return LineageEndpoint(
-                family=family, record_id=record_id, situation_kind=SituationKind(mapping["kind"])
+        return _to_endpoint(family, record_id, row)
+
+    def native_members(
+        self, principal_id: str, refs: Collection[RecordRef]
+    ) -> Mapping[RecordRef, LineageEndpoint]:
+        found: dict[RecordRef, LineageEndpoint] = {}
+        by_family: dict[RecordFamily, set[str]] = {}
+        for ref in refs:
+            by_family.setdefault(ref.family, set()).add(ref.record_id)
+        for family, identifiers in sorted(by_family.items()):
+            table, column = _NATIVE[family]
+            rows = self._rows(
+                principal_scoped(
+                    select(table.c[column], *_endpoint_columns(family)).where(
+                        table.c[column].in_(sorted(identifiers))
+                    ),
+                    table,
+                    capture_context(principal_id),
+                )
             )
-        if family is RecordFamily.TASK:
-            return LineageEndpoint(
-                family=family, record_id=record_id, task_archived=mapping["archived_at"] is not None
-            )
-        if family is RecordFamily.MEETING_NOTE_VERSION:
-            return LineageEndpoint(
-                family=family, record_id=record_id, meeting_id=mapping["meeting_id"]
-            )
-        if family is RecordFamily.CAPTURE_VERSION:
-            return LineageEndpoint(
-                family=family,
-                record_id=record_id,
-                capture_id=mapping["capture_id"],
-                classification=mapping["classification"],
-            )
-        return LineageEndpoint(family=family, record_id=record_id)
+            for row in rows:
+                record_id = str(row._mapping[column])
+                found[RecordRef(family=family, record_id=record_id)] = _to_endpoint(
+                    family, record_id, row
+                )
+        return found
 
     # --- identity and head locks (section 6.2 steps 4 and 5) ------------------
 
@@ -287,6 +345,43 @@ class SqlRecordLineageRepository(RecordLineageRepository):
                     "identity": normalized_identity,
                 },
             )
+        )
+
+    def lock_blocks(self, principal_id: str) -> None:
+        _run(
+            lambda: self._connection.execute(
+                text(
+                    "SELECT pg_advisory_xact_lock(CAST(:namespace AS integer), "
+                    "hashtext(CAST(:principal_id AS text) || CAST(:suffix AS text)))"
+                ),
+                {
+                    "namespace": LINEAGE_ADVISORY_NAMESPACE,
+                    "principal_id": principal_id,
+                    "suffix": ":blocks",
+                },
+            )
+        )
+
+    def blocks_successors(
+        self, principal_id: str, refs: Collection[RecordRef]
+    ) -> tuple[RecordRef, ...]:
+        if not refs:
+            return ()
+        pairs = sorted({(ref.family.value, ref.record_id) for ref in refs})
+        rows = self._rows(
+            select(record_links.c.to_family, record_links.c.to_id)
+            .select_from(_heads_with_links())
+            .where(
+                _mine(record_link_heads, principal_id),
+                record_link_heads.c.lifecycle_state == LinkLifecycleState.ACTIVE.value,
+                record_links.c.relation_type == RelationType.BLOCKS.value,
+                tuple_(record_links.c.from_family, record_links.c.from_id).in_(pairs),
+            )
+            .distinct()
+            .order_by(record_links.c.to_family, record_links.c.to_id)
+        )
+        return tuple(
+            RecordRef(family=RecordFamily(row.to_family), record_id=row.to_id) for row in rows
         )
 
     def active_head_by_identity(
@@ -417,6 +512,7 @@ class SqlRecordLineageRepository(RecordLineageRepository):
                             "evidence_count": len(revision.evidence),
                             "evidence_set_digest": revision.evidence_set_digest,
                             "recorded_at": revision.recorded_at,
+                            "member_native_version": revision.member_native_version,
                         },
                     )
                 )
@@ -515,9 +611,10 @@ class SqlRecordLineageRepository(RecordLineageRepository):
             evidence_set_digest=row.evidence_set_digest,
             recorded_at=row.recorded_at,
             evidence=tuple(
-                LineageLinkEvidence(anchor_id=item.anchor_id, anchor=_to_anchor(item))
+                LineageLinkEvidence(anchor_id=item.anchor_id, anchor=anchor_from_row(item))
                 for item in cited
             ),
+            member_native_version=row.member_native_version,
         )
 
     def archived_capture_roots(
@@ -580,6 +677,49 @@ class SqlRecordLineageRepository(RecordLineageRepository):
             ).all()
         )
         return tuple(_to_head(row) for row in rows)
+
+    def mandatory_memberships(
+        self, principal_id: str, issue_id: str, *, share: bool
+    ) -> tuple[LinkHeadRecord, ...]:
+        statement = (
+            select(*_HEAD_COLUMNS)
+            .select_from(_heads_with_links())
+            .where(
+                _mine(record_link_heads, principal_id),
+                record_link_heads.c.lifecycle_state == LinkLifecycleState.ACTIVE.value,
+                record_links.c.kind == RecordLinkKind.ISSUE_MEMBERSHIP.value,
+                record_links.c.from_family == RecordFamily.SITUATION.value,
+                record_links.c.from_id == issue_id,
+                record_links.c.member_role.in_(
+                    sorted(role.value for role in MANDATORY_MEMBER_ROLES)
+                ),
+            )
+            .order_by(record_link_heads.c.link_id)
+        )
+        if share:
+            statement = statement.with_for_update(read=True, of=record_link_heads)
+        rows = self._rows(statement)
+        return tuple(_to_head(row) for row in rows)
+
+    def active_membership(
+        self, principal_id: str, issue_id: str, member: RecordRef
+    ) -> LinkHeadRecord | None:
+        rows = self._rows(
+            select(*_HEAD_COLUMNS)
+            .select_from(_heads_with_links())
+            .where(
+                _mine(record_link_heads, principal_id),
+                record_link_heads.c.lifecycle_state == LinkLifecycleState.ACTIVE.value,
+                record_links.c.kind == RecordLinkKind.ISSUE_MEMBERSHIP.value,
+                record_links.c.from_family == RecordFamily.SITUATION.value,
+                record_links.c.from_id == issue_id,
+                record_links.c.to_family == member.family.value,
+                record_links.c.to_id == member.record_id,
+            )
+            .order_by(record_links.c.created_at, record_links.c.link_id)
+            .limit(1)
+        )
+        return _to_head(rows[0]) if rows else None
 
     def resolve_records(
         self, principal_id: str, refs: Collection[RecordRef]

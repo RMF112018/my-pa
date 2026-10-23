@@ -183,6 +183,50 @@ describe("RelatedIssuesPanel", () => {
     expect(screen.queryByRole("button", { name: "Open note version" })).toBeNull();
   });
 
+  it("renders delegated, escalated, blocking and resolving relations in words", async () => {
+    // AT-024 (S2, web component): each S2 relation, read from either endpoint.
+    const ISSUE = { family: "situation", record_id: "sit_aaaaaaaa11111111" };
+    const TASK = { family: "task", record_id: TASK_ID };
+    const COMMITMENT = { family: "commitment", record_id: "cmt_aaaaaaaa11111111" };
+    const CONSTRAINT = { family: "constraint", record_id: "cst_aaaaaaaa11111111" };
+    for (const [family, root, relation, from, to, expected] of [
+      ["task", TASK, "delegated_from", COMMITMENT, TASK, "Delegated to a Commitment"],
+      ["commitment", COMMITMENT, "delegated_from", COMMITMENT, TASK, "Delegated from a Task"],
+      ["task", TASK, "escalated_from", CONSTRAINT, TASK, "Escalated to a Constraint"],
+      ["constraint", CONSTRAINT, "escalated_from", CONSTRAINT, TASK, "Escalated from a Task"],
+      ["task", TASK, "blocks", TASK, CONSTRAINT, "Blocks a Constraint"],
+      ["constraint", CONSTRAINT, "blocks", TASK, CONSTRAINT, "Blocked by a Task"],
+      ["task", TASK, "created_to_resolve", TASK, ISSUE, "Created to resolve an Issue"],
+      ["constraint", CONSTRAINT, "created_to_resolve", TASK, CONSTRAINT, "A Task was created to resolve it"],
+    ] as const) {
+      const answer = lineage();
+      answer.root = root;
+      const membership = (answer.typed_edges as Json[])[0]!;
+      membership.to = root;
+      const edge = (answer.typed_edges as Json[])[1]!;
+      Object.assign(edge, { relation_type: relation, from, to, evidence: [] });
+      stub(() => backend(answer));
+      const { unmount } = render(<RelatedIssuesPanel family={family} recordId={root.record_id} />);
+      const panel = await screen.findByRole("region", { name: "Related Issues" });
+      expect(await within(panel).findByText(expected), `${family} ${relation}`).toBeInTheDocument();
+      unmount();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("renders a closed Issue as closed", async () => {
+    const answer = lineage();
+    (answer.nodes as Json[])[2]!.state = "closed";
+    (answer.issues_matching_root as Json[])[0]!.state = "closed";
+    stub(() => backend(answer));
+    render(<RelatedIssuesPanel family="task" recordId={TASK_ID} />);
+    const panel = await screen.findByRole("region", { name: "Related Issues" });
+    expect(await within(panel).findByText(/Issue: Synthetic Issue/)).toBeInTheDocument();
+    expect(within(panel).getByText(/State: closed/)).toBeInTheDocument();
+    expect(within(panel).queryByText(/State: open/)).toBeNull();
+    expect(within(panel).queryByText(RELATED_ISSUES_UNAVAILABLE)).toBeNull();
+  });
+
   it("renders nothing when the capability is unsupported", async () => {
     const fetchMock = stub(() => refusal(503, "unavailable", "unsupported"));
     const { container } = render(<RelatedIssuesPanel family="constraint" recordId="cst_aaaaaaaa11111111" />);

@@ -1,8 +1,15 @@
-"""The public shapes of an Issue answer (record lineage S1 contract section 7.1).
+"""The public shapes of an Issue answer (record lineage S1 and S2 contracts, section 7.1).
 
-Four models: `IssueRevisionView` for the `issues.create`/`issues.update` write
-results, `IssueView` for an `issues.read`, `ProjectLinkView` for one native
-Issue↔Project link, and `IssueListEntry` for an `issues.list` row.
+S1's four models: `IssueRevisionView` for the Issue write results, `IssueView`
+for an `issues.read`, `ProjectLinkView` for one native Issue↔Project link, and
+`IssueListEntry` for an `issues.list` row. S2 adds `IssueClosureView` (the
+closing revision's basis, on `IssueView.closure` and the `issues.close`
+answer), `IssueReopeningView` (the `issues.reopen` answer's basis) and
+`ClosureBlockerView` (one blocked mandatory member, `issues.closure_readiness`),
+and `HandoffView` / `HandoffHolderView` (one responsibility handoff event,
+`issues.handoffs.record` and `.list`).
+No S1 key changes meaning; `state` may now be `closed` and `action` names the
+S2 actions. No closure evidence digest is ever shown (FR1-F05).
 
 **What these models cannot carry is the point of them.** No `principal_id`, no
 idempotency key and no request digest: the caller acts inside its own partition,
@@ -14,22 +21,37 @@ from `replayed`, which is beside it) even after the Issue moved on.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from my_pa.contracts.v1.base import StrictModel, UtcDatetime
+from my_pa.contracts.v1.record_lineage import EvidenceAnchorView, RecordRefView
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
-from my_pa.domain.lineage.model import MAX_ISSUE_DESCRIPTION_CHARACTERS, MAX_ISSUE_TITLE_CHARACTERS
+from my_pa.domain.lineage.model import (
+    MAX_EVIDENCE_ANCHORS,
+    MAX_ISSUE_DESCRIPTION_CHARACTERS,
+    MAX_ISSUE_TITLE_CHARACTERS,
+    MAX_LINEAGE_REASON_CHARACTERS,
+)
 from my_pa.domain.lineage.vocabulary import (
     AcceptanceBasis,
+    HandoffHolderKind,
+    IssueClosureBlocker,
     IssueProjectMembershipState,
     IssueRevisionAction,
+    MemberRole,
 )
 
 __all__ = [
+    "MAX_CLOSURE_BLOCKERS",
     "MAX_ISSUE_PROJECT_LINKS",
+    "ClosureBlockerView",
+    "HandoffHolderView",
+    "HandoffView",
+    "IssueClosureView",
     "IssueListEntry",
+    "IssueReopeningView",
     "IssueRevisionView",
     "IssueView",
     "ProjectLinkView",
@@ -37,9 +59,11 @@ __all__ = [
 
 #: At most this many Project links in one `IssueView` (section 7.1).
 MAX_ISSUE_PROJECT_LINKS = 100
+#: At most this many blocked members in one `issues.closure_readiness` (S2 7.2).
+MAX_CLOSURE_BLOCKERS = 100
 
-#: The three Issue states S1 holds (section 3).
-IssueState = Literal["open", "active", "suspended"]
+#: The Issue states: S1's three non-terminal states and S2's `closed`.
+IssueState = Literal["open", "active", "suspended", "closed"]
 
 _Title = Field(min_length=1, max_length=MAX_ISSUE_TITLE_CHARACTERS)
 _Description = Field(default=None, max_length=MAX_ISSUE_DESCRIPTION_CHARACTERS)
@@ -105,8 +129,52 @@ class ProjectLinkView(StrictModel):
         return None if value is None else validate_identifier(value, IdKind.LINEAGE_EVIDENCE_ANCHOR)
 
 
+class IssueClosureView(StrictModel):
+    """The basis an Issue is closed on (S2 section 7.1): the latest `closed` revision.
+
+    A `corrected` revision copies its `closed_at` and `outcome`; the evidence
+    stays the closing revision's. Availability is computed at read time. No
+    digest.
+    """
+
+    version: int = Field(ge=1)
+    closed_at: UtcDatetime
+    outcome: str = Field(min_length=1, max_length=MAX_LINEAGE_REASON_CHARACTERS)
+    evidence: tuple[EvidenceAnchorView, ...] = Field(min_length=1, max_length=MAX_EVIDENCE_ANCHORS)
+
+
+class IssueReopeningView(StrictModel):
+    """Why an Issue was reopened, and the evidence it was reopened with (S2 section 7.2)."""
+
+    reason: str = Field(min_length=1, max_length=MAX_LINEAGE_REASON_CHARACTERS)
+    evidence: tuple[EvidenceAnchorView, ...] = Field(max_length=MAX_EVIDENCE_ANCHORS)
+
+
+class ClosureBlockerView(StrictModel):
+    """One mandatory member that blocks an Issue's close, and every reason (S2 section 7.1).
+
+    `native_state` is the member's native lifecycle token (`lifecycle_state` or
+    `state`); `evidence_state` is a Task's or Commitment's, else `None`.
+    """
+
+    link_id: str
+    member: RecordRefView
+    role: MemberRole
+    native_state: str | None
+    evidence_state: str | None
+    reasons: tuple[IssueClosureBlocker, ...] = Field(min_length=1)
+
+    @field_validator("link_id")
+    @classmethod
+    def _link_id(cls, value: str) -> str:
+        return validate_identifier(value, IdKind.RECORD_LINK)
+
+
 class IssueView(StrictModel):
-    """One Issue as `issues.read` answers it, with at most 100 Project links."""
+    """One Issue as `issues.read` answers it, with at most 100 Project links.
+
+    `closure` (S2) is non-null exactly while the Issue is `closed`.
+    """
 
     issue_id: str
     kind: Literal["issue_workstream"] = "issue_workstream"
@@ -119,6 +187,7 @@ class IssueView(StrictModel):
     updated_at: UtcDatetime
     project_links: tuple[ProjectLinkView, ...] = Field(max_length=MAX_ISSUE_PROJECT_LINKS)
     project_links_truncated: bool
+    closure: IssueClosureView | None = None
 
     @field_validator("issue_id")
     @classmethod
@@ -139,3 +208,59 @@ class IssueListEntry(StrictModel):
     @classmethod
     def _issue_id(cls, value: str) -> str:
         return _valid_issue_id(value)
+
+
+class HandoffHolderView(StrictModel):
+    """One handoff holder (S2 section 7.1): the Principal, or one Entity by id."""
+
+    kind: HandoffHolderKind
+    entity_id: str | None
+
+    @model_validator(mode="after")
+    def _check(self) -> HandoffHolderView:
+        if (self.kind is HandoffHolderKind.PRINCIPAL) is not (self.entity_id is None):
+            raise ValueError("only an Entity holder names an Entity")
+        if self.entity_id is not None:
+            validate_identifier(self.entity_id, IdKind.ENTITY)
+        return self
+
+
+class HandoffView(StrictModel):
+    """One immutable responsibility handoff event (S2 sections 3.4 and 7.1).
+
+    `from_holder`/`to_holder` serialize as `from`/`to`, as `AssociationView`'s
+    endpoints do. `evidence` is the one `handoff` anchor, its availability
+    computed at read time.
+    """
+
+    handoff_id: str
+    issue_id: str
+    commitment_id: str
+    sequence_no: int = Field(ge=1)
+    from_holder: HandoffHolderView = Field(serialization_alias="from")
+    to_holder: HandoffHolderView = Field(serialization_alias="to")
+    effective_at: UtcDatetime
+    recorded_at: UtcDatetime
+    reason: str = Field(min_length=1, max_length=MAX_LINEAGE_REASON_CHARACTERS)
+    evidence: EvidenceAnchorView
+    acceptance_basis: AcceptanceBasis
+    authority_class: str
+
+    @field_validator("handoff_id")
+    @classmethod
+    def _handoff_id(cls, value: str) -> str:
+        return validate_identifier(value, IdKind.ISSUE_HANDOFF)
+
+    @field_validator("issue_id")
+    @classmethod
+    def _issue_id(cls, value: str) -> str:
+        return _valid_issue_id(value)
+
+    @field_validator("commitment_id")
+    @classmethod
+    def _commitment_id(cls, value: str) -> str:
+        return validate_identifier(value, IdKind.COMMITMENT)
+
+    def to_canonical_dict(self) -> dict[str, Any]:
+        """The JSON-mode representation, with the section 7.1 `from`/`to` keys."""
+        return self.model_dump(mode="json", by_alias=True)

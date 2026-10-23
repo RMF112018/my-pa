@@ -45,6 +45,7 @@ from sqlalchemy import Engine, Table, insert, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
 from tests.schema import lineage_schema_ahead_contract as lineage_gap
+from tests.schema.lineage_s2_schema_ahead_contract import S2_CAPABILITIES, S2_PURPOSES
 from tests.schema.lineage_schema_ahead_contract import S1_CAPABILITIES, S1_PURPOSES
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
@@ -74,11 +75,15 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "264310e0416a"
 PREVIOUS: Final = "b9025e7fb738"
-HEAD: Final = REVISION
+#: Record lineage S2 (`d020b532ad7d`, ADR-015) is additive on this revision.
+HEAD: Final = "d020b532ad7d"
 #: The revision that last stated `capability_is_known` and `purpose_is_known`.
 VOCABULARY_PREDECESSOR: Final = "a591b81f10a2"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20261017_264310e0416a_record_lineage_s1.py"
+#: The S2 revision, which adds columns and CHECKs to four of the eight S1 tables
+#: that `tables.py` now declares beside the S1 ones.
+S2_MIGRATION: Final = MIGRATIONS / "20261018_d020b532ad7d_record_lineage_s2.py"
 VOCABULARY_MIGRATION: Final = (
     MIGRATIONS / "20261011_a591b81f10a2_intelligence_report_type_registry.py"
 )
@@ -224,7 +229,7 @@ def test_the_revision_is_the_single_head_on_b9025e7fb738() -> None:
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "5c1e7a9b3d42"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
-    assert len(list(MIGRATIONS.glob("*.py"))) == 119
+    assert len(list(MIGRATIONS.glob("*.py"))) == 120
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -253,14 +258,21 @@ def test_frozen_ddl_names_every_declared_constraint() -> None:
     `tests/database/test_lineage_integrity_guards.py`; this is the static half.
     """
     source = MIGRATION.read_text(encoding="utf-8")
+    # A name the S2 revision adds to an S1 table is in that revision's text instead.
+    later = S2_MIGRATION.read_text(encoding="utf-8")
     flat = _WHITESPACE.sub(" ", source)
     for table in NEW_TABLES:
         assert f"CREATE TABLE knowledge.{table.name} (" in source
         for column in table.c:
-            assert re.search(rf"\b{column.name}\b", source), (table.name, column.name)
+            assert re.search(rf"\b{column.name}\b", source) or re.search(
+                rf"ADD COLUMN {column.name}\b", later
+            ), (table.name, column.name)
         for constraint in table.constraints:
             if constraint.name is not None and not str(constraint.name).startswith("_"):
-                assert str(constraint.name) in source, (table.name, constraint.name)
+                assert str(constraint.name) in source or str(constraint.name) in later, (
+                    table.name,
+                    constraint.name,
+                )
         for index in table.indexes:
             assert f"INDEX {index.name} ON knowledge.{table.name}" in flat, index.name
     declared = {
@@ -328,10 +340,11 @@ def test_at_vocabulary_adds_exactly_the_s1_names() -> None:
     # The head admits every declared name. The S1 names are admitted here ahead
     # of their `Capability`/`Purpose` members, which the S1 application slices
     # declare; the union below holds both before and after they do.
-    declared = {capability.value for capability in Capability}
+    # The S2 names, declared since, are the S2 revision's (d020b532ad7d).
+    declared = {capability.value for capability in Capability} - S2_CAPABILITIES
     native = {capability.value for capability in NativeSourceCapability}
     assert set(at) == declared | native | S1_CAPABILITIES
-    assert set(purposes_at) == {purpose.value for purpose in Purpose} | S1_PURPOSES
+    assert set(purposes_at) == ({purpose.value for purpose in Purpose} - S2_PURPOSES) | S1_PURPOSES
 
 
 def test_the_s1_schema_ahead_gap_is_measured() -> None:
@@ -647,7 +660,7 @@ def test_previous_head_with_rows_upgrades(disposable_database: str, engine: Engi
     with engine.begin() as connection:
         _seed_previous_head(connection)
     command.upgrade(_config(), REVISION)
-    _assert_present(engine)
+    _assert_present(engine, at=REVISION)
     with engine.connect() as connection:
         kinds = _rows(
             connection, "SELECT kind, version FROM knowledge.situations ORDER BY situation_id"
@@ -830,7 +843,9 @@ def test_downgrade_refuses_while_lineage_rows_exist(
     with pytest.raises(DBAPIError) as refused:
         command.downgrade(_config(), PREVIOUS)
     assert "refusing to downgrade 264310e0416a" in str(refused.value)
-    _assert_present(engine)
+    # Each revision runs in its own transaction: the S2 revision, holding no S2
+    # row, unwound first, and this one refused.
+    _assert_present(engine, at=REVISION)
 
 
 @pytest.mark.database
@@ -850,7 +865,9 @@ def test_downgrade_refuses_while_an_audit_event_names_the_s1_vocabulary(
     with pytest.raises(DBAPIError) as refused:
         command.downgrade(_config(), PREVIOUS)
     assert "refusing to downgrade 264310e0416a" in str(refused.value)
-    _assert_present(engine)
+    # Each revision runs in its own transaction: the S2 revision, holding no S2
+    # row, unwound first, and this one refused.
+    _assert_present(engine, at=REVISION)
 
 
 @pytest.mark.database

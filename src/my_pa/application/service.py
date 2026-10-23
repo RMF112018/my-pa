@@ -149,12 +149,14 @@ from my_pa.application.commands import (
     CloseCommitment,
     CloseConstraint,
     CloseConstraintWithFollowUp,
+    CloseIssue,
     CloseProject,
     Command,
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
     ConfigureProjectControls,
     CorrectGoodNotes,
+    CorrectIssueMembership,
     CorrectRecordAssociation,
     CreateCapture,
     CreateCommitment,
@@ -167,6 +169,8 @@ from my_pa.application.commands import (
     CreateEntityProposal,
     CreateEntityRelationship,
     CreateIssue,
+    CreateIssueWorkCommitment,
+    CreateIssueWorkTask,
     CreateKnowledgeAssertion,
     CreateManagedDocument,
     CreateManagedDocumentCommand,
@@ -229,6 +233,7 @@ from my_pa.application.commands import (
     ListGoodNotesPages,
     ListGoodNotesRuns,
     ListIntelligenceArtifacts,
+    ListIssueHandoffs,
     ListIssues,
     ListKnowledgeAssertions,
     ListManagedDocuments,
@@ -266,6 +271,7 @@ from my_pa.application.commands import (
     ReadGoodNotes,
     ReadIntelligenceArtifact,
     ReadIssue,
+    ReadIssueClosureReadiness,
     ReadKnowledge,
     ReadKnowledgeAssertion,
     ReadManagedDocument,
@@ -279,8 +285,10 @@ from my_pa.application.commands import (
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
+    RecordIssueHandoff,
     RecordTask,
     ReopenConstraint,
+    ReopenIssue,
     ReorderConstraintCategories,
     Representation,
     ResolveConstraintSyncConflict,
@@ -342,7 +350,7 @@ from my_pa.application.commands import (
     VoidConstraint,
     WaitingOn,
 )
-from my_pa.application.commitments import CommitmentManagementService
+from my_pa.application.commitments import CommitmentManagementService, CommitmentMutationReceipt
 from my_pa.application.constraint_management import (
     ConstraintCategoryMutationResult,
     ConstraintCategoryNotFoundError,
@@ -491,6 +499,8 @@ from my_pa.application.intelligence import (
     resolve_set,
     search_artifacts,
 )
+from my_pa.application.issue_handoffs import IssueHandoffApplication
+from my_pa.application.issue_work import IssueWorkApplication, NativeCreated, WorkCompositeResult
 from my_pa.application.issues import IssueApplication, IssueRevisionResult, ProjectLinkResult
 from my_pa.application.knowledge_assertions import (
     DEFAULT_KNOWLEDGE_PAGE_SIZE,
@@ -548,7 +558,11 @@ from my_pa.application.relationship_memory import (
     RelationshipMemoryService,
     ReviseMemoryCommand,
 )
-from my_pa.application.tasks import TaskManagementService, task_record_event
+from my_pa.application.tasks import (
+    TaskManagementService,
+    TaskMutationReceipt,
+    task_record_event,
+)
 from my_pa.contracts.ports import (
     Acceptance,
     AuthoringConflictError,
@@ -702,7 +716,8 @@ from my_pa.domain.knowledge_assertion.vocabulary import (
     KnowledgeReviewAuthorityClass,
     KnowledgeReviewRequirement,
 )
-from my_pa.domain.lineage.vocabulary import EvidenceAvailability, SituationKind
+from my_pa.domain.lineage.model import RecordRef
+from my_pa.domain.lineage.vocabulary import EvidenceAvailability, RecordFamily, SituationKind
 from my_pa.domain.meeting.model import (
     MAX_MEETING_PAGE_SIZE,
     MeetingCursorError,
@@ -4077,6 +4092,8 @@ class ApplicationService:
         #: Record lineage S1's memberships, associations and reverse read, on
         #: the same terms.
         self._record_lineage = RecordLineageApplication()
+        self._issue_handoffs = IssueHandoffApplication()
+        self._issue_work = IssueWorkApplication()
         #: WP-RI-A-02's entity authoring service, held for the reason the two
         #: above are: it is stateless and takes its port as an argument.
         self._entity_authoring = EntityAuthoringService()
@@ -9913,6 +9930,53 @@ class ApplicationService:
         idempotency, optimistic concurrency, and history recording. Returns
         the created task and the history entry that recorded the creation.
         """
+        principal_id = authorization.principal.principal_id
+        receipt = self._create_task_receipt(
+            unit_of_work,
+            authorization,
+            command,
+            source_capability=command.capability.value,
+            idempotency_key=command.idempotency_key,
+        )
+        with _translated():
+            states = _evidence_capture_states(
+                unit_of_work,
+                principal_id,
+                (receipt.task.origin_evidence_ref, receipt.task.closure_evidence_ref),
+            )
+        return _Result(
+            payload={
+                "task": _task_view(
+                    receipt.task,
+                    origin_evidence_capture_state=_ref_state(
+                        states, receipt.task.origin_evidence_ref
+                    ),
+                    closure_evidence_capture_state=_ref_state(
+                        states, receipt.task.closure_evidence_ref
+                    ),
+                ).to_canonical_dict(),
+                "history": _task_history_view(receipt.history).to_canonical_dict(),
+                "replayed": receipt.replayed,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
+        )
+
+    def _create_task_receipt(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: CreateTask,
+        *,
+        source_capability: str,
+        idempotency_key: str | None,
+    ) -> TaskMutationReceipt:
+        """The `tasks.create` body: validation, the native create and its receipt.
+
+        Shared, unchanged, by `tasks.create` and `issues.work.create_task`
+        (record lineage S2 section 6.4), which passes its own name as
+        `source_capability` and no `idempotency_key` (the lineage request row
+        is the composite's only idempotency record).
+        """
         if self._tasks is None:
             raise InternalError()
         principal_id = authorization.principal.principal_id
@@ -9961,39 +10025,18 @@ class ApplicationService:
                     project_id=command.project_id,
                     situation_id=command.situation_id,
                     accepted_by_review_decision_id=command.accepted_by_review_decision_id,
-                    idempotency_key=command.idempotency_key,
+                    idempotency_key=idempotency_key,
                     client_context=command.client_context,
                     commitment_id=command.commitment_id,
                     role=command.role,
                     active_uow=unit_of_work,
-                    source_capability=command.capability.value,
+                    source_capability=source_capability,
                     correlation_id=authorization.correlation_id,
                     validate_first_write=validate_first_write,
                 )
         except TaskIdempotencyConflictError:
             raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
-        with _translated():
-            states = _evidence_capture_states(
-                unit_of_work,
-                principal_id,
-                (receipt.task.origin_evidence_ref, receipt.task.closure_evidence_ref),
-            )
-        return _Result(
-            payload={
-                "task": _task_view(
-                    receipt.task,
-                    origin_evidence_capture_state=_ref_state(
-                        states, receipt.task.origin_evidence_ref
-                    ),
-                    closure_evidence_capture_state=_ref_state(
-                        states, receipt.task.closure_evidence_ref
-                    ),
-                ).to_canonical_dict(),
-                "history": _task_history_view(receipt.history).to_canonical_dict(),
-                "replayed": receipt.replayed,
-            },
-            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
-        )
+        return receipt
 
     def _tasks_update(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: UpdateTask
@@ -10798,6 +10841,46 @@ class ApplicationService:
     def _commitments_create(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: CreateCommitment
     ) -> _Result:
+        principal_id = authorization.principal.principal_id
+        receipt = self._create_commitment_receipt(
+            unit_of_work,
+            authorization,
+            command,
+            source_capability=command.capability.value,
+            idempotency_key=command.idempotency_key,
+        )
+        with _translated():
+            states = _evidence_capture_states(
+                unit_of_work,
+                principal_id,
+                (receipt.commitment.origin_evidence_ref, receipt.commitment.closure_evidence_ref),
+            )
+            public = _commitment_public_view(
+                unit_of_work, principal_id, receipt.commitment, states=states
+            )
+        return _Result(
+            payload={
+                "commitment": public,
+                "replayed": receipt.replayed,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_COMMITMENT_TRUST_BASIS),
+        )
+
+    def _create_commitment_receipt(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: CreateCommitment,
+        *,
+        source_capability: str,
+        idempotency_key: str | None,
+    ) -> CommitmentMutationReceipt:
+        """The `commitments.create` body: the native create, its eligibility and its receipt.
+
+        Shared, unchanged, by `commitments.create` and
+        `issues.work.create_commitment` (record lineage S2 section 6.4), which
+        passes its own name as `source_capability` and no `idempotency_key`.
+        """
         if self._commitments is None:
             raise InternalError()
         principal_id = authorization.principal.principal_id
@@ -10817,10 +10900,10 @@ class ApplicationService:
                     project_id=command.project_id,
                     situation_id=command.situation_id,
                     accepted_by_review_decision_id=command.accepted_by_review_decision_id,
-                    idempotency_key=command.idempotency_key,
+                    idempotency_key=idempotency_key,
                     client_context=command.client_context,
                     active_uow=unit_of_work,
-                    source_capability=command.capability.value,
+                    source_capability=source_capability,
                     correlation_id=authorization.correlation_id,
                     validate_first_write=lambda: self._require_commitment_create_eligibility(
                         unit_of_work,
@@ -10832,22 +10915,7 @@ class ApplicationService:
                 )
         except CommitmentIdempotencyConflictError:
             raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
-        with _translated():
-            states = _evidence_capture_states(
-                unit_of_work,
-                principal_id,
-                (receipt.commitment.origin_evidence_ref, receipt.commitment.closure_evidence_ref),
-            )
-            public = _commitment_public_view(
-                unit_of_work, principal_id, receipt.commitment, states=states
-            )
-        return _Result(
-            payload={
-                "commitment": public,
-                "replayed": receipt.replayed,
-            },
-            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_COMMITMENT_TRUST_BASIS),
-        )
+        return receipt
 
     def _commitments_close(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: CloseCommitment
@@ -13403,6 +13471,233 @@ class ApplicationService:
             )
         return self._association_result(authorization, "association", written)
 
+    # ---- record lineage S2 (ADR-015; S2 contract section 7) -------------------
+    #
+    # Eight handlers in the S1 shape: the switch first (section 7.5), then, for a
+    # write, the attested authority (section 6.1: `denied` unless local operator,
+    # before any row and before the replay lookup), then the application in
+    # `invoke`'s transaction. A composite's native create runs the extracted
+    # v1 body (`_create_task_receipt`, `_create_commitment_receipt`) on that
+    # same unit of work (S2 section 6.4).
+
+    def _issues_close(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: CloseIssue
+    ) -> _Result:
+        """`issues.close`: close an Issue behind the OD-03 gate."""
+        self._lineage_plane()
+        authority = attested_lineage_authority(authorization)
+        with _translated(), _lineage_translated():
+            written = self._issues.close_issue(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.issue_request(),
+                command.idempotency_key,
+                authority,
+                authorization.at,
+            )
+        return _Result(
+            payload={
+                "issue": written.issue.to_canonical_dict(),
+                "closure": written.closure.to_canonical_dict(),
+                "replayed": written.replayed,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+        )
+
+    def _issues_reopen(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReopenIssue
+    ) -> _Result:
+        """`issues.reopen`: reopen a closed Issue; nothing else changes."""
+        self._lineage_plane()
+        authority = attested_lineage_authority(authorization)
+        with _translated(), _lineage_translated():
+            written = self._issues.reopen_issue(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.issue_request(),
+                command.idempotency_key,
+                authority,
+                authorization.at,
+            )
+        return _Result(
+            payload={
+                "issue": written.issue.to_canonical_dict(),
+                "reopening": written.reopening.to_canonical_dict(),
+                "replayed": written.replayed,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+        )
+
+    def _issues_closure_readiness(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReadIssueClosureReadiness,
+    ) -> _Result:
+        """`issues.closure_readiness`: the gate's current answer, without writing."""
+        self._lineage_plane()
+        with _translated(), _lineage_translated():
+            readiness = self._issues.closure_readiness(
+                unit_of_work, authorization.principal.principal_id, command.issue_id
+            )
+        return _Result(
+            payload={
+                "issue_id": readiness.issue_id,
+                "version": readiness.version,
+                "state": readiness.state,
+                "ready": readiness.ready,
+                "blockers": [blocker.to_canonical_dict() for blocker in readiness.blockers],
+                "blockers_truncated": readiness.blockers_truncated,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+        )
+
+    def _issues_memberships_correct(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: CorrectIssueMembership,
+    ) -> _Result:
+        """`issues.memberships.correct`: replace a membership's evidence set."""
+        self._lineage_plane()
+        authority = attested_lineage_authority(authorization)
+        with _translated(), _lineage_translated():
+            written = self._record_lineage.correct_membership(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.lineage_request(),
+                command.idempotency_key,
+                authority,
+                authorization.at,
+            )
+        return self._association_result(authorization, "membership", written)
+
+    def _issues_handoffs_record(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: RecordIssueHandoff
+    ) -> _Result:
+        """`issues.handoffs.record`: append the next event of a Commitment's handoff chain."""
+        self._lineage_plane()
+        authority = attested_lineage_authority(authorization)
+        with _translated(), _lineage_translated():
+            written = self._issue_handoffs.record_handoff(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.handoff_request(),
+                command.idempotency_key,
+                authority,
+                authorization.at,
+            )
+        return _Result(
+            payload={"handoff": written.handoff.to_canonical_dict(), "replayed": written.replayed},
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+        )
+
+    def _issues_handoffs_list(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListIssueHandoffs
+    ) -> _Result:
+        """`issues.handoffs.list`: one keyset page of an Issue's handoffs, oldest first."""
+        self._lineage_plane()
+        request = command.handoff_request()
+        request = replace(request, page_size=min(request.page_size, self._limits.max_page_size))
+        with _translated(), _lineage_translated():
+            page = self._issue_handoffs.list_handoffs(
+                unit_of_work, authorization.principal.principal_id, request
+            )
+        return _Result(
+            payload={
+                "handoffs": [view.to_canonical_dict() for view in page.handoffs],
+                "next_cursor": page.next_cursor,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+        )
+
+    def _issues_work_create_task(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: CreateIssueWorkTask
+    ) -> _Result:
+        """`issues.work.create_task`: a Task, its `work` membership and its intents, one UOW."""
+        self._lineage_plane()
+        authority = attested_lineage_authority(authorization)
+        native = command.native_command()
+
+        def native_create() -> NativeCreated:
+            receipt = self._create_task_receipt(
+                unit_of_work,
+                authorization,
+                native,
+                source_capability=command.capability.value,
+                idempotency_key=None,
+            )
+            return NativeCreated(
+                ref=RecordRef(family=RecordFamily.TASK, record_id=receipt.task.task_id),
+                version=receipt.task.version,
+            )
+
+        with _translated(), _lineage_translated():
+            written = self._issue_work.create(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.work_request(),
+                command.idempotency_key,
+                authority,
+                authorization.at,
+                native_create,
+            )
+        return self._composite_result(authorization, written)
+
+    def _issues_work_create_commitment(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: CreateIssueWorkCommitment,
+    ) -> _Result:
+        """`issues.work.create_commitment`: a Commitment, its membership and its intents."""
+        self._lineage_plane()
+        authority = attested_lineage_authority(authorization)
+        native = command.native_command()
+
+        def native_create() -> NativeCreated:
+            receipt = self._create_commitment_receipt(
+                unit_of_work,
+                authorization,
+                native,
+                source_capability=command.capability.value,
+                idempotency_key=None,
+            )
+            return NativeCreated(
+                ref=RecordRef(
+                    family=RecordFamily.COMMITMENT, record_id=receipt.commitment.commitment_id
+                ),
+                version=receipt.commitment.version,
+            )
+
+        with _translated(), _lineage_translated():
+            written = self._issue_work.create(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.work_request(),
+                command.idempotency_key,
+                authority,
+                authorization.at,
+                native_create,
+            )
+        return self._composite_result(authorization, written)
+
+    @staticmethod
+    def _composite_result(authorization: Authorization, written: WorkCompositeResult) -> _Result:
+        """Section 6.4's answer; the native record's own view is read with its v1 read."""
+        return _Result(
+            payload={
+                "record": {
+                    "family": written.record.family.value,
+                    "record_id": written.record.record_id,
+                },
+                "membership": written.membership.to_canonical_dict(),
+                "associations": [view.to_canonical_dict() for view in written.associations],
+                "replayed": written.replayed,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+        )
+
     def _records_lineage(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadRecordLineage
     ) -> _Result:
@@ -15635,6 +15930,14 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.RECORDS_ASSOCIATIONS_CORRECT: ApplicationService._records_associations_correct,
         Capability.RECORDS_ASSOCIATIONS_END: ApplicationService._records_associations_end,
         Capability.RECORDS_LINEAGE: ApplicationService._records_lineage,
+        Capability.ISSUES_CLOSE: ApplicationService._issues_close,
+        Capability.ISSUES_REOPEN: ApplicationService._issues_reopen,
+        Capability.ISSUES_CLOSURE_READINESS: ApplicationService._issues_closure_readiness,
+        Capability.ISSUES_MEMBERSHIPS_CORRECT: ApplicationService._issues_memberships_correct,
+        Capability.ISSUES_HANDOFFS_RECORD: ApplicationService._issues_handoffs_record,
+        Capability.ISSUES_HANDOFFS_LIST: ApplicationService._issues_handoffs_list,
+        Capability.ISSUES_WORK_CREATE_TASK: ApplicationService._issues_work_create_task,
+        Capability.ISSUES_WORK_CREATE_COMMITMENT: ApplicationService._issues_work_create_commitment,
         Capability.MEETINGS_NOTES_VERSIONS: ApplicationService._meetings_notes_versions,
         Capability.MEETINGS_NOTES_READ_VERSION: ApplicationService._meetings_notes_read_version,
         Capability.RECORD_EVENTS_LIST: ApplicationService._record_events_list,
@@ -15771,8 +16074,8 @@ _KNOWLEDGE_ASSERTION_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     }
 )
 
-#: Record lineage S1 (ADR-015; S1 contract section 7.5): the exact S1 name set the
-#: `lineage_enabled` switch withholds, written out one at a time. The set is
+#: Record lineage S1 and S2 (ADR-015; S1 and S2 contract section 7.5): the exact
+#: 22-name set the `lineage_enabled` switch withholds, written out one at a time. The set is
 #: the contract's exact S1 set, named as strings because the S1 application
 #: slices declare their `Capability` members in turn (the Issue plane first);
 #: `_LINEAGE_CAPABILITIES` is the declared part of it, so a name declared later
@@ -15793,6 +16096,15 @@ _LINEAGE_CAPABILITY_NAMES: Final[frozenset[str]] = frozenset(
         "records.lineage",
         "meetings.notes.versions",
         "meetings.notes.read_version",
+        # Record lineage S2 (S2 contract section 7.5).
+        "issues.close",
+        "issues.reopen",
+        "issues.closure_readiness",
+        "issues.memberships.correct",
+        "issues.handoffs.record",
+        "issues.handoffs.list",
+        "issues.work.create_task",
+        "issues.work.create_commitment",
     }
 )
 _LINEAGE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(

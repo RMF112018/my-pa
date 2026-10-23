@@ -198,17 +198,21 @@ from my_pa.domain.lineage.model import (
 from my_pa.domain.lineage.vocabulary import (
     ATTESTED_AUTHORITY_CLASSES,
     ATTESTED_DECISION_CHANNELS,
+    COMPOSITE_CAPABILITIES,
+    HANDOFF_CAPABILITIES,
     ISSUE_AUTHORITY_CLASSES,
     ISSUE_REVISION_CAPABILITIES,
     ISSUE_STATES,
     LINEAGE_WRITE_CAPABILITIES,
     LINK_REVISION_CAPABILITIES,
+    MEMBER_VERSION_CAPABILITIES,
     MEMBERSHIP_EVENT_CAPABILITIES,
     RECORD_FAMILY_ID_KINDS,
     RECORD_LINK_CAPABILITIES,
     RELATION_MATRIX,
     AcceptanceBasis,
     EvidenceSourceFamily,
+    HandoffHolderKind,
     IssueProjectMembershipAction,
     IssueProjectMembershipState,
     IssueRevisionAction,
@@ -16560,8 +16564,16 @@ lineage_evidence_anchors = Table(
 
 #: One immutable Issue revision. Version 1 is `created` and `open`; each later
 #: version follows its predecessor. The Issue's `situations` row equals its
-#: revision at `situations.version` at commit (`an_issue_matches_its_latest_revision`)
+#: revision at `situations.version` at commit (`an_issue_matches_its_latest_revision`,
+#: which S2's `d020b532ad7d` replaces to compare `closed_at` and `outcome` too)
 #: and no revision is ahead of it (`an_issue_revision_is_not_ahead_of_its_issue`).
+#:
+#: S2 (S2 contract section 4.1) adds the closure columns: a `closed` revision
+#: carries `closed_at`, `outcome` and its closure evidence set
+#: (`issue_revision_evidence`, frozen at `evidence_count`); a `reopened` one its
+#: `reason` and optional evidence; a `corrected` one copies its predecessor's
+#: `closed_at` and `outcome` (`an_issue_closure_follows_its_predecessor`). The
+#: three closure actions are local-operator attested.
 issue_revisions = Table(
     "issue_revisions",
     METADATA,
@@ -16584,6 +16596,11 @@ issue_revisions = Table(
     Column("decision_channel", Text, nullable=False),
     Column("source_capability", Text, nullable=False),
     Column("recorded_at", DateTime(timezone=True), nullable=False),
+    Column("closed_at", DateTime(timezone=True)),
+    Column("outcome", Text),
+    Column("reason", Text),
+    Column("evidence_count", SmallInteger, nullable=False, server_default=text("0")),
+    Column("evidence_set_digest", Text),
     PrimaryKeyConstraint("principal_id", "issue_id", "version"),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _is_identifier("issue_id", IdKind.SITUATION),
@@ -16621,6 +16638,54 @@ issue_revisions = Table(
         "OR (version > 1 AND predecessor_version IS NOT DISTINCT FROM version - 1 AND action <> "
         "'created')",
         name="an_issue_revision_follows_its_predecessor",
+    ),
+    CheckConstraint(
+        "(state = 'closed') = (closed_at IS NOT NULL) AND (state = 'closed') = (outcome IS NOT "
+        "NULL)",
+        name="an_issue_revision_closes_exactly_when_closed",
+    ),
+    CheckConstraint(
+        f"outcome IS NULL OR length(trim(outcome)) BETWEEN 1 AND {MAX_LINEAGE_REASON_CHARACTERS}",
+        name="an_issue_revision_outcome_is_bounded",
+    ),
+    CheckConstraint(
+        f"reason IS NULL OR length(trim(reason)) BETWEEN 1 AND {MAX_LINEAGE_REASON_CHARACTERS}",
+        name="an_issue_revision_reason_is_bounded",
+    ),
+    CheckConstraint(
+        "(action IN ('closed', 'corrected') AND state = 'closed') OR (action = 'reopened' AND "
+        "state = 'active') OR (action NOT IN ('closed', 'corrected', 'reopened') AND state <> "
+        "'closed')",
+        name="an_issue_revision_action_matches_its_state",
+    ),
+    CheckConstraint(
+        "(action = 'closed') = (source_capability = 'issues.close') AND (action = 'reopened') = "
+        "(source_capability = 'issues.reopen') AND (action <> 'corrected' OR source_capability "
+        "= 'issues.update')",
+        name="an_issue_revision_action_matches_its_capability",
+    ),
+    CheckConstraint(
+        "(action = 'reopened') = (reason IS NOT NULL)", name="a_reopening_states_its_reason"
+    ),
+    CheckConstraint(
+        f"evidence_count BETWEEN 0 AND {MAX_EVIDENCE_ANCHORS} AND (evidence_count = 0) = "
+        f"(evidence_set_digest IS NULL) AND (evidence_set_digest IS NULL OR evidence_set_digest "
+        f"~ '{_LINEAGE_SHA256}')",
+        name="an_issue_revision_evidence_is_bounded",
+    ),
+    CheckConstraint(
+        "action IN ('closed', 'reopened') OR evidence_count = 0",
+        name="only_closure_revisions_carry_evidence",
+    ),
+    CheckConstraint(
+        "action <> 'closed' OR evidence_count >= 1",
+        name="an_issue_closing_revision_has_evidence",
+    ),
+    CheckConstraint(
+        "action NOT IN ('closed', 'corrected', 'reopened') OR (authority_class IN "
+        f"({_literals(ATTESTED_AUTHORITY_CLASSES)}) AND decision_channel IN "
+        f"({_literals(ATTESTED_DECISION_CHANNELS)}))",
+        name="an_issue_closure_is_operator_attested",
     ),
     UniqueConstraint(
         "principal_id", "revision_id", name="an_issue_revision_is_identified_within_its_principal"
@@ -16837,6 +16902,22 @@ record_links = Table(
         name="a_semantic_link_is_not_a_membership",
     ),
     CheckConstraint(_relation_matrix(), name="a_record_link_pair_is_admitted"),
+    # S2 section 4.1.
+    CheckConstraint(
+        "relation_type <> 'blocks' OR NOT (from_family = to_family AND from_id = to_id)",
+        name="a_blocks_link_names_two_records",
+    ),
+    CheckConstraint(
+        "(relation_type NOT IN ('created_to_resolve', 'delegated_from') OR (context_issue_id IS "
+        f"NOT NULL AND source_capability IN ({_literals(COMPOSITE_CAPABILITIES)}))) AND "
+        "(relation_type <> 'delegated_from' OR source_capability = "
+        "'issues.work.create_commitment')",
+        name="a_creation_link_is_written_by_its_composite",
+    ),
+    CheckConstraint(
+        "relation_type <> 'escalated_from' OR context_issue_id IS NOT NULL",
+        name="an_escalation_is_issue_scoped",
+    ),
     _local_operator_attested(),
     ForeignKeyConstraint(
         ["context_issue_id", "principal_id", "context_issue_kind"],
@@ -16893,6 +16974,9 @@ record_link_revisions = Table(
     Column("evidence_count", SmallInteger, nullable=False),
     Column("evidence_set_digest", Text, nullable=False),
     Column("recorded_at", DateTime(timezone=True), nullable=False),
+    #: S2 section 3.3: the member's native `version` a membership writer
+    #: observed under its `FOR SHARE` (Task, Commitment and Constraint members).
+    Column("member_native_version", Integer),
     PrimaryKeyConstraint("principal_id", "link_id", "revision_no"),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _is_identifier("link_id", IdKind.RECORD_LINK),
@@ -16931,6 +17015,15 @@ record_link_revisions = Table(
     CheckConstraint(
         "action NOT IN ('correct_evidence', 'end') OR reason IS NOT NULL",
         name="a_link_revision_states_its_reason",
+    ),
+    CheckConstraint(
+        "member_native_version IS NULL OR member_native_version >= 1",
+        name="a_member_native_version_is_positive",
+    ),
+    CheckConstraint(
+        "member_native_version IS NULL OR source_capability IN "
+        f"({_literals(MEMBER_VERSION_CAPABILITIES)})",
+        name="only_membership_writes_record_a_member_version",
     ),
     _local_operator_attested(),
     UniqueConstraint(
@@ -17043,11 +17136,14 @@ record_link_heads = Table(
     ),
 )
 
-#: Idempotency of the nine S1 writes, scoped `(principal, capability, key)` as
-#: Meetings is (precedent `meeting_write_requests`). A reserved row carries no
-#: result; a completed row carries exactly the one result group its capability
-#: produces, and completes once (`a_lineage_write_request_completes_once`); no
-#: row commits reserved (`a_lineage_write_request_is_never_left_reserved`).
+#: Idempotency of the fifteen lineage writes (S1's nine, S2's six), scoped
+#: `(principal, capability, key)` as Meetings is (precedent
+#: `meeting_write_requests`). A reserved row carries no result; a completed row
+#: carries exactly the one result group its capability produces, and completes
+#: once (`a_lineage_write_request_completes_once`); no row commits reserved
+#: (`a_lineage_write_request_is_never_left_reserved`). S2 adds the handoff and
+#: the composite result groups; a composite's links are in
+#: `lineage_write_request_links`.
 lineage_write_requests = Table(
     "lineage_write_requests",
     METADATA,
@@ -17063,11 +17159,26 @@ lineage_write_requests = Table(
     Column("result_created", Boolean),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("completed_at", DateTime(timezone=True)),
+    Column("result_handoff_id", Text),
+    Column("result_record_family", Text),
+    Column("result_record_id", Text),
     PrimaryKeyConstraint("principal_id", "capability", "idempotency_key"),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _is_identifier("result_issue_id", IdKind.SITUATION),
     _is_identifier("result_link_id", IdKind.RECORD_LINK),
     _is_identifier("result_membership_event_id", IdKind.ISSUE_PROJECT_MEMBERSHIP_EVENT),
+    _is_identifier("result_handoff_id", IdKind.ISSUE_HANDOFF),
+    CheckConstraint(
+        "result_record_family IS NULL OR result_record_family IN ('commitment', 'task')",
+        name="a_lineage_write_request_record_family_is_known",
+    ),
+    CheckConstraint(
+        "(result_record_family IS NULL AND result_record_id IS NULL) OR (result_record_family "
+        f"= 'commitment' AND result_record_id ~ "
+        f"'^{IdKind.COMMITMENT.value}_{_IDENTIFIER_SUFFIX}$') OR (result_record_family = 'task' "
+        f"AND result_record_id ~ '^{IdKind.TASK.value}_{_IDENTIFIER_SUFFIX}$')",
+        name="result_record_id_is_an_opaque_identifier",
+    ),
     _one_of(
         "capability",
         LINEAGE_WRITE_CAPABILITIES,
@@ -17084,7 +17195,8 @@ lineage_write_requests = Table(
     CheckConstraint(
         "completed_at IS NOT NULL OR (result_issue_id IS NULL AND result_issue_version IS NULL "
         "AND result_link_id IS NULL AND result_link_revision_no IS NULL AND "
-        "result_membership_event_id IS NULL AND result_created IS NULL)",
+        "result_membership_event_id IS NULL AND result_created IS NULL AND result_handoff_id IS "
+        "NULL AND result_record_family IS NULL AND result_record_id IS NULL)",
         name="an_incomplete_lineage_write_request_names_no_result",
     ),
     CheckConstraint(
@@ -17092,24 +17204,46 @@ lineage_write_requests = Table(
         f"{_literals(ISSUE_REVISION_CAPABILITIES)}) OR (result_issue_id IS NOT NULL AND "
         "result_issue_version IS NOT NULL AND result_link_id IS NULL AND "
         "result_link_revision_no IS NULL AND result_membership_event_id IS NULL AND "
-        "result_created IS NULL)",
+        "result_created IS NULL AND result_handoff_id IS NULL AND result_record_family IS NULL "
+        "AND result_record_id IS NULL)",
         name="a_completed_issue_write_names_its_revision",
     ),
     CheckConstraint(
         "completed_at IS NULL OR capability NOT IN ("
         f"{_literals(MEMBERSHIP_EVENT_CAPABILITIES)}) OR (result_membership_event_id IS NOT "
         "NULL AND result_issue_id IS NULL AND result_issue_version IS NULL AND result_link_id "
-        "IS NULL AND result_link_revision_no IS NULL AND result_created IS NULL)",
+        "IS NULL AND result_link_revision_no IS NULL AND result_created IS NULL AND "
+        "result_handoff_id IS NULL AND result_record_family IS NULL AND result_record_id IS "
+        "NULL)",
         name="a_completed_project_link_write_names_its_event",
     ),
     CheckConstraint(
         "completed_at IS NULL OR capability NOT IN ("
-        f"{_literals(LINK_REVISION_CAPABILITIES)}) OR (result_link_id IS NOT NULL AND "
-        "result_link_revision_no IS NOT NULL AND result_issue_id IS NULL AND "
+        f"{_literals(LINK_REVISION_CAPABILITIES - COMPOSITE_CAPABILITIES)}) OR (result_link_id "
+        "IS NOT NULL AND result_link_revision_no IS NOT NULL AND result_issue_id IS NULL AND "
         "result_issue_version IS NULL AND result_membership_event_id IS NULL AND "
-        "(result_created IS NOT NULL) = (capability IN ("
-        f"{_literals(RECORD_LINK_CAPABILITIES)})))",
+        "result_handoff_id IS NULL AND result_record_family IS NULL AND result_record_id IS "
+        "NULL AND (result_created IS NOT NULL) = (capability IN ("
+        f"{_literals(RECORD_LINK_CAPABILITIES - COMPOSITE_CAPABILITIES)})))",
         name="a_completed_link_write_names_its_revision",
+    ),
+    CheckConstraint(
+        "completed_at IS NULL OR capability NOT IN ("
+        f"{_literals(HANDOFF_CAPABILITIES)}) OR (result_handoff_id IS NOT NULL AND "
+        "result_issue_id IS NULL AND result_issue_version IS NULL AND result_link_id IS NULL "
+        "AND result_link_revision_no IS NULL AND result_membership_event_id IS NULL AND "
+        "result_created IS NULL AND result_record_family IS NULL AND result_record_id IS NULL)",
+        name="a_completed_handoff_write_names_its_event",
+    ),
+    CheckConstraint(
+        "completed_at IS NULL OR capability NOT IN ("
+        f"{_literals(COMPOSITE_CAPABILITIES)}) OR (result_record_family IS NOT NULL AND "
+        "result_record_id IS NOT NULL AND (capability = 'issues.work.create_task') = "
+        "(result_record_family = 'task') AND result_issue_id IS NULL AND result_issue_version "
+        "IS NULL AND result_link_id IS NULL AND result_link_revision_no IS NULL AND "
+        "result_membership_event_id IS NULL AND result_created IS NULL AND result_handoff_id IS "
+        "NULL)",
+        name="a_completed_composite_write_names_its_record",
     ),
     ForeignKeyConstraint(
         ["principal_id", "result_issue_id", "result_issue_version"],
@@ -17139,5 +17273,249 @@ lineage_write_requests = Table(
         ],
         ondelete="RESTRICT",
         name="a_lineage_write_request_names_a_membership_event",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "result_handoff_id"],
+        [
+            f"{SCHEMA}.issue_responsibility_events.principal_id",
+            f"{SCHEMA}.issue_responsibility_events.handoff_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_lineage_write_request_names_a_handoff",
+    ),
+)
+
+# --- Record lineage, Slice S2 (S2 contract section 4.2) ---------------------
+#
+# Three immutable tables, created by revision `d020b532ad7d` with frozen literal
+# DDL and the triggers a `Table` cannot declare: append-only and TRUNCATE
+# refusal on all three, the deferred closure-evidence count, the handoff chain
+# and time order, and the composite request's link set.
+
+#: The evidence set of one closing (or reopening) Issue revision, frozen at
+#: commit to `issue_revisions.evidence_count`
+#: (`an_issue_revision_evidence_set_is_frozen`). `ordinal` is the S1 section 5.1
+#: canonical position; `issue_revisions.evidence_set_digest` is the S1 digest
+#: over the same anchor objects.
+issue_revision_evidence = Table(
+    "issue_revision_evidence",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("issue_id", Text, nullable=False),
+    Column("version", Integer, nullable=False),
+    Column("ordinal", SmallInteger, nullable=False),
+    Column("anchor_id", Text, nullable=False),
+    Column("role", Text, nullable=False),
+    PrimaryKeyConstraint("principal_id", "issue_id", "version", "ordinal"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("issue_id", IdKind.SITUATION),
+    _is_identifier("anchor_id", IdKind.LINEAGE_EVIDENCE_ANCHOR),
+    CheckConstraint(
+        f"ordinal BETWEEN 1 AND {MAX_EVIDENCE_ANCHORS}",
+        name="an_issue_evidence_ordinal_is_bounded",
+    ),
+    _one_of("role", LineageEvidenceRole, name="an_issue_evidence_role_is_known"),
+    UniqueConstraint(
+        "principal_id",
+        "issue_id",
+        "version",
+        "anchor_id",
+        name="an_issue_revision_cites_an_anchor_once",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "issue_id", "version"],
+        [
+            f"{SCHEMA}.issue_revisions.principal_id",
+            f"{SCHEMA}.issue_revisions.issue_id",
+            f"{SCHEMA}.issue_revisions.version",
+        ],
+        ondelete="RESTRICT",
+        name="an_issue_evidence_belongs_to_a_revision_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "anchor_id"],
+        [
+            f"{SCHEMA}.lineage_evidence_anchors.principal_id",
+            f"{SCHEMA}.lineage_evidence_anchors.anchor_id",
+        ],
+        ondelete="RESTRICT",
+        name="an_issue_evidence_cites_an_anchor_of_its_principal",
+    ),
+)
+
+#: One immutable responsibility handoff (S2 section 3.4): within an Issue, the
+#: next management action on one Commitment moves from one holder to another.
+#: Event `n > 1` leaves the holder event `n - 1` arrived at
+#: (`a_handoff_follows_its_predecessor`) and is effective at or after both the
+#: Commitment's creation and event `n - 1` (`a_handoff_is_effective_in_order`).
+issue_responsibility_events = Table(
+    "issue_responsibility_events",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("handoff_id", Text, nullable=False),
+    Column("issue_id", Text, nullable=False),
+    Column(
+        "issue_kind",
+        Text,
+        nullable=False,
+        server_default=text(f"'{SituationKind.ISSUE_WORKSTREAM.value}'"),
+    ),
+    Column("commitment_id", Text, nullable=False),
+    Column("sequence_no", Integer, nullable=False),
+    Column("predecessor_sequence_no", Integer),
+    Column("from_holder_kind", Text, nullable=False),
+    Column("from_entity_id", Text),
+    Column("to_holder_kind", Text, nullable=False),
+    Column("to_entity_id", Text),
+    Column("effective_at", DateTime(timezone=True), nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    Column("evidence_anchor_id", Text, nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("acceptance_basis", Text, nullable=False),
+    Column("authority_class", Text, nullable=False),
+    Column("decision_channel", Text, nullable=False),
+    Column("source_capability", Text, nullable=False),
+    PrimaryKeyConstraint("principal_id", "handoff_id"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("handoff_id", IdKind.ISSUE_HANDOFF),
+    _is_identifier("issue_id", IdKind.SITUATION),
+    _is_identifier("commitment_id", IdKind.COMMITMENT),
+    _is_identifier("from_entity_id", IdKind.ENTITY),
+    _is_identifier("to_entity_id", IdKind.ENTITY),
+    _is_identifier("evidence_anchor_id", IdKind.LINEAGE_EVIDENCE_ANCHOR),
+    CheckConstraint(
+        f"issue_kind = '{SituationKind.ISSUE_WORKSTREAM.value}'",
+        name="a_handoff_names_an_issue",
+    ),
+    CheckConstraint("sequence_no >= 1", name="a_handoff_sequence_is_positive"),
+    _one_of("from_holder_kind", HandoffHolderKind, name="a_handoff_from_holder_kind_is_known"),
+    _one_of("to_holder_kind", HandoffHolderKind, name="a_handoff_to_holder_kind_is_known"),
+    CheckConstraint(
+        "(from_holder_kind = 'principal') = (from_entity_id IS NULL) AND (to_holder_kind = "
+        "'principal') = (to_entity_id IS NULL)",
+        name="a_handoff_holder_is_whole",
+    ),
+    CheckConstraint(
+        "NOT (from_holder_kind = 'principal' AND to_holder_kind = 'principal') AND NOT "
+        "(from_entity_id IS NOT NULL AND from_entity_id = to_entity_id)",
+        name="a_handoff_changes_its_holder",
+    ),
+    CheckConstraint(
+        "effective_at <= recorded_at", name="a_handoff_is_not_effective_after_recording"
+    ),
+    CheckConstraint(
+        "(sequence_no = 1) = (predecessor_sequence_no IS NULL) AND (sequence_no = 1 OR "
+        "predecessor_sequence_no = sequence_no - 1)",
+        name="a_handoff_follows_the_prior_sequence",
+    ),
+    CheckConstraint(
+        f"length(trim(reason)) BETWEEN 1 AND {MAX_LINEAGE_REASON_CHARACTERS}",
+        name="a_handoff_reason_is_bounded",
+    ),
+    _one_of("acceptance_basis", AcceptanceBasis, name="a_handoff_acceptance_basis_is_known"),
+    _one_of("source_capability", HANDOFF_CAPABILITIES, name="a_handoff_capability_is_known"),
+    _local_operator_attested(),
+    UniqueConstraint(
+        "principal_id",
+        "issue_id",
+        "commitment_id",
+        "sequence_no",
+        name="one_handoff_per_sequence",
+    ),
+    ForeignKeyConstraint(
+        ["issue_id", "principal_id", "issue_kind"],
+        [
+            f"{SCHEMA}.situations.situation_id",
+            f"{SCHEMA}.situations.principal_id",
+            f"{SCHEMA}.situations.kind",
+        ],
+        ondelete="RESTRICT",
+        name="a_handoff_names_an_issue_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "commitment_id"],
+        [f"{SCHEMA}.commitments.principal_id", f"{SCHEMA}.commitments.commitment_id"],
+        ondelete="RESTRICT",
+        name="a_handoff_names_a_commitment_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "issue_id", "commitment_id", "predecessor_sequence_no"],
+        [
+            f"{SCHEMA}.issue_responsibility_events.principal_id",
+            f"{SCHEMA}.issue_responsibility_events.issue_id",
+            f"{SCHEMA}.issue_responsibility_events.commitment_id",
+            f"{SCHEMA}.issue_responsibility_events.sequence_no",
+        ],
+        ondelete="RESTRICT",
+        name="a_handoff_follows_an_event_of_its_chain",
+    ),
+    ForeignKeyConstraint(
+        ["from_entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        ondelete="RESTRICT",
+        name="a_handoff_leaves_an_entity_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["to_entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        ondelete="RESTRICT",
+        name="a_handoff_reaches_an_entity_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "evidence_anchor_id"],
+        [
+            f"{SCHEMA}.lineage_evidence_anchors.principal_id",
+            f"{SCHEMA}.lineage_evidence_anchors.anchor_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_handoff_cites_an_anchor_of_its_principal",
+    ),
+    Index(
+        "issue_responsibility_events_by_issue",
+        "principal_id",
+        "issue_id",
+        "recorded_at",
+        "handoff_id",
+    ),
+)
+
+#: The links one completed composite request wrote (S2 section 6.4), for
+#: replay: ordinal 1 is the membership, 2..5 the association intents in request
+#: order (`a_composite_request_names_its_links`, deferred, on
+#: `lineage_write_requests`).
+lineage_write_request_links = Table(
+    "lineage_write_request_links",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("capability", Text, nullable=False),
+    Column("idempotency_key", Text, nullable=False),
+    Column("ordinal", SmallInteger, nullable=False),
+    Column("link_id", Text, nullable=False),
+    Column("revision_no", Integer, nullable=False),
+    PrimaryKeyConstraint("principal_id", "capability", "idempotency_key", "ordinal"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("link_id", IdKind.RECORD_LINK),
+    CheckConstraint("ordinal BETWEEN 1 AND 5", name="a_request_link_ordinal_is_bounded"),
+    _one_of("capability", COMPOSITE_CAPABILITIES, name="a_request_link_names_a_composite"),
+    UniqueConstraint("principal_id", "link_id", name="a_request_link_is_named_once"),
+    ForeignKeyConstraint(
+        ["principal_id", "capability", "idempotency_key"],
+        [
+            f"{SCHEMA}.lineage_write_requests.principal_id",
+            f"{SCHEMA}.lineage_write_requests.capability",
+            f"{SCHEMA}.lineage_write_requests.idempotency_key",
+        ],
+        ondelete="RESTRICT",
+        name="a_request_link_belongs_to_a_request",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "link_id", "revision_no"],
+        [
+            f"{SCHEMA}.record_link_revisions.principal_id",
+            f"{SCHEMA}.record_link_revisions.link_id",
+            f"{SCHEMA}.record_link_revisions.revision_no",
+        ],
+        ondelete="RESTRICT",
+        name="a_request_link_names_a_link_revision",
     ),
 )

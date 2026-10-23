@@ -70,12 +70,14 @@ from my_pa.application.commands import (
     CloseCommitment,
     CloseConstraint,
     CloseConstraintWithFollowUp,
+    CloseIssue,
     CloseProject,
     Command,
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
     ConfigureProjectControls,
     CorrectGoodNotes,
+    CorrectIssueMembership,
     CorrectRecordAssociation,
     CreateCapture,
     CreateCommitment,
@@ -88,6 +90,8 @@ from my_pa.application.commands import (
     CreateEntityProposal,
     CreateEntityRelationship,
     CreateIssue,
+    CreateIssueWorkCommitment,
+    CreateIssueWorkTask,
     CreateKnowledgeAssertion,
     CreateManagedDocument,
     CreateMeeting,
@@ -149,6 +153,7 @@ from my_pa.application.commands import (
     ListGoodNotesPages,
     ListGoodNotesRuns,
     ListIntelligenceArtifacts,
+    ListIssueHandoffs,
     ListIssues,
     ListKnowledgeAssertions,
     ListManagedDocuments,
@@ -185,6 +190,7 @@ from my_pa.application.commands import (
     ReadGoodNotes,
     ReadIntelligenceArtifact,
     ReadIssue,
+    ReadIssueClosureReadiness,
     ReadKnowledge,
     ReadKnowledgeAssertion,
     ReadManagedDocument,
@@ -197,8 +203,10 @@ from my_pa.application.commands import (
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
+    RecordIssueHandoff,
     RecordTask,
     ReopenConstraint,
+    ReopenIssue,
     ReorderConstraintCategories,
     ResolveConstraintSyncConflict,
     ResolveEntity,
@@ -709,6 +717,16 @@ def _requested_scope(
             | ReadRecordLineage()
             | ListMeetingNoteVersions()
             | ReadMeetingNoteVersion()
+            # Record lineage S2: the same partition's Issue, link, handoff and
+            # Work rows.
+            | CloseIssue()
+            | ReopenIssue()
+            | ReadIssueClosureReadiness()
+            | CorrectIssueMembership()
+            | RecordIssueHandoff()
+            | ListIssueHandoffs()
+            | CreateIssueWorkTask()
+            | CreateIssueWorkCommitment()
         ):
             return frozenset()
         case CreateCapture():

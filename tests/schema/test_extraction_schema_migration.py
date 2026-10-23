@@ -533,6 +533,15 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "lineage_write_requests",
         }
     ),
+    # Record lineage S2 (ADR-015): Issue closure evidence, the responsibility
+    # handoff ledger and a composite request's links.
+    "d020b532ad7d": frozenset(
+        {
+            "issue_revision_evidence",
+            "issue_responsibility_events",
+            "lineage_write_request_links",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

@@ -299,6 +299,15 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         Capability.RECORDS_LINEAGE,
         Capability.MEETINGS_NOTES_VERSIONS,
         Capability.MEETINGS_NOTES_READ_VERSION,
+        # Record lineage S2, behind the same switch.
+        Capability.ISSUES_CLOSE,
+        Capability.ISSUES_REOPEN,
+        Capability.ISSUES_CLOSURE_READINESS,
+        Capability.ISSUES_MEMBERSHIPS_CORRECT,
+        Capability.ISSUES_HANDOFFS_RECORD,
+        Capability.ISSUES_HANDOFFS_LIST,
+        Capability.ISSUES_WORK_CREATE_TASK,
+        Capability.ISSUES_WORK_CREATE_COMMITMENT,
     }
 )
 
@@ -1459,6 +1468,68 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "meeting_id": "mtg_wiremeeting0001",
             "note_version_id": "mnote_wirenote00001",
         },
+        # Record lineage S2.
+        Capability.ISSUES_CLOSE: {
+            "issue_id": "sit_wireissue0001",
+            "expected_version": 1,
+            "idempotency_key": "wire-issues-close-0001",
+            "outcome": "the wire issue was resolved",
+            "closure_evidence_anchors": [
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_wiremeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_wirenote00001",
+                    "source_sha256": "a" * 64,
+                    "role": "resolution",
+                }
+            ],
+        },
+        Capability.ISSUES_REOPEN: {
+            "issue_id": "sit_wireissue0001",
+            "expected_version": 2,
+            "idempotency_key": "wire-issues-reopen-0001",
+            "reason": "the wire issue recurred",
+        },
+        Capability.ISSUES_CLOSURE_READINESS: {"issue_id": "sit_wireissue0001"},
+        Capability.ISSUES_MEMBERSHIPS_CORRECT: {
+            "link_id": "irl_wirelink00001",
+            "expected_revision": 1,
+            "idempotency_key": "wire-issues-memberships-correct-0001",
+            "reason": "the wire task was resolved",
+        },
+        Capability.ISSUES_HANDOFFS_RECORD: {
+            "issue_id": "sit_wireissue0001",
+            "commitment_id": "cmt_wirecommitment01",
+            "from_side": "counterparty",
+            "effective_at": "2026-08-09T12:00:00+00:00",
+            "reason": "the wire counterparty handed back",
+            "evidence_anchor": {
+                "family": "meeting_note_version",
+                "root_id": "mtg_wiremeeting0001",
+                "version_kind": "immutable_version",
+                "version_id": "mnote_wirenote00001",
+                "source_sha256": "a" * 64,
+                "role": "handoff",
+            },
+            "idempotency_key": "wire-issues-handoffs-record-0001",
+        },
+        Capability.ISSUES_HANDOFFS_LIST: {"issue_id": "sit_wireissue0001"},
+        Capability.ISSUES_WORK_CREATE_TASK: {
+            "issue_id": "sit_wireissue0001",
+            "idempotency_key": "wire-issues-work-create-task-0001",
+            "task": {"title": "the wire task", "origin_kind": "direct_principal"},
+        },
+        Capability.ISSUES_WORK_CREATE_COMMITMENT: {
+            "issue_id": "sit_wireissue0001",
+            "idempotency_key": "wire-issues-work-create-commitment-0001",
+            "commitment": {
+                "counterparty_entity_id": "ent_wirecounterparty01",
+                "direction": "owed_to_principal",
+                "summary": "the wire commitment",
+                "origin_evidence_ref": "cap_wireorigin00001",
+            },
+        },
     }
 
 
@@ -2155,6 +2226,15 @@ SCOPED_CAPABILITIES = [
         Capability.RECORDS_LINEAGE,
         Capability.MEETINGS_NOTES_VERSIONS,
         Capability.MEETINGS_NOTES_READ_VERSION,
+        # Record lineage S2, also scopeless.
+        Capability.ISSUES_CLOSE,
+        Capability.ISSUES_REOPEN,
+        Capability.ISSUES_CLOSURE_READINESS,
+        Capability.ISSUES_MEMBERSHIPS_CORRECT,
+        Capability.ISSUES_HANDOFFS_RECORD,
+        Capability.ISSUES_HANDOFFS_LIST,
+        Capability.ISSUES_WORK_CREATE_TASK,
+        Capability.ISSUES_WORK_CREATE_COMMITMENT,
     }
 ]
 
@@ -2456,7 +2536,16 @@ REPORT_TYPE_AUTHORING_EXEMPTION = frozenset({Capability.REPORTS_TYPES_CREATE})
 #: `issues.create` and `issues.update` -- on the same reading: they write the
 #: acting Principal's own Issue rows and revisions and reach no source provider
 #: and no enrollment. The two `issues.project_links.` writes carry no listed verb.
-ISSUE_AUTHORING_EXEMPTION = frozenset({Capability.ISSUES_CREATE, Capability.ISSUES_UPDATE})
+ISSUE_AUTHORING_EXEMPTION = frozenset(
+    {
+        Capability.ISSUES_CREATE,
+        Capability.ISSUES_UPDATE,
+        # Record lineage S2's composites create a Task or Commitment of the
+        # Principal's own partition with its Issue membership; no source moves.
+        Capability.ISSUES_WORK_CREATE_TASK,
+        Capability.ISSUES_WORK_CREATE_COMMITMENT,
+    }
+)
 
 
 def test_the_transport_routes_no_mutating_capability() -> None:

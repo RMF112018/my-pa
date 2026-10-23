@@ -28,8 +28,8 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with two hundred and fourteen capabilities and
-fifty-eight purposes now declared in the domain. If this reddens, the freeze has been undone
+emits what it emitted on the day it merged, with two hundred and twenty-two capabilities and
+fifty-nine purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
 
@@ -238,6 +238,25 @@ LINEAGE_TRIGGERS: Final[frozenset[str]] = frozenset(
         "a_handoff_follows_its_predecessor",
         "a_handoff_is_effective_in_order",
         "a_composite_request_names_its_links",
+        # Record lineage S3.
+        "lineage_commit_marks_are_append_only",
+        "issue_responsibility_corrections_are_append_only",
+        *(
+            f"{table}_refuse_truncate"
+            for table in (
+                "lineage_commit_sequences",
+                "lineage_commit_marks",
+                "issue_responsibility_corrections",
+                "lineage_backfill_runs",
+                "lineage_backfill_items",
+            )
+        ),
+        "a_lineage_fact_takes_its_commit_mark",
+        "a_commit_sequence_advances_by_one",
+        "a_commit_mark_is_its_allocation",
+        "a_handoff_correction_is_admissible",
+        "a_backfill_run_moves_forward",
+        "a_backfill_item_is_settled_once",
     }
 )
 
@@ -548,6 +567,16 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "issues.handoffs.list",
         "issues.work.create_task",
         "issues.work.create_commitment",
+        # Record lineage S3, admitted by its revision with the domain declaring
+        # every name in the same change.
+        "records.associations.contest",
+        "records.associations.reinstate",
+        "records.associations.history",
+        "issues.history",
+        "issues.timeline",
+        "issues.handoffs.correct",
+        "records.backfill.plan",
+        "records.backfill.report",
     }
 )
 

@@ -38,7 +38,8 @@ function lineageFor(family: "task" | "commitment", recordId: string) {
   const lineage = structuredClone(fixtures["records.lineage"]);
   const root = { family, record_id: recordId };
   lineage.root = root;
-  lineage.nodes[0] = { family, record_id: recordId, depth: 0 };
+  // S3 lockstep: the root node's path step is null.
+  lineage.nodes[0] = { family, record_id: recordId, depth: 0, reached_from: null, reached_via: null };
   lineage.typed_edges[0]!.to = root;
   lineage.typed_edges[1]!.from = root;
   return { shape: "backend", ...lineage, disclosure: {} };

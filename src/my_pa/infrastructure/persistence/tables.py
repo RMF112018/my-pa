@@ -85,6 +85,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.types import UserDefinedType
 
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.contracts.v1.native_sources import NATIVE_SOURCE_MAX_PAGE_SIZE
@@ -198,8 +199,10 @@ from my_pa.domain.lineage.model import (
 from my_pa.domain.lineage.vocabulary import (
     ATTESTED_AUTHORITY_CLASSES,
     ATTESTED_DECISION_CHANNELS,
+    BACKFILL_WRITE_CAPABILITIES,
     COMPOSITE_CAPABILITIES,
     HANDOFF_CAPABILITIES,
+    HANDOFF_CORRECTION_CAPABILITIES,
     ISSUE_AUTHORITY_CLASSES,
     ISSUE_REVISION_CAPABILITIES,
     ISSUE_STATES,
@@ -212,6 +215,8 @@ from my_pa.domain.lineage.vocabulary import (
     RELATION_MATRIX,
     AcceptanceBasis,
     EvidenceSourceFamily,
+    ExistingLinkState,
+    HandoffCorrectionAction,
     HandoffHolderKind,
     IssueProjectMembershipAction,
     IssueProjectMembershipState,
@@ -225,6 +230,13 @@ from my_pa.domain.lineage.vocabulary import (
     SourceVersionKind,
 )
 from my_pa.domain.lineage.vocabulary import EvidenceRole as LineageEvidenceRole
+from my_pa.domain.lineage_backfill.vocabulary import (
+    BACKFILL_VALIDATOR_VERSION,
+    BackfillClass,
+    BackfillReason,
+    BackfillRunState,
+    BackfillSourceKind,
+)
 from my_pa.domain.meeting.model import (
     MAX_ATTENDEE_DISPLAY_NAME_CHARACTERS,
     MAX_ATTENDEE_EMAIL_CHARACTERS,
@@ -16440,6 +16452,28 @@ def _local_operator_attested() -> CheckConstraint:
     )
 
 
+#: S3 section 4.1 `a_lineage_fact_names_its_commit_mark`: a fact row's
+#: `commit_seq` names a mark of its own Principal. The value is set by the
+#: `a_lineage_fact_takes_its_commit_mark` trigger, never by a writer.
+def _names_its_commit_mark() -> ForeignKeyConstraint:
+    return ForeignKeyConstraint(
+        ["principal_id", "commit_seq"],
+        [
+            f"{SCHEMA}.lineage_commit_marks.principal_id",
+            f"{SCHEMA}.lineage_commit_marks.commit_seq",
+        ],
+        ondelete="RESTRICT",
+        name="a_lineage_fact_names_its_commit_mark",
+    )
+
+
+#: The three S3 result columns every S1/S2 completion CHECK holds null.
+_S3_RESULTS_NULL: Final = (
+    " AND result_handoff_correction_id IS NULL AND result_backfill_run_id IS NULL AND "
+    "result_backfill_checkpoint IS NULL"
+)
+
+
 #: One immutable evidence anchor: an exact Meeting note version or Capture
 #: version (with an optional code-point passage), or a labelled
 #: `legacy_unversioned` Capture root. `anchor_identity` is the section 5.1
@@ -16601,6 +16635,8 @@ issue_revisions = Table(
     Column("reason", Text),
     Column("evidence_count", SmallInteger, nullable=False, server_default=text("0")),
     Column("evidence_set_digest", Text),
+    #: S3 section 4.1: this row's transaction's commit mark (null before S3).
+    Column("commit_seq", BigInteger),
     PrimaryKeyConstraint("principal_id", "issue_id", "version"),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _is_identifier("issue_id", IdKind.SITUATION),
@@ -16710,6 +16746,8 @@ issue_revisions = Table(
         ondelete="RESTRICT",
         name="an_issue_revision_follows_a_revision_of_its_issue",
     ),
+    _names_its_commit_mark(),
+    Index("issue_revisions_by_commit", "principal_id", "commit_seq"),
 )
 
 #: One immutable event on an Issue's native Project link (`project_situations`
@@ -16739,6 +16777,8 @@ issue_project_membership_events = Table(
     Column("decision_channel", Text, nullable=False),
     Column("source_capability", Text, nullable=False),
     Column("recorded_at", DateTime(timezone=True), nullable=False),
+    #: S3 section 4.1: this row's transaction's commit mark (null before S3).
+    Column("commit_seq", BigInteger),
     PrimaryKeyConstraint("principal_id", "membership_event_id"),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _is_identifier("membership_event_id", IdKind.ISSUE_PROJECT_MEMBERSHIP_EVENT),
@@ -16828,6 +16868,8 @@ issue_project_membership_events = Table(
         ondelete="RESTRICT",
         name="a_membership_event_cites_an_anchor_of_its_principal",
     ),
+    _names_its_commit_mark(),
+    Index("issue_project_membership_events_by_commit", "principal_id", "commit_seq"),
 )
 
 #: One immutable association root: an Issue membership or a semantic link
@@ -16918,6 +16960,12 @@ record_links = Table(
         "relation_type <> 'escalated_from' OR context_issue_id IS NOT NULL",
         name="an_escalation_is_issue_scoped",
     ),
+    # S3 section 4.1: stored once, in code-point order whatever the collation.
+    CheckConstraint(
+        "relation_type <> 'related_context' OR (context_issue_id IS NOT NULL AND (from_family "
+        'COLLATE "C", from_id COLLATE "C") < (to_family COLLATE "C", to_id COLLATE "C"))',
+        name="a_related_context_is_canonical_and_scoped",
+    ),
     _local_operator_attested(),
     ForeignKeyConstraint(
         ["context_issue_id", "principal_id", "context_issue_kind"],
@@ -16977,6 +17025,8 @@ record_link_revisions = Table(
     #: S2 section 3.3: the member's native `version` a membership writer
     #: observed under its `FOR SHARE` (Task, Commitment and Constraint members).
     Column("member_native_version", Integer),
+    #: S3 section 4.1: this row's transaction's commit mark (null before S3).
+    Column("commit_seq", BigInteger),
     PrimaryKeyConstraint("principal_id", "link_id", "revision_no"),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _is_identifier("link_id", IdKind.RECORD_LINK),
@@ -17013,8 +17063,16 @@ record_link_revisions = Table(
         name="a_link_revision_ends_exactly_when_it_ends",
     ),
     CheckConstraint(
-        "action NOT IN ('correct_evidence', 'end') OR reason IS NOT NULL",
+        "action NOT IN ('contest', 'correct_evidence', 'end', 'reinstate') OR reason IS NOT NULL",
         name="a_link_revision_states_its_reason",
+    ),
+    # S3 section 4.1.
+    CheckConstraint(
+        "(action = 'contest') = (lifecycle_state = 'contested')",
+        name="a_link_revision_contests_exactly_when_contested",
+    ),
+    CheckConstraint(
+        "action <> 'reinstate' OR lifecycle_state = 'active'", name="a_reinstatement_is_active"
     ),
     CheckConstraint(
         "member_native_version IS NULL OR member_native_version >= 1",
@@ -17045,6 +17103,8 @@ record_link_revisions = Table(
         ondelete="RESTRICT",
         name="a_link_revision_follows_a_revision_of_its_link",
     ),
+    _names_its_commit_mark(),
+    Index("record_link_revisions_by_commit", "principal_id", "commit_seq"),
 )
 
 #: One immutable evidence row of one link revision: the anchor at its 1-based
@@ -17132,7 +17192,8 @@ record_link_heads = Table(
         "principal_id",
         "normalized_identity",
         unique=True,
-        postgresql_where=text("lifecycle_state = 'active'"),
+        # S3 section 4.1: one live head -- `active` or `contested` -- per meaning.
+        postgresql_where=text("lifecycle_state IN ('active', 'contested')"),
     ),
 )
 
@@ -17162,12 +17223,29 @@ lineage_write_requests = Table(
     Column("result_handoff_id", Text),
     Column("result_record_family", Text),
     Column("result_record_id", Text),
+    #: S3 section 4.1: the commit mark of the write's transaction, set at
+    #: completion by every write that took one (every lineage write after the
+    #: S3 revision except `records.backfill.plan`); null on a pre-S3 row.
+    Column("commit_seq", BigInteger),
+    Column("result_handoff_correction_id", Text),
+    Column("result_backfill_run_id", Text),
+    Column("result_backfill_checkpoint", Integer),
     PrimaryKeyConstraint("principal_id", "capability", "idempotency_key"),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _is_identifier("result_issue_id", IdKind.SITUATION),
     _is_identifier("result_link_id", IdKind.RECORD_LINK),
     _is_identifier("result_membership_event_id", IdKind.ISSUE_PROJECT_MEMBERSHIP_EVENT),
     _is_identifier("result_handoff_id", IdKind.ISSUE_HANDOFF),
+    _is_identifier("result_handoff_correction_id", IdKind.ISSUE_HANDOFF_CORRECTION),
+    _is_identifier("result_backfill_run_id", IdKind.LINEAGE_BACKFILL_RUN),
+    CheckConstraint(
+        "result_backfill_checkpoint IS NULL OR result_backfill_checkpoint >= 0",
+        name="a_lineage_write_request_checkpoint_is_not_negative",
+    ),
+    CheckConstraint(
+        "commit_seq IS NULL OR commit_seq >= 1",
+        name="a_lineage_write_request_commit_mark_is_positive",
+    ),
     CheckConstraint(
         "result_record_family IS NULL OR result_record_family IN ('commitment', 'task')",
         name="a_lineage_write_request_record_family_is_known",
@@ -17196,7 +17274,8 @@ lineage_write_requests = Table(
         "completed_at IS NOT NULL OR (result_issue_id IS NULL AND result_issue_version IS NULL "
         "AND result_link_id IS NULL AND result_link_revision_no IS NULL AND "
         "result_membership_event_id IS NULL AND result_created IS NULL AND result_handoff_id IS "
-        "NULL AND result_record_family IS NULL AND result_record_id IS NULL)",
+        "NULL AND result_record_family IS NULL AND result_record_id IS NULL"
+        f"{_S3_RESULTS_NULL} AND commit_seq IS NULL)",
         name="an_incomplete_lineage_write_request_names_no_result",
     ),
     CheckConstraint(
@@ -17205,7 +17284,7 @@ lineage_write_requests = Table(
         "result_issue_version IS NOT NULL AND result_link_id IS NULL AND "
         "result_link_revision_no IS NULL AND result_membership_event_id IS NULL AND "
         "result_created IS NULL AND result_handoff_id IS NULL AND result_record_family IS NULL "
-        "AND result_record_id IS NULL)",
+        f"AND result_record_id IS NULL{_S3_RESULTS_NULL})",
         name="a_completed_issue_write_names_its_revision",
     ),
     CheckConstraint(
@@ -17214,7 +17293,7 @@ lineage_write_requests = Table(
         "NULL AND result_issue_id IS NULL AND result_issue_version IS NULL AND result_link_id "
         "IS NULL AND result_link_revision_no IS NULL AND result_created IS NULL AND "
         "result_handoff_id IS NULL AND result_record_family IS NULL AND result_record_id IS "
-        "NULL)",
+        f"NULL{_S3_RESULTS_NULL})",
         name="a_completed_project_link_write_names_its_event",
     ),
     CheckConstraint(
@@ -17223,7 +17302,7 @@ lineage_write_requests = Table(
         "IS NOT NULL AND result_link_revision_no IS NOT NULL AND result_issue_id IS NULL AND "
         "result_issue_version IS NULL AND result_membership_event_id IS NULL AND "
         "result_handoff_id IS NULL AND result_record_family IS NULL AND result_record_id IS "
-        "NULL AND (result_created IS NOT NULL) = (capability IN ("
+        f"NULL{_S3_RESULTS_NULL} AND (result_created IS NOT NULL) = (capability IN ("
         f"{_literals(RECORD_LINK_CAPABILITIES - COMPOSITE_CAPABILITIES)})))",
         name="a_completed_link_write_names_its_revision",
     ),
@@ -17232,7 +17311,8 @@ lineage_write_requests = Table(
         f"{_literals(HANDOFF_CAPABILITIES)}) OR (result_handoff_id IS NOT NULL AND "
         "result_issue_id IS NULL AND result_issue_version IS NULL AND result_link_id IS NULL "
         "AND result_link_revision_no IS NULL AND result_membership_event_id IS NULL AND "
-        "result_created IS NULL AND result_record_family IS NULL AND result_record_id IS NULL)",
+        "result_created IS NULL AND result_record_family IS NULL AND result_record_id IS NULL"
+        f"{_S3_RESULTS_NULL})",
         name="a_completed_handoff_write_names_its_event",
     ),
     CheckConstraint(
@@ -17242,8 +17322,32 @@ lineage_write_requests = Table(
         "(result_record_family = 'task') AND result_issue_id IS NULL AND result_issue_version "
         "IS NULL AND result_link_id IS NULL AND result_link_revision_no IS NULL AND "
         "result_membership_event_id IS NULL AND result_created IS NULL AND result_handoff_id IS "
-        "NULL)",
+        f"NULL{_S3_RESULTS_NULL})",
         name="a_completed_composite_write_names_its_record",
+    ),
+    # S3 section 4.1.
+    CheckConstraint(
+        "completed_at IS NULL OR capability NOT IN ("
+        f"{_literals(HANDOFF_CORRECTION_CAPABILITIES)}) OR (result_handoff_correction_id IS NOT "
+        "NULL AND result_issue_id IS NULL AND result_issue_version IS NULL AND result_link_id IS "
+        "NULL AND result_link_revision_no IS NULL AND result_membership_event_id IS NULL AND "
+        "result_created IS NULL AND result_handoff_id IS NULL AND result_record_family IS NULL "
+        "AND result_record_id IS NULL AND result_backfill_run_id IS NULL AND "
+        "result_backfill_checkpoint IS NULL)",
+        name="a_completed_handoff_correction_names_its_correction",
+    ),
+    CheckConstraint(
+        "completed_at IS NULL OR capability NOT IN ("
+        f"{_literals(BACKFILL_WRITE_CAPABILITIES)}) OR (result_backfill_run_id IS NOT NULL AND "
+        "result_backfill_checkpoint IS NOT NULL AND result_issue_id IS NULL AND "
+        "result_issue_version IS NULL AND result_link_id IS NULL AND result_link_revision_no IS "
+        "NULL AND result_membership_event_id IS NULL AND result_created IS NULL AND "
+        "result_handoff_id IS NULL AND result_record_family IS NULL AND result_record_id IS NULL "
+        "AND result_handoff_correction_id IS NULL AND commit_seq IS NULL)",
+        name="a_completed_backfill_write_names_its_run",
+    ),
+    UniqueConstraint(
+        "principal_id", "commit_seq", name="a_lineage_write_request_names_its_commit_mark_once"
     ),
     ForeignKeyConstraint(
         ["principal_id", "result_issue_id", "result_issue_version"],
@@ -17282,6 +17386,33 @@ lineage_write_requests = Table(
         ],
         ondelete="RESTRICT",
         name="a_lineage_write_request_names_a_handoff",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "commit_seq"],
+        [
+            f"{SCHEMA}.lineage_commit_marks.principal_id",
+            f"{SCHEMA}.lineage_commit_marks.commit_seq",
+        ],
+        ondelete="RESTRICT",
+        name="a_lineage_write_request_names_its_commit_mark",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "result_handoff_correction_id"],
+        [
+            f"{SCHEMA}.issue_responsibility_corrections.principal_id",
+            f"{SCHEMA}.issue_responsibility_corrections.correction_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_lineage_write_request_names_a_handoff_correction",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "result_backfill_run_id"],
+        [
+            f"{SCHEMA}.lineage_backfill_runs.principal_id",
+            f"{SCHEMA}.lineage_backfill_runs.run_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_lineage_write_request_names_a_backfill_run",
     ),
 )
 
@@ -17375,6 +17506,8 @@ issue_responsibility_events = Table(
     Column("authority_class", Text, nullable=False),
     Column("decision_channel", Text, nullable=False),
     Column("source_capability", Text, nullable=False),
+    #: S3 section 4.1: this row's transaction's commit mark (null before S3).
+    Column("commit_seq", BigInteger),
     PrimaryKeyConstraint("principal_id", "handoff_id"),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _is_identifier("handoff_id", IdKind.ISSUE_HANDOFF),
@@ -17470,6 +17603,7 @@ issue_responsibility_events = Table(
         ondelete="RESTRICT",
         name="a_handoff_cites_an_anchor_of_its_principal",
     ),
+    _names_its_commit_mark(),
     Index(
         "issue_responsibility_events_by_issue",
         "principal_id",
@@ -17477,6 +17611,7 @@ issue_responsibility_events = Table(
         "recorded_at",
         "handoff_id",
     ),
+    Index("issue_responsibility_events_by_commit", "principal_id", "commit_seq"),
 )
 
 #: The links one completed composite request wrote (S2 section 6.4), for
@@ -17517,5 +17652,340 @@ lineage_write_request_links = Table(
         ],
         ondelete="RESTRICT",
         name="a_request_link_names_a_link_revision",
+    ),
+)
+
+# --- Record lineage, Slice S3 (S3 contract section 4.2) ---------------------
+#
+# Five tables, created by revision `6f1476b8da52` with frozen literal DDL and
+# the triggers a `Table` cannot declare: the knowledge clock (the allocator and
+# its immutable marks, `knowledge.lineage_commit_mark`, the commit mark on every
+# fact row), the append-only handoff corrections with their admission check,
+# and the guarded backfill ledger. TRUNCATE is refused on all five while they
+# hold a row; `lineage_commit_marks` and `issue_responsibility_corrections` are
+# append-only.
+
+
+class _TransactionId(UserDefinedType[int]):
+    """PostgreSQL's `xid8`: a full 64-bit transaction id (`pg_current_xact_id()`)."""
+
+    cache_ok = True
+
+    def get_col_spec(self, **kw: object) -> str:
+        del kw
+        return "XID8"
+
+
+#: The knowledge clock's allocator: one mutable row per Principal, advanced by
+#: exactly one, later in time, under its row lock
+#: (`a_commit_sequence_advances_by_one`; precedent `record_event_sequences`). Its
+#: committed `last_marked_at` is the horizon every `known_at` read is capped at.
+lineage_commit_sequences = Table(
+    "lineage_commit_sequences",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("last_seq", BigInteger, nullable=False),
+    Column("last_marked_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint("principal_id"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint("last_seq >= 0", name="a_commit_sequence_is_not_negative"),
+)
+
+#: One immutable commit mark per (Principal, transaction), equal to the
+#: allocation it was taken under (`a_commit_mark_is_its_allocation`).
+lineage_commit_marks = Table(
+    "lineage_commit_marks",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("commit_seq", BigInteger, nullable=False),
+    Column("marked_at", DateTime(timezone=True), nullable=False),
+    Column("recorded_xact", _TransactionId(), nullable=False),
+    PrimaryKeyConstraint("principal_id", "commit_seq"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint("commit_seq >= 1", name="a_commit_mark_is_positive"),
+    UniqueConstraint("principal_id", "recorded_xact", name="one_commit_mark_per_transaction"),
+    Index("lineage_commit_marks_by_time", "principal_id", "marked_at"),
+)
+
+#: One immutable handoff correction (S3 section 3.3): `retime` (another
+#: business time) or `void` (it did not happen) of one handoff event, never
+#: changing the event. `a_handoff_correction_is_admissible` refuses a correction
+#: of a voided event, a void of any but the chain's last live event, and an
+#: out-of-order retime.
+issue_responsibility_corrections = Table(
+    "issue_responsibility_corrections",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("correction_id", Text, nullable=False),
+    Column("handoff_id", Text, nullable=False),
+    Column("correction_no", Integer, nullable=False),
+    Column("predecessor_correction_no", Integer),
+    Column("action", Text, nullable=False),
+    Column("corrected_effective_at", DateTime(timezone=True)),
+    Column("evidence_anchor_id", Text, nullable=False),
+    Column("evidence_role", Text, nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("acceptance_basis", Text, nullable=False),
+    Column("authority_class", Text, nullable=False),
+    Column("decision_channel", Text, nullable=False),
+    Column("source_capability", Text, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    Column("commit_seq", BigInteger, nullable=False),
+    PrimaryKeyConstraint("principal_id", "correction_id"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("correction_id", IdKind.ISSUE_HANDOFF_CORRECTION),
+    _is_identifier("handoff_id", IdKind.ISSUE_HANDOFF),
+    _is_identifier("evidence_anchor_id", IdKind.LINEAGE_EVIDENCE_ANCHOR),
+    CheckConstraint("correction_no >= 1", name="a_handoff_correction_number_is_positive"),
+    CheckConstraint(
+        "(correction_no = 1) = (predecessor_correction_no IS NULL) AND (correction_no = 1 OR "
+        "predecessor_correction_no = correction_no - 1)",
+        name="a_handoff_correction_follows_the_prior_number",
+    ),
+    _one_of("action", HandoffCorrectionAction, name="a_handoff_correction_action_is_known"),
+    CheckConstraint(
+        "(action = 'retime') = (corrected_effective_at IS NOT NULL)",
+        name="a_retime_states_its_effective_time",
+    ),
+    CheckConstraint(
+        "corrected_effective_at <= recorded_at",
+        name="a_retime_is_not_effective_after_recording",
+    ),
+    CheckConstraint(
+        "(action = 'retime' AND evidence_role = 'handoff') OR (action = 'void' AND "
+        "evidence_role = 'contradicts')",
+        name="a_handoff_correction_cites_its_role",
+    ),
+    CheckConstraint(
+        f"length(trim(reason)) BETWEEN 1 AND {MAX_LINEAGE_REASON_CHARACTERS}",
+        name="a_handoff_correction_reason_is_bounded",
+    ),
+    _one_of(
+        "acceptance_basis",
+        AcceptanceBasis,
+        name="a_handoff_correction_acceptance_basis_is_known",
+    ),
+    _one_of(
+        "source_capability",
+        HANDOFF_CORRECTION_CAPABILITIES,
+        name="a_handoff_correction_capability_is_known",
+    ),
+    _local_operator_attested(),
+    UniqueConstraint(
+        "principal_id", "handoff_id", "correction_no", name="one_correction_per_number"
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "handoff_id"],
+        [
+            f"{SCHEMA}.issue_responsibility_events.principal_id",
+            f"{SCHEMA}.issue_responsibility_events.handoff_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_handoff_correction_names_a_handoff_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "handoff_id", "predecessor_correction_no"],
+        [
+            f"{SCHEMA}.issue_responsibility_corrections.principal_id",
+            f"{SCHEMA}.issue_responsibility_corrections.handoff_id",
+            f"{SCHEMA}.issue_responsibility_corrections.correction_no",
+        ],
+        ondelete="RESTRICT",
+        name="a_handoff_correction_follows_a_correction_of_its_handoff",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "evidence_anchor_id"],
+        [
+            f"{SCHEMA}.lineage_evidence_anchors.principal_id",
+            f"{SCHEMA}.lineage_evidence_anchors.anchor_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_handoff_correction_cites_an_anchor_of_its_principal",
+    ),
+    _names_its_commit_mark(),
+    Index(
+        "issue_responsibility_corrections_by_handoff",
+        "principal_id",
+        "handoff_id",
+        "correction_no",
+    ),
+)
+
+#: One backfill dry run (S3 section 8.3): a guarded ledger row that moves only
+#: forward (`a_backfill_run_moves_forward`) from `enumerated` to `classified`,
+#: never deleted. `commit_seq_cutoff` is the lineage cut its items' existing-link
+#: columns are computed at; `census` holds counts and tokens only.
+lineage_backfill_runs = Table(
+    "lineage_backfill_runs",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("run_id", Text, nullable=False),
+    Column("state", Text, nullable=False),
+    Column("validator_version", Integer, nullable=False),
+    Column("commit_seq_cutoff", BigInteger, nullable=False),
+    Column("source_cutoff_at", DateTime(timezone=True), nullable=False),
+    Column("population_count", Integer, nullable=False),
+    Column("classified_count", Integer, nullable=False),
+    Column("plan_digest", Text),
+    Column("census", JSONB, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("classified_at", DateTime(timezone=True)),
+    Column("authority_class", Text, nullable=False),
+    Column("decision_channel", Text, nullable=False),
+    PrimaryKeyConstraint("principal_id", "run_id"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("run_id", IdKind.LINEAGE_BACKFILL_RUN),
+    _one_of("state", BackfillRunState, name="a_backfill_run_state_is_known"),
+    CheckConstraint(
+        f"validator_version = {BACKFILL_VALIDATOR_VERSION}",
+        name="a_backfill_run_validator_is_known",
+    ),
+    CheckConstraint("commit_seq_cutoff >= 0", name="a_backfill_run_cutoff_is_not_negative"),
+    CheckConstraint("population_count >= 0", name="a_backfill_run_population_is_not_negative"),
+    CheckConstraint(
+        "0 <= classified_count AND classified_count <= population_count",
+        name="a_backfill_run_classifies_within_its_population",
+    ),
+    CheckConstraint(
+        "(state = 'enumerated') = (plan_digest IS NULL) AND (state = 'classified') = "
+        "(classified_at IS NOT NULL)",
+        name="a_backfill_run_digests_exactly_when_classified",
+    ),
+    CheckConstraint(
+        "state <> 'classified' OR classified_count = population_count",
+        name="a_classified_backfill_run_classified_everything",
+    ),
+    CheckConstraint(
+        f"plan_digest IS NULL OR plan_digest ~ '{_LINEAGE_SHA256}'",
+        name="a_backfill_plan_digest_is_sha256",
+    ),
+    CheckConstraint("jsonb_typeof(census) = 'object'", name="a_backfill_census_is_an_object"),
+    _local_operator_attested(),
+)
+
+#: The families a backfill item's source may be: section 8.3's population.
+_BACKFILL_SOURCE_FAMILIES: Final = {
+    "commitment": IdKind.COMMITMENT,
+    "constraint": IdKind.PROJECT_CONSTRAINT,
+    "meeting": IdKind.MEETING,
+    "situation": IdKind.SITUATION,
+    "task": IdKind.TASK,
+}
+
+#: One frozen backfill item (S3 section 8.3): the native source, its ASCII
+#: reference token and the digest of its source document, enumerated in one
+#: statement; then classified once, all its settled columns together
+#: (`a_backfill_item_is_settled_once`). `unresolved` and `refused` items are
+#: quarantined.
+lineage_backfill_items = Table(
+    "lineage_backfill_items",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("run_id", Text, nullable=False),
+    Column("item_no", Integer, nullable=False),
+    Column("source_kind", Text, nullable=False),
+    Column("source_family", Text, nullable=False),
+    Column("source_id", Text, nullable=False),
+    Column("source_ref", Text, nullable=False),
+    Column("source_version", Integer),
+    Column("source_digest", Text, nullable=False),
+    Column("classification", Text),
+    Column("reason", Text),
+    Column("candidate_identity", Text),
+    Column("candidate", Text),
+    Column("existing_link_id", Text),
+    Column("existing_link_state", Text),
+    Column("quarantined", Boolean, nullable=False, server_default=text("false")),
+    Column("classified_at", DateTime(timezone=True)),
+    PrimaryKeyConstraint("principal_id", "run_id", "item_no"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("run_id", IdKind.LINEAGE_BACKFILL_RUN),
+    _is_identifier("existing_link_id", IdKind.RECORD_LINK),
+    CheckConstraint("item_no >= 1", name="a_backfill_item_number_is_positive"),
+    _one_of("source_kind", BackfillSourceKind, name="a_backfill_source_kind_is_known"),
+    CheckConstraint(
+        "(source_kind = 'task_follow_up' AND source_family = 'task') OR (source_kind = "
+        "'constraint_follow_up' AND source_family = 'constraint') OR (source_kind = "
+        "'meeting_series' AND source_family = 'meeting') OR (source_kind IN "
+        "('project_situation', 'situation_object_ref') AND source_family = 'situation') OR "
+        "(source_kind IN ('work_origin_assertion', 'work_origin_capture_root', "
+        "'work_origin_other') AND source_family IN ('commitment', 'task'))",
+        name="a_backfill_source_names_its_kind_family",
+    ),
+    CheckConstraint(
+        " OR ".join(
+            f"(source_family = '{family}' AND source_id ~ '^{kind.value}_{_IDENTIFIER_SUFFIX}$')"
+            for family, kind in sorted(_BACKFILL_SOURCE_FAMILIES.items())
+        ),
+        name="source_id_is_an_opaque_identifier",
+    ),
+    CheckConstraint(
+        "length(source_ref) BETWEEN 1 AND 256 AND source_ref ~ '^[!-~]+$'",
+        name="a_backfill_source_ref_is_an_ascii_token",
+    ),
+    CheckConstraint(
+        "source_version IS NULL OR source_version >= 1",
+        name="a_backfill_source_version_is_positive",
+    ),
+    CheckConstraint(
+        f"source_digest ~ '{_LINEAGE_SHA256}'", name="a_backfill_source_digest_is_sha256"
+    ),
+    CheckConstraint(
+        f"classification IS NULL OR classification IN ({_literals(BackfillClass)})",
+        name="a_backfill_classification_is_known",
+    ),
+    CheckConstraint(
+        f"reason IS NULL OR reason IN ({_literals(BackfillReason)})",
+        name="a_backfill_reason_is_known",
+    ),
+    CheckConstraint(
+        f"existing_link_state IS NULL OR existing_link_state IN ({_literals(ExistingLinkState)})",
+        name="an_existing_link_state_is_known",
+    ),
+    CheckConstraint(
+        "(classification IS NULL) = (reason IS NULL) AND (classification IS NULL) = "
+        "(classified_at IS NULL) AND (classification IS NULL) = (existing_link_state IS NULL)",
+        name="a_backfill_item_is_settled_whole",
+    ),
+    CheckConstraint(
+        "(existing_link_id IS NULL) = (existing_link_state IS NULL OR existing_link_state = "
+        "'none')",
+        name="a_backfill_item_names_an_existing_link_exactly_when_one_exists",
+    ),
+    CheckConstraint(
+        "(candidate_identity IS NULL) = (candidate IS NULL) AND (candidate_identity IS NULL OR "
+        "classification IN ('review_candidate', 'source_backed_accepted'))",
+        name="a_backfill_candidate_is_named_only_when_derivable",
+    ),
+    CheckConstraint(
+        "(candidate_identity IS NULL OR length(candidate_identity) BETWEEN 1 AND "
+        f"{MAX_NORMALIZED_IDENTITY_CHARACTERS}) AND (candidate IS NULL OR length(candidate) "
+        "BETWEEN 1 AND 65536)",
+        name="a_backfill_candidate_is_bounded",
+    ),
+    CheckConstraint(
+        "quarantined = (classification IS NOT NULL AND classification IN ('refused', "
+        "'unresolved'))",
+        name="a_backfill_item_is_quarantined_exactly_when_unsettled",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "run_id",
+        "source_kind",
+        "source_id",
+        "source_ref",
+        name="one_backfill_item_per_source",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "run_id"],
+        [f"{SCHEMA}.lineage_backfill_runs.principal_id", f"{SCHEMA}.lineage_backfill_runs.run_id"],
+        ondelete="RESTRICT",
+        name="a_backfill_item_belongs_to_a_run_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "existing_link_id"],
+        [f"{SCHEMA}.record_links.principal_id", f"{SCHEMA}.record_links.link_id"],
+        ondelete="RESTRICT",
+        name="a_backfill_item_names_a_link_of_its_principal",
     ),
 )

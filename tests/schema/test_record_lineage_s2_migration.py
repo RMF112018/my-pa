@@ -44,6 +44,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
 from tests.schema import lineage_s2_schema_ahead_contract as gap
 from tests.schema.lineage_s2_schema_ahead_contract import S2_CAPABILITIES, S2_PURPOSES
+from tests.schema.lineage_s3_schema_ahead_contract import S3_CAPABILITIES, S3_PURPOSES
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.identity.purpose import Purpose
@@ -63,10 +64,14 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "d020b532ad7d"
 PREVIOUS: Final = "264310e0416a"
-HEAD: Final = REVISION
+#: Record lineage S3 (`6f1476b8da52`, ADR-015) is additive on this revision.
+HEAD: Final = "6f1476b8da52"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20261018_d020b532ad7d_record_lineage_s2.py"
 S1_MIGRATION: Final = MIGRATIONS / "20261017_264310e0416a_record_lineage_s1.py"
+#: The S3 revision, which adds columns and CHECKs to four of the tables this
+#: revision alters, and that `tables.py` now declares beside the S2 ones.
+S3_MIGRATION: Final = MIGRATIONS / "20261019_6f1476b8da52_record_lineage_s3.py"
 
 NEW_TABLES: Final[tuple[Table, ...]] = (
     issue_revision_evidence,
@@ -187,7 +192,7 @@ def test_the_revision_is_the_single_head_on_264310e0416a() -> None:
     assert script.get_revision(PREVIOUS).down_revision == "b9025e7fb738"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
     assert MIGRATION.name.endswith("_record_lineage_s2.py")
-    assert len(list(MIGRATIONS.glob("*.py"))) == 120
+    assert len(list(MIGRATIONS.glob("*.py"))) == 121
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -217,25 +222,38 @@ def test_frozen_ddl_names_every_declared_constraint() -> None:
     """
     source = MIGRATION.read_text(encoding="utf-8")
     s1 = S1_MIGRATION.read_text(encoding="utf-8")
+    # A name the S3 revision adds to one of these tables is in that revision's
+    # text instead (the later revision owns it).
+    later = S3_MIGRATION.read_text(encoding="utf-8")
     flat = _flat(source)
+    flat_later = _flat(later)
     for table in NEW_TABLES:
         assert f"CREATE TABLE knowledge.{table.name} (" in source
         for column in table.c:
-            assert re.search(rf"\b{column.name}\b", source), (table.name, column.name)
+            assert re.search(rf"\b{column.name}\b", source) or re.search(
+                rf"ADD COLUMN {column.name}\b", later
+            ), (table.name, column.name)
         for constraint in table.constraints:
             if constraint.name is not None and not str(constraint.name).startswith("_"):
-                assert str(constraint.name) in source, (table.name, constraint.name)
+                assert str(constraint.name) in source or str(constraint.name) in later, (
+                    table.name,
+                    constraint.name,
+                )
         for index in table.indexes:
-            assert f"INDEX {index.name} ON knowledge.{table.name}" in flat, index.name
+            assert (
+                f"INDEX {index.name} ON knowledge.{table.name}" in flat
+                or f"INDEX {index.name} ON knowledge.{table.name}" in flat_later
+            ), index.name
     for table in ALTERED_TABLES:
         for column in ADDED_COLUMNS.get(table.name, frozenset()):
             assert column in table.c, (table.name, column)
             assert f"ALTER TABLE knowledge.{table.name} ADD COLUMN {column} " in source
         declared = {str(c.name) for c in table.constraints if c.name}
-        # Every name the S1 revision does not create is this revision's.
+        # Every name the S1 revision does not create is this revision's, or
+        # the S3 revision's.
         for name in declared:
             if name not in s1:
-                assert name in source, (table.name, name)
+                assert name in source or name in later, (table.name, name)
         for name in WIDENED.get(table.name, frozenset()):
             assert name in declared and name in s1 and name in source, (table.name, name)
     for function in FUNCTIONS | set(REPLACED_FUNCTIONS):
@@ -295,10 +313,11 @@ def test_at_vocabulary_adds_exactly_the_s2_names() -> None:
     assert purposes_at == sorted(purposes_at)
     # The head admits every declared name, and the S2 schema-ahead gap is
     # exactly the S2 names the domain does not declare yet (none).
-    declared = {capability.value for capability in Capability}
+    # The S3 names, declared since, are the S3 revision's (6f1476b8da52).
+    declared = {capability.value for capability in Capability} - S3_CAPABILITIES
     native = {capability.value for capability in NativeSourceCapability}
     assert set(at) == declared | native | gap.lineage_s2_admitted_ahead("capability")
-    purposes = {purpose.value for purpose in Purpose}
+    purposes = {purpose.value for purpose in Purpose} - S3_PURPOSES
     assert set(purposes_at) == purposes | gap.lineage_s2_admitted_ahead("purpose")
     assert S2_CAPABILITIES & declared == gap.S2_CAPABILITIES_DECLARED_BY_DOMAIN
     assert S2_PURPOSES & purposes == gap.S2_PURPOSES_DECLARED_BY_DOMAIN
@@ -392,9 +411,9 @@ def _added_columns() -> set[str]:
     return {f"{table}.{column}" for table, columns in ADDED_COLUMNS.items() for column in columns}
 
 
-def _assert_present(engine: Engine) -> None:
+def _assert_present(engine: Engine, *, at: str = HEAD) -> None:
     catalog = _catalog(engine)
-    assert catalog["version"] == {HEAD}
+    assert catalog["version"] == {at}
     assert catalog["tables"] >= NEW_TABLE_NAMES
     assert catalog["functions"] >= FUNCTIONS
     assert catalog["columns"] >= _added_columns()
@@ -480,7 +499,7 @@ def test_s1_head_with_rows_upgrades_unchanged(disposable_database: str, engine: 
         before = _rows(connection)
     assert all(before[table] for table in ("issue_revisions", "record_links"))
     command.upgrade(_config(), REVISION)
-    _assert_present(engine)
+    _assert_present(engine, at=REVISION)
     with engine.connect() as connection:
         after = _rows(connection)
         added = connection.execute(
@@ -541,7 +560,9 @@ def test_downgrade_refuses_while_s2_rows_exist(disposable_database: str, engine:
         command.downgrade(_config(), PREVIOUS)
     assert getattr(refused.value.orig, "sqlstate", None) == RESTRICT_VIOLATION
     assert "refusing to downgrade d020b532ad7d" in str(refused.value)
-    _assert_present(engine)
+    # Each revision runs in its own transaction: the S3 revision, holding no S3
+    # row, unwound first, and this one refused.
+    _assert_present(engine, at=REVISION)
     # And a closed Issue with its closure evidence: refused, nothing dropped.
     world = _world(engine, "prn_lineages2mig0002")
     with engine.begin() as connection:
@@ -575,7 +596,7 @@ def test_downgrade_refuses_while_s2_rows_exist(disposable_database: str, engine:
     with pytest.raises(DBAPIError) as refused_again:
         command.downgrade(_config(), PREVIOUS)
     assert "refusing to downgrade d020b532ad7d" in str(refused_again.value)
-    _assert_present(engine)
+    _assert_present(engine, at=REVISION)
 
 
 def _s1_texts(engine: Engine) -> dict[str, object]:
@@ -659,8 +680,9 @@ def test_downgrade_restores_every_s1_text(disposable_database: str, engine: Engi
     command.downgrade(_config(), PREVIOUS)
     _assert_absent(engine)
     assert _s1_texts(engine) == at_s1
-    command.upgrade(_config(), "head")
-    _assert_present(engine)
+    # Back to this revision: the S3 revision widens some of these texts again.
+    command.upgrade(_config(), REVISION)
+    _assert_present(engine, at=REVISION)
     assert _s1_texts(engine) == at_s2
 
 
@@ -771,19 +793,29 @@ def _seed_blocks_root(engine: Engine, world: object) -> None:
 
 
 def _seed_member_version(engine: Engine, world: object) -> None:
-    """An S1 capability on the S2 schema: `issues.memberships.add` of a Task records its version."""
-    from tests.database.lineage_issue_harness import LineageRuntime
-    from tests.database.lineage_record_harness import GATEWAY, membership, task
+    """An S1 capability on the S2 schema: a membership revision recording its member's version.
 
-    del world
-    url = engine.url.render_as_string(hide_password=False)
-    runtime = LineageRuntime(url)
-    try:
-        issue = runtime.issue("s2-mig-member")
-        member = task(runtime, "s2-mig-member")
-        runtime.ok(membership(issue, "task", member, "s2-mig-member"), surface=GATEWAY)
-    finally:
-        runtime.close()
+    Seeded as the row `issues.memberships.add` writes on the S2 schema
+    (`member_native_version` on an S1-capability revision). Since the S3
+    revision every application lineage write first takes a commit mark, which
+    this S2-revision schema does not have, so the row is written directly here
+    rather than through the application; the S2 write path itself is pinned by
+    the S2 relation-rule and close tests on the head.
+    """
+    with engine.begin() as connection:
+        _replica(connection)
+        connection.execute(
+            text(
+                "INSERT INTO knowledge.record_link_revisions (principal_id, link_id, "
+                "revision_no, revision_id, predecessor_revision_no, action, lifecycle_state, "
+                "acceptance_basis, authority_class, decision_channel, source_capability, reason, "
+                "evidence_count, evidence_set_digest, recorded_at, member_native_version) "
+                "VALUES (:p, :link, 2, 'irv_lineages2mig0002', 1, 'correct_evidence', 'active', "
+                "'user_confirmed', 'local_operator', 'local_cli', 'issues.memberships.add', "
+                "'Synthetic member version.', 0, :digest, now(), 1)"
+            ),
+            {"p": world.principal, "link": world.membership, "digest": "e" * 64},  # type: ignore[attr-defined]
+        )
     with engine.connect() as connection:
         stored = connection.execute(
             text(
@@ -861,11 +893,13 @@ def test_each_downgrade_refusal_family_alone_refuses(
     from tests.database.test_lineage_integrity_guards import _world
 
     del disposable_database
-    command.upgrade(_config(), "head")
+    # At this revision: on the S3 head every fact row takes a commit mark, which
+    # the S3 revision's own refusal would answer first.
+    command.upgrade(_config(), REVISION)
     world = _world(engine, P)
     _REFUSAL_CASES[fact](engine, world)
     with pytest.raises(DBAPIError) as refused:
         command.downgrade(_config(), PREVIOUS)
     assert getattr(refused.value.orig, "sqlstate", None) == RESTRICT_VIOLATION
     assert "refusing to downgrade d020b532ad7d" in str(refused.value)
-    _assert_present(engine)
+    _assert_present(engine, at=REVISION)

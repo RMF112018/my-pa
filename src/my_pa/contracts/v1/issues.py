@@ -8,6 +8,10 @@ answer), `IssueReopeningView` (the `issues.reopen` answer's basis) and
 `ClosureBlockerView` (one blocked mandatory member, `issues.closure_readiness`),
 and `HandoffView` / `HandoffHolderView` (one responsibility handoff event,
 `issues.handoffs.record` and `.list`).
+S3 adds `ContestedLinkView` (one contested link in the Issue's context,
+`issues.closure_readiness`), `HandoffCorrectionView` (one append-only handoff
+correction) and three `HandoffView` keys: `current_effective_at`, `voided` and
+`correction_ids` (`effective_at` keeps its recorded S2 meaning, R3-F18).
 No S1 key changes meaning; `state` may now be `closed` and `action` names the
 S2 actions. No closure evidence digest is ever shown (FR1-F05).
 
@@ -36,20 +40,28 @@ from my_pa.domain.lineage.model import (
 )
 from my_pa.domain.lineage.vocabulary import (
     AcceptanceBasis,
+    EvidenceRole,
+    HandoffCorrectionAction,
     HandoffHolderKind,
     IssueClosureBlocker,
     IssueProjectMembershipState,
     IssueRevisionAction,
     MemberRole,
+    RelationType,
 )
 
 __all__ = [
     "MAX_CLOSURE_BLOCKERS",
+    "MAX_CONTESTED_LINKS",
+    "MAX_HANDOFF_CORRECTIONS",
     "MAX_ISSUE_PROJECT_LINKS",
     "ClosureBlockerView",
+    "ContestedLinkView",
+    "HandoffCorrectionView",
     "HandoffHolderView",
     "HandoffView",
     "IssueClosureView",
+    "IssueHistoryEntryView",
     "IssueListEntry",
     "IssueReopeningView",
     "IssueRevisionView",
@@ -61,6 +73,10 @@ __all__ = [
 MAX_ISSUE_PROJECT_LINKS = 100
 #: At most this many blocked members in one `issues.closure_readiness` (S2 7.2).
 MAX_CLOSURE_BLOCKERS = 100
+#: At most this many contested links in one `issues.closure_readiness` (S3 7.1).
+MAX_CONTESTED_LINKS = 100
+#: At most this many correction ids on one `HandoffView` (S3 7.1).
+MAX_HANDOFF_CORRECTIONS = 32
 
 #: The Issue states: S1's three non-terminal states and S2's `closed`.
 IssueState = Literal["open", "active", "suspended", "closed"]
@@ -100,6 +116,21 @@ class IssueRevisionView(StrictModel):
     @classmethod
     def _revision_id(cls, value: str) -> str:
         return validate_identifier(value, IdKind.ISSUE_REVISION)
+
+
+class IssueHistoryEntryView(IssueRevisionView):
+    """One revision in `issues.history` (S3 section 7.3).
+
+    The S1 `IssueRevisionView` keys plus the revision's own closure basis:
+    `closed_at` and `outcome` (a `closed` or `corrected` revision), `reason`
+    (a `reopened` one) and its closing or reopening evidence set, each anchor
+    visibility-filtered (section 6.4). No digest (FR1-F05).
+    """
+
+    closed_at: UtcDatetime | None = None
+    outcome: str | None = None
+    reason: str | None = Field(default=None, max_length=MAX_LINEAGE_REASON_CHARACTERS)
+    evidence: tuple[EvidenceAnchorView, ...] = Field(default=(), max_length=MAX_EVIDENCE_ANCHORS)
 
 
 class ProjectLinkView(StrictModel):
@@ -245,6 +276,12 @@ class HandoffView(StrictModel):
     evidence: EvidenceAnchorView
     acceptance_basis: AcceptanceBasis
     authority_class: str
+    #: S3 section 7.1: the current effective time at the read's `known_at` (the
+    #: latest known `retime`'s instant, else `effective_at`), whether a `void`
+    #: is known, and the known corrections in `correction_no` order.
+    current_effective_at: UtcDatetime
+    voided: bool
+    correction_ids: tuple[str, ...] = Field(max_length=MAX_HANDOFF_CORRECTIONS)
 
     @field_validator("handoff_id")
     @classmethod
@@ -261,6 +298,72 @@ class HandoffView(StrictModel):
     def _commitment_id(cls, value: str) -> str:
         return validate_identifier(value, IdKind.COMMITMENT)
 
+    @field_validator("correction_ids")
+    @classmethod
+    def _correction_ids(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        for correction_id in value:
+            validate_identifier(correction_id, IdKind.ISSUE_HANDOFF_CORRECTION)
+        return value
+
     def to_canonical_dict(self) -> dict[str, Any]:
         """The JSON-mode representation, with the section 7.1 `from`/`to` keys."""
         return self.model_dump(mode="json", by_alias=True)
+
+
+class HandoffCorrectionView(StrictModel):
+    """One immutable handoff correction (S3 sections 3.3 and 7.1).
+
+    `effective_at` is the retimed instant (`retime`), `null` for a `void`;
+    `evidence` is the one cited anchor (`handoff` for a retime, `contradicts`
+    for a void), its availability computed at read time.
+    """
+
+    correction_id: str
+    handoff_id: str
+    correction_no: int = Field(ge=1)
+    action: HandoffCorrectionAction
+    effective_at: UtcDatetime | None
+    reason: str = Field(min_length=1, max_length=MAX_LINEAGE_REASON_CHARACTERS)
+    evidence: EvidenceAnchorView
+    recorded_at: UtcDatetime
+    authority_class: str
+
+    @field_validator("correction_id")
+    @classmethod
+    def _correction_id(cls, value: str) -> str:
+        return validate_identifier(value, IdKind.ISSUE_HANDOFF_CORRECTION)
+
+    @field_validator("handoff_id")
+    @classmethod
+    def _handoff_id(cls, value: str) -> str:
+        return validate_identifier(value, IdKind.ISSUE_HANDOFF)
+
+    @model_validator(mode="after")
+    def _retime_states_its_instant(self) -> HandoffCorrectionView:
+        retime = self.action is HandoffCorrectionAction.RETIME
+        if retime is not (self.effective_at is not None):
+            raise ValueError("a retime states its effective time; a void none")
+        role = EvidenceRole.HANDOFF if retime else EvidenceRole.CONTRADICTS
+        if self.evidence.role is not role:
+            raise ValueError("a correction cites its action's evidence role")
+        return self
+
+    def to_canonical_dict(self) -> dict[str, Any]:
+        """The JSON-mode representation."""
+        return self.model_dump(mode="json")
+
+
+class ContestedLinkView(StrictModel):
+    """One contested semantic link in an Issue's context (S3 sections 3.2 and 7.1)."""
+
+    link_id: str
+    relation_type: RelationType
+
+    @field_validator("link_id")
+    @classmethod
+    def _link_id(cls, value: str) -> str:
+        return validate_identifier(value, IdKind.RECORD_LINK)
+
+    def to_canonical_dict(self) -> dict[str, Any]:
+        """The JSON-mode representation."""
+        return self.model_dump(mode="json")

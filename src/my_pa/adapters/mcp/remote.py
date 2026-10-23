@@ -82,6 +82,8 @@ _WRITE_PURPOSES: Final = frozenset(
         Purpose.RECORD_LINEAGE_AUTHORING,
         # Record lineage S2: the two composite Work writes' purpose.
         Purpose.ISSUE_WORK_AUTHORING,
+        # Record lineage S3: the operator-only backfill's purpose.
+        Purpose.LINEAGE_BACKFILL,
         Purpose.CONTEXT_PREFERENCE,
         Purpose.GOODNOTES_PROPOSAL,
         Purpose.REPORT_AUTHORING,

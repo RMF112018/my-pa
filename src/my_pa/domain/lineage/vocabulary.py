@@ -1,4 +1,4 @@
-"""Closed vocabularies of record lineage, Slices S1 and S2 (S1 and S2 contracts, section 3).
+"""Closed vocabularies of record lineage, Slices S1, S2 and S3 (each contract's section 3).
 
 Each enum here holds exactly what S1 admits, which is also exactly what the S1
 database CHECKs admit (`docs/architecture/record-lineage-s1-contract.md`
@@ -24,6 +24,15 @@ the Issue states (`closed`), the Issue revision actions (`closed`, `reopened`,
 read-only closure blockers, and widens the capability sets the S2 revision
 (`d020b532ad7d`) restates as frozen literals, in the same change.
 
+**S3** (`docs/architecture/record-lineage-s3-contract.md` section 3) adds the
+relation `related_context`, the link actions `contest` and `reinstate` and the
+state `contested`, the read-only `restricted` availability and the two S3
+completeness codes, the handoff-correction, timeline and backfill vocabularies,
+and the S3 capability sets; the S3 revision restates each as a frozen literal
+in the same change. The backfill's own source, class, reason and run-state
+vocabularies are `domain.lineage_backfill.vocabulary`'s: the dry run reads
+native shapes (a Meeting's Series among them) that lineage itself never reads.
+
 Pure data: this module persists nothing and grants nothing.
 """
 
@@ -42,14 +51,21 @@ from my_pa.domain.knowledge_assertion.vocabulary import (
 __all__ = [
     "ATTESTED_AUTHORITY_CLASSES",
     "ATTESTED_DECISION_CHANNELS",
+    "BACKFILL_WRITE_CAPABILITIES",
     "COMPOSITE_CAPABILITIES",
     "COMPOSITE_ONLY_RELATIONS",
+    "CONTESTABLE_RELATIONS",
     "HANDOFF_CAPABILITIES",
+    "HANDOFF_CORRECTION_CAPABILITIES",
     "ISSUE_AUTHORITY_CLASSES",
     "ISSUE_REVISION_CAPABILITIES",
     "ISSUE_STATES",
+    "LINEAGE_BACKFILL_CAPABILITIES",
+    "LINEAGE_FAMILY_READS",
+    "LINEAGE_READ_GENERATION",
     "LINEAGE_WRITE_CAPABILITIES",
     "LINK_REVISION_CAPABILITIES",
+    "LIVE_LINK_STATES",
     "MANDATORY_MEMBER_ROLES",
     "MEMBERSHIP_EVENT_CAPABILITIES",
     "MEMBER_VERSION_CAPABILITIES",
@@ -57,10 +73,13 @@ __all__ = [
     "RECORD_LINK_CAPABILITIES",
     "RELATION_MATRIX",
     "S1_LINEAGE_WRITE_CAPABILITIES",
+    "S2_LINEAGE_WRITE_CAPABILITIES",
     "AcceptanceBasis",
     "EvidenceAvailability",
     "EvidenceRole",
     "EvidenceSourceFamily",
+    "ExistingLinkState",
+    "HandoffCorrectionAction",
     "HandoffHolderKind",
     "HandoffSide",
     "IssueClosureBlocker",
@@ -78,6 +97,7 @@ __all__ = [
     "Selector",
     "SituationKind",
     "SourceVersionKind",
+    "TimelineEntryKind",
 ]
 
 
@@ -140,7 +160,11 @@ class RecordLinkKind(StrEnum):
 
 
 class RelationType(StrEnum):
-    """The S1 relation types (S1 section 3.1) and the four S2 adds (S2 section 3.1)."""
+    """The S1 relation types (S1 section 3.1), the four S2 adds (S2 section 3.1) and S3's one.
+
+    S3 (section 3.1) adds `related_context`: symmetric, stored once in canonical
+    order, and always Issue-scoped.
+    """
 
     ISSUE_MEMBER = "issue_member"
     ORIGINATED_FROM = "originated_from"
@@ -149,6 +173,7 @@ class RelationType(StrEnum):
     ESCALATED_FROM = "escalated_from"
     BLOCKS = "blocks"
     CREATED_TO_RESOLVE = "created_to_resolve"
+    RELATED_CONTEXT = "related_context"
 
 
 class MemberRole(StrEnum):
@@ -169,18 +194,21 @@ class Selector(StrEnum):
 
 
 class LinkRevisionAction(StrEnum):
-    """One revision of a record link."""
+    """One revision of a record link. S3 (section 3.1) adds `contest` and `reinstate`."""
 
     ASSERT = "assert"
     END = "end"
     CORRECT_EVIDENCE = "correct_evidence"
+    CONTEST = "contest"
+    REINSTATE = "reinstate"
 
 
 class LinkLifecycleState(StrEnum):
-    """Where a record link stands after a revision."""
+    """Where a record link stands after a revision. S3 adds `contested` (section 3.1)."""
 
     ACTIVE = "active"
     ENDED = "ended"
+    CONTESTED = "contested"
 
 
 class AcceptanceBasis(StrEnum):
@@ -222,15 +250,24 @@ class EvidenceAvailability(StrEnum):
     AVAILABLE = "available"
     ARCHIVED = "archived"
     LEGACY_UNVERSIONED = "legacy_unversioned"
+    #: S3 (section 6.4): a legacy Capture anchor whose root now has a
+    #: `restricted_local` version.
+    RESTRICTED = "restricted"
 
 
 class LineageCompleteness(StrEnum):
-    """Read-only: what a `records.lineage` answer is able to claim."""
+    """Read-only: what a `records.lineage` answer is able to claim.
+
+    S3 (section 3) adds `restricted_evidence` and `scope_changed_restart_required`;
+    `domain.lineage.asof.completeness` orders the codes by section 3's precedence.
+    """
 
     COMPLETE = "complete"
     TRUNCATED_BUDGET = "truncated_budget"
     UNRESOLVED_AMBIGUITY = "unresolved_ambiguity"
     PARTIAL_NATIVE_HISTORY = "partial_native_history"
+    RESTRICTED_EVIDENCE = "restricted_evidence"
+    SCOPE_CHANGED_RESTART_REQUIRED = "scope_changed_restart_required"
 
 
 class NativeVirtualEdge(StrEnum):
@@ -268,6 +305,34 @@ class IssueClosureBlocker(StrEnum):
     RESOLUTION_EVIDENCE_UNAVAILABLE = "resolution_evidence_unavailable"
     RESOLUTION_EVIDENCE_CONTRADICTED = "resolution_evidence_contradicted"
     RESOLUTION_EVIDENCE_STALE = "resolution_evidence_stale"
+
+
+class HandoffCorrectionAction(StrEnum):
+    """S3 section 3.3: how one append-only correction changes one handoff's meaning."""
+
+    RETIME = "retime"
+    VOID = "void"
+
+
+class TimelineEntryKind(StrEnum):
+    """Read-only: one `issues.timeline` entry's kind, in the section 7.3 table order."""
+
+    ISSUE_REVISION = "issue_revision"
+    PROJECT_LINK = "project_link"
+    MEMBERSHIP = "membership"
+    ASSOCIATION = "association"
+    HANDOFF = "handoff"
+    HANDOFF_CORRECTION = "handoff_correction"
+    NATIVE_EVENT = "native_event"
+
+
+class ExistingLinkState(StrEnum):
+    """Read-only: the state, at a run's cutoff, of a link between a candidate's endpoints."""
+
+    NONE = "none"
+    ACTIVE = "active"
+    CONTESTED = "contested"
+    ENDED = "ended"
 
 
 #: The Issue states admitted on `issue_revisions`: S1's three non-terminal
@@ -316,13 +381,16 @@ RECORD_LINK_CAPABILITIES: Final[frozenset[str]] = (
     frozenset({"issues.memberships.add", "records.associations.assert"}) | COMPOSITE_CAPABILITIES
 )
 
-#: The capabilities that write a record link revision.
+#: The capabilities that write a record link revision. S3 (section 3) adds
+#: `records.associations.contest` and `records.associations.reinstate`.
 LINK_REVISION_CAPABILITIES: Final[frozenset[str]] = RECORD_LINK_CAPABILITIES | frozenset(
     {
         "issues.memberships.end",
         "issues.memberships.correct",
         "records.associations.correct",
         "records.associations.end",
+        "records.associations.contest",
+        "records.associations.reinstate",
     }
 )
 
@@ -350,14 +418,46 @@ S1_LINEAGE_WRITE_CAPABILITIES: Final[frozenset[str]] = frozenset(
     }
 )
 
-#: The fifteen lineage write capabilities (`lineage_write_requests.capability`):
-#: S1's nine and S2's six.
+#: The six S2 write capabilities, as S2 named them.
+S2_LINEAGE_WRITE_CAPABILITIES: Final[frozenset[str]] = frozenset(
+    {
+        "issues.close",
+        "issues.reopen",
+        "issues.memberships.correct",
+        "issues.handoffs.record",
+        "issues.work.create_task",
+        "issues.work.create_commitment",
+    }
+)
+
+#: S3 section 3.3: the capability that writes a handoff correction (the
+#: fact-writing set of `issue_responsibility_corrections`).
+HANDOFF_CORRECTION_CAPABILITIES: Final[frozenset[str]] = frozenset({"issues.handoffs.correct"})
+
+#: S3 section 8.3: the backfill write. It writes ledger rows only -- no fact and
+#: no commit mark.
+BACKFILL_WRITE_CAPABILITIES: Final[frozenset[str]] = frozenset({"records.backfill.plan"})
+
+#: The nineteen lineage write capabilities (`lineage_write_requests.capability`):
+#: S1's nine, S2's six and S3's four.
 LINEAGE_WRITE_CAPABILITIES: Final[frozenset[str]] = (
     ISSUE_REVISION_CAPABILITIES
     | MEMBERSHIP_EVENT_CAPABILITIES
     | LINK_REVISION_CAPABILITIES
     | HANDOFF_CAPABILITIES
+    | HANDOFF_CORRECTION_CAPABILITIES
+    | BACKFILL_WRITE_CAPABILITIES
 )
+
+#: S3 section 7.7: the two operator-only backfill capabilities, withheld unless
+#: both the lineage switch and `MY_PA_LINEAGE_BACKFILL_ENABLED` are on.
+LINEAGE_BACKFILL_CAPABILITIES: Final[frozenset[str]] = frozenset(
+    {"records.backfill.plan", "records.backfill.report"}
+)
+
+#: S3 section 3: bumped by any change to traversal, visibility, ordering or
+#: paging rules, and bound in every lineage cursor (section 5).
+LINEAGE_READ_GENERATION: Final = 1
 
 #: The identifier kind every endpoint family's record id carries.
 RECORD_FAMILY_ID_KINDS: Final[MappingProxyType[RecordFamily, IdKind]] = MappingProxyType(
@@ -372,6 +472,20 @@ RECORD_FAMILY_ID_KINDS: Final[MappingProxyType[RecordFamily, IdKind]] = MappingP
     }
 )
 
+#: S3 section 6.4: a remote reader sees a lineage family only while it holds a
+#: grant on one of these reads (precedent `RECORD_EVENT_FAMILY_READS`).
+LINEAGE_FAMILY_READS: Final[MappingProxyType[RecordFamily, frozenset[str]]] = MappingProxyType(
+    {
+        RecordFamily.SITUATION: frozenset({"issues.read", "issues.list"}),
+        RecordFamily.MEETING: frozenset({"meetings.read", "meetings.list"}),
+        RecordFamily.MEETING_NOTE_VERSION: frozenset({"meetings.read", "meetings.list"}),
+        RecordFamily.TASK: frozenset({"tasks.read", "tasks.list"}),
+        RecordFamily.COMMITMENT: frozenset({"commitments.read", "commitments.list"}),
+        RecordFamily.CONSTRAINT: frozenset({"constraints.read", "constraints.list"}),
+        RecordFamily.CAPTURE_VERSION: frozenset({"capture.read", "capture.list"}),
+    }
+)
+
 #: The membership roles the closure gate evaluates (S2 section 3.3).
 MANDATORY_MEMBER_ROLES: Final[frozenset[MemberRole]] = frozenset(
     {MemberRole.WORK, MemberRole.CONSTRAINT}
@@ -381,6 +495,28 @@ MANDATORY_MEMBER_ROLES: Final[frozenset[MemberRole]] = frozenset(
 #: `records.associations.assert` refuses them as it refuses `issue_member`.
 COMPOSITE_ONLY_RELATIONS: Final[frozenset[RelationType]] = frozenset(
     {RelationType.DELEGATED_FROM, RelationType.CREATED_TO_RESOLVE}
+)
+
+#: S3 section 3: the link states that hold an identity and are traversed.
+LIVE_LINK_STATES: Final[frozenset[LinkLifecycleState]] = frozenset(
+    {LinkLifecycleState.ACTIVE, LinkLifecycleState.CONTESTED}
+)
+
+#: S3 section 3.1: the relations `contest` admits -- every semantic relation.
+CONTESTABLE_RELATIONS: Final[frozenset[RelationType]] = frozenset(RelationType) - {
+    RelationType.ISSUE_MEMBER
+}
+
+#: S3 section 3.1: the six families a `related_context` link may join, both ways.
+_RELATED_CONTEXT_FAMILIES: Final = frozenset(
+    {
+        RecordFamily.MEETING,
+        RecordFamily.MEETING_NOTE_VERSION,
+        RecordFamily.TASK,
+        RecordFamily.COMMITMENT,
+        RecordFamily.CONSTRAINT,
+        RecordFamily.CAPTURE_VERSION,
+    }
 )
 
 #: The section 3.1 relation matrix: `relation -> (kind, from families, to families)`.
@@ -443,6 +579,12 @@ RELATION_MATRIX: Final[
             RecordLinkKind.SEMANTIC,
             frozenset({RecordFamily.TASK, RecordFamily.COMMITMENT}),
             frozenset({RecordFamily.SITUATION, RecordFamily.CONSTRAINT}),
+        ),
+        # S3 section 3.1.
+        RelationType.RELATED_CONTEXT: (
+            RecordLinkKind.SEMANTIC,
+            _RELATED_CONTEXT_FAMILIES,
+            _RELATED_CONTEXT_FAMILIES,
         ),
     }
 )

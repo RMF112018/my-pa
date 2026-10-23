@@ -48,6 +48,8 @@ from sqlalchemy.exc import DBAPIError
 from tests.schema.knowledge_schema_ahead_contract import current_gap
 from tests.schema.lineage_s2_schema_ahead_contract import S2_CAPABILITIES as LINEAGE_S2_CAPABILITIES
 from tests.schema.lineage_s2_schema_ahead_contract import S2_PURPOSES as LINEAGE_S2_PURPOSES
+from tests.schema.lineage_s3_schema_ahead_contract import S3_CAPABILITIES as LINEAGE_S3_CAPABILITIES
+from tests.schema.lineage_s3_schema_ahead_contract import S3_PURPOSES as LINEAGE_S3_PURPOSES
 from tests.schema.lineage_schema_ahead_contract import S1_CAPABILITIES as LINEAGE_S1_CAPABILITIES
 from tests.schema.lineage_schema_ahead_contract import S1_PURPOSES as LINEAGE_S1_PURPOSES
 from tests.schema.test_meeting_records_migration import _audit, _seed_meeting
@@ -66,7 +68,7 @@ REVISION: Final = "1d9b248e7f83"
 #: The chain head. `0641c354ca85` (CRL-WP-03, Capture lifecycle) is additive on
 #: `REVISION`, so `REVISION` is no longer the head; a database upgraded to head
 #: stands there, and a refused downgrade leaves it there.
-HEAD: Final = "d020b532ad7d"
+HEAD: Final = "6f1476b8da52"
 PREVIOUS: Final = "7d9a450dfd07"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20260929_1d9b248e7f83_record_events.py"
@@ -135,7 +137,8 @@ def test_the_revision_is_directly_on_7d9a450dfd07_under_one_later_head() -> None
     script = ScriptDirectory.from_config(_config())
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "264310e0416a"
+    assert script.get_revision(HEAD).down_revision == "d020b532ad7d"
+    assert script.get_revision("d020b532ad7d").down_revision == "264310e0416a"
     assert script.get_revision("264310e0416a").down_revision == "b9025e7fb738"
     assert script.get_revision("b9025e7fb738").down_revision == "5c1e7a9b3d42"
     assert script.get_revision("5c1e7a9b3d42").down_revision == "c8f7ae406d47"
@@ -241,8 +244,14 @@ def test_head_admits_every_declared_capability_and_purpose() -> None:
         {capability.value for capability in Capability}
         - LINEAGE_S1_CAPABILITIES
         - LINEAGE_S2_CAPABILITIES
+        - LINEAGE_S3_CAPABILITIES
     )
-    purposes = {purpose.value for purpose in Purpose} - LINEAGE_S1_PURPOSES - LINEAGE_S2_PURPOSES
+    purposes = (
+        {purpose.value for purpose in Purpose}
+        - LINEAGE_S1_PURPOSES
+        - LINEAGE_S2_PURPOSES
+        - LINEAGE_S3_PURPOSES
+    )
     assert declared <= at
     assert purposes <= purposes_at
     assert at - declared == {capability.value for capability in NativeSourceCapability} | set(

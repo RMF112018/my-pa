@@ -55,7 +55,7 @@ def manifest(implemented: frozenset[Capability] = EVERYTHING) -> CapabilityManif
 
 def test_manifest_lists_every_capability_exactly_once() -> None:
     names = [status.name for status in manifest().capabilities]
-    assert len(names) == len(Capability) == 214
+    assert len(names) == len(Capability) == 222
     assert set(names) == set(Capability)
     assert len(set(names)) == len(names)
 
@@ -276,6 +276,15 @@ def test_capability_names_match_the_published_contract() -> None:
         "issues.handoffs.list",
         "issues.work.create_task",
         "issues.work.create_commitment",
+        # Record lineage S3 (S3 contract section 7).
+        "records.associations.contest",
+        "records.associations.reinstate",
+        "records.associations.history",
+        "issues.history",
+        "issues.timeline",
+        "issues.handoffs.correct",
+        "records.backfill.plan",
+        "records.backfill.report",
     }
 
 
@@ -333,6 +342,10 @@ def test_the_operator_only_set_is_enrollment_and_governed_identity_correction() 
         Capability.ENTITIES_MERGE,
         Capability.ENTITIES_SPLIT_PREVIEW,
         Capability.ENTITIES_SPLIT,
+        # Record lineage S3 (section 6.1): the backfill dry run reads the whole
+        # native corpus and writes a durable ledger.
+        Capability.RECORDS_BACKFILL_PLAN,
+        Capability.RECORDS_BACKFILL_REPORT,
     }
     assert is_operator_only(Capability.SOURCES_ENROLL)
     assert is_operator_only(Capability.ENTITIES_MERGE_PREVIEW)

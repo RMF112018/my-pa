@@ -356,6 +356,12 @@ def test_downgrading_one_step_removes_exactly_this_table_and_restores_the_origin
         "issue_revision_evidence",
         "issue_responsibility_events",
         "lineage_write_request_links",
+        # Record lineage S3 stacks its five.
+        "lineage_commit_sequences",
+        "lineage_commit_marks",
+        "issue_responsibility_corrections",
+        "lineage_backfill_runs",
+        "lineage_backfill_items",
     }
     # The rest of the entity plane survives the downgrade of this revision alone.
     assert {

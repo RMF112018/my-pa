@@ -369,6 +369,9 @@ DECLARED: Final = frozenset(
         # KLP-WP-06: the Knowledge Assertion context plane applies the R6
         # section 5.2 terms (remote withholding, local class/availability flags).
         Capability.CONTEXT_PREPARE,
+        # Record lineage S3 (section 7.3, R3-F03): the Issue timeline's native
+        # plane imports the feed's own visibility predicate, OD-8 term included.
+        Capability.ISSUES_TIMELINE,
     }
 )
 
@@ -453,6 +456,17 @@ BEYOND_THE_NINE: Final = {
         "and `current_version_id` to `memory_version_id` under the Principal partition and "
         "compares the version's `classification`, and whose Knowledge term compares every "
         "cited memory version's `classification`. No memory column enters the answer."
+    ),
+    Capability.ISSUES_TIMELINE: (
+        "purpose `issue_read`. `issues.timeline` (record lineage S3) reads two of the eight "
+        "(`relationship_memories`, `relationship_memory_versions`) and writes none of the "
+        "eight, and only for a remote caller: its native plane passes the feed's own "
+        "visibility predicate, imported whole (R3-F03), whose OD-8 (i) `EXISTS` joins "
+        "`memory_id` and `current_version_id` to `memory_version_id` under the Principal "
+        "partition and compares the version's `classification`. Its families are an Issue "
+        "member's (Task, Commitment, Constraint, Meeting, Capture), never "
+        "`relationship_memory`, so the term matches no event. No memory column enters the "
+        "answer."
     ),
     Capability.CONTEXT_PREPARE: (
         "purpose `context_preparation`. `context.prepare` (KLP-WP-06) reads one of the eight "
@@ -602,6 +616,11 @@ DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str
     ),
     # KLP-WP-05: the same predicate, on the event and its cited triggers.
     Capability.RECORD_EVENTS_PROVENANCE: (
+        frozenset({"relationship_memories", "relationship_memory_versions"}),
+        frozenset(),
+    ),
+    # Record lineage S3: the same predicate, on the Issue timeline's native plane.
+    Capability.ISSUES_TIMELINE: (
         frozenset({"relationship_memories", "relationship_memory_versions"}),
         frozenset(),
     ),
@@ -3230,6 +3249,9 @@ def test_the_port_crossings_that_reach_a_memory_row_are_the_two_planes() -> None
     """
     crossings = _memory_reaching_port_methods()
     assert set(crossings) == {
+        # Record lineage S3: the Issue timeline's native plane is the feed
+        # module's own read under the OD-8 predicate (`issue_member_events`).
+        "IssueTimelineRepository",
         "KnowledgeAssertionRepository",
         "RecordEventReader",
         "RelationshipMemoryProposalRepository",
@@ -3243,6 +3265,11 @@ def test_the_port_crossings_that_reach_a_memory_row_are_the_two_planes() -> None
         "the producer's crossing is now "
         f"{sorted(crossings['RelationshipMemoryProposalRepository'])}; the whole claim about "
         "that port is that it has exactly one method and a producer can call nothing else"
+    )
+    assert crossings["IssueTimelineRepository"] == frozenset({"native_events"}), (
+        "the Issue timeline's crossings are now "
+        f"{sorted(crossings['IssueTimelineRepository'])}; only its native-plane read applies "
+        "the feed's OD-8 restricted-memory predicate"
     )
     # KLP-WP-05: `event_provenance` applies the same predicate to an event and
     # its cited triggers.

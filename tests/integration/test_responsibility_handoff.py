@@ -167,7 +167,14 @@ def test_closing_a_commitment_writes_no_handoff(runtime: S2Runtime) -> None:
     runtime.close_commitment(commitment, "no-infer-close")
     assert _events(runtime) == 0
     page = _ok(runtime, ListIssueHandoffs(issue_id=issue, commitment_id=commitment))
-    assert page == {"handoffs": [], "next_cursor": None}
+    # S3 section 7.1 lockstep: the page also reports the cut it was read at.
+    assert page == {
+        "handoffs": [],
+        "next_cursor": None,
+        "known_at": page["known_at"],
+        # S3 section 6.4 lockstep: nothing withheld.
+        "restricted": False,
+    }
     after = runtime.commitment_view(commitment)
     assert after["state"] == "closed"
     assert after["counterparty_entity_id"] == before["counterparty_entity_id"]
@@ -461,7 +468,15 @@ def test_no_handoff_is_inferred_for_a_delegate(runtime: S2Runtime) -> None:
     runtime.close_commitment(commitment, "delegate-c2")
     runtime.transition(task_id, TaskLifecycleState.COMPLETED, "delegate-t1")
     assert _events(runtime) == 0
-    assert _ok(runtime, ListIssueHandoffs(issue_id=issue)) == {"handoffs": [], "next_cursor": None}
+    empty = _ok(runtime, ListIssueHandoffs(issue_id=issue))
+    # S3 section 7.1 lockstep: the page also reports the cut it was read at.
+    assert empty == {
+        "handoffs": [],
+        "next_cursor": None,
+        "known_at": empty["known_at"],
+        # S3 section 6.4 lockstep: nothing withheld.
+        "restricted": False,
+    }
 
 
 # ---- the ledger read and the chain rules ------------------------------------------------------
@@ -489,9 +504,14 @@ def test_handoffs_list_returns_the_sequence_in_order(runtime: S2Runtime) -> None
     assert page["handoffs"] + rest["handoffs"] == [written["handoff"] for written in recorded]
     chain = _ok(runtime, ListIssueHandoffs(issue_id=issue, commitment_id=first))
     assert [event["sequence_no"] for event in chain["handoffs"]] == [1, 2]
-    assert _ok(runtime, ListIssueHandoffs(issue_id=issue, commitment_id=quiet)) == {
+    quiet_page = _ok(runtime, ListIssueHandoffs(issue_id=issue, commitment_id=quiet))
+    # S3 section 7.1 lockstep: the page also reports the cut it was read at.
+    assert quiet_page == {
         "handoffs": [],
         "next_cursor": None,
+        "known_at": quiet_page["known_at"],
+        # S3 section 6.4 lockstep: nothing withheld.
+        "restricted": False,
     }
     assert _refused(
         runtime, ListIssueHandoffs(issue_id=issue, commitment_id=second, after=ids[0])

@@ -1834,6 +1834,54 @@
           "version": "v1",
           "availability": "available",
           "operator_only": false
+        },
+        {
+          "name": "records.associations.contest",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "records.associations.reinstate",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "records.associations.history",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "issues.history",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "issues.timeline",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "issues.handoffs.correct",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "records.backfill.plan",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": true
+        },
+        {
+          "name": "records.backfill.report",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": true
         }
       ],
       "content_types": [
@@ -1860,11 +1908,11 @@
     "readiness": {
       "state": "degraded",
       "contract_version": "v1",
-      "implemented_capabilities": 214,
-      "total_capabilities": 214,
+      "implemented_capabilities": 222,
+      "total_capabilities": 222,
       "limitations": [
         "Content types awaiting an operator decision: application/pdf. They are reported rather than silently skipped.",
-        "Listings stop at the page size; truncation is disclosed. These issue a continuation cursor: commitments.history, commitments.list, commitments.search, commitments.waiting_on, constraint_sync.conflicts, constraint_sync.delta, constraints.history, constraints.list, constraints.portfolio_list, constraints.portfolio_search, constraints.search, continuity.projects, entities.addresses.list, entities.aliases.list, entities.assignments.list, entities.communication.list, entities.graph, entities.identifiers.list, entities.identity_history, entities.names.list, entities.observations.list, entities.participations.list, entities.relationships, entities.search, entities.unresolved_mentions, goodnotes.notebooks.list, goodnotes.pages.list, goodnotes.pull, goodnotes.runs.list, goodnotes.search, issues.handoffs.list, issues.list, knowledge.assertions.list, knowledge.assertions.search, knowledge.search, meetings.list, meetings.notes.versions, meetings.search, record_events.list, relationship_memory.history, relationship_memory.list, relationship_memory.search, reports.list, review.list, tasks.comments.list, tasks.history, tasks.list, tasks.search. Every other listing does not, so a caller cannot ask for the next page.",
+        "Listings stop at the page size; truncation is disclosed. These issue a continuation cursor: commitments.history, commitments.list, commitments.search, commitments.waiting_on, constraint_sync.conflicts, constraint_sync.delta, constraints.history, constraints.list, constraints.portfolio_list, constraints.portfolio_search, constraints.search, continuity.projects, entities.addresses.list, entities.aliases.list, entities.assignments.list, entities.communication.list, entities.graph, entities.identifiers.list, entities.identity_history, entities.names.list, entities.observations.list, entities.participations.list, entities.relationships, entities.search, entities.unresolved_mentions, goodnotes.notebooks.list, goodnotes.pages.list, goodnotes.pull, goodnotes.runs.list, goodnotes.search, issues.handoffs.list, issues.history, issues.list, issues.timeline, knowledge.assertions.list, knowledge.assertions.search, knowledge.search, meetings.list, meetings.notes.versions, meetings.search, record_events.list, records.associations.history, records.backfill.report, records.lineage, relationship_memory.history, relationship_memory.list, relationship_memory.search, reports.list, review.list, tasks.comments.list, tasks.history, tasks.list, tasks.search. Every other listing does not, so a caller cannot ask for the next page.",
         "Model proposals and semantic retrieval are disabled; deterministic lexical retrieval remains active.",
         "Worker-plane health is unavailable, stale, absent for queued work, or reports dead-lettered work; inspect worker_planes."
       ]
@@ -4484,25 +4532,51 @@
       {
         "family": "task",
         "record_id": "tsk_aaaaaaaa11111111",
-        "depth": 0
+        "depth": 0,
+        "reached_from": null,
+        "reached_via": null
       },
       {
         "family": "meeting_note_version",
         "record_id": "mnote_aaaaaaaa11111111",
         "depth": 1,
-        "meeting_id": "mtg_aaaaaaaa11111111"
+        "meeting_id": "mtg_aaaaaaaa11111111",
+        "reached_from": {
+          "family": "task",
+          "record_id": "tsk_aaaaaaaa11111111"
+        },
+        "reached_via": {
+          "edge": "typed",
+          "link_id": "irl_bbbbbbbb22222222"
+        }
       },
       {
         "family": "situation",
         "record_id": "sit_aaaaaaaa11111111",
         "depth": 1,
         "title": "Synthetic Issue",
-        "state": "open"
+        "state": "open",
+        "reached_from": {
+          "family": "task",
+          "record_id": "tsk_aaaaaaaa11111111"
+        },
+        "reached_via": {
+          "edge": "typed",
+          "link_id": "irl_aaaaaaaa11111111"
+        }
       },
       {
         "family": "meeting",
         "record_id": "mtg_aaaaaaaa11111111",
-        "depth": 2
+        "depth": 2,
+        "reached_from": {
+          "family": "meeting_note_version",
+          "record_id": "mnote_aaaaaaaa11111111"
+        },
+        "reached_via": {
+          "edge": "virtual",
+          "edge_type": "meeting_note_version_of"
+        }
       }
     ],
     "typed_edges": [
@@ -4578,6 +4652,13 @@
       }
     ],
     "complete_state": "complete",
+    "qualifiers": [
+      "complete"
+    ],
+    "known_at": "2026-08-09T12:00:00.000000Z",
+    "valid_at": "2026-08-09T12:00:00.000000Z",
+    "lineage_valid_at": "2026-08-09T12:00:00.000000Z",
+    "native_cut_at": "2026-08-09T12:00:00.000000Z",
     "next_cursor": null
   },
   "meetings.notes.read_version": {
@@ -4593,5 +4674,417 @@
       "body_markdown": "Synthetic note: pour the north slab after the inspection."
     },
     "evidence_availability": "available"
+  },
+  "issues.list": {
+    "issues": [
+      {
+        "issue_id": "sit_bbbbbbbb22222222",
+        "version": 2,
+        "state": "active",
+        "title": "Synthetic second Issue",
+        "updated_at": "2026-08-09T12:00:00.000Z"
+      },
+      {
+        "issue_id": "sit_aaaaaaaa11111111",
+        "version": 1,
+        "state": "open",
+        "title": "Synthetic Issue",
+        "updated_at": "2026-08-09T12:00:00.000Z"
+      }
+    ],
+    "next_cursor": "sit_aaaaaaaa11111111",
+    "restricted": false
+  },
+  "issues.read": {
+    "issue": {
+      "issue_id": "sit_aaaaaaaa11111111",
+      "kind": "issue_workstream",
+      "version": 1,
+      "state": "open",
+      "title": "Synthetic Issue",
+      "description": "Synthetic description of the north slab pour.",
+      "opened_at": "2026-08-09T12:00:00.000Z",
+      "created_at": "2026-08-09T12:00:00.000Z",
+      "updated_at": "2026-08-09T12:00:00.000Z",
+      "project_links": [
+        {
+          "project_id": "prj_aaaaaaaa11111111",
+          "project_situation_id": "psit_aaaaaaaa11111111",
+          "state": "active",
+          "membership_revision_no": 1,
+          "acceptance_basis": "user_confirmed",
+          "evidence_anchor_id": null,
+          "recorded_at": "2026-08-09T12:00:00.000Z"
+        }
+      ],
+      "project_links_truncated": false,
+      "closure": null
+    },
+    "restricted": false
+  },
+  "issues.timeline": {
+    "issue_id": "sit_aaaaaaaa11111111",
+    "known_at": "2026-08-09T12:00:00.000000Z",
+    "valid_at": "2026-08-09T12:00:00.000000Z",
+    "lineage_valid_at": "2026-08-09T12:00:00.000000Z",
+    "entries": [
+      {
+        "entry_id": "irs_aaaaaaaa11111111",
+        "kind": "issue_revision",
+        "plane": "lineage",
+        "at": "2026-08-09T12:00:00.000000Z",
+        "recorded_at": "2026-08-09T12:00:00.000000Z",
+        "subject": {
+          "family": "situation",
+          "record_id": "sit_aaaaaaaa11111111"
+        },
+        "action": "created",
+        "historical_fields_partial": false,
+        "issue_version": 1,
+        "state": "open",
+        "title": "Synthetic Issue",
+        "closed_at": null,
+        "outcome": null,
+        "project_id": null,
+        "membership_revision_no": null,
+        "link_state": null,
+        "link_id": null,
+        "revision_no": null,
+        "relation_type": null,
+        "member_role": null,
+        "lifecycle_state": null,
+        "from": null,
+        "to": null,
+        "handoff_id": null,
+        "commitment_id": null,
+        "sequence_no": null,
+        "from_holder": null,
+        "to_holder": null,
+        "voided": null,
+        "correction_id": null,
+        "correction_action": null,
+        "corrected_effective_at": null,
+        "native": null,
+        "recorded_fields": null
+      },
+      {
+        "entry_id": "ipme_aaaaaaaa11111111",
+        "kind": "project_link",
+        "plane": "lineage",
+        "at": "2026-08-09T12:00:00.000000Z",
+        "recorded_at": "2026-08-09T12:00:00.000000Z",
+        "subject": null,
+        "action": "assert",
+        "historical_fields_partial": false,
+        "issue_version": null,
+        "state": null,
+        "title": null,
+        "closed_at": null,
+        "outcome": null,
+        "project_id": "prj_aaaaaaaa11111111",
+        "membership_revision_no": 1,
+        "link_state": "active",
+        "link_id": null,
+        "revision_no": null,
+        "relation_type": null,
+        "member_role": null,
+        "lifecycle_state": null,
+        "from": null,
+        "to": null,
+        "handoff_id": null,
+        "commitment_id": null,
+        "sequence_no": null,
+        "from_holder": null,
+        "to_holder": null,
+        "voided": null,
+        "correction_id": null,
+        "correction_action": null,
+        "corrected_effective_at": null,
+        "native": null,
+        "recorded_fields": null
+      },
+      {
+        "entry_id": "irv_aaaaaaaa11111111",
+        "kind": "membership",
+        "plane": "lineage",
+        "at": "2026-08-09T12:00:00.000000Z",
+        "recorded_at": "2026-08-09T12:00:00.000000Z",
+        "subject": {
+          "family": "task",
+          "record_id": "tsk_aaaaaaaa11111111"
+        },
+        "action": "assert",
+        "historical_fields_partial": false,
+        "issue_version": null,
+        "state": null,
+        "title": null,
+        "closed_at": null,
+        "outcome": null,
+        "project_id": null,
+        "membership_revision_no": null,
+        "link_state": null,
+        "link_id": "irl_aaaaaaaa11111111",
+        "revision_no": 1,
+        "relation_type": "issue_member",
+        "member_role": "work",
+        "lifecycle_state": "active",
+        "from": {
+          "family": "situation",
+          "record_id": "sit_aaaaaaaa11111111"
+        },
+        "to": {
+          "family": "task",
+          "record_id": "tsk_aaaaaaaa11111111"
+        },
+        "handoff_id": null,
+        "commitment_id": null,
+        "sequence_no": null,
+        "from_holder": null,
+        "to_holder": null,
+        "voided": null,
+        "correction_id": null,
+        "correction_action": null,
+        "corrected_effective_at": null,
+        "native": null,
+        "recorded_fields": null
+      },
+      {
+        "entry_id": "irv_bbbbbbbb22222222",
+        "kind": "association",
+        "plane": "lineage",
+        "at": "2026-08-09T12:00:00.000000Z",
+        "recorded_at": "2026-08-09T12:00:00.000000Z",
+        "subject": null,
+        "action": "contest",
+        "historical_fields_partial": false,
+        "issue_version": null,
+        "state": null,
+        "title": null,
+        "closed_at": null,
+        "outcome": null,
+        "project_id": null,
+        "membership_revision_no": null,
+        "link_state": null,
+        "link_id": "irl_bbbbbbbb22222222",
+        "revision_no": 2,
+        "relation_type": "originated_from",
+        "member_role": null,
+        "lifecycle_state": "contested",
+        "from": {
+          "family": "task",
+          "record_id": "tsk_aaaaaaaa11111111"
+        },
+        "to": {
+          "family": "meeting_note_version",
+          "record_id": "mnote_aaaaaaaa11111111"
+        },
+        "handoff_id": null,
+        "commitment_id": null,
+        "sequence_no": null,
+        "from_holder": null,
+        "to_holder": null,
+        "voided": null,
+        "correction_id": null,
+        "correction_action": null,
+        "corrected_effective_at": null,
+        "native": null,
+        "recorded_fields": null
+      },
+      {
+        "entry_id": "ihnd_aaaaaaaa11111111",
+        "kind": "handoff",
+        "plane": "lineage",
+        "at": "2026-08-09T12:00:00.000000Z",
+        "recorded_at": "2026-08-09T12:00:00.000000Z",
+        "subject": {
+          "family": "commitment",
+          "record_id": "cmt_aaaaaaaa11111111"
+        },
+        "action": "recorded",
+        "historical_fields_partial": false,
+        "issue_version": null,
+        "state": null,
+        "title": null,
+        "closed_at": null,
+        "outcome": null,
+        "project_id": null,
+        "membership_revision_no": null,
+        "link_state": null,
+        "link_id": null,
+        "revision_no": null,
+        "relation_type": null,
+        "member_role": null,
+        "lifecycle_state": null,
+        "from": null,
+        "to": null,
+        "handoff_id": "ihnd_aaaaaaaa11111111",
+        "commitment_id": "cmt_aaaaaaaa11111111",
+        "sequence_no": 1,
+        "from_holder": {
+          "kind": "principal",
+          "entity_id": null
+        },
+        "to_holder": {
+          "kind": "entity",
+          "entity_id": "ent_aaaaaaaa11111111"
+        },
+        "voided": false,
+        "correction_id": null,
+        "correction_action": null,
+        "corrected_effective_at": null,
+        "native": null,
+        "recorded_fields": null
+      },
+      {
+        "entry_id": "ihcr_aaaaaaaa11111111",
+        "kind": "handoff_correction",
+        "plane": "lineage",
+        "at": "2026-08-09T12:00:00.000000Z",
+        "recorded_at": "2026-08-09T12:00:00.000000Z",
+        "subject": {
+          "family": "commitment",
+          "record_id": "cmt_aaaaaaaa11111111"
+        },
+        "action": "retime",
+        "historical_fields_partial": false,
+        "issue_version": null,
+        "state": null,
+        "title": null,
+        "closed_at": null,
+        "outcome": null,
+        "project_id": null,
+        "membership_revision_no": null,
+        "link_state": null,
+        "link_id": null,
+        "revision_no": null,
+        "relation_type": null,
+        "member_role": null,
+        "lifecycle_state": null,
+        "from": null,
+        "to": null,
+        "handoff_id": "ihnd_aaaaaaaa11111111",
+        "commitment_id": null,
+        "sequence_no": null,
+        "from_holder": null,
+        "to_holder": null,
+        "voided": null,
+        "correction_id": "ihcr_aaaaaaaa11111111",
+        "correction_action": "retime",
+        "corrected_effective_at": "2026-08-09T12:00:00.000000Z",
+        "native": null,
+        "recorded_fields": null
+      },
+      {
+        "entry_id": "rcev_aaaaaaaa11111111",
+        "kind": "native_event",
+        "plane": "native",
+        "at": "2026-08-09T12:00:00.000000Z",
+        "recorded_at": "2026-08-09T12:00:00.000000Z",
+        "subject": {
+          "family": "task",
+          "record_id": "tsk_aaaaaaaa11111111"
+        },
+        "action": "updated",
+        "historical_fields_partial": true,
+        "issue_version": null,
+        "state": null,
+        "title": null,
+        "closed_at": null,
+        "outcome": null,
+        "project_id": null,
+        "membership_revision_no": null,
+        "link_state": null,
+        "link_id": null,
+        "revision_no": null,
+        "relation_type": null,
+        "member_role": null,
+        "lifecycle_state": null,
+        "from": null,
+        "to": null,
+        "handoff_id": null,
+        "commitment_id": null,
+        "sequence_no": null,
+        "from_holder": null,
+        "to_holder": null,
+        "voided": null,
+        "correction_id": null,
+        "correction_action": null,
+        "corrected_effective_at": null,
+        "native": {
+          "record_family": "task",
+          "record_id": "tsk_aaaaaaaa11111111",
+          "event_kind": "updated",
+          "record_version": 2,
+          "changed_fields": [
+            "title"
+          ],
+          "source_capability": "tasks.update"
+        },
+        "recorded_fields": null
+      },
+      {
+        "entry_id": "rcev_bbbbbbbb22222222",
+        "kind": "native_event",
+        "plane": "native",
+        "at": "2026-08-09T12:00:00.000000Z",
+        "recorded_at": "2026-08-09T12:00:00.000000Z",
+        "subject": {
+          "family": "constraint",
+          "record_id": "cst_aaaaaaaa11111111"
+        },
+        "action": "state_changed",
+        "historical_fields_partial": false,
+        "issue_version": null,
+        "state": null,
+        "title": null,
+        "closed_at": null,
+        "outcome": null,
+        "project_id": null,
+        "membership_revision_no": null,
+        "link_state": null,
+        "link_id": null,
+        "revision_no": null,
+        "relation_type": null,
+        "member_role": null,
+        "lifecycle_state": null,
+        "from": null,
+        "to": null,
+        "handoff_id": null,
+        "commitment_id": null,
+        "sequence_no": null,
+        "from_holder": null,
+        "to_holder": null,
+        "voided": null,
+        "correction_id": null,
+        "correction_action": null,
+        "corrected_effective_at": null,
+        "native": {
+          "record_family": "constraint",
+          "record_id": "cst_aaaaaaaa11111111",
+          "event_kind": "state_changed",
+          "record_version": 3,
+          "changed_fields": [
+            "lifecycle_state"
+          ],
+          "source_capability": "constraints.transition"
+        },
+        "recorded_fields": {
+          "lifecycle_state": "in_progress",
+          "ball_in_court": [
+            {
+              "kind": "entity",
+              "party_ref_id": "ent_aaaaaaaa11111111",
+              "display_label": "Synthetic Engineer of Record",
+              "entity_id": "ent_aaaaaaaa11111111"
+            }
+          ]
+        }
+      }
+    ],
+    "complete_state": "complete",
+    "qualifiers": [
+      "complete"
+    ],
+    "next_cursor": "eyJ2IjoxfQ"
   }
 }

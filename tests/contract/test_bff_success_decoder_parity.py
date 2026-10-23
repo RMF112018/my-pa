@@ -23,10 +23,17 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Final, cast
+from unittest.mock import patch
 
 from my_pa.application.authorization import Authorization
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
-from my_pa.application.commands import ReadMeetingNoteVersion, ReadRecordLineage
+from my_pa.application.commands import (
+    ListIssues,
+    ReadIssue,
+    ReadIssueTimeline,
+    ReadMeetingNoteVersion,
+    ReadRecordLineage,
+)
 from my_pa.application.constraint_management import (
     ConstraintCategoryMutationResult,
     ConstraintCategoryReorderResult,
@@ -78,6 +85,17 @@ from my_pa.contracts.v1.commitments import (
     WaitingOnEntry,
 )
 from my_pa.contracts.v1.documents import ManagedDocumentVersionView
+from my_pa.contracts.v1.issue_timeline import (
+    IssueTimelineView,
+    TimelineEntryView,
+    TimelineNativeView,
+)
+from my_pa.contracts.v1.issues import (
+    HandoffHolderView,
+    IssueListEntry,
+    IssueView,
+    ProjectLinkView,
+)
 from my_pa.contracts.v1.meetings import (
     MeetingAttachmentView,
     MeetingAttendeeView,
@@ -93,6 +111,7 @@ from my_pa.contracts.v1.record_lineage import (
     EvidenceAnchorView,
     LineageIssueMatch,
     LineageNodeView,
+    LineagePathEdgeView,
     LineageView,
     RecordRefView,
     VirtualEdgeView,
@@ -107,6 +126,7 @@ from my_pa.contracts.v1.tasks import (
 from my_pa.domain.capture.proposal import ProposalState, ProposalType, RiskClass
 from my_pa.domain.capture.reveal import EvidenceGap, EvidenceState
 from my_pa.domain.capture.review import ReviewCase, ReviewSubjectKind
+from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.provenance import Provenance, TrustLevel
 from my_pa.domain.common.time import format_rfc3339
@@ -121,6 +141,8 @@ from my_pa.domain.lineage.vocabulary import (
     EvidenceAvailability,
     EvidenceRole,
     EvidenceSourceFamily,
+    HandoffHolderKind,
+    IssueProjectMembershipState,
     LineageCompleteness,
     LinkLifecycleState,
     MemberRole,
@@ -129,6 +151,7 @@ from my_pa.domain.lineage.vocabulary import (
     RecordLinkKind,
     RelationType,
     SourceVersionKind,
+    TimelineEntryKind,
 )
 from my_pa.domain.meeting.model import (
     AttendeeResponseStatus,
@@ -176,6 +199,7 @@ from my_pa.domain.project_controls.read_models import (
     RelationshipDirection,
 )
 from my_pa.domain.project_controls.settings import ConstraintProjectSettings
+from my_pa.domain.record_events import RecordEventKind
 from my_pa.domain.relationship.entity import RelationshipState
 from my_pa.domain.search.query import RankCategory, SearchMatch, label_for_media_type
 from my_pa.domain.situation.continuity import ContinuityAcceptanceKind, ContinuityEvidenceState
@@ -1762,9 +1786,15 @@ LINEAGE_NOTE_BODY: Final = "Synthetic note: pour the north slab after the inspec
 def _lineage_service() -> tuple[ApplicationService, Authorization]:
     service = object.__new__(ApplicationService)
     service._lineage_enabled = True
+    # S3 section 6.1 lockstep: a lineage read re-checks the caller's grant set
+    # (`None`: the local caller, which sees every family).
     authorization = cast(
         Authorization,
-        SimpleNamespace(at=AT, principal=SimpleNamespace(principal_id="prn_aaaaaaaa11111111")),
+        SimpleNamespace(
+            at=AT,
+            principal=SimpleNamespace(principal_id="prn_aaaaaaaa11111111"),
+            capability_grants=None,
+        ),
     )
     return service, authorization
 
@@ -1828,6 +1858,7 @@ def _records_lineage() -> dict[str, Any]:
         issues_matching_root=(
             LineageIssueMatch(issue_id=LINEAGE_ISSUE_ID, title="Synthetic Issue", state="open"),
         ),
+        # S3 section 7.1 lockstep: each node states the path step that reached it.
         nodes=(
             LineageNodeView(family=RecordFamily.TASK, record_id=LINEAGE_TASK_ID, depth=0),
             LineageNodeView(
@@ -1835,6 +1866,8 @@ def _records_lineage() -> dict[str, Any]:
                 record_id=LINEAGE_NOTE_VERSION_ID,
                 depth=1,
                 meeting_id=LINEAGE_MEETING_ID,
+                reached_from=task,
+                reached_via=LineagePathEdgeView(edge="typed", link_id="irl_bbbbbbbb22222222"),
             ),
             LineageNodeView(
                 family=RecordFamily.SITUATION,
@@ -1842,8 +1875,18 @@ def _records_lineage() -> dict[str, Any]:
                 depth=1,
                 title="Synthetic Issue",
                 state="open",
+                reached_from=task,
+                reached_via=LineagePathEdgeView(edge="typed", link_id="irl_aaaaaaaa11111111"),
             ),
-            LineageNodeView(family=RecordFamily.MEETING, record_id=LINEAGE_MEETING_ID, depth=2),
+            LineageNodeView(
+                family=RecordFamily.MEETING,
+                record_id=LINEAGE_MEETING_ID,
+                depth=2,
+                reached_from=note,
+                reached_via=LineagePathEdgeView(
+                    edge="virtual", edge_type=NativeVirtualEdge.MEETING_NOTE_VERSION_OF
+                ),
+            ),
         ),
         typed_edges=(membership, origin),
         virtual_native_edges=(
@@ -1852,9 +1895,15 @@ def _records_lineage() -> dict[str, Any]:
             ),
         ),
         complete_state=LineageCompleteness.COMPLETE,
+        # S3 section 7.2 lockstep: the qualifiers and the cuts the answer was read at.
+        qualifiers=(LineageCompleteness.COMPLETE,),
+        known_at=AT,
+        valid_at=AT,
+        lineage_valid_at=AT,
+        native_cut_at=AT,
     )
     service, authorization = _lineage_service()
-    service._record_lineage = cast(Any, SimpleNamespace(read_lineage=lambda *_: view))
+    service._record_lineage = cast(Any, SimpleNamespace(read_lineage=lambda *_, **__: view))
     command = ReadRecordLineage(
         origin={"family": "task", "record_id": LINEAGE_TASK_ID}, max_depth=1
     )
@@ -1882,6 +1931,248 @@ def _meetings_notes_read_version() -> dict[str, Any]:
         meeting_id=LINEAGE_MEETING_ID, note_version_id=LINEAGE_NOTE_VERSION_ID, include_body=True
     )
     return service._meetings_notes_read_version(unit_of_work, authorization, command).payload
+
+
+# --- record lineage S3 (contract sections 7.3 and 7.6) ---------------------------
+#
+# Through the real handlers on an uninitialized service, as the S1 rows above:
+# the collaborators are synthetic in-memory values (the timeline's read function
+# patched to answer one built page), so each payload is exactly what
+# `_issues_list` / `_issues_read` / `_issues_timeline` publish.
+
+LINEAGE_PROJECT_ID: Final = "prj_aaaaaaaa11111111"
+LINEAGE_CONSTRAINT_ID: Final = "cst_aaaaaaaa11111111"
+LINEAGE_COMMITMENT_ID: Final = "cmt_aaaaaaaa11111111"
+
+
+def _issues_list() -> dict[str, Any]:
+    """One page of two Issues, newest first, with a keyset cursor."""
+    entries = (
+        IssueListEntry(
+            issue_id="sit_bbbbbbbb22222222",
+            version=2,
+            state="active",
+            title="Synthetic second Issue",
+            updated_at=AT,
+        ),
+        IssueListEntry(
+            issue_id=LINEAGE_ISSUE_ID,
+            version=1,
+            state="open",
+            title="Synthetic Issue",
+            updated_at=AT,
+        ),
+    )
+    service, authorization = _lineage_service()
+    service._limits = cast(Any, SimpleNamespace(max_page_size=100))
+    service._issues = cast(Any, SimpleNamespace(list_issues=lambda *_: (entries, LINEAGE_ISSUE_ID)))
+    unit_of_work = cast(UnitOfWork, SimpleNamespace())
+    return service._issues_list(unit_of_work, authorization, ListIssues(page_size=2)).payload
+
+
+def _issues_read() -> dict[str, Any]:
+    """One open Issue with one native Project link; no closure, nothing withheld."""
+    view = IssueView(
+        issue_id=LINEAGE_ISSUE_ID,
+        version=1,
+        state="open",
+        title="Synthetic Issue",
+        description="Synthetic description of the north slab pour.",
+        opened_at=AT,
+        created_at=AT,
+        updated_at=AT,
+        project_links=(
+            ProjectLinkView(
+                project_id=LINEAGE_PROJECT_ID,
+                project_situation_id="psit_aaaaaaaa11111111",
+                state=IssueProjectMembershipState.ACTIVE,
+                membership_revision_no=1,
+                acceptance_basis=AcceptanceBasis.USER_CONFIRMED,
+                evidence_anchor_id=None,
+                recorded_at=AT,
+            ),
+        ),
+        project_links_truncated=False,
+        closure=None,
+    )
+    service, authorization = _lineage_service()
+    service._issues = cast(Any, SimpleNamespace(read_issue=lambda *_: view))
+    # S3 FR3-F08 lockstep: the read sets the lineage statement timeout first.
+    unit_of_work = cast(
+        UnitOfWork,
+        SimpleNamespace(record_lineage=SimpleNamespace(bound_read_statements=lambda _ms: None)),
+    )
+    command = ReadIssue(issue_id=LINEAGE_ISSUE_ID)
+    return service._issues_read(unit_of_work, authorization, command).payload
+
+
+def _issues_timeline() -> dict[str, Any]:
+    """A current timeline page: lineage entries, a partial native Task event, a
+    Constraint event with its recorded ball-in-court, and a cursor."""
+    issue = RecordRefView(family=RecordFamily.SITUATION, record_id=LINEAGE_ISSUE_ID)
+    task = RecordRefView(family=RecordFamily.TASK, record_id=LINEAGE_TASK_ID)
+    note = RecordRefView(
+        family=RecordFamily.MEETING_NOTE_VERSION, record_id=LINEAGE_NOTE_VERSION_ID
+    )
+    constraint = RecordRefView(family=RecordFamily.CONSTRAINT, record_id=LINEAGE_CONSTRAINT_ID)
+    principal = HandoffHolderView(kind=HandoffHolderKind.PRINCIPAL, entity_id=None)
+    entity = HandoffHolderView(kind=HandoffHolderKind.ENTITY, entity_id="ent_aaaaaaaa11111111")
+
+    def lineage(kind: TimelineEntryKind, entry_id: str, **keys: Any) -> TimelineEntryView:  # noqa: ANN401
+        return TimelineEntryView(
+            entry_id=entry_id,
+            kind=kind,
+            plane="lineage",
+            at=AT,
+            recorded_at=AT,
+            historical_fields_partial=False,
+            **keys,
+        )
+
+    def native(entry_id: str, subject: RecordRefView, **keys: Any) -> TimelineEntryView:  # noqa: ANN401
+        recorded = keys.pop("recorded_fields", None)
+        return TimelineEntryView(
+            entry_id=entry_id,
+            kind=TimelineEntryKind.NATIVE_EVENT,
+            plane="native",
+            at=AT,
+            recorded_at=AT,
+            subject=subject,
+            action=keys["event_kind"].value,
+            historical_fields_partial=recorded is None,
+            native=TimelineNativeView(**keys),
+            recorded_fields=recorded,
+        )
+
+    entries = (
+        lineage(
+            TimelineEntryKind.ISSUE_REVISION,
+            "irs_aaaaaaaa11111111",
+            subject=issue,
+            action="created",
+            issue_version=1,
+            state="open",
+            title="Synthetic Issue",
+        ),
+        lineage(
+            TimelineEntryKind.PROJECT_LINK,
+            "ipme_aaaaaaaa11111111",
+            subject=None,
+            action="assert",
+            project_id=LINEAGE_PROJECT_ID,
+            membership_revision_no=1,
+            link_state=IssueProjectMembershipState.ACTIVE,
+        ),
+        lineage(
+            TimelineEntryKind.MEMBERSHIP,
+            "irv_aaaaaaaa11111111",
+            subject=task,
+            action="assert",
+            link_id="irl_aaaaaaaa11111111",
+            revision_no=1,
+            relation_type=RelationType.ISSUE_MEMBER,
+            member_role=MemberRole.WORK,
+            lifecycle_state=LinkLifecycleState.ACTIVE,
+            from_ref=issue,
+            to_ref=task,
+        ),
+        lineage(
+            TimelineEntryKind.ASSOCIATION,
+            "irv_bbbbbbbb22222222",
+            subject=None,
+            action="contest",
+            link_id="irl_bbbbbbbb22222222",
+            revision_no=2,
+            relation_type=RelationType.ORIGINATED_FROM,
+            lifecycle_state=LinkLifecycleState.CONTESTED,
+            from_ref=task,
+            to_ref=note,
+        ),
+        lineage(
+            TimelineEntryKind.HANDOFF,
+            "ihnd_aaaaaaaa11111111",
+            subject=RecordRefView(family=RecordFamily.COMMITMENT, record_id=LINEAGE_COMMITMENT_ID),
+            action="recorded",
+            handoff_id="ihnd_aaaaaaaa11111111",
+            commitment_id=LINEAGE_COMMITMENT_ID,
+            sequence_no=1,
+            from_holder=principal,
+            to_holder=entity,
+            voided=False,
+        ),
+        lineage(
+            TimelineEntryKind.HANDOFF_CORRECTION,
+            "ihcr_aaaaaaaa11111111",
+            subject=RecordRefView(family=RecordFamily.COMMITMENT, record_id=LINEAGE_COMMITMENT_ID),
+            action="retime",
+            handoff_id="ihnd_aaaaaaaa11111111",
+            correction_id="ihcr_aaaaaaaa11111111",
+            correction_action="retime",
+            corrected_effective_at=AT,
+        ),
+        native(
+            "rcev_aaaaaaaa11111111",
+            task,
+            record_family="task",
+            record_id=LINEAGE_TASK_ID,
+            event_kind=RecordEventKind.UPDATED,
+            record_version=2,
+            changed_fields=("title",),
+            source_capability="tasks.update",
+        ),
+        native(
+            "rcev_bbbbbbbb22222222",
+            constraint,
+            record_family="constraint",
+            record_id=LINEAGE_CONSTRAINT_ID,
+            event_kind=RecordEventKind.STATE_CHANGED,
+            record_version=3,
+            changed_fields=("lifecycle_state",),
+            source_capability="constraints.transition",
+            recorded_fields={
+                "lifecycle_state": "in_progress",
+                "ball_in_court": [
+                    {
+                        "kind": "entity",
+                        "party_ref_id": "ent_aaaaaaaa11111111",
+                        "display_label": "Synthetic Engineer of Record",
+                        "entity_id": "ent_aaaaaaaa11111111",
+                    }
+                ],
+            },
+        ),
+    )
+    view = IssueTimelineView(
+        issue_id=LINEAGE_ISSUE_ID,
+        known_at=AT,
+        valid_at=AT,
+        lineage_valid_at=AT,
+        entries=entries,
+        complete_state=LineageCompleteness.COMPLETE,
+        qualifiers=(LineageCompleteness.COMPLETE,),
+        next_cursor="eyJ2IjoxfQ",
+    )
+    service, authorization = _lineage_service()
+    authorization = cast(
+        Authorization,
+        SimpleNamespace(
+            at=AT,
+            principal=SimpleNamespace(principal_id="prn_aaaaaaaa11111111"),
+            capability_grants=None,
+            transport=CaptureTransport.LOCAL,
+        ),
+    )
+    unit_of_work = cast(UnitOfWork, SimpleNamespace())
+    command = ReadIssueTimeline(issue_id=LINEAGE_ISSUE_ID, page_size=10)
+    with (
+        patch.object(
+            ApplicationService,
+            "available_capabilities",
+            new=property(lambda _self: frozenset(Capability)),
+        ),
+        patch("my_pa.application.service.read_issue_timeline", lambda *_, **__: view),
+    ):
+        return service._issues_timeline(unit_of_work, authorization, command).payload
 
 
 def python_success_payloads() -> dict[str, dict[str, Any]]:
@@ -2051,6 +2342,9 @@ def python_success_payloads() -> dict[str, dict[str, Any]]:
         "constraint_categories.reorder": _constraint_categories_reorder(),
         "records.lineage": _records_lineage(),
         "meetings.notes.read_version": _meetings_notes_read_version(),
+        "issues.list": _issues_list(),
+        "issues.read": _issues_read(),
+        "issues.timeline": _issues_timeline(),
     }
 
 

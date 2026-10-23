@@ -509,6 +509,15 @@ class IdKind(StrEnum):
     #: uniqueness assertion in `tests/unit/test_identifiers.py`): it collides
     #: with none, no member is a prefix of it, and it is a prefix of none.
     ISSUE_HANDOFF = "ihnd"
+    #: Record lineage, Slice S3 (S3 contract section 2): one immutable handoff
+    #: correction (`issue_responsibility_corrections.correction_id`) and one
+    #: backfill dry-run (`lineage_backfill_runs.run_id`). Checked against all
+    #: 148 prior members before use (a grep of `ihcr` and `lbfr` over `src`,
+    #: `tests`, `web/src` and `migrations`, and the uniqueness assertion in
+    #: `tests/unit/test_identifiers.py`): neither collides, no member is a
+    #: prefix of either, and neither is a prefix of any.
+    ISSUE_HANDOFF_CORRECTION = "ihcr"
+    LINEAGE_BACKFILL_RUN = "lbfr"
 
 
 class InvalidIdentifierError(ValueError):

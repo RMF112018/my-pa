@@ -542,6 +542,17 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "lineage_write_request_links",
         }
     ),
+    # Record lineage S3 (ADR-015): the knowledge clock, handoff corrections and
+    # the backfill dry-run ledger.
+    "6f1476b8da52": frozenset(
+        {
+            "lineage_commit_sequences",
+            "lineage_commit_marks",
+            "issue_responsibility_corrections",
+            "lineage_backfill_runs",
+            "lineage_backfill_items",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

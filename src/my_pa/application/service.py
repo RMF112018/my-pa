@@ -109,7 +109,7 @@ import hashlib
 import hmac
 import json
 import sys
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, is_dataclass, replace
 from datetime import UTC, date, datetime, timedelta
@@ -155,7 +155,9 @@ from my_pa.application.commands import (
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
     ConfigureProjectControls,
+    ContestRecordAssociation,
     CorrectGoodNotes,
+    CorrectIssueHandoff,
     CorrectIssueMembership,
     CorrectRecordAssociation,
     CreateCapture,
@@ -253,6 +255,7 @@ from my_pa.application.commands import (
     ListUnresolvedMentions,
     MergeEntities,
     ObserveEntityMention,
+    PlanLineageBackfill,
     PrepareContext,
     PreviewConstraintSync,
     PreviewEntityMerge,
@@ -272,6 +275,8 @@ from my_pa.application.commands import (
     ReadIntelligenceArtifact,
     ReadIssue,
     ReadIssueClosureReadiness,
+    ReadIssueHistory,
+    ReadIssueTimeline,
     ReadKnowledge,
     ReadKnowledgeAssertion,
     ReadManagedDocument,
@@ -281,15 +286,18 @@ from my_pa.application.commands import (
     ReadPortfolioConstraintOverview,
     ReadProject,
     ReadProjectControlsStatus,
+    ReadRecordAssociationHistory,
     ReadRecordLineage,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
     RecordIssueHandoff,
     RecordTask,
+    ReinstateRecordAssociation,
     ReopenConstraint,
     ReopenIssue,
     ReorderConstraintCategories,
+    ReportLineageBackfill,
     Representation,
     ResolveConstraintSyncConflict,
     ResolveEntity,
@@ -500,6 +508,7 @@ from my_pa.application.intelligence import (
     search_artifacts,
 )
 from my_pa.application.issue_handoffs import IssueHandoffApplication
+from my_pa.application.issue_timeline import NativeVisibility, read_issue_timeline
 from my_pa.application.issue_work import IssueWorkApplication, NativeCreated, WorkCompositeResult
 from my_pa.application.issues import IssueApplication, IssueRevisionResult, ProjectLinkResult
 from my_pa.application.knowledge_assertions import (
@@ -534,6 +543,13 @@ from my_pa.application.knowledge_assertions import submission_view as knowledge_
 from my_pa.application.knowledge_assertions import submit_request as knowledge_submit_request
 from my_pa.application.knowledge_assertions import submit_view as knowledge_submit_view
 from my_pa.application.lineage_authority import attested_lineage_authority, lineage_authority
+from my_pa.application.lineage_backfill import plan_backfill, report_backfill
+from my_pa.application.lineage_visibility import (
+    ANCHOR_FAMILIES,
+    LineageVisibility,
+    lineage_visibility,
+    require_read_grant,
+)
 from my_pa.application.managed_documents import ManagedDocumentService
 from my_pa.application.meetings import (
     MeetingApplication,
@@ -543,11 +559,19 @@ from my_pa.application.meetings import (
 from my_pa.application.model_gate import BoundedModelGate
 from my_pa.application.producer_origin import ProducerOriginError, ProducerOriginRegistry
 from my_pa.application.record_events import (
+    MemoryDisclosure,
     list_record_events,
+    memory_disclosure,
     record_event_page_size,
     record_event_provenance,
+    visible_families,
 )
-from my_pa.application.record_lineage import AssociationResult, RecordLineageApplication
+from my_pa.application.record_lineage import (
+    LINEAGE_STATEMENT_TIMEOUT_MS,
+    MAX_VISIBILITY_SCAN,
+    AssociationResult,
+    RecordLineageApplication,
+)
 from my_pa.application.relationship_memory import (
     ArchiveMemoryCommand,
     CreateMemoryCommand,
@@ -596,6 +620,7 @@ from my_pa.contracts.ports import (
     KnowledgeSupersessionGuardError,
     KnowledgeTriggerNotFoundError,
     LineageIdempotencyConflictError,
+    LineageReadTimeoutError,
     ManagedByteStore,
     MeetingListPage,
     MemoryDetail,
@@ -641,7 +666,9 @@ from my_pa.contracts.v1.documents import (
     ManagedDocumentVersionView,
 )
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
+from my_pa.contracts.v1.issues import HandoffView
 from my_pa.contracts.v1.meetings import MeetingNoteVersionEntry, MeetingNoteVersionView
+from my_pa.contracts.v1.record_lineage import EvidenceAnchorView
 from my_pa.contracts.v1.reveal import RevealView
 from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.contracts.v1.tasks import (
@@ -691,7 +718,7 @@ from my_pa.domain.common.identifiers import (
     validate_identifier,
 )
 from my_pa.domain.common.provenance import TrustLevel
-from my_pa.domain.common.time import format_rfc3339, utc_now
+from my_pa.domain.common.time import ensure_utc, format_rfc3339, utc_now
 from my_pa.domain.documents.managed import (
     DocumentState,
     ManagedDocumentConflictError,
@@ -717,7 +744,13 @@ from my_pa.domain.knowledge_assertion.vocabulary import (
     KnowledgeReviewRequirement,
 )
 from my_pa.domain.lineage.model import RecordRef
-from my_pa.domain.lineage.vocabulary import EvidenceAvailability, RecordFamily, SituationKind
+from my_pa.domain.lineage.vocabulary import (
+    LINEAGE_BACKFILL_CAPABILITIES,
+    EvidenceAvailability,
+    EvidenceSourceFamily,
+    RecordFamily,
+    SituationKind,
+)
 from my_pa.domain.meeting.model import (
     MAX_MEETING_PAGE_SIZE,
     MeetingCursorError,
@@ -1387,6 +1420,10 @@ def _port_failure(error: PortError) -> ApplicationError:
     if isinstance(error, KnowledgeCheckpointKindMismatchError):
         return InvalidRequestError(SafeDetail.REPRESENTATION)
     if isinstance(error, EvidenceUnavailableError):
+        return UnavailableError()
+    # Record lineage S3 section 7.2 step 5: a bounded lineage read statement
+    # that outran its `statement_timeout` is `unavailable`, not a server fault.
+    if isinstance(error, LineageReadTimeoutError):
         return UnavailableError()
     return InternalError()
 
@@ -3961,6 +3998,7 @@ class ApplicationService:
         relationship_memory_enabled: bool = False,
         knowledge_assertions_enabled: bool = False,
         lineage_enabled: bool = False,
+        lineage_backfill_enabled: bool = False,
         knowledge_discovery_client_ids: frozenset[str] = frozenset(),
         knowledge_operator_review_client_ids: frozenset[str] = frozenset(),
         knowledge_manager_client_ids: frozenset[str] = frozenset(),
@@ -4015,6 +4053,12 @@ class ApplicationService:
         #: handler asks again first (`_lineage_plane`), before authority or
         #: reservation, because the HTTP transport routes into `_HANDLERS`.
         self._lineage_enabled = lineage_enabled
+        #: Record lineage S3 (contract section 7.7): the backfill sub-switch.
+        #: Default `False`. The two operator-only backfill capabilities are served
+        #: only while this *and* `lineage_enabled` are on, so enabling lineage
+        #: never enables a backfill; each backfill handler asks again
+        #: (`_lineage_backfill_plane`) after `_lineage_plane`.
+        self._lineage_backfill_enabled = lineage_backfill_enabled
         #: KLP-WP-04 (R6 section 6.1): the exact discovery allowlist the second
         #: service gate reads. Empty -- the default -- refuses every submit and
         #: checkpoint, so an unconfigured build fails closed for the role.
@@ -4209,6 +4253,11 @@ class ApplicationService:
         # the ChatLLM profile.
         if not self._lineage_enabled:
             served -= _LINEAGE_CAPABILITIES
+        # Record lineage S3 (contract section 7.7): the backfill sub-switch,
+        # subtracted after the lineage line as the entity write half is, so the
+        # two backfill names need both switches.
+        if not (self._lineage_enabled and self._lineage_backfill_enabled):
+            served -= _LINEAGE_BACKFILL_CAPABILITIES
         # A proposal surface without a trusted server registration would
         # advertise a write every authenticated caller can only be denied.
         # Withhold both producer capabilities when composition has no exact
@@ -13259,6 +13308,28 @@ class ApplicationService:
         if not self._lineage_enabled:
             raise UnsupportedError()
 
+    def _lineage_read(
+        self, authorization: Authorization, capability: Capability
+    ) -> LineageVisibility:
+        """The switch, then the remote grant re-check, of every lineage read (S3 section 6.1).
+
+        `invoke` does not consult the grant set (G1-RD-008), so a remote caller
+        without a grant on `capability` for one of its permitted purposes is
+        answered `unsupported` here, as `_record_events_list` and
+        `_knowledge_plane` do. Returns the caller's section 6.4 visibility.
+        """
+        self._lineage_plane()
+        require_read_grant(authorization.capability_grants, capability)
+        return lineage_visibility(authorization.capability_grants, capability)
+
+    def _lineage_backfill_plane(self) -> None:
+        """Refuse unless the backfill sub-switch is on too (S3 contract section 7.7).
+
+        Asked after `_lineage_plane` and before authority, reservation or replay.
+        """
+        if not (self._lineage_enabled and self._lineage_backfill_enabled):
+            raise UnsupportedError()
+
     def _issues_create(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: CreateIssue
     ) -> _Result:
@@ -13279,19 +13350,49 @@ class ApplicationService:
     def _issues_read(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadIssue
     ) -> _Result:
-        """`issues.read`: one Issue and its Project links, or `not_found`."""
-        self._lineage_plane()
+        """`issues.read`: one Issue and its Project links, or `not_found`.
+
+        S3 section 6.4: a remote reader without a grant on `issues.read` is
+        `unsupported`; an Issue it may not see is `not_found`; a membership whose
+        member, and an anchor whose source, it may not see is withheld, and
+        `restricted` says whether anything was.
+        """
+        visibility = self._lineage_read(authorization, command.capability)
         principal_id = authorization.principal.principal_id
+        # FR3-F07: no Issue-family check -- the grant on `issues.read` that
+        # `_lineage_read` required already makes the Issue family visible.
         with _translated(), _lineage_translated():
+            # FR3-F08: under the lineage read timeout (`unavailable`).
+            unit_of_work.record_lineage.bound_read_statements(LINEAGE_STATEMENT_TIMEOUT_MS)
             view = self._issues.read_issue(unit_of_work, principal_id, command.issue_id)
+            restricted = False
+            if view.closure is not None:
+                shown, restricted = _shown_anchors(
+                    unit_of_work, principal_id, view.closure.evidence, visibility
+                )
+                view = view.model_copy(
+                    update={"closure": view.closure.model_copy(update={"evidence": shown})}
+                )
             payload: dict[str, Any] = {"issue": view.to_canonical_dict()}
             if command.include_members:
                 # Section 7.2: the active memberships, at most 100, oldest first.
-                members, truncated = self._record_lineage.memberships(
-                    unit_of_work, principal_id, command.issue_id
+                # S3 section 6.4 (FR3-F01): only visible members are shown or
+                # counted toward `memberships_truncated`.
+                visible_members, truncated, hidden = self._record_lineage.memberships(
+                    unit_of_work, principal_id, command.issue_id, visible=visibility.sees
                 )
-                payload["memberships"] = [member.to_canonical_dict() for member in members]
+                restricted = restricted or hidden
+                kept = []
+                for member in visible_members:
+                    anchors, withheld = _shown_anchors(
+                        unit_of_work, principal_id, member.evidence, visibility
+                    )
+                    restricted = restricted or withheld
+                    kept.append(member.model_copy(update={"evidence": anchors}))
+                visible_members = tuple(kept)
+                payload["memberships"] = [member.to_canonical_dict() for member in visible_members]
                 payload["memberships_truncated"] = truncated
+            payload["restricted"] = restricted
         return _Result(
             payload=payload,
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
@@ -13300,18 +13401,26 @@ class ApplicationService:
     def _issues_list(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListIssues
     ) -> _Result:
-        """`issues.list`: one keyset page of Issues, newest first."""
-        self._lineage_plane()
+        """`issues.list`: one keyset page of Issues, newest first.
+
+        S3 section 6.4: a remote reader without a grant on `issues.list` is
+        `unsupported`; Issues are listed only while the Issue family is visible.
+        """
+        self._lineage_read(authorization, command.capability)
         request = command.issue_request()
         request = replace(request, page_size=min(request.page_size, self._limits.max_page_size))
         with _translated(), _lineage_translated():
             entries, next_cursor = self._issues.list_issues(
                 unit_of_work, authorization.principal.principal_id, request
             )
+        # FR3-F07: the grant on `issues.list` `_lineage_read` required already
+        # makes the Issue family visible, so nothing on this page is withheld.
+        restricted = False
         return _Result(
             payload={
                 "issues": [entry.to_canonical_dict() for entry in entries],
                 "next_cursor": next_cursor,
+                "restricted": restricted,
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
         )
@@ -13534,11 +13643,21 @@ class ApplicationService:
         authorization: Authorization,
         command: ReadIssueClosureReadiness,
     ) -> _Result:
-        """`issues.closure_readiness`: the gate's current answer, without writing."""
-        self._lineage_plane()
+        """`issues.closure_readiness`: the gate's current answer, without writing.
+
+        S3 section 6.4: a blocker whose member, or a contested link with an
+        endpoint, the reader may not see is withheld (`restricted`); `ready` is
+        computed over everything.
+        """
+        visibility = self._lineage_read(authorization, command.capability)
+        if not visibility.sees_family(RecordFamily.SITUATION):
+            raise NotFoundError(SafeDetail.ISSUE_ID)
         with _translated(), _lineage_translated():
             readiness = self._issues.closure_readiness(
-                unit_of_work, authorization.principal.principal_id, command.issue_id
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.issue_id,
+                visible=visibility.sees,
             )
         return _Result(
             payload={
@@ -13548,6 +13667,10 @@ class ApplicationService:
                 "ready": readiness.ready,
                 "blockers": [blocker.to_canonical_dict() for blocker in readiness.blockers],
                 "blockers_truncated": readiness.blockers_truncated,
+                # S3 section 7.1: contested links in the Issue's context.
+                "contested_links": [view.to_canonical_dict() for view in readiness.contested_links],
+                "contested_links_truncated": readiness.contested_links_truncated,
+                "restricted": readiness.restricted,
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
         )
@@ -13595,20 +13718,88 @@ class ApplicationService:
     def _issues_handoffs_list(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListIssueHandoffs
     ) -> _Result:
-        """`issues.handoffs.list`: one keyset page of an Issue's handoffs, oldest first."""
-        self._lineage_plane()
+        """`issues.handoffs.list`: one keyset page of an Issue's handoffs, oldest first.
+
+        S3 section 6.4: handoffs need Commitment visibility. A remote reader that
+        may not see Commitments gets `not_found` / `commitment_id` for a named
+        one, and otherwise an empty page with `restricted` set when any was
+        withheld.
+        """
+        visibility = self._lineage_read(authorization, command.capability)
+        if not visibility.sees_family(RecordFamily.SITUATION):
+            raise NotFoundError(SafeDetail.ISSUE_ID)
         request = command.handoff_request()
         request = replace(request, page_size=min(request.page_size, self._limits.max_page_size))
+        principal_id = authorization.principal.principal_id
+        commitments_visible = visibility.sees_family(RecordFamily.COMMITMENT)
+        # Section 6.4 (FR3-F01): a handoff's one required anchor cannot be
+        # dropped from its view, so an entry the reader may not see is withheld
+        # whole -- and the page is filled from the visible entries only. Batches
+        # are read at one frozen cut until `page_size + 1` visible entries are
+        # found or the set ends, so neither `next_cursor` (always a shown
+        # entry) nor the page sequence depends on any withheld entry.
+        # FR3-F08: batches of at least `_HANDOFF_SCAN_BATCH`, at most
+        # `_HANDOFF_SCAN_BOUND` entries read per request, and every statement
+        # under the lineage read timeout (`unavailable`). Reaching the bound
+        # answers what is shown, a cursor only from a shown entry, and an
+        # explicit truncation in the disclosure -- never a withheld identifier.
+        shown: list[HandoffView] = []
+        restricted = False
+        capped = False
+        scanned = 0
+        known_at: datetime | None = None
+        batch = replace(request, page_size=max(request.page_size + 1, _HANDOFF_SCAN_BATCH))
         with _translated(), _lineage_translated():
-            page = self._issue_handoffs.list_handoffs(
-                unit_of_work, authorization.principal.principal_id, request
-            )
+            unit_of_work.record_lineage.bound_read_statements(LINEAGE_STATEMENT_TIMEOUT_MS)
+            while True:
+                page = self._issue_handoffs.list_handoffs(
+                    unit_of_work, principal_id, batch, authorization.at
+                )
+                if known_at is None:
+                    known_at = page.known_at
+                if not commitments_visible:
+                    # After the application's own Issue and Commitment checks.
+                    if request.commitment_id is not None:
+                        raise NotFoundError(SafeDetail.COMMITMENT_ID)
+                    restricted = bool(page.handoffs)
+                    break
+                for view in page.handoffs:
+                    scanned += 1
+                    kept, withheld = _shown_anchors(
+                        unit_of_work, principal_id, (view.evidence,), visibility
+                    )
+                    if withheld or not kept:
+                        restricted = True
+                        continue
+                    shown.append(view.model_copy(update={"evidence": kept[0]}))
+                if len(shown) > request.page_size or page.next_cursor is None:
+                    break
+                if scanned >= _HANDOFF_SCAN_BOUND:
+                    capped = True
+                    break
+                batch = replace(batch, after=page.next_cursor, known_at=page.known_at)
+        handoffs = tuple(shown[: request.page_size])
+        more = len(shown) > request.page_size or (capped and bool(handoffs))
+        next_cursor = handoffs[-1].handoff_id if more else None
         return _Result(
             payload={
-                "handoffs": [view.to_canonical_dict() for view in page.handoffs],
-                "next_cursor": page.next_cursor,
+                "handoffs": [view.to_canonical_dict() for view in handoffs],
+                "next_cursor": next_cursor,
+                "restricted": restricted,
+                # S3 section 7.1: the cut the page was read at (`T_k`).
+                "known_at": None if known_at is None else _lineage_instant(known_at),
             },
-            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_LINEAGE_TRUST_BASIS,
+                truncation=(
+                    Truncation(
+                        is_truncated=True, reason=_HANDOFF_SCAN_REASON, next_cursor=next_cursor
+                    )
+                    if capped
+                    else _NO_TRUNCATION
+                ),
+            ),
         )
 
     def _issues_work_create_task(
@@ -13698,14 +13889,236 @@ class ApplicationService:
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
         )
 
+    # ---- record lineage S3 (ADR-015; S3 contract section 7) -------------------
+    #
+    # Eight handlers in the S1 shape: the switch first (section 7.7), then, for
+    # the two backfill names, the backfill sub-switch; then, for a write, the
+    # attested authority (section 6.1: `denied` unless local operator, before any
+    # row and before the replay lookup). A use case not yet landed answers
+    # `unsupported` after the switches and the authority, writing nothing,
+    # until its worker lands it (the S2 K1 precedent).
+
+    def _records_associations_contest(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ContestRecordAssociation,
+    ) -> _Result:
+        """`records.associations.contest`: dispute an active semantic association."""
+        self._lineage_plane()
+        authority = attested_lineage_authority(authorization)
+        with _translated(), _lineage_translated():
+            written = self._record_lineage.contest_association(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.lineage_request(),
+                command.idempotency_key,
+                authority,
+                authorization.at,
+            )
+        return self._association_result(authorization, "association", written)
+
+    def _records_associations_reinstate(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReinstateRecordAssociation,
+    ) -> _Result:
+        """`records.associations.reinstate`: resolve a contested association back to active."""
+        self._lineage_plane()
+        authority = attested_lineage_authority(authorization)
+        with _translated(), _lineage_translated():
+            written = self._record_lineage.reinstate_association(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.lineage_request(),
+                command.idempotency_key,
+                authority,
+                authorization.at,
+            )
+        return self._association_result(authorization, "association", written)
+
+    def _records_associations_history(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReadRecordAssociationHistory,
+    ) -> _Result:
+        """`records.associations.history`: one link's revisions with evidence, as of `known_at`."""
+        visibility = self._lineage_read(authorization, command.capability)
+        with _translated(), _lineage_translated():
+            history = self._record_lineage.association_history(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.history_request(),
+                now=authorization.at,
+                visibility=visibility,
+            )
+        return _Result(
+            payload={
+                "link": history.link.to_canonical_dict(),
+                "known_at": (
+                    None if history.known_at is None else _lineage_instant(history.known_at)
+                ),
+                "revisions": [revision.to_canonical_dict() for revision in history.revisions],
+                "next_cursor": history.next_cursor,
+                # S3 section 6.4 (FR3-F04): whether evidence was withheld.
+                "restricted": history.restricted,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+        )
+
+    def _issues_history(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadIssueHistory
+    ) -> _Result:
+        """`issues.history`: an Issue's revisions with their closure basis, as of `known_at`."""
+        visibility = self._lineage_read(authorization, command.capability)
+        with _translated(), _lineage_translated():
+            history = self._issues.issue_history(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.history_request(),
+                now=authorization.at,
+                visibility=visibility,
+            )
+        return _Result(
+            payload={
+                "issue_id": history.issue_id,
+                "known_at": (
+                    None if history.known_at is None else _lineage_instant(history.known_at)
+                ),
+                "revisions": [revision.to_canonical_dict() for revision in history.revisions],
+                "next_cursor": history.next_cursor,
+                # S3 section 6.4 (FR3-F04): whether evidence was withheld.
+                "restricted": history.restricted,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+        )
+
+    def _issues_timeline(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadIssueTimeline
+    ) -> _Result:
+        """`issues.timeline`: one Issue's ordered lineage and native events (S3 section 7.3).
+
+        The switch and the remote grant re-check first (`_lineage_read`). The
+        native plane's Record Event visibility is re-derived here exactly as
+        `record_events.list` derives it -- the composed families a caller's
+        grants admit, and no restricted memory or capture for a remote caller
+        -- so the timeline never shows an event the feed would withhold.
+        """
+        visibility = self._lineage_read(authorization, command.capability)
+        grants = authorization.capability_grants
+        native = NativeVisibility(
+            families=visible_families(self.available_capabilities, grants),
+            include_restricted_memory=memory_disclosure(
+                grants,
+                remote_transport=authorization.transport is CaptureTransport.REMOTE_CLIENT,
+            )
+            is MemoryDisclosure.INCLUDE_RESTRICTED,
+        )
+        with _translated(), _lineage_translated():
+            view = read_issue_timeline(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.timeline_request(),
+                now=authorization.at,
+                visibility=visibility,
+                native=native,
+            )
+        return _Result(
+            payload=view.to_canonical_dict(),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+        )
+
+    def _issues_handoffs_correct(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: CorrectIssueHandoff
+    ) -> _Result:
+        """`issues.handoffs.correct`: retime or void one handoff, never rewriting it."""
+        self._lineage_plane()
+        authority = attested_lineage_authority(authorization)
+        with _translated(), _lineage_translated():
+            written = self._issue_handoffs.correct_handoff(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.handoff_request(),
+                command.idempotency_key,
+                authority,
+                authorization.at,
+            )
+        return _Result(
+            payload={
+                "correction": written.correction.to_canonical_dict(),
+                "handoff": written.handoff.to_canonical_dict(),
+                "replayed": written.replayed,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+        )
+
+    def _records_backfill_plan(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: PlanLineageBackfill
+    ) -> _Result:
+        """`records.backfill.plan`: enumerate a dry run, or classify its next batch.
+
+        Both switches first (section 7.7), then the attested authority (section
+        6.1: `denied` unless local operator, before any row and before the
+        replay lookup). It writes ledger rows only: no link, fact or mark.
+        """
+        self._lineage_plane()
+        self._lineage_backfill_plane()
+        authority = attested_lineage_authority(authorization)
+        with _translated(), _lineage_translated():
+            written = plan_backfill(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.plan_request(),
+                command.idempotency_key,
+                authority,
+                authorization.at,
+            )
+        return _Result(
+            payload=written.to_payload(),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+        )
+
+    def _records_backfill_report(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReportLineageBackfill,
+    ) -> _Result:
+        """`records.backfill.report`: one run's census, counts and items (section 8.3).
+
+        Both switches first, then the local-operator check: an ordinary or
+        remote caller is `denied` (section 7.5), whatever grants it holds.
+        """
+        self._lineage_plane()
+        self._lineage_backfill_plane()
+        attested_lineage_authority(authorization)
+        with _translated(), _lineage_translated():
+            report = report_backfill(
+                unit_of_work, authorization.principal.principal_id, command.report_request()
+            )
+        return _Result(
+            payload=report.to_payload(),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+        )
+
     def _records_lineage(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadRecordLineage
     ) -> _Result:
-        """`records.lineage`: the bounded, Issue-scoped reverse read."""
-        self._lineage_plane()
+        """`records.lineage`: the bounded, Issue-scoped reverse read (S3 section 7.2).
+
+        As of `known_at` / `valid_at`, family-visible to a remote reader (section
+        6.4), and paged under a grant-bound cursor when `page_size` is given.
+        """
+        visibility = self._lineage_read(authorization, command.capability)
         with _translated(), _lineage_translated():
             view = self._record_lineage.read_lineage(
-                unit_of_work, authorization.principal.principal_id, command.lineage_request()
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.lineage_request(),
+                now=authorization.at,
+                visibility=visibility,
             )
         return _Result(
             payload=view.to_canonical_dict(),
@@ -13719,7 +14132,7 @@ class ApplicationService:
         command: ListMeetingNoteVersions,
     ) -> _Result:
         """`meetings.notes.versions`: note version metadata, newest first; no body or digest."""
-        self._lineage_plane()
+        self._lineage_read(authorization, command.capability)
         principal_id = authorization.principal.principal_id
         with _translated(), _meeting_translated():
             meetings = unit_of_work.meetings
@@ -13766,7 +14179,7 @@ class ApplicationService:
         command: ReadMeetingNoteVersion,
     ) -> _Result:
         """`meetings.notes.read_version`: one exact note version; the body only on request."""
-        self._lineage_plane()
+        self._lineage_read(authorization, command.capability)
         with _translated(), _meeting_translated():
             note = unit_of_work.meetings.read_note_version(
                 authorization.principal.principal_id, command.meeting_id, command.note_version_id
@@ -15938,6 +16351,16 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.ISSUES_HANDOFFS_LIST: ApplicationService._issues_handoffs_list,
         Capability.ISSUES_WORK_CREATE_TASK: ApplicationService._issues_work_create_task,
         Capability.ISSUES_WORK_CREATE_COMMITMENT: ApplicationService._issues_work_create_commitment,
+        Capability.RECORDS_ASSOCIATIONS_CONTEST: ApplicationService._records_associations_contest,
+        Capability.RECORDS_ASSOCIATIONS_REINSTATE: (
+            ApplicationService._records_associations_reinstate
+        ),
+        Capability.RECORDS_ASSOCIATIONS_HISTORY: ApplicationService._records_associations_history,
+        Capability.ISSUES_HISTORY: ApplicationService._issues_history,
+        Capability.ISSUES_TIMELINE: ApplicationService._issues_timeline,
+        Capability.ISSUES_HANDOFFS_CORRECT: ApplicationService._issues_handoffs_correct,
+        Capability.RECORDS_BACKFILL_PLAN: ApplicationService._records_backfill_plan,
+        Capability.RECORDS_BACKFILL_REPORT: ApplicationService._records_backfill_report,
         Capability.MEETINGS_NOTES_VERSIONS: ApplicationService._meetings_notes_versions,
         Capability.MEETINGS_NOTES_READ_VERSION: ApplicationService._meetings_notes_read_version,
         Capability.RECORD_EVENTS_LIST: ApplicationService._record_events_list,
@@ -16074,8 +16497,9 @@ _KNOWLEDGE_ASSERTION_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     }
 )
 
-#: Record lineage S1 and S2 (ADR-015; S1 and S2 contract section 7.5): the exact
-#: 22-name set the `lineage_enabled` switch withholds, written out one at a time. The set is
+#: Record lineage S1, S2 and S3 (ADR-015; S1 and S2 contract section 7.5, S3
+#: section 7.7): the exact 30-name set the `lineage_enabled` switch withholds,
+#: written out one at a time. The set is
 #: the contract's exact S1 set, named as strings because the S1 application
 #: slices declare their `Capability` members in turn (the Issue plane first);
 #: `_LINEAGE_CAPABILITIES` is the declared part of it, so a name declared later
@@ -16105,10 +16529,80 @@ _LINEAGE_CAPABILITY_NAMES: Final[frozenset[str]] = frozenset(
         "issues.handoffs.list",
         "issues.work.create_task",
         "issues.work.create_commitment",
+        # Record lineage S3 (S3 contract section 7.7).
+        "records.associations.contest",
+        "records.associations.reinstate",
+        "records.associations.history",
+        "issues.history",
+        "issues.timeline",
+        "issues.handoffs.correct",
+        "records.backfill.plan",
+        "records.backfill.report",
     }
 )
 _LINEAGE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     capability for capability in Capability if capability.value in _LINEAGE_CAPABILITY_NAMES
+)
+
+
+#: S3 FR3-F08: `issues.handoffs.list` reads its visibility-filtered pages in
+#: batches of at least this many entries, and at most `MAX_VISIBILITY_SCAN`
+#: entries per request; reaching the bound is this stated truncation.
+_HANDOFF_SCAN_BATCH: Final = 100
+_HANDOFF_SCAN_BOUND: Final = MAX_VISIBILITY_SCAN
+_HANDOFF_SCAN_REASON: Final = "visibility_scan_bound"
+
+
+def _shown_anchors(
+    unit_of_work: UnitOfWork,
+    principal_id: str,
+    anchors: Sequence[EvidenceAnchorView],
+    visibility: LineageVisibility,
+) -> tuple[tuple[EvidenceAnchorView, ...], bool]:
+    """S3 section 6.4 over already-built anchor views: `(shown, withheld)`.
+
+    An anchor whose source family the reader may not see is withheld; a legacy
+    `capture` anchor whose root now holds a `restricted_local` version reads
+    `restricted` to a local reader and is withheld from a remote one (S1 F24's
+    forward rule).
+    """
+    legacy = {anchor.root_id for anchor in anchors if anchor.family is EvidenceSourceFamily.CAPTURE}
+    restricted_roots = (
+        unit_of_work.record_lineage.restricted_capture_roots(principal_id, legacy)
+        if legacy
+        else frozenset()
+    )
+    shown: list[EvidenceAnchorView] = []
+    withheld = False
+    for anchor in anchors:
+        is_restricted = (
+            anchor.family is EvidenceSourceFamily.CAPTURE and anchor.root_id in restricted_roots
+        )
+        if not visibility.sees_family(ANCHOR_FAMILIES[anchor.family]) or (
+            is_restricted and visibility.remote
+        ):
+            withheld = True
+            continue
+        if is_restricted:
+            anchor = anchor.model_copy(update={"availability": EvidenceAvailability.RESTRICTED})
+        shown.append(anchor)
+    return tuple(shown), withheld
+
+
+def _lineage_instant(value: datetime) -> str:
+    """A lineage cut as RFC 3339 UTC with microseconds (S3 contract section 3.4).
+
+    Unlike a view's millisecond timestamps, a reported cut keeps every digit, so
+    passing it back as `known_at` reads exactly the same facts.
+    """
+    return ensure_utc(value).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+#: Record lineage S3 (contract section 7.7): the two operator-only backfill
+#: names, withheld unless both `lineage_enabled` and `lineage_backfill_enabled`
+#: are on (`LINEAGE_BACKFILL_CAPABILITIES`, as members).
+_LINEAGE_BACKFILL_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    capability for capability in Capability if capability.value in LINEAGE_BACKFILL_CAPABILITIES
 )
 
 #: KLP-WP-04: the bound discovery client's two writes. Withheld from every

@@ -28,11 +28,19 @@ cascade), `issues.reopen`, the read-only `issues.closure_readiness`, the
 R2-F14), `IssueView.closure`, and the closed-Issue rule on the Project-link
 writes (section 3.2). Closing or reopening changes no member, link or native
 record.
+
+**S3** (S3 contract section 3.2) adds one gate condition: no link in the
+Issue's context has a `contested` head (the one "in the Issue's context"
+predicate, `record_lineage.links_in_context`), so `issues.close` answers
+`conflict` / `closure_gate` and `issues.closure_readiness` lists the
+`contested_links` (at most 100, by `link_id`) and is not ready while any
+exist. The close also shares the endpoints of every in-context semantic link
+it evaluates.
 """
 
 from __future__ import annotations
 
-from collections.abc import Collection, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Final
@@ -54,13 +62,21 @@ from my_pa.application.lineage_endpoints import (
     lock_evidence_source,
     lock_lineage_sources,
 )
-from my_pa.application.record_lineage import anchor_view, evidence_availability
+from my_pa.application.lineage_visibility import LineageVisibility
+from my_pa.application.record_lineage import (
+    anchor_view,
+    evidence_availability,
+    lineage_known_at,
+    links_in_context,
+    visible_anchor_sets,
+)
 from my_pa.contracts.ports import (
     IssueListPage,
     IssueRecord,
     IssueRepository,
     IssueRevisionRecord,
     LineageEndpoint,
+    LineageFactCut,
     LineageLinkEvidence,
     LineageWriteRequestRecord,
     LinkHeadRecord,
@@ -72,9 +88,12 @@ from my_pa.contracts.ports import (
 )
 from my_pa.contracts.v1.issues import (
     MAX_CLOSURE_BLOCKERS,
+    MAX_CONTESTED_LINKS,
     MAX_ISSUE_PROJECT_LINKS,
     ClosureBlockerView,
+    ContestedLinkView,
     IssueClosureView,
+    IssueHistoryEntryView,
     IssueListEntry,
     IssueReopeningView,
     IssueRevisionView,
@@ -103,6 +122,7 @@ from my_pa.domain.lineage.vocabulary import (
     IssueProjectMembershipAction,
     IssueProjectMembershipState,
     IssueRevisionAction,
+    LinkLifecycleState,
     RecordFamily,
 )
 from my_pa.domain.situation.issue_lifecycle import (
@@ -126,6 +146,8 @@ __all__ = [
     "IssueCloseResult",
     "IssueClosureReadiness",
     "IssueCreateRequest",
+    "IssueHistoryRequest",
+    "IssueHistoryResult",
     "IssueListRequest",
     "IssueReopenRequest",
     "IssueReopenResult",
@@ -257,6 +279,34 @@ class IssueClosureReadiness:
     ready: bool
     blockers: tuple[ClosureBlockerView, ...]
     blockers_truncated: bool
+    #: S3 section 7.1: contested links in the Issue's context, by `link_id`.
+    contested_links: tuple[ContestedLinkView, ...] = ()
+    contested_links_truncated: bool = False
+    #: S3 section 6.4: whether a blocker or contested link was withheld from a
+    #: remote reader (`ready` is computed over everything).
+    restricted: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class IssueHistoryRequest:
+    """`issues.history`, parsed (S3 section 7.3)."""
+
+    issue_id: str
+    known_at: datetime | None
+    page_size: int
+    after: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class IssueHistoryResult:
+    """One page of an Issue's revisions as known at `known_at` (`T_k`)."""
+
+    issue_id: str
+    known_at: datetime | None
+    revisions: tuple[IssueHistoryEntryView, ...]
+    next_cursor: int | None
+    #: S3 section 6.4 (FR3-F04): whether an anchor was withheld from this page.
+    restricted: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -530,6 +580,8 @@ class IssueApplication:
         )
         if prior is not None:
             return _replayed_revision(issues, principal_id, prior)
+        # S3 section 6.2 step 1b: the commit mark, before any other lock.
+        uow.record_lineage.take_commit_mark(principal_id)
         issue = IssueRecord(
             issue_id=issue_identifier(IdKind.SITUATION),
             version=1,
@@ -601,6 +653,65 @@ class IssueApplication:
             closure=closure,
         )
 
+    def issue_history(
+        self,
+        uow: UnitOfWork,
+        principal_id: str,
+        request: IssueHistoryRequest,
+        *,
+        now: datetime,
+        visibility: LineageVisibility,
+    ) -> IssueHistoryResult:
+        """`issues.history` (S3 section 7.3): the revisions known at `T_k`, by version.
+
+        An absent, foreign or context Situation, an Issue no revision of which
+        is known at `T_k`, and (remote) an Issue the reader may not see are
+        `not_found` / `issue_id`, alike. Each revision carries its closing or
+        reopening evidence, visibility-filtered (section 6.4).
+        """
+        issues = uow.issues
+        issue_ref = RecordRef(family=RecordFamily.SITUATION, record_id=request.issue_id)
+        issue = issues.read_issue(principal_id, request.issue_id)
+        if issue is None or not visibility.sees(issue_ref):
+            raise NotFoundError(SafeDetail.ISSUE_ID)
+        known_at = lineage_known_at(uow, principal_id, request.known_at, now)
+        cut = LineageFactCut(
+            watermark=None
+            if known_at is None
+            else uow.record_lineage.commit_watermark(principal_id, known_at),
+            at=known_at,
+        )
+        if not issues.issue_revisions_known_at(
+            principal_id, request.issue_id, cut, after=None, limit=1
+        ):
+            raise NotFoundError(SafeDetail.ISSUE_ID)
+        revisions = issues.issue_revisions_known_at(
+            principal_id, request.issue_id, cut, after=request.after, limit=request.page_size + 1
+        )
+        shown = revisions[: request.page_size]
+        sets, withheld = visible_anchor_sets(
+            uow.record_lineage,
+            principal_id,
+            [revision.evidence for revision in shown],
+            visibility,
+        )
+        return IssueHistoryResult(
+            issue_id=request.issue_id,
+            known_at=known_at,
+            revisions=tuple(
+                IssueHistoryEntryView(
+                    **_revision_view(issue, revision).model_dump(),
+                    closed_at=revision.closed_at,
+                    outcome=revision.outcome,
+                    reason=revision.reason,
+                    evidence=evidence,
+                )
+                for revision, evidence in zip(shown, sets, strict=True)
+            ),
+            next_cursor=shown[-1].version if len(revisions) > request.page_size and shown else None,
+            restricted=withheld,
+        )
+
     def list_issues(
         self, uow: UnitOfWork, principal_id: str, request: IssueListRequest
     ) -> tuple[tuple[IssueListEntry, ...], str | None]:
@@ -654,6 +765,8 @@ class IssueApplication:
             if stored.action is IssueRevisionAction.CORRECTED:
                 _require_attested(authority)
             return IssueRevisionResult(issue=_revision_view(stored_issue, stored), replayed=True)
+        # S3 section 6.2 step 1b: the commit mark, before any other lock.
+        uow.record_lineage.take_commit_mark(principal_id)
         current = issues.lock_issue(principal_id, request.issue_id, for_update=True)
         if current is None:
             raise NotFoundError(SafeDetail.ISSUE_ID)
@@ -757,6 +870,8 @@ class IssueApplication:
                 closure=_closure_view(lineage, principal_id, stored),
                 replayed=True,
             )
+        # S3 section 6.2 step 1b: the commit mark, before any other lock.
+        uow.record_lineage.take_commit_mark(principal_id)
         current = issues.lock_issue(principal_id, request.issue_id, for_update=True)
         if current is None:
             raise NotFoundError(SafeDetail.ISSUE_ID)
@@ -781,11 +896,21 @@ class IssueApplication:
             if cited.anchor.role is EvidenceRole.RESOLUTION
         )
         closure_set = request.closure_evidence_anchors
+        # S3 section 3.2: the live semantic links in the Issue's context. Every
+        # contest or reinstate of one shares this Issue, so they are stable once
+        # it is locked; their endpoints are shared with the members.
+        in_context = links_in_context(lineage, principal_id, request.issue_id)
+        issue_ref = RecordRef(family=RecordFamily.SITUATION, record_id=request.issue_id)
+        shared_refs = list(dict.fromkeys(head.link.to_ref for head in heads))
+        for head in in_context:
+            for ref in (head.link.from_ref, head.link.to_ref):
+                if ref != issue_ref and ref not in shared_refs:
+                    shared_refs.append(ref)
         locked = lock_lineage_sources(
             issues,
             lineage,
             principal_id,
-            endpoints=tuple((head.link.to_ref, SafeDetail.MEMBER) for head in heads),
+            endpoints=tuple((ref, SafeDetail.MEMBER) for ref in shared_refs),
             anchors=closure_set + resolution_sources,
             anchor_detail=SafeDetail.CLOSURE_EVIDENCE_ANCHORS,
         )
@@ -816,6 +941,9 @@ class IssueApplication:
                 archived,
             ):
                 raise ConflictError(SafeDetail.CLOSURE_GATE)
+        if any(head.lifecycle_state is LinkLifecycleState.CONTESTED for head in in_context):
+            # S3 section 3.2: a disputed claim in the Issue's context holds the close.
+            raise ConflictError(SafeDetail.CLOSURE_GATE)
         version = current.version + 1
         revision = IssueRevisionRecord(
             issue_id=current.issue_id,
@@ -886,6 +1014,8 @@ class IssueApplication:
                 reopening=_reopening_view(lineage, principal_id, stored),
                 replayed=True,
             )
+        # S3 section 6.2 step 1b: the commit mark, before any other lock.
+        uow.record_lineage.take_commit_mark(principal_id)
         current = issues.lock_issue(principal_id, request.issue_id, for_update=True)
         if current is None:
             raise NotFoundError(SafeDetail.ISSUE_ID)
@@ -946,12 +1076,20 @@ class IssueApplication:
         )
 
     def closure_readiness(
-        self, uow: UnitOfWork, principal_id: str, issue_id: str
+        self,
+        uow: UnitOfWork,
+        principal_id: str,
+        issue_id: str,
+        *,
+        visible: Callable[[RecordRef], bool] | None = None,
     ) -> IssueClosureReadiness:
         """Evaluate the gate without writing or locking (S2 section 7.2).
 
         Says nothing about the closure evidence `issues.close` is given. A
-        closed Issue answers `ready: false` and no blockers.
+        closed Issue answers `ready: false` and no blockers. `visible` is the
+        reader's section 6.4 family visibility (S3): a blocker whose member, or
+        a contested link with an endpoint, it may not see is withheld and
+        `restricted` says so; `ready` is computed over everything.
         """
         issues, lineage = uow.issues, uow.record_lineage
         issue = issues.read_issue(principal_id, issue_id)
@@ -999,13 +1137,37 @@ class IssueApplication:
         blocked.sort(
             key=lambda view: (view.member.family.value, view.member.record_id, view.link_id)
         )
+        # S3 section 3.2: every contested link in the Issue's context, by `link_id`.
+        disputed = sorted(
+            (
+                head
+                for head in links_in_context(lineage, principal_id, issue_id)
+                if head.lifecycle_state is LinkLifecycleState.CONTESTED
+            ),
+            key=lambda head: head.link.link_id,
+        )
+        ready = not blocked and not disputed
+        sees = visible if visible is not None else (lambda _ref: True)
+        shown = [
+            view
+            for view in blocked
+            if sees(RecordRef(family=view.member.family, record_id=view.member.record_id))
+        ]
+        contested = [
+            ContestedLinkView(link_id=head.link.link_id, relation_type=head.link.relation_type)
+            for head in disputed
+            if sees(head.link.from_ref) and sees(head.link.to_ref)
+        ]
         return IssueClosureReadiness(
             issue_id=issue.issue_id,
             version=issue.version,
             state=issue.state.value,
-            ready=not blocked,
-            blockers=tuple(blocked[:MAX_CLOSURE_BLOCKERS]),
-            blockers_truncated=len(blocked) > MAX_CLOSURE_BLOCKERS,
+            ready=ready,
+            blockers=tuple(shown[:MAX_CLOSURE_BLOCKERS]),
+            blockers_truncated=len(shown) > MAX_CLOSURE_BLOCKERS,
+            contested_links=tuple(contested[:MAX_CONTESTED_LINKS]),
+            contested_links_truncated=len(contested) > MAX_CONTESTED_LINKS,
+            restricted=len(shown) < len(blocked) or len(contested) < len(disputed),
         )
 
     # --- issues.project_links.add / end ----------------------------------------
@@ -1028,6 +1190,8 @@ class IssueApplication:
         )
         if prior is not None:
             return _replayed_link(issues, principal_id, prior)
+        # S3 section 6.2 step 1b: the commit mark, before any other lock.
+        uow.record_lineage.take_commit_mark(principal_id)
         anchor_id = self._share_link_ends(
             issues,
             principal_id,
@@ -1098,6 +1262,8 @@ class IssueApplication:
         )
         if prior is not None:
             return _replayed_link(issues, principal_id, prior)
+        # S3 section 6.2 step 1b: the commit mark, before any other lock.
+        uow.record_lineage.take_commit_mark(principal_id)
         self._share_link_ends(
             issues,
             principal_id,

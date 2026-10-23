@@ -3,6 +3,10 @@ import {
   type MeetingsNotesReadVersionResult,
 } from "@/lib/api/decode/capabilities/meetings.notes.read_version";
 import { decodeRecordsLineage, type RecordsLineageResult } from "@/lib/api/decode/capabilities/records.lineage";
+import { decodeIssuesList, type IssuesListResult } from "@/lib/api/decode/capabilities/issues.list";
+import { decodeIssuesRead, type IssuesReadResult } from "@/lib/api/decode/capabilities/issues.read";
+import { decodeIssuesTimeline, type IssuesTimelineResult } from "@/lib/api/decode/capabilities/issues.timeline";
+import { decodeMeetingsRead, type MeetingsReadResult } from "@/lib/api/decode/capabilities/meetings.read";
 import type { Decoder } from "@/lib/api/decode/types";
 
 export type ApiFailure = Error & { status?: number; code?: string; errorClass?: string; current?: unknown };
@@ -71,8 +75,8 @@ export async function workRequest<T>(
   return body as T;
 }
 
-/** The record views that carry a related-Issue panel (S1 contract section 7.4). */
-export type RelatedIssuesFamily = "task" | "commitment" | "constraint";
+/** The record views that carry a related-Issue panel (S1 contract section 7.4; S3 section 7.6 adds the Meeting view). */
+export type RelatedIssuesFamily = "task" | "commitment" | "constraint" | "meeting";
 
 /**
  * A BFF route answer is the capability result plus the route's own `shape` and
@@ -110,6 +114,47 @@ export async function fetchNoteVersion(
     `/api/meetings/${encodeURIComponent(meetingId)}/notes/${encodeURIComponent(noteVersionId)}?includeBody=true`,
     decodeMeetingsNotesReadVersion,
   );
+}
+
+/** The Issues index: one `issues.list` page (S3 contract section 7.6). */
+export async function fetchIssues(options: { readonly state?: string; readonly after?: string } = {}): Promise<IssuesListResult> {
+  const query = new URLSearchParams();
+  if (options.state !== undefined) query.set("state", options.state);
+  if (options.after !== undefined) query.set("after", options.after);
+  const search = query.size > 0 ? `?${query.toString()}` : "";
+  return decodedRead(`/api/issues${search}`, decodeIssuesList);
+}
+
+/** One Issue's header: one `issues.read`. */
+export async function fetchIssue(issueId: string): Promise<IssuesReadResult> {
+  return decodedRead(`/api/issues/${encodeURIComponent(issueId)}`, decodeIssuesRead);
+}
+
+/** The paged reads of the Issue view: the first page names its size; a later one adds only the cursor. */
+export interface IssuePage {
+  readonly pageSize: number;
+  readonly cursor?: string;
+}
+
+function pageQuery(page: IssuePage): string {
+  const query = new URLSearchParams({ pageSize: String(page.pageSize) });
+  if (page.cursor !== undefined) query.set("cursor", page.cursor);
+  return `?${query.toString()}`;
+}
+
+/** One `issues.timeline` page. */
+export async function fetchIssueTimeline(issueId: string, page: IssuePage): Promise<IssuesTimelineResult> {
+  return decodedRead(`/api/issues/${encodeURIComponent(issueId)}/timeline${pageQuery(page)}`, decodeIssuesTimeline);
+}
+
+/** One `records.lineage` page with the Issue as origin. */
+export async function fetchIssueLineage(issueId: string, page: IssuePage): Promise<RecordsLineageResult> {
+  return decodedRead(`/api/issues/${encodeURIComponent(issueId)}/lineage${pageQuery(page)}`, decodeRecordsLineage);
+}
+
+/** One Meeting's header: the existing `meetings.read` route. */
+export async function fetchMeeting(meetingId: string): Promise<MeetingsReadResult> {
+  return decodedRead(`/api/meetings/${encodeURIComponent(meetingId)}`, decodeMeetingsRead);
 }
 
 export async function captureEvidence(note: string, purpose: string, idempotencyKey = mutationKey(purpose)): Promise<string> {

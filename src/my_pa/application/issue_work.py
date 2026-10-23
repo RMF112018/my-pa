@@ -214,6 +214,8 @@ class IssueWorkApplication:
         )
         if prior is not None:
             return self._replayed(uow, principal_id, capability, idempotency_key, prior)
+        # S3 section 6.2 step 1b: the commit mark, before any other lock.
+        uow.record_lineage.take_commit_mark(principal_id)
         issue_ref = RecordRef(family=RecordFamily.SITUATION, record_id=request.issue_id)
         intents = request.association_intents
         for intent in intents:

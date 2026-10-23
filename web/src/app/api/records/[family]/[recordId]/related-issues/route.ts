@@ -3,14 +3,15 @@ import type { RecordsLineageResult } from "@/lib/api/decode/capabilities/records
 import { invalidWorkRequest, isCanonicalId, workGet } from "@/lib/api/work-route";
 
 /**
- * The related-Issue read behind one Task, Commitment or Constraint view
- * (record lineage S1 contract section 7.4): one `records.lineage` call, one hop
- * from the record, optionally under a chosen Issue. Read-only.
+ * The related-Issue read behind one Task, Commitment, Constraint or Meeting
+ * view (record lineage S1 contract section 7.4; S3 section 7.6 admits the
+ * Meeting view): one `records.lineage` call, one hop from the record,
+ * optionally under a chosen Issue. Read-only.
  *
- * Only the three record views `web/` has are admitted; any other family is a
+ * Only the four record views `web/` has are admitted; any other family is a
  * local `invalid_request` and never reaches the gateway.
  */
-const FAMILY_PREFIX = { task: "tsk", commitment: "cmt", constraint: "cst" } as const;
+const FAMILY_PREFIX = { task: "tsk", commitment: "cmt", constraint: "cst", meeting: "mtg" } as const;
 type Family = keyof typeof FAMILY_PREFIX;
 
 function isFamily(value: string): value is Family {
@@ -21,7 +22,7 @@ type Context = { params: Promise<{ family: string; recordId: string }> };
 
 export async function GET(request: NextRequest, context: Context) {
   const { family, recordId } = await context.params;
-  if (!isFamily(family)) return invalidWorkRequest("family must be task, commitment or constraint");
+  if (!isFamily(family)) return invalidWorkRequest("family must be task, commitment, constraint or meeting");
   if (!isCanonicalId(recordId, FAMILY_PREFIX[family])) return invalidWorkRequest("recordId was malformed");
   return workGet(request, "related-issues", "records.lineage", {
     issueId: { gateway: "issue_id", type: "string", pattern: /^sit_[A-Za-z0-9]{8,64}$/ },

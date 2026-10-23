@@ -473,6 +473,11 @@ def test_ending_a_membership_is_the_only_way_past_an_unsatisfiable_member(
         "ready": True,
         "blockers": [],
         "blockers_truncated": False,
+        # S3 section 7.1 lockstep: no contested link in the Issue's context,
+        # and (section 6.4) nothing withheld.
+        "contested_links": [],
+        "contested_links_truncated": False,
+        "restricted": False,
     }
     _ok(runtime, close(issue, 1, "scope-2", _closure_set(runtime, "scope-2")))
 
@@ -731,6 +736,11 @@ def test_closure_readiness_names_each_blocked_member(runtime: S2Runtime) -> None
         "ready": False,
         "blockers": [],
         "blockers_truncated": False,
+        # S3 section 7.1 lockstep: no contested link in the Issue's context,
+        # and (section 6.4) nothing withheld.
+        "contested_links": [],
+        "contested_links_truncated": False,
+        "restricted": False,
     }
 
 

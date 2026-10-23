@@ -13,7 +13,12 @@
  *
  * With the lineage plane switched off the capability answers `unsupported`, and
  * the panel then renders nothing at all.
+ *
+ * S3 (contract section 7.6): the Meeting view carries the panel too, the
+ * selected Issue's title links to the Issue view, and a contested link says so
+ * in words.
  */
+import Link from "next/link";
 import { useEffect, useId, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type {
@@ -79,6 +84,9 @@ function relationWords(edge: AssociationView, root: RecordRef): string {
       return outgoing ? `Blocks ${family}` : `Blocked by ${family}`;
     case "created_to_resolve":
       return outgoing ? `Created to resolve ${family}` : `${family.charAt(0).toUpperCase()}${family.slice(1)} was created to resolve it`;
+    // S3 (contract section 3.1): symmetric, so both sides read the same.
+    case "related_context":
+      return `Related to ${family}`;
     default:
       return outgoing ? `Discusses ${family}` : `Discussed in ${family}`;
   }
@@ -171,7 +179,9 @@ function NoteAnchor({ anchor }: { readonly anchor: EvidenceAnchorView }) {
 function Edge({ edge, root }: { readonly edge: AssociationView; readonly root: RecordRef }) {
   return (
     <li className="rounded-lg border border-moss-slate/15 p-3" data-testid={`related-issue-edge-${edge.link_id}`}>
-      <p className="font-medium text-moss-slate">{relationWords(edge, root)}</p>
+      <p className="font-medium text-moss-slate">
+        {relationWords(edge, root)}{edge.lifecycle_state === "contested" ? " (contested)" : null}
+      </p>
       <p className="mt-1 text-muted">
         State: {words(edge.lifecycle_state)} · Basis: {words(edge.acceptance_basis)} · Recorded by: {words(edge.authority_class)}
       </p>
@@ -268,7 +278,10 @@ export function RelatedIssuesPanel({ family, recordId, headingLevel = 2 }: Relat
         {selectedId !== null && !pending ? (
           <div className="mt-2" data-testid="related-issue-selected">
             <p className="break-words font-medium text-moss-slate">
-              Issue: {issueTitle ?? "Title not shown"}{issueState ? <span className="font-normal text-muted"> · State: {words(issueState)}</span> : null}
+              <Link href={`/work/issues/${encodeURIComponent(selectedId)}`} className="underline underline-offset-2">
+                Issue: {issueTitle ?? "Title not shown"}
+              </Link>
+              {issueState ? <span className="font-normal text-muted"> · State: {words(issueState)}</span> : null}
             </p>
             {edges.length > 0 ? (
               <ul className="mt-2 grid gap-2">

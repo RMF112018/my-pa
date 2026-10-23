@@ -521,6 +521,8 @@ _EXACT_ROLE_RULES: Final[Mapping[RelationType, EvidenceRole]] = {
     RelationType.DELEGATED_FROM: EvidenceRole.ORIGIN,
     RelationType.ESCALATED_FROM: EvidenceRole.ORIGIN,
     RelationType.BLOCKS: EvidenceRole.CORROBORATES,
+    # S3 section 3.1.
+    RelationType.RELATED_CONTEXT: EvidenceRole.CORROBORATES,
 }
 
 
@@ -539,7 +541,8 @@ def require_relation_evidence(
 
     S2 (section 3.1): `delegated_from` and `escalated_from` need an `origin`
     anchor on an exact version (`immutable_version`), `blocks` a
-    `corroborates` one; `created_to_resolve` admits any set. This is the rule
+    `corroborates` one; `created_to_resolve` admits any set. S3 (section 3.1):
+    `related_context` needs an exact `corroborates` anchor. This is the rule
     a correction re-applies (R2-F07); the assert-time rules are the
     composite's and `records.associations.assert`'s.
     """

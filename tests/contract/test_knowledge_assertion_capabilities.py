@@ -950,6 +950,15 @@ _POST_KLP_CAPABILITIES: Final = frozenset(
         "issues.handoffs.list",
         "issues.work.create_task",
         "issues.work.create_commitment",
+        # Record lineage S3.
+        "records.associations.contest",
+        "records.associations.reinstate",
+        "records.associations.history",
+        "issues.history",
+        "issues.timeline",
+        "issues.handoffs.correct",
+        "records.backfill.plan",
+        "records.backfill.report",
     }
 )
 _EVENT: Final = "rcev_fastworld000000001"

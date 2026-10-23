@@ -25,12 +25,14 @@ refused on construction, not silently dropped.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import Field, field_validator, model_validator
 
 from my_pa.contracts.v1.base import StrictModel, UtcDatetime
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
+from my_pa.domain.lineage.cursor import MAX_CURSOR_CHARACTERS, instant_token
 from my_pa.domain.lineage.model import MAX_ISSUE_TITLE_CHARACTERS
 from my_pa.domain.lineage.vocabulary import (
     RECORD_FAMILY_ID_KINDS,
@@ -40,6 +42,7 @@ from my_pa.domain.lineage.vocabulary import (
     EvidenceSourceFamily,
     LineageCompleteness,
     LinkLifecycleState,
+    LinkRevisionAction,
     MemberRole,
     NativeVirtualEdge,
     RecordFamily,
@@ -55,7 +58,10 @@ __all__ = [
     "EvidenceAnchorView",
     "LineageIssueMatch",
     "LineageNodeView",
+    "LineagePathEdgeView",
     "LineageView",
+    "LinkHistoryRevisionView",
+    "LinkHistoryRootView",
     "RecordRefView",
     "VirtualEdgeView",
 ]
@@ -134,6 +140,46 @@ class AssociationView(StrictModel):
         return self.model_dump(mode="json", by_alias=True)
 
 
+class LinkHistoryRootView(StrictModel):
+    """The link a `records.associations.history` answer is about (S3 section 7.3)."""
+
+    link_id: str
+    kind: RecordLinkKind
+    relation_type: RelationType
+    from_ref: RecordRefView = Field(serialization_alias="from")
+    to_ref: RecordRefView = Field(serialization_alias="to")
+    member_role: MemberRole | None
+    context_issue_id: str | None
+    created_at: UtcDatetime
+
+    @field_validator("link_id")
+    @classmethod
+    def _link_id(cls, value: str) -> str:
+        return validate_identifier(value, IdKind.RECORD_LINK)
+
+    def to_canonical_dict(self) -> dict[str, Any]:
+        return self.model_dump(mode="json", by_alias=True)
+
+
+class LinkHistoryRevisionView(StrictModel):
+    """One revision of one link, with its (visible) evidence (S3 section 7.3)."""
+
+    revision_no: int = Field(ge=1)
+    revision_id: str
+    action: LinkRevisionAction
+    lifecycle_state: LinkLifecycleState
+    acceptance_basis: AcceptanceBasis
+    authority_class: str
+    reason: str | None
+    evidence: tuple[EvidenceAnchorView, ...] = Field(max_length=32)
+    recorded_at: UtcDatetime
+
+    @field_validator("revision_id")
+    @classmethod
+    def _revision_id(cls, value: str) -> str:
+        return validate_identifier(value, IdKind.RECORD_LINK_REVISION)
+
+
 class LineageIssueMatch(StrictModel):
     """One Issue the root matches: its id, its own title and state only."""
 
@@ -147,11 +193,39 @@ class LineageIssueMatch(StrictModel):
         return validate_identifier(value, IdKind.SITUATION)
 
 
+class LineagePathEdgeView(StrictModel):
+    """How a node was first reached (S3 section 7.1, `LineagePathStep.reached_via`).
+
+    `{"edge": "typed", "link_id": irl_}` or `{"edge": "virtual", "edge_type":
+    "meeting_note_version_of"}`; the other key is never serialized.
+    """
+
+    edge: Literal["typed", "virtual"]
+    link_id: str | None = None
+    edge_type: NativeVirtualEdge | None = None
+
+    @model_validator(mode="after")
+    def _check(self) -> LineagePathEdgeView:
+        if self.edge == "typed":
+            if self.link_id is None or self.edge_type is not None:
+                raise ValueError("a typed path step names its link only")
+            validate_identifier(self.link_id, IdKind.RECORD_LINK)
+        elif self.edge_type is None or self.link_id is not None:
+            raise ValueError("a virtual path step names its edge type only")
+        return self
+
+    def to_canonical_dict(self) -> dict[str, Any]:
+        return self.model_dump(mode="json", exclude_none=True)
+
+
 class LineageNodeView(StrictModel):
     """One reached record.
 
     `meeting_id` only on a note version, `title` and `state` only on an Issue,
     `availability` only on a Capture version; absent keys are not serialized.
+    S3 (section 7.1) adds the path step that first reached the node:
+    `reached_from` (`null` for the root) and `reached_via` (`null` for the
+    root), always serialized, so following `reached_from` reaches the root.
     """
 
     family: RecordFamily
@@ -161,6 +235,8 @@ class LineageNodeView(StrictModel):
     title: str | None = Field(default=None, min_length=1, max_length=MAX_ISSUE_TITLE_CHARACTERS)
     state: _IssueState | None = None
     availability: Literal["available", "archived"] | None = None
+    reached_from: RecordRefView | None = None
+    reached_via: LineagePathEdgeView | None = None
 
     @model_validator(mode="after")
     def _check(self) -> LineageNodeView:
@@ -176,11 +252,25 @@ class LineageNodeView(StrictModel):
             raise ValueError("only an Issue node carries a title and a state")
         if (self.availability is not None) is not is_capture:
             raise ValueError("only a Capture version node carries an availability")
+        if (self.reached_from is None) is not (self.reached_via is None):
+            raise ValueError("a path step names both its parent and its edge, or neither")
         return self
 
     def to_canonical_dict(self) -> dict[str, Any]:
-        """The JSON-mode representation without the keys this family does not carry."""
-        return self.model_dump(mode="json", exclude_none=True)
+        """The JSON-mode representation without the keys this family does not carry.
+
+        The two path keys are always present (`null` on the root).
+        """
+        document = self.model_dump(
+            mode="json", exclude_none=True, exclude={"reached_from", "reached_via"}
+        )
+        document["reached_from"] = (
+            None if self.reached_from is None else self.reached_from.to_canonical_dict()
+        )
+        document["reached_via"] = (
+            None if self.reached_via is None else self.reached_via.to_canonical_dict()
+        )
+        return document
 
 
 class VirtualEdgeView(StrictModel):
@@ -205,7 +295,14 @@ class VirtualEdgeView(StrictModel):
 
 
 class LineageView(StrictModel):
-    """One `records.lineage` answer (section 7.2)."""
+    """One `records.lineage` answer (S1 section 7.2, widened by S3 section 7.2).
+
+    S3 adds `qualifiers` (every applicable completeness code, by precedence),
+    the cuts the answer was read at -- `known_at` (`T_k`), `valid_at` (as
+    requested, else `T_k`), `lineage_valid_at` (`T_v`) and `native_cut_at`
+    (`N`), each RFC 3339 UTC with microseconds -- and a string `next_cursor`
+    when another page follows.
+    """
 
     root: RecordRefView
     selected_issue_id: str | None
@@ -214,7 +311,14 @@ class LineageView(StrictModel):
     typed_edges: tuple[AssociationView, ...]
     virtual_native_edges: tuple[VirtualEdgeView, ...]
     complete_state: LineageCompleteness
-    next_cursor: None = None
+    qualifiers: tuple[LineageCompleteness, ...] = ()
+    known_at: datetime | None = None
+    valid_at: datetime | None = None
+    lineage_valid_at: datetime | None = None
+    native_cut_at: datetime | None = None
+    next_cursor: str | None = Field(
+        default=None, min_length=1, max_length=MAX_CURSOR_CHARACTERS, pattern=r"^[A-Za-z0-9_-]+$"
+    )
 
     @model_validator(mode="after")
     def _check(self) -> LineageView:
@@ -222,6 +326,11 @@ class LineageView(StrictModel):
             raise ValueError("a lineage answer holds at most 400 edges")
         if self.selected_issue_id is not None:
             validate_identifier(self.selected_issue_id, IdKind.SITUATION)
+        if self.qualifiers and self.qualifiers[0] is not self.complete_state:
+            raise ValueError("the complete_state is the first qualifier")
+        for instant in (self.known_at, self.valid_at, self.lineage_valid_at, self.native_cut_at):
+            if instant is not None and instant.tzinfo is None:
+                raise ValueError("a lineage cut is an aware instant")
         return self
 
     def to_canonical_dict(self) -> dict[str, Any]:
@@ -238,5 +347,10 @@ class LineageView(StrictModel):
                 edge.to_canonical_dict() for edge in self.virtual_native_edges
             ],
             "complete_state": self.complete_state.value,
-            "next_cursor": None,
+            "qualifiers": [code.value for code in self.qualifiers or (self.complete_state,)],
+            "known_at": instant_token(self.known_at),
+            "valid_at": instant_token(self.valid_at),
+            "lineage_valid_at": instant_token(self.lineage_valid_at),
+            "native_cut_at": instant_token(self.native_cut_at),
+            "next_cursor": self.next_cursor,
         }

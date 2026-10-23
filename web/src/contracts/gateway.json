@@ -1033,7 +1033,11 @@
       "payloadFields": [
         "origin",
         "issue_id",
-        "max_depth"
+        "max_depth",
+        "known_at",
+        "valid_at",
+        "page_size",
+        "cursor"
       ],
       "probe": {
         "origin": {
@@ -1054,6 +1058,43 @@
         "meeting_id": "mtg_aaaaaaaa11111111",
         "note_version_id": "mnote_aaaaaaaa11111111",
         "include_body": true
+      }
+    },
+    "issues.list": {
+      "purpose": "issue_read",
+      "payloadFields": [
+        "page_size",
+        "after",
+        "state",
+        "project_id"
+      ],
+      "probe": {
+        "page_size": 25,
+        "state": "open"
+      }
+    },
+    "issues.read": {
+      "purpose": "issue_read",
+      "payloadFields": [
+        "issue_id",
+        "include_members"
+      ],
+      "probe": {
+        "issue_id": "sit_aaaaaaaa11111111"
+      }
+    },
+    "issues.timeline": {
+      "purpose": "issue_read",
+      "payloadFields": [
+        "issue_id",
+        "known_at",
+        "valid_at",
+        "page_size",
+        "cursor"
+      ],
+      "probe": {
+        "issue_id": "sit_aaaaaaaa11111111",
+        "page_size": 25
       }
     }
   },

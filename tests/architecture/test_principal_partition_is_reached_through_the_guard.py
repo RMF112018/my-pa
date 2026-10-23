@@ -177,6 +177,11 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # `matching_partition_criterion`. It writes no hand-written partition
         # comparison.
         "infrastructure/persistence/issue_handoffs.py",
+        # Record lineage S3's Issue timeline reads. Every SELECT composes `_mine`
+        # over `partition_criterion` or `principal_scoped`, and the Constraint
+        # revision party join `matching_partition_criterion`. It writes nothing
+        # and no hand-written partition comparison.
+        "infrastructure/persistence/issue_timeline.py",
         # KLP-WP-03's Knowledge Assertion plane. Every SELECT and UPDATE scopes
         # each table and alias it names through `partition_criterion`, every
         # INSERT (including the `ON CONFLICT` reservation and evidence upserts)
@@ -503,6 +508,12 @@ PER_MODULE_ONLY: Final = {
         "record lineage S2: every SELECT composes `_mine` over `partition_criterion`, "
         "the INSERT `_bound` over `principal_bound_values`, the anchor join "
         "`matching_partition_criterion`; not yet in a dedicated statement-level scanner."
+    ),
+    "infrastructure/persistence/issue_timeline.py": (
+        "record lineage S3: every SELECT composes `_mine` over `partition_criterion` or "
+        "`principal_scoped`, the Constraint revision party join "
+        "`matching_partition_criterion`; it writes nothing; not yet in a dedicated "
+        "statement-level scanner."
     ),
     "infrastructure/persistence/issues.py": (
         "every SELECT/UPDATE composes `_mine` over `partition_criterion` or "

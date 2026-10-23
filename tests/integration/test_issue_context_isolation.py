@@ -91,6 +91,11 @@ def _lineage(
     )
 
 
+def _cutless(answer: dict[str, Any]) -> dict[str, Any]:
+    """The answer without its read-time native cut (S3 section 3.4)."""
+    return {key: value for key, value in answer.items() if key != "native_cut_at"}
+
+
 def _nodes(answer: dict[str, Any]) -> set[tuple[str, str]]:
     return {(node["family"], node["record_id"]) for node in answer["nodes"]}
 
@@ -253,7 +258,11 @@ def test_series_reassignment_changes_no_lineage_row_or_answer(runtime: S2Runtime
         )["meeting"]
         assert moved["meeting_series_id"] == target
         assert all_s2_counts(runtime.engine) == counts, key
-        assert {root: _lineage(runtime, *root) for root in roots} == answers, key
+        # S3 section 3.4 lockstep: a current read reports its own read time as
+        # `native_cut_at`; every other key of the answer is unchanged.
+        assert {root: _cutless(_lineage(runtime, *root)) for root in roots} == {
+            root: _cutless(answer) for root, answer in answers.items()
+        }, key
     # Lineage has no Series vocabulary to read: the Series is native metadata.
     for module in _LINEAGE_MODULES:
         path = _SRC / module

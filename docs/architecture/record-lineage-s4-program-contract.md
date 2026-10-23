@@ -52,8 +52,9 @@ the Markdown digest does not.
 - **WP-04C** — `knowledge.intelligence_artifact_manifests` (section 4.1): every
   artifact committed after the S4 revision gets one immutable canonical manifest
   (section 5.3), hashed separately from the unchanged Markdown digest; a report may
-  reference a Program overview it was written from (section 5.4), which the server
-  re-verifies at commit; `reports.manifest` (section 7.4) reads it, and a report
+  reference a Program overview it was written from (section 5.4), and the manifest
+  binds that reference as an **unverified claim** (nothing in a report is certified in
+  S4); `reports.manifest` (section 7.4) reads it, and a report
   committed before the revision answers `manifest_unavailable_legacy` without any write.
 - AT-015, AT-018, AT-019, AT-022, the S4 part of AT-023, with AT-026 as a regression
   (section 10).
@@ -87,12 +88,12 @@ answers are not lineage reads, so `LineageCompleteness` does not gain the
 | `ProgramCompleteness` | `complete`, `historical_membership_unverified`, `membership_unresolved`, `truncated_budget`, `restricted_evidence` |
 | `MetricGrain` | `commitment`, `issue`, `constraint` |
 | `MetricValueState` | `reported`, `not_reportable`, `restricted` |
-| `NotReportableReason` | `membership_unresolved`, `membership_truncated`, `acceptance_unverified`, `calendar_unconfigured`, `never_synced`, `sync_conflict` |
-| `ConstraintSourceState` | `in_sync`, `never_synced`, `conflict`, `calendar_unconfigured` |
+| `NotReportableReason` | `membership_unresolved`, `membership_truncated`, `acceptance_unverified`, `issue_link_unverified`, `calendar_unconfigured`, `never_synced`, `sync_unverified`, `sync_degraded`, `sync_conflict` |
+| `ConstraintSourceState` | `in_sync`, `never_synced`, `unverified`, `sync_degraded`, `conflict`, `calendar_unconfigured` |
 | `AcceptanceVerification` | `unverified_review_reference`, `not_accepted` |
-| `ReferenceState` | `owned`, `none`, `not_owned` |
-| `ProgramVerificationState` (manifest) | `verified_at_commit`, `changed_since_read` |
-| `ManifestState` (read) | `recorded`, `manifest_unavailable_legacy`, `restricted_evidence` |
+| `ReferenceState` | `owned`, `none`, `not_owned`, `restricted` |
+| `ProgramReferenceState` (manifest) | `unverified_reference` |
+| `ManifestState` (read) | `recorded`, `manifest_unavailable_legacy` |
 | `CandidateStatus` (manifest) | `unaccepted_candidate`, `not_a_candidate` |
 
 `ProgramCompleteness` precedence (one `complete_state`, every applicable code in
@@ -142,10 +143,14 @@ Principal-scoped):
    the request (beyond: `truncated_budget`, and nothing after the bound is read).
    `scope_entity_id` is ignored.
 3. **Window.** With `t` = the evaluation instant (section 3.4):
-   - **current mode** (no `valid_at`): a member iff `state = 'active'` and
-     (`effective_from IS NULL` or `effective_from <= t`) and (`effective_to IS NULL` or
-     `effective_to > t`). A null start is no obstacle here: the edge is recorded as
-     currently active.
+   - **current mode** (no `valid_at`; `t` = `source_cutoff_at`): a member iff
+     (`effective_from IS NULL` or `effective_from <= t`) and either `effective_to > t`
+     (non-null), or `effective_to IS NULL` and `state = 'active'`. A null start is no
+     obstacle here: the edge is recorded as currently in force. An `ended` edge whose
+     recorded end is still in the future (`entities.relationships.end` admits a future
+     `effective_end`) is a member until that end — current and historical mode apply
+     the same window, so they agree at every instant; an `ended` edge with a null end is
+     not a current member.
    - **historical mode** (`valid_at` given): not a member when `effective_from > t` or
      `effective_to <= t` (both non-null comparisons); otherwise a **verified** member iff
      `effective_from` is non-null and (`effective_to` is non-null or `state = 'active'`);
@@ -158,7 +163,10 @@ Principal-scoped):
 4. **Member entity.** The edge's `from_entity_id`, redirect-followed as in step 1;
    `redirect_unresolvable` when the chain fails. A terminal whose `entity_type <>
    'project'` is not a Project member: counted in `excluded.non_project_members`, never
-   listed as a Project.
+   listed as a Project. This includes a **nested Program** (`program member_of
+   program`): Programs are never expanded transitively. The member entity's own status
+   (`active`, `inactive`, `historical`, `archived`) is admitted and reported as
+   `member_entity_status`; a Project Entity is a member by its edge, not by its status.
 5. **Bridge.** The `bound` `project_entity_links` rows whose `project_entity_id`
    redirect-resolves (step 1 rule) to the member terminal `E`. Exactly 1 ⇒ its
    `project_id`; 0 ⇒ `bridge_missing` (this includes a Project whose own bridge row is
@@ -172,6 +180,13 @@ Principal-scoped):
    Programs is a member of each; the `portfolio` set holds it once and `overlaps` names
    its Programs. More than `MAX_PROGRAM_PROJECTS` distinct Projects over the request ⇒
    `truncated_budget`; members are kept in `project_id` order up to the bound.
+   **Which scopes a budget marks:** Programs are processed in request order; the Program
+   during which the edge or Project bound is reached and every later Program carry
+   `truncated_budget` (their sets are incomplete), earlier Programs do not, and the
+   portfolio carries it whenever any Program does.
+   **Historical mode reads only edges historically**: redirects and bridges are read as
+   currently recorded, which `membership_record: "current"` states for the whole
+   resolution (edges, redirects and bridge).
 7. **Never.** No name, alias, canonical-name, Organization, address, participation or
    property match; no manual Project list; no write of any kind (no reconciliation, no
    bridge repair).
@@ -192,9 +207,10 @@ the portfolio), read in the section 6.3 snapshot at the cutoff `c`. "Accepted" i
 | `commitment_overdue_proposed` | `commitment` | open, proposed, `due_at < c` | additive |
 | `commitment_unscheduled_accepted` | `commitment` | open, accepted, `due_at IS NULL` | additive; total gated by `acceptance_unverified` |
 | `commitment_unscheduled_proposed` | `commitment` | open, proposed, `due_at IS NULL` | additive |
-| `issue_outstanding` | `issue` | `situations.kind = 'issue_workstream'`, `state <> 'closed'`, whose latest `issue_project_membership_events` row for `(p, issue)` is `active` | **nonadditive**: one Issue may impact several Projects |
+| `issue_outstanding` | `issue` | `situations.kind = 'issue_workstream'`, `state` ∈ `open`, `active`, `suspended` (a suspended Issue is outstanding — it is not closed — by decision), whose latest `issue_project_membership_events` row for `(p, issue)` is `active` | **nonadditive**: one Issue may impact several Projects |
 | `constraint_open` | `constraint` | `project_constraints.lifecycle_state` ∈ the active states, `project_id = p` (the `constraints.portfolio_overview` `total_open`) | additive |
-| `constraint_overdue` | `constraint` | active and `due_date < project_today(p)` on **p's own calendar** (`business_time.is_overdue`) | additive |
+| `constraint_overdue` | `constraint` | active and `due_date < project_today(p)` on **p's own calendar** (`business_time.is_overdue`) | additive as a distinct count of Constraints, each classified on its own Project's calendar at the one cutoff instant (section 12, D-25) |
+| `constraint_due_soon` | `constraint` | active and `project_today(p) <= due_date <= due_soon_through(project_today(p))` on p's calendar (the overview's `due_soon`) | as `constraint_overdue` |
 | `constraint_in_my_court` | `constraint` | active with the Principal as native ball-in-court party (the overview's `in_my_court`) | additive |
 | `constraint_draft` | `constraint` | `lifecycle_state = 'draft'`, `project_id = p` | additive |
 
@@ -222,11 +238,48 @@ the portfolio), read in the section 6.3 snapshot at the cutoff `c`. "Accepted" i
 Default `NOT_REPORTABLE` on any material gap; per-Project figures stay visible with
 their source state; **no zero is ever substituted**.
 
+**Constraint source state, from the stored sync data (R4-F01).** The portfolio read
+model's 3-way health (`_overview_of`: conflict / no target / `in_sync`) is **not** used
+for reportability: it reads a Project with a registered but never-verified target, or
+whose last run failed, as `in_sync`. S4 reads, in the snapshot and in one statement for
+all Projects, every `constraint_sync_targets` row of the Project with its
+`last_verified_at`, `last_run_id` and the `constraint_sync_runs.sync_state` of that last
+run (the 10 persisted outcomes of `ConstraintSyncState`), plus the open-conflict counts
+`portfolio_sync_summary` already reads. Per target:
+
+| Target condition (checked in this order) | Target state |
+| --- | --- |
+| an open sync conflict on the Project | `conflict` |
+| `last_verified_at IS NULL` or `last_run_id IS NULL` | `unverified` |
+| last run `sync_state` ≠ `in_sync` (`db_export_pending`, `external_import_pending`, `workbook_unavailable`, `schema_unsupported`, `partial`, `verification_pending`, `verification_failed`, `conflict`, `never_synced`) | `sync_degraded`, carrying the run's `sync_state` |
+| otherwise | `in_sync` |
+
+A Project's `constraint_source_state` is: `calendar_unconfigured` when it has no usable
+calendar; else `never_synced` when it has **no** target; else the **worst** of its
+targets' states by precedence `conflict` > `sync_degraded` > `unverified` > `in_sync`
+(a Project with 2 workbooks is `in_sync` only when both are). Overall precedence:
+`calendar_unconfigured` > `conflict` > `sync_degraded` > `unverified` > `never_synced` >
+`in_sync`. The per-Project answer also carries `constraint_last_run_sync_states` (the
+distinct persisted run states of its targets, sorted). The existing
+`ConstraintSyncHealthView` is still shown as `constraint_sync`, for continuity with
+`constraints.portfolio_overview`, and decides nothing.
+
+**Legacy Issue↔Project links (R4-F02).** S1 left existing Issue-kind
+`project_situations` rows "validated, never repaired, unread" (S1 §12 row 3), and S3 §8.3
+classifies one with no membership event for its triplet as `unresolved` /
+`project_situation_inconsistent`. In the snapshot S4 counts, per resolved Project, the
+`project_situations` rows naming an Issue (`situations.kind = 'issue_workstream'`) with
+**no** `issue_project_membership_events` row for `(principal, project, issue)` —
+`legacy_issue_links`. Such a link is neither counted nor dropped: it makes the Issue
+metric unverifiable for that Project.
+
 - **Per-Project values** are `reported` whenever they are computable, carrying the
   Project's `constraint_source_state` and, for the accepted Commitment metrics,
-  `acceptance: "unverified_review_reference"`. The one exception: a Project with no
-  usable calendar has `not_reportable` / `calendar_unconfigured` for its 4 Constraint
-  metrics (the portfolio overview omits it; it is disclosed, never dropped).
+  `acceptance: "unverified_review_reference"`. Exceptions, each `not_reportable` at
+  Project grain too: a Project with no usable calendar has `calendar_unconfigured` for
+  its 5 Constraint metrics (the portfolio overview omits it; it is disclosed, never
+  dropped); a Project with `legacy_issue_links > 0` has `issue_link_unverified` for
+  `issue_outstanding`.
 - **Program and portfolio totals** are `reported` (value = the distinct count, possibly
   `0`, which is then a verified zero) unless one of these holds, in which case the value
   is `null`, `value_state = "not_reportable"` and `reasons` lists every reason (sorted):
@@ -238,30 +291,36 @@ their source state; **no zero is ever substituted**.
     S3 D-11), so an accepted total is never certified; the rule is the pure function
     `domain/program/reportability.py::commitment_acceptance_proof`, which returns
     `unverified_review_reference` for every native accepted Commitment (section 12, D-04);
-  - `calendar_unconfigured`, `never_synced`, `sync_conflict` — a Constraint metric
-    whose scope holds a Project in that `constraint_source_state` (the 3 sync states
-    are the derivable ones of `constraints.portfolio_overview`; `db_export_pending` is
-    not derivable at Project grain and does not occur).
+  - `issue_link_unverified` — `issue_outstanding`, when any Project of the scope has
+    `legacy_issue_links > 0`;
+  - `calendar_unconfigured`, `never_synced`, `sync_unverified`, `sync_degraded`,
+    `sync_conflict` — a Constraint metric whose scope holds a Project whose
+    `constraint_source_state` is respectively `calendar_unconfigured`, `never_synced`,
+    `unverified`, `sync_degraded` or `conflict`.
 - **`restricted`** (value `null`) replaces both when the reader may not see the
   metric's family (section 6.2); it is never a count.
-- **One source state per Project**, by precedence `calendar_unconfigured` > `conflict` >
-  `never_synced` > `in_sync`.
 - **Denominator, never hidden.** Each Program and the portfolio carry
-  `denominator = {member_projects, unresolved_members, projects_by_constraint_source_state:
-  {in_sync, never_synced, conflict, calendar_unconfigured}}` (integers) and
-  `project_ids_by_constraint_source_state` (the caller's own Project ids, sorted), so the
-  reader sees which Projects make a total not reportable.
+  `denominator = {member_projects, unresolved_members, legacy_issue_links,
+  projects_by_constraint_source_state: {in_sync, never_synced, unverified, sync_degraded,
+  conflict, calendar_unconfigured}}` (integers) and `project_ids_by_constraint_source_state`
+  and `project_ids_with_legacy_issue_links` (the caller's own Project ids, sorted), so
+  the reader sees which Projects make a total not reportable. Their Constraint and Issue
+  parts follow the family visibility of section 6.2.
 - Lowering any threshold is an operator risk acceptance (OD-08, section 13); no S4 code
   path has a threshold parameter.
 
 ### 3.4 Time and the common cutoff
 
-- **One snapshot.** `programs.members.resolve` and `programs.overview` read in one
-  `REPEATABLE READ, READ ONLY` transaction on one connection (section 6.3). Every
-  statement sees the same committed state, so per-Project, per-Program and portfolio
-  figures — and a membership answer and an overview — are equal at a common cutoff by
-  construction. `source_cutoff_at` = `statement_timestamp()` of the snapshot's first
-  query (the snapshot is taken by that query).
+- **One snapshot per request.** One call of `programs.members.resolve` or
+  `programs.overview` reads in one `REPEATABLE READ, READ ONLY` transaction on one
+  connection (section 6.3). Every statement of that call sees the same committed state,
+  so its per-Project, per-Program and portfolio figures and its membership are equal at
+  a common cutoff by construction. 2 separate calls take 2 snapshots and are equal only
+  when nothing changed between them. `source_cutoff_at` = `statement_timestamp()` of
+  the snapshot's first query (the snapshot is taken by that query); the Commitment
+  cutoff `c` of section 3.2 **and** the `now` handed to `ConstraintReadService`'s
+  portfolio methods (from which `project_today` and the overview's `as_of` derive) are
+  this same instant.
 - **The S3 knowledge clock where it applies.** The first query also reads the
   Principal's committed lineage horizon `H` (`lineage_commit_sequences.last_marked_at`,
   null when the Principal has no lineage fact) and reports it as `lineage_known_at`. In
@@ -274,7 +333,8 @@ their source state; **no zero is ever substituted**.
   **currently recorded** effective window. The Entity plane has no knowledge clock and
   `revise` rewrites the window in place, so a historical answer can change after a later
   revision of an edge; the answer says `membership_record: "current"` (section 12,
-  D-05). `valid_at` after the server's now is `invalid_request` / `valid_at`.
+  D-05). The clock is the database's: a `valid_at` after `source_cutoff_at` is
+  `invalid_request` / `valid_at`.
 - **No past-dated overview.** Commitment and Constraint planes keep no field history a
   past count could be read from; `programs.overview` is current only, and `as_of` is not
   admitted (section 12, D-05).
@@ -308,10 +368,9 @@ section 10's plan test pins it, and an index is added only if that test proves t
 | `manifest_sha256` | `text NOT NULL`; CHECK `a_report_manifest_digest_is_its_canonical_text`: `manifest_sha256 = encode(sha256(convert_to('report-manifest-v1' || chr(10) || manifest_canonical, 'UTF8')), 'hex')` |
 | `structured_content_sha256` | `text` (hex, null exactly when the artifact has no structured content) |
 | `program_overview_sha256` | `text` (hex) or null: the Program reference's **claimed** digest (`program.claimed_overview_sha256`) |
-| `program_verification_state` | `ProgramVerificationState` or null; CHECK `(program_overview_sha256 IS NULL) = (program_verification_state IS NULL)` |
 | `recorded_at` | `timestamptz NOT NULL DEFAULT now()` |
 
-The 3 projected columns are copies of manifest fields, for reading without parsing;
+The 2 projected columns are copies of manifest fields, for reading without parsing;
 the canonical text is the fact.
 
 Triggers:
@@ -320,8 +379,8 @@ Triggers:
   must have `manifest_schema_version = 1`, `report.report_id = NEW.artifact_id`,
   `report.content_sha256` = the artifact's stored `content_sha256`,
   `structured_content.sha256` equal to `structured_content_sha256`, and
-  `program.claimed_overview_sha256` and `program.verification_state` (null when
-  `program` is null) equal to the 2 Program columns; else `check_violation`.
+  `program.claimed_overview_sha256` (null when `program` is null) equal to
+  `program_overview_sha256`; else `check_violation`.
 - `intelligence_lineage_is_append_only()` (existing function of `e9b2c4d7a150`)
   attached `BEFORE UPDATE OR DELETE`; new statement trigger
   `intelligence_manifests_refuse_truncate` (`BEFORE TRUNCATE`, `restrict_violation`;
@@ -334,19 +393,19 @@ Triggers:
 
 ### 4.2 Existing tables
 
-**`audit_events`** — `capability_is_known` and `purpose_is_known` restated (BEFORE texts
-byte copies of `6f1476b8da52`'s AT texts; AT texts add exactly the 7 section 7 names and
-`program_reporting_read`, sorted), `_CURRENT_AUDIT_CAPABILITIES` moving with them (233 →
-240), under the schema-ahead precedent with
-`tests/schema/lineage_s4_schema_ahead_contract.py`.
+**`audit_events`** — `capability_is_known` restated (BEFORE text a byte copy of
+`6f1476b8da52`'s AT text; AT text adds exactly the 7 section 7 names, sorted),
+`_CURRENT_AUDIT_CAPABILITIES` moving with it (233 → 240), under the schema-ahead
+precedent with `tests/schema/lineage_s4_schema_ahead_contract.py`. `purpose_is_known` is
+**unchanged**: S4 adds no purpose (section 7, R4-F04).
 
 ### 4.3 Downgrade
 
 `downgrade()` first refuses (`restrict_violation`) while an
 `intelligence_artifact_manifests` row exists, or an `audit_events` row names an S4
-capability or `program_reporting_read` (each family alone sufficient). Only then it
-drops `an_artifact_has_its_manifest`, the table with its triggers, and restores both
-audit CHECKs to their `6f1476b8da52` texts byte for byte.
+capability (each family alone sufficient). Only then it drops
+`an_artifact_has_its_manifest`, the table with its triggers, and restores the audit
+capability CHECK to its `6f1476b8da52` text byte for byte.
 
 ## 5. Canonical encodings
 
@@ -369,10 +428,16 @@ calendar day changes it.
 `structured_content_sha256 = sha256(b"report-structured-content-v1\n" + J(v)).hexdigest()`,
 `J(x) = json.dumps(x, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
 allow_nan=False).encode("ascii")`, where `v` is the artifact's `structured_content`
-**as read back from `intelligence_artifacts` in the committing transaction** (JSONB
-normalizes numbers, so hashing the request's parsed value would disagree with a later
-re-derivation from the stored row). Producer content may hold floats; `J` renders them
-by Python's shortest round-trip repr. `null` when the artifact has none.
+**as read back from `intelligence_artifacts` in the committing transaction** through
+SQLAlchemy's `JSONB` column with psycopg 3's default JSONB loader (`json.loads`:
+integers as `int`, other numbers as `float`, never `Decimal`) — JSONB normalizes numbers,
+so hashing the request's parsed value would disagree with a later re-derivation from the
+stored row. Producer content may hold floats; `J` renders them by Python's shortest
+round-trip repr. `null` when the artifact has none. **In-memory store:**
+`InMemoryIntelligenceStore` hashes the value it holds; it is not byte-comparable with the
+SQL path for a number JSONB renormalizes (a request `1e2` is `100.0` in memory and `100`
+from PostgreSQL), so golden vectors containing such numbers are derived from the SQL path
+only, and unit vectors use integers, strings and already-normal floats (R4-F12).
 
 ### 5.3 Report manifest (WP-04C, CR-013)
 
@@ -396,7 +461,9 @@ CHECK of section 4.1 recomputes it). `M` has exactly these keys, every one prese
 ```
 
 - `title_sha256` = `sha256(title.encode("utf-8"))` (no narrative in the manifest);
-  instants are RFC 3339 UTC with microseconds; `dependencies` sorted by `report_id`
+  every instant is rendered exactly as `%Y-%m-%dT%H:%M:%S.%fZ` in UTC (6 fractional
+  digits, a literal `Z`, never `+00:00`; the S3 `_lineage_instant` format, pinned by a
+  golden vector); `dependencies` sorted by `report_id`
   (`COLLATE "C"` order), `provenance` by `position`.
 - **Dependencies** carry each upstream's stored `content_sha256`, its
   `structured_content_sha256` (section 5.2, recomputed from the immutable upstream row
@@ -411,13 +478,12 @@ CHECK of section 4.1 recomputes it). `M` has exactly these keys, every one prese
   collector or researcher artifact.
 - `ProgramManifestSection` (section 5.4) = `{block_schema_version: 1,
   program_entity_ids, claimed_overview_sha256, claimed_source_cutoff_at,
-  verification_state, verified_overview_sha256|null, verified_source_cutoff_at|null,
-  lineage_known_at|null, metric_schema_version|null, calculation_version|null,
-  membership: [{program_entity_id, resolved_program_entity_id, project_ids}]|null,
-  portfolio_project_ids|null, totals: [{scope, metric_id, value, value_state,
-  reasons}]|null}`; the `verified_*`, membership and totals fields are non-null exactly
-  when `verification_state = "verified_at_commit"`, and are then the **server's**
-  recomputed values. `scope` is a Program id or `"portfolio"`.
+  reference_state: "unverified_reference"}` — exactly the producer's reference block,
+  bound as a **claim**. The server does not recompute the overview at commit and the
+  manifest carries no server membership or totals (section 12, D-09, D-10; R4-F03,
+  R4-F05): every value in this section is already in the artifact's own
+  `structured_content`, which `reports.read` discloses, so the section discloses
+  nothing a report reader could not read, and no commit outcome depends on Program data.
 - Excluded by design: the mutable `artifact_state` after supersession and `is_current`
   (the manifest binds commit-time state), and the never-written `evaluation_*` columns
   (section 12, D-23).
@@ -428,9 +494,12 @@ A synthesizer, reporter or morning-brief artifact written from a Program overvie
 under the reserved top-level `structured_content` key `program_overview_ref`, exactly
 `{"block_schema_version": 1, "program_entity_ids": [ent_ … as requested, 1..10,
 distinct], "overview_sha256": <64-hex from the overview it read>,
-"source_cutoff_at": <that overview's source_cutoff_at>}`. The block is a reference,
-not a copy: a whole overview can exceed `MAX_STRUCTURED_CONTENT_BYTES` (64 KiB), and a
-copy would prove nothing the server did not recompute (section 12, D-09).
+"source_cutoff_at": <that overview's source_cutoff_at, in the section 5.3 instant
+format>}`. The block is a reference, not a copy: a whole overview can exceed
+`MAX_STRUCTURED_CONTENT_BYTES` (64 KiB). Anyone who may read Programs can check it
+while the state is unchanged — `programs.overview` for the same ids reproduces
+`overview_sha256` — and a mismatch then says the Program has moved since the report
+was written; S4 certifies nothing (section 12, D-09).
 
 ## 6. Authority, visibility and the read transaction
 
@@ -444,7 +513,7 @@ re-check** (S3 §6.1, R3-F13): each S4 handler re-checks that a remote caller ho
 grant on its own capability for a permitted purpose, else **`unsupported`**. The
 attestation paths of S1–S3 are untouched.
 
-### 6.2 Visibility (remote callers; the S3 §6.4 rule)
+### 6.2 Visibility (remote callers; the S3 §6.4 rule, on every path — R4-F03)
 
 A local caller sees everything of its Principal. A remote caller sees a family only
 while it holds a grant, for one of its purposes, on one of the family's reads
@@ -454,73 +523,112 @@ while it holds a grant, for one of its purposes, on one of the family's reads
 | --- | --- |
 | `entity` | `entities.get`, `entities.search` |
 | `project` | `continuity.projects`, `continuity.projects.read` |
+| `situation` (context Situation) | `continuity.situations` |
 | `commitment` | `commitments.read`, `commitments.list` |
 | `issue` | `issues.read`, `issues.list` |
 | `constraint` | `constraints.read`, `constraints.list` |
 
-- Both Program reads need `entity` **and** `project`; without them every requested
+Every field an S4 answer derives from a family is withheld when that family is
+invisible — never only the headline metrics:
+
+- **Both Program reads** need `entity` **and** `project`; without them every requested
   Program answers `not_found` / `program_entity_ids` (an invisible root, S3 §6.4).
-- In `programs.overview` a metric whose grain family is invisible is `restricted` at
-  every scope (no value, no count, no reason) and the answer carries
-  `restricted_evidence`.
-- `reports.manifest`: a manifest whose `program` section is non-null is returned to a
-  remote caller only if it also holds a `programs.overview` grant; otherwise
-  `manifest_state = "restricted_evidence"`, `manifest_sha256` given, `manifest_canonical`
-  null.
-- `commitments.v2.*` apply exactly the visibility of their v1 siblings (none beyond the
-  grant).
+- **`programs.overview`**, per family:
+  - `commitment` invisible ⇒ the 7 Commitment metrics are `restricted` at every scope;
+  - `issue` invisible ⇒ `issue_outstanding` is `restricted` at every scope,
+    `lineage_known_at` is `null`, and `denominator.legacy_issue_links` and
+    `project_ids_with_legacy_issue_links` are `null`;
+  - `constraint` invisible ⇒ the 5 Constraint metrics are `restricted` at every scope,
+    and every Constraint-derived field is `null`: per Project `calendar`,
+    `constraint_source_state`, `constraint_last_run_sync_states` and `constraint_sync`;
+    `denominator.projects_by_constraint_source_state` and
+    `project_ids_by_constraint_source_state`.
+  - A restricted field is `null` (a metric: `value_state = "restricted"`, no value, no
+    reason); the answer carries `restricted_evidence`; the overview digest is computed
+    over the answer as served, so it never encodes a withheld value.
+- **`commitments.v2.*`**: `project_reference` / `situation_reference` are `restricted`
+  (id `null`) when the `project` / `situation` family is invisible to a remote caller;
+  otherwise their v1 siblings' visibility (the grant) applies.
+- **`reports.manifest`**: no Program data reaches a manifest (section 5.3), so it
+  applies only its own grant, as `reports.read` does.
+- **`reports.commit`**: no Program data is read on the commit path (section 7.4), so a
+  commit can be no oracle for an invisible family or an invisible Program.
 
-### 6.3 The Program read transaction
+### 6.3 The Program read transaction and its own pool (R4-F05)
 
-`infrastructure/persistence/program_reads.py::SqlAlchemyProgramReadUnitOfWork(engine)`
-— a factory the composition root hands `ApplicationService` (the
-`constraint_management_unit_of_work` precedent; `None` ⇒ the 2 Program reads and the
-Program-reference verification are withheld):
+**Why not the request's connection.** `ApplicationService._run` opens the request's
+`UnitOfWork` (READ COMMITTED) before authorization and keeps it for the handler's whole
+life, so the handler cannot raise that transaction's isolation level, and several
+statements on it are several snapshots. **Why not the work pool.** A second checkout
+from the work pool while the request holds its work connection is the deadlock at
+`C = P` that `bootstrap/gateway.py`'s module docstring derives and
+`tests/concurrency/test_gateway_connection_pool.py` measures (the existing Constraint,
+Task and Commitment unit-of-work factories are already drawn from the work engine; S4
+does not add to that).
 
-1. `engine.connect().execution_options(isolation_level="REPEATABLE READ",
-   postgresql_readonly=True)`, then `begin()`; the first statement is `SET LOCAL
-   statement_timeout = '2000ms'` (S3 budget; a cancelled statement is `unavailable`),
-   and the first query — the one that takes the snapshot — reads
-   `statement_timestamp()` and `H` (section 3.4).
+**Design.** `bootstrap/gateway.py` builds a **third engine**, `program_read_engine =
+create_database_engine(url, statement_timeout_ms=2000)` — the audit-engine fix, with
+the S3 per-statement budget — only when `program_reporting_enabled` is on, and passes
+`lambda: SqlAlchemyProgramReadUnitOfWork(program_read_engine)` to `ApplicationService`
+(`None` ⇒ the 2 Program reads are withheld). No other code draws from that pool.
+`GatewayRuntime` disposes it with the other 2.
+
+1. `program_read_engine.connect().execution_options(isolation_level="REPEATABLE READ",
+   postgresql_readonly=True)`, then `begin()`; the first query — the one that takes the
+   snapshot — reads `statement_timestamp()` and `H` (section 3.4). A statement cancelled
+   by the engine's timeout, or a checkout that exceeds the pool timeout, answers
+   `unavailable`.
 2. It exposes, on that one connection: `program_membership`
    (`SqlProgramMembershipRepository`), `program_metrics` (`SqlProgramMetricsRepository`)
    and `constraints` (the existing `SqlConstraintManagementRepository(connection)`).
 3. It never writes (the read-only transaction refuses a write); `__exit__` rolls back.
-   Audit and authorization stay in the request's own unit of work, as for the Constraint
-   reads (`_constraint_work`).
+   Audit and authorization stay in the request's own unit of work.
 
-READ ONLY makes the `ON CONFLICT` hazard documented in `infrastructure/persistence/__init__.py`
+**Pool arithmetic.** A Program read holds 1 work connection (the request's) and needs 1
+Program-pool connection; nothing that holds a Program-pool connection ever waits for a
+work or audit connection (the snapshot read completes on its own connection and returns
+it). The wait-for graph therefore has no cycle at any `C`: at `C > 5` concurrent Program
+reads the excess queue on the Program pool and proceed as connections return, exactly
+as the audit pool behaves. Section 10 pins it with the gateway's own pools at `C = 5`
+and `C = 10`. `reports.commit` never touches this pool (section 7.4). READ ONLY makes
+the `ON CONFLICT` hazard documented in `infrastructure/persistence/__init__.py`
 unreachable here (it concerns writers).
 
 **Statement plan, constant in the number of Programs, Projects and rows** (pinned by a
 statement recorder, section 10): cutoff + horizon; Programs with redirect resolution
 (1 recursive statement); member edges with member redirect resolution and types (1);
 bridges with redirect resolution (1); Projects (1); Commitment aggregates grouped by
-Project (1); Issue `(project_id, situation_id)` pairs (1); Constraint settings, overview
+Project (1); Issue `(project_id, situation_id)` pairs (1); legacy Issue links per
+Project (1); sync targets with their last run state (1); Constraint settings, overview
 facts and sync summary through the existing portfolio methods (4).
 
 ## 7. Capabilities — the exact S4 set
 
-7 new `Capability` members (222 → 229; audit vocabulary 233 → 240) and 1 new `Purpose`
-(59 → 60). All are reads, `_SCOPELESS`, in no write, idempotent or additive set, and
-`CHATLLM_OPERATOR_DECISION_REQUIRED`.
+7 new `Capability` members (222 → 229; audit vocabulary 233 → 240) and **no new
+`Purpose`** (59 stays 59). All are reads, `_SCOPELESS`, in no write, idempotent or
+additive set, and `CHATLLM_OPERATOR_DECISION_REQUIRED`.
 
 | Capability | Purpose | Family → feature | Answer |
 | --- | --- | --- | --- |
-| `programs.members.resolve` | `program_reporting_read` (new) | `programs` → `programs` (new feature row) | section 7.1 |
-| `programs.overview` | `program_reporting_read` | `programs` → `programs` | section 7.2 |
+| `programs.members.resolve` | `report_read` | `programs` → `programs` (new feature row) | section 7.1 |
+| `programs.overview` | `report_read` | `programs` → `programs` | section 7.2 |
 | `commitments.v2.read` | `commitment_read` | `commitments` → `work` | section 7.3 |
 | `commitments.v2.list` | `commitment_read` | `commitments` → `work` | section 7.3 |
 | `commitments.v2.search` | `commitment_read` | `commitments` → `work` | section 7.3 |
 | `commitments.v2.waiting_on` | `commitment_read` | `commitments` → `work` | section 7.3 |
 | `reports.manifest` | `report_read` | `reports` → `reports` | section 7.4 |
 
-`program_reporting_read` is its own purpose (D-91: would reuse widen the grant?): a
-Program read crosses Entities, Projects, Commitments, Issues and Constraints of many
-Projects, which no existing purpose covers. The `commitments.v2.*` and `reports.manifest`
-reads reuse their families' read purposes: they read the same records (a Commitment's
-own 2 native fields; a report's own manifest). A grant is still per capability, so no
-existing grant reaches an S4 name.
+**Purposes (R4-F04).** Every MCP tool's input schema carries the envelope's
+`$defs.Purpose.enum`, so a new purpose would widen all 222 existing tool schemas (the
+S3 `lineage_backfill` precedent did exactly that). S4 adds none. The D-91 question —
+would reuse widen a grant? — answers no for each reuse, because a grant is a
+`(capability, purpose)` pair and no existing grant names an S4 capability: the 2
+Program reads are reporting reads and take `report_read` (the purpose of the reads that
+consume their output, `reports.*`); the `commitments.v2.*` reads take
+`commitment_read` (they read the same rows as their v1 siblings); `reports.manifest`
+takes `report_read`. What a Program read crosses is bounded by section 6.2's
+per-family visibility, not by its purpose. So no existing tool schema changes at all
+(section 8).
 
 ### 7.1 `programs.members.resolve`
 
@@ -533,7 +641,8 @@ A duplicate, empty or oversize list, or a malformed id, is `invalid_request` /
 ```text
 {mode: "current"|"historical", valid_at, source_cutoff_at, membership_record: "current",
  programs: [{program_entity_id, resolved_program_entity_id, redirected, program_status,
-             members: [{project_id, project_entity_id, project_state, relationship_ids}],
+             members: [{project_id, project_entity_id, member_entity_status, project_state,
+                        relationship_ids}],
              unresolved_members: [{relationship_id, member_entity_id, reason}],
              unverified_members: [{relationship_id, member_entity_id, project_id|null, reason}],
              excluded: {non_project_members, outside_window},
@@ -559,22 +668,24 @@ section 3.1 step 5.
  calculation_version: "program-overview-v1",
  programs: [{program_entity_id, resolved_program_entity_id, membership_state: ProgramCompleteness,
              project_ids, unresolved_members, denominator, project_ids_by_constraint_source_state,
-             totals: [MetricView]}],
+             project_ids_with_legacy_issue_links, totals: [MetricView]}],
  portfolio: {project_ids, overlaps, denominator, project_ids_by_constraint_source_state,
-             totals: [MetricView]},
- per_project: [{project_id, project_state, calendar: {timezone_name|null, project_today|null},
-                constraint_source_state,
-                constraint_sync: {state, open_conflict_count, last_verified_at|null},
-                metrics: [MetricView]}],
+             project_ids_with_legacy_issue_links, totals: [MetricView]},
+ per_project: [{project_id, project_state, calendar: {timezone_name|null, project_today|null}|null,
+                constraint_source_state|null, constraint_last_run_sync_states|null,
+                constraint_sync: {state, open_conflict_count, last_verified_at|null}|null,
+                legacy_issue_links|null, metrics: [MetricView]}],
  complete_state, qualifiers, overview_sha256}
 MetricView = {metric_id, grain, value: int|null, value_state, reasons: [NotReportableReason],
               nonadditive_across_projects: bool, acceptance: AcceptanceVerification|null}
 ```
 
 Membership is current mode (section 3.1). `per_project` holds every resolved Project
-once, sorted by `project_id`; `totals` and `metrics` hold the 12 section 3.2 metrics in
+once, sorted by `project_id`; `totals` and `metrics` hold the 13 section 3.2 metrics in
 catalogue order. `constraint_sync` is the existing `ConstraintSyncHealthView`
-(`state` ∈ `in_sync`, `never_synced`, `conflict`). `acceptance` is
+(`state` ∈ `in_sync`, `never_synced`, `conflict`), shown for continuity and deciding
+nothing; `constraint_source_state` (section 3.3) decides. The `|null` fields are `null`
+only under section 6.2's family rule. `acceptance` is
 `unverified_review_reference` on the 3 accepted Commitment metrics and `null`
 elsewhere. Section 3.3 decides `value_state` and `reasons`; `overview_sha256` is
 section 5.1.
@@ -602,7 +713,8 @@ replaced by the v2 views of `contracts/v1/commitments_v2.py`:
 global foreign keys and `commitments.create` checks only their pattern (a pre-existing
 v1 residual, section 12, D-16). A v2 view shows the stored id with `owned` when it names
 a Project (or Situation) of this Principal; `null` with `none` when nothing is stored;
-and `null` with `not_owned` otherwise — another Principal's identifier is never echoed.
+`null` with `not_owned` otherwise — another Principal's identifier is never echoed —
+and `null` with `restricted` when the reader may not see the family (section 6.2).
 `acceptance_verification` is `unverified_review_reference` when `evidence_state =
 accepted`, else `not_accepted`.
 
@@ -627,18 +739,13 @@ reads unchanged (section 12, D-22).
 - **When the Program plane is admitted** (section 7.6) and `structured_content` has the
   key `program_overview_ref`: the block must have exactly the section 5.4 shape and the
   stage must be `synthesizer`, `reporter` or `morning_brief`, else `invalid_request` /
-  `structured_content`; the server then recomputes `programs.overview` for the block's
-  `program_entity_ids` in a section 6.3 snapshot (on the create path, after the replay
-  lookup) for the committing Principal with local (full) visibility — a server-side
-  check, whose result appears only in the manifest, never in the `reports.commit`
-  answer — and records `verified_at_commit` when the recomputed `overview_sha256`
-  equals the claimed one, else `changed_since_read`, passing the section 5.3
-  `ProgramManifestSection` to `put_artifact`. A changed state is recorded, not refused
-  (section 12, D-10). A recomputation that answers an error (a Program now absent, a
-  timeout) refuses the commit with that error. **The block is interpreted only for a
-  caller who may read Programs**: a remote caller without a `programs.overview` grant
-  (section 6.1) gets the switch-off behaviour below, so `reports.commit` can never be
-  used to probe whether an Entity id is a Program.
+  `structured_content`. The check is **pure**: it reads no Program, Entity, Commitment,
+  Issue or Constraint row, opens no other connection and takes nothing from the Program
+  pool, so it runs inside the commit's own transaction without a second checkout
+  (R4-F05) and its outcome depends only on the request (no oracle, R4-F03). A valid
+  block becomes the section 5.3 `ProgramManifestSection` (`unverified_reference`)
+  passed to `put_artifact`. The server does **not** recompute the overview at commit
+  (section 12, D-10).
 - **When the Program plane is not admitted**, the key is ordinary structured content:
   nothing is interpreted and the manifest's `program` is `null`, so the switch-off
   behaviour of `reports.commit` is byte-identical to S3's.
@@ -647,8 +754,7 @@ reads unchanged (section 12, D-22).
 `artifact_id`, as `reports.read`); out `{report_id, manifest_state, manifest_schema_version|null,
 manifest_sha256|null, manifest_canonical|null}`. `recorded` returns the stored row
 unchanged; an artifact with no row answers `manifest_unavailable_legacy` with 3 nulls
-and **writes nothing** (no backfill of legacy manifests exists or is planned); section
-6.2's remote rule may answer `restricted_evidence`. A client verifies by recomputing
+and **writes nothing** (no backfill of legacy manifests exists or is planned). A client verifies by recomputing
 `sha256(b"report-manifest-v1\n" + manifest_canonical)`.
 
 `reports.read`, `reports.latest`, `reports.list`, `reports.search`,
@@ -663,12 +769,12 @@ and issues no report-type grant (package 03 "no assumption report-type grant").
 | Program absent, foreign, or invisible to a remote reader | `not_found` / `program_entity_ids` |
 | terminal Entity not `program`-typed | `invalid_request` / `program_entity_ids` |
 | Program redirect chain longer than 8 or cyclic | `conflict` / `program_entity_ids` |
-| `valid_at` malformed or after now | `invalid_request` / `valid_at` |
+| `valid_at` malformed or after `source_cutoff_at` | `invalid_request` / `valid_at` |
 | a field `programs.overview` does not admit | `invalid_request` |
 | `project_ids` malformed, duplicate, empty or above 100 | `invalid_request` / `project_ids` |
 | `project_ids` names a Project not of this Principal | `not_found` / `project_ids` |
 | malformed Program reference block, or one on a collector or researcher artifact | `invalid_request` / `structured_content` |
-| a Program-read statement cancelled by its timeout | `unavailable` |
+| a Program-read statement cancelled by its timeout, or no Program-pool connection within the pool timeout | `unavailable` |
 | remote read without a grant on its own capability | `unsupported` |
 | switch off, or plane not composed | `unsupported` |
 
@@ -684,11 +790,14 @@ the S3 backfill sub-switch precedent (S3 §7.7), `available_capabilities()` subt
 `_PROGRAM_REPORTING_CAPABILITIES` (the 7 names) unless **both** `lineage_enabled` and
 `program_reporting_enabled` are on, and additionally subtracts the 2 `programs.*` names
 unless `relationship_intelligence_enabled` (their subjects are Entities; the memory-plane
-"two conditions" precedent) and the Program read factory is composed. Every S4 handler
-calls `_program_plane()` (and the 2 Program handlers also the entity-plane and factory
-checks) first, before any read, answering `unsupported`. The Program-reference
-interpretation of section 7.4 uses the same predicate as `programs.overview`'s
-admission. `ops/runbooks/gateway-operations.md` gains the variable.
+"two conditions" precedent) and the Program read factory is composed, and subtracts
+`programs.overview` also when `constraint_management_unit_of_work` is `None` — a
+gateway that does not serve the Constraint plane does not serve a read built on it
+(R4-F11; the factory itself is not used, the overview reads Constraint tables on its
+own snapshot connection). Every S4 handler calls `_program_plane()` (and the 2 Program
+handlers also their composition checks) first, before any read, answering
+`unsupported`. The Program-reference interpretation of section 7.4 applies exactly when
+the 7 names are admitted (`lineage_enabled` and `program_reporting_enabled`). `ops/runbooks/gateway-operations.md` gains the variable.
 
 **Web.** None: no route, view, decoder or `gateway.json` entry (still 110); the Program
 dashboard is WP-06B. **MCP.** The 7 tools are derived from their commands as every tool
@@ -697,12 +806,19 @@ lineage tool; no existing tool's schema changes (section 8).
 
 ## 8. Old-client rule and compatibility
 
-- **v1 shapes are byte-identical.** No existing command gains, loses or re-means a field,
-  so every existing MCP tool input schema is unchanged (the S3 payload-schema SHA pin,
-  narrowed to exclude the S4 names, stays equal); every existing answer, including the 4
-  v1 Commitment reads with Commitments that store a `project_id`, and `reports.commit` /
-  `reports.read`, is byte-identical with the switch on or off; `contracts/v1/commitments.py`
-  is not edited; the web decoders and `success.json` are untouched.
+- **v1 shapes are byte-identical.** No existing command gains, loses or re-means a
+  field, and S4 adds no purpose, so every existing MCP tool input schema — payload
+  **and** envelope, including `$defs.Purpose.enum` — is unchanged: the S3 payload-schema
+  SHA pin (narrowed to exclude the S4 names) and the S3 purpose-tail pin
+  `published[-4:] == [*basis_tail, "lineage_backfill"]` both stay green unedited
+  (R4-F04). The tool **list** grows by the 7 S4 tools when the switch is on.
+- Every existing answer is byte-identical with the switch on or off, including the 4 v1
+  Commitment reads over Commitments that store a `project_id`, and `reports.read`.
+  `reports.commit` is byte-identical with the switch off; with it on, it is identical
+  for every request whose `structured_content` has no `program_overview_ref` key, and a
+  request carrying that key may now be refused (malformed block, or a collector or
+  researcher stage) (R4-F10). `contracts/v1/commitments.py` is not edited; the web
+  decoders and `success.json` are untouched.
 - **The opt-in is the capability name.** A strict old client never calls a
   `commitments.v2.*` name; S2's rule "a composite is a new name, not a mode" is the
   precedent, and the envelope's `contract_version` stays `"v1"` (section 12, D-02).
@@ -717,19 +833,20 @@ New modules (resolve exact names against neighbours; no refactor beyond those na
 - `domain/program/__init__.py`, `domain/program/vocabulary.py` (section 3), `domain/program/membership.py` (pure: window rule, redirect walk over fetched rows, bridge resolution, dedup and overlap, completeness), `domain/program/reportability.py` (pure: totals from per-Project facts, reasons, denominator, `commitment_acceptance_proof`), `domain/program/digest.py` (section 5.1).
 - `domain/intelligence/source_manifest.py` (pure: `J`, sections 5.2–5.4, block validation, golden vectors in `tests/fixtures/report_manifest_vectors.json`).
 - `application/program_membership.py` (`programs.members.resolve`), `application/program_work.py` (Commitment and Issue metrics, the overview assembly and digest), `application/program_constraints.py` (Constraint metrics over `ConstraintReadService`'s portfolio path on the snapshot connection), `application/commitments_v2.py` (the 4 v2 handlers' assembly and batching).
-- `infrastructure/persistence/program_reads.py` (the unit of work of section 6.3), `infrastructure/persistence/program_membership.py`, `infrastructure/persistence/program_metrics.py`; additions to `infrastructure/persistence/commitment_management.py` (the `project_ids` predicate), `infrastructure/persistence/task_management.py` (follow-ups for a set of Commitments), `infrastructure/persistence/intelligence.py` (`put_artifact` builds and inserts the manifest, section 7.4; `get_manifest`) and `application/intelligence.py` (`commit_artifact` gains a `verify_program_reference` callback used on the create path only, after the replay lookup; the `InMemoryIntelligenceStore` builds the same manifest in memory from the value it stores).
-- `contracts/v1/programs.py` (the 2 Program answers, `MetricView`), `contracts/v1/commitments_v2.py`, `contracts/v1/report_manifests.py`; `application/commands.py`, `adapters/normalization.py`, `application/service.py` handlers and `_program_plane()`, `domain/identity/operation.py` / `purpose.py` / `chatllm_capability_policy.py` registrations, `adapters/mcp/chatllm_gateway.py` (`"programs": "programs"`), `contracts/ports.py` (`ProgramReadUnitOfWork`, `ProgramMembershipRepository`, `ProgramMetricsRepository`; `IntelligenceStore` manifest methods), `bootstrap/settings.py`, `bootstrap/gateway.py`, `application/errors.py` (2 `SafeDetail` members).
-- Every W1 §2.2 / §5.4 registration step and count pin applies (capability 229, purpose 60, audit vocabulary 240, revision count 122, head literal and head-pin list, `TABLES_SHA256`, `TABLES_ABOVE`, the principal-partition guard registry for the 3 new persistence modules, the memory-row capability registry if its guard asks, spelled counts in `adapters/cli/app.py`, `bootstrap/gateway.py`, the architecture index and READMEs; `gateway.json` stays 110).
+- `infrastructure/persistence/program_reads.py` (the unit of work of section 6.3), `infrastructure/persistence/program_membership.py`, `infrastructure/persistence/program_metrics.py` (Commitment and Issue aggregates, legacy Issue links, sync targets with their last run); additions to `infrastructure/persistence/commitment_management.py` (the `project_ids` predicate), `infrastructure/persistence/task_management.py` (follow-ups for a set of Commitments), `infrastructure/persistence/intelligence.py` (`put_artifact` builds and inserts the manifest, section 7.4; `get_manifest`) and `application/intelligence.py` (`commit_artifact` validates the reference block purely and passes the section to `put_artifact` on the create path only; the `InMemoryIntelligenceStore` builds the manifest from the value it holds, section 5.2's in-memory note).
+- `contracts/v1/programs.py` (the 2 Program answers, `MetricView`), `contracts/v1/commitments_v2.py`, `contracts/v1/report_manifests.py`; `application/commands.py`, `adapters/normalization.py`, `application/service.py` handlers and `_program_plane()`, `domain/identity/operation.py` / `chatllm_capability_policy.py` registrations (`purpose.py` unchanged), `adapters/mcp/chatllm_gateway.py` (`"programs": "programs"`), `contracts/ports.py` (`ProgramReadUnitOfWork`, `ProgramMembershipRepository`, `ProgramMetricsRepository`; `IntelligenceStore` manifest methods), `bootstrap/settings.py`, `bootstrap/gateway.py` (the third engine of section 6.3, built only when the switch is on, disposed by `GatewayRuntime`), `application/errors.py` (2 `SafeDetail` members).
+- Every W1 §2.2 / §5.4 registration step and count pin applies (capability 229, purpose 59 unchanged, audit vocabulary 240, revision count 122, head literal and head-pin list, `TABLES_SHA256`, `TABLES_ABOVE`, the principal-partition guard registry for the 3 new persistence modules, the memory-row capability registry if its guard asks, spelled counts in `adapters/cli/app.py`, `bootstrap/gateway.py`, the architecture index and READMEs; `gateway.json` stays 110).
+- **Sharded CI.** New test modules are placed by `tests/ci_shard.py` automatically; `tests/architecture/test_ci_shards*.py` and the partition proof stay green, and the worker adding the heavy database modules (AT-018, AT-019, AT-022, the pool test) re-measures them and adds entries to `tests/ci_shard_weights.json` when its guard asks.
 
 **Work split** (serial; each package testable alone; one worker at a time):
 
 | Worker | Owns | Delivers |
 | --- | --- | --- |
-| **M1** | the revision, `tables.py`, vocabulary, every registry, settings and switch, count pins, `ports.py` stubs, `program_reads.py` | section 4 in full; `domain/program/vocabulary.py`; registration of all 7 names and the purpose (unbuilt ones answer `unsupported` until their worker, `capabilities.get` truthful, S3 D-37); the read unit of work and its factory wiring; the S1–S3 lockstep moves; tests: S4 migration, S4 integrity guards, admission (FAST rows) |
+| **M1** | the revision, `tables.py`, vocabulary, every registry, settings and switch, count pins, `ports.py` stubs, `program_reads.py` and the third engine in `bootstrap/gateway.py` | section 4 in full; `domain/program/vocabulary.py`; registration of all 7 names (unbuilt ones answer `unsupported` until their worker, `capabilities.get` truthful, S3 D-37); the read unit of work, its own pool and the factory wiring; the S1–S3 lockstep moves; tests: S4 migration, S4 integrity guards, admission (FAST rows), the Program pool test |
 | **M2** | WP-04A | `domain/program/membership.py`, `application/program_membership.py`, `infrastructure/persistence/program_membership.py`, `contracts/v1/programs.py` (resolve part), the handler; tests: AT-018, the membership rows of the domain test, isolation rows for the resolver |
-| **M3** | Commitment v2 | `contracts/v1/commitments_v2.py`, `application/commitments_v2.py`, the 4 handlers, the `project_ids` predicate and the batched reads; tests: AT-015, the strict old client, v2 statement counts |
-| **M4** | WP-04B overview | `domain/program/reportability.py`, `domain/program/digest.py`, `application/program_work.py`, `application/program_constraints.py`, `infrastructure/persistence/program_metrics.py`, `contracts/v1/programs.py` (overview part), the handler; tests: AT-019, snapshot, statement plan and query plans, remote visibility |
-| **M5** | WP-04C, hardening, docs | `domain/intelligence/source_manifest.py`, the `reports.commit` delta and verification, `reports.manifest`, `contracts/v1/report_manifests.py`; tests: AT-022, AT-023 report rows, the S4 scope guard; docs sync ("as implemented" notes), full tiers |
+| **M3** | Commitment v2 | `contracts/v1/commitments_v2.py`, `application/commitments_v2.py`, the 4 handlers, the `project_ids` predicate, the reference states and the batched reads; tests: AT-015, the strict old client, v2 statement counts, the v2 visibility rows |
+| **M4** | WP-04B overview | `domain/program/reportability.py`, `domain/program/digest.py`, `application/program_work.py`, `application/program_constraints.py`, `infrastructure/persistence/program_metrics.py`, `contracts/v1/programs.py` (overview part), the handler; tests: AT-019 (with the sync-state and legacy-link rows), snapshot, statement plan and query plans, remote visibility |
+| **M5** | WP-04C, hardening, docs | `domain/intelligence/source_manifest.py`, the `reports.commit` delta (pure block check), `reports.manifest`, `contracts/v1/report_manifests.py`; tests: AT-022, AT-023 report rows, the S4 scope guard; docs sync ("as implemented" notes), full tiers |
 
 ## 10. Acceptance-test crosswalk
 
@@ -740,31 +857,32 @@ scope guard parses S3 §10.
 
 | AT (S4 part) | Module | Test functions | Tier |
 | --- | --- | --- | --- |
-| AT-018 | `tests/integration/test_program_member_resolver.py` | `test_three_bound_members_resolve_and_an_unrelated_project_never_does`; `test_a_same_named_unrelated_project_is_never_a_member`; `test_a_redirected_program_and_member_resolve_to_the_survivor`; `test_a_missing_bridge_is_unresolved_and_named`; `test_an_ambiguous_bridge_is_unresolved_never_chosen`; `test_a_non_project_member_is_excluded_and_counted`; `test_membership_outside_its_window_is_excluded`; `test_a_null_start_date_is_historical_membership_unverified`; `test_an_ended_edge_without_an_end_is_historical_membership_unverified`; `test_a_dated_edge_is_a_verified_historical_member`; `test_overlapping_programs_count_a_project_once_at_portfolio_grain`; `test_a_non_program_entity_is_invalid_request`; `test_a_redirect_cycle_is_conflict`; `test_the_edge_budget_answers_truncated_budget`; `test_resolution_writes_nothing` | database |
-| AT-015 | `tests/contract/test_commitment_project_scoping.py` | `test_v2_reads_expose_project_and_situation`; `test_v2_list_search_and_waiting_on_filter_by_project_ids`; `test_a_foreign_project_filter_answers_like_an_absent_one`; `test_a_foreign_project_reference_is_never_shown`; `test_v2_marks_native_acceptance_unverified`; `test_a_closed_proposed_commitment_is_never_counted_as_accepted`; `test_an_unrelated_project_never_enters_a_program_count`; `test_v2_pages_issue_a_constant_number_of_statements` | database |
-| AT-015 + AT-023 (old strict client) | `tests/contract/test_commitment_v1_strict_client.py` | `test_v1_commitment_answers_are_byte_identical` (with the switch on and Commitments storing a `project_id`); `test_v1_tool_schemas_are_unchanged_by_s4`; `test_v1_commitment_views_keep_their_keys`; `test_s4_adds_no_gateway_entry` | FAST (the first is database) |
-| AT-019 | `tests/integration/test_program_metric_reconciliation.py` | `test_per_project_values_equal_their_native_reads_at_one_cutoff`; `test_every_total_equals_a_direct_distinct_count`; `test_a_shared_issue_is_counted_once_in_program_totals`; `test_per_project_issue_impact_is_flagged_nonadditive`; `test_unverified_acceptance_makes_the_accepted_total_not_reportable`; `test_an_unresolved_member_makes_every_total_not_reportable`; `test_a_never_synced_project_makes_constraint_totals_not_reportable`; `test_a_sync_conflict_makes_constraint_totals_not_reportable`; `test_a_project_without_a_calendar_is_disclosed_not_dropped`; `test_constraint_overdue_uses_each_projects_own_calendar`; `test_a_verified_zero_is_reported_as_zero`; `test_the_denominator_names_every_project_state`; `test_the_overview_digest_is_stable_and_sensitive` | database |
+| AT-018 | `tests/integration/test_program_member_resolver.py` | `test_three_bound_members_resolve_and_an_unrelated_project_never_does`; `test_a_same_named_unrelated_project_is_never_a_member`; `test_a_redirected_program_and_member_resolve_to_the_survivor`; `test_a_missing_bridge_is_unresolved_and_named`; `test_an_ambiguous_bridge_is_unresolved_never_chosen`; `test_a_non_project_member_is_excluded_and_counted`; `test_membership_outside_its_window_is_excluded`; `test_a_null_start_date_is_historical_membership_unverified`; `test_an_ended_edge_without_an_end_is_historical_membership_unverified`; `test_a_dated_edge_is_a_verified_historical_member`; `test_overlapping_programs_count_a_project_once_at_portfolio_grain`; `test_a_non_program_entity_is_invalid_request`; `test_a_redirect_cycle_is_conflict`; `test_the_edge_budget_answers_truncated_budget`; `test_a_budget_marks_the_cut_program_later_programs_and_the_portfolio`; `test_an_edge_ended_with_a_future_end_is_a_member_until_that_end`; `test_a_nested_program_is_not_expanded`; `test_a_member_entity_status_is_reported_not_filtered`; `test_resolution_writes_nothing` | database |
+| AT-015 | `tests/contract/test_commitment_project_scoping.py` | `test_v2_reads_expose_project_and_situation`; `test_v2_list_search_and_waiting_on_filter_by_project_ids`; `test_a_foreign_project_filter_answers_like_an_absent_one`; `test_a_foreign_project_reference_is_never_shown`; `test_v2_marks_native_acceptance_unverified`; `test_a_closed_proposed_commitment_is_never_counted_as_accepted`; `test_an_unrelated_project_never_enters_a_program_count`; `test_a_foreign_principals_commitment_naming_this_project_is_never_counted` (Principal B's Commitment storing A's `prj_` and A's `sit_` appears in none of A's per-Project, Program or portfolio counts and in no `commitments.v2.list` of A with that `project_ids`); `test_v2_pages_issue_a_constant_number_of_statements` | database |
+| AT-015 + AT-023 (old strict client) | `tests/contract/test_commitment_v1_strict_client.py` | `test_v1_commitment_answers_are_byte_identical` (with the switch on and Commitments storing a `project_id`); `test_v1_tool_schemas_are_unchanged_by_s4` (the S3 payload-schema SHA over the 192 v1 tools **and** an exact pin of the whole envelope `$defs.Purpose.enum`, unchanged from the basis); `test_v1_commitment_views_keep_their_keys`; `test_s4_adds_no_gateway_entry` | FAST (the first is database) |
+| AT-019 | `tests/integration/test_program_metric_reconciliation.py` | `test_per_project_values_equal_their_native_reads_at_one_cutoff`; `test_every_total_equals_a_direct_distinct_count`; `test_a_shared_issue_is_counted_once_in_program_totals`; `test_per_project_issue_impact_is_flagged_nonadditive`; `test_unverified_acceptance_makes_the_accepted_total_not_reportable`; `test_an_unresolved_member_makes_every_total_not_reportable`; `test_a_never_synced_project_makes_constraint_totals_not_reportable`; `test_a_never_verified_target_is_unverified_not_in_sync`; `test_a_failed_or_partial_last_run_is_sync_degraded_not_in_sync`; `test_a_project_is_in_sync_only_when_every_target_is`; `test_a_sync_conflict_makes_constraint_totals_not_reportable`; `test_a_legacy_issue_link_makes_the_issue_metric_not_reportable`; `test_a_suspended_issue_is_outstanding`; `test_constraint_due_soon_uses_each_projects_own_calendar`; `test_a_project_without_a_calendar_is_disclosed_not_dropped`; `test_constraint_overdue_uses_each_projects_own_calendar`; `test_a_verified_zero_is_reported_as_zero`; `test_the_denominator_names_every_project_state`; `test_the_overview_digest_is_stable_and_sensitive` | database |
 | AT-019 (snapshot) | `tests/concurrency/test_program_overview_snapshot.py` | `test_one_overview_reads_one_snapshot` (a Commitment and an Issue link committed by another connection between the overview's statements are absent from it); `test_lineage_known_at_matches_the_issue_links_read` | database |
 | AT-019 (plans) | `tests/database/test_program_overview_plans.py` | `test_the_overview_issues_a_constant_number_of_statements`; `test_membership_reads_use_the_relationship_and_bridge_indexes`; `test_metric_reads_are_principal_scoped_aggregates` | database |
-| AT-022 | `tests/integration/test_report_manifest_integrity.py` | `test_every_new_artifact_has_a_manifest`; `test_a_structured_metric_change_with_the_same_markdown_changes_the_manifest`; `test_a_dependency_change_with_the_same_markdown_changes_the_manifest`; `test_the_markdown_digest_is_unchanged`; `test_the_manifest_digest_recomputes_from_the_stored_row`; `test_a_legacy_report_answers_unavailable_and_is_never_rewritten`; `test_a_verified_program_reference_binds_the_server_membership_and_totals`; `test_a_changed_program_source_is_recorded_unverified`; `test_a_collector_cannot_carry_a_program_reference`; `test_a_collector_candidate_is_never_typed`; `test_a_replayed_commit_writes_no_second_manifest`; `test_the_program_reference_is_ordinary_content_with_the_switch_off`; `test_a_report_reproduces_its_overview_digest_from_an_unchanged_state` | database |
+| AT-019 (pool) | `tests/concurrency/test_program_read_pool.py` | `test_five_concurrent_overviews_through_the_gateway_pools_complete_without_stall`; `test_ten_concurrent_overviews_queue_and_complete`; `test_a_program_read_never_draws_from_the_work_pool`; `test_reports_commit_opens_no_second_connection` (the barrier method of `tests/concurrency/test_gateway_connection_pool.py`) | database |
+| AT-022 | `tests/integration/test_report_manifest_integrity.py` | `test_every_new_artifact_has_a_manifest`; `test_a_structured_metric_change_with_the_same_markdown_changes_the_manifest`; `test_a_dependency_change_with_the_same_markdown_changes_the_manifest`; `test_the_markdown_digest_is_unchanged`; `test_the_manifest_digest_recomputes_from_the_stored_row`; `test_a_legacy_report_answers_unavailable_and_is_never_rewritten`; `test_a_program_reference_is_bound_as_an_unverified_claim`; `test_a_program_reference_reads_no_program_data`; `test_a_collector_cannot_carry_a_program_reference`; `test_a_collector_candidate_is_never_typed`; `test_a_replayed_commit_writes_no_second_manifest`; `test_the_program_reference_is_ordinary_content_with_the_switch_off`; `test_a_report_reproduces_its_overview_digest_from_an_unchanged_state` | database |
 | AT-022 (guards) | `tests/database/test_lineage_s4_integrity_guards.py` | `test_a_manifest_digest_must_be_its_canonical_text`; `test_a_manifest_names_its_own_artifact`; `test_every_artifact_committed_after_s4_has_a_manifest`; `test_manifests_refuse_update_and_delete`; `test_manifests_refuse_truncate` | database |
 | AT-012 (migration) | `tests/schema/test_record_lineage_s4_migration.py` | FAST: `test_the_revision_is_the_single_head_on_6f1476b8da52`; `test_the_revision_imports_no_domain_module`; `test_frozen_ddl_names_every_declared_constraint`; `test_before_texts_are_byte_copies_of_the_s3_texts`; `test_at_vocabulary_adds_exactly_the_s4_names`; `test_offline_downgrade_refuses_first`. DB: `test_empty_to_head`; `test_s3_head_with_artifacts_upgrades_and_leaves_them_legacy`; `test_downgrade_refuses_while_s4_rows_exist`; `test_downgrade_restores_every_s3_text`; `test_each_downgrade_refusal_family_alone_refuses` (2 cases) | FAST + migration markers |
-| AT-023 (S4) | `tests/contract/test_lineage_s4_capability_admission.py` | `test_s4_capabilities_are_operator_decision_required_reads`; `test_s4_registers_no_report_type_and_issues_no_grant`; `test_switch_off_withholds_every_s4_capability`; `test_program_reads_need_the_entity_plane_and_their_factory`; `test_s4_requests_reject_server_owned_fields`; `test_program_overview_admits_no_as_of`; `test_the_program_purpose_admits_exactly_the_program_reads` | FAST |
-| AT-023 (S4, DB) | `tests/security/test_program_reporting_isolation.py` | `test_a_foreign_program_answers_like_an_absent_one`; `test_cross_principal_overviews_disclose_nothing`; `test_a_remote_read_without_its_grant_is_unsupported`; `test_a_remote_reader_without_entity_and_project_reads_sees_no_program`; `test_an_invisible_family_is_restricted_never_counted`; `test_a_remote_manifest_with_a_program_section_needs_the_program_grant`; `test_switch_off_answers_unsupported_for_every_s4_capability`; `test_a_program_statement_timeout_answers_unavailable`; `test_a_remote_producer_without_the_program_grant_cannot_probe_programs` | database |
-| (domain) | `tests/unit/test_program_domain.py` | `test_window_rule_table`; `test_redirect_walk_bounds_and_cycles`; `test_bridge_resolution_counts`; `test_completeness_precedence`; `test_reportability_reasons_table`; `test_commitment_acceptance_proof_is_unverified_for_native_acceptance`; `test_a_proven_acceptance_would_report_the_distinct_total`; `test_overview_digest_golden_vectors` | FAST |
-| (domain) | `tests/unit/test_report_manifest_domain.py` | `test_manifest_golden_vectors`; `test_structured_content_digest_golden_vectors` (including a float and a non-ASCII string); `test_program_reference_block_shape`; `test_the_manifest_has_every_key`; `test_candidate_status_by_stage` | FAST |
+| AT-023 (S4) | `tests/contract/test_lineage_s4_capability_admission.py` | `test_s4_capabilities_are_operator_decision_required_reads`; `test_s4_registers_no_report_type_and_issues_no_grant`; `test_switch_off_withholds_every_s4_capability`; `test_program_reads_need_the_entity_plane_and_their_factory`; `test_s4_requests_reject_server_owned_fields`; `test_program_overview_admits_no_as_of`; `test_s4_adds_no_purpose`; `test_program_overview_needs_the_constraint_plane` | FAST |
+| AT-023 (S4, DB) | `tests/security/test_program_reporting_isolation.py` | `test_a_foreign_program_answers_like_an_absent_one`; `test_cross_principal_overviews_disclose_nothing`; `test_a_remote_read_without_its_grant_is_unsupported`; `test_a_remote_reader_without_entity_and_project_reads_sees_no_program`; `test_an_invisible_family_is_restricted_never_counted`; `test_an_invisible_constraint_family_hides_every_constraint_derived_field`; `test_an_invisible_issue_family_hides_the_lineage_horizon_and_legacy_links`; `test_v2_references_are_restricted_without_the_project_or_situation_family`; `test_a_manifest_carries_no_program_data_beyond_the_report`; `test_switch_off_answers_unsupported_for_every_s4_capability`; `test_a_program_statement_timeout_answers_unavailable` | database |
+| (domain) | `tests/unit/test_program_domain.py` | `test_window_rule_table` (current and historical modes agree at every instant, including a future end); `test_redirect_walk_bounds_and_cycles`; `test_constraint_source_state_table`; `test_bridge_resolution_counts`; `test_completeness_precedence`; `test_reportability_reasons_table`; `test_commitment_acceptance_proof_is_unverified_for_native_acceptance`; `test_a_proven_acceptance_would_report_the_distinct_total`; `test_overview_digest_golden_vectors` | FAST |
+| (domain) | `tests/unit/test_report_manifest_domain.py` | `test_manifest_golden_vectors` (including the exact instant format); `test_structured_content_digest_golden_vectors` (including an already-normal float and a non-ASCII string); `test_program_reference_block_shape`; `test_the_manifest_has_every_key`; `test_candidate_status_by_stage` | FAST |
 | AT-026 (S4) | `tests/architecture/test_record_lineage_s4_scope.py` | `test_every_s4_crosswalk_test_exists`; `test_s4_adds_no_record_event_family`; `test_s4_reads_stage_no_record_event`; `test_s4_changes_no_lineage_vocabulary` | FAST |
 | AT-026 (regression) | existing `tests/database/test_record_event_provenance.py` | existing `test_unknown_foreign_withheld_and_non_knowledge_events_answer_alike` (unchanged, green) | database |
 
 **S1–S3 regressions (binding, unchanged except lockstep moves):** every test of S1–S3
 §10 and every v1 suite. Admitted edits, each keeping its test name and assertion: the
 head literal and revision count (121 → 122) in every head-pin file and the head-pin
-list (gaining the S4 migration test); count pins (`Capability` 222 → 229, `Purpose` 59 →
-60, audit vocabulary 233 → 240, `TABLES_SHA256`, permitted pairs, tool, builder,
+list (gaining the S4 migration test); count pins (`Capability` 222 → 229, audit vocabulary 233 → 240 — `Purpose` stays 59, `TABLES_SHA256`, permitted pairs, tool, builder,
 command-union, operator-decision counts, docs count claims); registry additions for the
 7 names in the suites S2 D-18 (c) lists; `test_existing_v1_shapes_are_unchanged_by_s3`
-excludes the S4 names beside the lineage names (its count of 192 v1 tools and both SHA
-pins stay); the S3 migration suite accepts the S4-owned audit texts and runs its
+excludes the S4 names beside the lineage names (its count of 192 v1 tools, both SHA
+pins and the purpose-tail assertion `published[-4:]` stay unedited, because S4 adds no
+purpose — R4-F04); the S3 migration suite accepts the S4-owned audit capability text and runs its
 downgrade-refusal tests at `6f1476b8da52`; any migration suite that commits artifacts at
 head and then downgrades below `6f1476b8da52` seeds them at its own revision or under
 `session_replication_role = replica` instead (S3 D-35 precedent), because the S4
@@ -783,13 +901,24 @@ Project; an active `member_of` edge from each to `G` (`B1` dated, `B2` with a nu
 name** as `B1`'s and no edge; a 2nd Program `H` with `B3` and `U` as members; a Program
 `R` merged into `G`; a member whose bridge is missing and one made ambiguous by merging
 2 bound Project Entities; Commitments open/closed × accepted/proposed with and without
-`due_at` across the 4 Projects; one Issue linked to `B1` and `B2`, one to `U`; Constraints
-on Projects with `in_sync` (a sync target and baseline), `never_synced`, `conflict`, and
-no calendar. A 2nd Principal holds a copy of every row. Expected: `G` resolves to
+`due_at` across the 4 Projects; one Issue linked to `B1` and `B2`, one to `U`, one
+`suspended` Issue on `B3`, and an Issue linked to `B2` only by a legacy `project_situations`
+row with no membership event (seeded under `session_replication_role = replica`);
+Constraints on Projects whose sync is `in_sync` (a verified target whose last run is
+`in_sync`), `never_synced` (no target), `unverified` (a target with `last_verified_at`
+null), `sync_degraded` (last run `verification_failed`; and a 2nd Project whose 2
+targets are one `in_sync` and one `partial`), `conflict`, and no calendar. A 2nd
+Principal holds a copy of every row **and** a Commitment whose `project_id` and
+`situation_id` name the 1st Principal's `B1` Project and a context Situation of the 1st
+Principal (the global foreign keys admit it, D-16). Expected: `G` resolves to
 exactly `B1`, `B2`, `B3` (plus the unresolved members named), `U` never; `R` resolves as
 `G`, `redirected`; at a `valid_at` before `B2`'s recorded period, `B2` is
 `start_not_recorded`; the portfolio of `G` and `H` holds `B3` once; the `B1`/`B2` Issue
-counts once in `G`; every total names its reasons and denominator.
+counts once in `G`; the suspended Issue is outstanding; `B2`'s Issue metric and every
+Issue total containing `B2` are `issue_link_unverified`; the unverified, degraded and
+mixed-target Projects are not `in_sync` and their Constraint totals are not reportable;
+the 2nd Principal's cross-referencing Commitment is in no count of the 1st; every total
+names its reasons and denominator.
 
 **Prove-red expectations** (break exactly that one guard, show the named test red for
 that reason, restore; a green prove-red is reported as redundancy, a masked test or an
@@ -810,6 +939,12 @@ unreachable hazard, never as "covered"):
 | acceptance proof | treat native acceptance as proven | `test_unverified_acceptance_makes_the_accepted_total_not_reportable` |
 | proposed never accepted | count closed proposed Commitments as accepted | `test_a_closed_proposed_commitment_is_never_counted_as_accepted` |
 | no zero substitution (sync) | report the total for a `never_synced` Project | `test_a_never_synced_project_makes_constraint_totals_not_reportable` |
+| unverified target (R4-F01) | treat a target with `last_verified_at` null as `in_sync` | `test_a_never_verified_target_is_unverified_not_in_sync` |
+| last-run state (R4-F01) | treat a target whose last run failed as `in_sync` (the `_overview_of` rule) | `test_a_failed_or_partial_last_run_is_sync_degraded_not_in_sync` |
+| worst target wins (R4-F01) | take the first target's state | `test_a_project_is_in_sync_only_when_every_target_is` |
+| legacy Issue links (R4-F02) | ignore legacy links | `test_a_legacy_issue_link_makes_the_issue_metric_not_reportable` |
+| suspended Issues outstanding | count `open` and `active` only | `test_a_suspended_issue_is_outstanding` |
+| future end (R4-F09) | exclude every `ended` edge in current mode | `test_an_edge_ended_with_a_future_end_is_a_member_until_that_end` |
 | calendar omission disclosed | drop the calendar-less Project silently | `test_a_project_without_a_calendar_is_disclosed_not_dropped` |
 | unresolved membership gate | report totals with an unresolved member | `test_an_unresolved_member_makes_every_total_not_reportable` |
 | one snapshot | open the Program read at READ COMMITTED | `test_one_overview_reads_one_snapshot` |
@@ -817,10 +952,18 @@ unreachable hazard, never as "covered"):
 | v2 batching | fetch the follow-up Task per row | `test_v2_pages_issue_a_constant_number_of_statements` |
 | owned references | show the stored foreign `project_id` | `test_a_foreign_project_reference_is_never_shown` |
 | foreign filter | drop unowned ids from `project_ids` silently | `test_a_foreign_project_filter_answers_like_an_absent_one` |
+| Principal scope of the Commitment aggregate (R4-F06) | drop the Principal predicate in the Commitment aggregate | `test_a_foreign_principals_commitment_naming_this_project_is_never_counted` |
+| Principal scope of the v2 filter (R4-F06) | drop the Principal predicate in the `project_ids` filter | `test_a_foreign_principals_commitment_naming_this_project_is_never_counted` |
 | v1 untouched | add `project_id` to `CommitmentListEntry` | `test_v1_commitment_answers_are_byte_identical`; `test_v1_tool_schemas_are_unchanged_by_s4` |
-| Principal scope | drop the Principal predicate in the edge read | `test_a_foreign_program_answers_like_an_absent_one` |
 | remote grant re-check | skip it in `programs.overview` | `test_a_remote_read_without_its_grant_is_unsupported` |
 | remote family visibility | count an invisible family | `test_an_invisible_family_is_restricted_never_counted` |
+| Constraint-derived fields (R4-F03) | return `calendar`, `constraint_source_state` and the sync denominator to a reader without the constraint family | `test_an_invisible_constraint_family_hides_every_constraint_derived_field` |
+| lineage horizon (R4-F03) | return `lineage_known_at` without the issue family | `test_an_invisible_issue_family_hides_the_lineage_horizon_and_legacy_links` |
+| v2 reference visibility (R4-F03) | show an owned `project_id` without the project family | `test_v2_references_are_restricted_without_the_project_or_situation_family` |
+| own pool (R4-F05) | build the Program read unit of work on the work engine | `test_five_concurrent_overviews_through_the_gateway_pools_complete_without_stall`; `test_a_program_read_never_draws_from_the_work_pool` |
+| no Program read on commit (R4-F05) | recompute the overview inside `reports.commit` | `test_reports_commit_opens_no_second_connection`; `test_a_program_reference_reads_no_program_data` |
+| Constraint plane admission (R4-F11) | drop the Constraint-factory condition | `test_program_overview_needs_the_constraint_plane` |
+| no new purpose (R4-F04) | add a purpose | `test_s4_adds_no_purpose`; `test_v1_tool_schemas_are_unchanged_by_s4` |
 | switch | drop `_program_plane()` in one handler | `test_switch_off_answers_unsupported_for_every_s4_capability` |
 | overview digest | omit `per_project` from `D` | `test_the_overview_digest_is_stable_and_sensitive` |
 | manifest digest CHECK | drop the CHECK (direct insert) | `test_a_manifest_digest_must_be_its_canonical_text` |
@@ -830,12 +973,18 @@ unreachable hazard, never as "covered"):
 | dependency bound | omit the upstream `structured_content_sha256` | `test_a_dependency_change_with_the_same_markdown_changes_the_manifest` |
 | read-back digest | hash the request's parsed value | `test_the_manifest_digest_recomputes_from_the_stored_row` (with a structured value JSONB renormalizes) |
 | legacy never rewritten | insert a manifest on a legacy read | `test_a_legacy_report_answers_unavailable_and_is_never_rewritten` |
-| verification compares | record `verified_at_commit` without comparing | `test_a_changed_program_source_is_recorded_unverified` |
+| reference bound as a claim | drop the program section from `M` | `test_a_program_reference_is_bound_as_an_unverified_claim` |
 | collector refusal | admit the block on a collector | `test_a_collector_cannot_carry_a_program_reference` |
 | switch-off content | interpret the block with the switch off | `test_the_program_reference_is_ordinary_content_with_the_switch_off` |
-| no Program probe through a commit | interpret the block for a remote caller without the `programs.overview` grant | `test_a_remote_producer_without_the_program_grant_cannot_probe_programs` |
 | append-only / truncate | detach the trigger | `test_manifests_refuse_update_and_delete`; `test_manifests_refuse_truncate` |
 | downgrade refusal, each family | delete that family's clause | the matching case of `test_each_downgrade_refusal_family_alone_refuses` |
+
+**Defence in depth, no prove-red claimed (R4-F06).** The Principal predicate on the
+member-edge and bridge reads guards a hazard the schema already makes unreachable: a
+foreign Program is refused at step 1, and `entity_relationships` (from, to, scope) and
+`project_entity_links` carry principal-composite foreign keys, so every edge into an own
+Program and every bridge row is own. Dropping that predicate leaves every test green; it
+is kept and not listed as coverage.
 
 **Not S4:** AT-020 and AT-021 → out of scope until OD-06; AT-024 Program web rows → WP-06B.
 
@@ -851,6 +1000,9 @@ unreachable hazard, never as "covered"):
 | Knowledge-time (`known_at`) Program membership | needs a knowledge clock on the Entity plane (section 12, D-05) |
 | Certified Program totals, any looser OD-08 threshold | operator risk acceptance (OD-08) |
 | Ownership checks for `commitments.create` `project_id` / `situation_id` | a v1 Work-plane change; S4 only stops echoing a foreign id (D-16) |
+| Commitment "upcoming" / due-soon (CR-010) | no defined window exists for an instant-dated Commitment (`due_at timestamptz`) and no Project calendar applies to it; a later package names the window. Constraints have `constraint_due_soon` (section 3.2; D-26) |
+| Server verification of a report's Program reference, and certified Program totals in a manifest | needs an operator OD-08 decision (nothing is certified in S4) and a recomputation outside the commit's write transaction; S4 binds the reference as an unverified claim (D-09, D-10) |
+| A dedicated pool for the existing Constraint, Task and Commitment unit-of-work factories (each a second work-pool checkout today) | a pre-existing composition residual of the Work and Constraint planes, not widened by S4 (section 6.3); operator item (section 13) |
 | A backfill of manifests for legacy artifacts | not planned: a manifest is evidence of what was bound at commit and cannot be reconstructed honestly |
 | Remote exposure of any S4 name | OD-07 operator decision |
 
@@ -866,9 +1018,9 @@ unreachable hazard, never as "covered"):
 | D-06 | `linkage_state = bound` ambiguity and missing bridges | `project_entity_links` admits one bound row per entity, and unresolved rows carry no entity id; a merge does not rewrite the bridge | ambiguity arises only through redirects and is surfaced (`bridge_ambiguous`); an unresolved bridge row is unreachable from the member side and reads `bridge_missing` |
 | D-07 | "reuse … five focus areas" | the catalog admits 9 focus areas and expects 6 (`EXPECTED_FOCUS_AREAS`, including `project_program_pulse`) | unchanged; S4 adds no focus area, stage or report type |
 | D-08 | CR-013: manifest fields on `reports.commit` / a versioned structure | `reports.commit` / `reports.read` are live v1 shapes; artifact body columns are trigger-immutable | a separate immutable companion table and a new `reports.manifest` read; v1 report answers unchanged |
-| D-09 | the manifest binds the Program membership set and metrics the producer used | `structured_content` is bounded to 64 KiB, too small for a whole overview; a copied overview proves nothing the server did not recompute | a reference block (section 5.4) re-verified at commit; on success the manifest binds the **server's** membership and totals |
-| D-10 | AT-022: "source hash mismatch refused" | a Program's state legitimately moves between a producer's read and its commit | a malformed block is refused; a digest mismatch is recorded `changed_since_read` with no membership or totals in the manifest (nothing certified); the existing `advisory_digest` mismatch refusal is unchanged |
-| D-11 | 07 `coverage_state` (`complete`, `partial`, `not_reportable`, `not_configured`, `never_synced`, `stale`, `unavailable`, `verified_zero`) | Constraint sync health derives 3 states at Project grain; `stale` / `unavailable` are not derivable | `value_state` + `reasons` + `ConstraintSourceState`; a verified zero is a `reported` 0 |
+| D-09 | the manifest binds the Program membership set and metrics the producer used | `structured_content` is bounded to 64 KiB, too small for a whole overview; recomputing at commit would read Program data inside the commit's write transaction (a second pool connection, R4-F05) with the committing caller's visibility as an oracle (R4-F03) | a reference block (section 5.4) bound by digest as an **unverified claim**: ids, claimed overview digest, claimed cutoff; reproducible by any Program reader while the state is unchanged; certification deferred (section 11) |
+| D-10 | AT-022: "source hash mismatch refused" | a Program's state legitimately moves between a producer's read and its commit, and S4 does not recompute at commit | a malformed block is refused; the claimed digest is recorded as a claim and never certified; the existing `advisory_digest` mismatch refusal is unchanged |
+| D-11 | 07 `coverage_state` (`complete`, `partial`, `not_reportable`, `not_configured`, `never_synced`, `stale`, `unavailable`, `verified_zero`) | the portfolio read model derives 3 health states (and reads a never-verified or failed target as `in_sync`); the stored data has `last_verified_at` and 10 persisted run outcomes per target (R4-F01) | `value_state` + `reasons` + `ConstraintSourceState` derived from targets and their last runs (section 3.3: `in_sync`, `never_synced`, `unverified`, `sync_degraded`, `conflict`, `calendar_unconfigured`); `stale` / `unavailable` map to `sync_degraded` through the run state; a verified zero is a `reported` 0 |
 | D-12 | 07 work overview with Task grain and a `responsibility_queue` | the S4 brief scopes Commitments, Issues and Constraints | deferred (section 11) |
 | D-13 | S3 §3: `LineageCompleteness` gains `not_reportable`, `source_not_integrated` for Program work | Program answers are not lineage reads; widening would move the S3 web decoders' closed sets | `ProgramCompleteness` and `MetricValueState` in `domain/program/vocabulary.py`; lineage vocabulary unchanged |
 | D-14 | CR-010: Commitment upcoming/overdue on the Project's civil day | `commitments.due_at` is an instant; the Project calendar lives in `constraint_project_settings` and governs date fields | Commitment overdue compares instants; Constraint dates use each Project's own calendar (PC-CM-RUN01-WP06 path) |
@@ -882,13 +1034,22 @@ unreachable hazard, never as "covered"):
 | D-22 | no N-Project fan-out; batched server reads | v1 `commitments.list` / `waiting_on` read a counterparty and a follow-up per row | the v2 siblings batch per page; the v1 reads are not changed (byte-identical rule) |
 | D-23 | manifest binds "metric schema and versions" | `intelligence_artifacts.evaluation_*` columns exist and no code writes them | not in the manifest; the Program metric schema and calculation versions are |
 | D-24 | 07 errors `source_unavailable`, `limit_exceeded` | the repository's codes are `unavailable` and `invalid_request` for bounds | repository codes (section 7.5) |
+| D-25 | totals of `constraint_overdue` / `constraint_due_soon` | `ConstraintPortfolioOverview` states its per-Project counts "are not summable … an addition across different days" (R4-F07) | S4's total is not a sum of counts taken against one day: it is the distinct count of Constraints, each classified overdue (or due soon) on **its own** Project's calendar at the one snapshot instant — a well-defined set, so `nonadditive_across_projects` stays `false`; the per-Project `project_today` is shown beside it |
+| D-26 | CR-010 "upcoming/overdue" | Constraints carry `due_soon` in the overview facts; Commitments have only an instant `due_at` and no calendar | `constraint_due_soon` added; Commitment upcoming deferred (section 11) |
+| D-27 | package 07: a new Program grant/purpose | every MCP tool's input schema carries the envelope purpose enum, so a new purpose widens all 222 existing tool schemas (R4-F04) | no new purpose: the Program reads take `report_read` (section 7); a grant is per capability, so no existing grant reaches them |
+| D-28 | issue impact over native Project links | Issue-kind `project_situations` rows without a membership event exist (S1 §12 row 3, S3 §8.3 `project_situation_inconsistent`, package UB-005) | counted per Project as `legacy_issue_links`; any one makes the Issue metric `issue_link_unverified` at that Project and every scope holding it (section 3.3, R4-F02) |
+| D-29 | Program reads on the request's transaction or the Constraint precedent's work-pool factory | a second work-pool checkout per request deadlocks at `C = P` (`bootstrap/gateway.py`, `tests/concurrency/test_gateway_connection_pool.py`) | a third engine with its own pool for Program reads only, the audit-engine fix; no cycle in the wait-for graph (section 6.3, R4-F05) |
 
 ## 13. Operator gates that remain
 
 Ratification of ADR-015 beyond the directive defaults; any live migration, grant,
 ChatLLM or client exposure, deployment (OD-07); enabling `MY_PA_PROGRAM_REPORTING_ENABLED`
 anywhere but a test; any certified Program total or looser completeness threshold
-(OD-08); verified Commitment acceptance as a Work decision (D-04); finance, CPM, ERP and
-P6 source commissioning (OD-06); a Program web view (WP-06B); S3.1 (attestation, held).
+(OD-08); server verification of report Program references (section 11); verified
+Commitment acceptance as a Work decision (D-04); finance, CPM, ERP and P6 source
+commissioning (OD-06); a Program web view (WP-06B); the pre-existing second work-pool
+checkout of the Constraint, Task and Commitment factories (section 11) and the size of
+the new Program pool in production (the `create_database_engine` default of 5 is the
+contract's assumption); S3.1 (attestation, held).
 Nothing else in S4 is left for a worker to decide beyond local naming with no incumbent
 constraint.

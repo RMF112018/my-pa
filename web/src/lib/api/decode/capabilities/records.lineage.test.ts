@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import fixtures from "../fixtures/python/success.json";
-import { decodeRecordsLineage, ISSUE_STATES, RELATION_TYPES } from "./records.lineage";
+import { decodeRecordsLineage, ISSUE_STATES, LINK_LIFECYCLE_STATES, RELATION_TYPES } from "./records.lineage";
 
 const canonical = fixtures["records.lineage"];
 type Json = Record<string, unknown>;
@@ -29,10 +29,12 @@ describe("records.lineage strict canonical success", () => {
       { issue_id: "sit_aaaaaaaa11111111", title: "First", state: "open" },
       { issue_id: "sit_bbbbbbbb22222222", title: "Second", state: "active" },
     ];
-    value.nodes = [{ family: "task", record_id: "tsk_aaaaaaaa11111111", depth: 0 }];
+    // S3 lockstep: every node states its path step (`null` on the root).
+    value.nodes = [{ family: "task", record_id: "tsk_aaaaaaaa11111111", depth: 0, reached_from: null, reached_via: null }];
     value.typed_edges = [];
     value.virtual_native_edges = [];
     value.complete_state = "unresolved_ambiguity";
+    value.qualifiers = ["unresolved_ambiguity"];
     expect(decode(value).ok).toBe(true);
     // A legacy Capture anchor and an archived Capture version node.
     const legacy = payload();
@@ -42,7 +44,11 @@ describe("records.lineage strict canonical success", () => {
       version_kind: "legacy_unversioned", version_id: null, source_version_no: null,
       passage_start_cp: null, passage_end_cp: null, role: "corroborates", availability: "archived",
     }];
-    (legacy.nodes as Json[]).push({ family: "capture_version", record_id: "capver_aaaaaaaa11111111", depth: 1, availability: "archived" });
+    (legacy.nodes as Json[]).push({
+      family: "capture_version", record_id: "capver_aaaaaaaa11111111", depth: 1, availability: "archived",
+      reached_from: { family: "task", record_id: "tsk_aaaaaaaa11111111" },
+      reached_via: { edge: "typed", link_id: "irl_bbbbbbbb22222222" },
+    });
     expect(decode(legacy).ok).toBe(true);
   });
 
@@ -70,10 +76,12 @@ describe("records.lineage strict canonical success", () => {
 
   it("decodes the S2 relation types and a closed Issue", () => {
     // The closed sets are exactly the server vocabulary (S2 section 7.4); the
-    // Python side of the equality is `test_record_lineage_s2_scope.py`.
+    // Python side of the equality is `test_record_lineage_s2_scope.py`. S3 widens
+    // the server vocabulary by `related_context` (S3 section 3.1), in lockstep.
     expect([...RELATION_TYPES]).toEqual([
       "issue_member", "originated_from", "discusses",
       "delegated_from", "escalated_from", "blocks", "created_to_resolve",
+      "related_context",
     ]);
     expect([...ISSUE_STATES]).toEqual(["open", "active", "suspended", "closed"]);
     for (const [relation, from, to] of [
@@ -95,8 +103,9 @@ describe("records.lineage strict canonical success", () => {
   });
 
   it("refuses a relation type outside the S2 vocabulary", () => {
-    // `related_context` is S3 (S2 section 11): the server never sends it in S2.
-    for (const relation of ["related_context", "follows_up", "Blocks", "", "contested"]) {
+    // `related_context` joined the server vocabulary in S3 (S3 section 3.1); a
+    // relation outside it still refuses the whole answer.
+    for (const relation of ["follows_up", "Blocks", "", "contested", "Related_context"]) {
       const value = payload(); (value.typed_edges as Json[])[1]!.relation_type = relation;
       expect(decode(value).ok, relation).toBe(false);
     }
@@ -115,9 +124,71 @@ describe("records.lineage strict canonical success", () => {
     expect(decode(anchor).ok).toBe(false);
     const virtual = payload(); ((virtual.virtual_native_edges as Json[])[0]!.to as Json).family = "task";
     expect(decode(virtual).ok).toBe(false);
-    const cursor = payload(); cursor.next_cursor = "sit_aaaaaaaa11111111";
-    expect(decode(cursor).ok).toBe(false);
+    // S3 lockstep (section 5): `next_cursor` may be an opaque base64url token,
+    // so the refused cursor is one that is not.
+    for (const next of ["sit aaaaaaaa", "", "x".repeat(2049), 7]) {
+      const cursor = payload(); cursor.next_cursor = next;
+      expect(decode(cursor).ok, String(next)).toBe(false);
+    }
     const state = payload(); state.complete_state = "partial";
     expect(decode(state).ok).toBe(false);
+  });
+  it("decodes an S3 lineage page with a cursor and path steps", () => {
+    // AT-024 (S3, web decoders): a paged answer (S3 sections 5, 7.1 and 7.2).
+    const value = payload();
+    Object.assign(value, {
+      next_cursor: "eyJ2IjoxLCJwIjoibm9kZSJ9_-",
+      complete_state: "restricted_evidence",
+      qualifiers: ["restricted_evidence"],
+    });
+    // A contested related context between two members, and a restricted anchor.
+    const edge = (value.typed_edges as Json[])[1]!;
+    Object.assign(edge, {
+      relation_type: "related_context", lifecycle_state: "contested",
+      from: { family: "meeting", record_id: "mtg_aaaaaaaa11111111" },
+      to: { family: "task", record_id: "tsk_aaaaaaaa11111111" },
+    });
+    (edge.evidence as Json[])[0]!.availability = "restricted";
+    expect(decode(value)).toEqual({ ok: true, value });
+    // Every node states how it was reached; following `reached_from` ends at the root.
+    const nodes = (payload().nodes as Json[]);
+    const root = payload().root as Json;
+    for (const node of nodes) {
+      let step: Json | undefined = node;
+      for (let hops = 0; step !== undefined && step.reached_from !== null && hops < 5; hops += 1) {
+        const from: Json = step.reached_from as Json;
+        step = nodes.find((candidate) => candidate.family === from.family && candidate.record_id === from.record_id);
+      }
+      expect(step).toBeDefined();
+      expect({ family: step!.family, record_id: step!.record_id }).toEqual(root);
+    }
+    // A path step carries exactly its edge kind's keys, and a root carries none.
+    const typedKey = payload(); ((typedKey.nodes as Json[])[1]!.reached_via as Json).edge_type = "meeting_note_version_of";
+    expect(decode(typedKey).ok).toBe(false);
+    const half = payload(); (half.nodes as Json[])[1]!.reached_via = null;
+    expect(decode(half).ok).toBe(false);
+    // The qualifiers lead with the complete_state and the cuts are instants or null.
+    const lead = payload(); lead.qualifiers = ["truncated_budget", "complete"];
+    expect(decode(lead).ok).toBe(false);
+    const cut = payload(); cut.known_at = "yesterday";
+    expect(decode(cut).ok).toBe(false);
+  });
+
+  it("refuses a lifecycle state outside the S3 vocabulary", () => {
+    // The S3 closed sets are exactly the server vocabulary (pinned from the
+    // Python side by `test_record_lineage_s3_scope.py`).
+    expect([...LINK_LIFECYCLE_STATES]).toEqual(["active", "ended", "contested"]);
+    for (const state of ["disputed", "Contested", "proposed", "", "superseded"]) {
+      const value = payload(); (value.typed_edges as Json[])[1]!.lifecycle_state = state;
+      expect(decode(value).ok, state).toBe(false);
+    }
+    for (const availability of ["redacted", "withdrawn", "unavailable", "Restricted"]) {
+      const value = payload(); ((value.typed_edges as Json[])[1]!.evidence as Json[])[0]!.availability = availability;
+      expect(decode(value).ok, availability).toBe(false);
+    }
+    for (const completeness of ["source_not_integrated", "not_reportable", "historical_fields_partial"]) {
+      const value = payload(); Object.assign(value, { complete_state: completeness, qualifiers: [completeness] });
+      expect(decode(value).ok, completeness).toBe(false);
+    }
   });
 });

@@ -1024,6 +1024,21 @@ class Capability(StrEnum):
     ISSUES_HANDOFFS_LIST = "issues.handoffs.list"
     ISSUES_WORK_CREATE_TASK = "issues.work.create_task"
     ISSUES_WORK_CREATE_COMMITMENT = "issues.work.create_commitment"
+    #: Record lineage S3 (S3 contract section 7): dispute and reinstate a
+    #: semantic link, a link's and an Issue's history as of `known_at`, an
+    #: Issue's timeline, the handoff correction, and the operator-only backfill
+    #: dry run (plan and report). The four writes are attested (local operator
+    #: only, S3 section 6.1); all eight are scopeless and withheld unless
+    #: `MY_PA_LINEAGE_ENABLED` is on, and the two backfill names also unless
+    #: `MY_PA_LINEAGE_BACKFILL_ENABLED` is (section 7.7).
+    RECORDS_ASSOCIATIONS_CONTEST = "records.associations.contest"
+    RECORDS_ASSOCIATIONS_REINSTATE = "records.associations.reinstate"
+    RECORDS_ASSOCIATIONS_HISTORY = "records.associations.history"
+    ISSUES_HISTORY = "issues.history"
+    ISSUES_TIMELINE = "issues.timeline"
+    ISSUES_HANDOFFS_CORRECT = "issues.handoffs.correct"
+    RECORDS_BACKFILL_PLAN = "records.backfill.plan"
+    RECORDS_BACKFILL_REPORT = "records.backfill.report"
 
 
 class NativeSourceCapability(StrEnum):
@@ -1113,6 +1128,10 @@ _OPERATOR_ONLY: frozenset[AuthorizedCapability] = frozenset(
         NativeSourceCapability.RESUME,
         NativeSourceCapability.BACKFILL,
         NativeSourceCapability.DISABLE,
+        # Record lineage S3 (section 6.1): the backfill reads the Principal's whole
+        # native corpus and writes a durable ledger.
+        Capability.RECORDS_BACKFILL_PLAN,
+        Capability.RECORDS_BACKFILL_REPORT,
     }
 )
 
@@ -1597,6 +1616,16 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.ISSUES_HANDOFFS_LIST: frozenset({Purpose.ISSUE_READ}),
         Capability.ISSUES_WORK_CREATE_TASK: frozenset({Purpose.ISSUE_WORK_AUTHORING}),
         Capability.ISSUES_WORK_CREATE_COMMITMENT: frozenset({Purpose.ISSUE_WORK_AUTHORING}),
+        # Record lineage S3 (S3 contract section 7). The backfill has a purpose of
+        # its own: no lineage or Issue grant may become one.
+        Capability.RECORDS_ASSOCIATIONS_CONTEST: frozenset({Purpose.RECORD_LINEAGE_AUTHORING}),
+        Capability.RECORDS_ASSOCIATIONS_REINSTATE: frozenset({Purpose.RECORD_LINEAGE_AUTHORING}),
+        Capability.RECORDS_ASSOCIATIONS_HISTORY: frozenset({Purpose.RECORD_LINEAGE_READ}),
+        Capability.ISSUES_HISTORY: frozenset({Purpose.ISSUE_READ}),
+        Capability.ISSUES_TIMELINE: frozenset({Purpose.ISSUE_READ}),
+        Capability.ISSUES_HANDOFFS_CORRECT: frozenset({Purpose.ISSUE_AUTHORING}),
+        Capability.RECORDS_BACKFILL_PLAN: frozenset({Purpose.LINEAGE_BACKFILL}),
+        Capability.RECORDS_BACKFILL_REPORT: frozenset({Purpose.LINEAGE_BACKFILL}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),
@@ -1779,6 +1808,11 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ISSUES_HANDOFFS_RECORD,
         Capability.ISSUES_WORK_CREATE_TASK,
         Capability.ISSUES_WORK_CREATE_COMMITMENT,
+        # Record lineage S3: the four writes; the four reads stay out.
+        Capability.RECORDS_ASSOCIATIONS_CONTEST,
+        Capability.RECORDS_ASSOCIATIONS_REINSTATE,
+        Capability.ISSUES_HANDOFFS_CORRECT,
+        Capability.RECORDS_BACKFILL_PLAN,
     }
 )
 
@@ -1895,6 +1929,9 @@ _ADDITIVE_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ISSUES_HANDOFFS_RECORD,
         Capability.ISSUES_WORK_CREATE_TASK,
         Capability.ISSUES_WORK_CREATE_COMMITMENT,
+        # Record lineage S3: a backfill plan appends ledger rows only. Contest,
+        # reinstate and the handoff correction change what a link or handoff means.
+        Capability.RECORDS_BACKFILL_PLAN,
     }
 )
 

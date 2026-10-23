@@ -104,8 +104,10 @@ from my_pa.contracts.ports import (
     GoodNotesSemanticRepository,
     IssueHandoffRepository,
     IssueRepository,
+    IssueTimelineRepository,
     KnowledgeRecord,
     KnowledgeRepository,
+    LineageBackfillRepository,
     ManagedAdmission,
     ManagedByteStore,
     ManagedDocumentRepository,
@@ -9792,6 +9794,16 @@ class FakeUnitOfWork(UnitOfWork):
         return cast("IssueHandoffRepository", _UnmodelledPlane("issue_handoffs"))
 
     @property
+    def issue_timeline(self) -> IssueTimelineRepository:
+        """Record lineage S3 timeline: not modelled in FAST worlds, as `issues`."""
+        return cast("IssueTimelineRepository", _UnmodelledPlane("issue_timeline"))
+
+    @property
+    def lineage_backfill(self) -> LineageBackfillRepository:
+        """Record lineage S3 backfill ledger: not modelled in FAST worlds, as `issues`."""
+        return cast("LineageBackfillRepository", _UnmodelledPlane("lineage_backfill"))
+
+    @property
     def identity_history(self) -> object:
         """An empty authoritative projection for FAST worlds with no identity ledger."""
 
@@ -10325,6 +10337,7 @@ def build_service(
     producer_origins: ProducerOriginRegistry | None = None,
     knowledge_assertions_enabled: bool = False,
     lineage_enabled: bool = False,
+    lineage_backfill_enabled: bool = False,
     constraint_management_unit_of_work: (
         Callable[[], ConstraintManagementUnitOfWork] | None
     ) = _COMPOSE_CONSTRAINTS,
@@ -10433,6 +10446,9 @@ def build_service(
         # this `World` models no Issue rows (`FakeUnitOfWork.issues` refuses any
         # use). A FAST test about publication or the switch passes `True`.
         lineage_enabled=lineage_enabled,
+        # Record lineage S3 (contract section 7.7): the backfill sub-switch, off
+        # unless a test about it turns it on.
+        lineage_backfill_enabled=lineage_backfill_enabled,
         gsqs_b0_ports=WorkflowPorts(
             session_factory=lambda rasters: DiskContentSession(rasters),
             case_count=2,

@@ -76,7 +76,9 @@ from my_pa.application.commands import (
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
     ConfigureProjectControls,
+    ContestRecordAssociation,
     CorrectGoodNotes,
+    CorrectIssueHandoff,
     CorrectIssueMembership,
     CorrectRecordAssociation,
     CreateCapture,
@@ -172,6 +174,7 @@ from my_pa.application.commands import (
     ListUnresolvedMentions,
     MergeEntities,
     ObserveEntityMention,
+    PlanLineageBackfill,
     PrepareContext,
     PreviewConstraintSync,
     PreviewEntityMerge,
@@ -191,6 +194,8 @@ from my_pa.application.commands import (
     ReadIntelligenceArtifact,
     ReadIssue,
     ReadIssueClosureReadiness,
+    ReadIssueHistory,
+    ReadIssueTimeline,
     ReadKnowledge,
     ReadKnowledgeAssertion,
     ReadManagedDocument,
@@ -199,15 +204,18 @@ from my_pa.application.commands import (
     ReadPortfolioConstraintOverview,
     ReadProject,
     ReadProjectControlsStatus,
+    ReadRecordAssociationHistory,
     ReadRecordLineage,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
     RecordIssueHandoff,
     RecordTask,
+    ReinstateRecordAssociation,
     ReopenConstraint,
     ReopenIssue,
     ReorderConstraintCategories,
+    ReportLineageBackfill,
     ResolveConstraintSyncConflict,
     ResolveEntity,
     ResolveIntelligenceSet,
@@ -727,6 +735,16 @@ def _requested_scope(
             | ListIssueHandoffs()
             | CreateIssueWorkTask()
             | CreateIssueWorkCommitment()
+            # Record lineage S3: the same partition's link, Issue, handoff and
+            # backfill-ledger rows.
+            | ContestRecordAssociation()
+            | ReinstateRecordAssociation()
+            | ReadRecordAssociationHistory()
+            | ReadIssueHistory()
+            | ReadIssueTimeline()
+            | CorrectIssueHandoff()
+            | PlanLineageBackfill()
+            | ReportLineageBackfill()
         ):
             return frozenset()
         case CreateCapture():

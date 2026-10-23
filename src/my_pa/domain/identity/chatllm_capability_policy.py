@@ -280,6 +280,10 @@ _CONTROL_PLANE_EXCLUDED: Final[frozenset[Capability]] = frozenset(
         Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
         Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
         Capability.SOURCES_ENROLL,
+        # Record lineage S3 (S3 contract section 7): the operator-only backfill dry
+        # run reads the whole native corpus and writes a durable ledger.
+        Capability.RECORDS_BACKFILL_PLAN,
+        Capability.RECORDS_BACKFILL_REPORT,
     }
 )
 
@@ -312,6 +316,13 @@ _OPERATOR_DECISION_REQUIRED: Final[frozenset[Capability]] = frozenset(
         Capability.ISSUES_HANDOFFS_LIST,
         Capability.ISSUES_WORK_CREATE_TASK,
         Capability.ISSUES_WORK_CREATE_COMMITMENT,
+        # Record lineage S3 (S3 contract section 7): the same operator decision.
+        Capability.RECORDS_ASSOCIATIONS_CONTEST,
+        Capability.RECORDS_ASSOCIATIONS_REINSTATE,
+        Capability.RECORDS_ASSOCIATIONS_HISTORY,
+        Capability.ISSUES_HISTORY,
+        Capability.ISSUES_TIMELINE,
+        Capability.ISSUES_HANDOFFS_CORRECT,
     }
 )
 
@@ -356,6 +367,10 @@ _LINEAGE_S1_EXCLUSION: Final = (
 _LINEAGE_S2_EXCLUSION: Final = (
     "record lineage S2; exposure is an operator decision (ADR-015, OD-07)"
 )
+_LINEAGE_S3_EXCLUSION: Final = (
+    "record lineage S3; exposure is an operator decision (ADR-015, OD-07)"
+)
+_LINEAGE_BACKFILL_EXCLUSION: Final = "operator-only lineage backfill"
 
 _EXCLUSION_RATIONALE: Final[Mapping[Capability, str]] = MappingProxyType(
     {
@@ -402,6 +417,14 @@ _EXCLUSION_RATIONALE: Final[Mapping[Capability, str]] = MappingProxyType(
         Capability.ISSUES_HANDOFFS_LIST: _LINEAGE_S2_EXCLUSION,
         Capability.ISSUES_WORK_CREATE_TASK: _LINEAGE_S2_EXCLUSION,
         Capability.ISSUES_WORK_CREATE_COMMITMENT: _LINEAGE_S2_EXCLUSION,
+        Capability.RECORDS_ASSOCIATIONS_CONTEST: _LINEAGE_S3_EXCLUSION,
+        Capability.RECORDS_ASSOCIATIONS_REINSTATE: _LINEAGE_S3_EXCLUSION,
+        Capability.RECORDS_ASSOCIATIONS_HISTORY: _LINEAGE_S3_EXCLUSION,
+        Capability.ISSUES_HISTORY: _LINEAGE_S3_EXCLUSION,
+        Capability.ISSUES_TIMELINE: _LINEAGE_S3_EXCLUSION,
+        Capability.ISSUES_HANDOFFS_CORRECT: _LINEAGE_S3_EXCLUSION,
+        Capability.RECORDS_BACKFILL_PLAN: _LINEAGE_BACKFILL_EXCLUSION,
+        Capability.RECORDS_BACKFILL_REPORT: _LINEAGE_BACKFILL_EXCLUSION,
     }
 )
 

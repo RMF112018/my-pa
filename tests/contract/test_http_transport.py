@@ -113,7 +113,9 @@ from my_pa.application.commands import (
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
     ConfigureProjectControls,
+    ContestRecordAssociation,
     CorrectGoodNotes,
+    CorrectIssueHandoff,
     CorrectIssueMembership,
     CorrectRecordAssociation,
     CreateCapture,
@@ -209,6 +211,7 @@ from my_pa.application.commands import (
     ListUnresolvedMentions,
     MergeEntities,
     ObserveEntityMention,
+    PlanLineageBackfill,
     PrepareContext,
     PreviewConstraintSync,
     PreviewEntityMerge,
@@ -228,6 +231,8 @@ from my_pa.application.commands import (
     ReadIntelligenceArtifact,
     ReadIssue,
     ReadIssueClosureReadiness,
+    ReadIssueHistory,
+    ReadIssueTimeline,
     ReadKnowledge,
     ReadKnowledgeAssertion,
     ReadManagedDocument,
@@ -236,15 +241,18 @@ from my_pa.application.commands import (
     ReadPortfolioConstraintOverview,
     ReadProject,
     ReadProjectControlsStatus,
+    ReadRecordAssociationHistory,
     ReadRecordLineage,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
     RecordIssueHandoff,
     RecordTask,
+    ReinstateRecordAssociation,
     ReopenConstraint,
     ReopenIssue,
     ReorderConstraintCategories,
+    ReportLineageBackfill,
     Representation,
     ResolveConstraintSyncConflict,
     ResolveEntity,
@@ -477,6 +485,15 @@ _UNCOMPOSED_CAPABILITIES = frozenset(
         Capability.ISSUES_HANDOFFS_LIST,
         Capability.ISSUES_WORK_CREATE_TASK,
         Capability.ISSUES_WORK_CREATE_COMMITMENT,
+        # Record lineage S3, behind the same switch.
+        Capability.RECORDS_ASSOCIATIONS_CONTEST,
+        Capability.RECORDS_ASSOCIATIONS_REINSTATE,
+        Capability.RECORDS_ASSOCIATIONS_HISTORY,
+        Capability.ISSUES_HISTORY,
+        Capability.ISSUES_TIMELINE,
+        Capability.ISSUES_HANDOFFS_CORRECT,
+        Capability.RECORDS_BACKFILL_PLAN,
+        Capability.RECORDS_BACKFILL_REPORT,
     }
 )
 
@@ -1753,6 +1770,58 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
                 "origin_evidence_ref": "cap_httporigin00001",
             },
         },
+        # Record lineage S3 (S3 contract section 7).
+        Capability.RECORDS_ASSOCIATIONS_CONTEST: {
+            "link_id": "irl_httplink00001",
+            "expected_revision": 1,
+            "idempotency_key": "http-records-associations-contest-0001",
+            "reason": "the http association is disputed",
+            "evidence_anchors": [
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_httpmeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_httpnote00001",
+                    "source_sha256": "a" * 64,
+                    "role": "contradicts",
+                }
+            ],
+        },
+        Capability.RECORDS_ASSOCIATIONS_REINSTATE: {
+            "link_id": "irl_httplink00001",
+            "expected_revision": 2,
+            "idempotency_key": "http-records-associations-reinstate-0001",
+            "reason": "the http dispute was resolved",
+            "evidence_anchors": [
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_httpmeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_httpnote00001",
+                    "source_sha256": "a" * 64,
+                    "role": "corroborates",
+                }
+            ],
+        },
+        Capability.RECORDS_ASSOCIATIONS_HISTORY: {"link_id": "irl_httplink00001"},
+        Capability.ISSUES_HISTORY: {"issue_id": "sit_httpissue0001"},
+        Capability.ISSUES_TIMELINE: {"issue_id": "sit_httpissue0001"},
+        Capability.ISSUES_HANDOFFS_CORRECT: {
+            "handoff_id": "ihnd_httphandoff0001",
+            "action": "void",
+            "reason": "the http handoff did not happen",
+            "evidence_anchor": {
+                "family": "meeting_note_version",
+                "root_id": "mtg_httpmeeting0001",
+                "version_kind": "immutable_version",
+                "version_id": "mnote_httpnote00001",
+                "source_sha256": "a" * 64,
+                "role": "contradicts",
+            },
+            "idempotency_key": "http-issues-handoffs-correct-0001",
+        },
+        Capability.RECORDS_BACKFILL_PLAN: {"idempotency_key": "http-records-backfill-plan-0001"},
+        Capability.RECORDS_BACKFILL_REPORT: {"run_id": "lbfr_httprun000001"},
     }
 
 
@@ -2930,6 +2999,62 @@ def commands_for(
                 "origin_evidence_ref": "cap_httporigin00001",
             },
         ),
+        # Record lineage S3 (S3 contract section 7).
+        Capability.RECORDS_ASSOCIATIONS_CONTEST: ContestRecordAssociation(
+            link_id="irl_httplink00001",
+            expected_revision=1,
+            idempotency_key="http-records-associations-contest-0001",
+            reason="the http association is disputed",
+            evidence_anchors=(
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_httpmeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_httpnote00001",
+                    "source_sha256": "a" * 64,
+                    "role": "contradicts",
+                },
+            ),
+        ),
+        Capability.RECORDS_ASSOCIATIONS_REINSTATE: ReinstateRecordAssociation(
+            link_id="irl_httplink00001",
+            expected_revision=2,
+            idempotency_key="http-records-associations-reinstate-0001",
+            reason="the http dispute was resolved",
+            evidence_anchors=(
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_httpmeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_httpnote00001",
+                    "source_sha256": "a" * 64,
+                    "role": "corroborates",
+                },
+            ),
+        ),
+        Capability.RECORDS_ASSOCIATIONS_HISTORY: ReadRecordAssociationHistory(
+            link_id="irl_httplink00001"
+        ),
+        Capability.ISSUES_HISTORY: ReadIssueHistory(issue_id="sit_httpissue0001"),
+        Capability.ISSUES_TIMELINE: ReadIssueTimeline(issue_id="sit_httpissue0001"),
+        Capability.ISSUES_HANDOFFS_CORRECT: CorrectIssueHandoff(
+            handoff_id="ihnd_httphandoff0001",
+            action="void",
+            reason="the http handoff did not happen",
+            evidence_anchor={
+                "family": "meeting_note_version",
+                "root_id": "mtg_httpmeeting0001",
+                "version_kind": "immutable_version",
+                "version_id": "mnote_httpnote00001",
+                "source_sha256": "a" * 64,
+                "role": "contradicts",
+            },
+            idempotency_key="http-issues-handoffs-correct-0001",
+        ),
+        Capability.RECORDS_BACKFILL_PLAN: PlanLineageBackfill(
+            idempotency_key="http-records-backfill-plan-0001"
+        ),
+        Capability.RECORDS_BACKFILL_REPORT: ReportLineageBackfill(run_id="lbfr_httprun000001"),
     }
 
 

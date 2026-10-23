@@ -47,6 +47,7 @@ __all__ = [
     "evidence_set_digest",
     "normalized_identity",
     "passage_sha256",
+    "related_context_order",
     "request_digest",
 ]
 
@@ -196,6 +197,19 @@ def normalized_identity(
             "context_issue_id": context_issue_id,
         }
     )
+
+
+def related_context_order(first: RecordRef, second: RecordRef) -> tuple[RecordRef, RecordRef]:
+    """S3 section 3.1: a `related_context` link's stored `(from, to)`.
+
+    `from` is the endpoint with the smaller `(family token, record_id)`,
+    compared by code point (Python `str` order, `COLLATE "C"` in SQL), so both
+    request orders have one `normalized_identity`. Equal endpoints are returned
+    as given; the caller refuses them.
+    """
+    if (second.family.value, second.record_id) < (first.family.value, first.record_id):
+        return second, first
+    return first, second
 
 
 def request_digest(capability: str, principal_id: str, request: Mapping[str, object]) -> str:

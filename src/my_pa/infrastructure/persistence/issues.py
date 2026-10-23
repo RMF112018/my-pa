@@ -32,7 +32,18 @@ from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Any, Final, cast
 
-from sqlalchemy import ColumnElement, Table, and_, exists, insert, select, tuple_, update
+from sqlalchemy import (
+    ColumnElement,
+    Table,
+    and_,
+    exists,
+    func,
+    insert,
+    or_,
+    select,
+    tuple_,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection, Row
 from sqlalchemy.exc import DBAPIError
@@ -43,8 +54,10 @@ from my_pa.contracts.ports import (
     IssueRecord,
     IssueRepository,
     IssueRevisionRecord,
+    LineageFactCut,
     LineageIdempotencyConflictError,
     LineageLinkEvidence,
+    LineageReadTimeoutError,
     LineageSourceVersion,
     LineageWriteRequestRecord,
     ProjectLinkEventRecord,
@@ -82,6 +95,7 @@ from my_pa.infrastructure.persistence.tables import (
     issue_project_membership_events,
     issue_revision_evidence,
     issue_revisions,
+    lineage_commit_marks,
     lineage_evidence_anchors,
     lineage_write_request_links,
     lineage_write_requests,
@@ -142,6 +156,10 @@ def _bound(table: Table, principal_id: str, values: dict[str, object]) -> dict[s
     return principal_bound_values(values, table, capture_context(principal_id))
 
 
+#: PostgreSQL's `query_canceled`: a statement that outran `statement_timeout`.
+_QUERY_CANCELED: Final = "57014"
+
+
 def _run[ResultT](statement: Callable[[], ResultT]) -> ResultT:
     """Run `statement`; a deadlock or serialization victim is `TransactionConflictError`.
 
@@ -149,12 +167,20 @@ def _run[ResultT](statement: Callable[[], ResultT]) -> ResultT:
     handler, so the driver error is not left in `__context__`.
     """
     conflict = False
+    timed_out = False
     try:
         return statement()
     except DBAPIError as error:
-        if not is_transaction_conflict(error):
+        if getattr(error.orig, "sqlstate", None) == _QUERY_CANCELED:
+            # S3 section 7.2 step 5 (FR3-F08): a lineage statement that outran
+            # its `statement_timeout` answers `unavailable`, never a fault.
+            timed_out = True
+        elif not is_transaction_conflict(error):
             raise
-        conflict = True
+        else:
+            conflict = True
+    if timed_out:
+        raise LineageReadTimeoutError("a lineage statement timed out")
     if conflict:
         raise TransactionConflictError("the transaction lost a race")
     raise AssertionError("unreachable")  # pragma: no cover
@@ -322,6 +348,10 @@ class SqlIssueRepository(IssueRepository):
                     request.c.result_handoff_id,
                     request.c.result_record_family,
                     request.c.result_record_id,
+                    request.c.result_handoff_correction_id,
+                    request.c.result_backfill_run_id,
+                    request.c.result_backfill_checkpoint,
+                    request.c.commit_seq,
                 ).where(
                     _mine(request, principal_id),
                     request.c.capability == capability,
@@ -349,6 +379,10 @@ class SqlIssueRepository(IssueRepository):
             result_handoff_id=winner.result_handoff_id,
             result_record_family=winner.result_record_family,
             result_record_id=winner.result_record_id,
+            result_handoff_correction_id=winner.result_handoff_correction_id,
+            result_backfill_run_id=winner.result_backfill_run_id,
+            result_backfill_checkpoint=winner.result_backfill_checkpoint,
+            commit_seq=winner.commit_seq,
         )
 
     def complete_write_request(
@@ -368,8 +402,22 @@ class SqlIssueRepository(IssueRepository):
         result_handoff_id: str | None = None,
         result_record_family: str | None = None,
         result_record_id: str | None = None,
+        result_handoff_correction_id: str | None = None,
+        result_backfill_run_id: str | None = None,
+        result_backfill_checkpoint: int | None = None,
     ) -> None:
         request = lineage_write_requests
+        marks = lineage_commit_marks
+        # S3 section 4.1: the mark this transaction took for the Principal, if any
+        # (`take_commit_mark`); none for a backfill plan, which writes no fact.
+        held_mark = (
+            select(marks.c.commit_seq)
+            .where(
+                _mine(marks, principal_id),
+                marks.c.recorded_xact == func.pg_current_xact_id(),
+            )
+            .scalar_subquery()
+        )
         completed = _run(
             lambda: self._connection.execute(
                 update(request)
@@ -390,6 +438,10 @@ class SqlIssueRepository(IssueRepository):
                     result_handoff_id=result_handoff_id,
                     result_record_family=result_record_family,
                     result_record_id=result_record_id,
+                    result_handoff_correction_id=result_handoff_correction_id,
+                    result_backfill_run_id=result_backfill_run_id,
+                    result_backfill_checkpoint=result_backfill_checkpoint,
+                    commit_seq=held_mark,
                     completed_at=completed_at,
                 )
                 .returning(request.c.capability)
@@ -607,6 +659,39 @@ class SqlIssueRepository(IssueRepository):
         if row is None:
             return None
         return _to_revision(row, self._revision_evidence(principal_id, issue_id, row.version))
+
+    def issue_revisions_known_at(
+        self,
+        principal_id: str,
+        issue_id: str,
+        cut: LineageFactCut,
+        *,
+        after: int | None,
+        limit: int,
+    ) -> tuple[IssueRevisionRecord, ...]:
+        if cut.at is None:
+            return ()
+        revisions = issue_revisions
+        # S3 section 3.4: known by its mark, or (a pre-S3 row) by its own time.
+        known: ColumnElement[bool] = and_(
+            revisions.c.commit_seq.is_(None), revisions.c.recorded_at <= cut.at
+        )
+        if cut.watermark is not None:
+            known = or_(revisions.c.commit_seq <= cut.watermark, known)
+        statement = select(*revisions.c).where(
+            _mine(revisions, principal_id), revisions.c.issue_id == issue_id, known
+        )
+        if after is not None:
+            statement = statement.where(revisions.c.version > after)
+        rows = _run(
+            lambda: self._connection.execute(
+                statement.order_by(revisions.c.version).limit(limit)
+            ).all()
+        )
+        return tuple(
+            _to_revision(row, self._revision_evidence(principal_id, issue_id, row.version))
+            for row in rows
+        )
 
     def list_issues(
         self,

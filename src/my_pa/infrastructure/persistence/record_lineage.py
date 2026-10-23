@@ -40,17 +40,35 @@ serialization victim is `TransactionConflictError` and answers `conflict`.
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Final
 
-from sqlalchemy import ColumnElement, Table, and_, insert, or_, select, text, tuple_, update
+from sqlalchemy import (
+    ColumnElement,
+    Table,
+    and_,
+    false,
+    func,
+    insert,
+    literal,
+    or_,
+    select,
+    text,
+    tuple_,
+    update,
+)
 from sqlalchemy.engine import Connection, Row
+from sqlalchemy.exc import DBAPIError
 
 from my_pa.contracts.ports import (
     LineageEndpoint,
+    LineageFactCut,
+    LineageIssueAsOf,
     LineageLinkEvidence,
     LineageNoteVersionRef,
+    LineageReadTimeoutError,
     LineageResolvedRecord,
     LinkHeadRecord,
     LinkRevisionRecord,
@@ -59,8 +77,10 @@ from my_pa.contracts.ports import (
     RepositoryFailureError,
 )
 from my_pa.domain.capture.lifecycle import CaptureLifecycleState
+from my_pa.domain.common.classification import Classification
 from my_pa.domain.lineage.model import RecordRef
 from my_pa.domain.lineage.vocabulary import (
+    LIVE_LINK_STATES,
     MANDATORY_MEMBER_ROLES,
     AcceptanceBasis,
     LinkLifecycleState,
@@ -84,6 +104,9 @@ from my_pa.infrastructure.persistence.principal_scope import (
 from my_pa.infrastructure.persistence.tables import (
     capture_versions,
     commitments,
+    issue_revisions,
+    lineage_commit_marks,
+    lineage_commit_sequences,
     lineage_evidence_anchors,
     meeting_note_versions,
     meetings,
@@ -122,12 +145,49 @@ _NATIVE: Final[Mapping[RecordFamily, tuple[Table, str]]] = {
 }
 
 
+#: S3 section 3: the head states that hold an identity and are traversed, as
+#: stored tokens in a fixed order.
+_LIVE_STATES: Final = tuple(sorted(state.value for state in LIVE_LINK_STATES))
+
+
 def _mine(table: Table, principal_id: str) -> ColumnElement[bool]:
     return partition_criterion(table, capture_context(principal_id))
 
 
 def _bound(table: Table, principal_id: str, values: dict[str, object]) -> dict[str, object]:
     return principal_bound_values(values, table, capture_context(principal_id))
+
+
+#: PostgreSQL's `query_canceled`: a statement that outran `statement_timeout`.
+_QUERY_CANCELED: Final = "57014"
+
+
+def _bounded[ResultT](statement: Callable[[], ResultT]) -> ResultT:
+    """`_run`, and a statement cancelled by its timeout is `LineageReadTimeoutError`.
+
+    S3 section 7.2 step 5: a bounded read's statement timeout answers
+    `unavailable`; any other store failure propagates as `_run` lets it.
+    """
+    timed_out = False
+    try:
+        return _run(statement)
+    except DBAPIError as error:
+        if getattr(error.orig, "sqlstate", None) != _QUERY_CANCELED:
+            raise
+        timed_out = True
+    if timed_out:
+        raise LineageReadTimeoutError("a bounded lineage read timed out")
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def _known(table: Table, cut: LineageFactCut) -> ColumnElement[bool]:
+    """S3 section 3.4: a fact row known at the cut (by its mark, or a pre-S3 row by time)."""
+    if cut.at is None:
+        return and_(false())
+    known: ColumnElement[bool] = and_(table.c.commit_seq.is_(None), table.c.recorded_at <= cut.at)
+    if cut.watermark is not None:
+        known = or_(table.c.commit_seq <= cut.watermark, known)
+    return known
 
 
 _LINK_COLUMNS: Final = (
@@ -273,7 +333,7 @@ class SqlRecordLineageRepository(RecordLineageRepository):
         self._connection = connection
 
     def _rows(self, statement: Any) -> Sequence[Row[Any]]:  # noqa: ANN401 - a SQLAlchemy select
-        return _run(lambda: self._connection.execute(statement).all())
+        return _bounded(lambda: self._connection.execute(statement).all())
 
     # --- endpoints (section 3.2 step 2, section 6.2 step 3) -----------------
 
@@ -373,7 +433,8 @@ class SqlRecordLineageRepository(RecordLineageRepository):
             .select_from(_heads_with_links())
             .where(
                 _mine(record_link_heads, principal_id),
-                record_link_heads.c.lifecycle_state == LinkLifecycleState.ACTIVE.value,
+                # S3 section 6.2 step 6: contested `blocks` heads stay in the search.
+                record_link_heads.c.lifecycle_state.in_(_LIVE_STATES),
                 record_links.c.relation_type == RelationType.BLOCKS.value,
                 tuple_(record_links.c.from_family, record_links.c.from_id).in_(pairs),
             )
@@ -394,7 +455,8 @@ class SqlRecordLineageRepository(RecordLineageRepository):
                 .where(
                     _mine(record_link_heads, principal_id),
                     record_link_heads.c.normalized_identity == normalized_identity,
-                    record_link_heads.c.lifecycle_state == LinkLifecycleState.ACTIVE.value,
+                    # S3 section 3.1: a contested head still holds its identity.
+                    record_link_heads.c.lifecycle_state.in_(_LIVE_STATES),
                 )
                 .with_for_update(of=record_link_heads)
             ).one_or_none()
@@ -538,7 +600,7 @@ class SqlRecordLineageRepository(RecordLineageRepository):
     # --- immutable reads --------------------------------------------------------
 
     def read_link(self, principal_id: str, link_id: str) -> RecordLinkRecord | None:
-        row = _run(
+        row = _bounded(
             lambda: self._connection.execute(
                 select(*_LINK_COLUMNS).where(
                     _mine(record_links, principal_id), record_links.c.link_id == link_id
@@ -551,7 +613,7 @@ class SqlRecordLineageRepository(RecordLineageRepository):
         self, principal_id: str, link_id: str, revision_no: int
     ) -> LinkRevisionRecord | None:
         revisions = record_link_revisions
-        row = _run(
+        row = _bounded(
             lambda: self._connection.execute(
                 select(*revisions.c).where(
                     _mine(revisions, principal_id),
@@ -564,7 +626,7 @@ class SqlRecordLineageRepository(RecordLineageRepository):
             return None
         evidence = record_link_revision_evidence
         anchors = lineage_evidence_anchors
-        cited = _run(
+        cited = _bounded(
             lambda: self._connection.execute(
                 select(
                     evidence.c.anchor_id,
@@ -622,7 +684,7 @@ class SqlRecordLineageRepository(RecordLineageRepository):
     ) -> frozenset[str]:
         if not capture_ids:
             return frozenset()
-        projections = _run(
+        projections = _bounded(
             lambda: latest_lifecycles(
                 self._connection, capture_ids, context=capture_context(principal_id)
             )
@@ -641,13 +703,14 @@ class SqlRecordLineageRepository(RecordLineageRepository):
         if not refs:
             return ()
         pairs = sorted({(ref.family.value, ref.record_id) for ref in refs})
-        rows = _run(
+        rows = _bounded(
             lambda: self._connection.execute(
                 select(*_HEAD_COLUMNS)
                 .select_from(_heads_with_links())
                 .where(
                     _mine(record_link_heads, principal_id),
-                    record_link_heads.c.lifecycle_state == LinkLifecycleState.ACTIVE.value,
+                    # S3 section 9: live heads, so a contested link is followed and shown.
+                    record_link_heads.c.lifecycle_state.in_(_LIVE_STATES),
                     or_(
                         tuple_(record_links.c.from_family, record_links.c.from_id).in_(pairs),
                         tuple_(record_links.c.to_family, record_links.c.to_id).in_(pairs),
@@ -659,23 +722,33 @@ class SqlRecordLineageRepository(RecordLineageRepository):
         return tuple(_to_head(row) for row in rows)
 
     def issue_memberships(
-        self, principal_id: str, issue_id: str, *, limit: int
+        self,
+        principal_id: str,
+        issue_id: str,
+        *,
+        limit: int,
+        after: tuple[datetime, str] | None = None,
     ) -> tuple[LinkHeadRecord, ...]:
-        rows = _run(
-            lambda: self._connection.execute(
-                select(*_HEAD_COLUMNS)
-                .select_from(_heads_with_links())
-                .where(
-                    _mine(record_link_heads, principal_id),
-                    record_link_heads.c.lifecycle_state == LinkLifecycleState.ACTIVE.value,
-                    record_links.c.kind == RecordLinkKind.ISSUE_MEMBERSHIP.value,
-                    record_links.c.from_family == RecordFamily.SITUATION.value,
-                    record_links.c.from_id == issue_id,
-                )
-                .order_by(record_links.c.created_at, record_links.c.link_id)
-                .limit(limit)
-            ).all()
+        statement = (
+            select(*_HEAD_COLUMNS)
+            .select_from(_heads_with_links())
+            .where(
+                _mine(record_link_heads, principal_id),
+                record_link_heads.c.lifecycle_state == LinkLifecycleState.ACTIVE.value,
+                record_links.c.kind == RecordLinkKind.ISSUE_MEMBERSHIP.value,
+                record_links.c.from_family == RecordFamily.SITUATION.value,
+                record_links.c.from_id == issue_id,
+            )
+            .order_by(record_links.c.created_at, record_links.c.link_id)
+            .limit(limit)
         )
+        if after is not None:
+            # The same key and collation as the order, so the keyset is exact.
+            statement = statement.where(
+                tuple_(record_links.c.created_at, record_links.c.link_id)
+                > tuple_(literal(after[0]), literal(after[1]))
+            )
+        rows = _bounded(lambda: self._connection.execute(statement).all())
         return tuple(_to_head(row) for row in rows)
 
     def mandatory_memberships(
@@ -774,7 +847,7 @@ class SqlRecordLineageRepository(RecordLineageRepository):
         if not meeting_ids:
             return {}
         notes = meeting_note_versions
-        rows = _run(
+        rows = _bounded(
             lambda: self._connection.execute(
                 select(notes.c.note_version_id, notes.c.meeting_id, notes.c.version_number)
                 .where(_mine(notes, principal_id), notes.c.meeting_id.in_(sorted(set(meeting_ids))))
@@ -791,6 +864,305 @@ class SqlRecordLineageRepository(RecordLineageRepository):
                 )
             )
         return {meeting_id: tuple(versions) for meeting_id, versions in found.items()}
+
+    def links_in_issue_context(
+        self, principal_id: str, issue_id: str, inside: Collection[RecordRef]
+    ) -> tuple[LinkHeadRecord, ...]:
+        pairs = sorted(
+            {(ref.family.value, ref.record_id) for ref in inside}
+            | {(RecordFamily.SITUATION.value, issue_id)}
+        )
+        rows = self._rows(
+            select(*_HEAD_COLUMNS)
+            .select_from(_heads_with_links())
+            .where(
+                _mine(record_link_heads, principal_id),
+                record_link_heads.c.lifecycle_state.in_(_LIVE_STATES),
+                record_links.c.kind == RecordLinkKind.SEMANTIC.value,
+                or_(
+                    record_links.c.context_issue_id == issue_id,
+                    tuple_(record_links.c.from_family, record_links.c.from_id).in_(pairs),
+                    tuple_(record_links.c.to_family, record_links.c.to_id).in_(pairs),
+                ),
+            )
+            .order_by(record_links.c.link_id.collate("C"))
+        )
+        return tuple(_to_head(row) for row in rows)
+
+    # --- the knowledge clock (S3 contract sections 3.4, 4.2 and 6.2) -------------
+
+    def take_commit_mark(self, principal_id: str) -> int:
+        # The allocator row stays locked until this transaction ends; a second
+        # call in the same transaction returns the mark it already holds.
+        mark = _run(
+            lambda: self._connection.execute(
+                text("SELECT knowledge.lineage_commit_mark(CAST(:principal_id AS text))"),
+                {"principal_id": principal_id},
+            ).scalar_one()
+        )
+        return int(mark)
+
+    def commit_horizon(self, principal_id: str) -> datetime | None:
+        sequences = lineage_commit_sequences
+        return _bounded(
+            lambda: self._connection.execute(
+                select(sequences.c.last_marked_at).where(_mine(sequences, principal_id))
+            ).scalar_one_or_none()
+        )
+
+    def commit_watermark(self, principal_id: str, at: datetime) -> int | None:
+        marks = lineage_commit_marks
+        found = _bounded(
+            lambda: self._connection.execute(
+                select(func.max(marks.c.commit_seq)).where(
+                    _mine(marks, principal_id), marks.c.marked_at <= at
+                )
+            ).scalar_one()
+        )
+        return None if found is None else int(found)
+
+    def link_states_known_at(
+        self,
+        principal_id: str,
+        link_ids: Collection[str],
+        *,
+        watermark: int | None,
+        at: datetime | None,
+    ) -> Mapping[str, tuple[int, LinkLifecycleState]]:
+        if not link_ids or at is None:
+            return {}
+        revisions = record_link_revisions
+        known = and_(revisions.c.commit_seq.is_(None), revisions.c.recorded_at <= at)
+        if watermark is not None:
+            known = or_(revisions.c.commit_seq <= watermark, known)
+        rows = self._rows(
+            select(revisions.c.link_id, revisions.c.revision_no, revisions.c.lifecycle_state)
+            .where(
+                _mine(revisions, principal_id),
+                revisions.c.link_id.in_(sorted(set(link_ids))),
+                known,
+            )
+            .distinct(revisions.c.link_id)
+            .order_by(revisions.c.link_id, revisions.c.revision_no.desc())
+        )
+        return {
+            row.link_id: (int(row.revision_no), LinkLifecycleState(row.lifecycle_state))
+            for row in rows
+        }
+
+    # --- the as-of read core (S3 contract sections 3.4, 6.4 and 7.2) --------------
+
+    def bound_read_statements(self, timeout_ms: int) -> None:
+        _run(
+            lambda: self._connection.execute(
+                text(f"SET LOCAL statement_timeout = {int(timeout_ms)}")
+            )
+        )
+
+    def live_links_incident(
+        self, principal_id: str, refs: Collection[RecordRef], cut: LineageFactCut
+    ) -> tuple[LinkHeadRecord, ...]:
+        if not refs or cut.at is None:
+            return ()
+        pairs = sorted({(ref.family.value, ref.record_id) for ref in refs})
+        revisions = record_link_revisions
+        selected = (
+            select(
+                *_LINK_COLUMNS,
+                revisions.c.revision_no.label("head_revision_no"),
+                revisions.c.lifecycle_state.label("head_lifecycle_state"),
+            )
+            .select_from(
+                record_links.join(
+                    revisions,
+                    and_(
+                        matching_partition_criterion(revisions, record_links),
+                        revisions.c.link_id == record_links.c.link_id,
+                    ),
+                )
+            )
+            .where(
+                _mine(record_links, principal_id),
+                or_(
+                    tuple_(record_links.c.from_family, record_links.c.from_id).in_(pairs),
+                    tuple_(record_links.c.to_family, record_links.c.to_id).in_(pairs),
+                ),
+                _known(revisions, cut),
+            )
+            # Section 7.2 step 2: the latest revision of each link known at the cut.
+            .distinct(record_links.c.link_id)
+            .order_by(record_links.c.link_id, revisions.c.revision_no.desc())
+            .subquery("selected")
+        )
+        rows = self._rows(
+            select(selected)
+            .where(selected.c.head_lifecycle_state.in_(_LIVE_STATES))
+            .order_by(selected.c.created_at, selected.c.link_id.collate("C"))
+        )
+        return tuple(_to_head(row) for row in rows)
+
+    def links_in_issue_context_at(
+        self,
+        principal_id: str,
+        issue_id: str,
+        inside: Collection[RecordRef],
+        cut: LineageFactCut,
+    ) -> tuple[LinkHeadRecord, ...]:
+        if cut.at is None:
+            return ()
+        pairs = sorted(
+            {(ref.family.value, ref.record_id) for ref in inside}
+            | {(RecordFamily.SITUATION.value, issue_id)}
+        )
+        revisions = record_link_revisions
+        selected = (
+            select(
+                *_LINK_COLUMNS,
+                revisions.c.revision_no.label("head_revision_no"),
+                revisions.c.lifecycle_state.label("head_lifecycle_state"),
+            )
+            .select_from(
+                record_links.join(
+                    revisions,
+                    and_(
+                        matching_partition_criterion(revisions, record_links),
+                        revisions.c.link_id == record_links.c.link_id,
+                    ),
+                )
+            )
+            .where(
+                _mine(record_links, principal_id),
+                or_(
+                    record_links.c.context_issue_id == issue_id,
+                    tuple_(record_links.c.from_family, record_links.c.from_id).in_(pairs),
+                    tuple_(record_links.c.to_family, record_links.c.to_id).in_(pairs),
+                ),
+                _known(revisions, cut),
+            )
+            # S3 section 3.2 at a read cut: the latest revision of each link known then.
+            .distinct(record_links.c.link_id)
+            .order_by(record_links.c.link_id, revisions.c.revision_no.desc())
+            .subquery("selected")
+        )
+        rows = self._rows(select(selected).order_by(selected.c.link_id.collate("C")))
+        return tuple(_to_head(row) for row in rows)
+
+    def issues_known_at(
+        self, principal_id: str, issue_ids: Collection[str], cut: LineageFactCut
+    ) -> Mapping[str, LineageIssueAsOf]:
+        if not issue_ids or cut.at is None:
+            return {}
+        rows = self._rows(
+            select(
+                issue_revisions.c.issue_id,
+                issue_revisions.c.version,
+                issue_revisions.c.title,
+                issue_revisions.c.state,
+            )
+            .where(
+                _mine(issue_revisions, principal_id),
+                issue_revisions.c.issue_id.in_(sorted(set(issue_ids))),
+                _known(issue_revisions, cut),
+            )
+            .distinct(issue_revisions.c.issue_id)
+            .order_by(issue_revisions.c.issue_id, issue_revisions.c.version.desc())
+        )
+        return {
+            row.issue_id: LineageIssueAsOf(
+                issue_id=row.issue_id, version=int(row.version), title=row.title, state=row.state
+            )
+            for row in rows
+        }
+
+    def note_versions_until(
+        self, principal_id: str, meeting_ids: Collection[str], recorded_at_most: datetime
+    ) -> Mapping[str, tuple[LineageNoteVersionRef, ...]]:
+        if not meeting_ids:
+            return {}
+        notes = meeting_note_versions
+        rows = self._rows(
+            select(notes.c.note_version_id, notes.c.meeting_id, notes.c.version_number)
+            .where(
+                _mine(notes, principal_id),
+                notes.c.meeting_id.in_(sorted(set(meeting_ids))),
+                notes.c.recorded_at <= recorded_at_most,
+            )
+            .order_by(notes.c.meeting_id, notes.c.version_number)
+        )
+        found: dict[str, list[LineageNoteVersionRef]] = {}
+        for row in rows:
+            found.setdefault(row.meeting_id, []).append(
+                LineageNoteVersionRef(
+                    note_version_id=row.note_version_id,
+                    meeting_id=row.meeting_id,
+                    version_number=row.version_number,
+                )
+            )
+        return {meeting_id: tuple(versions) for meeting_id, versions in found.items()}
+
+    def note_version_recorded_at(
+        self, principal_id: str, note_version_ids: Collection[str]
+    ) -> Mapping[str, datetime]:
+        if not note_version_ids:
+            return {}
+        notes = meeting_note_versions
+        rows = self._rows(
+            select(notes.c.note_version_id, notes.c.recorded_at).where(
+                _mine(notes, principal_id),
+                notes.c.note_version_id.in_(sorted(set(note_version_ids))),
+            )
+        )
+        return {row.note_version_id: row.recorded_at for row in rows}
+
+    def link_revisions_known_at(
+        self,
+        principal_id: str,
+        link_id: str,
+        cut: LineageFactCut,
+        *,
+        after: int | None,
+        limit: int,
+    ) -> tuple[LinkRevisionRecord, ...]:
+        if cut.at is None:
+            return ()
+        revisions = record_link_revisions
+        statement = select(revisions.c.revision_no).where(
+            _mine(revisions, principal_id),
+            revisions.c.link_id == link_id,
+            _known(revisions, cut),
+        )
+        if after is not None:
+            statement = statement.where(revisions.c.revision_no > after)
+        numbers = [
+            int(row.revision_no)
+            for row in self._rows(statement.order_by(revisions.c.revision_no).limit(limit))
+        ]
+        found: list[LinkRevisionRecord] = []
+        for number in numbers:
+            revision = self.read_revision(principal_id, link_id, number)
+            if revision is None:
+                raise RepositoryFailureError
+            found.append(revision)
+        return tuple(found)
+
+    def restricted_capture_roots(
+        self, principal_id: str, capture_ids: Collection[str]
+    ) -> frozenset[str]:
+        if not capture_ids:
+            return frozenset()
+        rows = self._rows(
+            principal_scoped(
+                select(capture_versions.c.capture_id)
+                .where(
+                    capture_versions.c.capture_id.in_(sorted(set(capture_ids))),
+                    capture_versions.c.classification == Classification.RESTRICTED_LOCAL.value,
+                )
+                .distinct(),
+                capture_versions,
+                capture_context(principal_id),
+            )
+        )
+        return frozenset(str(row.capture_id) for row in rows)
 
 
 # --- head rebuild parity ---------------------------------------------------------

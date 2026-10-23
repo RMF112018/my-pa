@@ -18,6 +18,9 @@ import { decodeDocumentsArchive } from "./capabilities/documents.archive";
 import { decodeDocumentsRestore } from "./capabilities/documents.restore";
 import { decodeRecordsLineage } from "./capabilities/records.lineage";
 import { decodeMeetingsNotesReadVersion } from "./capabilities/meetings.notes.read_version";
+import { decodeIssuesList } from "./capabilities/issues.list";
+import { decodeIssuesRead } from "./capabilities/issues.read";
+import { decodeIssuesTimeline } from "./capabilities/issues.timeline";
 import { decodeCapabilitiesGet } from "./capabilities/capabilities.get";
 import { decodeKnowledgeSearch } from "./capabilities/knowledge.search";
 import { decodeKnowledgeRead } from "./capabilities/knowledge.read";
@@ -134,6 +137,9 @@ export const DECODERS = {
   "documents.restore": decodeDocumentsRestore,
   "records.lineage": decodeRecordsLineage,
   "meetings.notes.read_version": decodeMeetingsNotesReadVersion,
+  "issues.list": decodeIssuesList,
+  "issues.read": decodeIssuesRead,
+  "issues.timeline": decodeIssuesTimeline,
   "capabilities.get": decodeCapabilitiesGet,
   "knowledge.search": decodeKnowledgeSearch,
   "knowledge.read": decodeKnowledgeRead,

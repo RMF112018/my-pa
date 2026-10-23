@@ -49,16 +49,27 @@ from my_pa.application import goodnotes_note_unit_contract as _note_unit
 from my_pa.application.errors import InvalidRequestError, SafeDetail, invalid_choice
 from my_pa.application.goodnotes_pull_orchestration import MAX_PULL_BATCH_SIZE
 from my_pa.application.identity_correction import ConflictChoice
-from my_pa.application.issue_handoffs import HandoffListRequest, HandoffRecordRequest
+from my_pa.application.issue_handoffs import (
+    HandoffCorrectRequest,
+    HandoffListRequest,
+    HandoffRecordRequest,
+)
+from my_pa.application.issue_timeline import DEFAULT_TIMELINE_PAGE_SIZE, IssueTimelineRequest
 from my_pa.application.issue_work import AssociationIntent, WorkCompositeRequest
 from my_pa.application.issues import (
     IssueCloseRequest,
     IssueCreateRequest,
+    IssueHistoryRequest,
     IssueListRequest,
     IssueReopenRequest,
     IssueUpdateRequest,
     ProjectLinkAddRequest,
     ProjectLinkEndRequest,
+)
+from my_pa.application.lineage_backfill import (
+    DEFAULT_BACKFILL_BATCH,
+    BackfillPlanRequest,
+    BackfillReportRequest,
 )
 from my_pa.application.lineage_endpoints import (
     EvidenceAnchorInput,
@@ -76,6 +87,7 @@ from my_pa.application.record_lineage import (
     AssociationAssertRequest,
     AssociationCorrectRequest,
     AssociationEndRequest,
+    AssociationHistoryRequest,
     LineageReadRequest,
     MembershipAddRequest,
     MembershipCorrectRequest,
@@ -149,6 +161,7 @@ from my_pa.domain.knowledge_assertion.vocabulary import (
     KnowledgeOwnerRefKind,
     KnowledgeSubjectKind,
 )
+from my_pa.domain.lineage.canonical import related_context_order
 from my_pa.domain.lineage.model import (
     MAX_EVIDENCE_ANCHORS,
     MAX_ISSUE_DESCRIPTION_CHARACTERS,
@@ -160,6 +173,7 @@ from my_pa.domain.lineage.model import (
 from my_pa.domain.lineage.vocabulary import (
     RELATION_MATRIX,
     EvidenceSourceFamily,
+    HandoffCorrectionAction,
     HandoffSide,
     MemberRole,
     RecordFamily,
@@ -167,6 +181,7 @@ from my_pa.domain.lineage.vocabulary import (
     SourceVersionKind,
 )
 from my_pa.domain.lineage.vocabulary import EvidenceRole as LineageEvidenceRole
+from my_pa.domain.lineage_backfill.vocabulary import BackfillClass
 from my_pa.domain.meeting.model import (
     DEFAULT_MEETING_PAGE_SIZE,
     MAX_ATTENDEE_DISPLAY_NAME_CHARACTERS,
@@ -12453,8 +12468,14 @@ def _member_role(value: object) -> MemberRole:
     raise invalid_choice(SafeDetail.ROLE, [role.value for role in MemberRole])
 
 
+#: The relations `records.associations.assert` names. `related_context` (S3
+#: section 3.1) is in the vocabulary and the S3 schema, and is refused here
+#: until its rules (the in-context endpoints and the canonical order) land.
+_ASSERTABLE_RELATIONS: Final = frozenset(RelationType) - {RelationType.ISSUE_MEMBER}
+
+
 def _semantic_relation(value: object) -> RelationType:
-    admitted = [relation for relation in RelationType if relation is not RelationType.ISSUE_MEMBER]
+    admitted = [relation for relation in RelationType if relation in _ASSERTABLE_RELATIONS]
     if isinstance(value, str):
         for relation in admitted:
             if relation.value == value:
@@ -12563,9 +12584,13 @@ class AssertRecordAssociation:
     links include the Constraint's Project and whose members include the
     Task, with an exact-version `origin` anchor. `blocks`: a Task or
     Constraint blocks another one (never itself, never closing a cycle), with
-    an exact-version `corroborates` anchor. `context_issue_id` scopes the
-    association to one of your Issues. The same active meaning returns the
-    existing association with `created: false`.
+    an exact-version `corroborates` anchor. `related_context`: two distinct
+    Meetings, notes, Tasks, Commitments, Constraints or Capture versions that
+    both belong to the required `context_issue_id` relate within it, with an
+    exact-version `corroborates` anchor; it is stored once whichever order you
+    name them in. `context_issue_id` scopes the association to one of your
+    Issues. The same active meaning returns the existing association with
+    `created: false`; a contested one is refused.
     """
 
     capability: ClassVar[Capability] = Capability.RECORDS_ASSOCIATIONS_ASSERT
@@ -12576,7 +12601,13 @@ class AssertRecordAssociation:
             "to_record": _RECORD_REF_SCHEMA,
             "relation_type": {
                 "type": "string",
-                "enum": ["blocks", "discusses", "escalated_from", "originated_from"],
+                "enum": [
+                    "blocks",
+                    "discusses",
+                    "escalated_from",
+                    "originated_from",
+                    "related_context",
+                ],
             },
             "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
             "evidence_anchors": {**_EVIDENCE_ANCHORS_SCHEMA, "minItems": 1},
@@ -12605,6 +12636,10 @@ class AssertRecordAssociation:
             raise InvalidRequestError(SafeDetail.RELATION_TYPE)
         if self.context_issue_id is not None:
             _identifier(self.context_issue_id, IdKind.SITUATION, SafeDetail.CONTEXT_ISSUE_ID)
+        if relation is RelationType.RELATED_CONTEXT:
+            # S3 section 3.1: one stored order, before the request digest, so
+            # both orders are one request under one key.
+            from_ref, to_ref = related_context_order(from_ref, to_ref)
         return AssociationAssertRequest(
             from_ref=from_ref,
             to_ref=to_ref,
@@ -12713,12 +12748,33 @@ class ReadRecordLineage:
             "origin": _RECORD_REF_SCHEMA,
             "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue to read lineage under."),
             "max_depth": {"type": "integer", "minimum": 0, "maximum": 4, "default": 4},
+            # S3 section 7.2: the cuts and the opaque, grant-bound page cursor.
+            "known_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "ISO-8601 with an offset.",
+            },
+            "valid_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "ISO-8601 with an offset.",
+            },
+            "page_size": {"type": "integer", "minimum": 10, "maximum": 100},
+            "cursor": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{1,2048}$",
+                "description": "The previous page's next_cursor, with the same request.",
+            },
         }
     )
 
     origin: dict[str, object]
     issue_id: str | None = None
     max_depth: int | None = None
+    known_at: str | None = None
+    valid_at: str | None = None
+    page_size: int | None = None
+    cursor: str | None = None
 
     def __post_init__(self) -> None:
         self.lineage_request()
@@ -12732,10 +12788,17 @@ class ReadRecordLineage:
             depth = DEFAULT_LINEAGE_DEPTH
         if type(depth) is not int or not 0 <= depth <= MAX_LINEAGE_DEPTH:
             raise InvalidRequestError(SafeDetail.MAX_DEPTH)
+        known_at = _optional_instant(self.known_at, SafeDetail.KNOWN_AT)
+        valid_at = _optional_instant(self.valid_at, SafeDetail.VALID_AT)
+        _cursor_page(self.page_size, self.cursor)
         return LineageReadRequest(
             origin=_record_ref(self.origin, SafeDetail.ORIGIN),
             issue_id=self.issue_id,
             max_depth=depth,
+            known_at=known_at,
+            valid_at=valid_at,
+            page_size=self.page_size,
+            cursor=self.cursor,
         )
 
 
@@ -13102,6 +13165,12 @@ def _aware_instant(value: object, detail: SafeDetail) -> datetime:
     return instant
 
 
+#: An ISO-8601 instant with an offset (S3 `known_at`, `valid_at`, `effective_at`).
+_INSTANT_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {"type": "string", "format": "date-time", "description": "ISO-8601 with an offset."}
+)
+
+
 @dataclass(frozen=True, slots=True)
 class ListIssueHandoffs:
     """`issues.handoffs.list`: one page of an Issue's handoffs, oldest first.
@@ -13126,6 +13195,7 @@ class ListIssueHandoffs:
             "after": _issue_id_schema(
                 IdKind.ISSUE_HANDOFF, "Keyset cursor: the last handoff_id shown."
             ),
+            "known_at": _INSTANT_SCHEMA,
         }
     )
 
@@ -13133,6 +13203,7 @@ class ListIssueHandoffs:
     commitment_id: str | None = None
     page_size: int | None = None
     after: str | None = None
+    known_at: str | None = None
 
     def __post_init__(self) -> None:
         self.handoff_request()
@@ -13152,6 +13223,7 @@ class ListIssueHandoffs:
             commitment_id=self.commitment_id,
             page_size=DEFAULT_ISSUE_PAGE_SIZE if sized is None else sized,
             after=self.after,
+            known_at=_optional_instant(self.known_at, SafeDetail.KNOWN_AT),
         )
 
 
@@ -13507,6 +13579,460 @@ class CreateIssueWorkCommitment:
         )
 
 
+# --- Record lineage S3 (S3 contract section 7) ----------------------------------
+#
+# Eight commands, each a frozen dataclass whose fields are exactly the section 7
+# request fields (no server-owned field, no `commit_seq`, no `marked_at`, no
+# grant). Validation here is what is decidable from the request alone: types,
+# bounds, prefixes, closed choices and instants with an offset; `known_at` and
+# `valid_at` after now are the application's (they need the server's clock).
+
+#: S3 sections 7.2 and 7.3: the paged lineage and timeline reads take a page of
+#: 10..100 items (R3-F15), never clamped; the history reads 1..100.
+MIN_LINEAGE_PAGE_SIZE: Final = 10
+#: S3 section 5: an opaque cursor is unpadded base64url, at most 2048 characters.
+MAX_LINEAGE_CURSOR_CHARACTERS: Final = 2048
+_LINEAGE_CURSOR: Final = re.compile(r"[A-Za-z0-9_-]{1,2048}")
+#: S3 section 8.3: a plan classifies 1..500 items per call, 200 by default.
+DEFAULT_BACKFILL_BATCH_SIZE: Final = DEFAULT_BACKFILL_BATCH
+MAX_BACKFILL_BATCH_SIZE: Final = 500
+
+_LINEAGE_CURSOR_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{1,2048}$",
+        "description": "The previous page's next_cursor, with the same request.",
+    }
+)
+_HISTORY_PAGE_SIZE_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": MAX_ISSUE_PAGE_SIZE,
+        "default": DEFAULT_ISSUE_PAGE_SIZE,
+    }
+)
+
+
+def _optional_instant(value: object, detail: SafeDetail) -> datetime | None:
+    return None if value is None else _aware_instant(value, detail)
+
+
+def _history_page(page_size: object, after: object) -> None:
+    """S3 section 7.3: `page_size` 1..100 and `after` a positive integer."""
+    if page_size is not None and (
+        type(page_size) is not int or not 1 <= page_size <= MAX_ISSUE_PAGE_SIZE
+    ):
+        raise InvalidRequestError(SafeDetail.PAGE_SIZE)
+    if after is not None and (type(after) is not int or after < 1):
+        raise InvalidRequestError(SafeDetail.CURSOR)
+
+
+def _cursor_page(page_size: object, cursor: object) -> None:
+    """S3 section 7.2: `page_size` 10..100; a cursor needs a page size and is base64url."""
+    if page_size is not None and (
+        type(page_size) is not int or not MIN_LINEAGE_PAGE_SIZE <= page_size <= MAX_ISSUE_PAGE_SIZE
+    ):
+        raise InvalidRequestError(SafeDetail.PAGE_SIZE)
+    if cursor is not None:
+        if page_size is None or not isinstance(cursor, str):
+            raise InvalidRequestError(SafeDetail.CURSOR)
+        if _LINEAGE_CURSOR.fullmatch(cursor) is None:
+            raise InvalidRequestError(SafeDetail.CURSOR)
+
+
+def _link_change_request(
+    command: ContestRecordAssociation | ReinstateRecordAssociation,
+) -> AssociationCorrectRequest:
+    return AssociationCorrectRequest(
+        link_id=_identifier(command.link_id, IdKind.RECORD_LINK, SafeDetail.LINK_ID),
+        expected_revision=_link_revision(command.expected_revision),
+        reason=_lineage_reason(command.reason),
+        evidence_anchors=_anchor_set(command.evidence_anchors, minimum=1),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ContestRecordAssociation:
+    """`records.associations.contest`: dispute an active semantic association of yours.
+
+    Local operator only. The supplied evidence is the complete new set and holds
+    at least one exact-version anchor with role contradicts. The association
+    keeps its identity and reads as contested until it is reinstated or ended;
+    a contested association in an Issue's context blocks that Issue's close.
+    """
+
+    capability: ClassVar[Capability] = Capability.RECORDS_ASSOCIATIONS_CONTEST
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "link_id": _issue_id_schema(IdKind.RECORD_LINK, "The association."),
+            "expected_revision": {"type": "integer", "minimum": 1},
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "reason": _LINEAGE_REASON_SCHEMA,
+            "evidence_anchors": {**_EVIDENCE_ANCHORS_SCHEMA, "minItems": 1},
+        }
+    )
+
+    link_id: str
+    expected_revision: int
+    idempotency_key: str
+    reason: str = field(repr=False)
+    evidence_anchors: tuple[dict[str, object], ...] = field(repr=False)
+
+    def __post_init__(self) -> None:
+        self.lineage_request()
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def lineage_request(self) -> AssociationCorrectRequest:
+        """The parsed request this command states."""
+        return _link_change_request(self)
+
+
+@dataclass(frozen=True, slots=True)
+class ReinstateRecordAssociation:
+    """`records.associations.reinstate`: resolve a contested association back to active.
+
+    Local operator only. The supplied evidence is the complete new set and
+    satisfies the relation's own evidence rule.
+    """
+
+    capability: ClassVar[Capability] = Capability.RECORDS_ASSOCIATIONS_REINSTATE
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "link_id": _issue_id_schema(IdKind.RECORD_LINK, "The association."),
+            "expected_revision": {"type": "integer", "minimum": 1},
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "reason": _LINEAGE_REASON_SCHEMA,
+            "evidence_anchors": {**_EVIDENCE_ANCHORS_SCHEMA, "minItems": 1},
+        }
+    )
+
+    link_id: str
+    expected_revision: int
+    idempotency_key: str
+    reason: str = field(repr=False)
+    evidence_anchors: tuple[dict[str, object], ...] = field(repr=False)
+
+    def __post_init__(self) -> None:
+        self.lineage_request()
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def lineage_request(self) -> AssociationCorrectRequest:
+        """The parsed request this command states."""
+        return _link_change_request(self)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadRecordAssociationHistory:
+    """`records.associations.history`: one association's revisions with their evidence.
+
+    As known at `known_at` (default: now), oldest first; `after` is the last
+    `revision_no` shown.
+    """
+
+    capability: ClassVar[Capability] = Capability.RECORDS_ASSOCIATIONS_HISTORY
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "link_id": _issue_id_schema(IdKind.RECORD_LINK, "The association or membership."),
+            "known_at": _INSTANT_SCHEMA,
+            "page_size": _HISTORY_PAGE_SIZE_SCHEMA,
+            "after": {"type": "integer", "minimum": 1},
+        }
+    )
+
+    link_id: str
+    known_at: str | None = None
+    page_size: int | None = None
+    after: int | None = None
+
+    def __post_init__(self) -> None:
+        self.history_request()
+
+    def history_request(self) -> AssociationHistoryRequest:
+        """The parsed request this command states."""
+        _identifier(self.link_id, IdKind.RECORD_LINK, SafeDetail.LINK_ID)
+        known_at = _optional_instant(self.known_at, SafeDetail.KNOWN_AT)
+        _history_page(self.page_size, self.after)
+        return AssociationHistoryRequest(
+            link_id=self.link_id,
+            known_at=known_at,
+            page_size=DEFAULT_ISSUE_PAGE_SIZE if self.page_size is None else self.page_size,
+            after=self.after,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ReadIssueHistory:
+    """`issues.history`: one Issue's revisions with their closure basis, oldest first.
+
+    As known at `known_at` (default: now); `after` is the last version shown.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_HISTORY
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue."),
+            "known_at": _INSTANT_SCHEMA,
+            "page_size": _HISTORY_PAGE_SIZE_SCHEMA,
+            "after": {"type": "integer", "minimum": 1},
+        }
+    )
+
+    issue_id: str
+    known_at: str | None = None
+    page_size: int | None = None
+    after: int | None = None
+
+    def __post_init__(self) -> None:
+        self.history_request()
+
+    def history_request(self) -> IssueHistoryRequest:
+        """The parsed request this command states."""
+        _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
+        known_at = _optional_instant(self.known_at, SafeDetail.KNOWN_AT)
+        _history_page(self.page_size, self.after)
+        return IssueHistoryRequest(
+            issue_id=self.issue_id,
+            known_at=known_at,
+            page_size=DEFAULT_ISSUE_PAGE_SIZE if self.page_size is None else self.page_size,
+            after=self.after,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ReadIssueTimeline:
+    """`issues.timeline`: one Issue's ordered lineage and native events, one page at a time.
+
+    `known_at` reads the lineage plane as it was then known (native events are
+    then omitted); `valid_at` reads what was in effect then. `page_size` is
+    10..100 (default 25); `cursor` is the previous page's `next_cursor`.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_TIMELINE
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue."),
+            "known_at": _INSTANT_SCHEMA,
+            "valid_at": _INSTANT_SCHEMA,
+            "page_size": {
+                "type": "integer",
+                "minimum": MIN_LINEAGE_PAGE_SIZE,
+                "maximum": MAX_ISSUE_PAGE_SIZE,
+                "default": DEFAULT_ISSUE_PAGE_SIZE,
+            },
+            "cursor": _LINEAGE_CURSOR_SCHEMA,
+        }
+    )
+
+    issue_id: str
+    known_at: str | None = None
+    valid_at: str | None = None
+    page_size: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        self.timeline_request()
+
+    def timeline_request(self) -> IssueTimelineRequest:
+        """The parsed request this command states."""
+        _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
+        known_at = _optional_instant(self.known_at, SafeDetail.KNOWN_AT)
+        valid_at = _optional_instant(self.valid_at, SafeDetail.VALID_AT)
+        _cursor_page(self.page_size, self.cursor)
+        return IssueTimelineRequest(
+            issue_id=self.issue_id,
+            known_at=known_at,
+            valid_at=valid_at,
+            page_size=DEFAULT_TIMELINE_PAGE_SIZE if self.page_size is None else self.page_size,
+            cursor=self.cursor,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CorrectIssueHandoff:
+    """`issues.handoffs.correct`: retime or void one recorded handoff, never rewriting it.
+
+    Local operator only. `retime`: the handoff happened at `effective_at`
+    instead (with an offset, in order within its chain), with exactly one exact
+    anchor with role handoff. `void`: it did not happen -- only the chain's
+    last live handoff -- with exactly one exact anchor with role contradicts.
+    A voided handoff takes no further correction; a closed Issue's handoffs
+    are not corrected.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_HANDOFFS_CORRECT
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "handoff_id": _issue_id_schema(IdKind.ISSUE_HANDOFF, "The handoff."),
+            "action": {"type": "string", "enum": [a.value for a in HandoffCorrectionAction]},
+            "effective_at": {
+                **_INSTANT_SCHEMA,
+                "description": "retime only: when it took effect, ISO-8601 with an offset.",
+            },
+            "reason": _LINEAGE_REASON_SCHEMA,
+            "evidence_anchor": {
+                **_EVIDENCE_ANCHOR_SCHEMA,
+                "description": (
+                    "Exactly one exact Meeting note or Capture version (immutable_version): "
+                    "role handoff for retime, contradicts for void."
+                ),
+            },
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+        }
+    )
+
+    handoff_id: str
+    action: str
+    idempotency_key: str
+    reason: str = field(repr=False)
+    evidence_anchor: dict[str, object] = field(repr=False)
+    effective_at: str | None = None
+
+    def __post_init__(self) -> None:
+        self.handoff_request()
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def handoff_request(self) -> HandoffCorrectRequest:
+        """The parsed request this command states."""
+        handoff_id = _identifier(self.handoff_id, IdKind.ISSUE_HANDOFF, SafeDetail.HANDOFF_ID)
+        action = _handoff_correction_action(self.action)
+        effective_at: datetime | None = None
+        if action is HandoffCorrectionAction.RETIME:
+            effective_at = _aware_instant(self.effective_at, SafeDetail.EFFECTIVE_AT)
+        elif self.effective_at is not None:
+            raise InvalidRequestError(SafeDetail.EFFECTIVE_AT)
+        reason = _blank_refused_reason(self.reason)
+        anchor = parse_evidence_anchor(self.evidence_anchor, SafeDetail.EVIDENCE_ANCHOR)
+        role = (
+            LineageEvidenceRole.HANDOFF
+            if action is HandoffCorrectionAction.RETIME
+            else LineageEvidenceRole.CONTRADICTS
+        )
+        if (
+            anchor.role is not role
+            or anchor.version_kind is not SourceVersionKind.IMMUTABLE_VERSION
+        ):
+            raise InvalidRequestError(SafeDetail.EVIDENCE_ANCHOR)
+        return HandoffCorrectRequest(
+            handoff_id=handoff_id,
+            action=action,
+            effective_at=effective_at,
+            reason=reason,
+            evidence_anchor=anchor,
+        )
+
+
+def _handoff_correction_action(value: object) -> HandoffCorrectionAction:
+    if isinstance(value, str):
+        for action in HandoffCorrectionAction:
+            if action.value == value:
+                return action
+    raise invalid_choice(SafeDetail.ACTION, [action.value for action in HandoffCorrectionAction])
+
+
+@dataclass(frozen=True, slots=True)
+class PlanLineageBackfill:
+    """`records.backfill.plan`: enumerate a backfill dry run, or classify its next batch.
+
+    Operator only, behind its own switch. Without `run_id` it freezes the whole
+    population in one statement; with `run_id` and `expected_checkpoint` (the
+    run's classified count) it classifies the next `batch_size` items (1..500,
+    default 200). It writes ledger rows only: never a link.
+    """
+
+    capability: ClassVar[Capability] = Capability.RECORDS_BACKFILL_PLAN
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "run_id": _issue_id_schema(IdKind.LINEAGE_BACKFILL_RUN, "The run to continue."),
+            "expected_checkpoint": {"type": "integer", "minimum": 0},
+            "batch_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_BACKFILL_BATCH_SIZE,
+                "default": DEFAULT_BACKFILL_BATCH_SIZE,
+            },
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+        }
+    )
+
+    idempotency_key: str
+    run_id: str | None = None
+    expected_checkpoint: int | None = None
+    batch_size: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.run_id is not None:
+            _identifier(self.run_id, IdKind.LINEAGE_BACKFILL_RUN, SafeDetail.RUN_ID)
+            if type(self.expected_checkpoint) is not int or self.expected_checkpoint < 0:
+                raise InvalidRequestError(SafeDetail.CHECKPOINT)
+        elif self.expected_checkpoint is not None:
+            raise InvalidRequestError(SafeDetail.CHECKPOINT)
+        if self.batch_size is not None and (
+            type(self.batch_size) is not int or not 1 <= self.batch_size <= MAX_BACKFILL_BATCH_SIZE
+        ):
+            raise InvalidRequestError(SafeDetail.BATCH_SIZE)
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def plan_request(self) -> BackfillPlanRequest:
+        """The parsed request this command states."""
+        return BackfillPlanRequest(
+            run_id=self.run_id,
+            expected_checkpoint=self.expected_checkpoint,
+            batch_size=self.batch_size,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ReportLineageBackfill:
+    """`records.backfill.report`: one backfill run's census, counts and items.
+
+    Operator only, behind its own switch. `after` is the last `item_no` shown;
+    `classification` narrows the items to one class.
+    """
+
+    capability: ClassVar[Capability] = Capability.RECORDS_BACKFILL_REPORT
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "run_id": _issue_id_schema(IdKind.LINEAGE_BACKFILL_RUN, "The run."),
+            "page_size": _HISTORY_PAGE_SIZE_SCHEMA,
+            "after": {"type": "integer", "minimum": 1},
+            "classification": {"type": "string", "enum": [c.value for c in BackfillClass]},
+        }
+    )
+
+    run_id: str
+    page_size: int | None = None
+    after: int | None = None
+    classification: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.run_id, IdKind.LINEAGE_BACKFILL_RUN, SafeDetail.RUN_ID)
+        _history_page(self.page_size, self.after)
+        if self.classification is not None and self.classification not in {
+            member.value for member in BackfillClass
+        }:
+            raise invalid_choice(SafeDetail.CLASSIFICATION, [c.value for c in BackfillClass])
+
+    def report_request(self) -> BackfillReportRequest:
+        """The parsed request this command states."""
+        return BackfillReportRequest(
+            run_id=self.run_id,
+            page_size=DEFAULT_ISSUE_PAGE_SIZE if self.page_size is None else self.page_size,
+            after=self.after,
+            classification=(
+                None if self.classification is None else BackfillClass(self.classification)
+            ),
+        )
+
+
 type Command = (
     GetCapabilities
     | ListSources
@@ -13722,6 +14248,14 @@ type Command = (
     | ListIssueHandoffs
     | CreateIssueWorkTask
     | CreateIssueWorkCommitment
+    | ContestRecordAssociation
+    | ReinstateRecordAssociation
+    | ReadRecordAssociationHistory
+    | ReadIssueHistory
+    | ReadIssueTimeline
+    | CorrectIssueHandoff
+    | PlanLineageBackfill
+    | ReportLineageBackfill
 )
 
 

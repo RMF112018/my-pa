@@ -821,6 +821,7 @@ unreachable hazard, never as "covered"):
 graph, AT-025, the S3 part of the reverse-root equivalence → S3; AT-015 Program v2
 reads and project-scoped Commitment lists, AT-018, AT-019, AT-022, AT-023 Commitment
 v2 → Program/report work packages; AT-020, AT-021 → out of scope until OD-06.
+The S3 tests are bound in the [S3 contract](record-lineage-s3-contract.md) section 10.
 
 ## 11. Deferred work and its owner slice
 
@@ -839,6 +840,17 @@ v2 → Program/report work packages; AT-020, AT-021 → out of scope until OD-06
 | Issue pages with close/reopen/handoff controls; the Meeting record view | S3 (WP-06A) |
 | Runtime-role provisioning, remote attested lineage writer, native writers through `is_transaction_conflict` | as S1 §11 |
 | Backfill, Program, report manifest, finance, P6 | as S1 §11 |
+
+The S3 rows above are specified by the [S3 contract](record-lineage-s3-contract.md):
+it builds `related_context`, `contest` / `reinstate` with `contested` as a closure-gate
+blocker (as any contested link in the Issue's context), `issues.history`,
+`records.associations.history`, `known_at` / `valid_at` reads, cursors, the timeline,
+handoff correction (`retime` / `void`), past ball-in-court from native Constraint
+revision snapshots and the Issue and Meeting views; it carries Decision membership,
+proposals and review, the lineage Record Event family, `list_for_record` and native
+virtual edges beyond `meeting_note_version_of`, with reasons (S3 contract sections 11
+and 12). Verified Commitment acceptance (D-05, D-17) and Constraint close evidence (D-06)
+stay operator or plane decisions.
 
 ## 12. Divergences — repository vs package, and resolutions
 

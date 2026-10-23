@@ -37,7 +37,13 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 #: CHECKs of `record_links`, `record_link_revisions.member_native_version` and
 #: the handoff and composite result columns of `lineage_write_requests`;
 #: `captures` is untouched.
-TABLES_SHA256: Final = "1186d614dce9df80aabf44c471ceab97a5dd07a10b88fa21e40971872e5fa1c1"
+#: Moved by the record lineage S3 revision (ADR-015), which declares the five
+#: S3 tables (the commit-mark allocator and marks, the handoff corrections and
+#: the backfill ledger), `commit_seq` with its foreign key and index on the four
+#: fact tables, the S3 CHECKs of `record_links` and `record_link_revisions`, the
+#: one-live-head predicate and the S3 result columns of `lineage_write_requests`;
+#: `captures` is untouched.
+TABLES_SHA256: Final = "de0b4aac86bc66af8f5236c0b43c4d8595aee1950e35e8d527e2cbbab2e9efae"
 WP03_MIGRATION_SHA256: Final = "098edd98ccc1846b01c58f42e296e4751e7841b562a2827616cc4337e174c354"
 WP03_MIGRATION: Final = (
     ROOT / "migrations/versions/20260914_e6a4c2f91b73_project_controls_run01_integrity.py"

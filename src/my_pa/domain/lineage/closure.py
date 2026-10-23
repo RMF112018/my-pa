@@ -31,30 +31,48 @@ satisfies anything. For a Task, Commitment or Constraint the head revision's
 `member_native_version` must equal the member's current native `version`, so
 evidence recorded before any later native change is
 `resolution_evidence_stale` (R2-F01).
+
+**S3** (`docs/architecture/record-lineage-s3-contract.md` sections 3.1 and
+3.2) adds the link transition table (`link_transition`), the contest evidence
+rule (`is_contest_evidence`) and the one "in the Issue's context" predicate
+(`in_issue_context`) the gate, readiness, the frozen-closed refusals and the
+timeline all use: a membership from *I*; a semantic link whose context is *I*;
+a semantic link with *I* as an endpoint; or a null-context semantic link whose
+two endpoints are both *inside* *I* (*I*, an active member, or a member of an
+active member's pair set). The gate's one S3 condition is that no link in the
+Issue's context has a `contested` head.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final
 
-from my_pa.domain.lineage.model import EvidenceAnchor
+from my_pa.domain.lineage.model import EvidenceAnchor, RecordRef
 from my_pa.domain.lineage.vocabulary import (
     MANDATORY_MEMBER_ROLES,
     EvidenceAvailability,
     EvidenceRole,
     IssueClosureBlocker,
+    LinkLifecycleState,
+    LinkRevisionAction,
     RecordFamily,
+    RecordLinkKind,
     SourceVersionKind,
 )
 
 __all__ = [
+    "LINK_TRANSITIONS",
     "MANDATORY_MEMBER_ROLES",
     "VERSIONED_MEMBER_FAMILIES",
     "MemberNativeFacts",
     "MembershipHeadEvidence",
     "has_resolution_anchor",
+    "in_issue_context",
+    "is_contest_evidence",
+    "link_transition",
     "member_blockers",
 ]
 
@@ -154,3 +172,75 @@ def member_blockers(
         found.append(IssueClosureBlocker.RESOLUTION_EVIDENCE_STALE)
     order = list(IssueClosureBlocker)
     return tuple(sorted(set(found), key=order.index))
+
+
+# --- S3: link transitions, the contest rule and "in the Issue's context" ------
+
+#: S3 section 3.1: each revision action's admitted head states and the state it
+#: leaves. `ended` is terminal; `assert` writes revision 1 and has no row here.
+LINK_TRANSITIONS: Final[
+    Mapping[LinkRevisionAction, tuple[frozenset[LinkLifecycleState], LinkLifecycleState]]
+] = MappingProxyType(
+    {
+        LinkRevisionAction.CORRECT_EVIDENCE: (
+            frozenset({LinkLifecycleState.ACTIVE}),
+            LinkLifecycleState.ACTIVE,
+        ),
+        LinkRevisionAction.END: (
+            frozenset({LinkLifecycleState.ACTIVE, LinkLifecycleState.CONTESTED}),
+            LinkLifecycleState.ENDED,
+        ),
+        LinkRevisionAction.CONTEST: (
+            frozenset({LinkLifecycleState.ACTIVE}),
+            LinkLifecycleState.CONTESTED,
+        ),
+        LinkRevisionAction.REINSTATE: (
+            frozenset({LinkLifecycleState.CONTESTED}),
+            LinkLifecycleState.ACTIVE,
+        ),
+    }
+)
+
+
+def link_transition(
+    action: LinkRevisionAction, head_state: LinkLifecycleState
+) -> LinkLifecycleState | None:
+    """The state `action` leaves from `head_state`, or `None` when it is not admitted."""
+    admitted = LINK_TRANSITIONS.get(action)
+    if admitted is None or head_state not in admitted[0]:
+        return None
+    return admitted[1]
+
+
+def is_contest_evidence(anchors: Sequence[EvidenceAnchor]) -> bool:
+    """S3 section 3.1: a contest set holds an `immutable_version` anchor with role `contradicts`."""
+    return any(
+        anchor.role is EvidenceRole.CONTRADICTS
+        and anchor.source_version_kind is SourceVersionKind.IMMUTABLE_VERSION
+        for anchor in anchors
+    )
+
+
+def in_issue_context(
+    *,
+    kind: RecordLinkKind,
+    from_ref: RecordRef,
+    to_ref: RecordRef,
+    context_issue_id: str | None,
+    issue_id: str,
+    inside: Collection[RecordRef],
+) -> bool:
+    """S3 section 3.2: whether one link is in the context of Issue `issue_id`.
+
+    `inside` is the Issue's inside set at the cut: the Issue itself, its active
+    members and every member of an active member's pair set. A membership is
+    in context only from its own Issue; a semantic link when its context is the
+    Issue, when the Issue is one of its endpoints (whatever its context), or
+    when its context is null and both endpoints are inside.
+    """
+    issue = RecordRef(family=RecordFamily.SITUATION, record_id=issue_id)
+    if kind is RecordLinkKind.ISSUE_MEMBERSHIP:
+        return from_ref == issue
+    if context_issue_id == issue_id or issue in (from_ref, to_ref):
+        return True
+    return context_issue_id is None and from_ref in inside and to_ref in inside

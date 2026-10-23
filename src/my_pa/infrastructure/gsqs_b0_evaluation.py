@@ -24,7 +24,9 @@ from my_pa.contracts.ports import (
     GoodNotesSemanticRepository,
     IssueHandoffRepository,
     IssueRepository,
+    IssueTimelineRepository,
     KnowledgeRepository,
+    LineageBackfillRepository,
     ManagedDocumentRepository,
     MeetingRepository,
     OperationQueue,
@@ -238,6 +240,14 @@ class GsqsB0EvaluationUnitOfWork(UnitOfWork):
     @property
     def issue_handoffs(self) -> IssueHandoffRepository:
         return cast(IssueHandoffRepository, self._unused)
+
+    @property
+    def issue_timeline(self) -> IssueTimelineRepository:
+        return cast(IssueTimelineRepository, self._unused)
+
+    @property
+    def lineage_backfill(self) -> LineageBackfillRepository:
+        return cast(LineageBackfillRepository, self._unused)
 
     @property
     def context_runs(self) -> ContextRunRepository:

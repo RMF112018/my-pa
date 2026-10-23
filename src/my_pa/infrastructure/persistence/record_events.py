@@ -58,8 +58,9 @@ statement runs.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Final, cast
 
 from sqlalchemy import (
@@ -78,6 +79,7 @@ from sqlalchemy import (
     or_,
     select,
     true,
+    tuple_,
 )
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError, SQLAlchemyError
@@ -94,6 +96,7 @@ from my_pa.contracts.ports import (
     RecordEventStager,
     RecordEventWriter,
     RepositoryFailureError,
+    TimelineNativeEvent,
     TransactionConflictError,
     is_transaction_conflict,
 )
@@ -147,6 +150,7 @@ __all__ = [
     "TriggerReceipt",
     "feed_reader_memory_relation_names",
     "flush_record_events",
+    "issue_member_events",
     "provenance_relation_names",
     "trigger_receipts",
 ]
@@ -605,6 +609,72 @@ def trigger_receipts(
         )
         for row in connection.execute(statement)
     }
+
+
+def issue_member_events(
+    connection: Connection,
+    principal_id: str,
+    records: Collection[tuple[RecordEventFamily, str]],
+    *,
+    families: frozenset[RecordEventFamily],
+    include_restricted_memory: bool,
+    occurred_at_most: datetime | None,
+    sequence_at_most: int | None,
+) -> tuple[TimelineNativeEvent, ...]:
+    """Record lineage S3 section 7.3: the Issue timeline's native plane, one statement.
+
+    The feed module's own read (the only importer of the feed tables, as
+    `trigger_receipts` is): the Record Events of the named member records under
+    the feed's one visibility predicate (`_visible`, R3-F03) -- the reader's
+    family set and, remotely, every withholding clause -- so a withheld event
+    reaches no timeline entry and no watermark. Bounded by `occurred_at <=
+    occurred_at_most` and `sequence_number <= sequence_at_most` when given, in
+    sequence order. Only the event's own columns are read; no payload. Not
+    translated: the caller's bounded runner classifies a failure.
+    """
+    wanted = sorted({(family.value, record_id) for family, record_id in records})
+    if not wanted or not families:
+        return ()
+    event = record_events
+    criteria = [
+        *_visible(event, principal_id, families, include_restricted_memory),
+        tuple_(event.c.record_family, event.c.record_id).in_(wanted),
+    ]
+    if occurred_at_most is not None:
+        criteria.append(event.c.occurred_at <= occurred_at_most)
+    if sequence_at_most is not None:
+        criteria.append(event.c.sequence_number <= sequence_at_most)
+    statement = (
+        select(
+            event.c.event_id,
+            event.c.sequence_number,
+            event.c.record_family,
+            event.c.record_id,
+            event.c.event_kind,
+            event.c.record_version,
+            event.c.changed_fields,
+            event.c.source_capability,
+            event.c.occurred_at,
+            event.c.recorded_at,
+        )
+        .where(*criteria)
+        .order_by(event.c.sequence_number)
+    )
+    return tuple(
+        TimelineNativeEvent(
+            event_id=row.event_id,
+            sequence_number=int(row.sequence_number),
+            record_family=RecordEventFamily(row.record_family),
+            record_id=row.record_id,
+            event_kind=RecordEventKind(row.event_kind),
+            record_version=int(row.record_version),
+            changed_fields=tuple(row.changed_fields),
+            source_capability=row.source_capability,
+            occurred_at=row.occurred_at,
+            recorded_at=row.recorded_at,
+        )
+        for row in connection.execute(statement)
+    )
 
 
 # --- KLP-WP-05: cross-run provenance ---------------------------------------------

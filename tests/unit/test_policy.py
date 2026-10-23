@@ -469,6 +469,17 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.ISSUES_HANDOFFS_LIST, Purpose.ISSUE_READ),
         (Capability.ISSUES_WORK_CREATE_TASK, Purpose.ISSUE_WORK_AUTHORING),
         (Capability.ISSUES_WORK_CREATE_COMMITMENT, Purpose.ISSUE_WORK_AUTHORING),
+        # Record lineage S3: link writes and history under the record-lineage
+        # purposes, the Issue reads under `issue_read`, the handoff correction
+        # under `issue_authoring`, the backfill under `lineage_backfill`.
+        (Capability.RECORDS_ASSOCIATIONS_CONTEST, Purpose.RECORD_LINEAGE_AUTHORING),
+        (Capability.RECORDS_ASSOCIATIONS_REINSTATE, Purpose.RECORD_LINEAGE_AUTHORING),
+        (Capability.RECORDS_ASSOCIATIONS_HISTORY, Purpose.RECORD_LINEAGE_READ),
+        (Capability.ISSUES_HISTORY, Purpose.ISSUE_READ),
+        (Capability.ISSUES_TIMELINE, Purpose.ISSUE_READ),
+        (Capability.ISSUES_HANDOFFS_CORRECT, Purpose.ISSUE_AUTHORING),
+        (Capability.RECORDS_BACKFILL_PLAN, Purpose.LINEAGE_BACKFILL),
+        (Capability.RECORDS_BACKFILL_REPORT, Purpose.LINEAGE_BACKFILL),
     }
 )
 
@@ -557,9 +568,9 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # `issue_authoring` pair, each name mapped to exactly one of the pair.
     # Unioned: 198 capabilities, 54 purposes, 200 permitted pairs; then its remaining
     # S1 names and their purposes: 206 capabilities, 57 purposes, 208 pairs.
-    # Record lineage S2: 214 capabilities, 58 purposes, 216 pairs.
-    assert len(PERMITTED_PAIRS) == 216
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 216 == 12196
+    # Record lineage S3: 222 capabilities, 59 purposes, 224 pairs.
+    assert len(PERMITTED_PAIRS) == 224
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 224 == 12874
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

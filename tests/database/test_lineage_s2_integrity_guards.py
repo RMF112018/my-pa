@@ -307,7 +307,16 @@ def test_s2_immutable_tables_refuse_update_and_delete(
 def test_s2_tables_refuse_truncate(db_engine: Engine, s2world: S2World, table: str) -> None:
     """Each S2 table, holding a row, refuses on its own trigger: every other is disabled."""
     del s2world
-    everything = (*S1_TABLES, *S2_TABLES)
+    # Record lineage S3's five tables are truncated with them, their own refusals
+    # disabled, because they reference these tables or are referenced by them.
+    s3_tables = (
+        "lineage_commit_sequences",
+        "lineage_commit_marks",
+        "issue_responsibility_corrections",
+        "lineage_backfill_runs",
+        "lineage_backfill_items",
+    )
+    everything = (*S1_TABLES, *S2_TABLES, *s3_tables)
 
     def truncate(c: Connection) -> None:
         for other in everything:

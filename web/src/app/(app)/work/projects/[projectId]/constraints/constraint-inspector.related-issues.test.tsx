@@ -23,7 +23,8 @@ describe("Constraint inspector related Issues", () => {
     const lineage = structuredClone(fixtures["records.lineage"]);
     const root = { family: "constraint", record_id: constraintId };
     lineage.root = root;
-    lineage.nodes[0] = { family: "constraint", record_id: constraintId, depth: 0 };
+    // S3 lockstep: the root node's path step is null.
+    lineage.nodes[0] = { family: "constraint", record_id: constraintId, depth: 0, reached_from: null, reached_via: null };
     lineage.typed_edges[0]!.to = root;
     lineage.typed_edges[1]!.from = root;
     const fetcher = vi.fn<typeof fetch>(async (input) => {

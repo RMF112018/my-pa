@@ -78,9 +78,11 @@ from my_pa.contracts.ports import (
     GoodNotesSemanticRepository,
     IssueHandoffRepository,
     IssueRepository,
+    IssueTimelineRepository,
     KnowledgeAssertionRepository,
     KnowledgeRecord,
     KnowledgeRepository,
+    LineageBackfillRepository,
     ManagedDocumentRepository,
     MeetingRepository,
     Operation,
@@ -206,6 +208,7 @@ from my_pa.infrastructure.persistence.goodnotes_pull import SqlGoodNotesPullRepo
 from my_pa.infrastructure.persistence.goodnotes_semantics import SqlGoodNotesSemanticRepository
 from my_pa.infrastructure.persistence.intelligence import SqlIntelligenceStore
 from my_pa.infrastructure.persistence.issue_handoffs import SqlIssueHandoffRepository
+from my_pa.infrastructure.persistence.issue_timeline import SqlIssueTimelineRepository
 from my_pa.infrastructure.persistence.issues import SqlIssueRepository
 from my_pa.infrastructure.persistence.jobs import enqueue_job, job_for
 from my_pa.infrastructure.persistence.knowledge import (
@@ -218,6 +221,7 @@ from my_pa.infrastructure.persistence.knowledge import (
 from my_pa.infrastructure.persistence.knowledge_assertions import (
     SqlKnowledgeAssertionRepository,
 )
+from my_pa.infrastructure.persistence.lineage_backfill import SqlLineageBackfillRepository
 from my_pa.infrastructure.persistence.managed_documents import SqlManagedDocumentRepository
 from my_pa.infrastructure.persistence.meetings import SqlMeetingRepository
 from my_pa.infrastructure.persistence.principal_scope import capture_context
@@ -1503,6 +1507,16 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def issue_handoffs(self) -> IssueHandoffRepository:
         """Record lineage S2 responsibility handoffs, on this transaction's connection."""
         return SqlIssueHandoffRepository(self._open)
+
+    @property
+    def issue_timeline(self) -> IssueTimelineRepository:
+        """Record lineage S3 Issue timeline reads, on this transaction's connection."""
+        return SqlIssueTimelineRepository(self._open)
+
+    @property
+    def lineage_backfill(self) -> LineageBackfillRepository:
+        """Record lineage S3 backfill ledger, on this transaction's connection."""
+        return SqlLineageBackfillRepository(self._open)
 
     @property
     def identity_history(self) -> SqlIdentityHistoryQuery:

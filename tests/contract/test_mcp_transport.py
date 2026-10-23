@@ -93,10 +93,15 @@ def served(scene: Scene) -> Served[McpTransport]:
     scene.world.searches[scene.enrollment.enrollment_id] = staged_search(scene)
     # KLP-WP-03: the Knowledge plane composed too, so the listing below is the
     # whole local surface; nothing in this module calls a Knowledge handler.
-    # Record lineage S1: the lineage plane too, for the same reason.
+    # Record lineage S1: the lineage plane too, for the same reason; S3: and its
+    # backfill sub-switch.
     return mcp_transport(
         build_service(
-            scene.world, scene.providers, knowledge_assertions_enabled=True, lineage_enabled=True
+            scene.world,
+            scene.providers,
+            knowledge_assertions_enabled=True,
+            lineage_enabled=True,
+            lineage_backfill_enabled=True,
         ),
         scene.principal,
     )
@@ -137,7 +142,7 @@ def test_tools_list_publishes_exactly_the_local_capability_set(
         for capability in HANDLER_CAPABILITIES
         if capability not in _AUTHENTICATED_CLIENT_CAPABILITIES
     ]
-    assert len(listed.tools) == 209
+    assert len(listed.tools) == 217
     assert all(tool.description for tool in listed.tools), "a tool has no description"
 
 
@@ -146,7 +151,7 @@ def test_handler_unwired_capabilities_publish_no_mcp_tools() -> None:
     assert {tool.name for tool in TOOLS} == {
         capability.value for capability in HANDLER_CAPABILITIES
     }
-    assert len(TOOLS) == 214
+    assert len(TOOLS) == 222
     assert not {capability.value for capability in HANDLER_UNWIRED_CAPABILITIES} & {
         tool.name for tool in TOOLS
     }
@@ -698,6 +703,8 @@ def test_a_child_with_a_managed_root_publishes_every_locally_available_capabilit
         MY_PA_KNOWLEDGE_ASSERTIONS_ENABLED="true",
         # Record lineage S1: the lineage plane's own switch, no dependency.
         MY_PA_LINEAGE_ENABLED="true",
+        # Record lineage S3: the backfill sub-switch, which needs the one above.
+        MY_PA_LINEAGE_BACKFILL_ENABLED="true",
     )
     expected = [
         capability.value

@@ -66,10 +66,12 @@ describe("RelatedIssuesPanel", () => {
         { issue_id: "sit_aaaaaaaa11111111", title: "Synthetic Issue", state: "open" },
         { issue_id: "sit_bbbbbbbb22222222", title: "Second synthetic Issue", state: "active" },
       ],
-      nodes: [{ family: "task", record_id: TASK_ID, depth: 0 }],
+      // S3 lockstep: the root node's path step is null; the qualifiers lead with the state.
+      nodes: [{ family: "task", record_id: TASK_ID, depth: 0, reached_from: null, reached_via: null }],
       typed_edges: [],
       virtual_native_edges: [],
       complete_state: "unresolved_ambiguity",
+      qualifiers: ["unresolved_ambiguity"],
     });
     const chosen = lineage();
     chosen.issues_matching_root = ambiguous.issues_matching_root;
@@ -89,7 +91,8 @@ describe("RelatedIssuesPanel", () => {
 
   it("shows the empty message when no Issue matches", async () => {
     const none = lineage();
-    Object.assign(none, { selected_issue_id: null, issues_matching_root: [], nodes: [{ family: "task", record_id: TASK_ID, depth: 0 }], typed_edges: [], virtual_native_edges: [] });
+    // S3 lockstep: the root node's path step is null.
+    Object.assign(none, { selected_issue_id: null, issues_matching_root: [], nodes: [{ family: "task", record_id: TASK_ID, depth: 0, reached_from: null, reached_via: null }], typed_edges: [], virtual_native_edges: [] });
     stub(() => backend(none));
     render(<RelatedIssuesPanel family="task" recordId={TASK_ID} />);
     expect(await screen.findByText(RELATED_ISSUES_EMPTY)).toBeInTheDocument();
@@ -103,6 +106,8 @@ describe("RelatedIssuesPanel", () => {
     ] as const) {
       const answer = lineage();
       answer.complete_state = state;
+      // S3 lockstep: the qualifiers lead with the complete_state.
+      answer.qualifiers = [state];
       stub(() => backend(answer));
       const { unmount } = render(<RelatedIssuesPanel family="task" recordId={TASK_ID} />);
       const panel = await screen.findByRole("region", { name: "Related Issues" });
@@ -244,5 +249,26 @@ describe("RelatedIssuesPanel", () => {
     // One read for the record: never per Issue, per edge or per node.
     expect(paths(fetchMock)).toEqual([LINEAGE_PATH]);
     expect(paths(fetchMock).some((path) => path.includes("/api/issues"))).toBe(false);
+  });
+  it("renders a contested relation and a related context", async () => {
+    // AT-024 (S3, web component): a contested link says so in words, and the
+    // symmetric related context reads the same from either endpoint.
+    const answer = lineage();
+    const edge = (answer.typed_edges as Json[])[1]!;
+    Object.assign(edge, {
+      relation_type: "related_context",
+      lifecycle_state: "contested",
+      from: { family: "meeting", record_id: "mtg_aaaaaaaa11111111" },
+      to: { family: "task", record_id: TASK_ID },
+    });
+    stub(() => backend(answer));
+    render(<RelatedIssuesPanel family="task" recordId={TASK_ID} />);
+    const panel = await screen.findByRole("region", { name: "Related Issues" });
+    expect(await within(panel).findByText("Related to a Meeting (contested)")).toBeInTheDocument();
+    expect(within(panel).getByText(/State: contested · Basis: user confirmed/)).toBeInTheDocument();
+    // S3 section 7.6: the selected Issue's title opens the Issue view.
+    expect(within(panel).getByRole("link", { name: "Issue: Synthetic Issue" })).toHaveAttribute(
+      "href", "/work/issues/sit_aaaaaaaa11111111",
+    );
   });
 });

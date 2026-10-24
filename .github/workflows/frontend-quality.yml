@@ -1017,6 +1017,15 @@ jobs:
     if: needs.classify.outputs.applicable == 'true'
     continue-on-error: true
     runs-on: ubuntu-latest
+    env:
+      # Temporary candidate flow: ONLY the operator's same-repository PR339.
+      CI_VISUAL_ASSET_CAPTURE_REQUEST: ${{ github.event_name == 'pull_request' && github.repository_id == '1317234001' && github.event.pull_request.number == 339 && github.event.pull_request.head.repo.id == 1317234001 && github.head_ref == 'feat/mcp-database-profiles' && 'MYPA-PR339-LINUX-20261024' || '' }}
+      MYPA_CAPTURE_PR: ${{ github.event.pull_request.number }}
+      MYPA_CAPTURE_HEAD_REPO: ${{ github.event.pull_request.head.repo.id }}
+      MYPA_CAPTURE_BRANCH: ${{ github.head_ref }}
+      MYPA_CAPTURE_HEAD: ${{ github.event.pull_request.head.sha }}
+      MYPA_CAPTURE_VISIBILITY: ${{ github.event.repository.private == false && 'public' || 'private' }}
+      MYPA_CAPTURE_PASS: first
     defaults:
       run:
         working-directory: web
@@ -1052,6 +1061,7 @@ jobs:
       - run: npm ci
       - run: npx playwright install chromium
       - name: Run desktop visual snapshots (INTRODUCED / ADVISORY)
+        id: visual_assertions
         env:
           CI_VISUAL_DIAGNOSTIC: "1"
           MYPA_E2E_PYTHON: python
@@ -1061,10 +1071,47 @@ jobs:
           set -euo pipefail
           python_bin="$(command -v python)"
           test -x "${python_bin}"
-          node --test e2e/ci-visual-reporter.test.mjs e2e/ci-signin-stage.test.mjs e2e/visual-assertion-witness.test.mjs e2e/ci-diagnostic-source-binding.test.mjs
+          node --test e2e/ci-visual-reporter.test.mjs e2e/ci-signin-stage.test.mjs e2e/visual-assertion-witness.test.mjs e2e/ci-diagnostic-source-binding.test.mjs e2e/ci-overlay-dom.test.mjs e2e/ci-search-active.test.mjs e2e/linux-visual-assets.test.mjs
+          if [ "${CI_VISUAL_ASSET_CAPTURE_REQUEST}" = "MYPA-PR339-LINUX-20261024" ]; then
+            node e2e/linux-visual-assets.cjs preflight
+          fi
           # Committed baselines are Darwin-only. This job must not --update-snapshots.
           # Linux PNG mismatch is expected until WP28 commits linux baselines.
           MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/visual.spec.ts --project=desktop
+      - name: Validate exactly four eligible PUBLIC visual candidates
+        id: linux_stage
+        if: always() && env.CI_VISUAL_ASSET_CAPTURE_REQUEST == 'MYPA-PR339-LINUX-20261024' && steps.visual_assertions.outcome == 'failure'
+        env:
+          MYPA_CAPTURE_FIRST_OUTCOME: ${{ steps.visual_assertions.outcome }}
+          MYPA_E2E_ADMIN_URL: postgresql+psycopg://my_pa:ci_throwaway_not_a_secret@localhost:5432/postgres
+          MYPA_E2E_DATABASE_URL: postgresql+psycopg://my_pa:ci_throwaway_not_a_secret@localhost:5432/my_pa_wp13_e2e
+        run: node e2e/linux-visual-assets.cjs stage
+      - name: Compare against the first candidates using ONE fresh synthetic seed
+        id: linux_repeat
+        if: always() && steps.linux_stage.outputs.safe == 'true'
+        env:
+          MYPA_CAPTURE_FIRST_OUTCOME: ${{ steps.visual_assertions.outcome }}
+          MYPA_E2E_ADMIN_URL: postgresql+psycopg://my_pa:ci_throwaway_not_a_secret@localhost:5432/postgres
+          MYPA_E2E_DATABASE_URL: postgresql+psycopg://my_pa:ci_throwaway_not_a_secret@localhost:5432/my_pa_wp13_e2e
+        run: |
+          set -euo pipefail
+          python_bin="$(command -v python)"
+          test -x "${python_bin}"
+          MYPA_E2E_PYTHON="${python_bin}" node e2e/linux-visual-assets.cjs repeat
+      - name: Preserve only the five validated PUBLIC candidate members (one day)
+        if: always() && steps.linux_repeat.outputs.safe_upload == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: linux-visual-candidates-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.event.pull_request.head.sha }}
+          path: |
+            ${{ runner.temp }}/my-pa-linux-visual-${{ github.run_id }}-${{ github.run_attempt }}/shell-light-unavailable-desktop-linux.png
+            ${{ runner.temp }}/my-pa-linux-visual-${{ github.run_id }}-${{ github.run_attempt }}/shell-dark-inspector-desktop-linux.png
+            ${{ runner.temp }}/my-pa-linux-visual-${{ github.run_id }}-${{ github.run_attempt }}/shell-command-menu-desktop-linux.png
+            ${{ runner.temp }}/my-pa-linux-visual-${{ github.run_id }}-${{ github.run_attempt }}/shell-zoom-200-desktop-linux.png
+            ${{ runner.temp }}/my-pa-linux-visual-${{ github.run_id }}-${{ github.run_attempt }}/MANIFEST.json
+          include-hidden-files: false
+          if-no-files-found: error
+          retention-days: 1
 
   performance:
     name: frontend / performance

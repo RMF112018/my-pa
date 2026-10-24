@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, lstatSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { Reporter, TestCase, TestError, TestResult, TestStep } from "@playwright/test/reporter";
 
@@ -38,15 +38,18 @@ export function failureCategory(
 /** Opt-in Linux visual lane only: four fixed, bounded annotations and no raw errors. */
 export default class VisualCiReporter implements Reporter {
   private emitted = 0;
+  private observations = new Map<string, { id: string; outcome: string; status: string }>();
 
   onTestEnd(test: TestCase, result: TestResult): void {
-    if (this.emitted >= 4 || test.expectedStatus !== "passed" || !FAILED.has(result.status)) return;
+    if (test.expectedStatus !== "passed") return;
+    if (!FAILED.has(result.status) && process.env.CI_VISUAL_ASSET_CAPTURE_REQUEST !== "MYPA-PR339-LINUX-20261024") return;
     if (test.parent?.project()?.name !== "desktop" || test.location?.file !== absoluteSpec()) return;
     const admitted = CASES.find((entry) => entry.declaration === test.location.line);
     if (!admitted) return;
     const baseline = path.join(process.cwd(), "e2e", "visual.spec.ts-snapshots",
       `${admitted.snapshot}-desktop-linux.png`);
-    const structural = failureCategory(result, admitted.assertion, admitted.snapshot, existsSync(baseline));
+    const structural = FAILED.has(result.status)
+      ? failureCategory(result, admitted.assertion, admitted.snapshot, existsSync(baseline)) : "other";
     const signIn = (result.annotations ?? []).find((item) => item.type === "my-pa-ci-failed-stage"
       && item.description !== undefined && SIGN_IN_STAGES.has(item.description))?.description;
     const completed = (result.annotations ?? []).some((item) => item.type === "my-pa-ci-signin-complete"
@@ -55,6 +58,13 @@ export default class VisualCiReporter implements Reporter {
     const witness = observations.length === 1
       ? ["absent-created-error", "hard-throw", "matched-no-delta", "unknown"].find((outcome) =>
         observations[0].description === `${admitted.id}:${outcome}`) : undefined;
+    if (process.env.CI_VISUAL_ASSET_CAPTURE_REQUEST === "MYPA-PR339-LINUX-20261024") {
+      const status = ["passed", "failed", "timedOut", "interrupted", "skipped"].includes(result.status) ? result.status : "unknown";
+      this.observations.set(admitted.id, this.observations.has(admitted.id)
+        ? { id: admitted.id, outcome: "unknown", status: "unknown" }
+        : { id: admitted.id, outcome: witness ?? "unknown", status });
+    }
+    if (this.emitted >= 4 || !FAILED.has(result.status)) return;
     const category = witness === "absent-created-error" ? "missing-baseline"
       : witness === "hard-throw" ? "assertion-hard-throw"
         : witness === "matched-no-delta" ? "after-snapshot"
@@ -70,5 +80,26 @@ export default class VisualCiReporter implements Reporter {
     if (this.emitted >= 4) return;
     this.emitted += 1;
     process.stdout.write("::error title=Visual Playwright failure::category=setup\n");
+  }
+
+  onEnd(): void {
+    if (process.env.CI !== "true" || process.env.CI_VISUAL_ASSET_CAPTURE_REQUEST !== "MYPA-PR339-LINUX-20261024"
+      || process.env.GITHUB_REPOSITORY_ID !== "1317234001" || process.env.MYPA_CAPTURE_PR !== "339"
+      || process.env.MYPA_CAPTURE_BRANCH !== "feat/mcp-database-profiles") return;
+    const pass = process.env.MYPA_CAPTURE_PASS;
+    const root = process.env.RUNNER_TEMP;
+    const head = process.env.MYPA_CAPTURE_HEAD;
+    const run = process.env.GITHUB_RUN_ID;
+    const attempt = process.env.GITHUB_RUN_ATTEMPT;
+    if ((pass !== "first" && pass !== "repeat") || !root || !path.isAbsolute(root)
+      || !head || !/^[0-9a-f]{40}$/.test(head) || !run || !/^\d+$/.test(run) || !attempt || !/^\d+$/.test(attempt)) return;
+    try {
+      const directory = lstatSync(root);
+      if (!directory.isDirectory() || directory.isSymbolicLink()) return;
+      writeFileSync(path.join(root, `my-pa-linux-visual-${pass}.json`), JSON.stringify({
+        schema: 1, pass, head, run, attempt,
+        cases: CASES.flatMap((entry) => this.observations.has(entry.id) ? [this.observations.get(entry.id)] : []),
+      }), { flag: "wx", mode: 0o600 });
+    } catch { process.stdout.write("::error title=Linux visual candidates::receipt=unavailable\n"); }
   }
 }

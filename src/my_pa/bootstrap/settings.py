@@ -499,6 +499,16 @@ class Settings(StrictModel):
     #: backfill. Enabling it, or running the dry run against any real database,
     #: is an operator gate (S3 contract section 13).
     lineage_backfill_enabled: bool = False
+    #: Record lineage S4 Program-reporting sub-switch (S4 contract section 7.6),
+    #: env `MY_PA_PROGRAM_REPORTING_ENABLED`. Default off, and it widens nothing
+    #: alone: the 7 S4 capabilities (`programs.members.resolve`,
+    #: `programs.overview`, the 4 `commitments.v2.*` reads and
+    #: `reports.manifest`) are served only while this and `lineage_enabled` are
+    #: both on. On, the gateway also builds the third, 5-connection Program read
+    #: pool (`bootstrap/gateway.py`). Report manifests are written for every new
+    #: artifact whatever it says (S4 D-21). Enabling it anywhere but a test is an
+    #: operator gate (S4 contract section 13).
+    program_reporting_enabled: bool = False
     #: KLP-WP-04 (R6 section 3.4, KLP-AC-019). The exact OAuth client ids bound
     #: as Knowledge discovery clients. Compared exactly, never by prefix; empty --
     #: the default -- binds no client, so `knowledge.assertions.submit` and

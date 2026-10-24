@@ -14033,6 +14033,254 @@ class ReportLineageBackfill:
         )
 
 
+# --- Record lineage S4 Program reporting (S4 contract section 7) -----------------
+#
+# Seven read commands, each a frozen dataclass whose fields are exactly the
+# section 7 request fields (no server-owned field). Validation here is what is
+# decidable from the request alone: types, bounds, prefixes, duplicates and
+# instants with an offset; a `valid_at` after the snapshot's cutoff is the
+# application's (it needs the database's clock).
+
+_PROGRAM_IDS_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 10,
+        "uniqueItems": True,
+        "items": {"type": "string", "pattern": "^ent_[A-Za-z0-9]{8,64}$"},
+        "description": "1..10 distinct Program Entity ids (ent_...).",
+    }
+)
+_PROJECT_IDS_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 100,
+        "uniqueItems": True,
+        "items": {"type": "string", "pattern": "^prj_[A-Za-z0-9]{8,64}$"},
+        "description": "Optional: keep only Commitments whose Project is one of these 1..100.",
+    }
+)
+
+
+def _distinct_identifiers(
+    value: object, kind: IdKind, detail: SafeDetail, *, maximum: int
+) -> tuple[str, ...]:
+    """A tuple of 1..`maximum` distinct identifiers of one kind, else `invalid_request`."""
+    if not isinstance(value, tuple) or not 1 <= len(value) <= maximum:
+        raise InvalidRequestError(detail)
+    for item in value:
+        if not isinstance(item, str):
+            raise InvalidRequestError(detail)
+        _identifier(item, kind, detail)
+    if len(set(value)) != len(value):
+        raise InvalidRequestError(detail)
+    return value
+
+
+def _program_entity_ids(value: object) -> tuple[str, ...]:
+    return _distinct_identifiers(value, IdKind.ENTITY, SafeDetail.PROGRAM_ENTITY_IDS, maximum=10)
+
+
+def _optional_project_ids(value: object) -> tuple[str, ...] | None:
+    if value is None:
+        return None
+    return _distinct_identifiers(value, IdKind.PROJECT, SafeDetail.PROJECT_IDS, maximum=100)
+
+
+@dataclass(frozen=True, slots=True)
+class ResolveProgramMembers:
+    """`programs.members.resolve`: the exact Continuity Projects of 1..10 Program Entities.
+
+    Derived only from typed `member_of` edges and the Project-Entity bridge,
+    never from a name; redirects followed, missing and ambiguous bridges named.
+    Without `valid_at` it is current membership; with it, membership at that
+    instant over the edges' recorded windows, where an edge whose dates cannot
+    prove membership is listed as unverified.
+    """
+
+    capability: ClassVar[Capability] = Capability.PROGRAMS_MEMBERS_RESOLVE
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {"program_entity_ids": _PROGRAM_IDS_SCHEMA, "valid_at": _INSTANT_SCHEMA}
+    )
+
+    program_entity_ids: tuple[str, ...]
+    valid_at: str | None = None
+
+    def __post_init__(self) -> None:
+        _program_entity_ids(self.program_entity_ids)
+        _optional_instant(self.valid_at, SafeDetail.VALID_AT)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadProgramOverview:
+    """`programs.overview`: Commitments, Issues and Constraints of 1..10 Programs' Projects.
+
+    Per Project, per Program and per portfolio, from one database snapshot, as
+    distinct counts; a total that is not complete enough to report says why,
+    with its denominator. Current only.
+    """
+
+    capability: ClassVar[Capability] = Capability.PROGRAMS_OVERVIEW
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {"program_entity_ids": _PROGRAM_IDS_SCHEMA}
+    )
+
+    program_entity_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        _program_entity_ids(self.program_entity_ids)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadCommitmentV2:
+    """`commitments.v2.read`: one commitment, with its Project and Situation references.
+
+    Exactly `commitments.read`'s request; the answer adds `project_id`,
+    `situation_id`, their reference states and the acceptance verification.
+    """
+
+    capability: ClassVar[Capability] = Capability.COMMITMENTS_V2_READ
+
+    commitment_id: str
+
+    def __post_init__(self) -> None:
+        self.v1()
+
+    def v1(self) -> ReadCommitment:
+        """The v1 sibling request this command states (S4 section 7.3)."""
+        return ReadCommitment(commitment_id=self.commitment_id)
+
+
+@dataclass(frozen=True, slots=True)
+class ListCommitmentsV2:
+    """`commitments.v2.list`: `commitments.list` with Project references and a Project filter.
+
+    Exactly `commitments.list`'s request plus an optional `project_ids`
+    (1..100 of this Principal's Projects).
+    """
+
+    capability: ClassVar[Capability] = Capability.COMMITMENTS_V2_LIST
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {"project_ids": _PROJECT_IDS_SCHEMA}
+    )
+
+    direction: CommitmentDirection | None = None
+    state: CommitmentState | None = None
+    page_size: int | None = None
+    after: str | None = None
+    work_view: CommitmentWorkView | None = None
+    work_date: date | None = None
+    timezone: str | None = None
+    project_ids: tuple[str, ...] | None = None
+
+    def __post_init__(self) -> None:
+        self.v1()
+        _optional_project_ids(self.project_ids)
+
+    def v1(self) -> ListCommitments:
+        """The v1 sibling request this command states (S4 section 7.3)."""
+        return ListCommitments(
+            direction=self.direction,
+            state=self.state,
+            page_size=self.page_size,
+            after=self.after,
+            work_view=self.work_view,
+            work_date=self.work_date,
+            timezone=self.timezone,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SearchCommitmentsV2:
+    """`commitments.v2.search`: `commitments.search` with Project references and a Project filter.
+
+    Exactly `commitments.search`'s request plus an optional `project_ids`
+    (1..100 of this Principal's Projects).
+    """
+
+    capability: ClassVar[Capability] = Capability.COMMITMENTS_V2_SEARCH
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {"project_ids": _PROJECT_IDS_SCHEMA}
+    )
+
+    query: str = field(repr=False)
+    page_size: int | None = None
+    after: str | None = None
+    direction: CommitmentDirection | None = None
+    state: CommitmentState | None = None
+    work_view: CommitmentWorkView | None = None
+    work_date: date | None = None
+    timezone: str | None = None
+    project_ids: tuple[str, ...] | None = None
+
+    def __post_init__(self) -> None:
+        self.v1()
+        _optional_project_ids(self.project_ids)
+
+    def v1(self) -> SearchCommitments:
+        """The v1 sibling request this command states (S4 section 7.3)."""
+        return SearchCommitments(
+            query=self.query,
+            page_size=self.page_size,
+            after=self.after,
+            direction=self.direction,
+            state=self.state,
+            work_view=self.work_view,
+            work_date=self.work_date,
+            timezone=self.timezone,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class WaitingOnV2:
+    """`commitments.v2.waiting_on`: `commitments.waiting_on` with Project references.
+
+    Exactly `commitments.waiting_on`'s request plus an optional `project_ids`
+    (1..100 of this Principal's Projects); one page reads its follow-up Tasks and
+    counterparties in batched statements.
+    """
+
+    capability: ClassVar[Capability] = Capability.COMMITMENTS_V2_WAITING_ON
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {"project_ids": _PROJECT_IDS_SCHEMA}
+    )
+
+    page_size: int | None = None
+    after: str | None = None
+    project_ids: tuple[str, ...] | None = None
+
+    def __post_init__(self) -> None:
+        self.v1()
+        _optional_project_ids(self.project_ids)
+
+    def v1(self) -> WaitingOn:
+        """The v1 sibling request this command states (S4 section 7.3)."""
+        return WaitingOn(page_size=self.page_size, after=self.after)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadReportManifest:
+    """`reports.manifest`: an Intelligence artifact's immutable report manifest.
+
+    The canonical manifest committed with the artifact and its digest; an
+    artifact committed before manifests existed answers
+    `manifest_unavailable_legacy` and nothing is written.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_MANIFEST
+
+    report_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.report_id, IdKind.INTELLIGENCE_ARTIFACT, SafeDetail.ARTIFACT_ID)
+
+
 type Command = (
     GetCapabilities
     | ListSources
@@ -14256,6 +14504,13 @@ type Command = (
     | CorrectIssueHandoff
     | PlanLineageBackfill
     | ReportLineageBackfill
+    | ResolveProgramMembers
+    | ReadProgramOverview
+    | ReadCommitmentV2
+    | ListCommitmentsV2
+    | SearchCommitmentsV2
+    | WaitingOnV2
+    | ReadReportManifest
 )
 
 

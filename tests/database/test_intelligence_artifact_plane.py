@@ -327,6 +327,8 @@ def test_sql_forty_nine_cycle_kind_counts_and_digest_readback(migrated_engine: E
         "reports.resolve_set",
         "reports.types.create",
         "reports.types.list",
+        # Record lineage S4 (contract section 7.4): the manifest read.
+        "reports.manifest",
     }
 
 

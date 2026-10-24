@@ -151,6 +151,7 @@ from my_pa.application.commands import (
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListCommitmentsV2,
     ListConstraintCategories,
     ListConstraints,
     ListConstraintSyncConflicts,
@@ -196,6 +197,7 @@ from my_pa.application.commands import (
     PutCanvasWorkspace,
     ReadCapture,
     ReadCommitment,
+    ReadCommitmentV2,
     ReadConstraint,
     ReadConstraintHistory,
     ReadConstraintOverview,
@@ -213,10 +215,12 @@ from my_pa.application.commands import (
     ReadMeeting,
     ReadMeetingNoteVersion,
     ReadPortfolioConstraintOverview,
+    ReadProgramOverview,
     ReadProject,
     ReadProjectControlsStatus,
     ReadRecordAssociationHistory,
     ReadRecordLineage,
+    ReadReportManifest,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
@@ -231,6 +235,7 @@ from my_pa.application.commands import (
     ResolveConstraintSyncConflict,
     ResolveEntity,
     ResolveIntelligenceSet,
+    ResolveProgramMembers,
     ResolveUnresolvedMention,
     RestoreCapture,
     RestoreEntity,
@@ -254,6 +259,7 @@ from my_pa.application.commands import (
     ReviseRelationshipMemory,
     SearchCaptures,
     SearchCommitments,
+    SearchCommitmentsV2,
     SearchConstraints,
     SearchEntities,
     SearchGoodNotes,
@@ -284,6 +290,7 @@ from my_pa.application.commands import (
     UpdateTask,
     VoidConstraint,
     WaitingOn,
+    WaitingOnV2,
 )
 from my_pa.application.errors import (
     InvalidRequestError,
@@ -930,6 +937,48 @@ def _search_commitments(payload: Mapping[str, Any]) -> Command:
         except ValueError:
             raise InvalidRequestError(SafeDetail.SELECTOR) from None
     return SearchCommitments(**converted)
+
+
+def _work_filters(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """`commitments.list` / `.search`'s closed selectors and work date, converted.
+
+    The same conversion `_list_commitments` and `_search_commitments` apply,
+    for their record lineage S4 v2 siblings (S4 contract section 7.3), which
+    take exactly the v1 request plus `project_ids`.
+    """
+    converted = dict(payload)
+    named = converted.get("direction")
+    if isinstance(named, str):
+        converted["direction"] = _enum_or_invalid(named, CommitmentDirection, SafeDetail.SELECTOR)
+    named = converted.get("state")
+    if isinstance(named, str):
+        converted["state"] = _enum_or_invalid(named, CommitmentState, SafeDetail.SELECTOR)
+    named = converted.get("work_view")
+    if isinstance(named, str):
+        converted["work_view"] = _enum_or_invalid(named, CommitmentWorkView, SafeDetail.SELECTOR)
+    named_date = converted.get("work_date")
+    if isinstance(named_date, str):
+        try:
+            converted["work_date"] = date.fromisoformat(named_date)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+    return _with_project_ids(converted)
+
+
+def _with_project_ids(payload: Mapping[str, Any]) -> dict[str, Any]:
+    converted = dict(payload)
+    if converted.get("project_ids") is not None:
+        converted["project_ids"] = _strings(converted["project_ids"], SafeDetail.PROJECT_IDS)
+    return converted
+
+
+def _program_request(payload: Mapping[str, Any]) -> dict[str, Any]:
+    converted = dict(payload)
+    if "program_entity_ids" in converted:
+        converted["program_entity_ids"] = _strings(
+            converted["program_entity_ids"], SafeDetail.PROGRAM_ENTITY_IDS
+        )
+    return converted
 
 
 def _get_commitment_history(payload: Mapping[str, Any]) -> Command:
@@ -2829,6 +2878,22 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.ISSUES_HANDOFFS_CORRECT: lambda payload: CorrectIssueHandoff(**payload),
         Capability.RECORDS_BACKFILL_PLAN: lambda payload: PlanLineageBackfill(**payload),
         Capability.RECORDS_BACKFILL_REPORT: lambda payload: ReportLineageBackfill(**payload),
+        # Record lineage S4 (S4 contract section 7).
+        Capability.PROGRAMS_MEMBERS_RESOLVE: lambda payload: ResolveProgramMembers(
+            **_program_request(payload)
+        ),
+        Capability.PROGRAMS_OVERVIEW: lambda payload: ReadProgramOverview(
+            **_program_request(payload)
+        ),
+        Capability.COMMITMENTS_V2_READ: lambda payload: ReadCommitmentV2(**payload),
+        Capability.COMMITMENTS_V2_LIST: lambda payload: ListCommitmentsV2(**_work_filters(payload)),
+        Capability.COMMITMENTS_V2_SEARCH: lambda payload: SearchCommitmentsV2(
+            **_work_filters(payload)
+        ),
+        Capability.COMMITMENTS_V2_WAITING_ON: lambda payload: WaitingOnV2(
+            **_with_project_ids(payload)
+        ),
+        Capability.REPORTS_MANIFEST: lambda payload: ReadReportManifest(**payload),
     }
 )
 

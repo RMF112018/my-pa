@@ -323,6 +323,14 @@ _OPERATOR_DECISION_REQUIRED: Final[frozenset[Capability]] = frozenset(
         Capability.ISSUES_HISTORY,
         Capability.ISSUES_TIMELINE,
         Capability.ISSUES_HANDOFFS_CORRECT,
+        # Record lineage S4 (S4 contract section 6.1): the same operator decision.
+        Capability.PROGRAMS_MEMBERS_RESOLVE,
+        Capability.PROGRAMS_OVERVIEW,
+        Capability.COMMITMENTS_V2_READ,
+        Capability.COMMITMENTS_V2_LIST,
+        Capability.COMMITMENTS_V2_SEARCH,
+        Capability.COMMITMENTS_V2_WAITING_ON,
+        Capability.REPORTS_MANIFEST,
     }
 )
 
@@ -371,6 +379,9 @@ _LINEAGE_S3_EXCLUSION: Final = (
     "record lineage S3; exposure is an operator decision (ADR-015, OD-07)"
 )
 _LINEAGE_BACKFILL_EXCLUSION: Final = "operator-only lineage backfill"
+_PROGRAM_REPORTING_EXCLUSION: Final = (
+    "record lineage S4 Program reporting; exposure is an operator decision (ADR-015, OD-07)"
+)
 
 _EXCLUSION_RATIONALE: Final[Mapping[Capability, str]] = MappingProxyType(
     {
@@ -425,6 +436,13 @@ _EXCLUSION_RATIONALE: Final[Mapping[Capability, str]] = MappingProxyType(
         Capability.ISSUES_HANDOFFS_CORRECT: _LINEAGE_S3_EXCLUSION,
         Capability.RECORDS_BACKFILL_PLAN: _LINEAGE_BACKFILL_EXCLUSION,
         Capability.RECORDS_BACKFILL_REPORT: _LINEAGE_BACKFILL_EXCLUSION,
+        Capability.PROGRAMS_MEMBERS_RESOLVE: _PROGRAM_REPORTING_EXCLUSION,
+        Capability.PROGRAMS_OVERVIEW: _PROGRAM_REPORTING_EXCLUSION,
+        Capability.COMMITMENTS_V2_READ: _PROGRAM_REPORTING_EXCLUSION,
+        Capability.COMMITMENTS_V2_LIST: _PROGRAM_REPORTING_EXCLUSION,
+        Capability.COMMITMENTS_V2_SEARCH: _PROGRAM_REPORTING_EXCLUSION,
+        Capability.COMMITMENTS_V2_WAITING_ON: _PROGRAM_REPORTING_EXCLUSION,
+        Capability.REPORTS_MANIFEST: _PROGRAM_REPORTING_EXCLUSION,
     }
 )
 

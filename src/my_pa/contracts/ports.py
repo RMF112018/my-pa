@@ -10443,3 +10443,75 @@ class LineageBackfillRepository(ABC):  # noqa: B024 - non-abstract, as IssueTime
     def late_source_count(self, principal_id: str, run_id: str) -> int:
         """In-scope sources present now that the run's frozen population does not hold."""
         raise NotImplementedError
+
+
+# --- Record lineage S4 Program reporting (S4 contract sections 6.3 and 9) -------
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramSnapshot:
+    """What the first query of one Program read transaction saw (S4 section 3.4).
+
+    `source_cutoff_at` is that query's `statement_timestamp()` -- the instant
+    the `REPEATABLE READ` snapshot was taken -- and `lineage_known_at` the
+    Principal's committed lineage horizon `H`
+    (`lineage_commit_sequences.last_marked_at`), `None` when the Principal has
+    no lineage fact.
+    """
+
+    source_cutoff_at: datetime
+    lineage_known_at: datetime | None
+
+
+class ProgramMembershipRepository(ABC):  # noqa: B024 - its reads are added by worker M2
+    """The exact Program member reads (S4 section 3.1), on the snapshot connection.
+
+    A seam: worker M2 (WP-04A) adds the batched, Principal-scoped reads.
+    """
+
+
+class ProgramMetricsRepository(ABC):  # noqa: B024 - its reads are added by worker M4
+    """The Program Commitment and Issue aggregates (S4 section 3.2), on the snapshot.
+
+    A seam: worker M4 (WP-04B) adds the batched, Principal-scoped aggregates.
+    """
+
+
+class ProgramReadUnitOfWork(ABC):
+    """One `REPEATABLE READ, READ ONLY` transaction on the Program read pool (S4 6.3).
+
+    Never writes and never commits: `__exit__` rolls back. It is drawn from its
+    own engine, never the work or audit pool, so a request holding a work
+    connection can always take it (no cycle in the wait-for graph). Audit and
+    authorization stay in the request's own unit of work.
+    """
+
+    @abstractmethod
+    def __enter__(self) -> ProgramReadUnitOfWork:
+        """Check out a Program-pool connection and begin the read-only snapshot."""
+
+    @abstractmethod
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Roll the read-only transaction back and return the connection."""
+
+    @abstractmethod
+    def snapshot(self, principal_id: str) -> ProgramSnapshot:
+        """Run the first query -- the one that takes the snapshot -- once.
+
+        Reads `statement_timestamp()` and the Principal's lineage horizon; a
+        second call answers the first call's values without a statement.
+        """
+
+    @abstractmethod
+    def set_statement_timeout(self, milliseconds: int) -> None:
+        """`SET LOCAL statement_timeout` for the remaining statements (S4 section 7.4)."""
+
+    @property
+    @abstractmethod
+    def constraints(self) -> ConstraintManagementRepository:
+        """The existing Constraint repository, on this same snapshot connection."""

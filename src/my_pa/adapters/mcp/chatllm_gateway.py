@@ -67,6 +67,9 @@ _FEATURE_BY_FAMILY: Final[Mapping[str, str]] = {
     # Record lineage S1 (contract section 7); `meetings.notes.*` stays `meetings`.
     "issues": "lineage",
     "records": "lineage",
+    # Record lineage S4 (contract section 7): the 2 Program reads. The v2
+    # Commitment reads stay `work` and `reports.manifest` stays `reports`.
+    "programs": "programs",
 }
 
 _WRAPPER_SCHEMA: Final[dict[str, Any]] = {

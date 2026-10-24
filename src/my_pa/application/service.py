@@ -220,6 +220,7 @@ from my_pa.application.commands import (
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListCommitmentsV2,
     ListConstraintCategories,
     ListConstraints,
     ListConstraintSyncConflicts,
@@ -266,6 +267,7 @@ from my_pa.application.commands import (
     PutCanvasWorkspace,
     ReadCapture,
     ReadCommitment,
+    ReadCommitmentV2,
     ReadConstraint,
     ReadConstraintHistory,
     ReadConstraintOverview,
@@ -284,10 +286,12 @@ from my_pa.application.commands import (
     ReadMeeting,
     ReadMeetingNoteVersion,
     ReadPortfolioConstraintOverview,
+    ReadProgramOverview,
     ReadProject,
     ReadProjectControlsStatus,
     ReadRecordAssociationHistory,
     ReadRecordLineage,
+    ReadReportManifest,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
@@ -302,6 +306,7 @@ from my_pa.application.commands import (
     ResolveConstraintSyncConflict,
     ResolveEntity,
     ResolveIntelligenceSet,
+    ResolveProgramMembers,
     ResolveUnresolvedMention,
     RestoreCapture,
     RestoreEntity,
@@ -327,6 +332,7 @@ from my_pa.application.commands import (
     ReviseRelationshipMemory,
     SearchCaptures,
     SearchCommitments,
+    SearchCommitmentsV2,
     SearchConstraints,
     SearchEntities,
     SearchGoodNotes,
@@ -357,6 +363,7 @@ from my_pa.application.commands import (
     UpdateTask,
     VoidConstraint,
     WaitingOn,
+    WaitingOnV2,
 )
 from my_pa.application.commitments import CommitmentManagementService, CommitmentMutationReceipt
 from my_pa.application.constraint_management import (
@@ -628,6 +635,7 @@ from my_pa.contracts.ports import (
     MemoryPage,
     PortError,
     PreferenceConflictError,
+    ProgramReadUnitOfWork,
     RelationshipMemoryRepository,
     ReviewDecisionRequest,
     SearchOutcome,
@@ -766,6 +774,10 @@ from my_pa.domain.policy.knowledge_review_authority import (
     InconsistentKnowledgeReviewCompositionError,
     UnsupportedKnowledgeReviewCompositionError,
     derive_knowledge_review_authority,
+)
+from my_pa.domain.program.vocabulary import (
+    PROGRAM_READ_CAPABILITIES,
+    PROGRAM_REPORTING_CAPABILITIES,
 )
 from my_pa.domain.project_controls.business_time import ProjectTimezoneError
 from my_pa.domain.project_controls.category import ConstraintCategoryError
@@ -3999,6 +4011,8 @@ class ApplicationService:
         knowledge_assertions_enabled: bool = False,
         lineage_enabled: bool = False,
         lineage_backfill_enabled: bool = False,
+        program_reporting_enabled: bool = False,
+        program_read_unit_of_work: Callable[[], ProgramReadUnitOfWork] | None = None,
         knowledge_discovery_client_ids: frozenset[str] = frozenset(),
         knowledge_operator_review_client_ids: frozenset[str] = frozenset(),
         knowledge_manager_client_ids: frozenset[str] = frozenset(),
@@ -4059,6 +4073,14 @@ class ApplicationService:
         #: never enables a backfill; each backfill handler asks again
         #: (`_lineage_backfill_plane`) after `_lineage_plane`.
         self._lineage_backfill_enabled = lineage_backfill_enabled
+        #: Record lineage S4 (contract section 7.6): the Program-reporting
+        #: sub-switch. Default `False`. The 7 S4 capabilities are served only
+        #: while this *and* `lineage_enabled` are on; each S4 handler asks again
+        #: (`_program_plane`) before any read.
+        self._program_reporting_enabled = program_reporting_enabled
+        #: Record lineage S4 (contract section 6.3): the Program read unit of work
+        #: on its own pool, or `None` -- then the 2 Program reads are withheld.
+        self._program_read_unit_of_work = program_read_unit_of_work
         #: KLP-WP-04 (R6 section 6.1): the exact discovery allowlist the second
         #: service gate reads. Empty -- the default -- refuses every submit and
         #: checkpoint, so an unconfigured build fails closed for the role.
@@ -4258,6 +4280,18 @@ class ApplicationService:
         # two backfill names need both switches.
         if not (self._lineage_enabled and self._lineage_backfill_enabled):
             served -= _LINEAGE_BACKFILL_CAPABILITIES
+        # Record lineage S4 (contract section 7.6), on the S3 backfill precedent:
+        # the 7 Program-reporting names need both switches; the 2 Program reads
+        # also need the entity plane (their subjects are Entities) and the
+        # Program read factory, and the overview the Constraint plane.
+        if not (self._lineage_enabled and self._program_reporting_enabled):
+            served -= _PROGRAM_REPORTING_CAPABILITIES
+        if not (
+            self._relationship_intelligence_enabled and self._program_read_unit_of_work is not None
+        ):
+            served -= _PROGRAM_READ_CAPABILITIES
+        if self._constraint_management_unit_of_work is None:
+            served -= {Capability.PROGRAMS_OVERVIEW}
         # A proposal surface without a trusted server registration would
         # advertise a write every authenticated caller can only be denied.
         # Withhold both producer capabilities when composition has no exact
@@ -13322,6 +13356,27 @@ class ApplicationService:
         require_read_grant(authorization.capability_grants, capability)
         return lineage_visibility(authorization.capability_grants, capability)
 
+    def _program_plane(self) -> None:
+        """Refuse unless both the lineage and the Program-reporting switches are on.
+
+        S4 contract section 7.6. Asked first by every S4 handler, before any read.
+        """
+        if not (self._lineage_enabled and self._program_reporting_enabled):
+            raise UnsupportedError()
+
+    def _program_read_plane(self, *, overview: bool) -> Callable[[], ProgramReadUnitOfWork]:
+        """The 2 Program reads' composition checks (S4 section 7.6), after `_program_plane`.
+
+        `unsupported` unless the entity plane is served and the Program read
+        factory composed, and, for the overview, the Constraint plane too.
+        """
+        factory = self._program_read_unit_of_work
+        if not self._relationship_intelligence_enabled or factory is None:
+            raise UnsupportedError()
+        if overview and self._constraint_management_unit_of_work is None:
+            raise UnsupportedError()
+        return factory
+
     def _lineage_backfill_plane(self) -> None:
         """Refuse unless the backfill sub-switch is on too (S3 contract section 7.7).
 
@@ -14102,6 +14157,71 @@ class ApplicationService:
             payload=report.to_payload(),
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
         )
+
+    # ---- record lineage S4 Program reporting (ADR-015; S4 contract section 7) ----
+    #
+    # Seven read handlers: the switches first (section 7.6), then for the 2
+    # Program reads their composition checks. The use cases are not implemented
+    # in this change: after those checks each handler answers `unsupported`,
+    # reading nothing, until its worker lands it (the S3 L1 precedent, D-37).
+
+    def _programs_members_resolve(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ResolveProgramMembers
+    ) -> _Result:
+        """`programs.members.resolve`: not implemented in this change (`unsupported`)."""
+        del unit_of_work, authorization, command
+        self._program_plane()
+        self._program_read_plane(overview=False)
+        raise UnsupportedError()
+
+    def _programs_overview(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadProgramOverview
+    ) -> _Result:
+        """`programs.overview`: not implemented in this change (`unsupported`)."""
+        del unit_of_work, authorization, command
+        self._program_plane()
+        self._program_read_plane(overview=True)
+        raise UnsupportedError()
+
+    def _commitments_v2_read(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadCommitmentV2
+    ) -> _Result:
+        """`commitments.v2.read`: not implemented in this change (`unsupported`)."""
+        del unit_of_work, authorization, command
+        self._program_plane()
+        raise UnsupportedError()
+
+    def _commitments_v2_list(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListCommitmentsV2
+    ) -> _Result:
+        """`commitments.v2.list`: not implemented in this change (`unsupported`)."""
+        del unit_of_work, authorization, command
+        self._program_plane()
+        raise UnsupportedError()
+
+    def _commitments_v2_search(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: SearchCommitmentsV2
+    ) -> _Result:
+        """`commitments.v2.search`: not implemented in this change (`unsupported`)."""
+        del unit_of_work, authorization, command
+        self._program_plane()
+        raise UnsupportedError()
+
+    def _commitments_v2_waiting_on(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: WaitingOnV2
+    ) -> _Result:
+        """`commitments.v2.waiting_on`: not implemented in this change (`unsupported`)."""
+        del unit_of_work, authorization, command
+        self._program_plane()
+        raise UnsupportedError()
+
+    def _reports_manifest(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadReportManifest
+    ) -> _Result:
+        """`reports.manifest`: not implemented in this change (`unsupported`)."""
+        del unit_of_work, authorization, command
+        self._program_plane()
+        raise UnsupportedError()
 
     def _records_lineage(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadRecordLineage
@@ -16361,6 +16481,13 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.ISSUES_HANDOFFS_CORRECT: ApplicationService._issues_handoffs_correct,
         Capability.RECORDS_BACKFILL_PLAN: ApplicationService._records_backfill_plan,
         Capability.RECORDS_BACKFILL_REPORT: ApplicationService._records_backfill_report,
+        Capability.PROGRAMS_MEMBERS_RESOLVE: ApplicationService._programs_members_resolve,
+        Capability.PROGRAMS_OVERVIEW: ApplicationService._programs_overview,
+        Capability.COMMITMENTS_V2_READ: ApplicationService._commitments_v2_read,
+        Capability.COMMITMENTS_V2_LIST: ApplicationService._commitments_v2_list,
+        Capability.COMMITMENTS_V2_SEARCH: ApplicationService._commitments_v2_search,
+        Capability.COMMITMENTS_V2_WAITING_ON: ApplicationService._commitments_v2_waiting_on,
+        Capability.REPORTS_MANIFEST: ApplicationService._reports_manifest,
         Capability.MEETINGS_NOTES_VERSIONS: ApplicationService._meetings_notes_versions,
         Capability.MEETINGS_NOTES_READ_VERSION: ApplicationService._meetings_notes_read_version,
         Capability.RECORD_EVENTS_LIST: ApplicationService._record_events_list,
@@ -16603,6 +16730,19 @@ def _lineage_instant(value: datetime) -> str:
 #: are on (`LINEAGE_BACKFILL_CAPABILITIES`, as members).
 _LINEAGE_BACKFILL_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     capability for capability in Capability if capability.value in LINEAGE_BACKFILL_CAPABILITIES
+)
+
+#: Record lineage S4 (contract section 7.6): the 7 Program-reporting names,
+#: withheld unless both `lineage_enabled` and `program_reporting_enabled` are on
+#: (`PROGRAM_REPORTING_CAPABILITIES`, as members). Not lineage capabilities: the
+#: 30-name `_LINEAGE_CAPABILITIES` set is unchanged.
+_PROGRAM_REPORTING_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    capability for capability in Capability if capability.value in PROGRAM_REPORTING_CAPABILITIES
+)
+#: The 2 Program reads, which also need the entity plane and the Program read
+#: factory (and `programs.overview` the Constraint plane).
+_PROGRAM_READ_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    capability for capability in Capability if capability.value in PROGRAM_READ_CAPABILITIES
 )
 
 #: KLP-WP-04: the bound discovery client's two writes. Withheld from every

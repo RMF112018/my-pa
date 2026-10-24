@@ -266,6 +266,10 @@ from my_pa.domain.native_sources import (
     WatcherSimulationState,
 )
 from my_pa.domain.policy.decision import POLICY_VERSION_PATTERN, DenialReason
+from my_pa.domain.program.vocabulary import (
+    REPORT_MANIFEST_SCHEMA_VERSION,
+    ProgramVerificationState,
+)
 from my_pa.domain.project_controls.category import (
     CONSTRAINT_CATEGORY_PREFIX_PATTERN,
     ConstraintCategoryState,
@@ -10298,6 +10302,72 @@ intelligence_provenance_refs = Table(
         "principal_id", "artifact_id", "position", name="intelligence_provenance_refs_pkey"
     ),
     _one_of("relation", ProvenanceRelation, name="intelligence_provenance_relation_is_known"),
+)
+
+#: Record lineage S4 (S4 contract section 4.1): one immutable canonical report
+#: manifest per Intelligence artifact committed after the S4 revision, hashed
+#: separately from the unchanged Markdown digest. The canonical text is the fact;
+#: the 3 projected digest and state columns are copies of manifest fields, for
+#: reading without parsing. Guarded by `a_manifest_names_its_own_artifact`
+#: (the canonical text names this artifact, its Markdown digest and the
+#: projected values), append-only and TRUNCATE refusal, and on
+#: `intelligence_artifacts` the deferred `an_artifact_has_its_manifest`.
+intelligence_artifact_manifests = Table(
+    "intelligence_artifact_manifests",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("artifact_id", Text, nullable=False),
+    Column("manifest_schema_version", Integer, nullable=False),
+    Column("manifest_canonical", Text, nullable=False),
+    Column("manifest_sha256", Text, nullable=False),
+    Column("structured_content_sha256", Text),
+    Column("program_overview_sha256", Text),
+    Column("program_verification_state", Text),
+    Column("recorded_at", DateTime(timezone=True), nullable=False, server_default=text("now()")),
+    PrimaryKeyConstraint(
+        "principal_id", "artifact_id", name="intelligence_artifact_manifests_pkey"
+    ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("artifact_id", IdKind.INTELLIGENCE_ARTIFACT),
+    CheckConstraint(
+        f"manifest_schema_version = {REPORT_MANIFEST_SCHEMA_VERSION}",
+        name="a_manifest_schema_version_is_known",
+    ),
+    CheckConstraint(
+        "manifest_canonical ~ '^[ -~]+$' AND length(manifest_canonical) <= 262144",
+        name="a_manifest_is_printable_ascii",
+    ),
+    CheckConstraint(
+        "manifest_sha256 = encode(sha256(convert_to('report-manifest-v1' || chr(10) || "
+        "manifest_canonical, 'UTF8')), 'hex')",
+        name="a_report_manifest_digest_is_its_canonical_text",
+    ),
+    CheckConstraint(
+        "structured_content_sha256 IS NULL OR structured_content_sha256 ~ '^[0-9a-f]{64}$'",
+        name="a_manifest_structured_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "program_overview_sha256 IS NULL OR program_overview_sha256 ~ '^[0-9a-f]{64}$'",
+        name="a_manifest_program_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "program_verification_state IS NULL OR program_verification_state IN "
+        f"({_literals(ProgramVerificationState)})",
+        name="a_manifest_program_verification_state_is_known",
+    ),
+    CheckConstraint(
+        "(program_overview_sha256 IS NULL) = (program_verification_state IS NULL)",
+        name="a_manifest_program_claim_has_its_verification",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "artifact_id"],
+        [
+            f"{SCHEMA}.intelligence_artifacts.principal_id",
+            f"{SCHEMA}.intelligence_artifacts.artifact_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_manifest_names_an_artifact_of_its_principal",
+    ),
 )
 
 

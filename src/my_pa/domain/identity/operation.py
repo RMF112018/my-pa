@@ -1039,6 +1039,20 @@ class Capability(StrEnum):
     ISSUES_HANDOFFS_CORRECT = "issues.handoffs.correct"
     RECORDS_BACKFILL_PLAN = "records.backfill.plan"
     RECORDS_BACKFILL_REPORT = "records.backfill.report"
+    #: Record lineage S4 Program reporting (S4 contract section 7): the exact
+    #: Program-to-Project resolver and the server-batched Program overview, the
+    #: 4 v2 sibling Commitment reads (each v1 read's request and answer, plus
+    #: `project_id`, `situation_id` and an optional `project_ids` filter), and an
+    #: Intelligence artifact's report manifest. All 7 are scopeless reads,
+    #: withheld unless both `MY_PA_LINEAGE_ENABLED` and
+    #: `MY_PA_PROGRAM_REPORTING_ENABLED` are on (section 7.6).
+    PROGRAMS_MEMBERS_RESOLVE = "programs.members.resolve"
+    PROGRAMS_OVERVIEW = "programs.overview"
+    COMMITMENTS_V2_READ = "commitments.v2.read"
+    COMMITMENTS_V2_LIST = "commitments.v2.list"
+    COMMITMENTS_V2_SEARCH = "commitments.v2.search"
+    COMMITMENTS_V2_WAITING_ON = "commitments.v2.waiting_on"
+    REPORTS_MANIFEST = "reports.manifest"
 
 
 class NativeSourceCapability(StrEnum):
@@ -1626,6 +1640,18 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.ISSUES_HANDOFFS_CORRECT: frozenset({Purpose.ISSUE_AUTHORING}),
         Capability.RECORDS_BACKFILL_PLAN: frozenset({Purpose.LINEAGE_BACKFILL}),
         Capability.RECORDS_BACKFILL_REPORT: frozenset({Purpose.LINEAGE_BACKFILL}),
+        # Record lineage S4 (S4 contract section 7). The 2 Program reads have a
+        # purpose of their own (D-91: a Program read reaches the Entities,
+        # Projects, Commitments, Issues and Constraints of many Projects, which
+        # no existing purpose names); the v2 Commitment reads and the manifest
+        # read reuse their v1 siblings' purposes: same data, same domain.
+        Capability.PROGRAMS_MEMBERS_RESOLVE: frozenset({Purpose.PROGRAM_REPORTING_READ}),
+        Capability.PROGRAMS_OVERVIEW: frozenset({Purpose.PROGRAM_REPORTING_READ}),
+        Capability.COMMITMENTS_V2_READ: frozenset({Purpose.COMMITMENT_READ}),
+        Capability.COMMITMENTS_V2_LIST: frozenset({Purpose.COMMITMENT_READ}),
+        Capability.COMMITMENTS_V2_SEARCH: frozenset({Purpose.COMMITMENT_READ}),
+        Capability.COMMITMENTS_V2_WAITING_ON: frozenset({Purpose.COMMITMENT_READ}),
+        Capability.REPORTS_MANIFEST: frozenset({Purpose.REPORT_READ}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),

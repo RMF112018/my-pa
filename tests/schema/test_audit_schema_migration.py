@@ -384,6 +384,8 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "issue_responsibility_corrections",
         "lineage_backfill_runs",
         "lineage_backfill_items",
+        # Record lineage S4 stacks its one.
+        "intelligence_artifact_manifests",
     }
 )
 

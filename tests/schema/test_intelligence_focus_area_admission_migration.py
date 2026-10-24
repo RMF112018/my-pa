@@ -12,9 +12,11 @@ import ast
 import io
 import re
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
+from unittest.mock import patch
 
 import pytest
 from alembic import command
@@ -38,6 +40,7 @@ from my_pa.domain.intelligence.catalog import (
 )
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
+from my_pa.infrastructure.persistence.intelligence import SqlIntelligenceStore
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 
 ROOT: Final = Path(__file__).resolve().parents[2]
@@ -279,40 +282,56 @@ def _commit(
     return report_id
 
 
+@contextmanager
+def _below_the_s4_manifest() -> Iterator[None]:
+    """Seed through the application at a revision below `c5260943d933`.
+
+    Record lineage S4 (S4 contract section 10, the S3 D-35 precedent): since
+    the S4 revision the one artifact writer also writes the artifact's report
+    manifest, whose table this revision's schema does not have. The writer's
+    other rows are exactly what they were, so only that one write is left out
+    here; at head the deferred `an_artifact_has_its_manifest` holds every
+    writer to it.
+    """
+    with patch.object(SqlIntelligenceStore, "_put_manifest", lambda *_args: None):
+        yield
+
+
 def _seed(engine: Engine, focus: FocusAreaId, key: str) -> None:
     """One collector and one researcher depending on it: a row in each table."""
-    service = _service(engine)
-    principal = operator()
-    cycle = _ok(
-        service,
-        principal,
-        BeginIntelligenceCycle(
-            cycle_id=CYCLE_MORNING_INTELLIGENCE,
-            business_date="2026-10-07",
-            idempotency_key=f"{key}-cycle",
-        ),
-    )["cycle_run_id"]
-    assert isinstance(cycle, str)
-    collector = _commit(
-        service,
-        principal,
-        cycle,
-        stage=IntelligenceStage.COLLECTOR,
-        kind=ArtifactKind.COLLECTOR_CANDIDATES,
-        focus=focus,
-        key=f"{key}-collector",
-    )
-    _commit(
-        service,
-        principal,
-        cycle,
-        stage=IntelligenceStage.RESEARCHER,
-        kind=ArtifactKind.RESEARCH_CONTEXT,
-        focus=focus,
-        key=f"{key}-teams",
-        lane=SourceLaneId.TEAMS,
-        dependencies=(collector,),
-    )
+    with _below_the_s4_manifest():
+        service = _service(engine)
+        principal = operator()
+        cycle = _ok(
+            service,
+            principal,
+            BeginIntelligenceCycle(
+                cycle_id=CYCLE_MORNING_INTELLIGENCE,
+                business_date="2026-10-07",
+                idempotency_key=f"{key}-cycle",
+            ),
+        )["cycle_run_id"]
+        assert isinstance(cycle, str)
+        collector = _commit(
+            service,
+            principal,
+            cycle,
+            stage=IntelligenceStage.COLLECTOR,
+            kind=ArtifactKind.COLLECTOR_CANDIDATES,
+            focus=focus,
+            key=f"{key}-collector",
+        )
+        _commit(
+            service,
+            principal,
+            cycle,
+            stage=IntelligenceStage.RESEARCHER,
+            kind=ArtifactKind.RESEARCH_CONTEXT,
+            focus=focus,
+            key=f"{key}-teams",
+            lane=SourceLaneId.TEAMS,
+            dependencies=(collector,),
+        )
 
 
 def _copy_with(
@@ -403,8 +422,11 @@ def test_downgrade_refuses_while_a_row_holds_an_admitted_area(
     disposable_database: str, engine: Engine
 ) -> None:
     del disposable_database
-    command.upgrade(_config(), "head")
+    # Seeded at this revision (S4 contract section 10): rows committed at head
+    # carry report manifests, whose own downgrade refusal would answer first.
+    command.upgrade(_config(), REVISION)
     _seed(engine, FocusAreaId.CAPTURES, "mig-captures")
+    command.upgrade(_config(), "head")
     with pytest.raises(DBAPIError) as refused:
         command.downgrade(_config(), PREVIOUS)
     assert getattr(refused.value.orig, "sqlstate", None) == CHECK_VIOLATION

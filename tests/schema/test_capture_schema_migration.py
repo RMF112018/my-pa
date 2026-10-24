@@ -257,6 +257,11 @@ LINEAGE_TRIGGERS: Final[frozenset[str]] = frozenset(
         "a_handoff_correction_is_admissible",
         "a_backfill_run_moves_forward",
         "a_backfill_item_is_settled_once",
+        # Record lineage S4.
+        "a_manifest_names_its_own_artifact",
+        "intelligence_artifact_manifests_are_append_only",
+        "intelligence_manifests_refuse_truncate",
+        "an_artifact_has_its_manifest",
     }
 )
 
@@ -577,6 +582,15 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "issues.handoffs.correct",
         "records.backfill.plan",
         "records.backfill.report",
+        # Record lineage S4, admitted by its revision with the domain declaring
+        # every name in the same change.
+        "programs.members.resolve",
+        "programs.overview",
+        "commitments.v2.read",
+        "commitments.v2.list",
+        "commitments.v2.search",
+        "commitments.v2.waiting_on",
+        "reports.manifest",
     }
 )
 

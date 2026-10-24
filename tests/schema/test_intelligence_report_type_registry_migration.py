@@ -20,9 +20,11 @@ import ast
 import io
 import re
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
+from unittest.mock import patch
 
 import pytest
 from alembic import command
@@ -50,6 +52,7 @@ from my_pa.domain.intelligence.catalog import (
 from my_pa.domain.intelligence.models import builtin_report_type_definitions
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
+from my_pa.infrastructure.persistence.intelligence import SqlIntelligenceStore
 from my_pa.infrastructure.persistence.tables import (
     intelligence_artifacts,
     intelligence_report_types,
@@ -351,40 +354,56 @@ def _ok(service: ApplicationService, principal: Principal, command_: object) -> 
     return envelope.result
 
 
+@contextmanager
+def _below_the_s4_manifest() -> Iterator[None]:
+    """Seed through the application at a revision below `c5260943d933`.
+
+    Record lineage S4 (S4 contract section 10, the S3 D-35 precedent): since
+    the S4 revision the one artifact writer also writes the artifact's report
+    manifest, whose table this revision's schema does not have. The writer's
+    other rows are exactly what they were, so only that one write is left out
+    here; at head the deferred `an_artifact_has_its_manifest` holds every
+    writer to it.
+    """
+    with patch.object(SqlIntelligenceStore, "_put_manifest", lambda *_args: None):
+        yield
+
+
 def _seed(engine: Engine, key: str) -> str:
     """One cycle and one collector artifact (with its run) for a fresh Principal."""
-    service = _service(engine)
-    principal = operator()
-    cycle = _ok(
-        service,
-        principal,
-        BeginIntelligenceCycle(
-            cycle_id=CYCLE_MORNING_INTELLIGENCE,
-            business_date="2026-10-11",
-            idempotency_key=f"{key}-cycle",
-        ),
-    )["cycle_run_id"]
-    assert isinstance(cycle, str)
-    _ok(
-        service,
-        principal,
-        CommitIntelligenceArtifact(
-            cycle_run_id=cycle,
-            stage=IntelligenceStage.COLLECTOR,
-            artifact_kind=ArtifactKind.COLLECTOR_CANDIDATES,
-            producer_task_id=f"mig-{key}",
-            producer_task_name=key,
-            automation_platform="abacus_chatllm",
-            report_date="2026-10-11",
-            title=key,
-            body_markdown=f"synthetic {key}",
-            artifact_state=ArtifactState.FINAL,
-            schema_version="1",
-            idempotency_key=key,
-            focus_area_id=FocusAreaId.COMMUNICATIONS,
-        ),
-    )
-    return principal.principal_id
+    with _below_the_s4_manifest():
+        service = _service(engine)
+        principal = operator()
+        cycle = _ok(
+            service,
+            principal,
+            BeginIntelligenceCycle(
+                cycle_id=CYCLE_MORNING_INTELLIGENCE,
+                business_date="2026-10-11",
+                idempotency_key=f"{key}-cycle",
+            ),
+        )["cycle_run_id"]
+        assert isinstance(cycle, str)
+        _ok(
+            service,
+            principal,
+            CommitIntelligenceArtifact(
+                cycle_run_id=cycle,
+                stage=IntelligenceStage.COLLECTOR,
+                artifact_kind=ArtifactKind.COLLECTOR_CANDIDATES,
+                producer_task_id=f"mig-{key}",
+                producer_task_name=key,
+                automation_platform="abacus_chatllm",
+                report_date="2026-10-11",
+                title=key,
+                body_markdown=f"synthetic {key}",
+                artifact_state=ArtifactState.FINAL,
+                schema_version="1",
+                idempotency_key=key,
+                focus_area_id=FocusAreaId.COMMUNICATIONS,
+            ),
+        )
+        return principal.principal_id
 
 
 def _registry(engine: Engine) -> set[tuple[str, str, str, str]]:

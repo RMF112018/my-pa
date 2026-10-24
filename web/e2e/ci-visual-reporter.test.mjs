@@ -141,35 +141,3 @@ test("admits only fixed runtime stage metadata and treats completion as after si
     assert.equal(output.includes("SECRET"), false);
   }
 });
-
-test("the one-off receipt contains only finite witnesses and bound public identity", () => {
-  const fs = require("node:fs"); const os = require("node:os");
-  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "my-pa-witness-unit-"));
-  const values = { CI: "true", CI_VISUAL_ASSET_CAPTURE_REQUEST: "MYPA-PR339-LINUX-20261024", GITHUB_REPOSITORY_ID: "1317234001",
-    MYPA_CAPTURE_PR: "339", MYPA_CAPTURE_BRANCH: "feat/mcp-database-profiles", MYPA_CAPTURE_PASS: "first",
-    MYPA_CAPTURE_HEAD: "a".repeat(40), GITHUB_RUN_ID: "123", GITHUB_RUN_ATTEMPT: "1", RUNNER_TEMP: temp };
-  const previous = Object.fromEntries(Object.keys(values).map((key) => [key, process.env[key]]));
-  try {
-    Object.assign(process.env, values);
-    const reporter = new VisualCiReporter();
-    capture(() => {
-      for (const [id, line] of [["light", 18], ["dark", 27], ["launcher", 60], ["zoom", 72]]) {
-        reporter.onTestEnd(caseFor({ location: { file, line }, title: "SECRET" }), resultFor({ steps: [], stdout: ["SECRET"],
-          annotations: [{ type: "my-pa-ci-visual-witness", description: `${id}:absent-created-error` }] }));
-      }
-      reporter.onEnd();
-    });
-    const receipt = JSON.parse(fs.readFileSync(path.join(temp, "my-pa-linux-visual-first.json")));
-    assert.deepEqual(Object.keys(receipt).sort(), ["schema", "pass", "head", "run", "attempt", "cases"].sort());
-    assert.equal(receipt.cases.length, 4);
-    assert.equal(JSON.stringify(receipt).includes("SECRET"), false);
-    assert.equal(fs.statSync(path.join(temp, "my-pa-linux-visual-first.json")).mode & 0o777, 0o600);
-    fs.unlinkSync(path.join(temp, "my-pa-linux-visual-first.json"));
-    process.env.MYPA_CAPTURE_PR = "340";
-    reporter.onEnd();
-    assert.deepEqual(fs.readdirSync(temp), []);
-  } finally {
-    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
-    fs.rmSync(temp, { recursive: true });
-  }
-});

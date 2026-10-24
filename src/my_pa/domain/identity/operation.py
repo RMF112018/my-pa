@@ -419,7 +419,7 @@ class Capability(StrEnum):
     # Principal's own partition. Real handwriting remains fail-closed.
     GSQS_START = "gsqs.start"
     GSQS_STATUS = "gsqs.status"
-    # Intelligence Artifact / Report plane. Ten `reports.*` names rather than a
+    # Intelligence Artifact / Report plane. Eleven `reports.*` names rather than a
     # widening of `capture.*`, `documents.*`, `knowledge.*`, or `context.*`
     # (`D-91`). Capture is user-authored notes. Documents are managed bytes.
     # Knowledge is enrollment-scoped extraction. Context assembles a retrieval

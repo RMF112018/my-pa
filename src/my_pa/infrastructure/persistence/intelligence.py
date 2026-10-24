@@ -369,37 +369,42 @@ class SqlIntelligenceStore:
         ).scalar_one()
         upstream_ids = [dependency.upstream_artifact_id for dependency in artifact.dependencies]
         upstreams: dict[str, RowMapping] = {}
+        recorded: dict[str, RowMapping] = {}
         if upstream_ids:
-            statement = principal_scoped(
-                select(
-                    intelligence_artifacts.c.artifact_id,
-                    intelligence_artifacts.c.content_sha256,
-                    intelligence_artifacts.c.structured_content,
-                    intelligence_artifact_manifests.c.manifest_sha256,
-                    intelligence_artifact_manifests.c.structured_content_sha256,
-                )
-                .select_from(
-                    intelligence_artifacts.outerjoin(
-                        intelligence_artifact_manifests,
-                        and_(
-                            intelligence_artifact_manifests.c.principal_id
-                            == intelligence_artifacts.c.principal_id,
-                            intelligence_artifact_manifests.c.artifact_id
-                            == intelligence_artifacts.c.artifact_id,
-                        ),
-                    )
-                )
-                .where(intelligence_artifacts.c.artifact_id.in_(upstream_ids)),
-                intelligence_artifacts,
-                self._context,
-            )
+            # Two Principal-scoped statements (the upstream rows, then their
+            # manifests), never a hand-written partition join.
             upstreams = {
-                row["artifact_id"]: row for row in self._connection.execute(statement).mappings()
+                row["artifact_id"]: row
+                for row in self._connection.execute(
+                    principal_scoped(
+                        select(
+                            intelligence_artifacts.c.artifact_id,
+                            intelligence_artifacts.c.content_sha256,
+                            intelligence_artifacts.c.structured_content,
+                        ).where(intelligence_artifacts.c.artifact_id.in_(upstream_ids)),
+                        intelligence_artifacts,
+                        self._context,
+                    )
+                ).mappings()
+            }
+            recorded = {
+                row["artifact_id"]: row
+                for row in self._connection.execute(
+                    principal_scoped(
+                        select(
+                            intelligence_artifact_manifests.c.artifact_id,
+                            intelligence_artifact_manifests.c.manifest_sha256,
+                            intelligence_artifact_manifests.c.structured_content_sha256,
+                        ).where(intelligence_artifact_manifests.c.artifact_id.in_(upstream_ids)),
+                        intelligence_artifact_manifests,
+                        self._context,
+                    )
+                ).mappings()
             }
         digests = []
         for dependency in artifact.dependencies:
             row = upstreams[dependency.upstream_artifact_id]
-            recorded = row["manifest_sha256"]
+            manifest = recorded.get(dependency.upstream_artifact_id)
             digests.append(
                 DependencyDigests(
                     report_id=dependency.upstream_artifact_id,
@@ -408,10 +413,10 @@ class SqlIntelligenceStore:
                     content_sha256=row["content_sha256"],
                     structured_content_sha256=(
                         structured_content_sha256(_structured(row["structured_content"]))
-                        if recorded is None
-                        else row["structured_content_sha256"]
+                        if manifest is None
+                        else manifest["structured_content_sha256"]
                     ),
-                    manifest_sha256=recorded,
+                    manifest_sha256=None if manifest is None else manifest["manifest_sha256"],
                 )
             )
         built = build_manifest(

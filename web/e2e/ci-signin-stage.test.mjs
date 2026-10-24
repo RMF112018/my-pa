@@ -14,7 +14,7 @@ const compiled = ts.transpileModule(source, {
   "const { expect, test } = globalThis.__myPaSyntheticStageProbe;");
 
 let moduleNumber = 0;
-async function probe(failure, { active = true, annotations = [], mode = "visual" } = {}) {
+async function probe(failure, { active = true, annotations = [], mode = "visual", operation = "signin" } = {}) {
   const keys = ["CI", "CI_VISUAL_DIAGNOSTIC", "CI_BROWSER_DIAGNOSTIC", "CI_RESPONSIVE_DIAGNOSTIC"];
   const before = keys.map((key) => process.env[key]);
   process.env.CI = active ? "true" : "";
@@ -27,15 +27,20 @@ async function probe(failure, { active = true, annotations = [], mode = "visual"
   const launcher = { kind: "launcher", filter() { return this; } };
   const button = { kind: "signinbutton", click: () => act("click") };
   const page = { goto: () => act("goto"), addStyleTag: () => act("overlay"),
-    getByTestId: () => button, waitForURL: () => act("todayURL"), locator: () => launcher };
+    getByTestId: () => button, waitForURL: () => act("todayURL"), locator: () => launcher,
+    emulateMedia: (options) => { assert.deepEqual(options, { reducedMotion: "reduce" }); return act("media"); } };
   globalThis.__myPaSyntheticStageProbe = {
     expect: (locator) => ({ toBeVisible: () => act(locator.kind) }),
     test: { info: () => ({ annotations }) },
   };
   let caught;
   try {
-    const { signIn } = await import(`data:text/javascript,${encodeURIComponent(compiled)}#${moduleNumber++}`);
-    try { await signIn(page); } catch (error) { caught = error; }
+    const { signIn, markBrowserEarly, observeSearchMedia } = await import(`data:text/javascript,${encodeURIComponent(compiled)}#${moduleNumber++}`);
+    try {
+      if (operation === "early") markBrowserEarly();
+      else if (operation === "media") await observeSearchMedia(page);
+      else await signIn(page);
+    } catch (error) { caught = error; }
     if (failure) assert.equal(caught, sensitive);
     else assert.equal(caught, undefined);
     return { annotations, calls };
@@ -46,7 +51,7 @@ async function probe(failure, { active = true, annotations = [], mode = "visual"
 }
 
 test("records each fixed failing sign-in stage and rethrows the identical opaque error", async () => {
-  for (const stage of ["goto", "signinbutton", "click", "todayURL", "launcher"]) {
+  for (const stage of ["goto", "overlay", "signinbutton", "click", "todayURL", "launcher"]) {
     const { annotations } = await probe(stage);
     assert.deepEqual(annotations, [{ type: "my-pa-ci-failed-stage", description: stage }]);
   }
@@ -58,11 +63,26 @@ test("preserves successful await order and emits nothing outside diagnostics", a
   assert.deepEqual(success.annotations, [{ type: "my-pa-ci-signin-complete", description: "complete" }]);
   assert.deepEqual((await probe(undefined, { active: false })).annotations, []);
   assert.deepEqual((await probe("click", { active: false })).annotations, []);
-  assert.deepEqual((await probe("click", { mode: "browser" })).annotations,
+  assert.deepEqual((await probe("click", { mode: "browser" })).annotations.filter((item) => item.type !== "my-pa-ci-browser-phase"),
     [{ type: "my-pa-ci-failed-stage", description: "click" }]);
   assert.deepEqual((await probe("click", { mode: "responsive" })).annotations,
     [{ type: "my-pa-ci-failed-stage", description: "click" }]);
-  assert.deepEqual((await probe("overlay")).annotations, []);
+  assert.deepEqual((await probe("overlay")).annotations, [{ type: "my-pa-ci-failed-stage", description: "overlay" }]);
+});
+
+test("the fixed early/media boundaries preserve Page options, order and opaque failures", async () => {
+  const early = await probe(undefined, { mode: "browser", operation: "early" });
+  assert.deepEqual(early.calls, []);
+  assert.deepEqual(early.annotations, [{ type: "my-pa-ci-browser-phase", description: "early-entered" }]);
+  const media = await probe(undefined, { mode: "browser", operation: "media" });
+  assert.deepEqual(media.calls, ["media"]);
+  assert.deepEqual(media.annotations.map((item) => item.description), ["page-ready", "before-emulateMedia", "after-emulateMedia"]);
+  const failed = await probe("media", { mode: "browser", operation: "media" });
+  assert.deepEqual(failed.annotations.map((item) => item.description), ["page-ready", "before-emulateMedia", "emulateMedia-failed"]);
+  assert.deepEqual((await probe("media", { active: false, mode: "browser", operation: "media" })).annotations, []);
+  const unavailable = new Proxy([], { get() { throw new Error("synthetic unavailable annotations"); } });
+  await probe("media", { mode: "browser", operation: "media", annotations: unavailable });
+  await probe(undefined, { mode: "browser", operation: "media", annotations: unavailable });
 });
 
 test("caps metadata and cannot replace the original failure if metadata recording fails", async () => {

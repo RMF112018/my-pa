@@ -40,6 +40,35 @@ export async function hideNextjsDevOverlay(page: Page): Promise<void> {
   });
 }
 
+type BrowserPhase = "early-entered" | "page-ready" | "before-emulateMedia" | "after-emulateMedia" | "emulateMedia-failed";
+function recordBrowserPhase(phase: BrowserPhase): void {
+  if (process.env.CI !== "true" || process.env.CI_BROWSER_DIAGNOSTIC !== "1") return;
+  try {
+    const annotations = test.info().annotations;
+    if (!annotations.some((item) => item.type === "my-pa-ci-browser-phase" && item.description === phase)) {
+      annotations.push({ type: "my-pa-ci-browser-phase", description: phase });
+    }
+  } catch { /* Fixed diagnostics must not change fixture outcomes. */ }
+}
+
+/** No page dependency: records only entry into the two admitted browser specs. */
+export function markBrowserEarly(): void {
+  recordBrowserPhase("early-entered");
+}
+
+/** Search already requests page here; retain its one existing media operation. */
+export async function observeSearchMedia(page: Page): Promise<void> {
+  recordBrowserPhase("page-ready");
+  recordBrowserPhase("before-emulateMedia");
+  try {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+  } catch (error) {
+    recordBrowserPhase("emulateMedia-failed");
+    throw error;
+  }
+  recordBrowserPhase("after-emulateMedia");
+}
+
 /**
  * Sign in through the real screen, and land where the app sends you.
  *
@@ -53,10 +82,11 @@ export async function hideNextjsDevOverlay(page: Page): Promise<void> {
 export async function signIn(page: Page, origin?: string): Promise<void> {
   const diagnostic = process.env.CI === "true" &&
     (process.env.CI_VISUAL_DIAGNOSTIC === "1" || process.env.CI_BROWSER_DIAGNOSTIC === "1" || process.env.CI_RESPONSIVE_DIAGNOSTIC === "1");
-  let stage: "goto" | "signinbutton" | "click" | "todayURL" | "launcher" | undefined = "goto";
+  let stage: "goto" | "overlay" | "signinbutton" | "click" | "todayURL" | "launcher" = "goto";
   try {
+    recordBrowserPhase("page-ready");
     await page.goto(`${origin ?? ""}/sign-in`);
-    stage = undefined; // No admitted stage for development-overlay preparation.
+    stage = "overlay";
     await hideNextjsDevOverlay(page);
     stage = "signinbutton";
     const button = page.getByTestId(`sign-in-${ADMISSIBLE_PRINCIPAL}`);

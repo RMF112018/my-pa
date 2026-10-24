@@ -4,14 +4,15 @@ import type { Reporter, TestCase, TestError, TestResult, TestStep } from "@playw
 // Exact declarations/assertion locations in the two advisory critical-path specs.
 // No messages, titles, cookies, request/response data or attachment content is read.
 const SPECS = [
-  { name: "browser-security.spec.ts", declarations: [78, 104, 116, 129, 148, 166, 188, 207],
-    assertions: [18, 19, 20, 60, 61, 63, 70, 100, 101, 111, 112, 113, 222, 224] },
-  { name: "search-contract.spec.ts", declarations: [56, 105, 161, 197, 245, 317, 365],
-    assertions: [60, 61, 65, 66, 67, 69, 71, 72, 73, 78, 79, 81, 82, 83, 84, 87, 88, 92, 93, 95, 96, 100, 102, 108, 110, 118, 119, 120, 121, 128, 129, 130, 131, 132, 135, 166, 168, 169, 171, 172, 173, 175, 176, 177, 178, 180, 182, 184, 187, 188, 189, 191, 192, 193, 194, 238, 240, 241, 294, 295, 298, 299, 300, 301, 302, 303, 307, 308, 309, 310, 311, 312, 313, 323, 324, 325, 339, 341, 342, 377, 382, 384, 447, 451, 452, 453, 454, 457, 463, 464, 465, 473, 474, 475, 480, 485, 487, 488, 489, 490, 494, 500, 501] },
+  { name: "browser-security.spec.ts", declarations: [82, 108, 120, 133, 152, 170, 192, 211],
+    assertions: [22, 23, 24, 64, 65, 67, 74, 104, 105, 115, 116, 117, 226, 228] },
+  { name: "search-contract.spec.ts", declarations: [60, 109, 165, 201, 249, 321, 369],
+    assertions: [64, 65, 69, 70, 71, 73, 75, 76, 77, 82, 83, 85, 86, 87, 88, 91, 92, 96, 97, 99, 100, 104, 106, 112, 114, 122, 123, 124, 125, 132, 133, 134, 135, 136, 139, 170, 172, 173, 175, 176, 177, 179, 180, 181, 182, 184, 186, 188, 191, 192, 193, 195, 196, 197, 198, 242, 244, 245, 298, 299, 302, 303, 304, 305, 306, 307, 311, 312, 313, 314, 315, 316, 317, 327, 328, 329, 343, 345, 346, 381, 386, 388, 451, 455, 456, 457, 458, 461, 467, 468, 469, 477, 478, 479, 484, 489, 491, 492, 493, 494, 498, 504, 505] },
 ];
 const PROJECTS = new Set(["firefox", "webkit"]);
 const FAILED = new Set(["failed", "timedOut", "interrupted"]);
-const SIGN_IN_STAGES = new Set(["goto", "signinbutton", "click", "todayURL", "launcher"]);
+const SIGN_IN_STAGES = new Set(["goto", "overlay", "signinbutton", "click", "todayURL", "launcher"]);
+const BROWSER_PHASES = ["emulateMedia-failed", "after-emulateMedia", "before-emulateMedia", "page-ready", "early-entered"];
 function stepsOf(steps: TestStep[]): TestStep[] {
   return steps.flatMap((step) => [step, ...stepsOf(step.steps)]);
 }
@@ -37,11 +38,14 @@ export default class BrowserCiReporter implements Reporter {
       && item.description !== undefined && SIGN_IN_STAGES.has(item.description))?.description;
     const completed = (result.annotations ?? []).some((item) => item.type === "my-pa-ci-signin-complete"
       && item.description === "complete");
-    const category = signIn ? "setup" : assertion !== undefined ? "assertion"
+    const phase = BROWSER_PHASES.find((value) => (result.annotations ?? []).some((item) =>
+      item.type === "my-pa-ci-browser-phase" && item.description === value));
+    const category = signIn || phase === "emulateMedia-failed" ? "setup" : assertion !== undefined ? "assertion"
       : completed ? "after-sign-in" : steps.some((step) => step.category === "hook" && !!step.error) ? "setup" : "other";
     const stage = signIn ? `; stage=${signIn}; status=${result.status}` : "";
+    const boundary = phase ? `; phase=${phase}` : "";
     this.emitted += 1;
-    process.stdout.write(`::error file=web/e2e/${spec.name},line=${assertion ?? test.location.line},title=Browser Playwright failure::project=${project}; category=${category}${stage}\n`);
+    process.stdout.write(`::error file=web/e2e/${spec.name},line=${assertion ?? test.location.line},title=Browser Playwright failure::project=${project}; category=${category}${stage}${boundary}\n`);
   }
 
   onError(_error: TestError): void {

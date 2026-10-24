@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { SEARCH_SETTLED, signIn } from "./fixtures";
+import { markBrowserEarly, observeSearchMedia, SEARCH_SETTLED, signIn } from "./fixtures";
 
 type ApiAnswer<T> = { status: number; body: T };
 
@@ -48,8 +48,12 @@ async function api<T>(
   );
 }
 
+test.beforeEach(async () => {
+  markBrowserEarly();
+});
+
 test.beforeEach(async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: "reduce" });
+  await observeSearchMedia(page);
   await signIn(page);
 });
 

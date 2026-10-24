@@ -5,13 +5,13 @@ import type { Reporter, TestCase, TestError, TestResult, TestStep } from "@playw
 const SPEC = "web/e2e/visual.spec.ts";
 const absoluteSpec = () => path.join(process.cwd(), "e2e", "visual.spec.ts");
 const CASES = [
-  { declaration: 17, assertion: 20, snapshot: "shell-light-unavailable" },
-  { declaration: 26, assertion: 53, snapshot: "shell-dark-inspector" },
-  { declaration: 59, assertion: 65, snapshot: "shell-command-menu" },
-  { declaration: 71, assertion: 90, snapshot: "shell-zoom-200" },
+  { id: "light", declaration: 18, assertion: 21, snapshot: "shell-light-unavailable" },
+  { id: "dark", declaration: 27, assertion: 54, snapshot: "shell-dark-inspector" },
+  { id: "launcher", declaration: 60, assertion: 66, snapshot: "shell-command-menu" },
+  { id: "zoom", declaration: 72, assertion: 91, snapshot: "shell-zoom-200" },
 ] as const;
 const FAILED = new Set(["failed", "timedOut", "interrupted"]);
-const SIGN_IN_STAGES = new Set(["goto", "signinbutton", "click", "todayURL", "launcher"]);
+const SIGN_IN_STAGES = new Set(["goto", "overlay", "signinbutton", "click", "todayURL", "launcher"]);
 
 function stepsOf(steps: TestStep[]): TestStep[] {
   return steps.flatMap((step) => [step, ...stepsOf(step.steps)]);
@@ -20,16 +20,12 @@ function stepsOf(steps: TestStep[]): TestStep[] {
 /** Classify structured locations only; never inspect an exception or attachment body. */
 export function failureCategory(
   result: TestResult, assertion: number, snapshot: string, baselineExists: boolean,
-): "missing-baseline" | "snapshot-mismatch" | "setup" | "other" {
+): "snapshot-mismatch" | "setup" | "other" {
   const steps = stepsOf(result.steps ?? []);
   const snapshotFailed = steps.some((step) => step.category === "expect" && !!step.error
     && step.location?.file === absoluteSpec() && step.location.line === assertion);
-  // Playwright's missing-baseline soft error has an exact structured location
-  // on the result even when its expect step has no error. Read only that field.
-  if (!baselineExists && result.errors?.some((error) => error.location?.file === absoluteSpec()
-    && error.location.line === assertion)) return "missing-baseline";
   if (snapshotFailed) {
-    if (!baselineExists) return "missing-baseline";
+    if (!baselineExists) return "other";
     const names = new Set(result.attachments.map((attachment) => attachment.name));
     if (["expected", "actual", "diff"].every((kind) => names.has(`${snapshot}-${kind}.png`))) {
       return "snapshot-mismatch";
@@ -55,11 +51,19 @@ export default class VisualCiReporter implements Reporter {
       && item.description !== undefined && SIGN_IN_STAGES.has(item.description))?.description;
     const completed = (result.annotations ?? []).some((item) => item.type === "my-pa-ci-signin-complete"
       && item.description === "complete");
-    const category = signIn ? "setup" : completed && (structural === "setup" || structural === "other")
-      ? "after-sign-in" : structural;
+    const observations = (result.annotations ?? []).filter((item) => item.type === "my-pa-ci-visual-witness");
+    const witness = observations.length === 1
+      ? ["absent-created-error", "hard-throw", "matched-no-delta", "unknown"].find((outcome) =>
+        observations[0].description === `${admitted.id}:${outcome}`) : undefined;
+    const category = witness === "absent-created-error" ? "missing-baseline"
+      : witness === "hard-throw" ? "assertion-hard-throw"
+        : witness === "matched-no-delta" ? "after-snapshot"
+          : signIn ? "setup" : completed && (structural === "setup" || structural === "other")
+            ? "after-sign-in" : structural;
     const stage = signIn ? `; stage=${signIn}; status=${result.status}` : "";
+    const observation = witness ? `; witness=${witness}` : "";
     this.emitted += 1;
-    process.stdout.write(`::error file=${SPEC},line=${admitted.declaration},title=Visual Playwright failure::project=desktop; category=${category}${stage}\n`);
+    process.stdout.write(`::error file=${SPEC},line=${admitted.declaration},title=Visual Playwright failure::project=desktop; category=${category}${stage}${observation}\n`);
   }
 
   onError(_error: TestError): void {

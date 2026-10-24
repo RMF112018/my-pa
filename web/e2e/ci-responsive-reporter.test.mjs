@@ -177,7 +177,7 @@ test("admits only fixed helper and exact Constraint-route stage metadata", () =>
     }));
     assert.match(output, new RegExp(`category=constraint-route; stage=${stage}\\n$`));
   }
-  for (const stage of ["goto", "signinbutton", "click", "todayURL", "launcher"]) {
+  for (const stage of ["goto", "overlay", "signinbutton", "click", "todayURL", "launcher"]) {
     const output = capture(() => new ResponsiveCiReporter().onTestEnd(declaration, {
       status: "failed", annotations: [{ type: "my-pa-ci-failed-stage", description: stage }],
     }));

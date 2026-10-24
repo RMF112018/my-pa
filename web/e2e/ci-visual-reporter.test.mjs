@@ -18,7 +18,7 @@ const { default: VisualCiReporter, failureCategory } = await import(
 const file = path.join(process.cwd(), "e2e", "visual.spec.ts");
 const caseFor = (overrides = {}) => ({
   expectedStatus: "passed", parent: { project: () => ({ name: "desktop" }) },
-  location: { file, line: 17 }, ...overrides,
+  location: { file, line: 18 }, ...overrides,
 });
 const resultFor = (overrides = {}) => ({
   status: "failed", attachments: [], steps: [{ category: "expect", error: {},
@@ -32,13 +32,37 @@ function capture(run) {
   return chunks.join("");
 }
 
-test("distinguishes missing platform baseline, evidenced mismatch, setup and other", () => {
-  assert.equal(failureCategory(resultFor(), 20, "shell-light-unavailable", false), "missing-baseline");
+test("post-test absence stays unknown while evidenced mismatch and setup remain distinct", () => {
+  assert.equal(failureCategory(resultFor(), 20, "shell-light-unavailable", false), "other");
   const attachments = ["expected", "actual", "diff"].map((kind) => ({ name: `shell-light-unavailable-${kind}.png` }));
   assert.equal(failureCategory(resultFor({ attachments }), 20, "shell-light-unavailable", true), "snapshot-mismatch");
   assert.equal(failureCategory(resultFor(), 20, "shell-light-unavailable", true), "other");
   assert.equal(failureCategory(resultFor({ steps: [{ category: "hook", error: {}, steps: [] }] }), 20, "shell-light-unavailable", false), "setup");
   assert.equal(failureCategory(resultFor({ steps: [] }), 20, "shell-light-unavailable", false), "other");
+});
+
+test("only a unique matching case witness can establish the baseline creation pattern", () => {
+  for (const [id, line] of [["light", 18], ["dark", 27], ["launcher", 60], ["zoom", 72]]) {
+    for (const [outcome, category] of [["absent-created-error", "missing-baseline"],
+      ["hard-throw", "assertion-hard-throw"], ["matched-no-delta", "after-snapshot"], ["unknown", "other"]]) {
+      const output = capture(() => new VisualCiReporter().onTestEnd(caseFor({ location: { file, line } }), resultFor({
+        steps: [], annotations: [{ type: "my-pa-ci-visual-witness", description: `${id}:${outcome}` }],
+      })));
+      assert.match(output, new RegExp(`category=${category}; witness=${outcome}\\n$`));
+    }
+  }
+});
+
+test("unknown, foreign, duplicate and conflicting witnesses cannot claim a baseline cause", () => {
+  for (const descriptions of [["other:absent-created-error"], ["light:SECRET\n::error::x"],
+    ["light:absent-created-error", "light:hard-throw"], ["light:absent-created-error", "light:absent-created-error"]]) {
+    const output = capture(() => new VisualCiReporter().onTestEnd(caseFor(), resultFor({ steps: [],
+      annotations: descriptions.map((description) => ({ type: "my-pa-ci-visual-witness", description })),
+    })));
+    assert.equal(output.includes("witness="), false);
+    assert.equal(output.includes("SECRET"), false);
+    assert.equal(output.includes("category=missing-baseline"), false);
+  }
 });
 
 test("missing files alone do not misclassify an earlier assertion or foreign step", () => {
@@ -47,9 +71,9 @@ test("missing files alone do not misclassify an earlier assertion or foreign ste
   }
 });
 
-test("classifies located missing-baseline soft errors without an errored step", () => {
+test("does not infer baseline cause from a post-test location and absence", () => {
   const soft = resultFor({ steps: [], errors: [{ location: { file, line: 20 } }] });
-  assert.equal(failureCategory(soft, 20, "shell-light-unavailable", false), "missing-baseline");
+  assert.equal(failureCategory(soft, 20, "shell-light-unavailable", false), "other");
   assert.equal(failureCategory(soft, 20, "shell-light-unavailable", true), "other");
   for (const location of [{ file, line: 19 }, { file: `${file}\n::error::x`, line: 20 }]) {
     assert.equal(failureCategory(resultFor({ steps: [], errors: [{ location }] }), 20, "shell-light-unavailable", false), "other");
@@ -71,13 +95,13 @@ test("emits only fixed test identity/category and never secret error data", () =
     }));
     reporter.onError(forbidden);
   });
-  assert.match(output, /^::error file=web\/e2e\/visual.spec.ts,line=17,title=Visual Playwright failure::project=desktop; category=(missing-baseline|other)\n::error title=Visual Playwright failure::category=setup\n$/);
+  assert.match(output, /^::error file=web\/e2e\/visual.spec.ts,line=18,title=Visual Playwright failure::project=desktop; category=(missing-baseline|other)\n::error title=Visual Playwright failure::category=setup\n$/);
   assert.equal(output.includes(secret), false);
 });
 
 test("refuses unknown spec, project, declaration and nonfailure results", () => {
   for (const candidate of [caseFor({ location: { file: `${file}\n::error::x`, line: 17 } }),
-    caseFor({ location: { file, line: 18 } }), caseFor({ expectedStatus: "failed" }),
+    caseFor({ location: { file, line: 19 } }), caseFor({ expectedStatus: "failed" }),
     caseFor({ parent: { project: () => ({ name: "desktop\n::error::x" }) } })]) {
     assert.equal(capture(() => new VisualCiReporter().onTestEnd(candidate, resultFor())), "");
   }
@@ -98,7 +122,7 @@ test("caps annotations without altering test outcomes", () => {
 });
 
 test("admits only fixed runtime stage metadata and treats completion as after sign-in", () => {
-  for (const stage of ["goto", "signinbutton", "click", "todayURL", "launcher"]) {
+  for (const stage of ["goto", "overlay", "signinbutton", "click", "todayURL", "launcher"]) {
     const output = capture(() => new VisualCiReporter().onTestEnd(caseFor(), resultFor({
       steps: [], annotations: [{ type: "my-pa-ci-failed-stage", description: stage }],
     })));

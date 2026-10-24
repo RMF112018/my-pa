@@ -13,7 +13,7 @@ const SPECS = [
 const FAILURE_STATUSES = new Set(["failed", "timedOut", "interrupted"]);
 const MAX_ANNOTATIONS = 10;
 const MAX_LINE = 100_000;
-const SIGN_IN_STAGES = new Set(["goto", "signinbutton", "click", "todayURL", "launcher"]);
+const SIGN_IN_STAGES = new Set(["goto", "overlay", "signinbutton", "click", "todayURL", "launcher"]);
 const CONSTRAINT_STAGES = new Set(["nav", "URL-state", "loading", "unavailable", "row-visible"]);
 
 /** CI-only, bounded annotations. Never interpolate a title, error, or raw path. */

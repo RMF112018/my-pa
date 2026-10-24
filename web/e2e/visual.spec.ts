@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { signIn, openAccount, pinInspector } from "./fixtures";
+import { witnessVisualAssertion } from "./visual-assertion-witness";
 
 async function stableFrame(page: Page) {
   await page.addStyleTag({ content: "nextjs-portal { display: none !important; }" });
@@ -14,13 +15,13 @@ test.beforeEach(async ({ page }) => {
   await stableFrame(page);
 });
 
-test("light successor shell is visually reviewable", async ({ page }) => {
+test("light successor shell is visually reviewable", async ({ page }, testInfo) => {
   await page.goto("/intelligence");
   await stableFrame(page);
-  await expect(page).toHaveScreenshot("shell-light-unavailable.png", {
+  await witnessVisualAssertion(testInfo, "light", () => expect(page).toHaveScreenshot("shell-light-unavailable.png", {
     animations: "disabled",
     fullPage: true,
-  });
+  }));
 });
 
 test("dark shell captures responsive navigation and Inspector states", async ({ page }, testInfo) => {
@@ -50,25 +51,25 @@ test("dark shell captures responsive navigation and Inspector states", async ({ 
     await expect(page.getByRole("complementary", { name: "Utility region" })).toBeVisible();
   }
 
-  await expect(page).toHaveScreenshot("shell-dark-inspector.png", {
+  await witnessVisualAssertion(testInfo, "dark", () => expect(page).toHaveScreenshot("shell-dark-inspector.png", {
     animations: "disabled",
     fullPage: true,
-  });
+  }));
 });
 
-test("unified launcher has a deterministic reduced-motion initial state", async ({ page }) => {
+test("unified launcher has a deterministic reduced-motion initial state", async ({ page }, testInfo) => {
   await page.keyboard.press("ControlOrMeta+k");
   const launcher = page.getByRole("dialog", { name: "Search or create" });
   await expect(launcher).toBeVisible();
   await expect(launcher.getByRole("group", { name: "Search or New" }).getByRole("button")).toHaveText(["Search", "New"]);
   await expect(launcher.getByRole("button", { name: "Search", exact: true })).toBeFocused();
-  await expect(page).toHaveScreenshot("shell-command-menu.png", {
+  await witnessVisualAssertion(testInfo, "launcher", () => expect(page).toHaveScreenshot("shell-command-menu.png", {
     animations: "disabled",
     fullPage: true,
-  });
+  }));
 });
 
-test("the shell reflows at 200 percent without horizontal loss", async ({ page }) => {
+test("the shell reflows at 200 percent without horizontal loss", async ({ page }, testInfo) => {
   await page.goto("/work");
   await stableFrame(page);
   const viewport = page.viewportSize();
@@ -87,8 +88,8 @@ test("the shell reflows at 200 percent without horizontal loss", async ({ page }
   // Work disclosure/freshness is diagnostic-only in the default product view.
   await expect(page.getByRole("complementary", { name: "Work answer disclosure" })).toHaveCount(0);
   await expect(page.locator('[data-visual-dynamic="freshness"]')).toHaveCount(0);
-  await expect(page).toHaveScreenshot("shell-zoom-200.png", {
+  await witnessVisualAssertion(testInfo, "zoom", () => expect(page).toHaveScreenshot("shell-zoom-200.png", {
     animations: "disabled",
     fullPage: false,
-  });
+  }));
 });

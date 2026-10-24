@@ -13,10 +13,10 @@ const compiled = ts.transpileModule(source, {
 }).outputText;
 const { default: BrowserCiReporter } = await import(`data:text/javascript,${encodeURIComponent(compiled)}`);
 const file = (spec) => path.join(process.cwd(), "e2e", spec);
-const caseFor = (spec = "browser-security.spec.ts", line = 78, project = "firefox") => ({
+const caseFor = (spec = "browser-security.spec.ts", line = 82, project = "firefox") => ({
   expectedStatus: "passed", parent: { project: () => ({ name: project }) }, location: { file: file(spec), line },
 });
-const resultFor = (spec = "browser-security.spec.ts", line = 60) => ({
+const resultFor = (spec = "browser-security.spec.ts", line = 64) => ({
   status: "failed", steps: [{ category: "expect", error: {}, location: { file: file(spec), line }, steps: [] }],
 });
 function capture(run) {
@@ -29,7 +29,7 @@ function capture(run) {
 
 test("emits only admitted spec/project/assertion identities", () => {
   for (const project of ["firefox", "webkit"]) {
-    for (const [spec, declaration, assertion] of [["browser-security.spec.ts", 78, 60], ["search-contract.spec.ts", 56, 61]]) {
+    for (const [spec, declaration, assertion] of [["browser-security.spec.ts", 82, 64], ["search-contract.spec.ts", 60, 65]]) {
       assert.equal(capture(() => new BrowserCiReporter().onTestEnd(caseFor(spec, declaration, project), resultFor(spec, assertion))),
         `::error file=web/e2e/${spec},line=${assertion},title=Browser Playwright failure::project=${project}; category=assertion\n`);
     }
@@ -37,23 +37,23 @@ test("emits only admitted spec/project/assertion identities", () => {
 });
 
 test("unknown assertions stay other; hook failures are setup", () => {
-  assert.match(capture(() => new BrowserCiReporter().onTestEnd(caseFor(), resultFor("browser-security.spec.ts", 999))), /line=78,.*category=other/);
+  assert.match(capture(() => new BrowserCiReporter().onTestEnd(caseFor(), resultFor("browser-security.spec.ts", 999))), /line=82,.*category=other/);
   assert.match(capture(() => new BrowserCiReporter().onTestEnd(caseFor(), { status: "failed", steps: [{ category: "hook", error: {}, steps: [] }] })), /category=setup/);
 });
 
 test("uses only admitted structured error locations for assertion fallback", () => {
-  for (const location of [{ file: file("browser-security.spec.ts"), line: 60 },
+  for (const location of [{ file: file("browser-security.spec.ts"), line: 64 },
     { file: file("browser-security.spec.ts"), line: 999 },
-    { file: `${file("browser-security.spec.ts")}\n::error::x`, line: 60 }]) {
+    { file: `${file("browser-security.spec.ts")}\n::error::x`, line: 64 }]) {
     const output = capture(() => new BrowserCiReporter().onTestEnd(caseFor(), {
       status: "failed", steps: [], errors: [{ location }],
     }));
-    assert.equal(output.includes("category=assertion"), location.line === 60 && location.file === file("browser-security.spec.ts"));
+    assert.equal(output.includes("category=assertion"), location.line === 64 && location.file === file("browser-security.spec.ts"));
   }
 });
 
 test("reports only fixed admitted runtime sign-in stages and failure statuses", () => {
-  for (const stage of ["goto", "signinbutton", "click", "todayURL", "launcher"]) {
+  for (const stage of ["goto", "overlay", "signinbutton", "click", "todayURL", "launcher"]) {
     const output = capture(() => new BrowserCiReporter().onTestEnd(caseFor(), {
       status: "timedOut", steps: [], annotations: [{ type: "my-pa-ci-failed-stage", description: stage }],
     }));
@@ -86,8 +86,8 @@ test("completion means a later failure, and unknown metadata never becomes outpu
 
 test("unknown path/project/declaration/status fail closed without printing values", () => {
   for (const candidate of [caseFor("other.spec.ts"),
-    { ...caseFor(), location: { file: `${process.cwd()}/e2e/../e2e/browser-security.spec.ts`, line: 78 } },
-    caseFor("browser-security.spec.ts", 79), caseFor("browser-security.spec.ts", 78, "desktop\n::error::x")]) {
+    { ...caseFor(), location: { file: `${process.cwd()}/e2e/../e2e/browser-security.spec.ts`, line: 82 } },
+    caseFor("browser-security.spec.ts", 83), caseFor("browser-security.spec.ts", 82, "desktop\n::error::x")]) {
     assert.equal(capture(() => new BrowserCiReporter().onTestEnd(candidate, resultFor())), "");
   }
   assert.equal(capture(() => new BrowserCiReporter().onTestEnd(caseFor(), { status: "passed", steps: [] })), "");
@@ -112,4 +112,18 @@ test("does not access or emit any error/title/request/payload data and caps outp
   });
   assert.equal(output.includes(secret), false);
   assert.equal(output.trim().split("\n").length, 10);
+});
+
+test("reports only fixed early/media boundary metadata without naming a browser cause", () => {
+  for (const phase of ["early-entered", "page-ready", "before-emulateMedia", "after-emulateMedia", "emulateMedia-failed"]) {
+    const output = capture(() => new BrowserCiReporter().onTestEnd(caseFor(), {
+      status: "failed", steps: [], annotations: [{ type: "my-pa-ci-browser-phase", description: phase }],
+    }));
+    assert.match(output, new RegExp(`phase=${phase}\\n$`));
+  }
+  const output = capture(() => new BrowserCiReporter().onTestEnd(caseFor(), {
+    status: "failed", steps: [], annotations: [{ type: "my-pa-ci-browser-phase", description: "SECRET\n::error::x" }],
+  }));
+  assert.equal(output.includes("phase="), false);
+  assert.equal(output.includes("SECRET"), false);
 });

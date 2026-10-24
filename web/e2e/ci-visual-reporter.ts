@@ -11,6 +11,7 @@ const CASES = [
   { declaration: 71, assertion: 90, snapshot: "shell-zoom-200" },
 ] as const;
 const FAILED = new Set(["failed", "timedOut", "interrupted"]);
+const SIGN_IN_STAGES = new Set(["goto", "signinbutton", "click", "todayURL", "launcher"]);
 
 function stepsOf(steps: TestStep[]): TestStep[] {
   return steps.flatMap((step) => [step, ...stepsOf(step.steps)]);
@@ -49,9 +50,16 @@ export default class VisualCiReporter implements Reporter {
     if (!admitted) return;
     const baseline = path.join(process.cwd(), "e2e", "visual.spec.ts-snapshots",
       `${admitted.snapshot}-desktop-linux.png`);
-    const category = failureCategory(result, admitted.assertion, admitted.snapshot, existsSync(baseline));
+    const structural = failureCategory(result, admitted.assertion, admitted.snapshot, existsSync(baseline));
+    const signIn = (result.annotations ?? []).find((item) => item.type === "my-pa-ci-failed-stage"
+      && item.description !== undefined && SIGN_IN_STAGES.has(item.description))?.description;
+    const completed = (result.annotations ?? []).some((item) => item.type === "my-pa-ci-signin-complete"
+      && item.description === "complete");
+    const category = signIn ? "setup" : completed && (structural === "setup" || structural === "other")
+      ? "after-sign-in" : structural;
+    const stage = signIn ? `; stage=${signIn}; status=${result.status}` : "";
     this.emitted += 1;
-    process.stdout.write(`::error file=${SPEC},line=${admitted.declaration},title=Visual Playwright failure::project=desktop; category=${category}\n`);
+    process.stdout.write(`::error file=${SPEC},line=${admitted.declaration},title=Visual Playwright failure::project=desktop; category=${category}${stage}\n`);
   }
 
   onError(_error: TestError): void {

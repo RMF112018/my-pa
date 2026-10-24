@@ -168,3 +168,45 @@ test("caps test and global annotations together at ten", () => {
   assert.equal(output.match(/phase=playwright-global/g)?.length, 1);
   assert.equal(output.match(/project=desktop; status=failed/g)?.length, 9);
 });
+
+test("admits only fixed helper and exact Constraint-route stage metadata", () => {
+  const declaration = caseFor({ location: { file: specPath("journeys.spec.ts"), line: 634 } });
+  for (const stage of ["nav", "URL-state", "loading", "unavailable", "row-visible"]) {
+    const output = capture(() => new ResponsiveCiReporter().onTestEnd(declaration, {
+      status: "failed", annotations: [{ type: "my-pa-ci-constraint-stage", description: stage }],
+    }));
+    assert.match(output, new RegExp(`category=constraint-route; stage=${stage}\\n$`));
+  }
+  for (const stage of ["goto", "signinbutton", "click", "todayURL", "launcher"]) {
+    const output = capture(() => new ResponsiveCiReporter().onTestEnd(declaration, {
+      status: "failed", annotations: [{ type: "my-pa-ci-failed-stage", description: stage }],
+    }));
+    assert.match(output, new RegExp(`category=setup; stage=${stage}\\n$`));
+  }
+  const completed = capture(() => new ResponsiveCiReporter().onTestEnd(declaration, {
+    status: "failed", annotations: [{ type: "my-pa-ci-signin-complete", description: "complete" }],
+  }));
+  assert.match(completed, /category=after-sign-in\n$/);
+});
+
+test("unknown/injected stage metadata and other route declarations are never emitted", () => {
+  const declaration = caseFor({ location: { file: specPath("journeys.spec.ts"), line: 634 } });
+  for (const annotation of [{ type: "unknown", description: "nav" },
+    { type: "my-pa-ci-constraint-stage", description: "nav\n::error::SECRET" },
+    { type: "my-pa-ci-failed-stage", description: "SECRET" },
+    { type: "my-pa-ci-signin-complete", description: "SECRET" }]) {
+    const output = capture(() => new ResponsiveCiReporter().onTestEnd(declaration,
+      { status: "failed", annotations: [annotation] }));
+    assert.equal(output.includes("category="), false);
+    assert.equal(output.includes("SECRET"), false);
+  }
+  for (const candidate of [caseFor({ location: { file: specPath("journeys.spec.ts"), line: 635 } }), caseFor()]) {
+    const output = capture(() => new ResponsiveCiReporter().onTestEnd(candidate,
+      { status: "failed", annotations: [{ type: "my-pa-ci-constraint-stage", description: "nav" }] }));
+    assert.equal(output.includes("category="), false);
+  }
+  const opaque = new Proxy({}, { get() { throw new Error("sensitive error read"); } });
+  const output = capture(() => new ResponsiveCiReporter().onTestEnd(declaration,
+    { status: "failed", errors: [opaque], annotations: [{ type: "my-pa-ci-constraint-stage", description: "loading" }] }));
+  assert.match(output, /stage=loading\n$/);
+});

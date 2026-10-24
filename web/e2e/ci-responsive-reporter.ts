@@ -13,6 +13,8 @@ const SPECS = [
 const FAILURE_STATUSES = new Set(["failed", "timedOut", "interrupted"]);
 const MAX_ANNOTATIONS = 10;
 const MAX_LINE = 100_000;
+const SIGN_IN_STAGES = new Set(["goto", "signinbutton", "click", "todayURL", "launcher"]);
+const CONSTRAINT_STAGES = new Set(["nav", "URL-state", "loading", "unavailable", "row-visible"]);
 
 /** CI-only, bounded annotations. Never interpolate a title, error, or raw path. */
 export default class ResponsiveCiReporter implements Reporter {
@@ -33,9 +35,21 @@ export default class ResponsiveCiReporter implements Reporter {
     const spec = SPECS.find((name) => file === path.join(process.cwd(), "e2e", name));
     if (!spec) return;
 
+    const signIn = (result.annotations ?? []).find((item) => item.type === "my-pa-ci-failed-stage"
+      && item.description !== undefined && SIGN_IN_STAGES.has(item.description))?.description;
+    const route = spec === "journeys.spec.ts" && line === 634
+      ? (result.annotations ?? []).find((item) => item.type === "my-pa-ci-constraint-stage"
+        && item.description !== undefined && CONSTRAINT_STAGES.has(item.description))?.description
+      : undefined;
+    const completed = (result.annotations ?? []).some((item) => item.type === "my-pa-ci-signin-complete"
+      && item.description === "complete");
+    const detail = signIn ? `; category=setup; stage=${signIn}`
+      : route ? `; category=constraint-route; stage=${route}`
+        : completed ? "; category=after-sign-in" : "";
+
     this.emitted += 1;
     process.stdout.write(
-      `::error file=web/e2e/${spec},line=${line},title=Responsive Playwright failure::project=${project}; status=${status}\n`,
+      `::error file=web/e2e/${spec},line=${line},title=Responsive Playwright failure::project=${project}; status=${status}${detail}\n`,
     );
   }
 

@@ -96,3 +96,24 @@ test("caps annotations without altering test outcomes", () => {
   assert.equal(output.trim().split("\n").length, 4);
   assert.equal(result.status, "failed");
 });
+
+test("admits only fixed runtime stage metadata and treats completion as after sign-in", () => {
+  for (const stage of ["goto", "signinbutton", "click", "todayURL", "launcher"]) {
+    const output = capture(() => new VisualCiReporter().onTestEnd(caseFor(), resultFor({
+      steps: [], annotations: [{ type: "my-pa-ci-failed-stage", description: stage }],
+    })));
+    assert.match(output, new RegExp(`category=setup; stage=${stage}; status=failed\\n$`));
+  }
+  const complete = capture(() => new VisualCiReporter().onTestEnd(caseFor(), resultFor({
+    steps: [], annotations: [{ type: "my-pa-ci-signin-complete", description: "complete" }],
+  })));
+  assert.match(complete, /category=after-sign-in\n$/);
+  assert.equal(complete.includes("stage="), false);
+  for (const annotation of [{ type: "unknown", description: "goto" },
+    { type: "my-pa-ci-failed-stage", description: "goto\n::error::SECRET" },
+    { type: "my-pa-ci-signin-complete", description: "SECRET" }]) {
+    const output = capture(() => new VisualCiReporter().onTestEnd(caseFor(), resultFor({ steps: [], annotations: [annotation] })));
+    assert.match(output, /category=other\n$/);
+    assert.equal(output.includes("SECRET"), false);
+  }
+});

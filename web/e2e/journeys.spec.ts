@@ -7,7 +7,7 @@
  * typed into the browser comes back as a row in the Library listing, and the
  * only way that can happen is if it was committed.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page, type TestInfo } from "@playwright/test";
 import { enableDiagnostics, expectState, openCaptureNote, pinInspector, SEARCH_SETTLED, signIn, syntheticNote, visibleCaptureButton } from "./fixtures";
 
 /** Phone Chrome below `md` (768): Knowledge lives in More; tablet uses the compact rail. */
@@ -632,13 +632,26 @@ test.describe("the canonical Constraint route", () => {
   });
 
   test("a deep-linked view state does not change the address it resolves to", async ({ page }, testInfo) => {
-    await signIn(page);
+    await runDeepLinkedConstraintView(page, testInfo);
+  });
+});
+
+/** The exact deep-link journey; stage metadata never changes its failure. */
+export async function runDeepLinkedConstraintView(page: Page, testInfo: TestInfo): Promise<void> {
+  await signIn(page);
+  const diagnostic = process.env.CI === "true" && process.env.CI_RESPONSIVE_DIAGNOSTIC === "1";
+  let stage: "nav" | "URL-state" | "loading" | "unavailable" | "row-visible" = "nav";
+  try {
     await page.goto("/work/projects/prj_e2ecst0000000001/constraints?view=register&scope=open&overdue=1");
+    stage = "URL-state";
     await expect(page).toHaveURL(/view=register/);
     await expect(page).toHaveURL(/overdue=1/);
     const workspace = page.getByTestId("constraints-live-workspace");
+    stage = "loading";
     await expect(workspace.getByTestId("register-loading")).toHaveCount(0);
+    stage = "unavailable";
     await expect(page.getByTestId("register-unavailable")).toHaveCount(0);
+    stage = "row-visible";
     await expect(
       workspace.getByTestId(
         testInfo.project.name === "mobile"
@@ -646,5 +659,14 @@ test.describe("the canonical Constraint route", () => {
           : "register-row-cst_e2ecst0000000001",
       ),
     ).toBeVisible();
-  });
-});
+  } catch (error) {
+    if (diagnostic) {
+      try {
+        if (!testInfo.annotations.some((item) => item.type === "my-pa-ci-constraint-stage")) {
+          testInfo.annotations.push({ type: "my-pa-ci-constraint-stage", description: stage });
+        }
+      } catch { /* Preserve the original error even if metadata cannot be recorded. */ }
+    }
+    throw error;
+  }
+}

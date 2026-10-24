@@ -11,11 +11,7 @@ const SPECS = [
 ];
 const PROJECTS = new Set(["firefox", "webkit"]);
 const FAILED = new Set(["failed", "timedOut", "interrupted"]);
-const SIGN_IN_STAGES = [
-  { line: 54, name: "navigation" }, { line: 55, name: "dev-overlay" },
-  { line: 57, name: "button-visible" }, { line: 58, name: "button-click" },
-  { line: 59, name: "today-navigation" }, { line: 60, name: "launcher-visible" },
-];
+const SIGN_IN_STAGES = new Set(["goto", "signinbutton", "click", "todayURL", "launcher"]);
 function stepsOf(steps: TestStep[]): TestStep[] {
   return steps.flatMap((step) => [step, ...stepsOf(step.steps)]);
 }
@@ -37,11 +33,13 @@ export default class BrowserCiReporter implements Reporter {
     ];
     const assertion = spec.assertions.find((line) => locations.some((location) =>
       location?.file === test.location.file && location.line === line));
-    const signIn = assertion === undefined ? SIGN_IN_STAGES.find((stage) => locations.some((location) =>
-      location?.file === path.join(process.cwd(), "e2e", "fixtures.ts") && location.line === stage.line)) : undefined;
-    const category = assertion !== undefined ? "assertion"
-      : signIn || steps.some((step) => step.category === "hook" && !!step.error) ? "setup" : "other";
-    const stage = signIn ? `; stage=${signIn.name}; status=${result.status}` : "";
+    const signIn = (result.annotations ?? []).find((item) => item.type === "my-pa-ci-failed-stage"
+      && item.description !== undefined && SIGN_IN_STAGES.has(item.description))?.description;
+    const completed = (result.annotations ?? []).some((item) => item.type === "my-pa-ci-signin-complete"
+      && item.description === "complete");
+    const category = signIn ? "setup" : assertion !== undefined ? "assertion"
+      : completed ? "after-sign-in" : steps.some((step) => step.category === "hook" && !!step.error) ? "setup" : "other";
+    const stage = signIn ? `; stage=${signIn}; status=${result.status}` : "";
     this.emitted += 1;
     process.stdout.write(`::error file=web/e2e/${spec.name},line=${assertion ?? test.location.line},title=Browser Playwright failure::project=${project}; category=${category}${stage}\n`);
   }

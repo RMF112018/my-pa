@@ -13,7 +13,7 @@
  * at this head**, and constructing one would mean widening the pin that prevents
  * the disclosure.
  */
-import { expect, type Page } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 /** The one principal `local_operator` mode admits. See `lib/auth/synthetic.ts`. */
 export const ADMISSIBLE_PRINCIPAL = "synthetic-a";
@@ -51,13 +51,44 @@ export async function hideNextjsDevOverlay(page: Page): Promise<void> {
  * first presented, as an unrelated locator timing out three tests further on.
  */
 export async function signIn(page: Page, origin?: string): Promise<void> {
-  await page.goto(`${origin ?? ""}/sign-in`);
-  await hideNextjsDevOverlay(page);
-  const button = page.getByTestId(`sign-in-${ADMISSIBLE_PRINCIPAL}`);
-  await expect(button).toBeVisible();
-  await button.click();
-  await page.waitForURL("**/today");
-  await expect(visibleCaptureButton(page)).toBeVisible();
+  const diagnostic = process.env.CI === "true" &&
+    (process.env.CI_VISUAL_DIAGNOSTIC === "1" || process.env.CI_BROWSER_DIAGNOSTIC === "1" || process.env.CI_RESPONSIVE_DIAGNOSTIC === "1");
+  let stage: "goto" | "signinbutton" | "click" | "todayURL" | "launcher" | undefined = "goto";
+  try {
+    await page.goto(`${origin ?? ""}/sign-in`);
+    stage = undefined; // No admitted stage for development-overlay preparation.
+    await hideNextjsDevOverlay(page);
+    stage = "signinbutton";
+    const button = page.getByTestId(`sign-in-${ADMISSIBLE_PRINCIPAL}`);
+    await expect(button).toBeVisible();
+    stage = "click";
+    await button.click();
+    stage = "todayURL";
+    await page.waitForURL("**/today");
+    stage = "launcher";
+    await expect(visibleCaptureButton(page)).toBeVisible();
+    if (diagnostic) {
+      try {
+        const annotations = test.info().annotations;
+        if (!annotations.some((item) => item.type === "my-pa-ci-failed-stage" || item.type === "my-pa-ci-signin-complete")) {
+          annotations.push({ type: "my-pa-ci-signin-complete", description: "complete" });
+        }
+      } catch { /* Diagnostic metadata must not change successful fixture behavior. */ }
+    }
+  } catch (error) {
+    if (diagnostic && stage) {
+      try {
+        const annotations = test.info().annotations;
+        if (!annotations.some((item) => item.type === "my-pa-ci-failed-stage")) {
+          const completion = annotations.findIndex((item) => item.type === "my-pa-ci-signin-complete");
+          const failed = { type: "my-pa-ci-failed-stage", description: stage };
+          if (completion >= 0) annotations[completion] = failed;
+          else annotations.push(failed);
+        }
+      } catch { /* Never replace the original failure with a diagnostic error. */ }
+    }
+    throw error;
+  }
 }
 
 /** Compatibility helper: Capture now opens through the visible Search or create launcher. */

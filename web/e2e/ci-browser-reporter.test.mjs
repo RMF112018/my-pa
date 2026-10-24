@@ -52,11 +52,10 @@ test("uses only admitted structured error locations for assertion fallback", () 
   }
 });
 
-test("reports only fixed admitted sign-in stages and failure statuses", () => {
-  for (const [line, stage] of [[54, "navigation"], [55, "dev-overlay"], [57, "button-visible"],
-    [58, "button-click"], [59, "today-navigation"], [60, "launcher-visible"]]) {
+test("reports only fixed admitted runtime sign-in stages and failure statuses", () => {
+  for (const stage of ["goto", "signinbutton", "click", "todayURL", "launcher"]) {
     const output = capture(() => new BrowserCiReporter().onTestEnd(caseFor(), {
-      status: "timedOut", steps: [], errors: [{ location: { file: file("fixtures.ts"), line } }],
+      status: "timedOut", steps: [], annotations: [{ type: "my-pa-ci-failed-stage", description: stage }],
     }));
     assert.match(output, new RegExp(`category=setup; stage=${stage}; status=timedOut\\n$`));
   }
@@ -65,6 +64,24 @@ test("reports only fixed admitted sign-in stages and failure statuses", () => {
     assert.match(output, /category=other\n$/);
     assert.equal(output.includes("stage="), false);
   }
+});
+
+test("completion means a later failure, and unknown metadata never becomes output", () => {
+  const completed = capture(() => new BrowserCiReporter().onTestEnd(caseFor(), {
+    status: "failed", steps: [], annotations: [{ type: "my-pa-ci-signin-complete", description: "complete" }],
+  }));
+  assert.match(completed, /category=after-sign-in\n$/);
+  assert.equal(completed.includes("stage="), false);
+  for (const annotation of [{ type: "unknown", description: "click" },
+    { type: "my-pa-ci-failed-stage", description: "click\n::error::SECRET" },
+    { type: "my-pa-ci-signin-complete", description: "SECRET" }]) {
+    const output = capture(() => new BrowserCiReporter().onTestEnd(caseFor(), { status: "failed", steps: [], annotations: [annotation] }));
+    assert.match(output, /category=other\n$/);
+    assert.equal(output.includes("SECRET"), false);
+  }
+  assert.equal(capture(() => new BrowserCiReporter().onTestEnd(caseFor(), {
+    status: "passed", steps: [], annotations: [{ type: "my-pa-ci-signin-complete", description: "complete" }],
+  })), "");
 });
 
 test("unknown path/project/declaration/status fail closed without printing values", () => {

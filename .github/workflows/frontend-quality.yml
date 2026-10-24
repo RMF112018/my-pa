@@ -733,7 +733,7 @@ jobs:
       - name: Verify responsive diagnostics use fixed annotations
         run: |
           set -euo pipefail
-          node --test e2e/ci-responsive-reporter.test.mjs
+          node --test e2e/ci-responsive-reporter.test.mjs e2e/ci-signin-stage.test.mjs e2e/ci-constraint-route-stage.test.mjs
           bash e2e/ci-responsive-stage.test.sh
       - run: npx playwright install chromium
       - name: Verify the responsive selection is what this lane claims
@@ -1061,7 +1061,7 @@ jobs:
           set -euo pipefail
           python_bin="$(command -v python)"
           test -x "${python_bin}"
-          node --test e2e/ci-visual-reporter.test.mjs
+          node --test e2e/ci-visual-reporter.test.mjs e2e/ci-signin-stage.test.mjs
           # Committed baselines are Darwin-only. This job must not --update-snapshots.
           # Linux PNG mismatch is expected until WP28 commits linux baselines.
           MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/visual.spec.ts --project=desktop

@@ -5,8 +5,8 @@ through `ApplicationService.invoke` with the Program read pool composed as the
 gateway composes it. The resolver rows (worker M2, WP-04A):
 
 * another Principal's Program answers exactly as an absent one;
-* a remote reader without a grant on `programs.members.resolve` is
-  `unsupported` (the S3 grant re-check, R3-F13);
+* a remote reader without a grant on `programs.members.resolve` (or, worker
+  M5, on `reports.manifest`) is `unsupported` (the S3 grant re-check, R3-F13);
 * a remote reader that does not see both the `entity` and the `project`
   family sees no Program -- `not_found`, never a partial answer;
 * with either switch off, every S4 capability answers `unsupported`;
@@ -33,12 +33,26 @@ The overview rows (worker M4, section 7.2):
   and the legacy-link fields without `issue`;
 * an overview statement cancelled by its timeout answers `unavailable`.
 
-The manifest rows of the same section 10 entry are added by their package
-(worker M5). Every identity is synthetic.
+The manifest rows (worker M5, sections 6.2 and 7.4):
+
+* a commit-time recompute runs with the committing caller's visibility, so
+  its outcome is exactly that caller's own `programs.overview`; a caller
+  `programs.overview` does not admit records `not_attempted`, whatever the
+  Program ids name;
+* `reports.manifest` releases a manifest whose Program state is not
+  `not_attempted` only to a reader holding a `programs.overview` grant for
+  `program_reporting_read`, the `entity` and `project` families, and every
+  family the server state was computed with -- otherwise
+  `restricted_evidence`, with neither the text nor any digest of it;
+* `families_seen` names only the overview's 5 families.
+
+Every identity is synthetic.
 """
 
 from __future__ import annotations
 
+import json
+import re
 import threading
 from collections.abc import Iterator
 from datetime import UTC, date, datetime
@@ -66,6 +80,8 @@ from my_pa.application.commands import (
 )
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.intelligence.catalog import IntelligenceStage
+from my_pa.domain.intelligence.source_manifest import server_state
 from my_pa.domain.program.vocabulary import PROGRAM_REPORTING_CAPABILITIES
 
 pytestmark = pytest.mark.database
@@ -129,6 +145,7 @@ def test_a_remote_read_without_its_grant_is_unsupported(runtime: S4Runtime) -> N
     program = _program_with_member(runtime)
     _commitment_v2_grant_cases(runtime)
     _overview_grant_cases(runtime, program)
+    _manifest_grant_cases(runtime)
     # Every family read, but no grant on `programs.members.resolve` itself.
     families_only = grant(*ROOT_READS)
     assert _error(runtime, _resolve(program), grants=families_only) == ("unsupported", [])
@@ -207,6 +224,22 @@ def _commitment_v2_grant_cases(runtime: S4Runtime) -> None:
         assert _error(runtime, command, grants=misgranted) == ("unsupported", []), name
         # With the grant, the same caller is answered.
         assert runtime.ok(command, grants=grant(name, *V2_FAMILY_READS)), name
+
+
+def _manifest_grant_cases(runtime: S4Runtime) -> None:
+    """`reports.manifest` re-checks its own grant (section 6.1, R3-F13)."""
+    cycle = runtime.cycle("isolation-manifest-grant")
+    collector = runtime.commit_report(
+        runtime.report(cycle, IntelligenceStage.COLLECTOR, "isolation-manifest-grant")
+    )
+    command = ReadReportManifest(report_id=collector["report_id"])
+    # `reports.read` and the Program reads, but no grant on `reports.manifest`.
+    families_only = grant("reports.read", "programs.overview", *ROOT_READS)
+    assert _error(runtime, command, grants=families_only) == ("unsupported", [])
+    misgranted = families_only | {(Capability.REPORTS_MANIFEST, Purpose.PROGRAM_REPORTING_READ)}
+    assert _error(runtime, command, grants=misgranted) == ("unsupported", [])
+    granted = runtime.ok(command, grants=grant("reports.manifest"))
+    assert granted["manifest_state"] == "recorded"
 
 
 def _references(
@@ -624,3 +657,284 @@ def test_an_invisible_issue_family_hides_the_lineage_horizon_and_legacy_links(
         # The Constraint denominator stays.
         assert scope["denominator"]["projects_by_constraint_source_state"] is not None
     assert local["lineage_known_at"] not in str(answer)
+
+
+# --- reports.commit and reports.manifest (worker M5, sections 6.2 and 7.4) --------
+
+#: A remote producer's grants: the commit, the overview and its 2 root reads.
+PRODUCER: Final = ("reports.commit", "programs.overview", *ROOT_READS)
+
+
+def _manifest_scene(runtime: S4Runtime) -> tuple[dict[str, str], str, str]:
+    """The overview scene, a cycle and one researcher: `(scene, cycle, researcher)`."""
+    scene = _overview_scene(runtime)
+    cycle = runtime.cycle("isolation-manifest")
+    researcher = runtime.research(cycle, "isolation-manifest")
+    return scene, cycle, researcher
+
+
+def _commit_with(
+    runtime: S4Runtime,
+    cycle: str,
+    researcher: str,
+    key: str,
+    block: dict[str, object],
+    **kwargs: Any,  # noqa: ANN401
+) -> str:
+    """A synthesizer carrying `block`: its `report_id` (committed with `kwargs`' caller)."""
+    written = runtime.commit_report(
+        runtime.report(
+            cycle,
+            IntelligenceStage.SYNTHESIZER,
+            key,
+            dependencies=(researcher,),
+            structured_content=block,
+        ),
+        **kwargs,
+    )
+    return str(written["report_id"])
+
+
+def _section(runtime: S4Runtime, report_id: str) -> dict[str, Any]:
+    """The stored manifest's Program section (read locally)."""
+    program = json.loads(runtime.manifest(report_id)["manifest_canonical"])["program"]
+    assert isinstance(program, dict)
+    return program
+
+
+def _manifest_state(runtime: S4Runtime, report_id: str, *reads: str) -> dict[str, Any]:
+    """`reports.manifest` for a remote reader granted it and `reads`."""
+    return runtime.manifest(report_id, grants=grant("reports.manifest", *reads))
+
+
+def test_a_commit_outcome_reveals_nothing_beyond_the_callers_own_overview(
+    runtime: S4Runtime,
+) -> None:
+    scene, cycle, researcher = _manifest_scene(runtime)
+    program = scene["program"]
+    # A remote producer missing the commitment family: its own overview ...
+    without_commitments = grant(*PRODUCER, "issues.read", "constraints.read")
+    own = runtime.ok(_overview(program), grants=without_commitments)
+    report = _commit_with(
+        runtime,
+        cycle,
+        researcher,
+        "isolation-own-view",
+        runtime.program_reference(own, program),
+        grants=without_commitments,
+    )
+    section = _section(runtime, report)
+    # ... is exactly what the commit records: verified against its own view,
+    # Commitment totals `restricted`, never the full (local) totals.
+    assert section["verification_state"] == "verified_at_commit"
+    assert section["server"] == server_state(own) | {
+        "source_cutoff_at": section["server"]["source_cutoff_at"]
+    }
+    for row in section["server"]["totals"]:
+        if row["metric_id"].startswith("commitment_"):
+            assert (row["value"], row["value_state"], row["reasons"]) == (None, "restricted", [])
+    assert "commitment" not in section["families_seen"]
+    local = runtime.overview(program)
+    assert section["server"]["overview_sha256"] != local["overview_sha256"]
+    # A producer `programs.overview` does not admit -- no grant on it, or no
+    # `entity` family -- records `not_attempted`, whatever the ids name: an own
+    # Program, an absent id, or an Entity that is no Program.
+    _project, project_entity = runtime.seeds.project("Isolation not a program")
+    claim = {"overview_sha256": "a" * 64, "source_cutoff_at": own["source_cutoff_at"]}
+    for index, grants in enumerate(
+        (
+            grant("reports.commit", *ROOT_READS, *METRIC_FAMILY_READS),
+            grant(
+                "reports.commit", "programs.overview", "continuity.projects", *METRIC_FAMILY_READS
+            ),
+        )
+    ):
+        sections = []
+        for target in (program, ABSENT, project_entity):
+            written = _commit_with(
+                runtime,
+                cycle,
+                researcher,
+                f"isolation-unadmitted-{index}-{target}",
+                runtime.program_reference(claim, target),
+                grants=grants,
+            )
+            found = _section(runtime, written)
+            assert found["verification_state"] == "not_attempted"
+            assert (found["server"], found["families_seen"], found["recompute_failure"]) == (
+                None,
+                None,
+                None,
+            )
+            sections.append(
+                {key: value for key, value in found.items() if key != "program_entity_ids"}
+            )
+        assert sections[0] == sections[1] == sections[2]
+
+
+def test_a_manifest_program_section_needs_every_family_it_was_computed_with(
+    runtime: S4Runtime,
+) -> None:
+    scene, cycle, researcher = _manifest_scene(runtime)
+    program = scene["program"]
+    report = _commit_with(
+        runtime,
+        cycle,
+        researcher,
+        "isolation-families",
+        runtime.program_reference(runtime.overview(program), program),
+    )
+    assert _section(runtime, report)["families_seen"] == [
+        "commitment",
+        "constraint",
+        "entity",
+        "issue",
+        "project",
+    ]
+    reader = ("programs.overview", *ROOT_READS)
+    full = _manifest_state(runtime, report, *reader, *METRIC_FAMILY_READS)
+    assert full["manifest_state"] == "recorded"
+    assert full == runtime.manifest(report)
+    for missing in METRIC_FAMILY_READS:
+        reads = tuple(read for read in METRIC_FAMILY_READS if read != missing)
+        answer = _manifest_state(runtime, report, *reader, *reads)
+        assert answer["manifest_state"] == "restricted_evidence", missing
+    # A producer that saw fewer families binds fewer: such a reader then sees it.
+    narrow = grant(*PRODUCER, "issues.read", "constraints.read")
+    own = runtime.ok(_overview(program), grants=narrow)
+    narrower = _commit_with(
+        runtime,
+        cycle,
+        researcher,
+        "isolation-narrow",
+        runtime.program_reference(own, program),
+        grants=narrow,
+    )
+    answer = _manifest_state(runtime, narrower, *reader, "issues.read", "constraints.read")
+    assert answer["manifest_state"] == "recorded"
+
+
+def test_a_manifest_program_section_needs_the_program_grant(runtime: S4Runtime) -> None:
+    scene, cycle, researcher = _manifest_scene(runtime)
+    program = scene["program"]
+    report = _commit_with(
+        runtime,
+        cycle,
+        researcher,
+        "isolation-grant",
+        runtime.program_reference(runtime.overview(program), program),
+    )
+    families = (*ROOT_READS, *METRIC_FAMILY_READS)
+    # Every family, but no `programs.overview` grant: withheld.
+    assert _manifest_state(runtime, report, *families)["manifest_state"] == "restricted_evidence"
+    # A grant on it for a purpose it does not permit admits nothing.
+    misgranted = grant("reports.manifest", *families) | {
+        (Capability.PROGRAMS_OVERVIEW, Purpose.REPORT_READ)
+    }
+    assert runtime.manifest(report, grants=misgranted)["manifest_state"] == "restricted_evidence"
+    # Nor does the resolver's grant.
+    resolver = _manifest_state(runtime, report, "programs.members.resolve", *families)
+    assert resolver["manifest_state"] == "restricted_evidence"
+    granted = _manifest_state(runtime, report, "programs.overview", *families)
+    assert granted["manifest_state"] == "recorded"
+
+
+def test_a_failed_recompute_manifest_needs_the_program_grant_and_entity_family(
+    runtime: S4Runtime,
+) -> None:
+    scene, cycle, researcher = _manifest_scene(runtime)
+    overview = runtime.overview(scene["program"])
+    failed = _commit_with(
+        runtime, cycle, researcher, "isolation-failed", runtime.program_reference(overview, ABSENT)
+    )
+    section = _section(runtime, failed)
+    assert (section["verification_state"], section["recompute_failure"], section["server"]) == (
+        "recompute_failed",
+        "program_not_found",
+        None,
+    )
+    # The failure token would tell whether the id exists and is a Program.
+    for reads in (
+        (*ROOT_READS, *METRIC_FAMILY_READS),
+        ("programs.overview", "continuity.projects", *METRIC_FAMILY_READS),
+        ("programs.overview", "entities.get", *METRIC_FAMILY_READS),
+    ):
+        assert _manifest_state(runtime, failed, *reads)["manifest_state"] == "restricted_evidence"
+    released = _manifest_state(runtime, failed, "programs.overview", *ROOT_READS)
+    assert released["manifest_state"] == "recorded"
+    # A `not_attempted` manifest carries only the producer's claim: ungated.
+    unattempted = _commit_with(
+        runtime,
+        cycle,
+        researcher,
+        "isolation-unattempted",
+        runtime.program_reference(overview, scene["program"]),
+        grants=grant("reports.commit", *ROOT_READS),
+    )
+    assert _section(runtime, unattempted)["verification_state"] == "not_attempted"
+    assert _manifest_state(runtime, unattempted)["manifest_state"] == "recorded"
+    # So is a manifest with no Program section at all.
+    assert _section_or_none(runtime, researcher) is None
+    assert _manifest_state(runtime, researcher)["manifest_state"] == "recorded"
+
+
+def _section_or_none(runtime: S4Runtime, report_id: str) -> dict[str, Any] | None:
+    program = json.loads(runtime.manifest(report_id)["manifest_canonical"])["program"]
+    return program if isinstance(program, dict) else None
+
+
+def test_a_restricted_manifest_returns_no_digest(runtime: S4Runtime) -> None:
+    scene, cycle, researcher = _manifest_scene(runtime)
+    program = scene["program"]
+    report = _commit_with(
+        runtime,
+        cycle,
+        researcher,
+        "isolation-digest",
+        runtime.program_reference(runtime.overview(program), program),
+    )
+    stored = runtime.stored_manifest(report)
+    assert stored is not None
+    answer = _manifest_state(runtime, report, *ROOT_READS)
+    assert answer == {
+        "report_id": report,
+        "manifest_state": "restricted_evidence",
+        "manifest_schema_version": 1,
+        "manifest_sha256": None,
+        "manifest_canonical": None,
+    }
+    # No digest of the withheld text, of any kind, is anywhere in the answer.
+    rendered = json.dumps(answer)
+    for digest in (
+        stored["manifest_sha256"],
+        stored["structured_content_sha256"],
+        stored["program_overview_sha256"],
+    ):
+        assert digest not in rendered
+    assert re.search(r"[0-9a-f]{64}", rendered) is None
+
+
+def test_families_seen_names_only_the_overview_families(runtime: S4Runtime) -> None:
+    scene, cycle, researcher = _manifest_scene(runtime)
+    program = scene["program"]
+    local = _commit_with(
+        runtime,
+        cycle,
+        researcher,
+        "isolation-seen-local",
+        runtime.program_reference(runtime.overview(program), program),
+    )
+    every = ["commitment", "constraint", "entity", "issue", "project"]
+    assert _section(runtime, local)["families_seen"] == every
+    # A remote producer that also sees context Situations: still never `situation`.
+    grants = grant(*PRODUCER, *METRIC_FAMILY_READS, "continuity.situations")
+    own = runtime.ok(_overview(program), grants=grants)
+    remote = _commit_with(
+        runtime,
+        cycle,
+        researcher,
+        "isolation-seen-remote",
+        runtime.program_reference(own, program),
+        grants=grants,
+    )
+    assert _section(runtime, remote)["families_seen"] == every

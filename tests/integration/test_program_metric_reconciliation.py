@@ -32,7 +32,7 @@ import pytest
 from sqlalchemy import text
 
 from my_pa.application.commands import ListCommitmentsV2, ReadPortfolioConstraintOverview
-from my_pa.domain.project_controls.business_time import due_soon_through
+from my_pa.domain.project_controls.business_time import due_soon_through, project_today
 from my_pa.domain.project_controls.constraint import ConstraintLifecycleState
 from my_pa.domain.situation.continuity import CommitmentState
 from tests.database.lineage_issue_harness import OTHER_PRINCIPAL, PRINCIPAL
@@ -387,6 +387,9 @@ def test_every_total_equals_a_direct_distinct_count(runtime: S4Runtime) -> None:
     runtime.linked_issue("direct-other", other_members[0].project_id, members[0].project_id)
     answer = runtime.overview(program, other)
     cutoff = datetime.fromisoformat(answer["source_cutoff_at"])
+    # The direct counts classify on the day of the overview's own instant, so a
+    # midnight crossing after seeding cannot flake them.
+    today = project_today(cutoff, "UTC")
     scopes = [(scope["project_ids"], scope["totals"]) for scope in answer["programs"]]
     scopes.append((answer["portfolio"]["project_ids"], answer["portfolio"]["totals"]))
     assert len(answer["portfolio"]["project_ids"]) == 4
@@ -725,31 +728,67 @@ def _two_calendars(runtime: S4Runtime, name: str) -> tuple[str, _Project, _Proje
     return program, east, west, west_today
 
 
+def _days_at_the_cutoff(answer: dict[str, Any]) -> tuple[date, date]:
+    """Each zone's calendar day at the answer's own snapshot instant: `(east, west)`.
+
+    The expectations derive from the instant the overview read, never from a
+    clock read before seeding, so a midnight crossing in either zone between
+    the seeding and the snapshot cannot flake the test.
+    """
+    cutoff = datetime.fromisoformat(answer["source_cutoff_at"])
+    east, west = project_today(cutoff, EAST), project_today(cutoff, WEST)
+    assert east > west
+    return east, west
+
+
+def _due_soon(today: date, due: date) -> int:
+    return int(today <= due <= due_soon_through(today))
+
+
 def test_constraint_due_soon_uses_each_projects_own_calendar(runtime: S4Runtime) -> None:
-    program, east, west, west_today = _two_calendars(runtime, "Due soon")
+    program, east, west, due = _two_calendars(runtime, "Due soon")
     answer = runtime.overview(program)
+    east_today, west_today = _days_at_the_cutoff(answer)
     west_entry = _project(answer, west.project_id)
     east_entry = _project(answer, east.project_id)
     assert west_entry["calendar"] == {
         "timezone_name": WEST,
         "project_today": west_today.isoformat(),
     }
-    assert east_entry["calendar"]["timezone_name"] == EAST
-    assert east_entry["calendar"]["project_today"] > west_today.isoformat()
-    assert _value(west_entry["metrics"], "constraint_due_soon") == 1
-    assert _value(east_entry["metrics"], "constraint_due_soon") == 0
-    assert _value(answer["programs"][0]["totals"], "constraint_due_soon") == 1
+    assert east_entry["calendar"] == {
+        "timezone_name": EAST,
+        "project_today": east_today.isoformat(),
+    }
+    expected = {"west": _due_soon(west_today, due), "east": _due_soon(east_today, due)}
+    if west_today == due:
+        # No midnight crossing since seeding: due today in the west, already
+        # past in the east -- one due date, 2 calendars, 2 answers.
+        assert expected == {"west": 1, "east": 0}
+    assert _value(west_entry["metrics"], "constraint_due_soon") == expected["west"]
+    assert _value(east_entry["metrics"], "constraint_due_soon") == expected["east"]
+    assert _value(answer["programs"][0]["totals"], "constraint_due_soon") == sum(expected.values())
 
 
 def test_constraint_overdue_uses_each_projects_own_calendar(runtime: S4Runtime) -> None:
-    program, east, west, _west_today = _two_calendars(runtime, "Overdue")
+    program, east, west, due = _two_calendars(runtime, "Overdue")
     answer = runtime.overview(program)
-    assert _value(_project(answer, east.project_id)["metrics"], "constraint_overdue") == 1
-    assert _value(_project(answer, west.project_id)["metrics"], "constraint_overdue") == 0
+    east_today, west_today = _days_at_the_cutoff(answer)
+    expected = {"west": int(due < west_today), "east": int(due < east_today)}
+    if west_today == due:
+        # No midnight crossing since seeding: overdue in the east only.
+        assert expected == {"west": 0, "east": 1}
+    assert (
+        _value(_project(answer, east.project_id)["metrics"], "constraint_overdue")
+        == expected["east"]
+    )
+    assert (
+        _value(_project(answer, west.project_id)["metrics"], "constraint_overdue")
+        == expected["west"]
+    )
     total = _metric(answer["programs"][0]["totals"], "constraint_overdue")
     assert (total["value_state"], total["value"], total["nonadditive_across_projects"]) == (
         "reported",
-        1,
+        sum(expected.values()),
         False,
     )
 

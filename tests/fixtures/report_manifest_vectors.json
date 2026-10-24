@@ -1,0 +1,201 @@
+{
+  "_comment": "Golden vectors of the record lineage S4 report-manifest encodings (S4 contract sections 5.2 and 5.3). Generated once from the canonical encoder and reviewed by hand: sorted keys, compact separators, every non-printable or non-ASCII character escaped (DEL as \\u007f), instants as %Y-%m-%dT%H:%M:%S.%fZ. Every digest is SHA-256 over the domain separator and the expected text. Unit vectors use integers, strings and already-normal floats only (section 5.2, R4-F12). All identifiers are synthetic.",
+  "structured_content": [
+    {
+      "name": "integers_strings_booleans_and_null",
+      "input": {
+        "b": [
+          true,
+          null,
+          "x"
+        ],
+        "a": 1
+      },
+      "expected_canonical": "{\"a\":1,\"b\":[true,null,\"x\"]}",
+      "expected_sha256": "8123bbe4615974175c864d49c949220a91e970dec90ac0799bc9c8f517b0a1a9"
+    },
+    {
+      "name": "an_already_normal_float",
+      "input": {
+        "ratio": 0.5,
+        "count": 100,
+        "nested": {
+          "z": -2.25,
+          "a": 1e-07
+        }
+      },
+      "expected_canonical": "{\"count\":100,\"nested\":{\"a\":1e-07,\"z\":-2.25},\"ratio\":0.5}",
+      "expected_sha256": "6c3f116125036aba4dca18c0276296ff47e2fbadb292cd0033cc361ca5dbb0d9"
+    },
+    {
+      "name": "a_non_ascii_string",
+      "input": {
+        "title": "Caf\u00e9 \u2013 \u0394 \ud83d\ude00"
+      },
+      "expected_canonical": "{\"title\":\"Caf\\u00e9 \\u2013 \\u0394 \\ud83d\\ude00\"}",
+      "expected_sha256": "5c865ca451dbdaaed848ec4d0e68d285fadc74f33ae42a3274414f89e4cc3876"
+    },
+    {
+      "name": "control_characters_and_del",
+      "input": {
+        "ref": "a\u0001b\u007fc\nd"
+      },
+      "expected_canonical": "{\"ref\":\"a\\u0001b\\u007fc\\nd\"}",
+      "expected_sha256": "b0d1d1494da3a860b8417906155e8d64800e57e5f26025e1f77ee38612ccadda"
+    }
+  ],
+  "manifest": [
+    {
+      "name": "a_collector_candidate_with_provenance",
+      "artifact": {
+        "artifact_id": "rpt_vectorcollector01",
+        "stage": "collector",
+        "artifact_kind": "collector_candidates",
+        "focus_area_id": "risk_deadline_exception",
+        "source_lane": null,
+        "title": "Collector \u00e9",
+        "committed_at": "2026-10-24T06:30:00.000000+00:00",
+        "provenance": [
+          {
+            "source_system": "outlook",
+            "source_ref": "msg-1\u007fdel",
+            "relation": "derived_from",
+            "source_url": "https://example.invalid/a",
+            "observed_at": "2026-10-23T23:59:59.999999+00:00",
+            "retrieved_at": null,
+            "evidence_subject_id": null
+          },
+          {
+            "source_system": "sharepoint",
+            "source_ref": "doc \u2013 2",
+            "relation": "context",
+            "source_url": null,
+            "observed_at": null,
+            "retrieved_at": "2026-10-24T01:00:00.5+00:00",
+            "evidence_subject_id": "ent_vectorsubject0001"
+          }
+        ]
+      },
+      "stored_structured_content": null,
+      "dependencies": [],
+      "program": null,
+      "expected_canonical": "{\"candidate_status\":\"unaccepted_candidate\",\"dependencies\":[],\"manifest_schema_version\":1,\"program\":null,\"provenance\":[{\"certification\":\"uncertified_reference\",\"evidence_subject_id\":null,\"observed_at\":\"2026-10-23T23:59:59.999999Z\",\"position\":1,\"relation\":\"derived_from\",\"retrieved_at\":null,\"source_ref\":\"msg-1\\u007fdel\",\"source_system\":\"outlook\",\"source_url\":\"https://example.invalid/a\"},{\"certification\":\"uncertified_reference\",\"evidence_subject_id\":\"ent_vectorsubject0001\",\"observed_at\":null,\"position\":2,\"relation\":\"context\",\"retrieved_at\":\"2026-10-24T01:00:00.500000Z\",\"source_ref\":\"doc \\u2013 2\",\"source_system\":\"sharepoint\",\"source_url\":null}],\"report\":{\"artifact_kind\":\"collector_candidates\",\"artifact_state_at_commit\":\"final\",\"committed_at\":\"2026-10-24T06:30:00.000000Z\",\"content_bytes\":4,\"content_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"cycle_run_id\":\"micr_vectorcycle0001\",\"focus_area_id\":\"risk_deadline_exception\",\"producer_completeness\":null,\"producer_prompt_version\":null,\"producer_run_id\":\"rrun_vectorrun000001\",\"report_date\":\"2026-10-24\",\"report_id\":\"rpt_vectorcollector01\",\"schema_version\":\"1\",\"source_lane\":null,\"stage\":\"collector\",\"supersedes_report_id\":null,\"title_sha256\":\"4d4b9482e4333ad2930cf6db34ab61a4e2966285cd5a58d2f7d4556aa4b229e2\",\"version\":1},\"structured_content\":{\"present\":false,\"sha256\":null}}",
+      "expected_sha256": "09997a89d74c68010f1e3e7306ce95684a6b3165bea77a93bd25d419075cba77"
+    },
+    {
+      "name": "a_synthesizer_with_a_recorded_and_a_legacy_dependency_and_a_changed_program_reference",
+      "artifact": {
+        "artifact_id": "rpt_vectorsynthesis1",
+        "stage": "synthesizer",
+        "artifact_kind": "synthesis_package",
+        "focus_area_id": "risk_deadline_exception",
+        "source_lane": null,
+        "title": "Synthesis",
+        "committed_at": "2026-10-24T06:30:00.123456+00:00",
+        "version": 2,
+        "supersedes_artifact_id": "rpt_vectorsynthesis0",
+        "completeness": "complete",
+        "producer_prompt_version": "p-1",
+        "artifact_state": "partial",
+        "dependencies": [
+          {
+            "upstream_artifact_id": "rpt_vectorresearchb1",
+            "dependency_role": "researcher:onedrive"
+          },
+          {
+            "upstream_artifact_id": "rpt_vectorresearcha1",
+            "dependency_role": "researcher:sharepoint"
+          }
+        ]
+      },
+      "stored_structured_content": {
+        "metric": 3,
+        "program_overview_ref": {
+          "block_schema_version": 1,
+          "program_entity_ids": [
+            "ent_vectorprogram0001"
+          ],
+          "overview_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "source_cutoff_at": "2026-10-24T06:29:59.000001Z"
+        }
+      },
+      "dependencies": [
+        {
+          "report_id": "rpt_vectorresearchb1",
+          "dependency_role": "researcher:onedrive",
+          "required": true,
+          "content_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "structured_content_sha256": null,
+          "manifest_sha256": null
+        },
+        {
+          "report_id": "rpt_vectorresearcha1",
+          "dependency_role": "researcher:sharepoint",
+          "required": true,
+          "content_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "structured_content_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      ],
+      "program": {
+        "block_schema_version": 1,
+        "program_entity_ids": [
+          "ent_vectorprogram0001"
+        ],
+        "claimed_overview_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "claimed_source_cutoff_at": "2026-10-24T06:29:59.000001Z",
+        "verification_state": "changed_since_read",
+        "recompute_failure": null,
+        "families_seen": [
+          "entity",
+          "issue",
+          "project"
+        ],
+        "server": {
+          "overview_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "source_cutoff_at": "2026-10-24T06:30:01.250000Z",
+          "lineage_known_at": null,
+          "metric_schema_version": 1,
+          "calculation_version": "program-overview-v1",
+          "complete_state": "restricted_evidence",
+          "qualifiers": [
+            "restricted_evidence"
+          ],
+          "membership": [
+            {
+              "program_entity_id": "ent_vectorprogram0001",
+              "resolved_program_entity_id": "ent_vectorprogram0001",
+              "membership_state": "complete",
+              "project_ids": [
+                "prj_vectorproject001"
+              ]
+            }
+          ],
+          "portfolio_project_ids": [
+            "prj_vectorproject001"
+          ],
+          "totals": [
+            {
+              "scope": "ent_vectorprogram0001",
+              "metric_id": "commitment_open_accepted",
+              "value": null,
+              "value_state": "restricted",
+              "reasons": []
+            },
+            {
+              "scope": "portfolio",
+              "metric_id": "constraint_open",
+              "value": null,
+              "value_state": "not_reportable",
+              "reasons": [
+                "never_synced"
+              ]
+            }
+          ]
+        }
+      },
+      "expected_canonical": "{\"candidate_status\":\"not_a_candidate\",\"dependencies\":[{\"content_sha256\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"dependency_role\":\"researcher:sharepoint\",\"manifest_sha256\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"manifest_state\":\"recorded\",\"report_id\":\"rpt_vectorresearcha1\",\"required\":true,\"structured_content_sha256\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\"},{\"content_sha256\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"dependency_role\":\"researcher:onedrive\",\"manifest_sha256\":null,\"manifest_state\":\"manifest_unavailable_legacy\",\"report_id\":\"rpt_vectorresearchb1\",\"required\":true,\"structured_content_sha256\":null}],\"manifest_schema_version\":1,\"program\":{\"block_schema_version\":1,\"claimed_overview_sha256\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"claimed_source_cutoff_at\":\"2026-10-24T06:29:59.000001Z\",\"families_seen\":[\"entity\",\"issue\",\"project\"],\"program_entity_ids\":[\"ent_vectorprogram0001\"],\"recompute_failure\":null,\"server\":{\"calculation_version\":\"program-overview-v1\",\"complete_state\":\"restricted_evidence\",\"lineage_known_at\":null,\"membership\":[{\"membership_state\":\"complete\",\"program_entity_id\":\"ent_vectorprogram0001\",\"project_ids\":[\"prj_vectorproject001\"],\"resolved_program_entity_id\":\"ent_vectorprogram0001\"}],\"metric_schema_version\":1,\"overview_sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"portfolio_project_ids\":[\"prj_vectorproject001\"],\"qualifiers\":[\"restricted_evidence\"],\"source_cutoff_at\":\"2026-10-24T06:30:01.250000Z\",\"totals\":[{\"metric_id\":\"commitment_open_accepted\",\"reasons\":[],\"scope\":\"ent_vectorprogram0001\",\"value\":null,\"value_state\":\"restricted\"},{\"metric_id\":\"constraint_open\",\"reasons\":[\"never_synced\"],\"scope\":\"portfolio\",\"value\":null,\"value_state\":\"not_reportable\"}]},\"verification_state\":\"changed_since_read\"},\"provenance\":[],\"report\":{\"artifact_kind\":\"synthesis_package\",\"artifact_state_at_commit\":\"partial\",\"committed_at\":\"2026-10-24T06:30:00.123456Z\",\"content_bytes\":4,\"content_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"cycle_run_id\":\"micr_vectorcycle0001\",\"focus_area_id\":\"risk_deadline_exception\",\"producer_completeness\":\"complete\",\"producer_prompt_version\":\"p-1\",\"producer_run_id\":\"rrun_vectorrun000001\",\"report_date\":\"2026-10-24\",\"report_id\":\"rpt_vectorsynthesis1\",\"schema_version\":\"1\",\"source_lane\":null,\"stage\":\"synthesizer\",\"supersedes_report_id\":\"rpt_vectorsynthesis0\",\"title_sha256\":\"7de5a138fd9bbeda7a7b4dea75b30584e0cf3f6b3278c2e478f38e1f3fdf723b\",\"version\":2},\"structured_content\":{\"present\":true,\"sha256\":\"728262582e4012faa5669c9e8548e74dcb63cc8bed7f1a2a8c9dd5ebf7dbd4d9\"}}",
+      "expected_sha256": "c14cecb76dd19055c9a14dc89a90586ac5f08e87503cb8440055d8e9e613185f"
+    }
+  ]
+}

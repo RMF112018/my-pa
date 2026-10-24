@@ -15,8 +15,10 @@ repeatable-read snapshot. Worker M4's rows drive real `programs.overview`
 requests through the gateway's own pools: 5 at once all complete without a
 stall (each holding its work connection while it takes its Program one), and
 10 at once queue on the **work** pool -- 5 run, 5 wait for a work connection,
-never for a Program one -- and all complete. The commit-driven row runs once
-the commit recompute (worker M5) exists.
+never for a Program one -- and all complete. Worker M5's row drives 5 concurrent
+`reports.commit` requests carrying a Program reference block: each recompute
+holds its request's work connection and draws only one Program connection,
+and all 5 complete `verified_at_commit`.
 
 The barrier makes the overlap certain rather than hoped for. Every test runs
 against a disposable database; everything in it is synthetic.
@@ -36,7 +38,12 @@ from sqlalchemy import event, text
 from sqlalchemy.exc import DBAPIError
 from tests.database.lineage_s4_harness import T0, ProgramSeeds
 
-from my_pa.application.commands import ReadProgramOverview
+from my_pa.application.commands import (
+    BeginIntelligenceCycle,
+    Command,
+    CommitIntelligenceArtifact,
+    ReadProgramOverview,
+)
 from my_pa.bootstrap.gateway import GatewayRuntime, build_gateway_runtime
 from my_pa.bootstrap.settings import Settings
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
@@ -44,6 +51,15 @@ from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.intelligence.catalog import (
+    ARTIFACT_KIND_FOR_STAGE,
+    CYCLE_MORNING_INTELLIGENCE,
+    ArtifactState,
+    FocusAreaId,
+    IntelligenceStage,
+    SourceLaneId,
+)
+from my_pa.domain.program.vocabulary import PROGRAM_REFERENCE_BLOCK_KEY
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence.program_reads import SqlAlchemyProgramReadUnitOfWork
 
@@ -270,3 +286,170 @@ def test_ten_concurrent_overviews_queue_on_the_work_pool_and_complete(
     assert len(held) == 2 * CONCURRENCY
     assert {work for work, _program in held} == {CONCURRENCY}
     assert {program_out for _work, program_out in held} == {CONCURRENCY}
+
+
+# --- reports.commit recomputes through the gateway's pools (worker M5) ----------
+
+
+def _invoke(runtime: GatewayRuntime, command: Command, purpose: Purpose) -> ResponseEnvelope:
+    return runtime.service.invoke(
+        RequestMetadata(
+            request_id=issue_identifier(IdKind.CORRELATION),
+            capability=command.capability,
+            purpose=purpose,
+            principal_id=PRINCIPAL,
+            requested_at=datetime.now(UTC),
+        ),
+        command,
+        principal=Principal(
+            principal_id=PRINCIPAL, kind=PrincipalKind.OPERATOR, authenticated=True
+        ),
+    )
+
+
+def _report(
+    cycle: str,
+    stage: IntelligenceStage,
+    key: str,
+    *,
+    dependencies: tuple[str, ...] = (),
+    structured_content: dict[str, object] | None = None,
+) -> CommitIntelligenceArtifact:
+    return CommitIntelligenceArtifact(
+        cycle_run_id=cycle,
+        stage=stage,
+        artifact_kind=ARTIFACT_KIND_FOR_STAGE[stage],
+        producer_task_id=f"pool-{stage.value}",
+        producer_task_name="Pool report",
+        automation_platform="abacus_chatllm",
+        report_date="2026-10-24",
+        title="Pool report",
+        body_markdown="Synthetic pool report",
+        artifact_state=ArtifactState.PARTIAL,
+        schema_version="1",
+        idempotency_key=f"pool-{key}",
+        focus_area_id=FocusAreaId.PROJECT_PROGRAM_PULSE,
+        source_lane=SourceLaneId.MY_PA if stage is IntelligenceStage.RESEARCHER else None,
+        structured_content=structured_content,
+        dependency_report_ids=dependencies,
+    )
+
+
+def _committed(envelope: ResponseEnvelope) -> str:
+    assert envelope.error is None, envelope.error
+    result = envelope.to_canonical_dict()["result"]
+    return str(result["report_id"] if "report_id" in result else result["cycle_run_id"])
+
+
+def _researcher_in_its_own_cycle(runtime: GatewayRuntime, index: int) -> tuple[str, str]:
+    """A cycle with a collector and a researcher: `(cycle, researcher)`.
+
+    One cycle per concurrent commit, so the 5 synthesizers share no head.
+    """
+    cycle = _committed(
+        _invoke(
+            runtime,
+            BeginIntelligenceCycle(
+                cycle_id=CYCLE_MORNING_INTELLIGENCE,
+                business_date=f"2026-10-{index + 1:02d}",
+                idempotency_key=f"pool-cycle-{index}",
+            ),
+            Purpose.REPORT_AUTHORING,
+        )
+    )
+    collector = _committed(
+        _invoke(
+            runtime,
+            _report(cycle, IntelligenceStage.COLLECTOR, f"collector-{index}"),
+            Purpose.REPORT_AUTHORING,
+        )
+    )
+    researcher = _committed(
+        _invoke(
+            runtime,
+            _report(
+                cycle,
+                IntelligenceStage.RESEARCHER,
+                f"researcher-{index}",
+                dependencies=(collector,),
+            ),
+            Purpose.REPORT_AUTHORING,
+        )
+    )
+    return cycle, researcher
+
+
+def test_a_commit_recompute_draws_only_from_the_program_pool_and_completes_at_five(
+    overview_runtime: GatewayRuntime,
+) -> None:
+    runtime = overview_runtime
+    program = _seeded_program(runtime)
+    overview = _overview(runtime, program, 0).to_canonical_dict()["result"]
+    block = {
+        PROGRAM_REFERENCE_BLOCK_KEY: {
+            "block_schema_version": 1,
+            "program_entity_ids": [program],
+            "overview_sha256": overview["overview_sha256"],
+            "source_cutoff_at": overview["source_cutoff_at"],
+        }
+    }
+    chains = [_researcher_in_its_own_cycle(runtime, index) for index in range(CONCURRENCY)]
+    barrier = threading.Barrier(CONCURRENCY)
+    held: list[tuple[int, int]] = []
+    lock = threading.Lock()
+    assert runtime.program_read_engine is not None
+    program_engine = runtime.program_read_engine
+
+    def after(_connection: object, _cursor: object, statement: str, *_rest: object) -> None:
+        # At its snapshot query every recompute holds its request's work
+        # connection and its one Program connection.
+        if SNAPSHOT_MARK not in statement:
+            return
+        barrier.wait(timeout=BARRIER_TIMEOUT_SECONDS)
+        with lock:
+            held.append(
+                (
+                    int(runtime.work_engine.pool.checkedout()),  # type: ignore[attr-defined]
+                    int(program_engine.pool.checkedout()),  # type: ignore[attr-defined]
+                )
+            )
+        barrier.wait(timeout=BARRIER_TIMEOUT_SECONDS)
+
+    def commit(index: int) -> ResponseEnvelope:
+        cycle, researcher = chains[index]
+        return _invoke(
+            runtime,
+            _report(
+                cycle,
+                IntelligenceStage.SYNTHESIZER,
+                f"synthesizer-{index}",
+                dependencies=(researcher,),
+                structured_content=block,
+            ),
+            Purpose.REPORT_AUTHORING,
+        )
+
+    event.listen(program_engine, "after_cursor_execute", after)
+    started = time.monotonic()
+    try:
+        with ThreadPoolExecutor(max_workers=CONCURRENCY) as pool:
+            envelopes = list(pool.map(commit, range(CONCURRENCY)))
+    finally:
+        event.remove(program_engine, "after_cursor_execute", after)
+    elapsed = time.monotonic() - started
+    report_ids = [_committed(envelope) for envelope in envelopes]
+    # All 5 held the whole work pool and 5 Program connections at once: the
+    # recompute never took a second work connection.
+    assert held == [(CONCURRENCY, CONCURRENCY)] * CONCURRENCY
+    assert elapsed < BARRIER_TIMEOUT_SECONDS / 3, elapsed
+    with runtime.work_engine.connect() as connection:
+        states = connection.execute(
+            text(
+                "SELECT program_verification_state FROM knowledge.intelligence_artifact_manifests "
+                "WHERE artifact_id = ANY(:ids)"
+            ),
+            {"ids": report_ids},
+        ).scalars()
+        assert sorted(states) == ["verified_at_commit"] * CONCURRENCY
+    assert program_engine.pool.checkedout() == 0  # type: ignore[attr-defined]
+    assert runtime.work_engine.pool.checkedout() == 0  # type: ignore[attr-defined]

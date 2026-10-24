@@ -23,7 +23,13 @@ with what the Program reads need:
   `programs.overview` facts (worker M4): Issues linked natively, a legacy
   Issue link and a closed Issue by SQL under `session_replication_role =
   replica` (as only SQL can seed them, S4 section 10), Constraints on a
-  Project's own calendar, sync targets with a last run in any persisted state.
+  Project's own calendar, sync targets with a last run in any persisted state;
+* `S4Runtime.cycle` / `report` / `commit_report` / `research` / `manifest` /
+  `stored_manifest` and `program_reference` -- the Intelligence pipeline and
+  its report manifests (worker M5, section 7.4): a cycle, artifacts of every
+  stage committed through `reports.commit`, the `reports.manifest` answer and
+  the stored row, and the section 5.4 Program reference block of an overview
+  answer.
 
 Every identity here is synthetic.
 """
@@ -39,19 +45,31 @@ from sqlalchemy import Engine, text
 
 from my_pa.application.commands import (
     AddIssueProjectLink,
+    BeginIntelligenceCycle,
     CloseCommitment,
+    CommitIntelligenceArtifact,
     CreateCommitment,
     CreateSituation,
     CreateTask,
     ReadCommitment,
     ReadIssue,
     ReadProgramOverview,
+    ReadReportManifest,
     ResolveProgramMembers,
     UpdateIssue,
 )
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.ports import UnitOfWork
 from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.intelligence.catalog import (
+    ARTIFACT_KIND_FOR_STAGE,
+    CYCLE_MORNING_INTELLIGENCE,
+    ArtifactState,
+    FocusAreaId,
+    IntelligenceStage,
+    SourceLaneId,
+)
+from my_pa.domain.program.vocabulary import PROGRAM_REFERENCE_BLOCK_KEY
 from my_pa.domain.project_controls.category import ConstraintCategory, ConstraintCategoryState
 from my_pa.domain.project_controls.constraint import (
     ConstraintLifecycleState,
@@ -84,6 +102,7 @@ from tests.database.lineage_s3_read_harness import S3ReadRuntime
 from tests.database.test_commitment_entity_counterparty import seed_counterparty_entity
 
 __all__ = [
+    "FOCUS",
     "PROGRAM_STATEMENT_TIMEOUT_MS",
     "T0",
     "ProgramSeeds",
@@ -97,6 +116,10 @@ PROGRAM_STATEMENT_TIMEOUT_MS: Final = 2000
 PROGRAM_POOL_TIMEOUT_SECONDS: Final = 1
 #: A fixed instant well before any snapshot a test takes.
 T0: Final = datetime(2026, 1, 1, tzinfo=UTC)
+
+#: The focus area and source lane of every S4 report test (synthetic).
+FOCUS: Final = FocusAreaId.PROJECT_PROGRAM_PULSE
+LANE: Final = SourceLaneId.MY_PA
 
 #: The tables a Program membership read reads (and must never write).
 _MEMBERSHIP_TABLES: Final = (
@@ -307,6 +330,127 @@ class S4Runtime(S3ReadRuntime):
             surface=GATEWAY,
             principal_id=principal_id,
         )
+
+    # --- the Intelligence pipeline and its manifests (worker M5, section 7.4) ---
+
+    def cycle(self, key: str, *, principal_id: str = PRINCIPAL) -> str:
+        """`reports.begin_cycle` for a synthetic morning cycle: its `cycle_run_id`."""
+        written = self.ok(
+            BeginIntelligenceCycle(
+                cycle_id=CYCLE_MORNING_INTELLIGENCE,
+                business_date="2026-10-24",
+                idempotency_key=f"s4-cycle-{key}",
+            ),
+            principal_id=principal_id,
+        )
+        return str(written["cycle_run_id"])
+
+    @staticmethod
+    def report(
+        cycle_run_id: str,
+        stage: IntelligenceStage,
+        key: str,
+        *,
+        dependencies: tuple[str, ...] = (),
+        structured_content: dict[str, object] | None = None,
+        provenance: tuple[dict[str, object], ...] = (),
+        body: str = "Synthetic s4 report body",
+        title: str = "Synthetic s4 report",
+        supersedes: str | None = None,
+        automation_run_id: str | None = None,
+        artifact_state: ArtifactState = ArtifactState.PARTIAL,
+    ) -> CommitIntelligenceArtifact:
+        """A `reports.commit` request of `stage` (focus `FOCUS`; a researcher on `LANE`)."""
+        return CommitIntelligenceArtifact(
+            cycle_run_id=cycle_run_id,
+            stage=stage,
+            artifact_kind=ARTIFACT_KIND_FOR_STAGE[stage],
+            producer_task_id=f"s4-{stage.value}",
+            producer_task_name=title,
+            automation_platform="abacus_chatllm",
+            report_date="2026-10-24",
+            title=title,
+            body_markdown=body,
+            artifact_state=artifact_state,
+            schema_version="1",
+            idempotency_key=f"s4-report-{key}",
+            focus_area_id=None if stage is IntelligenceStage.MORNING_BRIEF else FOCUS,
+            source_lane=LANE if stage is IntelligenceStage.RESEARCHER else None,
+            automation_run_id=automation_run_id,
+            structured_content=structured_content,
+            dependency_report_ids=dependencies,
+            provenance=provenance,
+            supersedes_artifact_id=supersedes,
+        )
+
+    def commit_report(self, command: CommitIntelligenceArtifact, **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
+        """`reports.commit`, which must succeed: the commit answer."""
+        return self.ok(command, **kwargs)
+
+    def research(self, cycle_run_id: str, key: str, *, principal_id: str = PRINCIPAL) -> str:
+        """A collector and one researcher over it: the researcher's `report_id`."""
+        collector = self.ok(
+            self.report(cycle_run_id, IntelligenceStage.COLLECTOR, f"{key}-collector"),
+            principal_id=principal_id,
+        )
+        researcher = self.ok(
+            self.report(
+                cycle_run_id,
+                IntelligenceStage.RESEARCHER,
+                f"{key}-researcher",
+                dependencies=(str(collector["report_id"]),),
+            ),
+            principal_id=principal_id,
+        )
+        return str(researcher["report_id"])
+
+    def manifest(self, report_id: str, **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
+        """`reports.manifest`, which must succeed."""
+        return self.ok(ReadReportManifest(report_id=report_id), **kwargs)
+
+    def stored_manifest(self, report_id: str) -> dict[str, Any] | None:
+        """The stored manifest row of `report_id`, by SQL (`None`: no row)."""
+        with self.engine.connect() as connection:
+            row = (
+                connection.execute(
+                    text(
+                        "SELECT * FROM knowledge.intelligence_artifact_manifests "
+                        "WHERE artifact_id = :artifact_id"
+                    ),
+                    {"artifact_id": report_id},
+                )
+                .mappings()
+                .first()
+            )
+        return None if row is None else dict(row)
+
+    def make_legacy(self, report_id: str) -> None:
+        """Remove `report_id`'s manifest, as an artifact committed before the S4 revision has none.
+
+        Under `session_replication_role = replica` (synthetic database only):
+        the append-only trigger does not fire there, and nothing else is touched.
+        """
+        with self.engine.begin() as connection:
+            connection.execute(text("SET LOCAL session_replication_role = replica"))
+            connection.execute(
+                text(
+                    "DELETE FROM knowledge.intelligence_artifact_manifests "
+                    "WHERE artifact_id = :artifact_id"
+                ),
+                {"artifact_id": report_id},
+            )
+
+    @staticmethod
+    def program_reference(overview: dict[str, Any], *program_entity_ids: str) -> dict[str, object]:
+        """The section 5.4 block of an overview answer, under its reserved key."""
+        return {
+            PROGRAM_REFERENCE_BLOCK_KEY: {
+                "block_schema_version": 1,
+                "program_entity_ids": list(program_entity_ids),
+                "overview_sha256": overview["overview_sha256"],
+                "source_cutoff_at": overview["source_cutoff_at"],
+            }
+        }
 
     def resolve_refused(
         self,

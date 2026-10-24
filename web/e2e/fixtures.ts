@@ -13,7 +13,7 @@
  * at this head**, and constructing one would mean widening the pin that prevents
  * the disclosure.
  */
-import { expect, type Page } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 /** The one principal `local_operator` mode admits. See `lib/auth/synthetic.ts`. */
 export const ADMISSIBLE_PRINCIPAL = "synthetic-a";
@@ -35,9 +35,53 @@ export function syntheticNote(marker: string): string {
  * and does not claim Safari/PWA (AC072-074).
  */
 export async function hideNextjsDevOverlay(page: Page): Promise<void> {
-  await page.addStyleTag({
-    content: "nextjs-portal { display: none !important; pointer-events: none !important; }",
+  await page.evaluate(() => {
+    function removePortals(root: ParentNode): void {
+      root.querySelectorAll("nextjs-portal").forEach((portal) => portal.remove());
+    }
+    removePortals(document);
+    const state = document as Document & { __myPaE2EPortalObserver?: MutationObserver };
+    if (state.__myPaE2EPortalObserver) return;
+    const observer = new MutationObserver((records) => {
+      for (const record of records) for (const node of record.addedNodes) {
+        if (node.nodeType !== 1) continue;
+        const element = node as Element;
+        if (element.localName === "nextjs-portal") element.remove();
+        removePortals(element);
+      }
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+    Object.defineProperty(state, "__myPaE2EPortalObserver", { value: observer });
   });
+}
+
+type BrowserPhase = "early-entered" | "page-ready" | "before-emulateMedia" | "after-emulateMedia" | "emulateMedia-failed";
+function recordBrowserPhase(phase: BrowserPhase): void {
+  if (process.env.CI !== "true" || process.env.CI_BROWSER_DIAGNOSTIC !== "1") return;
+  try {
+    const annotations = test.info().annotations;
+    if (!annotations.some((item) => item.type === "my-pa-ci-browser-phase" && item.description === phase)) {
+      annotations.push({ type: "my-pa-ci-browser-phase", description: phase });
+    }
+  } catch { /* Fixed diagnostics must not change fixture outcomes. */ }
+}
+
+/** No page dependency: records only entry into the two admitted browser specs. */
+export function markBrowserEarly(): void {
+  recordBrowserPhase("early-entered");
+}
+
+/** Search already requests page here; retain its one existing media operation. */
+export async function observeSearchMedia(page: Page): Promise<void> {
+  recordBrowserPhase("page-ready");
+  recordBrowserPhase("before-emulateMedia");
+  try {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+  } catch (error) {
+    recordBrowserPhase("emulateMedia-failed");
+    throw error;
+  }
+  recordBrowserPhase("after-emulateMedia");
 }
 
 /**
@@ -51,13 +95,45 @@ export async function hideNextjsDevOverlay(page: Page): Promise<void> {
  * first presented, as an unrelated locator timing out three tests further on.
  */
 export async function signIn(page: Page, origin?: string): Promise<void> {
-  await page.goto(`${origin ?? ""}/sign-in`);
-  await hideNextjsDevOverlay(page);
-  const button = page.getByTestId(`sign-in-${ADMISSIBLE_PRINCIPAL}`);
-  await expect(button).toBeVisible();
-  await button.click();
-  await page.waitForURL("**/today");
-  await expect(visibleCaptureButton(page)).toBeVisible();
+  const diagnostic = process.env.CI === "true" &&
+    (process.env.CI_VISUAL_DIAGNOSTIC === "1" || process.env.CI_BROWSER_DIAGNOSTIC === "1" || process.env.CI_RESPONSIVE_DIAGNOSTIC === "1");
+  let stage: "goto" | "overlay" | "signinbutton" | "click" | "todayURL" | "launcher" = "goto";
+  try {
+    recordBrowserPhase("page-ready");
+    await page.goto(`${origin ?? ""}/sign-in`);
+    stage = "overlay";
+    await hideNextjsDevOverlay(page);
+    stage = "signinbutton";
+    const button = page.getByTestId(`sign-in-${ADMISSIBLE_PRINCIPAL}`);
+    await expect(button).toBeVisible();
+    stage = "click";
+    await button.click();
+    stage = "todayURL";
+    await page.waitForURL("**/today");
+    stage = "launcher";
+    await expect(visibleCaptureButton(page)).toBeVisible();
+    if (diagnostic) {
+      try {
+        const annotations = test.info().annotations;
+        if (!annotations.some((item) => item.type === "my-pa-ci-failed-stage" || item.type === "my-pa-ci-signin-complete")) {
+          annotations.push({ type: "my-pa-ci-signin-complete", description: "complete" });
+        }
+      } catch { /* Diagnostic metadata must not change successful fixture behavior. */ }
+    }
+  } catch (error) {
+    if (diagnostic && stage) {
+      try {
+        const annotations = test.info().annotations;
+        if (!annotations.some((item) => item.type === "my-pa-ci-failed-stage")) {
+          const completion = annotations.findIndex((item) => item.type === "my-pa-ci-signin-complete");
+          const failed = { type: "my-pa-ci-failed-stage", description: stage };
+          if (completion >= 0) annotations[completion] = failed;
+          else annotations.push(failed);
+        }
+      } catch { /* Never replace the original failure with a diagnostic error. */ }
+    }
+    throw error;
+  }
 }
 
 /** Compatibility helper: Capture now opens through the visible Search or create launcher. */

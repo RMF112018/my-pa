@@ -53,7 +53,9 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), prefetch: vi.fn() }),
 }));
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { hydrateRoot, type Root } from "react-dom/client";
+import { renderToString } from "react-dom/server";
 
 import { SearchCommandPanel } from "@/components/shell/command-palette";
 import type { ApiFailure } from "@/lib/api/work-client";
@@ -73,6 +75,58 @@ afterEach(() => {
   vi.useRealTimers();
   cleanup();
   diagnostics.enabled = false;
+});
+
+describe("Search input hydration readiness", () => {
+  it("renders the server input noneditable before its change handler is ready", () => {
+    const container = document.createElement("div");
+    container.innerHTML = renderToString(<SearchCommandPanel onCapture={() => {}} />);
+    const input = container.querySelector<HTMLInputElement>('[data-testid="search-command-input"]');
+    expect(input?.disabled).toBe(true);
+    expect(input?.value).toBe("");
+    expect(search.fetch).not.toHaveBeenCalled();
+  });
+
+  it("enables after hydration and sends the typed query from actual React state", async () => {
+    search.fetch.mockResolvedValue({ query: "morning brief", hits: [], coverage: [] });
+    const container = document.createElement("div");
+    const panel = <SearchCommandPanel onCapture={() => {}} />;
+    container.innerHTML = renderToString(panel);
+    document.body.append(container);
+    const input = container.querySelector<HTMLInputElement>('[data-testid="search-command-input"]')!;
+    expect(input.disabled).toBe(true);
+    let root: Root | undefined;
+    try {
+      await act(async () => { root = hydrateRoot(container, panel); });
+      expect(input.disabled).toBe(false);
+      fireEvent.change(input, { target: { value: "morning brief" } });
+      expect(container.textContent).not.toContain("Start typing to search.");
+      await vi.advanceTimersByTimeAsync(250);
+      expect(search.fetch).toHaveBeenCalledExactlyOnceWith("morning brief", expect.any(Object));
+    } finally {
+      await act(async () => { root?.unmount(); });
+      container.remove();
+    }
+  });
+
+  it("honors autofocus when hydration makes the input usable", async () => {
+    const container = document.createElement("div");
+    const panel = <SearchCommandPanel onCapture={() => {}} autoFocus />;
+    container.innerHTML = renderToString(panel);
+    document.body.append(container);
+    const input = container.querySelector<HTMLInputElement>('[data-testid="search-command-input"]')!;
+    expect(input.disabled).toBe(true);
+    expect(document.activeElement).not.toBe(input);
+    let root: Root | undefined;
+    try {
+      await act(async () => { root = hydrateRoot(container, panel); });
+      expect(input.disabled).toBe(false);
+      expect(document.activeElement).toBe(input);
+    } finally {
+      await act(async () => { root?.unmount(); });
+      container.remove();
+    }
+  });
 });
 
 /** Render the panel with a query already typed and let the debounce elapse. */

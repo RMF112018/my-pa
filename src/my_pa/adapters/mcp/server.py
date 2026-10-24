@@ -147,6 +147,8 @@ class McpAccess:
     compact_publication: bool = False
     allowed_canonical_targets: frozenset[str] | None = None
     authenticated_client_id: str | None = field(default=None, repr=False)
+    # Internal authenticated dispatch, never a tool argument.
+    service: ApplicationService | None = field(default=None, repr=False, compare=False)
 
 
 def _document(arguments: Mapping[str, Any] | None) -> Mapping[str, Any]:
@@ -461,11 +463,12 @@ def create_mcp_server(
         access = _access(context)
         if not enabled or access is None:
             return ListToolsResult(tools=[])
+        selected_service = access.service if access.service is not None else service
         if access.compact_publication:
             tools = compact_tools(access.allowed_tools or frozenset())
         else:
             tools = published_tools(
-                service,
+                selected_service,
                 authenticated_client_present=access.authenticated_client_id is not None,
             )
             if access.allowed_tools is not None:
@@ -484,10 +487,13 @@ def create_mcp_server(
     ) -> CallToolResult:
         """`tools/call`. The one `await` in this package."""
         access = _access(context)
+        selected_service = (
+            access.service if access is not None and access.service is not None else service
+        )
         published = {
             tool.name
             for tool in published_tools(
-                service,
+                selected_service,
                 authenticated_client_present=(
                     access is not None and access.authenticated_client_id is not None
                 ),
@@ -533,7 +539,7 @@ def create_mcp_server(
         future = loop.run_in_executor(
             None,
             _answer,
-            service,
+            selected_service,
             access.principal,
             params.name,
             params.arguments,

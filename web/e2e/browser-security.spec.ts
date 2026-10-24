@@ -1,6 +1,10 @@
 import { expect, test } from "@playwright/test";
 import { LIVE_URL } from "../playwright.config";
-import { signIn, syntheticNote } from "./fixtures";
+import { markBrowserEarly, signIn, syntheticNote } from "./fixtures";
+
+test.beforeEach(async () => {
+  markBrowserEarly();
+});
 
 const OPAQUE_SID = /^[0-9a-f]{64}$/;
 const ATTACKER_ORIGIN = "https://attacker.example";

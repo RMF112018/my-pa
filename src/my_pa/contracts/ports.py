@@ -134,6 +134,7 @@ from my_pa.domain.meeting.model import (
     NormalizedAttendee,
 )
 from my_pa.domain.policy.decision import validate_policy_version
+from my_pa.domain.program.membership import BridgeLink, EntityNode, MemberEdge
 from my_pa.domain.project_controls.category import ConstraintCategory, ConstraintCategoryState
 from my_pa.domain.project_controls.constraint import ProjectConstraint
 from my_pa.domain.project_controls.history import (
@@ -458,6 +459,9 @@ __all__ = [
     "Operation",
     "OperationQueue",
     "PortError",
+    "ProgramMemberEdges",
+    "ProgramMembershipRepository",
+    "ProgramReadUnavailableError",
     "ProjectLinkEventRecord",
     "ProjectRepository",
     "ProposalAdmissionConflictError",
@@ -10463,11 +10467,82 @@ class ProgramSnapshot:
     lineage_known_at: datetime | None
 
 
-class ProgramMembershipRepository(ABC):  # noqa: B024 - its reads are added by worker M2
+class ProgramReadUnavailableError(PortError):
+    """A Program read could not complete in its budget (S4 sections 6.3 and 7.5).
+
+    `reason` is `statement_timeout` (a statement cancelled by its
+    `statement_timeout`) or `pool_unavailable` (no Program-pool connection
+    within the Program engine's checkout timeout). A Program read answers
+    `unavailable`; a commit-time recompute records it as `recompute_failed`.
+    The read's transaction is lost with it.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"a Program read was unavailable: {reason}")
+        self.reason = reason
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramMemberEdges:
+    """The member edges of one request, cut at the edge budget (S4 section 3.1 step 2).
+
+    `edges` holds at most the requested limit, in `(resolved Program in
+    request order, relationship_id COLLATE "C")` order; `overflow_program` is
+    the resolved Program of the first edge beyond the limit, `None` when the
+    budget was not reached. `entities` are the caller's Entities on the redirect
+    chains of the edges' members (each at most `max_hops` hops from its member).
+    """
+
+    edges: tuple[MemberEdge, ...]
+    overflow_program: str | None
+    entities: tuple[EntityNode, ...]
+
+
+class ProgramMembershipRepository(ABC):
     """The exact Program member reads (S4 section 3.1), on the snapshot connection.
 
-    A seam: worker M2 (WP-04A) adds the batched, Principal-scoped reads.
+    Each method is one Principal-scoped statement, whatever the number of
+    Programs, edges or Projects (S4 section 6.3's constant statement plan).
+    Nothing here writes; a statement cancelled by its timeout raises
+    `ProgramReadUnavailableError`.
     """
+
+    @abstractmethod
+    def entity_chains(
+        self, principal_id: str, entity_ids: Sequence[str], *, max_hops: int
+    ) -> tuple[EntityNode, ...]:
+        """The caller's Entities named, and those on their redirect chains (<= `max_hops`)."""
+
+    @abstractmethod
+    def member_edges(
+        self,
+        principal_id: str,
+        program_entity_ids: Sequence[str],
+        *,
+        limit: int,
+        max_hops: int,
+    ) -> ProgramMemberEdges:
+        """The `member_of` edges (not superseded) into the given resolved Programs.
+
+        Ordered by the Programs' order in `program_entity_ids`, then by
+        `relationship_id COLLATE "C"`; at most `limit`, and the member Entities'
+        redirect chains, in one statement.
+        """
+
+    @abstractmethod
+    def bridges(
+        self, principal_id: str, project_entity_ids: Sequence[str], *, max_hops: int
+    ) -> tuple[BridgeLink, ...]:
+        """Every `bound` bridge row whose Entity redirect-resolves to one of the given ones.
+
+        An Entity resolves to `E` when it is `E` or reaches `E` by at most
+        `max_hops` redirects. Unresolved bridge rows name no Entity and are
+        never returned.
+        """
+
+    @abstractmethod
+    def project_states(self, principal_id: str, project_ids: Sequence[str]) -> Mapping[str, str]:
+        """`project_id -> projects.state` for the caller's Projects among `project_ids`."""
 
 
 class ProgramMetricsRepository(ABC):  # noqa: B024 - its reads are added by worker M4
@@ -10515,3 +10590,8 @@ class ProgramReadUnitOfWork(ABC):
     @abstractmethod
     def constraints(self) -> ConstraintManagementRepository:
         """The existing Constraint repository, on this same snapshot connection."""
+
+    @property
+    @abstractmethod
+    def program_membership(self) -> ProgramMembershipRepository:
+        """The Program member reads (S4 section 3.1), on this same snapshot connection."""

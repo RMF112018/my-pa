@@ -25,13 +25,20 @@ from types import TracebackType
 from typing import Final
 
 from sqlalchemy import Connection, Engine, bindparam, text
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 from my_pa.contracts.ports import (
     ConstraintManagementRepository,
+    ProgramMembershipRepository,
+    ProgramReadUnavailableError,
     ProgramReadUnitOfWork,
     ProgramSnapshot,
 )
 from my_pa.infrastructure.persistence.constraints import SqlConstraintManagementRepository
+from my_pa.infrastructure.persistence.program_membership import (
+    SqlProgramMembershipRepository,
+    program_statement,
+)
 
 __all__ = ["SqlAlchemyProgramReadUnitOfWork"]
 
@@ -56,9 +63,7 @@ class SqlAlchemyProgramReadUnitOfWork(ProgramReadUnitOfWork):
     def __enter__(self) -> ProgramReadUnitOfWork:
         if self._connection is not None:
             raise RuntimeError("this unit of work is already inside a transaction")
-        connection = self._engine.connect().execution_options(
-            isolation_level="REPEATABLE READ", postgresql_readonly=True
-        )
+        connection = self._checkout()
         try:
             connection.begin()
         except BaseException:
@@ -68,6 +73,23 @@ class SqlAlchemyProgramReadUnitOfWork(ProgramReadUnitOfWork):
         self._snapshot = None
         self._principal_id = None
         return self
+
+    def _checkout(self) -> Connection:
+        """A Program-pool connection, or `ProgramReadUnavailableError` (S4 section 6.3).
+
+        A checkout that outwaits the Program engine's checkout timeout is
+        `pool_unavailable`: the Program reads answer `unavailable`.
+        """
+        exhausted = False
+        try:
+            return self._engine.connect().execution_options(
+                isolation_level="REPEATABLE READ", postgresql_readonly=True
+            )
+        except PoolTimeoutError:
+            exhausted = True
+        if exhausted:
+            raise ProgramReadUnavailableError("pool_unavailable")
+        raise AssertionError("unreachable")  # pragma: no cover
 
     def __exit__(
         self,
@@ -98,7 +120,10 @@ class SqlAlchemyProgramReadUnitOfWork(ProgramReadUnitOfWork):
             if principal_id != self._principal_id:
                 raise RuntimeError("one Program snapshot serves one Principal")
             return self._snapshot
-        row = self.connection.execute(_SNAPSHOT, {"principal_id": principal_id}).one()
+        connection = self.connection
+        row = program_statement(
+            lambda: connection.execute(_SNAPSHOT, {"principal_id": principal_id}).one()
+        )
         self._snapshot = ProgramSnapshot(
             source_cutoff_at=row.source_cutoff_at, lineage_known_at=row.lineage_known_at
         )
@@ -114,3 +139,7 @@ class SqlAlchemyProgramReadUnitOfWork(ProgramReadUnitOfWork):
     @property
     def constraints(self) -> ConstraintManagementRepository:
         return SqlConstraintManagementRepository(self.connection)
+
+    @property
+    def program_membership(self) -> ProgramMembershipRepository:
+        return SqlProgramMembershipRepository(self.connection)

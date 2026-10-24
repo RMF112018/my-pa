@@ -565,6 +565,7 @@ from my_pa.application.meetings import (
 )
 from my_pa.application.model_gate import BoundedModelGate
 from my_pa.application.producer_origin import ProducerOriginError, ProducerOriginRegistry
+from my_pa.application.program_membership import program_families, resolve_program_members
 from my_pa.application.record_events import (
     MemoryDisclosure,
     list_record_events,
@@ -635,6 +636,7 @@ from my_pa.contracts.ports import (
     MemoryPage,
     PortError,
     PreferenceConflictError,
+    ProgramReadUnavailableError,
     ProgramReadUnitOfWork,
     RelationshipMemoryRepository,
     ReviewDecisionRequest,
@@ -1436,6 +1438,10 @@ def _port_failure(error: PortError) -> ApplicationError:
     # Record lineage S3 section 7.2 step 5: a bounded lineage read statement
     # that outran its `statement_timeout` is `unavailable`, not a server fault.
     if isinstance(error, LineageReadTimeoutError):
+        return UnavailableError()
+    # Record lineage S4 sections 6.3 and 7.5: a Program-read statement cancelled
+    # by its timeout, or no Program-pool connection within the pool timeout.
+    if isinstance(error, ProgramReadUnavailableError):
         return UnavailableError()
     return InternalError()
 
@@ -14168,11 +14174,29 @@ class ApplicationService:
     def _programs_members_resolve(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ResolveProgramMembers
     ) -> _Result:
-        """`programs.members.resolve`: not implemented in this change (`unsupported`)."""
-        del unit_of_work, authorization, command
+        """`programs.members.resolve`: the exact member Projects of 1..10 Programs (S4 7.1).
+
+        The switches, then the composition checks (section 7.6), then the remote
+        grant re-check (section 6.1: `unsupported`), then the read on its own
+        Program snapshot with the caller's section 6.2 families. The request's
+        own unit of work is not read: it carries the audit row only.
+        """
+        del unit_of_work
         self._program_plane()
-        self._program_read_plane(overview=False)
-        raise UnsupportedError()
+        factory = self._program_read_plane(overview=False)
+        require_read_grant(authorization.capability_grants, command.capability)
+        with _translated():
+            view = resolve_program_members(
+                factory,
+                authorization.principal.principal_id,
+                command.program_entity_ids,
+                valid_at=command.valid_instant(),
+                families=program_families(authorization.capability_grants),
+            )
+        return _Result(
+            payload=view.to_canonical_dict(),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+        )
 
     def _programs_overview(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadProgramOverview

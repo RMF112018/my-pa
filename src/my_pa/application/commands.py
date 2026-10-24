@@ -14112,6 +14112,10 @@ class ResolveProgramMembers:
         _program_entity_ids(self.program_entity_ids)
         _optional_instant(self.valid_at, SafeDetail.VALID_AT)
 
+    def valid_instant(self) -> datetime | None:
+        """The parsed `valid_at` (an aware instant), or `None` for current membership."""
+        return _optional_instant(self.valid_at, SafeDetail.VALID_AT)
+
 
 @dataclass(frozen=True, slots=True)
 class ReadProgramOverview:

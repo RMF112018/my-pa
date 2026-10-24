@@ -16,6 +16,7 @@ from my_pa.domain.identity.operation import (
     is_write_capability,
     permitted_purposes,
 )
+from my_pa.domain.program.vocabulary import PROGRAM_REPORTING_CAPABILITIES
 
 CLIENT = "synthetic-personal-chatgpt"
 ALL = frozenset(Capability)
@@ -98,6 +99,8 @@ async def test_full_inventory_catalog_without_execution(scene: Scene) -> None:
         c.value
         for c in ALL
         if not c.value.startswith(("reports.types.", "issues.", "records.", "meetings.notes."))
+        # Record lineage S4's seven Program-reporting names are not deployed either.
+        and c.value not in PROGRAM_REPORTING_CAPABILITIES
     }
     assert len(deployed) == 190
     assert deployed <= names

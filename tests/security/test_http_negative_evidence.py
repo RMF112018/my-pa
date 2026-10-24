@@ -317,6 +317,14 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         Capability.ISSUES_HANDOFFS_CORRECT,
         Capability.RECORDS_BACKFILL_PLAN,
         Capability.RECORDS_BACKFILL_REPORT,
+        # Record lineage S4, behind the same switch and its sub-switch (and scopeless).
+        Capability.PROGRAMS_MEMBERS_RESOLVE,
+        Capability.PROGRAMS_OVERVIEW,
+        Capability.COMMITMENTS_V2_READ,
+        Capability.COMMITMENTS_V2_LIST,
+        Capability.COMMITMENTS_V2_SEARCH,
+        Capability.COMMITMENTS_V2_WAITING_ON,
+        Capability.REPORTS_MANIFEST,
     }
 )
 
@@ -1591,6 +1599,14 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
         },
         Capability.RECORDS_BACKFILL_PLAN: {"idempotency_key": "wire-records-backfill-plan-0001"},
         Capability.RECORDS_BACKFILL_REPORT: {"run_id": "lbfr_wirerun000001"},
+        # Record lineage S4 (S4 contract section 7).
+        Capability.PROGRAMS_MEMBERS_RESOLVE: {"program_entity_ids": ["ent_wireprogram00001"]},
+        Capability.PROGRAMS_OVERVIEW: {"program_entity_ids": ["ent_wireprogram00001"]},
+        Capability.COMMITMENTS_V2_READ: {"commitment_id": "cmt_wirecommit000001"},
+        Capability.COMMITMENTS_V2_LIST: {"project_ids": ["prj_wireproject00001"]},
+        Capability.COMMITMENTS_V2_SEARCH: {"query": "wire"},
+        Capability.COMMITMENTS_V2_WAITING_ON: {},
+        Capability.REPORTS_MANIFEST: {"report_id": "rpt_wirereport000001"},
     }
 
 
@@ -2305,6 +2321,14 @@ SCOPED_CAPABILITIES = [
         Capability.ISSUES_HANDOFFS_CORRECT,
         Capability.RECORDS_BACKFILL_PLAN,
         Capability.RECORDS_BACKFILL_REPORT,
+        # Record lineage S4, behind the same switch and its sub-switch (and scopeless).
+        Capability.PROGRAMS_MEMBERS_RESOLVE,
+        Capability.PROGRAMS_OVERVIEW,
+        Capability.COMMITMENTS_V2_READ,
+        Capability.COMMITMENTS_V2_LIST,
+        Capability.COMMITMENTS_V2_SEARCH,
+        Capability.COMMITMENTS_V2_WAITING_ON,
+        Capability.REPORTS_MANIFEST,
     }
 ]
 

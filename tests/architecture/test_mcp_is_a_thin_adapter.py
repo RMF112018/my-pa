@@ -298,6 +298,10 @@ EXEMPT_PROPERTIES: Final[frozenset[tuple[str, str]]] = frozenset(
         # Record lineage S2: the composite's nested `commitments.create` object
         # carries the same `direction` field (owed by or to the Principal).
         ("issues.work.create_commitment", "direction"),
+        # Record lineage S4: the v2 sibling reads take exactly their v1
+        # siblings' request, `direction` included.
+        ("commitments.v2.list", "direction"),
+        ("commitments.v2.search", "direction"),
         # Which way an edge points, not where a file lives. Exempt on exactly the
         # precedent above: `direction` trips the scan on the substring "dir", and
         # its admitted values are `any`, `outgoing` and `incoming`.
@@ -682,8 +686,9 @@ def test_the_location_scan_would_catch_one() -> None:
     # Plus record lineage S1's evidence-anchor `root_id` (an opaque `mtg_`/`cap_`)
     # on the Project-link write and the four link writes that take anchors, and
     # on the S2 anchor-bearing writes. Plus the S2 Commitment composite's nested
-    # `commitments.create` `direction`. Plus the S3 anchor-bearing writes.
-    assert len(EXEMPT_PROPERTIES) == 37
+    # `commitments.create` `direction`. Plus the S3 anchor-bearing writes. Plus
+    # the S4 v2 list and search siblings' `direction`.
+    assert len(EXEMPT_PROPERTIES) == 39
     for tool_name, property_name in EXEMPT_PROPERTIES:
         tool = next(entry for entry in TOOLS if entry.name == tool_name)
         assert property_name in set(_schema_property_names(tool.input_schema))

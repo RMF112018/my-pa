@@ -46,6 +46,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
 from tests.schema import lineage_s3_schema_ahead_contract as gap
 from tests.schema.lineage_s3_schema_ahead_contract import S3_CAPABILITIES, S3_PURPOSES
+from tests.schema.lineage_s4_schema_ahead_contract import S4_CAPABILITIES, S4_PURPOSES
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.identity.purpose import Purpose
@@ -70,7 +71,8 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "6f1476b8da52"
 PREVIOUS: Final = "d020b532ad7d"
-HEAD: Final = REVISION
+#: Record lineage S4 (`c5260943d933`, ADR-015) is additive on this revision.
+HEAD: Final = "c5260943d933"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20261019_6f1476b8da52_record_lineage_s3.py"
 S2_MIGRATION: Final = MIGRATIONS / "20261018_d020b532ad7d_record_lineage_s2.py"
@@ -224,7 +226,7 @@ def test_the_revision_is_the_single_head_on_d020b532ad7d() -> None:
     assert script.get_revision(PREVIOUS).down_revision == "264310e0416a"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
     assert MIGRATION.name.endswith("_record_lineage_s3.py")
-    assert len(list(MIGRATIONS.glob("*.py"))) == 121
+    assert len(list(MIGRATIONS.glob("*.py"))) == 122
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -378,10 +380,11 @@ def test_at_vocabulary_adds_exactly_the_s3_names() -> None:
     assert purposes_at == sorted(purposes_at)
     # The head admits every declared name, and the S3 schema-ahead gap is
     # exactly the S3 names the domain does not declare yet (none).
-    declared = {capability.value for capability in Capability}
+    # The S4 names, declared since, are the S4 revision's (c5260943d933).
+    declared = {capability.value for capability in Capability} - S4_CAPABILITIES
     native = {capability.value for capability in NativeSourceCapability}
     assert set(at) == declared | native | gap.lineage_s3_admitted_ahead("capability")
-    purposes = {purpose.value for purpose in Purpose}
+    purposes = {purpose.value for purpose in Purpose} - S4_PURPOSES
     assert set(purposes_at) == purposes | gap.lineage_s3_admitted_ahead("purpose")
     assert S3_CAPABILITIES & declared == gap.S3_CAPABILITIES_DECLARED_BY_DOMAIN
     assert S3_PURPOSES & purposes == gap.S3_PURPOSES_DECLARED_BY_DOMAIN
@@ -481,9 +484,9 @@ def _added_columns() -> set[str]:
     return {f"{table}.{column}" for table, columns in ADDED_COLUMNS.items() for column in columns}
 
 
-def _assert_present(engine: Engine) -> None:
+def _assert_present(engine: Engine, *, at: str = HEAD) -> None:
     catalog = _catalog(engine)
-    assert catalog["version"] == {HEAD}
+    assert catalog["version"] == {at}
     assert catalog["tables"] >= NEW_TABLE_NAMES
     assert catalog["functions"] >= FUNCTIONS
     assert catalog["columns"] >= _added_columns()
@@ -602,7 +605,7 @@ def test_s2_head_with_rows_upgrades_and_seeds_the_horizon(
         )
     assert all(before[table] for table in ("issue_revisions", "issue_responsibility_events"))
     command.upgrade(_config(), REVISION)
-    _assert_present(engine)
+    _assert_present(engine, at=REVISION)
     with engine.connect() as connection:
         after = _rows(connection)
         seeded = {
@@ -655,7 +658,9 @@ def test_downgrade_refuses_while_s3_rows_exist(disposable_database: str, engine:
     from tests.database.test_lineage_integrity_guards import _world
 
     del disposable_database
-    command.upgrade(_config(), "head")
+    # At this revision (S4 contract section 10): the S4 downgrade refuses while
+    # an S4 row exists, so S3's refusals are exercised at its own revision.
+    command.upgrade(_config(), REVISION)
     # Only an audit event naming an S3 capability: refused.
     with engine.begin() as connection:
         _audit(
@@ -668,13 +673,13 @@ def test_downgrade_refuses_while_s3_rows_exist(disposable_database: str, engine:
         command.downgrade(_config(), PREVIOUS)
     assert getattr(refused.value.orig, "sqlstate", None) == RESTRICT_VIOLATION
     assert REFUSAL in str(refused.value)
-    _assert_present(engine)
+    _assert_present(engine, at=REVISION)
     # And ordinary S1 facts written on the S3 schema: each took a commit mark.
     _world(engine, "prn_lineages3mig0003")
     with pytest.raises(DBAPIError) as refused_again:
         command.downgrade(_config(), PREVIOUS)
     assert REFUSAL in str(refused_again.value)
-    _assert_present(engine)
+    _assert_present(engine, at=REVISION)
 
 
 def _s2_texts(engine: Engine) -> dict[str, object]:
@@ -774,8 +779,9 @@ def test_downgrade_restores_every_s2_text(disposable_database: str, engine: Engi
     command.downgrade(_config(), PREVIOUS)
     _assert_absent(engine)
     assert _s2_texts(engine) == at_s2
-    command.upgrade(_config(), "head")
-    _assert_present(engine)
+    # Back to this revision: the S4 revision restates the audit texts again.
+    command.upgrade(_config(), REVISION)
+    _assert_present(engine, at=REVISION)
     assert _s2_texts(engine) == at_s3
 
 
@@ -872,7 +878,8 @@ def test_each_downgrade_refusal_family_alone_refuses(
     disposable_database: str, engine: Engine, fact: str
 ) -> None:
     del disposable_database
-    command.upgrade(_config(), "head")
+    # At this revision, as above.
+    command.upgrade(_config(), REVISION)
     _REFUSAL_CASES[fact](engine)
     with engine.connect() as connection:
         # Nothing else S3 is present: no other family's clause can answer.
@@ -888,4 +895,4 @@ def test_each_downgrade_refusal_family_alone_refuses(
         command.downgrade(_config(), PREVIOUS)
     assert getattr(refused.value.orig, "sqlstate", None) == RESTRICT_VIOLATION
     assert REFUSAL in str(refused.value)
-    _assert_present(engine)
+    _assert_present(engine, at=REVISION)

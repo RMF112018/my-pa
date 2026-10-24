@@ -143,6 +143,7 @@ from my_pa.application.commands import (
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListCommitmentsV2,
     ListConstraintCategories,
     ListConstraints,
     ListConstraintSyncConflicts,
@@ -188,6 +189,7 @@ from my_pa.application.commands import (
     PutCanvasWorkspace,
     ReadCapture,
     ReadCommitment,
+    ReadCommitmentV2,
     ReadConstraint,
     ReadConstraintHistory,
     ReadConstraintOverview,
@@ -205,10 +207,12 @@ from my_pa.application.commands import (
     ReadMeeting,
     ReadMeetingNoteVersion,
     ReadPortfolioConstraintOverview,
+    ReadProgramOverview,
     ReadProject,
     ReadProjectControlsStatus,
     ReadRecordAssociationHistory,
     ReadRecordLineage,
+    ReadReportManifest,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
@@ -222,6 +226,7 @@ from my_pa.application.commands import (
     ResolveConstraintSyncConflict,
     ResolveEntity,
     ResolveIntelligenceSet,
+    ResolveProgramMembers,
     ResolveUnresolvedMention,
     RestoreCapture,
     RestoreEntity,
@@ -245,6 +250,7 @@ from my_pa.application.commands import (
     ReviseRelationshipMemory,
     SearchCaptures,
     SearchCommitments,
+    SearchCommitmentsV2,
     SearchConstraints,
     SearchEntities,
     SearchGoodNotes,
@@ -275,6 +281,7 @@ from my_pa.application.commands import (
     UpdateTask,
     VoidConstraint,
     WaitingOn,
+    WaitingOnV2,
 )
 from my_pa.application.service import _HANDLERS, ApplicationService
 from my_pa.contracts.v1.envelope import ResponseEnvelope
@@ -1478,6 +1485,18 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             idempotency_key="policy-records-backfill-plan-0001"
         ),
         Capability.RECORDS_BACKFILL_REPORT: ReportLineageBackfill(run_id="lbfr_policyrun000001"),
+        # Record lineage S4 (S4 contract section 7).
+        Capability.PROGRAMS_MEMBERS_RESOLVE: ResolveProgramMembers(
+            program_entity_ids=("ent_policyprogram0001",)
+        ),
+        Capability.PROGRAMS_OVERVIEW: ReadProgramOverview(
+            program_entity_ids=("ent_policyprogram0001",)
+        ),
+        Capability.COMMITMENTS_V2_READ: ReadCommitmentV2(commitment_id="cmt_policycommit00001"),
+        Capability.COMMITMENTS_V2_LIST: ListCommitmentsV2(),
+        Capability.COMMITMENTS_V2_SEARCH: SearchCommitmentsV2(query="policy"),
+        Capability.COMMITMENTS_V2_WAITING_ON: WaitingOnV2(),
+        Capability.REPORTS_MANIFEST: ReadReportManifest(report_id="rpt_policyreport00001"),
     }
 
 
@@ -1950,6 +1969,14 @@ SCOPED_CAPABILITIES = [
         Capability.ISSUES_HANDOFFS_CORRECT,
         Capability.RECORDS_BACKFILL_PLAN,
         Capability.RECORDS_BACKFILL_REPORT,
+        # Record lineage S4: the seven S4 names, also in `_SCOPELESS`.
+        Capability.PROGRAMS_MEMBERS_RESOLVE,
+        Capability.PROGRAMS_OVERVIEW,
+        Capability.COMMITMENTS_V2_READ,
+        Capability.COMMITMENTS_V2_LIST,
+        Capability.COMMITMENTS_V2_SEARCH,
+        Capability.COMMITMENTS_V2_WAITING_ON,
+        Capability.REPORTS_MANIFEST,
     }
 ]
 
@@ -2272,6 +2299,14 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.ISSUES_HANDOFFS_CORRECT,
         Capability.RECORDS_BACKFILL_PLAN,
         Capability.RECORDS_BACKFILL_REPORT,
+        # Record lineage S4: the seven S4 names, also in `_SCOPELESS`.
+        Capability.PROGRAMS_MEMBERS_RESOLVE,
+        Capability.PROGRAMS_OVERVIEW,
+        Capability.COMMITMENTS_V2_READ,
+        Capability.COMMITMENTS_V2_LIST,
+        Capability.COMMITMENTS_V2_SEARCH,
+        Capability.COMMITMENTS_V2_WAITING_ON,
+        Capability.REPORTS_MANIFEST,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

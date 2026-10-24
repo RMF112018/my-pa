@@ -47,6 +47,7 @@ from sqlalchemy.exc import DBAPIError
 from tests.schema import lineage_schema_ahead_contract as lineage_gap
 from tests.schema.lineage_s2_schema_ahead_contract import S2_CAPABILITIES, S2_PURPOSES
 from tests.schema.lineage_s3_schema_ahead_contract import S3_CAPABILITIES, S3_PURPOSES
+from tests.schema.lineage_s4_schema_ahead_contract import S4_CAPABILITIES, S4_PURPOSES
 from tests.schema.lineage_schema_ahead_contract import S1_CAPABILITIES, S1_PURPOSES
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
@@ -76,9 +77,9 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "264310e0416a"
 PREVIOUS: Final = "b9025e7fb738"
-#: Record lineage S2 (`d020b532ad7d`) and S3 (`6f1476b8da52`, ADR-015) are additive on
-#: this revision; the S3 revision is the head.
-HEAD: Final = "6f1476b8da52"
+#: Record lineage S2 (`d020b532ad7d`), S3 (`6f1476b8da52`) and S4 (`c5260943d933`,
+#: ADR-015) are additive on this revision; the S4 revision is the head.
+HEAD: Final = "c5260943d933"
 #: The S2 revision, the S1 suite's head before the S3 revision.
 S2_REVISION: Final = "d020b532ad7d"
 #: The revision that last stated `capability_is_known` and `purpose_is_known`.
@@ -236,7 +237,7 @@ def test_the_revision_is_the_single_head_on_b9025e7fb738() -> None:
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "5c1e7a9b3d42"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
-    assert len(list(MIGRATIONS.glob("*.py"))) == 121
+    assert len(list(MIGRATIONS.glob("*.py"))) == 122
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -354,12 +355,18 @@ def test_at_vocabulary_adds_exactly_the_s1_names() -> None:
     # declare; the union below holds both before and after they do.
     # The S2 names, declared since, are the S2 revision's (d020b532ad7d).
     # The S3 names too, the S3 revision's (6f1476b8da52).
-    declared = {capability.value for capability in Capability} - S2_CAPABILITIES - S3_CAPABILITIES
+    declared = (
+        {capability.value for capability in Capability}
+        - S2_CAPABILITIES
+        - S3_CAPABILITIES
+        - S4_CAPABILITIES
+    )
     native = {capability.value for capability in NativeSourceCapability}
     assert set(at) == declared | native | S1_CAPABILITIES
     assert (
         set(purposes_at)
-        == ({purpose.value for purpose in Purpose} - S2_PURPOSES - S3_PURPOSES) | S1_PURPOSES
+        == ({purpose.value for purpose in Purpose} - S2_PURPOSES - S3_PURPOSES - S4_PURPOSES)
+        | S1_PURPOSES
     )
 
 

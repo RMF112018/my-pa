@@ -1015,6 +1015,7 @@ def build_gateway_runtime(
     data_engine: Engine | None = None,
     independent_audit_engine: Engine | None = None,
     controls_engine: Engine | None = None,
+    permit_reenrichment: bool = True,
 ) -> GatewayRuntime:
     """Compose the gateway from validated configuration.
 
@@ -1149,7 +1150,8 @@ def build_gateway_runtime(
                 settings.relationship_identity_correction_enabled
             ),
             relationship_reenrichment_enabled=(
-                settings.relationship_intelligence_enabled
+                permit_reenrichment
+                and settings.relationship_intelligence_enabled
                 and settings.relationship_intelligence_writes_enabled
             ),
             producer_origins=producer_origins,

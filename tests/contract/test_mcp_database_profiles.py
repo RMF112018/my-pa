@@ -161,3 +161,62 @@ async def test_compact_umbrella_cannot_bypass_profile_or_protected_ceiling(
             "my_pa.read", {"capability": "tasks.create", "payload": {}}
         )
         assert hidden.is_error
+
+
+@pytest.mark.anyio
+async def test_revoked_write_grant_demotes_established_session_to_ro_service(scene: Scene) -> None:
+    from my_pa.domain.identity.purpose import Purpose
+
+    ro = build_service(scene.world, scene.providers)
+    rw = build_service(scene.world, scene.providers)
+    profiles = McpDatabaseServices(ro, rw, frozenset(), frozenset({"rw"}), ())  # type: ignore[arg-type]
+    read = Capability.CANVAS_WORKSPACE_GET
+    write = Capability.CANVAS_WORKSPACE_PUT
+    current = RemoteAccessContext(
+        scene.principal,
+        authenticated_client_id="rw",
+        allowed_capabilities=frozenset({read.value, write.value}),
+        capability_purposes=frozenset(
+            {(read, Purpose.CANVAS_WORKSPACE_READ), (write, Purpose.CANVAS_WORKSPACE_AUTHORING)}
+        ),
+    )
+    selections = []
+
+    def resolve(_header: str | None) -> RemoteAccessContext | None:
+        bound = profiles.access(current, write_allowed=True)
+        assert bound is not None
+        selections.append(bound.service)
+        return bound
+
+    app = create_remote_mcp_app(
+        ro,
+        resolve_access=resolve,
+        require_bound_service=True,
+        allowed_hosts=("testserver",),
+        remote_enabled=True,
+        writes_enabled=True,
+        resource="https://mcp.example.invalid/mcp",
+        authorization_servers=("https://mcp.example.invalid",),
+    )
+    async with (
+        app.router.lifespan_context(app),
+        httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=app), base_url="http://testserver"
+        ) as http,
+        streamable_http_client("http://testserver/mcp", http_client=http) as streams,
+        ClientSession(streams[0], streams[1]) as session,
+    ):
+        await session.initialize()
+        assert write.value in {t.name for t in (await session.list_tools()).tools}
+        assert selections[-1] is rw
+        # Token read scope, expired/revoked grant and deny overlay all arrive as a
+        # fresh reduced capability/purpose ceiling; the durable write flag may stay true.
+        current = replace(
+            current,
+            allowed_capabilities=frozenset({read.value}),
+            capability_purposes=frozenset({(read, Purpose.CANVAS_WORKSPACE_READ)}),
+        )
+        assert write.value not in {t.name for t in (await session.list_tools()).tools}
+        assert selections[-1] is ro
+        assert (await session.call_tool(write.value, {})).is_error
+        assert selections[-1] is ro

@@ -175,3 +175,51 @@ def test_profile_transport_security_options_are_preserved() -> None:
     )
     assert settings.parsed_database_url().query["sslmode"] == "verify-full"
     assert settings.parsed_database_url().query["channel_binding"] == "require"
+
+
+@pytest.mark.parametrize(
+    "grant_state",
+    ["read_scope", "missing_purpose", "wrong_purpose", "no_grants", "unsupported_write"],
+)
+def test_effective_read_only_grants_never_select_rw_pool(scene: Scene, grant_state: str) -> None:
+    from my_pa.domain.identity.purpose import Purpose
+
+    ro = build_service(scene.world, scene.providers)
+    rw = build_service(scene.world, scene.providers)
+    profiles = McpDatabaseServices(ro, rw, frozenset(), frozenset({"rw"}), ())  # type: ignore[arg-type]
+    read = Capability.CANVAS_WORKSPACE_GET
+    write = Capability.CANVAS_WORKSPACE_PUT
+    names = frozenset({read.value, write.value})
+    purposes = frozenset(
+        {(read, Purpose.CANVAS_WORKSPACE_READ), (write, Purpose.CANVAS_WORKSPACE_AUTHORING)}
+    )
+    if grant_state == "read_scope":
+        names = frozenset({read.value})
+    if grant_state == "missing_purpose":
+        purposes = frozenset({(read, Purpose.CANVAS_WORKSPACE_READ)})
+    if grant_state == "wrong_purpose":
+        purposes = frozenset({(write, Purpose.CANVAS_WORKSPACE_READ)})
+    if grant_state == "no_grants":
+        purposes = frozenset()
+    if grant_state == "unsupported_write":
+        names = frozenset({read.value, Capability.REPORTS_COMMIT.value})
+        purposes = frozenset({(Capability.REPORTS_COMMIT, Purpose.REPORT_AUTHORING)})
+    context = RemoteAccessContext(
+        scene.principal,
+        authenticated_client_id="rw",
+        allowed_capabilities=names,
+        capability_purposes=purposes,
+    )
+    bound = profiles.access(context, write_allowed=True)
+    assert bound is not None and bound.service is ro
+    assert write.value not in bound.allowed_capabilities
+    # A fresh, admitted write regrant, not a stale profile/session, selects RW again.
+    restored = profiles.access(
+        replace(
+            context,
+            allowed_capabilities=frozenset({read.value, write.value}),
+            capability_purposes=frozenset({(write, Purpose.CANVAS_WORKSPACE_AUTHORING)}),
+        ),
+        write_allowed=True,
+    )
+    assert restored is not None and restored.service is rw

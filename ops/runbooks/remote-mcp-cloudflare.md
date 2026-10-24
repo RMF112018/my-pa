@@ -491,7 +491,8 @@ The operator configures disjoint exact `MY_PA_MCP_DATABASE_RO_CLIENT_IDS` and
 `MY_PA_MCP_DATABASE_RW_CLIENT_IDS`. Unknown clients are refused. Durable OAuth
 registration, revocation/expiry, audience, scope, purpose, capability grants and
 all existing write switches still apply. An RO mapping cannot promote. An RW
-mapping whose write gates are closed uses the RO service. The MCP request cannot
+mapping without a surviving supported write capability/purpose grant or whose
+write switches are closed uses the RO service. The MCP request cannot
 supply a connection/role/DSN selector. There is no legacy/owner fallback when a
 bound service is required or a role/target check fails.
 

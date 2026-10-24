@@ -103,6 +103,8 @@ def profile_settings(tmp_path: Path, admin: Engine) -> Settings:
     return Settings(
         database_url=admin.url.render_as_string(hide_password=False),
         mcp_database_profiles_enabled=True,
+        relationship_intelligence_enabled=True,
+        relationship_intelligence_writes_enabled=True,
         mcp_database_ro_client_ids="client-ro",
         mcp_database_rw_client_ids="client-rw",
         mcp_database_ro_password_file=paths[0],
@@ -116,8 +118,11 @@ def test_real_pools_principal_isolation_write_denial_and_durable_audit(
 ) -> None:
     settings = profile_settings(tmp_path, synthetic_admin)
     control = build_gateway_runtime(settings)
+    assert control.service._relationship_reenrichment_enabled
     services = build_mcp_database_services(settings, control)
     assert services is not None
+    assert not services.read_service._relationship_reenrichment_enabled
+    assert not services.write_service._relationship_reenrichment_enabled
     try:
         for engine, role in zip(services.engines, ("my_pa_mcp_ro", "my_pa_mcp_rw"), strict=True):
             with engine.connect() as c:

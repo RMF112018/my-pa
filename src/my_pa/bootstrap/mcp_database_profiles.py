@@ -19,9 +19,11 @@ from my_pa.bootstrap.gateway import GatewayRuntime, build_gateway_runtime
 from my_pa.bootstrap.settings import Settings, SettingsError
 from my_pa.contracts.mcp_database_profiles import (
     MCP_DATABASE_TRANSPORT_QUERY_KEYS,
+    MCP_PROFILE_WRITE_CAPABILITIES,
     McpDatabaseProfile,
     profile_capabilities,
 )
+from my_pa.domain.identity.operation import permitted_purposes
 from my_pa.infrastructure.database.engine import create_database_engine
 
 
@@ -132,11 +134,22 @@ class McpDatabaseServices:
         if not context.principal.authenticated:
             return None
         client = context.authenticated_client_id
+        # Durable write switches are not a capability/purpose grant. Token scope,
+        # expiry/revocation and deny overlays may have removed the last write.
+        # Explicit None retains the existing durable wildcard-purpose semantics.
+        surviving_write = any(
+            capability in MCP_PROFILE_WRITE_CAPABILITIES
+            and capability.value in (context.allowed_capabilities or ())
+            and (purpose is None or purpose in permitted_purposes(capability))
+            for capability, purpose in (context.capability_purposes or ())
+        )
         if client in self.read_clients:
             profile = McpDatabaseProfile.READ_ONLY
         elif client in self.write_clients:
             profile = (
-                McpDatabaseProfile.READ_WRITE if write_allowed else McpDatabaseProfile.READ_ONLY
+                McpDatabaseProfile.READ_WRITE
+                if write_allowed and surviving_write
+                else McpDatabaseProfile.READ_ONLY
             )
         else:
             return None
@@ -197,7 +210,6 @@ def build_mcp_database_services(
         # reads or automatic startup observations. Managed writes are not admitted.
         data_settings = settings.model_copy(
             update={
-                "relationship_reenrichment_enabled": False,
                 "managed_document_root": "",
             }
         )
@@ -207,6 +219,7 @@ def build_mcp_database_services(
                 data_engine=engine,
                 independent_audit_engine=control.audit_engine,
                 controls_engine=control.work_engine,
+                permit_reenrichment=False,
             ).service
             for engine in engines
         ]

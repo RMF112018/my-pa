@@ -32,25 +32,66 @@ inside the payload the caller controls.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import math
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import Enum, StrEnum
 from types import MappingProxyType
-from typing import Any, ClassVar, Final
+from typing import Any, ClassVar, Final, get_type_hints
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from my_pa.application import goodnotes_note_unit_contract as _note_unit
 from my_pa.application.errors import InvalidRequestError, SafeDetail, invalid_choice
 from my_pa.application.goodnotes_pull_orchestration import MAX_PULL_BATCH_SIZE
 from my_pa.application.identity_correction import ConflictChoice
+from my_pa.application.issue_handoffs import (
+    HandoffCorrectRequest,
+    HandoffListRequest,
+    HandoffRecordRequest,
+)
+from my_pa.application.issue_timeline import DEFAULT_TIMELINE_PAGE_SIZE, IssueTimelineRequest
+from my_pa.application.issue_work import AssociationIntent, WorkCompositeRequest
+from my_pa.application.issues import (
+    IssueCloseRequest,
+    IssueCreateRequest,
+    IssueHistoryRequest,
+    IssueListRequest,
+    IssueReopenRequest,
+    IssueUpdateRequest,
+    ProjectLinkAddRequest,
+    ProjectLinkEndRequest,
+)
+from my_pa.application.lineage_backfill import (
+    DEFAULT_BACKFILL_BATCH,
+    BackfillPlanRequest,
+    BackfillReportRequest,
+)
+from my_pa.application.lineage_endpoints import (
+    EvidenceAnchorInput,
+    parse_evidence_anchor,
+    parse_evidence_anchors,
+    parse_record_ref,
+)
 from my_pa.application.record_events import (
     MAX_RECORD_EVENT_CURSOR_CHARACTERS,
     requested_families,
+)
+from my_pa.application.record_lineage import (
+    DEFAULT_LINEAGE_DEPTH,
+    MAX_LINEAGE_DEPTH,
+    AssociationAssertRequest,
+    AssociationCorrectRequest,
+    AssociationEndRequest,
+    AssociationHistoryRequest,
+    LineageReadRequest,
+    MembershipAddRequest,
+    MembershipCorrectRequest,
+    MembershipEndRequest,
 )
 from my_pa.domain.capture.display_label import normalize_display_label
 from my_pa.domain.capture.errors import CaptureBoundsError, CaptureError
@@ -120,6 +161,27 @@ from my_pa.domain.knowledge_assertion.vocabulary import (
     KnowledgeOwnerRefKind,
     KnowledgeSubjectKind,
 )
+from my_pa.domain.lineage.canonical import related_context_order
+from my_pa.domain.lineage.model import (
+    MAX_EVIDENCE_ANCHORS,
+    MAX_ISSUE_DESCRIPTION_CHARACTERS,
+    MAX_ISSUE_TITLE_CHARACTERS,
+    MAX_LINEAGE_IDEMPOTENCY_KEY_CHARACTERS,
+    MAX_LINEAGE_REASON_CHARACTERS,
+    RecordRef,
+)
+from my_pa.domain.lineage.vocabulary import (
+    RELATION_MATRIX,
+    EvidenceSourceFamily,
+    HandoffCorrectionAction,
+    HandoffSide,
+    MemberRole,
+    RecordFamily,
+    RelationType,
+    SourceVersionKind,
+)
+from my_pa.domain.lineage.vocabulary import EvidenceRole as LineageEvidenceRole
+from my_pa.domain.lineage_backfill.vocabulary import BackfillClass
 from my_pa.domain.meeting.model import (
     DEFAULT_MEETING_PAGE_SIZE,
     MAX_ATTENDEE_DISPLAY_NAME_CHARACTERS,
@@ -262,6 +324,7 @@ from my_pa.domain.situation.situation import (
     ProjectSector,
     ProjectState,
     ProjectType,
+    SituationState,
     is_storable_project_value,
 )
 from my_pa.domain.task.comment import (
@@ -11909,6 +11972,2067 @@ class CheckpointKnowledgeDiscovery:
         _idempotency_key(self.idempotency_key)
 
 
+# --- Record lineage S1: the Issue plane (S1 contract section 7.2) -------------
+#
+# Six commands, each a frozen dataclass whose fields are exactly the section 7.2
+# request fields: an unknown field -- `principal_id`, an authority class, a
+# decision channel, an acceptance basis, a `recorded_at` or a selector -- is an
+# unexpected keyword and `invalid_request` (`adapters.normalization._command`).
+# Validation here is what is decidable from the request alone: types, bounds,
+# identifier prefixes and the anchor shape. Existence, ownership, versions and
+# state moves are the application's (`application.issues`).
+
+
+def _issue_id_schema(kind: IdKind, description: str) -> dict[str, object]:
+    return {
+        "type": "string",
+        "pattern": f"^{kind.value}_[A-Za-z0-9]{{8,64}}$",
+        "description": description,
+    }
+
+
+_ISSUE_IDEMPOTENCY_KEY_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": MAX_LINEAGE_IDEMPOTENCY_KEY_CHARACTERS,
+        "description": (
+            "Caller-chosen replay key, 1..128 characters. The same key with the same "
+            "request replays the original result; with a different request it is conflict."
+        ),
+    }
+)
+
+_ISSUE_TITLE_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": MAX_ISSUE_TITLE_CHARACTERS,
+        "description": "The Issue title, not blank, stored exactly as sent.",
+    }
+)
+
+_ISSUE_DESCRIPTION_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {"type": "string", "maxLength": MAX_ISSUE_DESCRIPTION_CHARACTERS}
+)
+
+_LINEAGE_REASON_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {"type": "string", "minLength": 1, "maxLength": MAX_LINEAGE_REASON_CHARACTERS}
+)
+
+#: `issues.project_links.add`'s optional `evidence_anchor` (section 7.1).
+_EVIDENCE_ANCHOR_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["family", "root_id", "version_kind", "role"],
+        "properties": {
+            "family": {
+                "type": "string",
+                "enum": [member.value for member in EvidenceSourceFamily],
+            },
+            "root_id": {"type": "string", "description": "The Meeting or Capture root."},
+            "version_kind": {
+                "type": "string",
+                "enum": [member.value for member in SourceVersionKind],
+            },
+            "version_id": {"type": "string", "description": "The note or Capture version."},
+            "source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "passage_start_cp": {"type": "integer", "minimum": 0},
+            "passage_end_cp": {"type": "integer", "minimum": 1},
+            "passage_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "role": {
+                "type": "string",
+                "enum": [member.value for member in LineageEvidenceRole],
+            },
+        },
+        "description": (
+            "Optional evidence for the link: an exact Meeting note or Capture version "
+            "(with an optional code-point passage), or a legacy Capture root."
+        ),
+    }
+)
+
+
+def _lineage_key(value: str) -> str:
+    """The lineage bounds on a key `_idempotency_key` already admitted.
+
+    1..128 characters (`lineage_write_requests.idempotency_key`) and storable
+    as text.
+    """
+    if len(value) > MAX_LINEAGE_IDEMPOTENCY_KEY_CHARACTERS:
+        raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+    return _storable_text(value, SafeDetail.IDEMPOTENCY_KEY)
+
+
+def _issue_title(value: object) -> str:
+    title = _storable_text(value, SafeDetail.TITLE)
+    if not title.strip() or len(title) > MAX_ISSUE_TITLE_CHARACTERS:
+        raise InvalidRequestError(SafeDetail.TITLE)
+    return title
+
+
+def _issue_description(value: object) -> str | None:
+    description = _optional_storable_text(value, SafeDetail.DESCRIPTION)
+    if description is not None and len(description) > MAX_ISSUE_DESCRIPTION_CHARACTERS:
+        raise InvalidRequestError(SafeDetail.DESCRIPTION)
+    return description
+
+
+def _lineage_reason(value: object) -> str:
+    reason = _storable_text(value, SafeDetail.REASON)
+    if not 1 <= len(reason) <= MAX_LINEAGE_REASON_CHARACTERS:
+        raise InvalidRequestError(SafeDetail.REASON)
+    return reason
+
+
+def _issue_state(value: object, admitted: frozenset[SituationState]) -> SituationState | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        for state in admitted:
+            if state.value == value:
+                return state
+    raise invalid_choice(SafeDetail.STATE, sorted(state.value for state in admitted))
+
+
+def _membership_revision(value: object, minimum: int) -> int:
+    if type(value) is not int or value < minimum:
+        raise InvalidRequestError(SafeDetail.EXPECTED_MEMBERSHIP_REVISION)
+    return value
+
+
+#: The states an `issues.update` may name, and an `issues.list` may filter by
+#: (S2 adds `closed` to the filter; closing is `issues.close` only).
+_ISSUE_UPDATE_STATES: Final = frozenset({SituationState.ACTIVE, SituationState.SUSPENDED})
+_ISSUE_LIST_STATES: Final = frozenset(
+    {SituationState.OPEN, SituationState.ACTIVE, SituationState.SUSPENDED, SituationState.CLOSED}
+)
+#: The only field `issues.update` can clear.
+_ISSUE_CLEARABLE_FIELDS: Final = frozenset({"description"})
+#: `issues.list` page bounds (section 7.2).
+DEFAULT_ISSUE_PAGE_SIZE: Final = 25
+MAX_ISSUE_PAGE_SIZE: Final = 100
+
+
+@dataclass(frozen=True, slots=True)
+class CreateIssue:
+    """`issues.create`: open one Issue (version 1, `open`) with a title and description.
+
+    No Project and no members: a Project link is `issues.project_links.add`. The
+    same `idempotency_key` with the same request replays the original revision;
+    with a different request it is conflict. Off unless the lineage plane is on.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_CREATE
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "title": _ISSUE_TITLE_SCHEMA,
+            "description": _ISSUE_DESCRIPTION_SCHEMA,
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+        }
+    )
+
+    title: str = field(repr=False)
+    idempotency_key: str
+    description: str | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        _lineage_key(_idempotency_key(self.idempotency_key))
+        _issue_title(self.title)
+        _issue_description(self.description)
+
+    def issue_request(self) -> IssueCreateRequest:
+        """The parsed request this command states."""
+        return IssueCreateRequest(title=self.title, description=self.description)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadIssue:
+    """`issues.read`: one Issue of yours with its native Project links.
+
+    A context Situation, and an Issue another Principal holds, are answered
+    exactly as an absent one: not_found.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_READ
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue to read."),
+            "include_members": {
+                "type": "boolean",
+                "default": False,
+                "description": "Also return the Issue's active memberships.",
+            },
+        }
+    )
+
+    issue_id: str
+    include_members: bool = False
+
+    def __post_init__(self) -> None:
+        _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
+        if not isinstance(self.include_members, bool):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+
+
+@dataclass(frozen=True, slots=True)
+class ListIssues:
+    """`issues.list`: one keyset page of your Issues, newest first.
+
+    Optionally only one state, or only Issues with an active link to one
+    Project. `after` is the last `issue_id` of the previous page under the same
+    filters, otherwise invalid_request.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_LIST
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_ISSUE_PAGE_SIZE,
+                "default": DEFAULT_ISSUE_PAGE_SIZE,
+            },
+            "after": _issue_id_schema(
+                IdKind.SITUATION, "Keyset cursor: the last issue_id of the previous page."
+            ),
+            "state": {"type": "string", "enum": ["open", "active", "suspended", "closed"]},
+            "project_id": _issue_id_schema(
+                IdKind.PROJECT, "Only Issues with an active link to this Project."
+            ),
+        }
+    )
+
+    page_size: int | None = None
+    after: str | None = None
+    state: str | None = None
+    project_id: str | None = None
+
+    def __post_init__(self) -> None:
+        sized = _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if sized is not None and sized > MAX_ISSUE_PAGE_SIZE:
+            raise InvalidRequestError(SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.SITUATION, SafeDetail.CURSOR)
+        if self.project_id is not None:
+            _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _issue_state(self.state, _ISSUE_LIST_STATES)
+
+    def issue_request(self) -> IssueListRequest:
+        """The parsed request this command states."""
+        return IssueListRequest(
+            page_size=DEFAULT_ISSUE_PAGE_SIZE if self.page_size is None else self.page_size,
+            after=self.after,
+            state=_issue_state(self.state, _ISSUE_LIST_STATES),
+            project_id=self.project_id,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateIssue:
+    """`issues.update`: change an Issue's title, description or non-terminal state.
+
+    `expected_version` is the version you read; a stale one is conflict and
+    writes nothing. Allowed state moves: open to active, open or active to
+    suspended, suspended to active. `clear_fields` may name `description`. A
+    request that changes nothing, or both sets and clears the description, is
+    invalid_request. Closing is issues.close and reopening issues.reopen; on a
+    closed Issue this is a correction of its title or description (local
+    operator only; no state) and the Issue stays closed.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_UPDATE
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue to change."),
+            "expected_version": {"type": "integer", "minimum": 1},
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "title": _ISSUE_TITLE_SCHEMA,
+            "description": _ISSUE_DESCRIPTION_SCHEMA,
+            "state": {"type": "string", "enum": ["active", "suspended"]},
+            "clear_fields": {
+                "type": "array",
+                "uniqueItems": True,
+                "items": {"type": "string", "enum": ["description"]},
+            },
+        }
+    )
+
+    issue_id: str
+    expected_version: int
+    idempotency_key: str
+    title: str | None = field(default=None, repr=False)
+    description: str | None = field(default=None, repr=False)
+    state: str | None = None
+    clear_fields: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
+        _expected_version(self.expected_version)
+        _lineage_key(_idempotency_key(self.idempotency_key))
+        if self.title is not None:
+            _issue_title(self.title)
+        _issue_description(self.description)
+        _issue_state(self.state, _ISSUE_UPDATE_STATES)
+        # `object`, for the reason `_idempotency_key` gives: the annotation says
+        # what a well-formed request holds, not what a transport delivered.
+        clears: object = self.clear_fields
+        if (
+            not isinstance(clears, tuple)
+            or not all(isinstance(name, str) for name in clears)
+            or not set(clears) <= _ISSUE_CLEARABLE_FIELDS
+            or len(set(clears)) != len(clears)
+        ):
+            raise InvalidRequestError(SafeDetail.CLEAR_FIELDS)
+        if self.description is not None and "description" in self.clear_fields:
+            raise InvalidRequestError(SafeDetail.CLEAR_FIELDS)
+        if (
+            self.title is None
+            and self.description is None
+            and self.state is None
+            and not self.clear_fields
+        ):
+            raise InvalidRequestError(SafeDetail.MUTATIONS)
+
+    def issue_request(self) -> IssueUpdateRequest:
+        """The parsed request this command states."""
+        return IssueUpdateRequest(
+            issue_id=self.issue_id,
+            expected_version=self.expected_version,
+            title=self.title,
+            description=self.description,
+            state=_issue_state(self.state, _ISSUE_UPDATE_STATES),
+            clear_fields=tuple(sorted(self.clear_fields)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AddIssueProjectLink:
+    """`issues.project_links.add`: link an Issue to a Project of yours, or relink it.
+
+    Local operator only. `expected_membership_revision` 0 asserts a new link (no
+    link may exist); n reinstates a link whose latest event is n and ended. An
+    active link is conflict. The Issue's version does not change.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_PROJECT_LINKS_ADD
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue."),
+            "project_id": _issue_id_schema(IdKind.PROJECT, "A Project of yours."),
+            "expected_membership_revision": {"type": "integer", "minimum": 0},
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "evidence_anchor": _EVIDENCE_ANCHOR_SCHEMA,
+            "reason": _LINEAGE_REASON_SCHEMA,
+        }
+    )
+
+    issue_id: str
+    project_id: str
+    expected_membership_revision: int
+    idempotency_key: str
+    evidence_anchor: dict[str, object] | None = field(default=None, repr=False)
+    reason: str | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
+        _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _membership_revision(self.expected_membership_revision, 0)
+        _lineage_key(_idempotency_key(self.idempotency_key))
+        if self.reason is not None:
+            _lineage_reason(self.reason)
+        self.issue_request()
+
+    def issue_request(self) -> ProjectLinkAddRequest:
+        """The parsed request this command states."""
+        return ProjectLinkAddRequest(
+            issue_id=self.issue_id,
+            project_id=self.project_id,
+            expected_membership_revision=self.expected_membership_revision,
+            evidence_anchor=(
+                None
+                if self.evidence_anchor is None
+                else parse_evidence_anchor(self.evidence_anchor, SafeDetail.EVIDENCE_ANCHOR)
+            ),
+            reason=self.reason,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class EndIssueProjectLink:
+    """`issues.project_links.end`: end an Issue's active link to a Project.
+
+    Local operator only. The link's latest event must be
+    `expected_membership_revision` and active, otherwise conflict. The link row
+    is never deleted; a later `issues.project_links.add` can reinstate it.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_PROJECT_LINKS_END
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue."),
+            "project_id": _issue_id_schema(IdKind.PROJECT, "The linked Project."),
+            "expected_membership_revision": {"type": "integer", "minimum": 1},
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "reason": _LINEAGE_REASON_SCHEMA,
+        }
+    )
+
+    issue_id: str
+    project_id: str
+    expected_membership_revision: int
+    idempotency_key: str
+    reason: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
+        _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _membership_revision(self.expected_membership_revision, 1)
+        _lineage_key(_idempotency_key(self.idempotency_key))
+        _lineage_reason(self.reason)
+
+    def issue_request(self) -> ProjectLinkEndRequest:
+        """The parsed request this command states."""
+        return ProjectLinkEndRequest(
+            issue_id=self.issue_id,
+            project_id=self.project_id,
+            expected_membership_revision=self.expected_membership_revision,
+            reason=self.reason,
+        )
+
+
+# --- Record lineage S1: memberships, associations, the reverse read and note
+# history (S1 contract sections 3.1, 7.1 and 7.2) ---------------------------------
+#
+# Eight commands. A record reference is `{family, record_id}`; an evidence set is
+# a list of section 7.1 `EvidenceAnchorInput` documents. What is decidable from
+# the request alone is refused here: types, bounds, prefixes, the matrix's
+# families, a repeated anchor identity. Existence, ownership, linkability and the
+# evidence rules against the stored sources are the application's
+# (`application.record_lineage`). `records.associations.assert` names its
+# endpoints `from_record` and `to_record`: `from` is a Python keyword and every
+# payload key here is a dataclass field (`adapters.mcp.tools.payload_schema_for`).
+
+_RECORD_REF_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["family", "record_id"],
+        "properties": {
+            "family": {"type": "string", "enum": [member.value for member in RecordFamily]},
+            "record_id": {"type": "string", "description": "An identifier of that family."},
+        },
+    }
+)
+
+_EVIDENCE_ANCHORS_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "array",
+        "maxItems": MAX_EVIDENCE_ANCHORS,
+        "items": dict(_EVIDENCE_ANCHOR_SCHEMA),
+        "description": (
+            "Evidence: exact Meeting note or Capture versions, each with an optional "
+            "code-point passage, or legacy Capture roots (corroborates/contradicts only). "
+            "No anchor may repeat another's source and passage."
+        ),
+    }
+)
+
+
+def _record_ref(value: object, detail: SafeDetail) -> RecordRef:
+    return parse_record_ref(value, detail)
+
+
+def _anchor_set(value: object, *, minimum: int) -> tuple[EvidenceAnchorInput, ...]:
+    return parse_evidence_anchors(value, SafeDetail.EVIDENCE_ANCHORS, minimum=minimum)
+
+
+def _link_revision(value: object) -> int:
+    if type(value) is not int or value < 1:
+        raise InvalidRequestError(SafeDetail.EXPECTED_REVISION)
+    return value
+
+
+def _member_role(value: object) -> MemberRole:
+    if isinstance(value, str):
+        for role in MemberRole:
+            if role.value == value:
+                return role
+    raise invalid_choice(SafeDetail.ROLE, [role.value for role in MemberRole])
+
+
+#: The relations `records.associations.assert` names. `related_context` (S3
+#: section 3.1) is in the vocabulary and the S3 schema, and is refused here
+#: until its rules (the in-context endpoints and the canonical order) land.
+_ASSERTABLE_RELATIONS: Final = frozenset(RelationType) - {RelationType.ISSUE_MEMBER}
+
+
+def _semantic_relation(value: object) -> RelationType:
+    admitted = [relation for relation in RelationType if relation in _ASSERTABLE_RELATIONS]
+    if isinstance(value, str):
+        for relation in admitted:
+            if relation.value == value:
+                return relation
+    raise invalid_choice(SafeDetail.RELATION_TYPE, [relation.value for relation in admitted])
+
+
+#: The families an Issue membership may name (section 3.1, `issue_member` to).
+_MEMBER_FAMILIES: Final = RELATION_MATRIX[RelationType.ISSUE_MEMBER][2]
+
+
+@dataclass(frozen=True, slots=True)
+class AddIssueMembership:
+    """`issues.memberships.add`: make a record of yours a member of one of your Issues.
+
+    Local operator only. `member` is a Meeting, Meeting note version, Task,
+    Commitment, Constraint or Capture version; a Project's scope is
+    `issues.project_links.add`. An active membership with the same member and
+    role is returned with `created: false` and never changes.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_MEMBERSHIPS_ADD
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue."),
+            "member": _RECORD_REF_SCHEMA,
+            "role": {"type": "string", "enum": [role.value for role in MemberRole]},
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "evidence_anchors": _EVIDENCE_ANCHORS_SCHEMA,
+        }
+    )
+
+    issue_id: str
+    member: dict[str, object]
+    role: str
+    idempotency_key: str
+    evidence_anchors: tuple[dict[str, object], ...] = field(default=(), repr=False)
+
+    def __post_init__(self) -> None:
+        _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
+        self.lineage_request()
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def lineage_request(self) -> MembershipAddRequest:
+        """The parsed request this command states."""
+        member = _record_ref(self.member, SafeDetail.MEMBER)
+        if member.family not in _MEMBER_FAMILIES:
+            raise InvalidRequestError(SafeDetail.MEMBER)
+        return MembershipAddRequest(
+            issue_id=self.issue_id,
+            member=member,
+            role=_member_role(self.role),
+            evidence_anchors=_anchor_set(self.evidence_anchors, minimum=0),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class EndIssueMembership:
+    """`issues.memberships.end`: end an active Issue membership.
+
+    Local operator only. `expected_revision` is the membership's current
+    revision; a stale one is conflict. A semantic association's id is
+    invalid_request.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_MEMBERSHIPS_END
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "link_id": _issue_id_schema(IdKind.RECORD_LINK, "The membership link."),
+            "expected_revision": {"type": "integer", "minimum": 1},
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "reason": _LINEAGE_REASON_SCHEMA,
+        }
+    )
+
+    link_id: str
+    expected_revision: int
+    idempotency_key: str
+    reason: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        self.lineage_request()
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def lineage_request(self) -> MembershipEndRequest:
+        """The parsed request this command states."""
+        return MembershipEndRequest(
+            link_id=_identifier(self.link_id, IdKind.RECORD_LINK, SafeDetail.LINK_ID),
+            expected_revision=_link_revision(self.expected_revision),
+            reason=_lineage_reason(self.reason),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AssertRecordAssociation:
+    """`records.associations.assert`: assert that one record of yours relates to another.
+
+    Local operator only. `originated_from`: a Commitment, Task or Constraint
+    from an exact Meeting note or Capture version, with an `origin` anchor on a
+    passage of that version. `discusses`: a Meeting or note version discusses
+    an Issue, Task, Commitment or Constraint, with a `discussion` anchor on that
+    note (or a note of that Meeting). `escalated_from`: a published Constraint
+    escalated from a Task, in a required `context_issue_id` whose Project
+    links include the Constraint's Project and whose members include the
+    Task, with an exact-version `origin` anchor. `blocks`: a Task or
+    Constraint blocks another one (never itself, never closing a cycle), with
+    an exact-version `corroborates` anchor. `related_context`: two distinct
+    Meetings, notes, Tasks, Commitments, Constraints or Capture versions that
+    both belong to the required `context_issue_id` relate within it, with an
+    exact-version `corroborates` anchor; it is stored once whichever order you
+    name them in. `context_issue_id` scopes the association to one of your
+    Issues. The same active meaning returns the existing association with
+    `created: false`; a contested one is refused.
+    """
+
+    capability: ClassVar[Capability] = Capability.RECORDS_ASSOCIATIONS_ASSERT
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "from_record": _RECORD_REF_SCHEMA,
+            "to_record": _RECORD_REF_SCHEMA,
+            "relation_type": {
+                "type": "string",
+                "enum": [
+                    "blocks",
+                    "discusses",
+                    "escalated_from",
+                    "originated_from",
+                    "related_context",
+                ],
+            },
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "evidence_anchors": {**_EVIDENCE_ANCHORS_SCHEMA, "minItems": 1},
+            "context_issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue it belongs to."),
+        }
+    )
+
+    from_record: dict[str, object]
+    to_record: dict[str, object]
+    relation_type: str
+    idempotency_key: str
+    evidence_anchors: tuple[dict[str, object], ...] = field(repr=False)
+    context_issue_id: str | None = None
+
+    def __post_init__(self) -> None:
+        self.lineage_request()
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def lineage_request(self) -> AssociationAssertRequest:
+        """The parsed request this command states."""
+        relation = _semantic_relation(self.relation_type)
+        from_ref = _record_ref(self.from_record, SafeDetail.FROM_RECORD)
+        to_ref = _record_ref(self.to_record, SafeDetail.TO_RECORD)
+        _kind, sources, targets = RELATION_MATRIX[relation]
+        if from_ref.family not in sources or to_ref.family not in targets:
+            raise InvalidRequestError(SafeDetail.RELATION_TYPE)
+        if self.context_issue_id is not None:
+            _identifier(self.context_issue_id, IdKind.SITUATION, SafeDetail.CONTEXT_ISSUE_ID)
+        if relation is RelationType.RELATED_CONTEXT:
+            # S3 section 3.1: one stored order, before the request digest, so
+            # both orders are one request under one key.
+            from_ref, to_ref = related_context_order(from_ref, to_ref)
+        return AssociationAssertRequest(
+            from_ref=from_ref,
+            to_ref=to_ref,
+            relation_type=relation,
+            evidence_anchors=_anchor_set(self.evidence_anchors, minimum=1),
+            context_issue_id=self.context_issue_id,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CorrectRecordAssociation:
+    """`records.associations.correct`: replace a semantic association's evidence set.
+
+    Local operator only. The supplied set is the complete new set, satisfies
+    the relation's rule and differs from the current one. The association's
+    endpoints and meaning never change.
+    """
+
+    capability: ClassVar[Capability] = Capability.RECORDS_ASSOCIATIONS_CORRECT
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "link_id": _issue_id_schema(IdKind.RECORD_LINK, "The association."),
+            "expected_revision": {"type": "integer", "minimum": 1},
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "reason": _LINEAGE_REASON_SCHEMA,
+            "evidence_anchors": {**_EVIDENCE_ANCHORS_SCHEMA, "minItems": 1},
+        }
+    )
+
+    link_id: str
+    expected_revision: int
+    idempotency_key: str
+    reason: str = field(repr=False)
+    evidence_anchors: tuple[dict[str, object], ...] = field(repr=False)
+
+    def __post_init__(self) -> None:
+        self.lineage_request()
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def lineage_request(self) -> AssociationCorrectRequest:
+        """The parsed request this command states."""
+        return AssociationCorrectRequest(
+            link_id=_identifier(self.link_id, IdKind.RECORD_LINK, SafeDetail.LINK_ID),
+            expected_revision=_link_revision(self.expected_revision),
+            reason=_lineage_reason(self.reason),
+            evidence_anchors=_anchor_set(self.evidence_anchors, minimum=1),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class EndRecordAssociation:
+    """`records.associations.end`: end a semantic association.
+
+    Local operator only. An ended association is final; asserting the same
+    meaning again creates a new one.
+    """
+
+    capability: ClassVar[Capability] = Capability.RECORDS_ASSOCIATIONS_END
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "link_id": _issue_id_schema(IdKind.RECORD_LINK, "The association."),
+            "expected_revision": {"type": "integer", "minimum": 1},
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "reason": _LINEAGE_REASON_SCHEMA,
+            "evidence_anchors": _EVIDENCE_ANCHORS_SCHEMA,
+        }
+    )
+
+    link_id: str
+    expected_revision: int
+    idempotency_key: str
+    reason: str = field(repr=False)
+    evidence_anchors: tuple[dict[str, object], ...] = field(default=(), repr=False)
+
+    def __post_init__(self) -> None:
+        self.lineage_request()
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def lineage_request(self) -> AssociationEndRequest:
+        """The parsed request this command states."""
+        return AssociationEndRequest(
+            link_id=_identifier(self.link_id, IdKind.RECORD_LINK, SafeDetail.LINK_ID),
+            expected_revision=_link_revision(self.expected_revision),
+            reason=_lineage_reason(self.reason),
+            evidence_anchors=_anchor_set(self.evidence_anchors, minimum=0),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ReadRecordLineage:
+    """`records.lineage`: the Issue-scoped lineage around one record of yours.
+
+    Returns the Issues the record belongs to and, for the one selected (or the
+    only one), the records and recorded associations reachable within
+    `max_depth` (0..4, default 4). With several candidate Issues and no
+    `issue_id`, only the candidates are returned. One bounded page: no body, no
+    title but an Issue's own, and `complete_state` says what the answer can claim.
+    """
+
+    capability: ClassVar[Capability] = Capability.RECORDS_LINEAGE
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "origin": _RECORD_REF_SCHEMA,
+            "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue to read lineage under."),
+            "max_depth": {"type": "integer", "minimum": 0, "maximum": 4, "default": 4},
+            # S3 section 7.2: the cuts and the opaque, grant-bound page cursor.
+            "known_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "ISO-8601 with an offset.",
+            },
+            "valid_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "ISO-8601 with an offset.",
+            },
+            "page_size": {"type": "integer", "minimum": 10, "maximum": 100},
+            "cursor": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{1,2048}$",
+                "description": "The previous page's next_cursor, with the same request.",
+            },
+        }
+    )
+
+    origin: dict[str, object]
+    issue_id: str | None = None
+    max_depth: int | None = None
+    known_at: str | None = None
+    valid_at: str | None = None
+    page_size: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        self.lineage_request()
+
+    def lineage_request(self) -> LineageReadRequest:
+        """The parsed request this command states."""
+        if self.issue_id is not None:
+            _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
+        depth: object = self.max_depth
+        if depth is None:
+            depth = DEFAULT_LINEAGE_DEPTH
+        if type(depth) is not int or not 0 <= depth <= MAX_LINEAGE_DEPTH:
+            raise InvalidRequestError(SafeDetail.MAX_DEPTH)
+        known_at = _optional_instant(self.known_at, SafeDetail.KNOWN_AT)
+        valid_at = _optional_instant(self.valid_at, SafeDetail.VALID_AT)
+        _cursor_page(self.page_size, self.cursor)
+        return LineageReadRequest(
+            origin=_record_ref(self.origin, SafeDetail.ORIGIN),
+            issue_id=self.issue_id,
+            max_depth=depth,
+            known_at=known_at,
+            valid_at=valid_at,
+            page_size=self.page_size,
+            cursor=self.cursor,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ListMeetingNoteVersions:
+    """`meetings.notes.versions`: the note versions of one Meeting of yours, newest first.
+
+    Metadata only: no body and no digest. `after` is the last
+    `note_version_id` of the previous page, otherwise invalid_request.
+    """
+
+    capability: ClassVar[Capability] = Capability.MEETINGS_NOTES_VERSIONS
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "meeting_id": _meeting_id_schema(IdKind.MEETING, "The Meeting."),
+            "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_ISSUE_PAGE_SIZE,
+                "default": DEFAULT_ISSUE_PAGE_SIZE,
+            },
+            "after": _meeting_id_schema(
+                IdKind.MEETING_NOTE_VERSION, "Keyset cursor: the last note_version_id shown."
+            ),
+        }
+    )
+
+    meeting_id: str
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.meeting_id, IdKind.MEETING, SafeDetail.MEETING_ID)
+        sized = _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if sized is not None and sized > MAX_ISSUE_PAGE_SIZE:
+            raise InvalidRequestError(SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.MEETING_NOTE_VERSION, SafeDetail.CURSOR)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadMeetingNoteVersion:
+    """`meetings.notes.read_version`: one exact note version of one Meeting of yours.
+
+    Returns its stored content digest, and the exact body only when
+    `include_body` is true. A note version of another Meeting, or of another
+    Principal, is not_found.
+    """
+
+    capability: ClassVar[Capability] = Capability.MEETINGS_NOTES_READ_VERSION
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "meeting_id": _meeting_id_schema(IdKind.MEETING, "The Meeting."),
+            "note_version_id": _meeting_id_schema(
+                IdKind.MEETING_NOTE_VERSION, "The note version of that Meeting."
+            ),
+            "include_body": {"type": "boolean", "default": False},
+        }
+    )
+
+    meeting_id: str
+    note_version_id: str
+    include_body: bool = False
+
+    def __post_init__(self) -> None:
+        _identifier(self.meeting_id, IdKind.MEETING, SafeDetail.MEETING_ID)
+        _identifier(self.note_version_id, IdKind.MEETING_NOTE_VERSION, SafeDetail.NOTE_VERSION_ID)
+        if not isinstance(self.include_body, bool):
+            raise InvalidRequestError(SafeDetail.INCLUDE_BODY)
+
+
+# --- Record lineage S2: close, reopen, closure readiness, membership correction,
+# handoffs and the composite Work writes (S2 contract sections 3.3, 3.4, 6.4 and
+# 7.2) ----------------------------------------------------------------------------
+#
+# Eight commands. What is decidable from the request alone is refused here; the
+# gate, the closed-Issue rule, existence and the evidence rules against stored
+# sources are the application's (`application.issues`,
+# `application.record_lineage`, `application.issue_handoffs`,
+# `application.issue_work`).
+
+_CLOSURE_EVIDENCE_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        **_EVIDENCE_ANCHORS_SCHEMA,
+        "minItems": 1,
+        "description": (
+            "The Issue's closure evidence: at least one exact Meeting note or Capture "
+            "version with role resolution, and none with role contradicts."
+        ),
+    }
+)
+
+
+def _lineage_outcome(value: object) -> str:
+    outcome = _storable_text(value, SafeDetail.OUTCOME)
+    if not outcome.strip() or len(outcome) > MAX_LINEAGE_REASON_CHARACTERS:
+        raise InvalidRequestError(SafeDetail.OUTCOME)
+    return outcome
+
+
+def _blank_refused_reason(value: object) -> str:
+    reason = _lineage_reason(value)
+    if not reason.strip():
+        raise InvalidRequestError(SafeDetail.REASON)
+    return reason
+
+
+@dataclass(frozen=True, slots=True)
+class CloseIssue:
+    """`issues.close`: close one of your Issues behind its closure gate.
+
+    Local operator only. Every active work or constraint member must be
+    natively closed (and accepted, for a Task or Commitment) and carry
+    available, current resolution evidence on its membership, otherwise
+    conflict (`issues.closure_readiness` lists what blocks). The closure
+    evidence needs at least one exact resolution anchor and no contradicting
+    one. There is no exception: a member that will never be satisfied is ended
+    with issues.memberships.end. Closing changes no member, link or record.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_CLOSE
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue to close."),
+            "expected_version": {"type": "integer", "minimum": 1},
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "outcome": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": MAX_LINEAGE_REASON_CHARACTERS,
+                "description": "How the Issue was resolved.",
+            },
+            "closure_evidence_anchors": _CLOSURE_EVIDENCE_SCHEMA,
+        }
+    )
+
+    issue_id: str
+    expected_version: int
+    idempotency_key: str
+    outcome: str = field(repr=False)
+    closure_evidence_anchors: tuple[dict[str, object], ...] = field(repr=False)
+
+    def __post_init__(self) -> None:
+        self.issue_request()
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def issue_request(self) -> IssueCloseRequest:
+        """The parsed request this command states."""
+        return IssueCloseRequest(
+            issue_id=_identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID),
+            expected_version=_expected_version(self.expected_version),
+            outcome=_lineage_outcome(self.outcome),
+            closure_evidence_anchors=parse_evidence_anchors(
+                self.closure_evidence_anchors, SafeDetail.CLOSURE_EVIDENCE_ANCHORS, minimum=1
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ReopenIssue:
+    """`issues.reopen`: reopen one of your closed Issues, with a reason.
+
+    Local operator only. The Issue becomes active and its closure is cleared;
+    no member, link or record is reopened or changed. Optional evidence anchors
+    of any role are recorded with the reopening.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_REOPEN
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "issue_id": _issue_id_schema(IdKind.SITUATION, "The closed Issue."),
+            "expected_version": {"type": "integer", "minimum": 1},
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "reason": _LINEAGE_REASON_SCHEMA,
+            "evidence_anchors": _EVIDENCE_ANCHORS_SCHEMA,
+        }
+    )
+
+    issue_id: str
+    expected_version: int
+    idempotency_key: str
+    reason: str = field(repr=False)
+    evidence_anchors: tuple[dict[str, object], ...] = field(default=(), repr=False)
+
+    def __post_init__(self) -> None:
+        self.issue_request()
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def issue_request(self) -> IssueReopenRequest:
+        """The parsed request this command states."""
+        return IssueReopenRequest(
+            issue_id=_identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID),
+            expected_version=_expected_version(self.expected_version),
+            reason=_blank_refused_reason(self.reason),
+            evidence_anchors=_anchor_set(self.evidence_anchors, minimum=0),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ReadIssueClosureReadiness:
+    """`issues.closure_readiness`: whether one of your Issues could close now, and why not.
+
+    Read-only and current: lists each blocked work or constraint member with
+    every reason. Says nothing about closure evidence, which issues.close is
+    given. A closed Issue answers not ready with no blockers.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_CLOSURE_READINESS
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {"issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue to evaluate.")}
+    )
+
+    issue_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class CorrectIssueMembership:
+    """`issues.memberships.correct`: replace a membership's evidence set.
+
+    Local operator only. The supplied set (0..32 anchors, any role) is the
+    complete new set and differs from the current one, except an identical set
+    with a resolution anchor after the member's own record changed (a
+    re-affirmation). This is how resolution evidence is recorded on a work or
+    constraint member after its native close. The member and role never change.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_MEMBERSHIPS_CORRECT
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "link_id": _issue_id_schema(IdKind.RECORD_LINK, "The membership link."),
+            "expected_revision": {"type": "integer", "minimum": 1},
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "reason": _LINEAGE_REASON_SCHEMA,
+            "evidence_anchors": _EVIDENCE_ANCHORS_SCHEMA,
+        }
+    )
+
+    link_id: str
+    expected_revision: int
+    idempotency_key: str
+    reason: str = field(repr=False)
+    evidence_anchors: tuple[dict[str, object], ...] = field(default=(), repr=False)
+
+    def __post_init__(self) -> None:
+        self.lineage_request()
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def lineage_request(self) -> MembershipCorrectRequest:
+        """The parsed request this command states."""
+        return MembershipCorrectRequest(
+            link_id=_identifier(self.link_id, IdKind.RECORD_LINK, SafeDetail.LINK_ID),
+            expected_revision=_link_revision(self.expected_revision),
+            reason=_lineage_reason(self.reason),
+            evidence_anchors=_anchor_set(self.evidence_anchors, minimum=0),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RecordIssueHandoff:
+    """`issues.handoffs.record`: record that a Commitment's next action changed hands.
+
+    Local operator only. Within one of your Issues, the next management action
+    on one Commitment member moves from the side `from_side` names -- the
+    Principal or the counterparty -- to the other side, effective at
+    `effective_at` (with an offset, never in the future, never before the
+    Commitment's creation or the previous handoff). The server resolves both
+    holders: the leaving one is the chain's last holder, the arriving one the
+    Principal or the Commitment's current counterparty. Exactly one exact
+    evidence anchor with role handoff. Nothing native changes, and a handoff
+    is never inferred from a close, a create or a membership change.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_HANDOFFS_RECORD
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue."),
+            "commitment_id": _issue_id_schema(IdKind.COMMITMENT, "A Commitment member."),
+            "from_side": {
+                "type": "string",
+                "enum": [side.value for side in HandoffSide],
+                "description": "The side the responsibility leaves.",
+            },
+            "effective_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "When the handoff took effect, ISO-8601 with an offset.",
+            },
+            "reason": _LINEAGE_REASON_SCHEMA,
+            "evidence_anchor": {
+                **_EVIDENCE_ANCHOR_SCHEMA,
+                "description": (
+                    "Exactly one exact Meeting note or Capture version (immutable_version) "
+                    "with role handoff."
+                ),
+            },
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+        }
+    )
+
+    issue_id: str
+    commitment_id: str
+    from_side: str
+    effective_at: str
+    idempotency_key: str
+    reason: str = field(repr=False)
+    evidence_anchor: dict[str, object] = field(repr=False)
+
+    def __post_init__(self) -> None:
+        self.handoff_request()
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def handoff_request(self) -> HandoffRecordRequest:
+        """The parsed request this command states."""
+        anchor = parse_evidence_anchor(self.evidence_anchor, SafeDetail.EVIDENCE_ANCHOR)
+        if (
+            anchor.role is not LineageEvidenceRole.HANDOFF
+            or anchor.version_kind is not SourceVersionKind.IMMUTABLE_VERSION
+        ):
+            raise InvalidRequestError(SafeDetail.EVIDENCE_ANCHOR)
+        return HandoffRecordRequest(
+            issue_id=_identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID),
+            commitment_id=_identifier(
+                self.commitment_id, IdKind.COMMITMENT, SafeDetail.COMMITMENT_ID
+            ),
+            side=_handoff_side(self.from_side),
+            effective_at=_aware_instant(self.effective_at, SafeDetail.EFFECTIVE_AT),
+            reason=_blank_refused_reason(self.reason),
+            evidence_anchor=anchor,
+        )
+
+
+def _handoff_side(value: object) -> HandoffSide:
+    if isinstance(value, str):
+        for side in HandoffSide:
+            if side.value == value:
+                return side
+    # The request field is `from_side` (`from` is a Python keyword); the
+    # refusal names the contract's `from` (S2 section 7.3).
+    raise invalid_choice(SafeDetail.FROM_RECORD, [side.value for side in HandoffSide])
+
+
+def _aware_instant(value: object, detail: SafeDetail) -> datetime:
+    """An ISO-8601 instant with an offset (or an aware `datetime`), else `invalid_request`."""
+    instant: datetime | None = None
+    if isinstance(value, datetime):
+        instant = value
+    elif isinstance(value, str):
+        try:
+            instant = datetime.fromisoformat(value)
+        except ValueError:
+            instant = None
+    if instant is None or instant.tzinfo is None or instant.utcoffset() is None:
+        raise InvalidRequestError(detail)
+    return instant
+
+
+#: An ISO-8601 instant with an offset (S3 `known_at`, `valid_at`, `effective_at`).
+_INSTANT_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {"type": "string", "format": "date-time", "description": "ISO-8601 with an offset."}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ListIssueHandoffs:
+    """`issues.handoffs.list`: one page of an Issue's handoffs, oldest first.
+
+    Ordered by when each was recorded; `commitment_id` narrows to one
+    Commitment's chain. An owned Commitment with no handoff in this Issue
+    answers an empty page.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_HANDOFFS_LIST
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue."),
+            "commitment_id": _issue_id_schema(IdKind.COMMITMENT, "Only this Commitment's."),
+            "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_ISSUE_PAGE_SIZE,
+                "default": DEFAULT_ISSUE_PAGE_SIZE,
+            },
+            "after": _issue_id_schema(
+                IdKind.ISSUE_HANDOFF, "Keyset cursor: the last handoff_id shown."
+            ),
+            "known_at": _INSTANT_SCHEMA,
+        }
+    )
+
+    issue_id: str
+    commitment_id: str | None = None
+    page_size: int | None = None
+    after: str | None = None
+    known_at: str | None = None
+
+    def __post_init__(self) -> None:
+        self.handoff_request()
+
+    def handoff_request(self) -> HandoffListRequest:
+        """The parsed request this command states."""
+        _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
+        if self.commitment_id is not None:
+            _identifier(self.commitment_id, IdKind.COMMITMENT, SafeDetail.COMMITMENT_ID)
+        sized = _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if sized is not None and sized > MAX_ISSUE_PAGE_SIZE:
+            raise InvalidRequestError(SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.ISSUE_HANDOFF, SafeDetail.CURSOR)
+        return HandoffListRequest(
+            issue_id=self.issue_id,
+            commitment_id=self.commitment_id,
+            page_size=DEFAULT_ISSUE_PAGE_SIZE if sized is None else sized,
+            after=self.after,
+            known_at=_optional_instant(self.known_at, SafeDetail.KNOWN_AT),
+        )
+
+
+# --- the composite Work writes (S2 contract section 6.4) -----------------------
+#
+# The nested `task` / `commitment` object is exactly the v1 `tasks.create` /
+# `commitments.create` payload without `idempotency_key` and `situation_id`
+# (and, for a Task, without `accepted_by_review_decision_id`, R2-F04). It is
+# converted the way `adapters.normalization` converts the v1 payload (strings
+# to enum members and instants) and handed to the v1 command class itself, so
+# every v1 shape rule and refusal applies unchanged; an excluded or unknown key
+# is `invalid_request`, as an unknown v1 field is.
+
+#: The v1 create fields each composite's nested object refuses (section 6.4).
+_COMPOSITE_REFUSED_TASK_FIELDS: Final = frozenset(
+    {"idempotency_key", "situation_id", "accepted_by_review_decision_id"}
+)
+_COMPOSITE_REFUSED_COMMITMENT_FIELDS: Final = frozenset({"idempotency_key", "situation_id"})
+
+#: The relations each composite's intents may name (section 6.4).
+_TASK_INTENT_RELATIONS: Final = (RelationType.ORIGINATED_FROM, RelationType.CREATED_TO_RESOLVE)
+_COMMITMENT_INTENT_RELATIONS: Final = (
+    RelationType.ORIGINATED_FROM,
+    RelationType.DELEGATED_FROM,
+    RelationType.CREATED_TO_RESOLVE,
+)
+_INTENT_KEYS: Final = frozenset({"relation_type", "to_record", "evidence_anchors", "purpose"})
+#: At most this many association intents in one composite (section 6.4).
+MAX_ASSOCIATION_INTENTS: Final = 4
+
+
+def _nested_field_schema(annotation: object) -> dict[str, object]:
+    """The wire schema of one v1 create field, as the v1 tool publishes it."""
+    optional = [
+        member for member in getattr(annotation, "__args__", ()) if member is not type(None)
+    ]
+    shown = optional[0] if len(optional) == 1 else annotation
+    if shown is datetime:
+        return {"type": "string", "format": "date-time"}
+    if isinstance(shown, type) and issubclass(shown, StrEnum):
+        return {"type": "string", "enum": [member.value for member in shown]}
+    return {"type": "string"}
+
+
+def _nested_object_schema(
+    command: type, refused: frozenset[str], description: str
+) -> dict[str, object]:
+    """The nested native object's schema: the v1 create fields less `refused`."""
+    hints = get_type_hints(command)
+    properties: dict[str, object] = {}
+    required: list[str] = []
+    for item in dataclasses.fields(command):
+        if item.name in refused:
+            continue
+        properties[item.name] = _nested_field_schema(hints[item.name])
+        if item.default is dataclasses.MISSING and item.default_factory is dataclasses.MISSING:
+            required.append(item.name)
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": required,
+        "properties": properties,
+        "description": description,
+    }
+
+
+def _intents_schema(relations: tuple[RelationType, ...]) -> dict[str, object]:
+    return {
+        "type": "array",
+        "maxItems": MAX_ASSOCIATION_INTENTS,
+        "items": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["relation_type", "to_record"],
+            "properties": {
+                "relation_type": {
+                    "type": "string",
+                    "enum": [relation.value for relation in relations],
+                },
+                "to_record": dict(_RECORD_REF_SCHEMA),
+                "evidence_anchors": dict(_EVIDENCE_ANCHORS_SCHEMA),
+                "purpose": {
+                    **_LINEAGE_REASON_SCHEMA,
+                    "description": "Required for created_to_resolve: what the record resolves.",
+                },
+            },
+        },
+        "description": (
+            "Associations from the new record, scoped to the Issue: originated_from an "
+            "exact note or Capture version, created_to_resolve the Issue or a Constraint "
+            "member (with a purpose)"
+            + (
+                ", delegated_from a Task member (owed_to_principal only)."
+                if RelationType.DELEGATED_FROM in relations
+                else "."
+            )
+        ),
+    }
+
+
+def _native_moment(converted: dict[str, Any], detail: SafeDetail) -> None:
+    supplied = converted.get("due_at")
+    if isinstance(supplied, str):
+        try:
+            converted["due_at"] = datetime.fromisoformat(supplied)
+        except ValueError:
+            raise InvalidRequestError(detail) from None
+
+
+def _native_member[EnumT: StrEnum](
+    converted: dict[str, Any], name: str, enum: type[EnumT], detail: SafeDetail
+) -> None:
+    named = converted.get(name)
+    if isinstance(named, str):
+        try:
+            converted[name] = enum(named)
+        except ValueError:
+            raise invalid_choice(detail, enum) from None
+
+
+def _nested_native(document: object, command: type, refused: frozenset[str]) -> dict[str, Any]:
+    """The nested object as a dict, or `invalid_request` for a refused or unknown key."""
+    if not isinstance(document, Mapping):
+        raise InvalidRequestError()
+    admitted = {item.name for item in dataclasses.fields(command)} - refused
+    if not set(document) <= admitted:
+        raise InvalidRequestError()
+    return dict(document)
+
+
+def _built[NativeT](build: Callable[..., NativeT], converted: dict[str, Any], key: str) -> NativeT:
+    try:
+        return build(**converted, idempotency_key=key)
+    except TypeError:
+        # A missing required field, as for the v1 payload.
+        pass
+    raise InvalidRequestError()
+
+
+def _native_document(native: object, refused: frozenset[str]) -> dict[str, object]:
+    """The native command's fields as the request digest holds them (S2 section 5)."""
+    document: dict[str, object] = {}
+    for item in dataclasses.fields(native):  # type: ignore[arg-type]
+        if item.name in refused:
+            continue
+        value = getattr(native, item.name)
+        if isinstance(value, datetime):
+            value = value.astimezone(UTC).isoformat()
+        elif isinstance(value, StrEnum):
+            value = value.value
+        document[item.name] = value
+    return document
+
+
+def _association_intents(
+    value: object, family: RecordFamily, relations: tuple[RelationType, ...]
+) -> tuple[AssociationIntent, ...]:
+    """Section 6.4's intent list: shape, admitted relation, matrix pair, no repeat."""
+    if not isinstance(value, tuple | list) or len(value) > MAX_ASSOCIATION_INTENTS:
+        raise InvalidRequestError(SafeDetail.ASSOCIATION_INTENTS)
+    parsed: list[AssociationIntent] = []
+    for document in value:
+        if (
+            not isinstance(document, Mapping)
+            or not set(document) <= _INTENT_KEYS
+            or not {"relation_type", "to_record"} <= set(document)
+        ):
+            raise InvalidRequestError(SafeDetail.ASSOCIATION_INTENTS)
+        relation = next(
+            (item for item in relations if item.value == document.get("relation_type")), None
+        )
+        if relation is None:
+            raise InvalidRequestError(SafeDetail.ASSOCIATION_INTENTS)
+        to_ref = _record_ref(document.get("to_record"), SafeDetail.TO_RECORD)
+        _kind, sources, targets = RELATION_MATRIX[relation]
+        if family not in sources or to_ref.family not in targets:
+            raise InvalidRequestError(SafeDetail.ASSOCIATION_INTENTS)
+        purpose = document.get("purpose")
+        if relation is RelationType.CREATED_TO_RESOLVE:
+            if purpose is None:
+                raise InvalidRequestError(SafeDetail.PURPOSE)
+            stated = _storable_text(purpose, SafeDetail.PURPOSE)
+            if not stated.strip() or len(stated) > MAX_LINEAGE_REASON_CHARACTERS:
+                raise InvalidRequestError(SafeDetail.PURPOSE)
+            purpose = stated
+        elif purpose is not None:
+            raise InvalidRequestError(SafeDetail.ASSOCIATION_INTENTS)
+        parsed.append(
+            AssociationIntent(
+                relation_type=relation,
+                to_ref=to_ref,
+                evidence_anchors=_anchor_set(document.get("evidence_anchors", ()), minimum=0),
+                purpose=purpose,
+            )
+        )
+    if len({(intent.relation_type, intent.to_ref) for intent in parsed}) != len(parsed):
+        # From the one new record within the one Issue: a repeated relation
+        # and target is a repeated normalized identity.
+        raise InvalidRequestError(SafeDetail.ASSOCIATION_INTENTS)
+    return tuple(parsed)
+
+
+def _issue_work_request(
+    *,
+    capability: Capability,
+    issue_id: str,
+    family: RecordFamily,
+    native_key: str,
+    native: CreateTask | CreateCommitment,
+    refused: frozenset[str],
+    membership_evidence_anchors: object,
+    association_intents: object,
+    relations: tuple[RelationType, ...],
+) -> WorkCompositeRequest:
+    return WorkCompositeRequest(
+        capability=capability.value,
+        issue_id=_identifier(issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID),
+        family=family,
+        native_key=native_key,
+        native_document=MappingProxyType(_native_document(native, refused)),
+        project_id=native.project_id,
+        direction=native.direction if isinstance(native, CreateCommitment) else None,
+        membership_evidence_anchors=_anchor_set(membership_evidence_anchors, minimum=0),
+        association_intents=_association_intents(association_intents, family, relations),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class CreateIssueWorkTask:
+    """`issues.work.create_task`: create a Task as work of one of your Issues.
+
+    Local operator only. `task` is the tasks.create payload without
+    idempotency_key, situation_id and accepted_by_review_decision_id (a Task
+    is accepted only by direct_principal origin). One transaction creates the
+    Task exactly as tasks.create would, its work membership in the Issue, and
+    up to four associations from it (originated_from, created_to_resolve). A
+    project_id needs an active Project link to the Issue. Replays return the
+    original answer; read the Task itself with tasks.read.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_WORK_CREATE_TASK
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue."),
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "task": _nested_object_schema(
+                CreateTask,
+                _COMPOSITE_REFUSED_TASK_FIELDS,
+                "The tasks.create request, without idempotency_key, situation_id and "
+                "accepted_by_review_decision_id.",
+            ),
+            "membership_evidence_anchors": _EVIDENCE_ANCHORS_SCHEMA,
+            "association_intents": _intents_schema(_TASK_INTENT_RELATIONS),
+        }
+    )
+
+    issue_id: str
+    idempotency_key: str
+    task: dict[str, object] = field(repr=False)
+    membership_evidence_anchors: tuple[dict[str, object], ...] = field(default=(), repr=False)
+    association_intents: tuple[dict[str, object], ...] = field(default=(), repr=False)
+
+    def __post_init__(self) -> None:
+        self.work_request()
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def native_command(self) -> CreateTask:
+        """The v1 `tasks.create` command the nested object states, under this key."""
+        converted = _nested_native(self.task, CreateTask, _COMPOSITE_REFUSED_TASK_FIELDS)
+        _native_moment(converted, SafeDetail.DUE_AT)
+        _native_member(converted, "priority", TaskPriority, SafeDetail.PRIORITY)
+        _native_member(converted, "role", TaskRole, SafeDetail.SELECTOR)
+        _native_member(converted, "origin_kind", TaskOriginKind, SafeDetail.ORIGIN_KIND)
+        return _built(CreateTask, converted, self.idempotency_key)
+
+    def work_request(self) -> WorkCompositeRequest:
+        """The parsed request this command states."""
+        return _issue_work_request(
+            capability=self.capability,
+            issue_id=self.issue_id,
+            family=RecordFamily.TASK,
+            native_key="task",
+            native=self.native_command(),
+            refused=_COMPOSITE_REFUSED_TASK_FIELDS,
+            membership_evidence_anchors=self.membership_evidence_anchors,
+            association_intents=self.association_intents,
+            relations=_TASK_INTENT_RELATIONS,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CreateIssueWorkCommitment:
+    """`issues.work.create_commitment`: create a Commitment as work of one of your Issues.
+
+    Local operator only. `commitment` is the commitments.create payload without
+    idempotency_key and situation_id. One transaction creates the Commitment
+    exactly as commitments.create would, its work membership in the Issue, and
+    up to four associations from it (originated_from, delegated_from a Task
+    member -- only for owed_to_principal -- and created_to_resolve). A
+    project_id needs an active Project link to the Issue. No handoff is
+    written. Replays return the original answer; read the Commitment itself
+    with commitments.read.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_WORK_CREATE_COMMITMENT
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue."),
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "commitment": _nested_object_schema(
+                CreateCommitment,
+                _COMPOSITE_REFUSED_COMMITMENT_FIELDS,
+                "The commitments.create request, without idempotency_key and situation_id.",
+            ),
+            "membership_evidence_anchors": _EVIDENCE_ANCHORS_SCHEMA,
+            "association_intents": _intents_schema(_COMMITMENT_INTENT_RELATIONS),
+        }
+    )
+
+    issue_id: str
+    idempotency_key: str
+    commitment: dict[str, object] = field(repr=False)
+    membership_evidence_anchors: tuple[dict[str, object], ...] = field(default=(), repr=False)
+    association_intents: tuple[dict[str, object], ...] = field(default=(), repr=False)
+
+    def __post_init__(self) -> None:
+        self.work_request()
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def native_command(self) -> CreateCommitment:
+        """The v1 `commitments.create` command the nested object states, under this key."""
+        converted = _nested_native(
+            self.commitment, CreateCommitment, _COMPOSITE_REFUSED_COMMITMENT_FIELDS
+        )
+        _native_moment(converted, SafeDetail.DUE_AT)
+        _native_member(converted, "direction", CommitmentDirection, SafeDetail.SELECTOR)
+        return _built(CreateCommitment, converted, self.idempotency_key)
+
+    def work_request(self) -> WorkCompositeRequest:
+        """The parsed request this command states."""
+        return _issue_work_request(
+            capability=self.capability,
+            issue_id=self.issue_id,
+            family=RecordFamily.COMMITMENT,
+            native_key="commitment",
+            native=self.native_command(),
+            refused=_COMPOSITE_REFUSED_COMMITMENT_FIELDS,
+            membership_evidence_anchors=self.membership_evidence_anchors,
+            association_intents=self.association_intents,
+            relations=_COMMITMENT_INTENT_RELATIONS,
+        )
+
+
+# --- Record lineage S3 (S3 contract section 7) ----------------------------------
+#
+# Eight commands, each a frozen dataclass whose fields are exactly the section 7
+# request fields (no server-owned field, no `commit_seq`, no `marked_at`, no
+# grant). Validation here is what is decidable from the request alone: types,
+# bounds, prefixes, closed choices and instants with an offset; `known_at` and
+# `valid_at` after now are the application's (they need the server's clock).
+
+#: S3 sections 7.2 and 7.3: the paged lineage and timeline reads take a page of
+#: 10..100 items (R3-F15), never clamped; the history reads 1..100.
+MIN_LINEAGE_PAGE_SIZE: Final = 10
+#: S3 section 5: an opaque cursor is unpadded base64url, at most 2048 characters.
+MAX_LINEAGE_CURSOR_CHARACTERS: Final = 2048
+_LINEAGE_CURSOR: Final = re.compile(r"[A-Za-z0-9_-]{1,2048}")
+#: S3 section 8.3: a plan classifies 1..500 items per call, 200 by default.
+DEFAULT_BACKFILL_BATCH_SIZE: Final = DEFAULT_BACKFILL_BATCH
+MAX_BACKFILL_BATCH_SIZE: Final = 500
+
+_LINEAGE_CURSOR_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{1,2048}$",
+        "description": "The previous page's next_cursor, with the same request.",
+    }
+)
+_HISTORY_PAGE_SIZE_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": MAX_ISSUE_PAGE_SIZE,
+        "default": DEFAULT_ISSUE_PAGE_SIZE,
+    }
+)
+
+
+def _optional_instant(value: object, detail: SafeDetail) -> datetime | None:
+    return None if value is None else _aware_instant(value, detail)
+
+
+def _history_page(page_size: object, after: object) -> None:
+    """S3 section 7.3: `page_size` 1..100 and `after` a positive integer."""
+    if page_size is not None and (
+        type(page_size) is not int or not 1 <= page_size <= MAX_ISSUE_PAGE_SIZE
+    ):
+        raise InvalidRequestError(SafeDetail.PAGE_SIZE)
+    if after is not None and (type(after) is not int or after < 1):
+        raise InvalidRequestError(SafeDetail.CURSOR)
+
+
+def _cursor_page(page_size: object, cursor: object) -> None:
+    """S3 section 7.2: `page_size` 10..100; a cursor needs a page size and is base64url."""
+    if page_size is not None and (
+        type(page_size) is not int or not MIN_LINEAGE_PAGE_SIZE <= page_size <= MAX_ISSUE_PAGE_SIZE
+    ):
+        raise InvalidRequestError(SafeDetail.PAGE_SIZE)
+    if cursor is not None:
+        if page_size is None or not isinstance(cursor, str):
+            raise InvalidRequestError(SafeDetail.CURSOR)
+        if _LINEAGE_CURSOR.fullmatch(cursor) is None:
+            raise InvalidRequestError(SafeDetail.CURSOR)
+
+
+def _link_change_request(
+    command: ContestRecordAssociation | ReinstateRecordAssociation,
+) -> AssociationCorrectRequest:
+    return AssociationCorrectRequest(
+        link_id=_identifier(command.link_id, IdKind.RECORD_LINK, SafeDetail.LINK_ID),
+        expected_revision=_link_revision(command.expected_revision),
+        reason=_lineage_reason(command.reason),
+        evidence_anchors=_anchor_set(command.evidence_anchors, minimum=1),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ContestRecordAssociation:
+    """`records.associations.contest`: dispute an active semantic association of yours.
+
+    Local operator only. The supplied evidence is the complete new set and holds
+    at least one exact-version anchor with role contradicts. The association
+    keeps its identity and reads as contested until it is reinstated or ended;
+    a contested association in an Issue's context blocks that Issue's close.
+    """
+
+    capability: ClassVar[Capability] = Capability.RECORDS_ASSOCIATIONS_CONTEST
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "link_id": _issue_id_schema(IdKind.RECORD_LINK, "The association."),
+            "expected_revision": {"type": "integer", "minimum": 1},
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "reason": _LINEAGE_REASON_SCHEMA,
+            "evidence_anchors": {**_EVIDENCE_ANCHORS_SCHEMA, "minItems": 1},
+        }
+    )
+
+    link_id: str
+    expected_revision: int
+    idempotency_key: str
+    reason: str = field(repr=False)
+    evidence_anchors: tuple[dict[str, object], ...] = field(repr=False)
+
+    def __post_init__(self) -> None:
+        self.lineage_request()
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def lineage_request(self) -> AssociationCorrectRequest:
+        """The parsed request this command states."""
+        return _link_change_request(self)
+
+
+@dataclass(frozen=True, slots=True)
+class ReinstateRecordAssociation:
+    """`records.associations.reinstate`: resolve a contested association back to active.
+
+    Local operator only. The supplied evidence is the complete new set and
+    satisfies the relation's own evidence rule.
+    """
+
+    capability: ClassVar[Capability] = Capability.RECORDS_ASSOCIATIONS_REINSTATE
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "link_id": _issue_id_schema(IdKind.RECORD_LINK, "The association."),
+            "expected_revision": {"type": "integer", "minimum": 1},
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "reason": _LINEAGE_REASON_SCHEMA,
+            "evidence_anchors": {**_EVIDENCE_ANCHORS_SCHEMA, "minItems": 1},
+        }
+    )
+
+    link_id: str
+    expected_revision: int
+    idempotency_key: str
+    reason: str = field(repr=False)
+    evidence_anchors: tuple[dict[str, object], ...] = field(repr=False)
+
+    def __post_init__(self) -> None:
+        self.lineage_request()
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def lineage_request(self) -> AssociationCorrectRequest:
+        """The parsed request this command states."""
+        return _link_change_request(self)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadRecordAssociationHistory:
+    """`records.associations.history`: one association's revisions with their evidence.
+
+    As known at `known_at` (default: now), oldest first; `after` is the last
+    `revision_no` shown.
+    """
+
+    capability: ClassVar[Capability] = Capability.RECORDS_ASSOCIATIONS_HISTORY
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "link_id": _issue_id_schema(IdKind.RECORD_LINK, "The association or membership."),
+            "known_at": _INSTANT_SCHEMA,
+            "page_size": _HISTORY_PAGE_SIZE_SCHEMA,
+            "after": {"type": "integer", "minimum": 1},
+        }
+    )
+
+    link_id: str
+    known_at: str | None = None
+    page_size: int | None = None
+    after: int | None = None
+
+    def __post_init__(self) -> None:
+        self.history_request()
+
+    def history_request(self) -> AssociationHistoryRequest:
+        """The parsed request this command states."""
+        _identifier(self.link_id, IdKind.RECORD_LINK, SafeDetail.LINK_ID)
+        known_at = _optional_instant(self.known_at, SafeDetail.KNOWN_AT)
+        _history_page(self.page_size, self.after)
+        return AssociationHistoryRequest(
+            link_id=self.link_id,
+            known_at=known_at,
+            page_size=DEFAULT_ISSUE_PAGE_SIZE if self.page_size is None else self.page_size,
+            after=self.after,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ReadIssueHistory:
+    """`issues.history`: one Issue's revisions with their closure basis, oldest first.
+
+    As known at `known_at` (default: now); `after` is the last version shown.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_HISTORY
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue."),
+            "known_at": _INSTANT_SCHEMA,
+            "page_size": _HISTORY_PAGE_SIZE_SCHEMA,
+            "after": {"type": "integer", "minimum": 1},
+        }
+    )
+
+    issue_id: str
+    known_at: str | None = None
+    page_size: int | None = None
+    after: int | None = None
+
+    def __post_init__(self) -> None:
+        self.history_request()
+
+    def history_request(self) -> IssueHistoryRequest:
+        """The parsed request this command states."""
+        _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
+        known_at = _optional_instant(self.known_at, SafeDetail.KNOWN_AT)
+        _history_page(self.page_size, self.after)
+        return IssueHistoryRequest(
+            issue_id=self.issue_id,
+            known_at=known_at,
+            page_size=DEFAULT_ISSUE_PAGE_SIZE if self.page_size is None else self.page_size,
+            after=self.after,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ReadIssueTimeline:
+    """`issues.timeline`: one Issue's ordered lineage and native events, one page at a time.
+
+    `known_at` reads the lineage plane as it was then known (native events are
+    then omitted); `valid_at` reads what was in effect then. `page_size` is
+    10..100 (default 25); `cursor` is the previous page's `next_cursor`.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_TIMELINE
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue."),
+            "known_at": _INSTANT_SCHEMA,
+            "valid_at": _INSTANT_SCHEMA,
+            "page_size": {
+                "type": "integer",
+                "minimum": MIN_LINEAGE_PAGE_SIZE,
+                "maximum": MAX_ISSUE_PAGE_SIZE,
+                "default": DEFAULT_ISSUE_PAGE_SIZE,
+            },
+            "cursor": _LINEAGE_CURSOR_SCHEMA,
+        }
+    )
+
+    issue_id: str
+    known_at: str | None = None
+    valid_at: str | None = None
+    page_size: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        self.timeline_request()
+
+    def timeline_request(self) -> IssueTimelineRequest:
+        """The parsed request this command states."""
+        _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
+        known_at = _optional_instant(self.known_at, SafeDetail.KNOWN_AT)
+        valid_at = _optional_instant(self.valid_at, SafeDetail.VALID_AT)
+        _cursor_page(self.page_size, self.cursor)
+        return IssueTimelineRequest(
+            issue_id=self.issue_id,
+            known_at=known_at,
+            valid_at=valid_at,
+            page_size=DEFAULT_TIMELINE_PAGE_SIZE if self.page_size is None else self.page_size,
+            cursor=self.cursor,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CorrectIssueHandoff:
+    """`issues.handoffs.correct`: retime or void one recorded handoff, never rewriting it.
+
+    Local operator only. `retime`: the handoff happened at `effective_at`
+    instead (with an offset, in order within its chain), with exactly one exact
+    anchor with role handoff. `void`: it did not happen -- only the chain's
+    last live handoff -- with exactly one exact anchor with role contradicts.
+    A voided handoff takes no further correction; a closed Issue's handoffs
+    are not corrected.
+    """
+
+    capability: ClassVar[Capability] = Capability.ISSUES_HANDOFFS_CORRECT
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "handoff_id": _issue_id_schema(IdKind.ISSUE_HANDOFF, "The handoff."),
+            "action": {"type": "string", "enum": [a.value for a in HandoffCorrectionAction]},
+            "effective_at": {
+                **_INSTANT_SCHEMA,
+                "description": "retime only: when it took effect, ISO-8601 with an offset.",
+            },
+            "reason": _LINEAGE_REASON_SCHEMA,
+            "evidence_anchor": {
+                **_EVIDENCE_ANCHOR_SCHEMA,
+                "description": (
+                    "Exactly one exact Meeting note or Capture version (immutable_version): "
+                    "role handoff for retime, contradicts for void."
+                ),
+            },
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+        }
+    )
+
+    handoff_id: str
+    action: str
+    idempotency_key: str
+    reason: str = field(repr=False)
+    evidence_anchor: dict[str, object] = field(repr=False)
+    effective_at: str | None = None
+
+    def __post_init__(self) -> None:
+        self.handoff_request()
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def handoff_request(self) -> HandoffCorrectRequest:
+        """The parsed request this command states."""
+        handoff_id = _identifier(self.handoff_id, IdKind.ISSUE_HANDOFF, SafeDetail.HANDOFF_ID)
+        action = _handoff_correction_action(self.action)
+        effective_at: datetime | None = None
+        if action is HandoffCorrectionAction.RETIME:
+            effective_at = _aware_instant(self.effective_at, SafeDetail.EFFECTIVE_AT)
+        elif self.effective_at is not None:
+            raise InvalidRequestError(SafeDetail.EFFECTIVE_AT)
+        reason = _blank_refused_reason(self.reason)
+        anchor = parse_evidence_anchor(self.evidence_anchor, SafeDetail.EVIDENCE_ANCHOR)
+        role = (
+            LineageEvidenceRole.HANDOFF
+            if action is HandoffCorrectionAction.RETIME
+            else LineageEvidenceRole.CONTRADICTS
+        )
+        if (
+            anchor.role is not role
+            or anchor.version_kind is not SourceVersionKind.IMMUTABLE_VERSION
+        ):
+            raise InvalidRequestError(SafeDetail.EVIDENCE_ANCHOR)
+        return HandoffCorrectRequest(
+            handoff_id=handoff_id,
+            action=action,
+            effective_at=effective_at,
+            reason=reason,
+            evidence_anchor=anchor,
+        )
+
+
+def _handoff_correction_action(value: object) -> HandoffCorrectionAction:
+    if isinstance(value, str):
+        for action in HandoffCorrectionAction:
+            if action.value == value:
+                return action
+    raise invalid_choice(SafeDetail.ACTION, [action.value for action in HandoffCorrectionAction])
+
+
+@dataclass(frozen=True, slots=True)
+class PlanLineageBackfill:
+    """`records.backfill.plan`: enumerate a backfill dry run, or classify its next batch.
+
+    Operator only, behind its own switch. Without `run_id` it freezes the whole
+    population in one statement; with `run_id` and `expected_checkpoint` (the
+    run's classified count) it classifies the next `batch_size` items (1..500,
+    default 200). It writes ledger rows only: never a link.
+    """
+
+    capability: ClassVar[Capability] = Capability.RECORDS_BACKFILL_PLAN
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "run_id": _issue_id_schema(IdKind.LINEAGE_BACKFILL_RUN, "The run to continue."),
+            "expected_checkpoint": {"type": "integer", "minimum": 0},
+            "batch_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_BACKFILL_BATCH_SIZE,
+                "default": DEFAULT_BACKFILL_BATCH_SIZE,
+            },
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+        }
+    )
+
+    idempotency_key: str
+    run_id: str | None = None
+    expected_checkpoint: int | None = None
+    batch_size: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.run_id is not None:
+            _identifier(self.run_id, IdKind.LINEAGE_BACKFILL_RUN, SafeDetail.RUN_ID)
+            if type(self.expected_checkpoint) is not int or self.expected_checkpoint < 0:
+                raise InvalidRequestError(SafeDetail.CHECKPOINT)
+        elif self.expected_checkpoint is not None:
+            raise InvalidRequestError(SafeDetail.CHECKPOINT)
+        if self.batch_size is not None and (
+            type(self.batch_size) is not int or not 1 <= self.batch_size <= MAX_BACKFILL_BATCH_SIZE
+        ):
+            raise InvalidRequestError(SafeDetail.BATCH_SIZE)
+        _lineage_key(_idempotency_key(self.idempotency_key))
+
+    def plan_request(self) -> BackfillPlanRequest:
+        """The parsed request this command states."""
+        return BackfillPlanRequest(
+            run_id=self.run_id,
+            expected_checkpoint=self.expected_checkpoint,
+            batch_size=self.batch_size,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ReportLineageBackfill:
+    """`records.backfill.report`: one backfill run's census, counts and items.
+
+    Operator only, behind its own switch. `after` is the last `item_no` shown;
+    `classification` narrows the items to one class.
+    """
+
+    capability: ClassVar[Capability] = Capability.RECORDS_BACKFILL_REPORT
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "run_id": _issue_id_schema(IdKind.LINEAGE_BACKFILL_RUN, "The run."),
+            "page_size": _HISTORY_PAGE_SIZE_SCHEMA,
+            "after": {"type": "integer", "minimum": 1},
+            "classification": {"type": "string", "enum": [c.value for c in BackfillClass]},
+        }
+    )
+
+    run_id: str
+    page_size: int | None = None
+    after: int | None = None
+    classification: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.run_id, IdKind.LINEAGE_BACKFILL_RUN, SafeDetail.RUN_ID)
+        _history_page(self.page_size, self.after)
+        if self.classification is not None and self.classification not in {
+            member.value for member in BackfillClass
+        }:
+            raise invalid_choice(SafeDetail.CLASSIFICATION, [c.value for c in BackfillClass])
+
+    def report_request(self) -> BackfillReportRequest:
+        """The parsed request this command states."""
+        return BackfillReportRequest(
+            run_id=self.run_id,
+            page_size=DEFAULT_ISSUE_PAGE_SIZE if self.page_size is None else self.page_size,
+            after=self.after,
+            classification=(
+                None if self.classification is None else BackfillClass(self.classification)
+            ),
+        )
+
+
 type Command = (
     GetCapabilities
     | ListSources
@@ -12102,6 +14226,36 @@ type Command = (
     | CreateKnowledgeAssertion
     | SubmitKnowledgeAssertion
     | CheckpointKnowledgeDiscovery
+    | CreateIssue
+    | ReadIssue
+    | ListIssues
+    | UpdateIssue
+    | AddIssueProjectLink
+    | EndIssueProjectLink
+    | AddIssueMembership
+    | EndIssueMembership
+    | AssertRecordAssociation
+    | CorrectRecordAssociation
+    | EndRecordAssociation
+    | ReadRecordLineage
+    | ListMeetingNoteVersions
+    | ReadMeetingNoteVersion
+    | CloseIssue
+    | ReopenIssue
+    | ReadIssueClosureReadiness
+    | CorrectIssueMembership
+    | RecordIssueHandoff
+    | ListIssueHandoffs
+    | CreateIssueWorkTask
+    | CreateIssueWorkCommitment
+    | ContestRecordAssociation
+    | ReinstateRecordAssociation
+    | ReadRecordAssociationHistory
+    | ReadIssueHistory
+    | ReadIssueTimeline
+    | CorrectIssueHandoff
+    | PlanLineageBackfill
+    | ReportLineageBackfill
 )
 
 

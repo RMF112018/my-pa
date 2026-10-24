@@ -491,6 +491,22 @@ class Settings(StrictModel):
     #: binding, so a consumer's prior cursor answers `conflict(cursor)` and the
     #: consumer re-bootstraps (`ops/runbooks/gateway-operations.md`).
     knowledge_assertions_enabled: bool = False
+    #: Record lineage S1 admission switch (ADR-015; S1 contract section 7.5).
+    #: Default off. Off withholds every S1 lineage capability from
+    #: `capabilities.get`, readiness, the MCP tool list and the ChatLLM profile,
+    #: and each S1 handler answers `unsupported` before authority or reservation.
+    #: No dependency on another switch; turning it on or off changes no row --
+    #: the S1 schema is present and dormant either way. The refusal of an Issue
+    #: `situation_id` by the Work and Memory writers holds whatever it says.
+    lineage_enabled: bool = False
+    #: Record lineage S3 backfill sub-switch (S3 contract section 7.7, R3-F12),
+    #: env `MY_PA_LINEAGE_BACKFILL_ENABLED`. Default off, and it widens nothing
+    #: alone: the two operator-only backfill capabilities (`records.backfill.plan`
+    #: and `records.backfill.report`) are served only while this and
+    #: `lineage_enabled` are both on, so enabling lineage never enables a
+    #: backfill. Enabling it, or running the dry run against any real database,
+    #: is an operator gate (S3 contract section 13).
+    lineage_backfill_enabled: bool = False
     #: KLP-WP-04 (R6 section 3.4, KLP-AC-019). The exact OAuth client ids bound
     #: as Knowledge discovery clients. Compared exactly, never by prefix; empty --
     #: the default -- binds no client, so `knowledge.assertions.submit` and

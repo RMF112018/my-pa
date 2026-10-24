@@ -20,6 +20,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import IntegrityError
 from tests.schema.knowledge_schema_ahead_contract import GAP_ROWS, admitted_ahead
+from tests.schema.lineage_schema_ahead_contract import lineage_admitted_ahead
 
 from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.common.identifiers import IdKind
@@ -169,7 +170,7 @@ def test_the_chain_has_one_head_and_these_revisions_are_in_order() -> None:
     # (RULING-M11); 91 since `6a2f9d1c4b80` added the GoodNotes pull schema on
     # top of that -- counted on the merged tree, not derived (RULING-M2).
     # R8 adds one receipt migration on the previous 91-revision chain.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 118
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 121
 
 
 def test_the_frozen_literals_are_the_domain_at_head() -> None:
@@ -249,10 +250,12 @@ def test_the_revisions_run_empty_to_head_and_prior_to_head(disposable_database: 
         declared = {member.value for member in Capability} | {
             member.value for member in NativeSourceCapability
         }
-        assert _admitted(engine, "capability_is_known") == declared | admitted_ahead("capability")
-        assert _admitted(engine, "purpose_is_known") == {
-            member.value for member in Purpose
-        } | admitted_ahead("purpose")
+        assert _admitted(engine, "capability_is_known") == declared | (
+            admitted_ahead("capability") | lineage_admitted_ahead("capability")
+        )
+        assert _admitted(engine, "purpose_is_known") == {member.value for member in Purpose} | (
+            admitted_ahead("purpose") | lineage_admitted_ahead("purpose")
+        )
         assert {"context_runs", "context_run_items"} <= _tables(engine)
         # KLP-AC-109 / 132: at head the context item CHECKs equal the domain
         # union the current gap row (empty at wp06).

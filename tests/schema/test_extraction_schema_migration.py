@@ -518,6 +518,41 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
     ),
     # The Intelligence report type registry: one per-Principal table.
     "a591b81f10a2": frozenset({"intelligence_report_types"}),
+    # Record lineage S1 (ADR-015): Issue revisions, Issue-Project membership
+    # events, evidence anchors, link roots, revisions, revision evidence and
+    # heads, and the write-request ledger.
+    "264310e0416a": frozenset(
+        {
+            "lineage_evidence_anchors",
+            "issue_revisions",
+            "issue_project_membership_events",
+            "record_links",
+            "record_link_revisions",
+            "record_link_revision_evidence",
+            "record_link_heads",
+            "lineage_write_requests",
+        }
+    ),
+    # Record lineage S2 (ADR-015): Issue closure evidence, the responsibility
+    # handoff ledger and a composite request's links.
+    "d020b532ad7d": frozenset(
+        {
+            "issue_revision_evidence",
+            "issue_responsibility_events",
+            "lineage_write_request_links",
+        }
+    ),
+    # Record lineage S3 (ADR-015): the knowledge clock, handoff corrections and
+    # the backfill dry-run ledger.
+    "6f1476b8da52": frozenset(
+        {
+            "lineage_commit_sequences",
+            "lineage_commit_marks",
+            "issue_responsibility_corrections",
+            "lineage_backfill_runs",
+            "lineage_backfill_items",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

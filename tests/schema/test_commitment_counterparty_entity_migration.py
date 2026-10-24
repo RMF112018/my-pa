@@ -30,8 +30,9 @@ VERSIONS: Final = ROOT / "migrations" / "versions"
 REVISION: Final = "5c1e7a9b3d42"
 PREVIOUS: Final = "c8f7ae406d47"
 #: `b9025e7fb738` (WP-MCP-PROJ-05, legacy Project-Entity bridge reconciliation)
-#: is additive directly on this revision and is now the chain's sole head.
-HEAD: Final = "b9025e7fb738"
+#: is additive directly on this revision, and `264310e0416a` (record lineage S1)
+#: on that; the latter is now the chain's sole head.
+HEAD: Final = "6f1476b8da52"
 MIGRATION: Final = VERSIONS / "20261014_5c1e7a9b3d42_commitment_counterparty_entity.py"
 RESTRICT_VIOLATION: Final = "23001"
 FOREIGN_KEY_VIOLATION: Final = "23503"
@@ -71,7 +72,10 @@ def _config() -> Config:
 def test_the_revision_is_the_single_head_directly_on_the_mcp_interaction_log() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == REVISION
+    assert script.get_revision(HEAD).down_revision == "d020b532ad7d"
+    assert script.get_revision("d020b532ad7d").down_revision == "264310e0416a"
+    assert script.get_revision("264310e0416a").down_revision == "b9025e7fb738"
+    assert script.get_revision("b9025e7fb738").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "a591b81f10a2"
     assert [path.name for path in VERSIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]

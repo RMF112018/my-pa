@@ -84,13 +84,18 @@ from my_pa.contracts.ports import (
     EnrollmentRepository,
     EntitiesRepository,
     GoodNotesSemanticRepository,
+    IssueHandoffRepository,
+    IssueRepository,
+    IssueTimelineRepository,
     KnowledgeRepository,
+    LineageBackfillRepository,
     ManagedDocumentRepository,
     MeetingRepository,
     OperationQueue,
     ProjectRepository,
     PulseRepository,
     RecordEventStager,
+    RecordLineageRepository,
     ReviewRepository,
     SituationRepository,
     SourceProviders,
@@ -232,6 +237,26 @@ class _HoldsItsConnection(UnitOfWork):
     @property
     def meetings(self) -> MeetingRepository:
         return self._inner.meetings
+
+    @property
+    def issues(self) -> IssueRepository:
+        return self._inner.issues
+
+    @property
+    def record_lineage(self) -> RecordLineageRepository:
+        return self._inner.record_lineage
+
+    @property
+    def issue_handoffs(self) -> IssueHandoffRepository:
+        return self._inner.issue_handoffs
+
+    @property
+    def issue_timeline(self) -> IssueTimelineRepository:
+        return self._inner.issue_timeline
+
+    @property
+    def lineage_backfill(self) -> LineageBackfillRepository:
+        return self._inner.lineage_backfill
 
     @property
     def audit(self) -> AuditSink:

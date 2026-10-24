@@ -44,6 +44,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import IntegrityError
 from tests.schema.knowledge_schema_ahead_contract import admitted_ahead
+from tests.schema.lineage_schema_ahead_contract import lineage_admitted_ahead
 
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
@@ -252,7 +253,7 @@ def test_downgrading_this_revision_restores_exactly_the_previous_vocabulary(
             member.value for member in NativeSourceCapability
         }
         assert _admitted(engine, "audit_events", "capability_is_known") == (
-            declared | admitted_ahead("capability")
+            declared | (admitted_ahead("capability") | lineage_admitted_ahead("capability"))
         )
 
         command.downgrade(_config(), PREVIOUS_REVISION)
@@ -260,7 +261,7 @@ def test_downgrading_this_revision_restores_exactly_the_previous_vocabulary(
 
         command.upgrade(_config(), "head")
         assert _admitted(engine, "audit_events", "capability_is_known") == (
-            declared | admitted_ahead("capability")
+            declared | (admitted_ahead("capability") | lineage_admitted_ahead("capability"))
         )
     finally:
         engine.dispose()

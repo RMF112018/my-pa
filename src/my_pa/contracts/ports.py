@@ -112,6 +112,21 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesSemanticProposal,
     GoodNotesSemanticReviewCase,
 )
+from my_pa.domain.lineage.backfill import CaptureVersionPin
+from my_pa.domain.lineage.model import EvidenceAnchor, RecordRef
+from my_pa.domain.lineage.vocabulary import (
+    AcceptanceBasis,
+    IssueProjectMembershipAction,
+    IssueProjectMembershipState,
+    IssueRevisionAction,
+    LinkLifecycleState,
+    LinkRevisionAction,
+    MemberRole,
+    RecordFamily,
+    RecordLinkKind,
+    RelationType,
+    SituationKind,
+)
 from my_pa.domain.meeting.model import (
     MeetingListRequest,
     MeetingSearchRequest,
@@ -330,6 +345,13 @@ __all__ = [
     "AuditSink",
     "AuthoringConflictError",
     "AuthoringReceipt",
+    "BackfillCountRow",
+    "BackfillExistingLink",
+    "BackfillItemRecord",
+    "BackfillLinkEndpoints",
+    "BackfillPendingSource",
+    "BackfillRunRecord",
+    "BackfillSettlement",
     "CanvasWorkspaceConflictError",
     "CanvasWorkspaceRecord",
     "CanvasWorkspaceRepository",
@@ -346,6 +368,7 @@ __all__ = [
     "CommitmentManagementUnitOfWork",
     "ConstraintManagementRepository",
     "ConstraintManagementUnitOfWork",
+    "ConstraintRevisionSnapshot",
     "ContextPreferenceRepository",
     "ContextRunRepository",
     "ContinuityAuthoringRepository",
@@ -365,6 +388,12 @@ __all__ = [
     "FrameRepository",
     "InitialAlias",
     "InitialIdentifier",
+    "IssueCursorError",
+    "IssueListPage",
+    "IssueRecord",
+    "IssueRepository",
+    "IssueRevisionRecord",
+    "IssueTimelineRepository",
     "KnowledgeAssertionHistory",
     "KnowledgeAssertionPage",
     "KnowledgeAssertionRepository",
@@ -397,6 +426,19 @@ __all__ = [
     "KnowledgeSubmitRequest",
     "KnowledgeSupersessionGuardError",
     "KnowledgeTriggerNotFoundError",
+    "LineageBackfillRepository",
+    "LineageEndpoint",
+    "LineageFactCut",
+    "LineageIdempotencyConflictError",
+    "LineageIssueAsOf",
+    "LineageLinkEvidence",
+    "LineageNoteVersionRef",
+    "LineageReadTimeoutError",
+    "LineageResolvedRecord",
+    "LineageSourceVersion",
+    "LineageWriteRequestRecord",
+    "LinkHeadRecord",
+    "LinkRevisionRecord",
     "ManagedAdmission",
     "ManagedByteStore",
     "ManagedDocumentRepository",
@@ -407,6 +449,8 @@ __all__ = [
     "MeetingEntityState",
     "MeetingListPage",
     "MeetingNoteRecord",
+    "MeetingNoteVersionPage",
+    "MeetingNoteVersionRecord",
     "MeetingRecord",
     "MeetingRepository",
     "MeetingWriteRequestRecord",
@@ -414,6 +458,7 @@ __all__ = [
     "Operation",
     "OperationQueue",
     "PortError",
+    "ProjectLinkEventRecord",
     "ProjectRepository",
     "ProposalAdmissionConflictError",
     "PulseRepository",
@@ -425,6 +470,8 @@ __all__ = [
     "RecordEventReader",
     "RecordEventStager",
     "RecordEventWriter",
+    "RecordLineageRepository",
+    "RecordLinkRecord",
     "RelationshipEventRepository",
     "RelationshipRepository",
     "RelationshipWriteRequest",
@@ -437,6 +484,8 @@ __all__ = [
     "SourceRepository",
     "TaskManagementRepository",
     "TaskManagementUnitOfWork",
+    "TimelineLinkRevision",
+    "TimelineNativeEvent",
     "TraceRepository",
     "TransactionConflictError",
     "UnitOfWork",
@@ -6254,6 +6303,48 @@ class UnitOfWork(ABC):
         """
 
     @property
+    @abstractmethod
+    def issues(self) -> IssueRepository:
+        """The record lineage S1 Issue plane, inside this transaction.
+
+        On the general unit of work for the reason `meetings` is: an Issue write
+        reserves its request, locks, writes its revision or membership event and
+        completes its request in the one transaction `invoke` already owns.
+        """
+
+    @property
+    @abstractmethod
+    def record_lineage(self) -> RecordLineageRepository:
+        """The record lineage S1 links, evidence and reverse read, inside this transaction.
+
+        On the general unit of work beside `issues`: a membership or association
+        write reserves its request through `issues`, shares its endpoints and
+        evidence sources, and writes its root, revision, evidence and head here,
+        all in the one transaction `invoke` already owns.
+        """
+
+    @property
+    @abstractmethod
+    def issue_handoffs(self) -> IssueHandoffRepository:
+        """The record lineage S2 responsibility handoff ledger, inside this transaction.
+
+        On the general unit of work beside `issues` and `record_lineage`, for
+        the reason they are: a handoff reserves its request, shares its Issue,
+        Commitment and evidence source, and appends its event in the one
+        transaction `invoke` already owns.
+        """
+
+    @property
+    @abstractmethod
+    def issue_timeline(self) -> IssueTimelineRepository:
+        """The record lineage S3 Issue timeline reads, inside this transaction."""
+
+    @property
+    @abstractmethod
+    def lineage_backfill(self) -> LineageBackfillRepository:
+        """The record lineage S3 backfill dry-run ledger, inside this transaction."""
+
+    @property
     def identity_history(self) -> object:
         """The optional Principal-scoped identity-history read projection.
 
@@ -6453,7 +6544,14 @@ class SituationRepository(ABC):
     def list_situations(
         self, principal_id: str, state_filter: SituationState | None = None
     ) -> tuple[Situation, ...]:
-        """One page of this Principal's Situations, newest first."""
+        """One page of this Principal's context Situations, newest first.
+
+        Selects `kind = 'context'` only (record lineage S1 contract section 8,
+        F22): an Issue (`kind = 'issue_workstream'`) is never listed here, so
+        `continuity.situations` and `context.prepare`'s continuity gather never
+        offer a `situation_id` the Work and Memory writers refuse. Issues are
+        reached through `issues.list` and `issues.read`.
+        """
 
 
 class FrameRepository(ABC):
@@ -8687,6 +8785,33 @@ class MeetingListPage:
     has_more: bool
 
 
+@dataclass(frozen=True, slots=True)
+class MeetingNoteVersionRecord:
+    """One immutable `meeting_note_versions` row (record lineage S1 contract 7.2).
+
+    `body` is the exact stored text; it leaves the application only through
+    `meetings.notes.read_version` with `include_body`. `is_current` says no
+    later version supersedes this one.
+    """
+
+    note_version_id: str
+    meeting_id: str
+    version_number: int
+    supersedes_note_version_id: str | None
+    content_sha256: str
+    body: str
+    recorded_at: datetime
+    is_current: bool
+
+
+@dataclass(frozen=True, slots=True)
+class MeetingNoteVersionPage:
+    """One page of a Meeting's note versions, newest first, and whether more follow."""
+
+    entries: tuple[MeetingNoteVersionRecord, ...]
+    has_more: bool
+
+
 class MeetingRepository(ABC):
     """The Meeting records tables, on the general unit of work's connection.
 
@@ -8947,3 +9072,1374 @@ class MeetingRepository(ABC):
         Raises `MeetingCursorError` when the anchor is absent, foreign, or
         outside the filter set (and, with `query`, outside the match set).
         """
+
+    # --- note history (record lineage S1 contract section 7.2) ----------------
+
+    @abstractmethod
+    def meeting_is_owned(self, principal_id: str, meeting_id: str) -> bool:
+        """Whether this Principal holds the Meeting, in any status. Nonlocking."""
+
+    @abstractmethod
+    def list_note_versions(
+        self, principal_id: str, meeting_id: str, *, page_size: int, after: str | None
+    ) -> MeetingNoteVersionPage:
+        """One page of the Meeting's note versions, `version_number DESC`.
+
+        Raises `MeetingCursorError` when `after` names no note version of this
+        Meeting and Principal.
+        """
+
+    @abstractmethod
+    def read_note_version(
+        self, principal_id: str, meeting_id: str, note_version_id: str
+    ) -> MeetingNoteVersionRecord | None:
+        """One note version under that Meeting of this Principal, or `None`."""
+
+
+# --- Record lineage S1: the Issue plane (S1 contract sections 6 and 7) ---------
+#
+# The values below cross the Issue port. None carries a `principal_id`: the
+# Principal is a parameter on every `IssueRepository` method, taken from the
+# authenticated request, and the repository stamps it on every write and
+# constrains every read by it. Every method runs on the general unit of work's
+# connection, inside the one transaction `ApplicationService.invoke` opened.
+
+
+class LineageIdempotencyConflictError(PortError):
+    """One lineage idempotency key was reused with a different request digest."""
+
+
+class IssueCursorError(PortError):
+    """An `issues.list` `after` anchor is absent, foreign or outside the filter."""
+
+
+@dataclass(frozen=True, slots=True)
+class LineageWriteRequestRecord:
+    """One completed `lineage_write_requests` row, as a replay reads it.
+
+    Only completed rows cross the port: an incomplete reservation behind a
+    conflicting insert is an internal failure, never a replay.
+    """
+
+    capability: str
+    request_digest: str
+    completed_at: datetime
+    result_issue_id: str | None = None
+    result_issue_version: int | None = None
+    result_membership_event_id: str | None = None
+    result_link_id: str | None = None
+    result_link_revision_no: int | None = None
+    result_created: bool | None = None
+    #: Record lineage S2 (S2 contract section 4.1): a handoff's event and a
+    #: composite's native record (its links are in `lineage_write_request_links`).
+    result_handoff_id: str | None = None
+    result_record_family: str | None = None
+    result_record_id: str | None = None
+    #: Record lineage S3 (S3 contract section 4.1): a handoff correction, a
+    #: backfill run and its checkpoint, and the commit mark the write took
+    #: (null for a backfill plan and for a pre-S3 row).
+    result_handoff_correction_id: str | None = None
+    result_backfill_run_id: str | None = None
+    result_backfill_checkpoint: int | None = None
+    commit_seq: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class IssueRecord:
+    """The `situations` row of one Issue (`kind = 'issue_workstream'`).
+
+    `closed_at` and `outcome` are set exactly while the Issue is `closed` (S2).
+    """
+
+    issue_id: str
+    version: int
+    state: SituationState
+    title: str
+    description: str | None
+    opened_at: datetime
+    created_at: datetime
+    updated_at: datetime
+    closed_at: datetime | None = None
+    outcome: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class IssueRevisionRecord:
+    """One immutable `issue_revisions` row."""
+
+    issue_id: str
+    version: int
+    revision_id: str
+    predecessor_version: int | None
+    action: IssueRevisionAction
+    state: SituationState
+    title: str
+    description: str | None
+    authority_class: str
+    decision_channel: str
+    source_capability: str
+    recorded_at: datetime
+    #: Record lineage S2 (S2 contract section 4.1): a `closed` revision's
+    #: `closed_at` and `outcome` (a `corrected` one copies them), a `reopened`
+    #: one's `reason`, and a closing or reopening revision's evidence set in
+    #: canonical order with its stored digest (withheld from every view).
+    closed_at: datetime | None = None
+    outcome: str | None = None
+    reason: str | None = None
+    evidence: tuple[LineageLinkEvidence, ...] = ()
+    evidence_set_digest: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectLinkEventRecord:
+    """One immutable `issue_project_membership_events` row, with its link's `psit_`.
+
+    `project_situation_id` is the `project_situations` row the event's triplet
+    names; it never changes after the link's first event.
+    """
+
+    membership_event_id: str
+    project_id: str
+    issue_id: str
+    project_situation_id: str
+    revision_no: int
+    predecessor_revision_no: int | None
+    action: IssueProjectMembershipAction
+    state: IssueProjectMembershipState
+    evidence_anchor_id: str | None
+    reason: str | None
+    acceptance_basis: str
+    authority_class: str
+    decision_channel: str
+    source_capability: str
+    recorded_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class IssueListPage:
+    """One bounded keyset page of Issues, and whether another page follows."""
+
+    entries: tuple[IssueRecord, ...]
+    has_more: bool
+
+
+@dataclass(frozen=True, slots=True)
+class LineageSourceVersion:
+    """One evidence source version, read under `FOR SHARE` (S1 contract 3.2, 5.2).
+
+    `body` is the exact stored text (`meeting_note_versions.content_markdown`
+    or `capture_versions.content`), read only to verify a passage digest and
+    never returned. `classification` is the Capture version's, `None` for a
+    Meeting note version.
+    """
+
+    version_number: int
+    content_sha256: str
+    body: str
+    classification: str | None = None
+
+
+class IssueRepository(ABC):
+    """The Issue plane's rows, on the general unit of work's connection.
+
+    The operation set is S1 contract section 6.2's lock order for the Issue and
+    Project-link writes: reserve and complete a `lineage_write_requests` row;
+    lock an Issue `FOR UPDATE` (a write that changes it) or `FOR SHARE`; share
+    the Project and every evidence source; claim the `project_situations`
+    triplet row `FOR UPDATE`; write the Issue, its immutable revision, the link
+    and its immutable membership event, and a reused-or-inserted evidence
+    anchor; and read. Reads take no locks.
+    """
+
+    @abstractmethod
+    def reserve_write_request(
+        self,
+        principal_id: str,
+        capability: str,
+        idempotency_key: str,
+        request_digest: str,
+        *,
+        created_at: datetime,
+    ) -> LineageWriteRequestRecord | None:
+        """Reserve the request identity, or answer the committed winner.
+
+        `None` when this call reserved it. A completed winner with the same
+        digest is returned for replay; one with another digest raises
+        `LineageIdempotencyConflictError`.
+        """
+
+    @abstractmethod
+    def complete_write_request(
+        self,
+        principal_id: str,
+        capability: str,
+        idempotency_key: str,
+        *,
+        request_digest: str,
+        completed_at: datetime,
+        result_issue_id: str | None = None,
+        result_issue_version: int | None = None,
+        result_membership_event_id: str | None = None,
+        result_link_id: str | None = None,
+        result_link_revision_no: int | None = None,
+        result_created: bool | None = None,
+        result_handoff_id: str | None = None,
+        result_record_family: str | None = None,
+        result_record_id: str | None = None,
+        result_handoff_correction_id: str | None = None,
+        result_backfill_run_id: str | None = None,
+        result_backfill_checkpoint: int | None = None,
+    ) -> None:
+        """Complete this transaction's reservation with its one result group.
+
+        S3 section 4.1: the row also records `commit_seq`, the commit mark this
+        transaction holds for the Principal (`take_commit_mark`), or null when
+        it took none -- a `records.backfill.plan`, which writes no fact.
+        """
+
+    @abstractmethod
+    def insert_issue(
+        self, principal_id: str, issue: IssueRecord, revision: IssueRevisionRecord
+    ) -> None:
+        """Insert a new Issue `situations` row and its first revision."""
+
+    @abstractmethod
+    def lock_issue(
+        self, principal_id: str, issue_id: str, *, for_update: bool
+    ) -> IssueRecord | None:
+        """Lock one Issue of this Principal, or `None` (absent, foreign or context)."""
+
+    @abstractmethod
+    def update_issue(
+        self, principal_id: str, issue: IssueRecord, revision: IssueRevisionRecord
+    ) -> None:
+        """Write the Issue's next revision and the matching `situations` row."""
+
+    @abstractmethod
+    def read_issue(self, principal_id: str, issue_id: str) -> IssueRecord | None:
+        """One Issue of this Principal without a lock, or `None`."""
+
+    @abstractmethod
+    def read_issue_revision(
+        self, principal_id: str, issue_id: str, version: int
+    ) -> IssueRevisionRecord | None:
+        """One immutable Issue revision with its evidence set, or `None`."""
+
+    @abstractmethod
+    def latest_closing_revision(
+        self, principal_id: str, issue_id: str, *, at_or_below: int
+    ) -> IssueRevisionRecord | None:
+        """The latest `closed` revision at or below `at_or_below`, with its evidence, or `None`.
+
+        Record lineage S2 (S2 contract section 7.1, `IssueClosureView`).
+        """
+
+    def issue_revisions_known_at(
+        self,
+        principal_id: str,
+        issue_id: str,
+        cut: LineageFactCut,
+        *,
+        after: int | None,
+        limit: int,
+    ) -> tuple[IssueRevisionRecord, ...]:
+        """One Issue's revisions known at `cut`, by `version`, after `after`, with evidence.
+
+        `issues.history` (S3 contract section 7.3); at most `limit`. No lock.
+        Non-abstract: a fake that serves no history never needs it.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_issues(
+        self,
+        principal_id: str,
+        *,
+        page_size: int,
+        after: str | None,
+        state: SituationState | None,
+        project_id: str | None,
+    ) -> IssueListPage:
+        """One keyset page ordered `(created_at DESC, situation_id DESC)`.
+
+        Raises `IssueCursorError` when `after` names no Issue inside the same
+        filter set.
+        """
+
+    @abstractmethod
+    def project_links(
+        self, principal_id: str, issue_id: str, *, limit: int
+    ) -> tuple[ProjectLinkEventRecord, ...]:
+        """The latest event of each of the Issue's Project links, at most `limit`.
+
+        Ordered active first, then by `project_id`.
+        """
+
+    @abstractmethod
+    def share_project(self, principal_id: str, project_id: str) -> bool:
+        """`FOR SHARE` on a Project of this Principal; `False` when it has none."""
+
+    @abstractmethod
+    def claim_project_link(
+        self,
+        principal_id: str,
+        *,
+        project_id: str,
+        issue_id: str,
+        project_situation_id: str,
+        linked_at: datetime,
+        association_evidence_ref: str | None,
+    ) -> str:
+        """Insert the triplet row unless one stands, lock it `FOR UPDATE`, return its id."""
+
+    @abstractmethod
+    def latest_membership_event(
+        self, principal_id: str, project_id: str, issue_id: str
+    ) -> ProjectLinkEventRecord | None:
+        """The latest event of one Project link, or `None` when it has none."""
+
+    @abstractmethod
+    def insert_membership_event(self, principal_id: str, event: ProjectLinkEventRecord) -> None:
+        """Append one immutable Project-link membership event."""
+
+    @abstractmethod
+    def read_membership_event(
+        self, principal_id: str, membership_event_id: str
+    ) -> ProjectLinkEventRecord | None:
+        """One immutable membership event, or `None`."""
+
+    @abstractmethod
+    def share_note_version(
+        self, principal_id: str, meeting_id: str, note_version_id: str
+    ) -> LineageSourceVersion | None:
+        """`FOR SHARE` on a Meeting note version under that Meeting, or `None`."""
+
+    @abstractmethod
+    def share_capture_root(self, principal_id: str, capture_id: str) -> bool:
+        """`FOR SHARE` on a Capture root of this Principal; `False` when it has none."""
+
+    @abstractmethod
+    def share_capture_version(
+        self, principal_id: str, capture_id: str, version_id: str
+    ) -> LineageSourceVersion | None:
+        """`FOR SHARE` on a Capture version under that Capture root, or `None`."""
+
+    @abstractmethod
+    def capture_root_is_archived(self, principal_id: str, capture_id: str) -> bool:
+        """Whether the owned root's current lifecycle projection is archived."""
+
+    @abstractmethod
+    def capture_root_has_restricted_version(self, principal_id: str, capture_id: str) -> bool:
+        """Whether any committed version of the owned root is `restricted_local`."""
+
+    @abstractmethod
+    def admit_anchor(
+        self, principal_id: str, anchor: EvidenceAnchor, *, anchor_id: str, recorded_at: datetime
+    ) -> str:
+        """Reuse the anchor with this identity, or insert it; return its `anchor_id`."""
+
+    # --- record lineage S2 (S2 contract sections 4.2, 6.2 and 6.4) ------------
+
+    @abstractmethod
+    def share_active_project_link(self, principal_id: str, project_id: str, issue_id: str) -> bool:
+        """Whether the Project's link to the Issue is active, its triplet row `FOR SHARE`.
+
+        The composites' Project qualification (section 6.4): the triplet row
+        an `issues.project_links.end` claims `FOR UPDATE` is shared, so the
+        answer cannot change before commit. `False` when no triplet row or no
+        active latest event exists, for an absent, foreign or unlinked Project
+        alike.
+        """
+
+    @abstractmethod
+    def insert_write_request_links(
+        self,
+        principal_id: str,
+        capability: str,
+        idempotency_key: str,
+        links: Sequence[tuple[int, str, int]],
+    ) -> None:
+        """Record a composite request's `(ordinal, link_id, revision_no)` rows."""
+
+    @abstractmethod
+    def write_request_links(
+        self, principal_id: str, capability: str, idempotency_key: str
+    ) -> tuple[tuple[int, str, int], ...]:
+        """A completed composite request's `(ordinal, link_id, revision_no)` rows, by ordinal."""
+
+
+# --- Record lineage S1: memberships, associations and the reverse read ---------
+#
+# S1 contract sections 3.1, 3.2, 6.2, 6.3 and 7.2. As for the Issue plane, no
+# value carries a `principal_id`; every method takes it as a parameter and runs
+# on the general unit of work's connection inside `invoke`'s one transaction.
+
+
+@dataclass(frozen=True, slots=True)
+class LineageEndpoint:
+    """One endpoint row after section 3.2 step 2: locked, owned, under its parent.
+
+    Only the facts the step 3 linkability check needs: the Situation's kind,
+    whether a Task is archived, a note version's Meeting, and a Capture
+    version's root and classification.
+    """
+
+    family: RecordFamily
+    record_id: str
+    situation_kind: SituationKind | None = None
+    task_archived: bool = False
+    meeting_id: str | None = None
+    capture_id: str | None = None
+    classification: str | None = None
+    #: Record lineage S2: a Situation's `state` (the closed-Issue rule, S2
+    #: section 3.2), and a Task's, Commitment's or Constraint's native lifecycle
+    #: token, acceptance and `version`, read under the same `FOR SHARE` (the
+    #: membership `member_native_version` and the closure gate, S2 section 3.3).
+    situation_state: str | None = None
+    native_state: str | None = None
+    evidence_state: str | None = None
+    native_version: int | None = None
+    #: Record lineage S2, the `escalated_from` assert-time rules (S2 section
+    #: 3.1): a Task's or Constraint's `created_at`, and a Constraint's
+    #: `project_id`, read under the same `FOR SHARE`.
+    created_at: datetime | None = None
+    project_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RecordLinkRecord:
+    """One immutable `record_links` root."""
+
+    link_id: str
+    kind: RecordLinkKind
+    from_ref: RecordRef
+    to_ref: RecordRef
+    relation_type: RelationType
+    member_role: MemberRole | None
+    context_issue_id: str | None
+    normalized_identity: str
+    authority_class: str
+    decision_channel: str
+    source_capability: str
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class LineageLinkEvidence:
+    """One evidence row of a link revision: its anchor and the anchor's role there."""
+
+    anchor_id: str
+    anchor: EvidenceAnchor
+
+
+@dataclass(frozen=True, slots=True)
+class LinkRevisionRecord:
+    """One immutable `record_link_revisions` row with its frozen evidence set.
+
+    `evidence` is in the section 5.1 canonical order (the stored `ordinal`).
+    """
+
+    link_id: str
+    revision_no: int
+    revision_id: str
+    predecessor_revision_no: int | None
+    action: LinkRevisionAction
+    lifecycle_state: LinkLifecycleState
+    acceptance_basis: AcceptanceBasis
+    authority_class: str
+    decision_channel: str
+    source_capability: str
+    reason: str | None
+    evidence_set_digest: str
+    recorded_at: datetime
+    evidence: tuple[LineageLinkEvidence, ...]
+    #: Record lineage S2 (S2 contract section 3.3): the member's native
+    #: `version` a membership writer observed; `None` for every other revision.
+    member_native_version: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class LinkHeadRecord:
+    """A link root with its current head revision number and lifecycle state."""
+
+    link: RecordLinkRecord
+    revision_no: int
+    lifecycle_state: LinkLifecycleState
+
+
+@dataclass(frozen=True, slots=True)
+class LineageFactCut:
+    """Which lineage fact rows a read selects (S3 contract section 3.4).
+
+    A row is known at the cut iff its `commit_seq <= watermark` (`W(at)`), or
+    -- a row written before the S3 revision, with no mark -- its own
+    `recorded_at <= at`. With `at` `None` (a Principal with no lineage fact)
+    nothing is known.
+    """
+
+    watermark: int | None
+    at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class LineageIssueAsOf:
+    """An Issue's title and state at a cut: its revision selected at that cut."""
+
+    issue_id: str
+    version: int
+    title: str
+    state: str
+
+
+class LineageReadTimeoutError(PortError):
+    """A bounded lineage read statement hit its `statement_timeout` (S3 section 7.2 step 5).
+
+    The read answers `unavailable`; the read's transaction is lost with it.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class LineageNoteVersionRef:
+    """One note version of a Meeting, as the reverse read's virtual edges need it."""
+
+    note_version_id: str
+    meeting_id: str
+    version_number: int
+
+
+@dataclass(frozen=True, slots=True)
+class LineageResolvedRecord:
+    """One record as the reverse read re-resolves it in its native table.
+
+    `meeting_id` for a note version; `title`, `state` and `situation_kind` for a
+    Situation; `capture_id` and `capture_archived` for a Capture version.
+    """
+
+    ref: RecordRef
+    meeting_id: str | None = None
+    situation_kind: SituationKind | None = None
+    title: str | None = None
+    state: str | None = None
+    capture_id: str | None = None
+    capture_archived: bool = False
+
+    @property
+    def parent_root_id(self) -> str | None:
+        """The native root a version lives under: a note's Meeting, a Capture version's Capture.
+
+        S3 section 7.3: the record whose Record Events a version member's
+        native timeline entries are; `None` for a record that is its own root.
+        """
+        return self.meeting_id if self.meeting_id is not None else self.capture_id
+
+
+class RecordLineageRepository(ABC):
+    """Record links, their revisions, evidence and heads, and the reverse read.
+
+    The write operations are S1 contract section 6.2 steps 3 to 5 for the five
+    link writes: share an endpoint (`FOR SHARE`, existence under its parent);
+    take the identity advisory lock; lock a head `FOR UPDATE`; insert a root
+    with revision 1, its evidence and its head, or append the next revision
+    and advance the head. Request reservation and evidence anchors are the
+    `IssueRepository`'s, on the same connection. Reads take no locks.
+    """
+
+    @abstractmethod
+    def capture_version_root(self, principal_id: str, version_id: str) -> str | None:
+        """The Capture root of one owned Capture version, without a lock, or `None`."""
+
+    @abstractmethod
+    def share_endpoint(
+        self, principal_id: str, family: RecordFamily, record_id: str
+    ) -> LineageEndpoint | None:
+        """`FOR SHARE` on one owned endpoint row of `family`, or `None`.
+
+        A Situation of either kind answers (the application refuses a context
+        one as not linkable); a Capture version's root is shared first by the
+        caller (`IssueRepository.share_capture_root`).
+        """
+
+    @abstractmethod
+    def lock_identity(self, principal_id: str, normalized_identity: str) -> None:
+        """`pg_advisory_xact_lock` on the lineage namespace and this identity."""
+
+    @abstractmethod
+    def active_head_by_identity(
+        self, principal_id: str, normalized_identity: str
+    ) -> LinkHeadRecord | None:
+        """The live head with this identity, locked `FOR UPDATE`, or `None`.
+
+        S3 section 3.1: *live* is `active` or `contested` (`LIVE_LINK_STATES`),
+        the states that hold an identity; the caller refuses a `contested` one
+        (`conflict` / `state`) rather than answering it as `created: false`.
+        """
+
+    @abstractmethod
+    def lock_head(self, principal_id: str, link_id: str) -> LinkHeadRecord | None:
+        """One owned link's head, locked `FOR UPDATE`, with its root; or `None`."""
+
+    @abstractmethod
+    def insert_link(
+        self, principal_id: str, link: RecordLinkRecord, revision: LinkRevisionRecord
+    ) -> None:
+        """Insert a root, its revision 1, that revision's evidence and the head."""
+
+    @abstractmethod
+    def append_revision(self, principal_id: str, revision: LinkRevisionRecord) -> None:
+        """Append the next revision and its evidence, and advance the head to it."""
+
+    @abstractmethod
+    def read_link(self, principal_id: str, link_id: str) -> RecordLinkRecord | None:
+        """One owned link root without a lock, or `None`."""
+
+    @abstractmethod
+    def read_revision(
+        self, principal_id: str, link_id: str, revision_no: int
+    ) -> LinkRevisionRecord | None:
+        """One immutable link revision with its evidence, or `None`."""
+
+    @abstractmethod
+    def archived_capture_roots(
+        self, principal_id: str, capture_ids: Collection[str]
+    ) -> frozenset[str]:
+        """The named owned Capture roots whose lifecycle projection is archived now."""
+
+    @abstractmethod
+    def active_links_incident(
+        self, principal_id: str, refs: Collection[RecordRef]
+    ) -> tuple[LinkHeadRecord, ...]:
+        """Every live link with an endpoint in `refs`, ordered `(created_at, link_id)`.
+
+        S3 section 9 (the one-line widening of the S1 head-based reader): live is
+        `active` or `contested`, so a contested link is followed and shown.
+        """
+
+    @abstractmethod
+    def issue_memberships(
+        self,
+        principal_id: str,
+        issue_id: str,
+        *,
+        limit: int,
+        after: tuple[datetime, str] | None = None,
+    ) -> tuple[LinkHeadRecord, ...]:
+        """The Issue's active membership links, `(created_at, link_id)`, at most `limit`.
+
+        `after` is the `(created_at, link_id)` key of the last link already read
+        (S3 FR3-F08: the visibility-filtered read pages keyset-wise).
+        """
+
+    def mandatory_memberships(
+        self, principal_id: str, issue_id: str, *, share: bool
+    ) -> tuple[LinkHeadRecord, ...]:
+        """The Issue's active `work` and `constraint` memberships, by `link_id`.
+
+        Record lineage S2 (S2 contract sections 3.3 and 6.2 step 5): `share`
+        takes each head `FOR SHARE` in that order (`issues.close`); a read
+        (`issues.closure_readiness`) takes none. Non-abstract with a
+        `NotImplementedError` default, so a read-only S1 source (the
+        `records.lineage` traversal fakes) need not implement the S2 gate reads.
+        """
+        raise NotImplementedError
+
+    def native_members(
+        self, principal_id: str, refs: Collection[RecordRef]
+    ) -> Mapping[RecordRef, LineageEndpoint]:
+        """Each named member's native facts, without a lock (S2 `issues.closure_readiness`).
+
+        Non-abstract with a `NotImplementedError` default, on the same terms.
+        """
+        raise NotImplementedError
+
+    def active_membership(
+        self, principal_id: str, issue_id: str, member: RecordRef
+    ) -> LinkHeadRecord | None:
+        """The Issue's active `issue_member` head naming `member`, any role, or `None`.
+
+        Record lineage S2 (S2 contract sections 3.1 and 3.4): a handoff's
+        Commitment, a `delegated_from` or `escalated_from` Task and a
+        `created_to_resolve` Constraint must each be an active member of the
+        Issue. Without a lock; non-abstract with a `NotImplementedError`
+        default, on the same terms.
+        """
+        raise NotImplementedError
+
+    def lock_blocks(self, principal_id: str) -> None:
+        """`pg_advisory_xact_lock` on the lineage namespace and `principal_id || ':blocks'`.
+
+        Record lineage S2 (S2 contract sections 3.1 and 6.2 step 4): every
+        `blocks` assert takes it after its identity key and before its cycle
+        search, so two asserts never search concurrently. Non-abstract with a
+        `NotImplementedError` default, on the same terms as `active_membership`.
+        """
+        raise NotImplementedError
+
+    def blocks_successors(
+        self, principal_id: str, refs: Collection[RecordRef]
+    ) -> tuple[RecordRef, ...]:
+        """The `to` records of every live `blocks` head whose `from` is in `refs`.
+
+        S3 section 6.2 step 6: `active` and `contested` heads alike, so no cycle
+        can form through a contested link that a reinstate would revive.
+
+        Any context, distinct, ordered by `(family, record_id)`; no lock (the
+        caller holds the `:blocks` key). The `blocks` cycle search's one step
+        (S2 contract section 3.1). Non-abstract, on the same terms.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def resolve_records(
+        self, principal_id: str, refs: Collection[RecordRef]
+    ) -> Mapping[RecordRef, LineageResolvedRecord]:
+        """Each named record that resolves in its native table for this Principal."""
+
+    @abstractmethod
+    def note_versions_of(
+        self, principal_id: str, meeting_ids: Collection[str]
+    ) -> Mapping[str, tuple[LineageNoteVersionRef, ...]]:
+        """Each named Meeting's note versions, `version_number` ascending."""
+
+    # --- the knowledge clock (S3 contract sections 3.4, 4.2 and 6.2) -------------
+
+    def take_commit_mark(self, principal_id: str) -> int:
+        """This transaction's commit mark for `principal_id`, allocating it on first use.
+
+        `knowledge.lineage_commit_mark`: the allocator row is locked from here
+        to commit, so every lineage writer calls this immediately after a
+        non-replay reservation and before any other lock (S3 section 6.2 step
+        1b). A second call in one transaction returns the same mark.
+        Non-abstract: a fake that writes no fact never needs it.
+        """
+        raise NotImplementedError
+
+    def commit_horizon(self, principal_id: str) -> datetime | None:
+        """`H`: the allocator row's committed `last_marked_at`, read without a lock.
+
+        `None` when the Principal has no allocator row, and so no lineage fact.
+        Non-abstract, on the same terms.
+        """
+        raise NotImplementedError
+
+    def commit_watermark(self, principal_id: str, at: datetime) -> int | None:
+        """`W(at)`: the largest mark of the Principal with `marked_at <= at`, or `None`.
+
+        Read without a lock; for an `at` at or before the horizon every such
+        mark is committed. Non-abstract, on the same terms.
+        """
+        raise NotImplementedError
+
+    def links_in_issue_context(
+        self, principal_id: str, issue_id: str, inside: Collection[RecordRef]
+    ) -> tuple[LinkHeadRecord, ...]:
+        """S3 section 3.2's candidates: every live semantic link that may be in the context.
+
+        Its context is the Issue, or an endpoint is in `inside` (the Issue's
+        inside set, which holds the Issue itself); current heads, no lock,
+        ordered by `link_id` in code-point order. The caller decides membership
+        with `domain.lineage.closure.in_issue_context`. Non-abstract, on the
+        same terms.
+        """
+        raise NotImplementedError
+
+    def link_states_known_at(
+        self,
+        principal_id: str,
+        link_ids: Collection[str],
+        *,
+        watermark: int | None,
+        at: datetime | None,
+    ) -> Mapping[str, tuple[int, LinkLifecycleState]]:
+        """Each named link's revision known at the cut: `link_id -> (revision_no, state)`.
+
+        The as-of selection of S3 section 7.2 step 2, from revisions and never
+        from `record_link_heads`: the latest revision with `commit_seq <=
+        watermark`, or -- a row written before the S3 revision, with no mark --
+        with `recorded_at <= at` (section 3.4). A link with no revision known at
+        the cut is absent. No lock. Non-abstract, on the same terms.
+        """
+        raise NotImplementedError
+
+    # --- the as-of read core (S3 contract sections 3.4, 6.4 and 7.2; worker L3) ----
+
+    def bound_read_statements(self, timeout_ms: int) -> None:
+        """`SET LOCAL statement_timeout` for the rest of this read's transaction.
+
+        S3 section 7.2 step 5: a statement that runs longer raises
+        `LineageReadTimeoutError` (`unavailable`). Non-abstract, on the same
+        terms.
+        """
+        raise NotImplementedError
+
+    def live_links_incident(
+        self, principal_id: str, refs: Collection[RecordRef], cut: LineageFactCut
+    ) -> tuple[LinkHeadRecord, ...]:
+        """Every link incident to `refs` whose revision selected at `cut` is live.
+
+        S3 section 7.2 step 2: from revisions, never from `record_link_heads`
+        -- the latest revision of each link known at the cut; the returned
+        "head" is that revision's number and state, `active` or `contested`.
+        Ordered `(created_at, link_id)` in code-point order. No lock.
+        Non-abstract, on the same terms.
+        """
+        raise NotImplementedError
+
+    def issues_known_at(
+        self, principal_id: str, issue_ids: Collection[str], cut: LineageFactCut
+    ) -> Mapping[str, LineageIssueAsOf]:
+        """Each named Issue's revision selected at `cut` (its title and state then).
+
+        An Issue with no revision known at the cut is absent. No lock.
+        Non-abstract, on the same terms.
+        """
+        raise NotImplementedError
+
+    def note_versions_until(
+        self, principal_id: str, meeting_ids: Collection[str], recorded_at_most: datetime
+    ) -> Mapping[str, tuple[LineageNoteVersionRef, ...]]:
+        """`note_versions_of`, cut at the native cut (S3 section 3.4, R3-F01).
+
+        Only versions with `recorded_at <= recorded_at_most`, by version
+        number. Non-abstract, on the same terms.
+        """
+        raise NotImplementedError
+
+    def note_version_recorded_at(
+        self, principal_id: str, note_version_ids: Collection[str]
+    ) -> Mapping[str, datetime]:
+        """Each owned note version's own `recorded_at` (its native cut key).
+
+        Non-abstract, on the same terms.
+        """
+        raise NotImplementedError
+
+    def links_in_issue_context_at(
+        self,
+        principal_id: str,
+        issue_id: str,
+        inside: Collection[RecordRef],
+        cut: LineageFactCut,
+    ) -> tuple[LinkHeadRecord, ...]:
+        """`links_in_issue_context` at a read cut, in every state (S3 section 3.2).
+
+        The candidates -- context the Issue, or an endpoint in `inside` -- of
+        either kind, each with its revision selected at `cut` (from revisions,
+        never from heads; `active`, `contested` or `ended`). A link with no
+        revision known at the cut is absent. Ordered by `link_id` in code-point
+        order. The caller decides membership with `in_issue_context`. No lock.
+        Non-abstract, on the same terms.
+        """
+        raise NotImplementedError
+
+    def link_revisions_known_at(
+        self,
+        principal_id: str,
+        link_id: str,
+        cut: LineageFactCut,
+        *,
+        after: int | None,
+        limit: int,
+    ) -> tuple[LinkRevisionRecord, ...]:
+        """One link's revisions known at `cut`, by `revision_no`, after `after`.
+
+        `records.associations.history` (S3 section 7.3); at most `limit`.
+        Non-abstract, on the same terms.
+        """
+        raise NotImplementedError
+
+    def restricted_capture_roots(
+        self, principal_id: str, capture_ids: Collection[str]
+    ) -> frozenset[str]:
+        """The named Capture roots that currently hold any `restricted_local` version.
+
+        S1 F24's forward rule (S3 section 6.4): a legacy anchor on one reads
+        `restricted`. Non-abstract, on the same terms.
+        """
+        raise NotImplementedError
+
+
+# --- Record lineage S2: the responsibility handoff ledger ---------------------
+#
+# S2 contract sections 3.4, 4.2 and 6.2. On the general unit of work beside
+# `issues` and `record_lineage`: a handoff reserves its request through
+# `issues`, shares its Issue, Commitment and evidence source, takes the chain's
+# advisory key here, reads the chain's last event and appends the next one, all
+# in the one transaction `invoke` already owns.
+
+
+class HandoffSequenceConflictError(PortError):
+    """Another handoff of the same chain took this sequence number. Retryable."""
+
+
+@dataclass(frozen=True, slots=True)
+class HandoffRecord:
+    """One immutable `issue_responsibility_events` row with its evidence anchor.
+
+    A holder is the Principal (`*_holder_kind = 'principal'`, entity `None`)
+    or one Entity. `evidence` carries the one anchor, with role `handoff`.
+    """
+
+    handoff_id: str
+    issue_id: str
+    commitment_id: str
+    sequence_no: int
+    predecessor_sequence_no: int | None
+    from_holder_kind: str
+    from_entity_id: str | None
+    to_holder_kind: str
+    to_entity_id: str | None
+    effective_at: datetime
+    recorded_at: datetime
+    evidence: LineageLinkEvidence
+    reason: str
+    acceptance_basis: str
+    authority_class: str
+    decision_channel: str
+    source_capability: str
+    #: S3 section 4.1: the event's commit mark; null on a pre-S3 row.
+    commit_seq: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class HandoffCorrectionRecord:
+    """One immutable `issue_responsibility_corrections` row with its evidence anchor (S3 3.3).
+
+    `corrected_effective_at` is set exactly for a `retime`; `evidence` carries
+    the one anchor (role `handoff` for a retime, `contradicts` for a void).
+    `commit_seq` is the correction's commit mark (`None` only before insert).
+    """
+
+    correction_id: str
+    handoff_id: str
+    correction_no: int
+    predecessor_correction_no: int | None
+    action: str
+    corrected_effective_at: datetime | None
+    evidence: LineageLinkEvidence
+    reason: str
+    acceptance_basis: str
+    authority_class: str
+    decision_channel: str
+    source_capability: str
+    recorded_at: datetime
+    commit_seq: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class HandoffPage:
+    """One `issues.handoffs.list` page, `(recorded_at, handoff_id)` ascending."""
+
+    handoffs: tuple[HandoffRecord, ...]
+    has_more: bool
+
+
+class IssueHandoffRepository(ABC):
+    """The handoff ledger's rows, on the general unit of work's connection.
+
+    Written here and nowhere else: `issue_responsibility_events`. The caller
+    sequences the section 6.2 locks: the chain's advisory key (`lock_chain`)
+    is taken after every `FOR SHARE` and before the chain's last event is read.
+    Reads take no locks.
+    """
+
+    @abstractmethod
+    def lock_chain(self, principal_id: str, issue_id: str, commitment_id: str) -> None:
+        """`pg_advisory_xact_lock` on `principal_id:handoff:issue_id:commitment_id`."""
+
+    @abstractmethod
+    def latest_event(
+        self, principal_id: str, issue_id: str, commitment_id: str
+    ) -> HandoffRecord | None:
+        """The chain's last event (highest `sequence_no`), or `None` for an empty chain."""
+
+    @abstractmethod
+    def insert_event(self, principal_id: str, event: HandoffRecord) -> None:
+        """Append one event; a taken sequence number is `HandoffSequenceConflictError`."""
+
+    @abstractmethod
+    def read_event(self, principal_id: str, handoff_id: str) -> HandoffRecord | None:
+        """One owned event with its anchor, or `None`."""
+
+    @abstractmethod
+    def list_events(
+        self,
+        principal_id: str,
+        issue_id: str,
+        *,
+        commitment_id: str | None,
+        page_size: int,
+        after: str | None,
+    ) -> HandoffPage:
+        """One keyset page of the Issue's events (optionally one Commitment's).
+
+        Raises `IssueCursorError` when `after` names no event inside the same
+        filter set.
+        """
+
+    # --- S3 (S3 contract sections 3.3 and 7.1): corrections and as-of reads -------
+    #
+    # Non-abstract: a fake that never corrects a handoff never needs them.
+
+    def known_events(
+        self,
+        principal_id: str,
+        issue_id: str,
+        *,
+        commitment_id: str | None,
+        page_size: int,
+        after: str | None,
+        watermark: int | None,
+        at: datetime | None,
+    ) -> HandoffPage:
+        """`list_events` restricted to the events known at the cut (S3 section 3.4).
+
+        Known: `commit_seq <= watermark`, or -- a pre-S3 row -- `recorded_at <=
+        at`; nothing is known at a `None` cut. Raises `IssueCursorError` when
+        `after` names no known event inside the same filter set.
+        """
+        raise NotImplementedError
+
+    def chain_events(
+        self, principal_id: str, issue_id: str, commitment_id: str
+    ) -> tuple[HandoffRecord, ...]:
+        """Every event of one chain, `sequence_no` ascending (current state, no lock)."""
+        raise NotImplementedError
+
+    def corrections_of(
+        self,
+        principal_id: str,
+        handoff_ids: Collection[str],
+        *,
+        watermark: int | None = None,
+        at: datetime | None = None,
+        current: bool = False,
+    ) -> Mapping[str, tuple[HandoffCorrectionRecord, ...]]:
+        """Each named event's corrections, `correction_no` ascending.
+
+        `current` reads every committed correction (the writers' view); else
+        only those known at the cut, by the `known_events` rule.
+        """
+        raise NotImplementedError
+
+    def read_correction(
+        self, principal_id: str, correction_id: str
+    ) -> HandoffCorrectionRecord | None:
+        """One owned correction with its anchor, or `None`."""
+        raise NotImplementedError
+
+    def insert_correction(self, principal_id: str, correction: HandoffCorrectionRecord) -> None:
+        """Append one correction; the commit mark is stamped by the database trigger."""
+        raise NotImplementedError
+
+
+# --- Record lineage S3: the Issue timeline and the backfill ledger ------------
+#
+# S3 contract section 9. Declared with the unit of work so every subclass
+# implements or stubs them from the start; the operations are the timeline
+# (section 7.3) and backfill (section 8.3) work packages'.
+
+
+@dataclass(frozen=True, slots=True)
+class TimelineLinkRevision:
+    """One link revision as a timeline entry needs it: its recorded values, no evidence."""
+
+    link_id: str
+    revision_no: int
+    revision_id: str
+    action: LinkRevisionAction
+    lifecycle_state: LinkLifecycleState
+    recorded_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class TimelineNativeEvent:
+    """One Record Event of an Issue's member, read under the feed's own predicate.
+
+    `sequence_number` orders the watermark and never leaves the application.
+    No field value of the record is carried: only the event's own columns.
+    """
+
+    event_id: str
+    sequence_number: int
+    record_family: RecordEventFamily
+    record_id: str
+    event_kind: RecordEventKind
+    record_version: int
+    changed_fields: tuple[str, ...]
+    source_capability: str
+    occurred_at: datetime
+    recorded_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ConstraintRevisionSnapshot:
+    """One immutable Constraint revision's state and its stored ball-in-court parties."""
+
+    constraint_id: str
+    version: int
+    lifecycle_state: str
+    bic: tuple[ConstraintPartyRow, ...]
+
+
+class IssueTimelineRepository(ABC):  # noqa: B024 - non-abstract reads, as RecordLineageRepository
+    """The record lineage S3 Issue timeline reads (S3 contract section 7.3).
+
+    Lock-free. The lineage-plane reads select facts known at a `LineageFactCut`
+    (section 3.4); the native-plane read applies the Record Event reader's own
+    visibility predicate, imported from the feed module. Non-abstract with
+    `NotImplementedError`, on the `RecordLineageRepository` terms, so a test
+    double implements only what it drives.
+    """
+
+    def issue_revisions(
+        self, principal_id: str, issue_id: str, cut: LineageFactCut
+    ) -> tuple[IssueRevisionRecord, ...]:
+        """Every revision of the Issue known at `cut`, by version, without evidence."""
+        raise NotImplementedError
+
+    def project_link_events(
+        self, principal_id: str, issue_id: str, cut: LineageFactCut
+    ) -> tuple[ProjectLinkEventRecord, ...]:
+        """Every Project link event of the Issue known at `cut`, by `(recorded_at, id)`."""
+        raise NotImplementedError
+
+    def link_revisions(
+        self, principal_id: str, link_ids: Collection[str], cut: LineageFactCut
+    ) -> Mapping[str, tuple[TimelineLinkRevision, ...]]:
+        """Each named link's revisions known at `cut`, by `revision_no`."""
+        raise NotImplementedError
+
+    def native_events(
+        self,
+        principal_id: str,
+        records: Collection[tuple[RecordEventFamily, str]],
+        *,
+        families: frozenset[RecordEventFamily],
+        include_restricted_memory: bool,
+        occurred_at_most: datetime | None,
+        sequence_at_most: int | None,
+    ) -> tuple[TimelineNativeEvent, ...]:
+        """The Record Events of `records` this reader may see, by sequence number.
+
+        One statement, the feed module's own `issue_member_events`, under the
+        feed's one visibility predicate (the family set and, remotely, every
+        withholding clause), bounded by
+        `occurred_at <= occurred_at_most` and `sequence_number <=
+        sequence_at_most` when given. A withheld event is simply absent.
+        """
+        raise NotImplementedError
+
+    def constraint_snapshots(
+        self, principal_id: str, versions: Collection[tuple[str, int]]
+    ) -> Mapping[tuple[str, int], ConstraintRevisionSnapshot]:
+        """Each named `(constraint_id, version)`'s stored revision snapshot, if one exists."""
+        raise NotImplementedError
+
+    def entity_labels(self, principal_id: str, entity_ids: Collection[str]) -> Mapping[str, str]:
+        """Display names of owned Entities (a party label's fallback, as `constraints.read`)."""
+        raise NotImplementedError
+
+
+@dataclass(frozen=True, slots=True)
+class BackfillRunRecord:
+    """One `lineage_backfill_runs` row (S3 contract section 4.2). `census` is its stored object."""
+
+    run_id: str
+    state: str
+    validator_version: int
+    commit_seq_cutoff: int
+    source_cutoff_at: datetime
+    population_count: int
+    classified_count: int
+    plan_digest: str | None
+    census: Mapping[str, object]
+    created_at: datetime
+    classified_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class BackfillItemRecord:
+    """One `lineage_backfill_items` row, as the plan's batch and the report show it.
+
+    `candidate` is the stored canonical JSON (the view derives its relation
+    from it); every settled column is `None` while the item is unclassified.
+    """
+
+    item_no: int
+    source_kind: str
+    source_family: str
+    source_id: str
+    source_ref: str
+    source_version: int | None
+    source_digest: str
+    classification: str | None
+    reason: str | None
+    candidate_identity: str | None
+    candidate: str | None
+    existing_link_id: str | None
+    existing_link_state: str | None
+    quarantined: bool
+    classified_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class BackfillPendingSource:
+    """One unclassified item with its source rebuilt now (S3 contract section 8.3).
+
+    `current_digest` is `knowledge.lineage_backfill_source_digest` recomputed
+    for the item; `current_document` the matching source document.
+    """
+
+    item: BackfillItemRecord
+    current_digest: str
+    current_document: str
+
+
+@dataclass(frozen=True, slots=True)
+class BackfillSettlement:
+    """What one classified item is settled with, once."""
+
+    item_no: int
+    classification: str
+    reason: str
+    candidate_identity: str | None
+    candidate: str | None
+    existing_link_id: str | None
+    existing_link_state: str
+    quarantined: bool
+
+
+@dataclass(frozen=True, slots=True)
+class BackfillLinkEndpoints:
+    """A candidate's `(from, relation_type, to)` endpoints, compared in any context."""
+
+    from_family: str
+    from_id: str
+    relation_type: str
+    to_family: str
+    to_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class BackfillExistingLink:
+    """The lowest `link_id` between one candidate's endpoints known at a cutoff, and its state."""
+
+    link_id: str
+    lifecycle_state: str
+
+
+@dataclass(frozen=True, slots=True)
+class BackfillCountRow:
+    """One group of a run's classified items: how many share these settled values."""
+
+    classification: str
+    reason: str
+    existing_link_state: str
+    quarantined: bool
+    count: int
+
+
+class LineageBackfillRepository(ABC):  # noqa: B024 - non-abstract, as IssueTimelineRepository
+    """The record lineage S3 backfill dry-run ledger (S3 contract sections 4.2 and 8.3).
+
+    Every method runs on the general unit of work's connection, scoped to the
+    Principal it is given. It writes ledger rows only -- never a link, a fact
+    or a commit mark. Non-abstract with `NotImplementedError`, on the
+    `IssueTimelineRepository` terms, so a test double implements only what it
+    drives.
+    """
+
+    def enumerate_run(
+        self,
+        principal_id: str,
+        run_id: str,
+        *,
+        created_at: datetime,
+        authority_class: str,
+        decision_channel: str,
+    ) -> BackfillRunRecord:
+        """Create the run and freeze its whole population in one `INSERT ... SELECT`.
+
+        One statement, one snapshot: every in-scope source with its version and
+        `knowledge.lineage_backfill_source_digest`, the census and the
+        Principal's committed `last_seq` as `commit_seq_cutoff`.
+        """
+        raise NotImplementedError
+
+    def read_run(
+        self, principal_id: str, run_id: str, *, for_update: bool = False
+    ) -> BackfillRunRecord | None:
+        """One run of this Principal (`FOR UPDATE` when asked), or `None`."""
+        raise NotImplementedError
+
+    def pending_sources(
+        self, principal_id: str, run_id: str, *, after: int, limit: int
+    ) -> tuple[BackfillPendingSource, ...]:
+        """The next `limit` unclassified items after `after`, by `item_no`, sources rebuilt."""
+        raise NotImplementedError
+
+    def capture_version_pins(
+        self, principal_id: str, version_ids: Collection[str]
+    ) -> Mapping[str, CaptureVersionPin]:
+        """Each owned Capture version's immutable root, number and content digest."""
+        raise NotImplementedError
+
+    def owned_references(
+        self, principal_id: str, references: Collection[tuple[RecordFamily, str]]
+    ) -> frozenset[tuple[RecordFamily, str]]:
+        """Which of `references` name a record this Principal owns."""
+        raise NotImplementedError
+
+    def existing_links(
+        self, principal_id: str, endpoints: Collection[BackfillLinkEndpoints], *, cutoff: int
+    ) -> Mapping[BackfillLinkEndpoints, BackfillExistingLink]:
+        """Per endpoints, the lowest `link_id` (`COLLATE "C"`) known at `cutoff`, in any state.
+
+        Any context: the link's `context_issue_id` is not compared. Known at the
+        cutoff: a revision with `commit_seq <= cutoff`, or a pre-S3 revision.
+        """
+        raise NotImplementedError
+
+    def settle_items(
+        self,
+        principal_id: str,
+        run_id: str,
+        settlements: Sequence[BackfillSettlement],
+        *,
+        classified_at: datetime,
+    ) -> None:
+        """Settle each item once (`a_backfill_item_is_settled_once`)."""
+        raise NotImplementedError
+
+    def advance_run(
+        self,
+        principal_id: str,
+        run_id: str,
+        *,
+        classified_count: int,
+        plan_digest: str | None,
+        classified_at: datetime | None,
+    ) -> None:
+        """Move the run's checkpoint forward; with a plan digest, to `classified`."""
+        raise NotImplementedError
+
+    def items(
+        self,
+        principal_id: str,
+        run_id: str,
+        *,
+        after: int,
+        through: int | None = None,
+        limit: int | None = None,
+        classification: str | None = None,
+    ) -> tuple[BackfillItemRecord, ...]:
+        """Items with `after < item_no <= through`, by `item_no`, optionally of one class."""
+        raise NotImplementedError
+
+    def count_rows(self, principal_id: str, run_id: str) -> tuple[BackfillCountRow, ...]:
+        """The run's classified items grouped by their settled values."""
+        raise NotImplementedError
+
+    def late_source_count(self, principal_id: str, run_id: str) -> int:
+        """In-scope sources present now that the run's frozen population does not hold."""
+        raise NotImplementedError

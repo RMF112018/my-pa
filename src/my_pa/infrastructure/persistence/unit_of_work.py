@@ -76,9 +76,13 @@ from my_pa.contracts.ports import (
     EntitiesRepository,
     EvidenceUnavailableError,
     GoodNotesSemanticRepository,
+    IssueHandoffRepository,
+    IssueRepository,
+    IssueTimelineRepository,
     KnowledgeAssertionRepository,
     KnowledgeRecord,
     KnowledgeRepository,
+    LineageBackfillRepository,
     ManagedDocumentRepository,
     MeetingRepository,
     Operation,
@@ -87,6 +91,7 @@ from my_pa.contracts.ports import (
     PulseRepository,
     RecordEventReader,
     RecordEventStager,
+    RecordLineageRepository,
     RelationshipMemoryProposalRepository,
     RelationshipMemoryRepository,
     RepositoryFailureError,
@@ -202,6 +207,9 @@ from my_pa.infrastructure.persistence.goodnotes_durable_note import PostgresDura
 from my_pa.infrastructure.persistence.goodnotes_pull import SqlGoodNotesPullRepository
 from my_pa.infrastructure.persistence.goodnotes_semantics import SqlGoodNotesSemanticRepository
 from my_pa.infrastructure.persistence.intelligence import SqlIntelligenceStore
+from my_pa.infrastructure.persistence.issue_handoffs import SqlIssueHandoffRepository
+from my_pa.infrastructure.persistence.issue_timeline import SqlIssueTimelineRepository
+from my_pa.infrastructure.persistence.issues import SqlIssueRepository
 from my_pa.infrastructure.persistence.jobs import enqueue_job, job_for
 from my_pa.infrastructure.persistence.knowledge import (
     corpus_coverage,
@@ -213,6 +221,7 @@ from my_pa.infrastructure.persistence.knowledge import (
 from my_pa.infrastructure.persistence.knowledge_assertions import (
     SqlKnowledgeAssertionRepository,
 )
+from my_pa.infrastructure.persistence.lineage_backfill import SqlLineageBackfillRepository
 from my_pa.infrastructure.persistence.managed_documents import SqlManagedDocumentRepository
 from my_pa.infrastructure.persistence.meetings import SqlMeetingRepository
 from my_pa.infrastructure.persistence.principal_scope import capture_context
@@ -222,6 +231,7 @@ from my_pa.infrastructure.persistence.record_events import (
     SqlRecordEventWriter,
     flush_record_events,
 )
+from my_pa.infrastructure.persistence.record_lineage import SqlRecordLineageRepository
 from my_pa.infrastructure.persistence.registry import (
     UnknownSourceError,
     get_source,
@@ -1482,6 +1492,31 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def meetings(self) -> MeetingRepository:
         """The Meeting records rows, on this transaction's connection (WP-MTG-02)."""
         return SqlMeetingRepository(self._open)
+
+    @property
+    def issues(self) -> IssueRepository:
+        """The record lineage S1 Issue plane, on this transaction's connection."""
+        return SqlIssueRepository(self._open)
+
+    @property
+    def record_lineage(self) -> RecordLineageRepository:
+        """Record lineage S1 links and the reverse read, on this transaction's connection."""
+        return SqlRecordLineageRepository(self._open)
+
+    @property
+    def issue_handoffs(self) -> IssueHandoffRepository:
+        """Record lineage S2 responsibility handoffs, on this transaction's connection."""
+        return SqlIssueHandoffRepository(self._open)
+
+    @property
+    def issue_timeline(self) -> IssueTimelineRepository:
+        """Record lineage S3 Issue timeline reads, on this transaction's connection."""
+        return SqlIssueTimelineRepository(self._open)
+
+    @property
+    def lineage_backfill(self) -> LineageBackfillRepository:
+        """Record lineage S3 backfill ledger, on this transaction's connection."""
+        return SqlLineageBackfillRepository(self._open)
 
     @property
     def identity_history(self) -> SqlIdentityHistoryQuery:

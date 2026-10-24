@@ -244,6 +244,17 @@ def test_contract_prefixes_are_stable() -> None:
         "kdcp",
         "kdcpr",
         "kdsp",
+        # Record lineage S1 (ADR-015, S1 contract section 2).
+        "irs",
+        "ipme",
+        "irl",
+        "irv",
+        "ian",
+        # Record lineage S2 (S2 contract section 2).
+        "ihnd",
+        # Record lineage S3 (S3 contract section 2).
+        "ihcr",
+        "lbfr",
     }
 
 

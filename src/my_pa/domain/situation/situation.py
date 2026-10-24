@@ -48,6 +48,7 @@ from typing import Final
 
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import ensure_utc
+from my_pa.domain.lineage.vocabulary import SituationKind
 
 __all__ = [
     "PROJECT_CLEARABLE_FIELDS",
@@ -400,6 +401,14 @@ class Situation:
     object_refs: tuple[str, ...] = ()
     closed_at: datetime | None = None
     outcome: str | None = None
+    #: Record lineage S1 (ADR-015, OD-01): a context Situation or an Issue. Every
+    #: Situation written before S1, and every one `continuity.situations.create`
+    #: writes, is `context`; `kind` never changes after insert (the
+    #: `a_situation_kind_is_fixed` trigger).
+    kind: SituationKind = SituationKind.CONTEXT
+    #: The Issue CAS version. A context Situation stays at 1; an Issue advances
+    #: by one per Issue revision (`a_situation_kind_is_fixed`).
+    version: int = 1
 
     def __post_init__(self) -> None:
         validate_identifier(self.situation_id, IdKind.SITUATION)
@@ -415,6 +424,10 @@ class Situation:
             ensure_utc(self.closed_at)
         if (self.state is SituationState.CLOSED) is not (self.closed_at is not None):
             raise ValueError("a closed situation records when it closed, and only then")
+        if not isinstance(self.kind, SituationKind):
+            raise ValueError("a situation names one kind")
+        if type(self.version) is not int or self.version < 1:
+            raise ValueError("a situation version is a positive integer")
 
 
 @dataclass(frozen=True, slots=True)

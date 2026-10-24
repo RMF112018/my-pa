@@ -54,11 +54,14 @@ from my_pa.application.commands import (
     AddEntityAlias,
     AddEntityCommunicationMethod,
     AddEntityName,
+    AddIssueMembership,
+    AddIssueProjectLink,
     ApplyConstraintSync,
     ArchiveCapture,
     ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
+    AssertRecordAssociation,
     BeginIntelligenceCycle,
     BindEntityIdentifier,
     BulkConfirmTasks,
@@ -67,12 +70,17 @@ from my_pa.application.commands import (
     CloseCommitment,
     CloseConstraint,
     CloseConstraintWithFollowUp,
+    CloseIssue,
     CloseProject,
     Command,
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
     ConfigureProjectControls,
+    ContestRecordAssociation,
     CorrectGoodNotes,
+    CorrectIssueHandoff,
+    CorrectIssueMembership,
+    CorrectRecordAssociation,
     CreateCapture,
     CreateCommitment,
     CreateConstraintCategory,
@@ -83,6 +91,9 @@ from my_pa.application.commands import (
     CreateEntityParticipation,
     CreateEntityProposal,
     CreateEntityRelationship,
+    CreateIssue,
+    CreateIssueWorkCommitment,
+    CreateIssueWorkTask,
     CreateKnowledgeAssertion,
     CreateManagedDocument,
     CreateMeeting,
@@ -99,6 +110,9 @@ from my_pa.application.commands import (
     EndEntityAssignment,
     EndEntityParticipation,
     EndEntityRelationship,
+    EndIssueMembership,
+    EndIssueProjectLink,
+    EndRecordAssociation,
     EnrollSource,
     FetchSource,
     GetCanvasWorkspace,
@@ -141,8 +155,11 @@ from my_pa.application.commands import (
     ListGoodNotesPages,
     ListGoodNotesRuns,
     ListIntelligenceArtifacts,
+    ListIssueHandoffs,
+    ListIssues,
     ListKnowledgeAssertions,
     ListManagedDocuments,
+    ListMeetingNoteVersions,
     ListMeetings,
     ListPortfolioConstraints,
     ListProjects,
@@ -157,6 +174,7 @@ from my_pa.application.commands import (
     ListUnresolvedMentions,
     MergeEntities,
     ObserveEntityMention,
+    PlanLineageBackfill,
     PrepareContext,
     PreviewConstraintSync,
     PreviewEntityMerge,
@@ -174,19 +192,30 @@ from my_pa.application.commands import (
     ReadConstraintSyncState,
     ReadGoodNotes,
     ReadIntelligenceArtifact,
+    ReadIssue,
+    ReadIssueClosureReadiness,
+    ReadIssueHistory,
+    ReadIssueTimeline,
     ReadKnowledge,
     ReadKnowledgeAssertion,
     ReadManagedDocument,
     ReadMeeting,
+    ReadMeetingNoteVersion,
     ReadPortfolioConstraintOverview,
     ReadProject,
     ReadProjectControlsStatus,
+    ReadRecordAssociationHistory,
+    ReadRecordLineage,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
+    RecordIssueHandoff,
     RecordTask,
+    ReinstateRecordAssociation,
     ReopenConstraint,
+    ReopenIssue,
     ReorderConstraintCategories,
+    ReportLineageBackfill,
     ResolveConstraintSyncConflict,
     ResolveEntity,
     ResolveIntelligenceSet,
@@ -236,6 +265,7 @@ from my_pa.application.commands import (
     UpdateConstraint,
     UpdateConstraintCategory,
     UpdateEntity,
+    UpdateIssue,
     UpdateMeeting,
     UpdateMeetingSeries,
     UpdateProject,
@@ -676,6 +706,45 @@ def _requested_scope(
             # Principal, and never a configured source or an enrollment.
             | SubmitKnowledgeAssertion()
             | CheckpointKnowledgeDiscovery()
+            # Record lineage S1: an Issue, its revisions and its native Project
+            # links are product-owned rows of the acting Principal and never a
+            # configured source.
+            | CreateIssue()
+            | ReadIssue()
+            | ListIssues()
+            | UpdateIssue()
+            | AddIssueProjectLink()
+            | EndIssueProjectLink()
+            # Memberships, associations, the lineage read and the note-history
+            # reads name the same partition's product-owned rows.
+            | AddIssueMembership()
+            | EndIssueMembership()
+            | AssertRecordAssociation()
+            | CorrectRecordAssociation()
+            | EndRecordAssociation()
+            | ReadRecordLineage()
+            | ListMeetingNoteVersions()
+            | ReadMeetingNoteVersion()
+            # Record lineage S2: the same partition's Issue, link, handoff and
+            # Work rows.
+            | CloseIssue()
+            | ReopenIssue()
+            | ReadIssueClosureReadiness()
+            | CorrectIssueMembership()
+            | RecordIssueHandoff()
+            | ListIssueHandoffs()
+            | CreateIssueWorkTask()
+            | CreateIssueWorkCommitment()
+            # Record lineage S3: the same partition's link, Issue, handoff and
+            # backfill-ledger rows.
+            | ContestRecordAssociation()
+            | ReinstateRecordAssociation()
+            | ReadRecordAssociationHistory()
+            | ReadIssueHistory()
+            | ReadIssueTimeline()
+            | CorrectIssueHandoff()
+            | PlanLineageBackfill()
+            | ReportLineageBackfill()
         ):
             return frozenset()
         case CreateCapture():

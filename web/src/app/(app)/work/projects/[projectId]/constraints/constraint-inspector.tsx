@@ -34,6 +34,7 @@ import { Badge } from "@/components/ui/badge";
 import { WhenDiagnostics } from "@/components/diagnostics/diagnostics-provider";
 import { Button } from "@/components/ui/button";
 import { SurfaceState } from "@/components/ui/surface-state";
+import { RelatedIssuesPanel } from "@/components/work/related-issues";
 import {
   attentionReasonLabel,
   codeLabel,
@@ -364,6 +365,14 @@ export function ConstraintInspector({
               </ul>
             )}
           </Section>
+
+          {/* E2. Related Issues — the record lineage S1 read-only panel. */}
+          <RelatedIssuesPanel
+            key={`related-issues:${detail.constraintId}`}
+            family="constraint"
+            recordId={detail.constraintId}
+            headingLevel={3}
+          />
 
           {/* F. History — a timeline, not audit JSON. */}
           <Section title="History" testId="inspector-history">

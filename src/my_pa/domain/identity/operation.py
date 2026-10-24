@@ -970,6 +970,75 @@ class Capability(StrEnum):
     #: `record_events.list` is: an event names a product-owned record of the
     #: acting Principal's own partition and no configured source.
     RECORD_EVENTS_PROVENANCE = "record_events.provenance"
+    #: Record lineage S1 (ADR-015; S1 contract section 7): the Issue plane. An
+    #: Issue is a `situations` row of kind `issue_workstream` with its own
+    #: immutable revisions; its native Project scope is an append-only event
+    #: ledger over `project_situations`. Two reads map to `Purpose.ISSUE_READ`
+    #: and the four writes to `Purpose.ISSUE_AUTHORING`, and to nothing else.
+    #: The two `issues.project_links.*` writes are attested: local-operator only
+    #: (contract section 6.1). None is operator-only in the `_OPERATOR_ONLY`
+    #: sense -- the attestation rule is the application's, applied per request
+    #: -- and every one is scopeless: an Issue is a product-owned record of the
+    #: Principal's own partition. All six are withheld unless
+    #: `MY_PA_LINEAGE_ENABLED` is on (contract section 7.5).
+    ISSUES_CREATE = "issues.create"
+    ISSUES_READ = "issues.read"
+    ISSUES_LIST = "issues.list"
+    ISSUES_UPDATE = "issues.update"
+    ISSUES_PROJECT_LINKS_ADD = "issues.project_links.add"
+    ISSUES_PROJECT_LINKS_END = "issues.project_links.end"
+    #: Record lineage S1 (S1 contract sections 3.1 and 7): Issue memberships and
+    #: semantic associations, both `record_links` roots with immutable
+    #: revisions and evidence. The two membership writes map to
+    #: `Purpose.ISSUE_AUTHORING`; the three association writes to
+    #: `Purpose.RECORD_LINEAGE_AUTHORING`. All five are attested
+    #: (local-operator only, contract section 6.1), scopeless, and withheld
+    #: unless `MY_PA_LINEAGE_ENABLED` is on.
+    ISSUES_MEMBERSHIPS_ADD = "issues.memberships.add"
+    ISSUES_MEMBERSHIPS_END = "issues.memberships.end"
+    RECORDS_ASSOCIATIONS_ASSERT = "records.associations.assert"
+    RECORDS_ASSOCIATIONS_CORRECT = "records.associations.correct"
+    RECORDS_ASSOCIATIONS_END = "records.associations.end"
+    #: Record lineage S1 (contract section 7.2): the bounded, single-page,
+    #: Issue-scoped reverse read. No body and no title but an Issue's own.
+    RECORDS_LINEAGE = "records.lineage"
+    #: Record lineage S1 (contract section 7.2): a Meeting's note version
+    #: history (metadata only, under `meeting_read`) and one exact note version
+    #: (digest, and the body only on request, under
+    #: `meeting_note_history_read`).
+    MEETINGS_NOTES_VERSIONS = "meetings.notes.versions"
+    MEETINGS_NOTES_READ_VERSION = "meetings.notes.read_version"
+    #: Record lineage S2 (S2 contract section 7): Issue close and reopen behind
+    #: the OD-03 gate and its read-only evaluation; the membership evidence
+    #: correction; the responsibility handoff ledger; and the two composite
+    #: Work writes. The six writes are attested (local-operator only, S2
+    #: section 6.1); all eight are scopeless and withheld unless
+    #: `MY_PA_LINEAGE_ENABLED` is on. The composites map to
+    #: `Purpose.ISSUE_WORK_AUTHORING`, every other write to
+    #: `Purpose.ISSUE_AUTHORING` and both reads to `Purpose.ISSUE_READ`.
+    ISSUES_CLOSE = "issues.close"
+    ISSUES_REOPEN = "issues.reopen"
+    ISSUES_CLOSURE_READINESS = "issues.closure_readiness"
+    ISSUES_MEMBERSHIPS_CORRECT = "issues.memberships.correct"
+    ISSUES_HANDOFFS_RECORD = "issues.handoffs.record"
+    ISSUES_HANDOFFS_LIST = "issues.handoffs.list"
+    ISSUES_WORK_CREATE_TASK = "issues.work.create_task"
+    ISSUES_WORK_CREATE_COMMITMENT = "issues.work.create_commitment"
+    #: Record lineage S3 (S3 contract section 7): dispute and reinstate a
+    #: semantic link, a link's and an Issue's history as of `known_at`, an
+    #: Issue's timeline, the handoff correction, and the operator-only backfill
+    #: dry run (plan and report). The four writes are attested (local operator
+    #: only, S3 section 6.1); all eight are scopeless and withheld unless
+    #: `MY_PA_LINEAGE_ENABLED` is on, and the two backfill names also unless
+    #: `MY_PA_LINEAGE_BACKFILL_ENABLED` is (section 7.7).
+    RECORDS_ASSOCIATIONS_CONTEST = "records.associations.contest"
+    RECORDS_ASSOCIATIONS_REINSTATE = "records.associations.reinstate"
+    RECORDS_ASSOCIATIONS_HISTORY = "records.associations.history"
+    ISSUES_HISTORY = "issues.history"
+    ISSUES_TIMELINE = "issues.timeline"
+    ISSUES_HANDOFFS_CORRECT = "issues.handoffs.correct"
+    RECORDS_BACKFILL_PLAN = "records.backfill.plan"
+    RECORDS_BACKFILL_REPORT = "records.backfill.report"
 
 
 class NativeSourceCapability(StrEnum):
@@ -1059,6 +1128,10 @@ _OPERATOR_ONLY: frozenset[AuthorizedCapability] = frozenset(
         NativeSourceCapability.RESUME,
         NativeSourceCapability.BACKFILL,
         NativeSourceCapability.DISABLE,
+        # Record lineage S3 (section 6.1): the backfill reads the Principal's whole
+        # native corpus and writes a durable ledger.
+        Capability.RECORDS_BACKFILL_PLAN,
+        Capability.RECORDS_BACKFILL_REPORT,
     }
 )
 
@@ -1510,6 +1583,49 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         # `record_event_read`: a grant issued to list the feed must never also
         # disclose submission lineage, and the reverse.
         Capability.RECORD_EVENTS_PROVENANCE: frozenset({Purpose.RECORD_EVENT_PROVENANCE_READ}),
+        # Record lineage S1: each Issue name maps to exactly one purpose of the
+        # plane's read/authoring pair, so a grant issued to read Issues cannot
+        # change one.
+        Capability.ISSUES_READ: frozenset({Purpose.ISSUE_READ}),
+        Capability.ISSUES_LIST: frozenset({Purpose.ISSUE_READ}),
+        Capability.ISSUES_CREATE: frozenset({Purpose.ISSUE_AUTHORING}),
+        Capability.ISSUES_UPDATE: frozenset({Purpose.ISSUE_AUTHORING}),
+        Capability.ISSUES_PROJECT_LINKS_ADD: frozenset({Purpose.ISSUE_AUTHORING}),
+        Capability.ISSUES_PROJECT_LINKS_END: frozenset({Purpose.ISSUE_AUTHORING}),
+        Capability.ISSUES_MEMBERSHIPS_ADD: frozenset({Purpose.ISSUE_AUTHORING}),
+        Capability.ISSUES_MEMBERSHIPS_END: frozenset({Purpose.ISSUE_AUTHORING}),
+        # The association writes and the lineage read carry a purpose pair of
+        # their own: a grant issued to author Issues must not assert lineage
+        # between other records, nor read it.
+        Capability.RECORDS_ASSOCIATIONS_ASSERT: frozenset({Purpose.RECORD_LINEAGE_AUTHORING}),
+        Capability.RECORDS_ASSOCIATIONS_CORRECT: frozenset({Purpose.RECORD_LINEAGE_AUTHORING}),
+        Capability.RECORDS_ASSOCIATIONS_END: frozenset({Purpose.RECORD_LINEAGE_AUTHORING}),
+        Capability.RECORDS_LINEAGE: frozenset({Purpose.RECORD_LINEAGE_READ}),
+        # Version metadata is a Meeting read; a historical body is a widening
+        # over `meeting_read` and carries its own purpose.
+        Capability.MEETINGS_NOTES_VERSIONS: frozenset({Purpose.MEETING_READ}),
+        Capability.MEETINGS_NOTES_READ_VERSION: frozenset({Purpose.MEETING_NOTE_HISTORY_READ}),
+        # Record lineage S2 (S2 contract section 7). The composites write native
+        # Work rows, so a grant for Issue authoring must not silently become a
+        # grant to create Tasks and Commitments: their purpose is their own.
+        Capability.ISSUES_CLOSE: frozenset({Purpose.ISSUE_AUTHORING}),
+        Capability.ISSUES_REOPEN: frozenset({Purpose.ISSUE_AUTHORING}),
+        Capability.ISSUES_CLOSURE_READINESS: frozenset({Purpose.ISSUE_READ}),
+        Capability.ISSUES_MEMBERSHIPS_CORRECT: frozenset({Purpose.ISSUE_AUTHORING}),
+        Capability.ISSUES_HANDOFFS_RECORD: frozenset({Purpose.ISSUE_AUTHORING}),
+        Capability.ISSUES_HANDOFFS_LIST: frozenset({Purpose.ISSUE_READ}),
+        Capability.ISSUES_WORK_CREATE_TASK: frozenset({Purpose.ISSUE_WORK_AUTHORING}),
+        Capability.ISSUES_WORK_CREATE_COMMITMENT: frozenset({Purpose.ISSUE_WORK_AUTHORING}),
+        # Record lineage S3 (S3 contract section 7). The backfill has a purpose of
+        # its own: no lineage or Issue grant may become one.
+        Capability.RECORDS_ASSOCIATIONS_CONTEST: frozenset({Purpose.RECORD_LINEAGE_AUTHORING}),
+        Capability.RECORDS_ASSOCIATIONS_REINSTATE: frozenset({Purpose.RECORD_LINEAGE_AUTHORING}),
+        Capability.RECORDS_ASSOCIATIONS_HISTORY: frozenset({Purpose.RECORD_LINEAGE_READ}),
+        Capability.ISSUES_HISTORY: frozenset({Purpose.ISSUE_READ}),
+        Capability.ISSUES_TIMELINE: frozenset({Purpose.ISSUE_READ}),
+        Capability.ISSUES_HANDOFFS_CORRECT: frozenset({Purpose.ISSUE_AUTHORING}),
+        Capability.RECORDS_BACKFILL_PLAN: frozenset({Purpose.LINEAGE_BACKFILL}),
+        Capability.RECORDS_BACKFILL_REPORT: frozenset({Purpose.LINEAGE_BACKFILL}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),
@@ -1670,6 +1786,33 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         # So both are destructive, and the matrix says the same.
         Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
         Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
+        # Record lineage S1: the four Issue writes each append an immutable
+        # revision or membership event; the two reads stay out.
+        Capability.ISSUES_CREATE,
+        Capability.ISSUES_UPDATE,
+        Capability.ISSUES_PROJECT_LINKS_ADD,
+        Capability.ISSUES_PROJECT_LINKS_END,
+        # Record lineage S1: the five link writes each append an immutable
+        # root, revision or evidence row; `records.lineage` and the two note
+        # reads stay out.
+        Capability.ISSUES_MEMBERSHIPS_ADD,
+        Capability.ISSUES_MEMBERSHIPS_END,
+        Capability.RECORDS_ASSOCIATIONS_ASSERT,
+        Capability.RECORDS_ASSOCIATIONS_CORRECT,
+        Capability.RECORDS_ASSOCIATIONS_END,
+        # Record lineage S2: the six writes; `issues.closure_readiness` and
+        # `issues.handoffs.list` stay out.
+        Capability.ISSUES_CLOSE,
+        Capability.ISSUES_REOPEN,
+        Capability.ISSUES_MEMBERSHIPS_CORRECT,
+        Capability.ISSUES_HANDOFFS_RECORD,
+        Capability.ISSUES_WORK_CREATE_TASK,
+        Capability.ISSUES_WORK_CREATE_COMMITMENT,
+        # Record lineage S3: the four writes; the four reads stay out.
+        Capability.RECORDS_ASSOCIATIONS_CONTEST,
+        Capability.RECORDS_ASSOCIATIONS_REINSTATE,
+        Capability.ISSUES_HANDOFFS_CORRECT,
+        Capability.RECORDS_BACKFILL_PLAN,
     }
 )
 
@@ -1769,6 +1912,26 @@ _ADDITIVE_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         # mutation or Record Event. It never enriches, supersedes or transitions
         # an existing assertion.
         Capability.KNOWLEDGE_ASSERTIONS_CREATE,
+        # Record lineage S1 (contract section 7): `issues.create` inserts a new
+        # Issue and its first revision; `issues.project_links.add` inserts a
+        # Project link or appends a `reinstate` event, and never rewrites a row.
+        # `issues.update` and `issues.project_links.end` change existing state.
+        Capability.ISSUES_CREATE,
+        Capability.ISSUES_PROJECT_LINKS_ADD,
+        # `issues.memberships.add` and `records.associations.assert` insert a
+        # new link root (or answer an existing one, `created: false`, writing
+        # only their own request row); `.end` and `.correct` change a link.
+        Capability.ISSUES_MEMBERSHIPS_ADD,
+        Capability.RECORDS_ASSOCIATIONS_ASSERT,
+        # Record lineage S2: a handoff appends one immutable event; a composite
+        # inserts a native record, its membership and its links. Close, reopen
+        # and the membership correction change existing state.
+        Capability.ISSUES_HANDOFFS_RECORD,
+        Capability.ISSUES_WORK_CREATE_TASK,
+        Capability.ISSUES_WORK_CREATE_COMMITMENT,
+        # Record lineage S3: a backfill plan appends ledger rows only. Contest,
+        # reinstate and the handoff correction change what a link or handoff means.
+        Capability.RECORDS_BACKFILL_PLAN,
     }
 )
 

@@ -1974,6 +1974,214 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "idempotency_key": "parity-knowledge-checkpoint",
         },
         Capability.RECORD_EVENTS_PROVENANCE: {"event_id": "rcev_parityknowledge0001"},
+        # Record lineage S1, the Issue plane.
+        Capability.ISSUES_CREATE: {
+            "title": "A parity issue",
+            "idempotency_key": "parity-issues-create-0001",
+        },
+        Capability.ISSUES_READ: {"issue_id": "sit_parityissue0001"},
+        Capability.ISSUES_LIST: {},
+        Capability.ISSUES_UPDATE: {
+            "issue_id": "sit_parityissue0001",
+            "expected_version": 1,
+            "idempotency_key": "parity-issues-update-0001",
+            "title": "A parity issue, retitled",
+        },
+        Capability.ISSUES_PROJECT_LINKS_ADD: {
+            "issue_id": "sit_parityissue0001",
+            "project_id": "prj_parityproject0001",
+            "expected_membership_revision": 0,
+            "idempotency_key": "parity-issues-project-links-add-0001",
+        },
+        Capability.ISSUES_PROJECT_LINKS_END: {
+            "issue_id": "sit_parityissue0001",
+            "project_id": "prj_parityproject0001",
+            "expected_membership_revision": 1,
+            "idempotency_key": "parity-issues-project-links-end-0001",
+            "reason": "the parity issue left the project",
+        },
+        # Record lineage S1, memberships, associations, the reverse read and note history.
+        Capability.ISSUES_MEMBERSHIPS_ADD: {
+            "issue_id": "sit_parityissue0001",
+            "member": {"family": "task", "record_id": "tsk_paritytask00001"},
+            "role": "work",
+            "idempotency_key": "parity-issues-memberships-add-0001",
+        },
+        Capability.ISSUES_MEMBERSHIPS_END: {
+            "link_id": "irl_paritylink00001",
+            "expected_revision": 1,
+            "idempotency_key": "parity-issues-memberships-end-0001",
+            "reason": "the parity task left the issue",
+        },
+        Capability.RECORDS_ASSOCIATIONS_ASSERT: {
+            "from_record": {"family": "commitment", "record_id": "cmt_paritycommitment01"},
+            "to_record": {"family": "meeting_note_version", "record_id": "mnote_paritynote00001"},
+            "relation_type": "originated_from",
+            "idempotency_key": "parity-records-associations-assert-0001",
+            "evidence_anchors": [
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_paritymeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_paritynote00001",
+                    "source_sha256": "a" * 64,
+                    "passage_start_cp": 0,
+                    "passage_end_cp": 4,
+                    "passage_sha256": "b" * 64,
+                    "role": "origin",
+                }
+            ],
+        },
+        Capability.RECORDS_ASSOCIATIONS_CORRECT: {
+            "link_id": "irl_paritylink00001",
+            "expected_revision": 1,
+            "idempotency_key": "parity-records-associations-correct-0001",
+            "reason": "the parity origin passage was narrowed",
+            "evidence_anchors": [
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_paritymeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_paritynote00001",
+                    "source_sha256": "a" * 64,
+                    "passage_start_cp": 0,
+                    "passage_end_cp": 4,
+                    "passage_sha256": "b" * 64,
+                    "role": "origin",
+                }
+            ],
+        },
+        Capability.RECORDS_ASSOCIATIONS_END: {
+            "link_id": "irl_paritylink00001",
+            "expected_revision": 1,
+            "idempotency_key": "parity-records-associations-end-0001",
+            "reason": "the parity association was wrong",
+        },
+        Capability.RECORDS_LINEAGE: {
+            "origin": {"family": "task", "record_id": "tsk_paritytask00001"}
+        },
+        Capability.MEETINGS_NOTES_VERSIONS: {"meeting_id": "mtg_paritymeeting0001"},
+        Capability.MEETINGS_NOTES_READ_VERSION: {
+            "meeting_id": "mtg_paritymeeting0001",
+            "note_version_id": "mnote_paritynote00001",
+        },
+        # Record lineage S2: close, reopen, readiness and membership correction.
+        Capability.ISSUES_CLOSE: {
+            "issue_id": "sit_parityissue0001",
+            "expected_version": 1,
+            "idempotency_key": "parity-issues-close-0001",
+            "outcome": "the parity issue was resolved",
+            "closure_evidence_anchors": [
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_paritymeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_paritynote00001",
+                    "source_sha256": "a" * 64,
+                    "passage_start_cp": 0,
+                    "passage_end_cp": 4,
+                    "passage_sha256": "b" * 64,
+                    "role": "resolution",
+                }
+            ],
+        },
+        Capability.ISSUES_REOPEN: {
+            "issue_id": "sit_parityissue0001",
+            "expected_version": 2,
+            "idempotency_key": "parity-issues-reopen-0001",
+            "reason": "the parity issue recurred",
+        },
+        Capability.ISSUES_CLOSURE_READINESS: {"issue_id": "sit_parityissue0001"},
+        Capability.ISSUES_MEMBERSHIPS_CORRECT: {
+            "link_id": "irl_paritylink00001",
+            "expected_revision": 1,
+            "idempotency_key": "parity-issues-memberships-correct-0001",
+            "reason": "the parity task was resolved",
+        },
+        Capability.ISSUES_HANDOFFS_RECORD: {
+            "issue_id": "sit_parityissue0001",
+            "commitment_id": "cmt_paritycommitment01",
+            "from_side": "counterparty",
+            "effective_at": "2026-08-09T12:00:00+00:00",
+            "reason": "the parity counterparty handed back",
+            "evidence_anchor": {
+                "family": "meeting_note_version",
+                "root_id": "mtg_paritymeeting0001",
+                "version_kind": "immutable_version",
+                "version_id": "mnote_paritynote00001",
+                "source_sha256": "a" * 64,
+                "role": "handoff",
+            },
+            "idempotency_key": "parity-issues-handoffs-record-0001",
+        },
+        Capability.ISSUES_HANDOFFS_LIST: {"issue_id": "sit_parityissue0001"},
+        Capability.ISSUES_WORK_CREATE_TASK: {
+            "issue_id": "sit_parityissue0001",
+            "idempotency_key": "parity-issues-work-create-task-0001",
+            "task": {"title": "the parity task", "origin_kind": "direct_principal"},
+        },
+        Capability.ISSUES_WORK_CREATE_COMMITMENT: {
+            "issue_id": "sit_parityissue0001",
+            "idempotency_key": "parity-issues-work-create-commitment-0001",
+            "commitment": {
+                "counterparty_entity_id": "ent_paritycounterparty01",
+                "direction": "owed_to_principal",
+                "summary": "the parity commitment",
+                "origin_evidence_ref": "cap_parityorigin00001",
+            },
+        },
+        # Record lineage S3 (S3 contract section 7).
+        Capability.RECORDS_ASSOCIATIONS_CONTEST: {
+            "link_id": "irl_paritylink00001",
+            "expected_revision": 1,
+            "idempotency_key": "parity-records-associations-contest-0001",
+            "reason": "the parity association is disputed",
+            "evidence_anchors": [
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_paritymeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_paritynote00001",
+                    "source_sha256": "a" * 64,
+                    "role": "contradicts",
+                }
+            ],
+        },
+        Capability.RECORDS_ASSOCIATIONS_REINSTATE: {
+            "link_id": "irl_paritylink00001",
+            "expected_revision": 2,
+            "idempotency_key": "parity-records-associations-reinstate-0001",
+            "reason": "the parity dispute was resolved",
+            "evidence_anchors": [
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_paritymeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_paritynote00001",
+                    "source_sha256": "a" * 64,
+                    "role": "corroborates",
+                }
+            ],
+        },
+        Capability.RECORDS_ASSOCIATIONS_HISTORY: {"link_id": "irl_paritylink00001"},
+        Capability.ISSUES_HISTORY: {"issue_id": "sit_parityissue0001"},
+        Capability.ISSUES_TIMELINE: {"issue_id": "sit_parityissue0001"},
+        Capability.ISSUES_HANDOFFS_CORRECT: {
+            "handoff_id": "ihnd_parityhandoff0001",
+            "action": "void",
+            "reason": "the parity handoff did not happen",
+            "evidence_anchor": {
+                "family": "meeting_note_version",
+                "root_id": "mtg_paritymeeting0001",
+                "version_kind": "immutable_version",
+                "version_id": "mnote_paritynote00001",
+                "source_sha256": "a" * 64,
+                "role": "contradicts",
+            },
+            "idempotency_key": "parity-issues-handoffs-correct-0001",
+        },
+        Capability.RECORDS_BACKFILL_PLAN: {"idempotency_key": "parity-records-backfill-plan-0001"},
+        Capability.RECORDS_BACKFILL_REPORT: {"run_id": "lbfr_parityrun000001"},
     }
 
 
@@ -2109,7 +2317,7 @@ def test_there_are_three_transports_to_compare() -> None:
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
     # The command union and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 193, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 223, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -2442,6 +2650,41 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
         # KLP-WP-05: provenance, on the same switch.
         Capability.RECORD_EVENTS_PROVENANCE,
+        # Record lineage S1: the Issue plane, behind `MY_PA_LINEAGE_ENABLED` (off here).
+        Capability.ISSUES_CREATE,
+        Capability.ISSUES_READ,
+        Capability.ISSUES_LIST,
+        Capability.ISSUES_UPDATE,
+        Capability.ISSUES_PROJECT_LINKS_ADD,
+        Capability.ISSUES_PROJECT_LINKS_END,
+        # Record lineage S1: memberships, associations, the reverse read and note
+        # history, behind the same switch.
+        Capability.ISSUES_MEMBERSHIPS_ADD,
+        Capability.ISSUES_MEMBERSHIPS_END,
+        Capability.RECORDS_ASSOCIATIONS_ASSERT,
+        Capability.RECORDS_ASSOCIATIONS_CORRECT,
+        Capability.RECORDS_ASSOCIATIONS_END,
+        Capability.RECORDS_LINEAGE,
+        Capability.MEETINGS_NOTES_VERSIONS,
+        Capability.MEETINGS_NOTES_READ_VERSION,
+        # Record lineage S2, behind the same switch.
+        Capability.ISSUES_CLOSE,
+        Capability.ISSUES_REOPEN,
+        Capability.ISSUES_CLOSURE_READINESS,
+        Capability.ISSUES_MEMBERSHIPS_CORRECT,
+        Capability.ISSUES_HANDOFFS_RECORD,
+        Capability.ISSUES_HANDOFFS_LIST,
+        Capability.ISSUES_WORK_CREATE_TASK,
+        Capability.ISSUES_WORK_CREATE_COMMITMENT,
+        # Record lineage S3, behind the same switch.
+        Capability.RECORDS_ASSOCIATIONS_CONTEST,
+        Capability.RECORDS_ASSOCIATIONS_REINSTATE,
+        Capability.RECORDS_ASSOCIATIONS_HISTORY,
+        Capability.ISSUES_HISTORY,
+        Capability.ISSUES_TIMELINE,
+        Capability.ISSUES_HANDOFFS_CORRECT,
+        Capability.RECORDS_BACKFILL_PLAN,
+        Capability.RECORDS_BACKFILL_REPORT,
     }
 )
 
@@ -3031,7 +3274,7 @@ def test_declared_unwired_capabilities_stay_separate_from_positive_parity(
     from my_pa.application.errors import UnsupportedError
 
     assert set(Capability) - set(_HANDLERS) == FUTURE_CAPABILITIES
-    assert len(IMPLEMENTED_CAPABILITIES) == 192
+    assert len(IMPLEMENTED_CAPABILITIES) == 222
     assert set(_BUILDERS) == set(IMPLEMENTED_CAPABILITIES)
     assert {Capability(tool.name) for tool in TOOLS} == set(IMPLEMENTED_CAPABILITIES)
 

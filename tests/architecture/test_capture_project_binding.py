@@ -26,7 +26,24 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 #: Moved by the Commitment counterparty Entity cutover (`commitments` swaps
 #: `counterparty_person_id` for `counterparty_entity_id` with its composite
 #: foreign key and index); `captures` is untouched.
-TABLES_SHA256: Final = "103244de1aa7f63d45a41a395f45009712738f13cf7ca122f16b1d422d3aae31"
+#: Moved by the record lineage S1 revision (ADR-015), which declares the
+#: eight lineage tables, `situations.kind`/`version` with their uniques, the
+#: `project_situations` triplet unique and same-Principal foreign keys, the
+#: `meeting_note_versions` digest unique, and a comment beside
+#: `capture_versions` naming its database-only digest unique; `captures` is
+#: untouched.
+#: Moved by the record lineage S2 revision (ADR-015), which declares the three
+#: S2 tables, the closure columns and CHECKs of `issue_revisions`, the S2
+#: CHECKs of `record_links`, `record_link_revisions.member_native_version` and
+#: the handoff and composite result columns of `lineage_write_requests`;
+#: `captures` is untouched.
+#: Moved by the record lineage S3 revision (ADR-015), which declares the five
+#: S3 tables (the commit-mark allocator and marks, the handoff corrections and
+#: the backfill ledger), `commit_seq` with its foreign key and index on the four
+#: fact tables, the S3 CHECKs of `record_links` and `record_link_revisions`, the
+#: one-live-head predicate and the S3 result columns of `lineage_write_requests`;
+#: `captures` is untouched.
+TABLES_SHA256: Final = "de0b4aac86bc66af8f5236c0b43c4d8595aee1950e35e8d527e2cbbab2e9efae"
 WP03_MIGRATION_SHA256: Final = "098edd98ccc1846b01c58f42e296e4751e7841b562a2827616cc4337e174c354"
 WP03_MIGRATION: Final = (
     ROOT / "migrations/versions/20260914_e6a4c2f91b73_project_controls_run01_integrity.py"

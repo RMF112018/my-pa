@@ -295,6 +295,9 @@ EXEMPT_PROPERTIES: Final[frozenset[tuple[str, str]]] = frozenset(
         ("commitments.list", "direction"),
         ("commitments.search", "direction"),
         ("commitments.create", "direction"),
+        # Record lineage S2: the composite's nested `commitments.create` object
+        # carries the same `direction` field (owed by or to the Principal).
+        ("issues.work.create_commitment", "direction"),
         # Which way an edge points, not where a file lives. Exempt on exactly the
         # precedent above: `direction` trips the scan on the substring "dir", and
         # its admitted values are `any`, `outgoing` and `incoming`.
@@ -350,6 +353,30 @@ EXEMPT_PROPERTIES: Final[frozenset[tuple[str, str]]] = frozenset(
         ("meetings.update", "virtual_meeting_url"),
         ("meetings.list", "sort_direction"),
         ("meetings.search", "sort_direction"),
+        # Record lineage S1: an evidence anchor's `root_id` is the opaque `mtg_`
+        # or `cap_` identifier of the anchor's source root, validated for its
+        # family's prefix and resolved only inside the caller's partition. It is
+        # matched only because "root" is in the vocabulary; it names no path.
+        ("issues.project_links.add", "root_id"),
+        # The same anchor shape inside the S1 link writes' `evidence_anchors`.
+        ("issues.memberships.add", "root_id"),
+        ("records.associations.assert", "root_id"),
+        ("records.associations.correct", "root_id"),
+        ("records.associations.end", "root_id"),
+        # Record lineage S2: the same anchor shape in the close, reopen and
+        # membership-correction sets, the handoff anchor, and the composites'
+        # membership evidence.
+        ("issues.close", "root_id"),
+        ("issues.reopen", "root_id"),
+        ("issues.memberships.correct", "root_id"),
+        ("issues.handoffs.record", "root_id"),
+        ("issues.work.create_task", "root_id"),
+        ("issues.work.create_commitment", "root_id"),
+        # Record lineage S3: the anchor sets of contest and reinstate, and the
+        # handoff correction's anchor.
+        ("records.associations.contest", "root_id"),
+        ("records.associations.reinstate", "root_id"),
+        ("issues.handoffs.correct", "root_id"),
     }
 )
 
@@ -652,7 +679,11 @@ def test_the_location_scan_would_catch_one() -> None:
     # fields (operator ruling B1): `location_text`/`virtual_meeting_url` on
     # create and update, `sort_direction` on list and search. Plus KLP-WP-04's two
     # `source_profile_id` fields (an opaque `kdsp_` profile, "file" in "profile").
-    assert len(EXEMPT_PROPERTIES) == 22
+    # Plus record lineage S1's evidence-anchor `root_id` (an opaque `mtg_`/`cap_`)
+    # on the Project-link write and the four link writes that take anchors, and
+    # on the S2 anchor-bearing writes. Plus the S2 Commitment composite's nested
+    # `commitments.create` `direction`. Plus the S3 anchor-bearing writes.
+    assert len(EXEMPT_PROPERTIES) == 37
     for tool_name, property_name in EXEMPT_PROPERTIES:
         tool = next(entry for entry in TOOLS if entry.name == tool_name)
         assert property_name in set(_schema_property_names(tool.input_schema))

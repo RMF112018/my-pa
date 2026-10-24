@@ -1027,6 +1027,75 @@
       "probe": {
         "document_id": "mdoc_aaaaaaaa11111111"
       }
+    },
+    "records.lineage": {
+      "purpose": "record_lineage_read",
+      "payloadFields": [
+        "origin",
+        "issue_id",
+        "max_depth",
+        "known_at",
+        "valid_at",
+        "page_size",
+        "cursor"
+      ],
+      "probe": {
+        "origin": {
+          "family": "task",
+          "record_id": "tsk_aaaaaaaa11111111"
+        },
+        "max_depth": 1
+      }
+    },
+    "meetings.notes.read_version": {
+      "purpose": "meeting_note_history_read",
+      "payloadFields": [
+        "meeting_id",
+        "note_version_id",
+        "include_body"
+      ],
+      "probe": {
+        "meeting_id": "mtg_aaaaaaaa11111111",
+        "note_version_id": "mnote_aaaaaaaa11111111",
+        "include_body": true
+      }
+    },
+    "issues.list": {
+      "purpose": "issue_read",
+      "payloadFields": [
+        "page_size",
+        "after",
+        "state",
+        "project_id"
+      ],
+      "probe": {
+        "page_size": 25,
+        "state": "open"
+      }
+    },
+    "issues.read": {
+      "purpose": "issue_read",
+      "payloadFields": [
+        "issue_id",
+        "include_members"
+      ],
+      "probe": {
+        "issue_id": "sit_aaaaaaaa11111111"
+      }
+    },
+    "issues.timeline": {
+      "purpose": "issue_read",
+      "payloadFields": [
+        "issue_id",
+        "known_at",
+        "valid_at",
+        "page_size",
+        "cursor"
+      ],
+      "probe": {
+        "issue_id": "sit_aaaaaaaa11111111",
+        "page_size": 25
+      }
     }
   },
   "_dispositionComment": [

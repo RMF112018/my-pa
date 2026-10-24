@@ -14,6 +14,7 @@ from tests.conftest import Scene, build_service
 from my_pa.adapters.mcp.remote import RemoteAccessContext, create_remote_mcp_app
 from my_pa.bootstrap.mcp_database_profiles import McpDatabaseServices
 from my_pa.domain.identity.operation import Capability, permitted_purposes
+from my_pa.domain.identity.purpose import Purpose
 
 
 @pytest.fixture
@@ -28,8 +29,12 @@ def anyio_backend() -> str:
 async def test_profile_catalog_and_direct_calls_have_same_ceiling(
     scene: Scene, client: str, writes: bool, expect_write: bool
 ) -> None:
-    ro = build_service(scene.world, scene.providers)
-    rw = build_service(scene.world, scene.providers)
+    ro = build_service(
+        scene.world, scene.providers, lineage_enabled=True, lineage_backfill_enabled=True
+    )
+    rw = build_service(
+        scene.world, scene.providers, lineage_enabled=True, lineage_backfill_enabled=True
+    )
     profiles = McpDatabaseServices(ro, rw, frozenset({"ro"}), frozenset({"rw"}), ())  # type: ignore[arg-type]
     context = RemoteAccessContext(
         scene.principal,
@@ -65,6 +70,17 @@ async def test_profile_catalog_and_direct_calls_have_same_ceiling(
         ):
             assert name not in names
             assert (await session.call_tool(name, {})).is_error
+        # Even global lineage/backfill switches and every valid purpose grant
+        # cannot admit these newly integrated protected capabilities.
+        for capability in Capability:
+            if permitted_purposes(capability) & {
+                Purpose.ISSUE_AUTHORING,
+                Purpose.RECORD_LINEAGE_AUTHORING,
+                Purpose.ISSUE_WORK_AUTHORING,
+                Purpose.LINEAGE_BACKFILL,
+            }:
+                assert capability.value not in names
+                assert (await session.call_tool(capability.value, {})).is_error
         focus = "ent_" + "a" * 32
         write = await session.call_tool(
             Capability.CANVAS_WORKSPACE_PUT.value,

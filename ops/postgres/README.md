@@ -272,8 +272,12 @@ from my_pa.infrastructure.database.mcp_object_grants import (
 )
 
 spec = McpObjectGrant(
-    schema="knowledge", name="reviewed_new_relation", creator="reviewed_creator",
-    classification="application_read", kind="r", review_id="EXACT_REVIEW_ID",
+    schema="knowledge",
+    name="reviewed_new_relation",
+    creator="reviewed_creator",
+    classification="application_read",
+    kind="r",
+    review_id="EXACT_REVIEW_ID",
 )
 with grant_created_mcp_object(connection, spec):
     # Existing reviewed migration CREATE only; do not SET ROLE or transfer owner here.

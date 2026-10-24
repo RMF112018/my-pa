@@ -28,8 +28,8 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with one hundred and ninety-two capabilities and
-fifty-two purposes now declared in the domain. If this reddens, the freeze has been undone
+emits what it emitted on the day it merged, with two hundred and twenty-two capabilities and
+fifty-nine purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
 
@@ -72,6 +72,7 @@ from tests.schema.knowledge_schema_ahead_contract import (
     KNOWLEDGE_WP_HEAD,
     admitted_ahead,
 )
+from tests.schema.lineage_schema_ahead_contract import lineage_admitted_ahead
 
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.audit.events import AuditOutcome
@@ -179,6 +180,86 @@ CAPABILITIES_AT_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset(
 #: Exact delta between the frozen capture revision and the current head. This is
 #: historical migration evidence, so it is intentionally literal rather than
 #: derived from either live domain enum.
+#: The trigger names the record lineage S1 revision installs, spelled.
+LINEAGE_TRIGGERS: Final[frozenset[str]] = frozenset(
+    {
+        *(
+            f"{table}_are_append_only"
+            for table in (
+                "lineage_evidence_anchors",
+                "issue_revisions",
+                "issue_project_membership_events",
+                "record_links",
+                "record_link_revisions",
+                "record_link_revision_evidence",
+            )
+        ),
+        *(
+            f"{table}_refuse_truncate"
+            for table in (
+                "lineage_evidence_anchors",
+                "issue_revisions",
+                "issue_project_membership_events",
+                "record_links",
+                "record_link_revisions",
+                "record_link_revision_evidence",
+                "record_link_heads",
+                "lineage_write_requests",
+            )
+        ),
+        "a_linked_record_is_not_deleted",
+        "a_situation_kind_is_fixed",
+        "an_issue_matches_its_latest_revision",
+        "an_issue_project_link_has_a_membership_event",
+        "an_issue_revision_is_not_ahead_of_its_issue",
+        "a_membership_event_follows_its_predecessor",
+        "a_record_link_identity_is_canonical",
+        "a_lineage_anchor_identity_is_canonical",
+        "a_lineage_anchor_passage_matches_its_source",
+        "a_link_revision_follows_an_active_predecessor",
+        "a_link_head_is_its_latest_revision",
+        "a_link_revision_evidence_set_is_frozen",
+        "a_link_head_follows_its_revisions",
+        "a_lineage_write_request_completes_once",
+        "a_lineage_write_request_is_never_left_reserved",
+        # Record lineage S2.
+        *(
+            f"{table}_{suffix}"
+            for table in (
+                "issue_revision_evidence",
+                "issue_responsibility_events",
+                "lineage_write_request_links",
+            )
+            for suffix in ("are_append_only", "refuse_truncate")
+        ),
+        "an_issue_closure_follows_its_predecessor",
+        "an_issue_revision_evidence_set_is_frozen",
+        "a_resolution_link_states_its_purpose",
+        "a_handoff_follows_its_predecessor",
+        "a_handoff_is_effective_in_order",
+        "a_composite_request_names_its_links",
+        # Record lineage S3.
+        "lineage_commit_marks_are_append_only",
+        "issue_responsibility_corrections_are_append_only",
+        *(
+            f"{table}_refuse_truncate"
+            for table in (
+                "lineage_commit_sequences",
+                "lineage_commit_marks",
+                "issue_responsibility_corrections",
+                "lineage_backfill_runs",
+                "lineage_backfill_items",
+            )
+        ),
+        "a_lineage_fact_takes_its_commit_mark",
+        "a_commit_sequence_advances_by_one",
+        "a_commit_mark_is_its_allocation",
+        "a_handoff_correction_is_admissible",
+        "a_backfill_run_moves_forward",
+        "a_backfill_item_is_settled_once",
+    }
+)
+
 CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset(
     {
         "constraint_categories.list",
@@ -458,6 +539,44 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "knowledge.assertions.submit",
         "knowledge.discovery.checkpoint",
         "record_events.provenance",
+        # Record lineage S1. Its revision restates `capability_is_known` and
+        # admits the fourteen S1 names at once, ahead of the domain
+        # (`tests/schema/lineage_schema_ahead_contract.py`). Spelled, not
+        # imported, for the reason given at the Knowledge names above.
+        "issues.create",
+        "issues.read",
+        "issues.list",
+        "issues.update",
+        "issues.project_links.add",
+        "issues.project_links.end",
+        "issues.memberships.add",
+        "issues.memberships.end",
+        "records.associations.assert",
+        "records.associations.correct",
+        "records.associations.end",
+        "records.lineage",
+        "meetings.notes.versions",
+        "meetings.notes.read_version",
+        # Record lineage S2, admitted by its revision with the domain declaring
+        # every name in the same change.
+        "issues.close",
+        "issues.reopen",
+        "issues.closure_readiness",
+        "issues.memberships.correct",
+        "issues.handoffs.record",
+        "issues.handoffs.list",
+        "issues.work.create_task",
+        "issues.work.create_commitment",
+        # Record lineage S3, admitted by its revision with the domain declaring
+        # every name in the same change.
+        "records.associations.contest",
+        "records.associations.reinstate",
+        "records.associations.history",
+        "issues.history",
+        "issues.timeline",
+        "issues.handoffs.correct",
+        "records.backfill.plan",
+        "records.backfill.report",
     }
 )
 
@@ -709,12 +828,16 @@ CHECKED_VOCABULARY: Final[tuple[tuple[str, str, frozenset[str]], ...]] = (
     (
         "audit_events",
         "capability_is_known",
-        HEAD_CAPABILITIES_DECLARED_BY_DOMAIN | CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN,
+        HEAD_CAPABILITIES_DECLARED_BY_DOMAIN
+        | CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN
+        | lineage_admitted_ahead("capability"),
     ),
     (
         "audit_events",
         "purpose_is_known",
-        frozenset(p.value for p in Purpose) | PURPOSES_ADMITTED_AHEAD_OF_THE_DOMAIN,
+        frozenset(p.value for p in Purpose)
+        | PURPOSES_ADMITTED_AHEAD_OF_THE_DOMAIN
+        | lineage_admitted_ahead("purpose"),
     ),
     ("audit_events", "audit_outcome_is_known", frozenset(o.value for o in AuditOutcome)),
     ("audit_events", "denial_reason_is_known", frozenset(d.value for d in DenialReason)),
@@ -885,9 +1008,15 @@ def test_the_schema_ahead_gap_matches_the_knowledge_wp_head() -> None:
     # restatement freezes, minus what the domain declares, is exactly the row.
     # Bumping `KNOWLEDGE_WP_HEAD` before the domain declares the members its next
     # row drops (or declaring them without the bump) reddens here, in FAST.
+    # The record lineage S1 revision admits its names ahead of the domain on the
+    # same terms (`tests/schema/lineage_schema_ahead_contract.py`).
     frozen_capabilities, frozen_purposes = _latest_frozen_audit_vocabulary()
-    assert frozen_capabilities - HEAD_CAPABILITIES_DECLARED_BY_DOMAIN == row["capability"]
-    assert frozen_purposes - {p.value for p in Purpose} == row["purpose"]
+    assert frozen_capabilities - HEAD_CAPABILITIES_DECLARED_BY_DOMAIN == row[
+        "capability"
+    ] | lineage_admitted_ahead("capability")
+    assert frozen_purposes - {p.value for p in Purpose} == row["purpose"] | lineage_admitted_ahead(
+        "purpose"
+    )
 
 
 def _latest_frozen_audit_vocabulary() -> tuple[frozenset[str], frozenset[str]]:
@@ -1095,7 +1224,9 @@ def test_downgrading_this_revision_restores_the_previous_vocabulary(
     try:
         command.upgrade(_config(), "head")
         assert _admitted(engine, "capability_is_known") == (
-            HEAD_CAPABILITIES_DECLARED_BY_DOMAIN | CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN
+            HEAD_CAPABILITIES_DECLARED_BY_DOMAIN
+            | CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN
+            | lineage_admitted_ahead("capability")
         )
 
         command.downgrade(_config(), ENROLLMENT_OBJECTS_REVISION)
@@ -1141,7 +1272,9 @@ def test_stopping_at_the_capture_revision_emits_the_twelve_it_merged_with(
 
         command.upgrade(_config(), "head")
         admitted_at_head = (
-            HEAD_CAPABILITIES_DECLARED_BY_DOMAIN | CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN
+            HEAD_CAPABILITIES_DECLARED_BY_DOMAIN
+            | CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN
+            | lineage_admitted_ahead("capability")
         )
         assert _admitted(engine, "capability_is_known") == admitted_at_head
         assert _tables(engine) >= PROPOSAL_TABLES
@@ -1331,6 +1464,11 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             # triggers over the fourteen `knowledge_*` tables, two of them
             # deferred constraint triggers; name them so the equality stays one.
             *KNOWLEDGE_TRIGGERS,
+            # Record lineage S1. Its revision installs append-only and
+            # TRUNCATE refusals, the commit checks and transitions of its eight
+            # tables, and its guards on the existing Situation, Project-link and
+            # linked native tables; name them so the equality stays one.
+            *LINEAGE_TRIGGERS,
         }
         for name in ("a_proposal_cites_at_least_one_span", "a_span_link_leaves_its_proposal_cited"):
             assert "CONSTRAINT TRIGGER" in triggers[name]

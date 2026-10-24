@@ -510,6 +510,45 @@ _ORDINAL_UNITS = (
     # ninety-two; dense through a hundred-ninety-third.
     "hundred-ninety-second",
     "hundred-ninety-third",
+    # Record lineage S1 adds the six Issue-plane names and takes the public set
+    # to one hundred and ninety-eight; dense through a hundred-ninety-ninth.
+    "hundred-ninety-fourth",
+    "hundred-ninety-fifth",
+    "hundred-ninety-sixth",
+    "hundred-ninety-seventh",
+    "hundred-ninety-eighth",
+    "hundred-ninety-ninth",
+    # Record lineage S1's memberships, associations, reverse read and note
+    # history take the public set to two hundred and six; dense through the
+    # two-hundred-seventh.
+    "two-hundredth",
+    "two-hundred-first",
+    "two-hundred-second",
+    "two-hundred-third",
+    "two-hundred-fourth",
+    "two-hundred-fifth",
+    "two-hundred-sixth",
+    "two-hundred-seventh",
+    # Record lineage S2 takes the public set to two hundred and fourteen; dense
+    # through the two-hundred-fifteenth.
+    "two-hundred-eighth",
+    "two-hundred-ninth",
+    "two-hundred-tenth",
+    "two-hundred-eleventh",
+    "two-hundred-twelfth",
+    "two-hundred-thirteenth",
+    "two-hundred-fourteenth",
+    "two-hundred-fifteenth",
+    # Record lineage S3 takes it to two hundred and twenty-two; dense through
+    # the two-hundred-twenty-third.
+    "two-hundred-sixteenth",
+    "two-hundred-seventeenth",
+    "two-hundred-eighteenth",
+    "two-hundred-nineteenth",
+    "two-hundred-twentieth",
+    "two-hundred-twenty-first",
+    "two-hundred-twenty-second",
+    "two-hundred-twenty-third",
 )
 
 

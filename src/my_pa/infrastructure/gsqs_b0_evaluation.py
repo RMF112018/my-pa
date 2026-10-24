@@ -22,13 +22,18 @@ from my_pa.contracts.ports import (
     EntitiesRepository,
     GoodNotesProposalAdmission,
     GoodNotesSemanticRepository,
+    IssueHandoffRepository,
+    IssueRepository,
+    IssueTimelineRepository,
     KnowledgeRepository,
+    LineageBackfillRepository,
     ManagedDocumentRepository,
     MeetingRepository,
     OperationQueue,
     PortError,
     ProjectRepository,
     PulseRepository,
+    RecordLineageRepository,
     ReviewRepository,
     SituationRepository,
     SourceProviders,
@@ -223,6 +228,26 @@ class GsqsB0EvaluationUnitOfWork(UnitOfWork):
     @property
     def meetings(self) -> MeetingRepository:
         return cast(MeetingRepository, self._unused)
+
+    @property
+    def issues(self) -> IssueRepository:
+        return cast(IssueRepository, self._unused)
+
+    @property
+    def record_lineage(self) -> RecordLineageRepository:
+        return cast(RecordLineageRepository, self._unused)
+
+    @property
+    def issue_handoffs(self) -> IssueHandoffRepository:
+        return cast(IssueHandoffRepository, self._unused)
+
+    @property
+    def issue_timeline(self) -> IssueTimelineRepository:
+        return cast(IssueTimelineRepository, self._unused)
+
+    @property
+    def lineage_backfill(self) -> LineageBackfillRepository:
+        return cast(LineageBackfillRepository, self._unused)
 
     @property
     def context_runs(self) -> ContextRunRepository:

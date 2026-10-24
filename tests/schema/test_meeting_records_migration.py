@@ -43,6 +43,12 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, Table, insert, text, update
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError, IntegrityError
+from tests.schema.lineage_s2_schema_ahead_contract import S2_CAPABILITIES as LINEAGE_S2_CAPABILITIES
+from tests.schema.lineage_s2_schema_ahead_contract import S2_PURPOSES as LINEAGE_S2_PURPOSES
+from tests.schema.lineage_s3_schema_ahead_contract import S3_CAPABILITIES as LINEAGE_S3_CAPABILITIES
+from tests.schema.lineage_s3_schema_ahead_contract import S3_PURPOSES as LINEAGE_S3_PURPOSES
+from tests.schema.lineage_schema_ahead_contract import S1_CAPABILITIES as LINEAGE_S1_CAPABILITIES
+from tests.schema.lineage_schema_ahead_contract import S1_PURPOSES as LINEAGE_S1_PURPOSES
 
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
@@ -72,7 +78,7 @@ PREVIOUS: Final = "6f6ead27d122"
 #: The chain head these tests run against. `1d9b248e7f83` (WP-RE-01, Record
 #: Events) is additive on `REVISION`, and `0641c354ca85` (CRL-WP-03, Capture
 #: lifecycle) is additive on that, so `REVISION` is no longer the head.
-HEAD: Final = "b9025e7fb738"
+HEAD: Final = "6f1476b8da52"
 #: The revision that last stated `capability_is_known` and `purpose_is_known`,
 #: and therefore the only correct source for this revision's BEFORE literals.
 VOCABULARY_PREDECESSOR: Final = "e6a4c2f91b73"
@@ -100,6 +106,12 @@ TRIGGERS: Final[dict[str, str]] = {
     "meeting_write_requests_complete_once": "meeting_write_request_completes_once",
 }
 OWNER_UNIQUE: Final = "a_managed_document_is_identified_within_its_owner"
+#: Declared on a Meeting table but added by a later revision, so absent from
+#: this one's frozen text: `264310e0416a` (record lineage S1) adds the note
+#: digest unique the evidence-anchor foreign key targets.
+ADDED_BY_LATER_REVISIONS: Final = frozenset(
+    {"a_meeting_note_digest_is_identified_within_its_meeting"}
+)
 ADMITTED_CAPABILITIES: Final = frozenset(
     {
         "meetings.create",
@@ -150,7 +162,10 @@ def _offline(target: str, *, down: bool = False) -> str:
 def test_the_revision_is_the_single_head_directly_on_the_previous_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "5c1e7a9b3d42"
+    assert script.get_revision(HEAD).down_revision == "d020b532ad7d"
+    assert script.get_revision("d020b532ad7d").down_revision == "264310e0416a"
+    assert script.get_revision("264310e0416a").down_revision == "b9025e7fb738"
+    assert script.get_revision("b9025e7fb738").down_revision == "5c1e7a9b3d42"
     assert script.get_revision("5c1e7a9b3d42").down_revision == "c8f7ae406d47"
     assert script.get_revision("c8f7ae406d47").down_revision == "a591b81f10a2"
     assert script.get_revision("a591b81f10a2").down_revision == "cc373834a485"
@@ -165,7 +180,7 @@ def test_the_revision_is_the_single_head_directly_on_the_previous_head() -> None
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 118
+    assert len(list(MIGRATIONS.glob("*.py"))) == 121
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -198,6 +213,9 @@ def test_the_frozen_ddl_names_every_declared_table_constraint_and_index() -> Non
             assert re.search(rf"\b{column.name}\b", source), (table.name, column.name)
         for constraint in table.constraints:
             if constraint.name is not None and not str(constraint.name).startswith("_"):
+                if str(constraint.name) in ADDED_BY_LATER_REVISIONS:
+                    assert str(constraint.name) not in source
+                    continue
                 assert str(constraint.name) in source, (table.name, constraint.name)
         for index in table.indexes:
             assert f"INDEX {index.name} ON knowledge.{table.name}" in _WHITESPACE.sub(
@@ -252,37 +270,50 @@ def test_the_at_texts_add_exactly_the_meeting_vocabulary_and_stay_sorted() -> No
 
 #: What the next vocabulary restatement (`1d9b248e7f83`, WP-RE-06) admits; this
 #: revision's AT set is every name declared *before* it.
-ADMITTED_LATER_CAPABILITIES: Final = frozenset(
-    {
-        "record_events.list",
-        "capture.archive",
-        "capture.restore",
-        # KLP-WP-03: admitted by the Knowledge revision `6734f039f7a6` (KLP-WP-02)
-        # and declared since.
-        "knowledge.assertions.read",
-        "knowledge.assertions.list",
-        "knowledge.assertions.search",
-        "knowledge.assertions.history",
-        "knowledge.assertions.reveal",
-        "knowledge.assertions.create",
-        # KLP-WP-04: the discovery pair, admitted by the same revision.
-        "knowledge.assertions.submit",
-        "knowledge.discovery.checkpoint",
-        # KLP-WP-05: the provenance read, admitted by the same revision.
-        "record_events.provenance",
-        # The report type registry, admitted by `a591b81f10a2`.
-        "reports.types.create",
-        "reports.types.list",
-    }
+ADMITTED_LATER_CAPABILITIES: Final = (
+    frozenset(
+        {
+            "record_events.list",
+            "capture.archive",
+            "capture.restore",
+            # KLP-WP-03: admitted by the Knowledge revision `6734f039f7a6` (KLP-WP-02)
+            # and declared since.
+            "knowledge.assertions.read",
+            "knowledge.assertions.list",
+            "knowledge.assertions.search",
+            "knowledge.assertions.history",
+            "knowledge.assertions.reveal",
+            "knowledge.assertions.create",
+            # KLP-WP-04: the discovery pair, admitted by the same revision.
+            "knowledge.assertions.submit",
+            "knowledge.discovery.checkpoint",
+            # KLP-WP-05: the provenance read, admitted by the same revision.
+            "record_events.provenance",
+            # The report type registry, admitted by `a591b81f10a2`.
+            "reports.types.create",
+            "reports.types.list",
+        }
+        # Record lineage S1: admitted by the S1 revision and declared by the S1 slices.
+    )
+    | LINEAGE_S1_CAPABILITIES
+    # Record lineage S2: admitted by the S2 revision and declared with it.
+    | LINEAGE_S2_CAPABILITIES
+    # Record lineage S3: admitted by the S3 revision and declared with it.
+    | LINEAGE_S3_CAPABILITIES
 )
-ADMITTED_LATER_PURPOSES: Final = frozenset(
-    {
-        "record_event_read",
-        "knowledge_assertion_read",
-        "knowledge_assertion_authoring",
-        "knowledge_assertion_observation",
-        "record_event_provenance_read",
-    }
+ADMITTED_LATER_PURPOSES: Final = (
+    frozenset(
+        {
+            "record_event_read",
+            "knowledge_assertion_read",
+            "knowledge_assertion_authoring",
+            "knowledge_assertion_observation",
+            "record_event_provenance_read",
+        }
+    )
+    | LINEAGE_S1_PURPOSES
+    | LINEAGE_S2_PURPOSES
+    | LINEAGE_S3_PURPOSES
 )
 
 

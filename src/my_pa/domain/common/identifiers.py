@@ -488,6 +488,36 @@ class IdKind(StrEnum):
     KNOWLEDGE_DISCOVERY_CHECKPOINT = "kdcp"
     KNOWLEDGE_DISCOVERY_CHECKPOINT_REQUEST = "kdcpr"
     KNOWLEDGE_DISCOVERY_SOURCE_PROFILE = "kdsp"
+    #: Record lineage, Slice S1 (ADR-015, S1 contract section 2): one immutable
+    #: Issue revision, one Issue↔Project membership event, one association
+    #: root, one association revision and one evidence anchor. An Issue keeps
+    #: its `sit` identifier (there is no `issue` kind). `ires` is deliberately
+    #: not used: it is `IDENTITY_RESOLUTION`. Checked against every prior member
+    #: of this enum before use (a grep of each quoted value over `src`, `tests`,
+    #: `web/src` and `migrations`, and the uniqueness assertion in
+    #: `tests/unit/test_identifiers.py`): none collides, and none is a
+    #: prefix-with-underscore of another kind.
+    ISSUE_REVISION = "irs"
+    ISSUE_PROJECT_MEMBERSHIP_EVENT = "ipme"
+    RECORD_LINK = "irl"
+    RECORD_LINK_REVISION = "irv"
+    LINEAGE_EVIDENCE_ANCHOR = "ian"
+    #: Record lineage, Slice S2 (S2 contract section 2): one immutable
+    #: responsibility handoff event (`issue_responsibility_events.handoff_id`).
+    #: Checked against every prior member of this enum before use (a grep of
+    #: `ihnd` over `src`, `tests`, `web/src` and `migrations`, and the
+    #: uniqueness assertion in `tests/unit/test_identifiers.py`): it collides
+    #: with none, no member is a prefix of it, and it is a prefix of none.
+    ISSUE_HANDOFF = "ihnd"
+    #: Record lineage, Slice S3 (S3 contract section 2): one immutable handoff
+    #: correction (`issue_responsibility_corrections.correction_id`) and one
+    #: backfill dry-run (`lineage_backfill_runs.run_id`). Checked against all
+    #: 148 prior members before use (a grep of `ihcr` and `lbfr` over `src`,
+    #: `tests`, `web/src` and `migrations`, and the uniqueness assertion in
+    #: `tests/unit/test_identifiers.py`): neither collides, no member is a
+    #: prefix of either, and neither is a prefix of any.
+    ISSUE_HANDOFF_CORRECTION = "ihcr"
+    LINEAGE_BACKFILL_RUN = "lbfr"
 
 
 class InvalidIdentifierError(ValueError):

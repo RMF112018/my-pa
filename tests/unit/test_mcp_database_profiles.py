@@ -16,6 +16,7 @@ from my_pa.contracts.mcp_database_profiles import (
     profile_capabilities,
 )
 from my_pa.domain.identity.operation import Capability, permitted_purposes
+from my_pa.domain.identity.purpose import Purpose
 from tests.conftest import Scene, build_service
 
 
@@ -82,6 +83,43 @@ def test_all_protected_writes_and_unknown_capabilities_stay_blocked() -> None:
     assert Capability.CANVAS_WORKSPACE_PUT.value in profile_capabilities(
         McpDatabaseProfile.READ_WRITE
     )
+
+
+@pytest.mark.parametrize("client", ["ro", "rw"])
+@pytest.mark.parametrize(
+    "capability",
+    [
+        capability
+        for capability in Capability
+        if permitted_purposes(capability)
+        & {
+            Purpose.ISSUE_AUTHORING,
+            Purpose.RECORD_LINEAGE_AUTHORING,
+            Purpose.ISSUE_WORK_AUTHORING,
+            Purpose.LINEAGE_BACKFILL,
+        }
+    ],
+)
+def test_lineage_grants_cannot_select_rw_or_expand_profile(
+    scene: Scene, client: str, capability: Capability
+) -> None:
+    ro = build_service(
+        scene.world, scene.providers, lineage_enabled=True, lineage_backfill_enabled=True
+    )
+    rw = build_service(
+        scene.world, scene.providers, lineage_enabled=True, lineage_backfill_enabled=True
+    )
+    profiles = McpDatabaseServices(ro, rw, frozenset({"ro"}), frozenset({"rw"}), ())  # type: ignore[arg-type]
+    context = RemoteAccessContext(
+        scene.principal,
+        authenticated_client_id=client,
+        allowed_capabilities=frozenset({capability.value}),
+        capability_purposes=frozenset((capability, p) for p in permitted_purposes(capability)),
+    )
+    bound = profiles.access(context, write_allowed=True)
+    assert bound is not None and bound.service is ro
+    assert not bound.allowed_capabilities
+    assert not bound.capability_purposes
 
 
 def test_concurrent_profile_binding_is_request_local_and_never_escalates(scene: Scene) -> None:

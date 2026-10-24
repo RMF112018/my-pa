@@ -150,7 +150,14 @@ CREATE_MINIMUM: Final[dict[str, Any]] = {
 
 
 def test_the_six_capabilities_are_declared_dispatched_built_and_published() -> None:
-    declared = {capability for capability in Capability if capability.value.startswith("meetings.")}
+    # Record lineage S1's two `meetings.notes.*` reads are the lineage plane's,
+    # behind its own switch, not this plane's six.
+    declared = {
+        capability
+        for capability in Capability
+        if capability.value.startswith("meetings.")
+        and not capability.value.startswith("meetings.notes.")
+    }
     assert declared == MEETING_CAPABILITIES
     assert set(_HANDLERS) >= MEETING_CAPABILITIES
     assert set(_BUILDERS) >= MEETING_CAPABILITIES

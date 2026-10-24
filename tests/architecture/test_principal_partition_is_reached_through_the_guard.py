@@ -153,6 +153,10 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # correlated predicate between two tables composes
         # `matching_partition_criterion`. No hand-written partition comparison.
         "infrastructure/persistence/meetings.py",
+        # Record lineage S1's Issue plane, in the same shape: every SELECT and
+        # UPDATE composes `_mine` or `principal_scoped`, every INSERT `_bound`,
+        # and every correlated predicate `matching_partition_criterion`.
+        "infrastructure/persistence/issues.py",
         # WP-RE-01's Record Event feed. Its two writes -- the allocator
         # upsert on `record_event_sequences` and the ordered insert into
         # `record_events` -- both compose `_bound` over `principal_bound_values`.
@@ -162,6 +166,22 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # `capture_versions` aliases of its capture analogue -- through
         # `partition_criterion`. It writes no hand-written partition comparison.
         "infrastructure/persistence/record_events.py",
+        # Record lineage S1 (ADR-015). Its read-only head rebuild scopes
+        # `record_links` through `principal_scoped` and joins
+        # `record_link_revisions` by `matching_partition_criterion`. It writes no
+        # hand-written partition comparison.
+        "infrastructure/persistence/record_lineage.py",
+        # Record lineage S2's handoff ledger. Every SELECT composes `_mine`
+        # over `partition_criterion`, the one INSERT `_bound` over
+        # `principal_bound_values`, and the anchor join
+        # `matching_partition_criterion`. It writes no hand-written partition
+        # comparison.
+        "infrastructure/persistence/issue_handoffs.py",
+        # Record lineage S3's Issue timeline reads. Every SELECT composes `_mine`
+        # over `partition_criterion` or `principal_scoped`, and the Constraint
+        # revision party join `matching_partition_criterion`. It writes nothing
+        # and no hand-written partition comparison.
+        "infrastructure/persistence/issue_timeline.py",
         # KLP-WP-03's Knowledge Assertion plane. Every SELECT and UPDATE scopes
         # each table and alias it names through `partition_criterion`, every
         # INSERT (including the `ON CONFLICT` reservation and evidence upserts)
@@ -423,6 +443,12 @@ STATEMENT_LEVEL: Final = frozenset(
 #: modules is reached only through an application path that has already resolved
 #: the Principal, which is the same argument the `QUARANTINED` entries make.
 PER_MODULE_ONLY: Final = {
+    "infrastructure/persistence/record_lineage.py": (
+        "record lineage S1: the read-only head rebuild scopes `record_links` through "
+        "`principal_scoped` and joins `record_link_revisions` by "
+        "`matching_partition_criterion`. It has not joined a dedicated statement-level "
+        "scanner."
+    ),
     "infrastructure/persistence/knowledge_assertions.py": (
         "KLP-WP-03: every read, lock and control UPDATE composes `partition_criterion` "
         "on each table and alias it names (the remote `withheld_remote` predicate "
@@ -477,6 +503,24 @@ PER_MODULE_ONLY: Final = {
         "INSERT composes `_bound` over `principal_bound_values`, correlated "
         "Meeting-table predicates use `matching_partition_criterion`; not yet in "
         "a dedicated statement-level scanner."
+    ),
+    "infrastructure/persistence/issue_handoffs.py": (
+        "record lineage S2: every SELECT composes `_mine` over `partition_criterion`, "
+        "the INSERT `_bound` over `principal_bound_values`, the anchor join "
+        "`matching_partition_criterion`; not yet in a dedicated statement-level scanner."
+    ),
+    "infrastructure/persistence/issue_timeline.py": (
+        "record lineage S3: every SELECT composes `_mine` over `partition_criterion` or "
+        "`principal_scoped`, the Constraint revision party join "
+        "`matching_partition_criterion`; it writes nothing; not yet in a dedicated "
+        "statement-level scanner."
+    ),
+    "infrastructure/persistence/issues.py": (
+        "every SELECT/UPDATE composes `_mine` over `partition_criterion` or "
+        "`principal_scoped`, every INSERT composes `_bound` over "
+        "`principal_bound_values`, correlated event/link predicates use "
+        "`matching_partition_criterion`; not yet in a dedicated statement-level "
+        "scanner."
     ),
     "infrastructure/persistence/continuity_read.py": (
         "one helper applies partition_criterion to every read-model table; the "
@@ -778,6 +822,9 @@ HAND_WRITTEN_COMPARISONS: Final = {
         ("situations", "principal_id"),
         ("situations", "principal_id"),
         ("situations", "principal_id"),
+        ("situations", "principal_id"),
+        # Record lineage S1: `propose_decision` refuses an Issue context, read
+        # inside the caller's partition (S1 contract section 9).
         ("situations", "principal_id"),
         ("table", "principal_id"),
         ("table", "principal_id"),

@@ -422,3 +422,38 @@ class Purpose(StrEnum):
     # submission lineage. A read-only purpose of its own, used by exactly
     # `record_events.provenance` (R5 profile table, matrix `purposes`).
     RECORD_EVENT_PROVENANCE_READ = "record_event_provenance_read"
+    # Record lineage S1 (ADR-015; S1 contract section 7), on `D-91`: would reuse
+    # widen the grant? `meeting_read`/`continuity` purposes would: an Issue is
+    # its own plane with its own revisions and native Project scope, and a
+    # grant issued to read Meetings or context Situations must not read Issues,
+    # nor the reverse. A read/authoring pair of its own, on the capture plane's
+    # split: a grant issued to read must never also create. `issue_authoring`
+    # is a remote-write purpose (`adapters.mcp.remote._WRITE_PURPOSES`).
+    ISSUE_READ = "issue_read"
+    ISSUE_AUTHORING = "issue_authoring"
+    # Record lineage S1 (S1 contract section 7), on `D-91`: would reuse widen
+    # the grant? `issue_read`/`issue_authoring` would: a lineage read crosses
+    # Meetings, Work, Constraints and Captures under one Issue, and asserting
+    # an association between two records is not authoring an Issue. A
+    # read/authoring pair of its own; `record_lineage_authoring` is a
+    # remote-write purpose.
+    RECORD_LINEAGE_READ = "record_lineage_read"
+    RECORD_LINEAGE_AUTHORING = "record_lineage_authoring"
+    # Record lineage S1, on `D-91`: would reuse widen the grant? `meeting_read`
+    # would: it discloses only the current note head, and a historical body is
+    # a widening over it. A read-only purpose of its own, used by exactly
+    # `meetings.notes.read_version`.
+    MEETING_NOTE_HISTORY_READ = "meeting_note_history_read"
+    # Record lineage S2 (S2 contract section 7), on `D-91`: would reuse widen
+    # the grant? `issue_authoring` would: the two composite writes create native
+    # Tasks and Commitments, and a grant issued to author Issues must not
+    # silently become a grant to create Work. A write purpose of its own, used
+    # by exactly `issues.work.create_task` and `issues.work.create_commitment`;
+    # a remote-write purpose.
+    ISSUE_WORK_AUTHORING = "issue_work_authoring"
+    # Record lineage S3 (S3 contract section 7), on `D-91`: would reuse widen the
+    # grant? Any lineage or Issue purpose would: a backfill reads the whole native
+    # corpus of the Principal and writes a durable ledger, so no lineage or Issue
+    # grant may become one. A write purpose of its own, used by exactly
+    # `records.backfill.plan` and `records.backfill.report`, both operator-only.
+    LINEAGE_BACKFILL = "lineage_backfill"

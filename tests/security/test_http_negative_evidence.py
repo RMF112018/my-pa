@@ -282,6 +282,41 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
         # KLP-WP-05: provenance, on the same terms.
         Capability.RECORD_EVENTS_PROVENANCE,
+        # Record lineage S1: the Issue plane, behind `MY_PA_LINEAGE_ENABLED` (off here).
+        Capability.ISSUES_CREATE,
+        Capability.ISSUES_READ,
+        Capability.ISSUES_LIST,
+        Capability.ISSUES_UPDATE,
+        Capability.ISSUES_PROJECT_LINKS_ADD,
+        Capability.ISSUES_PROJECT_LINKS_END,
+        # Record lineage S1: memberships, associations, the reverse read and note
+        # history, behind the same switch.
+        Capability.ISSUES_MEMBERSHIPS_ADD,
+        Capability.ISSUES_MEMBERSHIPS_END,
+        Capability.RECORDS_ASSOCIATIONS_ASSERT,
+        Capability.RECORDS_ASSOCIATIONS_CORRECT,
+        Capability.RECORDS_ASSOCIATIONS_END,
+        Capability.RECORDS_LINEAGE,
+        Capability.MEETINGS_NOTES_VERSIONS,
+        Capability.MEETINGS_NOTES_READ_VERSION,
+        # Record lineage S2, behind the same switch.
+        Capability.ISSUES_CLOSE,
+        Capability.ISSUES_REOPEN,
+        Capability.ISSUES_CLOSURE_READINESS,
+        Capability.ISSUES_MEMBERSHIPS_CORRECT,
+        Capability.ISSUES_HANDOFFS_RECORD,
+        Capability.ISSUES_HANDOFFS_LIST,
+        Capability.ISSUES_WORK_CREATE_TASK,
+        Capability.ISSUES_WORK_CREATE_COMMITMENT,
+        # Record lineage S3, behind the same switch (and scopeless).
+        Capability.RECORDS_ASSOCIATIONS_CONTEST,
+        Capability.RECORDS_ASSOCIATIONS_REINSTATE,
+        Capability.RECORDS_ASSOCIATIONS_HISTORY,
+        Capability.ISSUES_HISTORY,
+        Capability.ISSUES_TIMELINE,
+        Capability.ISSUES_HANDOFFS_CORRECT,
+        Capability.RECORDS_BACKFILL_PLAN,
+        Capability.RECORDS_BACKFILL_REPORT,
     }
 )
 
@@ -1351,6 +1386,211 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "idempotency_key": "wire-knowledge-checkpoint",
         },
         Capability.RECORD_EVENTS_PROVENANCE: {"event_id": "rcev_wireknowledge00001"},
+        # Record lineage S1, the Issue plane.
+        Capability.ISSUES_CREATE: {
+            "title": "A wire issue",
+            "idempotency_key": "wire-issues-create-0001",
+        },
+        Capability.ISSUES_READ: {"issue_id": "sit_wireissue0001"},
+        Capability.ISSUES_LIST: {},
+        Capability.ISSUES_UPDATE: {
+            "issue_id": "sit_wireissue0001",
+            "expected_version": 1,
+            "idempotency_key": "wire-issues-update-0001",
+            "title": "A wire issue, retitled",
+        },
+        Capability.ISSUES_PROJECT_LINKS_ADD: {
+            "issue_id": "sit_wireissue0001",
+            "project_id": "prj_wireproject0001",
+            "expected_membership_revision": 0,
+            "idempotency_key": "wire-issues-project-links-add-0001",
+        },
+        Capability.ISSUES_PROJECT_LINKS_END: {
+            "issue_id": "sit_wireissue0001",
+            "project_id": "prj_wireproject0001",
+            "expected_membership_revision": 1,
+            "idempotency_key": "wire-issues-project-links-end-0001",
+            "reason": "the wire issue left the project",
+        },
+        # Record lineage S1, memberships, associations, the reverse read and note history.
+        Capability.ISSUES_MEMBERSHIPS_ADD: {
+            "issue_id": "sit_wireissue0001",
+            "member": {"family": "task", "record_id": "tsk_wiretask00001"},
+            "role": "work",
+            "idempotency_key": "wire-issues-memberships-add-0001",
+        },
+        Capability.ISSUES_MEMBERSHIPS_END: {
+            "link_id": "irl_wirelink00001",
+            "expected_revision": 1,
+            "idempotency_key": "wire-issues-memberships-end-0001",
+            "reason": "the wire task left the issue",
+        },
+        Capability.RECORDS_ASSOCIATIONS_ASSERT: {
+            "from_record": {"family": "commitment", "record_id": "cmt_wirecommitment01"},
+            "to_record": {"family": "meeting_note_version", "record_id": "mnote_wirenote00001"},
+            "relation_type": "originated_from",
+            "idempotency_key": "wire-records-associations-assert-0001",
+            "evidence_anchors": [
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_wiremeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_wirenote00001",
+                    "source_sha256": "a" * 64,
+                    "passage_start_cp": 0,
+                    "passage_end_cp": 4,
+                    "passage_sha256": "b" * 64,
+                    "role": "origin",
+                }
+            ],
+        },
+        Capability.RECORDS_ASSOCIATIONS_CORRECT: {
+            "link_id": "irl_wirelink00001",
+            "expected_revision": 1,
+            "idempotency_key": "wire-records-associations-correct-0001",
+            "reason": "the wire origin passage was narrowed",
+            "evidence_anchors": [
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_wiremeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_wirenote00001",
+                    "source_sha256": "a" * 64,
+                    "passage_start_cp": 0,
+                    "passage_end_cp": 4,
+                    "passage_sha256": "b" * 64,
+                    "role": "origin",
+                }
+            ],
+        },
+        Capability.RECORDS_ASSOCIATIONS_END: {
+            "link_id": "irl_wirelink00001",
+            "expected_revision": 1,
+            "idempotency_key": "wire-records-associations-end-0001",
+            "reason": "the wire association was wrong",
+        },
+        Capability.RECORDS_LINEAGE: {
+            "origin": {"family": "task", "record_id": "tsk_wiretask00001"}
+        },
+        Capability.MEETINGS_NOTES_VERSIONS: {"meeting_id": "mtg_wiremeeting0001"},
+        Capability.MEETINGS_NOTES_READ_VERSION: {
+            "meeting_id": "mtg_wiremeeting0001",
+            "note_version_id": "mnote_wirenote00001",
+        },
+        # Record lineage S2.
+        Capability.ISSUES_CLOSE: {
+            "issue_id": "sit_wireissue0001",
+            "expected_version": 1,
+            "idempotency_key": "wire-issues-close-0001",
+            "outcome": "the wire issue was resolved",
+            "closure_evidence_anchors": [
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_wiremeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_wirenote00001",
+                    "source_sha256": "a" * 64,
+                    "role": "resolution",
+                }
+            ],
+        },
+        Capability.ISSUES_REOPEN: {
+            "issue_id": "sit_wireissue0001",
+            "expected_version": 2,
+            "idempotency_key": "wire-issues-reopen-0001",
+            "reason": "the wire issue recurred",
+        },
+        Capability.ISSUES_CLOSURE_READINESS: {"issue_id": "sit_wireissue0001"},
+        Capability.ISSUES_MEMBERSHIPS_CORRECT: {
+            "link_id": "irl_wirelink00001",
+            "expected_revision": 1,
+            "idempotency_key": "wire-issues-memberships-correct-0001",
+            "reason": "the wire task was resolved",
+        },
+        Capability.ISSUES_HANDOFFS_RECORD: {
+            "issue_id": "sit_wireissue0001",
+            "commitment_id": "cmt_wirecommitment01",
+            "from_side": "counterparty",
+            "effective_at": "2026-08-09T12:00:00+00:00",
+            "reason": "the wire counterparty handed back",
+            "evidence_anchor": {
+                "family": "meeting_note_version",
+                "root_id": "mtg_wiremeeting0001",
+                "version_kind": "immutable_version",
+                "version_id": "mnote_wirenote00001",
+                "source_sha256": "a" * 64,
+                "role": "handoff",
+            },
+            "idempotency_key": "wire-issues-handoffs-record-0001",
+        },
+        Capability.ISSUES_HANDOFFS_LIST: {"issue_id": "sit_wireissue0001"},
+        Capability.ISSUES_WORK_CREATE_TASK: {
+            "issue_id": "sit_wireissue0001",
+            "idempotency_key": "wire-issues-work-create-task-0001",
+            "task": {"title": "the wire task", "origin_kind": "direct_principal"},
+        },
+        Capability.ISSUES_WORK_CREATE_COMMITMENT: {
+            "issue_id": "sit_wireissue0001",
+            "idempotency_key": "wire-issues-work-create-commitment-0001",
+            "commitment": {
+                "counterparty_entity_id": "ent_wirecounterparty01",
+                "direction": "owed_to_principal",
+                "summary": "the wire commitment",
+                "origin_evidence_ref": "cap_wireorigin00001",
+            },
+        },
+        # Record lineage S3 (S3 contract section 7).
+        Capability.RECORDS_ASSOCIATIONS_CONTEST: {
+            "link_id": "irl_wirelink00001",
+            "expected_revision": 1,
+            "idempotency_key": "wire-records-associations-contest-0001",
+            "reason": "the wire association is disputed",
+            "evidence_anchors": [
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_wiremeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_wirenote00001",
+                    "source_sha256": "a" * 64,
+                    "role": "contradicts",
+                }
+            ],
+        },
+        Capability.RECORDS_ASSOCIATIONS_REINSTATE: {
+            "link_id": "irl_wirelink00001",
+            "expected_revision": 2,
+            "idempotency_key": "wire-records-associations-reinstate-0001",
+            "reason": "the wire dispute was resolved",
+            "evidence_anchors": [
+                {
+                    "family": "meeting_note_version",
+                    "root_id": "mtg_wiremeeting0001",
+                    "version_kind": "immutable_version",
+                    "version_id": "mnote_wirenote00001",
+                    "source_sha256": "a" * 64,
+                    "role": "corroborates",
+                }
+            ],
+        },
+        Capability.RECORDS_ASSOCIATIONS_HISTORY: {"link_id": "irl_wirelink00001"},
+        Capability.ISSUES_HISTORY: {"issue_id": "sit_wireissue0001"},
+        Capability.ISSUES_TIMELINE: {"issue_id": "sit_wireissue0001"},
+        Capability.ISSUES_HANDOFFS_CORRECT: {
+            "handoff_id": "ihnd_wirehandoff0001",
+            "action": "void",
+            "reason": "the wire handoff did not happen",
+            "evidence_anchor": {
+                "family": "meeting_note_version",
+                "root_id": "mtg_wiremeeting0001",
+                "version_kind": "immutable_version",
+                "version_id": "mnote_wirenote00001",
+                "source_sha256": "a" * 64,
+                "role": "contradicts",
+            },
+            "idempotency_key": "wire-issues-handoffs-correct-0001",
+        },
+        Capability.RECORDS_BACKFILL_PLAN: {"idempotency_key": "wire-records-backfill-plan-0001"},
+        Capability.RECORDS_BACKFILL_REPORT: {"run_id": "lbfr_wirerun000001"},
     }
 
 
@@ -2030,6 +2270,41 @@ SCOPED_CAPABILITIES = [
         Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
         # KLP-WP-05: provenance, on the same terms.
         Capability.RECORD_EVENTS_PROVENANCE,
+        # Record lineage S1: the Issue plane, behind `MY_PA_LINEAGE_ENABLED` (off here).
+        Capability.ISSUES_CREATE,
+        Capability.ISSUES_READ,
+        Capability.ISSUES_LIST,
+        Capability.ISSUES_UPDATE,
+        Capability.ISSUES_PROJECT_LINKS_ADD,
+        Capability.ISSUES_PROJECT_LINKS_END,
+        # Record lineage S1: memberships, associations, the reverse read and note
+        # history, behind the same switch.
+        Capability.ISSUES_MEMBERSHIPS_ADD,
+        Capability.ISSUES_MEMBERSHIPS_END,
+        Capability.RECORDS_ASSOCIATIONS_ASSERT,
+        Capability.RECORDS_ASSOCIATIONS_CORRECT,
+        Capability.RECORDS_ASSOCIATIONS_END,
+        Capability.RECORDS_LINEAGE,
+        Capability.MEETINGS_NOTES_VERSIONS,
+        Capability.MEETINGS_NOTES_READ_VERSION,
+        # Record lineage S2, also scopeless.
+        Capability.ISSUES_CLOSE,
+        Capability.ISSUES_REOPEN,
+        Capability.ISSUES_CLOSURE_READINESS,
+        Capability.ISSUES_MEMBERSHIPS_CORRECT,
+        Capability.ISSUES_HANDOFFS_RECORD,
+        Capability.ISSUES_HANDOFFS_LIST,
+        Capability.ISSUES_WORK_CREATE_TASK,
+        Capability.ISSUES_WORK_CREATE_COMMITMENT,
+        # Record lineage S3, behind the same switch (and scopeless).
+        Capability.RECORDS_ASSOCIATIONS_CONTEST,
+        Capability.RECORDS_ASSOCIATIONS_REINSTATE,
+        Capability.RECORDS_ASSOCIATIONS_HISTORY,
+        Capability.ISSUES_HISTORY,
+        Capability.ISSUES_TIMELINE,
+        Capability.ISSUES_HANDOFFS_CORRECT,
+        Capability.RECORDS_BACKFILL_PLAN,
+        Capability.RECORDS_BACKFILL_REPORT,
     }
 ]
 
@@ -2327,6 +2602,21 @@ KNOWLEDGE_AUTHORING_EXEMPTION = frozenset({Capability.KNOWLEDGE_ASSERTIONS_CREAT
 #: and no enrollment.
 REPORT_TYPE_AUTHORING_EXEMPTION = frozenset({Capability.REPORTS_TYPES_CREATE})
 
+#: Record lineage S1's two Issue writes the substring proxy refuses --
+#: `issues.create` and `issues.update` -- on the same reading: they write the
+#: acting Principal's own Issue rows and revisions and reach no source provider
+#: and no enrollment. The two `issues.project_links.` writes carry no listed verb.
+ISSUE_AUTHORING_EXEMPTION = frozenset(
+    {
+        Capability.ISSUES_CREATE,
+        Capability.ISSUES_UPDATE,
+        # Record lineage S2's composites create a Task or Commitment of the
+        # Principal's own partition with its Issue membership; no source moves.
+        Capability.ISSUES_WORK_CREATE_TASK,
+        Capability.ISSUES_WORK_CREATE_COMMITMENT,
+    }
+)
+
 
 def test_the_transport_routes_no_mutating_capability() -> None:
     """One route, one method, and no name that mutates a *source*.
@@ -2377,6 +2667,7 @@ def test_the_transport_routes_no_mutating_capability() -> None:
         | MEETING_AUTHORING_EXEMPTION
         | KNOWLEDGE_AUTHORING_EXEMPTION
         | REPORT_TYPE_AUTHORING_EXEMPTION
+        | ISSUE_AUTHORING_EXEMPTION
     )
     checked = [c for c in _BUILDERS if c not in exempt]
     assert len(checked) == len(IMPLEMENTED_CAPABILITIES) - len(exempt)

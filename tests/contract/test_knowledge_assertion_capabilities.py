@@ -920,7 +920,47 @@ def _gate_authorization(
 #: The capability count before the Knowledge layer (README/matrix pin: 181).
 _PRE_KLP_CAPABILITIES: Final = 181
 #: Capabilities admitted after the Knowledge layer, none of them a Knowledge name.
-_POST_KLP_CAPABILITIES: Final = frozenset({"reports.types.create", "reports.types.list"})
+_POST_KLP_CAPABILITIES: Final = frozenset(
+    {
+        "reports.types.create",
+        "reports.types.list",
+        # Record lineage S1, the Issue plane.
+        "issues.create",
+        "issues.read",
+        "issues.list",
+        "issues.update",
+        "issues.project_links.add",
+        "issues.project_links.end",
+        # Record lineage S1, memberships, associations, the reverse read and
+        # note history.
+        "issues.memberships.add",
+        "issues.memberships.end",
+        "records.associations.assert",
+        "records.associations.correct",
+        "records.associations.end",
+        "records.lineage",
+        "meetings.notes.versions",
+        "meetings.notes.read_version",
+        # Record lineage S2.
+        "issues.close",
+        "issues.reopen",
+        "issues.closure_readiness",
+        "issues.memberships.correct",
+        "issues.handoffs.record",
+        "issues.handoffs.list",
+        "issues.work.create_task",
+        "issues.work.create_commitment",
+        # Record lineage S3.
+        "records.associations.contest",
+        "records.associations.reinstate",
+        "records.associations.history",
+        "issues.history",
+        "issues.timeline",
+        "issues.handoffs.correct",
+        "records.backfill.plan",
+        "records.backfill.report",
+    }
+)
 _EVENT: Final = "rcev_fastworld000000001"
 
 

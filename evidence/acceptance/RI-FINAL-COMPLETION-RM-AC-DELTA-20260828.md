@@ -98,3 +98,15 @@ section 5.2 `withheld_remote` `EXISTS` before its LIMIT, and every caller's item
 applies the section 5.2 class term, each comparing the `classification` of every version of a
 cited memory under the Principal partition. No memory column enters the package, and no
 statement, structured value or evidence payload is read.
+
+**Record lineage S3 (`issues.timeline`, 2026-10-19):**
+`issues.timeline` reads two of the eight (`relationship_memories`,
+`relationship_memory_versions`) and writes none of the eight. The reach exists only for a
+remote caller: the timeline's native plane passes the feed's own visibility predicate,
+imported whole (S3 contract section 7.3, R3-F03), whose OD-8 (i) `EXISTS` joins
+`relationship_memories.memory_id` and `current_version_id` to
+`relationship_memory_versions.memory_version_id` under the Principal partition and compares
+that version's `classification`. Its families are an Issue member's (Task, Commitment,
+Constraint, Meeting, Capture) and never `relationship_memory`, so the term matches no event.
+No memory column enters the answer, and no statement, structured value or evidence payload is
+read.

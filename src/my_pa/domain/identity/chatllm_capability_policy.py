@@ -280,6 +280,10 @@ _CONTROL_PLANE_EXCLUDED: Final[frozenset[Capability]] = frozenset(
         Capability.KNOWLEDGE_ASSERTIONS_SUBMIT,
         Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT,
         Capability.SOURCES_ENROLL,
+        # Record lineage S3 (S3 contract section 7): the operator-only backfill dry
+        # run reads the whole native corpus and writes a durable ledger.
+        Capability.RECORDS_BACKFILL_PLAN,
+        Capability.RECORDS_BACKFILL_REPORT,
     }
 )
 
@@ -287,6 +291,38 @@ _OPERATOR_DECISION_REQUIRED: Final[frozenset[Capability]] = frozenset(
     {
         Capability.GSQS_START,
         Capability.GSQS_STATUS,
+        # Record lineage S1 (ADR-015, OD-07; S1 contract section 7): ChatLLM
+        # exposure of the lineage plane is an operator decision.
+        Capability.ISSUES_CREATE,
+        Capability.ISSUES_READ,
+        Capability.ISSUES_LIST,
+        Capability.ISSUES_UPDATE,
+        Capability.ISSUES_PROJECT_LINKS_ADD,
+        Capability.ISSUES_PROJECT_LINKS_END,
+        Capability.ISSUES_MEMBERSHIPS_ADD,
+        Capability.ISSUES_MEMBERSHIPS_END,
+        Capability.RECORDS_ASSOCIATIONS_ASSERT,
+        Capability.RECORDS_ASSOCIATIONS_CORRECT,
+        Capability.RECORDS_ASSOCIATIONS_END,
+        Capability.RECORDS_LINEAGE,
+        Capability.MEETINGS_NOTES_VERSIONS,
+        Capability.MEETINGS_NOTES_READ_VERSION,
+        # Record lineage S2 (S2 contract section 7): the same operator decision.
+        Capability.ISSUES_CLOSE,
+        Capability.ISSUES_REOPEN,
+        Capability.ISSUES_CLOSURE_READINESS,
+        Capability.ISSUES_MEMBERSHIPS_CORRECT,
+        Capability.ISSUES_HANDOFFS_RECORD,
+        Capability.ISSUES_HANDOFFS_LIST,
+        Capability.ISSUES_WORK_CREATE_TASK,
+        Capability.ISSUES_WORK_CREATE_COMMITMENT,
+        # Record lineage S3 (S3 contract section 7): the same operator decision.
+        Capability.RECORDS_ASSOCIATIONS_CONTEST,
+        Capability.RECORDS_ASSOCIATIONS_REINSTATE,
+        Capability.RECORDS_ASSOCIATIONS_HISTORY,
+        Capability.ISSUES_HISTORY,
+        Capability.ISSUES_TIMELINE,
+        Capability.ISSUES_HANDOFFS_CORRECT,
     }
 )
 
@@ -325,6 +361,16 @@ _GSQS_EXCLUSION: Final = "GSQS campaign lifecycle held out pending reclassificat
 _KNOWLEDGE_DISCOVERY_EXCLUSION: Final = (
     "bound Knowledge discovery-client control plane (exact allowlist and profile only)"
 )
+_LINEAGE_S1_EXCLUSION: Final = (
+    "record lineage S1; exposure is an operator decision (ADR-015, OD-07)"
+)
+_LINEAGE_S2_EXCLUSION: Final = (
+    "record lineage S2; exposure is an operator decision (ADR-015, OD-07)"
+)
+_LINEAGE_S3_EXCLUSION: Final = (
+    "record lineage S3; exposure is an operator decision (ADR-015, OD-07)"
+)
+_LINEAGE_BACKFILL_EXCLUSION: Final = "operator-only lineage backfill"
 
 _EXCLUSION_RATIONALE: Final[Mapping[Capability, str]] = MappingProxyType(
     {
@@ -349,6 +395,36 @@ _EXCLUSION_RATIONALE: Final[Mapping[Capability, str]] = MappingProxyType(
         Capability.GSQS_START: _GSQS_EXCLUSION,
         Capability.GSQS_STATUS: _GSQS_EXCLUSION,
         Capability.SOURCES_ENROLL: "operator-only source enrollment / authority expansion",
+        Capability.ISSUES_CREATE: _LINEAGE_S1_EXCLUSION,
+        Capability.ISSUES_READ: _LINEAGE_S1_EXCLUSION,
+        Capability.ISSUES_LIST: _LINEAGE_S1_EXCLUSION,
+        Capability.ISSUES_UPDATE: _LINEAGE_S1_EXCLUSION,
+        Capability.ISSUES_PROJECT_LINKS_ADD: _LINEAGE_S1_EXCLUSION,
+        Capability.ISSUES_PROJECT_LINKS_END: _LINEAGE_S1_EXCLUSION,
+        Capability.ISSUES_MEMBERSHIPS_ADD: _LINEAGE_S1_EXCLUSION,
+        Capability.ISSUES_MEMBERSHIPS_END: _LINEAGE_S1_EXCLUSION,
+        Capability.RECORDS_ASSOCIATIONS_ASSERT: _LINEAGE_S1_EXCLUSION,
+        Capability.RECORDS_ASSOCIATIONS_CORRECT: _LINEAGE_S1_EXCLUSION,
+        Capability.RECORDS_ASSOCIATIONS_END: _LINEAGE_S1_EXCLUSION,
+        Capability.RECORDS_LINEAGE: _LINEAGE_S1_EXCLUSION,
+        Capability.MEETINGS_NOTES_VERSIONS: _LINEAGE_S1_EXCLUSION,
+        Capability.MEETINGS_NOTES_READ_VERSION: _LINEAGE_S1_EXCLUSION,
+        Capability.ISSUES_CLOSE: _LINEAGE_S2_EXCLUSION,
+        Capability.ISSUES_REOPEN: _LINEAGE_S2_EXCLUSION,
+        Capability.ISSUES_CLOSURE_READINESS: _LINEAGE_S2_EXCLUSION,
+        Capability.ISSUES_MEMBERSHIPS_CORRECT: _LINEAGE_S2_EXCLUSION,
+        Capability.ISSUES_HANDOFFS_RECORD: _LINEAGE_S2_EXCLUSION,
+        Capability.ISSUES_HANDOFFS_LIST: _LINEAGE_S2_EXCLUSION,
+        Capability.ISSUES_WORK_CREATE_TASK: _LINEAGE_S2_EXCLUSION,
+        Capability.ISSUES_WORK_CREATE_COMMITMENT: _LINEAGE_S2_EXCLUSION,
+        Capability.RECORDS_ASSOCIATIONS_CONTEST: _LINEAGE_S3_EXCLUSION,
+        Capability.RECORDS_ASSOCIATIONS_REINSTATE: _LINEAGE_S3_EXCLUSION,
+        Capability.RECORDS_ASSOCIATIONS_HISTORY: _LINEAGE_S3_EXCLUSION,
+        Capability.ISSUES_HISTORY: _LINEAGE_S3_EXCLUSION,
+        Capability.ISSUES_TIMELINE: _LINEAGE_S3_EXCLUSION,
+        Capability.ISSUES_HANDOFFS_CORRECT: _LINEAGE_S3_EXCLUSION,
+        Capability.RECORDS_BACKFILL_PLAN: _LINEAGE_BACKFILL_EXCLUSION,
+        Capability.RECORDS_BACKFILL_REPORT: _LINEAGE_BACKFILL_EXCLUSION,
     }
 )
 

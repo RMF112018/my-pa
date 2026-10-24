@@ -74,9 +74,11 @@ is not a defect.
 
 ## 3. What is implemented
 
-Four hundred and twenty-six Python modules under `src/my_pa` and eight hundred and eleven test modules —
+Four hundred and thirty-one Python modules under `src/my_pa` and eight hundred and fourteen test modules —
 
-**Current-tree remeasurement (record lineage S4 Commitment v2 reads, branch `feat/lineage-s4-program`, worker M3, 2026-10-24):** the two commands below count 426 source modules and 811 test modules: the 424/809 below plus `src/my_pa/application/commitments_v2.py` and `src/my_pa/contracts/v1/commitments_v2.py`, and `tests/contract/test_commitment_project_scoping.py` and `tests/contract/test_commitment_v1_strict_client.py`. This is file-inventory evidence, not a test PASS receipt.
+**Current-tree remeasurement (record lineage S4 WP-04B Program overview, branch `feat/lineage-s4-program`, worker M4, 2026-10-24):** the two commands below count 431 source modules and 814 test modules: the 426/811 below plus `src/my_pa/domain/program/reportability.py`, `src/my_pa/domain/program/digest.py`, `src/my_pa/application/program_work.py`, `src/my_pa/application/program_constraints.py` and `src/my_pa/infrastructure/persistence/program_metrics.py`, and `tests/integration/test_program_metric_reconciliation.py`, `tests/concurrency/test_program_overview_snapshot.py` and `tests/database/test_program_overview_plans.py`. This is file-inventory evidence, not a test PASS receipt.
+
+**Historical remeasurement (record lineage S4 Commitment v2 reads, branch `feat/lineage-s4-program`, worker M3, 2026-10-24):** the two commands below counted 426 source modules and 811 test modules: the 424/809 below plus `src/my_pa/application/commitments_v2.py` and `src/my_pa/contracts/v1/commitments_v2.py`, and `tests/contract/test_commitment_project_scoping.py` and `tests/contract/test_commitment_v1_strict_client.py`. This is file-inventory evidence, not a test PASS receipt.
 
 **Historical remeasurement (record lineage S4 WP-04A Program member resolver, branch `feat/lineage-s4-program`, worker M2, 2026-10-24):** the two commands below counted 424 source modules and 809 test modules: the 420/806 below plus `src/my_pa/domain/program/membership.py`, `src/my_pa/application/program_membership.py`, `src/my_pa/infrastructure/persistence/program_membership.py` and `src/my_pa/contracts/v1/programs.py`, and `tests/unit/test_program_domain.py`, `tests/integration/test_program_member_resolver.py` and `tests/security/test_program_reporting_isolation.py` (`tests/database/lineage_s4_harness.py` is a helper, not a `test_*.py` module). This is file-inventory evidence, not a test PASS receipt.
 

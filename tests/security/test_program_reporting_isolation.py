@@ -938,3 +938,80 @@ def test_families_seen_names_only_the_overview_families(runtime: S4Runtime) -> N
         grants=grants,
     )
     assert _section(runtime, remote)["families_seen"] == every
+
+
+def test_an_ungated_downstream_of_a_gated_upstream_inherits_its_gate(runtime: S4Runtime) -> None:
+    """FR4-F01: a downstream binds each upstream's digest, so it carries the upstream's gate."""
+    scene, cycle, researcher = _manifest_scene(runtime)
+    overview = runtime.overview(scene["program"])
+    # A gated upstream: its recompute failed (the R4-F27 secret is its token).
+    upstream = _commit_with(
+        runtime,
+        cycle,
+        researcher,
+        "isolation-inherit-up",
+        runtime.program_reference(overview, ABSENT),
+    )
+    # An ungated downstream (no Program block) and a second hop over it.
+    reporter = runtime.commit_report(
+        runtime.report(
+            cycle, IntelligenceStage.REPORTER, "isolation-inherit-r", dependencies=(upstream,)
+        )
+    )["report_id"]
+    brief = runtime.commit_report(
+        runtime.report(
+            cycle, IntelligenceStage.MORNING_BRIEF, "isolation-inherit-b", dependencies=(reporter,)
+        )
+    )["report_id"]
+    assert _section_or_none(runtime, reporter) is None
+    assert _section_or_none(runtime, brief) is None
+    secret = runtime.manifest(upstream)["manifest_sha256"]
+    assert secret in runtime.manifest(reporter)["manifest_canonical"]
+    # A reader without the grant or the families sees none of the 3 in full,
+    # so the withheld upstream digest reaches it through no downstream text.
+    for reads in ((), ROOT_READS, ("programs.overview", "entities.get")):
+        for report_id in (upstream, reporter, brief):
+            answer = _manifest_state(runtime, report_id, *reads)
+            assert (answer["manifest_state"], answer["manifest_sha256"]) == (
+                "restricted_evidence",
+                None,
+            ), (reads, report_id)
+            assert answer["manifest_canonical"] is None
+            assert secret not in json.dumps(answer)
+    # A reader who satisfies the upstream's gate reads all 3.
+    for report_id in (upstream, reporter, brief):
+        released = _manifest_state(runtime, report_id, "programs.overview", *ROOT_READS)
+        assert released["manifest_state"] == "recorded", report_id
+        assert released == runtime.manifest(report_id)
+    requirement = json.loads(runtime.manifest(brief)["manifest_canonical"])["release_requirement"]
+    assert requirement == {"program_grant": True, "families": ["entity", "project"]}
+
+
+def test_a_downstream_inherits_every_family_its_upstream_was_computed_with(
+    runtime: S4Runtime,
+) -> None:
+    scene, cycle, researcher = _manifest_scene(runtime)
+    program = scene["program"]
+    upstream = _commit_with(
+        runtime,
+        cycle,
+        researcher,
+        "isolation-inherit-families",
+        runtime.program_reference(runtime.overview(program), program),
+    )
+    downstream = runtime.commit_report(
+        runtime.report(
+            cycle,
+            IntelligenceStage.REPORTER,
+            "isolation-inherit-families-r",
+            dependencies=(upstream,),
+        )
+    )["report_id"]
+    reader = ("programs.overview", *ROOT_READS)
+    assert _manifest_state(runtime, downstream, *reader, *METRIC_FAMILY_READS)[
+        "manifest_state"
+    ] == ("recorded")
+    for missing in METRIC_FAMILY_READS:
+        reads = tuple(read for read in METRIC_FAMILY_READS if read != missing)
+        answer = _manifest_state(runtime, downstream, *reader, *reads)
+        assert answer["manifest_state"] == "restricted_evidence", missing

@@ -41,6 +41,7 @@ from my_pa.domain.intelligence.source_manifest import (
     DependencyDigests,
     RecordedManifest,
     build_manifest,
+    recorded_release_requirement,
     structured_content_sha256,
 )
 from my_pa.domain.program.vocabulary import REPORT_MANIFEST_SCHEMA_VERSION
@@ -396,6 +397,7 @@ class SqlIntelligenceStore:
                             intelligence_artifact_manifests.c.artifact_id,
                             intelligence_artifact_manifests.c.manifest_sha256,
                             intelligence_artifact_manifests.c.structured_content_sha256,
+                            intelligence_artifact_manifests.c.manifest_canonical,
                         ).where(intelligence_artifact_manifests.c.artifact_id.in_(upstream_ids)),
                         intelligence_artifact_manifests,
                         self._context,
@@ -418,6 +420,11 @@ class SqlIntelligenceStore:
                         else manifest["structured_content_sha256"]
                     ),
                     manifest_sha256=None if manifest is None else manifest["manifest_sha256"],
+                    release_requirement=(
+                        None
+                        if manifest is None
+                        else recorded_release_requirement(manifest["manifest_canonical"])
+                    ),
                 )
             )
         built = build_manifest(

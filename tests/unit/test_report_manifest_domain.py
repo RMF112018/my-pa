@@ -51,6 +51,7 @@ from my_pa.domain.intelligence.source_manifest import (
     manifest_digest,
     program_reference_block,
     program_section,
+    release_requirement,
     structured_content_sha256,
 )
 from my_pa.domain.program.vocabulary import (
@@ -74,6 +75,7 @@ MANIFEST_KEYS: Final = {
     "dependencies",
     "provenance",
     "program",
+    "release_requirement",
 }
 REPORT_KEYS: Final = {
     "report_id",
@@ -418,3 +420,39 @@ def _keys(value: object) -> set[str]:
     if isinstance(value, list):
         return {key for item in value for key in _keys(item)}
     return set()
+
+
+def test_the_release_requirement_unites_the_own_gate_and_every_upstream() -> None:
+    """FR4-F01: a downstream binds its upstreams' digests, so it inherits their gate."""
+    nothing = {"program_grant": False, "families": []}
+    # No Program section, or `not_attempted`, and no gated upstream: ungated.
+    assert release_requirement(None, []) == nothing
+    assert release_requirement({"verification_state": "not_attempted", "server": None}, []) == (
+        nothing
+    )
+    assert release_requirement(None, [None, nothing]) == nothing
+    # A failed recompute: the grant and the 2 root families.
+    failed = {"verification_state": "recompute_failed", "server": None, "families_seen": None}
+    assert release_requirement(failed, []) == {
+        "program_grant": True,
+        "families": ["entity", "project"],
+    }
+    # A server state adds every family it was computed with.
+    verified = {
+        "verification_state": "verified_at_commit",
+        "server": {"overview_sha256": "a" * 64},
+        "families_seen": ["commitment", "entity", "project"],
+    }
+    own = release_requirement(verified, [])
+    assert own == {"program_grant": True, "families": ["commitment", "entity", "project"]}
+    # An ungated downstream of a gated upstream inherits the upstream's gate ...
+    hop = release_requirement(None, [own])
+    assert hop == own
+    # ... and a second hop inherits it too (transitive by construction).
+    assert release_requirement(None, [nothing, hop]) == own
+    # Unions accumulate across upstreams.
+    issue = {"program_grant": True, "families": ["entity", "issue", "project"]}
+    assert release_requirement(failed, [own, issue]) == {
+        "program_grant": True,
+        "families": ["commitment", "entity", "issue", "project"],
+    }

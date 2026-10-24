@@ -103,14 +103,15 @@ _LEGACY_ISSUE_LINKS: Final = text(
 
 #: Section 3.3 (R4-F01): every sync target of each requested Project with the
 #: `sync_state` of the run its `last_run_id` names (a run in flight is not
-#: consulted), and the Project's open sync conflicts -- one row per target, or
-#: one row with no target.
+#: consulted), and the Project's open sync conflicts -- every one, including a
+#: `new_in_external` conflict that names no Constraint yet (FR4-F02) -- one row
+#: per target, or one row with no target.
 _SYNC_FACTS: Final = text(
     "SELECT wanted.project_id, t.sync_target_id, t.last_verified_at, t.last_run_id,"
     " r.sync_state AS last_run_sync_state,"
     " (SELECT count(*) FROM knowledge.constraint_sync_conflicts c"
     " WHERE c.principal_id = :principal_id AND c.project_id = wanted.project_id"
-    " AND c.state = 'open' AND c.constraint_id IS NOT NULL) AS open_conflicts"
+    " AND c.state = 'open') AS open_conflicts"
     " FROM unnest(:project_ids) AS wanted (project_id)"
     " LEFT JOIN knowledge.constraint_sync_targets t"
     " ON t.principal_id = :principal_id AND t.project_id = wanted.project_id"

@@ -69,6 +69,8 @@ __all__ = [
     "program_reference_block",
     "program_released",
     "program_section",
+    "recorded_release_requirement",
+    "release_requirement",
     "server_state",
     "structured_content_sha256",
 ]
@@ -120,6 +122,9 @@ class DependencyDigests:
     structured_content_sha256: str | None
     #: `None` exactly when the upstream is a legacy artifact with no manifest.
     manifest_sha256: str | None
+    #: The upstream manifest's recorded `release_requirement` (FR4-F01); `None`
+    #: for a legacy upstream, which contributes nothing.
+    release_requirement: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +154,51 @@ def _provenance(position: int, ref: IntelligenceProvenanceRef) -> dict[str, obje
         "evidence_subject_id": ref.evidence_subject_id,
         "certification": _UNCERTIFIED_REFERENCE,
     }
+
+
+def _own_requirement(program: Mapping[str, object] | None) -> tuple[bool, set[str]]:
+    """Section 6.2 for this manifest's own Program section alone."""
+    if program is None or program.get("verification_state") in (
+        None,
+        ProgramVerificationState.NOT_ATTEMPTED.value,
+    ):
+        return False, set()
+    families = {ProgramFamily.ENTITY.value, ProgramFamily.PROJECT.value}
+    if program.get("server") is not None:
+        families |= set(cast(Sequence[str], program.get("families_seen") or ()))
+    return True, families
+
+
+def release_requirement(
+    program: Mapping[str, object] | None,
+    upstream: Sequence[Mapping[str, object] | None],
+) -> dict[str, object]:
+    """Section 5.3 `release_requirement` (FR4-F01): this manifest's gate and its upstreams'.
+
+    The union of the manifest's own section 6.2 requirement (nothing when
+    `program` is null or `not_attempted`; else a `programs.overview` grant for
+    `program_reporting_read`, the `entity` and `project` families and, with a
+    server state, every family in `families_seen`) and every upstream's
+    *recorded* requirement -- transitive by construction, since each upstream
+    recorded its own upstreams'. A legacy upstream contributes nothing. Bound
+    inside `M`, so it is hashed with everything else; `reports.manifest`
+    releases a manifest to a remote reader only when the reader satisfies it,
+    so no downstream text carries a withheld upstream digest to a reader who
+    may not see that upstream.
+    """
+    grant, families = _own_requirement(program)
+    for recorded in upstream:
+        if recorded is None:
+            continue
+        grant = grant or bool(recorded["program_grant"])
+        families |= set(cast(Sequence[str], recorded["families"]))
+    return {"program_grant": grant, "families": sorted(families)}
+
+
+def recorded_release_requirement(manifest_canonical: str) -> dict[str, object]:
+    """A stored manifest's `release_requirement`, read back from its canonical text."""
+    found = json.loads(manifest_canonical)["release_requirement"]
+    return {"program_grant": bool(found["program_grant"]), "families": list(found["families"])}
 
 
 def build_manifest(
@@ -219,6 +269,10 @@ def build_manifest(
             _provenance(position, ref) for position, ref in enumerate(artifact.provenance, start=1)
         ],
         "program": None if program is None else dict(program),
+        "release_requirement": release_requirement(
+            program,
+            [dependency.release_requirement for dependency in dependencies],
+        ),
     }
     encoded = canonical(manifest)
     claimed = None if program is None else program.get("claimed_overview_sha256")
@@ -448,25 +502,18 @@ def program_released(
     families: Collection[ProgramFamily],
     holds_program_grant: bool,
 ) -> bool:
-    """Section 6.2: whether a **remote** reader may read this manifest in full.
+    """Section 6.2 as amended by FR4-F01: whether a **remote** reader may read this manifest.
 
-    A manifest whose Program state is `null` or `not_attempted` carries only
-    producer-supplied content and is ungated. Every other one -- verified,
-    changed or `recompute_failed` (R4-F27) -- needs a `programs.overview`
-    grant for `program_reporting_read` (R4-F21), the `entity` and `project`
-    families, and, when it binds a server state, every family in its
-    `families_seen` (R4-F14).
+    The reader must satisfy the manifest's recorded `release_requirement`: the
+    union of its own Program gate (ungated when its Program section is null or
+    `not_attempted`; otherwise -- verified, changed or `recompute_failed`
+    (R4-F27) -- a `programs.overview` grant for `program_reporting_read`
+    (R4-F21), the `entity` and `project` families and, with a server state,
+    every family in `families_seen` (R4-F14)) and every upstream manifest's,
+    transitively, because the text binds each upstream's digest.
     """
-    state = manifest.program_verification_state
-    if state is None or state == ProgramVerificationState.NOT_ATTEMPTED.value:
-        return True
-    if not holds_program_grant:
+    requirement = recorded_release_requirement(manifest.manifest_canonical)
+    if requirement["program_grant"] and not holds_program_grant:
         return False
-    visible = {ProgramFamily(family) for family in families}
-    if not {ProgramFamily.ENTITY, ProgramFamily.PROJECT} <= visible:
-        return False
-    program = cast(Mapping[str, object], json.loads(manifest.manifest_canonical)["program"])
-    if program["server"] is None:
-        return True
-    seen = cast(Sequence[str], program["families_seen"])
-    return {ProgramFamily(family) for family in seen} <= visible
+    visible = {ProgramFamily(family).value for family in families}
+    return set(cast(Sequence[str], requirement["families"])) <= visible

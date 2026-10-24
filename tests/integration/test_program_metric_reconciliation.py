@@ -24,7 +24,8 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
+from time import sleep
 from typing import Any, Final
 from zoneinfo import ZoneInfo
 
@@ -79,10 +80,42 @@ def runtime(disposable_database: str) -> Iterator[S4Runtime]:
         composed.close()
 
 
+#: Longer than any one row of this module runs (FR4-F04).
+DAY_MARGIN: Final = timedelta(seconds=120)
+#: Every calendar a day-relative row of this module seeds against.
+SEEDED_ZONES: Final = ("UTC", "America/New_York", EAST, WEST)
+
+
+def _to_next_midnight(now: datetime) -> timedelta:
+    """The shortest wait until a midnight in any `SEEDED_ZONES` calendar."""
+    waits = []
+    for zone in SEEDED_ZONES:
+        local = now.astimezone(ZoneInfo(zone))
+        midnight = datetime.combine(local.date() + timedelta(days=1), time.min, local.tzinfo)
+        waits.append(midnight - local)
+    return min(waits)
+
+
 def _now(runtime: S4Runtime) -> datetime:
-    with runtime.engine.connect() as connection:
-        now = connection.execute(text("SELECT now()")).scalar_one()
-    assert isinstance(now, datetime)
+    """The database's own `statement_timestamp()`, read once per row and frozen (FR4-F04).
+
+    Every day-relative seed of a row derives from this one instant. A read
+    within `DAY_MARGIN` of a midnight in any seeded calendar first waits that
+    midnight out, so the seeding day and the overview snapshot's day are the
+    same day in every calendar: no row depends on a midnight crossing.
+    """
+    frozen = getattr(runtime, "_s4_seed_now", None)
+    if isinstance(frozen, datetime):
+        return frozen
+    while True:
+        with runtime.engine.connect() as connection:
+            now = connection.execute(text("SELECT statement_timestamp()")).scalar_one()
+        assert isinstance(now, datetime)
+        wait = _to_next_midnight(now)
+        if wait > DAY_MARGIN:
+            break
+        sleep(wait.total_seconds() + 1)
+    runtime._s4_seed_now = now  # type: ignore[attr-defined]
     return now
 
 
@@ -637,6 +670,30 @@ def test_a_sync_conflict_makes_constraint_totals_not_reportable(runtime: S4Runti
     }
     for row in _constraint_totals(answer):
         assert (row["value"], row["reasons"]) == (None, ["sync_conflict"])
+
+
+def test_a_conflict_with_no_constraint_yet_makes_the_project_conflict(runtime: S4Runtime) -> None:
+    """FR4-F02: an open `new_in_external` conflict names no Constraint, and still gates."""
+    program = runtime.seeds.program("Conflict without a Constraint")
+    member = _member(runtime, "Workbook-only conflict", program, sync="in_sync")
+    assert member.target is not None
+    target, run = member.target
+    assert run is not None
+    # The target is verified and its last run is `in_sync`: only the open
+    # conflict on a workbook row with no Constraint yet makes it a conflict.
+    runtime.seeds.sync_conflict(
+        member.project_id, target, run, None, conflict_kind="new_in_external"
+    )
+    answer = runtime.overview(program)
+    entry = _project(answer, member.project_id)
+    assert entry["constraint_source_state"] == "conflict"
+    assert entry["constraint_last_run_sync_states"] == ["in_sync"]
+    for row in _constraint_totals(answer):
+        assert (row["value"], row["value_state"], row["reasons"]) == (
+            None,
+            "not_reportable",
+            ["sync_conflict"],
+        )
 
 
 # --- legacy Issue links and Issue states (R4-F02, R4-F16) ------------------------

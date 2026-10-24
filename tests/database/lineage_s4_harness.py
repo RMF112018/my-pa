@@ -856,11 +856,16 @@ class ProgramSeeds:
         project_id: str,
         target_id: str,
         run_id: str,
-        constraint_id: str,
+        constraint_id: str | None,
         *,
+        conflict_kind: str = "both_changed",
         principal_id: str = PRINCIPAL,
     ) -> None:
-        """An open sync conflict on one Constraint of `project_id`."""
+        """An open sync conflict of `project_id`, on one Constraint or (`None`) on none yet.
+
+        A `new_in_external` conflict names no Constraint: the row exists only in
+        the workbook (S4 FR4-F02).
+        """
         with self._engine.begin() as connection:
             connection.execute(
                 text(
@@ -868,7 +873,7 @@ class ProgramSeeds:
                     "principal_id, project_id, sync_target_id, constraint_id, sync_run_id, "
                     "conflict_kind, field_names, state, created_at) VALUES (:conflict_id, "
                     ":principal_id, :project_id, :target_id, :constraint_id, :run_id, "
-                    "'both_changed', '[\"description\"]'::jsonb, 'open', :t0)"
+                    ":conflict_kind, '[\"description\"]'::jsonb, 'open', :t0)"
                 ),
                 {
                     "conflict_id": issue_identifier(IdKind.CONSTRAINT_SYNC_CONFLICT),
@@ -877,6 +882,7 @@ class ProgramSeeds:
                     "target_id": target_id,
                     "constraint_id": constraint_id,
                     "run_id": run_id,
+                    "conflict_kind": conflict_kind,
                     "t0": T0,
                 },
             )

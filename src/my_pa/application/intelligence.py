@@ -84,6 +84,7 @@ from my_pa.domain.intelligence.source_manifest import (
     RecordedManifest,
     build_manifest,
     program_reference_block,
+    recorded_release_requirement,
     structured_content_sha256,
 )
 from my_pa.domain.program.vocabulary import REPORT_MANIFEST_SCHEMA_VERSION
@@ -1833,6 +1834,11 @@ class InMemoryIntelligenceStore:
                         else recorded.structured_content_sha256
                     ),
                     manifest_sha256=None if recorded is None else recorded.manifest_sha256,
+                    release_requirement=(
+                        None
+                        if recorded is None
+                        else recorded_release_requirement(recorded.manifest_canonical)
+                    ),
                 )
             )
         built = build_manifest(

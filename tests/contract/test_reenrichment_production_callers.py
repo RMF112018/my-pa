@@ -347,6 +347,7 @@ def test_real_gateway_startup_observes_versions_before_each_transport_serves(
         oauth_operator_secret=None,
         compact_publication_for_client=lambda _client_id: False,
         mcp_interaction_log_enabled=False,
+        mcp_database_profiles_enabled=False,
     )
     monkeypatch.setattr(gateway, "load_settings", lambda: settings)
     monkeypatch.setattr(gateway, "build_gateway_runtime", lambda _settings: Runtime())
@@ -688,6 +689,7 @@ def test_remote_mcp_observes_only_authenticated_request_principals_before_contex
         chatllm_gateway_oauth_client_id_set=frozenset,
         knowledge_manager_oauth_client_id_set=frozenset,
         mcp_interaction_log_enabled=False,
+        mcp_database_profiles_enabled=False,
     )
     authenticated = SimpleNamespace(
         principal=scene.principal,

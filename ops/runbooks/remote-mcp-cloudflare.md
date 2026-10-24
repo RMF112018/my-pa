@@ -479,3 +479,74 @@ Knowledge Manager binding still requires the Knowledge/RI composition and its
 checkpoint signing configuration. Identity correction, GoodNotes pull and other
 optional planes retain their separate gates. Missing prerequisites are incomplete
 activation, never a successful smaller substitute for the full inventory.
+
+## Default-off database profiles (bounded implementation, not commissioned)
+
+`MY_PA_MCP_DATABASE_PROFILES_ENABLED` defaults to false. Enabling it is a separate
+operator commissioning action; neither this runbook nor a passing synthetic test
+activates access. This implementation does not change live grants, clients,
+credentials, HBA, networking, deployments or the migration chain.
+
+The operator configures disjoint exact `MY_PA_MCP_DATABASE_RO_CLIENT_IDS` and
+`MY_PA_MCP_DATABASE_RW_CLIENT_IDS`. Unknown clients are refused. Durable OAuth
+registration, revocation/expiry, audience, scope, purpose, capability grants and
+all existing write switches still apply. An RO mapping cannot promote. An RW
+mapping without a surviving supported write capability/purpose grant or whose
+write switches are closed uses the RO service. The MCP request cannot
+supply a connection/role/DSN selector. There is no legacy/owner fallback when a
+bound service is required or a role/target check fails.
+
+Provide distinct `MY_PA_MCP_DATABASE_RO_PASSWORD_FILE` and
+`MY_PA_MCP_DATABASE_RW_PASSWORD_FILE` plus
+`MY_PA_MCP_DATABASE_EXPECTED_CLUSTER_ID`. The two passwords are read only when
+the feature is deliberately enabled. Each file must be an absolute, non-symlink,
+single-link regular file owned by the process UID with mode 0400, under a
+canonical mode-0700 directory owned by that UID. Values never enter settings,
+repr, tool schemas or error messages. Canonical NAS credentials remain root-held;
+do not chmod/chown or mount them into a non-root service without a separately
+approved delivery plan proving effective NAS ACL rights. POSIX loader checks do
+not replace that NAS ACL proof.
+
+Data connections use fixed `my_pa_mcp_ro` / `my_pa_mcp_rw` identities on the same
+configured endpoint/database as the separately trusted control connection. Each
+checkout checks the cluster through the control path and compares data server,
+database and role identities, elevated attributes, memberships, persistent
+ownership and schema/database CREATE powers. RO transactions also use READ ONLY.
+Reviewed server TLS and channel-binding URL options are preserved. Query options
+that can override role, endpoint, service or session authority (and unreviewed
+client-certificate inputs) are refused rather than silently copied or discarded.
+Two immutable application services bind all main/specialized UOW factories to
+these data pools. Authentication and mandatory durable audit remain separate
+trusted server paths; review their existing credential scope before commissioning.
+The audit pool stays independent of work rollback and pool checkout. Automatic
+business re-enrichment observations are not run by this profiled MCP path.
+
+The closed capability matrix is in `contracts/mcp_database_profiles.py`:
+26 reviewed read capabilities and, for effective RW only,
+`canvas.workspace.put` (a Principal-scoped overlay with no feed flush). An RW
+mapping alone grants no capability. Report writes, Record Event-producing
+mutations, source writes, auth/control writes, preview/checkpoint side effects
+and all unreviewed/new capabilities remain unavailable. Tool discovery, direct
+calls and compact umbrella targets share the same ceiling. Generic transport
+refusals retain their existing ProblemDetail behavior; application authorization
+continues to record durable decisions and fails closed on audit failure.
+
+In particular, the role grant manifest still denies report DML and feed writes.
+Do not route these through the audit or owner connection, suppress feed failures,
+change report guards or grant broad permissions to make them work. Business/feed
+atomicity and guarded report commits remain unchanged. Extending this capability
+matrix requires independent persistence review and, if needed, a separately
+approved grant delta. No report-writing readiness is claimed.
+
+The process has two additional bounded data pools when enabled: control and
+audit each retain five connections, RO/RW data each have five, optional interaction
+recording has five. With zero overflow this caps these pools at 20 connections
+(or 25 with the optional recorder), excluding other existing processes. Keep
+MCP's concurrency bound and independent audit progress; verify aggregate server
+headroom before commissioning. Interaction recording remains independently off.
+
+After a separately authorized implementation review and secret/config delivery,
+commission only explicitly approved client IDs and capabilities against the
+exact reviewed image and reauthenticated target. For withdrawal disable routing
+and/or revoke only the commissioned client's grants and drain the process; never
+fall back to an owner connection. This work does not authorize any such action.

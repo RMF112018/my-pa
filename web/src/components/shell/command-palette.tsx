@@ -7,6 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type KeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
@@ -97,6 +98,8 @@ function classifyFailure(error: unknown): SearchAnswer {
   return { kind: "unavailable", diagnostic: safeDiagnostic(fields) };
 }
 
+const subscribeToHydration = () => () => {};
+
 function heldEnrollment(explicit?: string): string | undefined {
   const fromProp = admittedEnrollmentId(explicit);
   if (fromProp) return fromProp;
@@ -125,6 +128,7 @@ export function SearchCommandPanel({
   initialQuery?: string;
   enrollmentId?: string;
 }) {
+  const hydrated = useSyncExternalStore(subscribeToHydration, () => true, () => false);
   const router = useRouter();
   const diagnosticsEnabled = useDiagnosticsEnabled();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -153,8 +157,8 @@ export function SearchCommandPanel({
   );
 
   useEffect(() => {
-    if (autoFocus) inputRef.current?.focus();
-  }, [autoFocus]);
+    if (autoFocus && hydrated) inputRef.current?.focus();
+  }, [autoFocus, hydrated]);
 
   useEffect(() => {
     if (!onDismiss) return;
@@ -363,6 +367,7 @@ export function SearchCommandPanel({
         ref={inputRef}
         id={inputId}
         type="search"
+        disabled={!hydrated}
         value={query}
         onChange={(event) => {
           setQuery(event.target.value);

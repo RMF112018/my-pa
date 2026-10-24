@@ -1134,6 +1134,7 @@ def test_mcp_remote_serves_the_wrapped_app_and_closes_the_log_in_its_finally(
         oauth_operator_secret=None,
         mcp_interaction_log_enabled=True,
         parsed_database_url=lambda: _URL,
+        mcp_database_profiles_enabled=False,
     )
     monkeypatch.setattr(gateway, "load_settings", lambda: settings)
     monkeypatch.setattr(gateway, "build_gateway_runtime", lambda _settings: Runtime())

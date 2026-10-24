@@ -59,6 +59,7 @@ from pydantic import Field, PrivateAttr, ValidationError, model_validator
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import ArgumentError
 
+from my_pa.contracts.mcp_database_profiles import MCP_DATABASE_TRANSPORT_QUERY_KEYS
 from my_pa.contracts.oauth import valid_operator_secret
 from my_pa.contracts.v1.base import StrictModel
 from my_pa.contracts.v1.capabilities import EffectiveLimits
@@ -377,6 +378,13 @@ class Settings(StrictModel):
     mcp_surface_disabled: bool = False
     remote_mcp_enabled: bool = False
     remote_writes_enabled: bool = False
+    # Default off; mappings cannot override durable OAuth or capability grants.
+    mcp_database_profiles_enabled: bool = False
+    mcp_database_ro_client_ids: str = Field(default="", repr=False)
+    mcp_database_rw_client_ids: str = Field(default="", repr=False)
+    mcp_database_ro_password_file: str = Field(default="", repr=False)
+    mcp_database_rw_password_file: str = Field(default="", repr=False)
+    mcp_database_expected_cluster_id: str = ""
     #: Record every remote `/mcp` HTTP exchange, bodies included, in
     #: `observability.mcp_interactions` (`adapters.mcp_interaction_capture`).
     #:
@@ -674,6 +682,12 @@ class Settings(StrictModel):
     #: docstring and the tests.
     database_url: str = Field(repr=False)
 
+    def mcp_database_ro_clients(self) -> frozenset[str]:
+        return frozenset(_split_allowlist(self.mcp_database_ro_client_ids))
+
+    def mcp_database_rw_clients(self) -> frozenset[str]:
+        return frozenset(_split_allowlist(self.mcp_database_rw_client_ids))
+
     def gateway_bind_host(self) -> str:
         """Return the only address admitted for the selected deployment boundary."""
         return (
@@ -699,6 +713,30 @@ class Settings(StrictModel):
     @model_validator(mode="after")
     def _check(self) -> Settings:
         self._parsed_database_url = _parse_database_url(self.database_url)
+        for raw_clients in (self.mcp_database_ro_client_ids, self.mcp_database_rw_client_ids):
+            if len(_split_allowlist(raw_clients)) != len(set(_split_allowlist(raw_clients))):
+                raise SettingsError("MCP database client mappings must not contain duplicates")
+        if self.mcp_database_ro_clients() & self.mcp_database_rw_clients():
+            raise SettingsError("MCP database client mappings must be disjoint")
+        if self.mcp_database_profiles_enabled:
+            if not self._parsed_database_url.query.keys() <= MCP_DATABASE_TRANSPORT_QUERY_KEYS:
+                raise SettingsError(
+                    "MCP profiles refuse unreviewed database transport query options"
+                )
+            if not all(
+                (
+                    self.mcp_database_ro_password_file,
+                    self.mcp_database_rw_password_file,
+                    self.mcp_database_expected_cluster_id.isdecimal(),
+                )
+            ):
+                raise SettingsError(
+                    "MCP database profiles require two protected files and cluster ID"
+                )
+            if self.mcp_database_ro_password_file == self.mcp_database_rw_password_file:
+                raise SettingsError("MCP database profiles require distinct protected files")
+            if self._parsed_database_url.database != "my_pa":
+                raise SettingsError("MCP database profiles require the explicit my_pa target")
         if self.goodnotes_pull_enabled:
             key_bytes = self.goodnotes_pull_cursor_signing_key.encode("utf-8")
             if not 32 <= len(key_bytes) <= 128:

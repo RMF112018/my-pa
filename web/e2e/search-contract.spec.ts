@@ -1,5 +1,5 @@
-import { expect, test, type Page } from "@playwright/test";
-import { SEARCH_SETTLED, signIn } from "./fixtures";
+import { expect, test, type Page, type TestInfo } from "@playwright/test";
+import { markBrowserEarly, observeSearchMedia, SEARCH_SETTLED, signIn } from "./fixtures";
 
 type ApiAnswer<T> = { status: number; body: T };
 
@@ -48,8 +48,12 @@ async function api<T>(
   );
 }
 
+test.beforeEach(async () => {
+  markBrowserEarly();
+});
+
 test.beforeEach(async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: "reduce" });
+  await observeSearchMedia(page);
   await signIn(page);
 });
 
@@ -102,37 +106,9 @@ test("Federated Search BFF keeps typed hits and honest omitted coverage", async 
   expect(JSON.stringify(entityHits)).not.toMatch(/resolution/);
 });
 
-test("Search UX maps federated hits to honest hrefs without capture text", async ({ page }) => {
+test("Search UX maps federated hits to honest hrefs without capture text", async ({ page }, testInfo) => {
   test.setTimeout(180_000);
-  await page.goto("/search");
-  await expect(page.getByRole("heading", { name: "Search", level: 1 })).toBeVisible();
-  await page.getByRole("searchbox", { name: "Search" }).fill("morning brief");
-  await expect(
-    page.locator(SEARCH_SETTLED).first(),
-  ).toBeVisible({ timeout: 30_000 });
-
-  const captureLinks = page.locator('a[href*="captureId="]');
-  const captureCount = await captureLinks.count();
-  for (let index = 0; index < captureCount; index += 1) {
-    const href = (await captureLinks.nth(index).getAttribute("href")) ?? "";
-    expect(href).toMatch(/\/knowledge\?/);
-    expect(href).toMatch(/captureId=cap_/);
-    expect(href).toMatch(/versionId=/);
-    expect(href).not.toMatch(/text=/);
-  }
-
-  const goodnotesLinks = page.locator('a[href*="/knowledge/goodnotes"]');
-  const goodnotesCount = await goodnotesLinks.count();
-  for (let index = 0; index < goodnotesCount; index += 1) {
-    const href = (await goodnotesLinks.nth(index).getAttribute("href")) ?? "";
-    expect(href).toMatch(/\/knowledge\/goodnotes\?/);
-    expect(href).toMatch(/pageVersionId=|runId=/);
-    expect(href).not.toMatch(/transcription=/);
-    expect(href).not.toMatch(/snippet=/);
-    expect(href).not.toMatch(/body=/);
-  }
-
-  await expect(page.locator('a[href*="knowledgeId="]')).toHaveCount(0);
+  await runSearchHrefJourney(page, testInfo);
 });
 
 const RESURRECTED_SURFACES = /Assistant|ChatLLM|MossAIc/i;
@@ -501,3 +477,90 @@ test("TASK-AC-019 a Search Task hit reads the canonical Task once and mutates on
   await expect(result).toBeFocused();
   await page.unroute("**/api/search*");
 });
+
+
+/** The one admitted Search href journey; only fixed active phases become metadata. */
+export async function runSearchHrefJourney(page: Page, info: TestInfo): Promise<void> {
+  let phase: "nav" | "heading" | "query" | "search-settled" | "capture-links" | "goodnotes-links" | "knowledge-absence" = "nav";
+  function record(state: "inflight" | "complete" | "failed"): void {
+    if (process.env.CI !== "true" || process.env.CI_BROWSER_DIAGNOSTIC !== "1") return;
+    try {
+      const item = { type: "my-pa-ci-search-active", description: `${phase}:${state}` };
+      const index = info.annotations.findIndex((entry) => entry.type === item.type);
+      if (index < 0) info.annotations.push(item);
+      else info.annotations[index] = item;
+    } catch { /* Fixed observation cannot change successful work or the original failure. */ }
+  }
+  async function observeSettlement(): Promise<void> {
+    if (process.env.CI !== "true" || process.env.CI_BROWSER_DIAGNOSTIC !== "1" || info.project?.name !== "webkit") return;
+    function recordSnapshot(description: string): void {
+      try {
+        const item = { type: "my-pa-ci-search-snapshot", description };
+        const index = info.annotations.findIndex((entry) => entry.type === item.type);
+        if (index < 0) info.annotations.push(item);
+        else info.annotations[index] = item;
+      } catch { /* Observation cannot replace the original failure. */ }
+    }
+    try {
+      const snapshot = await page.evaluate((settledSelector) => {
+        const input = document.querySelector('[data-testid="search-command-input"]');
+        const list = document.querySelector('[data-testid="search-command-list"]');
+        return {
+          query: input instanceof HTMLInputElement && input.value === "morning brief",
+          idle: !!list?.querySelector(":scope > p:not([role])"),
+          busy: list?.getAttribute("aria-busy") === "true",
+          settled: !!document.querySelector(settledSelector),
+        };
+      }, SEARCH_SETTLED);
+      const fields = ["query", "idle", "busy", "settled"] as const;
+      if (Object.keys(snapshot).sort().join() !== [...fields].sort().join()
+        || !fields.every((key) => typeof snapshot[key] === "boolean")) {
+        recordSnapshot("unavailable"); return;
+      }
+      recordSnapshot(`q${Number(snapshot.query)}-i${Number(snapshot.idle)}-b${Number(snapshot.busy)}-s${Number(snapshot.settled)}`);
+    } catch { recordSnapshot("unavailable"); }
+  }
+  try {
+  phase = "nav"; record("inflight");
+  await page.goto("/search");
+  phase = "heading"; record("inflight");
+  await expect(page.getByRole("heading", { name: "Search", level: 1 })).toBeVisible();
+  phase = "query"; record("inflight");
+  await page.getByRole("searchbox", { name: "Search" }).fill("morning brief");
+  phase = "search-settled"; record("inflight");
+  await expect(
+    page.locator(SEARCH_SETTLED).first(),
+  ).toBeVisible({ timeout: 30_000 });
+
+  phase = "capture-links"; record("inflight");
+  const captureLinks = page.locator('a[href*="captureId="]');
+  const captureCount = await captureLinks.count();
+  for (let index = 0; index < captureCount; index += 1) {
+    const href = (await captureLinks.nth(index).getAttribute("href")) ?? "";
+    expect(href).toMatch(/\/knowledge\?/);
+    expect(href).toMatch(/captureId=cap_/);
+    expect(href).toMatch(/versionId=/);
+    expect(href).not.toMatch(/text=/);
+  }
+
+  phase = "goodnotes-links"; record("inflight");
+  const goodnotesLinks = page.locator('a[href*="/knowledge/goodnotes"]');
+  const goodnotesCount = await goodnotesLinks.count();
+  for (let index = 0; index < goodnotesCount; index += 1) {
+    const href = (await goodnotesLinks.nth(index).getAttribute("href")) ?? "";
+    expect(href).toMatch(/\/knowledge\/goodnotes\?/);
+    expect(href).toMatch(/pageVersionId=|runId=/);
+    expect(href).not.toMatch(/transcription=/);
+    expect(href).not.toMatch(/snippet=/);
+    expect(href).not.toMatch(/body=/);
+  }
+
+  phase = "knowledge-absence"; record("inflight");
+  await expect(page.locator('a[href*="knowledgeId="]')).toHaveCount(0);
+    record("complete");
+  } catch (error) {
+    record("failed");
+    if (phase === "search-settled") await observeSettlement();
+    throw error;
+  }
+}

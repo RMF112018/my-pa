@@ -342,6 +342,9 @@ def test_only_explicitly_admitted_settings_may_be_credential_bearing() -> None:
     tokens = ("password", "secret", "token", "key", "credential", "dsn", "url", "path")
     admitted = {
         "database_url",
+        # Operator-approved protected-file inputs, never inline credential values.
+        "mcp_database_ro_password_file",
+        "mcp_database_rw_password_file",
         "oauth_operator_secret",
         "gsqs_remote_eval_oauth_operator_secret",
         "webauthn_bff_secret",
@@ -354,6 +357,8 @@ def test_only_explicitly_admitted_settings_may_be_credential_bearing() -> None:
             continue
         for token in tokens:
             assert token not in name, f"settings field {name!r} looks secret-bearing"
+    assert Settings.model_fields["mcp_database_ro_password_file"].repr is False
+    assert Settings.model_fields["mcp_database_rw_password_file"].repr is False
     assert Settings.model_fields["oauth_operator_secret"].repr is False
     assert Settings.model_fields["gsqs_remote_eval_oauth_operator_secret"].repr is False
     assert Settings.model_fields["webauthn_bff_secret"].repr is False

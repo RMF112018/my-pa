@@ -74,9 +74,11 @@ is not a defect.
 
 ## 3. What is implemented
 
-Four hundred and thirty-two Python modules under `src/my_pa` and eight hundred and seventeen test modules —
+Four hundred and thirty-five Python modules under `src/my_pa` and eight hundred and twenty test modules —
 
-**Current-tree remeasurement (record lineage S4 WP-04C report manifest and hardening, branch `feat/lineage-s4-program`, worker M5, 2026-10-24):** the two commands below count 432 source modules and 817 test modules: the 431/814 below plus `src/my_pa/contracts/v1/report_manifests.py`, and `tests/unit/test_report_manifest_domain.py`, `tests/integration/test_report_manifest_integrity.py` and `tests/architecture/test_record_lineage_s4_scope.py`. This is file-inventory evidence, not a test PASS receipt.
+**Current-tree remeasurement (origin/main #339 MCP database profiles `19426ed5` merged into record lineage S4, branch `feat/lineage-s4-program`, worker M6, 2026-10-24):** the two commands below count 435 source modules and 820 test modules: the S4 432/817 below plus the three source and three test modules #339 added on `main` (the 419/805 below less the shared 416/802). This is file-inventory evidence, not a test PASS receipt.
+
+**Historical remeasurement (record lineage S4 WP-04C report manifest and hardening, branch `feat/lineage-s4-program`, worker M5, 2026-10-24):** the two commands below counted 432 source modules and 817 test modules: the 431/814 below plus `src/my_pa/contracts/v1/report_manifests.py`, and `tests/unit/test_report_manifest_domain.py`, `tests/integration/test_report_manifest_integrity.py` and `tests/architecture/test_record_lineage_s4_scope.py`. This is file-inventory evidence, not a test PASS receipt.
 
 **Historical remeasurement (record lineage S4 WP-04B Program overview, branch `feat/lineage-s4-program`, worker M4, 2026-10-24):** the two commands below counted 431 source modules and 814 test modules: the 426/811 below plus `src/my_pa/domain/program/reportability.py`, `src/my_pa/domain/program/digest.py`, `src/my_pa/application/program_work.py`, `src/my_pa/application/program_constraints.py` and `src/my_pa/infrastructure/persistence/program_metrics.py`, and `tests/integration/test_program_metric_reconciliation.py`, `tests/concurrency/test_program_overview_snapshot.py` and `tests/database/test_program_overview_plans.py`. This is file-inventory evidence, not a test PASS receipt.
 
@@ -86,7 +88,9 @@ Four hundred and thirty-two Python modules under `src/my_pa` and eight hundred a
 
 **Historical remeasurement (record lineage S4 schema, Program vocabulary and registration, branch `feat/lineage-s4-program`, worker M1, 2026-10-24):** the two commands below counted 420 source modules and 806 test modules: the 416/802 below plus `src/my_pa/domain/program/__init__.py`, `src/my_pa/domain/program/vocabulary.py`, `src/my_pa/domain/intelligence/source_manifest.py` and `src/my_pa/infrastructure/persistence/program_reads.py`, and `tests/schema/test_record_lineage_s4_migration.py`, `tests/database/test_lineage_s4_integrity_guards.py`, `tests/contract/test_lineage_s4_capability_admission.py` and `tests/concurrency/test_program_read_pool.py`. This is file-inventory evidence, not a test PASS receipt.
 
-**Historical remeasurement (CI sharding merged into `feat/lineage-s3-graph`, worker K1, 2026-10-20):** the two commands below count 416 source modules and 802 test modules: the 416/801 below plus `tests/architecture/test_ci_shards.py`; no source module is added (`tests/ci_shard.py` is a pytest plugin, not a `test_*.py` module). This is file-inventory evidence, not a test PASS receipt.
+**Historical remeasurement (MCP profile reconciliation on `main`, #339 `19426ed5`, 2026-10-24):** the two commands below counted 419 source modules and 805 test modules on `main`: the 416/802 below plus `src/my_pa/bootstrap/mcp_database_profiles.py`, `src/my_pa/contracts/mcp_database_profiles.py` and `src/my_pa/infrastructure/database/mcp_object_grants.py`, and `tests/unit/test_mcp_database_profiles.py`, `tests/contract/test_mcp_database_profiles.py` and `tests/database/test_mcp_database_profiles.py`. This is file-inventory evidence, not a test PASS receipt.
+
+**Historical remeasurement (CI sharding merged into `feat/lineage-s3-graph`, worker K1, 2026-10-20):** the two commands below counted 416 source modules and 802 test modules: the 416/801 below plus `tests/architecture/test_ci_shards.py`; no source module is added (`tests/ci_shard.py` is a pytest plugin, not a `test_*.py` module). This is file-inventory evidence, not a test PASS receipt.
 
 **Historical remeasurement (record lineage S3 FR3 remote-visibility corrections, branch `feat/lineage-s3-graph`, worker L3, 2026-10-20):** the two commands below counted 416 source modules and 801 test modules: the 416/800 below plus `tests/security/test_lineage_remote_visibility.py`. This is file-inventory evidence, not a test PASS receipt.
 

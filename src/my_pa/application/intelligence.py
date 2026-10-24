@@ -1818,7 +1818,7 @@ class InMemoryIntelligenceStore:
         self.artifacts[key] = artifact
         digests: list[DependencyDigests] = []
         for dependency in artifact.dependencies:
-            upstream_key = (artifact.principal_id, dependency.upstream_artifact_id)
+            upstream_key = (key[0], dependency.upstream_artifact_id)
             upstream = self.artifacts[upstream_key]
             recorded = self.manifests.get(upstream_key)
             digests.append(

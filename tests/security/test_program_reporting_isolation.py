@@ -21,20 +21,32 @@ The Commitment v2 rows (worker M3, section 7.3):
 * an Issue `situation_reference` needs the `issue` family, never the
   `situation` one (R4-F17).
 
-The overview and manifest rows of the same section 10 entry are added by their
-packages (workers M4 and M5). Every identity is synthetic.
+The overview rows (worker M4, section 7.2):
+
+* another Principal's rows -- a full copy of the scene and a Commitment storing
+  this Principal's Project id -- change nothing in this Principal's overview;
+* a remote reader without a grant on `programs.overview` is `unsupported`, and
+  one without the `entity` and `project` families sees no Program;
+* an invisible family's metrics are `restricted` at every scope, never a
+  count, and every field derived from it is `null`: the calendar, source state,
+  sync and source-state denominator without `constraint`, the lineage horizon
+  and the legacy-link fields without `issue`;
+* an overview statement cancelled by its timeout answers `unavailable`.
+
+The manifest rows of the same section 10 entry are added by their package
+(worker M5). Every identity is synthetic.
 """
 
 from __future__ import annotations
 
 import threading
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any, Final
 
 import pytest
 from sqlalchemy import text
-from tests.database.lineage_issue_harness import OTHER_PRINCIPAL
+from tests.database.lineage_issue_harness import OTHER_PRINCIPAL, PRINCIPAL
 from tests.database.lineage_s3_read_harness import grant
 from tests.database.lineage_s4_harness import (
     PROGRAM_STATEMENT_TIMEOUT_MS,
@@ -116,6 +128,7 @@ def test_a_foreign_program_answers_like_an_absent_one(runtime: S4Runtime) -> Non
 def test_a_remote_read_without_its_grant_is_unsupported(runtime: S4Runtime) -> None:
     program = _program_with_member(runtime)
     _commitment_v2_grant_cases(runtime)
+    _overview_grant_cases(runtime, program)
     # Every family read, but no grant on `programs.members.resolve` itself.
     families_only = grant(*ROOT_READS)
     assert _error(runtime, _resolve(program), grants=families_only) == ("unsupported", [])
@@ -152,6 +165,17 @@ def test_a_remote_reader_without_entity_and_project_reads_sees_no_program(
         for project_read in ("continuity.projects", "continuity.projects.read"):
             seen = grant("programs.members.resolve", entity_read, project_read)
             assert runtime.ok(_resolve(program), grants=seen)["programs"][0]["members"]
+    # The overview applies the same root rule (worker M4), every other family granted.
+    overview_grants = grant("programs.overview", *reads, *METRIC_FAMILY_READS)
+    for requested in (program, ABSENT):
+        assert _error(runtime, _overview(requested), grants=overview_grants) == (
+            "not_found",
+            ["program_entity_ids"],
+        )
+    for entity_read in ("entities.get", "entities.search"):
+        for project_read in ("continuity.projects", "continuity.projects.read"):
+            seen = grant("programs.overview", entity_read, project_read)
+            assert runtime.ok(_overview(program), grants=seen)["programs"][0]["project_ids"]
 
 
 #: Every family read a v2 Commitment reference can need (section 6.2).
@@ -358,3 +382,245 @@ def test_a_program_statement_timeout_answers_unavailable(runtime: S4Runtime) -> 
     assert runtime.program_engine.pool.checkedout() == 0  # type: ignore[attr-defined]
     # Once the lock is gone, the same read is answered.
     assert runtime.resolve(program)["programs"][0]["members"]
+    # The overview (worker M4): a metric read -- here the Constraint portfolio
+    # path's statements, which are not the S4 repositories' own -- cancelled by
+    # its timeout answers `unavailable` as well.
+    for table in ("commitments", "constraint_project_settings"):
+        assert _overview_timed_out(runtime, program, table) == ("unavailable", [])
+    assert runtime.overview(program)["programs"][0]["project_ids"]
+
+
+def _overview_timed_out(runtime: S4Runtime, program: str, table: str) -> tuple[str, list[str]]:
+    """`programs.overview` while another connection holds `table` exclusively."""
+    locked = threading.Event()
+    release = threading.Event()
+
+    def hold() -> None:
+        with runtime.engine.connect() as connection, connection.begin():
+            connection.execute(text(f"LOCK TABLE knowledge.{table} IN ACCESS EXCLUSIVE MODE"))
+            locked.set()
+            release.wait(timeout=30)
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    try:
+        assert locked.wait(timeout=30)
+        started = datetime.now(UTC)
+        error = runtime.overview_refused(program)
+        waited = (datetime.now(UTC) - started).total_seconds()
+    finally:
+        release.set()
+        holder.join(timeout=30)
+    assert PROGRAM_STATEMENT_TIMEOUT_MS / 1000 * 0.9 <= waited < 15, (table, waited)
+    assert runtime.program_engine.pool.checkedout() == 0  # type: ignore[attr-defined]
+    return str(error["code"]), list(error.get("safe_details") or [])
+
+
+# --- programs.overview (worker M4, sections 6.1, 6.2 and 7.2) ---------------------
+
+#: The 3 metric families' reads (one each), beside the 2 root reads.
+METRIC_FAMILY_READS: Final = ("commitments.read", "issues.read", "constraints.read")
+#: Each metric family, the reads that make it visible, and the metrics it derives.
+FAMILY_METRICS: Final = {
+    "commitment": (
+        ("commitments.read", "commitments.list"),
+        (
+            "commitment_open_accepted",
+            "commitment_open_proposed",
+            "commitment_closed_proposed",
+            "commitment_overdue_accepted",
+            "commitment_overdue_proposed",
+            "commitment_unscheduled_accepted",
+            "commitment_unscheduled_proposed",
+        ),
+    ),
+    "issue": (("issues.read", "issues.list"), ("issue_outstanding",)),
+    "constraint": (
+        ("constraints.read", "constraints.list"),
+        (
+            "constraint_open",
+            "constraint_overdue",
+            "constraint_due_soon",
+            "constraint_in_my_court",
+            "constraint_draft",
+        ),
+    ),
+}
+
+
+def _overview(program: str) -> ReadProgramOverview:
+    return ReadProgramOverview(program_entity_ids=(program,))
+
+
+def _overview_grant_cases(runtime: S4Runtime, program: str) -> None:
+    """`programs.overview` re-checks its own grant (section 6.1, R3-F13)."""
+    families_only = grant(*ROOT_READS, *METRIC_FAMILY_READS)
+    assert _error(runtime, _overview(program), grants=families_only) == ("unsupported", [])
+    # A grant on it for a purpose it does not permit admits nothing either.
+    misgranted = families_only | {(Capability.PROGRAMS_OVERVIEW, Purpose.REPORT_READ)}
+    assert _error(runtime, _overview(program), grants=misgranted) == ("unsupported", [])
+    # Nor does the resolver's grant.
+    resolver = families_only | grant("programs.members.resolve")
+    assert _error(runtime, _overview(program), grants=resolver) == ("unsupported", [])
+    granted = grant("programs.overview", *ROOT_READS, *METRIC_FAMILY_READS)
+    assert runtime.ok(_overview(program), grants=granted)["programs"][0]["project_ids"]
+
+
+def _overview_scene(runtime: S4Runtime, *, principal_id: str = PRINCIPAL) -> dict[str, str]:
+    """A Program of 2 members with every family's facts (synthetic).
+
+    Member A: a calendar, a verified in-sync target, Constraints, Commitments,
+    a native Issue link and a legacy Issue link. Member B: no calendar.
+    """
+    seeds = runtime.seeds
+    owner = {"principal_id": principal_id}
+    program = seeds.program("Overview isolation", **owner)
+    first, first_entity = seeds.project("Overview isolation A", **owner)
+    second, second_entity = seeds.project("Overview isolation B", **owner)
+    for entity in (first_entity, second_entity):
+        seeds.edge(entity, program, effective_from=T0, **owner)
+    category = seeds.constraint_calendar(first, **owner)
+    seeds.sync_target(first, **owner)
+    seeds.constraint(first, category, due_date=date(2099, 1, 1), **owner)
+    tag = "own" if principal_id == PRINCIPAL else "other"
+    runtime.work_commitment(f"iso-{tag}-accepted", project_id=first, **owner)
+    runtime.work_commitment(f"iso-{tag}-proposed", project_id=second, accepted=False, **owner)
+    runtime.linked_issue(f"iso-{tag}", first, second, principal_id=principal_id)
+    legacy = runtime.issue(f"s4-iso-{tag}-legacy", principal_id=principal_id)
+    seeds.legacy_issue_link(second, legacy, **owner)
+    return {"program": program, "first": first, "second": second}
+
+
+def _restricted(row: dict[str, Any]) -> bool:
+    return (row["value"], row["value_state"], row["reasons"]) == (None, "restricted", [])
+
+
+def _every_metric(answer: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        *(row for scope in answer["programs"] for row in scope["totals"]),
+        *answer["portfolio"]["totals"],
+        *(row for entry in answer["per_project"] for row in entry["metrics"]),
+    ]
+
+
+def test_cross_principal_overviews_disclose_nothing(runtime: S4Runtime) -> None:
+    own = _overview_scene(runtime)
+    before = runtime.overview(own["program"])
+    # The other Principal: a full copy of the scene, and a Commitment storing
+    # this Principal's Project id (the global foreign key admits it, D-16).
+    other = _overview_scene(runtime, principal_id=OTHER_PRINCIPAL)
+    runtime.work_commitment(
+        "iso-foreign-naming-own", project_id=own["first"], principal_id=OTHER_PRINCIPAL
+    )
+    after = runtime.overview(own["program"])
+    assert after["overview_sha256"] == before["overview_sha256"]
+    assert {key: value for key, value in after.items() if key != "source_cutoff_at"} == {
+        key: value for key, value in before.items() if key != "source_cutoff_at"
+    }
+    text_of_answer = str(after)
+    for foreign in other.values():
+        assert foreign not in text_of_answer
+    # The other Principal sees its own, and nothing of this Principal's.
+    theirs = runtime.overview(other["program"], principal_id=OTHER_PRINCIPAL)
+    assert theirs["portfolio"]["project_ids"] == sorted([other["first"], other["second"]])
+    for mine in own.values():
+        assert mine not in str(theirs)
+    # Its Commitment naming this Principal's Project is in no count of either:
+    # each side counts exactly its own one accepted Commitment.
+    for answer, first in ((after, own["first"]), (theirs, other["first"])):
+        accepted = {
+            entry["project_id"]: next(
+                row["value"]
+                for row in entry["metrics"]
+                if row["metric_id"] == "commitment_open_accepted"
+            )
+            for entry in answer["per_project"]
+        }
+        assert accepted == {first: 1, next(iter(set(accepted) - {first})): 0}
+    # Each Program answers the other Principal exactly as an absent one.
+    absent = _document(runtime.overview_refused(ABSENT))
+    assert _document(runtime.overview_refused(other["program"])) == absent
+    assert (
+        _document(runtime.overview_refused(own["program"], principal_id=OTHER_PRINCIPAL)) == absent
+    )
+
+
+def test_an_invisible_family_is_restricted_never_counted(runtime: S4Runtime) -> None:
+    scene = _overview_scene(runtime)
+    local = runtime.overview(scene["program"])
+    everything = grant("programs.overview", *ROOT_READS, *METRIC_FAMILY_READS)
+    full = runtime.ok(_overview(scene["program"]), grants=everything)
+    # Every family granted: exactly the local answer.
+    assert full["overview_sha256"] == local["overview_sha256"]
+    assert "restricted_evidence" not in full["qualifiers"]
+    for family, (reads, metrics) in FAMILY_METRICS.items():
+        others = tuple(
+            read
+            for name, (family_reads, _m) in FAMILY_METRICS.items()
+            if name != family
+            for read in family_reads[:1]
+        )
+        answer = runtime.ok(
+            _overview(scene["program"]), grants=grant("programs.overview", *ROOT_READS, *others)
+        )
+        rows = _every_metric(answer)
+        assert rows
+        for row in rows:
+            # Withheld: never a count, never a reason; the others untouched.
+            assert _restricted(row) is (row["metric_id"] in metrics), (family, row)
+        assert "restricted_evidence" in answer["qualifiers"], family
+        assert answer["overview_sha256"] != local["overview_sha256"], family
+        # Either read of the family makes it visible again.
+        for read in reads:
+            seen = runtime.ok(
+                _overview(scene["program"]),
+                grants=grant("programs.overview", *ROOT_READS, *others, read),
+            )
+            assert seen["overview_sha256"] == local["overview_sha256"], (family, read)
+
+
+def test_an_invisible_constraint_family_hides_every_constraint_derived_field(
+    runtime: S4Runtime,
+) -> None:
+    scene = _overview_scene(runtime)
+    local = runtime.overview(scene["program"])
+    first = next(entry for entry in local["per_project"] if entry["project_id"] == scene["first"])
+    assert first["calendar"]["timezone_name"] == "UTC"
+    assert first["constraint_source_state"] == "in_sync"
+    without = grant("programs.overview", *ROOT_READS, "commitments.read", "issues.read")
+    answer = runtime.ok(_overview(scene["program"]), grants=without)
+    for entry in answer["per_project"]:
+        assert entry["calendar"] is None
+        assert entry["constraint_source_state"] is None
+        assert entry["constraint_last_run_sync_states"] is None
+        assert entry["constraint_sync"] is None
+    for scope in (*answer["programs"], answer["portfolio"]):
+        assert scope["denominator"]["projects_by_constraint_source_state"] is None
+        assert scope["project_ids_by_constraint_source_state"] is None
+        # The other families' denominators stay.
+        assert scope["denominator"]["legacy_issue_links"] == 1
+        assert scope["denominator"]["member_projects"] == 2
+    for token in ("UTC", "in_sync", "calendar_unconfigured", "never_synced"):
+        assert token not in str(answer), token
+
+
+def test_an_invisible_issue_family_hides_the_lineage_horizon_and_legacy_links(
+    runtime: S4Runtime,
+) -> None:
+    scene = _overview_scene(runtime)
+    local = runtime.overview(scene["program"])
+    assert local["lineage_known_at"] is not None
+    assert local["portfolio"]["project_ids_with_legacy_issue_links"] == [scene["second"]]
+    without = grant("programs.overview", *ROOT_READS, "commitments.read", "constraints.read")
+    answer = runtime.ok(_overview(scene["program"]), grants=without)
+    assert answer["lineage_known_at"] is None
+    for entry in answer["per_project"]:
+        assert entry["legacy_issue_links"] is None
+        assert entry["legacy_issue_links_closed"] is None
+    for scope in (*answer["programs"], answer["portfolio"]):
+        assert scope["denominator"]["legacy_issue_links"] is None
+        assert scope["denominator"]["legacy_issue_links_closed"] is None
+        assert scope["project_ids_with_legacy_issue_links"] is None
+        # The Constraint denominator stays.
+        assert scope["denominator"]["projects_by_constraint_source_state"] is not None
+    assert local["lineage_known_at"] not in str(answer)

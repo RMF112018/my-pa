@@ -16,29 +16,51 @@ with what the Program reads need:
 * `S4Runtime.work_commitment` / `close_work_commitment` / `follow_up` /
   `context_situation` / `store_situation` -- Commitments storing any `project_id` and
   `situation_id` (the v1 writer checks only their pattern, S4 D-16), closed
-  natively, with a follow-up Task, for the `commitments.v2.*` tests (worker M3).
+  natively, with a follow-up Task, for the `commitments.v2.*` tests (worker M3);
+* `S4Runtime.overview` / `linked_issue` / `suspend_issue` and
+  `ProgramSeeds.constraint_calendar` / `constraint` / `sync_target` /
+  `sync_conflict` / `close_issue` / `legacy_issue_link` -- the
+  `programs.overview` facts (worker M4): Issues linked natively, a legacy
+  Issue link and a closed Issue by SQL under `session_replication_role =
+  replica` (as only SQL can seed them, S4 section 10), Constraints on a
+  Project's own calendar, sync targets with a last run in any persisted state.
 
 Every identity here is synthetic.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import hashlib
+from datetime import UTC, date, datetime
+from itertools import count
 from typing import Any, Final
 
 from sqlalchemy import Engine, text
 
 from my_pa.application.commands import (
+    AddIssueProjectLink,
     CloseCommitment,
     CreateCommitment,
     CreateSituation,
     CreateTask,
     ReadCommitment,
+    ReadIssue,
+    ReadProgramOverview,
     ResolveProgramMembers,
+    UpdateIssue,
 )
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.ports import UnitOfWork
 from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.project_controls.category import ConstraintCategory, ConstraintCategoryState
+from my_pa.domain.project_controls.constraint import (
+    ConstraintLifecycleState,
+    ConstraintOrigin,
+    ConstraintRecordQuality,
+    ProjectConstraint,
+)
+from my_pa.domain.project_controls.party import PartyKind, PartyRef
+from my_pa.domain.project_controls.settings import ConstraintProjectSettings
 from my_pa.domain.situation.continuity import CommitmentDirection
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.domain.task.lifecycle import TaskOriginKind
@@ -48,13 +70,16 @@ from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.commitment_management import (
     SqlAlchemyCommitmentManagementUnitOfWork,
 )
-from my_pa.infrastructure.persistence.constraints import SqlAlchemyConstraintManagementUnitOfWork
+from my_pa.infrastructure.persistence.constraints import (
+    SqlAlchemyConstraintManagementUnitOfWork,
+    SqlConstraintManagementRepository,
+)
 from my_pa.infrastructure.persistence.program_reads import SqlAlchemyProgramReadUnitOfWork
 from my_pa.infrastructure.persistence.task_management import SqlAlchemyTaskManagementUnitOfWork
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 from tests.database.lineage_issue_harness import LIMITS, PRINCIPAL
 from tests.database.lineage_record_harness import capture
-from tests.database.lineage_s2_harness import REVIEW_DECISION
+from tests.database.lineage_s2_harness import GATEWAY, REVIEW_DECISION
 from tests.database.lineage_s3_read_harness import S3ReadRuntime
 from tests.database.test_commitment_entity_counterparty import seed_counterparty_entity
 
@@ -242,6 +267,46 @@ class S4Runtime(S3ReadRuntime):
             principal_id=principal_id,
         )
         return str(written["situation_id"])
+
+    # --- programs.overview (worker M4, section 7.2) ---------------------------
+
+    def overview(self, *program_entity_ids: str, **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
+        """`programs.overview`, which must succeed."""
+        return self.ok(ReadProgramOverview(program_entity_ids=program_entity_ids), **kwargs)
+
+    def overview_refused(self, *program_entity_ids: str, **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
+        """`programs.overview`, which must be refused: the error document."""
+        return self.refused(ReadProgramOverview(program_entity_ids=program_entity_ids), **kwargs)
+
+    def linked_issue(self, key: str, *project_ids: str, principal_id: str = PRINCIPAL) -> str:
+        """A new Issue linked natively (`issues.project_links.add`) to each Project."""
+        issue_id = self.issue(f"s4-{key}", principal_id=principal_id)
+        for index, project_id in enumerate(project_ids):
+            self.ok(
+                AddIssueProjectLink(
+                    issue_id=issue_id,
+                    project_id=project_id,
+                    expected_membership_revision=0,
+                    idempotency_key=f"s4-plink-{key}-{index}",
+                ),
+                surface=GATEWAY,
+                principal_id=principal_id,
+            )
+        return issue_id
+
+    def suspend_issue(self, issue_id: str, key: str, *, principal_id: str = PRINCIPAL) -> None:
+        """`issues.update` to `suspended` (an outstanding, not closed, Issue)."""
+        current = self.ok(ReadIssue(issue_id=issue_id), principal_id=principal_id)["issue"]
+        self.ok(
+            UpdateIssue(
+                issue_id=issue_id,
+                expected_version=int(current["version"]),
+                idempotency_key=f"s4-suspend-{key}",
+                state="suspended",
+            ),
+            surface=GATEWAY,
+            principal_id=principal_id,
+        )
 
     def resolve_refused(
         self,
@@ -468,6 +533,213 @@ class ProgramSeeds:
                     "effective_to": effective_to,
                 },
             )
+
+    # --- the overview's Issue, Constraint and sync facts (worker M4) -----------
+
+    def close_issue(self, issue_id: str) -> None:
+        """Mark an Issue `closed` by SQL (replica mode: synthetic database only).
+
+        The native close needs a satisfied closure gate; the overview reads
+        only the Issue's `state`, so a closed Issue is seeded directly.
+        """
+        with self._engine.begin() as connection:
+            connection.execute(text("SET LOCAL session_replication_role = replica"))
+            connection.execute(
+                text(
+                    "UPDATE knowledge.situations SET state = 'closed', closed_at = :t0 "
+                    "WHERE situation_id = :issue_id"
+                ),
+                {"t0": T0, "issue_id": issue_id},
+            )
+
+    def legacy_issue_link(
+        self, project_id: str, issue_id: str, *, principal_id: str = PRINCIPAL
+    ) -> None:
+        """An Issue `project_situations` row with no membership event (S1 section 12 row 3).
+
+        Seeded under `session_replication_role = replica`, as S4 section 10
+        states: only a pre-S1 row has this shape.
+        """
+        with self._engine.begin() as connection:
+            connection.execute(text("SET LOCAL session_replication_role = replica"))
+            connection.execute(
+                text(
+                    "INSERT INTO knowledge.project_situations (project_situation_id, project_id, "
+                    "situation_id, principal_id, linked_at) VALUES (:link_id, :project_id, "
+                    ":issue_id, :principal_id, :t0)"
+                ),
+                {
+                    "link_id": issue_identifier(IdKind.PROJECT_SITUATION),
+                    "project_id": project_id,
+                    "issue_id": issue_id,
+                    "principal_id": principal_id,
+                    "t0": T0,
+                },
+            )
+
+    def constraint_calendar(
+        self, project_id: str, timezone_name: str = "UTC", *, principal_id: str = PRINCIPAL
+    ) -> str:
+        """The Project's Constraint settings (its own calendar) and one Category: its id."""
+        category_id = issue_identifier(IdKind.CONSTRAINT_CATEGORY)
+        with self._engine.begin() as connection:
+            repository = SqlConstraintManagementRepository(connection)
+            repository.insert_project_settings(
+                principal_id,
+                ConstraintProjectSettings(
+                    principal_id=principal_id,
+                    project_id=project_id,
+                    timezone_name=timezone_name,
+                    version=1,
+                    created_at=T0,
+                    updated_at=T0,
+                ),
+            )
+            repository.insert_category(
+                principal_id,
+                ConstraintCategory(
+                    category_id=category_id,
+                    principal_id=principal_id,
+                    project_id=project_id,
+                    prefix=f"P{next(_ORDINALS):05d}",
+                    title="Synthetic category",
+                    state=ConstraintCategoryState.ACTIVE,
+                    created_at=T0,
+                    updated_at=T0,
+                    display_order=1,
+                ),
+            )
+        return category_id
+
+    def constraint(
+        self,
+        project_id: str,
+        category_id: str,
+        *,
+        due_date: date | None,
+        state: ConstraintLifecycleState = ConstraintLifecycleState.IDENTIFIED,
+        in_my_court: bool = True,
+        principal_id: str = PRINCIPAL,
+    ) -> str:
+        """One Constraint of `project_id` (published unless a draft); its id."""
+        constraint_id = issue_identifier(IdKind.PROJECT_CONSTRAINT)
+        draft = state is ConstraintLifecycleState.DRAFT
+        bic = (PartyRef(kind=PartyKind.PRINCIPAL),) if in_my_court else ()
+        with self._engine.begin() as connection:
+            SqlConstraintManagementRepository(connection).insert_constraint(
+                principal_id,
+                ProjectConstraint(
+                    constraint_id=constraint_id,
+                    principal_id=principal_id,
+                    lifecycle_state=state,
+                    origin=ConstraintOrigin.PRODUCT,
+                    record_quality=ConstraintRecordQuality.NORMAL,
+                    created_at=T0,
+                    updated_at=T0,
+                    version=1,
+                    project_id=project_id,
+                    category_id=category_id,
+                    constraint_code=None if draft else f"1.{next(_ORDINALS):04d}",
+                    description="Synthetic constraint",
+                    date_identified=date(2026, 1, 2),
+                    due_date=due_date,
+                    bic=bic,
+                    published_at=None if draft else T0,
+                ),
+            )
+        return constraint_id
+
+    def sync_target(
+        self,
+        project_id: str,
+        *,
+        verified: bool = True,
+        last_run_state: str | None = "in_sync",
+        principal_id: str = PRINCIPAL,
+    ) -> tuple[str, str | None]:
+        """A sync target of `project_id` with a last run in `last_run_state`: `(target, run)`.
+
+        `verified=False` leaves `last_verified_at` null; `last_run_state=None`
+        records no run (`last_run_id` null).
+        """
+        target_id = issue_identifier(IdKind.CONSTRAINT_SYNC_TARGET)
+        run_id = None if last_run_state is None else issue_identifier(IdKind.CONSTRAINT_SYNC_RUN)
+        digest = hashlib.sha256(target_id.encode("ascii")).hexdigest()
+        with self._engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO knowledge.constraint_sync_targets (sync_target_id, principal_id, "
+                    "project_id, external_kind, external_identity, normalization_contract_version, "
+                    "last_verified_at, last_run_id, version, created_at, updated_at) VALUES "
+                    "(:target_id, :principal_id, :project_id, 'excel_workbook', :identity, 'v1', "
+                    ":verified_at, :run_id, 1, :t0, :t0)"
+                ),
+                {
+                    "target_id": target_id,
+                    "principal_id": principal_id,
+                    "project_id": project_id,
+                    "identity": f"synthetic-workbook-{target_id}",
+                    "verified_at": T0 if verified else None,
+                    "run_id": run_id,
+                    "t0": T0,
+                },
+            )
+            if run_id is not None:
+                connection.execute(
+                    text(
+                        "INSERT INTO knowledge.constraint_sync_runs (sync_run_id, principal_id, "
+                        "project_id, sync_target_id, state, sync_state, lease_token, "
+                        "preview_lease_until, preview_idempotency_key, preview_request_digest, "
+                        "started_at, finished_at, outcome, created_at, updated_at) VALUES "
+                        "(:run_id, :principal_id, :project_id, :target_id, 'applied', :sync_state, "
+                        ":digest, :t0, :key, :digest, :t0, :t0, 'applied', :t0, :t0)"
+                    ),
+                    {
+                        "run_id": run_id,
+                        "principal_id": principal_id,
+                        "project_id": project_id,
+                        "target_id": target_id,
+                        "sync_state": last_run_state,
+                        "digest": digest,
+                        "key": f"synthetic_{run_id}",
+                        "t0": T0,
+                    },
+                )
+        return target_id, run_id
+
+    def sync_conflict(
+        self,
+        project_id: str,
+        target_id: str,
+        run_id: str,
+        constraint_id: str,
+        *,
+        principal_id: str = PRINCIPAL,
+    ) -> None:
+        """An open sync conflict on one Constraint of `project_id`."""
+        with self._engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO knowledge.constraint_sync_conflicts (sync_conflict_id, "
+                    "principal_id, project_id, sync_target_id, constraint_id, sync_run_id, "
+                    "conflict_kind, field_names, state, created_at) VALUES (:conflict_id, "
+                    ":principal_id, :project_id, :target_id, :constraint_id, :run_id, "
+                    "'both_changed', '[\"description\"]'::jsonb, 'open', :t0)"
+                ),
+                {
+                    "conflict_id": issue_identifier(IdKind.CONSTRAINT_SYNC_CONFLICT),
+                    "principal_id": principal_id,
+                    "project_id": project_id,
+                    "target_id": target_id,
+                    "constraint_id": constraint_id,
+                    "run_id": run_id,
+                    "t0": T0,
+                },
+            )
+
+
+#: Distinct synthetic Category prefixes and Constraint codes.
+_ORDINALS: Final = count(1)
 
 
 def membership_tables(engine: Engine) -> dict[str, list[tuple[Any, ...]]]:

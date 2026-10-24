@@ -19,8 +19,12 @@ against PostgreSQL through `ApplicationService.invoke` with the S4 switch on
   Commitment storing this Principal's Project id never does;
 * a v2 page issues a constant number of statements whatever its size.
 
-The overview counts of AT-015 (the Program accepted grain) are added beside
-these by the overview package. Every identity here is synthetic.
+The overview counts of AT-015 (worker M4): `programs.overview` of the
+Program counts per Project, per Program and per portfolio exactly the
+Commitments whose own `project_id` is a resolved member of this Principal --
+never the unrelated Project's, never a closed proposal as accepted, never
+another Principal's Commitment storing this Principal's Project id. Every
+identity here is synthetic.
 """
 
 from __future__ import annotations
@@ -179,6 +183,22 @@ def _document(error: dict[str, Any]) -> dict[str, Any]:
 
 def _v1_keys(view: type) -> frozenset[str]:
     return frozenset(view.__dataclass_fields__) | {"counterparty"}
+
+
+def _counts(answer: dict[str, Any], metric_id: str) -> dict[str, Any]:
+    """`metric_id` per Project, per Program and per portfolio of one overview."""
+
+    def value(rows: list[dict[str, Any]]) -> Any:  # noqa: ANN401
+        (row,) = [row for row in rows if row["metric_id"] == metric_id]
+        return row["value"]
+
+    return {
+        "per_project": {
+            entry["project_id"]: value(entry["metrics"]) for entry in answer["per_project"]
+        },
+        "program": value(answer["programs"][0]["totals"]),
+        "portfolio": value(answer["portfolio"]["totals"]),
+    }
 
 
 def test_v2_reads_expose_project_and_situation(runtime: S4Runtime) -> None:
@@ -354,6 +374,14 @@ def test_a_closed_proposed_commitment_is_never_counted_as_accepted(runtime: S4Ru
         if entry["acceptance_verification"] != "not_accepted"
     ]
     assert accepted == [scene.b2_open_accepted]
+    # The overview's accepted grain of B2 is its one open accepted Commitment;
+    # the closed proposal is counted only as what it is.
+    answer = runtime.overview(scene.program)
+    assert _counts(answer, "commitment_open_accepted")["per_project"][scene.b2] == 1
+    assert _counts(answer, "commitment_unscheduled_accepted")["per_project"][scene.b2] == 1
+    assert _counts(answer, "commitment_open_proposed")["per_project"][scene.b2] == 0
+    closed = _counts(answer, "commitment_closed_proposed")
+    assert (closed["per_project"][scene.b2], closed["program"], closed["portfolio"]) == (1, 1, 1)
 
 
 def test_an_unrelated_project_never_enters_a_program_count(runtime: S4Runtime) -> None:
@@ -383,6 +411,16 @@ def test_an_unrelated_project_never_enters_a_program_count(runtime: S4Runtime) -
     assert _ids(runtime.ok(ListCommitmentsV2(project_ids=(scene.unrelated,)))) == [
         scene.unrelated_open_accepted
     ]
+    # The overview: per Project, per Program and per portfolio, only the members'.
+    answer = runtime.overview(scene.program)
+    assert answer["portfolio"]["project_ids"] == sorted(members)
+    assert scene.unrelated not in str(answer)
+    accepted = _counts(answer, "commitment_open_accepted")
+    assert accepted["per_project"] == {scene.b1: 1, scene.b2: 1, scene.b3: 1}
+    assert sum(accepted["per_project"].values()) == 3
+    proposed = _counts(answer, "commitment_open_proposed")
+    assert proposed["per_project"] == {scene.b1: 1, scene.b2: 0, scene.b3: 0}
+    assert (proposed["program"], proposed["portfolio"]) == (1, 1)
 
 
 def test_a_foreign_principals_commitment_naming_this_project_is_never_counted(
@@ -411,6 +449,16 @@ def test_a_foreign_principals_commitment_naming_this_project_is_never_counted(
     )
     error = runtime.refused(ReadCommitmentV2(commitment_id=scene.foreign_naming_b1))
     assert (error["code"], error["safe_details"]) == ("not_found", ["commitment_id"])
+    # Nor in any overview count: B1's per-Project figures are its own 2
+    # Commitments, and the Program and portfolio totals hold no third.
+    answer = runtime.overview(scene.program)
+    assert _counts(answer, "commitment_open_accepted")["per_project"][scene.b1] == 1
+    assert _counts(answer, "commitment_unscheduled_accepted")["per_project"][scene.b1] == 1
+    assert _counts(answer, "commitment_open_proposed")["per_project"][scene.b1] == 1
+    for metric_id in ("commitment_open_proposed", "commitment_unscheduled_proposed"):
+        counted = _counts(answer, metric_id)
+        assert (counted["program"], counted["portfolio"]) == (1, 1), metric_id
+    assert scene.foreign_naming_b1 not in str(answer)
 
 
 def _page_scene(runtime: S4Runtime, count: int) -> tuple[str, str]:

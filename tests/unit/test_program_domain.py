@@ -5,19 +5,25 @@ rule as tables over fetched rows -- the window rule in both modes, the
 redirect walk's bound and cycle refusal, the bridge's exactly-one rule and the
 completeness precedence -- so the database tests of
 `tests/integration/test_program_member_resolver.py` prove the reads feed it
-and these prove the rule itself. The reportability and digest rows are added
-by the overview package (worker M4).
+and these prove the rule itself. The overview rows (worker M4, WP-04B) pin
+the section 3.3 Constraint source-state table, the reportability reasons of
+every metric at Project and total grain, the acceptance proof (never proven
+in S4, and the one place that would change the accepted totals) and the
+section 5.1 digest's golden vectors.
 
 Every identifier here is synthetic.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import UTC, datetime, timedelta
 from typing import Final
 
 import pytest
 
+from my_pa.domain.program.digest import overview_digest
 from my_pa.domain.program.membership import (
     BridgeLink,
     EntityNode,
@@ -31,11 +37,30 @@ from my_pa.domain.program.membership import (
     walk_redirect,
     window_verdict,
 )
+from my_pa.domain.program.reportability import (
+    ACCEPTANCE_PROVING,
+    COMMITMENT_METRICS,
+    CONSTRAINT_METRICS,
+    METRIC_CATALOGUE,
+    MetricId,
+    ProjectFacts,
+    SyncTarget,
+    commitment_acceptance_proof,
+    constraint_source_state,
+    project_metric,
+    scope_total,
+    target_state,
+)
 from my_pa.domain.program.vocabulary import (
     MAX_REDIRECT_HOPS,
+    AcceptanceVerification,
+    ConstraintSourceState,
     MembershipMode,
     MemberUnresolvedReason,
+    MetricValueState,
+    NotReportableReason,
     ProgramCompleteness,
+    ProgramFamily,
 )
 
 T: Final = datetime(2026, 10, 24, 12, tzinfo=UTC)
@@ -257,3 +282,321 @@ def test_completeness_precedence() -> None:
             ProgramCompleteness.RESTRICTED_EVIDENCE,
         ),
     )
+
+
+# --- the overview rules (worker M4, sections 3.2, 3.3 and 5.1) -------------------
+
+_VERIFIED: Final = datetime(2026, 9, 1, tzinfo=UTC)
+
+
+def _target(
+    *, verified: bool = True, run: bool = True, state: str | None = "in_sync"
+) -> SyncTarget:
+    return SyncTarget(
+        last_verified_at=_VERIFIED if verified else None,
+        last_run_id="csyr_goldenrun0001" if run else None,
+        last_run_sync_state=state if run else None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("calendar", "targets", "conflicts", "expected"),
+    [
+        (False, [_target()], 0, ConstraintSourceState.CALENDAR_UNCONFIGURED),
+        (False, [], 3, ConstraintSourceState.CALENDAR_UNCONFIGURED),
+        (True, [], 0, ConstraintSourceState.NEVER_SYNCED),
+        (True, [_target()], 0, ConstraintSourceState.IN_SYNC),
+        (True, [_target(verified=False)], 0, ConstraintSourceState.UNVERIFIED),
+        (True, [_target(run=False)], 0, ConstraintSourceState.UNVERIFIED),
+        (True, [_target(state="verification_failed")], 0, ConstraintSourceState.SYNC_DEGRADED),
+        (True, [_target(state="partial")], 0, ConstraintSourceState.SYNC_DEGRADED),
+        (True, [_target(state="never_synced")], 0, ConstraintSourceState.SYNC_DEGRADED),
+        (True, [_target()], 1, ConstraintSourceState.CONFLICT),
+        (True, [_target(verified=False)], 1, ConstraintSourceState.CONFLICT),
+        # The worst target wins: in sync only when every target is.
+        (True, [_target(), _target(state="partial")], 0, ConstraintSourceState.SYNC_DEGRADED),
+        (True, [_target(state="partial"), _target()], 0, ConstraintSourceState.SYNC_DEGRADED),
+        (True, [_target(), _target(verified=False)], 0, ConstraintSourceState.UNVERIFIED),
+        (
+            True,
+            [_target(verified=False), _target(state="conflict")],
+            0,
+            ConstraintSourceState.SYNC_DEGRADED,
+        ),
+        (True, [_target(), _target()], 0, ConstraintSourceState.IN_SYNC),
+    ],
+)
+def test_constraint_source_state_table(
+    calendar: bool,
+    targets: list[SyncTarget],
+    conflicts: int,
+    expected: ConstraintSourceState,
+) -> None:
+    assert (
+        constraint_source_state(
+            calendar_configured=calendar, targets=targets, open_conflicts=conflicts
+        )
+        is expected
+    )
+    # Each target's own state, in its checked order (R4-F01).
+    assert target_state(_target(), project_has_open_conflict=True) is ConstraintSourceState.CONFLICT
+    assert (
+        target_state(_target(verified=False, state="partial"), project_has_open_conflict=False)
+        is ConstraintSourceState.UNVERIFIED
+    )
+
+
+_ALL: Final = frozenset(ProgramFamily)
+
+
+def _facts(
+    project_id: str,
+    *,
+    commitments: dict[MetricId, int] | None = None,
+    issues: frozenset[str] = frozenset(),
+    legacy: int = 0,
+    legacy_closed: int = 0,
+    source: ConstraintSourceState = ConstraintSourceState.IN_SYNC,
+    constraints: dict[MetricId, int] | None = None,
+) -> ProjectFacts:
+    calendar = source is not ConstraintSourceState.CALENDAR_UNCONFIGURED
+    return ProjectFacts(
+        project_id=project_id,
+        commitment_counts=commitments or {},
+        issue_ids=issues,
+        legacy_issue_links=legacy,
+        legacy_issue_links_closed=legacy_closed,
+        constraint_source_state=source,
+        constraint_counts=(constraints or {}) if calendar else None,
+    )
+
+
+_SOURCE_REASONS: Final = {
+    ConstraintSourceState.IN_SYNC: (),
+    ConstraintSourceState.NEVER_SYNCED: (NotReportableReason.NEVER_SYNCED,),
+    ConstraintSourceState.UNVERIFIED: (NotReportableReason.SYNC_UNVERIFIED,),
+    ConstraintSourceState.SYNC_DEGRADED: (NotReportableReason.SYNC_DEGRADED,),
+    ConstraintSourceState.CONFLICT: (NotReportableReason.SYNC_CONFLICT,),
+    ConstraintSourceState.CALENDAR_UNCONFIGURED: (NotReportableReason.CALENDAR_UNCONFIGURED,),
+}
+
+
+def _expected_reasons(
+    metric: MetricId,
+    *,
+    unresolved: bool,
+    truncated: bool,
+    legacy: bool,
+    source: ConstraintSourceState,
+) -> tuple[NotReportableReason, ...]:
+    reasons: set[NotReportableReason] = set()
+    if unresolved:
+        reasons.add(NotReportableReason.MEMBERSHIP_UNRESOLVED)
+    if truncated:
+        reasons.add(NotReportableReason.MEMBERSHIP_TRUNCATED)
+    if metric in {
+        MetricId.COMMITMENT_OPEN_ACCEPTED,
+        MetricId.COMMITMENT_OVERDUE_ACCEPTED,
+        MetricId.COMMITMENT_UNSCHEDULED_ACCEPTED,
+    }:
+        reasons.add(NotReportableReason.ACCEPTANCE_UNVERIFIED)
+    if metric is MetricId.ISSUE_OUTSTANDING and legacy:
+        reasons.add(NotReportableReason.ISSUE_LINK_UNVERIFIED)
+    if metric in CONSTRAINT_METRICS:
+        reasons.update(_SOURCE_REASONS[source])
+    return tuple(sorted(reasons))
+
+
+@pytest.mark.parametrize("unresolved", [False, True])
+@pytest.mark.parametrize("truncated", [False, True])
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("source", list(ConstraintSourceState))
+def test_reportability_reasons_table(
+    unresolved: bool, truncated: bool, legacy: bool, source: ConstraintSourceState
+) -> None:
+    clean = _facts("prj_goldenclean001", issues=frozenset({"sit_goldenshared01"}))
+    gapped = _facts(
+        "prj_goldengapped01",
+        issues=frozenset({"sit_goldenshared01", "sit_goldenown00001"}),
+        legacy=1 if legacy else 0,
+        legacy_closed=2,
+        source=source,
+    )
+    for row in METRIC_CATALOGUE:
+        total = scope_total(
+            row.metric_id,
+            [clean, gapped],
+            visible=_ALL,
+            membership_unresolved=unresolved,
+            membership_truncated=truncated,
+        )
+        expected = _expected_reasons(
+            row.metric_id, unresolved=unresolved, truncated=truncated, legacy=legacy, source=source
+        )
+        assert total.reasons == expected, row.metric_id
+        # No zero is ever substituted: a gap is a `null`, a clean total a count.
+        if expected:
+            assert (total.value, total.value_state) == (None, MetricValueState.NOT_REPORTABLE)
+        else:
+            assert total.value_state is MetricValueState.REPORTED
+            assert total.value is not None
+        assert total.nonadditive_across_projects is (row.metric_id is MetricId.ISSUE_OUTSTANDING)
+        # Per Project: only the calendar and the legacy link gate a value.
+        own = project_metric(row.metric_id, gapped, visible=_ALL)
+        project_reasons: tuple[NotReportableReason, ...] = ()
+        if row.metric_id is MetricId.ISSUE_OUTSTANDING and legacy:
+            project_reasons = (NotReportableReason.ISSUE_LINK_UNVERIFIED,)
+        if (
+            row.metric_id in CONSTRAINT_METRICS
+            and source is ConstraintSourceState.CALENDAR_UNCONFIGURED
+        ):
+            project_reasons = (NotReportableReason.CALENDAR_UNCONFIGURED,)
+        assert own.reasons == project_reasons, row.metric_id
+        # An invisible family is restricted, never a count and never a reason.
+        hidden = scope_total(
+            row.metric_id,
+            [clean, gapped],
+            visible=_ALL - {row.family},
+            membership_unresolved=unresolved,
+            membership_truncated=truncated,
+        )
+        assert (hidden.value, hidden.value_state, hidden.reasons) == (
+            None,
+            MetricValueState.RESTRICTED,
+            (),
+        )
+    # The Issue grain is distinct over the scope: the shared Issue counts once.
+    issues = scope_total(
+        MetricId.ISSUE_OUTSTANDING,
+        [clean, gapped],
+        visible=_ALL,
+        membership_unresolved=False,
+        membership_truncated=False,
+    )
+    if not legacy:
+        assert issues.value == 2
+
+
+def test_commitment_acceptance_proof_is_unverified_for_native_acceptance() -> None:
+    assert (
+        commitment_acceptance_proof("accepted")
+        is AcceptanceVerification.UNVERIFIED_REVIEW_REFERENCE
+    )
+    assert commitment_acceptance_proof("proposed") is AcceptanceVerification.NOT_ACCEPTED
+    # No verification state proves acceptance in S4.
+    assert frozenset() == ACCEPTANCE_PROVING
+    facts = _facts("prj_goldenaccept01", commitments=dict.fromkeys(COMMITMENT_METRICS, 2))
+    for metric in COMMITMENT_METRICS:
+        total = scope_total(
+            metric,
+            [facts],
+            visible=_ALL,
+            membership_unresolved=False,
+            membership_truncated=False,
+        )
+        accepted = metric in {
+            MetricId.COMMITMENT_OPEN_ACCEPTED,
+            MetricId.COMMITMENT_OVERDUE_ACCEPTED,
+            MetricId.COMMITMENT_UNSCHEDULED_ACCEPTED,
+        }
+        if accepted:
+            assert (total.value, total.reasons) == (
+                None,
+                (NotReportableReason.ACCEPTANCE_UNVERIFIED,),
+            )
+            assert total.acceptance is AcceptanceVerification.UNVERIFIED_REVIEW_REFERENCE
+            # Per Project the figure is shown, marked unverified.
+            shown = project_metric(metric, facts, visible=_ALL)
+            assert (shown.value, shown.value_state) == (2, MetricValueState.REPORTED)
+            assert shown.acceptance is AcceptanceVerification.UNVERIFIED_REVIEW_REFERENCE
+        else:
+            assert (total.value, total.reasons, total.acceptance) == (2, (), None)
+
+
+def test_a_proven_acceptance_would_report_the_distinct_total() -> None:
+    projects = [
+        _facts("prj_goldenproven01", commitments={MetricId.COMMITMENT_OPEN_ACCEPTED: 3}),
+        _facts("prj_goldenproven02", commitments={MetricId.COMMITMENT_OPEN_ACCEPTED: 4}),
+    ]
+    proven = scope_total(
+        MetricId.COMMITMENT_OPEN_ACCEPTED,
+        projects,
+        visible=_ALL,
+        membership_unresolved=False,
+        membership_truncated=False,
+        acceptance_proven=True,
+    )
+    assert (proven.value, proven.value_state, proven.reasons) == (
+        7,
+        MetricValueState.REPORTED,
+        (),
+    )
+    # The other gates still apply to a proven acceptance.
+    gapped = scope_total(
+        MetricId.COMMITMENT_OPEN_ACCEPTED,
+        projects,
+        visible=_ALL,
+        membership_unresolved=True,
+        membership_truncated=False,
+        acceptance_proven=True,
+    )
+    assert gapped.reasons == (NotReportableReason.MEMBERSHIP_UNRESOLVED,)
+
+
+#: Section 5.1: `D` with its 3 read-time stamps removed, exactly as canonical text.
+_GOLDEN_D: Final = {
+    "calculation_version": "program-overview-v1",
+    "complete_state": "complete",
+    "metric_schema_version": 1,
+    "per_project": [],
+    "portfolio": {"overlaps": [], "project_ids": []},
+    "programs": [],
+    "qualifiers": ["complete"],
+}
+_GOLDEN_TEXT: Final = (
+    b'program-overview-v1\n{"calculation_version":"program-overview-v1",'
+    b'"complete_state":"complete","metric_schema_version":1,"per_project":[],'
+    b'"portfolio":{"overlaps":[],"project_ids":[]},"programs":[],"qualifiers":["complete"]}'
+)
+
+
+def test_overview_digest_golden_vectors() -> None:
+    expected = "17a12995ad4fc709a4c90569e003e42e2d36324b2a3dd8c4aaf16a517ef16b9f"
+    assert hashlib.sha256(_GOLDEN_TEXT).hexdigest() == expected
+    assert overview_digest(_GOLDEN_D) == expected
+    # The 3 read-time stamps are not in `D`.
+    stamped = {
+        **_GOLDEN_D,
+        "source_cutoff_at": "2026-10-24T12:00:00.000000Z",
+        "lineage_known_at": "2026-10-24T11:59:59.000001Z",
+        "overview_sha256": "f" * 64,
+    }
+    assert overview_digest(stamped) == expected
+    # `project_today` and every per-Project field are in it.
+    with_project = {
+        **_GOLDEN_D,
+        "per_project": [
+            {
+                "calendar": {"project_today": "2026-10-25", "timezone_name": "Pacific/Kiritimati"},
+                "metrics": [
+                    {
+                        "metric_id": "issue_outstanding",
+                        "nonadditive_across_projects": True,
+                        "reasons": [],
+                        "value": 2,
+                    }
+                ],
+                "project_id": "prj_goldenvector01",
+            }
+        ],
+    }
+    assert (
+        overview_digest(with_project)
+        == "29e1f487f56dcd90514e2d4ac68c026a2504e38a019e7214c3c4536c5178fb77"
+    )
+    next_day = json.loads(json.dumps(with_project))
+    next_day["per_project"][0]["calendar"]["project_today"] = "2026-10-26"
+    assert overview_digest(next_day) != overview_digest(with_project)
+    # Key order is not part of it; the digest of `{}` is the bare prefix's.
+    assert overview_digest(dict(reversed(list(_GOLDEN_D.items())))) == expected
+    assert overview_digest({}) == hashlib.sha256(b"program-overview-v1\n{}").hexdigest()

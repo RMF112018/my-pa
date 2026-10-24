@@ -21,17 +21,33 @@ is `null` (`lineage_known_at` and the legacy-link fields with `issue`, the
 calendar, source state, sync and source-state denominator with
 `constraint`), and the answer carries `restricted_evidence`.
 
+**The commit-time recompute (section 7.4, R4-F14).** `recompute_program_reference`
+runs this same path for a committed artifact's Program reference block, with
+the committing caller's families, on its own Program-pool snapshot under a hard
+total budget of 5000 ms (the clock starts before the checkout), and returns the
+manifest's `ProgramManifestSection`: the server's state beside the claim, or
+the failure it met. A failure is recorded, never raised: a slow Program plane
+cannot fail an Intelligence commit.
+
 Nothing here writes: the snapshot transaction is read-only and rolled back.
 """
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Collection, Mapping, Sequence
+from typing import Final
 
-from my_pa.application.errors import NotFoundError, SafeDetail
+from my_pa.application.errors import (
+    ApplicationError,
+    ConflictError,
+    InvalidRequestError,
+    NotFoundError,
+    SafeDetail,
+)
 from my_pa.application.program_constraints import ProjectConstraintFacts, read_constraint_facts
 from my_pa.application.program_membership import PROGRAM_ROOT_FAMILIES, resolve_membership_in
-from my_pa.contracts.ports import ProgramReadUnitOfWork
+from my_pa.contracts.ports import ProgramReadUnavailableError, ProgramReadUnitOfWork
 from my_pa.contracts.v1.programs import (
     ConstraintSyncView,
     MetricView,
@@ -41,6 +57,11 @@ from my_pa.contracts.v1.programs import (
     ProgramOverviewView,
     ProjectCalendarView,
     program_instant,
+)
+from my_pa.domain.intelligence.source_manifest import (
+    ProgramReferenceBlock,
+    program_section,
+    server_state,
 )
 from my_pa.domain.program.digest import overview_digest
 from my_pa.domain.program.membership import ProgramResolution, completeness
@@ -57,10 +78,19 @@ from my_pa.domain.program.vocabulary import (
     PROGRAM_METRIC_SCHEMA_VERSION,
     ProgramCompleteness,
     ProgramFamily,
+    RecomputeFailure,
 )
 from my_pa.domain.situation.situation import ProjectState
 
-__all__ = ["program_overview_in", "read_program_overview"]
+__all__ = [
+    "RECOMPUTE_BUDGET_SECONDS",
+    "program_overview_in",
+    "read_program_overview",
+    "recompute_program_reference",
+]
+
+#: Section 7.4 (R4-F22): the hard total budget of one commit-time recompute.
+RECOMPUTE_BUDGET_SECONDS: Final = 5.0
 
 #: The 3 families the overview's metrics derive from; any one invisible makes
 #: the answer `restricted_evidence`.
@@ -256,3 +286,65 @@ def read_program_overview(
         return program_overview_in(
             unit_of_work, principal_id, program_entity_ids, families=families
         )
+
+
+def _program_failure(error: ApplicationError) -> RecomputeFailure | None:
+    """A Program the block names that is now absent (or invisible), or no longer a Program."""
+    if SafeDetail.PROGRAM_ENTITY_IDS not in error.safe_details:
+        return None
+    if isinstance(error, NotFoundError):
+        return RecomputeFailure.PROGRAM_NOT_FOUND
+    if isinstance(error, (InvalidRequestError, ConflictError)):
+        # Not program-typed, or a redirect chain that no longer resolves.
+        return RecomputeFailure.PROGRAM_INVALID
+    return None
+
+
+def recompute_program_reference(
+    unit_of_work_factory: Callable[[], ProgramReadUnitOfWork] | None,
+    principal_id: str,
+    block: ProgramReferenceBlock,
+    *,
+    families: frozenset[ProgramFamily],
+) -> dict[str, object]:
+    """Section 7.4 step 2-3: the manifest's Program section for one reference block.
+
+    `unit_of_work_factory` is `None` when `programs.overview` is not served by
+    this build or does not admit the committing caller (its remote grant
+    re-check and the `entity` and `project` families): the section records
+    `not_attempted` and nothing is read. Otherwise the `programs.overview`
+    path runs with the caller's `families` under the 5000 ms total budget; the
+    clock starts before the checkout (which waits at most the Program engine's
+    1 s), and every statement runs under `min(2000, remaining)` ms. The
+    server's `overview_sha256` equal to the claim is `verified_at_commit`, else
+    `changed_since_read`; a spent budget, a statement timeout, no Program-pool
+    connection, or a Program now absent or not program-typed is
+    `recompute_failed` with its token. Any other fault propagates.
+    """
+    if unit_of_work_factory is None:
+        return program_section(block)
+    deadline = time.monotonic() + RECOMPUTE_BUDGET_SECONDS
+    failure: RecomputeFailure | None = None
+    try:
+        with unit_of_work_factory() as unit_of_work:
+            unit_of_work.limit_to_deadline(deadline)
+            view = program_overview_in(
+                unit_of_work, principal_id, block.program_entity_ids, families=families
+            )
+    except ProgramReadUnavailableError as error:
+        if error.reason == "pool_unavailable":
+            failure = RecomputeFailure.POOL_UNAVAILABLE
+        elif error.reason == "budget_exceeded" or time.monotonic() >= deadline:
+            # A statement cancelled at the remaining budget spent the budget.
+            failure = RecomputeFailure.BUDGET_EXCEEDED
+        else:
+            failure = RecomputeFailure.STATEMENT_TIMEOUT
+    except ApplicationError as error:
+        failure = _program_failure(error)
+        if failure is None:
+            raise
+    if failure is not None:
+        return program_section(block, failure=failure)
+    return program_section(
+        block, server=server_state(view.to_canonical_dict()), families_seen=families
+    )

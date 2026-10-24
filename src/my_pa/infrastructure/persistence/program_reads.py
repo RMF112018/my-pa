@@ -17,15 +17,25 @@ snapshot read never waits on a row lock, so the wait-for graph has no cycle.
 The transaction never writes (PostgreSQL refuses a write in a read-only
 transaction) and `__exit__` always rolls back. Every statement it issues is
 Principal-scoped.
+
+**The commit-time recompute's total budget** (section 7.4, R4-F22):
+`limit_to_deadline` installs a `before_cursor_execute` hook on the snapshot
+connection, so *every* statement on it -- the S4 repositories' own and the
+unchanged Constraint portfolio path's alike -- first computes the remaining
+budget, refuses to start at a non-positive remainder (`budget_exceeded`), and
+otherwise runs under `SET LOCAL statement_timeout = min(2000, remaining)`
+milliseconds, issued on the same DBAPI cursor just before it.
 """
 
 from __future__ import annotations
 
+import math
+import time
 from collections.abc import Callable
 from types import TracebackType
-from typing import Final
+from typing import Any, Final
 
-from sqlalchemy import Connection, Engine, bindparam, text
+from sqlalchemy import Connection, Engine, bindparam, event, text
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 from my_pa.contracts.ports import (
@@ -43,7 +53,11 @@ from my_pa.infrastructure.persistence.program_membership import (
 )
 from my_pa.infrastructure.persistence.program_metrics import SqlProgramMetricsRepository
 
-__all__ = ["SqlAlchemyProgramReadUnitOfWork"]
+__all__ = ["PROGRAM_STATEMENT_BUDGET_MS", "SqlAlchemyProgramReadUnitOfWork"]
+
+#: S4 sections 6.3 and 7.4: the per-statement budget of a Program read (the
+#: Program engine's `statement_timeout`), and the cap of a budgeted statement.
+PROGRAM_STATEMENT_BUDGET_MS: Final = 2000
 
 #: S4 section 3.4: the first query takes the snapshot, and reads its own instant
 #: and the Principal's committed lineage horizon `H` in that one statement.
@@ -62,6 +76,7 @@ class SqlAlchemyProgramReadUnitOfWork(ProgramReadUnitOfWork):
         self._connection: Connection | None = None
         self._snapshot: ProgramSnapshot | None = None
         self._principal_id: str | None = None
+        self._deadline_hook: Callable[..., None] | None = None
 
     def __enter__(self) -> ProgramReadUnitOfWork:
         if self._connection is not None:
@@ -101,12 +116,16 @@ class SqlAlchemyProgramReadUnitOfWork(ProgramReadUnitOfWork):
         traceback: TracebackType | None,
     ) -> None:
         connection = self._connection
+        hook = self._deadline_hook
         self._connection = None
         self._snapshot = None
         self._principal_id = None
+        self._deadline_hook = None
         if connection is None:
             return
         try:
+            if hook is not None:
+                event.remove(connection, "before_cursor_execute", hook)
             connection.rollback()
         finally:
             connection.close()
@@ -138,6 +157,29 @@ class SqlAlchemyProgramReadUnitOfWork(ProgramReadUnitOfWork):
             raise ValueError("a statement timeout is a positive number of milliseconds")
         # `SET LOCAL` takes no bind parameter; the value is a validated integer.
         self.connection.execute(text(f"SET LOCAL statement_timeout = {milliseconds}"))
+
+    def limit_to_deadline(self, deadline: float) -> None:
+        connection = self.connection
+        if self._deadline_hook is not None:
+            raise RuntimeError("this snapshot already has a deadline")
+
+        def before(
+            _connection: Connection,
+            cursor: Any,  # noqa: ANN401 - the DBAPI cursor
+            _statement: str,
+            _parameters: object,
+            _context: object,
+            _executemany: bool,
+        ) -> None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ProgramReadUnavailableError("budget_exceeded")
+            milliseconds = min(PROGRAM_STATEMENT_BUDGET_MS, math.ceil(remaining * 1000))
+            # A validated integer; `SET LOCAL` takes no bind parameter.
+            cursor.execute(f"SET LOCAL statement_timeout = {milliseconds}")
+
+        event.listen(connection, "before_cursor_execute", before)
+        self._deadline_hook = before
 
     def guarded[ResultT](self, read: Callable[[], ResultT]) -> ResultT:
         return program_statement(read)

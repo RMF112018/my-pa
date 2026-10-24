@@ -10535,9 +10535,11 @@ class ProgramReadUnavailableError(PortError):
     """A Program read could not complete in its budget (S4 sections 6.3 and 7.5).
 
     `reason` is `statement_timeout` (a statement cancelled by its
-    `statement_timeout`) or `pool_unavailable` (no Program-pool connection
-    within the Program engine's checkout timeout). A Program read answers
-    `unavailable`; a commit-time recompute records it as `recompute_failed`.
+    `statement_timeout`), `pool_unavailable` (no Program-pool connection
+    within the Program engine's checkout timeout) or `budget_exceeded` (a
+    commit-time recompute's total budget was spent before a statement, section
+    7.4). A Program read answers `unavailable`; a commit-time recompute records
+    it as `recompute_failed`.
     The read's transaction is lost with it.
     """
 
@@ -10702,6 +10704,17 @@ class ProgramReadUnitOfWork(ABC):
     @abstractmethod
     def set_statement_timeout(self, milliseconds: int) -> None:
         """`SET LOCAL statement_timeout` for the remaining statements (S4 section 7.4)."""
+
+    @abstractmethod
+    def limit_to_deadline(self, deadline: float) -> None:
+        """Hold every later statement to a total budget ending at `deadline` (S4 section 7.4).
+
+        `deadline` is a `time.monotonic()` instant. Before each statement on this
+        snapshot the remaining budget is computed: a non-positive remainder is
+        `ProgramReadUnavailableError("budget_exceeded")` and the statement is not
+        sent; otherwise it runs under `SET LOCAL statement_timeout =
+        min(2000, remaining)` milliseconds, so no statement outlives the budget.
+        """
 
     @abstractmethod
     def guarded[ResultT](self, read: Callable[[], ResultT]) -> ResultT:

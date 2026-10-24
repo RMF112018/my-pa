@@ -8,26 +8,33 @@ Program section (section 5.4). Pure: the caller hands in what it read back from
 the committing transaction.
 
 `J` is the one canonical encoding: sorted keys, compact separators, ASCII
-escapes, no NaN. Every instant is UTC with 6 fractional digits and a literal
-`Z` (the S3 `_lineage_instant` format). The database CHECK
-`a_report_manifest_digest_is_its_canonical_text` recomputes the digest from the
-stored canonical text.
+escapes, no NaN. `ensure_ascii` escapes every character outside `0x20`-`0x7e`
+-- the C0 controls, DEL (`0x7f`, as `\u007f`) and everything non-ASCII -- so a
+manifest is always printable ASCII (`a_manifest_is_printable_ascii`), whatever
+a provenance reference holds; a golden vector pins it. Every instant is UTC
+with 6 fractional digits and a literal `Z` (the S3 `_lineage_instant` format).
+The database CHECK `a_report_manifest_digest_is_its_canonical_text` recomputes
+the digest from the stored canonical text.
 
-This module carries the part worker M1 needs so every artifact committed after
-the S4 revision has its manifest (the deferred `an_artifact_has_its_manifest`);
-the Program reference block's validation and the commit-time recompute are
-worker M5's (S4 contract section 9).
+Section 5.4: `program_reference_block` validates the reserved
+`program_overview_ref` block of a synthesizer, reporter or morning-brief
+artifact, and `program_section` / `server_state` build the manifest's
+`ProgramManifestSection` from the claim and, when the commit-time recompute
+ran, the server's overview as the committing caller saw it. `program_released`
+is section 6.2's `reports.manifest` gate over a stored manifest.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+import re
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Final
+from typing import Final, cast
 
+from my_pa.domain.common.identifiers import IdKind, InvalidIdentifierError, validate_identifier
 from my_pa.domain.common.time import ensure_utc
 from my_pa.domain.intelligence.catalog import IntelligenceStage
 from my_pa.domain.intelligence.models import (
@@ -35,19 +42,34 @@ from my_pa.domain.intelligence.models import (
     IntelligenceProvenanceRef,
 )
 from my_pa.domain.program.vocabulary import (
+    MAX_PROGRAMS_PER_REQUEST,
+    PROGRAM_OVERVIEW_FAMILIES,
+    PROGRAM_REFERENCE_BLOCK_KEY,
     REPORT_MANIFEST_SCHEMA_VERSION,
     CandidateStatus,
     ManifestState,
+    ProgramFamily,
+    ProgramVerificationState,
+    RecomputeFailure,
 )
 
 __all__ = [
     "MANIFEST_DIGEST_PREFIX",
+    "PROGRAM_REFERENCE_STAGES",
     "STRUCTURED_CONTENT_DIGEST_PREFIX",
     "BuiltManifest",
     "DependencyDigests",
+    "ProgramReferenceBlock",
+    "ProgramReferenceError",
+    "RecordedManifest",
     "build_manifest",
     "canonical",
+    "manifest_digest",
     "manifest_instant",
+    "program_reference_block",
+    "program_released",
+    "program_section",
+    "server_state",
     "structured_content_sha256",
 ]
 
@@ -73,6 +95,11 @@ def manifest_instant(value: datetime) -> str:
 
 def _optional_instant(value: datetime | None) -> str | None:
     return None if value is None else manifest_instant(value)
+
+
+def manifest_digest(manifest_canonical: str) -> str:
+    """Section 7.4: what a client recomputes, `sha256(b"report-manifest-v1\\n" + text)`."""
+    return hashlib.sha256(MANIFEST_DIGEST_PREFIX + manifest_canonical.encode("ascii")).hexdigest()
 
 
 def structured_content_sha256(value: Mapping[str, object] | None) -> str | None:
@@ -203,3 +230,243 @@ def build_manifest(
         program_overview_sha256=None if claimed is None else str(claimed),
         program_verification_state=None if state is None else str(state),
     )
+
+
+# ---- section 5.4: the Program reference block and the manifest's Program section ----
+
+#: Section 7.4: the stages that may carry a Program reference block; a
+#: collector or researcher artifact is refused one.
+PROGRAM_REFERENCE_STAGES: Final = frozenset(
+    {
+        IntelligenceStage.SYNTHESIZER,
+        IntelligenceStage.REPORTER,
+        IntelligenceStage.MORNING_BRIEF,
+    }
+)
+#: Section 5.4: the version of the block's shape.
+_BLOCK_SCHEMA_VERSION: Final = 1
+_BLOCK_KEYS: Final = frozenset(
+    {"block_schema_version", "program_entity_ids", "overview_sha256", "source_cutoff_at"}
+)
+_SHA256_HEX: Final = re.compile(r"\A[0-9a-f]{64}\Z")
+_INSTANT_FORMAT: Final = "%Y-%m-%dT%H:%M:%S.%fZ"
+
+
+class ProgramReferenceError(ValueError):
+    """A `program_overview_ref` block that is malformed or on a stage that may not carry one.
+
+    The application answers `invalid_request` / `structured_content` (section 7.5).
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramReferenceBlock:
+    """Section 5.4: the Programs an overview was read for, and what the producer says it read."""
+
+    program_entity_ids: tuple[str, ...]
+    overview_sha256: str
+    source_cutoff_at: str
+
+
+def _is_instant_token(value: object) -> bool:
+    """Exactly the section 5.3 instant format: it parses and re-renders unchanged."""
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = datetime.strptime(value, _INSTANT_FORMAT)
+    except ValueError:
+        return False
+    return parsed.strftime(_INSTANT_FORMAT) == value
+
+
+def _entity_ids(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list) or not 1 <= len(value) <= MAX_PROGRAMS_PER_REQUEST:
+        raise ProgramReferenceError("program_entity_ids holds 1..10 Entity ids")
+    ids: list[str] = []
+    for item in value:
+        try:
+            ids.append(validate_identifier(cast(str, item), IdKind.ENTITY))
+        except InvalidIdentifierError:
+            raise ProgramReferenceError("program_entity_ids holds Entity ids") from None
+    if len(set(ids)) != len(ids):
+        raise ProgramReferenceError("program_entity_ids are distinct")
+    return tuple(ids)
+
+
+def program_reference_block(
+    structured_content: Mapping[str, object] | None, *, stage: IntelligenceStage
+) -> ProgramReferenceBlock | None:
+    """Section 5.4 / 7.4: the artifact's Program reference block, or `None` when it has none.
+
+    Pure. A block must have exactly the 4 keys -- `block_schema_version` the
+    integer 1, `program_entity_ids` 1..10 distinct `ent_` ids, `overview_sha256`
+    64 lowercase hex, `source_cutoff_at` in the section 5.3 instant format --
+    and the stage must be a synthesizer, reporter or morning brief; anything
+    else is `ProgramReferenceError`.
+    """
+    if structured_content is None or PROGRAM_REFERENCE_BLOCK_KEY not in structured_content:
+        return None
+    if stage not in PROGRAM_REFERENCE_STAGES:
+        raise ProgramReferenceError("a collector or researcher carries no Program reference")
+    block = structured_content[PROGRAM_REFERENCE_BLOCK_KEY]
+    if not isinstance(block, Mapping) or set(block) != _BLOCK_KEYS:
+        raise ProgramReferenceError("a Program reference block has exactly its 4 keys")
+    version = block["block_schema_version"]
+    # `True == 1` in Python; a boolean is not the integer 1.
+    if type(version) is not int or version != _BLOCK_SCHEMA_VERSION:
+        raise ProgramReferenceError("block_schema_version is 1")
+    digest = block["overview_sha256"]
+    if not isinstance(digest, str) or _SHA256_HEX.match(digest) is None:
+        raise ProgramReferenceError("overview_sha256 is 64 lowercase hex")
+    cutoff = block["source_cutoff_at"]
+    if not _is_instant_token(cutoff):
+        raise ProgramReferenceError("source_cutoff_at is a section 5.3 instant")
+    return ProgramReferenceBlock(
+        program_entity_ids=_entity_ids(block["program_entity_ids"]),
+        overview_sha256=digest,
+        source_cutoff_at=cast(str, cutoff),
+    )
+
+
+def server_state(overview: Mapping[str, object]) -> dict[str, object]:
+    """Section 5.3 `server`: the recomputed `programs.overview` answer, as served.
+
+    `overview` is that answer's canonical form (`ProgramOverviewView`), already
+    restricted to the committing caller's families: a `restricted` value stays
+    `restricted` and a `not_reportable` one stays `null`. `scope` is the
+    requested Program id, or `"portfolio"`; totals keep the answer's order
+    (requested Programs, then the portfolio, each in catalogue order).
+    """
+    programs = cast(Sequence[Mapping[str, object]], overview["programs"])
+    portfolio = cast(Mapping[str, object], overview["portfolio"])
+
+    def totals(scope: str, rows: object) -> list[dict[str, object]]:
+        return [
+            {
+                "scope": scope,
+                "metric_id": row["metric_id"],
+                "value": row["value"],
+                "value_state": row["value_state"],
+                "reasons": list(cast(Sequence[str], row["reasons"])),
+            }
+            for row in cast(Sequence[Mapping[str, object]], rows)
+        ]
+
+    return {
+        "overview_sha256": overview["overview_sha256"],
+        "source_cutoff_at": overview["source_cutoff_at"],
+        "lineage_known_at": overview["lineage_known_at"],
+        "metric_schema_version": overview["metric_schema_version"],
+        "calculation_version": overview["calculation_version"],
+        "complete_state": overview["complete_state"],
+        "qualifiers": list(cast(Sequence[str], overview["qualifiers"])),
+        "membership": [
+            {
+                "program_entity_id": program["program_entity_id"],
+                "resolved_program_entity_id": program["resolved_program_entity_id"],
+                "membership_state": program["membership_state"],
+                "project_ids": list(cast(Sequence[str], program["project_ids"])),
+            }
+            for program in programs
+        ],
+        "portfolio_project_ids": list(cast(Sequence[str], portfolio["project_ids"])),
+        "totals": [
+            *(
+                row
+                for program in programs
+                for row in totals(cast(str, program["program_entity_id"]), program["totals"])
+            ),
+            *totals("portfolio", portfolio["totals"]),
+        ],
+    }
+
+
+def program_section(
+    block: ProgramReferenceBlock,
+    *,
+    server: Mapping[str, object] | None = None,
+    families_seen: Collection[ProgramFamily] | None = None,
+    failure: RecomputeFailure | None = None,
+) -> dict[str, object]:
+    """Section 5.3 `ProgramManifestSection`: the claim beside what the server found.
+
+    With `server` (and `families_seen`) the recompute ran: `verified_at_commit`
+    exactly when the server's `overview_sha256` equals the claimed one, else
+    `changed_since_read`. With `failure` it was attempted and failed:
+    `recompute_failed`. With neither it was not attempted: only the claim.
+    """
+    if (server is None) != (families_seen is None):
+        raise ValueError("a server state is bound together with the families it was read with")
+    if server is not None and failure is not None:
+        raise ValueError("a recompute either produced a server state or failed")
+    seen: list[str] | None = None
+    if server is None:
+        state = (
+            ProgramVerificationState.NOT_ATTEMPTED
+            if failure is None
+            else ProgramVerificationState.RECOMPUTE_FAILED
+        )
+    else:
+        state = (
+            ProgramVerificationState.VERIFIED_AT_COMMIT
+            if server["overview_sha256"] == block.overview_sha256
+            else ProgramVerificationState.CHANGED_SINCE_READ
+        )
+        # R4-F23: only the overview's 5 families, never `situation`.
+        seen = sorted(
+            family.value
+            for family in set(cast(Collection[ProgramFamily], families_seen))
+            if family in PROGRAM_OVERVIEW_FAMILIES
+        )
+    return {
+        "block_schema_version": _BLOCK_SCHEMA_VERSION,
+        "program_entity_ids": list(block.program_entity_ids),
+        "claimed_overview_sha256": block.overview_sha256,
+        "claimed_source_cutoff_at": block.source_cutoff_at,
+        "verification_state": state.value,
+        "recompute_failure": None if failure is None else failure.value,
+        "families_seen": seen,
+        "server": None if server is None else dict(server),
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class RecordedManifest:
+    """One stored `intelligence_artifact_manifests` row, as `reports.manifest` reads it."""
+
+    manifest_schema_version: int
+    manifest_canonical: str
+    manifest_sha256: str
+    structured_content_sha256: str | None
+    program_overview_sha256: str | None
+    program_verification_state: str | None
+
+
+def program_released(
+    manifest: RecordedManifest,
+    *,
+    families: Collection[ProgramFamily],
+    holds_program_grant: bool,
+) -> bool:
+    """Section 6.2: whether a **remote** reader may read this manifest in full.
+
+    A manifest whose Program state is `null` or `not_attempted` carries only
+    producer-supplied content and is ungated. Every other one -- verified,
+    changed or `recompute_failed` (R4-F27) -- needs a `programs.overview`
+    grant for `program_reporting_read` (R4-F21), the `entity` and `project`
+    families, and, when it binds a server state, every family in its
+    `families_seen` (R4-F14).
+    """
+    state = manifest.program_verification_state
+    if state is None or state == ProgramVerificationState.NOT_ATTEMPTED.value:
+        return True
+    if not holds_program_grant:
+        return False
+    visible = {ProgramFamily(family) for family in families}
+    if not {ProgramFamily.ENTITY, ProgramFamily.PROJECT} <= visible:
+        return False
+    program = cast(Mapping[str, object], json.loads(manifest.manifest_canonical)["program"])
+    if program["server"] is None:
+        return True
+    seen = cast(Sequence[str], program["families_seen"])
+    return {ProgramFamily(family) for family in seen} <= visible

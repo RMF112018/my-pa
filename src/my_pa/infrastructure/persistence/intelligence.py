@@ -39,6 +39,7 @@ from my_pa.domain.intelligence.models import (
 )
 from my_pa.domain.intelligence.source_manifest import (
     DependencyDigests,
+    RecordedManifest,
     build_manifest,
     structured_content_sha256,
 )
@@ -439,6 +440,35 @@ class SqlIntelligenceStore:
             self._context,
         )
         self._connection.execute(intelligence_artifact_manifests.insert().values(**values))
+
+    def get_manifest(self, principal_id: str, artifact_id: str) -> RecordedManifest | None:
+        """The stored manifest row, unchanged; `None` for a legacy artifact (S4 7.4).
+
+        A read only: a legacy artifact is never given a manifest here.
+        """
+        row = (
+            self._connection.execute(
+                principal_scoped(
+                    select(intelligence_artifact_manifests).where(
+                        intelligence_artifact_manifests.c.artifact_id == artifact_id
+                    ),
+                    intelligence_artifact_manifests,
+                    self._context,
+                )
+            )
+            .mappings()
+            .first()
+        )
+        if row is None:
+            return None
+        return RecordedManifest(
+            manifest_schema_version=int(row["manifest_schema_version"]),
+            manifest_canonical=str(row["manifest_canonical"]),
+            manifest_sha256=str(row["manifest_sha256"]),
+            structured_content_sha256=row["structured_content_sha256"],
+            program_overview_sha256=row["program_overview_sha256"],
+            program_verification_state=row["program_verification_state"],
+        )
 
     def mark_superseded(self, principal_id: str, artifact_id: str) -> None:
         self._connection.execute(

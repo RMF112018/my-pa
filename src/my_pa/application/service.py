@@ -508,6 +508,7 @@ from my_pa.application.identity_history import (
     IdentityHistoryService,
 )
 from my_pa.application.intelligence import (
+    IntelligenceStore,
     begin_cycle,
     commit_artifact,
     latest_artifact,
@@ -570,8 +571,12 @@ from my_pa.application.meetings import (
 )
 from my_pa.application.model_gate import BoundedModelGate
 from my_pa.application.producer_origin import ProducerOriginError, ProducerOriginRegistry
-from my_pa.application.program_membership import program_families, resolve_program_members
-from my_pa.application.program_work import read_program_overview
+from my_pa.application.program_membership import (
+    PROGRAM_ROOT_FAMILIES,
+    program_families,
+    resolve_program_members,
+)
+from my_pa.application.program_work import read_program_overview, recompute_program_reference
 from my_pa.application.record_events import (
     MemoryDisclosure,
     list_record_events,
@@ -690,6 +695,7 @@ from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
 from my_pa.contracts.v1.issues import HandoffView
 from my_pa.contracts.v1.meetings import MeetingNoteVersionEntry, MeetingNoteVersionView
 from my_pa.contracts.v1.record_lineage import EvidenceAnchorView
+from my_pa.contracts.v1.report_manifests import ReportManifestView
 from my_pa.contracts.v1.reveal import RevealView
 from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.contracts.v1.tasks import (
@@ -757,6 +763,7 @@ from my_pa.domain.identity.operator_surface import OperatorSurface
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.intelligence.models import ReportTypeDefinition
+from my_pa.domain.intelligence.source_manifest import ProgramReferenceBlock, program_released
 from my_pa.domain.knowledge_assertion.checkpoint import CheckpointSeal
 from my_pa.domain.knowledge_assertion.vocabulary import (
     KnowledgeAssertionLifecycle,
@@ -14197,9 +14204,10 @@ class ApplicationService:
     # ---- record lineage S4 Program reporting (ADR-015; S4 contract section 7) ----
     #
     # Seven read handlers: the switches first (section 7.6), then for the 2
-    # Program reads their composition checks. The use cases are not implemented
-    # in this change: after those checks each handler answers `unsupported`,
-    # reading nothing, until its worker lands it (the S3 L1 precedent, D-37).
+    # Program reads their composition checks, then each handler's remote grant
+    # re-check (section 6.1), before any read. `_reports_manifest` follows the
+    # v2 reads, with `_program_reference_recompute`, which `_reports_commit`
+    # hands to `commit_artifact` (section 7.4).
 
     def _programs_members_resolve(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ResolveProgramMembers
@@ -14538,10 +14546,71 @@ class ApplicationService:
     def _reports_manifest(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadReportManifest
     ) -> _Result:
-        """`reports.manifest`: not implemented in this change (`unsupported`)."""
-        del unit_of_work, authorization, command
+        """`reports.manifest`: an artifact's immutable report manifest (S4 section 7.4).
+
+        The switches (section 7.6), then the remote grant re-check (section
+        6.1: `unsupported`), then the artifact (absent and foreign are
+        `not_found` / `artifact_id`, as `reports.read`), then its stored
+        manifest: `recorded` unchanged, `manifest_unavailable_legacy` with
+        nothing written, or -- section 6.2's rule for a manifest whose Program
+        state is not `not_attempted` -- `restricted_evidence` with neither the
+        text nor its digest.
+        """
         self._program_plane()
-        raise UnsupportedError()
+        grants = authorization.capability_grants
+        require_read_grant(grants, command.capability)
+        principal_id = authorization.principal.principal_id
+        store = cast(IntelligenceStore, self._intelligence_store(unit_of_work, authorization))
+        artifact = read_artifact(store, principal_id=principal_id, artifact_id=command.report_id)
+        manifest = store.get_manifest(principal_id, artifact.artifact_id)
+        released = (
+            grants is None
+            or manifest is None
+            or program_released(
+                manifest,
+                families=program_families(grants),
+                holds_program_grant=Purpose.PROGRAM_REPORTING_READ
+                in granted_purposes(Capability.PROGRAMS_OVERVIEW, grants),
+            )
+        )
+        view = ReportManifestView.of(artifact.artifact_id, manifest, released=released)
+        return _Result(
+            payload=view.to_canonical_dict(),
+            disclosure=unenrolled_disclosure(authorization.at),
+        )
+
+    def _program_reference_recompute(
+        self, authorization: Authorization
+    ) -> Callable[[ProgramReferenceBlock], Mapping[str, object]] | None:
+        """S4 section 7.4: the `reports.commit` recompute of a Program reference block.
+
+        `None` -- the key is ordinary structured content -- unless the 7 S4
+        names are admitted (both switches). Otherwise the recompute runs only
+        when `programs.overview` is served by this build and admits the
+        committing caller (its remote grant re-check and the `entity` and
+        `project` families), with that caller's section 6.2 families, on the
+        Program read pool; else the manifest records `not_attempted`, which
+        depends only on the build and the caller's own grants (R4-F24).
+        """
+        if not (self._lineage_enabled and self._program_reporting_enabled):
+            return None
+        grants = authorization.capability_grants
+        principal_id = authorization.principal.principal_id
+        families = program_families(grants)
+        factory = self._program_read_unit_of_work
+        admitted = (
+            factory is not None
+            and Capability.PROGRAMS_OVERVIEW in self.available_capabilities
+            and (grants is None or bool(granted_purposes(Capability.PROGRAMS_OVERVIEW, grants)))
+            and families >= PROGRAM_ROOT_FAMILIES
+        )
+
+        def recompute(block: ProgramReferenceBlock) -> Mapping[str, object]:
+            return recompute_program_reference(
+                factory if admitted else None, principal_id, block, families=families
+            )
+
+        return recompute
 
     def _records_lineage(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadRecordLineage
@@ -15490,6 +15559,7 @@ class ApplicationService:
             supersedes_artifact_id=command.supersedes_artifact_id,
             advisory_digest=command.advisory_digest,
             completeness=command.completeness,
+            program_reference=self._program_reference_recompute(authorization),
         )
         artifact = admission.artifact
         if artifact is None:

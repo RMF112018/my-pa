@@ -367,6 +367,7 @@ __all__ = [
     "CaptureSummary",
     "CommitmentManagementRepository",
     "CommitmentManagementUnitOfWork",
+    "CommitmentReferenceOwners",
     "ConstraintManagementRepository",
     "ConstraintManagementUnitOfWork",
     "ConstraintRevisionSnapshot",
@@ -7902,6 +7903,18 @@ class TaskManagementRepository(ABC):
         """The deterministic follow-up Task for one Principal-owned Commitment, if present."""
         raise NotImplementedError
 
+    def follow_ups_for_commitments(
+        self, principal_id: str, commitment_ids: Sequence[str]
+    ) -> Mapping[str, TaskAggregate]:
+        """`get_follow_up_for_commitment` for a set of Commitments, in one statement.
+
+        Record lineage S4 section 7.3: a `commitments.v2.waiting_on` page reads
+        its follow-up Tasks once, whatever its size. Keyed by Commitment, holding
+        only Commitments that have one; each value is the Task the single read
+        would answer.
+        """
+        raise NotImplementedError
+
     # --- WP-TUX-01: append-only Task comments --------------------------------
     #
     # Comments are their own immutable receipts. They do not advance
@@ -7996,6 +8009,20 @@ class CounterpartyOption:
             raise ValueError("a counterparty display name is not blank")
 
 
+@dataclass(frozen=True, slots=True)
+class CommitmentReferenceOwners:
+    """Which stored Commitment references name this Principal's own records (S4 7.3).
+
+    `projects` are the given Project ids that are this Principal's Projects;
+    `situation_kinds` maps each given Situation id that is this Principal's
+    Situation to its `kind` (`context` or `issue_workstream`). An id that names
+    another Principal's record, or nothing, is in neither.
+    """
+
+    projects: frozenset[str]
+    situation_kinds: Mapping[str, str]
+
+
 class CommitmentManagementRepository(ABC):
     """`knowledge.commitments` and `knowledge.commitment_history`, inside one transaction.
 
@@ -8064,12 +8091,15 @@ class CommitmentManagementRepository(ABC):
         work_end: datetime | None = None,
         after: str | None = None,
         limit: int,
+        project_ids: Sequence[str] | None = None,
     ) -> tuple[CommitmentAggregate, ...]:
         """One bounded page of this Principal's own commitments, newest created first.
 
         `direction`, `state`, and `evidence_state`, when given, are exact matches — the same
         structured-filter shape `TaskManagementRepository.list_tasks` gives
-        `lifecycle_state`/`priority`.
+        `lifecycle_state`/`priority`. `project_ids` (record lineage S4 section
+        7.3, `commitments.v2.*` only) keeps the rows whose stored `project_id` is
+        one of them, inside the same order and keyset; `None` is no filter.
         """
 
     @abstractmethod
@@ -8111,8 +8141,39 @@ class CommitmentManagementRepository(ABC):
         work_view: CommitmentWorkView | None = None,
         work_start: datetime | None = None,
         work_end: datetime | None = None,
+        project_ids: Sequence[str] | None = None,
     ) -> tuple[CommitmentAggregate, ...]:
-        """One bounded lexical page over summaries, optionally after an opaque row ID."""
+        """One bounded lexical page over summaries, optionally after an opaque row ID.
+
+        `project_ids` filters as `list_commitments` states (S4 section 7.3).
+        """
+        raise NotImplementedError
+
+    def counterparties(
+        self, principal_id: str, entity_ids: Sequence[str]
+    ) -> Mapping[str, CounterpartyOption]:
+        """`counterparty` for a set of Entities, in one statement (S4 section 7.3).
+
+        Keyed by Entity, holding only those `counterparty` would answer; a v2
+        page reads its counterparty projections once, whatever its size.
+        """
+        raise NotImplementedError
+
+    def reference_owners(
+        self,
+        principal_id: str,
+        *,
+        project_ids: Sequence[str],
+        situation_ids: Sequence[str],
+    ) -> CommitmentReferenceOwners:
+        """Which of these ids name this Principal's Projects and Situations, in one statement.
+
+        Record lineage S4 section 7.3 (D-16): `commitments.project_id` and
+        `situation_id` carry global foreign keys, so a stored id may name
+        another Principal's record; a v2 view shows only an owned one. The
+        Situation's `kind` comes back in the same statement (section 6.2,
+        R4-F17). Also the one statement that checks a `project_ids` filter.
+        """
         raise NotImplementedError
 
 

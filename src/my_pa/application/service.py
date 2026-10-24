@@ -366,6 +366,11 @@ from my_pa.application.commands import (
     WaitingOnV2,
 )
 from my_pa.application.commitments import CommitmentManagementService, CommitmentMutationReceipt
+from my_pa.application.commitments_v2 import (
+    page_follow_ups,
+    read_commitment_page,
+    require_owned_projects,
+)
 from my_pa.application.constraint_management import (
     ConstraintCategoryMutationResult,
     ConstraintCategoryNotFoundError,
@@ -669,6 +674,11 @@ from my_pa.contracts.v1.commitments import (
     CommitmentView,
     WaitingOnEntry,
 )
+from my_pa.contracts.v1.commitments_v2 import (
+    CommitmentV2ListEntry,
+    CommitmentV2View,
+    WaitingOnV2Entry,
+)
 from my_pa.contracts.v1.disclosure import Disclosure, SourceReference, Truncation
 from my_pa.contracts.v1.documents import (
     ManagedDocumentListEntry,
@@ -780,6 +790,7 @@ from my_pa.domain.policy.knowledge_review_authority import (
 from my_pa.domain.program.vocabulary import (
     PROGRAM_READ_CAPABILITIES,
     PROGRAM_REPORTING_CAPABILITIES,
+    ProgramFamily,
 )
 from my_pa.domain.project_controls.business_time import ProjectTimezoneError
 from my_pa.domain.project_controls.category import ConstraintCategoryError
@@ -1698,6 +1709,24 @@ def _work_window(
     local_start = datetime.combine(first_date, datetime.min.time(), zone)
     local_end = datetime.combine(work_date + timedelta(days=1), datetime.min.time(), zone)
     return local_start.astimezone(UTC), local_end.astimezone(UTC)
+
+
+def _commitment_work_bounds(
+    work_view: CommitmentWorkView | None, work_date: date | None, timezone: str | None
+) -> tuple[datetime | None, datetime | None]:
+    """The UTC bounds a v1 Commitment page computes for its work view (S4 v2 siblings).
+
+    Exactly the `commitments.list` / `commitments.search` rule: both bounds
+    only when a work view and a work date are given, in `timezone` (UTC when
+    omitted).
+    """
+    if work_view is None or work_date is None:
+        return None, None
+    return _work_window(
+        work_date,
+        timezone or "UTC",
+        recent=work_view is CommitmentWorkView.RECENTLY_UPDATED,
+    )
 
 
 def _task_history_view(entry: TaskManagementHistoryEntry) -> TaskHistoryEntryView:
@@ -14207,37 +14236,285 @@ class ApplicationService:
         self._program_read_plane(overview=True)
         raise UnsupportedError()
 
+    # ---- commitments.v2.* (S4 contract section 7.3; worker M3) ----
+    #
+    # Each takes exactly its v1 sibling's request (plus an optional
+    # `project_ids` on the 3 page reads) and answers exactly its top-level keys,
+    # with v2 Commitment objects. The switch first, then the remote grant
+    # re-check (section 6.1), then the `project_ids` ownership check, then the
+    # v1 read with the filter; the reference check, the counterparty
+    # projections and a `waiting_on` page's follow-up Tasks are read once per
+    # page (`application.commitments_v2`). The v1 handlers are not changed.
+
     def _commitments_v2_read(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadCommitmentV2
     ) -> _Result:
-        """`commitments.v2.read`: not implemented in this change (`unsupported`)."""
-        del unit_of_work, authorization, command
+        """`commitments.v2.read`: `commitments.read` with Project and Situation references."""
         self._program_plane()
-        raise UnsupportedError()
+        require_read_grant(authorization.capability_grants, command.capability)
+        families = program_families(authorization.capability_grants)
+        principal_id = authorization.principal.principal_id
+        with _translated():
+            commitment = unit_of_work.commitments.get(principal_id, command.commitment_id)
+        if commitment is None:
+            raise NotFoundError(SafeDetail.COMMITMENT_ID)
+        with _translated():
+            follow_up = unit_of_work.tasks.get_follow_up_for_commitment(
+                principal_id, command.commitment_id
+            )
+            states = _evidence_capture_states(
+                unit_of_work,
+                principal_id,
+                (
+                    commitment.origin_evidence_ref,
+                    commitment.closure_evidence_ref,
+                    None if follow_up is None else follow_up.origin_evidence_ref,
+                    None if follow_up is None else follow_up.closure_evidence_ref,
+                ),
+            )
+            reads = read_commitment_page(
+                unit_of_work.commitments, principal_id, (commitment,), families
+            )
+            counterparty_options, counterparty_options_truncated = _counterparty_options(
+                unit_of_work, principal_id
+            )
+        public = CommitmentV2View(
+            view=_commitment_view(
+                commitment,
+                origin_evidence_capture_state=_ref_state(states, commitment.origin_evidence_ref),
+                closure_evidence_capture_state=_ref_state(states, commitment.closure_evidence_ref),
+            ),
+            references=reads.references_of(commitment),
+        ).to_canonical_dict()
+        public["counterparty"] = reads.counterparty_of(commitment)
+        return _Result(
+            payload={
+                "commitment": public,
+                "follow_up_task": (
+                    None
+                    if follow_up is None
+                    else _task_list_entry(
+                        follow_up,
+                        origin_evidence_capture_state=_ref_state(
+                            states, follow_up.origin_evidence_ref
+                        ),
+                        closure_evidence_capture_state=_ref_state(
+                            states, follow_up.closure_evidence_ref
+                        ),
+                    ).to_canonical_dict()
+                ),
+                "counterparty_options": counterparty_options,
+                "counterparty_options_truncated": counterparty_options_truncated,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_COMMITMENT_TRUST_BASIS),
+        )
 
     def _commitments_v2_list(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListCommitmentsV2
     ) -> _Result:
-        """`commitments.v2.list`: not implemented in this change (`unsupported`)."""
-        del unit_of_work, authorization, command
+        """`commitments.v2.list`: `commitments.list` with references and a Project filter."""
         self._program_plane()
-        raise UnsupportedError()
+        require_read_grant(authorization.capability_grants, command.capability)
+        families = program_families(authorization.capability_grants)
+        principal_id = authorization.principal.principal_id
+        request = command.v1()
+        with _translated():
+            require_owned_projects(
+                unit_of_work.commitments, principal_id, command.project_ids, families
+            )
+        page_size = self._page_size(request.page_size)
+        work_start, work_end = _commitment_work_bounds(
+            request.work_view, request.work_date, request.timezone
+        )
+        with _work_cursor_translated(), _translated():
+            found = unit_of_work.commitments.list_commitments(
+                principal_id,
+                direction=request.direction,
+                state=request.state,
+                work_view=request.work_view,
+                work_start=work_start,
+                work_end=work_end,
+                after=request.after,
+                limit=page_size + 1,
+                project_ids=command.project_ids,
+            )
+        return self._commitment_v2_page(
+            unit_of_work, authorization, found, page_size=page_size, families=families
+        )
 
     def _commitments_v2_search(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: SearchCommitmentsV2
     ) -> _Result:
-        """`commitments.v2.search`: not implemented in this change (`unsupported`)."""
-        del unit_of_work, authorization, command
+        """`commitments.v2.search`: `commitments.search` with references and a Project filter."""
         self._program_plane()
-        raise UnsupportedError()
+        require_read_grant(authorization.capability_grants, command.capability)
+        families = program_families(authorization.capability_grants)
+        principal_id = authorization.principal.principal_id
+        request = command.v1()
+        with _translated():
+            require_owned_projects(
+                unit_of_work.commitments, principal_id, command.project_ids, families
+            )
+        page_size = self._page_size(request.page_size)
+        work_start, work_end = _commitment_work_bounds(
+            request.work_view, request.work_date, request.timezone
+        )
+        with _work_cursor_translated(), _translated():
+            found = unit_of_work.commitments.search(
+                principal_id,
+                request.query,
+                page_size + 1,
+                after=request.after,
+                direction=request.direction,
+                state=request.state,
+                work_view=request.work_view,
+                work_start=work_start,
+                work_end=work_end,
+                project_ids=command.project_ids,
+            )
+        return self._commitment_v2_page(
+            unit_of_work, authorization, found, page_size=page_size, families=families
+        )
+
+    def _commitment_v2_page(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        found: Sequence[Commitment],
+        *,
+        page_size: int,
+        families: frozenset[ProgramFamily],
+    ) -> _Result:
+        """One v2 list or search page: `commitments.list`'s keys, batched (section 7.3)."""
+        principal_id = authorization.principal.principal_id
+        truncated = len(found) > page_size
+        page = tuple(found[:page_size])
+        with _translated():
+            states = _evidence_capture_states(
+                unit_of_work,
+                principal_id,
+                (
+                    reference
+                    for item in page
+                    for reference in (item.origin_evidence_ref, item.closure_evidence_ref)
+                ),
+            )
+            reads = read_commitment_page(unit_of_work.commitments, principal_id, page, families)
+            counterparty_options, counterparty_options_truncated = _counterparty_options(
+                unit_of_work, principal_id
+            )
+        entries: list[dict[str, object]] = []
+        for commitment in page:
+            entry = CommitmentV2ListEntry(
+                entry=_commitment_list_entry(
+                    commitment,
+                    origin_evidence_capture_state=_ref_state(
+                        states, commitment.origin_evidence_ref
+                    ),
+                    closure_evidence_capture_state=_ref_state(
+                        states, commitment.closure_evidence_ref
+                    ),
+                ),
+                evidence_state=commitment.evidence_state.value,
+                references=reads.references_of(commitment),
+            ).to_canonical_dict()
+            entry["counterparty"] = reads.counterparty_of(commitment)
+            entries.append(entry)
+        return _Result(
+            payload={
+                "commitments": entries,
+                "counterparty_options": counterparty_options,
+                "counterparty_options_truncated": counterparty_options_truncated,
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_COMMITMENT_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=truncated,
+                    reason="page_size_reached" if truncated else None,
+                    next_cursor=page[-1].commitment_id if truncated and page else None,
+                ),
+            ),
+        )
 
     def _commitments_v2_waiting_on(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: WaitingOnV2
     ) -> _Result:
-        """`commitments.v2.waiting_on`: not implemented in this change (`unsupported`)."""
-        del unit_of_work, authorization, command
+        """`commitments.v2.waiting_on`: `commitments.waiting_on` with references, batched."""
+        from my_pa.domain.situation.continuity import (
+            CommitmentDirection,
+            CommitmentState,
+            ContinuityEvidenceState,
+        )
+
         self._program_plane()
-        raise UnsupportedError()
+        require_read_grant(authorization.capability_grants, command.capability)
+        families = program_families(authorization.capability_grants)
+        principal_id = authorization.principal.principal_id
+        request = command.v1()
+        with _translated():
+            require_owned_projects(
+                unit_of_work.commitments, principal_id, command.project_ids, families
+            )
+        page_size = self._page_size(request.page_size)
+        with _work_cursor_translated(), _translated():
+            commitments = unit_of_work.commitments.list_commitments(
+                principal_id,
+                direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+                state=CommitmentState.OPEN,
+                evidence_state=ContinuityEvidenceState.ACCEPTED,
+                after=request.after,
+                limit=page_size + 1,
+                project_ids=command.project_ids,
+            )
+        truncated = len(commitments) > page_size
+        page = tuple(commitments[:page_size])
+        with _translated():
+            states = _evidence_capture_states(
+                unit_of_work,
+                principal_id,
+                (
+                    reference
+                    for item in page
+                    for reference in (item.origin_evidence_ref, item.closure_evidence_ref)
+                ),
+            )
+            follow_ups = page_follow_ups(unit_of_work.tasks, principal_id, page)
+            reads = read_commitment_page(unit_of_work.commitments, principal_id, page, families)
+        entries: list[dict[str, object]] = []
+        for c in page:
+            follow_up = follow_ups.get(c.commitment_id)
+            entry = WaitingOnV2Entry(
+                entry=WaitingOnEntry(
+                    commitment_id=c.commitment_id,
+                    title=c.summary,
+                    counterparty_entity_id=c.counterparty_entity_id,
+                    due_date=c.due_at.isoformat() if c.due_at is not None else None,
+                    state=c.state.value,
+                    follow_up_task_id=None if follow_up is None else follow_up.task_id,
+                    follow_up_task_title=None if follow_up is None else follow_up.title,
+                    follow_up_task_state=(
+                        None if follow_up is None else follow_up.lifecycle_state.value
+                    ),
+                    origin_evidence_capture_state=_ref_state(states, c.origin_evidence_ref),
+                    closure_evidence_capture_state=_ref_state(states, c.closure_evidence_ref),
+                ),
+                references=reads.references_of(c),
+            ).to_canonical_dict()
+            entry["counterparty"] = reads.counterparty_of(c)
+            entries.append(entry)
+        return _Result(
+            payload={"waiting_on": entries},
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_COMMITMENT_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=truncated,
+                    reason="page_size_reached" if truncated else None,
+                    next_cursor=page[-1].commitment_id if truncated else None,
+                ),
+            ),
+        )
 
     def _reports_manifest(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadReportManifest

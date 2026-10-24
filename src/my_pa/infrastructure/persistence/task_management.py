@@ -23,6 +23,7 @@ module unable to let the two columns disagree.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager
 from datetime import datetime
 from types import TracebackType
@@ -68,6 +69,7 @@ from my_pa.domain.task.lifecycle import (
 )
 from my_pa.domain.task.role import TaskRole
 from my_pa.domain.task.task import Task
+from my_pa.infrastructure.persistence.principal_scope import capture_context, partition_criterion
 from my_pa.infrastructure.persistence.record_events import (
     RecordEventBuffer,
     SqlRecordEventWriter,
@@ -832,6 +834,27 @@ class SqlTaskManagementRepository(TaskManagementRepository):
             .limit(1)
         ).one_or_none()
         return None if row is None else _to_task(row)
+
+    def follow_ups_for_commitments(
+        self, principal_id: str, commitment_ids: Sequence[str]
+    ) -> Mapping[str, Task]:
+        # Record lineage S4 section 7.3: the single read above, for a page of
+        # Commitments in one statement -- per Commitment the same first row of
+        # the same order.
+        wanted = tuple(dict.fromkeys(commitment_ids))
+        if not wanted:
+            return {}
+        rows = self._connection.execute(
+            select(*tasks.c)
+            .where(
+                partition_criterion(tasks, capture_context(principal_id)),
+                tasks.c.commitment_id.in_(wanted),
+                tasks.c.role == TaskRole.FOLLOW_UP.value,
+            )
+            .distinct(tasks.c.commitment_id)
+            .order_by(tasks.c.commitment_id, desc(tasks.c.created_at), asc(tasks.c.task_id))
+        ).all()
+        return {str(row._mapping["commitment_id"]): _to_task(row) for row in rows}
 
 
 def _acceptance_kind_value(task: Task) -> str:

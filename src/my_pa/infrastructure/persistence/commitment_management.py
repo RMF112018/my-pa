@@ -13,18 +13,33 @@ Commitment.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager
 from datetime import datetime
 from types import TracebackType
 from typing import Any, Final
 
-from sqlalchemy import Engine, and_, asc, desc, func, insert, or_, select, update
+from sqlalchemy import (
+    Engine,
+    and_,
+    asc,
+    desc,
+    func,
+    insert,
+    literal,
+    null,
+    or_,
+    select,
+    union_all,
+    update,
+)
 from sqlalchemy.engine import Connection, Row
 from sqlalchemy.sql.elements import ColumnElement
 
 from my_pa.contracts.ports import (
     CommitmentManagementRepository,
     CommitmentManagementUnitOfWork,
+    CommitmentReferenceOwners,
     CounterpartyOption,
     RecordEventStager,
     WorkCursorError,
@@ -54,6 +69,8 @@ from my_pa.infrastructure.persistence.tables import (
     commitment_history,
     commitments,
     entities,
+    projects,
+    situations,
 )
 
 __all__ = ["SqlAlchemyCommitmentManagementUnitOfWork", "SqlCommitmentManagementRepository"]
@@ -155,6 +172,64 @@ class SqlCommitmentManagementRepository(CommitmentManagementRepository):
             for row in rows
         )
 
+    def counterparties(
+        self, principal_id: str, entity_ids: Sequence[str]
+    ) -> Mapping[str, CounterpartyOption]:
+        wanted = tuple(dict.fromkeys(entity_ids))
+        if not wanted:
+            return {}
+        rows = self._connection.execute(
+            select(entities.c.entity_id, entities.c.display_name).where(
+                partition_criterion(entities, capture_context(principal_id)),
+                entities.c.entity_id.in_(wanted),
+                *_current_counterparty_criteria(),
+            )
+        ).all()
+        return {
+            str(row.entity_id): CounterpartyOption(
+                entity_id=str(row.entity_id), display_name=str(row.display_name)
+            )
+            for row in rows
+        }
+
+    def reference_owners(
+        self,
+        principal_id: str,
+        *,
+        project_ids: Sequence[str],
+        situation_ids: Sequence[str],
+    ) -> CommitmentReferenceOwners:
+        # Record lineage S4 section 7.3: one statement for the page (or the
+        # `project_ids` filter), both partitions stated, the Situation's kind
+        # read beside it (section 6.2, R4-F17).
+        context = capture_context(principal_id)
+        owned = self._connection.execute(
+            union_all(
+                select(
+                    literal("project").label("family"),
+                    projects.c.project_id.label("record_id"),
+                    null().label("kind"),
+                ).where(
+                    partition_criterion(projects, context),
+                    projects.c.project_id.in_(tuple(dict.fromkeys(project_ids))),
+                ),
+                select(
+                    literal("situation").label("family"),
+                    situations.c.situation_id.label("record_id"),
+                    situations.c.kind.label("kind"),
+                ).where(
+                    partition_criterion(situations, context),
+                    situations.c.situation_id.in_(tuple(dict.fromkeys(situation_ids))),
+                ),
+            )
+        ).all()
+        return CommitmentReferenceOwners(
+            projects=frozenset(str(row.record_id) for row in owned if row.family == "project"),
+            situation_kinds={
+                str(row.record_id): str(row.kind) for row in owned if row.family == "situation"
+            },
+        )
+
     def list_commitments(
         self,
         principal_id: str,
@@ -167,8 +242,13 @@ class SqlCommitmentManagementRepository(CommitmentManagementRepository):
         work_end: datetime | None = None,
         after: str | None = None,
         limit: int,
+        project_ids: Sequence[str] | None = None,
     ) -> tuple[Commitment, ...]:
         conditions = [commitments.c.principal_id == principal_id]
+        if project_ids is not None:
+            # Record lineage S4 section 7.3: the v2 Project filter, inside the
+            # caller's own partition above and the v1 order and keyset below.
+            conditions.append(commitments.c.project_id.in_(tuple(project_ids)))
         if direction is not None:
             conditions.append(commitments.c.direction == direction.value)
         if state is not None:
@@ -373,12 +453,16 @@ class SqlCommitmentManagementRepository(CommitmentManagementRepository):
         work_view: CommitmentWorkView | None = None,
         work_start: datetime | None = None,
         work_end: datetime | None = None,
+        project_ids: Sequence[str] | None = None,
     ) -> tuple[Commitment, ...]:
         escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         conditions = [
             commitments.c.principal_id == principal_id,
             commitments.c.summary.ilike(f"%{escaped}%", escape="\\"),
         ]
+        if project_ids is not None:
+            # Record lineage S4 section 7.3, as in `list_commitments`.
+            conditions.append(commitments.c.project_id.in_(tuple(project_ids)))
         if direction is not None:
             conditions.append(commitments.c.direction == direction.value)
         if state is not None:

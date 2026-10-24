@@ -10,7 +10,7 @@ const compiled = ts.transpileModule(readFileSync(path.join(path.dirname(fileURLT
 }).outputText.replace(/import \{[^\n]+\} from "@playwright\/test";/, "const { test, expect } = globalThis.__myPaSearchProbe;")
   .replace(/import \{[^\n]+\} from "\.\/fixtures";/, "const { markBrowserEarly, observeSearchMedia, SEARCH_SETTLED, signIn } = globalThis.__myPaSearchProbe.fixtures;");
 let moduleNumber = 0;
-async function exercise(target, { reject = true, active = true, annotations = [], checkMetadata = true } = {}) {
+async function exercise(target, { reject = true, active = true, annotations = [], checkMetadata = true, project, snapshot = {}, observationError = false } = {}) {
   const previous = [process.env.CI, process.env.CI_BROWSER_DIAGNOSTIC];
   process.env.CI = active ? "true" : ""; process.env.CI_BROWSER_DIAGNOSTIC = active ? "1" : "";
   const opaque = new Proxy({}, { get() { throw new Error("sensitive error accessed"); } });
@@ -19,6 +19,7 @@ async function exercise(target, { reject = true, active = true, annotations = []
   let blocked = false;
   const entered = new Promise((resolve) => { reached = resolve; });
   const calls = [];
+  let observations = 0;
   async function act(phase, value) {
     calls.push(phase);
     if (phase === target && !blocked) {
@@ -32,7 +33,29 @@ async function exercise(target, { reject = true, active = true, annotations = []
     return { count: () => act(kind, 1), nth: () => ({ getAttribute: () => act(kind,
       kind === "capture-links" ? "/knowledge?captureId=cap_fixture&versionId=fixture" : "/knowledge/goodnotes?pageVersionId=fixture") }) };
   }
-  const page = { goto: () => act("nav"), getByRole: (role) => ({ kind: role === "heading" ? "heading" : "query", fill: () => act("query") }),
+  const page = { async evaluate(callback, settledSelector) {
+    observations++;
+    assert.equal(settledSelector, "settled");
+    if (observationError) throw opaque;
+    const previousDocument = globalThis.document;
+    const previousInput = globalThis.HTMLInputElement;
+    class SyntheticInput { get value() { return snapshot.queryValue ?? "morning brief"; } }
+    const list = {
+      querySelector(selector) { assert.equal(selector, ":scope > p:not([role])"); return snapshot.idle ? {} : null; },
+      getAttribute(name) { assert.equal(name, "aria-busy"); return snapshot.busy ? "true" : null; },
+    };
+    globalThis.HTMLInputElement = SyntheticInput;
+    globalThis.document = { querySelector(selector) {
+      if (selector === '[data-testid="search-command-input"]') return new SyntheticInput();
+      if (selector === '[data-testid="search-command-list"]') return list;
+      assert.equal(selector, "settled"); return snapshot.settled ? {} : null;
+    } };
+    try { return callback(settledSelector); }
+    finally {
+      if (previousDocument === undefined) delete globalThis.document; else globalThis.document = previousDocument;
+      if (previousInput === undefined) delete globalThis.HTMLInputElement; else globalThis.HTMLInputElement = previousInput;
+    }
+  }, goto: () => act("nav"), getByRole: (role) => ({ kind: role === "heading" ? "heading" : "query", fill: () => act("query") }),
     locator: (selector) => selector === "settled" ? { first: () => ({ kind: "search-settled" }) }
       : selector.includes("captureId") ? links("capture-links")
         : selector.includes("goodnotes") ? links("goodnotes-links") : { kind: "knowledge-absence" } };
@@ -43,7 +66,7 @@ async function exercise(target, { reject = true, active = true, annotations = []
   try {
     const { runSearchHrefJourney } = await import(`data:text/javascript,${encodeURIComponent(compiled)}#${moduleNumber++}`);
     let caught;
-    const running = runSearchHrefJourney(page, { annotations }).catch((error) => { caught = error; });
+    const running = runSearchHrefJourney(page, { annotations, project: project ? { name: project } : undefined }).catch((error) => { caught = error; });
     if (target) {
       await entered;
       if (active && checkMetadata) {
@@ -54,7 +77,7 @@ async function exercise(target, { reject = true, active = true, annotations = []
     }
     await running;
     assert.equal(caught, target && reject ? opaque : undefined);
-    return { calls, annotations };
+    return { calls, annotations, observations };
   } finally {
     delete globalThis.__myPaSearchProbe;
     if (previous[0] === undefined) delete process.env.CI; else process.env.CI = previous[0];
@@ -78,4 +101,54 @@ test("default mode emits nothing and annotation failure cannot change successful
   const unavailable = new Proxy([], { get() { throw new Error("metadata unavailable"); } });
   await exercise(undefined, { annotations: unavailable });
   await exercise("nav", { annotations: unavailable, checkMetadata: false });
+});
+
+test("actual failed-settle snapshot exposes only four booleans for fixed WebKit109 DOM", async () => {
+  for (const snapshot of [{ queryValue: "morning brief", idle: true, busy: false, settled: false },
+    { queryValue: "OPAQUE_PRIVATE_QUERY\n::error::private", idle: false, busy: true, settled: false },
+    { queryValue: "morning brief", idle: false, busy: false, settled: true }]) {
+    const result = await exercise("search-settled", { project: "webkit", snapshot });
+    const description = `q${Number(snapshot.queryValue === "morning brief")}-i${Number(snapshot.idle)}-b${Number(snapshot.busy)}-s${Number(snapshot.settled)}`;
+    assert.equal(result.observations, 1);
+    assert.deepEqual(result.annotations, [{ type: "my-pa-ci-search-active", description: "search-settled:failed" },
+      { type: "my-pa-ci-search-snapshot", description }]);
+    assert.equal(JSON.stringify(result.annotations).includes("PRIVATE"), false);
+  }
+});
+test("snapshot failure or metadata failure preserves the SAME original settled-wait error", async () => {
+  const result = await exercise("search-settled", { project: "webkit", observationError: true });
+  assert.deepEqual(result.annotations.at(-1), { type: "my-pa-ci-search-snapshot", description: "unavailable" });
+  const unavailable = new Proxy([], { get() { throw new Error("opaque metadata unavailable"); } });
+  await exercise("search-settled", { project: "webkit", annotations: unavailable, checkMetadata: false });
+});
+test("successful/other-phase/other-project/default-off journeys perform no DOM snapshot", async () => {
+  for (const [phase, options] of [["search-settled", { project: "webkit", reject: false }],
+    ["heading", { project: "webkit" }], ["search-settled", { project: "firefox" }],
+    ["search-settled", { project: "webkit", active: false }]]) {
+    const result = await exercise(phase, options);
+    assert.equal(result.observations, 0);
+    assert.equal(result.annotations.some((item) => item.type === "my-pa-ci-search-snapshot"), false);
+  }
+});
+
+test("idle snapshot selector binds to the current sole direct non-status paragraph", () => {
+  const file = path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/components/shell/command-palette.tsx");
+  const source = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const found = [];
+  function visit(node) {
+    if (ts.isJsxElement(node) && node.openingElement.attributes.properties.some((property) =>
+      ts.isJsxAttribute(property) && property.name.getText(source) === "data-testid"
+      && property.initializer?.text === "search-command-list")) found.push(node);
+    ts.forEachChild(node, visit);
+  }
+  visit(source); assert.equal(found.length, 1);
+  const paragraphs = found[0].children.filter(ts.isJsxExpression).flatMap((node) => {
+    const conditional = node.expression;
+    if (!conditional || !ts.isConditionalExpression(conditional) || !ts.isParenthesizedExpression(conditional.whenTrue)) return [];
+    const element = conditional.whenTrue.expression;
+    if (!ts.isJsxElement(element) || element.openingElement.tagName.getText(source) !== "p"
+      || element.openingElement.attributes.properties.some((property) => property.name?.getText(source) === "role")) return [];
+    return [{ condition: conditional.condition.getText(source), copy: element.children.map((child) => child.getText(source)).join("").trim() }];
+  });
+  assert.deepEqual(paragraphs, [{ condition: "idle", copy: "Start typing to search." }]);
 });

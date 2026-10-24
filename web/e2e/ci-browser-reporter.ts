@@ -7,7 +7,7 @@ const SPECS = [
   { name: "browser-security.spec.ts", declarations: [82, 108, 120, 133, 152, 170, 192, 211],
     assertions: [22, 23, 24, 64, 65, 67, 74, 104, 105, 115, 116, 117, 226, 228] },
   { name: "search-contract.spec.ts", declarations: [60, 109, 137, 173, 221, 293, 341],
-    assertions: [64, 65, 69, 70, 71, 73, 75, 76, 77, 82, 83, 85, 86, 87, 88, 91, 92, 96, 97, 99, 100, 104, 106, 142, 144, 145, 147, 148, 149, 151, 152, 153, 154, 156, 158, 160, 163, 164, 165, 167, 168, 169, 170, 214, 216, 217, 270, 271, 274, 275, 276, 277, 278, 279, 283, 284, 285, 286, 287, 288, 289, 299, 300, 301, 315, 317, 318, 353, 358, 360, 423, 427, 428, 429, 430, 433, 439, 440, 441, 449, 450, 451, 456, 461, 463, 464, 465, 466, 470, 476, 477, 498, 502, 511, 512, 513, 514, 522, 523, 524, 525, 526, 530] },
+    assertions: [64, 65, 69, 70, 71, 73, 75, 76, 77, 82, 83, 85, 86, 87, 88, 91, 92, 96, 97, 99, 100, 104, 106, 142, 144, 145, 147, 148, 149, 151, 152, 153, 154, 156, 158, 160, 163, 164, 165, 167, 168, 169, 170, 214, 216, 217, 270, 271, 274, 275, 276, 277, 278, 279, 283, 284, 285, 286, 287, 288, 289, 299, 300, 301, 315, 317, 318, 353, 358, 360, 423, 427, 428, 429, 430, 433, 439, 440, 441, 449, 450, 451, 456, 461, 463, 464, 465, 466, 470, 476, 477, 527, 531, 540, 541, 542, 543, 551, 552, 553, 554, 555, 559] },
 ];
 const PROJECTS = new Set(["firefox", "webkit"]);
 const FAILED = new Set(["failed", "timedOut", "interrupted"]);
@@ -46,14 +46,18 @@ export default class BrowserCiReporter implements Reporter {
     const search = spec.name === "search-contract.spec.ts" && test.location.line === ACTIVE_SEARCH_DECLARATION && searchRecords.length === 1
       ? SEARCH_PHASES.flatMap((value) => ["inflight", "failed", "complete"].map((state) => ({ value, state })))
         .find((entry) => searchRecords[0].description === `${entry.value}:${entry.state}`) : undefined;
+    const snapshots = (result.annotations ?? []).filter((item) => item.type === "my-pa-ci-search-snapshot");
+    const snapshot = project === "webkit" && search?.value === "search-settled" && search.state === "failed" && snapshots.length === 1
+      && /^(?:q[01]-i[01]-b[01]-s[01]|unavailable)$/.test(snapshots[0].description ?? "") ? snapshots[0].description : undefined;
     const category = search ? (search.state === "complete" ? "after-search" : "search-phase")
       : signIn || phase === "emulateMedia-failed" ? "setup" : assertion !== undefined ? "assertion"
       : completed ? "after-sign-in" : steps.some((step) => step.category === "hook" && !!step.error) ? "setup" : "other";
     const stage = signIn ? `; stage=${signIn}; status=${result.status}` : "";
     const boundary = phase ? `; phase=${phase}` : "";
     const active = search ? `; active=${search.value}; state=${search.state}` : "";
+    const observation = snapshot ? `; snapshot=${snapshot}` : "";
     this.emitted += 1;
-    process.stdout.write(`::error file=web/e2e/${spec.name},line=${assertion ?? test.location.line},title=Browser Playwright failure::project=${project}; category=${category}${stage}${boundary}${active}\n`);
+    process.stdout.write(`::error file=web/e2e/${spec.name},line=${assertion ?? test.location.line},title=Browser Playwright failure::project=${project}; category=${category}${stage}${boundary}${active}${observation}\n`);
   }
 
   onError(_error: TestError): void {

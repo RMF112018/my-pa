@@ -149,3 +149,23 @@ test("only the admitted Search body emits finite active states, including inflig
     assert.equal(output.includes("SECRET"), false);
   }
 });
+
+test("only failed-settle WebKit109 can emit the closed four-bit snapshot without values", () => {
+  const active = { type: "my-pa-ci-search-active", description: "search-settled:failed" };
+  for (const bits of ["q0-i0-b0-s0", "q1-i1-b0-s0", "q0-i0-b1-s0", "q1-i0-b0-s1", "unavailable"]) {
+    const output = capture(() => new BrowserCiReporter().onTestEnd(caseFor("search-contract.spec.ts", 109, "webkit"), {
+      status: "failed", steps: [], annotations: [active, { type: "my-pa-ci-search-snapshot", description: bits }],
+    }));
+    assert.match(output, new RegExp(`snapshot=${bits}\\n$`));
+  }
+  for (const [candidate, annotations] of [
+    [caseFor("search-contract.spec.ts", 109, "firefox"), [active, { type: "my-pa-ci-search-snapshot", description: "q1-i1-b0-s0" }]],
+    [caseFor("search-contract.spec.ts", 60, "webkit"), [active, { type: "my-pa-ci-search-snapshot", description: "q1-i1-b0-s0" }]],
+    [caseFor("search-contract.spec.ts", 109, "webkit"), [active, { type: "my-pa-ci-search-snapshot", description: "q1-i1-b0-s0\n::error::PRIVATE" }]],
+    [caseFor("search-contract.spec.ts", 109, "webkit"), [active, ...Array(2).fill({ type: "my-pa-ci-search-snapshot", description: "q1-i1-b0-s0" })]],
+    [caseFor("search-contract.spec.ts", 109, "webkit"), [{ type: "my-pa-ci-search-active", description: "query:failed" }, { type: "my-pa-ci-search-snapshot", description: "q1-i1-b0-s0" }]],
+  ]) {
+    const output = capture(() => new BrowserCiReporter().onTestEnd(candidate, { status: "failed", steps: [], annotations }));
+    assert.equal(output.includes("snapshot="), false); assert.equal(output.includes("PRIVATE"), false);
+  }
+});

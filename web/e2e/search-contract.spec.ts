@@ -491,6 +491,35 @@ export async function runSearchHrefJourney(page: Page, info: TestInfo): Promise<
       else info.annotations[index] = item;
     } catch { /* Fixed observation cannot change successful work or the original failure. */ }
   }
+  async function observeSettlement(): Promise<void> {
+    if (process.env.CI !== "true" || process.env.CI_BROWSER_DIAGNOSTIC !== "1" || info.project?.name !== "webkit") return;
+    function recordSnapshot(description: string): void {
+      try {
+        const item = { type: "my-pa-ci-search-snapshot", description };
+        const index = info.annotations.findIndex((entry) => entry.type === item.type);
+        if (index < 0) info.annotations.push(item);
+        else info.annotations[index] = item;
+      } catch { /* Observation cannot replace the original failure. */ }
+    }
+    try {
+      const snapshot = await page.evaluate((settledSelector) => {
+        const input = document.querySelector('[data-testid="search-command-input"]');
+        const list = document.querySelector('[data-testid="search-command-list"]');
+        return {
+          query: input instanceof HTMLInputElement && input.value === "morning brief",
+          idle: !!list?.querySelector(":scope > p:not([role])"),
+          busy: list?.getAttribute("aria-busy") === "true",
+          settled: !!document.querySelector(settledSelector),
+        };
+      }, SEARCH_SETTLED);
+      const fields = ["query", "idle", "busy", "settled"] as const;
+      if (Object.keys(snapshot).sort().join() !== [...fields].sort().join()
+        || !fields.every((key) => typeof snapshot[key] === "boolean")) {
+        recordSnapshot("unavailable"); return;
+      }
+      recordSnapshot(`q${Number(snapshot.query)}-i${Number(snapshot.idle)}-b${Number(snapshot.busy)}-s${Number(snapshot.settled)}`);
+    } catch { recordSnapshot("unavailable"); }
+  }
   try {
   phase = "nav"; record("inflight");
   await page.goto("/search");
@@ -531,6 +560,7 @@ export async function runSearchHrefJourney(page: Page, info: TestInfo): Promise<
     record("complete");
   } catch (error) {
     record("failed");
+    if (phase === "search-settled") await observeSettlement();
     throw error;
   }
 }

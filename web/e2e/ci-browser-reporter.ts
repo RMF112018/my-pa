@@ -6,13 +6,15 @@ import type { Reporter, TestCase, TestError, TestResult, TestStep } from "@playw
 const SPECS = [
   { name: "browser-security.spec.ts", declarations: [82, 108, 120, 133, 152, 170, 192, 211],
     assertions: [22, 23, 24, 64, 65, 67, 74, 104, 105, 115, 116, 117, 226, 228] },
-  { name: "search-contract.spec.ts", declarations: [60, 109, 165, 201, 249, 321, 369],
-    assertions: [64, 65, 69, 70, 71, 73, 75, 76, 77, 82, 83, 85, 86, 87, 88, 91, 92, 96, 97, 99, 100, 104, 106, 112, 114, 122, 123, 124, 125, 132, 133, 134, 135, 136, 139, 170, 172, 173, 175, 176, 177, 179, 180, 181, 182, 184, 186, 188, 191, 192, 193, 195, 196, 197, 198, 242, 244, 245, 298, 299, 302, 303, 304, 305, 306, 307, 311, 312, 313, 314, 315, 316, 317, 327, 328, 329, 343, 345, 346, 381, 386, 388, 451, 455, 456, 457, 458, 461, 467, 468, 469, 477, 478, 479, 484, 489, 491, 492, 493, 494, 498, 504, 505] },
+  { name: "search-contract.spec.ts", declarations: [60, 109, 137, 173, 221, 293, 341],
+    assertions: [64, 65, 69, 70, 71, 73, 75, 76, 77, 82, 83, 85, 86, 87, 88, 91, 92, 96, 97, 99, 100, 104, 106, 142, 144, 145, 147, 148, 149, 151, 152, 153, 154, 156, 158, 160, 163, 164, 165, 167, 168, 169, 170, 214, 216, 217, 270, 271, 274, 275, 276, 277, 278, 279, 283, 284, 285, 286, 287, 288, 289, 299, 300, 301, 315, 317, 318, 353, 358, 360, 423, 427, 428, 429, 430, 433, 439, 440, 441, 449, 450, 451, 456, 461, 463, 464, 465, 466, 470, 476, 477, 498, 502, 511, 512, 513, 514, 522, 523, 524, 525, 526, 530] },
 ];
 const PROJECTS = new Set(["firefox", "webkit"]);
 const FAILED = new Set(["failed", "timedOut", "interrupted"]);
 const SIGN_IN_STAGES = new Set(["goto", "overlay", "signinbutton", "click", "todayURL", "launcher"]);
 const BROWSER_PHASES = ["emulateMedia-failed", "after-emulateMedia", "before-emulateMedia", "page-ready", "early-entered"];
+const SEARCH_PHASES = ["nav", "heading", "query", "search-settled", "capture-links", "goodnotes-links", "knowledge-absence"];
+const ACTIVE_SEARCH_DECLARATION = 109;
 function stepsOf(steps: TestStep[]): TestStep[] {
   return steps.flatMap((step) => [step, ...stepsOf(step.steps)]);
 }
@@ -40,12 +42,18 @@ export default class BrowserCiReporter implements Reporter {
       && item.description === "complete");
     const phase = BROWSER_PHASES.find((value) => (result.annotations ?? []).some((item) =>
       item.type === "my-pa-ci-browser-phase" && item.description === value));
-    const category = signIn || phase === "emulateMedia-failed" ? "setup" : assertion !== undefined ? "assertion"
+    const searchRecords = (result.annotations ?? []).filter((item) => item.type === "my-pa-ci-search-active");
+    const search = spec.name === "search-contract.spec.ts" && test.location.line === ACTIVE_SEARCH_DECLARATION && searchRecords.length === 1
+      ? SEARCH_PHASES.flatMap((value) => ["inflight", "failed", "complete"].map((state) => ({ value, state })))
+        .find((entry) => searchRecords[0].description === `${entry.value}:${entry.state}`) : undefined;
+    const category = search ? (search.state === "complete" ? "after-search" : "search-phase")
+      : signIn || phase === "emulateMedia-failed" ? "setup" : assertion !== undefined ? "assertion"
       : completed ? "after-sign-in" : steps.some((step) => step.category === "hook" && !!step.error) ? "setup" : "other";
     const stage = signIn ? `; stage=${signIn}; status=${result.status}` : "";
     const boundary = phase ? `; phase=${phase}` : "";
+    const active = search ? `; active=${search.value}; state=${search.state}` : "";
     this.emitted += 1;
-    process.stdout.write(`::error file=web/e2e/${spec.name},line=${assertion ?? test.location.line},title=Browser Playwright failure::project=${project}; category=${category}${stage}${boundary}\n`);
+    process.stdout.write(`::error file=web/e2e/${spec.name},line=${assertion ?? test.location.line},title=Browser Playwright failure::project=${project}; category=${category}${stage}${boundary}${active}\n`);
   }
 
   onError(_error: TestError): void {

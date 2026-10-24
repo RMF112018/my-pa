@@ -90,3 +90,18 @@ test("all three reporter stage enums match the actual signIn producer, not stale
     assert.deepEqual(literal(declaration.arguments[0]).sort(), [...stages].sort());
   }
 });
+
+test("active Search metadata is bound to its actual closed callback and producer phases", () => {
+  const source = load("search-contract.spec.ts");
+  const reporter = load("ci-browser-reporter.ts");
+  const target = calls(source, "test").find((node) => node.arguments[0].text === "Search UX maps federated hits to honest hrefs without capture text");
+  assert.equal(line(source, target), literal(variable(reporter, "ACTIVE_SEARCH_DECLARATION")));
+  assert.equal(calls(target, "runSearchHrefJourney").length, 1);
+  const timeout = nodes(target, (node) => ts.isCallExpression(node) && node.expression.getText(source) === "test.setTimeout");
+  assert.equal(timeout.length, 1);
+  assert.equal(Number(timeout[0].arguments[0].text), 180000);
+  const helper = nodes(source, (node) => ts.isFunctionDeclaration(node) && node.name?.text === "runSearchHrefJourney")[0];
+  const phases = new Set(nodes(helper, (node) => ts.isVariableDeclaration(node) && node.name.getText(source) === "phase").map((node) => node.initializer.text));
+  for (const assignment of nodes(helper, (node) => ts.isBinaryExpression(node) && node.left.getText(source) === "phase")) phases.add(assignment.right.text);
+  assert.deepEqual([...phases].sort(), literal(variable(reporter, "SEARCH_PHASES")).sort());
+});

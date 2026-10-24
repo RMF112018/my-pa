@@ -35,8 +35,23 @@ export function syntheticNote(marker: string): string {
  * and does not claim Safari/PWA (AC072-074).
  */
 export async function hideNextjsDevOverlay(page: Page): Promise<void> {
-  await page.addStyleTag({
-    content: "nextjs-portal { display: none !important; pointer-events: none !important; }",
+  await page.evaluate(() => {
+    function removePortals(root: ParentNode): void {
+      root.querySelectorAll("nextjs-portal").forEach((portal) => portal.remove());
+    }
+    removePortals(document);
+    const state = document as Document & { __myPaE2EPortalObserver?: MutationObserver };
+    if (state.__myPaE2EPortalObserver) return;
+    const observer = new MutationObserver((records) => {
+      for (const record of records) for (const node of record.addedNodes) {
+        if (node.nodeType !== 1) continue;
+        const element = node as Element;
+        if (element.localName === "nextjs-portal") element.remove();
+        removePortals(element);
+      }
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+    Object.defineProperty(state, "__myPaE2EPortalObserver", { value: observer });
   });
 }
 

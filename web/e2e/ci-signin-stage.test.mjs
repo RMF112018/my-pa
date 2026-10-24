@@ -26,7 +26,15 @@ async function probe(failure, { active = true, annotations = [], mode = "visual"
   const act = async (stage) => { calls.push(stage); if (failure === stage) throw sensitive; };
   const launcher = { kind: "launcher", filter() { return this; } };
   const button = { kind: "signinbutton", click: () => act("click") };
-  const page = { goto: () => act("goto"), addStyleTag: () => act("overlay"),
+  const page = { goto: () => act("goto"), evaluate: async (callback) => {
+    await act("overlay");
+    const previousDocument = globalThis.document;
+    const previousObserver = globalThis.MutationObserver;
+    globalThis.document = { querySelectorAll: () => [], documentElement: {} };
+    globalThis.MutationObserver = class { observe() {} };
+    try { return callback(); }
+    finally { globalThis.document = previousDocument; globalThis.MutationObserver = previousObserver; }
+  },
     getByTestId: () => button, waitForURL: () => act("todayURL"), locator: () => launcher,
     emulateMedia: (options) => { assert.deepEqual(options, { reducedMotion: "reduce" }); return act("media"); } };
   globalThis.__myPaSyntheticStageProbe = {

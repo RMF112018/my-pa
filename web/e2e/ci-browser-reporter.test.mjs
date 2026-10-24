@@ -127,3 +127,25 @@ test("reports only fixed early/media boundary metadata without naming a browser 
   assert.equal(output.includes("phase="), false);
   assert.equal(output.includes("SECRET"), false);
 });
+
+test("only the admitted Search body emits finite active states, including inflight", () => {
+  for (const phase of ["nav", "heading", "query", "search-settled", "capture-links", "goodnotes-links", "knowledge-absence"]) {
+    for (const state of ["inflight", "failed", "complete"]) {
+      const output = capture(() => new BrowserCiReporter().onTestEnd(caseFor("search-contract.spec.ts", 109, "webkit"), {
+        status: "failed", steps: [], annotations: [{ type: "my-pa-ci-search-active", description: `${phase}:${state}` }],
+      }));
+      assert.match(output, new RegExp(`active=${phase}; state=${state}\\n$`));
+    }
+  }
+  for (const candidate of [caseFor(), caseFor("search-contract.spec.ts", 110)]) {
+    const output = capture(() => new BrowserCiReporter().onTestEnd(candidate, { status: "failed", steps: [],
+      annotations: [{ type: "my-pa-ci-search-active", description: "nav:inflight" }] }));
+    assert.equal(output.includes("active="), false);
+  }
+  for (const descriptions of [["nav:SECRET\n::error::x"], ["nav:inflight", "query:failed"]]) {
+    const output = capture(() => new BrowserCiReporter().onTestEnd(caseFor("search-contract.spec.ts", 109), { status: "failed", steps: [],
+      annotations: descriptions.map((description) => ({ type: "my-pa-ci-search-active", description })) }));
+    assert.equal(output.includes("active="), false);
+    assert.equal(output.includes("SECRET"), false);
+  }
+});

@@ -119,6 +119,7 @@ class RemoteAccessContext:
     compact_publication: bool = False
     compact_operator_publication: bool = False
     authenticated_client_id: str | None = field(default=None, repr=False)
+    service: ApplicationService | None = field(default=None, repr=False, compare=False)
 
 
 RemoteAccessResolver = Callable[[str | None], RemoteAccessContext | None]
@@ -267,6 +268,7 @@ def create_remote_mcp_app(
     allowed_hosts: tuple[str, ...],
     allowed_origins: tuple[str, ...] = (),
     global_enabled: bool = True,
+    require_bound_service: bool = False,
     remote_enabled: bool = False,
     writes_enabled: bool = False,
     max_concurrent_calls: int = 8,
@@ -302,7 +304,7 @@ def create_remote_mcp_app(
         resolved = (
             None if request is None else request.scope.get("state", {}).get("remote_mcp_access")
         )
-        if resolved is None:
+        if resolved is None or (require_bound_service and resolved.service is None):
             return None
         principal, granted = resolved.principal, resolved.allowed_capabilities
         request_profile = (
@@ -329,6 +331,7 @@ def create_remote_mcp_app(
             compact_publication=compact,
             allowed_canonical_targets=canonical,
             authenticated_client_id=resolved.authenticated_client_id,
+            service=resolved.service,
         )
 
     server = create_mcp_server(

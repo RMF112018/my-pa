@@ -12,7 +12,11 @@ with what the Program reads need:
 * `ProgramSeeds` -- the Entity graph by direct SQL: Program and Project
   Entities, bound Continuity Projects, `member_of` edges with any recorded
   window and state, and merges (a redirect, without the merge command's
-  reparenting, so a test can state exactly which rows exist).
+  reparenting, so a test can state exactly which rows exist);
+* `S4Runtime.work_commitment` / `close_work_commitment` / `follow_up` /
+  `context_situation` / `store_situation` -- Commitments storing any `project_id` and
+  `situation_id` (the v1 writer checks only their pattern, S4 D-16), closed
+  natively, with a follow-up Task, for the `commitments.v2.*` tests (worker M3).
 
 Every identity here is synthetic.
 """
@@ -24,11 +28,21 @@ from typing import Any, Final
 
 from sqlalchemy import Engine, text
 
-from my_pa.application.commands import ResolveProgramMembers
+from my_pa.application.commands import (
+    CloseCommitment,
+    CreateCommitment,
+    CreateSituation,
+    CreateTask,
+    ReadCommitment,
+    ResolveProgramMembers,
+)
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.ports import UnitOfWork
 from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.situation.continuity import CommitmentDirection
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.domain.task.lifecycle import TaskOriginKind
+from my_pa.domain.task.role import TaskRole
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.commitment_management import (
@@ -39,7 +53,10 @@ from my_pa.infrastructure.persistence.program_reads import SqlAlchemyProgramRead
 from my_pa.infrastructure.persistence.task_management import SqlAlchemyTaskManagementUnitOfWork
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 from tests.database.lineage_issue_harness import LIMITS, PRINCIPAL
+from tests.database.lineage_record_harness import capture
+from tests.database.lineage_s2_harness import REVIEW_DECISION
 from tests.database.lineage_s3_read_harness import S3ReadRuntime
+from tests.database.test_commitment_entity_counterparty import seed_counterparty_entity
 
 __all__ = [
     "PROGRAM_STATEMENT_TIMEOUT_MS",
@@ -131,6 +148,100 @@ class S4Runtime(S3ReadRuntime):
             ResolveProgramMembers(program_entity_ids=program_entity_ids, valid_at=valid_at),
             **kwargs,
         )
+
+    # --- Commitments storing references (worker M3, section 7.3) ---------------
+
+    def work_commitment(
+        self,
+        key: str,
+        *,
+        project_id: str | None = None,
+        situation_id: str | None = None,
+        accepted: bool = True,
+        direction: CommitmentDirection = CommitmentDirection.OWED_TO_PRINCIPAL,
+        due_at: datetime | None = None,
+        summary: str | None = None,
+        counterparty_entity_id: str | None = None,
+        principal_id: str = PRINCIPAL,
+    ) -> str:
+        """A v1-created Commitment storing `project_id` / `situation_id` as given.
+
+        `accepted` through the v1 review-decision field (the only route, S2
+        D-05); otherwise natively `proposed`. Each gets its own counterparty
+        unless one is named.
+        """
+        origin, _, _ = capture(self, f"s4-cmt-origin-{key}", principal_id=principal_id)
+        written = self.ok(
+            CreateCommitment(
+                counterparty_entity_id=(
+                    counterparty_entity_id or seed_counterparty_entity(self.engine, principal_id)
+                ),
+                direction=direction,
+                summary=summary or f"Synthetic s4 commitment {key}",
+                origin_evidence_ref=origin,
+                idempotency_key=f"s4-cmt-{key}",
+                due_at=due_at,
+                project_id=project_id,
+                situation_id=situation_id,
+                accepted_by_review_decision_id=REVIEW_DECISION if accepted else None,
+            ),
+            principal_id=principal_id,
+        )
+        return str(written["commitment"]["commitment_id"])
+
+    def close_work_commitment(
+        self, commitment_id: str, key: str, *, principal_id: str = PRINCIPAL
+    ) -> None:
+        """`commitments.close` with closure evidence."""
+        current = self.ok(ReadCommitment(commitment_id=commitment_id), principal_id=principal_id)
+        evidence, _, _ = capture(self, f"s4-cmt-closure-{key}", principal_id=principal_id)
+        self.ok(
+            CloseCommitment(
+                commitment_id=commitment_id,
+                expected_version=int(current["commitment"]["version"]),
+                closure_evidence_ref=evidence,
+                idempotency_key=f"s4-cmt-close-{key}",
+            ),
+            principal_id=principal_id,
+        )
+
+    def store_situation(self, commitment_id: str, situation_id: str) -> None:
+        """Store `situation_id` on a Commitment by direct SQL.
+
+        The v1 writers refuse an Issue as a Work `situation_id` (S1 section 8),
+        but the column's global foreign key admits one, so a stored row may name
+        an Issue (S4 section 6.2, R4-F17); only SQL can seed it.
+        """
+        with self.engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE knowledge.commitments SET situation_id = :situation_id "
+                    "WHERE commitment_id = :commitment_id"
+                ),
+                {"situation_id": situation_id, "commitment_id": commitment_id},
+            )
+
+    def follow_up(self, commitment_id: str, key: str, *, principal_id: str = PRINCIPAL) -> str:
+        """A follow-up Task of `commitment_id` (`tasks.create` with the role)."""
+        written = self.ok(
+            CreateTask(
+                title=f"Synthetic s4 follow-up {key}",
+                idempotency_key=f"s4-tsk-{key}",
+                origin_kind=TaskOriginKind.DIRECT_PRINCIPAL,
+                commitment_id=commitment_id,
+                role=TaskRole.FOLLOW_UP,
+            ),
+            principal_id=principal_id,
+        )
+        return str(written["task"]["task_id"])
+
+    def context_situation(self, key: str, *, principal_id: str = PRINCIPAL) -> str:
+        """A context Situation (`continuity.situations.create`)."""
+        written = self.ok(
+            CreateSituation(title=f"Synthetic s4 situation {key}", idempotency_key=f"s4-sit-{key}"),
+            principal_id=principal_id,
+        )
+        return str(written["situation_id"])
 
     def resolve_refused(
         self,

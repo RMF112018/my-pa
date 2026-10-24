@@ -12,8 +12,17 @@ gateway composes it. The resolver rows (worker M2, WP-04A):
 * with either switch off, every S4 capability answers `unsupported`;
 * a Program-read statement cancelled by its timeout answers `unavailable`.
 
-The overview, Commitment v2 and manifest rows of the same section 10 entry are
-added by their packages (workers M3, M4 and M5). Every identity is synthetic.
+The Commitment v2 rows (worker M3, section 7.3):
+
+* a remote reader without a grant on its own `commitments.v2.*` name is
+  `unsupported`, whatever family reads it holds;
+* `project_reference` is `restricted` without the `project` family, and a
+  context `situation_reference` without the `situation` family;
+* an Issue `situation_reference` needs the `issue` family, never the
+  `situation` one (R4-F17).
+
+The overview and manifest rows of the same section 10 entry are added by their
+packages (workers M4 and M5). Every identity is synthetic.
 """
 
 from __future__ import annotations
@@ -106,6 +115,7 @@ def test_a_foreign_program_answers_like_an_absent_one(runtime: S4Runtime) -> Non
 
 def test_a_remote_read_without_its_grant_is_unsupported(runtime: S4Runtime) -> None:
     program = _program_with_member(runtime)
+    _commitment_v2_grant_cases(runtime)
     # Every family read, but no grant on `programs.members.resolve` itself.
     families_only = grant(*ROOT_READS)
     assert _error(runtime, _resolve(program), grants=families_only) == ("unsupported", [])
@@ -142,6 +152,142 @@ def test_a_remote_reader_without_entity_and_project_reads_sees_no_program(
         for project_read in ("continuity.projects", "continuity.projects.read"):
             seen = grant("programs.members.resolve", entity_read, project_read)
             assert runtime.ok(_resolve(program), grants=seen)["programs"][0]["members"]
+
+
+#: Every family read a v2 Commitment reference can need (section 6.2).
+V2_FAMILY_READS: Final = (
+    "commitments.read",
+    "continuity.projects",
+    "continuity.situations",
+    "issues.read",
+)
+
+
+def _commitment_v2_grant_cases(runtime: S4Runtime) -> None:
+    """Each `commitments.v2.*` name re-checks its own grant (section 6.1, R3-F13)."""
+    project, _entity = runtime.seeds.project("Isolation v2 grant")
+    commitment = runtime.work_commitment("isolation-v2-grant", project_id=project)
+    for command in (
+        ReadCommitmentV2(commitment_id=commitment),
+        ListCommitmentsV2(project_ids=(project,)),
+        SearchCommitmentsV2(query="isolation"),
+        WaitingOnV2(),
+    ):
+        name = command.capability.value
+        # Every family read and the v1 sibling, but no grant on the v2 name.
+        sibling = name.replace(".v2.", ".")
+        families_only = grant(*V2_FAMILY_READS, sibling)
+        assert _error(runtime, command, grants=families_only) == ("unsupported", []), name
+        # A grant on it for a purpose it does not permit admits nothing either.
+        misgranted = families_only | {(command.capability, Purpose.REPORT_READ)}
+        assert _error(runtime, command, grants=misgranted) == ("unsupported", []), name
+        # With the grant, the same caller is answered.
+        assert runtime.ok(command, grants=grant(name, *V2_FAMILY_READS)), name
+
+
+def _references(
+    runtime: S4Runtime, commitment_id: str, reads: tuple[str, ...]
+) -> list[tuple[Any, Any, Any, Any]]:
+    """`(project_id, project_reference, situation_id, situation_reference)` per v2 read.
+
+    The single read, and the row of the same Commitment in the list, search and
+    `waiting_on` pages, for a remote reader holding the 4 v2 grants and `reads`.
+    """
+    grants = grant(
+        "commitments.v2.read",
+        "commitments.v2.list",
+        "commitments.v2.search",
+        "commitments.v2.waiting_on",
+        *reads,
+    )
+
+    def shown(item: dict[str, Any]) -> tuple[Any, Any, Any, Any]:
+        return (
+            item["project_id"],
+            item["project_reference"],
+            item["situation_id"],
+            item["situation_reference"],
+        )
+
+    found = [
+        shown(
+            runtime.ok(ReadCommitmentV2(commitment_id=commitment_id), grants=grants)["commitment"]
+        )
+    ]
+    for command, key in (
+        (ListCommitmentsV2(), "commitments"),
+        (SearchCommitmentsV2(query="isolation"), "commitments"),
+        (WaitingOnV2(), "waiting_on"),
+    ):
+        rows = runtime.ok(command, grants=grants)[key]
+        found.extend(shown(item) for item in rows if item["commitment_id"] == commitment_id)
+    assert len(found) == 4
+    return found
+
+
+def test_v2_references_are_restricted_without_the_project_or_situation_family(
+    runtime: S4Runtime,
+) -> None:
+    project, _entity = runtime.seeds.project("Isolation v2 references")
+    context = runtime.context_situation("isolation-v2-context")
+    commitment = runtime.work_commitment(
+        "isolation-v2-references", project_id=project, situation_id=context
+    )
+    # Neither family: both references restricted, neither id shown.
+    assert set(_references(runtime, commitment, ())) == {(None, "restricted", None, "restricted")}
+    # The `project` family (either read) shows the Project only.
+    for project_read in ("continuity.projects", "continuity.projects.read"):
+        assert set(_references(runtime, commitment, (project_read,))) == {
+            (project, "owned", None, "restricted")
+        }
+    # The `situation` family shows the context Situation only.
+    assert set(_references(runtime, commitment, ("continuity.situations",))) == {
+        (None, "restricted", context, "owned")
+    }
+    # Both: both shown, as a local caller sees them.
+    assert set(
+        _references(runtime, commitment, ("continuity.projects", "continuity.situations"))
+    ) == {(project, "owned", context, "owned")}
+    local = runtime.ok(ReadCommitmentV2(commitment_id=commitment))["commitment"]
+    assert (local["project_id"], local["situation_id"]) == (project, context)
+    # A remote reader without the `project` family sees no Project to filter
+    # by either: its own Project answers as an absent one.
+    without = grant("commitments.v2.list")
+    assert _error(runtime, ListCommitmentsV2(project_ids=(project,)), grants=without) == (
+        "not_found",
+        ["project_ids"],
+    )
+    with_projects = grant("commitments.v2.list", "continuity.projects")
+    listed = runtime.ok(ListCommitmentsV2(project_ids=(project,)), grants=with_projects)
+    assert [item["commitment_id"] for item in listed["commitments"]] == [commitment]
+
+
+def test_an_issue_situation_reference_needs_the_issue_family(runtime: S4Runtime) -> None:
+    project, _entity = runtime.seeds.project("Isolation v2 issue reference")
+    issue = runtime.issue("isolation-v2-issue")
+    context = runtime.context_situation("isolation-v2-issue-context")
+    on_issue = runtime.work_commitment("isolation-v2-on-issue", project_id=project)
+    runtime.store_situation(on_issue, issue)
+    on_context = runtime.work_commitment(
+        "isolation-v2-on-context", project_id=project, situation_id=context
+    )
+    projects = "continuity.projects"
+    # The `situation` family does not reach an Issue ...
+    assert {
+        row[2:] for row in _references(runtime, on_issue, (projects, "continuity.situations"))
+    } == {(None, "restricted")}
+    # ... the `issue` family does, by either of its reads ...
+    for issue_read in ("issues.read", "issues.list"):
+        assert {row[2:] for row in _references(runtime, on_issue, (projects, issue_read))} == {
+            (issue, "owned")
+        }
+    # ... and the `issue` family does not reach a context Situation.
+    assert {row[2:] for row in _references(runtime, on_context, (projects, "issues.read"))} == {
+        (None, "restricted")
+    }
+    assert {
+        row[2:] for row in _references(runtime, on_context, (projects, "continuity.situations"))
+    } == {(context, "owned")}
 
 
 def _every_s4_command(program: str) -> list[Command]:

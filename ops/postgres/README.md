@@ -258,3 +258,51 @@ running a single-user bulk load — and are not server settings:
 `shm_size: 1gb` raises the container's `/dev/shm` above Docker's 64 MB default
 so parallel scans and hash joins have room. `stop_grace_period: 60s` gives the
 server time to shut down cleanly instead of being killed mid-checkpoint.
+
+## Creator-bound grants for future MCP objects
+
+`infrastructure/database/mcp_object_grants.py` provides an opt-in migration helper;
+no existing revision, live default ACL or role grant is changed by adding it.
+Future reviewed revisions may use it on the existing connection/transaction:
+
+```python
+from my_pa.infrastructure.database.mcp_object_grants import (
+    McpObjectGrant,
+    grant_created_mcp_object,
+)
+
+spec = McpObjectGrant(
+    schema="knowledge",
+    name="reviewed_new_relation",
+    creator="reviewed_creator",
+    classification="application_read",
+    kind="r",
+    review_id="EXACT_REVIEW_ID",
+)
+with grant_created_mcp_object(connection, spec):
+    # Existing reviewed migration CREATE only; do not SET ROLE or transfer owner here.
+    op.create_table("reviewed_new_relation", ..., schema="knowledge")
+```
+
+The helper requires an active revision transaction, an absent exact object and
+an explicit effective creator/classification. It checks creator at both CREATE
+boundaries and requires that creator to own the new object before granting.
+Schema/final ownership and membership defaults are not creator provenance. A
+separately reviewed ownership transfer can follow; verify the resulting ACLs.
+The trusted migration body must not switch away and back within the CREATE block;
+this helper is not a security boundary against a malicious migration owner.
+
+Explicit read/write classifications grant only the fixed MCP matrix. Unclassified
+objects and unsupported object kinds refuse. Security/control/report/feed objects
+cannot be classified as application data by schema name. Sequences need a real
+ownership dependency on an already approved writable table and receive RW USAGE
+only. Effective table/column/sequence negative checks detect unexpected PUBLIC or
+default privileges. A nested savepoint rolls back CREATE and grants even when the
+caller catches a validation error; the revision should propagate the failure.
+No shared policy is repaired and no existing object is silently regranted.
+
+Existing-object ALTERs (especially newly sensitive columns), views, foreign
+objects and post-grant ownership transfers need their own explicit review and
+verification; the new-object helper is not an automatic schema monitor. There
+are no blanket global/per-schema defaults, event triggers or grant daemons.
+Any future migration/grant application requires separate exact live authorization.

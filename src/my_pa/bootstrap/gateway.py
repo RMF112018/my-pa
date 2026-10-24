@@ -1009,18 +1009,32 @@ class GatewayRuntime:
         )
 
 
-def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
+def build_gateway_runtime(
+    settings: Settings,
+    *,
+    data_engine: Engine | None = None,
+    independent_audit_engine: Engine | None = None,
+    controls_engine: Engine | None = None,
+    permit_reenrichment: bool = True,
+) -> GatewayRuntime:
     """Compose the gateway from validated configuration.
 
     Two engines against the same database, for the reason the module docstring
     derives. The unit of work is built per invocation, as `ApplicationService`
     requires: one transaction per request, never a shared open one.
     """
-    work_engine = create_database_engine(
-        settings.parsed_database_url(), statement_timeout_ms=30_000
+    if data_engine is not None and (independent_audit_engine is None or controls_engine is None):
+        raise ValueError("injected data engine requires separate audit and control paths")
+    work_engine = (
+        data_engine
+        if data_engine is not None
+        else create_database_engine(settings.parsed_database_url(), statement_timeout_ms=30_000)
     )
-    audit_engine = create_database_engine(
-        settings.parsed_database_url(), statement_timeout_ms=30_000
+    control_engine = controls_engine if controls_engine is not None else work_engine
+    audit_engine = (
+        independent_audit_engine
+        if independent_audit_engine is not None
+        else create_database_engine(settings.parsed_database_url(), statement_timeout_ms=30_000)
     )
     audit = SqlAlchemyAuditSink(audit_engine)
 
@@ -1141,7 +1155,8 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
                 settings.relationship_identity_correction_enabled
             ),
             relationship_reenrichment_enabled=(
-                settings.relationship_intelligence_enabled
+                permit_reenrichment
+                and settings.relationship_intelligence_enabled
                 and settings.relationship_intelligence_writes_enabled
             ),
             producer_origins=producer_origins,
@@ -1160,24 +1175,24 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
             ),
         ),
         principal=principal,
-        authenticate=entra_authenticator(settings, work_engine) if entra else None,
+        authenticate=entra_authenticator(settings, control_engine) if entra else None,
         # Composed only when the operator turned the ingress on. There is no
         # `or`, no fallback and no third state: an unset variable produces
         # `False` and `False` produces `None`, so a process that was never
         # configured for remote capture cannot serve it.
         remote_client=(
-            remote_client_authenticator(settings, work_engine)
+            remote_client_authenticator(settings, control_engine)
             if settings.remote_ingress_enabled
             else None
         ),
         apple_authenticate=(
-            (lambda header: authenticate_apple_bridge_credential(work_engine, header))
+            (lambda header: authenticate_apple_bridge_credential(control_engine, header))
             if settings.apple_ingress_enabled
             else None
         ),
         apple_control=apple_control,
-        mcp_enabled=mcp_surface_enabled(settings, work_engine, principal),
+        mcp_enabled=mcp_surface_enabled(settings, control_engine, principal),
         work_engine=work_engine,
         audit_engine=audit_engine,
-        webauthn=_compose_webauthn_handler(settings, work_engine),
+        webauthn=_compose_webauthn_handler(settings, control_engine),
     )

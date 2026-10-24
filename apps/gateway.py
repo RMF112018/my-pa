@@ -99,6 +99,7 @@ from my_pa.adapters.mcp_interaction_capture import (
 from my_pa.application.service import ApplicationService
 from my_pa.bootstrap.gateway import GatewayRuntime, build_gateway_runtime
 from my_pa.bootstrap.knowledge_discovery_profiles import resolve_knowledge_client_overlay
+from my_pa.bootstrap.mcp_database_profiles import build_mcp_database_services
 from my_pa.bootstrap.relationship_intelligence_profiles import RELATIONSHIP_GRANT_PROFILES
 from my_pa.bootstrap.settings import Settings, load_settings
 from my_pa.domain.common.identifiers import IdKind
@@ -172,11 +173,11 @@ _SOURCE_PROVIDER_NOTICE = (
 )
 
 
-def _build_serving_runtime(settings: Settings) -> GatewayRuntime:
+def _build_serving_runtime(settings: Settings, *, observe: bool = True) -> GatewayRuntime:
     """Compose and observe server-owned versions for this process Principal."""
     runtime = build_gateway_runtime(settings)
     principal = runtime.principal
-    if principal is None:
+    if principal is None or not observe:
         return runtime
     try:
         runtime.observe_reenrichment_versions(
@@ -409,7 +410,12 @@ def _mcp_remote(args: argparse.Namespace) -> int:
     if not settings.remote_mcp_enabled:
         print("refusing    remote MCP is disabled", file=sys.stderr)
         return 2
-    runtime = _build_serving_runtime(settings)
+    runtime = _build_serving_runtime(settings, observe=not settings.mcp_database_profiles_enabled)
+    try:
+        database_services = build_mcp_database_services(settings, runtime)
+    except Exception:
+        runtime.close()
+        raise
     authorization_server = OriginOAuthServer(
         connections=runtime.work_engine.begin,
         issuer=settings.oauth_authorization_server,
@@ -427,11 +433,17 @@ def _mcp_remote(args: argparse.Namespace) -> int:
             authenticated = authenticator.authenticate(header)
         except RemoteAuthenticationError:
             return None
+        context = remote_access_context(settings, runtime.service, authenticated)
+        if database_services is not None:
+            return database_services.access(
+                context,
+                write_allowed=authenticated.write_allowed and settings.remote_writes_enabled,
+            )
         runtime.observe_authenticated_principal(
             authenticated.principal,
             cause=issue_identifier(IdKind.OPERATION),
         )
-        return remote_access_context(settings, runtime.service, authenticated)
+        return context
 
     def readiness() -> bool:
         with runtime.work_engine.connect() as connection:
@@ -444,6 +456,7 @@ def _mcp_remote(args: argparse.Namespace) -> int:
 
     app = create_remote_mcp_app(
         runtime.service,
+        require_bound_service=settings.mcp_database_profiles_enabled,
         resolve_access=resolve,
         allowed_hosts=(
             args.host,
@@ -486,6 +499,8 @@ def _mcp_remote(args: argparse.Namespace) -> int:
         try:
             close_interaction_log()
         finally:
+            if database_services is not None:
+                database_services.close()
             runtime.close()
     return 0
 

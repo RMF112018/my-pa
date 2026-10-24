@@ -23,6 +23,10 @@ export function failureCategory(
   const steps = stepsOf(result.steps ?? []);
   const snapshotFailed = steps.some((step) => step.category === "expect" && !!step.error
     && step.location?.file === absoluteSpec() && step.location.line === assertion);
+  // Playwright's missing-baseline soft error has an exact structured location
+  // on the result even when its expect step has no error. Read only that field.
+  if (!baselineExists && result.errors?.some((error) => error.location?.file === absoluteSpec()
+    && error.location.line === assertion)) return "missing-baseline";
   if (snapshotFailed) {
     if (!baselineExists) return "missing-baseline";
     const names = new Set(result.attachments.map((attachment) => attachment.name));

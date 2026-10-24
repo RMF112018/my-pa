@@ -11,6 +11,11 @@ const SPECS = [
 ];
 const PROJECTS = new Set(["firefox", "webkit"]);
 const FAILED = new Set(["failed", "timedOut", "interrupted"]);
+const SIGN_IN_STAGES = [
+  { line: 54, name: "navigation" }, { line: 55, name: "dev-overlay" },
+  { line: 57, name: "button-visible" }, { line: 58, name: "button-click" },
+  { line: 59, name: "today-navigation" }, { line: 60, name: "launcher-visible" },
+];
 function stepsOf(steps: TestStep[]): TestStep[] {
   return steps.flatMap((step) => [step, ...stepsOf(step.steps)]);
 }
@@ -26,12 +31,19 @@ export default class BrowserCiReporter implements Reporter {
       && entry.declarations.includes(test.location.line));
     if (!spec) return;
     const steps = stepsOf(result.steps ?? []);
-    const assertion = spec.assertions.find((line) => steps.some((step) => step.category === "expect"
-      && !!step.error && step.location?.file === test.location.file && step.location.line === line));
+    const locations = [
+      ...steps.filter((step) => !!step.error).map((step) => step.location),
+      ...(result.errors ?? []).map((error) => error.location),
+    ];
+    const assertion = spec.assertions.find((line) => locations.some((location) =>
+      location?.file === test.location.file && location.line === line));
+    const signIn = assertion === undefined ? SIGN_IN_STAGES.find((stage) => locations.some((location) =>
+      location?.file === path.join(process.cwd(), "e2e", "fixtures.ts") && location.line === stage.line)) : undefined;
     const category = assertion !== undefined ? "assertion"
-      : steps.some((step) => step.category === "hook" && !!step.error) ? "setup" : "other";
+      : signIn || steps.some((step) => step.category === "hook" && !!step.error) ? "setup" : "other";
+    const stage = signIn ? `; stage=${signIn.name}; status=${result.status}` : "";
     this.emitted += 1;
-    process.stdout.write(`::error file=web/e2e/${spec.name},line=${assertion ?? test.location.line},title=Browser Playwright failure::project=${project}; category=${category}\n`);
+    process.stdout.write(`::error file=web/e2e/${spec.name},line=${assertion ?? test.location.line},title=Browser Playwright failure::project=${project}; category=${category}${stage}\n`);
   }
 
   onError(_error: TestError): void {

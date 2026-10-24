@@ -41,6 +41,32 @@ test("unknown assertions stay other; hook failures are setup", () => {
   assert.match(capture(() => new BrowserCiReporter().onTestEnd(caseFor(), { status: "failed", steps: [{ category: "hook", error: {}, steps: [] }] })), /category=setup/);
 });
 
+test("uses only admitted structured error locations for assertion fallback", () => {
+  for (const location of [{ file: file("browser-security.spec.ts"), line: 60 },
+    { file: file("browser-security.spec.ts"), line: 999 },
+    { file: `${file("browser-security.spec.ts")}\n::error::x`, line: 60 }]) {
+    const output = capture(() => new BrowserCiReporter().onTestEnd(caseFor(), {
+      status: "failed", steps: [], errors: [{ location }],
+    }));
+    assert.equal(output.includes("category=assertion"), location.line === 60 && location.file === file("browser-security.spec.ts"));
+  }
+});
+
+test("reports only fixed admitted sign-in stages and failure statuses", () => {
+  for (const [line, stage] of [[54, "navigation"], [55, "dev-overlay"], [57, "button-visible"],
+    [58, "button-click"], [59, "today-navigation"], [60, "launcher-visible"]]) {
+    const output = capture(() => new BrowserCiReporter().onTestEnd(caseFor(), {
+      status: "timedOut", steps: [], errors: [{ location: { file: file("fixtures.ts"), line } }],
+    }));
+    assert.match(output, new RegExp(`category=setup; stage=${stage}; status=timedOut\\n$`));
+  }
+  for (const location of [{ file: file("fixtures.ts"), line: 56 }, { file: `${file("fixtures.ts")}\n::error::x`, line: 54 }]) {
+    const output = capture(() => new BrowserCiReporter().onTestEnd(caseFor(), { status: "failed", steps: [], errors: [{ location }] }));
+    assert.match(output, /category=other\n$/);
+    assert.equal(output.includes("stage="), false);
+  }
+});
+
 test("unknown path/project/declaration/status fail closed without printing values", () => {
   for (const candidate of [caseFor("other.spec.ts"),
     { ...caseFor(), location: { file: `${process.cwd()}/e2e/../e2e/browser-security.spec.ts`, line: 78 } },
@@ -52,7 +78,10 @@ test("unknown path/project/declaration/status fail closed without printing value
 
 test("does not access or emit any error/title/request/payload data and caps output", () => {
   const secret = "SYNTHETIC_COOKIE_URL_BODY\n::error::injected";
-  const error = new Proxy({}, { get() { throw new Error("error content accessed"); } });
+  const error = new Proxy({}, { get(_target, key) {
+    if (key === "location") return undefined;
+    throw new Error("error content accessed");
+  } });
   const reporter = new BrowserCiReporter();
   const output = capture(() => {
     for (let index = 0; index < 12; index++) {

@@ -186,6 +186,101 @@ def test_disabled_composition_opens_no_file_or_pool(monkeypatch: pytest.MonkeyPa
     assert build_mcp_database_services(settings, Mock(spec=GatewayRuntime)) is None
 
 
+def test_profile_urls_change_only_credentials_and_disable_managed_composition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from my_pa.bootstrap import mcp_database_profiles as profiles
+
+    settings = load_settings(
+        {
+            "MY_PA_DATABASE_URL": "postgresql+psycopg://control@db.invalid:5544/my_pa?sslmode=verify-full&channel_binding=require",
+            "MY_PA_MCP_DATABASE_PROFILES_ENABLED": "true",
+            "MY_PA_MCP_DATABASE_RO_PASSWORD_FILE": "/synthetic/ro",
+            "MY_PA_MCP_DATABASE_RW_PASSWORD_FILE": "/synthetic/rw",
+            "MY_PA_MCP_DATABASE_EXPECTED_CLUSTER_ID": "123",
+            "MY_PA_MANAGED_DOCUMENT_ROOT": "/synthetic/configured-managed-root",
+        }
+    )
+    original = settings.parsed_database_url()
+    urls = []
+    composed = []
+
+    def factory(url: object, **_kwargs: object) -> MagicMock:
+        urls.append(url)
+        return MagicMock()
+
+    def compose(actual_settings: object, **kwargs: object) -> SimpleNamespace:
+        assert actual_settings is settings
+        composed.append(kwargs)
+        return SimpleNamespace(service=object())
+
+    def no_reparse(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("profile composition must not parse the validated target again")
+
+    monkeypatch.setattr("my_pa.bootstrap.settings.make_url", no_reparse)
+    monkeypatch.setattr(profiles, "_password", lambda path: "synthetic-" + path.rsplit("/", 1)[-1])
+    monkeypatch.setattr(profiles, "_bind_engine", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(profiles, "create_database_engine", factory)
+    monkeypatch.setattr(profiles, "build_gateway_runtime", compose)
+    control = SimpleNamespace(work_engine=MagicMock(), audit_engine=MagicMock())
+    services = profiles.build_mcp_database_services(settings, control)  # type: ignore[arg-type]
+    assert services is not None
+    assert [url.username for url in urls] == ["my_pa_mcp_ro", "my_pa_mcp_rw"]
+    assert [url.password for url in urls] == ["synthetic-ro", "synthetic-rw"]
+    for url in urls:
+        assert (url.drivername, url.host, url.port, url.database, url.query) == (
+            original.drivername,
+            original.host,
+            original.port,
+            original.database,
+            original.query,
+        )
+    assert original.username == "control" and original.password is None
+    assert settings.parsed_database_url() is original
+    assert len(composed) == 2
+    assert all(kwargs["permit_managed_documents"] is False for kwargs in composed)
+    assert all(kwargs["permit_reenrichment"] is False for kwargs in composed)
+
+
+def test_managed_store_suppression_skips_factory_and_legacy_default_composes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import MagicMock, Mock
+
+    from my_pa.bootstrap import gateway
+
+    settings = load_settings(
+        {
+            "MY_PA_DATABASE_URL": "postgresql+psycopg://test@db.invalid/my_pa",
+            "MY_PA_MANAGED_DOCUMENT_ROOT": "/synthetic/configured-managed-root",
+        }
+    )
+    store = object()
+    factory = Mock(return_value=store)
+    monkeypatch.setattr(gateway, "managed_byte_store", factory)
+    engine = MagicMock()
+    suppressed = gateway.build_gateway_runtime(
+        settings,
+        data_engine=engine,
+        independent_audit_engine=engine,
+        controls_engine=engine,
+        permit_managed_documents=False,
+    )
+    factory.assert_not_called()
+    assert suppressed.service._managed_store_or_none is None
+    legacy = gateway.build_gateway_runtime(
+        settings,
+        data_engine=engine,
+        independent_audit_engine=engine,
+        controls_engine=engine,
+    )
+    factory.assert_called_once_with(settings, engine)
+    assert legacy.service._managed_store_or_none is store
+
+
 @pytest.mark.parametrize(
     "query", ["options=-c+role%3Downer", "user=owner", "host=elsewhere", "service=unreviewed"]
 )

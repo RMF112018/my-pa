@@ -11,7 +11,7 @@ import stat
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from sqlalchemy import URL, Connection, Engine, event
+from sqlalchemy import Connection, Engine, event
 
 from my_pa.adapters.mcp.remote import RemoteAccessContext
 from my_pa.application.service import ApplicationService
@@ -190,15 +190,7 @@ def build_mcp_database_services(
             base = settings.parsed_database_url()
             if not base.query.keys() <= MCP_DATABASE_TRANSPORT_QUERY_KEYS:
                 raise SettingsError("MCP profiles refuse unreviewed transport query options")
-            url = URL.create(
-                base.drivername,
-                username=role,
-                password=_password(path),
-                host=base.host,
-                port=base.port,
-                database="my_pa",
-                query=base.query,
-            )
+            url = base.set(username=role, password=_password(path))
             engine = create_database_engine(url, statement_timeout_ms=30_000)
             engines.append(engine)
             _bind_engine(
@@ -208,18 +200,14 @@ def build_mcp_database_services(
                 pass
         # Do not introduce business re-enrichment writes through authentication,
         # reads or automatic startup observations. Managed writes are not admitted.
-        data_settings = settings.model_copy(
-            update={
-                "managed_document_root": "",
-            }
-        )
         services = [
             build_gateway_runtime(
-                data_settings,
+                settings,
                 data_engine=engine,
                 independent_audit_engine=control.audit_engine,
                 controls_engine=control.work_engine,
                 permit_reenrichment=False,
+                permit_managed_documents=False,
             ).service
             for engine in engines
         ]

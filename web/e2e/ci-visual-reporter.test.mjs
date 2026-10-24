@@ -47,9 +47,21 @@ test("missing files alone do not misclassify an earlier assertion or foreign ste
   }
 });
 
+test("classifies located missing-baseline soft errors without an errored step", () => {
+  const soft = resultFor({ steps: [], errors: [{ location: { file, line: 20 } }] });
+  assert.equal(failureCategory(soft, 20, "shell-light-unavailable", false), "missing-baseline");
+  assert.equal(failureCategory(soft, 20, "shell-light-unavailable", true), "other");
+  for (const location of [{ file, line: 19 }, { file: `${file}\n::error::x`, line: 20 }]) {
+    assert.equal(failureCategory(resultFor({ steps: [], errors: [{ location }] }), 20, "shell-light-unavailable", false), "other");
+  }
+});
+
 test("emits only fixed test identity/category and never secret error data", () => {
   const secret = "SYNTHETIC_PRIVATE_HEADER_BODY_URL\n::error::injected";
-  const forbidden = new Proxy({}, { get() { throw new Error("raw error content accessed"); } });
+  const forbidden = new Proxy({}, { get(_target, key) {
+    if (key === "location") return undefined;
+    throw new Error("raw error content accessed");
+  } });
   const output = capture(() => {
     const reporter = new VisualCiReporter();
     reporter.onTestEnd(caseFor({ title: secret, id: secret }), resultFor({

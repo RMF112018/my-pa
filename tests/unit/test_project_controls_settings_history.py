@@ -556,9 +556,23 @@ def test_the_validator_offers_no_fallback_for_an_unknown_name() -> None:
         validate_project_timezone_name("Not/AZone")
 
 
-def test_the_validator_does_not_canonicalise_a_link_to_its_target() -> None:
-    """`US/Central` is a tzdata link to `America/Chicago` and stays spelled as sent."""
+def test_the_validator_does_not_canonicalise_a_link_to_its_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An accepted alias stays spelled as sent, independently of host link packages."""
+    from types import SimpleNamespace
+
+    from my_pa.domain.project_controls import business_time
+
+    looked_up: list[str] = []
+
+    def accepted_alias(name: str) -> SimpleNamespace:
+        looked_up.append(name)
+        return SimpleNamespace(key="America/Chicago")
+
+    monkeypatch.setattr(business_time, "ZoneInfo", accepted_alias)
     assert validate_project_timezone_name("US/Central") == "US/Central"
+    assert looked_up == ["US/Central"]
 
 
 def test_the_validator_leaves_project_today_untouched() -> None:

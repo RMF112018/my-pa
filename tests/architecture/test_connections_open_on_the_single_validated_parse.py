@@ -1,8 +1,10 @@
 """Every production connection opens on the parse validation made, not on the string.
 
 `Settings` states a guarantee its callers rely on: `database_url` is read once,
-by `make_url`, during validation, and the `URL` that reading produced is the
-object handed to `create_database_engine`. `create_engine` returns a `URL`
+by `make_url`, during validation, and that parsed target is handed to
+`create_database_engine`. Fixed MCP data roles may derive a new immutable URL
+only by substituting username/password; all target fields remain unchanged.
+`create_engine` returns a `URL`
 unchanged rather than parsing it again, so passing the parse is what leaves no
 second reading of the text to diverge from the first. Passing `database_url` —
 the raw string — re-enters the parser, and a string two parsers can read two
@@ -19,7 +21,15 @@ The rule is stated once, here, and derived from each module's own syntax tree
 rather than from a list of call sites a reviewer would have to keep current:
 
     in a production module, the URL argument of every `create_database_engine`
-    call resolves to a `.parsed_database_url()` call.
+    call resolves to a `.parsed_database_url()` call, optionally followed by
+    immutable credential-only `.set(username=..., password=...)` derivation.
+
+The two fixed MCP data roles require different credentials against the same
+validated target. Credential-only `URL.set` preserves the stored parse's driver,
+host, port, database and query without another parse. This guard permits only
+explicit username/password keywords, no positional or expanded arguments, and
+recursively proves the receiver's stored-parse provenance. Every target-field
+override and every raw or unknown receiver still fails closed.
 
 "Resolves to" and not "is", because the argument is not always written at the
 call. `migrations/env.py` binds the parse to a module-level name and passes the
@@ -135,7 +145,8 @@ def _provenance(
     """Where the URL this expression evaluates to came from.
 
     `parse` only for a call of `parsed_database_url` — the accessor that hands
-    back the object validation built. `raw` for any attribute read of
+    back the object validation built — or an explicit credential-only `set`
+    whose receiver recursively proves that provenance. `raw` for any attribute read of
     `database_url`, whatever the receiver is spelled, because
     `settings.database_url` and `load_settings().database_url` are the same
     mistake. Everything else is `unknown` and `unknown` fails.
@@ -144,6 +155,14 @@ def _provenance(
         callee = node.func
         if isinstance(callee, ast.Attribute) and callee.attr == PARSE_ACCESSOR:
             return "parse"
+        if (
+            isinstance(callee, ast.Attribute)
+            and callee.attr == "set"
+            and not node.args
+            and node.keywords
+            and all(keyword.arg in {"username", "password"} for keyword in node.keywords)
+        ):
+            return _provenance(callee.value, bindings, seen)
         return "unknown"
     if isinstance(node, ast.Attribute):
         return "raw" if node.attr == RAW_FIELD else "unknown"
@@ -284,6 +303,36 @@ CASES: tuple[tuple[str, str, str, list[str]], ...] = (
     ),
     # The shape every caller must have.
     ("the parse at the call", "", "load_settings().parsed_database_url()", []),
+    (
+        "credentials directly on the accessor",
+        "",
+        'load_settings().parsed_database_url().set(username="fixed_role")',
+        [],
+    ),
+    (
+        "credentials on the stored parse",
+        "base = load_settings().parsed_database_url()",
+        'base.set(username="fixed_role", password="synthetic_only")',
+        [],
+    ),
+    (
+        "recursive credential-only derivation",
+        "base = load_settings().parsed_database_url()",
+        'base.set(username="fixed_role").set(password="synthetic_only")',
+        [],
+    ),
+    (
+        "credential derivation cannot validate raw text",
+        "base = load_settings().database_url",
+        'base.set(username="fixed_role")',
+        ["8:raw"],
+    ),
+    (
+        "credential derivation cannot validate unknown receivers",
+        "base = unverified_url()",
+        'base.set(username="fixed_role")',
+        ["8:unknown"],
+    ),
     # By keyword rather than positionally: the same read, still raw.
     ("the raw field by keyword", "", "url=load_settings().database_url", ["8:raw"]),
     # A URL that never went through validation at all. Not the defect this
@@ -294,6 +343,29 @@ CASES: tuple[tuple[str, str, str, list[str]], ...] = (
         '"postgresql+psycopg://synthetic@nowhere.invalid/synthetic"',
         ["8:unknown"],
     ),
+)
+
+# Target fields, positional/starred arguments and expanded dictionaries cannot
+# hide endpoint changes behind the legitimate credential-only derivation.
+CASES += tuple(
+    (
+        f"reject target or unbounded derivation {argument}",
+        "base = load_settings().parsed_database_url()",
+        argument,
+        ["8:unknown"],
+    )
+    for argument in (
+        'base.set(host="elsewhere.invalid")',
+        'base.set(username="fixed_role", host="elsewhere.invalid")',
+        'base.set(host="elsewhere.invalid").set(username="fixed_role")',
+        "base.set(port=9999)",
+        'base.set(database="elsewhere")',
+        'base.set(drivername="elsewhere")',
+        'base.set(query={"options": "unreviewed"})',
+        'base.set("positional")',
+        "base.set(*unbounded)",
+        "base.set(**unbounded)",
+    )
 )
 
 
@@ -307,9 +379,9 @@ def test_the_scan_discriminates(
 
     A scan that reported everything would pass the rule above the day it broke,
     and a scan that reported nothing would pass it for ever. The same planted
-    module is run six ways: three that must be rejected, three that must be
-    accepted, and one of the accepted three is the alias whose *name* is the
-    raw field — so the scan is answering the question rather than its own name.
+    module is run with validated and invalid origins, credential-only derivations
+    and target overrides. An accepted alias is *named* like the raw field, so
+    the scan answers provenance rather than accepting its own variable names.
     """
     offending = unvalidated_connections(
         PLANTED.format(binding=binding, argument=argument), f"<planted: {name}>"

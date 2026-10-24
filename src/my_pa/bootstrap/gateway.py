@@ -1016,12 +1016,15 @@ def build_gateway_runtime(
     independent_audit_engine: Engine | None = None,
     controls_engine: Engine | None = None,
     permit_reenrichment: bool = True,
+    permit_managed_documents: bool = True,
 ) -> GatewayRuntime:
     """Compose the gateway from validated configuration.
 
     Two engines against the same database, for the reason the module docstring
     derives. The unit of work is built per invocation, as `ApplicationService`
     requires: one transaction per request, never a shared open one.
+    Restricted MCP compositions explicitly suppress re-enrichment and managed
+    storage construction; both remain enabled for existing callers by default.
     """
     if data_engine is not None and (independent_audit_engine is None or controls_engine is None):
         raise ValueError("injected data engine requires separate audit and control paths")
@@ -1111,7 +1114,9 @@ def build_gateway_runtime(
         service=ApplicationService(
             unit_of_work=unit_of_work,
             limits=settings.effective_limits(),
-            managed_store=managed_byte_store(settings, work_engine),
+            managed_store=(
+                managed_byte_store(settings, work_engine) if permit_managed_documents else None
+            ),
             task_management_unit_of_work=task_management_unit_of_work,
             commitment_management_unit_of_work=commitment_management_unit_of_work,
             constraint_management_unit_of_work=constraint_management_unit_of_work,

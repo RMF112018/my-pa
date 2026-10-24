@@ -571,6 +571,7 @@ from my_pa.application.meetings import (
 from my_pa.application.model_gate import BoundedModelGate
 from my_pa.application.producer_origin import ProducerOriginError, ProducerOriginRegistry
 from my_pa.application.program_membership import program_families, resolve_program_members
+from my_pa.application.program_work import read_program_overview
 from my_pa.application.record_events import (
     MemoryDisclosure,
     list_record_events,
@@ -14230,11 +14231,29 @@ class ApplicationService:
     def _programs_overview(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadProgramOverview
     ) -> _Result:
-        """`programs.overview`: not implemented in this change (`unsupported`)."""
-        del unit_of_work, authorization, command
+        """`programs.overview`: Commitments, Issues and Constraints of 1..10 Programs (S4 7.2).
+
+        The switches, then the composition checks (section 7.6: the entity
+        plane, the Program read factory and the Constraint plane), then the
+        remote grant re-check (section 6.1: `unsupported`), then the read on its
+        own Program snapshot with the caller's section 6.2 families. The
+        request's own unit of work is not read: it carries the audit row only.
+        """
+        del unit_of_work
         self._program_plane()
-        self._program_read_plane(overview=True)
-        raise UnsupportedError()
+        factory = self._program_read_plane(overview=True)
+        require_read_grant(authorization.capability_grants, command.capability)
+        with _translated():
+            view = read_program_overview(
+                factory,
+                authorization.principal.principal_id,
+                command.program_entity_ids,
+                families=program_families(authorization.capability_grants),
+            )
+        return _Result(
+            payload=view.to_canonical_dict(),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+        )
 
     # ---- commitments.v2.* (S4 contract section 7.3; worker M3) ----
     #

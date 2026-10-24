@@ -21,6 +21,7 @@ Principal-scoped.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from types import TracebackType
 from typing import Final
 
@@ -30,6 +31,7 @@ from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from my_pa.contracts.ports import (
     ConstraintManagementRepository,
     ProgramMembershipRepository,
+    ProgramMetricsRepository,
     ProgramReadUnavailableError,
     ProgramReadUnitOfWork,
     ProgramSnapshot,
@@ -39,6 +41,7 @@ from my_pa.infrastructure.persistence.program_membership import (
     SqlProgramMembershipRepository,
     program_statement,
 )
+from my_pa.infrastructure.persistence.program_metrics import SqlProgramMetricsRepository
 
 __all__ = ["SqlAlchemyProgramReadUnitOfWork"]
 
@@ -136,6 +139,9 @@ class SqlAlchemyProgramReadUnitOfWork(ProgramReadUnitOfWork):
         # `SET LOCAL` takes no bind parameter; the value is a validated integer.
         self.connection.execute(text(f"SET LOCAL statement_timeout = {milliseconds}"))
 
+    def guarded[ResultT](self, read: Callable[[], ResultT]) -> ResultT:
+        return program_statement(read)
+
     @property
     def constraints(self) -> ConstraintManagementRepository:
         return SqlConstraintManagementRepository(self.connection)
@@ -143,3 +149,7 @@ class SqlAlchemyProgramReadUnitOfWork(ProgramReadUnitOfWork):
     @property
     def program_membership(self) -> ProgramMembershipRepository:
         return SqlProgramMembershipRepository(self.connection)
+
+    @property
+    def program_metrics(self) -> ProgramMetricsRepository:
+        return SqlProgramMetricsRepository(self.connection)

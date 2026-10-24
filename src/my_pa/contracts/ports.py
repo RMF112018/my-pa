@@ -135,6 +135,7 @@ from my_pa.domain.meeting.model import (
 )
 from my_pa.domain.policy.decision import validate_policy_version
 from my_pa.domain.program.membership import BridgeLink, EntityNode, MemberEdge
+from my_pa.domain.program.reportability import MetricId, SyncTarget
 from my_pa.domain.project_controls.category import ConstraintCategory, ConstraintCategoryState
 from my_pa.domain.project_controls.constraint import ProjectConstraint
 from my_pa.domain.project_controls.history import (
@@ -462,7 +463,9 @@ __all__ = [
     "PortError",
     "ProgramMemberEdges",
     "ProgramMembershipRepository",
+    "ProgramMetricsRepository",
     "ProgramReadUnavailableError",
+    "ProgramSyncFacts",
     "ProjectLinkEventRecord",
     "ProjectRepository",
     "ProposalAdmissionConflictError",
@@ -10606,11 +10609,64 @@ class ProgramMembershipRepository(ABC):
         """`project_id -> projects.state` for the caller's Projects among `project_ids`."""
 
 
-class ProgramMetricsRepository(ABC):  # noqa: B024 - its reads are added by worker M4
-    """The Program Commitment and Issue aggregates (S4 section 3.2), on the snapshot.
+@dataclass(frozen=True, slots=True)
+class ProgramSyncFacts:
+    """One Project's stored Constraint sync data, read in the snapshot (S4 section 3.3).
 
-    A seam: worker M4 (WP-04B) adds the batched, Principal-scoped aggregates.
+    `targets` are its `constraint_sync_targets` rows (by `sync_target_id`),
+    each with the `sync_state` of the run its `last_run_id` names;
+    `open_conflicts` the Project's open sync conflicts (the count
+    `portfolio_sync_summary` reads); `last_verified_at` the latest of its
+    targets' (`None` without a verified target).
     """
+
+    targets: tuple[SyncTarget, ...]
+    open_conflicts: int
+    last_verified_at: datetime | None
+
+
+class ProgramMetricsRepository(ABC):
+    """The Program Commitment, Issue and sync aggregates (S4 sections 3.2, 3.3), on the snapshot.
+
+    Each method is one Principal-scoped statement for the whole set of
+    Projects, whatever its size (S4 section 6.3's constant statement plan).
+    Nothing here writes; a statement cancelled by its timeout raises
+    `ProgramReadUnavailableError`. A Project id that is not this Principal's
+    contributes nothing.
+    """
+
+    @abstractmethod
+    def commitment_counts(
+        self, principal_id: str, project_ids: Sequence[str], *, cutoff: datetime
+    ) -> Mapping[str, Mapping[MetricId, int]]:
+        """The 7 Commitment metrics per Project (`commitments.project_id`), at `cutoff`.
+
+        A Project with no Commitment has no key (its counts are zero).
+        """
+
+    @abstractmethod
+    def outstanding_issue_links(
+        self, principal_id: str, project_ids: Sequence[str]
+    ) -> tuple[tuple[str, str], ...]:
+        """`(project_id, issue_id)` of every outstanding Issue whose latest link event is active.
+
+        Outstanding: `state` in `open`, `active`, `suspended`; sorted.
+        """
+
+    @abstractmethod
+    def legacy_issue_links(
+        self, principal_id: str, project_ids: Sequence[str]
+    ) -> Mapping[str, tuple[int, int]]:
+        """Per Project, `(outstanding, closed)` Issue `project_situations` rows with no event.
+
+        A Project with none has no key.
+        """
+
+    @abstractmethod
+    def sync_facts(
+        self, principal_id: str, project_ids: Sequence[str]
+    ) -> Mapping[str, ProgramSyncFacts]:
+        """Every requested Project's stored sync data (a key for each, targets or not)."""
 
 
 class ProgramReadUnitOfWork(ABC):
@@ -10647,6 +10703,15 @@ class ProgramReadUnitOfWork(ABC):
     def set_statement_timeout(self, milliseconds: int) -> None:
         """`SET LOCAL statement_timeout` for the remaining statements (S4 section 7.4)."""
 
+    @abstractmethod
+    def guarded[ResultT](self, read: Callable[[], ResultT]) -> ResultT:
+        """Run `read` on this snapshot; a statement timeout is `ProgramReadUnavailableError`.
+
+        For reads whose statements are not the S4 repositories' own -- the
+        unchanged Constraint portfolio path (S4 section 3.2) -- so a statement
+        cancelled by its timeout answers `unavailable` like every Program read.
+        """
+
     @property
     @abstractmethod
     def constraints(self) -> ConstraintManagementRepository:
@@ -10656,3 +10721,8 @@ class ProgramReadUnitOfWork(ABC):
     @abstractmethod
     def program_membership(self) -> ProgramMembershipRepository:
         """The Program member reads (S4 section 3.1), on this same snapshot connection."""
+
+    @property
+    @abstractmethod
+    def program_metrics(self) -> ProgramMetricsRepository:
+        """The Program metric reads (S4 sections 3.2, 3.3), on this same snapshot connection."""

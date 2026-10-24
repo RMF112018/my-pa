@@ -340,7 +340,7 @@ def _canonical_sha256(document: object) -> str:
 
 def test_existing_v1_shapes_are_unchanged_by_s3() -> None:
     lineage = {capability.value for capability in _LINEAGE_CAPABILITIES}
-    # Record lineage S4 (S4 contract section 10): its seven names are excluded
+    # Record lineage S4 (S4 contract section 10): its 7 names are excluded
     # beside the lineage names; the count and both pins stay.
     lineage |= PROGRAM_REPORTING_CAPABILITIES
     payloads = {

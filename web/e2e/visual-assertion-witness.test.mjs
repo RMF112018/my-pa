@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
 
 const require = createRequire(import.meta.url);
 const ts = require("typescript");
@@ -141,4 +142,82 @@ test("the actual visual spec retains all four literal callbacks/options and orde
   visit(source);
   assert.deepEqual(observed, Object.entries(cases).map(([id, name]) =>
     [id, name, { animations: '"disabled"', fullPage: id === "zoom" ? "false" : "true" }]));
+});
+
+async function actualZoomReadiness(stage, reject = false) {
+  const events = [];
+  let release;
+  let fail;
+  const pending = new Promise((resolve, rejectPromise) => { release = resolve; fail = rejectPromise; });
+  const opaque = new Proxy({}, { get() { throw new Error("opaque readiness error content read"); } });
+  const empty = {
+    getByRole(role, options) {
+      assert.equal(role, "heading"); assert.deepEqual({ ...options }, { name: "No today tasks", exact: true });
+      return { stage: "heading" };
+    },
+    getByText(text, options) {
+      assert.equal(text, "Nothing is in this view yet."); assert.deepEqual({ ...options }, { exact: true });
+      return { stage: "detail" };
+    },
+  };
+  const page = {
+    async goto(value) { assert.equal(value, "/work"); events.push("goto"); },
+    async addStyleTag() { events.push("stable-frame-style"); },
+    async evaluate(fn) {
+      if (fn.toString().includes("document.fonts.ready")) { events.push("fonts"); return; }
+      events.push("overflow"); return 0;
+    },
+    viewportSize() { return { width: 1280, height: 800 }; },
+    async setViewportSize(value) { assert.deepEqual({ ...value }, { width: 640, height: 800 }); events.push("viewport"); },
+    getByTestId(value) {
+      if (value === "state-empty") return empty;
+      assert.equal(value, "work-loading"); return { stage: "loading" };
+    },
+    getByRole(role, options) {
+      assert.equal(role, "complementary"); assert.deepEqual({ ...options }, { name: "Work answer disclosure" });
+      return { stage: "disclosure" };
+    },
+    locator(value) { assert.equal(value, '[data-visual-dynamic="freshness"]'); return { stage: "freshness" }; },
+  };
+  const expectation = (value) => ({
+    toBeVisible() { assert.ok(["heading", "detail"].includes(value.stage)); events.push(value.stage); return value.stage === stage ? pending : Promise.resolve(); },
+    toHaveCount(count) { assert.equal(count, 0); events.push(value.stage); return value.stage === stage ? pending : Promise.resolve(); },
+    toBeLessThanOrEqual(limit) { assert.equal(value, 0); assert.equal(limit, 1); events.push("overflow-assertion"); },
+    async toHaveScreenshot(name, options) {
+      assert.equal(value, page); assert.equal(name, "shell-zoom-200.png");
+      assert.deepEqual({ ...options }, { animations: "disabled", fullPage: false }); events.push("snapshot");
+    },
+  });
+  let zoom;
+  const register = (title, callback) => { if (title === "the shell reflows at 200 percent without horizontal loss") zoom = callback; };
+  register.beforeEach = () => {};
+  const code = ts.transpileModule(readFileSync(path.join(here, "visual.spec.ts"), "utf8"), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
+  }).outputText;
+  runInNewContext(code, { exports: {}, require(name) {
+    if (name === "@playwright/test") return { expect: expectation, test: register };
+    if (name === "./fixtures") return {};
+    assert.equal(name, "./visual-assertion-witness");
+    return { async witnessVisualAssertion(_info, id, callback) { assert.equal(id, "zoom"); events.push("witness"); await callback(); } };
+  } });
+  assert.equal(typeof zoom, "function");
+  const settled = zoom({ page }, {}).then(() => ({ passed: true }), (error) => ({ error }));
+  await new Promise(setImmediate);
+  assert.equal(events.at(-1), stage);
+  assert.equal(events.includes("overflow"), false); assert.equal(events.includes("snapshot"), false);
+  if (reject) fail(opaque); else release();
+  const outcome = await settled;
+  if (reject) {
+    assert.ok(outcome.error === opaque); assert.equal(events.includes("snapshot"), false);
+  } else {
+    assert.equal(outcome.passed, true);
+    assert.deepEqual(events, ["goto", "stable-frame-style", "fonts", "viewport", "heading", "detail", "loading", "overflow", "overflow-assertion", "disclosure", "freshness", "witness", "snapshot"]);
+  }
+}
+
+test("actual zoom callback waits for settled empty heading/detail and loading absence before overflow/snapshot", async () => {
+  for (const stage of ["heading", "detail", "loading"]) await actualZoomReadiness(stage);
+});
+test("actual zoom callback propagates SAME opaque readiness failures and never takes a loading-state snapshot", async () => {
+  for (const stage of ["heading", "detail", "loading"]) await actualZoomReadiness(stage, true);
 });

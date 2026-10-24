@@ -8,7 +8,7 @@ const CASES = [
   { id: "light", declaration: 18, assertion: 21, snapshot: "shell-light-unavailable" },
   { id: "dark", declaration: 27, assertion: 54, snapshot: "shell-dark-inspector" },
   { id: "launcher", declaration: 60, assertion: 66, snapshot: "shell-command-menu" },
-  { id: "zoom", declaration: 72, assertion: 91, snapshot: "shell-zoom-200" },
+  { id: "zoom", declaration: 72, assertion: 95, snapshot: "shell-zoom-200" },
 ] as const;
 const FAILED = new Set(["failed", "timedOut", "interrupted"]);
 const SIGN_IN_STAGES = new Set(["goto", "overlay", "signinbutton", "click", "todayURL", "launcher"]);

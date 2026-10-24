@@ -81,6 +81,10 @@ test("the shell reflows at 200 percent without horizontal loss", async ({ page }
     width: Math.max(320, Math.floor(viewport.width / 2)),
     height: viewport.height,
   });
+  const emptyWork = page.getByTestId("state-empty");
+  await expect(emptyWork.getByRole("heading", { name: "No today tasks", exact: true })).toBeVisible();
+  await expect(emptyWork.getByText("Nothing is in this view yet.", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("work-loading")).toHaveCount(0);
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
   );

@@ -100,7 +100,11 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: 0,
   reporter:
-    mainDiagnostic ? [["./e2e/wp03-main-ci-diagnostic-reporter.cjs"]] : process.env.CI && process.env.CI_CONSTRAINT_DIAGNOSTIC === "1"
+    mainDiagnostic ? [["./e2e/wp03-main-ci-diagnostic-reporter.cjs"]] : process.env.CI && process.env.CI_VISUAL_DIAGNOSTIC === "1"
+      ? [["./e2e/ci-visual-reporter.ts"]]
+      : process.env.CI && process.env.CI_BROWSER_DIAGNOSTIC === "1"
+        ? [["./e2e/ci-browser-reporter.ts"]]
+      : process.env.CI && process.env.CI_CONSTRAINT_DIAGNOSTIC === "1"
       ? [["list"], ["html", { open: "never" }], ["./e2e/ci-constraint-reporter.ts"]]
       : process.env.CI && process.env.CI_RESPONSIVE_DIAGNOSTIC === "1"
         ? [["list"], ["html", { open: "never" }], ["./e2e/ci-responsive-reporter.ts"]]
@@ -111,8 +115,8 @@ export default defineConfig({
   expect: { timeout: 10_000 },
   use: {
     baseURL: LIVE_URL,
-    trace: mainDiagnostic ? "off" : "retain-on-failure",
-    screenshot: mainDiagnostic ? "off" : "only-on-failure",
+    trace: mainDiagnostic || process.env.CI_VISUAL_DIAGNOSTIC === "1" || process.env.CI_BROWSER_DIAGNOSTIC === "1" ? "off" : "retain-on-failure",
+    screenshot: mainDiagnostic || process.env.CI_VISUAL_DIAGNOSTIC === "1" || process.env.CI_BROWSER_DIAGNOSTIC === "1" ? "off" : "only-on-failure",
     ...(mainDiagnostic ? { video: "off" as const } : {}),
     // Service workers must be allowed to register: the PWA install criteria are
     // part of what this suite measures, so blocking them would measure nothing.

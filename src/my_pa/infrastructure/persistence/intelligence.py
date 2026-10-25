@@ -44,7 +44,6 @@ from my_pa.domain.intelligence.source_manifest import (
     recorded_release_requirement,
     structured_content_sha256,
 )
-from my_pa.domain.program.vocabulary import REPORT_MANIFEST_SCHEMA_VERSION
 from my_pa.domain.search.query import SearchQuery, SearchQueryError
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
@@ -273,6 +272,7 @@ class SqlIntelligenceStore:
         artifact: IntelligenceArtifact,
         *,
         program_section: Mapping[str, object] | None = None,
+        lineage_section: Mapping[str, object] | None = None,
     ) -> None:
         """Insert the artifact, its dependencies and provenance, then its manifest.
 
@@ -280,7 +280,9 @@ class SqlIntelligenceStore:
         `intelligence_artifacts` reads back the stored `structured_content` and
         the upstreams' digests in the same transaction and inserts the
         artifact's immutable manifest beside it, so the deferred
-        `an_artifact_has_its_manifest` holds at commit for every caller.
+        `an_artifact_has_its_manifest` holds at commit for every caller. S3.1
+        (section 7.9): with a lineage section, or an upstream carrying a lineage
+        gate, the manifest is schema 2 and the row states that version.
         """
         payload: dict[str, object] = {
             "artifact_id": artifact.artifact_id,
@@ -355,10 +357,13 @@ class SqlIntelligenceStore:
                 self._context,
             )
             self._connection.execute(intelligence_provenance_refs.insert().values(**prov_values))
-        self._put_manifest(artifact, program_section)
+        self._put_manifest(artifact, program_section, lineage_section)
 
     def _put_manifest(
-        self, artifact: IntelligenceArtifact, program_section: Mapping[str, object] | None
+        self,
+        artifact: IntelligenceArtifact,
+        program_section: Mapping[str, object] | None,
+        lineage_section: Mapping[str, object] | None,
     ) -> None:
         stored = self._connection.execute(
             principal_scoped(
@@ -432,11 +437,12 @@ class SqlIntelligenceStore:
             stored_structured_content=_structured(stored),
             dependencies=digests,
             program=program_section,
+            lineage=lineage_section,
         )
         values = principal_bound_values(
             {
                 "artifact_id": artifact.artifact_id,
-                "manifest_schema_version": REPORT_MANIFEST_SCHEMA_VERSION,
+                "manifest_schema_version": built.manifest_schema_version,
                 "manifest_canonical": built.manifest_canonical,
                 "manifest_sha256": built.manifest_sha256,
                 "structured_content_sha256": built.structured_content_sha256,

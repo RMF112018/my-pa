@@ -43,6 +43,7 @@ from __future__ import annotations
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
@@ -10010,6 +10011,20 @@ class RecordLineageRepository(ABC):
         S3 section 7.2 step 5: a statement that runs longer raises
         `LineageReadTimeoutError` (`unavailable`). Non-abstract, on the same
         terms.
+        """
+        raise NotImplementedError
+
+    def bounded_by_deadline(self, deadline: float) -> AbstractContextManager[None]:
+        """A scope whose every statement runs under the remaining budget (S3.1 section 7.9).
+
+        The `reports.commit` recompute of a lineage reference reads on the
+        request's own work connection: inside the scope each statement runs
+        under `statement_timeout = min(2000, remaining)` ms of the monotonic
+        `deadline`, a statement at a spent budget raises
+        `LineageReadTimeoutError` before it is sent, and a cancelled statement
+        raises it too. The scope is a savepoint that is always rolled back, so a
+        cancelled statement never aborts the commit's transaction and no timeout
+        outlives the scope. Non-abstract, on the same terms.
         """
         raise NotImplementedError
 

@@ -79,20 +79,23 @@ from my_pa.domain.intelligence.models import (
 )
 from my_pa.domain.intelligence.source_manifest import (
     DependencyDigests,
+    LineageReferenceBlock,
+    LineageReferenceError,
     ProgramReferenceBlock,
     ProgramReferenceError,
     RecordedManifest,
     build_manifest,
+    lineage_reference_block,
     program_reference_block,
     recorded_release_requirement,
     structured_content_sha256,
 )
-from my_pa.domain.program.vocabulary import REPORT_MANIFEST_SCHEMA_VERSION
 from my_pa.domain.source.registry import issue_identifier
 
 __all__ = [
     "InMemoryIntelligenceStore",
     "IntelligenceStore",
+    "LineageReferenceRecompute",
     "ProgramReferenceRecompute",
     "ReportTypeRegistration",
     "begin_cycle",
@@ -148,10 +151,12 @@ class IntelligenceStore(Protocol):
         artifact: IntelligenceArtifact,
         *,
         program_section: Mapping[str, object] | None = None,
+        lineage_section: Mapping[str, object] | None = None,
     ) -> None:
         """Insert the artifact and, beside it, its immutable report manifest (S4 7.4).
 
-        `program_section` is the manifest's `ProgramManifestSection`, or `None`.
+        `program_section` is the manifest's `ProgramManifestSection`, or `None`;
+        `lineage_section` its S3.1 section 7.9 `LineageManifestSection`, or `None`.
         """
 
     def get_manifest(self, principal_id: str, artifact_id: str) -> RecordedManifest | None:
@@ -258,6 +263,9 @@ class IntelligenceStore(Protocol):
 #: Record lineage S4 (contract section 7.4): the service's commit-time recompute
 #: of a Program reference block, returning the manifest's Program section.
 type ProgramReferenceRecompute = Callable[[ProgramReferenceBlock], Mapping[str, object]]
+#: Record lineage S3.1 (contract section 7.9): the service's commit-time
+#: recompute of a lineage reference block, returning the manifest's lineage section.
+type LineageReferenceRecompute = Callable[[LineageReferenceBlock], Mapping[str, object]]
 
 
 def _now(at: datetime) -> datetime:
@@ -1055,6 +1063,7 @@ def commit_artifact(
     advisory_digest: str | None = None,
     completeness: str | None = None,
     program_reference: ProgramReferenceRecompute | None = None,
+    lineage_reference: LineageReferenceRecompute | None = None,
 ) -> MutationAdmission:
     """Atomically commit a producer run and immutable artifact.
 
@@ -1067,13 +1076,27 @@ def commit_artifact(
     refusal check, immediately before the first write -- `program_reference`
     recomputes it; the section it returns is bound in the artifact's manifest.
     Without it the key is ordinary structured content.
+
+    Record lineage S3.1 (contract section 7.9), the same way:
+    `lineage_reference` is given exactly when `records.lineage.related` is
+    served; then a `lineage_context_ref` block must have the section 7.9 shape
+    on a synthesizer, reporter or morning-brief artifact (the same pure check)
+    and, create path only, `lineage_reference` recomputes it after the Program
+    recompute; the section it returns makes the manifest schema 2. Without it
+    the key is ordinary structured content.
     """
     try:
         block: ProgramReferenceBlock | None = None
+        lineage_block: LineageReferenceBlock | None = None
         if program_reference is not None:
             try:
                 block = program_reference_block(structured_content, stage=stage)
             except ProgramReferenceError:
+                raise InvalidRequestError(SafeDetail.STRUCTURED_CONTENT) from None
+        if lineage_reference is not None:
+            try:
+                lineage_block = lineage_reference_block(structured_content, stage=stage)
+            except LineageReferenceError:
                 raise InvalidRequestError(SafeDetail.STRUCTURED_CONTENT) from None
         # First, as before, but inside the translated block: a registry lookup
         # fault is handled exactly like every other store fault of this commit.
@@ -1261,6 +1284,13 @@ def commit_artifact(
         program_section = (
             None if block is None or program_reference is None else program_reference(block)
         )
+        # S3.1 section 7.9: the lineage recompute, at the same point and on the
+        # same terms; any failure is recorded in the section, never a refusal.
+        lineage_section = (
+            None
+            if lineage_block is None or lineage_reference is None
+            else lineage_reference(lineage_block)
+        )
         if not store.put_receipt(receipt):
             stored = store.get_receipt(principal_id, idempotency_key)
             if stored is None or stored.fingerprint_sha256 != fingerprint:
@@ -1285,7 +1315,9 @@ def commit_artifact(
         if current is not None:
             store.mark_superseded(principal_id, current.artifact_id)
         store.put_run(run)
-        store.put_artifact(artifact, program_section=program_section)
+        store.put_artifact(
+            artifact, program_section=program_section, lineage_section=lineage_section
+        )
         return MutationAdmission(
             receipt=receipt, created=True, replayed=False, artifact=artifact, run=run, cycle=cycle
         )
@@ -1809,6 +1841,7 @@ class InMemoryIntelligenceStore:
         artifact: IntelligenceArtifact,
         *,
         program_section: Mapping[str, object] | None = None,
+        lineage_section: Mapping[str, object] | None = None,
     ) -> None:
         """Hold the artifact and build its manifest from the values held (S4 section 5.2).
 
@@ -1846,9 +1879,10 @@ class InMemoryIntelligenceStore:
             stored_structured_content=artifact.structured_content,
             dependencies=digests,
             program=program_section,
+            lineage=lineage_section,
         )
         self.manifests[key] = RecordedManifest(
-            manifest_schema_version=REPORT_MANIFEST_SCHEMA_VERSION,
+            manifest_schema_version=built.manifest_schema_version,
             manifest_canonical=built.manifest_canonical,
             manifest_sha256=built.manifest_sha256,
             structured_content_sha256=built.structured_content_sha256,

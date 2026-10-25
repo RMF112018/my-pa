@@ -40,7 +40,10 @@ serialization victim is `TransactionConflictError` and answers `conflict`.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Mapping, Sequence
+import math
+import time
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Final
@@ -49,6 +52,7 @@ from sqlalchemy import (
     ColumnElement,
     Table,
     and_,
+    event,
     false,
     func,
     insert,
@@ -161,6 +165,8 @@ def _bound(table: Table, principal_id: str, values: dict[str, object]) -> dict[s
 
 #: PostgreSQL's `query_canceled`: a statement that outran `statement_timeout`.
 _QUERY_CANCELED: Final = "57014"
+#: S3.1 section 7.9: the per-statement cap of the lineage recompute (S4 D-36).
+_RECOMPUTE_STATEMENT_BUDGET_MS: Final = 2000
 
 
 def _bounded[ResultT](statement: Callable[[], ResultT]) -> ResultT:
@@ -1025,6 +1031,35 @@ class SqlRecordLineageRepository(RecordLineageRepository):
                 text(f"SET LOCAL statement_timeout = {int(timeout_ms)}")
             )
         )
+
+    @contextmanager
+    def bounded_by_deadline(self, deadline: float) -> Iterator[None]:
+        connection = self._connection
+        savepoint = connection.begin_nested()
+
+        def before(
+            _connection: Connection,
+            cursor: Any,  # noqa: ANN401 - the DBAPI cursor
+            _statement: str,
+            _parameters: object,
+            _context: object,
+            _executemany: bool,
+        ) -> None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise LineageReadTimeoutError("the lineage recompute spent its budget")
+            milliseconds = min(_RECOMPUTE_STATEMENT_BUDGET_MS, math.ceil(remaining * 1000))
+            # A validated integer; `SET LOCAL` takes no bind parameter.
+            cursor.execute(f"SET LOCAL statement_timeout = {milliseconds}")
+
+        event.listen(connection, "before_cursor_execute", before)
+        try:
+            yield
+        finally:
+            event.remove(connection, "before_cursor_execute", before)
+            # Always rolled back: the scope wrote nothing, a cancelled statement
+            # left the savepoint (not the commit) aborted, and `SET LOCAL` ends here.
+            savepoint.rollback()
 
     def live_links_incident(
         self, principal_id: str, refs: Collection[RecordRef], cut: LineageFactCut

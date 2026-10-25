@@ -70,7 +70,7 @@ import re
 import time
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final
 
 from my_pa.application.errors import (
@@ -104,6 +104,7 @@ from my_pa.contracts.ports import (
     LineageIssueAsOf,
     LineageLinkEvidence,
     LineageNoteVersionRef,
+    LineageReadTimeoutError,
     LineageResolvedRecord,
     LineageWriteRequestRecord,
     LinkHeadRecord,
@@ -133,6 +134,12 @@ from my_pa.contracts.v1.record_lineage import (
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import ensure_utc
 from my_pa.domain.identity.operation import Capability
+from my_pa.domain.intelligence.source_manifest import (
+    LineageRecomputeFailure,
+    LineageReferenceBlock,
+    lineage_section,
+    lineage_server_counts,
+)
 from my_pa.domain.lineage.asof import (
     CutAfterNowError,
     completeness,
@@ -193,6 +200,7 @@ if TYPE_CHECKING:
 __all__ = [
     "DEFAULT_LINEAGE_DEPTH",
     "LINEAGE_DEADLINE_SECONDS",
+    "LINEAGE_RECOMPUTE_BUDGET_SECONDS",
     "LINEAGE_STATEMENT_TIMEOUT_MS",
     "MAX_BLOCKS_SEARCH",
     "MAX_LINEAGE_BYTES",
@@ -234,6 +242,7 @@ __all__ = [
     "member_native_version",
     "read_lineage_as_of",
     "read_related_as_of",
+    "recompute_lineage_reference",
     "related_digest",
     "related_request_document",
     "require_no_blocks_cycle",
@@ -3436,3 +3445,120 @@ def read_related_as_of(
         # R3-F14, R3-F23: a position that is not an item of the recomputed result.
         return _related_restart(request, cuts)
     return page
+
+
+# ---- S3.1 section 7.9: the `reports.commit` recompute of a lineage reference ----
+
+#: S3.1 section 7.9: the total budget of one report's lineage recompute; each
+#: statement runs under `min(2000, remaining)` ms (the S4 D-36 deadline hook).
+LINEAGE_RECOMPUTE_BUDGET_SECONDS: Final = 5.0
+_REFERENCE_INSTANT: Final = "%Y-%m-%dT%H:%M:%S.%fZ"
+
+
+class _CutBeyondHorizonError(Exception):
+    """The block's `known_at` lies after the Principal's commit horizon (or after now)."""
+
+
+def _recomputed_related(
+    lineage: RecordLineageRepository,
+    principal_id: str,
+    request: RelatedReadRequest,
+    *,
+    now: datetime,
+    visibility: LineageVisibility,
+    deadline: float,
+) -> dict[str, object] | None:
+    """Section 7.4 as one unpaged bounded result at the block's `known_at`: the `server` part.
+
+    `None` when the traversal deadline ended the result early (a spent budget).
+    """
+    known_at = request.known_at
+    horizon = lineage.commit_horizon(principal_id)
+    if known_at is None or horizon is None or known_at > horizon or known_at > now:
+        raise _CutBeyondHorizonError
+    cut = knowledge_cut(known_at=known_at, valid_at=None, now=now, horizon=horizon)
+    t_v = cut.lineage_valid_at
+    fact_cut = LineageFactCut(
+        watermark=None if t_v is None else lineage.commit_watermark(principal_id, t_v), at=t_v
+    )
+    native_cut_at = native_cut(known_at=known_at, valid_at=None, read_time=now)
+    result = bounded_related(
+        lineage,
+        principal_id,
+        request,
+        reader=_AsOfReader(lineage, principal_id, fact_cut, native_cut_at),
+        visibility=visibility,
+        deadline=deadline,
+    )
+    if result.deadline_hit:
+        return None
+    state, qualifiers = completeness(result.codes)
+    return {
+        "related_sha256": result.related_sha256,
+        "known_at": instant_token(cut.known_at),
+        "complete_state": state.value,
+        "qualifiers": [code.value for code in qualifiers],
+        "record_count": len(result.records),
+        **lineage_server_counts([link.to_canonical_dict() for link in result.links]),
+    }
+
+
+def recompute_lineage_reference(
+    uow: UnitOfWork,
+    principal_id: str,
+    block: LineageReferenceBlock,
+    *,
+    visibility: LineageVisibility | None,
+    now: datetime,
+) -> dict[str, object]:
+    """S3.1 section 7.9: the manifest's lineage section for one reference block.
+
+    `visibility` is `None` when `records.lineage.related` does not admit the
+    committing caller (its remote grant re-check); a seed of a family the
+    caller cannot see is not admitted either: both record `not_attempted` and
+    read nothing. Otherwise the section 7.4 computation runs for the block's
+    seeds, filters and `known_at` (`valid_at` omitted) with the caller's
+    visibility, as one unpaged bounded result, on the request's own work
+    connection, under the 5000 ms total budget (`bounded_by_deadline`: a
+    savepoint always rolled back, each statement at `min(2000, remaining)`
+    ms). The server's `related_sha256` equal to the claim is
+    `verified_at_commit`, else `changed_since_read`; a spent budget, a
+    statement timeout, a missing seed or a `known_at` after the horizon is
+    `recompute_failed` with its token and never refuses the commit.
+    """
+    if visibility is None or not all(visibility.sees(seed) for seed in block.seeds):
+        return lineage_section(block)
+    at = ensure_utc(now)
+    request = RelatedReadRequest(
+        seeds=block.seeds,
+        max_depth=block.max_depth,
+        acceptance_bases=block.acceptance_bases,
+        relation_types=block.relation_types,
+        known_at=datetime.strptime(block.known_at, _REFERENCE_INSTANT).replace(tzinfo=UTC),
+    )
+    lineage = uow.record_lineage
+    deadline = time.monotonic() + LINEAGE_RECOMPUTE_BUDGET_SECONDS
+    failure: LineageRecomputeFailure | None = None
+    server: dict[str, object] | None = None
+    try:
+        with lineage.bounded_by_deadline(deadline):
+            server = _recomputed_related(
+                lineage, principal_id, request, now=at, visibility=visibility, deadline=deadline
+            )
+    except _CutBeyondHorizonError:
+        failure = LineageRecomputeFailure.CUT_BEYOND_HORIZON
+    except (NotFoundError, InvalidRequestError):
+        # Section 7.4 step 1: a seed absent, foreign or not an Issue at the cut.
+        failure = LineageRecomputeFailure.SEED_NOT_FOUND
+    except LineageReadTimeoutError:
+        # A statement cancelled at the remaining budget spent the budget.
+        failure = (
+            LineageRecomputeFailure.BUDGET_EXCEEDED
+            if time.monotonic() >= deadline
+            else LineageRecomputeFailure.STATEMENT_TIMEOUT
+        )
+    if failure is None and server is None:
+        failure = LineageRecomputeFailure.BUDGET_EXCEEDED
+    if failure is not None:
+        return lineage_section(block, failure=failure)
+    return lineage_section(block, server=server, families_seen=visibility.families)

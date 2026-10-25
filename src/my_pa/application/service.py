@@ -609,6 +609,7 @@ from my_pa.application.record_lineage import (
     AssociationResult,
     LinkConfirmRequest,
     RecordLineageApplication,
+    recompute_lineage_reference,
 )
 from my_pa.application.relationship_memory import (
     ArchiveMemoryCommand,
@@ -782,7 +783,12 @@ from my_pa.domain.identity.operator_surface import OperatorSurface
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.intelligence.models import ReportTypeDefinition
-from my_pa.domain.intelligence.source_manifest import ProgramReferenceBlock, program_released
+from my_pa.domain.intelligence.source_manifest import (
+    LineageReferenceBlock,
+    ProgramReferenceBlock,
+    lineage_released,
+    program_released,
+)
 from my_pa.domain.knowledge_assertion.checkpoint import CheckpointSeal
 from my_pa.domain.knowledge_assertion.vocabulary import (
     KnowledgeAssertionLifecycle,
@@ -14640,7 +14646,10 @@ class ApplicationService:
         manifest: `recorded` unchanged, `manifest_unavailable_legacy` with
         nothing written, or -- section 6.2's rule for a manifest whose Program
         state is not `not_attempted` -- `restricted_evidence` with neither the
-        text nor its digest.
+        text nor its digest. S3.1 section 7.9: a schema-2 manifest's recorded
+        lineage gate is applied beside it -- a remote reader also holds a
+        `records.lineage.related` grant for `record_lineage_read` and sees
+        every family in `lineage_families`.
         """
         self._program_plane()
         grants = authorization.capability_grants
@@ -14652,11 +14661,21 @@ class ApplicationService:
         released = (
             grants is None
             or manifest is None
-            or program_released(
-                manifest,
-                families=program_families(grants),
-                holds_program_grant=Purpose.PROGRAM_REPORTING_READ
-                in granted_purposes(Capability.PROGRAMS_OVERVIEW, grants),
+            or (
+                program_released(
+                    manifest,
+                    families=program_families(grants),
+                    holds_program_grant=Purpose.PROGRAM_REPORTING_READ
+                    in granted_purposes(Capability.PROGRAMS_OVERVIEW, grants),
+                )
+                and lineage_released(
+                    manifest,
+                    families=lineage_visibility(
+                        grants, Capability.RECORDS_LINEAGE_RELATED
+                    ).families,
+                    holds_related_grant=Purpose.RECORD_LINEAGE_READ
+                    in granted_purposes(Capability.RECORDS_LINEAGE_RELATED, grants),
+                )
             )
         )
         view = ReportManifestView.of(artifact.artifact_id, manifest, released=released)
@@ -14803,6 +14822,41 @@ class ApplicationService:
             return recompute_program_reference(
                 factory if admitted else None, principal_id, block, families=families
             )
+
+        return recompute
+
+    def _lineage_reference_recompute(
+        self, unit_of_work: UnitOfWork, authorization: Authorization
+    ) -> Callable[[LineageReferenceBlock], Mapping[str, object]] | None:
+        """S3.1 section 7.9: the `reports.commit` recompute of a lineage reference block.
+
+        `None` -- the key is ordinary structured content -- unless
+        `records.lineage.related` is served by this build (the lineage switch).
+        Otherwise the recompute runs only when `records.lineage.related` admits
+        the committing caller (its remote grant re-check, then the visibility of
+        every seed), with that caller's S3 section 6.4 visibility, on the
+        request's own work connection; else the manifest records
+        `not_attempted`.
+        """
+        if Capability.RECORDS_LINEAGE_RELATED not in self.available_capabilities:
+            return None
+        grants = authorization.capability_grants
+        principal_id = authorization.principal.principal_id
+        visibility = (
+            lineage_visibility(grants, Capability.RECORDS_LINEAGE_RELATED)
+            if grants is None or bool(granted_purposes(Capability.RECORDS_LINEAGE_RELATED, grants))
+            else None
+        )
+
+        def recompute(block: LineageReferenceBlock) -> Mapping[str, object]:
+            with _translated(), _lineage_translated():
+                return recompute_lineage_reference(
+                    unit_of_work,
+                    principal_id,
+                    block,
+                    visibility=visibility,
+                    now=authorization.at,
+                )
 
         return recompute
 
@@ -15760,6 +15814,7 @@ class ApplicationService:
             advisory_digest=command.advisory_digest,
             completeness=command.completeness,
             program_reference=self._program_reference_recompute(authorization),
+            lineage_reference=self._lineage_reference_recompute(unit_of_work, authorization),
         )
         artifact = admission.artifact
         if artifact is None:

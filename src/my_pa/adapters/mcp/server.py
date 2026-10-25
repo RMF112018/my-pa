@@ -601,6 +601,16 @@ def create_mcp_server(
             if release_here:
                 call_slots.release()
         content: list[ContentBlock] = [TextContent(type="text", text=text)]
+        if not failed and response_metadata:
+            # Protocol content is visible to the model; _meta is reserved for
+            # components. Mirror only the closed server-composed witness,
+            # preserving the first canonical envelope and the existing _meta.
+            content.append(
+                TextContent(
+                    type="text",
+                    text=json.dumps(response_metadata, sort_keys=True, separators=(",", ":")),
+                )
+            )
         if not failed and image is not None:
             content.append(image)
         if max_result_bytes is not None and _result_bytes(content) > max_result_bytes:

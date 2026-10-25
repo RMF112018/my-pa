@@ -130,7 +130,10 @@ deploy that ingress.
 `MY_PA_MCP_DATABASE_PROFILES_ENABLED=true`. When separately enabled, a known,
 authenticated, server-bound profile client calling `capabilities.get` for
 `status_observation` can receive `CallToolResult._meta.my_pa_database_witness`.
-The compact `my_pa.read` facade carries the same metadata for that canonical
+The same closed witness JSON is mirrored in a second `TextContent` block so it
+is available through model-visible protocol content; `_meta` alone is reserved
+for components. The first text block remains the unchanged canonical response
+envelope. The compact `my_pa.read` facade carries both channels for that canonical
 call. The result envelope, tool catalog, purposes, grants and write ceiling stay
 unchanged; no diagnostic tool or caller opt-in field is added. This source
 change does not deploy, bind a client, change a grant or activate either flag.
@@ -146,7 +149,11 @@ independent audit transaction acknowledges COMMIT. The
 separation; it does **not** observe authentication/control SQL for the call.
 Missing, mismatched or failed evidence produces no positive witness. A request
 failure likewise carries none. Off, no extra `SHOW` or response metadata is
-produced.
+produced and the normal status response remains one text block. The mirrored
+block counts toward the existing result byte limit; oversized and timed-out
+responses expose neither a positive mirror nor positive `_meta`. Protocol
+visibility does not establish delivery in a live app; that remains a future
+authenticated acceptance check after separately authorized deployment/activation.
 
 This proves the status request's actual unit-of-work transaction and audit
 commit acknowledgement. It does not prove a business repository query, every

@@ -6,21 +6,32 @@ A separate expected cluster ID prevents accidental use of another local database
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 from collections.abc import Iterator
+from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from mcp.client.session import ClientSession
+from mcp.shared.memory import create_client_server_memory_streams
+from mcp.types import CallToolResult
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.schema import CreateTable
 
+from my_pa.adapters.mcp.remote import RemoteAccessContext
+from my_pa.adapters.mcp.server import McpAccess, create_mcp_server
 from my_pa.application.commands import GetCanvasWorkspace, PutCanvasWorkspace
 from my_pa.bootstrap.gateway import build_gateway_runtime
 from my_pa.bootstrap.mcp_database_profiles import build_mcp_database_services
 from my_pa.bootstrap.settings import Settings, SettingsError
+from my_pa.contracts.v1.envelope import ResponseEnvelope
+from my_pa.domain.capture.submission import CaptureTransport
+from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.infrastructure.database.mcp_object_grants import (
     McpObjectGrant,
@@ -31,6 +42,33 @@ from my_pa.infrastructure.persistence.tables import audit_events, canvas_workspa
 from tests.conftest import metadata_for, operator
 
 pytestmark = pytest.mark.database
+
+
+async def _witness_status_over_memory(bound: RemoteAccessContext) -> CallToolResult:
+    """The real selected service through SDK framing, without HTTP or sockets."""
+    assert bound.service is not None
+    access = McpAccess(
+        bound.principal,
+        allowed_tools=bound.allowed_capabilities,
+        allowed_capability_purposes=bound.capability_purposes,
+        transport=CaptureTransport.REMOTE_CLIENT,
+        authenticated_client_id=bound.authenticated_client_id,
+        service=bound.service,
+        database_witness=bound.database_witness,
+    )
+    server = create_mcp_server(bound.service, access_for_request=lambda _: access)
+    async with create_client_server_memory_streams() as (client_streams, server_streams):
+        serving = asyncio.create_task(
+            server.run(server_streams[0], server_streams[1], server.create_initialization_options())
+        )
+        try:
+            async with ClientSession(client_streams[0], client_streams[1]) as session:
+                await session.initialize()
+                return await session.call_tool(Capability.CAPABILITIES_GET.value, {})
+        finally:
+            serving.cancel()
+            with suppress(asyncio.CancelledError):
+                await serving
 
 
 @pytest.fixture(scope="module")
@@ -385,15 +423,10 @@ def test_request_witness_observes_real_uow_begin_and_independent_audit_commit(
     profile: str,
 ) -> None:
     """Observe the request's exact connection and committed row, not another pool probe."""
-    import json
-
     from sqlalchemy import event
 
     import my_pa.application.service as service_module
-    from my_pa.adapters.mcp.remote import RemoteAccessContext
-    from my_pa.adapters.mcp.server import _answer
     from my_pa.contracts.mcp_database_witness import current_mcp_database_witness
-    from my_pa.domain.capture.submission import CaptureTransport
     from my_pa.domain.identity.operation import Capability, permitted_purposes
     from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 
@@ -454,27 +487,26 @@ def test_request_witness_observes_real_uow_begin_and_independent_audit_commit(
     try:
         for _ in range(2):  # Reuse the actual pool without retaining request evidence.
             seen.clear()
-            metadata: dict[str, object] = {}
-            result, failed, _image = _answer(
-                bound.service,
-                principal,
-                Capability.CAPABILITIES_GET.value,
-                {},
-                transport=CaptureTransport.REMOTE_CLIENT,
-                allowed_capability_purposes=bound.capability_purposes,
-                authenticated_client_id=client,
-                database_witness=bound.database_witness,
-                response_metadata=metadata,
-            )
-            assert not failed
-            envelope = json.loads(result)
-            witness = metadata["my_pa_database_witness"]
-            assert witness["correlation_id"] == envelope["correlation_id"]
-            assert witness["effective_profile"] == profile
-            assert witness["transaction_read_only"] is (profile == "ro")
-            assert witness["audit_committed"] is True
-            assert witness["audit_engine_independent"] is True
-            assert witness["control_engine_independent_configured"] is True
+            result = asyncio.run(_witness_status_over_memory(bound))
+            assert not result.is_error and len(result.content) == 2
+            assert result.content[0].type == result.content[1].type == "text"
+            envelope = ResponseEnvelope.model_validate_json(result.content[0].text)
+            assert envelope.error is None
+            assert result.content[0].text == envelope.to_canonical_json()
+            expected = {
+                "my_pa_database_witness": {
+                    "version": 1,
+                    "correlation_id": envelope.correlation_id,
+                    "effective_profile": profile,
+                    "data_role_identity_match": True,
+                    "database_identity_match": True,
+                    "transaction_read_only": profile == "ro",
+                    "audit_committed": True,
+                    "audit_engine_independent": True,
+                    "control_engine_independent_configured": True,
+                }
+            }
+            assert json.loads(result.content[1].text) == result.meta == expected
             assert current_mcp_database_witness.get() is None
             # Independent read transaction, synthetic IDs only, proves the
             # authorization event is durable after both request contexts exited.
@@ -482,7 +514,7 @@ def test_request_witness_observes_real_uow_begin_and_independent_audit_commit(
                 assert (
                     connection.execute(
                         text("SELECT count(*) FROM knowledge.audit_events WHERE correlation_id=:c"),
-                        {"c": envelope["correlation_id"]},
+                        {"c": envelope.correlation_id},
                     ).scalar_one()
                     == 1
                 )
@@ -495,15 +527,8 @@ def test_request_witness_never_acknowledges_failed_real_audit_commit(
     synthetic_admin: Engine,
     tmp_path: Path,
 ) -> None:
-    import json
-
     from sqlalchemy import event
     from sqlalchemy.exc import SQLAlchemyError
-
-    from my_pa.adapters.mcp.remote import RemoteAccessContext
-    from my_pa.adapters.mcp.server import _answer
-    from my_pa.domain.capture.submission import CaptureTransport
-    from my_pa.domain.identity.operation import Capability
 
     settings = profile_settings(tmp_path, synthetic_admin).model_copy(
         update={"mcp_database_witness_enabled": True}
@@ -529,25 +554,17 @@ def test_request_witness_never_acknowledges_failed_real_audit_commit(
 
     event.listen(control.audit_engine, "commit", refuse_commit)
     try:
-        metadata: dict[str, object] = {}
-        result, failed, _image = _answer(
-            bound.service,
-            principal,
-            Capability.CAPABILITIES_GET.value,
-            {},
-            transport=CaptureTransport.REMOTE_CLIENT,
-            allowed_capability_purposes=grants,
-            authenticated_client_id="client-ro",
-            database_witness=bound.database_witness,
-            response_metadata=metadata,
-        )
-        assert failed and not metadata
-        envelope = json.loads(result)
+        result = asyncio.run(_witness_status_over_memory(bound))
+        assert result.is_error and len(result.content) == 1 and result.meta is None
+        assert "my_pa_database_witness" not in result.model_dump_json(by_alias=True)
+        assert result.content[0].type == "text"
+        envelope = ResponseEnvelope.model_validate_json(result.content[0].text)
+        assert envelope.error is not None
         with synthetic_admin.connect() as connection:
             assert (
                 connection.execute(
                     text("SELECT count(*) FROM knowledge.audit_events WHERE correlation_id=:c"),
-                    {"c": envelope["correlation_id"]},
+                    {"c": envelope.correlation_id},
                 ).scalar_one()
                 == 0
             )

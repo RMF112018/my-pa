@@ -523,8 +523,12 @@ business re-enrichment observations are not run by this profiled MCP path.
 
 `MY_PA_MCP_DATABASE_WITNESS_ENABLED` also defaults to false and requires the
 profiles to be enabled. When explicitly enabled, an authenticated
-`capabilities.get` / `status_observation` response may include a closed `_meta`
-receipt for that request: selected data-role and database identity checks, the
+`capabilities.get` / `status_observation` response may include the same closed
+receipt in `_meta` and a second text block (the first response envelope remains
+unchanged). Text content is model-visible at the MCP protocol boundary; `_meta`
+may be hidden by clients. Actual ChatGPT/Abacus receipt visibility is verified
+only during separately authorized authenticated acceptance. The receipt covers
+that request: selected data-role and database identity checks, the
 actual work-transaction READ ONLY setting, and a matching audit commit on an
 independent engine and pool. Control-path independence is configured structural
 evidence, not observation of authentication/control SQL. No SQL, parameters,

@@ -38,7 +38,14 @@ from my_pa.infrastructure.database.mcp_object_grants import (
     McpObjectGrantError,
     grant_created_mcp_object,
 )
-from my_pa.infrastructure.persistence.tables import audit_events, canvas_workspaces, enrollments
+from my_pa.infrastructure.persistence.tables import (
+    audit_events,
+    canvas_workspaces,
+    capture_jobs,
+    enrollments,
+    jobs,
+    worker_heartbeats,
+)
 from tests.conftest import metadata_for, operator
 
 pytestmark = pytest.mark.database
@@ -103,7 +110,14 @@ def synthetic_admin() -> Iterator[Engine]:
                     c.exec_driver_sql(f"CREATE ROLE {role} NOLOGIN")
         c.exec_driver_sql("GRANT USAGE ON SCHEMA knowledge TO my_pa_mcp_ro,my_pa_mcp_rw")
         c.exec_driver_sql("GRANT USAGE,CREATE ON SCHEMA knowledge TO creator_a,creator_b")
-        for table in (enrollments, audit_events, canvas_workspaces):
+        for table in (
+            enrollments,
+            audit_events,
+            canvas_workspaces,
+            capture_jobs,
+            jobs,
+            worker_heartbeats,
+        ):
             if (
                 c.execute(
                     text("SELECT to_regclass(:n)"), {"n": f"knowledge.{table.name}"}
@@ -119,8 +133,14 @@ def synthetic_admin() -> Iterator[Engine]:
                 )
                 for index in table.indexes:
                     index.create(c)
+        # The real status handler filters this lifecycle column. Migration
+        # 0641c354ca85 adds it separately from the historical base Table.
         c.exec_driver_sql(
-            "GRANT SELECT ON knowledge.enrollments,knowledge.canvas_workspaces "
+            "ALTER TABLE knowledge.capture_jobs ADD COLUMN IF NOT EXISTS pause_cause TEXT"
+        )
+        c.exec_driver_sql(
+            "GRANT SELECT ON knowledge.enrollments,knowledge.canvas_workspaces,"
+            "knowledge.capture_jobs,knowledge.jobs,knowledge.worker_heartbeats "
             "TO my_pa_mcp_ro,my_pa_mcp_rw"
         )
         c.exec_driver_sql(

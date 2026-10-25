@@ -572,7 +572,7 @@ from my_pa.application.lineage_authority import (
     recorded_client_id,
 )
 from my_pa.application.lineage_backfill import plan_backfill, report_backfill
-from my_pa.application.lineage_endpoints import EvidenceAnchorInput
+from my_pa.application.lineage_endpoints import EvidenceAnchorInput, lock_order_families
 from my_pa.application.lineage_visibility import (
     ANCHOR_FAMILIES,
     LineageVisibility,
@@ -13826,6 +13826,12 @@ class ApplicationService:
                 "contested_links": [view.to_canonical_dict() for view in readiness.contested_links],
                 "contested_links_truncated": readiness.contested_links_truncated,
                 "restricted": readiness.restricted,
+                # S3.1 section 7.5: the unreviewed client facts of the review
+                # scope (visible entries only; `ready` is over everything).
+                "unreviewed_links": [
+                    view.to_canonical_dict() for view in readiness.unreviewed_links
+                ],
+                "unreviewed_links_truncated": readiness.unreviewed_links_truncated,
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
         )
@@ -17282,17 +17288,23 @@ type _OpenLineageWrite = (
 )
 
 
-def _require_visible_anchors(
-    anchors: Sequence[EvidenceAnchorInput], visibility: LineageVisibility, detail: SafeDetail
+def _require_visible_in_lock_order(
+    visibility: LineageVisibility,
+    *,
+    issue_ids: Sequence[tuple[str, SafeDetail]] = (),
+    endpoints: Sequence[tuple[RecordRef, SafeDetail]] = (),
+    anchors: Sequence[EvidenceAnchorInput] = (),
+    anchor_detail: SafeDetail = SafeDetail.EVIDENCE_ANCHORS,
 ) -> None:
-    for anchor in anchors:
-        if not visibility.sees_family(ANCHOR_FAMILIES[anchor.family]):
+    """Refuse the first subject of an invisible family, in validation's lock order.
+
+    So a hidden subject answers exactly what an absent one gets at validation.
+    """
+    for family, detail in lock_order_families(
+        issue_ids=issue_ids, endpoints=endpoints, anchors=anchors, anchor_detail=anchor_detail
+    ):
+        if not visibility.sees_family(family):
             raise NotFoundError(detail)
-
-
-def _require_visible(ref: RecordRef, visibility: LineageVisibility, detail: SafeDetail) -> None:
-    if not visibility.sees(ref):
-        raise NotFoundError(detail)
 
 
 def _require_visible_subjects(
@@ -17310,12 +17322,14 @@ def _require_visible_subjects(
     itself (RR1-F02), so neither the frozen-closed refusal nor an Issue-context
     or Project qualification check can disclose a hidden Issue. Then every
     subject in a family the caller cannot see answers `not_found` with the
-    detail an absent one gets: endpoints, Issues, anchors' source families, a
-    handoff's Commitment, a Project; a `link_id` is resolved to its root and a
-    `handoff_id` to its event, each read Principal-scoped. An absent subject is
-    refused later, at validation, with the same answer; both precede the rate
-    count. The answer depends only on the grants and the request, never on
-    whether a hidden subject exists.
+    detail an absent one gets, in the order validation would refuse it:
+    endpoints, Issues, anchors' source families, a handoff's Commitment, a
+    Project; a `link_id` is resolved to its root and a `handoff_id` to its
+    event, each read Principal-scoped. An absent subject is refused later, at
+    validation, with the same answer; both precede the rate count. The answer
+    depends only on the grants and the request (and, for an addressed root, on
+    rows of the caller's own Principal), never on whether a hidden subject
+    exists.
     """
     sees_issues = visibility.sees_family(RecordFamily.SITUATION)
     match command:
@@ -17323,18 +17337,25 @@ def _require_visible_subjects(
             request = command.lineage_request()
             if not sees_issues:
                 raise NotFoundError(SafeDetail.FROM_RECORD)
-            _require_visible(request.from_ref, visibility, SafeDetail.FROM_RECORD)
-            _require_visible(request.to_ref, visibility, SafeDetail.TO_RECORD)
-            _require_visible_anchors(
-                request.evidence_anchors, visibility, SafeDetail.EVIDENCE_ANCHORS
+            context = request.context_issue_id
+            _require_visible_in_lock_order(
+                visibility,
+                issue_ids=() if context is None else ((context, SafeDetail.CONTEXT_ISSUE_ID),),
+                endpoints=(
+                    (request.from_ref, SafeDetail.FROM_RECORD),
+                    (request.to_ref, SafeDetail.TO_RECORD),
+                ),
+                anchors=request.evidence_anchors,
             )
         case AddIssueMembership():
             membership = command.lineage_request()
             if not sees_issues:
                 raise NotFoundError(SafeDetail.ISSUE_ID)
-            _require_visible(membership.member, visibility, SafeDetail.MEMBER)
-            _require_visible_anchors(
-                membership.evidence_anchors, visibility, SafeDetail.EVIDENCE_ANCHORS
+            _require_visible_in_lock_order(
+                visibility,
+                issue_ids=((membership.issue_id, SafeDetail.ISSUE_ID),),
+                endpoints=((membership.member, SafeDetail.MEMBER),),
+                anchors=membership.evidence_anchors,
             )
         case (
             CorrectRecordAssociation()
@@ -17352,8 +17373,8 @@ def _require_visible_subjects(
                 visibility.sees(link.from_ref) and visibility.sees(link.to_ref)
             ):
                 raise NotFoundError(SafeDetail.LINK_ID)
-            _require_visible_anchors(
-                getattr(revised, "evidence_anchors", ()), visibility, SafeDetail.EVIDENCE_ANCHORS
+            _require_visible_in_lock_order(
+                visibility, anchors=getattr(revised, "evidence_anchors", ())
             )
         case AddIssueProjectLink() | EndIssueProjectLink():
             linked = command.issue_request()
@@ -17362,17 +17383,24 @@ def _require_visible_subjects(
             if not project_visible:
                 raise NotFoundError(SafeDetail.PROJECT_ID)
             anchor = getattr(linked, "evidence_anchor", None)
-            _require_visible_anchors(
-                () if anchor is None else (anchor,), visibility, SafeDetail.EVIDENCE_ANCHOR
+            _require_visible_in_lock_order(
+                visibility,
+                anchors=() if anchor is None else (anchor,),
+                anchor_detail=SafeDetail.EVIDENCE_ANCHOR,
             )
         case RecordIssueHandoff():
             recorded = command.handoff_request()
-            if not sees_issues:
-                raise NotFoundError(SafeDetail.ISSUE_ID)
-            if not visibility.sees_family(RecordFamily.COMMITMENT):
-                raise NotFoundError(SafeDetail.COMMITMENT_ID)
-            _require_visible_anchors(
-                (recorded.evidence_anchor,), visibility, SafeDetail.EVIDENCE_ANCHOR
+            _require_visible_in_lock_order(
+                visibility,
+                issue_ids=((recorded.issue_id, SafeDetail.ISSUE_ID),),
+                endpoints=(
+                    (
+                        RecordRef(family=RecordFamily.COMMITMENT, record_id=recorded.commitment_id),
+                        SafeDetail.COMMITMENT_ID,
+                    ),
+                ),
+                anchors=(recorded.evidence_anchor,),
+                anchor_detail=SafeDetail.EVIDENCE_ANCHOR,
             )
         case CorrectIssueHandoff():
             corrected = command.handoff_request()
@@ -17384,27 +17412,32 @@ def _require_visible_subjects(
                 # handoff whose anchor the reader may not see is withheld whole
                 # by `issues.handoffs.list`, so it is hidden here too.
                 raise NotFoundError(SafeDetail.HANDOFF_ID)
-            _require_visible_anchors(
-                (corrected.evidence_anchor,), visibility, SafeDetail.EVIDENCE_ANCHOR
+            _require_visible_in_lock_order(
+                visibility,
+                anchors=(corrected.evidence_anchor,),
+                anchor_detail=SafeDetail.EVIDENCE_ANCHOR,
             )
         case CreateIssueWorkTask() | CreateIssueWorkCommitment():
             work = command.work_request()
             if not sees_issues:
                 raise NotFoundError(SafeDetail.ISSUE_ID)
-            if work.project_id is not None and not project_visible:
-                raise NotFoundError(SafeDetail.PROJECT_ID)
-            for intent in work.association_intents:
-                _require_visible(intent.to_ref, visibility, SafeDetail.TO_RECORD)
-            _require_visible_anchors(
-                work.membership_evidence_anchors
+            _require_visible_in_lock_order(
+                visibility,
+                issue_ids=((work.issue_id, SafeDetail.ISSUE_ID),),
+                endpoints=tuple(
+                    (intent.to_ref, SafeDetail.TO_RECORD) for intent in work.association_intents
+                ),
+                anchors=work.membership_evidence_anchors
                 + tuple(
                     anchor
                     for intent in work.association_intents
                     for anchor in intent.evidence_anchors
                 ),
-                visibility,
-                SafeDetail.EVIDENCE_ANCHORS,
             )
+            if work.project_id is not None and not project_visible:
+                # Validation refuses an absent, foreign or unlinked Project
+                # alike, after every share: `invalid_request` / `project_id`.
+                raise InvalidRequestError(SafeDetail.PROJECT_ID)
 
 
 def _remote_visibility(authorization: Authorization) -> LineageVisibility | None:

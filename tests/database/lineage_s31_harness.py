@@ -75,10 +75,12 @@ __all__ = [
     "S31Runtime",
     "client_grants",
     "commitment_object",
+    "completed_requests",
     "every_open_write",
     "fact_rows",
     "open_scene",
     "request_writer",
+    "seed_completed_requests",
 ]
 
 #: A second synthetic OAuth client of the same Principal.
@@ -359,3 +361,63 @@ def every_open_write(
     run(work_commitment(scene.issue, f"open-{key}", scene.native_commitment))
     assert set(answers) == set(OPEN_LINEAGE_WRITE_CAPABILITIES)
     return answers
+
+
+# --- the section 4.8 budgets ---------------------------------------------------------
+
+
+def seed_completed_requests(
+    engine: Engine,
+    count: int,
+    *,
+    issue_id: str,
+    channel: str,
+    client: str | None,
+    age: str = "10 minutes",
+    prefix: str = "seed",
+    principal_id: str = PRINCIPAL,
+) -> None:
+    """`count` completed `issues.create` request rows of one writer, `age` old.
+
+    Synthetic bookkeeping rows naming one existing Issue's revision 1: the
+    section 4.8 counts read request rows, so a budget is filled without `count`
+    round trips.
+    """
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO knowledge.lineage_write_requests (principal_id, capability,"
+                " idempotency_key, request_digest, created_at, completed_at, result_issue_id,"
+                " result_issue_version, decision_channel, asserting_client_id)"
+                " SELECT :principal, 'issues.create', :prefix || '-' || n, repeat('a', 64),"
+                " now() - CAST(:age AS interval), now() - CAST(:age AS interval),"
+                " :issue, 1, :channel, :client FROM generate_series(1, :count) AS n"
+            ),
+            {
+                "principal": principal_id,
+                "prefix": f"s31-{prefix}-{channel}-{client}",
+                "age": age,
+                "issue": issue_id,
+                "channel": channel,
+                "client": client,
+                "count": count,
+            },
+        )
+
+
+def completed_requests(
+    engine: Engine, *, channel: str, client: str | None, principal_id: str = PRINCIPAL
+) -> int:
+    """The completed request rows of one writer bucket."""
+    with engine.connect() as connection:
+        return int(
+            connection.execute(
+                text(
+                    "SELECT count(*) FROM knowledge.lineage_write_requests"
+                    " WHERE principal_id = :principal AND decision_channel = :channel"
+                    " AND asserting_client_id IS NOT DISTINCT FROM :client"
+                    " AND completed_at IS NOT NULL"
+                ),
+                {"principal": principal_id, "channel": channel, "client": client},
+            ).scalar_one()
+        )

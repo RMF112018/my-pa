@@ -2972,7 +2972,7 @@ class _Related:
         A record new to the union is admitted against the node budget; a known
         one keeps its least depth and the first step at it.
         """
-        graph = self.graph
+        graph: _Graph = self.graph
         known = graph.depth.get(ref)
         if known is None:
             if not graph.budget.admit(nodes=1):

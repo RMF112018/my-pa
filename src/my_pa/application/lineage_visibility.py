@@ -44,6 +44,7 @@ __all__ = [
     "LineageVisibility",
     "lineage_visibility",
     "require_read_grant",
+    "require_write_grant",
 ]
 
 type Grants = frozenset[tuple[Capability, Purpose | None]]
@@ -85,6 +86,18 @@ def require_read_grant(grants: Grants | None, capability: Capability) -> None:
 
     `None` (a local caller) always passes. A grant for a purpose the
     capability does not permit admits nothing, as at the remote boundary.
+    """
+    if grants is not None and not granted_purposes(capability, grants):
+        raise UnsupportedError()
+
+
+def require_write_grant(grants: Grants | None, capability: Capability) -> None:
+    """S3.1 section 6.4 step 1: the write analogue of `require_read_grant` (R31-F01).
+
+    A remote caller without a grant on the open write it called, for one of
+    that write's permitted purposes, is `unsupported`: `invoke` does not consult
+    the grant set (G1-RD-008), so the handler re-checks it as defence in depth.
+    `None` (a local caller) always passes.
     """
     if grants is not None and not granted_purposes(capability, grants):
         raise UnsupportedError()

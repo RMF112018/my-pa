@@ -12,6 +12,8 @@ S3 adds `ContestedLinkView` (one contested link in the Issue's context,
 `issues.closure_readiness`), `HandoffCorrectionView` (one append-only handoff
 correction) and three `HandoffView` keys: `current_effective_at`, `voided` and
 `correction_ids` (`effective_at` keeps its recorded S2 meaning, R3-F18).
+S3.1 adds `UnreviewedLinkView` (one link in the Issue's review scope whose
+head revision is `client_identified`, `issues.closure_readiness`).
 No S1 key changes meaning; `state` may now be `closed` and `action` names the
 S2 actions. No closure evidence digest is ever shown (FR1-F05).
 
@@ -39,6 +41,7 @@ from my_pa.domain.lineage.model import (
     MAX_LINEAGE_REASON_CHARACTERS,
 )
 from my_pa.domain.lineage.vocabulary import (
+    MAX_UNREVIEWED_LINKS,
     AcceptanceBasis,
     EvidenceRole,
     HandoffCorrectionAction,
@@ -46,7 +49,10 @@ from my_pa.domain.lineage.vocabulary import (
     IssueClosureBlocker,
     IssueProjectMembershipState,
     IssueRevisionAction,
+    LinkLifecycleState,
+    LinkRevisionAction,
     MemberRole,
+    RecordLinkKind,
     RelationType,
 )
 
@@ -55,6 +61,7 @@ __all__ = [
     "MAX_CONTESTED_LINKS",
     "MAX_HANDOFF_CORRECTIONS",
     "MAX_ISSUE_PROJECT_LINKS",
+    "MAX_UNREVIEWED_LINKS",
     "ClosureBlockerView",
     "ContestedLinkView",
     "HandoffCorrectionView",
@@ -67,6 +74,7 @@ __all__ = [
     "IssueRevisionView",
     "IssueView",
     "ProjectLinkView",
+    "UnreviewedLinkView",
 ]
 
 #: At most this many Project links in one `IssueView` (section 7.1).
@@ -358,6 +366,34 @@ class ContestedLinkView(StrictModel):
 
     link_id: str
     relation_type: RelationType
+
+    @field_validator("link_id")
+    @classmethod
+    def _link_id(cls, value: str) -> str:
+        return validate_identifier(value, IdKind.RECORD_LINK)
+
+    def to_canonical_dict(self) -> dict[str, Any]:
+        """The JSON-mode representation."""
+        return self.model_dump(mode="json")
+
+
+class UnreviewedLinkView(StrictModel):
+    """One unreviewed link in an Issue's review scope (S3.1 contract sections 4.6 and 7.5).
+
+    Its head revision is `client_identified`: it holds the close until the human
+    channel confirms or revises it. `user_directed_claim` is the writing
+    client's own, unverified statement; it changes no outcome.
+    """
+
+    link_id: str
+    kind: RecordLinkKind
+    relation_type: RelationType
+    member_role: MemberRole | None = None
+    lifecycle_state: LinkLifecycleState
+    revision_no: int = Field(ge=1)
+    action: LinkRevisionAction
+    user_directed_claim: bool
+    recorded_at: UtcDatetime
 
     @field_validator("link_id")
     @classmethod

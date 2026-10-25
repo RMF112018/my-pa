@@ -74,6 +74,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from my_pa.application.errors import (
     ConflictError,
+    DeniedError,
     InvalidRequestError,
     NotFoundError,
     SafeDetail,
@@ -89,6 +90,7 @@ from my_pa.application.lineage_endpoints import (
     require_open_issues,
     require_relation_evidence,
 )
+from my_pa.application.lineage_rate import require_client_write_budget
 from my_pa.application.lineage_visibility import LineageVisibility, lineage_visibility
 from my_pa.contracts.ports import (
     IssueRepository,
@@ -104,6 +106,7 @@ from my_pa.contracts.ports import (
     RecordLineageRepository,
     RecordLinkRecord,
     RepositoryFailureError,
+    ReviewScopeLink,
     UnitOfWork,
 )
 from my_pa.contracts.v1.record_lineage import (
@@ -135,7 +138,9 @@ from my_pa.domain.lineage.closure import (
     VERSIONED_MEMBER_FAMILIES,
     has_resolution_anchor,
     in_issue_context,
+    in_review_scope,
     is_contest_evidence,
+    is_unreviewed,
     link_transition,
 )
 from my_pa.domain.lineage.cursor import (
@@ -170,7 +175,7 @@ from my_pa.domain.project_controls.constraint import ConstraintLifecycleState
 from my_pa.domain.source.registry import issue_identifier
 
 if TYPE_CHECKING:
-    from my_pa.application.lineage_authority import LineageAuthority
+    from my_pa.application.lineage_authority import LineageAuthority, LineageProvenance
 
 __all__ = [
     "DEFAULT_LINEAGE_DEPTH",
@@ -192,6 +197,7 @@ __all__ = [
     "LineageBoundedResult",
     "LineageReadRequest",
     "LineageReportedCuts",
+    "LinkConfirmRequest",
     "MembershipAddRequest",
     "MembershipCorrectRequest",
     "MembershipEndRequest",
@@ -213,6 +219,7 @@ __all__ = [
     "read_lineage_as_of",
     "require_no_blocks_cycle",
     "traverse_lineage",
+    "unreviewed_links_in_scope",
     "visible_anchor_sets",
     "visible_association_views",
 ]
@@ -225,6 +232,8 @@ _CORRECT: Final = Capability.RECORDS_ASSOCIATIONS_CORRECT.value
 _END: Final = Capability.RECORDS_ASSOCIATIONS_END.value
 _CONTEST: Final = Capability.RECORDS_ASSOCIATIONS_CONTEST.value
 _REINSTATE: Final = Capability.RECORDS_ASSOCIATIONS_REINSTATE.value
+_CONFIRM: Final = Capability.RECORDS_ASSOCIATIONS_CONFIRM.value
+_MEMBERSHIP_CONFIRM: Final = Capability.ISSUES_MEMBERSHIPS_CONFIRM.value
 
 #: `records.lineage` bounds (section 7.2; design values, not benchmarks).
 MAX_LINEAGE_DEPTH: Final = 4
@@ -312,6 +321,15 @@ class AssociationEndRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class LinkConfirmRequest:
+    """`records.associations.confirm` / `issues.memberships.confirm`, parsed (S3.1 7.2)."""
+
+    link_id: str
+    expected_revision: int
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
 class LineageReadRequest:
     """`records.lineage`, parsed. S3 (section 7.2) adds the cuts and the paging fields.
 
@@ -335,6 +353,8 @@ class AssociationResult:
     association: AssociationView
     created: bool | None
     replayed: bool
+    #: S3.1 section 6.4: whether the answer filter withheld an anchor (remote).
+    restricted: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -402,6 +422,84 @@ def _revise_document(
         "reason": request.reason,
         "evidence_anchors": anchor_inputs_document(request.evidence_anchors),
     }
+
+
+def open_write_digest(
+    capability: str,
+    principal_id: str,
+    document: Mapping[str, object],
+    provenance: LineageProvenance,
+) -> str:
+    """S3.1 section 4.9: an open write's digest, binding a client writer and its claim.
+
+    The human channel's document is exactly the S1-S4 one, so every recorded
+    S1-S4 key replays byte-identically for the operator; a client's gains the
+    server-only `writer` key. `user_directed` enters the request document only
+    when `true`, so absent and `false` leave every existing digest unchanged.
+    """
+    claimed = dict(document)
+    if provenance.user_directed_claim:
+        claimed["user_directed"] = True
+    writer = (
+        None
+        if provenance.acceptance_basis is AcceptanceBasis.USER_CONFIRMED
+        else {
+            "decision_channel": provenance.decision_channel.value,
+            "asserting_client_id": provenance.asserting_client_id,
+        }
+    )
+    return request_digest(capability, principal_id, claimed, writer=writer)
+
+
+def reserve_open_write(
+    issues: IssueRepository,
+    principal_id: str,
+    capability: str,
+    idempotency_key: str,
+    digest: str,
+    provenance: LineageProvenance | LineageAuthority,
+    at: datetime,
+    *,
+    asserting_client_id: str | None = None,
+) -> LineageWriteRequestRecord | None:
+    """Reserve a lineage write request with its writer columns (S3.1 section 5.2)."""
+    client = getattr(provenance, "asserting_client_id", asserting_client_id)
+    return issues.reserve_write_request(
+        principal_id,
+        capability,
+        idempotency_key,
+        digest,
+        created_at=at,
+        decision_channel=provenance.decision_channel.value,
+        asserting_client_id=client,
+    )
+
+
+def require_client_may_revise(
+    lineage: RecordLineageRepository,
+    principal_id: str,
+    head: LinkHeadRecord,
+    action: LinkRevisionAction,
+    provenance: LineageProvenance,
+) -> None:
+    """S3.1 section 4.4: a client never revises lineage the human channel accepted.
+
+    Keyed on the link's **history**, not its head (RR1-F01): when any revision
+    of the link is `user_confirmed`, a client revision is `denied`, except 1
+    `contest` of an `active` link whose head is `user_confirmed` -- after
+    which the head is the client's contest and only the human channel writes
+    it. The caller holds the head `FOR UPDATE` and has passed the CAS check.
+    """
+    if provenance.acceptance_basis is not AcceptanceBasis.CLIENT_IDENTIFIED:
+        return
+    link_id = head.link.link_id
+    if not lineage.link_confirmed(principal_id, link_id):
+        return
+    if action is LinkRevisionAction.CONTEST and head.lifecycle_state is LinkLifecycleState.ACTIVE:
+        current = _revision_of(lineage, principal_id, link_id, head.revision_no)
+        if current.acceptance_basis is AcceptanceBasis.USER_CONFIRMED:
+            return
+    raise DeniedError()
 
 
 # ---------------------------------------------------------------------- views
@@ -555,15 +653,17 @@ class RecordLineageApplication:
         principal_id: str,
         request: MembershipAddRequest,
         idempotency_key: str,
-        authority: LineageAuthority,
+        authority: LineageProvenance,
         now: datetime,
     ) -> AssociationResult:
         """An Issue membership of a non-Project record, or the active one it repeats."""
         at = ensure_utc(now)
         issues, lineage = uow.issues, uow.record_lineage
-        digest = request_digest(_MEMBERSHIP_ADD, principal_id, _membership_add_document(request))
-        prior = issues.reserve_write_request(
-            principal_id, _MEMBERSHIP_ADD, idempotency_key, digest, created_at=at
+        digest = open_write_digest(
+            _MEMBERSHIP_ADD, principal_id, _membership_add_document(request), authority
+        )
+        prior = reserve_open_write(
+            issues, principal_id, _MEMBERSHIP_ADD, idempotency_key, digest, authority, at
         )
         if prior is not None:
             return _replayed(uow, principal_id, prior)
@@ -614,6 +714,7 @@ class RecordLineageApplication:
             root,
             anchors,
             at,
+            authority,
             member_version=member_native_version(member),
         )
 
@@ -623,15 +724,15 @@ class RecordLineageApplication:
         principal_id: str,
         request: AssociationAssertRequest,
         idempotency_key: str,
-        authority: LineageAuthority,
+        authority: LineageProvenance,
         now: datetime,
     ) -> AssociationResult:
         """A semantic association, or the active one with the same identity."""
         at = ensure_utc(now)
         issues, lineage = uow.issues, uow.record_lineage
-        digest = request_digest(_ASSERT, principal_id, _assert_document(request))
-        prior = issues.reserve_write_request(
-            principal_id, _ASSERT, idempotency_key, digest, created_at=at
+        digest = open_write_digest(_ASSERT, principal_id, _assert_document(request), authority)
+        prior = reserve_open_write(
+            issues, principal_id, _ASSERT, idempotency_key, digest, authority, at
         )
         if prior is not None:
             return _replayed(uow, principal_id, prior)
@@ -719,7 +820,16 @@ class RecordLineageApplication:
             created_at=at,
         )
         return self._assert_root(
-            uow, principal_id, _ASSERT, idempotency_key, digest, root, anchors, at, blocks=blocks
+            uow,
+            principal_id,
+            _ASSERT,
+            idempotency_key,
+            digest,
+            root,
+            anchors,
+            at,
+            authority,
+            blocks=blocks,
         )
 
     @staticmethod
@@ -732,11 +842,17 @@ class RecordLineageApplication:
         root: RecordLinkRecord,
         anchors: tuple[EvidenceAnchor, ...],
         at: datetime,
+        provenance: LineageProvenance,
         *,
         member_version: int | None = None,
         blocks: tuple[RecordRef, RecordRef] | None = None,
     ) -> AssociationResult:
         """Section 6.2 steps 4 and 5, then the writes: a new root, or the active one.
+
+        S3.1 (sections 4.5 and 6.2 step 7): an identity answered `created:
+        false` keeps its provenance whoever asserts it, and -- like a new root
+        -- is checked against and counted toward a client's write budgets,
+        after every refusal and before its first row.
 
         `member_version` is the member's observed native `version` a new
         membership's revision 1 records (S2 section 3.3); `None` otherwise.
@@ -755,6 +871,9 @@ class RecordLineageApplication:
         if existing is not None:
             # The active link with this meaning answers; its authority and
             # evidence never change, and only the request row is written.
+            require_client_write_budget(
+                uow, principal_id, provenance, provenance.asserting_client_id, at
+            )
             revision = _revision_of(
                 lineage, principal_id, existing.link.link_id, existing.revision_no
             )
@@ -772,8 +891,17 @@ class RecordLineageApplication:
             return AssociationResult(association=view, created=False, replayed=False)
         if blocks is not None:
             require_no_blocks_cycle(lineage, principal_id, *blocks)
+        require_client_write_budget(
+            uow, principal_id, provenance, provenance.asserting_client_id, at
+        )
         revision = insert_new_link(
-            uow, principal_id, root, anchors, at, member_version=member_version
+            uow,
+            principal_id,
+            root,
+            anchors,
+            at,
+            provenance=provenance,
+            member_version=member_version,
         )
         issues.complete_write_request(
             principal_id,
@@ -796,11 +924,13 @@ class RecordLineageApplication:
         principal_id: str,
         request: MembershipEndRequest,
         idempotency_key: str,
-        authority: LineageAuthority,
+        authority: LineageProvenance,
         now: datetime,
     ) -> AssociationResult:
         """End an active Issue membership at its expected revision."""
-        digest = request_digest(_MEMBERSHIP_END, principal_id, _membership_end_document(request))
+        digest = open_write_digest(
+            _MEMBERSHIP_END, principal_id, _membership_end_document(request), authority
+        )
         return self._revise(
             uow,
             principal_id,
@@ -823,7 +953,7 @@ class RecordLineageApplication:
         principal_id: str,
         request: MembershipCorrectRequest,
         idempotency_key: str,
-        authority: LineageAuthority,
+        authority: LineageProvenance,
         now: datetime,
     ) -> AssociationResult:
         """Replace a membership's evidence set (S2 section 7.2); root, role and identity stay.
@@ -832,7 +962,9 @@ class RecordLineageApplication:
         head's, except the section 3.3 re-affirmation. The revision records the
         member's native `version` observed now.
         """
-        digest = request_digest(_MEMBERSHIP_CORRECT, principal_id, _revise_document(request))
+        digest = open_write_digest(
+            _MEMBERSHIP_CORRECT, principal_id, _revise_document(request), authority
+        )
         return self._revise(
             uow,
             principal_id,
@@ -855,11 +987,11 @@ class RecordLineageApplication:
         principal_id: str,
         request: AssociationCorrectRequest,
         idempotency_key: str,
-        authority: LineageAuthority,
+        authority: LineageProvenance,
         now: datetime,
     ) -> AssociationResult:
         """Replace a semantic association's evidence set; the root never changes."""
-        digest = request_digest(_CORRECT, principal_id, _revise_document(request))
+        digest = open_write_digest(_CORRECT, principal_id, _revise_document(request), authority)
         return self._revise(
             uow,
             principal_id,
@@ -882,11 +1014,11 @@ class RecordLineageApplication:
         principal_id: str,
         request: AssociationEndRequest,
         idempotency_key: str,
-        authority: LineageAuthority,
+        authority: LineageProvenance,
         now: datetime,
     ) -> AssociationResult:
         """End a semantic association; an ended link is terminal in S1."""
-        digest = request_digest(_END, principal_id, _revise_document(request))
+        digest = open_write_digest(_END, principal_id, _revise_document(request), authority)
         return self._revise(
             uow,
             principal_id,
@@ -909,11 +1041,11 @@ class RecordLineageApplication:
         principal_id: str,
         request: AssociationCorrectRequest,
         idempotency_key: str,
-        authority: LineageAuthority,
+        authority: LineageProvenance,
         now: datetime,
     ) -> AssociationResult:
         """Dispute an active semantic association (S3 section 3.1): it reads `contested`."""
-        digest = request_digest(_CONTEST, principal_id, _revise_document(request))
+        digest = open_write_digest(_CONTEST, principal_id, _revise_document(request), authority)
         return self._revise(
             uow,
             principal_id,
@@ -936,11 +1068,11 @@ class RecordLineageApplication:
         principal_id: str,
         request: AssociationCorrectRequest,
         idempotency_key: str,
-        authority: LineageAuthority,
+        authority: LineageProvenance,
         now: datetime,
     ) -> AssociationResult:
         """Resolve a contested semantic association back to `active` (S3 section 3.1)."""
-        digest = request_digest(_REINSTATE, principal_id, _revise_document(request))
+        digest = open_write_digest(_REINSTATE, principal_id, _revise_document(request), authority)
         return self._revise(
             uow,
             principal_id,
@@ -971,13 +1103,13 @@ class RecordLineageApplication:
         evidence: tuple[EvidenceAnchorInput, ...],
         idempotency_key: str,
         digest: str,
-        authority: LineageAuthority,
+        authority: LineageProvenance,
         now: datetime,
     ) -> AssociationResult:
         at = ensure_utc(now)
         issues, lineage = uow.issues, uow.record_lineage
-        prior = issues.reserve_write_request(
-            principal_id, capability, idempotency_key, digest, created_at=at
+        prior = reserve_open_write(
+            issues, principal_id, capability, idempotency_key, digest, authority, at
         )
         if prior is not None:
             return _replayed(uow, principal_id, prior)
@@ -1021,6 +1153,9 @@ class RecordLineageApplication:
             raise RepositoryFailureError
         if head.revision_no != expected_revision:
             raise ConflictError(SafeDetail.STALE_VERSION)
+        # S3.1 section 4.4: under the head lock, after the CAS check, before
+        # any row and before the rate count.
+        require_client_may_revise(lineage, principal_id, head, action, authority)
         state = link_transition(action, head.lifecycle_state)
         if state is None:
             # S3 section 7.5: a contest of a non-active or a reinstate of a
@@ -1049,6 +1184,8 @@ class RecordLineageApplication:
             )
             if current.evidence_set_digest == digest_of_set and not reaffirmed:
                 raise InvalidRequestError(SafeDetail.EVIDENCE_ANCHORS)
+        # S3.1 section 6.2 step 7: every refusal is behind us; the first row follows.
+        require_client_write_budget(uow, principal_id, authority, authority.asserting_client_id, at)
         revision = LinkRevisionRecord(
             link_id=link_id,
             revision_no=head.revision_no + 1,
@@ -1056,7 +1193,7 @@ class RecordLineageApplication:
             predecessor_revision_no=head.revision_no,
             action=action,
             lifecycle_state=state,
-            acceptance_basis=AcceptanceBasis.USER_CONFIRMED,
+            acceptance_basis=authority.acceptance_basis,
             authority_class=authority.authority_class.value,
             decision_channel=authority.decision_channel.value,
             source_capability=capability,
@@ -1065,6 +1202,8 @@ class RecordLineageApplication:
             recorded_at=at,
             evidence=_inserted(issues, principal_id, anchors, at),
             member_native_version=observed,
+            asserting_client_id=authority.asserting_client_id,
+            user_directed_claim=authority.user_directed_claim,
         )
         lineage.append_revision(principal_id, revision)
         issues.complete_write_request(
@@ -1074,6 +1213,110 @@ class RecordLineageApplication:
             request_digest=digest,
             completed_at=at,
             result_link_id=link_id,
+            result_link_revision_no=revision.revision_no,
+        )
+        (view,) = _views(lineage, principal_id, [(link, revision)])
+        return AssociationResult(association=view, created=None, replayed=False)
+
+    # --- records.associations.confirm / issues.memberships.confirm (S3.1) -------
+
+    def confirm_link(
+        self,
+        uow: UnitOfWork,
+        principal_id: str,
+        request: LinkConfirmRequest,
+        idempotency_key: str,
+        authority: LineageAuthority,
+        now: datetime,
+        *,
+        kind: RecordLinkKind,
+    ) -> AssociationResult:
+        """Promote a client-identified link with a `confirm` revision (S3.1 sections 4.7, 7.2).
+
+        Attested: the handler refused every other caller before this, so the
+        digest is the human channel's document. The S1 `link_id` checks
+        (`not_found` alike for absent and foreign; the wrong kind is
+        `invalid_request`), the link's Issues in context `FOR SHARE` (a closed
+        one is `conflict` / `state`), the identity key, the head `FOR UPDATE`,
+        CAS, then section 4.7: the head revision must be `client_identified`
+        and `active` or `ended` (else `conflict` / `state`). Revision `n + 1`
+        keeps the head's state, re-cites its evidence anchor by anchor (same
+        anchors, roles and order, so the same digest) and copies its member
+        version, so stale evidence stays stale.
+        """
+        capability = _CONFIRM if kind is RecordLinkKind.SEMANTIC else _MEMBERSHIP_CONFIRM
+        at = ensure_utc(now)
+        issues, lineage = uow.issues, uow.record_lineage
+        digest = request_digest(
+            capability,
+            principal_id,
+            {
+                "link_id": request.link_id,
+                "expected_revision": request.expected_revision,
+                "reason": request.reason,
+            },
+        )
+        prior = reserve_open_write(
+            issues, principal_id, capability, idempotency_key, digest, authority, at
+        )
+        if prior is not None:
+            return _replayed(uow, principal_id, prior)
+        # S3 section 6.2 step 1b: the commit mark, before any other lock.
+        lineage.take_commit_mark(principal_id)
+        link = lineage.read_link(principal_id, request.link_id)
+        if link is None:
+            raise NotFoundError(SafeDetail.LINK_ID)
+        if link.kind is not kind:
+            raise InvalidRequestError(SafeDetail.LINK_ID)
+        named = _named_issues(link)
+        if link.kind is RecordLinkKind.SEMANTIC:
+            already = {issue_id for issue_id, _ in named}
+            named = named + tuple(
+                (issue_id, SafeDetail.CONTEXT_ISSUE_ID)
+                for issue_id in sorted(issues_in_context_of(lineage, principal_id, link))
+                if issue_id not in already
+            )
+        locked = lock_lineage_sources(issues, lineage, principal_id, issue_ids=named)
+        require_open_issues(locked)
+        lineage.lock_identity(principal_id, link.normalized_identity)
+        head = lineage.lock_head(principal_id, request.link_id)
+        if head is None:
+            raise RepositoryFailureError
+        if head.revision_no != request.expected_revision:
+            raise ConflictError(SafeDetail.STALE_VERSION)
+        current = _revision_of(lineage, principal_id, request.link_id, head.revision_no)
+        if not is_unreviewed(current.acceptance_basis) or head.lifecycle_state not in (
+            LinkLifecycleState.ACTIVE,
+            LinkLifecycleState.ENDED,
+        ):
+            # An already accepted head, or a contested one (a human who agrees
+            # with a client's dispute ends the link instead).
+            raise ConflictError(SafeDetail.STATE)
+        revision = LinkRevisionRecord(
+            link_id=request.link_id,
+            revision_no=head.revision_no + 1,
+            revision_id=issue_identifier(IdKind.RECORD_LINK_REVISION),
+            predecessor_revision_no=head.revision_no,
+            action=LinkRevisionAction.CONFIRM,
+            lifecycle_state=head.lifecycle_state,
+            acceptance_basis=AcceptanceBasis.USER_CONFIRMED,
+            authority_class=authority.authority_class.value,
+            decision_channel=authority.decision_channel.value,
+            source_capability=capability,
+            reason=request.reason,
+            evidence_set_digest=current.evidence_set_digest,
+            recorded_at=at,
+            evidence=current.evidence,
+            member_native_version=current.member_native_version,
+        )
+        lineage.append_revision(principal_id, revision)
+        issues.complete_write_request(
+            principal_id,
+            capability,
+            idempotency_key,
+            request_digest=digest,
+            completed_at=at,
+            result_link_id=request.link_id,
             result_link_revision_no=revision.revision_no,
         )
         (view,) = _views(lineage, principal_id, [(link, revision)])
@@ -1222,6 +1465,7 @@ def insert_new_link(
     anchors: tuple[EvidenceAnchor, ...],
     at: datetime,
     *,
+    provenance: LineageProvenance,
     reason: str | None = None,
     member_version: int | None = None,
 ) -> LinkRevisionRecord:
@@ -1232,7 +1476,9 @@ def insert_new_link(
     proven no active head carries that identity. `reason` is revision 1's
     (a `created_to_resolve` purpose, S2 section 3.1; else `None`);
     `member_version` the member's observed native `version` a membership's
-    revision 1 records (S2 section 3.3; else `None`).
+    revision 1 records (S2 section 3.3; else `None`). `provenance` is the
+    writer's (S3.1 section 4.1): its basis, client and claim; the root carries
+    its class and channel.
     """
     revision = LinkRevisionRecord(
         link_id=root.link_id,
@@ -1241,7 +1487,7 @@ def insert_new_link(
         predecessor_revision_no=None,
         action=LinkRevisionAction.ASSERT,
         lifecycle_state=LinkLifecycleState.ACTIVE,
-        acceptance_basis=AcceptanceBasis.USER_CONFIRMED,
+        acceptance_basis=provenance.acceptance_basis,
         authority_class=root.authority_class,
         decision_channel=root.decision_channel,
         source_capability=root.source_capability,
@@ -1250,6 +1496,8 @@ def insert_new_link(
         recorded_at=at,
         evidence=_inserted(uow.issues, principal_id, anchors, at),
         member_native_version=member_version,
+        asserting_client_id=provenance.asserting_client_id,
+        user_directed_claim=provenance.user_directed_claim,
     )
     uow.record_lineage.insert_link(principal_id, root, revision)
     return revision
@@ -1436,6 +1684,31 @@ def links_in_context(
             from_ref=head.link.from_ref,
             to_ref=head.link.to_ref,
             context_issue_id=head.link.context_issue_id,
+            issue_id=issue_id,
+            inside=inside,
+        )
+    )
+
+
+def unreviewed_links_in_scope(
+    lineage: RecordLineageRepository, principal_id: str, issue_id: str
+) -> tuple[ReviewScopeLink, ...]:
+    """S3.1 section 4.6: every link in Issue *I*'s review scope whose head is unreviewed.
+
+    Current heads in any state (live and ended), by `link_id` (code point):
+    the links whose head revision is `client_identified`, which hold the close
+    until the human channel confirms or revises each.
+    """
+    inside = issue_inside_set(lineage, principal_id, issue_id)
+    return tuple(
+        candidate
+        for candidate in lineage.review_scope_links(principal_id, issue_id, inside)
+        if is_unreviewed(candidate.acceptance_basis)
+        and in_review_scope(
+            kind=candidate.head.link.kind,
+            from_ref=candidate.head.link.from_ref,
+            to_ref=candidate.head.link.to_ref,
+            context_issue_id=candidate.head.link.context_issue_id,
             issue_id=issue_id,
             inside=inside,
         )

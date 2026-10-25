@@ -544,8 +544,10 @@ def test_a_proven_acceptance_would_report_the_distinct_total() -> None:
 
 
 #: Section 5.1: `D` with its 3 read-time stamps removed, exactly as canonical text.
+#: Regenerated in lockstep for record lineage S3.1 (S3.1 contract sections 7.8
+#: and 8): the calculation version is `program-overview-v2`.
 _GOLDEN_D: Final = {
-    "calculation_version": "program-overview-v1",
+    "calculation_version": "program-overview-v2",
     "complete_state": "complete",
     "metric_schema_version": 1,
     "per_project": [],
@@ -554,14 +556,14 @@ _GOLDEN_D: Final = {
     "qualifiers": ["complete"],
 }
 _GOLDEN_TEXT: Final = (
-    b'program-overview-v1\n{"calculation_version":"program-overview-v1",'
+    b'program-overview-v2\n{"calculation_version":"program-overview-v2",'
     b'"complete_state":"complete","metric_schema_version":1,"per_project":[],'
     b'"portfolio":{"overlaps":[],"project_ids":[]},"programs":[],"qualifiers":["complete"]}'
 )
 
 
 def test_overview_digest_golden_vectors() -> None:
-    expected = "17a12995ad4fc709a4c90569e003e42e2d36324b2a3dd8c4aaf16a517ef16b9f"
+    expected = "eb26c48831c2a1f81ccb2ab855bd8f7cc9c2553a3f805a466b16719ca23d6128"
     assert hashlib.sha256(_GOLDEN_TEXT).hexdigest() == expected
     assert overview_digest(_GOLDEN_D) == expected
     # The 3 read-time stamps are not in `D`.
@@ -592,11 +594,11 @@ def test_overview_digest_golden_vectors() -> None:
     }
     assert (
         overview_digest(with_project)
-        == "29e1f487f56dcd90514e2d4ac68c026a2504e38a019e7214c3c4536c5178fb77"
+        == "f5198014f7749003676b5623ccbb9f4610b92e9e5f262abd6f56c6a81d5df733"
     )
     next_day = json.loads(json.dumps(with_project))
     next_day["per_project"][0]["calendar"]["project_today"] = "2026-10-26"
     assert overview_digest(next_day) != overview_digest(with_project)
     # Key order is not part of it; the digest of `{}` is the bare prefix's.
     assert overview_digest(dict(reversed(list(_GOLDEN_D.items())))) == expected
-    assert overview_digest({}) == hashlib.sha256(b"program-overview-v1\n{}").hexdigest()
+    assert overview_digest({}) == hashlib.sha256(b"program-overview-v2\n{}").hexdigest()

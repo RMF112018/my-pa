@@ -17,13 +17,21 @@ operator-review client can call no S1 write, a replay of an attested write
 from an ordinary client is denied before the replay lookup, an ordinary remote
 client is denied the membership and association writes, and the switch-off
 row covers all fourteen S1 names. Every identity here is synthetic.
+
+**S3.1** (S3.1 contract section 10.1, the operator directives of 2026-10-20
+and 2026-10-25): the membership, association and Project-link writes are open.
+A remote client and an unstamped local caller are admitted and recorded
+`client_identified` (never `user_confirmed`, and still denied a revision of
+accepted lineage), and another writer re-sending the operator's request is
+`conflict` / `idempotency_conflict` instead of `denied`. The four converted
+functions keep their names (the S1 scope guard binds them).
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator
 from functools import partial
-from typing import Any
+from typing import Any, Final
 
 import pytest
 from sqlalchemy import select
@@ -76,6 +84,7 @@ from tests.database.lineage_record_harness import (
     note_anchor,
     originated_from,
 )
+from tests.database.lineage_s31_harness import client_grants, fact_rows
 from tests.database.test_commitment_entity_counterparty import seed_counterparty_entity
 from tests.schema.lineage_schema_ahead_contract import S1_CAPABILITIES
 
@@ -139,24 +148,126 @@ def test_a_local_operator_write_records_its_class_and_channel(runtime: LineageRu
 def test_an_ordinary_remote_client_is_denied_accepted_lineage_writes(
     runtime: LineageRuntime,
 ) -> None:
-    issue = runtime.issue("attested-remote")
-    project = runtime.project("attested-remote")
-    before = lineage_row_counts(runtime.engine)
-    error = runtime.refused(_link(issue, project, "remote"), remote_client=REMOTE_CLIENT)
-    assert error["code"] == "denied"
-    # A local caller with no stamped operator surface is not `local_operator`
-    # either (stdio MCP, an unstamped composition): denied the same way.
-    unstamped = runtime.refused(_link(issue, project, "unstamped"))
-    assert unstamped["code"] == "denied"
-    assert lineage_row_counts(runtime.engine) == before
-    # The membership and association writes are attested the same way.
-    link_writes = _link_writes(runtime, "remote", local_link=None)
-    links_before = all_lineage_counts(runtime.engine)
-    for command in link_writes:
-        for kwargs in ({"remote_client": REMOTE_CLIENT}, {}):
-            error = runtime.refused(command, **kwargs)
-            assert error["code"] == "denied", command.capability.value
-    assert all_lineage_counts(runtime.engine) == links_before
+    """S3.1 section 10.1 conversion (the operator directives of 2026-10-20 and 2026-10-25).
+
+    Before S3.1 each S1 link write by a remote client or an unstamped local
+    caller was `denied` and wrote nothing. The directive opens them: each is
+    admitted, and every fact row it writes is `client_identified` -- never
+    `user_confirmed` -- so the client is still denied an *accepted* link: it
+    can neither write one nor end or correct one the operator accepted.
+    """
+    for key, kwargs, channel, client in (
+        ("remote", {"remote_client": REMOTE_CLIENT}, "remote_interactive", REMOTE_CLIENT),
+        ("unstamped", {}, "local_unattested", None),
+    ):
+        before = {name: fact_rows(runtime.engine, name) for name in _FACT_TABLES}
+        # Every write is admitted for the caller (never `denied`).
+        _client_link_writes(runtime, key, kwargs)
+        issue = runtime.issue(f"attested-{key}")
+        project = runtime.project(f"attested-{key}")
+        _granted_ok(runtime, _link(issue, project, key), kwargs)
+        written: list[tuple[object, ...]] = []
+        for name in _FACT_TABLES:
+            after = fact_rows(runtime.engine, name)
+            written.extend(row for identity, row in after.items() if identity not in before[name])
+        assert len(written) == 6, key
+        for row in written:
+            # (basis, class, channel, client, claim): never the human channel's.
+            assert row[:5] == ("client_identified", "ordinary_reviewer", channel, client, False)
+    # The client is still denied an accepted link: the operator's membership
+    # and association cannot be ended or corrected by either caller.
+    operator = _link_writes(runtime, "accepted", local_link=None)
+    member = runtime.ok(operator[0], surface=OperatorSurface.HTTP_GATEWAY)["membership"]
+    association = runtime.ok(operator[2], surface=OperatorSurface.HTTP_GATEWAY)["association"]
+    before_all = all_lineage_counts(runtime.engine)
+    for key, kwargs in (("remote", {"remote_client": REMOTE_CLIENT}), ("unstamped", {})):
+        for command in (
+            EndIssueMembership(
+                link_id=member["link_id"],
+                expected_revision=1,
+                idempotency_key=f"lineage-accepted-member-end-{key}",
+                reason="synthetic",
+            ),
+            EndRecordAssociation(
+                link_id=association["link_id"],
+                expected_revision=1,
+                idempotency_key=f"lineage-accepted-assoc-end-{key}",
+                reason="synthetic",
+            ),
+        ):
+            error = _granted_refused(runtime, command, kwargs)
+            assert error["code"] == "denied", (key, command.capability.value)
+    assert all_lineage_counts(runtime.engine) == before_all
+
+
+#: The S3.1 fact tables (section 5.1) the S1 writes reach.
+_FACT_TABLES: Final = ("record_link_revisions", "issue_project_membership_events")
+
+
+def _granted(command: Any, kwargs: dict[str, Any]) -> dict[str, Any]:  # noqa: ANN401
+    """A remote caller sees every family its write names (S3.1 section 6.4)."""
+    if "remote_client" in kwargs:
+        return {**kwargs, "grants": client_grants(command.capability)}
+    return kwargs
+
+
+def _granted_ok(runtime: LineageRuntime, command: Any, kwargs: dict[str, Any]) -> dict[str, Any]:  # noqa: ANN401
+    return runtime.ok(command, **_granted(command, kwargs))
+
+
+def _granted_refused(
+    runtime: LineageRuntime,
+    command: Any,  # noqa: ANN401
+    kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    return runtime.refused(command, **_granted(command, kwargs))
+
+
+def _client_link_writes(runtime: LineageRuntime, key: str, kwargs: dict[str, Any]) -> list[Any]:
+    """The five S1 link writes made by one client caller on its own links, each admitted."""
+    issue = runtime.issue(f"client-links-{key}")
+    meeting_id, note_id = meeting(runtime, f"client-links-{key}")
+    c1 = commitment(runtime, f"client-links-{key}")
+    added = _granted_ok(
+        runtime,
+        membership(issue, "meeting", meeting_id, f"client-{key}", role="discussion"),
+        kwargs,
+    )["membership"]
+    end_member = EndIssueMembership(
+        link_id=added["link_id"],
+        expected_revision=1,
+        idempotency_key=f"lineage-client-{key}-member-end",
+        reason="synthetic",
+    )
+    _granted_ok(runtime, end_member, kwargs)
+    asserted = _granted_ok(
+        runtime,
+        originated_from(
+            "commitment",
+            c1,
+            "meeting_note_version",
+            note_id,
+            f"client-{key}",
+            (note_anchor(meeting_id, note_id, NOTE_BODY),),
+        ),
+        kwargs,
+    )["association"]
+    correct = CorrectRecordAssociation(
+        link_id=asserted["link_id"],
+        expected_revision=1,
+        idempotency_key=f"lineage-client-{key}-correct",
+        reason="synthetic",
+        evidence_anchors=(note_anchor(meeting_id, note_id, NOTE_BODY, passage="façade"),),
+    )
+    _granted_ok(runtime, correct, kwargs)
+    end = EndRecordAssociation(
+        link_id=asserted["link_id"],
+        expected_revision=2,
+        idempotency_key=f"lineage-client-{key}-end",
+        reason="synthetic",
+    )
+    _granted_ok(runtime, end, kwargs)
+    return [added, end_member, asserted, correct, end]
 
 
 def test_switch_off_answers_unsupported_and_writes_nothing(disposable_database: str) -> None:
@@ -390,22 +501,31 @@ def test_an_operator_review_client_cannot_call_any_s1_write(disposable_database:
         )
         assert not allowed & frozenset(writes)
         assert not {capability for capability, _ in pairs} & frozenset(writes)
-        # And even granted directly, the service refuses every attested write
-        # (both Knowledge allowlists are empty for lineage, section 6.1) and
-        # writes nothing.
-        before = all_lineage_counts(runtime.engine)
-        for command in _link_writes(runtime, "review", local_link=None):
-            error = runtime.refused(command, remote_client=REMOTE_CLIENT)
-            assert error["code"] == "denied", command.capability.value
+        # S3.1 section 10.1 (the operator directives of 2026-10-20 and
+        # 2026-10-25): granted directly, each S1 write is now admitted -- and
+        # recorded `client_identified` / `remote_interactive`, never
+        # `remote_operator_attested`: the Knowledge allowlists still confer
+        # nothing on lineage (both are empty for it, section 6.1).
+        before = {name: fact_rows(runtime.engine, name) for name in _FACT_TABLES}
+        remote = {"remote_client": REMOTE_CLIENT}
+        _client_link_writes(runtime, "review", remote)
         issue = runtime.issue("review-project")
         project = runtime.project("review-project")
-        error = runtime.refused(_link(issue, project, "review"), remote_client=REMOTE_CLIENT)
-        assert error["code"] == "denied"
-        seeded = all_lineage_counts(runtime.engine)
-        assert seeded["record_links"] == before["record_links"]
-        assert (
-            seeded["issue_project_membership_events"] == before["issue_project_membership_events"]
-        )
+        _granted_ok(runtime, _link(issue, project, "review"), remote)
+        written = [
+            row
+            for name in _FACT_TABLES
+            for identity, row in fact_rows(runtime.engine, name).items()
+            if identity not in before[name]
+        ]
+        assert len(written) == 6
+        for row in written:
+            assert row[:4] == (
+                "client_identified",
+                "ordinary_reviewer",
+                "remote_interactive",
+                REMOTE_CLIENT,
+            )
     finally:
         runtime.close()
 
@@ -418,12 +538,20 @@ def test_a_replayed_attested_write_from_an_ordinary_client_is_denied_before_the_
     asserted = runtime.ok(writes[2], surface=OperatorSurface.HTTP_GATEWAY)
     before = all_lineage_counts(runtime.engine)
     for command in (writes[0], writes[2]):
-        # The same key and payload a local operator committed: a replay for the
-        # operator, `denied` for an ordinary remote client and for an unstamped
-        # local caller, which never reach the request row.
+        # S3.1 section 10.1 (the operator directives of 2026-10-20 and
+        # 2026-10-25; section 4.9): the same key and payload a local operator
+        # committed is a replay for the operator and, for an ordinary remote
+        # client and an unstamped local caller, a different writer's request:
+        # `conflict` / `idempotency_conflict`, nothing written, never the operator's
+        # answer.
         for kwargs in ({"remote_client": REMOTE_CLIENT}, {}):
-            error = runtime.refused(command, **kwargs)
-            assert error["code"] == "denied", command.capability.value
+            error = _granted_refused(runtime, command, kwargs)
+            assert error["code"] == "conflict", command.capability.value
+            # `idempotency_conflict`: the existing detail of a key bound to a
+            # different request (S3.1 section 12.1, N2-01: the contract's
+            # `idempotency_key` names the malformed-key detail).
+            assert error["safe_details"] == ["idempotency_conflict"], command.capability.value
+            assert "result" not in error
     assert all_lineage_counts(runtime.engine) == before
     again = runtime.ok(writes[0], surface=OperatorSurface.HTTP_GATEWAY)
     assert again["replayed"] is True and again["membership"] == added["membership"]
@@ -517,15 +645,16 @@ def _without_replayed(answer: dict[str, Any]) -> dict[str, Any]:
 def test_every_replayed_attested_write_is_denied_before_the_replay_lookup(
     runtime: LineageRuntime,
 ) -> None:
-    """Section 6.1: authority is derived before the request row is read, for all seven.
+    """S3.1 section 10.1: a client re-sending any of the seven is a different writer.
 
     The membership and association asserts are pinned above; this extends the
-    ordering to `issues.project_links.add/end`, `issues.memberships.end` and
+    rule to `issues.project_links.add/end`, `issues.memberships.end` and
     `records.associations.correct/end`. A replay of exactly what the operator
-    committed is `denied` for an ordinary remote client and for an unstamped
-    local caller, writes nothing, and the operator's own replay still answers
-    the original. The two recorded writes (`issues.create`/`update`) admit any
-    caller, so an ordinary client's replay of them is a replay.
+    committed is `conflict` / `idempotency_conflict` for an ordinary remote client
+    and for an unstamped local caller (S3.1 section 4.9, the writer bound into
+    the digest), writes nothing, and the operator's own replay still answers
+    the original. The two recorded writes (`issues.create`/`update`) keep their
+    channel-blind replay, so an ordinary client's replay of them is a replay.
     """
     committed = _committed_writes(runtime, "attested")
     before = all_lineage_counts(runtime.engine)
@@ -539,8 +668,13 @@ def test_every_replayed_attested_write_is_denied_before_the_replay_lookup(
             continue
         attested += 1
         for kwargs in ({"remote_client": REMOTE_CLIENT}, {}):
-            error = runtime.refused(command, **kwargs)
-            assert error["code"] == "denied", (capability, kwargs)
+            # S3.1 section 10.1 (the operator directives of 2026-10-20 and
+            # 2026-10-25; section 4.9): the open write binds its writer into
+            # the digest, so a client re-sending the operator's request is
+            # `conflict` / `idempotency_conflict`, never the stored answer.
+            error = _granted_refused(runtime, command, kwargs)
+            assert error["code"] == "conflict", (capability, kwargs)
+            assert error["safe_details"] == ["idempotency_conflict"], (capability, kwargs)
         assert all_lineage_counts(runtime.engine) == before, capability
         again = runtime.ok(command, surface=OperatorSurface.HTTP_GATEWAY)
         assert again["replayed"] is True, capability

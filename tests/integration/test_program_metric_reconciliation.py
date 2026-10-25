@@ -914,6 +914,8 @@ def test_the_denominator_names_every_project_state(runtime: S4Runtime) -> None:
             "conflict": 0,
             "calendar_unconfigured": 0,
         },
+        # S3.1 section 7.8 (lockstep): the unreviewed client-identified links.
+        "unreviewed_issue_links": 0,
     }
     assert g["project_ids_by_constraint_source_state"] == {
         "in_sync": [scene.b1.project_id],

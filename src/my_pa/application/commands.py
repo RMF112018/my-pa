@@ -12313,6 +12313,20 @@ class UpdateIssue:
         )
 
 
+#: S3.1 section 7.1: the open lineage writes' client-declared flag. Stored as an
+#: unverified claim (`user_directed_claim`); it changes no gate or label, and
+#: the human channel may not send it (`invalid_request` / `user_directed`).
+_USER_DIRECTED_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {"type": "boolean", "default": False}
+)
+
+
+def _user_directed(value: object) -> None:
+    """S3.1 section 7.1: `user_directed` is a boolean; anything else names it."""
+    if type(value) is not bool:
+        raise InvalidRequestError(SafeDetail.USER_DIRECTED)
+
+
 @dataclass(frozen=True, slots=True)
 class AddIssueProjectLink:
     """`issues.project_links.add`: link an Issue to a Project of yours, or relink it.
@@ -12332,6 +12346,7 @@ class AddIssueProjectLink:
             "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
             "evidence_anchor": _EVIDENCE_ANCHOR_SCHEMA,
             "reason": _LINEAGE_REASON_SCHEMA,
+            "user_directed": _USER_DIRECTED_SCHEMA,
         }
     )
 
@@ -12342,7 +12357,10 @@ class AddIssueProjectLink:
     evidence_anchor: dict[str, object] | None = field(default=None, repr=False)
     reason: str | None = field(default=None, repr=False)
 
+    user_directed: bool = False
+
     def __post_init__(self) -> None:
+        _user_directed(self.user_directed)
         _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
         _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
         _membership_revision(self.expected_membership_revision, 0)
@@ -12384,6 +12402,7 @@ class EndIssueProjectLink:
             "expected_membership_revision": {"type": "integer", "minimum": 1},
             "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
             "reason": _LINEAGE_REASON_SCHEMA,
+            "user_directed": _USER_DIRECTED_SCHEMA,
         }
     )
 
@@ -12393,7 +12412,10 @@ class EndIssueProjectLink:
     idempotency_key: str
     reason: str = field(repr=False)
 
+    user_directed: bool = False
+
     def __post_init__(self) -> None:
+        _user_directed(self.user_directed)
         _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
         _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
         _membership_revision(self.expected_membership_revision, 1)
@@ -12508,6 +12530,7 @@ class AddIssueMembership:
             "role": {"type": "string", "enum": [role.value for role in MemberRole]},
             "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
             "evidence_anchors": _EVIDENCE_ANCHORS_SCHEMA,
+            "user_directed": _USER_DIRECTED_SCHEMA,
         }
     )
 
@@ -12517,7 +12540,10 @@ class AddIssueMembership:
     idempotency_key: str
     evidence_anchors: tuple[dict[str, object], ...] = field(default=(), repr=False)
 
+    user_directed: bool = False
+
     def __post_init__(self) -> None:
+        _user_directed(self.user_directed)
         _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
         self.lineage_request()
         _lineage_key(_idempotency_key(self.idempotency_key))
@@ -12552,6 +12578,7 @@ class EndIssueMembership:
             "expected_revision": {"type": "integer", "minimum": 1},
             "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
             "reason": _LINEAGE_REASON_SCHEMA,
+            "user_directed": _USER_DIRECTED_SCHEMA,
         }
     )
 
@@ -12560,7 +12587,10 @@ class EndIssueMembership:
     idempotency_key: str
     reason: str = field(repr=False)
 
+    user_directed: bool = False
+
     def __post_init__(self) -> None:
+        _user_directed(self.user_directed)
         self.lineage_request()
         _lineage_key(_idempotency_key(self.idempotency_key))
 
@@ -12614,6 +12644,7 @@ class AssertRecordAssociation:
             "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
             "evidence_anchors": {**_EVIDENCE_ANCHORS_SCHEMA, "minItems": 1},
             "context_issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue it belongs to."),
+            "user_directed": _USER_DIRECTED_SCHEMA,
         }
     )
 
@@ -12624,7 +12655,10 @@ class AssertRecordAssociation:
     evidence_anchors: tuple[dict[str, object], ...] = field(repr=False)
     context_issue_id: str | None = None
 
+    user_directed: bool = False
+
     def __post_init__(self) -> None:
+        _user_directed(self.user_directed)
         self.lineage_request()
         _lineage_key(_idempotency_key(self.idempotency_key))
 
@@ -12669,6 +12703,7 @@ class CorrectRecordAssociation:
             "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
             "reason": _LINEAGE_REASON_SCHEMA,
             "evidence_anchors": {**_EVIDENCE_ANCHORS_SCHEMA, "minItems": 1},
+            "user_directed": _USER_DIRECTED_SCHEMA,
         }
     )
 
@@ -12678,7 +12713,10 @@ class CorrectRecordAssociation:
     reason: str = field(repr=False)
     evidence_anchors: tuple[dict[str, object], ...] = field(repr=False)
 
+    user_directed: bool = False
+
     def __post_init__(self) -> None:
+        _user_directed(self.user_directed)
         self.lineage_request()
         _lineage_key(_idempotency_key(self.idempotency_key))
 
@@ -12709,6 +12747,7 @@ class EndRecordAssociation:
             "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
             "reason": _LINEAGE_REASON_SCHEMA,
             "evidence_anchors": _EVIDENCE_ANCHORS_SCHEMA,
+            "user_directed": _USER_DIRECTED_SCHEMA,
         }
     )
 
@@ -12718,7 +12757,10 @@ class EndRecordAssociation:
     reason: str = field(repr=False)
     evidence_anchors: tuple[dict[str, object], ...] = field(default=(), repr=False)
 
+    user_directed: bool = False
+
     def __post_init__(self) -> None:
+        _user_directed(self.user_directed)
         self.lineage_request()
         _lineage_key(_idempotency_key(self.idempotency_key))
 
@@ -13044,6 +13086,7 @@ class CorrectIssueMembership:
             "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
             "reason": _LINEAGE_REASON_SCHEMA,
             "evidence_anchors": _EVIDENCE_ANCHORS_SCHEMA,
+            "user_directed": _USER_DIRECTED_SCHEMA,
         }
     )
 
@@ -13053,7 +13096,10 @@ class CorrectIssueMembership:
     reason: str = field(repr=False)
     evidence_anchors: tuple[dict[str, object], ...] = field(default=(), repr=False)
 
+    user_directed: bool = False
+
     def __post_init__(self) -> None:
+        _user_directed(self.user_directed)
         self.lineage_request()
         _lineage_key(_idempotency_key(self.idempotency_key))
 
@@ -13107,6 +13153,7 @@ class RecordIssueHandoff:
                 ),
             },
             "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "user_directed": _USER_DIRECTED_SCHEMA,
         }
     )
 
@@ -13118,7 +13165,10 @@ class RecordIssueHandoff:
     reason: str = field(repr=False)
     evidence_anchor: dict[str, object] = field(repr=False)
 
+    user_directed: bool = False
+
     def __post_init__(self) -> None:
+        _user_directed(self.user_directed)
         self.handoff_request()
         _lineage_key(_idempotency_key(self.idempotency_key))
 
@@ -13480,6 +13530,7 @@ class CreateIssueWorkTask:
             ),
             "membership_evidence_anchors": _EVIDENCE_ANCHORS_SCHEMA,
             "association_intents": _intents_schema(_TASK_INTENT_RELATIONS),
+            "user_directed": _USER_DIRECTED_SCHEMA,
         }
     )
 
@@ -13489,7 +13540,10 @@ class CreateIssueWorkTask:
     membership_evidence_anchors: tuple[dict[str, object], ...] = field(default=(), repr=False)
     association_intents: tuple[dict[str, object], ...] = field(default=(), repr=False)
 
+    user_directed: bool = False
+
     def __post_init__(self) -> None:
+        _user_directed(self.user_directed)
         self.work_request()
         _lineage_key(_idempotency_key(self.idempotency_key))
 
@@ -13544,6 +13598,7 @@ class CreateIssueWorkCommitment:
             ),
             "membership_evidence_anchors": _EVIDENCE_ANCHORS_SCHEMA,
             "association_intents": _intents_schema(_COMMITMENT_INTENT_RELATIONS),
+            "user_directed": _USER_DIRECTED_SCHEMA,
         }
     )
 
@@ -13553,7 +13608,10 @@ class CreateIssueWorkCommitment:
     membership_evidence_anchors: tuple[dict[str, object], ...] = field(default=(), repr=False)
     association_intents: tuple[dict[str, object], ...] = field(default=(), repr=False)
 
+    user_directed: bool = False
+
     def __post_init__(self) -> None:
+        _user_directed(self.user_directed)
         self.work_request()
         _lineage_key(_idempotency_key(self.idempotency_key))
 
@@ -13673,6 +13731,7 @@ class ContestRecordAssociation:
             "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
             "reason": _LINEAGE_REASON_SCHEMA,
             "evidence_anchors": {**_EVIDENCE_ANCHORS_SCHEMA, "minItems": 1},
+            "user_directed": _USER_DIRECTED_SCHEMA,
         }
     )
 
@@ -13682,7 +13741,10 @@ class ContestRecordAssociation:
     reason: str = field(repr=False)
     evidence_anchors: tuple[dict[str, object], ...] = field(repr=False)
 
+    user_directed: bool = False
+
     def __post_init__(self) -> None:
+        _user_directed(self.user_directed)
         self.lineage_request()
         _lineage_key(_idempotency_key(self.idempotency_key))
 
@@ -13708,6 +13770,7 @@ class ReinstateRecordAssociation:
             "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
             "reason": _LINEAGE_REASON_SCHEMA,
             "evidence_anchors": {**_EVIDENCE_ANCHORS_SCHEMA, "minItems": 1},
+            "user_directed": _USER_DIRECTED_SCHEMA,
         }
     )
 
@@ -13717,7 +13780,10 @@ class ReinstateRecordAssociation:
     reason: str = field(repr=False)
     evidence_anchors: tuple[dict[str, object], ...] = field(repr=False)
 
+    user_directed: bool = False
+
     def __post_init__(self) -> None:
+        _user_directed(self.user_directed)
         self.lineage_request()
         _lineage_key(_idempotency_key(self.idempotency_key))
 
@@ -13886,6 +13952,7 @@ class CorrectIssueHandoff:
                 ),
             },
             "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "user_directed": _USER_DIRECTED_SCHEMA,
         }
     )
 
@@ -13896,7 +13963,10 @@ class CorrectIssueHandoff:
     evidence_anchor: dict[str, object] = field(repr=False)
     effective_at: str | None = None
 
+    user_directed: bool = False
+
     def __post_init__(self) -> None:
+        _user_directed(self.user_directed)
         self.handoff_request()
         _lineage_key(_idempotency_key(self.idempotency_key))
 

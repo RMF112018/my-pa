@@ -68,8 +68,10 @@ __all__ = [
     "LineageAuthority",
     "LineageProvenance",
     "attested_lineage_authority",
+    "attested_provenance",
     "lineage_authority",
     "lineage_write_provenance",
+    "recorded_client_id",
 ]
 
 
@@ -181,3 +183,28 @@ def lineage_write_provenance(
                 user_directed_claim=user_directed,
             )
     raise InternalError()
+
+
+def attested_provenance(authority: LineageAuthority) -> LineageProvenance:
+    """The provenance an attested write's fact rows record: the human channel's.
+
+    A confirm (S3.1 section 4.7) writes `user_confirmed` with the attested
+    pair; `attested_lineage_authority` already refused every other caller.
+    """
+    return LineageProvenance(
+        authority_class=authority.authority_class,
+        decision_channel=authority.decision_channel,
+        acceptance_basis=AcceptanceBasis.USER_CONFIRMED,
+        asserting_client_id=None,
+        user_directed_claim=False,
+    )
+
+
+def recorded_client_id(authorization: Authorization, authority: LineageAuthority) -> str | None:
+    """The OAuth client a recorded Issue write's request row names (S3.1 sections 4.8, 5.2).
+
+    The remote client's authenticated id for `remote_interactive`, else `None`.
+    """
+    if authority.decision_channel is KnowledgeDecisionChannel.REMOTE_INTERACTIVE:
+        return authorization.authenticated_client_id
+    return None

@@ -212,14 +212,30 @@ def related_context_order(first: RecordRef, second: RecordRef) -> tuple[RecordRe
     return first, second
 
 
-def request_digest(capability: str, principal_id: str, request: Mapping[str, object]) -> str:
+def request_digest(
+    capability: str,
+    principal_id: str,
+    request: Mapping[str, object],
+    *,
+    writer: Mapping[str, object] | None = None,
+) -> str:
     """`request_digest` of section 5.4: no NFC, so free text hashes as received.
 
     `request` is the parsed payload without `idempotency_key`, optional fields
     present as `null`, anchors in canonical order and `clear_fields` sorted; the
     caller builds it, this function only encodes it.
+
+    S3.1 (S3.1 contract section 4.9): a client channel's document gains the
+    server-only key `writer` (`{"decision_channel", "asserting_client_id"}`),
+    so the same key re-sent through another writer is a different digest; the
+    human channel passes `None` and its document is exactly the S1-S4 one.
     """
-    document = _checked(
-        {"capability": capability, "principal_id": principal_id, "request": request}, nfc=False
-    )
+    body: dict[str, object] = {
+        "capability": capability,
+        "principal_id": principal_id,
+        "request": request,
+    }
+    if writer is not None:
+        body["writer"] = dict(writer)
+    document = _checked(body, nfc=False)
     return hashlib.sha256(REQUEST_DOMAIN + _dumps(document).encode("utf-8")).hexdigest()

@@ -527,7 +527,12 @@ from my_pa.application.intelligence import (
 from my_pa.application.issue_handoffs import IssueHandoffApplication
 from my_pa.application.issue_timeline import NativeVisibility, read_issue_timeline
 from my_pa.application.issue_work import IssueWorkApplication, NativeCreated, WorkCompositeResult
-from my_pa.application.issues import IssueApplication, IssueRevisionResult, ProjectLinkResult
+from my_pa.application.issues import (
+    IssueApplication,
+    IssueRevisionResult,
+    ProjectLinkConfirmRequest,
+    ProjectLinkResult,
+)
 from my_pa.application.knowledge_assertions import (
     DEFAULT_KNOWLEDGE_PAGE_SIZE,
     KNOWLEDGE_PROMOTING_DISPOSITIONS,
@@ -559,13 +564,21 @@ from my_pa.application.knowledge_assertions import (
 from my_pa.application.knowledge_assertions import submission_view as knowledge_submission_view
 from my_pa.application.knowledge_assertions import submit_request as knowledge_submit_request
 from my_pa.application.knowledge_assertions import submit_view as knowledge_submit_view
-from my_pa.application.lineage_authority import attested_lineage_authority, lineage_authority
+from my_pa.application.lineage_authority import (
+    LineageProvenance,
+    attested_lineage_authority,
+    lineage_authority,
+    lineage_write_provenance,
+    recorded_client_id,
+)
 from my_pa.application.lineage_backfill import plan_backfill, report_backfill
+from my_pa.application.lineage_endpoints import EvidenceAnchorInput
 from my_pa.application.lineage_visibility import (
     ANCHOR_FAMILIES,
     LineageVisibility,
     lineage_visibility,
     require_read_grant,
+    require_write_grant,
 )
 from my_pa.application.managed_documents import ManagedDocumentService
 from my_pa.application.meetings import (
@@ -593,6 +606,7 @@ from my_pa.application.record_lineage import (
     LINEAGE_STATEMENT_TIMEOUT_MS,
     MAX_VISIBILITY_SCAN,
     AssociationResult,
+    LinkConfirmRequest,
     RecordLineageApplication,
 )
 from my_pa.application.relationship_memory import (
@@ -698,7 +712,7 @@ from my_pa.contracts.v1.documents import (
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
 from my_pa.contracts.v1.issues import HandoffView
 from my_pa.contracts.v1.meetings import MeetingNoteVersionEntry, MeetingNoteVersionView
-from my_pa.contracts.v1.record_lineage import EvidenceAnchorView
+from my_pa.contracts.v1.record_lineage import AssociationView, EvidenceAnchorView
 from my_pa.contracts.v1.report_manifests import ReportManifestView
 from my_pa.contracts.v1.reveal import RevealView
 from my_pa.contracts.v1.status import SourceStatusState
@@ -781,6 +795,7 @@ from my_pa.domain.lineage.vocabulary import (
     EvidenceAvailability,
     EvidenceSourceFamily,
     RecordFamily,
+    RecordLinkKind,
     SituationKind,
 )
 from my_pa.domain.meeting.model import (
@@ -13432,6 +13447,37 @@ class ApplicationService:
         if not (self._lineage_enabled and self._lineage_backfill_enabled):
             raise UnsupportedError()
 
+    def _open_lineage_write(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: _OpenLineageWrite
+    ) -> LineageProvenance:
+        """S3.1 section 6.2 steps 2 and 3 of an open lineage write, after the switch.
+
+        The provenance every fact row records (section 6.1; never `denied`),
+        then, for a remote caller only (section 6.4, R31-F01): the write-grant
+        re-check (`unsupported`), a composite's native create grant (`denied`)
+        and the hidden-is-absent pre-check of every subject the request names
+        or addresses -- each lock-free and before the reservation, the replay
+        lookup and the rate count.
+        """
+        provenance = lineage_write_provenance(authorization, user_directed=command.user_directed)
+        grants = authorization.capability_grants
+        if grants is not None:
+            capability = command.capability
+            require_write_grant(grants, capability)
+            native = _COMPOSITE_NATIVE_GRANTS.get(capability)
+            if native is not None and native[1] not in granted_purposes(native[0], grants):
+                # Section 6.4 step 2: `issue_work_authoring` never becomes a
+                # native create grant.
+                raise DeniedError()
+            _require_visible_subjects(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command,
+                lineage_visibility(grants, capability),
+                project_visible=ProgramFamily.PROJECT in program_families(grants),
+            )
+        return provenance
+
     def _issues_create(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: CreateIssue
     ) -> _Result:
@@ -13446,6 +13492,7 @@ class ApplicationService:
                 command.idempotency_key,
                 authority,
                 authorization.at,
+                asserting_client_id=recorded_client_id(authorization, authority),
             )
         return self._issue_revision_result(authorization, written)
 
@@ -13541,6 +13588,7 @@ class ApplicationService:
                 command.idempotency_key,
                 authority,
                 authorization.at,
+                asserting_client_id=recorded_client_id(authorization, authority),
             )
         return self._issue_revision_result(authorization, written)
 
@@ -13552,14 +13600,14 @@ class ApplicationService:
     ) -> _Result:
         """`issues.project_links.add`: assert or reinstate a native Project link."""
         self._lineage_plane()
-        authority = attested_lineage_authority(authorization)
+        provenance = self._open_lineage_write(unit_of_work, authorization, command)
         with _translated(), _lineage_translated():
             written = self._issues.add_project_link(
                 unit_of_work,
                 authorization.principal.principal_id,
                 command.issue_request(),
                 command.idempotency_key,
-                authority,
+                provenance,
                 authorization.at,
             )
         return self._project_link_result(authorization, written)
@@ -13572,14 +13620,14 @@ class ApplicationService:
     ) -> _Result:
         """`issues.project_links.end`: end an active native Project link."""
         self._lineage_plane()
-        authority = attested_lineage_authority(authorization)
+        provenance = self._open_lineage_write(unit_of_work, authorization, command)
         with _translated(), _lineage_translated():
             written = self._issues.end_project_link(
                 unit_of_work,
                 authorization.principal.principal_id,
                 command.issue_request(),
                 command.idempotency_key,
-                authority,
+                provenance,
                 authorization.at,
             )
         return self._project_link_result(authorization, written)
@@ -13596,16 +13644,17 @@ class ApplicationService:
     ) -> _Result:
         """`issues.memberships.add`: an Issue membership of a non-Project record."""
         self._lineage_plane()
-        authority = attested_lineage_authority(authorization)
+        provenance = self._open_lineage_write(unit_of_work, authorization, command)
         with _translated(), _lineage_translated():
             written = self._record_lineage.add_membership(
                 unit_of_work,
                 authorization.principal.principal_id,
                 command.lineage_request(),
                 command.idempotency_key,
-                authority,
+                provenance,
                 authorization.at,
             )
+            written = _filtered_association(unit_of_work, authorization, written)
         return self._association_result(authorization, "membership", written)
 
     def _issues_memberships_end(
@@ -13613,16 +13662,17 @@ class ApplicationService:
     ) -> _Result:
         """`issues.memberships.end`: end an active membership at its expected revision."""
         self._lineage_plane()
-        authority = attested_lineage_authority(authorization)
+        provenance = self._open_lineage_write(unit_of_work, authorization, command)
         with _translated(), _lineage_translated():
             written = self._record_lineage.end_membership(
                 unit_of_work,
                 authorization.principal.principal_id,
                 command.lineage_request(),
                 command.idempotency_key,
-                authority,
+                provenance,
                 authorization.at,
             )
+            written = _filtered_association(unit_of_work, authorization, written)
         return self._association_result(authorization, "membership", written)
 
     def _records_associations_assert(
@@ -13633,16 +13683,17 @@ class ApplicationService:
     ) -> _Result:
         """`records.associations.assert`: a semantic association, or the active one."""
         self._lineage_plane()
-        authority = attested_lineage_authority(authorization)
+        provenance = self._open_lineage_write(unit_of_work, authorization, command)
         with _translated(), _lineage_translated():
             written = self._record_lineage.assert_association(
                 unit_of_work,
                 authorization.principal.principal_id,
                 command.lineage_request(),
                 command.idempotency_key,
-                authority,
+                provenance,
                 authorization.at,
             )
+            written = _filtered_association(unit_of_work, authorization, written)
         return self._association_result(authorization, "association", written)
 
     def _records_associations_correct(
@@ -13653,16 +13704,17 @@ class ApplicationService:
     ) -> _Result:
         """`records.associations.correct`: replace an association's evidence set."""
         self._lineage_plane()
-        authority = attested_lineage_authority(authorization)
+        provenance = self._open_lineage_write(unit_of_work, authorization, command)
         with _translated(), _lineage_translated():
             written = self._record_lineage.correct_association(
                 unit_of_work,
                 authorization.principal.principal_id,
                 command.lineage_request(),
                 command.idempotency_key,
-                authority,
+                provenance,
                 authorization.at,
             )
+            written = _filtered_association(unit_of_work, authorization, written)
         return self._association_result(authorization, "association", written)
 
     def _records_associations_end(
@@ -13670,16 +13722,17 @@ class ApplicationService:
     ) -> _Result:
         """`records.associations.end`: end a semantic association."""
         self._lineage_plane()
-        authority = attested_lineage_authority(authorization)
+        provenance = self._open_lineage_write(unit_of_work, authorization, command)
         with _translated(), _lineage_translated():
             written = self._record_lineage.end_association(
                 unit_of_work,
                 authorization.principal.principal_id,
                 command.lineage_request(),
                 command.idempotency_key,
-                authority,
+                provenance,
                 authorization.at,
             )
+            written = _filtered_association(unit_of_work, authorization, written)
         return self._association_result(authorization, "association", written)
 
     # ---- record lineage S2 (ADR-015; S2 contract section 7) -------------------
@@ -13785,16 +13838,17 @@ class ApplicationService:
     ) -> _Result:
         """`issues.memberships.correct`: replace a membership's evidence set."""
         self._lineage_plane()
-        authority = attested_lineage_authority(authorization)
+        provenance = self._open_lineage_write(unit_of_work, authorization, command)
         with _translated(), _lineage_translated():
             written = self._record_lineage.correct_membership(
                 unit_of_work,
                 authorization.principal.principal_id,
                 command.lineage_request(),
                 command.idempotency_key,
-                authority,
+                provenance,
                 authorization.at,
             )
+            written = _filtered_association(unit_of_work, authorization, written)
         return self._association_result(authorization, "membership", written)
 
     def _issues_handoffs_record(
@@ -13802,18 +13856,24 @@ class ApplicationService:
     ) -> _Result:
         """`issues.handoffs.record`: append the next event of a Commitment's handoff chain."""
         self._lineage_plane()
-        authority = attested_lineage_authority(authorization)
+        provenance = self._open_lineage_write(unit_of_work, authorization, command)
         with _translated(), _lineage_translated():
             written = self._issue_handoffs.record_handoff(
                 unit_of_work,
                 authorization.principal.principal_id,
                 command.handoff_request(),
                 command.idempotency_key,
-                authority,
+                provenance,
                 authorization.at,
             )
         return _Result(
-            payload={"handoff": written.handoff.to_canonical_dict(), "replayed": written.replayed},
+            payload={
+                "handoff": written.handoff.to_canonical_dict(),
+                "replayed": written.replayed,
+                # S3.1 section 6.4: the one anchor shown is the request's own,
+                # visible by the pre-check, so nothing is ever withheld here.
+                "restricted": False,
+            },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
         )
 
@@ -13909,7 +13969,7 @@ class ApplicationService:
     ) -> _Result:
         """`issues.work.create_task`: a Task, its `work` membership and its intents, one UOW."""
         self._lineage_plane()
-        authority = attested_lineage_authority(authorization)
+        provenance = self._open_lineage_write(unit_of_work, authorization, command)
         native = command.native_command()
 
         def native_create() -> NativeCreated:
@@ -13931,10 +13991,11 @@ class ApplicationService:
                 authorization.principal.principal_id,
                 command.work_request(),
                 command.idempotency_key,
-                authority,
+                provenance,
                 authorization.at,
                 native_create,
             )
+            written = _filtered_composite(unit_of_work, authorization, written)
         return self._composite_result(authorization, written)
 
     def _issues_work_create_commitment(
@@ -13945,7 +14006,7 @@ class ApplicationService:
     ) -> _Result:
         """`issues.work.create_commitment`: a Commitment, its membership and its intents."""
         self._lineage_plane()
-        authority = attested_lineage_authority(authorization)
+        provenance = self._open_lineage_write(unit_of_work, authorization, command)
         native = command.native_command()
 
         def native_create() -> NativeCreated:
@@ -13969,10 +14030,11 @@ class ApplicationService:
                 authorization.principal.principal_id,
                 command.work_request(),
                 command.idempotency_key,
-                authority,
+                provenance,
                 authorization.at,
                 native_create,
             )
+            written = _filtered_composite(unit_of_work, authorization, written)
         return self._composite_result(authorization, written)
 
     @staticmethod
@@ -13987,6 +14049,7 @@ class ApplicationService:
                 "membership": written.membership.to_canonical_dict(),
                 "associations": [view.to_canonical_dict() for view in written.associations],
                 "replayed": written.replayed,
+                "restricted": written.restricted,
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
         )
@@ -14008,16 +14071,17 @@ class ApplicationService:
     ) -> _Result:
         """`records.associations.contest`: dispute an active semantic association."""
         self._lineage_plane()
-        authority = attested_lineage_authority(authorization)
+        provenance = self._open_lineage_write(unit_of_work, authorization, command)
         with _translated(), _lineage_translated():
             written = self._record_lineage.contest_association(
                 unit_of_work,
                 authorization.principal.principal_id,
                 command.lineage_request(),
                 command.idempotency_key,
-                authority,
+                provenance,
                 authorization.at,
             )
+            written = _filtered_association(unit_of_work, authorization, written)
         return self._association_result(authorization, "association", written)
 
     def _records_associations_reinstate(
@@ -14028,16 +14092,17 @@ class ApplicationService:
     ) -> _Result:
         """`records.associations.reinstate`: resolve a contested association back to active."""
         self._lineage_plane()
-        authority = attested_lineage_authority(authorization)
+        provenance = self._open_lineage_write(unit_of_work, authorization, command)
         with _translated(), _lineage_translated():
             written = self._record_lineage.reinstate_association(
                 unit_of_work,
                 authorization.principal.principal_id,
                 command.lineage_request(),
                 command.idempotency_key,
-                authority,
+                provenance,
                 authorization.at,
             )
+            written = _filtered_association(unit_of_work, authorization, written)
         return self._association_result(authorization, "association", written)
 
     def _records_associations_history(
@@ -14137,14 +14202,14 @@ class ApplicationService:
     ) -> _Result:
         """`issues.handoffs.correct`: retime or void one handoff, never rewriting it."""
         self._lineage_plane()
-        authority = attested_lineage_authority(authorization)
+        provenance = self._open_lineage_write(unit_of_work, authorization, command)
         with _translated(), _lineage_translated():
             written = self._issue_handoffs.correct_handoff(
                 unit_of_work,
                 authorization.principal.principal_id,
                 command.handoff_request(),
                 command.idempotency_key,
-                authority,
+                provenance,
                 authorization.at,
             )
         return _Result(
@@ -14152,6 +14217,9 @@ class ApplicationService:
                 "correction": written.correction.to_canonical_dict(),
                 "handoff": written.handoff.to_canonical_dict(),
                 "replayed": written.replayed,
+                # S3.1 section 6.4: the correction's anchor and the handoff's
+                # own anchor are both visible by the pre-check.
+                "restricted": False,
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
         )
@@ -14588,10 +14656,10 @@ class ApplicationService:
     # Four handlers: the 3 attested confirms and the related read. The switch
     # first (section 7.10); a confirm then derives attested authority -- `denied`
     # for a non-attested caller before any row and before the replay lookup --
-    # and the related read its remote grant re-check. The use cases are not
-    # implemented in this change: after those checks each handler answers
-    # `unsupported`, writing and reading nothing, until its worker lands it
-    # (the S3 D-37 precedent).
+    # and the related read its remote grant re-check. The related read's use
+    # case is not implemented in this change: after those checks it answers
+    # `unsupported`, reading nothing, until its worker lands it (the S3 D-37
+    # precedent).
 
     def _records_associations_confirm(
         self,
@@ -14600,10 +14668,23 @@ class ApplicationService:
         command: ConfirmRecordAssociation,
     ) -> _Result:
         """`records.associations.confirm`: promote a client-identified link (S3.1 7.2)."""
-        del unit_of_work, command
         self._lineage_plane()
-        attested_lineage_authority(authorization)
-        raise UnsupportedError()
+        authority = attested_lineage_authority(authorization)
+        with _translated(), _lineage_translated():
+            written = self._record_lineage.confirm_link(
+                unit_of_work,
+                authorization.principal.principal_id,
+                LinkConfirmRequest(
+                    link_id=command.link_id,
+                    expected_revision=command.expected_revision,
+                    reason=command.reason,
+                ),
+                command.idempotency_key,
+                authority,
+                authorization.at,
+                kind=RecordLinkKind.SEMANTIC,
+            )
+        return self._association_result(authorization, "association", written)
 
     def _issues_memberships_confirm(
         self,
@@ -14612,10 +14693,23 @@ class ApplicationService:
         command: ConfirmIssueMembership,
     ) -> _Result:
         """`issues.memberships.confirm`: promote a client-identified membership (S3.1 7.2)."""
-        del unit_of_work, command
         self._lineage_plane()
-        attested_lineage_authority(authorization)
-        raise UnsupportedError()
+        authority = attested_lineage_authority(authorization)
+        with _translated(), _lineage_translated():
+            written = self._record_lineage.confirm_link(
+                unit_of_work,
+                authorization.principal.principal_id,
+                LinkConfirmRequest(
+                    link_id=command.link_id,
+                    expected_revision=command.expected_revision,
+                    reason=command.reason,
+                ),
+                command.idempotency_key,
+                authority,
+                authorization.at,
+                kind=RecordLinkKind.ISSUE_MEMBERSHIP,
+            )
+        return self._association_result(authorization, "membership", written)
 
     def _issues_project_links_confirm(
         self,
@@ -14624,10 +14718,23 @@ class ApplicationService:
         command: ConfirmIssueProjectLink,
     ) -> _Result:
         """`issues.project_links.confirm`: promote a client-identified link event (S3.1 7.3)."""
-        del unit_of_work, command
         self._lineage_plane()
-        attested_lineage_authority(authorization)
-        raise UnsupportedError()
+        authority = attested_lineage_authority(authorization)
+        with _translated(), _lineage_translated():
+            written = self._issues.confirm_project_link(
+                unit_of_work,
+                authorization.principal.principal_id,
+                ProjectLinkConfirmRequest(
+                    issue_id=command.issue_id,
+                    project_id=command.project_id,
+                    expected_membership_revision=command.expected_membership_revision,
+                    reason=command.reason,
+                ),
+                command.idempotency_key,
+                authority,
+                authorization.at,
+            )
+        return self._project_link_result(authorization, written)
 
     def _records_lineage_related(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadRelatedRecords
@@ -14783,6 +14890,9 @@ class ApplicationService:
         }
         if written.created is not None:
             payload["created"] = written.created
+        # S3.1 section 6.4: every open-write and confirm answer says whether the
+        # answer filter withheld anything (`false` for every local caller).
+        payload["restricted"] = written.restricted
         return _Result(
             payload=payload,
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
@@ -14804,6 +14914,9 @@ class ApplicationService:
                 "project_link": written.project_link.to_canonical_dict(),
                 "issue_id": written.issue_id,
                 "replayed": written.replayed,
+                # S3.1 section 6.4: a Project-link view carries no anchor body,
+                # so the answer filter never withholds from it.
+                "restricted": False,
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
         )
@@ -17136,6 +17249,222 @@ _LINEAGE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
 _HANDOFF_SCAN_BATCH: Final = 100
 _HANDOFF_SCAN_BOUND: Final = MAX_VISIBILITY_SCAN
 _HANDOFF_SCAN_REASON: Final = "visibility_scan_bound"
+
+
+#: Record lineage S3.1 (S3.1 contract section 6.4 step 2): the native create
+#: grant each composite needs from a remote caller, besides its own.
+_COMPOSITE_NATIVE_GRANTS: Final[Mapping[Capability, tuple[Capability, Purpose]]] = MappingProxyType(
+    {
+        Capability.ISSUES_WORK_CREATE_TASK: (Capability.TASKS_CREATE, Purpose.TASK_AUTHORING),
+        Capability.ISSUES_WORK_CREATE_COMMITMENT: (
+            Capability.COMMITMENTS_CREATE,
+            Purpose.COMMITMENT_AUTHORING,
+        ),
+    }
+)
+
+#: The 14 open lineage writes' commands (S3.1 contract section 1, Part A).
+type _OpenLineageWrite = (
+    AssertRecordAssociation
+    | CorrectRecordAssociation
+    | EndRecordAssociation
+    | ContestRecordAssociation
+    | ReinstateRecordAssociation
+    | AddIssueMembership
+    | EndIssueMembership
+    | CorrectIssueMembership
+    | AddIssueProjectLink
+    | EndIssueProjectLink
+    | RecordIssueHandoff
+    | CorrectIssueHandoff
+    | CreateIssueWorkTask
+    | CreateIssueWorkCommitment
+)
+
+
+def _require_visible_anchors(
+    anchors: Sequence[EvidenceAnchorInput], visibility: LineageVisibility, detail: SafeDetail
+) -> None:
+    for anchor in anchors:
+        if not visibility.sees_family(ANCHOR_FAMILIES[anchor.family]):
+            raise NotFoundError(detail)
+
+
+def _require_visible(ref: RecordRef, visibility: LineageVisibility, detail: SafeDetail) -> None:
+    if not visibility.sees(ref):
+        raise NotFoundError(detail)
+
+
+def _require_visible_subjects(
+    unit_of_work: UnitOfWork,
+    principal_id: str,
+    command: _OpenLineageWrite,
+    visibility: LineageVisibility,
+    *,
+    project_visible: bool,
+) -> None:
+    """S3.1 section 6.4 step 3: a remote caller's hidden subject answers as an absent one.
+
+    Lock-free, before the reservation. Every write on a semantic link or a
+    membership (and both composites) first needs the `situation` family
+    itself (RR1-F02), so neither the frozen-closed refusal nor an Issue-context
+    or Project qualification check can disclose a hidden Issue. Then every
+    subject in a family the caller cannot see answers `not_found` with the
+    detail an absent one gets: endpoints, Issues, anchors' source families, a
+    handoff's Commitment, a Project; a `link_id` is resolved to its root and a
+    `handoff_id` to its event, each read Principal-scoped. An absent subject is
+    refused later, at validation, with the same answer; both precede the rate
+    count. The answer depends only on the grants and the request, never on
+    whether a hidden subject exists.
+    """
+    sees_issues = visibility.sees_family(RecordFamily.SITUATION)
+    match command:
+        case AssertRecordAssociation():
+            request = command.lineage_request()
+            if not sees_issues:
+                raise NotFoundError(SafeDetail.FROM_RECORD)
+            _require_visible(request.from_ref, visibility, SafeDetail.FROM_RECORD)
+            _require_visible(request.to_ref, visibility, SafeDetail.TO_RECORD)
+            _require_visible_anchors(
+                request.evidence_anchors, visibility, SafeDetail.EVIDENCE_ANCHORS
+            )
+        case AddIssueMembership():
+            membership = command.lineage_request()
+            if not sees_issues:
+                raise NotFoundError(SafeDetail.ISSUE_ID)
+            _require_visible(membership.member, visibility, SafeDetail.MEMBER)
+            _require_visible_anchors(
+                membership.evidence_anchors, visibility, SafeDetail.EVIDENCE_ANCHORS
+            )
+        case (
+            CorrectRecordAssociation()
+            | EndRecordAssociation()
+            | ContestRecordAssociation()
+            | ReinstateRecordAssociation()
+            | EndIssueMembership()
+            | CorrectIssueMembership()
+        ):
+            revised = command.lineage_request()
+            if not sees_issues:
+                raise NotFoundError(SafeDetail.LINK_ID)
+            link = unit_of_work.record_lineage.read_link(principal_id, revised.link_id)
+            if link is not None and not (
+                visibility.sees(link.from_ref) and visibility.sees(link.to_ref)
+            ):
+                raise NotFoundError(SafeDetail.LINK_ID)
+            _require_visible_anchors(
+                getattr(revised, "evidence_anchors", ()), visibility, SafeDetail.EVIDENCE_ANCHORS
+            )
+        case AddIssueProjectLink() | EndIssueProjectLink():
+            linked = command.issue_request()
+            if not sees_issues:
+                raise NotFoundError(SafeDetail.ISSUE_ID)
+            if not project_visible:
+                raise NotFoundError(SafeDetail.PROJECT_ID)
+            anchor = getattr(linked, "evidence_anchor", None)
+            _require_visible_anchors(
+                () if anchor is None else (anchor,), visibility, SafeDetail.EVIDENCE_ANCHOR
+            )
+        case RecordIssueHandoff():
+            recorded = command.handoff_request()
+            if not sees_issues:
+                raise NotFoundError(SafeDetail.ISSUE_ID)
+            if not visibility.sees_family(RecordFamily.COMMITMENT):
+                raise NotFoundError(SafeDetail.COMMITMENT_ID)
+            _require_visible_anchors(
+                (recorded.evidence_anchor,), visibility, SafeDetail.EVIDENCE_ANCHOR
+            )
+        case CorrectIssueHandoff():
+            corrected = command.handoff_request()
+            if not (sees_issues and visibility.sees_family(RecordFamily.COMMITMENT)):
+                raise NotFoundError(SafeDetail.HANDOFF_ID)
+            event = unit_of_work.issue_handoffs.read_event(principal_id, corrected.handoff_id)
+            if event is not None and not visibility.sees_anchor(event.evidence.anchor):
+                # The answer shows the handoff with its one required anchor; a
+                # handoff whose anchor the reader may not see is withheld whole
+                # by `issues.handoffs.list`, so it is hidden here too.
+                raise NotFoundError(SafeDetail.HANDOFF_ID)
+            _require_visible_anchors(
+                (corrected.evidence_anchor,), visibility, SafeDetail.EVIDENCE_ANCHOR
+            )
+        case CreateIssueWorkTask() | CreateIssueWorkCommitment():
+            work = command.work_request()
+            if not sees_issues:
+                raise NotFoundError(SafeDetail.ISSUE_ID)
+            if work.project_id is not None and not project_visible:
+                raise NotFoundError(SafeDetail.PROJECT_ID)
+            for intent in work.association_intents:
+                _require_visible(intent.to_ref, visibility, SafeDetail.TO_RECORD)
+            _require_visible_anchors(
+                work.membership_evidence_anchors
+                + tuple(
+                    anchor
+                    for intent in work.association_intents
+                    for anchor in intent.evidence_anchors
+                ),
+                visibility,
+                SafeDetail.EVIDENCE_ANCHORS,
+            )
+
+
+def _remote_visibility(authorization: Authorization) -> LineageVisibility | None:
+    """The answer filter's visibility: `None` for a local caller, who sees everything."""
+    grants = authorization.capability_grants
+    if grants is None:
+        return None
+    return lineage_visibility(grants, authorization.capability)
+
+
+def _filtered_view(
+    unit_of_work: UnitOfWork,
+    principal_id: str,
+    view: AssociationView,
+    visibility: LineageVisibility,
+) -> tuple[AssociationView, bool]:
+    shown, withheld = _shown_anchors(unit_of_work, principal_id, view.evidence, visibility)
+    if not withheld:
+        return view, False
+    return view.model_copy(update={"evidence": shown}), True
+
+
+def _filtered_association(
+    unit_of_work: UnitOfWork, authorization: Authorization, written: AssociationResult
+) -> AssociationResult:
+    """S3.1 section 6.4 step 4: withhold an invisible anchor from a remote write answer.
+
+    Possible only on a revision shown back that this request did not write (a
+    `created: false` identity, a replay rebuilt from stored rows under the
+    current filter); `restricted` says something was withheld, never a count.
+    A local caller's answer is unchanged.
+    """
+    visibility = _remote_visibility(authorization)
+    if visibility is None:
+        return written
+    view, withheld = _filtered_view(
+        unit_of_work, authorization.principal.principal_id, written.association, visibility
+    )
+    return replace(written, association=view, restricted=withheld)
+
+
+def _filtered_composite(
+    unit_of_work: UnitOfWork, authorization: Authorization, written: WorkCompositeResult
+) -> WorkCompositeResult:
+    """`_filtered_association` over a composite's membership and intents."""
+    visibility = _remote_visibility(authorization)
+    if visibility is None:
+        return written
+    principal_id = authorization.principal.principal_id
+    membership, withheld = _filtered_view(
+        unit_of_work, principal_id, written.membership, visibility
+    )
+    associations: list[AssociationView] = []
+    for view in written.associations:
+        shown, hidden = _filtered_view(unit_of_work, principal_id, view, visibility)
+        withheld = withheld or hidden
+        associations.append(shown)
+    return replace(
+        written, membership=membership, associations=tuple(associations), restricted=withheld
+    )
 
 
 def _shown_anchors(

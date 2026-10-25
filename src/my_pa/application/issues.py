@@ -62,12 +62,16 @@ from my_pa.application.lineage_endpoints import (
     lock_evidence_source,
     lock_lineage_sources,
 )
+from my_pa.application.lineage_rate import require_client_write_budget
 from my_pa.application.lineage_visibility import LineageVisibility
 from my_pa.application.record_lineage import (
     anchor_view,
     evidence_availability,
     lineage_known_at,
     links_in_context,
+    open_write_digest,
+    reserve_open_write,
+    unreviewed_links_in_scope,
     visible_anchor_sets,
 )
 from my_pa.contracts.ports import (
@@ -90,6 +94,7 @@ from my_pa.contracts.v1.issues import (
     MAX_CLOSURE_BLOCKERS,
     MAX_CONTESTED_LINKS,
     MAX_ISSUE_PROJECT_LINKS,
+    MAX_UNREVIEWED_LINKS,
     ClosureBlockerView,
     ContestedLinkView,
     IssueClosureView,
@@ -99,6 +104,7 @@ from my_pa.contracts.v1.issues import (
     IssueRevisionView,
     IssueView,
     ProjectLinkView,
+    UnreviewedLinkView,
 )
 from my_pa.contracts.v1.record_lineage import EvidenceAnchorView, RecordRefView
 from my_pa.domain.common.identifiers import IdKind
@@ -109,6 +115,7 @@ from my_pa.domain.lineage.closure import (
     MemberNativeFacts,
     MembershipHeadEvidence,
     has_resolution_anchor,
+    is_unreviewed,
     member_blockers,
 )
 from my_pa.domain.lineage.model import EvidenceAnchor, RecordRef
@@ -138,7 +145,7 @@ from my_pa.domain.source.registry import issue_identifier
 if TYPE_CHECKING:
     # Type-only: `lineage_authority` reads `Authorization`, whose module imports
     # the command union that imports this module's request values.
-    from my_pa.application.lineage_authority import LineageAuthority
+    from my_pa.application.lineage_authority import LineageAuthority, LineageProvenance
 
 __all__ = [
     "IssueApplication",
@@ -154,6 +161,7 @@ __all__ = [
     "IssueRevisionResult",
     "IssueUpdateRequest",
     "ProjectLinkAddRequest",
+    "ProjectLinkConfirmRequest",
     "ProjectLinkEndRequest",
     "ProjectLinkResult",
 ]
@@ -162,6 +170,7 @@ _CREATE: Final = Capability.ISSUES_CREATE.value
 _UPDATE: Final = Capability.ISSUES_UPDATE.value
 _LINK_ADD: Final = Capability.ISSUES_PROJECT_LINKS_ADD.value
 _LINK_END: Final = Capability.ISSUES_PROJECT_LINKS_END.value
+_LINK_CONFIRM: Final = Capability.ISSUES_PROJECT_LINKS_CONFIRM.value
 _CLOSE: Final = Capability.ISSUES_CLOSE.value
 _REOPEN: Final = Capability.ISSUES_REOPEN.value
 
@@ -240,6 +249,16 @@ class ProjectLinkEndRequest:
     reason: str
 
 
+@dataclass(frozen=True, slots=True)
+class ProjectLinkConfirmRequest:
+    """`issues.project_links.confirm`, parsed (S3.1 section 7.3)."""
+
+    issue_id: str
+    project_id: str
+    expected_membership_revision: int
+    reason: str
+
+
 # -------------------------------------------------------------------- results
 
 
@@ -285,6 +304,10 @@ class IssueClosureReadiness:
     #: S3 section 6.4: whether a blocker or contested link was withheld from a
     #: remote reader (`ready` is computed over everything).
     restricted: bool = False
+    #: S3.1 section 7.5: the unreviewed links in the Issue's review scope, by
+    #: `link_id`; visible entries only, and `truncated` over visible entries.
+    unreviewed_links: tuple[UnreviewedLinkView, ...] = ()
+    unreviewed_links_truncated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -363,6 +386,15 @@ def _reopen_document(request: IssueReopenRequest) -> dict[str, object]:
         "expected_version": request.expected_version,
         "reason": request.reason,
         "evidence_anchors": anchor_inputs_document(request.evidence_anchors),
+    }
+
+
+def _link_confirm_document(request: ProjectLinkConfirmRequest) -> dict[str, object]:
+    return {
+        "issue_id": request.issue_id,
+        "project_id": request.project_id,
+        "expected_membership_revision": request.expected_membership_revision,
+        "reason": request.reason,
     }
 
 
@@ -528,6 +560,8 @@ def _blockers_of(
         MembershipHeadEvidence(
             anchors=tuple(cited.anchor for cited in revision.evidence),
             member_native_version=revision.member_native_version,
+            # S3.1 section 4.6: client resolution evidence is not accepted-grade.
+            accepted=not is_unreviewed(revision.acceptance_basis),
         ),
         lambda anchor: evidence_availability(anchor, archived),
     )
@@ -540,6 +574,24 @@ def _resolution_roots(revisions: Sequence[LinkRevisionRecord]) -> frozenset[str]
         for cited in revision.evidence
         if cited.anchor.source_family is not EvidenceSourceFamily.MEETING_NOTE_VERSION
     )
+
+
+def _require_client_may_revise_project_link(
+    issues: IssueRepository,
+    principal_id: str,
+    request: ProjectLinkAddRequest | ProjectLinkEndRequest,
+    provenance: LineageProvenance,
+) -> None:
+    """S3.1 section 4.4 for a Project link: keyed on the triplet's history, not its latest event.
+
+    A client may end or reinstate a link only when no event of its `(project,
+    issue)` triplet is `user_confirmed`; the caller holds the triplet row `FOR
+    UPDATE` and has passed the CAS check.
+    """
+    if is_unreviewed(provenance.acceptance_basis) and issues.project_link_confirmed(
+        principal_id, request.project_id, request.issue_id
+    ):
+        raise DeniedError()
 
 
 def _replayed_link(
@@ -570,13 +622,27 @@ class IssueApplication:
         idempotency_key: str,
         authority: LineageAuthority,
         now: datetime,
+        *,
+        asserting_client_id: str | None = None,
     ) -> IssueRevisionResult:
-        """Insert an Issue `situations` row (version 1, `open`) and revision 1."""
+        """Insert an Issue `situations` row (version 1, `open`) and revision 1.
+
+        S3.1 (sections 4.8 and 5.2): the request row records its writer, and a
+        client's create is counted against its write budgets before the Issue
+        row; the replay stays channel-blind (D-06).
+        """
         at = ensure_utc(now)
         issues = uow.issues
         digest = request_digest(_CREATE, principal_id, _create_document(request))
-        prior = issues.reserve_write_request(
-            principal_id, _CREATE, idempotency_key, digest, created_at=at
+        prior = reserve_open_write(
+            issues,
+            principal_id,
+            _CREATE,
+            idempotency_key,
+            digest,
+            authority,
+            at,
+            asserting_client_id=asserting_client_id,
         )
         if prior is not None:
             return _replayed_revision(issues, principal_id, prior)
@@ -606,6 +672,7 @@ class IssueApplication:
             source_capability=_CREATE,
             recorded_at=at,
         )
+        require_client_write_budget(uow, principal_id, authority, asserting_client_id, at)
         issues.insert_issue(principal_id, issue, revision)
         issues.complete_write_request(
             principal_id,
@@ -746,6 +813,8 @@ class IssueApplication:
         idempotency_key: str,
         authority: LineageAuthority,
         now: datetime,
+        *,
+        asserting_client_id: str | None = None,
     ) -> IssueRevisionResult:
         """Write the next revision and the `situations` row (`version + 1`).
 
@@ -757,8 +826,15 @@ class IssueApplication:
         at = ensure_utc(now)
         issues = uow.issues
         digest = request_digest(_UPDATE, principal_id, _update_document(request))
-        prior = issues.reserve_write_request(
-            principal_id, _UPDATE, idempotency_key, digest, created_at=at
+        prior = reserve_open_write(
+            issues,
+            principal_id,
+            _UPDATE,
+            idempotency_key,
+            digest,
+            authority,
+            at,
+            asserting_client_id=asserting_client_id,
         )
         if prior is not None:
             stored_issue, stored = _stored_revision(issues, principal_id, prior)
@@ -825,6 +901,8 @@ class IssueApplication:
             closed_at=current.closed_at,
             outcome=current.outcome,
         )
+        # S3.1 section 4.8: a client's update counts, after every refusal.
+        require_client_write_budget(uow, principal_id, authority, asserting_client_id, at)
         issues.update_issue(principal_id, updated, revision)
         issues.complete_write_request(
             principal_id,
@@ -860,8 +938,8 @@ class IssueApplication:
         at = ensure_utc(now)
         issues, lineage = uow.issues, uow.record_lineage
         digest = request_digest(_CLOSE, principal_id, _close_document(request))
-        prior = issues.reserve_write_request(
-            principal_id, _CLOSE, idempotency_key, digest, created_at=at
+        prior = reserve_open_write(
+            issues, principal_id, _CLOSE, idempotency_key, digest, authority, at
         )
         if prior is not None:
             stored_issue, stored = _stored_revision(issues, principal_id, prior)
@@ -944,6 +1022,12 @@ class IssueApplication:
         if any(head.lifecycle_state is LinkLifecycleState.CONTESTED for head in in_context):
             # S3 section 3.2: a disputed claim in the Issue's context holds the close.
             raise ConflictError(SafeDetail.CLOSURE_GATE)
+        if unreviewed_links_in_scope(lineage, principal_id, request.issue_id):
+            # S3.1 section 4.6: an unreviewed client fact in the review scope --
+            # live or ended -- holds the close until the human channel reviews
+            # it. Every revision writer of a link in scope shares this Issue,
+            # which is locked `FOR UPDATE`, so the set cannot move before commit.
+            raise ConflictError(SafeDetail.CLOSURE_GATE)
         version = current.version + 1
         revision = IssueRevisionRecord(
             issue_id=current.issue_id,
@@ -1004,8 +1088,8 @@ class IssueApplication:
         at = ensure_utc(now)
         issues, lineage = uow.issues, uow.record_lineage
         digest = request_digest(_REOPEN, principal_id, _reopen_document(request))
-        prior = issues.reserve_write_request(
-            principal_id, _REOPEN, idempotency_key, digest, created_at=at
+        prior = reserve_open_write(
+            issues, principal_id, _REOPEN, idempotency_key, digest, authority, at
         )
         if prior is not None:
             stored_issue, stored = _stored_revision(issues, principal_id, prior)
@@ -1146,7 +1230,9 @@ class IssueApplication:
             ),
             key=lambda head: head.link.link_id,
         )
-        ready = not blocked and not disputed
+        # S3.1 section 4.6: the unreviewed links of the review scope, by `link_id`.
+        unreviewed = unreviewed_links_in_scope(lineage, principal_id, issue_id)
+        ready = not blocked and not disputed and not unreviewed
         sees = visible if visible is not None else (lambda _ref: True)
         shown = [
             view
@@ -1158,6 +1244,23 @@ class IssueApplication:
             for head in disputed
             if sees(head.link.from_ref) and sees(head.link.to_ref)
         ]
+        # S3.1 section 6.3 (R31-F10): an entry with an invisible endpoint is
+        # withheld and never counted; `ready` above is over everything.
+        reviewable = [
+            UnreviewedLinkView(
+                link_id=candidate.head.link.link_id,
+                kind=candidate.head.link.kind,
+                relation_type=candidate.head.link.relation_type,
+                member_role=candidate.head.link.member_role,
+                lifecycle_state=candidate.head.lifecycle_state,
+                revision_no=candidate.head.revision_no,
+                action=candidate.action,
+                user_directed_claim=candidate.user_directed_claim,
+                recorded_at=candidate.recorded_at,
+            )
+            for candidate in unreviewed
+            if sees(candidate.head.link.from_ref) and sees(candidate.head.link.to_ref)
+        ]
         return IssueClosureReadiness(
             issue_id=issue.issue_id,
             version=issue.version,
@@ -1167,7 +1270,13 @@ class IssueApplication:
             blockers_truncated=len(shown) > MAX_CLOSURE_BLOCKERS,
             contested_links=tuple(contested[:MAX_CONTESTED_LINKS]),
             contested_links_truncated=len(contested) > MAX_CONTESTED_LINKS,
-            restricted=len(shown) < len(blocked) or len(contested) < len(disputed),
+            restricted=(
+                len(shown) < len(blocked)
+                or len(contested) < len(disputed)
+                or len(reviewable) < len(unreviewed)
+            ),
+            unreviewed_links=tuple(reviewable[:MAX_UNREVIEWED_LINKS]),
+            unreviewed_links_truncated=len(reviewable) > MAX_UNREVIEWED_LINKS,
         )
 
     # --- issues.project_links.add / end ----------------------------------------
@@ -1178,15 +1287,20 @@ class IssueApplication:
         principal_id: str,
         request: ProjectLinkAddRequest,
         idempotency_key: str,
-        authority: LineageAuthority,
+        authority: LineageProvenance,
         now: datetime,
     ) -> ProjectLinkResult:
-        """Assert a new link (`expected = 0`) or reinstate an ended one (`expected = n`)."""
+        """Assert a new link (`expected = 0`) or reinstate an ended one (`expected = n`).
+
+        S3.1 (sections 4.4 and 4.8): a client may not reinstate a link the
+        human channel accepted at any event (`denied`, under the triplet lock),
+        and its write is counted against its budgets before the event.
+        """
         at = ensure_utc(now)
         issues = uow.issues
-        digest = request_digest(_LINK_ADD, principal_id, _link_add_document(request))
-        prior = issues.reserve_write_request(
-            principal_id, _LINK_ADD, idempotency_key, digest, created_at=at
+        digest = open_write_digest(_LINK_ADD, principal_id, _link_add_document(request), authority)
+        prior = reserve_open_write(
+            issues, principal_id, _LINK_ADD, idempotency_key, digest, authority, at
         )
         if prior is not None:
             return _replayed_link(issues, principal_id, prior)
@@ -1221,8 +1335,10 @@ class IssueApplication:
             ):
                 # Stale, or the link is already active: both are `conflict`.
                 raise ConflictError(SafeDetail.STALE_VERSION)
+            _require_client_may_revise_project_link(issues, principal_id, request, authority)
             action = IssueProjectMembershipAction.REINSTATE
             revision_no = latest.revision_no + 1
+        require_client_write_budget(uow, principal_id, authority, authority.asserting_client_id, at)
         event = ProjectLinkEventRecord(
             membership_event_id=issue_identifier(IdKind.ISSUE_PROJECT_MEMBERSHIP_EVENT),
             project_id=request.project_id,
@@ -1234,11 +1350,13 @@ class IssueApplication:
             state=IssueProjectMembershipState.ACTIVE,
             evidence_anchor_id=anchor_id,
             reason=request.reason,
-            acceptance_basis=AcceptanceBasis.USER_CONFIRMED.value,
+            acceptance_basis=authority.acceptance_basis.value,
             authority_class=authority.authority_class.value,
             decision_channel=authority.decision_channel.value,
             source_capability=_LINK_ADD,
             recorded_at=at,
+            asserting_client_id=authority.asserting_client_id,
+            user_directed_claim=authority.user_directed_claim,
         )
         return self._complete_link(
             issues, principal_id, _LINK_ADD, idempotency_key, digest, event, at
@@ -1250,15 +1368,20 @@ class IssueApplication:
         principal_id: str,
         request: ProjectLinkEndRequest,
         idempotency_key: str,
-        authority: LineageAuthority,
+        authority: LineageProvenance,
         now: datetime,
     ) -> ProjectLinkResult:
-        """End an active link whose latest event is `expected_membership_revision`."""
+        """End an active link whose latest event is `expected_membership_revision`.
+
+        S3.1 (sections 4.4 and 4.8): a client may not end a link the human
+        channel accepted at any event (`denied`, under the triplet lock), and
+        its write is counted against its budgets before the event.
+        """
         at = ensure_utc(now)
         issues = uow.issues
-        digest = request_digest(_LINK_END, principal_id, _link_end_document(request))
-        prior = issues.reserve_write_request(
-            principal_id, _LINK_END, idempotency_key, digest, created_at=at
+        digest = open_write_digest(_LINK_END, principal_id, _link_end_document(request), authority)
+        prior = reserve_open_write(
+            issues, principal_id, _LINK_END, idempotency_key, digest, authority, at
         )
         if prior is not None:
             return _replayed_link(issues, principal_id, prior)
@@ -1293,6 +1416,8 @@ class IssueApplication:
             or latest.state is not IssueProjectMembershipState.ACTIVE
         ):
             raise ConflictError(SafeDetail.STALE_VERSION)
+        _require_client_may_revise_project_link(issues, principal_id, request, authority)
+        require_client_write_budget(uow, principal_id, authority, authority.asserting_client_id, at)
         event = ProjectLinkEventRecord(
             membership_event_id=issue_identifier(IdKind.ISSUE_PROJECT_MEMBERSHIP_EVENT),
             project_id=request.project_id,
@@ -1304,14 +1429,90 @@ class IssueApplication:
             state=IssueProjectMembershipState.ENDED,
             evidence_anchor_id=None,
             reason=request.reason,
-            acceptance_basis=AcceptanceBasis.USER_CONFIRMED.value,
+            acceptance_basis=authority.acceptance_basis.value,
             authority_class=authority.authority_class.value,
             decision_channel=authority.decision_channel.value,
             source_capability=_LINK_END,
             recorded_at=at,
+            asserting_client_id=authority.asserting_client_id,
+            user_directed_claim=authority.user_directed_claim,
         )
         return self._complete_link(
             issues, principal_id, _LINK_END, idempotency_key, digest, event, at
+        )
+
+    def confirm_project_link(
+        self,
+        uow: UnitOfWork,
+        principal_id: str,
+        request: ProjectLinkConfirmRequest,
+        idempotency_key: str,
+        authority: LineageAuthority,
+        now: datetime,
+    ) -> ProjectLinkResult:
+        """`issues.project_links.confirm` (S3.1 sections 4.7 and 7.3): accept a client event.
+
+        Attested (the handler refused every other caller before this). The
+        `issues.project_links.end` order -- the anchor-less shares, the closed
+        Issue refusal, the triplet `FOR UPDATE`, the CAS -- then section 4.7:
+        the latest event must be `client_identified` and `active` or `ended`
+        (else `conflict` / `state`); event `n + 1` keeps its state and its
+        evidence anchor, `user_confirmed`, with the attested pair and `reason`.
+        """
+        at = ensure_utc(now)
+        issues = uow.issues
+        digest = request_digest(_LINK_CONFIRM, principal_id, _link_confirm_document(request))
+        prior = reserve_open_write(
+            issues, principal_id, _LINK_CONFIRM, idempotency_key, digest, authority, at
+        )
+        if prior is not None:
+            return _replayed_link(issues, principal_id, prior)
+        # S3 section 6.2 step 1b: the commit mark, before any other lock.
+        uow.record_lineage.take_commit_mark(principal_id)
+        self._share_link_ends(
+            issues,
+            principal_id,
+            issue_id=request.issue_id,
+            project_id=request.project_id,
+            anchor=None,
+            at=at,
+        )
+        latest = issues.latest_membership_event(principal_id, request.project_id, request.issue_id)
+        if latest is None:
+            raise ConflictError(SafeDetail.STALE_VERSION)
+        psit = issues.claim_project_link(
+            principal_id,
+            project_id=request.project_id,
+            issue_id=request.issue_id,
+            project_situation_id=latest.project_situation_id,
+            linked_at=at,
+            association_evidence_ref=None,
+        )
+        latest = issues.latest_membership_event(principal_id, request.project_id, request.issue_id)
+        if latest is None or latest.revision_no != request.expected_membership_revision:
+            raise ConflictError(SafeDetail.STALE_VERSION)
+        if not is_unreviewed(AcceptanceBasis(latest.acceptance_basis)):
+            # Section 4.7: only a client-identified event is confirmed.
+            raise ConflictError(SafeDetail.STATE)
+        event = ProjectLinkEventRecord(
+            membership_event_id=issue_identifier(IdKind.ISSUE_PROJECT_MEMBERSHIP_EVENT),
+            project_id=request.project_id,
+            issue_id=request.issue_id,
+            project_situation_id=psit,
+            revision_no=latest.revision_no + 1,
+            predecessor_revision_no=latest.revision_no,
+            action=IssueProjectMembershipAction.CONFIRM,
+            state=latest.state,
+            evidence_anchor_id=latest.evidence_anchor_id,
+            reason=request.reason,
+            acceptance_basis=AcceptanceBasis.USER_CONFIRMED.value,
+            authority_class=authority.authority_class.value,
+            decision_channel=authority.decision_channel.value,
+            source_capability=_LINK_CONFIRM,
+            recorded_at=at,
+        )
+        return self._complete_link(
+            issues, principal_id, _LINK_CONFIRM, idempotency_key, digest, event, at
         )
 
     @staticmethod

@@ -126,6 +126,34 @@ server-resolved exact `remote.operator` durable capability set. This repository
 state configures no live client or grant and does not activate, publish, or
 deploy that ingress.
 
+`MY_PA_MCP_DATABASE_WITNESS_ENABLED` defaults to `false` and requires
+`MY_PA_MCP_DATABASE_PROFILES_ENABLED=true`. When separately enabled, a known,
+authenticated, server-bound profile client calling `capabilities.get` for
+`status_observation` can receive `CallToolResult._meta.my_pa_database_witness`.
+The compact `my_pa.read` facade carries the same metadata for that canonical
+call. The result envelope, tool catalog, purposes, grants and write ceiling stay
+unchanged; no diagnostic tool or caller opt-in field is added. This source
+change does not deploy, bind a client, change a grant or activate either flag.
+
+The witness contains the server-issued correlation ID, effective `ro`/`rw`
+profile and closed booleans. It reuses the role/target validation on the exact
+data connection and observes `SHOW transaction_read_only` at the subsequent
+request unit-of-work BEGIN, after the identity probe has rolled back. RO must
+observe `on`; RW reports the actual value and may also observe `on` under server
+defaults. Audit evidence is emitted only after that correlation's existing
+independent audit transaction acknowledges COMMIT. The
+`control_engine_independent_configured` field describes configured engine and pool
+separation; it does **not** observe authentication/control SQL for the call.
+Missing, mismatched or failed evidence produces no positive witness. A request
+failure likewise carries none. Off, no extra `SHOW` or response metadata is
+produced.
+
+This proves the status request's actual unit-of-work transaction and audit
+commit acknowledgement. It does not prove a business repository query, every
+pool connection, future requests, crash recovery or live deployment. No SQL,
+parameters, usernames, client IDs, credentials, paths or content enter witness
+metadata, and no observations are logged or retained beyond the call.
+
 `gsqs.start` is the deliberate exception to the remote write classification:
 it remains visible when remote writes are disabled so an authenticated ChatLLM
 caller can start the bounded synthetic B0 workflow. The server still supplies

@@ -521,6 +521,23 @@ trusted server paths; review their existing credential scope before commissionin
 The audit pool stays independent of work rollback and pool checkout. Automatic
 business re-enrichment observations are not run by this profiled MCP path.
 
+`MY_PA_MCP_DATABASE_WITNESS_ENABLED` also defaults to false and requires the
+profiles to be enabled. When explicitly enabled, an authenticated
+`capabilities.get` / `status_observation` response may include a closed `_meta`
+receipt for that request: selected data-role and database identity checks, the
+actual work-transaction READ ONLY setting, and a matching audit commit on an
+independent engine and pool. Control-path independence is configured structural
+evidence, not observation of authentication/control SQL. No SQL, parameters,
+credentials, client IDs, connection strings or file paths enter this receipt.
+An incomplete or failed request emits no positive receipt. The default-off path
+does not issue the extra transaction-setting query. See the witness contract in
+[mcp-and-cli-operations.md](mcp-and-cli-operations.md) for its precise limits.
+A passing synthetic test is not installed evidence: commissioning this witness
+requires a separately reviewed image build, authorized deployment/configuration
+and authenticated acceptance against that exact image. The receipt proves this
+status request's work-transaction BEGIN and audit commit, not a business query,
+all pool connections, crash recovery or future requests.
+
 The closed capability matrix is in `contracts/mcp_database_profiles.py`:
 26 reviewed read capabilities and, for effective RW only,
 `canvas.workspace.put` (a Principal-scoped overlay with no feed flush). An RW

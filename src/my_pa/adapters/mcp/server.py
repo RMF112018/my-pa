@@ -120,6 +120,11 @@ from my_pa.application.errors import (
     problem_detail,
 )
 from my_pa.application.service import ApplicationService, published_capabilities
+from my_pa.contracts.mcp_database_witness import (
+    McpWitnessBinding,
+    current_mcp_database_witness,
+    request_witness,
+)
 from my_pa.contracts.v1.errors import ProblemDetail
 from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.common.identifiers import IdKind
@@ -149,6 +154,7 @@ class McpAccess:
     authenticated_client_id: str | None = field(default=None, repr=False)
     # Internal authenticated dispatch, never a tool argument.
     service: ApplicationService | None = field(default=None, repr=False, compare=False)
+    database_witness: McpWitnessBinding | None = field(default=None, repr=False, compare=False)
 
 
 def _document(arguments: Mapping[str, Any] | None) -> Mapping[str, Any]:
@@ -294,6 +300,8 @@ def _answer(
     clock: Callable[[], datetime] = utc_now,
     canonical_targets: frozenset[str] | None = None,
     authenticated_client_id: str | None = None,
+    database_witness: McpWitnessBinding | None = None,
+    response_metadata: dict[str, Any] | None = None,
 ) -> tuple[str, bool, ImageContent | None]:
     """One tool call, executed synchronously: text, failure flag, optional image.
 
@@ -348,17 +356,29 @@ def _answer(
         or (metadata.capability, metadata.purpose) in allowed_capability_purposes
     ):
         return _problem(UnsupportedError()).to_canonical_json(), True, None
+    # Establish context inside the executor thread; run_in_executor does not
+    # promise to propagate the async caller's ContextVars. Eligibility is a
+    # server-composed binding, never a caller field or capability grant.
+    witness = request_witness(
+        database_witness, metadata, principal, transport, authenticated_client_id
+    )
+    token = current_mcp_database_witness.set(witness)
     try:
-        envelope = service.invoke(
-            metadata,
-            command,
-            principal=principal,
-            transport=transport,
-            capability_grants=allowed_capability_purposes,
-            authenticated_client_id=authenticated_client_id,
-        )
-    except Exception:
-        return _problem(InternalError()).to_canonical_json(), True, None
+        try:
+            envelope = service.invoke(
+                metadata,
+                command,
+                principal=principal,
+                transport=transport,
+                capability_grants=allowed_capability_purposes,
+                authenticated_client_id=authenticated_client_id,
+            )
+            if witness is not None and envelope.error is None and response_metadata is not None:
+                response_metadata.update(witness.metadata(envelope.correlation_id))
+        except Exception:
+            return _problem(InternalError()).to_canonical_json(), True, None
+    finally:
+        current_mcp_database_witness.reset(token)
     if envelope.error is not None:
         return envelope.to_canonical_json(), True, None
     projected = _image_from_result(envelope.result)
@@ -536,6 +556,7 @@ def create_mcp_server(
                     ],
                     is_error=True,
                 )
+        response_metadata: dict[str, Any] = {}
         future = loop.run_in_executor(
             None,
             _answer,
@@ -548,6 +569,8 @@ def create_mcp_server(
             clock,
             access.allowed_canonical_targets if access.compact_publication else None,
             access.authenticated_client_id,
+            access.database_witness,
+            response_metadata,
         )
         release_here = True
         try:
@@ -583,7 +606,11 @@ def create_mcp_server(
         if max_result_bytes is not None and _result_bytes(content) > max_result_bytes:
             text, failed = _problem(InternalError()).to_canonical_json(), True
             content = [TextContent(type="text", text=text)]
-        return CallToolResult(content=content, is_error=failed)
+        return CallToolResult(
+            content=content,
+            is_error=failed,
+            _meta=(response_metadata or None) if not failed else None,
+        )
 
     return Server(
         SERVER_NAME,

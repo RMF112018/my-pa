@@ -523,6 +523,11 @@ def _outcome(runtime: S31ReportRuntime, *, claimed: bool) -> dict[str, Any]:
     readiness = runtime.readiness(scene.issue)
     error = _try_close(runtime, scene.issue, key)
     verification = _lineage_verification(runtime, key, scene.issue)
+    # Worker N4: an Issue whose only hold is the client's unreviewed link, so a
+    # gate that skipped a claimed link would close it.
+    alone = open_scene(runtime, f"{key}-alone", operator=True)
+    runtime.client_ok(sent(_blocks(runtime, alone, f"{key}-alone-link")))
+    alone_error = _try_close(runtime, alone.issue, f"{key}-alone")
     with runtime.engine.connect() as connection:
         consumed = connection.execute(
             text(
@@ -546,6 +551,9 @@ def _outcome(runtime: S31ReportRuntime, *, claimed: bool) -> dict[str, Any]:
         ),
         "claims": {entry["user_directed_claim"] for entry in readiness["unreviewed_links"]},
         "close": None if error is None else (error["code"], error["safe_details"]),
+        "close_held_only_by_review": None
+        if alone_error is None
+        else (alone_error["code"], alone_error["safe_details"]),
         "consumed": int(consumed),
         "link_state": link["lifecycle_state"],
         "verification": verification,
@@ -575,3 +583,4 @@ def test_the_user_directed_claim_changes_no_outcome(report_runtime: S31ReportRun
     assert without["verification"]["verification_state"] == "verified_at_commit"
     assert with_claim == without
     assert without["close"] == ("conflict", ["closure_gate"])
+    assert without["close_held_only_by_review"] == ("conflict", ["closure_gate"])

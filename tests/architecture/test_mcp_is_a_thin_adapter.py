@@ -306,6 +306,31 @@ EXEMPT_PROPERTIES: Final[frozenset[tuple[str, str]]] = frozenset(
         # precedent above: `direction` trips the scan on the substring "dir", and
         # its admitted values are `any`, `outgoing` and `incoming`.
         ("entities.relationships", "direction"),
+        # Record lineage S3.1 (S3.1 contract section 7.1): the client-declared
+        # `user_directed` boolean of the 14 open lineage writes -- a claim
+        # stored verbatim, not where a file lives. It trips the scan on the
+        # substring "dir" (the `direction` precedent above) and is a `boolean`,
+        # so no string a caller sends through it can be a path at all; the name
+        # is the contract's and the stored column's (`user_directed_claim`).
+        *(
+            (name, "user_directed")
+            for name in (
+                "records.associations.assert",
+                "records.associations.correct",
+                "records.associations.end",
+                "records.associations.contest",
+                "records.associations.reinstate",
+                "issues.memberships.add",
+                "issues.memberships.end",
+                "issues.memberships.correct",
+                "issues.project_links.add",
+                "issues.project_links.end",
+                "issues.handoffs.record",
+                "issues.handoffs.correct",
+                "issues.work.create_task",
+                "issues.work.create_commitment",
+            )
+        ),
         ("context.feedback", "target_id"),
         # KLP-WP-04: a provisioned Knowledge discovery source profile, not where a
         # file lives. It trips the scan on the substring "file" inside "profile",
@@ -687,8 +712,9 @@ def test_the_location_scan_would_catch_one() -> None:
     # on the Project-link write and the four link writes that take anchors, and
     # on the S2 anchor-bearing writes. Plus the S2 Commitment composite's nested
     # `commitments.create` `direction`. Plus the S3 anchor-bearing writes. Plus
-    # the S4 v2 list and search siblings' `direction`.
-    assert len(EXEMPT_PROPERTIES) == 39
+    # the S4 v2 list and search siblings' `direction`. Plus record lineage
+    # S3.1's 14 open writes' boolean `user_directed` claim.
+    assert len(EXEMPT_PROPERTIES) == 53
     for tool_name, property_name in EXEMPT_PROPERTIES:
         tool = next(entry for entry in TOOLS if entry.name == tool_name)
         assert property_name in set(_schema_property_names(tool.input_schema))

@@ -74,9 +74,11 @@ is not a defect.
 
 ## 3. What is implemented
 
-Four hundred and thirty-five Python modules under `src/my_pa` and eight hundred and twenty-four test modules —
+Four hundred and thirty-six Python modules under `src/my_pa` and eight hundred and thirty-one test modules —
 
-**Current-tree remeasurement (record lineage S3.1 schema, registration and Part D catalog, branch `feat/lineage-s31-open-writes`, worker N1, 2026-10-25):** the two commands below count 435 source modules and 824 test modules: the 435/820 below plus `tests/schema/test_record_lineage_s31_migration.py`, `tests/database/test_lineage_s31_integrity_guards.py`, `tests/contract/test_lineage_s31_capability_admission.py` and `tests/contract/test_lineage_s31_facade_catalog.py` (no source module is added; the S3.1 revision is under `migrations/`). This is file-inventory evidence, not a test PASS receipt.
+**Current-tree remeasurement (record lineage S3.1 open writes, branch `feat/lineage-s31-open-writes`, worker N2, 2026-10-25):** the two commands below count 436 source modules and 831 test modules: the 435/824 below plus `src/my_pa/application/lineage_rate.py` and the seven N2 test modules `tests/database/test_lineage_s31_open_writes.py`, `tests/database/test_lineage_s31_remaining_gates.py`, `tests/database/test_lineage_s31_rate_bounds.py`, `tests/integration/test_lineage_s31_confirmation.py`, `tests/integration/test_lineage_s31_close_gate.py`, `tests/security/test_lineage_s31_write_visibility.py` and `tests/concurrency/test_lineage_s31_budget_race.py`. This is file-inventory evidence, not a test PASS receipt.
+
+**Historical remeasurement (record lineage S3.1 schema, registration and Part D catalog, branch `feat/lineage-s31-open-writes`, worker N1, 2026-10-25):** the two commands below counted 435 source modules and 824 test modules: the 435/820 below plus `tests/schema/test_record_lineage_s31_migration.py`, `tests/database/test_lineage_s31_integrity_guards.py`, `tests/contract/test_lineage_s31_capability_admission.py` and `tests/contract/test_lineage_s31_facade_catalog.py` (no source module is added; the S3.1 revision is under `migrations/`). This is file-inventory evidence, not a test PASS receipt.
 
 **Historical remeasurement (origin/main #339 MCP database profiles `19426ed5` merged into record lineage S4, branch `feat/lineage-s4-program`, worker M6, 2026-10-24):** the two commands below counted 435 source modules and 820 test modules: the S4 432/817 below plus the three source and three test modules #339 added on `main` (the 419/805 below less the shared 416/802). This is file-inventory evidence, not a test PASS receipt.
 

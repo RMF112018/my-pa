@@ -354,30 +354,42 @@ with action `confirm` in its history. Client facts are traversed by every lineag
 exactly as operator facts are (they are live facts of the ledger); the related read
 filters by basis (section 7.4).
 
-### 4.4 Ending, correcting and contesting: clients never remove accepted lineage (R31-F02, option a)
+### 4.4 Ending, correcting and contesting: clients never remove accepted lineage (R31-F02 option a, RR1-F01)
 
-**The accepted-lineage rule.** A client (any `client_identified` writer) may write a
-revision only on a fact whose current head is itself `client_identified`, with exactly 1
-exception: it may **`contest`** an `active` semantic link whose head is `user_confirmed`
-(reversible, and it already holds the close, section 4.6). Concretely, on a head, latest
-event or handoff whose basis is `user_confirmed`, a client's `records.associations.end`,
-`correct` or `reinstate`, `issues.memberships.end` or `correct`, `issues.project_links.end`
-or a reinstating `issues.project_links.add`, and `issues.handoffs.correct` (`retime` or
-`void`) are **`denied`** (no detail), checked under the head lock after the CAS check, so
-before any row and before the rate count. A handoff is "`user_confirmed`" when its event's
-basis is, or when any correction of it known now is.
+**The accepted-lineage rule (keyed on the fact's history, not its head).** A client may
+write a revision of a fact only when **no revision of that fact is `user_confirmed`** (a
+fact never accepted by the human channel), with exactly 1 exception: it may `contest` an
+`active` semantic link whose head is `user_confirmed`. After that contest, **only the human
+channel** may write the next revision of that link (`reinstate`, `end`, `correct` or a
+further `contest`); every client revision of it is `denied`.
 
-- **What a client can do instead.** Dispute an accepted semantic link with `contest`
-  (an exact `contradicts` anchor, S3 §3.1); dispute an accepted membership by asserting
-  a semantic `contest`-able link or by reporting it (a membership has no contest, S3
-  §3.2); state a later change of responsibility by recording a new handoff, which chains
-  from the last live event (S3 §3.3); and propose any new fact as a new root. A client may
-  end, correct, contest, reinstate, void or retime facts whose head is `client_identified`
-  — its own or another client's — under the S1–S3 transition table and CAS.
+- **The same history rule for every fact family.** A *link* (semantic or membership) is
+  accepted when any of its revisions is `user_confirmed`; a *Project link* when any event of
+  its `(principal, project, issue)` triplet is `user_confirmed`; a *handoff* when the event
+  or any of its corrections is `user_confirmed`. On an accepted fact a client's
+  `records.associations.end`, `correct`, `reinstate` or `contest` (other than the 1
+  exception), `issues.memberships.end` or `correct`, `issues.project_links.end` or a
+  reinstating `issues.project_links.add`, and `issues.handoffs.correct` (`retime` or
+  `void`) are **`denied`** (no detail), checked under the head (or triplet, or chain) lock
+  after the CAS check, so before any row and before the rate count. The check reads
+  whether any `user_confirmed` revision, event or correction exists for the fact
+  (`EXISTS`, under the lock), never only the head.
+- **A confirmed client fact becomes accepted.** Once the human channel confirms a client
+  fact (section 4.7), that fact has a `user_confirmed` revision, so by the same rule no
+  client may revise it further — except the 1 `contest` exception, after which again only
+  the human channel writes.
+- **What a client can do instead.** Dispute an accepted semantic link with the 1
+  `contest` (an exact `contradicts` anchor, S3 §3.1), which holds the close until the human
+  channel answers it; dispute an accepted membership by reporting it (a membership has no
+  contest, S3 §3.2); state a later change of responsibility by recording a new handoff,
+  which chains from the last live event (S3 §3.3); and propose any new fact as a new root.
+  On never-accepted facts — its own or another client's — a client may end, correct,
+  contest, reinstate, void or retime under the S1–S3 transition table and CAS.
 - **The human channel** may write every S1–S3 revision on any fact, and additionally
   confirms (section 4.7). Nothing a client writes changes or removes an earlier revision,
-  and no client action can remove or end accepted lineage, so an accepted fact is never
-  hidden from the default traversal by a client.
+  and no sequence of client actions can end, correct or reinstate a fact the human channel
+  has accepted at any revision, so accepted lineage is never removed from the default
+  traversal by a client.
 
 ### 4.5 Asserting an identity that already has a live head
 
@@ -411,9 +423,9 @@ scope has a `client_identified` head revision.**
 - **Clearing a hold.** For a live head (`active` or `contested`) the human channel confirms
   it (an `active` head, section 4.7) or writes its own S1–S3 revision of it (`end`,
   `correct`, `contest` or `reinstate`, as the transition table admits). For an `ended`
-  head — which, by section 4.4, can only be the end of a `client_identified` fact — the
-  human channel confirms the end (it accepts the removal of an unreviewed client fact;
-  there is no accepted fact to restore) and, if it wants the relationship, asserts it anew
+  head — which, by the history rule of section 4.4, can only be the end of a fact the human
+  channel never accepted at any revision — the human channel confirms the end (it accepts
+  the removal of an unreviewed client fact; there is no accepted fact to restore) and, if it wants the relationship, asserts it anew
   as a new root (S1). After either the head revision is `user_confirmed`. A client cannot
   clear a hold.
 - `issues.close` with a non-empty unreviewed set answers `conflict` / `closure_gate`;
@@ -449,8 +461,10 @@ A confirmation is a **new immutable revision**, never a mutation:
   `confirm`, the same state, the latest event's `evidence_anchor_id`, `user_confirmed`, the
   attested pair and a `reason`.
 - `ended` stays terminal for every other action; `confirm` of a `client_identified` end is
-  the one revision admitted after an `ended` head (it accepts the end of an unreviewed
-  client fact; by section 4.4 a client can never end a `user_confirmed` fact).
+  the one revision admitted after an `ended` head (it accepts the end of a never-accepted
+  client fact; by the history rule of section 4.4 a client can never end a fact the human
+  channel accepted at any revision). A confirmed fact is accepted from then on and is
+  client-immutable apart from the 1 `contest` exception.
 - A closed Issue refuses a confirm of any link in its context or naming it (S2/S3 frozen
   closed Issue), `conflict` / `state`.
 - Handoffs and handoff corrections have no confirmation in S3.1 (no gate consumes them;
@@ -691,7 +705,10 @@ inconsistent composition is `internal_error`, a remote transport without a clien
 5. Commit mark (S3 §6.2 step 1b).
 6. Locks, validation and write-specific checks exactly as S1–S3 (lock order S3 §6.2), the
    accepted-lineage rule (section 4.4) under the head lock.
-7. Rate bounds (section 4.8), client writes only.
+7. Rate bounds (section 4.8), client writes only; for `issues.work.*` it precedes the native
+   Task or Commitment create (RR1-F04). An identity answered `created: false` is **checked
+   and counted**: it completes a client request row, so it passes the bound like any other
+   write and counts toward later ones (pinned by `test_a_created_false_answer_is_checked_and_counted`).
 8. The rows, each carrying the provenance of section 4.1; complete the request row; build
    the answer under the section 6.4 answer filter; commit; deferred triggers verify.
 
@@ -730,8 +747,13 @@ write and every remote caller (`authorization.capability_grants is not None`):
    (no detail), so `issue_work_authoring` never becomes a native create grant.
 3. **Hidden is absent.** With the caller's visibility `lineage_visibility(grants,
    capability)` (S3 §6.4 table; for `issues.project_links.*` also the S4 `project` family,
-   `PROGRAM_FAMILY_READS`), every subject in a family the caller cannot see answers exactly
-   as an absent one — `not_found` with the same safe detail — read without locks before the
+   `PROGRAM_FAMILY_READS`), and — for every open write on a semantic link or a membership
+   (`records.associations.*`, `issues.memberships.*`, both composites) — **the `situation`
+   family itself (RR1-F02)**: a remote caller without Issue visibility answers every such
+   write exactly as absent (`not_found` / `link_id`, or the first named subject's detail)
+   before any row, so the frozen-closed refusal and the Issue-context and Project
+   qualification checks never disclose a hidden Issue. Then every subject in a family the
+   caller cannot see answers exactly as an absent one — `not_found` with the same safe detail — read without locks before the
    reservation: every endpoint (`from_record`, `to_record`, `member`), every Issue
    (`issue_id`, `context_issue_id`), every evidence anchor's source family
    (`evidence_anchors`), a handoff's Commitment (`commitment_id`), a Project
@@ -744,8 +766,12 @@ write and every remote caller (`authorization.capability_grants is not None`):
 4. **Answer filter: withhold, and say so.** Every view in a remote caller's write answer is
    filtered by S3 §6.4: an anchor whose source family is invisible (possible only on an
    existing revision shown back, e.g. the `created: false` answer of an active identity) is
-   withheld, and every lineage write answer gains a top-level `restricted: bool`, true
-   exactly when something was withheld (no count; the S3 R3-F13 form). A write is never
+   withheld, and **every answer of the 14 open writes and the 3 confirms always carries a
+   top-level `restricted: bool`** — `false` for every local caller, and for a remote caller
+   true exactly when something was withheld (no count; the S3 R3-F13 form). A **replay**
+   rebuilds its answer from the stored rows (S1 §6.3) and applies the current filter; a
+   replay whose subject is now hidden is already refused by step 3, and the filter covers a
+   now-hidden anchor. A write is never
    refused for a hidden anchor on a revision it did not write, because refusing would
    itself disclose it.
 5. Local callers see every family (S3 §6.4), unchanged.
@@ -1094,9 +1120,9 @@ variable. No production setting, profile, grant or deployed-client grant changes
   (R31-F05):
 
 ```json
-{"tool": "my_pa.describe", "arguments": {"feature": "lineage", "kind": "write"}}
-{"tool": "my_pa.describe", "arguments": {"capability": "records.associations.assert"}}
-{"tool": "my_pa.write", "arguments": {"capability": "records.associations.assert", "arguments": {"payload": {
+{"name": "my_pa.describe", "arguments": {"feature": "lineage", "kind": "write"}}
+{"name": "my_pa.describe", "arguments": {"capability": "records.associations.assert"}}
+{"name": "my_pa.write", "arguments": {"capability": "records.associations.assert", "arguments": {"payload": {
   "relation_type": "originated_from",
   "from_record": {"family": "commitment", "record_id": "cmt_EXAMPLE0001"},
   "to_record": {"family": "meeting_note_version", "record_id": "mnote_EXAMPLE0001"},
@@ -1107,8 +1133,8 @@ variable. No production setting, profile, grant or deployed-client grant changes
 ```
 
 ```json
-{"tool": "my_pa.read", "arguments": {"capability": "tasks.search", "arguments": {"payload": {"query": "crane permit"}}}}
-{"tool": "my_pa.read", "arguments": {"capability": "records.lineage.related", "arguments": {"payload": {
+{"name": "my_pa.read", "arguments": {"capability": "tasks.search", "arguments": {"payload": {"query": "crane permit"}}}}
+{"name": "my_pa.read", "arguments": {"capability": "records.lineage.related", "arguments": {"payload": {
   "seeds": [{"family": "task", "record_id": "tsk_EXAMPLE0001"}, {"family": "task", "record_id": "tsk_EXAMPLE0002"}],
   "max_depth": 2, "acceptance_bases": ["user_confirmed", "client_identified"]}}}}
 ```
@@ -1118,7 +1144,8 @@ variable. No production setting, profile, grant or deployed-client grant changes
   body read with `meetings.notes.read_version`; `source_sha256` and `passage_sha256` are
   optional and, when given, must match). The second maps each `tasks.search` hit's
   `task_id` to a seed `{"family": "task", "record_id": <task_id>}` and reads what recorded
-  lineage relates to them. Each `{"tool", "arguments"}` line is one MCP `tools/call`; the
+  lineage relates to them. Each `{"name", "arguments"}` line is the params of one MCP
+  `tools/call` (RR1-F06); the
   page writes every example as a fenced `json` block of such lines, and
   `test_the_guidance_examples_validate_against_the_remote_schemas` parses every block and
   validates each inner `arguments` against `remote_tool_schema` of the named capability's
@@ -1242,7 +1269,8 @@ profile planner's diff desires, adds and reports missing no lineage-plane name.
   section 7.5. **For a Principal holding no `client_identified` row, every lineage answer
   equals its S4 answer plus the added keys with their neutral values**
   (`user_directed_claim: false`, `asserting_client_id: null` for operator facts,
-  `unreviewed_links: []`, `unreviewed_links_truncated: false`), pinned by
+  `unreviewed_links: []`, `unreviewed_links_truncated: false`, and `restricted: false` on
+  the 14 open-write and 3 confirm answers), pinned by
   `test_s31_answers_without_client_rows_differ_from_s4_only_by_the_added_keys`.
 - **S4 manifests:** schema 1 unchanged byte for byte whenever no lineage section or gate
   applies; the S4 golden vectors stay. **S4 overview:** the 3 added keys and the
@@ -1325,15 +1353,16 @@ scope guard parses S4 §10.
 
 | Concern | Module | Test functions | Tier |
 | --- | --- | --- | --- |
-| Part A open writes | `tests/database/test_lineage_s31_open_writes.py` | `test_a_remote_client_commits_every_open_lineage_write` (each of the 14, each row `client_identified`, `ordinary_reviewer`, `remote_interactive`, with the client id); `test_a_local_unattested_caller_commits_as_client_identified_without_a_client_id`; `test_an_operator_write_still_records_user_confirmed_and_no_client`; `test_user_directed_is_stored_as_an_unverified_claim`; `test_the_operator_cannot_send_a_user_directed_claim`; `test_no_payload_can_supply_provenance`; `test_a_client_replay_of_its_own_write_is_a_replay`; `test_a_client_reusing_an_operator_key_is_conflict_and_writes_nothing`; `test_the_operator_reusing_a_client_key_is_conflict`; `test_a_client_reusing_another_clients_key_is_conflict`; `test_an_operator_replay_of_a_pre_s31_key_answers_the_original` (a request row and facts seeded at `c5260943d933`, upgraded, replayed); `test_an_active_identity_answers_created_false_and_never_changes_its_provenance` (both directions); `test_clients_end_correct_and_contest_each_others_links_within_the_principal`; `test_a_client_composite_writes_client_identified_links`; `test_a_client_cannot_end_or_correct_accepted_lineage` (`records.associations.end`/`correct`/`reinstate`, `issues.memberships.end`/`correct`, `issues.project_links.end` and a reinstating `add`, each on a `user_confirmed` head, `denied`, nothing written); `test_a_client_may_contest_an_accepted_semantic_link`; `test_a_client_cannot_void_or_retime_a_human_channel_handoff`; `test_clients_may_revise_client_identified_facts`; `test_a_remote_byte_identical_reassert_after_an_end_replays_the_old_answer` (pins residual R31-F11 d); `test_a_local_caller_reusing_an_operator_key_gets_conflict` (pins residual R31-F11 e); `test_cross_principal_open_writes_answer_like_absent`; `test_switch_off_answers_unsupported_for_every_open_write`; `test_issue_metadata_writes_keep_their_s1_rules` | database |
+| Part A open writes | `tests/database/test_lineage_s31_open_writes.py` | `test_a_remote_client_commits_every_open_lineage_write` (each of the 14, each row `client_identified`, `ordinary_reviewer`, `remote_interactive`, with the client id); `test_a_local_unattested_caller_commits_as_client_identified_without_a_client_id`; `test_an_operator_write_still_records_user_confirmed_and_no_client`; `test_user_directed_is_stored_as_an_unverified_claim`; `test_the_operator_cannot_send_a_user_directed_claim`; `test_no_payload_can_supply_provenance`; `test_a_client_replay_of_its_own_write_is_a_replay`; `test_a_client_reusing_an_operator_key_is_conflict_and_writes_nothing`; `test_the_operator_reusing_a_client_key_is_conflict`; `test_a_client_reusing_another_clients_key_is_conflict`; `test_an_operator_replay_of_a_pre_s31_key_answers_the_original` (a request row and facts seeded at `c5260943d933`, upgraded, replayed); `test_an_active_identity_answers_created_false_and_never_changes_its_provenance` (both directions); `test_clients_end_correct_and_contest_each_others_links_within_the_principal`; `test_a_client_composite_writes_client_identified_links`; `test_a_client_cannot_end_or_correct_accepted_lineage` (`records.associations.end`/`correct`/`reinstate`, `issues.memberships.end`/`correct`, `issues.project_links.end` and a reinstating `add`, each on a `user_confirmed` head, `denied`, nothing written); `test_a_client_may_contest_an_accepted_semantic_link`; `test_a_client_cannot_end_or_reinstate_its_own_contest_of_accepted_lineage` (RR1-F01: contest → end, and contest → reinstate, each `denied` at the second step, plus `correct` after an operator reinstate of the client's contest); `test_a_client_cannot_revise_a_confirmed_client_fact` (a client fact confirmed by the operator, then a client `end`, `correct` and Project-link `end`, each `denied`); `test_a_client_cannot_void_or_retime_a_human_channel_handoff`; `test_clients_may_revise_client_identified_facts`; `test_a_remote_byte_identical_reassert_after_an_end_replays_the_old_answer` (pins residual R31-F11 d); `test_a_local_caller_reusing_an_operator_key_gets_conflict` (pins residual R31-F11 e); `test_cross_principal_open_writes_answer_like_absent`; `test_switch_off_answers_unsupported_for_every_open_write`; `test_issue_metadata_writes_keep_their_s1_rules` | database |
 | Remaining gates | `tests/database/test_lineage_s31_remaining_gates.py` | `test_close_reopen_and_closed_issue_corrections_stay_operator_attested` (remote and unstamped `denied`, before the replay lookup, nothing written); `test_backfill_stays_operator_only_and_attested`; `test_confirm_capabilities_are_operator_attested_before_the_replay_lookup` | database |
 | Confirmation | `tests/integration/test_lineage_s31_confirmation.py` | `test_confirm_appends_a_user_confirmed_revision_with_the_same_evidence`; `test_confirm_of_a_user_confirmed_or_contested_head_is_conflict_state`; `test_confirm_of_a_client_ended_link_keeps_it_ended`; `test_a_confirmed_membership_keeps_its_recorded_member_version`; `test_project_link_confirm_appends_a_confirm_event`; `test_confirm_is_refused_on_a_closed_issue`; `test_confirm_with_a_stale_expected_revision_is_conflict` | database |
 | Close gate (OD-03) | `tests/integration/test_lineage_s31_close_gate.py` | `test_an_unreviewed_membership_holds_the_close`; `test_an_unreviewed_semantic_link_in_context_holds_the_close`; `test_a_client_end_of_a_mandatory_member_holds_the_close_until_confirmed`; `test_a_client_reinstatement_of_a_contested_link_holds_the_close`; `test_client_resolution_evidence_never_satisfies_the_gate_until_confirmed`; `test_readiness_lists_unreviewed_links_and_is_not_ready`; `test_confirming_or_an_operator_revision_clears_the_hold`; `test_confirming_a_client_end_clears_the_hold_and_a_new_root_restores_the_relationship`; `test_unreviewed_links_outside_the_review_scope_do_not_hold_it`; `test_a_close_and_a_client_revision_in_scope_serialize`; `test_the_user_directed_claim_changes_no_outcome` (R31-F06: the same scenario with `user_directed` false and true gives identical `ready`, blockers, close outcome, Program reportability, rate consumption and lineage `verification_state`). Every fixture of this module includes at least 1 fact written with `user_directed: true` | database |
 | Remote write visibility (R31-F01) | `tests/security/test_lineage_s31_write_visibility.py` | `test_an_absent_and_a_hidden_endpoint_answer_alike` (each open write; same code and detail; nothing written; no budget consumed); `test_a_hidden_link_revision_answers_not_found` (`end`, `correct`, `contest`, `reinstate` by `link_id` with an invisible endpoint or context Issue); `test_a_hidden_anchor_source_answers_not_found`; `test_a_hidden_handoff_commitment_answers_not_found`; `test_a_hidden_project_answers_not_found_for_project_link_writes`; `test_a_write_answer_withholds_a_hidden_anchor_and_says_restricted`; `test_a_composite_without_the_native_create_grant_is_denied`; `test_a_remote_write_without_its_own_grant_is_unsupported`; `test_hidden_and_absent_answer_alike_at_the_budget_bound` | database |
+| Validation-stage disclosure (RR1-F02) | `tests/security/test_lineage_s31_write_visibility.py` | `test_a_link_or_membership_write_without_issue_visibility_answers_as_absent` (covers the frozen-closed and Issue-context cases); the `blocks` cycle refusal is an explicit non-goal (section 14), pinned only by the existing S2 cycle tests | database |
 | Truncation visibility (R31-F10) | `tests/security/test_lineage_s31_write_visibility.py` | `test_related_and_readiness_truncation_count_only_visible_items` | database |
-| Rate bounds | `tests/database/test_lineage_s31_rate_bounds.py` | `test_a_client_past_its_hourly_budget_is_rate_limited_and_writes_nothing`; `test_the_daily_and_principal_budgets_bound_client_writes`; `test_replays_and_refusals_never_consume_budget`; `test_operator_writes_are_never_rate_limited`; `test_each_client_has_its_own_budget_and_unattested_callers_share_one` | database |
+| Rate bounds | `tests/database/test_lineage_s31_rate_bounds.py` | `test_a_client_past_its_hourly_budget_is_rate_limited_and_writes_nothing`; `test_the_daily_and_principal_budgets_bound_client_writes`; `test_replays_and_refusals_never_consume_budget`; `test_operator_writes_are_never_rate_limited`; `test_each_client_has_its_own_budget_and_unattested_callers_share_one`; `test_a_created_false_answer_is_checked_and_counted`; `test_a_composite_past_its_budget_creates_no_native_record` | database |
 | Rate race (R31-F13) | `tests/concurrency/test_lineage_s31_budget_race.py` | `test_concurrent_client_writes_at_the_budget_boundary_admit_exactly_one` | database |
-| Labels | `tests/contract/test_lineage_s31_read_labels.py` | `test_every_lineage_view_carries_the_s31_labels` (FAST, model keys); `test_s31_answers_without_client_rows_differ_from_s4_only_by_the_added_keys` (FAST, fixtures); `test_a_remote_reader_never_sees_a_client_id` (database); `test_every_read_labels_a_client_fact` (database: `records.lineage`, `issues.read`, `records.associations.history`, `issues.timeline`, `issues.handoffs.list`, `issues.closure_readiness`) | FAST + database |
+| Labels | `tests/contract/test_lineage_s31_read_labels.py` | `test_every_lineage_view_carries_the_s31_labels` (FAST, model keys); `test_s31_answers_without_client_rows_differ_from_s4_only_by_the_added_keys` (FAST, fixtures; includes every open-write answer and its `restricted: false`); `test_a_replay_applies_the_current_answer_filter` (database); `test_a_remote_reader_never_sees_a_client_id` (database); `test_every_read_labels_a_client_fact` (database: `records.lineage`, `issues.read`, `records.associations.history`, `issues.timeline`, `issues.handoffs.list`, `issues.closure_readiness`) | FAST + database |
 | Part C related read | `tests/integration/test_records_lineage_related.py` | `test_related_returns_issue_context_predecessors_successors_and_evidence`; `test_related_never_crosses_issues_through_a_shared_meeting`; `test_related_filters_by_acceptance_basis_and_relation`; `test_related_order_is_deterministic_and_pages_union_to_one_answer`; `test_a_grant_change_between_pages_restarts`; `test_hidden_records_are_never_emitted_or_counted`; `test_related_budgets_truncate`; `test_the_related_digest_is_stable_and_excludes_read_stamps`; `test_a_foreign_or_invisible_seed_is_not_found`; `test_an_explicit_known_at_reproduces_an_earlier_answer` | database |
 | Part C reports | `tests/integration/test_report_manifest_lineage.py` | `test_a_lineage_reference_binds_the_server_state_and_provenance_counts`; `test_a_changed_lineage_source_is_recorded_changed_since_read`; `test_a_failed_lineage_recompute_never_refuses_the_commit`; `test_a_manifest_without_a_lineage_reference_stays_schema_1`; `test_a_lineage_section_needs_the_related_grant_and_every_family`; `test_a_downstream_inherits_a_lineage_gate`; `test_the_lineage_reference_is_ordinary_content_when_related_is_not_served`; `test_a_collector_cannot_carry_a_lineage_reference`; `test_a_replayed_commit_never_recomputes_the_lineage_reference` | database |
 | S4 reportability | existing `tests/integration/test_program_metric_reconciliation.py` | new `test_an_unreviewed_issue_link_makes_the_issue_metric_not_reportable`; new `test_a_client_ended_issue_link_makes_the_issue_metric_not_reportable` (R31-F03); new `test_an_unreviewed_link_of_a_closed_issue_never_gates`; new `test_a_confirmed_issue_link_is_reported` | database |
@@ -1407,11 +1436,14 @@ prove-red is reported as redundancy, a masked test or an unreachable hazard, nev
 | claim never upgrades | derive `user_confirmed` when `user_directed` is true | `test_user_directed_is_stored_as_an_unverified_claim` |
 | claim read by nothing | let the close gate skip unreviewed links whose claim is true | `test_no_gate_reads_the_user_directed_claim`; `test_the_user_directed_claim_changes_no_outcome` |
 | accepted lineage kept (R31-F02) | admit a client `end` of a `user_confirmed` head | `test_a_client_cannot_end_or_correct_accepted_lineage` |
+| history-keyed rule (RR1-F01) | key the rule on the head basis | `test_a_client_cannot_end_or_reinstate_its_own_contest_of_accepted_lineage` |
+| confirmed becomes accepted (RR1-F01) | key the rule on the head basis | `test_a_client_cannot_revise_a_confirmed_client_fact` |
 | contest still open (R31-F02) | refuse a client `contest` of a `user_confirmed` head | `test_a_client_may_contest_an_accepted_semantic_link` |
 | handoff analogue (R31-F02) | admit a client `void` of a `user_confirmed` handoff | `test_a_client_cannot_void_or_retime_a_human_channel_handoff` |
 | hidden is absent (R31-F01) | skip the visibility pre-check for `records.associations.assert` | `test_an_absent_and_a_hidden_endpoint_answer_alike` |
 | link_id-addressed visibility (R31-F01) | skip the root read for `records.associations.end` | `test_a_hidden_link_revision_answers_not_found` |
 | anchor family visibility (R31-F01) | admit an anchor of an invisible family | `test_a_hidden_anchor_source_answers_not_found` |
+| situation visibility for link writes (RR1-F02) | drop the `situation` family requirement | `test_a_link_or_membership_write_without_issue_visibility_answers_as_absent` |
 | answer filter (R31-F01) | return the unfiltered `AssociationView` | `test_a_write_answer_withholds_a_hidden_anchor_and_says_restricted` |
 | composite native grant (R31-F01) | drop the `tasks.create` grant check | `test_a_composite_without_the_native_create_grant_is_denied` |
 | write-grant re-check (R31-F01) | drop `require_write_grant` | `test_a_remote_write_without_its_own_grant_is_unsupported` |
@@ -1497,7 +1529,7 @@ prove-red is reported as redundancy, a masked test or an unreachable hazard, nev
 | D-02 | default: client links "not accepted-grade evidence for the close gate" | counting only live heads, a client `end`, `reinstate` or `correct` could weaken the S2/S3 gate | stricter: any `client_identified` head in the review scope **holds** the close until the human channel confirms or revises it (section 4.6) |
 | D-03 | proposals "via the existing proposal mechanism" | no lineage proposal plane exists (S3 D-07); other planes' proposals are for their own facts | the `client_identified` fact in the one ledger is the proposal state; no `irp`/`ldec`; other planes unchanged |
 | D-04 | "strict v1 shapes unchanged" | lineage reads are behind a default-off switch with no grant and no deployed client; S2 and S3 widened them in lockstep | non-lineage v1 shapes byte-identical; lineage shapes widened additively in lockstep with the web decoders (section 8) — the design reviewer is asked to adjudicate this reading |
-| D-05 | "lineage/program capability names" admissible in the profile ceilings | profile compositions build no Program read engine (S4 D-46), so the 2 `programs.*` reads are never served there | `commitments.v2.*` and `reports.manifest` admissible; `programs.members.resolve` and `programs.overview` not |
+| D-05 | "lineage/program capability names" admissible in the profile ceilings | profile compositions build no Program read engine (S4 D-46), so the 2 `programs.*` reads are never served there | `commitments.v2.*` admissible; `programs.members.resolve` and `programs.overview` not; `reports.manifest` not admissible either (D-21) |
 | D-06 | idempotency "incl. previously-attested keys" | S1 recorded writes replay channel-blind; attested writes refused a non-attested replay as `denied` | the open writes bind the writer into the client digest (`conflict` across writers; human-channel digests unchanged); `issues.create`/`update` keep their S1 channel-blind replay (unchanged behaviour, no test converted) |
 | D-07 | S4 "certified/NOT_REPORTABLE reporting" | S4 certifies nothing; its `issue_outstanding` reads the latest Project-link event | an unreviewed link reuses `issue_link_unverified` (no new reason), 3 keys added, calculation version `program-overview-v2` |
 | D-08 | handoffs (record/retime/void) open | open as directed; nothing consumes their provenance | open and labelled; no confirmation (section 11) |
@@ -1510,7 +1542,7 @@ prove-red is reported as redundancy, a masked test or an unreachable hazard, nev
 | D-16 | Part D: "Issue close/reopen … stay `operator`" | at the basis they are `write` kind (not `_OPERATOR_ONLY`); `_OPERATOR_ONLY`'s stated test is "widens a later request's scope", which they do not | they join `_OPERATOR_ONLY` with the 3 confirms, because their attestation can never be met remotely; the deviation from that module's stated test is deliberate and recorded |
 | D-17 | Part D: "accurate idempotency annotations" | every tool's `idempotent_hint` is false; many non-lineage writes are also keyed | true for the 22 lineage writes only; non-lineage annotations unchanged (their under-annotation is a pre-existing residual, section 11) |
 | D-18 | brief: channel-bound replay (section 4.9) | the remote boundary derives one key per payload, not per client | the derived key binds the client for the 14 open writes, so identical requests from 2 clients reach the identity rule instead of `conflict` |
-| D-19 | R31-F02: clients ending or correcting accepted lineage | the S1–S3 transition table admits any writer | option (a): a client may only `contest` a `user_confirmed` head; every other client revision of accepted lineage (links, memberships, Project links, handoffs) is `denied`; ended heads in review scope are therefore only ends of client facts (section 4.4) |
+| D-19 | R31-F02: clients ending or correcting accepted lineage | the S1–S3 transition table admits any writer | option (a), keyed on history (RR1-F01): a client may revise only a fact the human channel has never accepted at any revision, except 1 `contest` of an active accepted semantic link, after which only the human channel writes that link; every other client revision of a fact the human channel has accepted at any revision (links, memberships, Project links by triplet, handoffs by event or any correction) is `denied`; ended heads in review scope are therefore only ends of never-accepted facts (section 4.4) |
 | D-20 | R31-F01: open writes and S3 §6.4 | S3 §6.4 applied only to reads | remote writes get a write-grant re-check, a composite native-create grant, hidden-is-absent pre-checks before any row, replay and rate count, and an answer filter that withholds with `restricted: true` (section 6.4); the rate check moves after validation |
 | D-21 | §7.11 admissible set held `reports.manifest` | its table can never be granted to an MCP role | removed; deferred (section 11) |
 | D-15 | package/ADR-015 decision 7: only an attested surface writes accepted lineage | the directive opens the writes | ADR-015 decision 15 amends decision 7: the open writes are not accepted-grade; acceptance needs the human channel's revision |
@@ -1549,9 +1581,10 @@ incumbent constraint.
   writes up to 5 links) of unreviewed facts that hold Issue closes until the operator
   reviews each — confirming or revising a live head, or confirming the end of an ended
   client fact (section 4.6); the bounds cap it and revoking the grant stops it.
-- **Clients can end, correct or dispute each other's unreviewed facts, and contest the
-  operator's accepted semantic links, within the Principal**; they can never end or
-  correct accepted lineage (section 4.4). Every such revision holds the close until
+- **Clients can end, correct or dispute each other's never-accepted facts, and contest an
+  accepted semantic link once (after which only the human channel writes it), within the
+  Principal**; no sequence of client actions can end, correct or reinstate a fact the
+  human channel has accepted at any revision (section 4.4). Every such revision holds the close until
   reviewed; the default traversal shows a client-revised unreviewed fact in its latest
   state.
 - **(R31-F11 a) The Principal-wide budget is shared:** 1 or 2 granted clients, or the
@@ -1577,6 +1610,11 @@ incumbent constraint.
   that the key exists; pinned by `test_a_local_caller_reusing_an_operator_key_gets_conflict`.
 - **(f) Buckets are per granted client:** dynamic client registration exists, so the number
   of buckets is bounded only by grant issuance (a registration alone grants no tool).
+- **(g) The `blocks` cycle refusal can disclose a hidden path (RR1-F02):** asserting `A
+  blocks B` with visible A and B is refused when a `blocks` path from B to A exists through
+  a record the caller cannot see. The cycle rule is an integrity rule and cannot be hidden
+  without admitting a cycle; an explicit non-goal (the frozen-closed and Issue-context
+  cases are closed by the `situation` visibility requirement of section 6.4).
 - **Related reads and report recomputes reflect current visibility, native resolution and
   evidence availability**; a reference recorded `verified_at_commit` proves agreement at
   commit only.

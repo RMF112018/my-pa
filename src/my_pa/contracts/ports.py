@@ -10313,7 +10313,11 @@ class IssueHandoffRepository(ABC):
 
 @dataclass(frozen=True, slots=True)
 class TimelineLinkRevision:
-    """One link revision as a timeline entry needs it: its recorded values, no evidence."""
+    """One link revision as a timeline entry needs it: its recorded values, no evidence.
+
+    S3.1 (section 7.6): with its acceptance basis, the writing client's OAuth id
+    and its unverified `user_directed` claim.
+    """
 
     link_id: str
     revision_no: int
@@ -10321,6 +10325,9 @@ class TimelineLinkRevision:
     action: LinkRevisionAction
     lifecycle_state: LinkLifecycleState
     recorded_at: datetime
+    acceptance_basis: AcceptanceBasis = AcceptanceBasis.USER_CONFIRMED
+    asserting_client_id: str | None = None
+    user_directed_claim: bool = False
 
 
 @dataclass(frozen=True, slots=True)

@@ -64,6 +64,7 @@ as a virtual note edge of M1".
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
@@ -91,7 +92,11 @@ from my_pa.application.lineage_endpoints import (
     require_relation_evidence,
 )
 from my_pa.application.lineage_rate import require_client_write_budget
-from my_pa.application.lineage_visibility import LineageVisibility, lineage_visibility
+from my_pa.application.lineage_visibility import (
+    LineageVisibility,
+    lineage_visibility,
+    withhold_client_ids,
+)
 from my_pa.contracts.ports import (
     IssueRepository,
     LineageEndpoint,
@@ -121,6 +126,8 @@ from my_pa.contracts.v1.record_lineage import (
     LinkHistoryRevisionView,
     LinkHistoryRootView,
     RecordRefView,
+    RelatedRecordsView,
+    RelatedRecordView,
     VirtualEdgeView,
 )
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
@@ -133,7 +140,12 @@ from my_pa.domain.lineage.asof import (
     knowledge_cut,
     native_cut,
 )
-from my_pa.domain.lineage.canonical import evidence_set_digest, normalized_identity, request_digest
+from my_pa.domain.lineage.canonical import (
+    canonical_json,
+    evidence_set_digest,
+    normalized_identity,
+    request_digest,
+)
 from my_pa.domain.lineage.closure import (
     VERSIONED_MEMBER_FAMILIES,
     has_resolution_anchor,
@@ -156,6 +168,7 @@ from my_pa.domain.lineage.cursor import (
 from my_pa.domain.lineage.model import EvidenceAnchor, RecordRef
 from my_pa.domain.lineage.vocabulary import (
     COMPOSITE_ONLY_RELATIONS,
+    LINEAGE_RELATED_DIGEST_PREFIX,
     RECORD_FAMILY_ID_KINDS,
     AcceptanceBasis,
     EvidenceAvailability,
@@ -202,10 +215,13 @@ __all__ = [
     "MembershipCorrectRequest",
     "MembershipEndRequest",
     "RecordLineageApplication",
+    "RelatedBoundedResult",
+    "RelatedReadRequest",
     "anchor_view",
     "association_view",
     "association_views",
     "bounded_lineage",
+    "bounded_related",
     "evidence_availability",
     "insert_new_link",
     "issue_inside_set",
@@ -217,6 +233,9 @@ __all__ = [
     "links_in_context_at",
     "member_native_version",
     "read_lineage_as_of",
+    "read_related_as_of",
+    "related_digest",
+    "related_request_document",
     "require_no_blocks_cycle",
     "traverse_lineage",
     "unreviewed_links_in_scope",
@@ -566,6 +585,8 @@ def association_view(
         lifecycle_state=revision.lifecycle_state,
         acceptance_basis=revision.acceptance_basis,
         authority_class=revision.authority_class,
+        user_directed_claim=revision.user_directed_claim,
+        asserting_client_id=revision.asserting_client_id,
         evidence=tuple(anchor_view(cited, archived) for cited in revision.evidence),
         created_at=link.created_at,
         recorded_at=revision.recorded_at,
@@ -1433,6 +1454,8 @@ class RecordLineageApplication:
                     lifecycle_state=revision.lifecycle_state,
                     acceptance_basis=revision.acceptance_basis,
                     authority_class=revision.authority_class,
+                    user_directed_claim=revision.user_directed_claim,
+                    asserting_client_id=revision.asserting_client_id,
                     reason=revision.reason,
                     evidence=evidence,
                     recorded_at=revision.recorded_at,
@@ -1456,6 +1479,18 @@ class RecordLineageApplication:
     ) -> LineageView:
         """`records.lineage` (S3 section 7.2): as of a cut, visibility-filtered, paged."""
         return read_lineage_as_of(uow, principal_id, request, now=now, visibility=visibility)
+
+    def read_related(
+        self,
+        uow: UnitOfWork,
+        principal_id: str,
+        request: RelatedReadRequest,
+        *,
+        now: datetime,
+        visibility: LineageVisibility,
+    ) -> RelatedRecordsView:
+        """`records.lineage.related` (S3.1 section 7.4): related records of 1..25 seeds."""
+        return read_related_as_of(uow, principal_id, request, now=now, visibility=visibility)
 
 
 def insert_new_link(
@@ -2057,11 +2092,17 @@ class _Graph:
         return True
 
 
-def _matching_issues(graph: _Graph, pair: Sequence[RecordRef]) -> list[str]:
-    """Section 7.2 step 2 over the root's pair set; an invisible Issue is never a candidate."""
+def _matching_issues(
+    graph: _Graph, pair: Sequence[RecordRef], *, root: RecordRef | None = None
+) -> list[str]:
+    """Section 7.2 step 2 over the root's pair set; an invisible Issue is never a candidate.
+
+    `root` is the graph's own root unless given (S3.1: each related-read seed).
+    """
+    origin = graph.root if root is None else root
     matching: set[str] = set()
-    if graph.is_issue(graph.root):
-        matching.add(graph.root.record_id)
+    if graph.is_issue(origin):
+        matching.add(origin.record_id)
     pair_set = set(pair)
     for head in graph.reader.incident(pair_set):
         link = head.link
@@ -2832,3 +2873,566 @@ def _checked_cursor(
         if stated is not None and native > ensure_utc(stated):
             raise InvalidRequestError(SafeDetail.CURSOR)
     return cursor
+
+
+# --- records.lineage.related (S3.1 contract section 7.4) ------------------------------
+#
+# A multi-seed related-records read over the S3 traversal machinery: the same
+# as-of reader (`_AsOfReader`), the same Issue confinement (`_members_in`,
+# `_followable`), the same visibility rules (S3 section 6.4), budgets
+# (`MAX_LINEAGE_NODES`, `MAX_LINEAGE_EDGES`, the per-page deadline), cursor and
+# paging. One bounded result is recomputed per page; `related_sha256` binds it.
+
+_RECORDS_LINEAGE_RELATED: Final = Capability.RECORDS_LINEAGE_RELATED.value
+
+
+@dataclass(frozen=True, slots=True)
+class RelatedReadRequest:
+    """`records.lineage.related`, parsed (S3.1 section 7.4).
+
+    `seeds` are 1..25 distinct records in request order; `acceptance_bases` and
+    `relation_types` are the admitted filter sets in vocabulary order (the
+    defaults are every member); `page_size` is 10..100 and a `cursor` comes
+    only with a `page_size` (the command checked both).
+    """
+
+    seeds: tuple[RecordRef, ...]
+    max_depth: int
+    acceptance_bases: tuple[AcceptanceBasis, ...]
+    relation_types: tuple[RelationType, ...]
+    known_at: datetime | None = None
+    valid_at: datetime | None = None
+    page_size: int | None = None
+    cursor: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RelatedBoundedResult:
+    """The whole bounded result of one related read, before paging (section 7.4)."""
+
+    records: tuple[RelatedRecordView, ...]
+    links: tuple[AssociationView, ...]
+    virtual_edges: tuple[VirtualEdgeView, ...]
+    codes: frozenset[LineageCompleteness]
+    deadline_hit: bool
+    related_sha256: str
+
+
+class _Related:
+    """The traversal state of one related read: the S3 graph plus who reached what.
+
+    `graph.depth`, `graph.paths` and `graph.order` hold the union over seeds:
+    a record's least depth and the first reaching step in `(depth, seed
+    position, expansion order)`, where a seed's expansions run in order -- its
+    one hop, then each of its Issues in `issue_id` order -- and each one is
+    breadth-first in the S3 tie-break order.
+    """
+
+    def __init__(self, graph: _Graph, request: RelatedReadRequest) -> None:
+        self.graph = graph
+        self.bases = frozenset(request.acceptance_bases)
+        self.relations = frozenset(request.relation_types)
+        self.seeds_of: dict[RecordRef, set[int]] = {}
+        self.issues_of: dict[RecordRef, set[str]] = {}
+        self.revisions: dict[tuple[str, int], LinkRevisionRecord] = {}
+
+    def revision(self, head: LinkHeadRecord) -> LinkRevisionRecord:
+        key = (head.link.link_id, head.revision_no)
+        if key not in self.revisions:
+            self.revisions[key] = _revision_of(
+                self.graph.source, self.graph.owner, head.link.link_id, head.revision_no
+            )
+        return self.revisions[key]
+
+    def admitted(self, head: LinkHeadRecord) -> bool:
+        """Step 2: a link outside the filters is neither followed nor emitted."""
+        if head.link.relation_type not in self.relations:
+            return False
+        return self.revision(head).acceptance_basis in self.bases
+
+    def reach(
+        self,
+        ref: RecordRef,
+        depth: int,
+        step: tuple[RecordRef, _Via] | None,
+        position: int,
+        issue_id: str | None,
+    ) -> bool:
+        """Record that seed `position` (under `issue_id`) reached `ref` at `depth`.
+
+        A record new to the union is admitted against the node budget; a known
+        one keeps its least depth and the first step at it.
+        """
+        graph = self.graph
+        known = graph.depth.get(ref)
+        if known is None:
+            if not graph.budget.admit(nodes=1):
+                return False
+            graph.depth[ref] = depth
+            graph.paths[ref] = step
+            graph.order.append(ref)
+        elif depth < known:
+            graph.depth[ref] = depth
+            graph.paths[ref] = step
+        self.seeds_of.setdefault(ref, set()).add(position)
+        if issue_id is not None:
+            self.issues_of.setdefault(ref, set()).add(issue_id)
+        return True
+
+
+def _related_seed(graph: _Graph, seed: RecordRef) -> None:
+    """Step 1: a seed absent, foreign, invisible or not known at the cut is `not_found`."""
+    graph.resolve((seed,))
+    if seed not in graph.resolved or not graph.visible(seed):
+        raise NotFoundError(SafeDetail.SEEDS)
+    if seed.family is RecordFamily.SITUATION:
+        if not _is_issue(seed, graph.resolved):
+            # As `records.lineage`'s origin (S1 section 3.2): not an Issue.
+            raise InvalidRequestError(SafeDetail.SEEDS)
+        if not graph.is_issue(seed):
+            raise NotFoundError(SafeDetail.SEEDS)
+    if seed.family is RecordFamily.MEETING_NOTE_VERSION and not graph.reader.note_in_cut(seed):
+        raise NotFoundError(SafeDetail.SEEDS)
+
+
+def _related_one_hop(state: _Related, position: int, seed: RecordRef) -> bool:
+    """Step 3a: every admitted live link incident to the seed's pair set, any context."""
+    graph = state.graph
+    pair = graph.extension(seed)
+    for head in graph.reader.incident(pair):
+        if graph.out_of_time():
+            return False
+        if not state.admitted(head):
+            continue
+        link = head.link
+        near = link.from_ref if link.from_ref in pair else link.to_ref
+        far = link.to_ref if near == link.from_ref else link.from_ref
+        if not (graph.visible(near) and graph.visible(far)):
+            # S3 section 6.4: neither emitted, expanded nor counted.
+            graph.restricted = True
+            continue
+        if not graph.follow(head):
+            return False
+        if near != seed and not state.reach(near, 1, (seed, (_VIRTUAL, None)), position, None):
+            return False
+        if not state.reach(far, 1, (near, (_TYPED, link.link_id)), position, None):
+            return False
+    if seed.family is RecordFamily.MEETING_NOTE_VERSION:
+        meeting = graph.meeting_of(seed)
+        if meeting is not None and not state.reach(
+            meeting, 1, (seed, (_VIRTUAL, None)), position, None
+        ):
+            return False
+    return True
+
+
+def _related_under_issue(
+    state: _Related, position: int, seed: RecordRef, issue_id: str, max_depth: int
+) -> bool:
+    """Step 3b: S3 section 7.2 step 3 from the seed under one visible Issue, to `max_depth`.
+
+    The Issue context is fixed for the whole expansion, so a shared Meeting,
+    Project, Series or participant never bridges 2 Issues (AT-006). Visited
+    records are this expansion's own, so a record another seed reached first
+    is still expanded here.
+    """
+    graph = state.graph
+    inside = _members_in(graph, issue_id)
+    if not state.reach(seed, 0, None, position, issue_id):
+        return False
+    seen = {seed}
+    frontier = [seed]
+    depth = 0
+    while frontier and depth < max_depth and not graph.budget.exhausted:
+        nxt: list[RecordRef] = []
+        for node in sorted(frontier, key=lambda ref: (ref.family.value, ref.record_id)):
+            if graph.out_of_time():
+                return False
+            extension = graph.extension(node)
+            for head in graph.reader.incident(extension):
+                if not _followable(head, issue_id, inside) or not state.admitted(head):
+                    continue
+                link = head.link
+                near = link.from_ref if link.from_ref in extension else link.to_ref
+                far = link.to_ref if near == link.from_ref else link.from_ref
+                if not (graph.visible(near) and graph.visible(far)):
+                    graph.restricted = True
+                    continue
+                if not graph.follow(head):
+                    return False
+                for ref, step in (
+                    (near, (node, (_VIRTUAL, None))),
+                    (far, (near, (_TYPED, link.link_id))),
+                ):
+                    if ref in seen:
+                        continue
+                    if not state.reach(ref, depth + 1, step, position, issue_id):
+                        return False
+                    seen.add(ref)
+                    nxt.append(ref)
+            if node.family is RecordFamily.MEETING_NOTE_VERSION:
+                parent = graph.meeting_of(node)
+                if parent is not None and parent not in seen:
+                    if not state.reach(
+                        parent, depth + 1, (node, (_VIRTUAL, None)), position, issue_id
+                    ):
+                        return False
+                    seen.add(parent)
+                    nxt.append(parent)
+        frontier = nxt
+        depth += 1
+    return True
+
+
+def related_digest(
+    request: RelatedReadRequest,
+    records: Sequence[RelatedRecordView],
+    links: Sequence[AssociationView],
+    virtual_edges: Sequence[VirtualEdgeView],
+    codes: Collection[LineageCompleteness],
+    *,
+    remote: bool,
+) -> str:
+    """Step 8: `related_sha256` over the whole bounded result, without the read stamps.
+
+    The items as this reader is answered them (a remote reader's without client
+    ids, section 4.3), so the digest is of metadata the reader can read.
+    """
+    state, qualifiers = completeness(codes)
+    document: dict[str, object] = {
+        "schema_version": 1,
+        "seeds": [_ref_document(seed) for seed in request.seeds],
+        "max_depth": request.max_depth,
+        "acceptance_bases": [basis.value for basis in request.acceptance_bases],
+        "relation_types": [relation.value for relation in request.relation_types],
+        "records": [record.to_canonical_dict() for record in records],
+        "links": [link.to_canonical_dict() for link in links],
+        "virtual_edges": [edge.to_canonical_dict() for edge in virtual_edges],
+        "complete_state": state.value,
+        "qualifiers": [code.value for code in qualifiers],
+    }
+    if remote:
+        document = withhold_client_ids(document)
+    body = LINEAGE_RELATED_DIGEST_PREFIX + canonical_json(document).encode("utf-8")
+    return hashlib.sha256(body).hexdigest()
+
+
+def bounded_related(
+    source: RecordLineageRepository,
+    principal_id: str,
+    request: RelatedReadRequest,
+    *,
+    reader: _CurrentReader,
+    visibility: LineageVisibility,
+    deadline: float | None,
+) -> RelatedBoundedResult:
+    """Section 7.4 steps 1 to 5, 7 and 8: the traversal of every seed, before paging.
+
+    The whole-query budgets are the S3 node and edge budgets; the byte bound
+    applies per page. Hidden data is never emitted, expanded or counted.
+    """
+    graph = _Graph(reader, request.seeds[0], visibility, paged=True, deadline=deadline)
+    for seed in request.seeds:
+        _related_seed(graph, seed)
+    state = _Related(graph, request)
+    codes: set[LineageCompleteness] = set()
+    for position, seed in enumerate(request.seeds):
+        state.reach(seed, 0, None, position, None)
+    for position, seed in enumerate(request.seeds):
+        if graph.budget.exhausted or graph.deadline_hit:
+            break
+        if not _related_one_hop(state, position, seed):
+            break
+        pair = graph.extension(seed)
+        matching = _matching_issues(graph, pair, root=seed)
+        if len(matching) > MAX_MATCHING_ISSUES:
+            codes.add(LineageCompleteness.TRUNCATED_BUDGET)
+        stopped = False
+        for issue_id in matching[:MAX_MATCHING_ISSUES]:
+            if not _related_under_issue(state, position, seed, issue_id, request.max_depth):
+                stopped = True
+                break
+        if stopped:
+            break
+    # Step 5 (S3 section 7.2): re-resolve every reached record natively.
+    reached = list(graph.order)
+    fresh = source.resolve_records(principal_id, reached)
+    dropped = {ref for ref in reached if ref not in fresh}
+    graph.resolved.update(fresh)
+    nodes = [ref for ref in reached if ref not in dropped]
+    heads = [
+        head
+        for head in graph.links.values()
+        if head.link.from_ref not in dropped and head.link.to_ref not in dropped
+    ]
+    virtual = _virtual_edges(graph, set(nodes))
+    if graph.budget.exhausted:
+        codes.add(LineageCompleteness.TRUNCATED_BUDGET)
+    if dropped:
+        codes.add(LineageCompleteness.PARTIAL_NATIVE_HISTORY)
+    graph.load_issues(ref.record_id for ref in nodes if ref.family is RecordFamily.SITUATION)
+    pairs = [
+        (head.link, state.revision(head)) for head in sorted(heads, key=lambda h: h.link.link_id)
+    ]
+    edges, withheld = visible_association_views(source, principal_id, pairs, visibility, reader)
+    if graph.restricted or withheld:
+        codes.add(LineageCompleteness.RESTRICTED_EVIDENCE)
+    records = tuple(
+        RelatedRecordView(
+            **_node_view(graph, ref).model_dump(),
+            seeds=tuple(sorted(state.seeds_of[ref])),
+            issue_ids=tuple(sorted(state.issues_of.get(ref, ())))[:MAX_MATCHING_ISSUES],
+        )
+        for ref in sorted(
+            nodes, key=lambda ref: (graph.depth[ref], ref.family.value, ref.record_id)
+        )
+    )
+    frozen = frozenset(codes)
+    return RelatedBoundedResult(
+        records=records,
+        links=tuple(edges),
+        virtual_edges=tuple(virtual),
+        codes=frozen,
+        deadline_hit=graph.deadline_hit,
+        related_sha256=related_digest(
+            request, records, edges, virtual, frozen, remote=visibility.remote
+        ),
+    )
+
+
+def related_request_document(request: RelatedReadRequest) -> dict[str, object]:
+    """The parsed request without its cursor, optional fields `null` (S3 section 5's `b`)."""
+    return {
+        "seeds": [_ref_document(seed) for seed in request.seeds],
+        "max_depth": request.max_depth,
+        "acceptance_bases": [basis.value for basis in request.acceptance_bases],
+        "relation_types": [relation.value for relation in request.relation_types],
+        "known_at": instant_token(request.known_at),
+        "valid_at": instant_token(request.valid_at),
+        "page_size": request.page_size,
+    }
+
+
+def _related_view(
+    request: RelatedReadRequest,
+    cuts: LineageReportedCuts,
+    codes: Collection[LineageCompleteness],
+    digest: str,
+    items: Sequence[RelatedRecordView | AssociationView | VirtualEdgeView],
+    next_cursor: str | None,
+) -> RelatedRecordsView:
+    state, qualifiers = completeness(codes)
+    return RelatedRecordsView(
+        seeds=tuple(_ref_view(seed) for seed in request.seeds),
+        records=tuple(item for item in items if isinstance(item, RelatedRecordView)),
+        links=tuple(item for item in items if isinstance(item, AssociationView)),
+        virtual_edges=tuple(item for item in items if isinstance(item, VirtualEdgeView)),
+        complete_state=state,
+        qualifiers=qualifiers,
+        known_at=cuts.known_at,
+        valid_at=cuts.valid_at,
+        lineage_valid_at=cuts.lineage_valid_at,
+        native_cut_at=cuts.native_cut_at,
+        related_sha256=digest,
+        next_cursor=next_cursor,
+    )
+
+
+def _related_restart(request: RelatedReadRequest, cuts: LineageReportedCuts) -> RelatedRecordsView:
+    """S3 section 7.2 step 7: `scope_changed_restart_required`, no item."""
+    code = frozenset({LineageCompleteness.SCOPE_CHANGED_RESTART_REQUIRED})
+    digest = related_digest(request, (), (), (), code, remote=False)
+    return _related_view(request, cuts, code, digest, (), None)
+
+
+def _related_document(
+    item: RelatedRecordView | AssociationView | VirtualEdgeView, *, remote: bool
+) -> object:
+    document = item.to_canonical_dict()
+    return withhold_client_ids(document) if remote else document
+
+
+def _related_page(
+    request: RelatedReadRequest,
+    result: RelatedBoundedResult,
+    cuts: LineageReportedCuts,
+    *,
+    after: str | None,
+    remote: bool,
+    cursor_for: Callable[[str], str],
+) -> RelatedRecordsView | None:
+    """Step 6: the items after `after`, up to `page_size` (or all) within 512 KiB.
+
+    `None` when `after` is not an item of this result. Without a `page_size`
+    the read is one page: what does not fit is dropped (`truncated_budget`).
+    """
+    items: list[RelatedRecordView | AssociationView | VirtualEdgeView] = [
+        *result.records,
+        *result.links,
+        *result.virtual_edges,
+    ]
+    keys = [_item_key(item) for item in items]
+    start = 0
+    if after is not None:
+        if after not in keys:
+            return None
+        start = keys.index(after) + 1
+    limit = len(items) if request.page_size is None else request.page_size
+    codes = set(result.codes)
+    frame = _size(
+        _related_view(
+            request,
+            cuts,
+            codes | {LineageCompleteness.TRUNCATED_BUDGET},
+            result.related_sha256,
+            (),
+            "x" * MAX_CURSOR_CHARACTERS,
+        ).to_canonical_dict()
+    )
+    chosen: list[RelatedRecordView | AssociationView | VirtualEdgeView] = []
+    size = frame
+    for item in items[start:]:
+        if len(chosen) >= limit:
+            break
+        grows = _size(_related_document(item, remote=remote)) + 1
+        if chosen and size + grows > MAX_LINEAGE_BYTES:
+            break
+        chosen.append(item)
+        size += grows
+    end = start + len(chosen)
+    more = end < len(items)
+    next_cursor: str | None = None
+    if more and request.page_size is None:
+        codes.add(LineageCompleteness.TRUNCATED_BUDGET)
+    elif more and chosen and not result.deadline_hit:
+        next_cursor = cursor_for(keys[end - 1])
+    return _related_view(request, cuts, codes, result.related_sha256, chosen, next_cursor)
+
+
+def _checked_related_cursor(
+    request: RelatedReadRequest, principal_id: str, *, horizon: datetime | None, now: datetime
+) -> LineageCursor:
+    """S3 section 7.2 step 7 for the related read: shape, binding, cuts."""
+    try:
+        cursor = decode_cursor(request.cursor, _lineage_position)
+    except CursorMalformedError as error:
+        raise InvalidRequestError(SafeDetail.CURSOR) from error
+    if cursor.record_event_watermark is not None:
+        raise InvalidRequestError(SafeDetail.CURSOR)
+    expected = cursor_binding(
+        capability=_RECORDS_LINEAGE_RELATED,
+        principal_id=principal_id,
+        request=related_request_document(request),
+        known_at=cursor.known_at,
+        lineage_valid_at=cursor.lineage_valid_at,
+        native_cut_at=cursor.native_cut_at,
+        record_event_watermark=None,
+    )
+    if cursor.binding != expected:
+        raise ConflictError(SafeDetail.CURSOR)
+    known, valid, native = cursor.known_at, cursor.lineage_valid_at, cursor.native_cut_at
+    if known is not None and (horizon is None or known > horizon):
+        raise InvalidRequestError(SafeDetail.CURSOR)
+    if (known is None) is not (valid is None) or (
+        known is not None and valid is not None and valid > known
+    ):
+        raise InvalidRequestError(SafeDetail.CURSOR)
+    if native is None or native > now:
+        raise InvalidRequestError(SafeDetail.CURSOR)
+    for stated in (request.known_at, request.valid_at):
+        if stated is not None and native > ensure_utc(stated):
+            raise InvalidRequestError(SafeDetail.CURSOR)
+    return cursor
+
+
+def read_related_as_of(
+    uow: UnitOfWork,
+    principal_id: str,
+    request: RelatedReadRequest,
+    *,
+    now: datetime,
+    visibility: LineageVisibility,
+) -> RelatedRecordsView:
+    """`records.lineage.related` (S3.1 section 7.4): as of a cut, visibility-filtered, paged."""
+    lineage = uow.record_lineage
+    lineage.bound_read_statements(LINEAGE_STATEMENT_TIMEOUT_MS)
+    at = ensure_utc(now)
+    horizon = lineage.commit_horizon(principal_id)
+    scope = scope_digest(visibility.grant_digest)
+    cursor: LineageCursor | None = None
+    if request.cursor is not None:
+        cursor = _checked_related_cursor(request, principal_id, horizon=horizon, now=at)
+        cuts = LineageReportedCuts(
+            known_at=cursor.known_at,
+            valid_at=request.valid_at if request.valid_at is not None else cursor.known_at,
+            lineage_valid_at=cursor.lineage_valid_at,
+            native_cut_at=cursor.native_cut_at,
+        )
+        if cursor.scope != scope:
+            return _related_restart(request, cuts)
+    else:
+        try:
+            cut = knowledge_cut(
+                known_at=request.known_at, valid_at=request.valid_at, now=at, horizon=horizon
+            )
+        except CutAfterNowError as error:
+            detail = SafeDetail.KNOWN_AT if error.field == "known_at" else SafeDetail.VALID_AT
+            raise InvalidRequestError(detail) from error
+        cuts = LineageReportedCuts(
+            known_at=cut.known_at,
+            valid_at=cut.valid_at,
+            lineage_valid_at=cut.lineage_valid_at,
+            native_cut_at=native_cut(
+                known_at=request.known_at, valid_at=request.valid_at, read_time=at
+            ),
+        )
+    t_v = cuts.lineage_valid_at
+    fact_cut = LineageFactCut(
+        watermark=None if t_v is None else lineage.commit_watermark(principal_id, t_v), at=t_v
+    )
+    native_cut_at = cuts.native_cut_at
+    if native_cut_at is None:
+        raise RepositoryFailureError
+    result = bounded_related(
+        lineage,
+        principal_id,
+        request,
+        reader=_AsOfReader(lineage, principal_id, fact_cut, native_cut_at),
+        visibility=visibility,
+        deadline=_monotonic() + LINEAGE_DEADLINE_SECONDS,
+    )
+    binding = cursor_binding(
+        capability=_RECORDS_LINEAGE_RELATED,
+        principal_id=principal_id,
+        request=related_request_document(request),
+        known_at=cuts.known_at,
+        lineage_valid_at=cuts.lineage_valid_at,
+        native_cut_at=cuts.native_cut_at,
+        record_event_watermark=None,
+    )
+
+    def cursor_for(position: str) -> str:
+        return encode_cursor(
+            LineageCursor(
+                binding=binding,
+                scope=scope,
+                known_at=cuts.known_at,
+                lineage_valid_at=cuts.lineage_valid_at,
+                native_cut_at=cuts.native_cut_at,
+                record_event_watermark=None,
+                position=position,
+            )
+        )
+
+    page = _related_page(
+        request,
+        result,
+        cuts,
+        after=None if cursor is None else str(cursor.position),
+        remote=visibility.remote,
+        cursor_for=cursor_for,
+    )
+    if page is None:
+        # R3-F14, R3-F23: a position that is not an item of the recomputed result.
+        return _related_restart(request, cuts)
+    return page

@@ -579,6 +579,7 @@ from my_pa.application.lineage_visibility import (
     lineage_visibility,
     require_read_grant,
     require_write_grant,
+    withhold_client_ids,
 )
 from my_pa.application.managed_documents import ManagedDocumentService
 from my_pa.application.meetings import (
@@ -4580,6 +4581,13 @@ class ApplicationService:
                         result = _HANDLERS[command.capability](
                             self, unit_of_work, authorization, command
                         )
+                        if (
+                            command.capability in _LINEAGE_CAPABILITIES
+                            and authorization.capability_grants is not None
+                        ):
+                            # S3.1 section 4.3: a remote caller sees that a fact is
+                            # client-identified, never which OAuth client wrote it.
+                            result = replace(result, payload=withhold_client_ids(result.payload))
                         if (
                             self._relationship_reenrichment_enabled
                             and command.capability.value in TRIGGERS_BY_MUTATION_CAPABILITY
@@ -14745,10 +14753,25 @@ class ApplicationService:
     def _records_lineage_related(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadRelatedRecords
     ) -> _Result:
-        """`records.lineage.related`: related records of 1..25 seeds (S3.1 section 7.4)."""
-        del unit_of_work
-        self._lineage_read(authorization, command.capability)
-        raise UnsupportedError()
+        """`records.lineage.related`: related records of 1..25 seeds (S3.1 section 7.4).
+
+        As of `known_at` / `valid_at`, family-visible to a remote reader (S3
+        section 6.4, no hidden record counted), paged under a grant-bound cursor
+        when `page_size` is given, with the whole bounded result's digest.
+        """
+        visibility = self._lineage_read(authorization, command.capability)
+        with _translated(), _lineage_translated():
+            view = self._record_lineage.read_related(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.related_request(),
+                now=authorization.at,
+                visibility=visibility,
+            )
+        return _Result(
+            payload=view.to_canonical_dict(),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+        )
 
     def _program_reference_recompute(
         self, authorization: Authorization

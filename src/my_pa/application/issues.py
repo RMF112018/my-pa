@@ -437,6 +437,8 @@ def _link_view(event: ProjectLinkEventRecord) -> ProjectLinkView:
         state=event.state,
         membership_revision_no=event.revision_no,
         acceptance_basis=AcceptanceBasis(event.acceptance_basis),
+        user_directed_claim=event.user_directed_claim,
+        asserting_client_id=event.asserting_client_id,
         evidence_anchor_id=event.evidence_anchor_id,
         recorded_at=event.recorded_at,
     )

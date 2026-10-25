@@ -92,6 +92,7 @@ from my_pa.application.record_lineage import (
     MembershipAddRequest,
     MembershipCorrectRequest,
     MembershipEndRequest,
+    RelatedReadRequest,
 )
 from my_pa.domain.capture.display_label import normalize_display_label
 from my_pa.domain.capture.errors import CaptureBoundsError, CaptureError
@@ -14571,6 +14572,21 @@ class ReadRelatedRecords:
         _optional_instant(self.known_at, SafeDetail.KNOWN_AT)
         _optional_instant(self.valid_at, SafeDetail.VALID_AT)
         _cursor_page(self.page_size, self.cursor)
+
+    def related_request(self) -> RelatedReadRequest:
+        """The parsed request: filters in vocabulary order, defaults every member."""
+        bases = set(self.acceptance_bases or [member.value for member in AcceptanceBasis])
+        relations = set(self.relation_types or [member.value for member in RelationType])
+        return RelatedReadRequest(
+            seeds=self.seed_refs(),
+            max_depth=DEFAULT_RELATED_DEPTH if self.max_depth is None else self.max_depth,
+            acceptance_bases=tuple(member for member in AcceptanceBasis if member.value in bases),
+            relation_types=tuple(member for member in RelationType if member.value in relations),
+            known_at=_optional_instant(self.known_at, SafeDetail.KNOWN_AT),
+            valid_at=_optional_instant(self.valid_at, SafeDetail.VALID_AT),
+            page_size=self.page_size,
+            cursor=self.cursor,
+        )
 
     def seed_refs(self) -> tuple[RecordRef, ...]:
         """The parsed, distinct seeds in request order."""

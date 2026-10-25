@@ -13,7 +13,11 @@ S3 adds `ContestedLinkView` (one contested link in the Issue's context,
 correction) and three `HandoffView` keys: `current_effective_at`, `voided` and
 `correction_ids` (`effective_at` keeps its recorded S2 meaning, R3-F18).
 S3.1 adds `UnreviewedLinkView` (one link in the Issue's review scope whose
-head revision is `client_identified`, `issues.closure_readiness`).
+head revision is `client_identified`, `issues.closure_readiness`) and the
+section 7.6 labels: `ProjectLinkView`, `HandoffView` and `HandoffCorrectionView`
+gain `user_directed_claim` and `asserting_client_id` (the writing OAuth client,
+`null` for every remote reader), and `HandoffCorrectionView` its
+`acceptance_basis`.
 No S1 key changes meaning; `state` may now be `closed` and `action` names the
 S2 actions. No closure evidence digest is ever shown (FR1-F05).
 
@@ -32,7 +36,11 @@ from typing import Any, Literal
 from pydantic import Field, field_validator, model_validator
 
 from my_pa.contracts.v1.base import StrictModel, UtcDatetime
-from my_pa.contracts.v1.record_lineage import EvidenceAnchorView, RecordRefView
+from my_pa.contracts.v1.record_lineage import (
+    ASSERTING_CLIENT_ID,
+    EvidenceAnchorView,
+    RecordRefView,
+)
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.lineage.model import (
     MAX_EVIDENCE_ANCHORS,
@@ -149,6 +157,9 @@ class ProjectLinkView(StrictModel):
     state: IssueProjectMembershipState
     membership_revision_no: int = Field(ge=1)
     acceptance_basis: AcceptanceBasis
+    #: S3.1 section 7.6: the writing client's unverified claim, and its OAuth id.
+    user_directed_claim: bool = False
+    asserting_client_id: str | None = ASSERTING_CLIENT_ID
     evidence_anchor_id: str | None = None
     recorded_at: UtcDatetime
 
@@ -284,6 +295,9 @@ class HandoffView(StrictModel):
     evidence: EvidenceAnchorView
     acceptance_basis: AcceptanceBasis
     authority_class: str
+    #: S3.1 section 7.6: the writing client's unverified claim, and its OAuth id.
+    user_directed_claim: bool = False
+    asserting_client_id: str | None = ASSERTING_CLIENT_ID
     #: S3 section 7.1: the current effective time at the read's `known_at` (the
     #: latest known `retime`'s instant, else `effective_at`), whether a `void`
     #: is known, and the known corrections in `correction_no` order.
@@ -335,6 +349,10 @@ class HandoffCorrectionView(StrictModel):
     evidence: EvidenceAnchorView
     recorded_at: UtcDatetime
     authority_class: str
+    #: S3.1 section 7.6: the correction's own basis, claim and writing client.
+    acceptance_basis: AcceptanceBasis = AcceptanceBasis.USER_CONFIRMED
+    user_directed_claim: bool = False
+    asserting_client_id: str | None = ASSERTING_CLIENT_ID
 
     @field_validator("correction_id")
     @classmethod

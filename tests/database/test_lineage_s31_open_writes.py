@@ -482,10 +482,23 @@ def test_an_active_identity_answers_created_false_and_never_changes_its_provenan
         before = _facts(runtime)
         answered = second(blocks[1])
         assert answered["created"] is False
-        assert answered["association"] == created["association"]
+        # N3 lockstep (S3.1 section 4.3): the writing client's id is shown to the
+        # local reader only; every other key of the two answers is the same.
+        assert _without_client_id(answered["association"]) == _without_client_id(
+            created["association"]
+        )
+        remote, local = (created, answered) if basis == "client_identified" else (answered, created)
+        assert remote["association"]["asserting_client_id"] is None
+        assert local["association"]["asserting_client_id"] == (
+            REMOTE_CLIENT if basis == "client_identified" else None
+        )
         assert answered["association"]["acceptance_basis"] == basis
         assert answered["association"]["revision_no"] == 1
         assert _new_rows(runtime, before) == []
+
+
+def _without_client_id(view: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in view.items() if key != "asserting_client_id"}
 
 
 # ---- revisions between clients and accepted lineage (section 4.4) ------------------

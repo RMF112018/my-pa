@@ -269,6 +269,9 @@ def _correction_view(
         ),
         recorded_at=correction.recorded_at,
         authority_class=correction.authority_class,
+        acceptance_basis=AcceptanceBasis(correction.acceptance_basis),
+        user_directed_claim=correction.user_directed_claim,
+        asserting_client_id=correction.asserting_client_id,
     )
 
 
@@ -302,6 +305,8 @@ def _view(
         evidence=anchor_view(event.evidence, archived),
         acceptance_basis=AcceptanceBasis(event.acceptance_basis),
         authority_class=event.authority_class,
+        user_directed_claim=event.user_directed_claim,
+        asserting_client_id=event.asserting_client_id,
         current_effective_at=folded.current_effective_at,
         voided=folded.voided,
         correction_ids=tuple(

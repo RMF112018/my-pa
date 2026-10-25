@@ -379,7 +379,9 @@ def test_s1_lineage_views_keep_every_s1_key() -> None:
         "title",
         "updated_at",
     }
-    assert set(AssociationView.model_fields) == {
+    # S3.1 lockstep (S3.1 contract sections 7.6 and 10.1): exactly the 2
+    # provenance labels added; every S1 key kept.
+    assert set(AssociationView.model_fields) - {"user_directed_claim", "asserting_client_id"} == {
         "link_id",
         "kind",
         "relation_type",
@@ -630,8 +632,10 @@ def test_existing_v1_shapes_are_unchanged_by_s2() -> None:
     # The handoff view's keys (S2 section 7.1), with `from`/`to` on the wire; S3
     # lockstep (S3 contract sections 7.1 and 8.1): exactly 3 keys added, every
     # S2 key kept with `effective_at` in its recorded meaning.
-    assert {"current_effective_at", "voided", "correction_ids"} <= _names(HandoffView)
-    assert _names(HandoffView) - {"current_effective_at", "voided", "correction_ids"} == {
+    # S3.1 lockstep (S3.1 sections 7.6 and 10.1): exactly the 2 provenance labels.
+    s31 = {"user_directed_claim", "asserting_client_id"}
+    assert {"current_effective_at", "voided", "correction_ids"} | s31 <= _names(HandoffView)
+    assert _names(HandoffView) - {"current_effective_at", "voided", "correction_ids"} - s31 == {
         "handoff_id",
         "issue_id",
         "commitment_id",

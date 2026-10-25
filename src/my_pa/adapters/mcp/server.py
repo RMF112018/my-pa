@@ -332,6 +332,7 @@ def _answer(
                 principal=principal,
                 grants=allowed_capability_purposes,
                 clock=clock,
+                authenticated_client_id=authenticated_client_id,
             )
         except InvalidRequestError as refusal:
             return _problem(refusal).to_canonical_json(), True, None

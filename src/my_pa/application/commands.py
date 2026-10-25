@@ -171,7 +171,9 @@ from my_pa.domain.lineage.model import (
     RecordRef,
 )
 from my_pa.domain.lineage.vocabulary import (
+    MAX_RELATED_SEEDS,
     RELATION_MATRIX,
+    AcceptanceBasis,
     EvidenceSourceFamily,
     HandoffCorrectionAction,
     HandoffSide,
@@ -14285,6 +14287,232 @@ class ReadReportManifest:
         _identifier(self.report_id, IdKind.INTELLIGENCE_ARTIFACT, SafeDetail.ARTIFACT_ID)
 
 
+# --- Record lineage S3.1 (S3.1 contract sections 7.2 to 7.4) -------------------
+#
+# Four commands: the 3 attested confirms, by which the human channel promotes a
+# client-identified fact with a new revision, and the multi-seed related read.
+# What is decidable from the request alone is refused here (types, bounds,
+# prefixes, a repeated seed or filter value); the rest is the application's.
+
+
+@dataclass(frozen=True, slots=True)
+class ConfirmRecordAssociation:
+    """Operator only: confirm a client-identified lineage fact as user-confirmed by appending a revision.
+
+    `records.associations.confirm`, local operator only. The association's head
+    must be `expected_revision`, `client_identified` and `active` or `ended`; the
+    confirm keeps its state and re-cites its evidence, otherwise conflict.
+    """  # noqa: E501
+
+    capability: ClassVar[Capability] = Capability.RECORDS_ASSOCIATIONS_CONFIRM
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "link_id": _issue_id_schema(IdKind.RECORD_LINK, "The association."),
+            "expected_revision": {"type": "integer", "minimum": 1},
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "reason": _LINEAGE_REASON_SCHEMA,
+        }
+    )
+
+    link_id: str
+    expected_revision: int
+    idempotency_key: str
+    reason: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        _identifier(self.link_id, IdKind.RECORD_LINK, SafeDetail.LINK_ID)
+        _link_revision(self.expected_revision)
+        _lineage_key(_idempotency_key(self.idempotency_key))
+        _lineage_reason(self.reason)
+
+
+@dataclass(frozen=True, slots=True)
+class ConfirmIssueMembership:
+    """Operator only: confirm a client-identified lineage fact as user-confirmed by appending a revision.
+
+    `issues.memberships.confirm`, local operator only. The membership's head
+    must be `expected_revision`, `client_identified` and `active` or `ended`; the
+    confirm keeps its state, evidence and recorded member version, otherwise
+    conflict. A semantic association's id is invalid_request.
+    """  # noqa: E501
+
+    capability: ClassVar[Capability] = Capability.ISSUES_MEMBERSHIPS_CONFIRM
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "link_id": _issue_id_schema(IdKind.RECORD_LINK, "The membership link."),
+            "expected_revision": {"type": "integer", "minimum": 1},
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "reason": _LINEAGE_REASON_SCHEMA,
+        }
+    )
+
+    link_id: str
+    expected_revision: int
+    idempotency_key: str
+    reason: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        _identifier(self.link_id, IdKind.RECORD_LINK, SafeDetail.LINK_ID)
+        _link_revision(self.expected_revision)
+        _lineage_key(_idempotency_key(self.idempotency_key))
+        _lineage_reason(self.reason)
+
+
+@dataclass(frozen=True, slots=True)
+class ConfirmIssueProjectLink:
+    """Operator only: confirm a client-identified lineage fact as user-confirmed by appending a revision.
+
+    `issues.project_links.confirm`, local operator only. The link's latest event
+    must be `expected_membership_revision`, `client_identified` and `active` or
+    `ended`; the confirm event keeps its state and evidence, otherwise conflict.
+    """  # noqa: E501
+
+    capability: ClassVar[Capability] = Capability.ISSUES_PROJECT_LINKS_CONFIRM
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "issue_id": _issue_id_schema(IdKind.SITUATION, "The Issue."),
+            "project_id": _issue_id_schema(IdKind.PROJECT, "The linked Project."),
+            "expected_membership_revision": {"type": "integer", "minimum": 1},
+            "idempotency_key": _ISSUE_IDEMPOTENCY_KEY_SCHEMA,
+            "reason": _LINEAGE_REASON_SCHEMA,
+        }
+    )
+
+    issue_id: str
+    project_id: str
+    expected_membership_revision: int
+    idempotency_key: str
+    reason: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        _identifier(self.issue_id, IdKind.SITUATION, SafeDetail.ISSUE_ID)
+        _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _membership_revision(self.expected_membership_revision, 1)
+        _lineage_key(_idempotency_key(self.idempotency_key))
+        _lineage_reason(self.reason)
+
+
+#: S3.1 section 7.4: `records.lineage.related`'s depth bounds.
+DEFAULT_RELATED_DEPTH: Final = 2
+MAX_RELATED_DEPTH: Final = 3
+
+
+def _distinct_tokens(
+    value: object, vocabulary: type[StrEnum], detail: SafeDetail, *, maximum: int
+) -> tuple[str, ...]:
+    """A non-empty, distinct list of `vocabulary` tokens, at most `maximum` long."""
+    if not isinstance(value, tuple) or not 1 <= len(value) <= maximum:
+        raise InvalidRequestError(detail)
+    admitted = {member.value for member in vocabulary}
+    if any(not isinstance(item, str) or item not in admitted for item in value):
+        raise invalid_choice(detail, vocabulary)
+    if len(set(value)) != len(value):
+        raise InvalidRequestError(detail)
+    return tuple(value)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadRelatedRecords:
+    """Read records related to up to 25 seeds through recorded lineage, with each link's evidence and provenance label; pass known_at to reproduce a read.
+
+    `records.lineage.related`: from 1..25 distinct seed records, the live links
+    one hop away and the Issue-confined expansion under each seed's visible
+    Issues to `max_depth` (1..3, default 2), filtered by acceptance basis and
+    relation. One bounded result, paged, with a digest a report can cite.
+    """  # noqa: E501
+
+    capability: ClassVar[Capability] = Capability.RECORDS_LINEAGE_RELATED
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "seeds": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": MAX_RELATED_SEEDS,
+                "items": dict(_RECORD_REF_SCHEMA),
+                "description": "1..25 distinct records to start from.",
+            },
+            "max_depth": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_RELATED_DEPTH,
+                "default": DEFAULT_RELATED_DEPTH,
+            },
+            "acceptance_bases": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": len(AcceptanceBasis),
+                "uniqueItems": True,
+                "items": {"type": "string", "enum": [member.value for member in AcceptanceBasis]},
+                "description": "Follow and emit only links whose basis is listed; default both.",
+            },
+            "relation_types": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": len(RelationType),
+                "uniqueItems": True,
+                "items": {"type": "string", "enum": [member.value for member in RelationType]},
+                "description": "Follow and emit only these relations; default all.",
+            },
+            "known_at": _INSTANT_SCHEMA,
+            "valid_at": _INSTANT_SCHEMA,
+            "page_size": {"type": "integer", "minimum": 10, "maximum": 100},
+            "cursor": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{1,2048}$",
+                "description": "The previous page's next_cursor, with the same request.",
+            },
+        }
+    )
+
+    seeds: tuple[dict[str, object], ...]
+    max_depth: int | None = None
+    acceptance_bases: tuple[str, ...] | None = None
+    relation_types: tuple[str, ...] | None = None
+    known_at: str | None = None
+    valid_at: str | None = None
+    page_size: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.cursor is not None and not isinstance(self.cursor, str):
+            raise InvalidRequestError(SafeDetail.CURSOR)
+        self.seed_refs()
+        depth = self.max_depth
+        if depth is not None and (type(depth) is not int or not 1 <= depth <= MAX_RELATED_DEPTH):
+            raise InvalidRequestError(SafeDetail.MAX_DEPTH)
+        if self.acceptance_bases is not None:
+            _distinct_tokens(
+                self.acceptance_bases,
+                AcceptanceBasis,
+                SafeDetail.ACCEPTANCE_BASES,
+                maximum=len(AcceptanceBasis),
+            )
+        if self.relation_types is not None:
+            _distinct_tokens(
+                self.relation_types,
+                RelationType,
+                SafeDetail.RELATION_TYPES,
+                maximum=len(RelationType),
+            )
+        _optional_instant(self.known_at, SafeDetail.KNOWN_AT)
+        _optional_instant(self.valid_at, SafeDetail.VALID_AT)
+        _cursor_page(self.page_size, self.cursor)
+
+    def seed_refs(self) -> tuple[RecordRef, ...]:
+        """The parsed, distinct seeds in request order."""
+        value: object = self.seeds
+        if not isinstance(value, tuple) or not 1 <= len(value) <= MAX_RELATED_SEEDS:
+            raise InvalidRequestError(SafeDetail.SEEDS)
+        refs = tuple(_record_ref(seed, SafeDetail.SEEDS) for seed in value)
+        if len({(ref.family, ref.record_id) for ref in refs}) != len(refs):
+            raise InvalidRequestError(SafeDetail.SEEDS)
+        return refs
+
+
 type Command = (
     GetCapabilities
     | ListSources
@@ -14515,6 +14743,10 @@ type Command = (
     | SearchCommitmentsV2
     | WaitingOnV2
     | ReadReportManifest
+    | ConfirmRecordAssociation
+    | ConfirmIssueMembership
+    | ConfirmIssueProjectLink
+    | ReadRelatedRecords
 )
 
 

@@ -155,6 +155,9 @@ from my_pa.application.commands import (
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
     ConfigureProjectControls,
+    ConfirmIssueMembership,
+    ConfirmIssueProjectLink,
+    ConfirmRecordAssociation,
     ContestRecordAssociation,
     CorrectGoodNotes,
     CorrectIssueHandoff,
@@ -291,6 +294,7 @@ from my_pa.application.commands import (
     ReadProjectControlsStatus,
     ReadRecordAssociationHistory,
     ReadRecordLineage,
+    ReadRelatedRecords,
     ReadReportManifest,
     ReadTask,
     RecordContextFeedback,
@@ -14579,6 +14583,60 @@ class ApplicationService:
             disclosure=unenrolled_disclosure(authorization.at),
         )
 
+    # ---- record lineage S3.1 (ADR-015 decision 15; S3.1 contract section 7) ----
+    #
+    # Four handlers: the 3 attested confirms and the related read. The switch
+    # first (section 7.10); a confirm then derives attested authority -- `denied`
+    # for a non-attested caller before any row and before the replay lookup --
+    # and the related read its remote grant re-check. The use cases are not
+    # implemented in this change: after those checks each handler answers
+    # `unsupported`, writing and reading nothing, until its worker lands it
+    # (the S3 D-37 precedent).
+
+    def _records_associations_confirm(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ConfirmRecordAssociation,
+    ) -> _Result:
+        """`records.associations.confirm`: promote a client-identified link (S3.1 7.2)."""
+        del unit_of_work, command
+        self._lineage_plane()
+        attested_lineage_authority(authorization)
+        raise UnsupportedError()
+
+    def _issues_memberships_confirm(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ConfirmIssueMembership,
+    ) -> _Result:
+        """`issues.memberships.confirm`: promote a client-identified membership (S3.1 7.2)."""
+        del unit_of_work, command
+        self._lineage_plane()
+        attested_lineage_authority(authorization)
+        raise UnsupportedError()
+
+    def _issues_project_links_confirm(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ConfirmIssueProjectLink,
+    ) -> _Result:
+        """`issues.project_links.confirm`: promote a client-identified link event (S3.1 7.3)."""
+        del unit_of_work, command
+        self._lineage_plane()
+        attested_lineage_authority(authorization)
+        raise UnsupportedError()
+
+    def _records_lineage_related(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadRelatedRecords
+    ) -> _Result:
+        """`records.lineage.related`: related records of 1..25 seeds (S3.1 section 7.4)."""
+        del unit_of_work
+        self._lineage_read(authorization, command.capability)
+        raise UnsupportedError()
+
     def _program_reference_recompute(
         self, authorization: Authorization
     ) -> Callable[[ProgramReferenceBlock], Mapping[str, object]] | None:
@@ -16878,6 +16936,11 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.COMMITMENTS_V2_SEARCH: ApplicationService._commitments_v2_search,
         Capability.COMMITMENTS_V2_WAITING_ON: ApplicationService._commitments_v2_waiting_on,
         Capability.REPORTS_MANIFEST: ApplicationService._reports_manifest,
+        # Record lineage S3.1 (S3.1 contract section 7).
+        Capability.RECORDS_ASSOCIATIONS_CONFIRM: ApplicationService._records_associations_confirm,
+        Capability.ISSUES_MEMBERSHIPS_CONFIRM: ApplicationService._issues_memberships_confirm,
+        Capability.ISSUES_PROJECT_LINKS_CONFIRM: ApplicationService._issues_project_links_confirm,
+        Capability.RECORDS_LINEAGE_RELATED: ApplicationService._records_lineage_related,
         Capability.MEETINGS_NOTES_VERSIONS: ApplicationService._meetings_notes_versions,
         Capability.MEETINGS_NOTES_READ_VERSION: ApplicationService._meetings_notes_read_version,
         Capability.RECORD_EVENTS_LIST: ApplicationService._record_events_list,
@@ -17055,6 +17118,11 @@ _LINEAGE_CAPABILITY_NAMES: Final[frozenset[str]] = frozenset(
         "issues.handoffs.correct",
         "records.backfill.plan",
         "records.backfill.report",
+        # Record lineage S3.1 (S3.1 contract section 7.10).
+        "records.associations.confirm",
+        "issues.memberships.confirm",
+        "issues.project_links.confirm",
+        "records.lineage.related",
     }
 )
 _LINEAGE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(

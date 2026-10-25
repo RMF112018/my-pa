@@ -331,6 +331,13 @@ _OPERATOR_DECISION_REQUIRED: Final[frozenset[Capability]] = frozenset(
         Capability.COMMITMENTS_V2_SEARCH,
         Capability.COMMITMENTS_V2_WAITING_ON,
         Capability.REPORTS_MANIFEST,
+        # Record lineage S3.1 (S3.1 contract section 7): the same operator
+        # decision; opening the lineage writes to connected clients changes no
+        # ChatLLM classification.
+        Capability.RECORDS_ASSOCIATIONS_CONFIRM,
+        Capability.ISSUES_MEMBERSHIPS_CONFIRM,
+        Capability.ISSUES_PROJECT_LINKS_CONFIRM,
+        Capability.RECORDS_LINEAGE_RELATED,
     }
 )
 
@@ -377,6 +384,9 @@ _LINEAGE_S2_EXCLUSION: Final = (
 )
 _LINEAGE_S3_EXCLUSION: Final = (
     "record lineage S3; exposure is an operator decision (ADR-015, OD-07)"
+)
+_LINEAGE_S31_EXCLUSION: Final = (
+    "record lineage S3.1; exposure is an operator decision (ADR-015, OD-07)"
 )
 _LINEAGE_BACKFILL_EXCLUSION: Final = "operator-only lineage backfill"
 _PROGRAM_REPORTING_EXCLUSION: Final = (
@@ -443,6 +453,10 @@ _EXCLUSION_RATIONALE: Final[Mapping[Capability, str]] = MappingProxyType(
         Capability.COMMITMENTS_V2_SEARCH: _PROGRAM_REPORTING_EXCLUSION,
         Capability.COMMITMENTS_V2_WAITING_ON: _PROGRAM_REPORTING_EXCLUSION,
         Capability.REPORTS_MANIFEST: _PROGRAM_REPORTING_EXCLUSION,
+        Capability.RECORDS_ASSOCIATIONS_CONFIRM: _LINEAGE_S31_EXCLUSION,
+        Capability.ISSUES_MEMBERSHIPS_CONFIRM: _LINEAGE_S31_EXCLUSION,
+        Capability.ISSUES_PROJECT_LINKS_CONFIRM: _LINEAGE_S31_EXCLUSION,
+        Capability.RECORDS_LINEAGE_RELATED: _LINEAGE_S31_EXCLUSION,
     }
 )
 

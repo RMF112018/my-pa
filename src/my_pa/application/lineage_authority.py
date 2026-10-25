@@ -20,6 +20,20 @@ derivation cannot return `remote_operator_attested`, so in S1:
 
 An inconsistent composition is `internal_error` and a remote transport without
 a client is `unsupported`, as for Knowledge.
+
+**S3.1** (S3.1 contract section 6.1) opens the 14 lineage writes the operator
+directives name to any admitted caller and adds `lineage_write_provenance`:
+the same derivation, mapped to the provenance every fact row of an open write
+records. The human channel (`local_operator` with `local_cli` or `local_web`)
+is `user_confirmed`; a remote client (`ordinary_reviewer` /
+`remote_interactive`, its OAuth client id recorded) and stdio MCP or another
+unstamped local caller (`ordinary_reviewer` / `local_unattested`, no client
+id) are `client_identified`. It never raises `DeniedError`: an open write is
+never refused for want of attestation. The client-declared `user_directed`
+flag is stored verbatim as `user_directed_claim`; it upgrades nothing, and the
+human channel may not send it (`invalid_request` / `user_directed`).
+`attested_lineage_authority` is now used only by the attested set (Issue close
+and reopen, the closed-Issue correction, the backfill plan and the 3 confirms).
 """
 
 from __future__ import annotations
@@ -27,7 +41,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from my_pa.application.authorization import Authorization
-from my_pa.application.errors import DeniedError, InternalError, UnsupportedError
+from my_pa.application.errors import (
+    DeniedError,
+    InternalError,
+    InvalidRequestError,
+    SafeDetail,
+    UnsupportedError,
+)
 from my_pa.domain.knowledge_assertion.vocabulary import (
     KnowledgeDecisionChannel,
     KnowledgeReviewAuthorityClass,
@@ -35,6 +55,8 @@ from my_pa.domain.knowledge_assertion.vocabulary import (
 from my_pa.domain.lineage.vocabulary import (
     ATTESTED_AUTHORITY_CLASSES,
     ATTESTED_DECISION_CHANNELS,
+    MAX_ASSERTING_CLIENT_ID_CHARACTERS,
+    AcceptanceBasis,
 )
 from my_pa.domain.policy.knowledge_review_authority import (
     InconsistentKnowledgeReviewCompositionError,
@@ -42,7 +64,13 @@ from my_pa.domain.policy.knowledge_review_authority import (
     derive_knowledge_review_authority,
 )
 
-__all__ = ["LineageAuthority", "attested_lineage_authority", "lineage_authority"]
+__all__ = [
+    "LineageAuthority",
+    "LineageProvenance",
+    "attested_lineage_authority",
+    "lineage_authority",
+    "lineage_write_provenance",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,3 +113,71 @@ def attested_lineage_authority(authorization: Authorization) -> LineageAuthority
     ):
         raise DeniedError()
     return derived
+
+
+@dataclass(frozen=True, slots=True)
+class LineageProvenance:
+    """What every fact row of one open lineage write records (S3.1 section 4.1).
+
+    Server-derived: nothing in a payload reaches any field but
+    `user_directed_claim`, which is the client's own unverified statement.
+    """
+
+    authority_class: KnowledgeReviewAuthorityClass
+    decision_channel: KnowledgeDecisionChannel
+    acceptance_basis: AcceptanceBasis
+    asserting_client_id: str | None
+    user_directed_claim: bool
+
+
+def lineage_write_provenance(
+    authorization: Authorization, *, user_directed: bool
+) -> LineageProvenance:
+    """The provenance an open S3.1 lineage write records; never `denied`.
+
+    Section 6.1: the pair through `lineage_authority` (both allowlists empty,
+    unchanged), then `local_operator` with a local operator channel is
+    `user_confirmed` (refusing `user_directed=True`), and `ordinary_reviewer`
+    with `remote_interactive` or `local_unattested` is `client_identified`.
+    Any other pair -- `remote_operator_attested`, unreachable with both
+    allowlists empty -- is `internal_error`.
+    """
+    derived = lineage_authority(authorization)
+    authority = derived.authority_class
+    channel = derived.decision_channel
+    if (
+        authority is KnowledgeReviewAuthorityClass.LOCAL_OPERATOR
+        and channel.value in ATTESTED_DECISION_CHANNELS
+    ):
+        if user_directed:
+            # The human channel is the directing user: the claim would be
+            # meaningless, and the database refuses it.
+            raise InvalidRequestError(SafeDetail.USER_DIRECTED)
+        return LineageProvenance(
+            authority_class=authority,
+            decision_channel=channel,
+            acceptance_basis=AcceptanceBasis.USER_CONFIRMED,
+            asserting_client_id=None,
+            user_directed_claim=False,
+        )
+    if authority is KnowledgeReviewAuthorityClass.ORDINARY_REVIEWER:
+        if channel is KnowledgeDecisionChannel.REMOTE_INTERACTIVE:
+            client = authorization.authenticated_client_id
+            if client is None or not 1 <= len(client) <= MAX_ASSERTING_CLIENT_ID_CHARACTERS:
+                raise InternalError()
+            return LineageProvenance(
+                authority_class=authority,
+                decision_channel=channel,
+                acceptance_basis=AcceptanceBasis.CLIENT_IDENTIFIED,
+                asserting_client_id=client,
+                user_directed_claim=user_directed,
+            )
+        if channel is KnowledgeDecisionChannel.LOCAL_UNATTESTED:
+            return LineageProvenance(
+                authority_class=authority,
+                decision_channel=channel,
+                acceptance_basis=AcceptanceBasis.CLIENT_IDENTIFIED,
+                asserting_client_id=None,
+                user_directed_claim=user_directed,
+            )
+    raise InternalError()

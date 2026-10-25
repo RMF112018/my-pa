@@ -33,6 +33,14 @@ in the same change. The backfill's own source, class, reason and run-state
 vocabularies are `domain.lineage_backfill.vocabulary`'s: the dry run reads
 native shapes (a Meeting's Series among them) that lineage itself never reads.
 
+**S3.1** (`docs/architecture/record-lineage-s31-open-writes-contract.md`
+section 4) adds the acceptance basis `client_identified` (every fact a
+connected client commits; never accepted-grade), the `confirm` action of a
+link revision and of a Project-link event (the human channel's promotion of a
+client fact), the provenance, open-write, attested-write and confirm sets, the
+client write budgets and the related-read bounds; the S3.1 revision restates
+each as a frozen literal in the same change.
+
 Pure data: this module persists nothing and grants nothing.
 """
 
@@ -51,9 +59,15 @@ from my_pa.domain.knowledge_assertion.vocabulary import (
 __all__ = [
     "ATTESTED_AUTHORITY_CLASSES",
     "ATTESTED_DECISION_CHANNELS",
+    "ATTESTED_LINEAGE_WRITE_CAPABILITIES",
     "BACKFILL_WRITE_CAPABILITIES",
+    "CLIENT_ACCEPTANCE_BASES",
+    "CLIENT_DECISION_CHANNELS",
+    "CLIENT_LINEAGE_WRITES_PER_DAY",
+    "CLIENT_LINEAGE_WRITES_PER_HOUR",
     "COMPOSITE_CAPABILITIES",
     "COMPOSITE_ONLY_RELATIONS",
+    "CONFIRM_CAPABILITIES",
     "CONTESTABLE_RELATIONS",
     "HANDOFF_CAPABILITIES",
     "HANDOFF_CORRECTION_CAPABILITIES",
@@ -61,14 +75,23 @@ __all__ = [
     "ISSUE_REVISION_CAPABILITIES",
     "ISSUE_STATES",
     "LINEAGE_BACKFILL_CAPABILITIES",
+    "LINEAGE_CONTEXT_BLOCK_KEY",
     "LINEAGE_FAMILY_READS",
     "LINEAGE_READ_GENERATION",
+    "LINEAGE_RELATED_DIGEST_PREFIX",
     "LINEAGE_WRITE_CAPABILITIES",
     "LINK_REVISION_CAPABILITIES",
     "LIVE_LINK_STATES",
     "MANDATORY_MEMBER_ROLES",
+    "MAX_ASSERTING_CLIENT_ID_CHARACTERS",
+    "MAX_RELATED_SEEDS",
+    "MAX_UNREVIEWED_LINKS",
     "MEMBERSHIP_EVENT_CAPABILITIES",
     "MEMBER_VERSION_CAPABILITIES",
+    "OPEN_LINEAGE_WRITE_CAPABILITIES",
+    "OPERATOR_ACCEPTANCE_BASES",
+    "PRINCIPAL_CLIENT_LINEAGE_WRITES_PER_DAY",
+    "RECORDED_LINEAGE_WRITE_CAPABILITIES",
     "RECORD_FAMILY_ID_KINDS",
     "RECORD_LINK_CAPABILITIES",
     "RELATION_MATRIX",
@@ -126,11 +149,16 @@ class IssueRevisionAction(StrEnum):
 
 
 class IssueProjectMembershipAction(StrEnum):
-    """One event on an Issue's native Project link."""
+    """One event on an Issue's native Project link.
+
+    S3.1 (section 4.7) adds `confirm`: the human channel accepts a
+    `client_identified` event, keeping its state.
+    """
 
     ASSERT = "assert"
     END = "end"
     REINSTATE = "reinstate"
+    CONFIRM = "confirm"
 
 
 class IssueProjectMembershipState(StrEnum):
@@ -194,13 +222,18 @@ class Selector(StrEnum):
 
 
 class LinkRevisionAction(StrEnum):
-    """One revision of a record link. S3 (section 3.1) adds `contest` and `reinstate`."""
+    """One revision of a record link. S3 (section 3.1) adds `contest` and `reinstate`.
+
+    S3.1 (section 4.7) adds `confirm`: the human channel accepts a
+    `client_identified` head, keeping its state, evidence and member version.
+    """
 
     ASSERT = "assert"
     END = "end"
     CORRECT_EVIDENCE = "correct_evidence"
     CONTEST = "contest"
     REINSTATE = "reinstate"
+    CONFIRM = "confirm"
 
 
 class LinkLifecycleState(StrEnum):
@@ -212,9 +245,15 @@ class LinkLifecycleState(StrEnum):
 
 
 class AcceptanceBasis(StrEnum):
-    """Why a link or Project-link event is accepted. S1: an attested user."""
+    """Why a lineage fact is recorded. S1: an attested user.
+
+    S3.1 (section 4.1) adds `client_identified`: the fact a connected client
+    committed (a remote client, stdio MCP or another unstamped local caller).
+    Server-derived, never from a payload, and never accepted-grade.
+    """
 
     USER_CONFIRMED = "user_confirmed"
+    CLIENT_IDENTIFIED = "client_identified"
 
 
 class EvidenceSourceFamily(StrEnum):
@@ -365,9 +404,10 @@ ISSUE_REVISION_CAPABILITIES: Final[frozenset[str]] = frozenset(
     {"issues.create", "issues.update", "issues.close", "issues.reopen"}
 )
 
-#: The capabilities that write an Issue↔Project membership event.
+#: The capabilities that write an Issue↔Project membership event. S3.1 (section
+#: 4) adds `issues.project_links.confirm`.
 MEMBERSHIP_EVENT_CAPABILITIES: Final[frozenset[str]] = frozenset(
-    {"issues.project_links.add", "issues.project_links.end"}
+    {"issues.project_links.add", "issues.project_links.end", "issues.project_links.confirm"}
 )
 
 #: The two S2 composite writes (S2 section 6.4): a native Work create, its
@@ -382,7 +422,8 @@ RECORD_LINK_CAPABILITIES: Final[frozenset[str]] = (
 )
 
 #: The capabilities that write a record link revision. S3 (section 3) adds
-#: `records.associations.contest` and `records.associations.reinstate`.
+#: `records.associations.contest` and `records.associations.reinstate`; S3.1
+#: (section 4) the 2 link confirms.
 LINK_REVISION_CAPABILITIES: Final[frozenset[str]] = RECORD_LINK_CAPABILITIES | frozenset(
     {
         "issues.memberships.end",
@@ -391,6 +432,8 @@ LINK_REVISION_CAPABILITIES: Final[frozenset[str]] = RECORD_LINK_CAPABILITIES | f
         "records.associations.end",
         "records.associations.contest",
         "records.associations.reinstate",
+        "records.associations.confirm",
+        "issues.memberships.confirm",
     }
 )
 
@@ -438,8 +481,8 @@ HANDOFF_CORRECTION_CAPABILITIES: Final[frozenset[str]] = frozenset({"issues.hand
 #: no commit mark.
 BACKFILL_WRITE_CAPABILITIES: Final[frozenset[str]] = frozenset({"records.backfill.plan"})
 
-#: The nineteen lineage write capabilities (`lineage_write_requests.capability`):
-#: S1's nine, S2's six and S3's four.
+#: The twenty-two lineage write capabilities (`lineage_write_requests.capability`):
+#: S1's nine, S2's six, S3's four and S3.1's three confirms.
 LINEAGE_WRITE_CAPABILITIES: Final[frozenset[str]] = (
     ISSUE_REVISION_CAPABILITIES
     | MEMBERSHIP_EVENT_CAPABILITIES
@@ -456,8 +499,93 @@ LINEAGE_BACKFILL_CAPABILITIES: Final[frozenset[str]] = frozenset(
 )
 
 #: S3 section 3: bumped by any change to traversal, visibility, ordering or
-#: paging rules, and bound in every lineage cursor (section 5).
+#: paging rules, and bound in every lineage cursor (section 5). S3.1 changes no
+#: such rule of an existing read, so it stays 1.
 LINEAGE_READ_GENERATION: Final = 1
+
+# --- Record lineage S3.1 (S3.1 contract section 4) --------------------------
+
+#: The acceptance basis of every fact a connected client commits (section 4.1).
+CLIENT_ACCEPTANCE_BASES: Final[frozenset[str]] = frozenset(
+    {AcceptanceBasis.CLIENT_IDENTIFIED.value}
+)
+
+#: The acceptance basis of every fact the human channel writes (section 4.1).
+OPERATOR_ACCEPTANCE_BASES: Final[frozenset[str]] = frozenset({AcceptanceBasis.USER_CONFIRMED.value})
+
+#: The decision channels of a connected client (section 4.1): a remote client
+#: (its OAuth client id recorded) and stdio MCP or another unstamped local
+#: caller (no client id).
+CLIENT_DECISION_CHANNELS: Final[frozenset[str]] = frozenset(
+    {
+        KnowledgeDecisionChannel.REMOTE_INTERACTIVE.value,
+        KnowledgeDecisionChannel.LOCAL_UNATTESTED.value,
+    }
+)
+
+#: Section 4.7: the 3 attested writes that promote a client fact.
+CONFIRM_CAPABILITIES: Final[frozenset[str]] = frozenset(
+    {
+        "records.associations.confirm",
+        "issues.memberships.confirm",
+        "issues.project_links.confirm",
+    }
+)
+
+#: Section 1, Part A: the 14 lineage writes the operator directives open to any
+#: admitted caller, recorded `client_identified` unless from the human channel.
+OPEN_LINEAGE_WRITE_CAPABILITIES: Final[frozenset[str]] = frozenset(
+    {
+        "records.associations.assert",
+        "records.associations.correct",
+        "records.associations.end",
+        "records.associations.contest",
+        "records.associations.reinstate",
+        "issues.memberships.add",
+        "issues.memberships.end",
+        "issues.memberships.correct",
+        "issues.project_links.add",
+        "issues.project_links.end",
+        "issues.handoffs.record",
+        "issues.handoffs.correct",
+        "issues.work.create_task",
+        "issues.work.create_commitment",
+    }
+)
+
+#: Section 4: the lineage writes that stay local-operator attested -- Issue
+#: close and reopen, the backfill plan and the 3 confirms. (`issues.update` of
+#: a closed Issue is attested inside its handler; the name itself is open.)
+ATTESTED_LINEAGE_WRITE_CAPABILITIES: Final[frozenset[str]] = (
+    frozenset({"issues.close", "issues.reopen", "records.backfill.plan"}) | CONFIRM_CAPABILITIES
+)
+
+#: Section 4.8: the 2 recorded Issue writes, open since S1, which S3.1 counts
+#: against the client write budgets beside the open writes.
+RECORDED_LINEAGE_WRITE_CAPABILITIES: Final[frozenset[str]] = frozenset(
+    {"issues.create", "issues.update"}
+)
+
+#: Section 4.1: the bound of `asserting_client_id` (the Knowledge submission
+#: precedent for an OAuth client id).
+MAX_ASSERTING_CLIENT_ID_CHARACTERS: Final = 256
+
+#: Section 4.8: the rolling client write budgets. A change is a code change
+#: under review; no settings key.
+CLIENT_LINEAGE_WRITES_PER_HOUR: Final = 120
+CLIENT_LINEAGE_WRITES_PER_DAY: Final = 1000
+PRINCIPAL_CLIENT_LINEAGE_WRITES_PER_DAY: Final = 2000
+
+#: Section 7.4: the seed bound of `records.lineage.related` and its digest prefix.
+MAX_RELATED_SEEDS: Final = 25
+LINEAGE_RELATED_DIGEST_PREFIX: Final = b"lineage-related-v1\n"
+
+#: Section 7.5: the bound of `issues.closure_readiness`' `unreviewed_links`.
+MAX_UNREVIEWED_LINKS: Final = 100
+
+#: Section 7.9: the reserved `structured_content` key of a report's lineage
+#: reference block.
+LINEAGE_CONTEXT_BLOCK_KEY: Final = "lineage_context_ref"
 
 #: The identifier kind every endpoint family's record id carries.
 RECORD_FAMILY_ID_KINDS: Final[MappingProxyType[RecordFamily, IdKind]] = MappingProxyType(

@@ -131,13 +131,19 @@ def test_s2_capabilities_are_operator_decision_required() -> None:
     declared = _s2()
     assert {capability.value for capability in declared} == S2_NAMES
     assert declared <= _LINEAGE_CAPABILITIES
-    # Record lineage S3 adds its own names to the same switch set, 22 -> 30.
-    assert len(_LINEAGE_CAPABILITIES) == 30
+    # Record lineage S3 adds its own names to the same switch set, 22 -> 30, and
+    # S3.1 its 4, 30 -> 34.
+    assert len(_LINEAGE_CAPABILITIES) == 34
     for capability in declared:
         policy = CHATLLM_CAPABILITY_POLICY[capability]
         assert policy.classification is ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED
         assert policy.exclusion_rationale == _RATIONALE
-        assert not is_operator_only(capability)
+        # S3.1 contract section 7.13 (D-16, a Part D conversion): Issue close and
+        # reopen are operator-only, attested to the local operator surface; the
+        # other 6 S2 names are not.
+        assert is_operator_only(capability) is (
+            capability in {Capability.ISSUES_CLOSE, Capability.ISSUES_REOPEN}
+        )
         assert capability in _SCOPELESS
         assert _FEATURE_BY_FAMILY[capability.value.split(".", 1)[0]] == "lineage"
         writes = capability.value in _WRITES

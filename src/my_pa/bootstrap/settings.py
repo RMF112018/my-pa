@@ -59,7 +59,10 @@ from pydantic import Field, PrivateAttr, ValidationError, model_validator
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import ArgumentError
 
-from my_pa.contracts.mcp_database_profiles import MCP_DATABASE_TRANSPORT_QUERY_KEYS
+from my_pa.contracts.mcp_database_profiles import (
+    MCP_DATABASE_TRANSPORT_QUERY_KEYS,
+    MCP_PROFILE_OPT_IN_CAPABILITY_NAMES,
+)
 from my_pa.contracts.oauth import valid_operator_secret
 from my_pa.contracts.v1.base import StrictModel
 from my_pa.contracts.v1.capabilities import EffectiveLimits
@@ -385,6 +388,13 @@ class Settings(StrictModel):
     mcp_database_ro_password_file: str = Field(default="", repr=False)
     mcp_database_rw_password_file: str = Field(default="", repr=False)
     mcp_database_expected_cluster_id: str = ""
+    #: Record lineage S3.1 (S3.1 contract section 7.11): env
+    #: `MY_PA_MCP_DATABASE_PROFILE_OPT_INS`, comma- or space-separated names
+    #: from the 2 closed opt-in sets that the restricted profiles' ceilings
+    #: also admit. **Default empty**, and fails closed: a name outside those
+    #: sets, or any name while `MY_PA_MCP_DATABASE_PROFILES_ENABLED` is off, is
+    #: a `SettingsError`. It never issues a grant.
+    mcp_database_profile_opt_ins: str = ""
     #: Record every remote `/mcp` HTTP exchange, bodies included, in
     #: `observability.mcp_interactions` (`adapters.mcp_interaction_capture`).
     #:
@@ -688,6 +698,10 @@ class Settings(StrictModel):
     def mcp_database_rw_clients(self) -> frozenset[str]:
         return frozenset(_split_allowlist(self.mcp_database_rw_client_ids))
 
+    def mcp_database_profile_opt_in_set(self) -> frozenset[str]:
+        """The opted-in capability names (S3.1 section 7.11); empty by default."""
+        return frozenset(_split_allowlist(self.mcp_database_profile_opt_ins))
+
     def gateway_bind_host(self) -> str:
         """Return the only address admitted for the selected deployment boundary."""
         return (
@@ -718,6 +732,11 @@ class Settings(StrictModel):
                 raise SettingsError("MCP database client mappings must not contain duplicates")
         if self.mcp_database_ro_clients() & self.mcp_database_rw_clients():
             raise SettingsError("MCP database client mappings must be disjoint")
+        opt_ins = self.mcp_database_profile_opt_in_set()
+        if opt_ins and not self.mcp_database_profiles_enabled:
+            raise SettingsError("MCP database profile opt-ins require MCP database profiles")
+        if not opt_ins <= MCP_PROFILE_OPT_IN_CAPABILITY_NAMES:
+            raise SettingsError("MCP database profile opt-ins name only admissible capabilities")
         if self.mcp_database_profiles_enabled:
             if not self._parsed_database_url.query.keys() <= MCP_DATABASE_TRANSPORT_QUERY_KEYS:
                 raise SettingsError(

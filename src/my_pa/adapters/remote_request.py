@@ -30,6 +30,10 @@ from my_pa.domain.identity.operation import (
 )
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.lineage.vocabulary import (
+    LINEAGE_WRITE_CAPABILITIES,
+    OPEN_LINEAGE_WRITE_CAPABILITIES,
+)
 from my_pa.domain.source.registry import issue_identifier
 
 __all__ = [
@@ -38,6 +42,7 @@ __all__ = [
     "REMOTE_OWNED_PAYLOAD_FIELDS",
     "SERVER_OWNED_REMOTE_FIELDS",
     "compose_remote_arguments",
+    "is_remote_idempotent",
     "is_server_replay_capability",
     "remote_tool_schema",
     "resolve_remote_purpose",
@@ -60,6 +65,20 @@ _SERVER_REPLAY_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
 def is_server_replay_capability(capability: Capability) -> bool:
     """Whether remote retries are backed by the canonical request ledger."""
     return capability in _SERVER_REPLAY_REMOTE_CAPABILITIES
+
+
+def is_remote_idempotent(capability: Capability) -> bool:
+    """Whether a remote retry of `capability` replays: the MCP `idempotentHint`.
+
+    Record lineage S3.1 (S3.1 contract section 7.13, D-17): the server-replay
+    writes, and every lineage write (`LINEAGE_WRITE_CAPABILITIES`), whose
+    server-derived key a remote caller's identical retry reuses. Every other
+    keyed write keeps its unchanged annotation (a pre-existing residual).
+    """
+    return (
+        capability in _SERVER_REPLAY_REMOTE_CAPABILITIES
+        or capability.value in LINEAGE_WRITE_CAPABILITIES
+    )
 
 
 #: Envelope fields a remote MCP caller may not state. `capability` is already
@@ -320,6 +339,12 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.RECORDS_ASSOCIATIONS_REINSTATE,
         Capability.ISSUES_HANDOFFS_CORRECT,
         Capability.RECORDS_BACKFILL_PLAN,
+        # Record lineage S3.1: the 3 attested confirms, each keyed. Like the
+        # attested writes above they are refused remotely by the application
+        # (and withheld remotely as operator-only); here for one replay identity.
+        Capability.RECORDS_ASSOCIATIONS_CONFIRM,
+        Capability.ISSUES_MEMBERSHIPS_CONFIRM,
+        Capability.ISSUES_PROJECT_LINKS_CONFIRM,
         # **No keyless proposal or identity-correction write is here, and the reason is this set's
         # mechanism rather than a judgement about how replayable they are.**
         # Membership makes `compose_remote_arguments` derive a key and *insert it
@@ -346,6 +371,18 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         # `idempotency_key` on every one of these paths, which is what operator §23's "do not
         # accept caller-selected remote idempotency keys" actually needs.
     }
+)
+
+#: Record lineage S3.1 (S3.1 contract section 4.9, D-18): the 14 open lineage
+#: writes, whose derived key also binds the authenticated OAuth client. Two
+#: remote clients sending the same payload so derive 2 keys and both reach the
+#: identity rule (`created: false` for the second), while a client's own retry
+#: derives its own key again and replays. Every other capability's derivation
+#: is unchanged.
+_CLIENT_BOUND_KEY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    capability
+    for capability in _IDEMPOTENT_REMOTE_CAPABILITIES
+    if capability.value in OPEN_LINEAGE_WRITE_CAPABILITIES
 )
 
 #: When more than one permitted purpose remains after grant intersection, the
@@ -411,6 +448,7 @@ def compose_remote_arguments(
     grants: frozenset[tuple[Capability, Purpose | None]] | None,
     clock: Clock = utc_now,
     issue_id: IdentifierIssuer = issue_identifier,
+    authenticated_client_id: str | None = None,
 ) -> dict[str, Any]:
     """Build the document `normalize` reads, or refuse.
 
@@ -435,17 +473,15 @@ def compose_remote_arguments(
     composed = dict(arguments)
     if capability in _IDEMPOTENT_REMOTE_CAPABILITIES:
         domain = dict(payload) if isinstance(payload, Mapping) else {}
-        digest = hashlib.sha256(
-            json.dumps(
-                {
-                    "capability": capability.value,
-                    "principal_id": principal.principal_id,
-                    "payload": domain,
-                },
-                sort_keys=True,
-                default=str,
-            ).encode()
-        ).hexdigest()
+        keyed: dict[str, Any] = {
+            "capability": capability.value,
+            "principal_id": principal.principal_id,
+            "payload": domain,
+        }
+        if capability in _CLIENT_BOUND_KEY_CAPABILITIES:
+            # S3.1 section 4.9: the open lineage writes' key binds the client.
+            keyed["client"] = authenticated_client_id
+        digest = hashlib.sha256(json.dumps(keyed, sort_keys=True, default=str).encode()).hexdigest()
         composed["payload"] = {**domain, "idempotency_key": f"idk_{digest[:32]}"}
     if is_server_replay_capability(capability):
         request_digest = hashlib.sha256(

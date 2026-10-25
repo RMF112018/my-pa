@@ -416,6 +416,13 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.COMMITMENTS_V2_SEARCH,
         Capability.COMMITMENTS_V2_WAITING_ON,
         Capability.REPORTS_MANIFEST,
+        # Record lineage S3.1 (S3.1 contract section 7): the 3 confirms and the
+        # related read act on the same partition's link, Project-link and record
+        # rows; none names a source.
+        Capability.RECORDS_ASSOCIATIONS_CONFIRM,
+        Capability.ISSUES_MEMBERSHIPS_CONFIRM,
+        Capability.ISSUES_PROJECT_LINKS_CONFIRM,
+        Capability.RECORDS_LINEAGE_RELATED,
         # `context.feedback` names a ranking preference, not a source. The rows
         # it writes belong to the acting Principal's partition and carry no
         # `enrollment_id` and no grant a scope could be compared against.

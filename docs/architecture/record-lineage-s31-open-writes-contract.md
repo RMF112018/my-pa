@@ -1552,6 +1552,20 @@ prove-red is reported as redundancy, a masked test or an unreachable hazard, nev
 Reserved for the S3.1 workers' resolutions (N1–N4), each reported in its handoff and
 accepted by the Orchestrator.
 
+**N1** (revision `023f8f7eb499`, registration, provenance derivation, profile opt-ins,
+the kind and annotation half of section 7.13):
+
+| # | Point | Resolution |
+| --- | --- | --- |
+| N1-01 | Section 4.7 copies a membership head's `member_native_version` into its confirm, but S2's `only_membership_writes_record_a_member_version` admitted a version only for `issues.memberships.add`/`correct` and the composites | the revision restates that CHECK by same-name replacement to admit `issues.memberships.confirm` too (`tables.py` declares `MEMBER_VERSION_CAPABILITIES` plus the confirm; the vocabulary set itself is unchanged); downgrade restores the S2 text; pinned by `test_a_confirmation_keeps_its_evidence_and_member_version` |
+| N1-02 | Section 5.2's `a_lineage_write_request_writer_is_known` text admits a null `decision_channel` with a non-null `asserting_client_id` (SQL `NULL` in its third disjunct) | the third disjunct reads `decision_channel IS NOT NULL AND decision_channel = 'remote_interactive' AND …`, so a client id needs its channel; stricter, same intent; pinned by `test_a_write_request_records_its_writer_once` |
+| N1-03 | Section 5.3 says a schema-2 manifest carries `lineage` "(an object)"; section 7.9 makes it `LineageManifestSection \| null` | `a_manifest_names_its_own_artifact` admits the key with an object or `null` value on schema 2, refuses it on schema 1, and checks the row's version equals the text's; pinned by `test_a_schema_2_manifest_names_its_lineage_section` |
+| N1-04 | Section 7.11 names a setting `mcp_database_profile_opt_ins: frozenset[str]` | the peer settings' shape: a string field `mcp_database_profile_opt_ins` (env `MY_PA_MCP_DATABASE_PROFILE_OPT_INS`) and the parsed accessor `mcp_database_profile_opt_in_set()`; `McpDatabaseServices` gains `opt_ins` (default empty); `profile_capabilities(profile, opt_ins=frozenset())` as written |
+| N1-05 | Section 7.13 Part D conversions, the concrete functions changed | `tests/contract/test_capabilities_and_readiness.py::test_the_operator_only_set_is_enrollment_and_governed_identity_correction`, `tests/contract/test_lineage_s2_capability_admission.py::test_s2_capabilities_are_operator_decision_required`, `tests/contract/test_chatllm_operator_publication.py::test_full_inventory_catalog_without_execution` (the remote catalog now omits the 5 operator-only lineage writes); no function of `tests/contract/test_transport_parity.py`, `tests/unit/test_policy.py`, `tests/policy/test_application_authorization.py` or `tests/architecture/test_mcp_is_a_thin_adapter.py` asserted their remote publication, so none changed beyond the registry additions for the 4 new names |
+| N1-06 | Lockstep pins outside the section 10.1 list | `tests/architecture/test_record_lineage_s4_scope.py`'s lineage-vocabulary digest moves (S3.1 widens the vocabulary S4 left untouched); `tests/unit/test_lineage_s3_domain.py::test_link_transition_table` admits `confirm` beside `assert` as no state transition (its 12 S3 rows unchanged); `tests/schema/test_constraint_authoring_capability_migration.py`'s head-pin list drops the extraction ledger (S3.1 creates no table, so that file no longer names the head) |
+| N1-07 | The 4 new handlers | unbuilt (S3 D-37): after the switch the 3 confirms derive attested authority (`denied` for a non-attested caller) and every one answers `unsupported`; the command request validation of sections 7.2–7.4 is complete; no `ports.py` method is added (the N2/N3 repository methods are theirs to declare) |
+| N1-08 | `test_lineage_tool_descriptions_carry_the_client_guidance` | pins the section 7.12 sentences of the 4 new commands verbatim and every lineage tool's description within 240 characters; the open commands' summaries and docstring bodies are N3's (section 7.12), which extends this test |
+
 ## 13. Operator gates that remain
 
 Ratification of ADR-015 and its S3.1 amendment beyond the directive defaults; enabling

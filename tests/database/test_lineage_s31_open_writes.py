@@ -754,8 +754,10 @@ def test_a_client_cannot_revise_a_confirmed_client_fact(runtime: S31Runtime) -> 
     ):
         assert _denied(runtime.client_refused(command)), command.capability.value
     assert all_lineage_counts(runtime.engine) == before
-    # The 1 contest exception still holds for a confirmed semantic link.
+    # The 1 contest exception still holds for a confirmed semantic link; after
+    # it the head is the client's, yet the link stays accepted (its history).
     runtime.client_ok(contest(link, 2, "confirmed", (contradicts(scene.meeting, scene.note),)))
+    assert _denied(runtime.client_refused(_end_link(link, 3, "confirmed-after-contest")))
 
 
 def test_a_client_cannot_void_or_retime_a_human_channel_handoff(runtime: S31Runtime) -> None:

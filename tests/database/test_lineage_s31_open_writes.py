@@ -38,6 +38,8 @@ from alembic.config import Config
 from sqlalchemy import text
 
 from my_pa.adapters.normalization import normalize
+from my_pa.application import issues as issues_module
+from my_pa.application import record_lineage as record_lineage_module
 from my_pa.application.commands import (
     AddIssueProjectLink,
     ConfirmIssueMembership,
@@ -51,8 +53,10 @@ from my_pa.application.commands import (
     UpdateIssue,
 )
 from my_pa.application.errors import InvalidRequestError
+from my_pa.application.issue_handoffs import handoff_document
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.operator_surface import OperatorSurface
+from my_pa.domain.lineage.canonical import request_digest
 from my_pa.domain.lineage.vocabulary import OPEN_LINEAGE_WRITE_CAPABILITIES
 from tests.database.lineage_issue_harness import OTHER_PRINCIPAL, PRINCIPAL
 from tests.database.lineage_record_harness import (
@@ -378,6 +382,35 @@ def _alembic() -> Config:
     return Config(str(_ROOT / "alembic.ini"))
 
 
+def _s4_digest(command: Any) -> str:  # noqa: ANN401
+    """The S1-S4 request digest of an operator request: no writer, no claim."""
+    name = command.capability.value
+    if name == "records.associations.assert":
+        document = record_lineage_module._assert_document(command.lineage_request())
+    elif name == "issues.memberships.add":
+        document = record_lineage_module._membership_add_document(command.lineage_request())
+    elif name == "issues.project_links.add":
+        document = issues_module._link_add_document(command.issue_request())
+    elif name == "issues.handoffs.record":
+        document = handoff_document(command.handoff_request())
+    else:
+        document = command.work_request().digest_document()
+    return request_digest(name, PRINCIPAL, document)
+
+
+def _stored_digest(runtime: S31Runtime, command: Any) -> str:  # noqa: ANN401
+    with runtime.engine.connect() as connection:
+        return str(
+            connection.execute(
+                text(
+                    "SELECT request_digest FROM knowledge.lineage_write_requests"
+                    " WHERE capability = :capability AND idempotency_key = :key"
+                ),
+                {"capability": command.capability.value, "key": command.idempotency_key},
+            ).scalar_one()
+        )
+
+
 def test_an_operator_replay_of_a_pre_s31_key_answers_the_original(runtime: S31Runtime) -> None:
     """Section 4.9: a key recorded at `c5260943d933` replays byte-identically for the operator.
 
@@ -388,6 +421,9 @@ def test_an_operator_replay_of_a_pre_s31_key_answers_the_original(runtime: S31Ru
     scene = open_scene(runtime, "pre-s31", operator=True)
     commands = _first_writes(scene)
     originals = [runtime.ok(command, surface=GATEWAY) for command in commands]
+    # The human channel's digest document is exactly the S1-S4 one.
+    for command in commands:
+        assert _stored_digest(runtime, command) == _s4_digest(command), command.capability.value
     runtime.engine.dispose()
     runtime.audit_engine.dispose()
     alembic.downgrade(_alembic(), _S4_HEAD)

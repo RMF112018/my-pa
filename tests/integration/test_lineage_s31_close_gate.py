@@ -18,6 +18,7 @@ true` (R31-F06). Every identity and every body here is synthetic.
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -34,8 +35,10 @@ from my_pa.application.commands import (
     EndIssueMembership,
     EndRecordAssociation,
     ReadIssue,
+    ReadRelatedRecords,
 )
 from my_pa.contracts.v1.envelope import ResponseEnvelope
+from my_pa.domain.intelligence.catalog import IntelligenceStage
 from my_pa.domain.task.lifecycle import TaskLifecycleState
 from tests.database.lineage_record_harness import NOTE_BODY, membership, note_anchor
 from tests.database.lineage_s2_harness import (
@@ -46,11 +49,14 @@ from tests.database.lineage_s2_harness import (
     resolution_anchor,
 )
 from tests.database.lineage_s3_harness import contest, contradicts, corroborates, reinstate
+from tests.database.lineage_s3_read_harness import horizon
 from tests.database.lineage_s31_harness import (
     GATEWAY,
     OTHER_CLIENT,
     OpenScene,
+    S31ReportRuntime,
     S31Runtime,
+    lineage_reference,
     open_scene,
 )
 
@@ -63,6 +69,16 @@ JOIN_TIMEOUT_SECONDS: Final = 60.0
 @pytest.fixture
 def runtime(disposable_database: str) -> Iterator[S31Runtime]:
     composed = S31Runtime(disposable_database)
+    try:
+        yield composed
+    finally:
+        composed.close()
+
+
+@pytest.fixture
+def report_runtime(disposable_database: str) -> Iterator[S31ReportRuntime]:
+    """The same calls over the S4 runtime, which also commits reports (worker N4)."""
+    composed = S31ReportRuntime(disposable_database)
     try:
         yield composed
     finally:
@@ -442,7 +458,48 @@ def test_a_close_and_a_client_revision_in_scope_serialize(runtime: S31Runtime) -
 # ---- the claim changes no outcome (R31-F06) --------------------------------------------
 
 
-def _outcome(runtime: S31Runtime, *, claimed: bool) -> dict[str, Any]:
+def _lineage_verification(runtime: S31ReportRuntime, key: str, issue_id: str) -> dict[str, Any]:
+    """S3.1 section 7.9 for the scenario: a report citing a related read of the Issue.
+
+    The manifest's lineage `verification_state` and its server counts, without
+    what names this scenario's records (the digest and the cut) and without the
+    count of claims, which `claims` reports apart.
+    """
+    seeds = (("situation", issue_id),)
+    answer = runtime.ok(
+        ReadRelatedRecords(
+            seeds=({"family": "situation", "record_id": issue_id},),
+            known_at=horizon(runtime.engine),
+        )
+    )
+    cycle = runtime.cycle(key)
+    researcher = runtime.research(cycle, key)
+    written = runtime.commit_report(
+        runtime.report(
+            cycle,
+            IntelligenceStage.SYNTHESIZER,
+            f"{key}-synth",
+            dependencies=(researcher,),
+            structured_content=lineage_reference(answer, seeds),
+        )
+    )
+    stored = runtime.stored_manifest(written["report_id"])
+    assert stored is not None
+    section = json.loads(stored["manifest_canonical"])["lineage"]
+    server = section["server"]
+    return {
+        "verification_state": section["verification_state"],
+        "recompute_failure": section["recompute_failure"],
+        "server": {
+            name: value
+            for name, value in server.items()
+            if name not in ("related_sha256", "known_at", "user_directed_claims")
+        },
+        "user_directed_claims": server["user_directed_claims"],
+    }
+
+
+def _outcome(runtime: S31ReportRuntime, *, claimed: bool) -> dict[str, Any]:
     """One scenario with every client write claimed or not; everything a gate decides."""
     key = f"gate-claim-{claimed}"
     scene, member = _resolved_member_scene(runtime, key, claimed=claimed)
@@ -465,6 +522,7 @@ def _outcome(runtime: S31Runtime, *, claimed: bool) -> dict[str, Any]:
     )
     readiness = runtime.readiness(scene.issue)
     error = _try_close(runtime, scene.issue, key)
+    verification = _lineage_verification(runtime, key, scene.issue)
     with runtime.engine.connect() as connection:
         consumed = connection.execute(
             text(
@@ -490,24 +548,30 @@ def _outcome(runtime: S31Runtime, *, claimed: bool) -> dict[str, Any]:
         "close": None if error is None else (error["code"], error["safe_details"]),
         "consumed": int(consumed),
         "link_state": link["lifecycle_state"],
+        "verification": verification,
     }
 
 
-def test_the_user_directed_claim_changes_no_outcome(runtime: S31Runtime) -> None:
+def test_the_user_directed_claim_changes_no_outcome(report_runtime: S31ReportRuntime) -> None:
     """R31-F06: the same scenario with the claim false and true decides identically.
 
     `ready`, the blockers, the unreviewed links (but for the displayed claim),
-    the close's answer and the budget a client consumed. Program reportability
-    under the claim is pinned with the S4 rows
-    (`test_an_unreviewed_issue_link_makes_the_issue_metric_not_reportable`
-    writes its link claimed), and the lineage `verification_state` with the
-    report-manifest rows of worker N4.
+    the close's answer, the budget a client consumed and -- worker N4, S3.1
+    section 7.9 -- the lineage `verification_state` and server counts of a
+    report citing a related read of the Issue (the manifest counts the claims,
+    and nothing else differs). Program reportability under the claim is pinned
+    with the S4 rows (`test_an_unreviewed_issue_link_makes_the_issue_metric_not_reportable`
+    writes its link claimed).
     """
+    runtime = report_runtime
     without = _outcome(runtime, claimed=False)
     consumed = without.pop("consumed")
     with_claim = _outcome(runtime, claimed=True)
     assert with_claim.pop("consumed") - consumed == consumed
     assert without.pop("claims") == {False}
     assert with_claim.pop("claims") == {True}
+    assert without["verification"].pop("user_directed_claims") == 0
+    assert with_claim["verification"].pop("user_directed_claims") > 0
+    assert without["verification"]["verification_state"] == "verified_at_commit"
     assert with_claim == without
     assert without["close"] == ("conflict", ["closure_gate"])

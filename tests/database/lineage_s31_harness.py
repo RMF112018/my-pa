@@ -14,7 +14,10 @@ grant set) with what the S3.1 write tests need:
   `local_unattested`, no client id);
 * `fact_rows(...)` -- the provenance columns of every fact row a write left, and
   `request_writer(...)` -- the writer columns of a request row;
-* scene builders: a client membership, a client semantic link, an operator one.
+* scene builders: a client membership, a client semantic link, an operator one;
+* `S31ReportRuntime` (worker N4) -- the same calls over the S4 runtime, which
+  also composes the Program-reporting switch and the Intelligence pipeline, and
+  `lineage_reference(...)`, the S3.1 section 7.9 block of a related read.
 
 Every identity and every body here is synthetic.
 """
@@ -39,7 +42,11 @@ from my_pa.application.commands import (
 from my_pa.contracts.v1.envelope import ResponseEnvelope
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
-from my_pa.domain.lineage.vocabulary import OPEN_LINEAGE_WRITE_CAPABILITIES
+from my_pa.domain.lineage.vocabulary import (
+    LINEAGE_CONTEXT_BLOCK_KEY,
+    OPEN_LINEAGE_WRITE_CAPABILITIES,
+    RelationType,
+)
 from tests.database.lineage_issue_harness import PRINCIPAL, REMOTE_CLIENT
 from tests.database.lineage_record_harness import (
     GATEWAY,
@@ -65,6 +72,7 @@ from tests.database.lineage_s3_harness import (
     shortly_after,
 )
 from tests.database.lineage_s3_read_harness import READS, Grants, S3ReadRuntime, grant
+from tests.database.lineage_s4_harness import S4Runtime
 from tests.database.test_commitment_entity_counterparty import seed_counterparty_entity
 
 __all__ = [
@@ -72,12 +80,14 @@ __all__ = [
     "OTHER_CLIENT",
     "REMOTE_CLIENT",
     "OpenScene",
+    "S31ReportRuntime",
     "S31Runtime",
     "client_grants",
     "commitment_object",
     "completed_requests",
     "every_open_write",
     "fact_rows",
+    "lineage_reference",
     "open_scene",
     "request_writer",
     "seed_completed_requests",
@@ -148,6 +158,37 @@ class S31Runtime(S3ReadRuntime):
 
     def local_refused(self, command: Command, **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
         return self.refused(command, **kwargs)
+
+
+class S31ReportRuntime(S4Runtime, S31Runtime):
+    """`S31Runtime`'s client calls over `S4Runtime`'s service and report helpers."""
+
+
+def lineage_reference(
+    answer: dict[str, Any],
+    seeds: tuple[tuple[str, str], ...],
+    *,
+    max_depth: int = 2,
+    acceptance_bases: tuple[str, ...] = ("user_confirmed", "client_identified"),
+    relation_types: tuple[str, ...] | None = None,
+    related_sha256: str | None = None,
+) -> dict[str, object]:
+    """The S3.1 section 7.9 block of a related `answer`, under its reserved key.
+
+    `seeds` and the filters are the read's request; `known_at` and the digest
+    are the answer's (`related_sha256` overrides the claimed digest).
+    """
+    return {
+        LINEAGE_CONTEXT_BLOCK_KEY: {
+            "block_schema_version": 1,
+            "seeds": [{"family": family, "record_id": record_id} for family, record_id in seeds],
+            "max_depth": max_depth,
+            "acceptance_bases": list(acceptance_bases),
+            "relation_types": list(relation_types or [member.value for member in RelationType]),
+            "known_at": answer["known_at"],
+            "related_sha256": related_sha256 or answer["related_sha256"],
+        }
+    }
 
 
 #: The 4 fact tables and their identity column (S3.1 section 5.1).

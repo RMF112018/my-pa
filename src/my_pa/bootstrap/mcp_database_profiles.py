@@ -23,6 +23,10 @@ from my_pa.contracts.mcp_database_profiles import (
     McpDatabaseProfile,
     profile_capabilities,
 )
+from my_pa.contracts.mcp_database_witness import (
+    McpWitnessBinding,
+    current_mcp_database_witness,
+)
 from my_pa.domain.identity.operation import permitted_purposes
 from my_pa.infrastructure.database.engine import create_database_engine
 
@@ -63,14 +67,28 @@ def _password(path: str) -> str:
 
 
 def _bind_engine(engine: Engine, control: Engine, role: str, cluster: str, *, ro: bool) -> None:
-    if ro:
-
-        @event.listens_for(engine, "begin")
-        def read_only(connection: Connection) -> None:
+    @event.listens_for(engine, "begin")
+    def read_only(connection: Connection) -> None:
+        if ro:
             connection.exec_driver_sql("SET TRANSACTION READ ONLY")
+        witness = current_mcp_database_witness.get()
+        if (
+            witness is not None
+            and witness.binding.data_engine is engine
+            and connection.info.get("mcp_profile_identity_verified") is True
+        ):
+            observed = connection.exec_driver_sql("SHOW transaction_read_only").scalar_one()
+            if observed not in ("on", "off"):
+                raise SettingsError("MCP transaction evidence unavailable")
+            if ro and observed != "on":
+                raise SettingsError("MCP read-only transaction refused")
+            witness.data_begin(engine, pool=engine.pool, read_only=observed == "on")
 
     @event.listens_for(engine, "engine_connect")
     def identity(connection: Connection) -> None:
+        # Pool info survives reuse. Never let a prior attestation turn this
+        # connection's identity-probe transaction into request evidence.
+        connection.info.pop("mcp_profile_identity_verified", None)
         # A fresh attested control connection binds the same configured endpoint
         # to the cluster. Data roles never receive pg_control_system privileges.
         with control.connect() as trusted:
@@ -118,6 +136,7 @@ def _bind_engine(engine: Engine, control: Engine, role: str, cluster: str, *, ro
         finally:
             # The identity SELECT must not leave a transaction on a reused pool connection.
             connection.rollback()
+        connection.info["mcp_profile_identity_verified"] = True
 
 
 @dataclass(frozen=True)
@@ -127,6 +146,8 @@ class McpDatabaseServices:
     read_clients: frozenset[str] = field(repr=False)
     write_clients: frozenset[str] = field(repr=False)
     engines: tuple[Engine, Engine] = field(repr=False)
+    witness_enabled: bool = False
+    controls_engine: Engine | None = field(default=None, repr=False, compare=False)
 
     def access(
         self, context: RemoteAccessContext, *, write_allowed: bool
@@ -166,6 +187,15 @@ class McpDatabaseServices:
             service=self.write_service
             if profile is McpDatabaseProfile.READ_WRITE
             else self.read_service,
+            database_witness=McpWitnessBinding(
+                profile,
+                self.engines[1 if profile is McpDatabaseProfile.READ_WRITE else 0],
+                self.controls_engine,
+                self.engines[1 if profile is McpDatabaseProfile.READ_WRITE else 0].pool,
+                self.controls_engine.pool,
+            )
+            if self.witness_enabled and self.controls_engine is not None
+            else None,
         )
 
     def close(self) -> None:
@@ -217,6 +247,8 @@ def build_mcp_database_services(
             settings.mcp_database_ro_clients(),
             settings.mcp_database_rw_clients(),
             (engines[0], engines[1]),
+            witness_enabled=settings.mcp_database_witness_enabled,
+            controls_engine=control.work_engine,
         )
     except Exception:
         for engine in engines:

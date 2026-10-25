@@ -827,6 +827,64 @@ jobs:
           "(database_clone or database_transactional) and not recovery and not e2e
           and not migration_edge and not migration_empty_to_head and not migration"
 
+
+      - name: Verify MCP profiles and request witness on isolated PostgreSQL
+        shell: bash
+        run: |
+          python - <<'PYTEST'
+          import os
+          import psycopg
+          import pytest
+
+          # Fixed public throwaway CI service, never application configuration.
+          with psycopg.connect(
+              host="127.0.0.1", port=5432, dbname="my_pa_ci", user="my_pa",
+              password="ci_throwaway_not_a_secret", autocommit=True,
+          ) as admin:
+              assert admin.info.host == "127.0.0.1" and admin.info.port == 5432
+              assert admin.info.dbname == "my_pa_ci" and admin.info.user == "my_pa"
+              assert admin.execute(
+                  "SELECT NOT pg_is_in_recovery() AND current_setting('server_version_num')::int "
+                  ">= 170000 AND current_setting('server_version_num')::int < 180000"
+              ).fetchone() == (True,)
+              assert admin.execute(
+                  "SELECT NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='synthetic_admin') "
+                  "AND NOT EXISTS(SELECT 1 FROM pg_database WHERE datname='my_pa')"
+              ).fetchone() == (True,)
+              admin.execute(
+                  "CREATE ROLE synthetic_admin LOGIN SUPERUSER "
+                  "PASSWORD 'synthetic-role-fixture-0000000000000000'"
+              )
+              admin.execute("CREATE DATABASE my_pa OWNER synthetic_admin TEMPLATE template0")
+              cluster = admin.execute(
+                  "SELECT system_identifier::text FROM pg_control_system()"
+              ).fetchone()[0]
+          os.environ["MCP_PROFILE_TEST_ADMIN_URL"] = (
+              "postgresql+psycopg://synthetic_admin:"
+              "synthetic-role-fixture-0000000000000000@127.0.0.1:5432/my_pa"
+          )
+          os.environ["MCP_PROFILE_TEST_CLUSTER_ID"] = cluster
+
+          class RequiredProfileProof:
+              skipped = False
+              collected = 0
+
+              def pytest_collection_finish(self, session):
+                  self.collected = len(session.items)
+
+              def pytest_runtest_logreport(self, report):
+                  if report.skipped:
+                      self.skipped = True
+
+          proof = RequiredProfileProof()
+          result = pytest.main([
+              "-q", "tests/database/test_mcp_database_profiles.py",
+          ], plugins=[proof])
+          assert result == 0 and proof.collected > 0 and not proof.skipped, (
+              "required isolated PostgreSQL profile proof did not pass completely"
+          )
+          PYTEST
+
   database-recovery:
     runs-on: ubuntu-latest
     timeout-minutes: 40

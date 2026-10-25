@@ -74,9 +74,11 @@ is not a defect.
 
 ## 3. What is implemented
 
-Four hundred and nineteen Python modules under `src/my_pa` and eight hundred and five test modules (measured for the 2026-10-24 MCP profile reconciliation; the prior record-lineage snapshot held 416 source modules and 802 test modules) —
+Four hundred and twenty Python modules under `src/my_pa` and eight hundred and eight test modules (measured for the 2026-10-25 MCP commissioning evidence correction; the prior MCP profile reconciliation snapshot held 419 source modules and 805 test modules) —
 
-**Current-tree remeasurement (MCP profile reconciliation, 2026-10-24):** the two commands below count 419 source modules and 805 test modules. This is file-inventory evidence, not a test PASS receipt.
+**Current-tree remeasurement (MCP commissioning evidence correction, 2026-10-25):** the two commands below count 420 source modules and 808 test modules. This is file-inventory evidence, not a test PASS receipt.
+
+**Historical remeasurement (MCP profile reconciliation, 2026-10-24):** the two commands below counted 419 source modules and 805 test modules. This is file-inventory evidence, not a test PASS receipt.
 
 **Historical remeasurement (CI sharding merged into `feat/lineage-s3-graph`, worker K1, 2026-10-20):** the two commands below counted 416 source modules and 802 test modules: the 416/801 below plus `tests/architecture/test_ci_shards.py`; no source module is added (`tests/ci_shard.py` is a pytest plugin, not a `test_*.py` module). This is file-inventory evidence, not a test PASS receipt.
 

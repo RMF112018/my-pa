@@ -55,6 +55,7 @@ from __future__ import annotations
 from sqlalchemy import Connection, Engine
 from sqlalchemy.exc import InterfaceError, OperationalError, SQLAlchemyError
 
+from my_pa.contracts.mcp_database_witness import current_mcp_database_witness
 from my_pa.contracts.ports import AuditSink, EvidenceUnavailableError, RepositoryFailureError
 from my_pa.domain.audit.events import AuditEvent
 from my_pa.infrastructure.persistence.tables import audit_events
@@ -130,5 +131,10 @@ class SqlAlchemyAuditSink(AuditSink):
             # there. Retrying writes the same row and fails the same way.
             failure = RepositoryFailureError("the audit event could not be recorded")
         else:
+            # Only a successful context-manager exit acknowledges COMMIT.
+            # No audit payload, statement, or parameters cross this boundary.
+            witness = current_mcp_database_witness.get()
+            if witness is not None:
+                witness.audit_committed(self._engine, event.correlation_id, pool=self._engine.pool)
             return
         raise failure

@@ -1026,8 +1026,18 @@ def build_gateway_runtime(
     Restricted MCP compositions explicitly suppress re-enrichment and managed
     storage construction; both remain enabled for existing callers by default.
     """
-    if data_engine is not None and (independent_audit_engine is None or controls_engine is None):
-        raise ValueError("injected data engine requires separate audit and control paths")
+    if data_engine is not None:
+        if independent_audit_engine is None or controls_engine is None:
+            raise ValueError("injected data engine requires separate audit and control paths")
+        if (
+            data_engine is independent_audit_engine
+            or data_engine is controls_engine
+            or data_engine.pool is independent_audit_engine.pool
+            or data_engine.pool is controls_engine.pool
+        ):
+            raise ValueError(
+                "injected data engine requires independent audit and control engines and pools"
+            )
     work_engine = (
         data_engine
         if data_engine is not None

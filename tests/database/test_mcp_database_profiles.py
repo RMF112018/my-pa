@@ -1,36 +1,81 @@
 """Synthetic-only PostgreSQL role routing, audit, Principal and future-grant proofs.
 
-Opt-in to an exclusively owned local tmpfs fixture. Never consumes MY_PA_DATABASE_URL.
+Opt-in to an exclusively owned isolated local/CI fixture. Never consumes MY_PA_DATABASE_URL.
 A separate expected cluster ID prevents accidental use of another local database.
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 from collections.abc import Iterator
+from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from mcp.client.session import ClientSession
+from mcp.shared.memory import create_client_server_memory_streams
+from mcp.types import CallToolResult
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.schema import CreateTable
 
+from my_pa.adapters.mcp.remote import RemoteAccessContext
+from my_pa.adapters.mcp.server import McpAccess, create_mcp_server
 from my_pa.application.commands import GetCanvasWorkspace, PutCanvasWorkspace
 from my_pa.bootstrap.gateway import build_gateway_runtime
 from my_pa.bootstrap.mcp_database_profiles import build_mcp_database_services
 from my_pa.bootstrap.settings import Settings, SettingsError
+from my_pa.contracts.v1.envelope import ResponseEnvelope
+from my_pa.domain.capture.submission import CaptureTransport
+from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.infrastructure.database.mcp_object_grants import (
     McpObjectGrant,
     McpObjectGrantError,
     grant_created_mcp_object,
 )
-from my_pa.infrastructure.persistence.tables import audit_events, canvas_workspaces, enrollments
+from my_pa.infrastructure.persistence.tables import (
+    audit_events,
+    canvas_workspaces,
+    capture_jobs,
+    enrollments,
+    jobs,
+    worker_heartbeats,
+)
 from tests.conftest import metadata_for, operator
 
 pytestmark = pytest.mark.database
+
+
+async def _witness_status_over_memory(bound: RemoteAccessContext) -> CallToolResult:
+    """The real selected service through SDK framing, without HTTP or sockets."""
+    assert bound.service is not None
+    access = McpAccess(
+        bound.principal,
+        allowed_tools=bound.allowed_capabilities,
+        allowed_capability_purposes=bound.capability_purposes,
+        transport=CaptureTransport.REMOTE_CLIENT,
+        authenticated_client_id=bound.authenticated_client_id,
+        service=bound.service,
+        database_witness=bound.database_witness,
+    )
+    server = create_mcp_server(bound.service, access_for_request=lambda _: access)
+    async with create_client_server_memory_streams() as (client_streams, server_streams):
+        serving = asyncio.create_task(
+            server.run(server_streams[0], server_streams[1], server.create_initialization_options())
+        )
+        try:
+            async with ClientSession(client_streams[0], client_streams[1]) as session:
+                await session.initialize()
+                return await session.call_tool(Capability.CAPABILITIES_GET.value, {})
+        finally:
+            serving.cancel()
+            with suppress(asyncio.CancelledError):
+                await serving
 
 
 @pytest.fixture(scope="module")
@@ -65,7 +110,14 @@ def synthetic_admin() -> Iterator[Engine]:
                     c.exec_driver_sql(f"CREATE ROLE {role} NOLOGIN")
         c.exec_driver_sql("GRANT USAGE ON SCHEMA knowledge TO my_pa_mcp_ro,my_pa_mcp_rw")
         c.exec_driver_sql("GRANT USAGE,CREATE ON SCHEMA knowledge TO creator_a,creator_b")
-        for table in (enrollments, audit_events, canvas_workspaces):
+        for table in (
+            enrollments,
+            audit_events,
+            canvas_workspaces,
+            capture_jobs,
+            jobs,
+            worker_heartbeats,
+        ):
             if (
                 c.execute(
                     text("SELECT to_regclass(:n)"), {"n": f"knowledge.{table.name}"}
@@ -81,8 +133,14 @@ def synthetic_admin() -> Iterator[Engine]:
                 )
                 for index in table.indexes:
                     index.create(c)
+        # The real status handler filters this lifecycle column. Migration
+        # 0641c354ca85 adds it separately from the historical base Table.
         c.exec_driver_sql(
-            "GRANT SELECT ON knowledge.enrollments,knowledge.canvas_workspaces "
+            "ALTER TABLE knowledge.capture_jobs ADD COLUMN IF NOT EXISTS pause_cause TEXT"
+        )
+        c.exec_driver_sql(
+            "GRANT SELECT ON knowledge.enrollments,knowledge.canvas_workspaces,"
+            "knowledge.capture_jobs,knowledge.jobs,knowledge.worker_heartbeats "
             "TO my_pa_mcp_ro,my_pa_mcp_rw"
         )
         c.exec_driver_sql(
@@ -370,3 +428,167 @@ def test_reused_pool_checks_the_actual_role_on_every_connection(synthetic_admin:
             pytest.fail("wrong-role connection must not be admitted")
     finally:
         wrong.dispose()
+
+
+@pytest.mark.parametrize(
+    "client,writes,profile",
+    [("client-ro", True, "ro"), ("client-rw", True, "rw"), ("client-rw", False, "ro")],
+)
+def test_request_witness_observes_real_uow_begin_and_independent_audit_commit(
+    synthetic_admin: Engine,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    client: str,
+    writes: bool,
+    profile: str,
+) -> None:
+    """Observe the request's exact connection and committed row, not another pool probe."""
+    from sqlalchemy import event
+
+    import my_pa.application.service as service_module
+    from my_pa.contracts.mcp_database_witness import current_mcp_database_witness
+    from my_pa.domain.identity.operation import Capability, permitted_purposes
+    from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
+
+    settings = profile_settings(tmp_path, synthetic_admin).model_copy(
+        update={"mcp_database_witness_enabled": True}
+    )
+    control = build_gateway_runtime(settings)
+    services = build_mcp_database_services(settings, control)
+    assert services is not None
+    seen: list[int] = []
+    principal = operator()
+    grants = frozenset(
+        (c, p)
+        for c in (Capability.CAPABILITIES_GET, Capability.CANVAS_WORKSPACE_PUT)
+        for p in permitted_purposes(c)
+    )
+    bound = services.access(
+        RemoteAccessContext(
+            principal,
+            authenticated_client_id=client,
+            allowed_capabilities=frozenset(c.value for c, _ in grants),
+            capability_purposes=grants,
+        ),
+        write_allowed=writes,
+    )
+    assert bound is not None and bound.service is not None and bound.database_witness is not None
+    selected_engine = bound.database_witness.data_engine
+
+    def observed_show(
+        connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _many: bool,
+    ) -> None:
+        if statement == "SHOW transaction_read_only":
+            assert current_mcp_database_witness.get() is not None
+            seen.append(id(connection))
+
+    event.listen(selected_engine, "before_cursor_execute", observed_show)
+    original = service_module._HANDLERS[Capability.CAPABILITIES_GET]
+
+    def checked(*args: object) -> object:
+        unit = args[1]
+        assert isinstance(unit, SqlAlchemyUnitOfWork)
+        assert seen == [id(unit._connection)]
+        return original(*args)
+
+    monkeypatch.setattr(
+        service_module,
+        "_HANDLERS",
+        {
+            **service_module._HANDLERS,
+            Capability.CAPABILITIES_GET: checked,
+        },
+    )
+    try:
+        for _ in range(2):  # Reuse the actual pool without retaining request evidence.
+            seen.clear()
+            result = asyncio.run(_witness_status_over_memory(bound))
+            assert not result.is_error and len(result.content) == 2
+            assert result.content[0].type == result.content[1].type == "text"
+            envelope = ResponseEnvelope.model_validate_json(result.content[0].text)
+            assert envelope.error is None
+            assert result.content[0].text == envelope.to_canonical_json()
+            expected = {
+                "my_pa_database_witness": {
+                    "version": 1,
+                    "correlation_id": envelope.correlation_id,
+                    "effective_profile": profile,
+                    "data_role_identity_match": True,
+                    "database_identity_match": True,
+                    "transaction_read_only": profile == "ro",
+                    "audit_committed": True,
+                    "audit_engine_independent": True,
+                    "control_engine_independent_configured": True,
+                }
+            }
+            assert json.loads(result.content[1].text) == result.meta == expected
+            assert current_mcp_database_witness.get() is None
+            # Independent read transaction, synthetic IDs only, proves the
+            # authorization event is durable after both request contexts exited.
+            with synthetic_admin.connect() as connection:
+                assert (
+                    connection.execute(
+                        text("SELECT count(*) FROM knowledge.audit_events WHERE correlation_id=:c"),
+                        {"c": envelope.correlation_id},
+                    ).scalar_one()
+                    == 1
+                )
+    finally:
+        services.close()
+        control.close()
+
+
+def test_request_witness_never_acknowledges_failed_real_audit_commit(
+    synthetic_admin: Engine,
+    tmp_path: Path,
+) -> None:
+    from sqlalchemy import event
+    from sqlalchemy.exc import SQLAlchemyError
+
+    settings = profile_settings(tmp_path, synthetic_admin).model_copy(
+        update={"mcp_database_witness_enabled": True}
+    )
+    control = build_gateway_runtime(settings)
+    services = build_mcp_database_services(settings, control)
+    assert services is not None
+    principal = operator()
+    grants = frozenset({(Capability.CAPABILITIES_GET, Purpose.STATUS_OBSERVATION)})
+    bound = services.access(
+        RemoteAccessContext(
+            principal,
+            authenticated_client_id="client-ro",
+            allowed_capabilities=frozenset({Capability.CAPABILITIES_GET.value}),
+            capability_purposes=grants,
+        ),
+        write_allowed=False,
+    )
+    assert bound is not None and bound.database_witness is not None and bound.service is not None
+
+    def refuse_commit(_connection: object) -> None:
+        raise SQLAlchemyError("synthetic commit refusal")
+
+    event.listen(control.audit_engine, "commit", refuse_commit)
+    try:
+        result = asyncio.run(_witness_status_over_memory(bound))
+        assert result.is_error and len(result.content) == 1 and result.meta is None
+        assert "my_pa_database_witness" not in result.model_dump_json(by_alias=True)
+        assert result.content[0].type == "text"
+        envelope = ResponseEnvelope.model_validate_json(result.content[0].text)
+        assert envelope.error is not None
+        with synthetic_admin.connect() as connection:
+            assert (
+                connection.execute(
+                    text("SELECT count(*) FROM knowledge.audit_events WHERE correlation_id=:c"),
+                    {"c": envelope.correlation_id},
+                ).scalar_one()
+                == 0
+            )
+    finally:
+        event.remove(control.audit_engine, "commit", refuse_commit)
+        services.close()
+        control.close()

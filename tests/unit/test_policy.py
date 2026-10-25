@@ -490,6 +490,10 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.COMMITMENTS_V2_SEARCH, Purpose.COMMITMENT_READ),
         (Capability.COMMITMENTS_V2_WAITING_ON, Purpose.COMMITMENT_READ),
         (Capability.REPORTS_MANIFEST, Purpose.REPORT_READ),
+        (Capability.RECORDS_ASSOCIATIONS_CONFIRM, Purpose.RECORD_LINEAGE_AUTHORING),
+        (Capability.ISSUES_MEMBERSHIPS_CONFIRM, Purpose.ISSUE_AUTHORING),
+        (Capability.ISSUES_PROJECT_LINKS_CONFIRM, Purpose.ISSUE_AUTHORING),
+        (Capability.RECORDS_LINEAGE_RELATED, Purpose.RECORD_LINEAGE_READ),
     }
 )
 
@@ -579,8 +583,10 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # Unioned: 198 capabilities, 54 purposes, 200 permitted pairs; then its remaining
     # S1 names and their purposes: 206 capabilities, 57 purposes, 208 pairs.
     # Record lineage S4: 229 capabilities, 60 purposes, 231 pairs.
-    assert len(PERMITTED_PAIRS) == 231
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 231 == 13509
+    # Record lineage S3.1 adds 4 names and no purpose, each mapped to exactly one
+    # existing purpose: 233 capabilities, 60 purposes, 235 pairs.
+    assert len(PERMITTED_PAIRS) == 235
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 235 == 13745
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

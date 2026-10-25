@@ -214,7 +214,8 @@ def test_s3_capabilities_are_operator_decision_required() -> None:
     declared = _s3()
     assert {capability.value for capability in declared} == S3_NAMES
     assert declared <= _LINEAGE_CAPABILITIES
-    assert len(_LINEAGE_CAPABILITIES) == 30
+    # Record lineage S3.1 adds its 4 names to the same switch set, 30 -> 34.
+    assert len(_LINEAGE_CAPABILITIES) == 34
     for capability in declared:
         name = capability.value
         assert capability in _SCOPELESS

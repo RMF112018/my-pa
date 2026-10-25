@@ -1566,6 +1566,23 @@ the kind and annotation half of section 7.13):
 | N1-07 | The 4 new handlers | unbuilt (S3 D-37): after the switch the 3 confirms derive attested authority (`denied` for a non-attested caller) and every one answers `unsupported`; the command request validation of sections 7.2–7.4 is complete; no `ports.py` method is added (the N2/N3 repository methods are theirs to declare) |
 | N1-08 | `test_lineage_tool_descriptions_carry_the_client_guidance` | pins the section 7.12 sentences of the 4 new commands verbatim and every lineage tool's description within 240 characters; the open commands' summaries and docstring bodies are N3's (section 7.12), which extends this test |
 
+**N2** (the write paths: sections 4.2, 4.4-4.9, 6.2, 6.4, 7.1-7.3, 7.5 and 7.8):
+
+| # | Point | Resolution |
+| --- | --- | --- |
+| N2-01 | Sections 4.9, 7.7 and 10.1 name the cross-writer key reuse `conflict` / `idempotency_key` | `idempotency_key` is the existing malformed-key detail; a key bound to a different request already answers `idempotency_conflict` (`LineageIdempotencyConflictError`), and the server cannot tell a writer change from a payload change without reading the winner; kept `idempotency_conflict`, asserted by every converted and new test |
+| N2-02 | Section 4.6 names `review_scope_links(principal_id, issue_id)` | it takes the current `inside` set too, as `links_in_issue_context` does; `record_lineage.unreviewed_links_in_scope` builds the set and applies `closure.in_review_scope` and `is_unreviewed` |
+| N2-03 | Section 6.4 step 4 withholds an invisible anchor from a write answer | `HandoffView.evidence` is one required anchor (no withholding); a `handoff_id` whose own event anchor is invisible to the remote caller answers `not_found` / `handoff_id` in the pre-check, as `issues.handoffs.list` withholds that entry whole; Project-link answers carry no anchor body (`restricted: false`); the filter applies to remote callers only |
+| N2-04 | Section 6.4 step 3, "the same safe detail" as an absent subject | the pre-check walks the subjects in validation's lock order (`lineage_endpoints.lock_order_families`), so a hidden subject answers what an absent one would; the Project-link writes check Issue, then Project, then anchor (the order section 10.1 pins with `not_found` / `issue_id`); a composite's hidden Project answers `invalid_request` / `project_id`, as an absent one does |
+| N2-05 | RR1-F02 situation-family rule | kept first for every link, membership and composite write; for asserts, membership adds and composites the lock-order walk would also hide the Issue (with its own detail), so the rule is load-bearing for the `link_id`-addressed writes (prove-red P13b) and changes only the detail elsewhere (P13c) |
+| N2-06 | Section 4.6, a client's resolution evidence is not accepted-grade | `MembershipHeadEvidence.accepted`: a `client_identified` mandatory head offers no resolution evidence, so readiness lists `resolution_evidence_missing` for it (no new blocker token) until the human channel confirms it |
+| N2-07 | Section 5.2, writer columns "for every later row" | every lineage request row records its writer: the open writes, the confirms, close, reopen, `issues.create`/`update` (the remote client id, `lineage_authority.recorded_client_id`) and the backfill plan |
+| N2-08 | Section 7.1 `user_directed?: bool` | added to the 14 open commands with a minimal boolean schema; its field documentation and the 14 docstring bodies (still "Local operator only.") are N3's (section 7.12) |
+| N2-09 | Lockstep pins outside the section 10.1 list | `tests/architecture/test_mcp_is_a_thin_adapter.py` exempts the boolean `user_directed` from the location-word scan (39 -> 53, the `direction` precedent); the S4 denominator dict and calculation version (`test_program_metric_reconciliation.py`, `test_report_manifest_integrity.py`); the readiness dicts of `test_issue_close_reopen.py`; the S4 overview golden vectors; the plans' module and tier counts; `LineageRuntime.invoke` gains an exact `grants` override |
+| N2-10 | R31-F03's counterexample (a client ends the operator's Project link) | impossible under section 4.4 (`denied`); the R31-F03 row uses a client-created link the client ends |
+| N2-11 | R31-F06 claim row | covers `ready`, blockers, unreviewed links, the close answer and budget consumption; Program reportability is pinned by the S4 row whose link is written claimed; the lineage `verification_state` part is N4's (section 7.9) |
+| N2-12 | Section 10 truncation-visibility row | N3's (with the related read); readiness computes `unreviewed_links_truncated` over visible entries only |
+
 ## 13. Operator gates that remain
 
 Ratification of ADR-015 and its S3.1 amendment beyond the directive defaults; enabling

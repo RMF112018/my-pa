@@ -135,3 +135,15 @@ the answer you used and record the seeds, filters and `related_sha256` with it; 
 recomputes and records whether they still agree when the report is committed. A report
 should say plainly that `client_identified` links are client-identified and unreviewed,
 and that `user_directed_claim` is a claim.
+
+Concretely, a synthesizer, reporter or morning-brief artifact cites the read under the
+reserved `structured_content` key `lineage_context_ref` with exactly these keys:
+`block_schema_version` (the integer 1), `seeds`, `max_depth`, `acceptance_bases` and
+`relation_types` as the read was made (list every relation when the read used the
+default), `known_at` (the answer's, `YYYY-MM-DDTHH:MM:SS.ffffffZ`) and `related_sha256`.
+A collector or researcher artifact may not carry it, and a malformed block is refused as
+`invalid_request` / `structured_content`. The `reports.commit` answer is unchanged: what
+the server found (`verified_at_commit`, `changed_since_read`, `recompute_failed` or
+`not_attempted`), its own digest and its counts of links by label and of claims are in the
+artifact's `reports.manifest`, which a remote reader can read in full only while it holds
+a `records.lineage.related` grant and sees every family the reference names.

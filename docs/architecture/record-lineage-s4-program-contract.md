@@ -73,7 +73,7 @@ the Markdown digest does not.
 web view or `gateway.json` entry (WP-06B); Task metrics and a responsibility queue in
 the Program overview; a past-dated (`as_of`) Program overview; knowledge-time
 (`known_at`) Program membership; verified Commitment acceptance; any certified Program
-total; any change to an attestation path (S3.1 is held on an operator rule).
+total; any change to an attestation path (S3.1 is held on an operator rule). *S3.1 is now specified by the [S3.1 contract](record-lineage-s31-open-writes-contract.md) (ADR-015 decision 15); its section 7.8 adds the unreviewed Issue↔Project link rule to this contract's section 3.3 and its section 7.9 the schema-2 manifest to section 5.3.*
 
 ## 2. Identifier kinds
 
@@ -1260,6 +1260,6 @@ checkout of the Constraint, Task and Commitment factories (section 11) and the s
 the new Program pool in production and the per-process backend budget it raises (5 more
 backends per process that composes it — the gateway goes from 10 to 15 — section 6.3;
 the `create_database_engine` default of 5 is the contract's assumption); S3.1
-(attestation, held).
+(attestation, held; now specified by the [S3.1 contract](record-lineage-s31-open-writes-contract.md), whose section 13 lists its own gates).
 Nothing else in S4 is left for a worker to decide beyond local naming with no incumbent
 constraint.

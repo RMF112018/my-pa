@@ -463,3 +463,292 @@ def test_the_s4_manifest_table_cannot_be_granted_to_an_mcp_role(classification: 
         pytest.fail("a protected report object must refuse before CREATE")
     connection.exec_driver_sql.assert_not_called()
     connection.execute.assert_not_called()
+
+
+# Record lineage S3.1 (S3.1 contract section 7.11, worker N1): remote exposure of
+# lineage on the restricted profiles is an operator opt-in from two closed,
+# code-owned sets, empty by default; it never issues a grant. Every value is
+# synthetic.
+
+#: The #339 ceilings, spelled: the S3.1 default must leave them byte-identical.
+_339_READ_CEILING = frozenset(
+    {
+        "capabilities.get",
+        "sources.list",
+        "sources.metadata",
+        "sources.status",
+        "knowledge.search",
+        "knowledge.read",
+        "knowledge.coverage",
+        "capture.read",
+        "capture.list",
+        "capture.search",
+        "tasks.read",
+        "tasks.list",
+        "tasks.search",
+        "tasks.history",
+        "tasks.comments.list",
+        "commitments.read",
+        "commitments.list",
+        "commitments.search",
+        "commitments.history",
+        "commitments.waiting_on",
+        "canvas.workspace.get",
+        "reports.read",
+        "reports.latest",
+        "reports.list",
+        "reports.search",
+        "reports.types.list",
+    }
+)
+_339_WRITE_CEILING = frozenset({"canvas.workspace.put"})
+#: Section 7.11, verbatim.
+_OPT_IN_READS = frozenset(
+    {
+        "records.lineage",
+        "records.lineage.related",
+        "records.associations.history",
+        "issues.read",
+        "issues.list",
+        "issues.history",
+        "issues.timeline",
+        "issues.handoffs.list",
+        "issues.closure_readiness",
+        "meetings.notes.versions",
+        "meetings.notes.read_version",
+        "commitments.v2.read",
+        "commitments.v2.list",
+        "commitments.v2.search",
+        "commitments.v2.waiting_on",
+    }
+)
+_OPT_IN_WRITES = frozenset(
+    {
+        "records.associations.assert",
+        "records.associations.correct",
+        "records.associations.end",
+        "records.associations.contest",
+        "records.associations.reinstate",
+        "issues.memberships.add",
+        "issues.memberships.end",
+        "issues.memberships.correct",
+        "issues.project_links.add",
+        "issues.project_links.end",
+        "issues.handoffs.record",
+        "issues.handoffs.correct",
+        "issues.work.create_task",
+        "issues.work.create_commitment",
+        "issues.create",
+        "issues.update",
+    }
+)
+#: Never admissible (section 7.11).
+_NEVER = frozenset(
+    {
+        "issues.close",
+        "issues.reopen",
+        "records.associations.confirm",
+        "issues.memberships.confirm",
+        "issues.project_links.confirm",
+        "records.backfill.plan",
+        "records.backfill.report",
+        "programs.members.resolve",
+        "programs.overview",
+    }
+)
+_PROFILE_SETTINGS = {
+    "MY_PA_DATABASE_URL": "postgresql+psycopg://test@db.invalid/my_pa",
+    "MY_PA_MCP_DATABASE_PROFILES_ENABLED": "true",
+    "MY_PA_MCP_DATABASE_RO_PASSWORD_FILE": "/synthetic/ro/password",
+    "MY_PA_MCP_DATABASE_RW_PASSWORD_FILE": "/synthetic/rw/password",
+    "MY_PA_MCP_DATABASE_EXPECTED_CLUSTER_ID": "7000000000000000001",
+}
+
+
+def _opted_in(names: str) -> object:
+    return load_settings({**_PROFILE_SETTINGS, "MY_PA_MCP_DATABASE_PROFILE_OPT_INS": names})
+
+
+def _profiles(
+    scene: Scene, opt_ins: frozenset[str] = frozenset()
+) -> tuple[McpDatabaseServices, object, object]:
+    ro = build_service(scene.world, scene.providers, lineage_enabled=True)
+    rw = build_service(scene.world, scene.providers, lineage_enabled=True)
+    services = McpDatabaseServices(
+        ro,
+        rw,
+        frozenset({"ro"}),
+        frozenset({"rw"}),
+        (),  # type: ignore[arg-type]
+        opt_ins=opt_ins,
+    )
+    return services, ro, rw
+
+
+def _granted(scene: Scene, client: str, *names: str) -> RemoteAccessContext:
+    capabilities = [Capability(name) for name in names]
+    return RemoteAccessContext(
+        scene.principal,
+        authenticated_client_id=client,
+        allowed_capabilities=frozenset(names),
+        capability_purposes=frozenset(
+            (capability, purpose)
+            for capability in capabilities
+            for purpose in permitted_purposes(capability)
+        ),
+    )
+
+
+def test_default_profile_ceilings_are_byte_identical() -> None:
+    from my_pa.contracts.mcp_database_profiles import (
+        MCP_PROFILE_READ_CAPABILITIES,
+        MCP_PROFILE_WRITE_CAPABILITIES,
+    )
+
+    assert {c.value for c in MCP_PROFILE_READ_CAPABILITIES} == _339_READ_CEILING
+    assert {c.value for c in MCP_PROFILE_WRITE_CAPABILITIES} == _339_WRITE_CEILING
+    for opt_ins in (None, frozenset()):
+        read = (
+            profile_capabilities(McpDatabaseProfile.READ_ONLY)
+            if opt_ins is None
+            else profile_capabilities(McpDatabaseProfile.READ_ONLY, opt_ins)
+        )
+        write = (
+            profile_capabilities(McpDatabaseProfile.READ_WRITE)
+            if opt_ins is None
+            else profile_capabilities(McpDatabaseProfile.READ_WRITE, opt_ins)
+        )
+        assert read == _339_READ_CEILING
+        assert write == _339_READ_CEILING | _339_WRITE_CEILING
+    # The setting is default empty, with or without the profiles.
+    plain = load_settings({"MY_PA_DATABASE_URL": "postgresql+psycopg://test@db.invalid/my_pa"})
+    assert plain.mcp_database_profile_opt_in_set() == frozenset()
+    assert load_settings(_PROFILE_SETTINGS).mcp_database_profile_opt_in_set() == frozenset()
+    assert McpDatabaseServices.__dataclass_fields__["opt_ins"].default == frozenset()
+
+
+def test_an_opt_in_admits_only_admissible_lineage_names() -> None:
+    from my_pa.contracts.mcp_database_profiles import (
+        MCP_PROFILE_OPT_IN_CAPABILITY_NAMES,
+        MCP_PROFILE_OPT_IN_READ_CAPABILITIES,
+        MCP_PROFILE_OPT_IN_WRITE_CAPABILITIES,
+    )
+
+    assert {c.value for c in MCP_PROFILE_OPT_IN_READ_CAPABILITIES} == _OPT_IN_READS
+    assert {c.value for c in MCP_PROFILE_OPT_IN_WRITE_CAPABILITIES} == _OPT_IN_WRITES
+    assert MCP_PROFILE_OPT_IN_CAPABILITY_NAMES == _OPT_IN_READS | _OPT_IN_WRITES
+    everything = _OPT_IN_READS | _OPT_IN_WRITES
+    settings = _opted_in(",".join(sorted(everything)))
+    assert settings.mcp_database_profile_opt_in_set() == everything  # type: ignore[attr-defined]
+    assert profile_capabilities(McpDatabaseProfile.READ_ONLY, everything) == (
+        _339_READ_CEILING | _OPT_IN_READS
+    )
+    assert profile_capabilities(McpDatabaseProfile.READ_WRITE, everything) == (
+        _339_READ_CEILING | _339_WRITE_CEILING | _OPT_IN_READS | _OPT_IN_WRITES
+    )
+    # One opt-in adds exactly that one name.
+    assert profile_capabilities(
+        McpDatabaseProfile.READ_ONLY, frozenset({"records.lineage.related"})
+    ) == (_339_READ_CEILING | {"records.lineage.related"})
+
+
+@pytest.mark.parametrize("names", ["arbitrary.sql", "tasks.create", "reports.commit", "issues"])
+def test_an_opt_in_outside_the_admissible_set_refuses_composition(names: str) -> None:
+    with pytest.raises(SettingsError, match="admissible"):
+        _opted_in(names)
+    with pytest.raises(SettingsError, match="admissible"):
+        _opted_in(f"records.lineage,{names}")
+    # And any name at all while the restricted profiles are off.
+    with pytest.raises(SettingsError, match="require MCP database profiles"):
+        load_settings(
+            {
+                "MY_PA_DATABASE_URL": "postgresql+psycopg://test@db.invalid/my_pa",
+                "MY_PA_MCP_DATABASE_PROFILE_OPT_INS": "records.lineage",
+            }
+        )
+
+
+def test_write_opt_ins_reach_only_the_rw_profile() -> None:
+    for name in sorted(_OPT_IN_WRITES):
+        opted = frozenset({name})
+        assert name not in profile_capabilities(McpDatabaseProfile.READ_ONLY, opted), name
+        assert name in profile_capabilities(McpDatabaseProfile.READ_WRITE, opted), name
+    for name in sorted(_OPT_IN_READS):
+        opted = frozenset({name})
+        for profile in McpDatabaseProfile:
+            assert name in profile_capabilities(profile, opted), (name, profile)
+
+
+def test_an_opted_in_write_grant_selects_the_rw_profile(scene: Scene) -> None:
+    assert_name = Capability.RECORDS_ASSOCIATIONS_ASSERT.value
+    context = _granted(scene, "rw", assert_name)
+    # Not opted in: the #339 behaviour -- the ro service, and the write trimmed.
+    services, ro, rw = _profiles(scene)
+    bound = services.access(context, write_allowed=True)
+    assert bound is not None and bound.service is ro
+    assert not bound.allowed_capabilities
+    # Opted in: the surviving opted-in write grant selects the rw service.
+    services, ro, rw = _profiles(scene, frozenset({assert_name}))
+    bound = services.access(context, write_allowed=True)
+    assert bound is not None and bound.service is rw
+    assert bound.allowed_capabilities == frozenset({assert_name})
+    # Writes off, or an ro-listed client, still bind the ro service and no write.
+    for client, writes in (("rw", False), ("ro", True)):
+        bound = services.access(_granted(scene, client, assert_name), write_allowed=writes)
+        assert bound is not None and bound.service is ro, (client, writes)
+        assert not bound.allowed_capabilities
+
+
+def test_reports_manifest_is_never_admissible(scene: Scene) -> None:
+    from my_pa.contracts.mcp_database_profiles import MCP_PROFILE_OPT_IN_CAPABILITY_NAMES
+
+    name = Capability.REPORTS_MANIFEST.value
+    assert name not in MCP_PROFILE_OPT_IN_CAPABILITY_NAMES
+    with pytest.raises(SettingsError, match="admissible"):
+        _opted_in(name)
+    # Even handed straight to the ceiling, it is not admitted.
+    for profile in McpDatabaseProfile:
+        assert name not in profile_capabilities(profile, frozenset({name}))
+    services, _ro, _rw = _profiles(scene, frozenset({name}))
+    bound = services.access(_granted(scene, "rw", name), write_allowed=True)
+    assert bound is not None and not bound.allowed_capabilities
+
+
+def test_close_reopen_backfill_confirm_and_program_reads_are_never_admissible() -> None:
+    from my_pa.contracts.mcp_database_profiles import MCP_PROFILE_OPT_IN_CAPABILITY_NAMES
+
+    assert not _NEVER & MCP_PROFILE_OPT_IN_CAPABILITY_NAMES
+    for name in sorted(_NEVER):
+        assert Capability(name)  # every one is a declared name
+        with pytest.raises(SettingsError, match="admissible"):
+            _opted_in(name)
+        for profile in McpDatabaseProfile:
+            assert name not in profile_capabilities(profile, frozenset({name})), name
+
+
+def test_an_opt_in_never_issues_a_grant(scene: Scene) -> None:
+    everything = _OPT_IN_READS | _OPT_IN_WRITES
+    services, _ro, rw = _profiles(scene, everything)
+    # A client granted only a #339 read reaches only that read: the opt-ins
+    # widen the ceiling, never the client's own grants.
+    granted = _granted(scene, "rw", Capability.CANVAS_WORKSPACE_GET.value)
+    bound = services.access(granted, write_allowed=True)
+    assert bound is not None
+    assert bound.allowed_capabilities == frozenset({Capability.CANVAS_WORKSPACE_GET.value})
+    assert bound.capability_purposes <= granted.capability_purposes
+    # A client granted one opted-in write reaches that write and nothing else.
+    one = Capability.ISSUES_MEMBERSHIPS_ADD.value
+    bound = services.access(_granted(scene, "rw", one), write_allowed=True)
+    assert bound is not None and bound.service is rw
+    assert bound.allowed_capabilities == frozenset({one})
+    # No grant at all: nothing, whatever is opted in.
+    bound = services.access(
+        RemoteAccessContext(
+            scene.principal,
+            authenticated_client_id="rw",
+            allowed_capabilities=frozenset(),
+            capability_purposes=frozenset(),
+        ),
+        write_allowed=True,
+    )
+    assert bound is not None and not bound.allowed_capabilities

@@ -480,15 +480,152 @@ _SUMMARIES: Final = {
 }
 
 
+#: Section 7.12 (worker N3): the summary of every other lineage write and read,
+#: verbatim. Each open write says it is recorded client-identified; each
+#: operator-kind name says "Operator only"; each read names what it labels.
+_LINEAGE_SUMMARIES: Final = {
+    "records.associations.assert": (
+        "Commit a typed link you identified from cited exact evidence or the user's "
+        "instruction; it is recorded client-identified and unreviewed, and shared projects, "
+        "dates, names or similar text are not evidence of it."
+    ),
+    "records.associations.correct": (
+        "Replace an unreviewed association's evidence with exact cited passages; recorded "
+        "client-identified, and refused on a link the user has confirmed."
+    ),
+    "records.associations.end": (
+        "End an association the user never confirmed, with a reason; recorded "
+        "client-identified, and it holds its Issue's close until the user reviews it."
+    ),
+    "records.associations.contest": (
+        "Dispute an active association with an exact contradicting passage; recorded "
+        "client-identified, and a link the user confirmed may be contested only once."
+    ),
+    "records.associations.reinstate": (
+        "Resolve a contested association the user never confirmed back to active with its "
+        "relation's evidence; recorded client-identified and unreviewed."
+    ),
+    "issues.memberships.add": (
+        "Make a record a member of an Issue, citing exact evidence; recorded "
+        "client-identified and unreviewed, and it holds the Issue's close until confirmed."
+    ),
+    "issues.memberships.end": (
+        "End an Issue membership the user never confirmed, with a reason; recorded "
+        "client-identified, and it holds the Issue's close until the user reviews it."
+    ),
+    "issues.memberships.correct": (
+        "Replace an unreviewed membership's evidence with exact cited passages; recorded "
+        "client-identified, and refused on a membership the user has confirmed."
+    ),
+    "issues.project_links.add": (
+        "Link an Issue to a Project, or relink it, when its work belongs there; recorded "
+        "client-identified, and an unreviewed link makes the Project's Issue totals not "
+        "reportable."
+    ),
+    "issues.project_links.end": (
+        "End an Issue's Project link the user never confirmed, with a reason; recorded "
+        "client-identified and unreviewed."
+    ),
+    "issues.handoffs.record": (
+        "Record from exact evidence that a Commitment's next action changed hands; recorded "
+        "client-identified and unreviewed."
+    ),
+    "issues.handoffs.correct": (
+        "Retime or void a handoff the user never confirmed, citing exact evidence; recorded "
+        "client-identified, never rewriting the original."
+    ),
+    "issues.work.create_task": (
+        "Create a Task as work of an Issue with its membership and links in one request; the "
+        "links are recorded client-identified and unreviewed."
+    ),
+    "issues.work.create_commitment": (
+        "Create a Commitment as work of an Issue with its membership and links in one "
+        "request; the links are recorded client-identified and unreviewed."
+    ),
+    "issues.create": "Open an Issue (version 1, open) with a title and description.",
+    "issues.update": (
+        "Change an Issue's title, description or non-terminal state at its expected version."
+    ),
+    "issues.close": "Operator only: close an Issue behind its closure gate.",
+    "issues.reopen": "Operator only: reopen a closed Issue, with a reason.",
+    "records.backfill.plan": (
+        "Operator only: enumerate a lineage backfill dry run, or classify its next batch."
+    ),
+    "records.backfill.report": (
+        "Operator only: read one lineage backfill run's census, counts and items."
+    ),
+    "issues.read": (
+        "Read one Issue with its Project links and, on request, its members, each labelled "
+        "user_confirmed or client_identified."
+    ),
+    "issues.list": "List your Issues, newest first, one keyset page at a time.",
+    "issues.history": (
+        "Read one Issue's revisions with their closure basis, oldest first, as known at known_at."
+    ),
+    "issues.timeline": (
+        "Read one Issue's lineage and native events in order, each lineage fact with its "
+        "provenance label, one page at a time."
+    ),
+    "issues.handoffs.list": (
+        "List an Issue's handoffs, oldest first, each with its evidence and provenance label."
+    ),
+    "issues.closure_readiness": (
+        "Read an Issue's gaps: blocked members, stale evidence, contested links and "
+        "unreviewed client-identified links that hold its close."
+    ),
+    "records.lineage": (
+        "Read the Issue-scoped lineage around one record, with each link's evidence and "
+        "provenance label."
+    ),
+    "records.associations.history": (
+        "Read one association's revisions with their evidence and provenance labels, as "
+        "known at known_at."
+    ),
+    "meetings.notes.versions": (
+        "List one Meeting's note versions, newest first, to choose the exact version to cite."
+    ),
+    "meetings.notes.read_version": (
+        "Read one exact Meeting note version, its body on request, to cite code-point offsets "
+        "of the stored text."
+    ),
+}
+#: Section 7.12, verbatim: the field documentation of the flag and of the anchors.
+_USER_DIRECTED_DOC: Final = (
+    "Set true only when the user explicitly instructed this write; it is stored as an "
+    "unverified claim and changes no gate or label."
+)
+_EVIDENCE_DOC: Final = (
+    "Cite the exact stored version (mnote_ or capver_) and code-point offsets of the stored "
+    "body; read it with meetings.notes.read_version first."
+)
+
+
 def test_lineage_tool_descriptions_carry_the_client_guidance() -> None:
     descriptions = {tool.name: tool.description for tool in TOOLS}
-    for name, summary in _SUMMARIES.items():
+    for name, summary in (_SUMMARIES | _LINEAGE_SUMMARIES).items():
         assert descriptions[name] == summary, name
-    # Every lineage tool has a one-sentence description within 240 characters.
+    # Every lineage tool has a pinned, one-sentence description within 240 characters.
+    assert {capability.value for capability in _LINEAGE_CAPABILITIES} == set(
+        _SUMMARIES | _LINEAGE_SUMMARIES
+    )
     for capability in _LINEAGE_CAPABILITIES:
         description = descriptions[capability.value]
         assert description, capability.value
         assert len(description) <= 240, capability.value
+        assert description.endswith(".") and ". " not in description, capability.value
+    # The open writes' field documentation (section 7.12).
+    payloads = {
+        tool.name: tool.input_schema["properties"]["payload"]["properties"] for tool in TOOLS
+    }
+    for name in OPEN_LINEAGE_WRITE_CAPABILITIES:
+        assert payloads[name]["user_directed"]["description"] == _USER_DIRECTED_DOC, name
+        anchors = [
+            value
+            for key, value in payloads[name].items()
+            if key in {"evidence_anchors", "membership_evidence_anchors"}
+        ]
+        for schema in anchors:
+            assert schema["description"].endswith(_EVIDENCE_DOC), name
 
 
 # ---- old-client rule (section 8) -----------------------------------------------------

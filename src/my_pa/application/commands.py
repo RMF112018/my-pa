@@ -12120,7 +12120,7 @@ MAX_ISSUE_PAGE_SIZE: Final = 100
 
 @dataclass(frozen=True, slots=True)
 class CreateIssue:
-    """`issues.create`: open one Issue (version 1, `open`) with a title and description.
+    """Open an Issue (version 1, open) with a title and description.
 
     No Project and no members: a Project link is `issues.project_links.add`. The
     same `idempotency_key` with the same request replays the original revision;
@@ -12153,11 +12153,11 @@ class CreateIssue:
 
 @dataclass(frozen=True, slots=True)
 class ReadIssue:
-    """`issues.read`: one Issue of yours with its native Project links.
+    """Read one Issue with its Project links and, on request, its members, each labelled user_confirmed or client_identified.
 
     A context Situation, and an Issue another Principal holds, are answered
     exactly as an absent one: not_found.
-    """
+    """  # noqa: E501
 
     capability: ClassVar[Capability] = Capability.ISSUES_READ
 
@@ -12183,7 +12183,7 @@ class ReadIssue:
 
 @dataclass(frozen=True, slots=True)
 class ListIssues:
-    """`issues.list`: one keyset page of your Issues, newest first.
+    """List your Issues, newest first, one keyset page at a time.
 
     Optionally only one state, or only Issues with an active link to one
     Project. `after` is the last `issue_id` of the previous page under the same
@@ -12237,7 +12237,7 @@ class ListIssues:
 
 @dataclass(frozen=True, slots=True)
 class UpdateIssue:
-    """`issues.update`: change an Issue's title, description or non-terminal state.
+    """Change an Issue's title, description or non-terminal state at its expected version.
 
     `expected_version` is the version you read; a stale one is conflict and
     writes nothing. Allowed state moves: open to active, open or active to
@@ -12318,7 +12318,15 @@ class UpdateIssue:
 #: unverified claim (`user_directed_claim`); it changes no gate or label, and
 #: the human channel may not send it (`invalid_request` / `user_directed`).
 _USER_DIRECTED_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
-    {"type": "boolean", "default": False}
+    {
+        "type": "boolean",
+        "default": False,
+        # S3.1 section 7.12, verbatim (the field documentation of the flag).
+        "description": (
+            "Set true only when the user explicitly instructed this write; it is stored "
+            "as an unverified claim and changes no gate or label."
+        ),
+    }
 )
 
 
@@ -12330,12 +12338,16 @@ def _user_directed(value: object) -> None:
 
 @dataclass(frozen=True, slots=True)
 class AddIssueProjectLink:
-    """`issues.project_links.add`: link an Issue to a Project of yours, or relink it.
+    """Link an Issue to a Project, or relink it, when its work belongs there; recorded client-identified, and an unreviewed link makes the Project's Issue totals not reportable.
 
-    Local operator only. `expected_membership_revision` 0 asserts a new link (no
-    link may exist); n reinstates a link whose latest event is n and ended. An
-    active link is conflict. The Issue's version does not change.
-    """
+    Open to any admitted caller (S3.1): a write not from the local operator is
+    recorded `client_identified` -- unreviewed, never accepted-grade, and making the
+    Project's Issue totals not reportable until the user confirms it -- and counted
+    against the writing client's rate bounds. A link the user has confirmed at any
+    event is `denied` to a client. `expected_membership_revision` 0 asserts a new
+    link (no link may exist); n reinstates a link whose latest event is n and ended.
+    An active link is conflict. The Issue's version does not change.
+    """  # noqa: E501
 
     capability: ClassVar[Capability] = Capability.ISSUES_PROJECT_LINKS_ADD
 
@@ -12387,12 +12399,16 @@ class AddIssueProjectLink:
 
 @dataclass(frozen=True, slots=True)
 class EndIssueProjectLink:
-    """`issues.project_links.end`: end an Issue's active link to a Project.
+    """End an Issue's Project link the user never confirmed, with a reason; recorded client-identified and unreviewed.
 
-    Local operator only. The link's latest event must be
-    `expected_membership_revision` and active, otherwise conflict. The link row
-    is never deleted; a later `issues.project_links.add` can reinstate it.
-    """
+    Open to any admitted caller (S3.1): a write not from the local operator is
+    recorded `client_identified` -- unreviewed, never accepted-grade, and making the
+    Project's Issue totals not reportable until the user confirms it -- and counted
+    against the writing client's rate bounds. A link the user has confirmed at any
+    event is `denied` to a client. The link's latest event must be
+    `expected_membership_revision` and active, otherwise conflict. The link row is
+    never deleted; a later `issues.project_links.add` can reinstate it.
+    """  # noqa: E501
 
     capability: ClassVar[Capability] = Capability.ISSUES_PROJECT_LINKS_END
 
@@ -12465,7 +12481,10 @@ _EVIDENCE_ANCHORS_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
         "description": (
             "Evidence: exact Meeting note or Capture versions, each with an optional "
             "code-point passage, or legacy Capture roots (corroborates/contradicts only). "
-            "No anchor may repeat another's source and passage."
+            "No anchor may repeat another's source and passage. "
+            # S3.1 section 7.12, verbatim.
+            "Cite the exact stored version (mnote_ or capver_) and code-point offsets of "
+            "the stored body; read it with meetings.notes.read_version first."
         ),
     }
 )
@@ -12514,13 +12533,17 @@ _MEMBER_FAMILIES: Final = RELATION_MATRIX[RelationType.ISSUE_MEMBER][2]
 
 @dataclass(frozen=True, slots=True)
 class AddIssueMembership:
-    """`issues.memberships.add`: make a record of yours a member of one of your Issues.
+    """Make a record a member of an Issue, citing exact evidence; recorded client-identified and unreviewed, and it holds the Issue's close until confirmed.
 
-    Local operator only. `member` is a Meeting, Meeting note version, Task,
+    Open to any admitted caller (S3.1): a write not from the local operator is
+    recorded `client_identified` -- unreviewed, never accepted-grade, holding its
+    Issue's close until the user confirms or revises it -- and counted against the
+    writing client's rate bounds. A fact the user has confirmed at any revision is
+    `denied` to a client. `member` is a Meeting, Meeting note version, Task,
     Commitment, Constraint or Capture version; a Project's scope is
-    `issues.project_links.add`. An active membership with the same member and
-    role is returned with `created: false` and never changes.
-    """
+    `issues.project_links.add`. An active membership with the same member and role
+    is returned with `created: false` and never changes.
+    """  # noqa: E501
 
     capability: ClassVar[Capability] = Capability.ISSUES_MEMBERSHIPS_ADD
 
@@ -12564,12 +12587,15 @@ class AddIssueMembership:
 
 @dataclass(frozen=True, slots=True)
 class EndIssueMembership:
-    """`issues.memberships.end`: end an active Issue membership.
+    """End an Issue membership the user never confirmed, with a reason; recorded client-identified, and it holds the Issue's close until the user reviews it.
 
-    Local operator only. `expected_revision` is the membership's current
-    revision; a stale one is conflict. A semantic association's id is
-    invalid_request.
-    """
+    Open to any admitted caller (S3.1): a write not from the local operator is
+    recorded `client_identified` -- unreviewed, never accepted-grade, holding its
+    Issue's close until the user confirms or revises it -- and counted against the
+    writing client's rate bounds. A fact the user has confirmed at any revision is
+    `denied` to a client. `expected_revision` is the membership's current revision;
+    a stale one is conflict. A semantic association's id is invalid_request.
+    """  # noqa: E501
 
     capability: ClassVar[Capability] = Capability.ISSUES_MEMBERSHIPS_END
 
@@ -12606,25 +12632,28 @@ class EndIssueMembership:
 
 @dataclass(frozen=True, slots=True)
 class AssertRecordAssociation:
-    """`records.associations.assert`: assert that one record of yours relates to another.
+    """Commit a typed link you identified from cited exact evidence or the user's instruction; it is recorded client-identified and unreviewed, and shared projects, dates, names or similar text are not evidence of it.
 
-    Local operator only. `originated_from`: a Commitment, Task or Constraint
-    from an exact Meeting note or Capture version, with an `origin` anchor on a
-    passage of that version. `discusses`: a Meeting or note version discusses
-    an Issue, Task, Commitment or Constraint, with a `discussion` anchor on that
-    note (or a note of that Meeting). `escalated_from`: a published Constraint
-    escalated from a Task, in a required `context_issue_id` whose Project
-    links include the Constraint's Project and whose members include the
-    Task, with an exact-version `origin` anchor. `blocks`: a Task or
-    Constraint blocks another one (never itself, never closing a cycle), with
-    an exact-version `corroborates` anchor. `related_context`: two distinct
-    Meetings, notes, Tasks, Commitments, Constraints or Capture versions that
-    both belong to the required `context_issue_id` relate within it, with an
-    exact-version `corroborates` anchor; it is stored once whichever order you
-    name them in. `context_issue_id` scopes the association to one of your
-    Issues. The same active meaning returns the existing association with
-    `created: false`; a contested one is refused.
-    """
+    Open to any admitted caller (S3.1): a write not from the local operator is
+    recorded `client_identified` -- unreviewed, never accepted-grade, holding its
+    Issue's close until the user confirms or revises it -- and counted against the
+    writing client's rate bounds. A fact the user has confirmed at any revision is
+    `denied` to a client. `originated_from`: a Commitment, Task or Constraint from
+    an exact Meeting note or Capture version, with an `origin` anchor on a passage
+    of that version. `discusses`: a Meeting or note version discusses an Issue,
+    Task, Commitment or Constraint, with a `discussion` anchor on that note (or a
+    note of that Meeting). `escalated_from`: a published Constraint escalated from a
+    Task, in a required `context_issue_id` whose Project links include the
+    Constraint's Project and whose members include the Task, with an exact-version
+    `origin` anchor. `blocks`: a Task or Constraint blocks another one (never
+    itself, never closing a cycle), with an exact-version `corroborates` anchor.
+    `related_context`: two distinct Meetings, notes, Tasks, Commitments, Constraints
+    or Capture versions that both belong to the required `context_issue_id` relate
+    within it, with an exact-version `corroborates` anchor; it is stored once
+    whichever order you name them in. `context_issue_id` scopes the association to
+    one of your Issues. The same active meaning returns the existing association
+    with `created: false`; a contested one is refused.
+    """  # noqa: E501
 
     capability: ClassVar[Capability] = Capability.RECORDS_ASSOCIATIONS_ASSERT
 
@@ -12688,12 +12717,16 @@ class AssertRecordAssociation:
 
 @dataclass(frozen=True, slots=True)
 class CorrectRecordAssociation:
-    """`records.associations.correct`: replace a semantic association's evidence set.
+    """Replace an unreviewed association's evidence with exact cited passages; recorded client-identified, and refused on a link the user has confirmed.
 
-    Local operator only. The supplied set is the complete new set, satisfies
-    the relation's rule and differs from the current one. The association's
-    endpoints and meaning never change.
-    """
+    Open to any admitted caller (S3.1): a write not from the local operator is
+    recorded `client_identified` -- unreviewed, never accepted-grade, holding its
+    Issue's close until the user confirms or revises it -- and counted against the
+    writing client's rate bounds. A fact the user has confirmed at any revision is
+    `denied` to a client. The supplied set is the complete new set, satisfies the
+    relation's rule and differs from the current one. The association's endpoints
+    and meaning never change.
+    """  # noqa: E501
 
     capability: ClassVar[Capability] = Capability.RECORDS_ASSOCIATIONS_CORRECT
 
@@ -12733,11 +12766,15 @@ class CorrectRecordAssociation:
 
 @dataclass(frozen=True, slots=True)
 class EndRecordAssociation:
-    """`records.associations.end`: end a semantic association.
+    """End an association the user never confirmed, with a reason; recorded client-identified, and it holds its Issue's close until the user reviews it.
 
-    Local operator only. An ended association is final; asserting the same
-    meaning again creates a new one.
-    """
+    Open to any admitted caller (S3.1): a write not from the local operator is
+    recorded `client_identified` -- unreviewed, never accepted-grade, holding its
+    Issue's close until the user confirms or revises it -- and counted against the
+    writing client's rate bounds. A fact the user has confirmed at any revision is
+    `denied` to a client. An ended association is final; asserting the same meaning
+    again creates a new one.
+    """  # noqa: E501
 
     capability: ClassVar[Capability] = Capability.RECORDS_ASSOCIATIONS_END
 
@@ -12777,14 +12814,14 @@ class EndRecordAssociation:
 
 @dataclass(frozen=True, slots=True)
 class ReadRecordLineage:
-    """`records.lineage`: the Issue-scoped lineage around one record of yours.
+    """Read the Issue-scoped lineage around one record, with each link's evidence and provenance label.
 
     Returns the Issues the record belongs to and, for the one selected (or the
     only one), the records and recorded associations reachable within
     `max_depth` (0..4, default 4). With several candidate Issues and no
     `issue_id`, only the candidates are returned. One bounded page: no body, no
     title but an Issue's own, and `complete_state` says what the answer can claim.
-    """
+    """  # noqa: E501
 
     capability: ClassVar[Capability] = Capability.RECORDS_LINEAGE
 
@@ -12849,7 +12886,7 @@ class ReadRecordLineage:
 
 @dataclass(frozen=True, slots=True)
 class ListMeetingNoteVersions:
-    """`meetings.notes.versions`: the note versions of one Meeting of yours, newest first.
+    """List one Meeting's note versions, newest first, to choose the exact version to cite.
 
     Metadata only: no body and no digest. `after` is the last
     `note_version_id` of the previous page, otherwise invalid_request.
@@ -12887,12 +12924,12 @@ class ListMeetingNoteVersions:
 
 @dataclass(frozen=True, slots=True)
 class ReadMeetingNoteVersion:
-    """`meetings.notes.read_version`: one exact note version of one Meeting of yours.
+    """Read one exact Meeting note version, its body on request, to cite code-point offsets of the stored text.
 
     Returns its stored content digest, and the exact body only when
     `include_body` is true. A note version of another Meeting, or of another
     Principal, is not_found.
-    """
+    """  # noqa: E501
 
     capability: ClassVar[Capability] = Capability.MEETINGS_NOTES_READ_VERSION
 
@@ -12955,7 +12992,7 @@ def _blank_refused_reason(value: object) -> str:
 
 @dataclass(frozen=True, slots=True)
 class CloseIssue:
-    """`issues.close`: close one of your Issues behind its closure gate.
+    """Operator only: close an Issue behind its closure gate.
 
     Local operator only. Every active work or constraint member must be
     natively closed (and accepted, for a Task or Commitment) and carry
@@ -13007,7 +13044,7 @@ class CloseIssue:
 
 @dataclass(frozen=True, slots=True)
 class ReopenIssue:
-    """`issues.reopen`: reopen one of your closed Issues, with a reason.
+    """Operator only: reopen a closed Issue, with a reason.
 
     Local operator only. The Issue becomes active and its closure is cleared;
     no member, link or record is reopened or changed. Optional evidence anchors
@@ -13048,12 +13085,12 @@ class ReopenIssue:
 
 @dataclass(frozen=True, slots=True)
 class ReadIssueClosureReadiness:
-    """`issues.closure_readiness`: whether one of your Issues could close now, and why not.
+    """Read an Issue's gaps: blocked members, stale evidence, contested links and unreviewed client-identified links that hold its close.
 
     Read-only and current: lists each blocked work or constraint member with
     every reason. Says nothing about closure evidence, which issues.close is
     given. A closed Issue answers not ready with no blockers.
-    """
+    """  # noqa: E501
 
     capability: ClassVar[Capability] = Capability.ISSUES_CLOSURE_READINESS
 
@@ -13069,14 +13106,18 @@ class ReadIssueClosureReadiness:
 
 @dataclass(frozen=True, slots=True)
 class CorrectIssueMembership:
-    """`issues.memberships.correct`: replace a membership's evidence set.
+    """Replace an unreviewed membership's evidence with exact cited passages; recorded client-identified, and refused on a membership the user has confirmed.
 
-    Local operator only. The supplied set (0..32 anchors, any role) is the
-    complete new set and differs from the current one, except an identical set
-    with a resolution anchor after the member's own record changed (a
-    re-affirmation). This is how resolution evidence is recorded on a work or
-    constraint member after its native close. The member and role never change.
-    """
+    Open to any admitted caller (S3.1): a write not from the local operator is
+    recorded `client_identified` -- unreviewed, never accepted-grade, holding its
+    Issue's close until the user confirms or revises it -- and counted against the
+    writing client's rate bounds. A fact the user has confirmed at any revision is
+    `denied` to a client. The supplied set (0..32 anchors, any role) is the complete
+    new set and differs from the current one, except an identical set with a
+    resolution anchor after the member's own record changed (a re-affirmation). This
+    is how resolution evidence is recorded on a work or constraint member after its
+    native close. The member and role never change.
+    """  # noqa: E501
 
     capability: ClassVar[Capability] = Capability.ISSUES_MEMBERSHIPS_CORRECT
 
@@ -13116,18 +13157,20 @@ class CorrectIssueMembership:
 
 @dataclass(frozen=True, slots=True)
 class RecordIssueHandoff:
-    """`issues.handoffs.record`: record that a Commitment's next action changed hands.
+    """Record from exact evidence that a Commitment's next action changed hands; recorded client-identified and unreviewed.
 
-    Local operator only. Within one of your Issues, the next management action
-    on one Commitment member moves from the side `from_side` names -- the
-    Principal or the counterparty -- to the other side, effective at
+    Open to any admitted caller (S3.1): a write not from the local operator is
+    recorded `client_identified` -- unreviewed and never accepted-grade -- and
+    counted against the writing client's rate bounds. Within one of your Issues, the
+    next management action on one Commitment member moves from the side `from_side`
+    names -- the Principal or the counterparty -- to the other side, effective at
     `effective_at` (with an offset, never in the future, never before the
     Commitment's creation or the previous handoff). The server resolves both
     holders: the leaving one is the chain's last holder, the arriving one the
-    Principal or the Commitment's current counterparty. Exactly one exact
-    evidence anchor with role handoff. Nothing native changes, and a handoff
-    is never inferred from a close, a create or a membership change.
-    """
+    Principal or the Commitment's current counterparty. Exactly one exact evidence
+    anchor with role handoff. Nothing native changes, and a handoff is never
+    inferred from a close, a create or a membership change.
+    """  # noqa: E501
 
     capability: ClassVar[Capability] = Capability.ISSUES_HANDOFFS_RECORD
 
@@ -13226,7 +13269,7 @@ _INSTANT_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
 
 @dataclass(frozen=True, slots=True)
 class ListIssueHandoffs:
-    """`issues.handoffs.list`: one page of an Issue's handoffs, oldest first.
+    """List an Issue's handoffs, oldest first, each with its evidence and provenance label.
 
     Ordered by when each was recorded; `commitment_id` narrows to one
     Commitment's chain. An owned Commitment with no handoff in this Issue
@@ -13506,16 +13549,20 @@ def _issue_work_request(
 
 @dataclass(frozen=True, slots=True)
 class CreateIssueWorkTask:
-    """`issues.work.create_task`: create a Task as work of one of your Issues.
+    """Create a Task as work of an Issue with its membership and links in one request; the links are recorded client-identified and unreviewed.
 
-    Local operator only. `task` is the tasks.create payload without
-    idempotency_key, situation_id and accepted_by_review_decision_id (a Task
-    is accepted only by direct_principal origin). One transaction creates the
-    Task exactly as tasks.create would, its work membership in the Issue, and
-    up to four associations from it (originated_from, created_to_resolve). A
-    project_id needs an active Project link to the Issue. Replays return the
-    original answer; read the Task itself with tasks.read.
-    """
+    Open to any admitted caller (S3.1): a write not from the local operator is
+    recorded `client_identified` -- unreviewed, never accepted-grade, holding its
+    Issue's close until the user confirms or revises it -- and counted against the
+    writing client's rate bounds. A fact the user has confirmed at any revision is
+    `denied` to a client. `task` is the tasks.create payload without
+    idempotency_key, situation_id and accepted_by_review_decision_id (a Task is
+    accepted only by direct_principal origin). One transaction creates the Task
+    exactly as tasks.create would, its work membership in the Issue, and up to four
+    associations from it (originated_from, created_to_resolve). A project_id needs
+    an active Project link to the Issue. Replays return the original answer; read
+    the Task itself with tasks.read.
+    """  # noqa: E501
 
     capability: ClassVar[Capability] = Capability.ISSUES_WORK_CREATE_TASK
 
@@ -13574,17 +13621,20 @@ class CreateIssueWorkTask:
 
 @dataclass(frozen=True, slots=True)
 class CreateIssueWorkCommitment:
-    """`issues.work.create_commitment`: create a Commitment as work of one of your Issues.
+    """Create a Commitment as work of an Issue with its membership and links in one request; the links are recorded client-identified and unreviewed.
 
-    Local operator only. `commitment` is the commitments.create payload without
-    idempotency_key and situation_id. One transaction creates the Commitment
-    exactly as commitments.create would, its work membership in the Issue, and
-    up to four associations from it (originated_from, delegated_from a Task
-    member -- only for owed_to_principal -- and created_to_resolve). A
-    project_id needs an active Project link to the Issue. No handoff is
-    written. Replays return the original answer; read the Commitment itself
-    with commitments.read.
-    """
+    Open to any admitted caller (S3.1): a write not from the local operator is
+    recorded `client_identified` -- unreviewed, never accepted-grade, holding its
+    Issue's close until the user confirms or revises it -- and counted against the
+    writing client's rate bounds. A fact the user has confirmed at any revision is
+    `denied` to a client. `commitment` is the commitments.create payload without
+    idempotency_key and situation_id. One transaction creates the Commitment exactly
+    as commitments.create would, its work membership in the Issue, and up to four
+    associations from it (originated_from, delegated_from a Task member -- only for
+    owed_to_principal -- and created_to_resolve). A project_id needs an active
+    Project link to the Issue. No handoff is written. Replays return the original
+    answer; read the Commitment itself with commitments.read.
+    """  # noqa: E501
 
     capability: ClassVar[Capability] = Capability.ISSUES_WORK_CREATE_COMMITMENT
 
@@ -13715,13 +13765,18 @@ def _link_change_request(
 
 @dataclass(frozen=True, slots=True)
 class ContestRecordAssociation:
-    """`records.associations.contest`: dispute an active semantic association of yours.
+    """Dispute an active association with an exact contradicting passage; recorded client-identified, and a link the user confirmed may be contested only once.
 
-    Local operator only. The supplied evidence is the complete new set and holds
-    at least one exact-version anchor with role contradicts. The association
-    keeps its identity and reads as contested until it is reinstated or ended;
-    a contested association in an Issue's context blocks that Issue's close.
-    """
+    Open to any admitted caller (S3.1): a write not from the local operator is
+    recorded `client_identified` -- unreviewed, never accepted-grade, holding its
+    Issue's close until the user confirms or revises it -- and counted against the
+    writing client's rate bounds. A fact the user has confirmed at any revision is
+    `denied` to a client, except 1 contest of an active association whose head the
+    user confirmed. The supplied evidence is the complete new set and holds at least
+    one exact-version anchor with role contradicts. The association keeps its
+    identity and reads as contested until it is reinstated or ended; a contested
+    association in an Issue's context blocks that Issue's close.
+    """  # noqa: E501
 
     capability: ClassVar[Capability] = Capability.RECORDS_ASSOCIATIONS_CONTEST
 
@@ -13756,11 +13811,15 @@ class ContestRecordAssociation:
 
 @dataclass(frozen=True, slots=True)
 class ReinstateRecordAssociation:
-    """`records.associations.reinstate`: resolve a contested association back to active.
+    """Resolve a contested association the user never confirmed back to active with its relation's evidence; recorded client-identified and unreviewed.
 
-    Local operator only. The supplied evidence is the complete new set and
+    Open to any admitted caller (S3.1): a write not from the local operator is
+    recorded `client_identified` -- unreviewed, never accepted-grade, holding its
+    Issue's close until the user confirms or revises it -- and counted against the
+    writing client's rate bounds. A fact the user has confirmed at any revision is
+    `denied` to a client. The supplied evidence is the complete new set and
     satisfies the relation's own evidence rule.
-    """
+    """  # noqa: E501
 
     capability: ClassVar[Capability] = Capability.RECORDS_ASSOCIATIONS_REINSTATE
 
@@ -13795,11 +13854,11 @@ class ReinstateRecordAssociation:
 
 @dataclass(frozen=True, slots=True)
 class ReadRecordAssociationHistory:
-    """`records.associations.history`: one association's revisions with their evidence.
+    """Read one association's revisions with their evidence and provenance labels, as known at known_at.
 
     As known at `known_at` (default: now), oldest first; `after` is the last
     `revision_no` shown.
-    """
+    """  # noqa: E501
 
     capability: ClassVar[Capability] = Capability.RECORDS_ASSOCIATIONS_HISTORY
 
@@ -13835,7 +13894,7 @@ class ReadRecordAssociationHistory:
 
 @dataclass(frozen=True, slots=True)
 class ReadIssueHistory:
-    """`issues.history`: one Issue's revisions with their closure basis, oldest first.
+    """Read one Issue's revisions with their closure basis, oldest first, as known at known_at.
 
     As known at `known_at` (default: now); `after` is the last version shown.
     """
@@ -13874,12 +13933,12 @@ class ReadIssueHistory:
 
 @dataclass(frozen=True, slots=True)
 class ReadIssueTimeline:
-    """`issues.timeline`: one Issue's ordered lineage and native events, one page at a time.
+    """Read one Issue's lineage and native events in order, each lineage fact with its provenance label, one page at a time.
 
     `known_at` reads the lineage plane as it was then known (native events are
     then omitted); `valid_at` reads what was in effect then. `page_size` is
     10..100 (default 25); `cursor` is the previous page's `next_cursor`.
-    """
+    """  # noqa: E501
 
     capability: ClassVar[Capability] = Capability.ISSUES_TIMELINE
 
@@ -13924,15 +13983,18 @@ class ReadIssueTimeline:
 
 @dataclass(frozen=True, slots=True)
 class CorrectIssueHandoff:
-    """`issues.handoffs.correct`: retime or void one recorded handoff, never rewriting it.
+    """Retime or void a handoff the user never confirmed, citing exact evidence; recorded client-identified, never rewriting the original.
 
-    Local operator only. `retime`: the handoff happened at `effective_at`
-    instead (with an offset, in order within its chain), with exactly one exact
-    anchor with role handoff. `void`: it did not happen -- only the chain's
-    last live handoff -- with exactly one exact anchor with role contradicts.
-    A voided handoff takes no further correction; a closed Issue's handoffs
-    are not corrected.
-    """
+    Open to any admitted caller (S3.1): a write not from the local operator is
+    recorded `client_identified` -- unreviewed and never accepted-grade -- and
+    counted against the writing client's rate bounds. A handoff the user confirmed
+    (the event or any correction) is `denied` to a client. `retime`: the handoff
+    happened at `effective_at` instead (with an offset, in order within its chain),
+    with exactly one exact anchor with role handoff. `void`: it did not happen --
+    only the chain's last live handoff -- with exactly one exact anchor with role
+    contradicts. A voided handoff takes no further correction; a closed Issue's
+    handoffs are not corrected.
+    """  # noqa: E501
 
     capability: ClassVar[Capability] = Capability.ISSUES_HANDOFFS_CORRECT
 
@@ -14011,7 +14073,7 @@ def _handoff_correction_action(value: object) -> HandoffCorrectionAction:
 
 @dataclass(frozen=True, slots=True)
 class PlanLineageBackfill:
-    """`records.backfill.plan`: enumerate a backfill dry run, or classify its next batch.
+    """Operator only: enumerate a lineage backfill dry run, or classify its next batch.
 
     Operator only, behind its own switch. Without `run_id` it freezes the whole
     population in one statement; with `run_id` and `expected_checkpoint` (the
@@ -14064,7 +14126,7 @@ class PlanLineageBackfill:
 
 @dataclass(frozen=True, slots=True)
 class ReportLineageBackfill:
-    """`records.backfill.report`: one backfill run's census, counts and items.
+    """Operator only: read one lineage backfill run's census, counts and items.
 
     Operator only, behind its own switch. `after` is the last `item_no` shown;
     `classification` narrows the items to one class.

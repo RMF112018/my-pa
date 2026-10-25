@@ -74,9 +74,11 @@ is not a defect.
 
 ## 3. What is implemented
 
-Four hundred and thirty-six Python modules under `src/my_pa` and eight hundred and thirty-six test modules —
+Four hundred and thirty-six Python modules under `src/my_pa` and eight hundred and thirty-seven test modules —
 
-**Current-tree remeasurement (record lineage S3.1 reads, labels, guidance and the compact facade, branch `feat/lineage-s31-open-writes`, worker N3, 2026-10-25):** the two commands below count 436 source modules and 836 test modules: the 436/831 below plus the five N3 test modules `tests/integration/test_records_lineage_related.py`, `tests/integration/test_lineage_s31_compact_facade.py`, `tests/contract/test_lineage_s31_read_labels.py`, `tests/contract/test_lineage_s31_guidance.py` and `tests/architecture/test_record_lineage_s31_scope.py` (no source module is added). This is file-inventory evidence, not a test PASS receipt.
+**Current-tree remeasurement (record lineage S3.1 report lineage references and hardening, branch `feat/lineage-s31-open-writes`, worker N4, 2026-10-25):** the two commands below count 436 source modules and 837 test modules: the 436/836 below plus the one N4 test module `tests/integration/test_report_manifest_lineage.py` (no source module is added). This is file-inventory evidence, not a test PASS receipt.
+
+**Historical remeasurement (record lineage S3.1 reads, labels, guidance and the compact facade, branch `feat/lineage-s31-open-writes`, worker N3, 2026-10-25):** the two commands below counted 436 source modules and 836 test modules: the 436/831 below plus the five N3 test modules `tests/integration/test_records_lineage_related.py`, `tests/integration/test_lineage_s31_compact_facade.py`, `tests/contract/test_lineage_s31_read_labels.py`, `tests/contract/test_lineage_s31_guidance.py` and `tests/architecture/test_record_lineage_s31_scope.py` (no source module is added). This is file-inventory evidence, not a test PASS receipt.
 
 **Historical remeasurement (record lineage S3.1 open writes, branch `feat/lineage-s31-open-writes`, worker N2, 2026-10-25):** the two commands below counted 436 source modules and 831 test modules: the 435/824 below plus `src/my_pa/application/lineage_rate.py` and the seven N2 test modules `tests/database/test_lineage_s31_open_writes.py`, `tests/database/test_lineage_s31_remaining_gates.py`, `tests/database/test_lineage_s31_rate_bounds.py`, `tests/integration/test_lineage_s31_confirmation.py`, `tests/integration/test_lineage_s31_close_gate.py`, `tests/security/test_lineage_s31_write_visibility.py` and `tests/concurrency/test_lineage_s31_budget_race.py`. This is file-inventory evidence, not a test PASS receipt.
 

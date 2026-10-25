@@ -63,6 +63,8 @@ from tests.database.lineage_s31_harness import (
     open_scene,
 )
 
+import my_pa.application.issues as issues_module
+import my_pa.application.record_lineage as lineage_module
 from my_pa.application.commands import (
     AddIssueProjectLink,
     CorrectRecordAssociation,
@@ -70,8 +72,11 @@ from my_pa.application.commands import (
     EndIssueMembership,
     EndIssueProjectLink,
     EndRecordAssociation,
+    ReadIssueClosureReadiness,
+    ReadRelatedRecords,
 )
 from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.identity.operation import Capability
 from my_pa.domain.lineage.vocabulary import (
     CLIENT_LINEAGE_WRITES_PER_HOUR,
     OPEN_LINEAGE_WRITE_CAPABILITIES,
@@ -582,3 +587,54 @@ def test_a_link_or_membership_write_without_issue_visibility_answers_as_absent(
         context=closed_issue.issue,
     )
     assert _answer(runtime.client_refused(command)) == ("conflict", ["state"])
+
+
+# ---- truncation visibility (R31-F10, worker N3) ----------------------------------------
+
+
+def test_related_and_readiness_truncation_count_only_visible_items(
+    runtime: S31Runtime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hidden item never moves a truncation flag (S3.1 section 6.3).
+
+    The related read's per-seed Issue cap ranges over visible Issues only, and
+    readiness's `unreviewed_links_truncated` over visible entries only -- with
+    the caps lowered so 1 hidden item would be the one past the bound.
+    """
+    # Related: a Task in 3 Issues, the cap 2. Seen with Issue visibility the cap
+    # truncates; without it no Issue is a candidate, so nothing is truncated.
+    task = runtime.task("truncation-seed")
+    for index in range(3):
+        issue = runtime.issue(f"truncation-{index}")
+        runtime.member(issue, "task", task, f"truncation-{index}", "work")
+    monkeypatch.setattr(lineage_module, "MAX_MATCHING_ISSUES", 2)
+    related = ReadRelatedRecords(seeds=({"family": "task", "record_id": task},))
+    seen = runtime.client_ok(related, grants=client_grants(Capability.RECORDS_LINEAGE_RELATED))
+    assert "truncated_budget" in seen["qualifiers"]
+    blind = runtime.client_ok(
+        related,
+        grants=client_grants(Capability.RECORDS_LINEAGE_RELATED, without=("issues.read",)),
+    )
+    assert "truncated_budget" not in blind["qualifiers"]
+    assert not any(record["family"] == "situation" for record in blind["records"])
+    assert "restricted_evidence" in blind["qualifiers"]
+    # Readiness: 1 visible and 1 hidden unreviewed membership, the cap 1.
+    issue = runtime.issue("truncation-readiness")
+    member = runtime.task("truncation-readiness-member")
+    _capture_id, version_id, _digest = capture(runtime, "truncation-readiness")
+    runtime.local_ok(membership(issue, "task", member, "truncation-visible", role="reference"))
+    runtime.local_ok(
+        membership(issue, "capture_version", version_id, "truncation-hidden", role="reference")
+    )
+    monkeypatch.setattr(issues_module, "MAX_UNREVIEWED_LINKS", 1)
+    readiness = ReadIssueClosureReadiness(issue_id=issue)
+    local = runtime.ok(readiness)
+    assert (len(local["unreviewed_links"]), local["unreviewed_links_truncated"]) == (1, True)
+    hidden = runtime.client_ok(
+        readiness,
+        grants=client_grants(Capability.ISSUES_CLOSURE_READINESS, without=("capture.read",)),
+    )
+    assert len(hidden["unreviewed_links"]) == 1
+    assert hidden["unreviewed_links_truncated"] is False
+    assert hidden["restricted"] is True
+    assert hidden["ready"] is False

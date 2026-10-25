@@ -673,6 +673,10 @@ gateway and the stdio and remote MCP transports (`apps/gateway.py`) and `apps/cl
 (one request at a time) — so the same per-process arithmetic holds in each; the only
 other `ApplicationService` composition, `apps/cli/gsqs_b0.py`, passes no Program factory,
 so `programs.*` are withheld there and a commit records `not_attempted` (R4-F22, R4-F24).
+The restricted MCP profile compositions (#339, `bootstrap/mcp_database_profiles.py`) are
+also built by `build_gateway_runtime`, but with an injected `data_engine`; they build no
+Program engine, so `programs.*` are withheld there too and a commit records
+`not_attempted` (section 12.1, D-46).
 Section 10 pins it with the gateway's own pools at `C = 5` and `C = 10` (the 10 complete;
 no Program-pool checkout waits). **Backends.** With the switch on, each process that
 composes the Program factory builds its own 5-connection Program pool: the gateway's
@@ -1218,7 +1222,7 @@ is kept and not listed as coverage.
 | D-28 | issue impact over native Project links | Issue-kind `project_situations` rows without a membership event exist (S1 §12 row 3, S3 §8.3 `project_situation_inconsistent`, package UB-005) | counted per Project as `legacy_issue_links`; any one makes the Issue metric `issue_link_unverified` at that Project and every scope holding it (section 3.3, R4-F02) |
 | D-29 | Program reads on the request's transaction or the Constraint precedent's work-pool factory | a second work-pool checkout per request deadlocks at `C = P` (`bootstrap/gateway.py`, `tests/concurrency/test_gateway_connection_pool.py`) | a third engine with its own pool for Program reads only, the audit-engine fix; no cycle in the wait-for graph (section 6.3, R4-F05) |
 
-### 12.1 As implemented (S4 workers M1–M5)
+### 12.1 As implemented (S4 workers M1–M6)
 
 Every resolution below was reported in the worker's handoff and accepted by the
 Orchestrator; none changes a section 10 test name or a binding assertion (the D-34 row
@@ -1242,6 +1246,7 @@ corrects a prove-red pairing, not a test).
 | D-43 | dependency-gate summary (FR4-F01) | sections 5.3, 6.2, 7.4 | each manifest records `release_requirement` inside `M` (no schema change): its own section 6.2 gate united with every recorded upstream's, read back from the upstream manifests' canonical text in the committing transaction; `reports.manifest` releases to a remote reader only when the reader satisfies it, otherwise `restricted_evidence` with the text and the digest `null` — for the downstream too. The domain rule is `source_manifest.release_requirement` / `program_released` | none |
 | D-44 | workbook-only conflicts (FR4-F02) | section 3.3: an open sync conflict on the Project is `conflict` | the Program sync facts count every open conflict of the Project, including a `new_in_external` conflict whose `constraint_id` is null; the portfolio's own `constraints.portfolio_overview` count is unchanged. A calendar-less Project's `constraint_sync`, built from S4's own statement (D-35), therefore counts such conflicts too, while a calendared Project's `constraint_sync` is still the portfolio view's (deciding nothing) | the displayed `constraint_sync.open_conflict_count` of a calendared Project can be lower than the count that decides `conflict` |
 | D-45 | generated web lockstep (M1; FR4-F03) | section 8: "`success.json` untouched" | `web/src/lib/api/decode/fixtures/python/success.json` was regenerated (the `capabilities.get` answer: 7 capability rows, 222 → 229, and its cursor list) and `web/README.md`'s capability count moved 222 → 229; section 8 is corrected. No decoder, route, view or `gateway.json` entry changed (still 110) | none |
+| D-46 | restricted MCP profile compositions (M6, merge of #339 `19426ed5`; FR4-R2-F01) | section 6.3: every composition that serves S4 is built by `build_gateway_runtime` with its own Program pool | a composition with an injected `data_engine` (a fixed MCP database role, `bootstrap/mcp_database_profiles.py`) builds no Program engine, because one built from the configured URL would read with broader credentials than the injected role; with no Program read factory `programs.members.resolve` and `programs.overview` are not served there and the `reports.commit` recompute records `not_attempted`. No MCP profile ceiling (`contracts/mcp_database_profiles.py`) admits any S4 name or `reports.commit`, and `knowledge.intelligence_artifact_manifests` cannot be granted to an MCP role (`infrastructure/database/mcp_object_grants.py` refuses every `intelligence_` object as application data). Pinned by the M6 rows of `tests/unit/test_mcp_database_profiles.py` | exposing S4 through MCP profiles is a later operator-gated profile and grant decision. FR4-R2-N1 (pre-existing #339 behaviour): a restricted service's `capabilities.get` still lists the switch-only S4 names (`commitments.v2.*`, `reports.manifest`), which the profile ceiling refuses per request |
 
 ## 13. Operator gates that remain
 

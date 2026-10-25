@@ -116,7 +116,11 @@ statement timeout, 1 s checkout timeout), so one gateway process holds up to fif
 backends instead of ten; sizing that budget in production is an operator item (S4
 contract section 13). Report manifests are written for every new Intelligence
 artifact whatever the switch says (S4 D-21). Enabling it anywhere but a test is an
-operator gate.
+operator gate. A restricted MCP profile composition (`MY_PA_MCP_DATABASE_PROFILES_ENABLED`,
+an injected `data_engine`) builds no Program pool and does not serve `programs.*`; a
+commit there records `not_attempted`, no profile ceiling admits an S4 name, and the
+manifest table cannot be granted to an MCP role (S4 contract D-46). Exposing S4
+through MCP profiles is a later operator-gated profile and grant decision.
 `/v1/{capability}` is a path parameter, so all of them *route*: dispatch
 reaches the handler, which refuses with `unsupported` and the transport maps that
 to **`501`**. This section already discloses the source-root gate below in the

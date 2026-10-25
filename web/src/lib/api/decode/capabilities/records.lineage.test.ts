@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import fixtures from "../fixtures/python/success.json";
-import { decodeRecordsLineage, ISSUE_STATES, LINK_LIFECYCLE_STATES, RELATION_TYPES } from "./records.lineage";
+import { ACCEPTANCE_BASES, decodeRecordsLineage, ISSUE_STATES, LINK_LIFECYCLE_STATES, RELATION_TYPES } from "./records.lineage";
 
 const canonical = fixtures["records.lineage"];
 type Json = Record<string, unknown>;
@@ -189,6 +189,34 @@ describe("records.lineage strict canonical success", () => {
     for (const completeness of ["source_not_integrated", "not_reportable", "historical_fields_partial"]) {
       const value = payload(); Object.assign(value, { complete_state: completeness, qualifiers: [completeness] });
       expect(decode(value).ok, completeness).toBe(false);
+    }
+  });
+
+  it("decodes the S3.1 provenance labels and refuses values outside them", () => {
+    // S3.1 (contract sections 4.3 and 7.6): a connected client's unreviewed
+    // fact, its unverified claim and the writing client (local readers only).
+    expect([...ACCEPTANCE_BASES]).toEqual(["user_confirmed", "client_identified"]);
+    const client = payload();
+    Object.assign((client.typed_edges as Json[])[1]!, {
+      acceptance_basis: "client_identified", authority_class: "ordinary_reviewer",
+      user_directed_claim: true, asserting_client_id: "synthetic-client-0001",
+    });
+    expect(decode(client)).toEqual({ ok: true, value: client });
+    for (const basis of ["attested", "client_confirmed", "User_confirmed", ""]) {
+      const value = payload(); (value.typed_edges as Json[])[1]!.acceptance_basis = basis;
+      expect(decode(value).ok, basis).toBe(false);
+    }
+    for (const claim of ["true", 1, null]) {
+      const value = payload(); (value.typed_edges as Json[])[1]!.user_directed_claim = claim;
+      expect(decode(value).ok, String(claim)).toBe(false);
+    }
+    for (const id of ["", "x".repeat(257), 7]) {
+      const value = payload(); (value.typed_edges as Json[])[1]!.asserting_client_id = id;
+      expect(decode(value).ok, String(id)).toBe(false);
+    }
+    for (const key of ["user_directed_claim", "asserting_client_id"]) {
+      const value = payload(); delete (value.typed_edges as Json[])[1]![key];
+      expect(decode(value).ok, key).toBe(false);
     }
   });
 });

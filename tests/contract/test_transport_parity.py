@@ -2182,6 +2182,14 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         },
         Capability.RECORDS_BACKFILL_PLAN: {"idempotency_key": "parity-records-backfill-plan-0001"},
         Capability.RECORDS_BACKFILL_REPORT: {"run_id": "lbfr_parityrun000001"},
+        # Record lineage S4 (S4 contract section 7).
+        Capability.PROGRAMS_MEMBERS_RESOLVE: {"program_entity_ids": ["ent_parityprogram0001"]},
+        Capability.PROGRAMS_OVERVIEW: {"program_entity_ids": ["ent_parityprogram0001"]},
+        Capability.COMMITMENTS_V2_READ: {"commitment_id": "cmt_paritycommit00001"},
+        Capability.COMMITMENTS_V2_LIST: {"project_ids": ["prj_parityproject0001"]},
+        Capability.COMMITMENTS_V2_SEARCH: {"query": "parity"},
+        Capability.COMMITMENTS_V2_WAITING_ON: {},
+        Capability.REPORTS_MANIFEST: {"report_id": "rpt_parityreport00001"},
     }
 
 
@@ -2317,7 +2325,7 @@ def test_there_are_three_transports_to_compare() -> None:
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
     # The command union and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 223, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 230, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -2685,6 +2693,14 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         Capability.ISSUES_HANDOFFS_CORRECT,
         Capability.RECORDS_BACKFILL_PLAN,
         Capability.RECORDS_BACKFILL_REPORT,
+        # Record lineage S4, behind the same switch and its own sub-switch.
+        Capability.PROGRAMS_MEMBERS_RESOLVE,
+        Capability.PROGRAMS_OVERVIEW,
+        Capability.COMMITMENTS_V2_READ,
+        Capability.COMMITMENTS_V2_LIST,
+        Capability.COMMITMENTS_V2_SEARCH,
+        Capability.COMMITMENTS_V2_WAITING_ON,
+        Capability.REPORTS_MANIFEST,
     }
 )
 
@@ -3274,7 +3290,7 @@ def test_declared_unwired_capabilities_stay_separate_from_positive_parity(
     from my_pa.application.errors import UnsupportedError
 
     assert set(Capability) - set(_HANDLERS) == FUTURE_CAPABILITIES
-    assert len(IMPLEMENTED_CAPABILITIES) == 222
+    assert len(IMPLEMENTED_CAPABILITIES) == 229
     assert set(_BUILDERS) == set(IMPLEMENTED_CAPABILITIES)
     assert {Capability(tool.name) for tool in TOOLS} == set(IMPLEMENTED_CAPABILITIES)
 

@@ -129,6 +129,7 @@ from my_pa.contracts.ports import (
     OperationQueue,
     PortError,
     PreferenceConflictError,
+    ProgramReadUnitOfWork,
     ProjectRepository,
     ProposalAdmissionConflictError,
     PulseRepository,
@@ -10325,6 +10326,11 @@ class Scene:
 _COMPOSE_CONSTRAINTS: Final = cast("Callable[[], ConstraintManagementUnitOfWork]", object())
 
 
+def _unopened_program_read() -> ProgramReadUnitOfWork:
+    """Record lineage S4: a composed Program read factory that FAST never opens."""
+    raise AssertionError("a FAST test opened a Program read; prove it against a server")
+
+
 def build_service(
     world: World,
     providers: FakeProviders,
@@ -10338,6 +10344,7 @@ def build_service(
     knowledge_assertions_enabled: bool = False,
     lineage_enabled: bool = False,
     lineage_backfill_enabled: bool = False,
+    program_reporting_enabled: bool = False,
     constraint_management_unit_of_work: (
         Callable[[], ConstraintManagementUnitOfWork] | None
     ) = _COMPOSE_CONSTRAINTS,
@@ -10449,6 +10456,12 @@ def build_service(
         # Record lineage S3 (contract section 7.7): the backfill sub-switch, off
         # unless a test about it turns it on.
         lineage_backfill_enabled=lineage_backfill_enabled,
+        # Record lineage S4 (contract section 7.6): the Program-reporting
+        # sub-switch, off unless a test about it turns it on; on, the Program
+        # read factory is composed as a stand-in no FAST test opens (the Program
+        # reads are proved against a real server).
+        program_reporting_enabled=program_reporting_enabled,
+        program_read_unit_of_work=(_unopened_program_read if program_reporting_enabled else None),
         gsqs_b0_ports=WorkflowPorts(
             session_factory=lambda rasters: DiskContentSession(rasters),
             case_count=2,

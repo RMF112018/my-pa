@@ -294,6 +294,8 @@ def test_downgrading_one_step_removes_exactly_these_two_tables(migrated_engine: 
         "issue_responsibility_corrections",
         "lineage_backfill_runs",
         "lineage_backfill_items",
+        # Record lineage S4 stacks its one.
+        "intelligence_artifact_manifests",
     }
     assert {
         "entities",

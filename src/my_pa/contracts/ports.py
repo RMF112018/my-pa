@@ -134,6 +134,8 @@ from my_pa.domain.meeting.model import (
     NormalizedAttendee,
 )
 from my_pa.domain.policy.decision import validate_policy_version
+from my_pa.domain.program.membership import BridgeLink, EntityNode, MemberEdge
+from my_pa.domain.program.reportability import MetricId, SyncTarget
 from my_pa.domain.project_controls.category import ConstraintCategory, ConstraintCategoryState
 from my_pa.domain.project_controls.constraint import ProjectConstraint
 from my_pa.domain.project_controls.history import (
@@ -366,6 +368,7 @@ __all__ = [
     "CaptureSummary",
     "CommitmentManagementRepository",
     "CommitmentManagementUnitOfWork",
+    "CommitmentReferenceOwners",
     "ConstraintManagementRepository",
     "ConstraintManagementUnitOfWork",
     "ConstraintRevisionSnapshot",
@@ -458,6 +461,11 @@ __all__ = [
     "Operation",
     "OperationQueue",
     "PortError",
+    "ProgramMemberEdges",
+    "ProgramMembershipRepository",
+    "ProgramMetricsRepository",
+    "ProgramReadUnavailableError",
+    "ProgramSyncFacts",
     "ProjectLinkEventRecord",
     "ProjectRepository",
     "ProposalAdmissionConflictError",
@@ -7898,6 +7906,18 @@ class TaskManagementRepository(ABC):
         """The deterministic follow-up Task for one Principal-owned Commitment, if present."""
         raise NotImplementedError
 
+    def follow_ups_for_commitments(
+        self, principal_id: str, commitment_ids: Sequence[str]
+    ) -> Mapping[str, TaskAggregate]:
+        """`get_follow_up_for_commitment` for a set of Commitments, in one statement.
+
+        Record lineage S4 section 7.3: a `commitments.v2.waiting_on` page reads
+        its follow-up Tasks once, whatever its size. Keyed by Commitment, holding
+        only Commitments that have one; each value is the Task the single read
+        would answer.
+        """
+        raise NotImplementedError
+
     # --- WP-TUX-01: append-only Task comments --------------------------------
     #
     # Comments are their own immutable receipts. They do not advance
@@ -7992,6 +8012,20 @@ class CounterpartyOption:
             raise ValueError("a counterparty display name is not blank")
 
 
+@dataclass(frozen=True, slots=True)
+class CommitmentReferenceOwners:
+    """Which stored Commitment references name this Principal's own records (S4 7.3).
+
+    `projects` are the given Project ids that are this Principal's Projects;
+    `situation_kinds` maps each given Situation id that is this Principal's
+    Situation to its `kind` (`context` or `issue_workstream`). An id that names
+    another Principal's record, or nothing, is in neither.
+    """
+
+    projects: frozenset[str]
+    situation_kinds: Mapping[str, str]
+
+
 class CommitmentManagementRepository(ABC):
     """`knowledge.commitments` and `knowledge.commitment_history`, inside one transaction.
 
@@ -8060,12 +8094,15 @@ class CommitmentManagementRepository(ABC):
         work_end: datetime | None = None,
         after: str | None = None,
         limit: int,
+        project_ids: Sequence[str] | None = None,
     ) -> tuple[CommitmentAggregate, ...]:
         """One bounded page of this Principal's own commitments, newest created first.
 
         `direction`, `state`, and `evidence_state`, when given, are exact matches — the same
         structured-filter shape `TaskManagementRepository.list_tasks` gives
-        `lifecycle_state`/`priority`.
+        `lifecycle_state`/`priority`. `project_ids` (record lineage S4 section
+        7.3, `commitments.v2.*` only) keeps the rows whose stored `project_id` is
+        one of them, inside the same order and keyset; `None` is no filter.
         """
 
     @abstractmethod
@@ -8107,8 +8144,39 @@ class CommitmentManagementRepository(ABC):
         work_view: CommitmentWorkView | None = None,
         work_start: datetime | None = None,
         work_end: datetime | None = None,
+        project_ids: Sequence[str] | None = None,
     ) -> tuple[CommitmentAggregate, ...]:
-        """One bounded lexical page over summaries, optionally after an opaque row ID."""
+        """One bounded lexical page over summaries, optionally after an opaque row ID.
+
+        `project_ids` filters as `list_commitments` states (S4 section 7.3).
+        """
+        raise NotImplementedError
+
+    def counterparties(
+        self, principal_id: str, entity_ids: Sequence[str]
+    ) -> Mapping[str, CounterpartyOption]:
+        """`counterparty` for a set of Entities, in one statement (S4 section 7.3).
+
+        Keyed by Entity, holding only those `counterparty` would answer; a v2
+        page reads its counterparty projections once, whatever its size.
+        """
+        raise NotImplementedError
+
+    def reference_owners(
+        self,
+        principal_id: str,
+        *,
+        project_ids: Sequence[str],
+        situation_ids: Sequence[str],
+    ) -> CommitmentReferenceOwners:
+        """Which of these ids name this Principal's Projects and Situations, in one statement.
+
+        Record lineage S4 section 7.3 (D-16): `commitments.project_id` and
+        `situation_id` carry global foreign keys, so a stored id may name
+        another Principal's record; a v2 view shows only an owned one. The
+        Situation's `kind` comes back in the same statement (section 6.2,
+        R4-F17). Also the one statement that checks a `project_ids` filter.
+        """
         raise NotImplementedError
 
 
@@ -10443,3 +10511,231 @@ class LineageBackfillRepository(ABC):  # noqa: B024 - non-abstract, as IssueTime
     def late_source_count(self, principal_id: str, run_id: str) -> int:
         """In-scope sources present now that the run's frozen population does not hold."""
         raise NotImplementedError
+
+
+# --- Record lineage S4 Program reporting (S4 contract sections 6.3 and 9) -------
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramSnapshot:
+    """What the first query of one Program read transaction saw (S4 section 3.4).
+
+    `source_cutoff_at` is that query's `statement_timestamp()` -- the instant
+    the `REPEATABLE READ` snapshot was taken -- and `lineage_known_at` the
+    Principal's committed lineage horizon `H`
+    (`lineage_commit_sequences.last_marked_at`), `None` when the Principal has
+    no lineage fact.
+    """
+
+    source_cutoff_at: datetime
+    lineage_known_at: datetime | None
+
+
+class ProgramReadUnavailableError(PortError):
+    """A Program read could not complete in its budget (S4 sections 6.3 and 7.5).
+
+    `reason` is `statement_timeout` (a statement cancelled by its
+    `statement_timeout`), `pool_unavailable` (no Program-pool connection
+    within the Program engine's checkout timeout) or `budget_exceeded` (a
+    commit-time recompute's total budget was spent before a statement, section
+    7.4). A Program read answers `unavailable`; a commit-time recompute records
+    it as `recompute_failed`.
+    The read's transaction is lost with it.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"a Program read was unavailable: {reason}")
+        self.reason = reason
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramMemberEdges:
+    """The member edges of one request, cut at the edge budget (S4 section 3.1 step 2).
+
+    `edges` holds at most the requested limit, in `(resolved Program in
+    request order, relationship_id COLLATE "C")` order; `overflow_program` is
+    the resolved Program of the first edge beyond the limit, `None` when the
+    budget was not reached. `entities` are the caller's Entities on the redirect
+    chains of the edges' members (each at most `max_hops` hops from its member).
+    """
+
+    edges: tuple[MemberEdge, ...]
+    overflow_program: str | None
+    entities: tuple[EntityNode, ...]
+
+
+class ProgramMembershipRepository(ABC):
+    """The exact Program member reads (S4 section 3.1), on the snapshot connection.
+
+    Each method is one Principal-scoped statement, whatever the number of
+    Programs, edges or Projects (S4 section 6.3's constant statement plan).
+    Nothing here writes; a statement cancelled by its timeout raises
+    `ProgramReadUnavailableError`.
+    """
+
+    @abstractmethod
+    def entity_chains(
+        self, principal_id: str, entity_ids: Sequence[str], *, max_hops: int
+    ) -> tuple[EntityNode, ...]:
+        """The caller's Entities named, and those on their redirect chains (<= `max_hops`)."""
+
+    @abstractmethod
+    def member_edges(
+        self,
+        principal_id: str,
+        program_entity_ids: Sequence[str],
+        *,
+        limit: int,
+        max_hops: int,
+    ) -> ProgramMemberEdges:
+        """The `member_of` edges (not superseded) into the given resolved Programs.
+
+        Ordered by the Programs' order in `program_entity_ids`, then by
+        `relationship_id COLLATE "C"`; at most `limit`, and the member Entities'
+        redirect chains, in one statement.
+        """
+
+    @abstractmethod
+    def bridges(
+        self, principal_id: str, project_entity_ids: Sequence[str], *, max_hops: int
+    ) -> tuple[BridgeLink, ...]:
+        """Every `bound` bridge row whose Entity redirect-resolves to one of the given ones.
+
+        An Entity resolves to `E` when it is `E` or reaches `E` by at most
+        `max_hops` redirects. Unresolved bridge rows name no Entity and are
+        never returned.
+        """
+
+    @abstractmethod
+    def project_states(self, principal_id: str, project_ids: Sequence[str]) -> Mapping[str, str]:
+        """`project_id -> projects.state` for the caller's Projects among `project_ids`."""
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramSyncFacts:
+    """One Project's stored Constraint sync data, read in the snapshot (S4 section 3.3).
+
+    `targets` are its `constraint_sync_targets` rows (by `sync_target_id`),
+    each with the `sync_state` of the run its `last_run_id` names;
+    `open_conflicts` the Project's open sync conflicts (the count
+    `portfolio_sync_summary` reads); `last_verified_at` the latest of its
+    targets' (`None` without a verified target).
+    """
+
+    targets: tuple[SyncTarget, ...]
+    open_conflicts: int
+    last_verified_at: datetime | None
+
+
+class ProgramMetricsRepository(ABC):
+    """The Program Commitment, Issue and sync aggregates (S4 sections 3.2, 3.3), on the snapshot.
+
+    Each method is one Principal-scoped statement for the whole set of
+    Projects, whatever its size (S4 section 6.3's constant statement plan).
+    Nothing here writes; a statement cancelled by its timeout raises
+    `ProgramReadUnavailableError`. A Project id that is not this Principal's
+    contributes nothing.
+    """
+
+    @abstractmethod
+    def commitment_counts(
+        self, principal_id: str, project_ids: Sequence[str], *, cutoff: datetime
+    ) -> Mapping[str, Mapping[MetricId, int]]:
+        """The 7 Commitment metrics per Project (`commitments.project_id`), at `cutoff`.
+
+        A Project with no Commitment has no key (its counts are zero).
+        """
+
+    @abstractmethod
+    def outstanding_issue_links(
+        self, principal_id: str, project_ids: Sequence[str]
+    ) -> tuple[tuple[str, str], ...]:
+        """`(project_id, issue_id)` of every outstanding Issue whose latest link event is active.
+
+        Outstanding: `state` in `open`, `active`, `suspended`; sorted.
+        """
+
+    @abstractmethod
+    def legacy_issue_links(
+        self, principal_id: str, project_ids: Sequence[str]
+    ) -> Mapping[str, tuple[int, int]]:
+        """Per Project, `(outstanding, closed)` Issue `project_situations` rows with no event.
+
+        A Project with none has no key.
+        """
+
+    @abstractmethod
+    def sync_facts(
+        self, principal_id: str, project_ids: Sequence[str]
+    ) -> Mapping[str, ProgramSyncFacts]:
+        """Every requested Project's stored sync data (a key for each, targets or not)."""
+
+
+class ProgramReadUnitOfWork(ABC):
+    """One `REPEATABLE READ, READ ONLY` transaction on the Program read pool (S4 6.3).
+
+    Never writes and never commits: `__exit__` rolls back. It is drawn from its
+    own engine, never the work or audit pool, so a request holding a work
+    connection can always take it (no cycle in the wait-for graph). Audit and
+    authorization stay in the request's own unit of work.
+    """
+
+    @abstractmethod
+    def __enter__(self) -> ProgramReadUnitOfWork:
+        """Check out a Program-pool connection and begin the read-only snapshot."""
+
+    @abstractmethod
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Roll the read-only transaction back and return the connection."""
+
+    @abstractmethod
+    def snapshot(self, principal_id: str) -> ProgramSnapshot:
+        """Run the first query -- the one that takes the snapshot -- once.
+
+        Reads `statement_timestamp()` and the Principal's lineage horizon; a
+        second call answers the first call's values without a statement.
+        """
+
+    @abstractmethod
+    def set_statement_timeout(self, milliseconds: int) -> None:
+        """`SET LOCAL statement_timeout` for the remaining statements (S4 section 7.4)."""
+
+    @abstractmethod
+    def limit_to_deadline(self, deadline: float) -> None:
+        """Hold every later statement to a total budget ending at `deadline` (S4 section 7.4).
+
+        `deadline` is a `time.monotonic()` instant. Before each statement on this
+        snapshot the remaining budget is computed: a non-positive remainder is
+        `ProgramReadUnavailableError("budget_exceeded")` and the statement is not
+        sent; otherwise it runs under `SET LOCAL statement_timeout =
+        min(2000, remaining)` milliseconds, so no statement outlives the budget.
+        """
+
+    @abstractmethod
+    def guarded[ResultT](self, read: Callable[[], ResultT]) -> ResultT:
+        """Run `read` on this snapshot; a statement timeout is `ProgramReadUnavailableError`.
+
+        For reads whose statements are not the S4 repositories' own -- the
+        unchanged Constraint portfolio path (S4 section 3.2) -- so a statement
+        cancelled by its timeout answers `unavailable` like every Program read.
+        """
+
+    @property
+    @abstractmethod
+    def constraints(self) -> ConstraintManagementRepository:
+        """The existing Constraint repository, on this same snapshot connection."""
+
+    @property
+    @abstractmethod
+    def program_membership(self) -> ProgramMembershipRepository:
+        """The Program member reads (S4 section 3.1), on this same snapshot connection."""
+
+    @property
+    @abstractmethod
+    def program_metrics(self) -> ProgramMetricsRepository:
+        """The Program metric reads (S4 sections 3.2, 3.3), on this same snapshot connection."""

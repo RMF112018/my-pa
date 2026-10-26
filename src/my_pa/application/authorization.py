@@ -140,6 +140,7 @@ from my_pa.application.commands import (
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListCommitmentsV2,
     ListConstraintCategories,
     ListConstraints,
     ListConstraintSyncConflicts,
@@ -185,6 +186,7 @@ from my_pa.application.commands import (
     PutCanvasWorkspace,
     ReadCapture,
     ReadCommitment,
+    ReadCommitmentV2,
     ReadConstraint,
     ReadConstraintHistory,
     ReadConstraintOverview,
@@ -202,10 +204,12 @@ from my_pa.application.commands import (
     ReadMeeting,
     ReadMeetingNoteVersion,
     ReadPortfolioConstraintOverview,
+    ReadProgramOverview,
     ReadProject,
     ReadProjectControlsStatus,
     ReadRecordAssociationHistory,
     ReadRecordLineage,
+    ReadReportManifest,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
@@ -219,6 +223,7 @@ from my_pa.application.commands import (
     ResolveConstraintSyncConflict,
     ResolveEntity,
     ResolveIntelligenceSet,
+    ResolveProgramMembers,
     ResolveUnresolvedMention,
     RestoreCapture,
     RestoreEntity,
@@ -242,6 +247,7 @@ from my_pa.application.commands import (
     ReviseRelationshipMemory,
     SearchCaptures,
     SearchCommitments,
+    SearchCommitmentsV2,
     SearchConstraints,
     SearchEntities,
     SearchGoodNotes,
@@ -272,6 +278,7 @@ from my_pa.application.commands import (
     UpdateTask,
     VoidConstraint,
     WaitingOn,
+    WaitingOnV2,
 )
 from my_pa.contracts.ports import UnitOfWork
 from my_pa.domain.audit.events import audit_event_for
@@ -745,6 +752,15 @@ def _requested_scope(
             | CorrectIssueHandoff()
             | PlanLineageBackfill()
             | ReportLineageBackfill()
+            # Record lineage S4: the same partition's Entity, Project, Commitment,
+            # Issue, Constraint and Intelligence rows; no source is named.
+            | ResolveProgramMembers()
+            | ReadProgramOverview()
+            | ReadCommitmentV2()
+            | ListCommitmentsV2()
+            | SearchCommitmentsV2()
+            | WaitingOnV2()
+            | ReadReportManifest()
         ):
             return frozenset()
         case CreateCapture():

@@ -356,3 +356,111 @@ def test_effective_read_only_grants_never_select_rw_pool(scene: Scene, grant_sta
         write_allowed=True,
     )
     assert restored is not None and restored.service is rw
+
+
+# Record lineage S4 x #339 (merge worker M6): the Program-reporting plane in a
+# restricted MCP composition. Every value is synthetic.
+
+_S4_PROGRAM_SETTINGS = {
+    "MY_PA_DATABASE_URL": "postgresql+psycopg://test@db.invalid/my_pa",
+    "MY_PA_LINEAGE_ENABLED": "true",
+    "MY_PA_PROGRAM_REPORTING_ENABLED": "true",
+    "MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED": "true",
+}
+
+
+def test_restricted_composition_never_builds_the_program_engine_from_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from my_pa.application.service import _PROGRAM_READ_CAPABILITIES
+    from my_pa.bootstrap import gateway
+    from my_pa.domain.intelligence.source_manifest import ProgramReferenceBlock
+
+    settings = load_settings(_S4_PROGRAM_SETTINGS)
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("an injected data engine must not be paired with a settings-built pool")
+
+    monkeypatch.setattr(gateway, "create_database_engine", forbidden)
+    # Three distinct engines and pools: #340 refuses an injected data engine
+    # that shares an engine or pool with the audit or control path.
+    restricted = gateway.build_gateway_runtime(
+        settings,
+        data_engine=MagicMock(),
+        independent_audit_engine=MagicMock(),
+        controls_engine=MagicMock(),
+        permit_reenrichment=False,
+        permit_managed_documents=False,
+    )
+    service = restricted.service
+    assert restricted.program_read_engine is None
+    assert service._program_read_unit_of_work is None
+    # Both Program reads are withheld; the switch-only S4 names stay served on
+    # the injected (restricted) engine, and the profile ceiling trims them.
+    assert not _PROGRAM_READ_CAPABILITIES & service.available_capabilities
+    assert Capability.REPORTS_MANIFEST in service.available_capabilities
+    # `reports.commit` recomputes nothing: the manifest records `not_attempted`.
+    recompute = service._program_reference_recompute(
+        SimpleNamespace(  # type: ignore[arg-type]
+            capability_grants=None, principal=SimpleNamespace(principal_id="principal-s4")
+        )
+    )
+    assert recompute is not None
+    block = ProgramReferenceBlock(
+        program_entity_ids=("ent_unitprogram00001",),
+        overview_sha256="a" * 64,
+        source_cutoff_at="2026-10-24T06:30:00.000001Z",
+    )
+    assert recompute(block)["verification_state"] == "not_attempted"
+
+
+def test_legacy_composition_still_builds_the_program_engine() -> None:
+    from my_pa.application.service import _PROGRAM_READ_CAPABILITIES
+    from my_pa.bootstrap.gateway import build_gateway_runtime
+
+    legacy = build_gateway_runtime(load_settings(_S4_PROGRAM_SETTINGS))
+    try:
+        assert legacy.program_read_engine is not None
+        assert legacy.program_read_engine is not legacy.work_engine
+        assert legacy.service._program_read_unit_of_work is not None
+        assert legacy.service.available_capabilities >= _PROGRAM_READ_CAPABILITIES
+    finally:
+        legacy.close()
+
+
+def test_no_profile_ceiling_admits_an_s4_program_reporting_name() -> None:
+    from my_pa.domain.program.vocabulary import PROGRAM_REPORTING_CAPABILITIES
+
+    assert len(PROGRAM_REPORTING_CAPABILITIES) == 7
+    for profile in McpDatabaseProfile:
+        allowed = profile_capabilities(profile)
+        assert not PROGRAM_REPORTING_CAPABILITIES & allowed
+        assert Capability.REPORTS_COMMIT.value not in allowed
+
+
+@pytest.mark.parametrize("classification", ["application_read", "application_write"])
+def test_the_s4_manifest_table_cannot_be_granted_to_an_mcp_role(classification: str) -> None:
+    from unittest.mock import MagicMock
+
+    from my_pa.infrastructure.database.mcp_object_grants import (
+        McpObjectGrant,
+        McpObjectGrantError,
+        _grant_created_mcp_object,
+    )
+
+    connection = MagicMock()
+    spec = McpObjectGrant(
+        schema="knowledge",
+        name="intelligence_artifact_manifests",
+        creator="synthetic_creator",
+        classification=classification,  # type: ignore[arg-type]
+        kind="r",
+        review_id="SYNTHETIC-S4-REVIEW",
+    )
+    with pytest.raises(McpObjectGrantError), _grant_created_mcp_object(connection, spec):
+        pytest.fail("a protected report object must refuse before CREATE")
+    connection.exec_driver_sql.assert_not_called()
+    connection.execute.assert_not_called()

@@ -41,7 +41,10 @@ class DatabaseHealth:
 
 
 def create_database_engine(
-    url: str | URL, *, statement_timeout_ms: int | None = _STATEMENT_TIMEOUT_MS
+    url: str | URL,
+    *,
+    statement_timeout_ms: int | None = _STATEMENT_TIMEOUT_MS,
+    pool_timeout_seconds: float = _POOL_TIMEOUT_SECONDS,
 ) -> Engine:
     """Build the engine for `url`.
 
@@ -52,8 +55,16 @@ def create_database_engine(
     reading of the same characters. Nothing here validates: this module is handed
     a URL, it does not decide which one (see the module docstring).
 
+    `pool_timeout_seconds` is how long a checkout waits for a pooled
+    connection. The default is the existing 30 s, so every existing caller is
+    unchanged; only the Program read engine (record lineage S4 contract section
+    6.3, R4-F22) passes 1 s, so a Program read or a commit recompute never waits
+    longer than its own budget for a connection.
+
     Callers own the engine's lifetime and should `dispose()` it when finished.
     """
+    if pool_timeout_seconds <= 0:
+        raise ValueError("pool_timeout_seconds must be positive")
     if statement_timeout_ms is not None and statement_timeout_ms <= 0:
         raise ValueError("statement_timeout_ms must be positive or None")
     connect_args = (
@@ -65,7 +76,7 @@ def create_database_engine(
         url,
         pool_size=_POOL_SIZE,
         max_overflow=0,
-        pool_timeout=_POOL_TIMEOUT_SECONDS,
+        pool_timeout=pool_timeout_seconds,
         pool_pre_ping=_POOL_PRE_PING,
         connect_args=connect_args,
     )

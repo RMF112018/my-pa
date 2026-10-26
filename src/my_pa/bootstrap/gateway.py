@@ -60,6 +60,17 @@ waits behind another audit, and a sixth audit connection could never be used.
 Ten backends in total, against a server whose other declared consumers are the
 worker and the migration CLI.
 
+**A third pool, for Program reads only** (record lineage S4 contract section
+6.3). With `MY_PA_PROGRAM_REPORTING_ENABLED` on, a third engine of five
+connections serves the read-only `REPEATABLE READ` snapshot of
+`programs.members.resolve`, `programs.overview` and a commit's Program-reference
+recompute, with a 2 s statement timeout and a 1 s checkout timeout. It is the
+audit-pool argument again: a request holding a work connection takes at most
+one Program connection, and nothing holding a Program connection waits for a
+work or audit connection, so no cycle forms at any concurrency and, with at
+most five work connections held, the Program pool never queues. With the switch
+on that is fifteen backends per gateway process; off, the engine is not built.
+
 `tests/concurrency/test_gateway_connection_pool.py` proves both halves: five
 concurrent requests all complete here, and the same five against one shared pool
 all fail.
@@ -76,7 +87,7 @@ principal is the only principal; no credential is issued, read, or required.
 `OPERATOR` rather than `GATEWAY` because the process *is* the operator's local
 transport — a `GATEWAY` principal cannot invoke `sources.enroll`, so the choice
 is between naming what this is and shipping a transport that cannot reach one of
-the 222 capabilities.
+the 229 capabilities.
 
 `entra` composes `entra_authenticator` instead and issues **no** process
 principal. Every request presents a bearer token, the token's validated
@@ -192,7 +203,7 @@ from my_pa.application.webauthn_bff_attestation import verify_webauthn_attestati
 from my_pa.bootstrap.apple_machine_control import SqlAppleMachineControl
 from my_pa.bootstrap.goodnotes_rollout import allowed_activation_steps
 from my_pa.bootstrap.settings import AuthMode, Settings
-from my_pa.contracts.ports import ManagedByteStore, UnitOfWork
+from my_pa.contracts.ports import ManagedByteStore, ProgramReadUnitOfWork, UnitOfWork
 from my_pa.domain.capture.client import admit_client_binding, parse_client_credential
 from my_pa.domain.capture.errors import CaptureError
 from my_pa.domain.common.identifiers import IdKind
@@ -231,6 +242,7 @@ from my_pa.infrastructure.persistence.entity_reenrichment import (
     SqlReenrichmentWorkRepository,
 )
 from my_pa.infrastructure.persistence.principal_scope import capture_context
+from my_pa.infrastructure.persistence.program_reads import SqlAlchemyProgramReadUnitOfWork
 from my_pa.infrastructure.persistence.registry import configured_source_roots
 from my_pa.infrastructure.persistence.tables import (
     entity_reenrichment_subjects,
@@ -935,15 +947,20 @@ class GatewayRuntime:
     mcp_enabled: bool
     work_engine: Engine
     audit_engine: Engine
+    #: Record lineage S4 (contract section 6.3): the Program read engine, built
+    #: only while `MY_PA_PROGRAM_REPORTING_ENABLED` is on; `None` otherwise.
+    program_read_engine: Engine | None = None
     #: HTTP WebAuthn ceremony handler. Composed here so `apps/gateway.py` only
     #: selects the runtime and never maps attested tenant/object identifiers.
     #: Default `None` keeps test constructions that omit ceremony safe.
     webauthn: Callable[..., Any] | None = None
 
     def close(self) -> None:
-        """Release both pools. Safe to call after a failed start."""
+        """Release every pool. Safe to call after a failed start."""
         self.work_engine.dispose()
         self.audit_engine.dispose()
+        if self.program_read_engine is not None:
+            self.program_read_engine.dispose()
 
     def run_reenrichment_once(
         self,
@@ -1009,6 +1026,15 @@ class GatewayRuntime:
         )
 
 
+def _program_read_factory(engine: Engine) -> Callable[[], ProgramReadUnitOfWork]:
+    """The Program read unit of work on `engine`, built per invocation (S4 6.3)."""
+
+    def program_read_unit_of_work() -> ProgramReadUnitOfWork:
+        return SqlAlchemyProgramReadUnitOfWork(engine)
+
+    return program_read_unit_of_work
+
+
 def build_gateway_runtime(
     settings: Settings,
     *,
@@ -1050,6 +1076,29 @@ def build_gateway_runtime(
         else create_database_engine(settings.parsed_database_url(), statement_timeout_ms=30_000)
     )
     audit = SqlAlchemyAuditSink(audit_engine)
+    # Record lineage S4 (contract section 6.3): the third engine, for Program
+    # reads only, and only while the switch is on. The S3 per-statement budget
+    # (2 s) and a 1 s checkout timeout (R4-F22).
+    #
+    # Never in a restricted composition: an injected `data_engine` is a fixed
+    # MCP database role (`bootstrap.mcp_database_profiles`), and this engine,
+    # built from the configured URL, would read with the broader configured
+    # credentials. No MCP profile ceiling admits a Program read or
+    # `reports.commit`, and `intelligence_*` objects are protected from the MCP
+    # roles (`infrastructure.database.mcp_object_grants`), so the composition
+    # withholds the 2 Program reads and the commit recompute records
+    # `not_attempted` (no Program read factory) instead of injecting a third
+    # restricted engine.
+    program_read_engine = (
+        create_database_engine(
+            settings.parsed_database_url(), statement_timeout_ms=2000, pool_timeout_seconds=1
+        )
+        if settings.program_reporting_enabled and data_engine is None
+        else None
+    )
+    program_read_unit_of_work = (
+        None if program_read_engine is None else _program_read_factory(program_read_engine)
+    )
 
     # The same conjunction `ApplicationService.available_capabilities` applies,
     # spelled once here so the review surface turns on with the plane's own
@@ -1146,6 +1195,11 @@ def build_gateway_runtime(
             # Record lineage S3 (contract section 7.7): the backfill sub-switch,
             # which the service conjoins with the lineage switch.
             lineage_backfill_enabled=settings.lineage_backfill_enabled,
+            # Record lineage S4 (contract section 7.6): the Program-reporting
+            # sub-switch, conjoined with the lineage switch by the service, and
+            # the Program read factory on its own pool (`None` when off).
+            program_reporting_enabled=settings.program_reporting_enabled,
+            program_read_unit_of_work=program_read_unit_of_work,
             # KLP-WP-04 (R6 section 6.1): the second service gate's allowlist.
             knowledge_discovery_client_ids=settings.knowledge_discovery_oauth_client_id_set(),
             # KLP-WP-04 slice C (R6 section 3.2): the operator-review allowlist the
@@ -1209,5 +1263,6 @@ def build_gateway_runtime(
         mcp_enabled=mcp_surface_enabled(settings, control_engine, principal),
         work_engine=work_engine,
         audit_engine=audit_engine,
+        program_read_engine=program_read_engine,
         webauthn=_compose_webauthn_handler(settings, control_engine),
     )

@@ -457,3 +457,10 @@ class Purpose(StrEnum):
     # grant may become one. A write purpose of its own, used by exactly
     # `records.backfill.plan` and `records.backfill.report`, both operator-only.
     LINEAGE_BACKFILL = "lineage_backfill"
+    # Record lineage S4 (S4 contract section 7, R4-F15), on `D-91`: would reuse
+    # widen the grant? `report_read` would: it names Intelligence artifacts, and a
+    # Program read reaches the Entities, Projects, Commitments, Issues and
+    # Constraints of every member Project, which no existing purpose names. A
+    # read purpose of its own, used by exactly `programs.members.resolve` and
+    # `programs.overview`.
+    PROGRAM_REPORTING_READ = "program_reporting_read"

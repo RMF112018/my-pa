@@ -55,7 +55,7 @@ def manifest(implemented: frozenset[Capability] = EVERYTHING) -> CapabilityManif
 
 def test_manifest_lists_every_capability_exactly_once() -> None:
     names = [status.name for status in manifest().capabilities]
-    assert len(names) == len(Capability) == 222
+    assert len(names) == len(Capability) == 229
     assert set(names) == set(Capability)
     assert len(set(names)) == len(names)
 
@@ -285,6 +285,14 @@ def test_capability_names_match_the_published_contract() -> None:
         "issues.handoffs.correct",
         "records.backfill.plan",
         "records.backfill.report",
+        # Record lineage S4 (contract section 7).
+        "programs.members.resolve",
+        "programs.overview",
+        "commitments.v2.read",
+        "commitments.v2.list",
+        "commitments.v2.search",
+        "commitments.v2.waiting_on",
+        "reports.manifest",
     }
 
 

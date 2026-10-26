@@ -600,6 +600,14 @@ class SafeDetail(StrEnum):
     CHECKPOINT = "checkpoint"
     BATCH_SIZE = "batch_size"
     CLASSIFICATION = "classification"
+    #: Record lineage S4 (S4 contract section 7.5). `PROGRAM_ENTITY_IDS` a
+    #: malformed, duplicate, empty or oversize Program list, a Program absent,
+    #: foreign or invisible, not program-typed, or behind a redirect chain that
+    #: is too long or cyclic; `PROJECT_IDS` a malformed, duplicate, empty or
+    #: oversize v2 `project_ids` filter, or one naming a Project not of this
+    #: Principal. `VALID_AT`, `STRUCTURED_CONTENT` and `ARTIFACT_ID` are reused.
+    PROGRAM_ENTITY_IDS = "program_entity_ids"
+    PROJECT_IDS = "project_ids"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

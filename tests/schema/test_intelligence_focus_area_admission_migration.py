@@ -12,9 +12,11 @@ import ast
 import io
 import re
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
+from unittest.mock import patch
 
 import pytest
 from alembic import command
@@ -38,6 +40,7 @@ from my_pa.domain.intelligence.catalog import (
 )
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
+from my_pa.infrastructure.persistence.intelligence import SqlIntelligenceStore
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 
 ROOT: Final = Path(__file__).resolve().parents[2]
@@ -46,7 +49,7 @@ REVISION: Final = "93f3aa113f58"
 PREVIOUS: Final = "6734f039f7a6"
 #: The chain head: `a591b81f10a2` (Intelligence report type registry) is additive
 #: on `REVISION`, so a database upgraded to head stands there.
-HEAD: Final = "6f1476b8da52"
+HEAD: Final = "c5260943d933"
 MIGRATION: Final = VERSIONS / "20261007_93f3aa113f58_intelligence_focus_area_admission.py"
 PLANE_MIGRATION: Final = VERSIONS / "20260820_e9b2c4d7a150_admit_intelligence_artifact_plane.py"
 CHECK_VIOLATION: Final = "23514"
@@ -119,7 +122,8 @@ def test_the_revision_is_directly_on_the_knowledge_revision_under_one_later_head
     """
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "d020b532ad7d"
+    assert script.get_revision(HEAD).down_revision == "6f1476b8da52"
+    assert script.get_revision("6f1476b8da52").down_revision == "d020b532ad7d"
     assert script.get_revision("d020b532ad7d").down_revision == "264310e0416a"
     assert script.get_revision("264310e0416a").down_revision == "b9025e7fb738"
     assert script.get_revision("b9025e7fb738").down_revision == "5c1e7a9b3d42"
@@ -278,40 +282,56 @@ def _commit(
     return report_id
 
 
+@contextmanager
+def _below_the_s4_manifest() -> Iterator[None]:
+    """Seed through the application at a revision below `c5260943d933`.
+
+    Record lineage S4 (S4 contract section 10, the S3 D-35 precedent): since
+    the S4 revision the one artifact writer also writes the artifact's report
+    manifest, whose table this revision's schema does not have. The writer's
+    other rows are exactly what they were, so only that one write is left out
+    here; at head the deferred `an_artifact_has_its_manifest` holds every
+    writer to it.
+    """
+    with patch.object(SqlIntelligenceStore, "_put_manifest", lambda *_args: None):
+        yield
+
+
 def _seed(engine: Engine, focus: FocusAreaId, key: str) -> None:
     """One collector and one researcher depending on it: a row in each table."""
-    service = _service(engine)
-    principal = operator()
-    cycle = _ok(
-        service,
-        principal,
-        BeginIntelligenceCycle(
-            cycle_id=CYCLE_MORNING_INTELLIGENCE,
-            business_date="2026-10-07",
-            idempotency_key=f"{key}-cycle",
-        ),
-    )["cycle_run_id"]
-    assert isinstance(cycle, str)
-    collector = _commit(
-        service,
-        principal,
-        cycle,
-        stage=IntelligenceStage.COLLECTOR,
-        kind=ArtifactKind.COLLECTOR_CANDIDATES,
-        focus=focus,
-        key=f"{key}-collector",
-    )
-    _commit(
-        service,
-        principal,
-        cycle,
-        stage=IntelligenceStage.RESEARCHER,
-        kind=ArtifactKind.RESEARCH_CONTEXT,
-        focus=focus,
-        key=f"{key}-teams",
-        lane=SourceLaneId.TEAMS,
-        dependencies=(collector,),
-    )
+    with _below_the_s4_manifest():
+        service = _service(engine)
+        principal = operator()
+        cycle = _ok(
+            service,
+            principal,
+            BeginIntelligenceCycle(
+                cycle_id=CYCLE_MORNING_INTELLIGENCE,
+                business_date="2026-10-07",
+                idempotency_key=f"{key}-cycle",
+            ),
+        )["cycle_run_id"]
+        assert isinstance(cycle, str)
+        collector = _commit(
+            service,
+            principal,
+            cycle,
+            stage=IntelligenceStage.COLLECTOR,
+            kind=ArtifactKind.COLLECTOR_CANDIDATES,
+            focus=focus,
+            key=f"{key}-collector",
+        )
+        _commit(
+            service,
+            principal,
+            cycle,
+            stage=IntelligenceStage.RESEARCHER,
+            kind=ArtifactKind.RESEARCH_CONTEXT,
+            focus=focus,
+            key=f"{key}-teams",
+            lane=SourceLaneId.TEAMS,
+            dependencies=(collector,),
+        )
 
 
 def _copy_with(
@@ -402,8 +422,11 @@ def test_downgrade_refuses_while_a_row_holds_an_admitted_area(
     disposable_database: str, engine: Engine
 ) -> None:
     del disposable_database
-    command.upgrade(_config(), "head")
+    # Seeded at this revision (S4 contract section 10): rows committed at head
+    # carry report manifests, whose own downgrade refusal would answer first.
+    command.upgrade(_config(), REVISION)
     _seed(engine, FocusAreaId.CAPTURES, "mig-captures")
+    command.upgrade(_config(), "head")
     with pytest.raises(DBAPIError) as refused:
         command.downgrade(_config(), PREVIOUS)
     assert getattr(refused.value.orig, "sqlstate", None) == CHECK_VIOLATION

@@ -177,6 +177,7 @@ from my_pa.application.commands import (
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListCommitmentsV2,
     ListConstraintCategories,
     ListConstraints,
     ListConstraintSyncConflicts,
@@ -222,6 +223,7 @@ from my_pa.application.commands import (
     PutCanvasWorkspace,
     ReadCapture,
     ReadCommitment,
+    ReadCommitmentV2,
     ReadConstraint,
     ReadConstraintHistory,
     ReadConstraintOverview,
@@ -239,10 +241,12 @@ from my_pa.application.commands import (
     ReadMeeting,
     ReadMeetingNoteVersion,
     ReadPortfolioConstraintOverview,
+    ReadProgramOverview,
     ReadProject,
     ReadProjectControlsStatus,
     ReadRecordAssociationHistory,
     ReadRecordLineage,
+    ReadReportManifest,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
@@ -257,6 +261,7 @@ from my_pa.application.commands import (
     ResolveConstraintSyncConflict,
     ResolveEntity,
     ResolveIntelligenceSet,
+    ResolveProgramMembers,
     ResolveUnresolvedMention,
     RestoreCapture,
     RestoreEntity,
@@ -280,6 +285,7 @@ from my_pa.application.commands import (
     ReviseRelationshipMemory,
     SearchCaptures,
     SearchCommitments,
+    SearchCommitmentsV2,
     SearchConstraints,
     SearchEntities,
     SearchGoodNotes,
@@ -310,6 +316,7 @@ from my_pa.application.commands import (
     UpdateTask,
     VoidConstraint,
     WaitingOn,
+    WaitingOnV2,
 )
 from my_pa.application.intelligence import begin_cycle, commit_artifact
 from my_pa.application.producer_origin import ProducerOriginRegistry
@@ -494,6 +501,14 @@ _UNCOMPOSED_CAPABILITIES = frozenset(
         Capability.ISSUES_HANDOFFS_CORRECT,
         Capability.RECORDS_BACKFILL_PLAN,
         Capability.RECORDS_BACKFILL_REPORT,
+        # Record lineage S4, behind the same switch and its own sub-switch.
+        Capability.PROGRAMS_MEMBERS_RESOLVE,
+        Capability.PROGRAMS_OVERVIEW,
+        Capability.COMMITMENTS_V2_READ,
+        Capability.COMMITMENTS_V2_LIST,
+        Capability.COMMITMENTS_V2_SEARCH,
+        Capability.COMMITMENTS_V2_WAITING_ON,
+        Capability.REPORTS_MANIFEST,
     }
 )
 
@@ -1822,6 +1837,14 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         },
         Capability.RECORDS_BACKFILL_PLAN: {"idempotency_key": "http-records-backfill-plan-0001"},
         Capability.RECORDS_BACKFILL_REPORT: {"run_id": "lbfr_httprun000001"},
+        # Record lineage S4 (S4 contract section 7).
+        Capability.PROGRAMS_MEMBERS_RESOLVE: {"program_entity_ids": ["ent_httpprogram00001"]},
+        Capability.PROGRAMS_OVERVIEW: {"program_entity_ids": ["ent_httpprogram00001"]},
+        Capability.COMMITMENTS_V2_READ: {"commitment_id": "cmt_httpcommit000001"},
+        Capability.COMMITMENTS_V2_LIST: {"project_ids": ["prj_httpproject00001"]},
+        Capability.COMMITMENTS_V2_SEARCH: {"query": "http"},
+        Capability.COMMITMENTS_V2_WAITING_ON: {},
+        Capability.REPORTS_MANIFEST: {"report_id": "rpt_httpreport000001"},
     }
 
 
@@ -3055,6 +3078,18 @@ def commands_for(
             idempotency_key="http-records-backfill-plan-0001"
         ),
         Capability.RECORDS_BACKFILL_REPORT: ReportLineageBackfill(run_id="lbfr_httprun000001"),
+        # Record lineage S4 (S4 contract section 7).
+        Capability.PROGRAMS_MEMBERS_RESOLVE: ResolveProgramMembers(
+            program_entity_ids=("ent_httpprogram00001",)
+        ),
+        Capability.PROGRAMS_OVERVIEW: ReadProgramOverview(
+            program_entity_ids=("ent_httpprogram00001",)
+        ),
+        Capability.COMMITMENTS_V2_READ: ReadCommitmentV2(commitment_id="cmt_httpcommit000001"),
+        Capability.COMMITMENTS_V2_LIST: ListCommitmentsV2(project_ids=("prj_httpproject00001",)),
+        Capability.COMMITMENTS_V2_SEARCH: SearchCommitmentsV2(query="http"),
+        Capability.COMMITMENTS_V2_WAITING_ON: WaitingOnV2(),
+        Capability.REPORTS_MANIFEST: ReadReportManifest(report_id="rpt_httpreport000001"),
     }
 
 

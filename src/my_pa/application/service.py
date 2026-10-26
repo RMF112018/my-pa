@@ -220,6 +220,7 @@ from my_pa.application.commands import (
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListCommitmentsV2,
     ListConstraintCategories,
     ListConstraints,
     ListConstraintSyncConflicts,
@@ -266,6 +267,7 @@ from my_pa.application.commands import (
     PutCanvasWorkspace,
     ReadCapture,
     ReadCommitment,
+    ReadCommitmentV2,
     ReadConstraint,
     ReadConstraintHistory,
     ReadConstraintOverview,
@@ -284,10 +286,12 @@ from my_pa.application.commands import (
     ReadMeeting,
     ReadMeetingNoteVersion,
     ReadPortfolioConstraintOverview,
+    ReadProgramOverview,
     ReadProject,
     ReadProjectControlsStatus,
     ReadRecordAssociationHistory,
     ReadRecordLineage,
+    ReadReportManifest,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
@@ -302,6 +306,7 @@ from my_pa.application.commands import (
     ResolveConstraintSyncConflict,
     ResolveEntity,
     ResolveIntelligenceSet,
+    ResolveProgramMembers,
     ResolveUnresolvedMention,
     RestoreCapture,
     RestoreEntity,
@@ -327,6 +332,7 @@ from my_pa.application.commands import (
     ReviseRelationshipMemory,
     SearchCaptures,
     SearchCommitments,
+    SearchCommitmentsV2,
     SearchConstraints,
     SearchEntities,
     SearchGoodNotes,
@@ -357,8 +363,14 @@ from my_pa.application.commands import (
     UpdateTask,
     VoidConstraint,
     WaitingOn,
+    WaitingOnV2,
 )
 from my_pa.application.commitments import CommitmentManagementService, CommitmentMutationReceipt
+from my_pa.application.commitments_v2 import (
+    page_follow_ups,
+    read_commitment_page,
+    require_owned_projects,
+)
 from my_pa.application.constraint_management import (
     ConstraintCategoryMutationResult,
     ConstraintCategoryNotFoundError,
@@ -496,6 +508,7 @@ from my_pa.application.identity_history import (
     IdentityHistoryService,
 )
 from my_pa.application.intelligence import (
+    IntelligenceStore,
     begin_cycle,
     commit_artifact,
     latest_artifact,
@@ -558,6 +571,12 @@ from my_pa.application.meetings import (
 )
 from my_pa.application.model_gate import BoundedModelGate
 from my_pa.application.producer_origin import ProducerOriginError, ProducerOriginRegistry
+from my_pa.application.program_membership import (
+    PROGRAM_ROOT_FAMILIES,
+    program_families,
+    resolve_program_members,
+)
+from my_pa.application.program_work import read_program_overview, recompute_program_reference
 from my_pa.application.record_events import (
     MemoryDisclosure,
     list_record_events,
@@ -628,6 +647,8 @@ from my_pa.contracts.ports import (
     MemoryPage,
     PortError,
     PreferenceConflictError,
+    ProgramReadUnavailableError,
+    ProgramReadUnitOfWork,
     RelationshipMemoryRepository,
     ReviewDecisionRequest,
     SearchOutcome,
@@ -659,6 +680,11 @@ from my_pa.contracts.v1.commitments import (
     CommitmentView,
     WaitingOnEntry,
 )
+from my_pa.contracts.v1.commitments_v2 import (
+    CommitmentV2ListEntry,
+    CommitmentV2View,
+    WaitingOnV2Entry,
+)
 from my_pa.contracts.v1.disclosure import Disclosure, SourceReference, Truncation
 from my_pa.contracts.v1.documents import (
     ManagedDocumentListEntry,
@@ -669,6 +695,7 @@ from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
 from my_pa.contracts.v1.issues import HandoffView
 from my_pa.contracts.v1.meetings import MeetingNoteVersionEntry, MeetingNoteVersionView
 from my_pa.contracts.v1.record_lineage import EvidenceAnchorView
+from my_pa.contracts.v1.report_manifests import ReportManifestView
 from my_pa.contracts.v1.reveal import RevealView
 from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.contracts.v1.tasks import (
@@ -736,6 +763,7 @@ from my_pa.domain.identity.operator_surface import OperatorSurface
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.intelligence.models import ReportTypeDefinition
+from my_pa.domain.intelligence.source_manifest import ProgramReferenceBlock, program_released
 from my_pa.domain.knowledge_assertion.checkpoint import CheckpointSeal
 from my_pa.domain.knowledge_assertion.vocabulary import (
     KnowledgeAssertionLifecycle,
@@ -766,6 +794,11 @@ from my_pa.domain.policy.knowledge_review_authority import (
     InconsistentKnowledgeReviewCompositionError,
     UnsupportedKnowledgeReviewCompositionError,
     derive_knowledge_review_authority,
+)
+from my_pa.domain.program.vocabulary import (
+    PROGRAM_READ_CAPABILITIES,
+    PROGRAM_REPORTING_CAPABILITIES,
+    ProgramFamily,
 )
 from my_pa.domain.project_controls.business_time import ProjectTimezoneError
 from my_pa.domain.project_controls.category import ConstraintCategoryError
@@ -1425,6 +1458,10 @@ def _port_failure(error: PortError) -> ApplicationError:
     # that outran its `statement_timeout` is `unavailable`, not a server fault.
     if isinstance(error, LineageReadTimeoutError):
         return UnavailableError()
+    # Record lineage S4 sections 6.3 and 7.5: a Program-read statement cancelled
+    # by its timeout, or no Program-pool connection within the pool timeout.
+    if isinstance(error, ProgramReadUnavailableError):
+        return UnavailableError()
     return InternalError()
 
 
@@ -1680,6 +1717,24 @@ def _work_window(
     local_start = datetime.combine(first_date, datetime.min.time(), zone)
     local_end = datetime.combine(work_date + timedelta(days=1), datetime.min.time(), zone)
     return local_start.astimezone(UTC), local_end.astimezone(UTC)
+
+
+def _commitment_work_bounds(
+    work_view: CommitmentWorkView | None, work_date: date | None, timezone: str | None
+) -> tuple[datetime | None, datetime | None]:
+    """The UTC bounds a v1 Commitment page computes for its work view (S4 v2 siblings).
+
+    Exactly the `commitments.list` / `commitments.search` rule: both bounds
+    only when a work view and a work date are given, in `timezone` (UTC when
+    omitted).
+    """
+    if work_view is None or work_date is None:
+        return None, None
+    return _work_window(
+        work_date,
+        timezone or "UTC",
+        recent=work_view is CommitmentWorkView.RECENTLY_UPDATED,
+    )
 
 
 def _task_history_view(entry: TaskManagementHistoryEntry) -> TaskHistoryEntryView:
@@ -3999,6 +4054,8 @@ class ApplicationService:
         knowledge_assertions_enabled: bool = False,
         lineage_enabled: bool = False,
         lineage_backfill_enabled: bool = False,
+        program_reporting_enabled: bool = False,
+        program_read_unit_of_work: Callable[[], ProgramReadUnitOfWork] | None = None,
         knowledge_discovery_client_ids: frozenset[str] = frozenset(),
         knowledge_operator_review_client_ids: frozenset[str] = frozenset(),
         knowledge_manager_client_ids: frozenset[str] = frozenset(),
@@ -4059,6 +4116,14 @@ class ApplicationService:
         #: never enables a backfill; each backfill handler asks again
         #: (`_lineage_backfill_plane`) after `_lineage_plane`.
         self._lineage_backfill_enabled = lineage_backfill_enabled
+        #: Record lineage S4 (contract section 7.6): the Program-reporting
+        #: sub-switch. Default `False`. The 7 S4 capabilities are served only
+        #: while this *and* `lineage_enabled` are on; each S4 handler asks again
+        #: (`_program_plane`) before any read.
+        self._program_reporting_enabled = program_reporting_enabled
+        #: Record lineage S4 (contract section 6.3): the Program read unit of work
+        #: on its own pool, or `None` -- then the 2 Program reads are withheld.
+        self._program_read_unit_of_work = program_read_unit_of_work
         #: KLP-WP-04 (R6 section 6.1): the exact discovery allowlist the second
         #: service gate reads. Empty -- the default -- refuses every submit and
         #: checkpoint, so an unconfigured build fails closed for the role.
@@ -4258,6 +4323,18 @@ class ApplicationService:
         # two backfill names need both switches.
         if not (self._lineage_enabled and self._lineage_backfill_enabled):
             served -= _LINEAGE_BACKFILL_CAPABILITIES
+        # Record lineage S4 (contract section 7.6), on the S3 backfill precedent:
+        # the 7 Program-reporting names need both switches; the 2 Program reads
+        # also need the entity plane (their subjects are Entities) and the
+        # Program read factory, and the overview the Constraint plane.
+        if not (self._lineage_enabled and self._program_reporting_enabled):
+            served -= _PROGRAM_REPORTING_CAPABILITIES
+        if not (
+            self._relationship_intelligence_enabled and self._program_read_unit_of_work is not None
+        ):
+            served -= _PROGRAM_READ_CAPABILITIES
+        if self._constraint_management_unit_of_work is None:
+            served -= {Capability.PROGRAMS_OVERVIEW}
         # A proposal surface without a trusted server registration would
         # advertise a write every authenticated caller can only be denied.
         # Withhold both producer capabilities when composition has no exact
@@ -13322,6 +13399,27 @@ class ApplicationService:
         require_read_grant(authorization.capability_grants, capability)
         return lineage_visibility(authorization.capability_grants, capability)
 
+    def _program_plane(self) -> None:
+        """Refuse unless both the lineage and the Program-reporting switches are on.
+
+        S4 contract section 7.6. Asked first by every S4 handler, before any read.
+        """
+        if not (self._lineage_enabled and self._program_reporting_enabled):
+            raise UnsupportedError()
+
+    def _program_read_plane(self, *, overview: bool) -> Callable[[], ProgramReadUnitOfWork]:
+        """The 2 Program reads' composition checks (S4 section 7.6), after `_program_plane`.
+
+        `unsupported` unless the entity plane is served and the Program read
+        factory composed, and, for the overview, the Constraint plane too.
+        """
+        factory = self._program_read_unit_of_work
+        if not self._relationship_intelligence_enabled or factory is None:
+            raise UnsupportedError()
+        if overview and self._constraint_management_unit_of_work is None:
+            raise UnsupportedError()
+        return factory
+
     def _lineage_backfill_plane(self) -> None:
         """Refuse unless the backfill sub-switch is on too (S3 contract section 7.7).
 
@@ -14102,6 +14200,417 @@ class ApplicationService:
             payload=report.to_payload(),
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
         )
+
+    # ---- record lineage S4 Program reporting (ADR-015; S4 contract section 7) ----
+    #
+    # Seven read handlers: the switches first (section 7.6), then for the 2
+    # Program reads their composition checks, then each handler's remote grant
+    # re-check (section 6.1), before any read. `_reports_manifest` follows the
+    # v2 reads, with `_program_reference_recompute`, which `_reports_commit`
+    # hands to `commit_artifact` (section 7.4).
+
+    def _programs_members_resolve(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ResolveProgramMembers
+    ) -> _Result:
+        """`programs.members.resolve`: the exact member Projects of 1..10 Programs (S4 7.1).
+
+        The switches, then the composition checks (section 7.6), then the remote
+        grant re-check (section 6.1: `unsupported`), then the read on its own
+        Program snapshot with the caller's section 6.2 families. The request's
+        own unit of work is not read: it carries the audit row only.
+        """
+        del unit_of_work
+        self._program_plane()
+        factory = self._program_read_plane(overview=False)
+        require_read_grant(authorization.capability_grants, command.capability)
+        with _translated():
+            view = resolve_program_members(
+                factory,
+                authorization.principal.principal_id,
+                command.program_entity_ids,
+                valid_at=command.valid_instant(),
+                families=program_families(authorization.capability_grants),
+            )
+        return _Result(
+            payload=view.to_canonical_dict(),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+        )
+
+    def _programs_overview(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadProgramOverview
+    ) -> _Result:
+        """`programs.overview`: Commitments, Issues and Constraints of 1..10 Programs (S4 7.2).
+
+        The switches, then the composition checks (section 7.6: the entity
+        plane, the Program read factory and the Constraint plane), then the
+        remote grant re-check (section 6.1: `unsupported`), then the read on its
+        own Program snapshot with the caller's section 6.2 families. The
+        request's own unit of work is not read: it carries the audit row only.
+        """
+        del unit_of_work
+        self._program_plane()
+        factory = self._program_read_plane(overview=True)
+        require_read_grant(authorization.capability_grants, command.capability)
+        with _translated():
+            view = read_program_overview(
+                factory,
+                authorization.principal.principal_id,
+                command.program_entity_ids,
+                families=program_families(authorization.capability_grants),
+            )
+        return _Result(
+            payload=view.to_canonical_dict(),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
+        )
+
+    # ---- commitments.v2.* (S4 contract section 7.3; worker M3) ----
+    #
+    # Each takes exactly its v1 sibling's request (plus an optional
+    # `project_ids` on the 3 page reads) and answers exactly its top-level keys,
+    # with v2 Commitment objects. The switch first, then the remote grant
+    # re-check (section 6.1), then the `project_ids` ownership check, then the
+    # v1 read with the filter; the reference check, the counterparty
+    # projections and a `waiting_on` page's follow-up Tasks are read once per
+    # page (`application.commitments_v2`). The v1 handlers are not changed.
+
+    def _commitments_v2_read(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadCommitmentV2
+    ) -> _Result:
+        """`commitments.v2.read`: `commitments.read` with Project and Situation references."""
+        self._program_plane()
+        require_read_grant(authorization.capability_grants, command.capability)
+        families = program_families(authorization.capability_grants)
+        principal_id = authorization.principal.principal_id
+        with _translated():
+            commitment = unit_of_work.commitments.get(principal_id, command.commitment_id)
+        if commitment is None:
+            raise NotFoundError(SafeDetail.COMMITMENT_ID)
+        with _translated():
+            follow_up = unit_of_work.tasks.get_follow_up_for_commitment(
+                principal_id, command.commitment_id
+            )
+            states = _evidence_capture_states(
+                unit_of_work,
+                principal_id,
+                (
+                    commitment.origin_evidence_ref,
+                    commitment.closure_evidence_ref,
+                    None if follow_up is None else follow_up.origin_evidence_ref,
+                    None if follow_up is None else follow_up.closure_evidence_ref,
+                ),
+            )
+            reads = read_commitment_page(
+                unit_of_work.commitments, principal_id, (commitment,), families
+            )
+            counterparty_options, counterparty_options_truncated = _counterparty_options(
+                unit_of_work, principal_id
+            )
+        public = CommitmentV2View(
+            view=_commitment_view(
+                commitment,
+                origin_evidence_capture_state=_ref_state(states, commitment.origin_evidence_ref),
+                closure_evidence_capture_state=_ref_state(states, commitment.closure_evidence_ref),
+            ),
+            references=reads.references_of(commitment),
+        ).to_canonical_dict()
+        public["counterparty"] = reads.counterparty_of(commitment)
+        return _Result(
+            payload={
+                "commitment": public,
+                "follow_up_task": (
+                    None
+                    if follow_up is None
+                    else _task_list_entry(
+                        follow_up,
+                        origin_evidence_capture_state=_ref_state(
+                            states, follow_up.origin_evidence_ref
+                        ),
+                        closure_evidence_capture_state=_ref_state(
+                            states, follow_up.closure_evidence_ref
+                        ),
+                    ).to_canonical_dict()
+                ),
+                "counterparty_options": counterparty_options,
+                "counterparty_options_truncated": counterparty_options_truncated,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_COMMITMENT_TRUST_BASIS),
+        )
+
+    def _commitments_v2_list(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListCommitmentsV2
+    ) -> _Result:
+        """`commitments.v2.list`: `commitments.list` with references and a Project filter."""
+        self._program_plane()
+        require_read_grant(authorization.capability_grants, command.capability)
+        families = program_families(authorization.capability_grants)
+        principal_id = authorization.principal.principal_id
+        request = command.v1()
+        with _translated():
+            require_owned_projects(
+                unit_of_work.commitments, principal_id, command.project_ids, families
+            )
+        page_size = self._page_size(request.page_size)
+        work_start, work_end = _commitment_work_bounds(
+            request.work_view, request.work_date, request.timezone
+        )
+        with _work_cursor_translated(), _translated():
+            found = unit_of_work.commitments.list_commitments(
+                principal_id,
+                direction=request.direction,
+                state=request.state,
+                work_view=request.work_view,
+                work_start=work_start,
+                work_end=work_end,
+                after=request.after,
+                limit=page_size + 1,
+                project_ids=command.project_ids,
+            )
+        return self._commitment_v2_page(
+            unit_of_work, authorization, found, page_size=page_size, families=families
+        )
+
+    def _commitments_v2_search(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: SearchCommitmentsV2
+    ) -> _Result:
+        """`commitments.v2.search`: `commitments.search` with references and a Project filter."""
+        self._program_plane()
+        require_read_grant(authorization.capability_grants, command.capability)
+        families = program_families(authorization.capability_grants)
+        principal_id = authorization.principal.principal_id
+        request = command.v1()
+        with _translated():
+            require_owned_projects(
+                unit_of_work.commitments, principal_id, command.project_ids, families
+            )
+        page_size = self._page_size(request.page_size)
+        work_start, work_end = _commitment_work_bounds(
+            request.work_view, request.work_date, request.timezone
+        )
+        with _work_cursor_translated(), _translated():
+            found = unit_of_work.commitments.search(
+                principal_id,
+                request.query,
+                page_size + 1,
+                after=request.after,
+                direction=request.direction,
+                state=request.state,
+                work_view=request.work_view,
+                work_start=work_start,
+                work_end=work_end,
+                project_ids=command.project_ids,
+            )
+        return self._commitment_v2_page(
+            unit_of_work, authorization, found, page_size=page_size, families=families
+        )
+
+    def _commitment_v2_page(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        found: Sequence[Commitment],
+        *,
+        page_size: int,
+        families: frozenset[ProgramFamily],
+    ) -> _Result:
+        """One v2 list or search page: `commitments.list`'s keys, batched (section 7.3)."""
+        principal_id = authorization.principal.principal_id
+        truncated = len(found) > page_size
+        page = tuple(found[:page_size])
+        with _translated():
+            states = _evidence_capture_states(
+                unit_of_work,
+                principal_id,
+                (
+                    reference
+                    for item in page
+                    for reference in (item.origin_evidence_ref, item.closure_evidence_ref)
+                ),
+            )
+            reads = read_commitment_page(unit_of_work.commitments, principal_id, page, families)
+            counterparty_options, counterparty_options_truncated = _counterparty_options(
+                unit_of_work, principal_id
+            )
+        entries: list[dict[str, object]] = []
+        for commitment in page:
+            entry = CommitmentV2ListEntry(
+                entry=_commitment_list_entry(
+                    commitment,
+                    origin_evidence_capture_state=_ref_state(
+                        states, commitment.origin_evidence_ref
+                    ),
+                    closure_evidence_capture_state=_ref_state(
+                        states, commitment.closure_evidence_ref
+                    ),
+                ),
+                evidence_state=commitment.evidence_state.value,
+                references=reads.references_of(commitment),
+            ).to_canonical_dict()
+            entry["counterparty"] = reads.counterparty_of(commitment)
+            entries.append(entry)
+        return _Result(
+            payload={
+                "commitments": entries,
+                "counterparty_options": counterparty_options,
+                "counterparty_options_truncated": counterparty_options_truncated,
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_COMMITMENT_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=truncated,
+                    reason="page_size_reached" if truncated else None,
+                    next_cursor=page[-1].commitment_id if truncated and page else None,
+                ),
+            ),
+        )
+
+    def _commitments_v2_waiting_on(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: WaitingOnV2
+    ) -> _Result:
+        """`commitments.v2.waiting_on`: `commitments.waiting_on` with references, batched."""
+        from my_pa.domain.situation.continuity import (
+            CommitmentDirection,
+            CommitmentState,
+            ContinuityEvidenceState,
+        )
+
+        self._program_plane()
+        require_read_grant(authorization.capability_grants, command.capability)
+        families = program_families(authorization.capability_grants)
+        principal_id = authorization.principal.principal_id
+        request = command.v1()
+        with _translated():
+            require_owned_projects(
+                unit_of_work.commitments, principal_id, command.project_ids, families
+            )
+        page_size = self._page_size(request.page_size)
+        with _work_cursor_translated(), _translated():
+            commitments = unit_of_work.commitments.list_commitments(
+                principal_id,
+                direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+                state=CommitmentState.OPEN,
+                evidence_state=ContinuityEvidenceState.ACCEPTED,
+                after=request.after,
+                limit=page_size + 1,
+                project_ids=command.project_ids,
+            )
+        truncated = len(commitments) > page_size
+        page = tuple(commitments[:page_size])
+        with _translated():
+            states = _evidence_capture_states(
+                unit_of_work,
+                principal_id,
+                (
+                    reference
+                    for item in page
+                    for reference in (item.origin_evidence_ref, item.closure_evidence_ref)
+                ),
+            )
+            follow_ups = page_follow_ups(unit_of_work.tasks, principal_id, page)
+            reads = read_commitment_page(unit_of_work.commitments, principal_id, page, families)
+        entries: list[dict[str, object]] = []
+        for c in page:
+            follow_up = follow_ups.get(c.commitment_id)
+            entry = WaitingOnV2Entry(
+                entry=WaitingOnEntry(
+                    commitment_id=c.commitment_id,
+                    title=c.summary,
+                    counterparty_entity_id=c.counterparty_entity_id,
+                    due_date=c.due_at.isoformat() if c.due_at is not None else None,
+                    state=c.state.value,
+                    follow_up_task_id=None if follow_up is None else follow_up.task_id,
+                    follow_up_task_title=None if follow_up is None else follow_up.title,
+                    follow_up_task_state=(
+                        None if follow_up is None else follow_up.lifecycle_state.value
+                    ),
+                    origin_evidence_capture_state=_ref_state(states, c.origin_evidence_ref),
+                    closure_evidence_capture_state=_ref_state(states, c.closure_evidence_ref),
+                ),
+                references=reads.references_of(c),
+            ).to_canonical_dict()
+            entry["counterparty"] = reads.counterparty_of(c)
+            entries.append(entry)
+        return _Result(
+            payload={"waiting_on": entries},
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_COMMITMENT_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=truncated,
+                    reason="page_size_reached" if truncated else None,
+                    next_cursor=page[-1].commitment_id if truncated else None,
+                ),
+            ),
+        )
+
+    def _reports_manifest(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadReportManifest
+    ) -> _Result:
+        """`reports.manifest`: an artifact's immutable report manifest (S4 section 7.4).
+
+        The switches (section 7.6), then the remote grant re-check (section
+        6.1: `unsupported`), then the artifact (absent and foreign are
+        `not_found` / `artifact_id`, as `reports.read`), then its stored
+        manifest: `recorded` unchanged, `manifest_unavailable_legacy` with
+        nothing written, or -- section 6.2's rule for a manifest whose Program
+        state is not `not_attempted` -- `restricted_evidence` with neither the
+        text nor its digest.
+        """
+        self._program_plane()
+        grants = authorization.capability_grants
+        require_read_grant(grants, command.capability)
+        principal_id = authorization.principal.principal_id
+        store = cast(IntelligenceStore, self._intelligence_store(unit_of_work, authorization))
+        artifact = read_artifact(store, principal_id=principal_id, artifact_id=command.report_id)
+        manifest = store.get_manifest(principal_id, artifact.artifact_id)
+        released = (
+            grants is None
+            or manifest is None
+            or program_released(
+                manifest,
+                families=program_families(grants),
+                holds_program_grant=Purpose.PROGRAM_REPORTING_READ
+                in granted_purposes(Capability.PROGRAMS_OVERVIEW, grants),
+            )
+        )
+        view = ReportManifestView.of(artifact.artifact_id, manifest, released=released)
+        return _Result(
+            payload=view.to_canonical_dict(),
+            disclosure=unenrolled_disclosure(authorization.at),
+        )
+
+    def _program_reference_recompute(
+        self, authorization: Authorization
+    ) -> Callable[[ProgramReferenceBlock], Mapping[str, object]] | None:
+        """S4 section 7.4: the `reports.commit` recompute of a Program reference block.
+
+        `None` -- the key is ordinary structured content -- unless the 7 S4
+        names are admitted (both switches). Otherwise the recompute runs only
+        when `programs.overview` is served by this build and admits the
+        committing caller (its remote grant re-check and the `entity` and
+        `project` families), with that caller's section 6.2 families, on the
+        Program read pool; else the manifest records `not_attempted`, which
+        depends only on the build and the caller's own grants (R4-F24).
+        """
+        if not (self._lineage_enabled and self._program_reporting_enabled):
+            return None
+        grants = authorization.capability_grants
+        principal_id = authorization.principal.principal_id
+        families = program_families(grants)
+        factory = self._program_read_unit_of_work
+        admitted = (
+            factory is not None
+            and Capability.PROGRAMS_OVERVIEW in self.available_capabilities
+            and (grants is None or bool(granted_purposes(Capability.PROGRAMS_OVERVIEW, grants)))
+            and families >= PROGRAM_ROOT_FAMILIES
+        )
+
+        def recompute(block: ProgramReferenceBlock) -> Mapping[str, object]:
+            return recompute_program_reference(
+                factory if admitted else None, principal_id, block, families=families
+            )
+
+        return recompute
 
     def _records_lineage(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadRecordLineage
@@ -15050,6 +15559,7 @@ class ApplicationService:
             supersedes_artifact_id=command.supersedes_artifact_id,
             advisory_digest=command.advisory_digest,
             completeness=command.completeness,
+            program_reference=self._program_reference_recompute(authorization),
         )
         artifact = admission.artifact
         if artifact is None:
@@ -16361,6 +16871,13 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.ISSUES_HANDOFFS_CORRECT: ApplicationService._issues_handoffs_correct,
         Capability.RECORDS_BACKFILL_PLAN: ApplicationService._records_backfill_plan,
         Capability.RECORDS_BACKFILL_REPORT: ApplicationService._records_backfill_report,
+        Capability.PROGRAMS_MEMBERS_RESOLVE: ApplicationService._programs_members_resolve,
+        Capability.PROGRAMS_OVERVIEW: ApplicationService._programs_overview,
+        Capability.COMMITMENTS_V2_READ: ApplicationService._commitments_v2_read,
+        Capability.COMMITMENTS_V2_LIST: ApplicationService._commitments_v2_list,
+        Capability.COMMITMENTS_V2_SEARCH: ApplicationService._commitments_v2_search,
+        Capability.COMMITMENTS_V2_WAITING_ON: ApplicationService._commitments_v2_waiting_on,
+        Capability.REPORTS_MANIFEST: ApplicationService._reports_manifest,
         Capability.MEETINGS_NOTES_VERSIONS: ApplicationService._meetings_notes_versions,
         Capability.MEETINGS_NOTES_READ_VERSION: ApplicationService._meetings_notes_read_version,
         Capability.RECORD_EVENTS_LIST: ApplicationService._record_events_list,
@@ -16603,6 +17120,19 @@ def _lineage_instant(value: datetime) -> str:
 #: are on (`LINEAGE_BACKFILL_CAPABILITIES`, as members).
 _LINEAGE_BACKFILL_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     capability for capability in Capability if capability.value in LINEAGE_BACKFILL_CAPABILITIES
+)
+
+#: Record lineage S4 (contract section 7.6): the 7 Program-reporting names,
+#: withheld unless both `lineage_enabled` and `program_reporting_enabled` are on
+#: (`PROGRAM_REPORTING_CAPABILITIES`, as members). Not lineage capabilities: the
+#: 30-name `_LINEAGE_CAPABILITIES` set is unchanged.
+_PROGRAM_REPORTING_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    capability for capability in Capability if capability.value in PROGRAM_REPORTING_CAPABILITIES
+)
+#: The 2 Program reads, which also need the entity plane and the Program read
+#: factory (and `programs.overview` the Constraint plane).
+_PROGRAM_READ_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    capability for capability in Capability if capability.value in PROGRAM_READ_CAPABILITIES
 )
 
 #: KLP-WP-04: the bound discovery client's two writes. Withheld from every

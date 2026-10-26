@@ -68,7 +68,7 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "b8e4d1a6c073"
 PULL_REVISION: Final = "6a2f9d1c4b80"
 PROMOTION_REVISION: Final = "a4d8e31b2c90"
-HEAD_REVISION: Final = "6f1476b8da52"
+HEAD_REVISION: Final = "c5260943d933"
 CURRENT_HEAD_REVISION: Final = HEAD_REVISION
 GRAPH_REVISION: Final = "c3f8a1d07e94"
 #: What was head until `REVISION` stacked on it, and therefore the revision
@@ -89,7 +89,7 @@ PREVIOUS_REVISION: Final = "16f05c46b8c3"
 #: Intelligence report type registry `a591b81f10a2` makes it 115, and the MCP
 #: interaction log `c8f7ae406d47` 116, and the Commitment counterparty Entity
 #: cutover `5c1e7a9b3d42` 117.
-REVISION_FILE_COUNT: Final = 121
+REVISION_FILE_COUNT: Final = 122
 
 #: The revision's frozen salt, restated. If this and the revision ever disagree
 #: the expectations below stop matching, which is the point of restating it.
@@ -446,7 +446,8 @@ def test_the_revision_is_the_single_head_and_revises_the_prior_head() -> None:
     # labels), then `de5ec1c65857` (WP-TUX-01). Every edge below is retained
     # and the new ones are asserted, so the chain is still checked link by
     # link rather than loosened.
-    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == "d020b532ad7d"
+    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == "6f1476b8da52"
+    assert script.get_revision("6f1476b8da52").down_revision == "d020b532ad7d"
     assert script.get_revision("d020b532ad7d").down_revision == "264310e0416a"
     assert script.get_revision("264310e0416a").down_revision == "b9025e7fb738"
     assert script.get_revision("b9025e7fb738").down_revision == "5c1e7a9b3d42"

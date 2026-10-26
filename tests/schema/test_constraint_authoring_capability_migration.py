@@ -52,7 +52,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "f7a2c9d51e64"
-CURRENT_HEAD: Final = "6f1476b8da52"
+CURRENT_HEAD: Final = "c5260943d933"
 CAPTURE_LABELS: Final = "c1a8e4d70b29"
 WP_TUX_01: Final = "de5ec1c65857"
 WP_MCP_PROJ_01: Final = "9f2c8a1d4e70"
@@ -125,6 +125,8 @@ RECORD_LINEAGE_S1_MIGRATION: Final = MIGRATIONS / "20261017_264310e0416a_record_
 RECORD_LINEAGE_S2_MIGRATION: Final = MIGRATIONS / "20261018_d020b532ad7d_record_lineage_s2.py"
 #: Record lineage S3's additive head (`6f1476b8da52`, ADR-015), on the same precedent.
 RECORD_LINEAGE_S3_MIGRATION: Final = MIGRATIONS / "20261019_6f1476b8da52_record_lineage_s3.py"
+#: Record lineage S4's additive head (`c5260943d933`, ADR-015), on the same precedent.
+RECORD_LINEAGE_S4_MIGRATION: Final = MIGRATIONS / "20261024_c5260943d933_record_lineage_s4.py"
 #: The one sanctioned edit to a historical revision (operator ruling
 #: OPERATOR_RULING_WP04_A_to_E.md section E). Like D-48, the Meeting-records
 #: work freezes `a_managed_document_is_identified_within_its_owner` out of
@@ -243,8 +245,10 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_record_lineage_s1_migration.py",
     # Record lineage S2's suite names the head the S3 revision now sits at.
     "tests/schema/test_record_lineage_s2_migration.py",
-    # Record lineage S3's own revision module names the head as the revision it tests.
+    # Record lineage S3's suite names the head the S4 revision now sits at.
     "tests/schema/test_record_lineage_s3_migration.py",
+    # Record lineage S4's own revision module names the head as the revision it tests.
+    "tests/schema/test_record_lineage_s4_migration.py",
     "tests/schema/test_record_event_truncate_refusal_migration.py",
     "tests/schema/test_record_events_migration.py",
     "tests/schema/test_oauth_refresh_migration.py",
@@ -332,7 +336,8 @@ def _literals(block: str) -> list[str]:
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [CURRENT_HEAD]
-    assert script.get_revision(CURRENT_HEAD).down_revision == "d020b532ad7d"
+    assert script.get_revision(CURRENT_HEAD).down_revision == "6f1476b8da52"
+    assert script.get_revision("6f1476b8da52").down_revision == "d020b532ad7d"
     assert script.get_revision("d020b532ad7d").down_revision == "264310e0416a"
     assert script.get_revision("264310e0416a").down_revision == "b9025e7fb738"
     assert script.get_revision("b9025e7fb738").down_revision == "5c1e7a9b3d42"
@@ -358,7 +363,7 @@ def test_revision_is_the_only_linear_head() -> None:
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 121
+    assert len(list(MIGRATIONS.glob("*.py"))) == 122
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -513,6 +518,7 @@ def test_no_historical_revision_was_edited() -> None:
         RECORD_LINEAGE_S1_MIGRATION.relative_to(ROOT).as_posix(),
         RECORD_LINEAGE_S2_MIGRATION.relative_to(ROOT).as_posix(),
         RECORD_LINEAGE_S3_MIGRATION.relative_to(ROOT).as_posix(),
+        RECORD_LINEAGE_S4_MIGRATION.relative_to(ROOT).as_posix(),
         # Not an additive head: the one sanctioned historical edit (see
         # `SANCTIONED_HISTORICAL_EDIT`; operator ruling section E).
         SANCTIONED_HISTORICAL_EDIT.relative_to(ROOT).as_posix(),

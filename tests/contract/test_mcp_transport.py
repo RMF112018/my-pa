@@ -56,6 +56,7 @@ from my_pa.application.service import _HANDLERS
 from my_pa.contracts.v1.envelope import RequestMetadata
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.identity.operation import Capability
+from my_pa.domain.program.vocabulary import PROGRAM_REPORTING_CAPABILITIES
 
 MCP_SOURCE = Path(mcp_module.__file__).read_text(encoding="utf-8")
 
@@ -102,6 +103,8 @@ def served(scene: Scene) -> Served[McpTransport]:
             knowledge_assertions_enabled=True,
             lineage_enabled=True,
             lineage_backfill_enabled=True,
+            # Record lineage S4: and the Program-reporting sub-switch.
+            program_reporting_enabled=True,
         ),
         scene.principal,
     )
@@ -142,7 +145,7 @@ def test_tools_list_publishes_exactly_the_local_capability_set(
         for capability in HANDLER_CAPABILITIES
         if capability not in _AUTHENTICATED_CLIENT_CAPABILITIES
     ]
-    assert len(listed.tools) == 217
+    assert len(listed.tools) == 224
     assert all(tool.description for tool in listed.tools), "a tool has no description"
 
 
@@ -151,7 +154,7 @@ def test_handler_unwired_capabilities_publish_no_mcp_tools() -> None:
     assert {tool.name for tool in TOOLS} == {
         capability.value for capability in HANDLER_CAPABILITIES
     }
-    assert len(TOOLS) == 222
+    assert len(TOOLS) == 229
     assert not {capability.value for capability in HANDLER_UNWIRED_CAPABILITIES} & {
         tool.name for tool in TOOLS
     }
@@ -597,6 +600,13 @@ _COMPOSED_CAPABILITIES: Final = (
         for capability in Capability
         if capability.value.startswith(("issues.", "records.", "meetings.notes."))
     )
+    # Record lineage S4: the Program-reporting names, on their own default-off
+    # sub-switch beside the lineage one.
+    | frozenset(
+        capability
+        for capability in Capability
+        if capability.value in PROGRAM_REPORTING_CAPABILITIES
+    )
 )
 
 _AUTHENTICATED_CLIENT_CAPABILITIES: Final = frozenset(
@@ -705,6 +715,8 @@ def test_a_child_with_a_managed_root_publishes_every_locally_available_capabilit
         MY_PA_LINEAGE_ENABLED="true",
         # Record lineage S3: the backfill sub-switch, which needs the one above.
         MY_PA_LINEAGE_BACKFILL_ENABLED="true",
+        # Record lineage S4: the Program-reporting sub-switch, which needs lineage.
+        MY_PA_PROGRAM_REPORTING_ENABLED="true",
     )
     expected = [
         capability.value

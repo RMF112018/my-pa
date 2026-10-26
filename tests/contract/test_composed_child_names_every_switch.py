@@ -55,7 +55,14 @@ from my_pa.bootstrap.settings import ENV_PREFIX, Settings
 #: of the three is a switch that the name-for-name setting derivation below
 #: should treat as an omitted flag.
 _COMPOSED_DEPENDENCY_ATTRIBUTES: Final[frozenset[str]] = frozenset(
-    {"_managed_store_or_none", "_producer_origins", "_constraint_management_unit_of_work"}
+    {
+        "_managed_store_or_none",
+        "_producer_origins",
+        "_constraint_management_unit_of_work",
+        # Record lineage S4 (contract section 6.3): the Program read factory,
+        # composed by `bootstrap/gateway.py` from the switch below.
+        "_program_read_unit_of_work",
+    }
 )
 
 _MANAGED_ROOT_VARIABLE: Final = f"{ENV_PREFIX}MANAGED_DOCUMENT_ROOT"
@@ -164,7 +171,7 @@ def test_the_derivation_finds_the_switches_the_published_surface_branches_on() -
     """
     variables = _switch_variables()
     assert variables, "no switch narrows the published surface, so this module proves nothing"
-    assert len(variables) == 8, (
+    assert len(variables) == 9, (
         "the published surface is narrowed by a different number of switches than "
         f"this guard knows about: {sorted(variables)}"
     )
@@ -180,6 +187,8 @@ def test_the_derivation_finds_the_switches_the_published_surface_branches_on() -
         "lineage_enabled",
         # Record lineage S3 (contract section 7.7): the backfill sub-switch.
         "lineage_backfill_enabled",
+        # Record lineage S4 (contract section 7.6): the Program-reporting sub-switch.
+        "program_reporting_enabled",
     }
 
 

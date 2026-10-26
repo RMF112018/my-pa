@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from datetime import date, datetime
 from typing import Any, cast
 
@@ -36,6 +37,14 @@ from my_pa.domain.intelligence.models import (
     ReportTypeInsertion,
     builtin_report_type_definitions,
 )
+from my_pa.domain.intelligence.source_manifest import (
+    DependencyDigests,
+    RecordedManifest,
+    build_manifest,
+    recorded_release_requirement,
+    structured_content_sha256,
+)
+from my_pa.domain.program.vocabulary import REPORT_MANIFEST_SCHEMA_VERSION
 from my_pa.domain.search.query import SearchQuery, SearchQueryError
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
@@ -44,6 +53,7 @@ from my_pa.infrastructure.persistence.principal_scope import (
     principal_scoped,
 )
 from my_pa.infrastructure.persistence.tables import (
+    intelligence_artifact_manifests,
     intelligence_artifacts,
     intelligence_commit_receipts,
     intelligence_cycle_runs,
@@ -71,6 +81,13 @@ def report_type_registry_lock_key(principal_id: str) -> int:
     """
     encoded = f"{REPORT_TYPE_REGISTRY_LOCK_NAMESPACE}\x1f{principal_id}".encode()
     return int.from_bytes(hashlib.sha256(encoded).digest()[:8], byteorder="big", signed=True)
+
+
+def _structured(value: object) -> dict[str, object] | None:
+    """A stored `structured_content` as the JSON object psycopg loaded, or `None`."""
+    if isinstance(value, str):
+        value = json.loads(value)
+    return cast(dict[str, object], value) if isinstance(value, dict) else None
 
 
 def _area(value: str | None) -> FocusAreaId | None:
@@ -251,7 +268,20 @@ class SqlIntelligenceStore:
         row = self._connection.execute(statement).mappings().first()
         return None if row is None else self._artifact(row)
 
-    def put_artifact(self, artifact: IntelligenceArtifact) -> None:
+    def put_artifact(
+        self,
+        artifact: IntelligenceArtifact,
+        *,
+        program_section: Mapping[str, object] | None = None,
+    ) -> None:
+        """Insert the artifact, its dependencies and provenance, then its manifest.
+
+        Record lineage S4 (contract sections 4.1 and 7.4): the one writer of
+        `intelligence_artifacts` reads back the stored `structured_content` and
+        the upstreams' digests in the same transaction and inserts the
+        artifact's immutable manifest beside it, so the deferred
+        `an_artifact_has_its_manifest` holds at commit for every caller.
+        """
         payload: dict[str, object] = {
             "artifact_id": artifact.artifact_id,
             "cycle_run_id": artifact.cycle_run_id,
@@ -325,6 +355,127 @@ class SqlIntelligenceStore:
                 self._context,
             )
             self._connection.execute(intelligence_provenance_refs.insert().values(**prov_values))
+        self._put_manifest(artifact, program_section)
+
+    def _put_manifest(
+        self, artifact: IntelligenceArtifact, program_section: Mapping[str, object] | None
+    ) -> None:
+        stored = self._connection.execute(
+            principal_scoped(
+                select(intelligence_artifacts.c.structured_content).where(
+                    intelligence_artifacts.c.artifact_id == artifact.artifact_id
+                ),
+                intelligence_artifacts,
+                self._context,
+            )
+        ).scalar_one()
+        upstream_ids = [dependency.upstream_artifact_id for dependency in artifact.dependencies]
+        upstreams: dict[str, RowMapping] = {}
+        recorded: dict[str, RowMapping] = {}
+        if upstream_ids:
+            # Two Principal-scoped statements (the upstream rows, then their
+            # manifests), never a hand-written partition join.
+            upstreams = {
+                row["artifact_id"]: row
+                for row in self._connection.execute(
+                    principal_scoped(
+                        select(
+                            intelligence_artifacts.c.artifact_id,
+                            intelligence_artifacts.c.content_sha256,
+                            intelligence_artifacts.c.structured_content,
+                        ).where(intelligence_artifacts.c.artifact_id.in_(upstream_ids)),
+                        intelligence_artifacts,
+                        self._context,
+                    )
+                ).mappings()
+            }
+            recorded = {
+                row["artifact_id"]: row
+                for row in self._connection.execute(
+                    principal_scoped(
+                        select(
+                            intelligence_artifact_manifests.c.artifact_id,
+                            intelligence_artifact_manifests.c.manifest_sha256,
+                            intelligence_artifact_manifests.c.structured_content_sha256,
+                            intelligence_artifact_manifests.c.manifest_canonical,
+                        ).where(intelligence_artifact_manifests.c.artifact_id.in_(upstream_ids)),
+                        intelligence_artifact_manifests,
+                        self._context,
+                    )
+                ).mappings()
+            }
+        digests = []
+        for dependency in artifact.dependencies:
+            row = upstreams[dependency.upstream_artifact_id]
+            manifest = recorded.get(dependency.upstream_artifact_id)
+            digests.append(
+                DependencyDigests(
+                    report_id=dependency.upstream_artifact_id,
+                    dependency_role=dependency.dependency_role,
+                    required=dependency.required,
+                    content_sha256=row["content_sha256"],
+                    structured_content_sha256=(
+                        structured_content_sha256(_structured(row["structured_content"]))
+                        if manifest is None
+                        else manifest["structured_content_sha256"]
+                    ),
+                    manifest_sha256=None if manifest is None else manifest["manifest_sha256"],
+                    release_requirement=(
+                        None
+                        if manifest is None
+                        else recorded_release_requirement(manifest["manifest_canonical"])
+                    ),
+                )
+            )
+        built = build_manifest(
+            artifact,
+            stored_structured_content=_structured(stored),
+            dependencies=digests,
+            program=program_section,
+        )
+        values = principal_bound_values(
+            {
+                "artifact_id": artifact.artifact_id,
+                "manifest_schema_version": REPORT_MANIFEST_SCHEMA_VERSION,
+                "manifest_canonical": built.manifest_canonical,
+                "manifest_sha256": built.manifest_sha256,
+                "structured_content_sha256": built.structured_content_sha256,
+                "program_overview_sha256": built.program_overview_sha256,
+                "program_verification_state": built.program_verification_state,
+            },
+            intelligence_artifact_manifests,
+            self._context,
+        )
+        self._connection.execute(intelligence_artifact_manifests.insert().values(**values))
+
+    def get_manifest(self, principal_id: str, artifact_id: str) -> RecordedManifest | None:
+        """The stored manifest row, unchanged; `None` for a legacy artifact (S4 7.4).
+
+        A read only: a legacy artifact is never given a manifest here.
+        """
+        row = (
+            self._connection.execute(
+                principal_scoped(
+                    select(intelligence_artifact_manifests).where(
+                        intelligence_artifact_manifests.c.artifact_id == artifact_id
+                    ),
+                    intelligence_artifact_manifests,
+                    self._context,
+                )
+            )
+            .mappings()
+            .first()
+        )
+        if row is None:
+            return None
+        return RecordedManifest(
+            manifest_schema_version=int(row["manifest_schema_version"]),
+            manifest_canonical=str(row["manifest_canonical"]),
+            manifest_sha256=str(row["manifest_sha256"]),
+            structured_content_sha256=row["structured_content_sha256"],
+            program_overview_sha256=row["program_overview_sha256"],
+            program_verification_state=row["program_verification_state"],
+        )
 
     def mark_superseded(self, principal_id: str, artifact_id: str) -> None:
         self._connection.execute(

@@ -553,6 +553,8 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "lineage_backfill_items",
         }
     ),
+    # Record lineage S4 (ADR-015): the immutable Intelligence report manifest.
+    "c5260943d933": frozenset({"intelligence_artifact_manifests"}),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

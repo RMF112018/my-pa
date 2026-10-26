@@ -47,6 +47,8 @@ from tests.schema.lineage_s2_schema_ahead_contract import S2_CAPABILITIES as LIN
 from tests.schema.lineage_s2_schema_ahead_contract import S2_PURPOSES as LINEAGE_S2_PURPOSES
 from tests.schema.lineage_s3_schema_ahead_contract import S3_CAPABILITIES as LINEAGE_S3_CAPABILITIES
 from tests.schema.lineage_s3_schema_ahead_contract import S3_PURPOSES as LINEAGE_S3_PURPOSES
+from tests.schema.lineage_s4_schema_ahead_contract import S4_CAPABILITIES as LINEAGE_S4_CAPABILITIES
+from tests.schema.lineage_s4_schema_ahead_contract import S4_PURPOSES as LINEAGE_S4_PURPOSES
 from tests.schema.lineage_schema_ahead_contract import S1_CAPABILITIES as LINEAGE_S1_CAPABILITIES
 from tests.schema.lineage_schema_ahead_contract import S1_PURPOSES as LINEAGE_S1_PURPOSES
 
@@ -78,7 +80,7 @@ PREVIOUS: Final = "6f6ead27d122"
 #: The chain head these tests run against. `1d9b248e7f83` (WP-RE-01, Record
 #: Events) is additive on `REVISION`, and `0641c354ca85` (CRL-WP-03, Capture
 #: lifecycle) is additive on that, so `REVISION` is no longer the head.
-HEAD: Final = "6f1476b8da52"
+HEAD: Final = "c5260943d933"
 #: The revision that last stated `capability_is_known` and `purpose_is_known`,
 #: and therefore the only correct source for this revision's BEFORE literals.
 VOCABULARY_PREDECESSOR: Final = "e6a4c2f91b73"
@@ -162,7 +164,8 @@ def _offline(target: str, *, down: bool = False) -> str:
 def test_the_revision_is_the_single_head_directly_on_the_previous_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "d020b532ad7d"
+    assert script.get_revision(HEAD).down_revision == "6f1476b8da52"
+    assert script.get_revision("6f1476b8da52").down_revision == "d020b532ad7d"
     assert script.get_revision("d020b532ad7d").down_revision == "264310e0416a"
     assert script.get_revision("264310e0416a").down_revision == "b9025e7fb738"
     assert script.get_revision("b9025e7fb738").down_revision == "5c1e7a9b3d42"
@@ -180,7 +183,7 @@ def test_the_revision_is_the_single_head_directly_on_the_previous_head() -> None
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 121
+    assert len(list(MIGRATIONS.glob("*.py"))) == 122
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -300,6 +303,8 @@ ADMITTED_LATER_CAPABILITIES: Final = (
     | LINEAGE_S2_CAPABILITIES
     # Record lineage S3: admitted by the S3 revision and declared with it.
     | LINEAGE_S3_CAPABILITIES
+    # Record lineage S4: admitted by the S4 revision and declared with it.
+    | LINEAGE_S4_CAPABILITIES
 )
 ADMITTED_LATER_PURPOSES: Final = (
     frozenset(
@@ -314,6 +319,7 @@ ADMITTED_LATER_PURPOSES: Final = (
     | LINEAGE_S1_PURPOSES
     | LINEAGE_S2_PURPOSES
     | LINEAGE_S3_PURPOSES
+    | LINEAGE_S4_PURPOSES
 )
 
 

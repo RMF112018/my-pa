@@ -73,7 +73,12 @@ from my_pa.application.commands import (
     SubmitGoodNotesProposal,
 )
 from my_pa.application.disclosure import Limitation
-from my_pa.application.service import _HANDLERS, _LINEAGE_CAPABILITIES, ApplicationService
+from my_pa.application.service import (
+    _HANDLERS,
+    _LINEAGE_CAPABILITIES,
+    _PROGRAM_REPORTING_CAPABILITIES,
+    ApplicationService,
+)
 from my_pa.contracts.ports import KnowledgeRecord
 from my_pa.contracts.v1.capabilities import Availability, EffectiveLimits, ReadinessState
 from my_pa.contracts.v1.envelope import ResponseEnvelope
@@ -656,6 +661,8 @@ def test_capabilities_get_reports_phase_a_pull_contracts_as_not_implemented(
         | _RUN01_UNWIRED_CAPABILITIES
         | _KNOWLEDGE_ASSERTION_CAPABILITIES
         | _LINEAGE_CAPABILITIES
+        # Record lineage S4: behind their own default-off sub-switch.
+        | _PROGRAM_REPORTING_CAPABILITIES
     )
     assert {
         Capability(name)
@@ -691,6 +698,8 @@ def test_readiness_stops_reporting_contracts_only_because_the_manifest_is_derive
         - _GOODNOTES_PULL_CAPABILITIES
         - _KNOWLEDGE_ASSERTION_CAPABILITIES
         - _LINEAGE_CAPABILITIES
+        # Record lineage S4: behind their own default-off sub-switch.
+        - _PROGRAM_REPORTING_CAPABILITIES
     )
     assert len(expected_available) == 180
     assert readiness["implemented_capabilities"] == len(expected_available)

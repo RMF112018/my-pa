@@ -596,6 +596,14 @@ SCOPED_CAPABILITIES = [
         Capability.ISSUES_HANDOFFS_CORRECT,
         Capability.RECORDS_BACKFILL_PLAN,
         Capability.RECORDS_BACKFILL_REPORT,
+        # Record lineage S4, behind the same switch and its sub-switch (and scopeless).
+        Capability.PROGRAMS_MEMBERS_RESOLVE,
+        Capability.PROGRAMS_OVERVIEW,
+        Capability.COMMITMENTS_V2_READ,
+        Capability.COMMITMENTS_V2_LIST,
+        Capability.COMMITMENTS_V2_SEARCH,
+        Capability.COMMITMENTS_V2_WAITING_ON,
+        Capability.REPORTS_MANIFEST,
     }
 ]
 

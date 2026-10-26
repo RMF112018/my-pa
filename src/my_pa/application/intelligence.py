@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from typing import Final, Protocol
@@ -77,11 +77,23 @@ from my_pa.domain.intelligence.models import (
     content_utf8_bytes,
     fingerprint_payload,
 )
+from my_pa.domain.intelligence.source_manifest import (
+    DependencyDigests,
+    ProgramReferenceBlock,
+    ProgramReferenceError,
+    RecordedManifest,
+    build_manifest,
+    program_reference_block,
+    recorded_release_requirement,
+    structured_content_sha256,
+)
+from my_pa.domain.program.vocabulary import REPORT_MANIFEST_SCHEMA_VERSION
 from my_pa.domain.source.registry import issue_identifier
 
 __all__ = [
     "InMemoryIntelligenceStore",
     "IntelligenceStore",
+    "ProgramReferenceRecompute",
     "ReportTypeRegistration",
     "begin_cycle",
     "commit_artifact",
@@ -131,7 +143,19 @@ class IntelligenceStore(Protocol):
 
     def get_artifact(self, principal_id: str, artifact_id: str) -> IntelligenceArtifact | None: ...
 
-    def put_artifact(self, artifact: IntelligenceArtifact) -> None: ...
+    def put_artifact(
+        self,
+        artifact: IntelligenceArtifact,
+        *,
+        program_section: Mapping[str, object] | None = None,
+    ) -> None:
+        """Insert the artifact and, beside it, its immutable report manifest (S4 7.4).
+
+        `program_section` is the manifest's `ProgramManifestSection`, or `None`.
+        """
+
+    def get_manifest(self, principal_id: str, artifact_id: str) -> RecordedManifest | None:
+        """The artifact's stored manifest; `None` for a legacy artifact (S4 7.4)."""
 
     def mark_superseded(self, principal_id: str, artifact_id: str) -> None: ...
 
@@ -229,6 +253,11 @@ class IntelligenceStore(Protocol):
         kind is returned unchanged (``inserted`` False) whatever the count;
         ``None`` means the kind is new and ``limit`` client kinds already exist.
         """
+
+
+#: Record lineage S4 (contract section 7.4): the service's commit-time recompute
+#: of a Program reference block, returning the manifest's Program section.
+type ProgramReferenceRecompute = Callable[[ProgramReferenceBlock], Mapping[str, object]]
 
 
 def _now(at: datetime) -> datetime:
@@ -1025,9 +1054,27 @@ def commit_artifact(
     supersedes_artifact_id: str | None = None,
     advisory_digest: str | None = None,
     completeness: str | None = None,
+    program_reference: ProgramReferenceRecompute | None = None,
 ) -> MutationAdmission:
-    """Atomically commit a producer run and immutable artifact."""
+    """Atomically commit a producer run and immutable artifact.
+
+    Record lineage S4 (contract section 7.4). `program_reference` is given
+    exactly when the Program plane is admitted (both switches): then a
+    `program_overview_ref` block in `structured_content` must have the section
+    5.4 shape on a synthesizer, reporter or morning-brief artifact (a pure
+    check, before anything is read: `invalid_request` / `structured_content`),
+    and -- create path only, after the replay lookup and every remaining
+    refusal check, immediately before the first write -- `program_reference`
+    recomputes it; the section it returns is bound in the artifact's manifest.
+    Without it the key is ordinary structured content.
+    """
     try:
+        block: ProgramReferenceBlock | None = None
+        if program_reference is not None:
+            try:
+                block = program_reference_block(structured_content, stage=stage)
+            except ProgramReferenceError:
+                raise InvalidRequestError(SafeDetail.STRUCTURED_CONTENT) from None
         # First, as before, but inside the translated block: a registry lookup
         # fault is handled exactly like every other store fault of this commit.
         artifact_kind = require_registered_kind(
@@ -1208,6 +1255,12 @@ def commit_artifact(
             content_sha256=digest,
             content_bytes=len(body),
         )
+        # S4 section 7.4 step 2: the recompute, after every refusal check and
+        # before the first write; it runs on its own Program-pool snapshot and
+        # records any failure in the section rather than refusing.
+        program_section = (
+            None if block is None or program_reference is None else program_reference(block)
+        )
         if not store.put_receipt(receipt):
             stored = store.get_receipt(principal_id, idempotency_key)
             if stored is None or stored.fingerprint_sha256 != fingerprint:
@@ -1232,7 +1285,7 @@ def commit_artifact(
         if current is not None:
             store.mark_superseded(principal_id, current.artifact_id)
         store.put_run(run)
-        store.put_artifact(artifact)
+        store.put_artifact(artifact, program_section=program_section)
         return MutationAdmission(
             receipt=receipt, created=True, replayed=False, artifact=artifact, run=run, cycle=cycle
         )
@@ -1684,6 +1737,9 @@ class InMemoryIntelligenceStore:
     runs: dict[tuple[str, str], IntelligenceProducerRun] = field(default_factory=dict)
     artifacts: dict[tuple[str, str], IntelligenceArtifact] = field(default_factory=dict)
     report_types: dict[tuple[str, str], IntelligenceReportType] = field(default_factory=dict)
+    #: S4 section 4.1: one manifest per artifact put through `put_artifact`; an
+    #: artifact placed in `artifacts` directly is a legacy one.
+    manifests: dict[tuple[str, str], RecordedManifest] = field(default_factory=dict)
 
     def get_receipt(
         self, principal_id: str, idempotency_key: str
@@ -1748,8 +1804,60 @@ class InMemoryIntelligenceStore:
     def get_artifact(self, principal_id: str, artifact_id: str) -> IntelligenceArtifact | None:
         return self.artifacts.get((principal_id, artifact_id))
 
-    def put_artifact(self, artifact: IntelligenceArtifact) -> None:
-        self.artifacts[(artifact.principal_id, artifact.artifact_id)] = artifact
+    def put_artifact(
+        self,
+        artifact: IntelligenceArtifact,
+        *,
+        program_section: Mapping[str, object] | None = None,
+    ) -> None:
+        """Hold the artifact and build its manifest from the values held (S4 section 5.2).
+
+        Not byte-comparable with the SQL path for a number JSONB renormalizes:
+        this store hashes the value it holds.
+        """
+        key = (artifact.principal_id, artifact.artifact_id)
+        self.artifacts[key] = artifact
+        digests: list[DependencyDigests] = []
+        for dependency in artifact.dependencies:
+            upstream_key = (key[0], dependency.upstream_artifact_id)
+            upstream = self.artifacts[upstream_key]
+            recorded = self.manifests.get(upstream_key)
+            digests.append(
+                DependencyDigests(
+                    report_id=dependency.upstream_artifact_id,
+                    dependency_role=dependency.dependency_role,
+                    required=dependency.required,
+                    content_sha256=upstream.content_sha256,
+                    structured_content_sha256=(
+                        structured_content_sha256(upstream.structured_content)
+                        if recorded is None
+                        else recorded.structured_content_sha256
+                    ),
+                    manifest_sha256=None if recorded is None else recorded.manifest_sha256,
+                    release_requirement=(
+                        None
+                        if recorded is None
+                        else recorded_release_requirement(recorded.manifest_canonical)
+                    ),
+                )
+            )
+        built = build_manifest(
+            artifact,
+            stored_structured_content=artifact.structured_content,
+            dependencies=digests,
+            program=program_section,
+        )
+        self.manifests[key] = RecordedManifest(
+            manifest_schema_version=REPORT_MANIFEST_SCHEMA_VERSION,
+            manifest_canonical=built.manifest_canonical,
+            manifest_sha256=built.manifest_sha256,
+            structured_content_sha256=built.structured_content_sha256,
+            program_overview_sha256=built.program_overview_sha256,
+            program_verification_state=built.program_verification_state,
+        )
+
+    def get_manifest(self, principal_id: str, artifact_id: str) -> RecordedManifest | None:
+        return self.manifests.get((principal_id, artifact_id))
 
     def mark_superseded(self, principal_id: str, artifact_id: str) -> None:
         stored = self.artifacts.get((principal_id, artifact_id))

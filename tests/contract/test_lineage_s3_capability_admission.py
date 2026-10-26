@@ -82,6 +82,7 @@ from my_pa.domain.lineage.vocabulary import (
     LINEAGE_WRITE_CAPABILITIES,
 )
 from my_pa.domain.policy.decision import _SCOPELESS
+from my_pa.domain.program.vocabulary import PROGRAM_REPORTING_CAPABILITIES
 
 S3_NAMES: Final = frozenset(
     {
@@ -339,6 +340,9 @@ def _canonical_sha256(document: object) -> str:
 
 def test_existing_v1_shapes_are_unchanged_by_s3() -> None:
     lineage = {capability.value for capability in _LINEAGE_CAPABILITIES}
+    # Record lineage S4 (S4 contract section 10): its 7 names are excluded
+    # beside the lineage names; the count and both pins stay.
+    lineage |= PROGRAM_REPORTING_CAPABILITIES
     payloads = {
         tool.name: tool.input_schema["properties"]["payload"]
         for tool in TOOLS
@@ -359,10 +363,11 @@ def test_existing_v1_shapes_are_unchanged_by_s3() -> None:
     assert len(views) == 38
     assert _canonical_sha256(views) == _V1_VIEW_FIELDS_SHA256
     # The envelope's `purpose` enum is the one v1 schema S3 widens, and only by
-    # its own backfill purpose (section 7.7).
+    # its own backfill purpose (section 7.7); S4 widens it by exactly its one
+    # Program purpose after it (S4 contract sections 8 and 10, R4-F04, R4-F15).
     basis_tail = ["record_lineage_authoring", "meeting_note_history_read", "issue_work_authoring"]
     published = TOOLS[0].input_schema["$defs"]["Purpose"]["enum"]
-    assert published[-4:] == [*basis_tail, "lineage_backfill"]
+    assert published[-5:] == [*basis_tail, "lineage_backfill", "program_reporting_read"]
 
 
 #: Every S1/S2 lineage view's keys at the S2 basis (`84ddab37`).

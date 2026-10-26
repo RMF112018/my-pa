@@ -1218,3 +1218,18 @@ def test_form_objects_join_the_cap_before_their_children_are_read(
     roomy = ScheduleParseLimits(max_page_objects=top_level + 4)
     assert parse_full_schedule(pdf, limits=roomy).outcome is SchedulePublicationStatus.COMPLETE
     assert reads == [4]
+
+
+def test_a_stacked_two_line_title_is_joined() -> None:
+    """D-39 needs both overlaps: x-overlapping pieces on separate lines are a title."""
+
+    def second_line(draws: list[gen.Draw]) -> None:
+        title = next(d for d in draws if d.text == gen.TITLE)
+        # 12 pt at baseline 748: box y 745.6..756.4, below the first line's
+        # 757.6..768.4 (disjoint in y) and overlapping it in x by far more
+        # than 250 mpt.
+        draws.append(dataclasses.replace(title, text="Phase Two", y=D(748)))
+
+    result = parse_full_schedule(_small_pdf(second_line))
+    assert result.outcome is SchedulePublicationStatus.COMPLETE
+    assert result.published_schedule_title == f"{gen.TITLE} Phase Two"

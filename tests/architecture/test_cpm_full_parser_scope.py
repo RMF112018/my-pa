@@ -249,6 +249,7 @@ CROSSWALK: Final[dict[str, tuple[str, ...]]] = {
         "test_form_objects_join_the_cap_before_their_children_are_read",
         "test_metadata_ignores_unmapped_objects",
         "test_overlapping_title_pieces_never_publish_a_doubled_title",
+        "test_a_stacked_two_line_title_is_joined",
         "test_a_stale_pdfium_error_never_decides_the_refusal",
     ),
     "tests/unit/test_schedule_full_profile.py": (

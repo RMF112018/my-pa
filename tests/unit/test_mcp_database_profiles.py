@@ -700,6 +700,52 @@ def test_an_opted_in_write_grant_selects_the_rw_profile(scene: Scene) -> None:
         assert not bound.allowed_capabilities
 
 
+def test_the_witness_binds_the_engine_of_the_profile_an_opted_in_write_selects(
+    scene: Scene,
+) -> None:
+    """S3.1 opt-ins composed with the #340 witness: evidence follows the selected profile."""
+    from unittest.mock import MagicMock
+
+    assert_name = Capability.RECORDS_ASSOCIATIONS_ASSERT.value
+    status = Capability.CAPABILITIES_GET.value
+    ro = build_service(scene.world, scene.providers, lineage_enabled=True)
+    rw = build_service(scene.world, scene.providers, lineage_enabled=True)
+    ro_engine, rw_engine, control = MagicMock(), MagicMock(), MagicMock()
+
+    def profiles(opt_ins: frozenset[str], *, witness: bool) -> McpDatabaseServices:
+        return McpDatabaseServices(
+            ro,
+            rw,
+            frozenset({"ro"}),
+            frozenset({"rw"}),
+            (ro_engine, rw_engine),
+            opt_ins=opt_ins,
+            witness_enabled=witness,
+            controls_engine=control,
+        )
+
+    context = _granted(scene, "rw", status, assert_name)
+    # The rw-listed client survives to the rw profile only through the opted-in write.
+    bound = profiles(frozenset({assert_name}), witness=True).access(context, write_allowed=True)
+    assert bound is not None and bound.service is rw
+    binding = bound.database_witness
+    assert binding is not None
+    assert binding.profile is McpDatabaseProfile.READ_WRITE
+    assert binding.data_engine is rw_engine and binding.data_pool is rw_engine.pool
+    assert binding.controls_engine is control and binding.controls_pool is control.pool
+    # The witness admits nothing: the same grant without it yields the same ceiling.
+    plain = profiles(frozenset({assert_name}), witness=False).access(context, write_allowed=True)
+    assert plain is not None and plain.database_witness is None
+    assert bound.allowed_capabilities == plain.allowed_capabilities == {status, assert_name}
+    # Not opted in, the write is trimmed and the witness binds the ro engine.
+    bound = profiles(frozenset(), witness=True).access(context, write_allowed=True)
+    assert bound is not None and bound.service is ro
+    assert bound.allowed_capabilities == {status}
+    binding = bound.database_witness
+    assert binding is not None and binding.profile is McpDatabaseProfile.READ_ONLY
+    assert binding.data_engine is ro_engine and binding.data_pool is ro_engine.pool
+
+
 def test_reports_manifest_is_never_admissible(scene: Scene) -> None:
     from my_pa.contracts.mcp_database_profiles import MCP_PROFILE_OPT_IN_CAPABILITY_NAMES
 

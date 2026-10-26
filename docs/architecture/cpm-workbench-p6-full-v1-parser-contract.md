@@ -621,7 +621,10 @@ only (R2 §13.3).
 
 1. Each row object goes to the band containing its x-centre (section 4.3). An object with
    x-centre `< 37.0` → row `AMBIGUOUS` + `AMBIGUOUS_CELL` (field `None`). An `OTHER`-font
-   object → row `AMBIGUOUS` + `AMBIGUOUS_CELL` (field = its band). An `unmapped` object
+   object → row `AMBIGUOUS` + `AMBIGUOUS_CELL` (field = its band). These 2 row-level rules
+   never fire for an unknown-text fragment (RR3-F02): such a fragment only makes its own
+   cell `AMBIGUOUS` + `AMBIGUOUS_CELL` (field = its band), or, when out of the grid,
+   records `AMBIGUOUS_CELL` with field `None` without changing the row type. An `unmapped` object
    (section 2.4) or a twinless suppressed object (section 5.4) → its cell `AMBIGUOUS` +
    `AMBIGUOUS_CELL` (field = its band); in the ID or Name band that makes the row
    `AMBIGUOUS` through section 5.10 rule 5, 7 or 8 (which rule is decided by real text only,
@@ -695,7 +698,7 @@ Applied to each non-wrap row after section 5.7 (first match wins):
 | 5 | ID-bearing with the ID or the name cell not `PUBLISHED_VALUE` (blank or `AMBIGUOUS`) | `AMBIGUOUS` | `AMBIGUOUS_CELL` (field = the first of `ACTIVITY_ID`, `ACTIVITY_NAME` that is not `PUBLISHED_VALUE`) |
 | 6 | summary label present, its cell not `AMBIGUOUS`, and the required cells structurally present (R2 §15.6): at least 1 of OD/RD/Start/Finish not `PUBLISHED_BLANK` | `WBS_SUMMARY` (section 5.11 may promote one to `PROJECT_SUMMARY`) | — |
 | 6' | summary label present, label cell not `AMBIGUOUS`, but OD/RD/Start/Finish all `PUBLISHED_BLANK` | `AMBIGUOUS` | `AMBIGUOUS_CELL` (field `None`) (D-32) |
-| 7 | "no label" with any of the 6 cells not `PUBLISHED_BLANK` (only unknown-text fragments can make `ACTIVITY_ID`/`ACTIVITY_NAME` non-blank here), or "name only" | `AMBIGUOUS` | `ACTIVITY_LIKE_ROW_MISSING_ID` (`ACTIVITY_ID`) |
+| 7 | "no label" with at least one of OD/RD/Start/Finish holding a **real-text** fragment, or "name only" (a row whose non-blank cells hold only unknown-text fragments falls to rule 8) | `AMBIGUOUS` | `ACTIVITY_LIKE_ROW_MISSING_ID` (`ACTIVITY_ID`) |
 | 8 | anything else | `AMBIGUOUS` | `AMBIGUOUS_CELL` (field `None`) |
 
 For `AMBIGUOUS` rows `published_activity_id = None` and `activity_name = None`; typed
@@ -1156,7 +1159,7 @@ Other required tests: `test_schedule_model.py::test_closed_enums_have_exactly_th
 `test_object_text_is_attributed_non_generated_characters` (section 2.4 table rows as
 assertions, including the measured suppression and whitespace-collapse cases, so a PDFium
 upgrade that changes them fails here first), `test_no_generated_character_enters_evidence`,
-`test_suppressed_objects_resolve_deterministically` (including the RR1-F02 causes `0 Tf`, `0 Tz` and out-of-range codes, zero-area twinlessness, and the RR1-F03 unit case: a split name whose second fragment is duplicated at +0.1 pt takes the second fragment's text, never the first's), `test_unmapped_characters_make_the_cell_ambiguous` (including a monkeypatched surrogate and NUL code point), `test_unknown_character_handle_is_parser_exception`, `test_fixture_text_state_is_reset_in_every_block`, `test_zero_height_own_row_is_placed_by_the_seed_key` (RR2-F02), `test_unknown_text_fragment_does_not_decide_the_row_case` (RR2-F03: a missing-ID row plus a zero-area object in the ID band yields both `ACTIVITY_LIKE_ROW_MISSING_ID` and `AMBIGUOUS_CELL`; a wrap line plus such an object still yields `ROW_WRAP_UNSUPPORTED`),
+`test_suppressed_objects_resolve_deterministically` (including the RR1-F02 causes `0 Tf`, `0 Tz` and out-of-range codes, zero-area twinlessness, and the RR1-F03 unit case: a split name whose second fragment is duplicated at +0.1 pt takes the second fragment's text, never the first's), `test_unmapped_characters_make_the_cell_ambiguous` (including a monkeypatched surrogate and NUL code point), `test_unknown_character_handle_is_parser_exception`, `test_fixture_text_state_is_reset_in_every_block`, `test_zero_height_own_row_is_placed_by_the_seed_key` (RR2-F02), `test_unknown_text_fragment_does_not_decide_the_row_case` (RR2-F03: a missing-ID row plus a zero-area object in the ID band yields both `ACTIVITY_LIKE_ROW_MISSING_ID` and `AMBIGUOUS_CELL`; a wrap line plus such an object still yields `ROW_WRAP_UNSUPPORTED`; RR3-F01: a row consisting only of a zero-area object yields `AMBIGUOUS_CELL` and **no** `ACTIVITY_LIKE_ROW_MISSING_ID`; RR3-F02: an out-of-grid or `OTHER`-font unknown-text fragment does not make its row `AMBIGUOUS`),
 `test_security_error_and_unknown_filter_are_encrypted`, `test_page_origin_is_validated`,
 `test_engine_provenance_is_outside_the_digest`;
 `test_schedule_full_profile.py::test_od_occlusion_admits_replaced_and_overlay_only`,
@@ -1247,10 +1250,10 @@ mutant left green is reported as redundancy, a masked test or an unreachable haz
 | M71 | rule: give a twinless suppressed object a guessed text instead of an unknown-text fragment | family 16 `zero_char_object` | family 16 `zero_char_object` golden, `test_suppressed_objects_resolve_deterministically` |
 | M72 | rule: twin = lowest-ordinal intersecting candidate (pre-RR1) | unit split-name duplicate case | `test_suppressed_objects_resolve_deterministically` |
 | M73 | rule: drop the surrogate/NUL clause of D-17 | unit monkeypatched code points | `test_unmapped_characters_make_the_cell_ambiguous` |
+| M74 | rule: apply the 250 mpt x-intersection test to a suppressed object and its twin | unit case over hand-built `PdfTextObject`s: a suppressed object whose box intersects its twin's by 200 mpt in x (not reachable through PDFium's ~1 pt envelope with the fixture glyphs, so it is a pure-algorithm case) | `test_suppressed_objects_resolve_deterministically` |
 | M75 | rule: marked watermark objects are ordinary twin candidates (pre-RR2) | family 15 `under_watermark` | family 15 `under_watermark` golden (duplicates become twinless) |
 | M76 | rule: a zero-height own row is appended at the end of the page | unit case in `test_zero_height_own_row_is_placed_by_the_seed_key` | that test |
 | M77 | rule: unknown-text fragments count in the left-label case and wrap conditions | unit cases in `test_unknown_text_fragment_does_not_decide_the_row_case` | that test |
-| M74 | rule: apply the 250 mpt x-intersection test to a suppressed object and its twin | unit case over hand-built `PdfTextObject`s: a suppressed object whose box intersects its twin's by 200 mpt in x (not reachable through PDFium's ~1 pt envelope with the fixture glyphs, so it is a pure-algorithm case) | `test_suppressed_objects_resolve_deterministically` |
 
 ## 11. Deviations from R2 and residuals
 

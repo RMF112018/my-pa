@@ -53,7 +53,8 @@ _ENCRYPTED_OPEN_ERRORS: Final = frozenset({pdfium_c.FPDF_ERR_PASSWORD, pdfium_c.
 _PAGE_WIDTH_MPT: Final = 1_224_000
 _PAGE_HEIGHT_MPT: Final = 792_000
 _PAGE_TOLERANCE_MPT: Final = 500
-#: Contract 5.1: a budget checkpoint after every this many objects of a page.
+#: Contract 5.1: a budget checkpoint after every this many objects, and every
+#: this many characters, of a page.
 _OBJECT_CHECKPOINT_EVERY: Final = 1_000
 _REPLACEMENT: Final = "�"
 _MAX_CODE_POINT: Final = 0x10FFFF
@@ -289,7 +290,7 @@ def _extract_page(
             tally.text_chars += int(pdfium_c.FPDFText_CountChars(textpage.raw))
             if tally.text_chars > limits.max_text_chars:
                 raise ScheduleParseRefusal(ScheduleIssueCode.BOUNDS_EXCEEDED)
-            objects = _attributed_objects(textpage, page_number, text_handles)
+            objects = _attributed_objects(textpage, page_number, text_handles, budget)
         finally:
             textpage.close()
     finally:
@@ -339,14 +340,7 @@ def _count_objects(
                 raise ScheduleParseRefusal(ScheduleIssueCode.PARSER_EXCEPTION)
             drafts[key] = _Draft(ordinal, pointer, [])
         elif kind == pdfium_c.FPDF_PAGEOBJ_FORM:
-            nested_objects, nested_text = _walk_form(pointer, 1, limits, page_number)
-            tally.page_objects += nested_objects
-            tally.text_objects += nested_text
-            if tally.page_objects > limits.max_page_objects:
-                raise ScheduleParseRefusal(ScheduleIssueCode.BOUNDS_EXCEEDED)
-            if nested_text:
-                # D-09: nested bounds are form-space; text in a form is refused.
-                raise ScheduleParseRefusal(ScheduleIssueCode.UNSUPPORTED_LAYOUT, page_number)
+            _walk_form(pointer, 1, limits, page_number, tally)
     if tally.text_objects > limits.max_text_objects:
         raise ScheduleParseRefusal(ScheduleIssueCode.BOUNDS_EXCEEDED)
     return drafts
@@ -357,30 +351,41 @@ def _walk_form(
     depth: int,
     limits: ExtractionLimits,
     page_number: int,
-) -> tuple[int, int]:
-    """(nested objects, nested text objects) below one form XObject."""
+    tally: _Tally,
+) -> None:
+    """Count one form XObject's objects into the caps, incrementally (V8).
+
+    Each form level's object count joins the all-object cap before any of its
+    children is read, and the first nested text object refuses the page
+    (D-09: nested bounds are form-space), so the walk never outruns a cap.
+    """
     if depth > limits.max_form_depth:
         raise ScheduleParseRefusal(ScheduleIssueCode.UNSUPPORTED_LAYOUT, page_number)
-    objects = texts = 0
-    for index in range(int(pdfium_c.FPDFFormObj_CountObjects(form))):
+    count = int(pdfium_c.FPDFFormObj_CountObjects(form))
+    tally.page_objects += count
+    if tally.page_objects > limits.max_page_objects:
+        raise ScheduleParseRefusal(ScheduleIssueCode.BOUNDS_EXCEEDED)
+    for index in range(count):
         child = pdfium_c.FPDFFormObj_GetObject(form, index)
-        objects += 1
         kind = int(pdfium_c.FPDFPageObj_GetType(child))
         if kind == pdfium_c.FPDF_PAGEOBJ_TEXT:
-            texts += 1
-        elif kind == pdfium_c.FPDF_PAGEOBJ_FORM:
-            child_objects, child_texts = _walk_form(child, depth + 1, limits, page_number)
-            objects += child_objects
-            texts += child_texts
-    return objects, texts
+            tally.text_objects += 1
+            raise ScheduleParseRefusal(ScheduleIssueCode.UNSUPPORTED_LAYOUT, page_number)
+        if kind == pdfium_c.FPDF_PAGEOBJ_FORM:
+            _walk_form(child, depth + 1, limits, page_number, tally)
 
 
 def _attributed_objects(
-    textpage: pdfium.PdfTextPage, page_number: int, drafts: dict[int, _Draft]
+    textpage: pdfium.PdfTextPage,
+    page_number: int,
+    drafts: dict[int, _Draft],
+    budget: ParseBudget,
 ) -> list[PdfTextObject]:
     """Section 2.4: each object's attributed, non-generated characters."""
     raw = textpage.raw
     for index in range(int(pdfium_c.FPDFText_CountChars(raw))):
+        if index and index % _OBJECT_CHECKPOINT_EVERY == 0:
+            budget.checkpoint()  # every 1,000 characters of the page (FR5-F07)
         if int(pdfium_c.FPDFText_IsGenerated(raw, index)) != 0:
             continue
         key = _handle(pdfium_c.FPDFText_GetTextObject(raw, index))

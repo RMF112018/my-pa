@@ -601,6 +601,14 @@ def collapse_duplicate_objects(
             same.append(obj)
         else:
             collapsed.append((obj, into))
+    # A twin that itself collapsed is represented by the object it collapsed
+    # into, so the section 5.4 step 3 same-cell test compares against a kept
+    # object (fail closed either way: same cell overlaps, another cell taints).
+    into_of = {gone.ordinal: into.ordinal for gone, into in collapsed}
+    kept = [
+        replace(o, twin=into_of[o.twin]) if o.twin is not None and o.twin in into_of else o
+        for o in kept
+    ]
     return DuplicateResolution(tuple(kept), tuple(collapsed))
 
 
@@ -699,6 +707,15 @@ def _page_metadata(zones: PageZones, profile: FullScheduleProfile) -> _PageMetad
         key=lambda item: (-item[1].y1, item[1].x0),
     )
     title = " ".join(text for text, _box in titled)
+    # D-39: overlapping title pieces (a near-duplicate redraw such as a fake
+    # bold, not collapsed by the 0.25 pt rule) never publish a doubled title;
+    # the title is invalid, as in a table cell (5.7 step 2).
+    if any(
+        _intersection_area(a, b) > 0 and _x_intersection(a, b) > profile.cell_overlap_mpt
+        for i, (_t, a) in enumerate(titled)
+        for _u, b in titled[i + 1 :]
+    ):
+        title = ""
     return _PageMetadata(
         anchors=_anchor_state(objects, profile),
         layout=layouts[0]["value"] if len(layouts) == 1 else None,
@@ -967,6 +984,13 @@ def assign_full_cells(
     durations: dict[int, ScheduleDurationCell] = {}
     dates: dict[int, ScheduleDateCell] = {}
     placement: list[tuple[int, ScheduleFieldCode | None]] = []
+    # Contract 5.4 step 3: a suppressed object whose twin is not in the same
+    # cell (another band, another row, or gone) taints the cell it lands in.
+    for band in cell_objects:
+        in_cell = {o.ordinal for o in cell_objects[band]}
+        tainting.update(
+            o.ordinal for o in cell_objects[band] if o.twin is not None and o.twin not in in_cell
+        )
     for band, field_code in enumerate(ROW_CELL_FIELDS):
         fragments = sorted(cell_objects[band], key=lambda o: (o.box.x0, o.ordinal))
         placement.extend((o.ordinal, field_code) for o in fragments)

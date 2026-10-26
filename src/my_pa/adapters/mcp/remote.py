@@ -20,6 +20,7 @@ from starlette.types import Receive, Scope, Send
 from my_pa.adapters.mcp.server import McpAccess, create_mcp_server, published_tools
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES
 from my_pa.application.service import ApplicationService
+from my_pa.contracts.mcp_database_witness import McpWitnessBinding
 from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.documents.managed import MAX_MANAGED_DOCUMENT_BYTES
 from my_pa.domain.identity.operation import Capability, is_operator_only, permitted_purposes
@@ -130,6 +131,7 @@ class RemoteAccessContext:
     compact_operator_publication: bool = False
     authenticated_client_id: str | None = field(default=None, repr=False)
     service: ApplicationService | None = field(default=None, repr=False, compare=False)
+    database_witness: McpWitnessBinding | None = field(default=None, repr=False, compare=False)
 
 
 RemoteAccessResolver = Callable[[str | None], RemoteAccessContext | None]
@@ -342,6 +344,7 @@ def create_remote_mcp_app(
             allowed_canonical_targets=canonical,
             authenticated_client_id=resolved.authenticated_client_id,
             service=resolved.service,
+            database_witness=resolved.database_witness,
         )
 
     server = create_mcp_server(

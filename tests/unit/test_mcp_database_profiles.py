@@ -265,8 +265,8 @@ def test_managed_store_suppression_skips_factory_and_legacy_default_composes(
     suppressed = gateway.build_gateway_runtime(
         settings,
         data_engine=engine,
-        independent_audit_engine=engine,
-        controls_engine=engine,
+        independent_audit_engine=MagicMock(),
+        controls_engine=MagicMock(),
         permit_managed_documents=False,
     )
     factory.assert_not_called()
@@ -274,8 +274,8 @@ def test_managed_store_suppression_skips_factory_and_legacy_default_composes(
     legacy = gateway.build_gateway_runtime(
         settings,
         data_engine=engine,
-        independent_audit_engine=engine,
-        controls_engine=engine,
+        independent_audit_engine=MagicMock(),
+        controls_engine=MagicMock(),
     )
     factory.assert_called_once_with(settings, engine)
     assert legacy.service._managed_store_or_none is store

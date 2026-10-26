@@ -380,6 +380,7 @@ class Settings(StrictModel):
     remote_writes_enabled: bool = False
     # Default off; mappings cannot override durable OAuth or capability grants.
     mcp_database_profiles_enabled: bool = False
+    mcp_database_witness_enabled: bool = False
     mcp_database_ro_client_ids: str = Field(default="", repr=False)
     mcp_database_rw_client_ids: str = Field(default="", repr=False)
     mcp_database_ro_password_file: str = Field(default="", repr=False)
@@ -718,6 +719,8 @@ class Settings(StrictModel):
                 raise SettingsError("MCP database client mappings must not contain duplicates")
         if self.mcp_database_ro_clients() & self.mcp_database_rw_clients():
             raise SettingsError("MCP database client mappings must be disjoint")
+        if self.mcp_database_witness_enabled and not self.mcp_database_profiles_enabled:
+            raise SettingsError("MCP database witness requires database profiles")
         if self.mcp_database_profiles_enabled:
             if not self._parsed_database_url.query.keys() <= MCP_DATABASE_TRANSPORT_QUERY_KEYS:
                 raise SettingsError(

@@ -115,6 +115,7 @@ ADMISSIBLE_IMPORTS: Final[frozenset[str]] = frozenset(
         "my_pa.application.commands",
         "my_pa.application.errors",
         "my_pa.application.service",
+        "my_pa.contracts.mcp_database_witness",
         "my_pa.contracts.v1.envelope",
         "my_pa.contracts.v1.errors",
         "my_pa.domain.common.identifiers",

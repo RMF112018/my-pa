@@ -26,6 +26,9 @@ deterministic suppressed-object rule (sections 2.4, 5.4), the bold-label wrap an
 non-embedded-font residual and `engine` provenance (1.3, 6.4, 6.6), a reachable prove-red
 plan (10.6), and the minor items (sections 2.1, 2.3, 4.2, 4.6, 5.2, 5.14, 6.2, 7, 11).
 
+**Revision R5-2.** Re-review 1 (PASS_WITH_REQUIRED_CHANGES at `1fcdcacd`) findings
+RR1-F01…F07 are resolved in sections 2.4, 5.3, 5.4, 8.2, 8.5, 10.4, 10.6 and 11.2.
+
 **Neutrality.** No proprietary project, company, person, filename, activity ID, title or
 schedule byte from the R2 research corpus appears in this contract, in S5a source, in
 S5a fixtures or in S5a goldens. Synthetic text is invented (`Synthetic Project`,
@@ -193,11 +196,18 @@ characters with `IsGenerated == 0` and a non-NULL `GetTextObject`. That string i
 object's `text`. Consequences, all fixed by this contract:
 
 1. Generated characters never enter evidence (no dependency on neighbouring objects).
-2. **Suppressed objects.** A top-level text object with 0 attributed characters is
-   `suppressed = True` (PDFium judged it a same-text near-duplicate of an earlier object;
-   since an empty show produces no object, there is no other way to reach 0). Its geometry,
-   font and size are still read. Section 5.4 resolves it deterministically; it is never
-   silently dropped and never first-write-wins.
+2. **Suppressed objects.** `suppressed = True` means exactly "the top-level text object has
+   0 attributed characters", whatever the cause. Causes measured by R5 at both PDFium
+   versions: (a) a same-text near-duplicate of an earlier object (the table above);
+   (b) `0 Tf` (zero-area box); (c) `0 Tz` (zero-width box); (d) character codes outside the
+   font's `FirstChar..LastChar` (zero-area box). Other causes are possible (for example a
+   font with `/MissingWidth`). An empty show produces no object, so it is not a cause. Its
+   geometry, font and size are still read. Section 5.4 resolves it deterministically; a
+   **zero-area** suppressed object is always twinless; no suppressed object is silently
+   dropped or resolved first-write-wins.
+2a. **Invariant.** Every attributed character must map to a top-level text object of the
+   page (D-09 guarantees no text in forms). A character attributed to an unknown handle is
+   an invariant breach → `PARSER_EXCEPTION`.
 3. **Whitespace runs.** A run of consecutive spaces inside one object is reported as one
    space; exact internal-whitespace preservation (R2 §16.4) is impossible through PDFium.
    Recorded as D-30 with a WP-04 owner (U-18). A within-publication pair of IDs differing
@@ -510,6 +520,14 @@ For each kept text object, in object order:
 
 1. **Chart:** y-centre in the data zone and `x0 + x1 >= 2 * 615,500` → excluded,
    counted in `chart_objects_excluded`, contributes nothing anywhere.
+1a. **Twins (RR1-F01):** section 5.4.1 now runs over every remaining object of the page,
+   so every suppressed object carries its twin's text (or is twinless) **before** the
+   watermark test. A twin candidate must lie in the same zone (data zone vs header/footer)
+   as `S`. Consequence: a watermark drawn twice (for example a fill and a `1 Tr` stroke
+   copy; measured: the copy has 0 attributed characters) is two objects with text `DRAFT`,
+   each tested against section 4.6 on **its own** geometry and rotation, so both are
+   excluded and R2 §12.6 stays exactly as narrow as before. A twinless suppressed object
+   never matches the watermark signature (its text is unknown).
 2. **Header/footer:** y-centre outside the data zone → metadata set (near-horizontal
    objects only participate in section 4.5 matching; others are ignored). Never rows.
 3. **Watermark:** matches section 4.6 → excluded, counted in
@@ -518,16 +536,21 @@ For each kept text object, in object order:
 
 ### 5.4 Suppressed objects and duplicate collapse (R2 §12.7, R5-F01)
 
-Runs separately within the metadata set and within the table set of each page, after
-section 5.3 (a suppressed object is zoned by its own geometry like any other), processing
-objects in `object_ordinal` order.
+Step 1 runs at section 5.3 step 1a (after the chart step, before the watermark step).
+Steps 2–4 run separately within the metadata set and within the table set of each page,
+after section 5.3 (a suppressed object is zoned by its own geometry like any other),
+processing objects in `object_ordinal` order.
 
-1. **Twin of a suppressed object.** For a suppressed object `S`, its twin `M` is the
-   lowest-`object_ordinal` **non-suppressed** object in the same set on the same page whose
-   box intersects `S`'s box with positive area. If none exists, `S` has no twin: in the
-   table set it becomes a fragment of unknown text in its band, making that cell
-   `AMBIGUOUS` + `AMBIGUOUS_CELL` (field = its band); in the metadata set it is ignored.
-   With a twin, `S.text := M.text` (PDFium suppresses only same-text objects, section 2.4).
+1. **Twin of a suppressed object (RR1-F01, RR1-F03).** For a suppressed object `S` whose
+   box has positive area, the candidates are the **non-suppressed**, non-chart objects of
+   the same page and zone whose box intersects `S`'s box with positive area. If there is no
+   candidate, or the candidates do not all have the same `normalize_display_text`, `S` is
+   **twinless**. Otherwise the twin `M` is the candidate with the largest intersection area
+   (integer mpt²), ties broken by lowest `object_ordinal`, and `S.text := M.text` (PDFium
+   suppresses only same-text objects, section 2.4). A zero-area `S` is always twinless. A
+   twinless `S` in the table set is a fragment of unknown text in its band, making that
+   cell `AMBIGUOUS` + `AMBIGUOUS_CELL` (field = its band); in the metadata set it is
+   ignored; it never matches the watermark signature.
 2. **Exact duplicate.** An object `O` (suppressed with a twin, or not suppressed) is an
    exact duplicate of an earlier **kept** object `K` iff `normalize_display_text` of both
    texts is equal, the prefix-normalized base fonts are equal, and every box edge differs by
@@ -535,14 +558,17 @@ objects in `object_ordinal` order.
    `DUPLICATE_TEXT_OBJECT_COLLAPSED` (warning; page ref; in the table set the row ref and
    field of `K` once rows exist; in the metadata set no row and no field), and
    `duplicate_objects_collapsed += 1`.
-3. **Not a duplicate.** A suppressed `S` with a twin that is not collapsed stays a kept
-   fragment carrying the twin's text. Then section 5.7 decides: same band and row as `M` →
-   the two overlap → `OVERLAPPING_CELL_TEXT` (cell `AMBIGUOUS`); a different font class from
-   `M` in the left region → the "mixed" case (row `AMBIGUOUS`, R2 §13.3); a different band
-   or row from `M` → `S`'s cell `AMBIGUOUS` + `AMBIGUOUS_CELL` (field = `S`'s band). Never
-   first-write-wins.
+3. **Not a duplicate (RR1-F04).** A suppressed `S` with a twin that is not collapsed stays
+   a kept fragment carrying the twin's text. If `S` lands in the same band and row as `M`,
+   that cell is **always** `AMBIGUOUS` + `OVERLAPPING_CELL_TEXT`, whatever their
+   x-intersection (section 5.7.2's 250 mpt test does not apply to this pair, so a narrow
+   glyph shifted about 1 pt is never joined as `"x x"`); if in addition the font class
+   differs from `M`'s in the left region, the "mixed" case also applies (row `AMBIGUOUS`,
+   R2 §13.3). If `S` lands in a different band or row from `M`, `S`'s cell is `AMBIGUOUS` +
+   `AMBIGUOUS_CELL` (field = `S`'s band). Never first-write-wins.
 4. `suppressed_objects` counts every suppressed object on every page (all zones except
-   chart, which section 5.3 removes first).
+   chart, which section 5.3 removes first), including watermark copies and twinless
+   objects.
 
 ### 5.5 Physical row grouping (R2 §12.8)
 
@@ -560,6 +586,11 @@ Per page, over kept table objects:
    publication in (page, physical line) order and never changes (R2 §12.13).
 6. A row whose box height `y1 - y0 > 16,000` is `AMBIGUOUS` with `AMBIGUOUS_CELL`
    (field `None`) (D-22).
+7. **Zero-height objects (RR1-F02).** An object with `y1 == y0` (for example a zero-area
+   suppressed object) never seeds a row and is left out of steps 1–5; afterwards it joins
+   the first row, in emission order, whose **seed** interval contains its `y0` (closed
+   interval); if none does it forms a row of its own (which section 5.10 then classifies,
+   normally as `AMBIGUOUS`). It never changes another row's seed.
 
 ### 5.6 Font classes
 
@@ -892,6 +923,12 @@ function `build(family, variant) -> FixtureCase` returning `pdf: bytes`,
 - Analytic bounds for the uniform metrics, `n` characters at size `s` from origin
   `(x, y)`: `[x, y - 0.2s, x + 0.5ns, y + 0.7s]`. Body size 7 pt, level-1 summaries 8 pt,
   the project summary 10 pt, title 12 pt.
+- **Text-state reset (RR1-F02).** `Tc`, `Tw`, `Tz`, `TL`, `Tr` and `Ts` persist across
+  `BT`/`ET`, so every fixture text object writes them explicitly in its own block —
+  `BT /Fn s Tf 0 Tc 0 Tw 100 Tz 0 TL 0 Tr 0 Ts a b c d e f Tm (…) Tj ET` — except the
+  parameter a variant deliberately sets (the `double_draw` stroke copy's `1 Tr`, the
+  `zero_char_object` codes), which is still reset by the next object's own block. A
+  generator unit test asserts every `BT` block in every fixture sets all 6.
 - One text object per `BT … Tf … Tm … Tj ET` block. Rotation `Tm` entries are literal
   `Decimal` constants: 7° watermark `0.992546 0.121869 -0.121869 0.992546`; 0.4° skew
   `0.999976 0.006981 -0.006981 0.999976`; 1° skew `0.999848 0.017452 -0.017452 0.999848`.
@@ -939,9 +976,9 @@ against. Goldens (section 9) only pin bytes.
 | 11 | `full_duration_date_in_od` | 1 | an activity with `15-Mar-28` at OD x0 436.0 | P + `INVALID_DURATION` | same; AC-017 |
 | 12 | `full_invalid_date` | 1 | `31-Feb-27` in Finish; `30-Foo-26` in Start | P + `INVALID_DATE` ×2 | coercion gate; AC-023 |
 | 13 | `full_chart_duplicates` | 1 | every row's name/dates repeated at x0 620/700 | C, `chart_objects_excluded` > 0 | §38 zero chart fragments; chart gate; AC-010 |
-| 14 | `full_draft_watermark` (`signature`, `off_signature`, `slight_skew`, `skew_1deg`) | 1 | rotated (7°) `DRAFT` whose box edges each sit 6–10 pt (not 0) from the signature box, crossing the table; an activity named `DRAFT`; `off_signature` moves every edge 20 pt; `slight_skew` adds an activity name at 0.4°; `skew_1deg` at 1° | C, `watermark_objects_excluded == 1`, `DRAFT` name kept / F `UNSUPPORTED_LAYOUT` / C / F `UNSUPPORTED_LAYOUT` | §38 watermark zero fragments; watermark gate; near-horizontal boundary; AC-011 |
+| 14 | `full_draft_watermark` (`signature`, `off_signature`, `slight_skew`, `skew_1deg`, `double_draw`) | 1 | rotated (7°) `DRAFT` whose box edges each sit 6–10 pt (not 0) from the signature box, crossing the table; an activity named `DRAFT`; `off_signature` moves every edge 20 pt; `slight_skew` adds an activity name at 0.4°; `skew_1deg` at 1°; `double_draw`: the `signature` watermark drawn twice at the same `Tm`, the copy with `1 Tr` (measured: copy has 0 attributed characters, box 0.5 pt larger) | C, `watermark_objects_excluded == 1`, `DRAFT` name kept / F `UNSUPPORTED_LAYOUT` / C / F `UNSUPPORTED_LAYOUT` / C with `watermark_objects_excluded == 2`, `suppressed_objects == 1`, no duplicate warning | §38 watermark zero fragments; watermark gate; near-horizontal boundary; AC-011 |
 | 15 | `full_duplicate_text_object` (`base`, `shift_0_5`, `bold_over_regular`, `same_text_2pt`) | 1 | `base`: one activity name drawn 3 times (identical, identical, +0.2 pt in x — measured: 2 suppressed objects) and, on another activity, OD `5` drawn twice 0.3 pt apart (measured: second suppressed); `shift_0_5`: a name redrawn +0.5 pt (suppressed); `bold_over_regular`: a regular name redrawn in bold at the same position (suppressed); `same_text_2pt`: OD `5` redrawn +2.0 pt (measured: **not** suppressed) | `base`: P — 1 `DUPLICATE_TEXT_OBJECT_COLLAPSED` issue (`counts.duplicate_objects_collapsed == 2`, `suppressed_objects == 3`) and `OVERLAPPING_CELL_TEXT` on the OD cell; `shift_0_5`: R (name cell overlapping → row `AMBIGUOUS`); `bold_over_regular`: R (mixed → row `AMBIGUOUS`); `same_text_2pt`: P (`OVERLAPPING_CELL_TEXT`) | §38 exact duplicate collapses; R2 §12.7 0.25 pt boundary with PDFium suppression; R2 §13.3 mixed style; no first-write-wins |
-| 16 | `full_overlapping_cell_text` (`od`, `id`, `id_split`, `unmapped`) | 1 | `5` and `8` 0.3 pt apart in OD (measured: both reported) / IDs `SYN-1101` and `SYN-1102` 0.3 pt apart / an ID drawn as `SYN-` and `1201` abutting without overlap / an activity name in a font without `/ToUnicode` | P + `OVERLAPPING_CELL_TEXT` / R (row `AMBIGUOUS`) / R (ID cell with 2 fragments, D-11) / R (unmapped name → row `AMBIGUOUS`) | §38 non-identical overlap ambiguous; no last-write-wins; identity never assembled from pieces |
+| 16 | `full_overlapping_cell_text` (`od`, `id`, `id_split`, `unmapped`, `zero_char_object`) | 1 | `5` and `8` 0.3 pt apart in OD (measured: both reported) / IDs `SYN-1101` and `SYN-1102` 0.3 pt apart / an ID drawn as `SYN-` and `1201` abutting without overlap / an activity name in a font without `/ToUnicode` / in an activity's RD band an object showing codes `<0a0b>` outside the font's `FirstChar..LastChar` (measured: 0 attributed characters, zero-area box) | P + `OVERLAPPING_CELL_TEXT` / R (row `AMBIGUOUS`) / R (ID cell with 2 fragments, D-11) / R (unmapped name → row `AMBIGUOUS`) / P (twinless suppressed object → RD cell `AMBIGUOUS` + `AMBIGUOUS_CELL`) | §38 non-identical overlap ambiguous; no last-write-wins; identity never assembled from pieces |
 | 17 | `full_ambiguous_hierarchy` (`close_centroids`, `orphan`, `level_gap`) | 1 | edges at 52.57 and 54.40 / a level-2 activity before any summary / a level-3 activity directly under a level-1 summary (no level-2 summary) | P + `HIERARCHY_AMBIGUOUS` (all 3) | every ambiguity explicit; R2 §14.12; AC-019 |
 | 18 | `full_row_wrap_unsupported` (`regular_name`, `bold_label`) | 1 | an activity followed by a regular name-only line 8 pt lower / a bold summary label followed by a bold continuation line starting at the same indent x (inside the ID band) 8 pt lower | R + `ROW_WRAP_UNSUPPORTED` (both) | wrap-concatenation gate = 0; no phantom summary; AC-013 |
 | 19 | `full_multi_page_86_equivalent` | 86 | 54 pages × 40 rows + 32 pages × 39 rows = 3408 rows: 443 summaries (1 project + 442 WBS), 2964 ID-bearing (2900 activities, 32 Start-only and 32 Finish-only milestones), 1 missing-ID row on page 21; OD occlusion on page 37; date tokens in a summary RD (page 55), an activity RD (page 58), an activity OD (page 61); watermark and chart duplicates on every page | R; counts equal `MEASURED_CORPUS`; issues: 1 missing-ID, 1 occlusion warning, 3 invalid-duration | corpus-shape reproduction; performance target; AC-037 |
@@ -1088,7 +1125,7 @@ Other required tests: `test_schedule_model.py::test_closed_enums_have_exactly_th
 `test_object_text_is_attributed_non_generated_characters` (section 2.4 table rows as
 assertions, including the measured suppression and whitespace-collapse cases, so a PDFium
 upgrade that changes them fails here first), `test_no_generated_character_enters_evidence`,
-`test_suppressed_objects_resolve_deterministically`, `test_unmapped_characters_make_the_cell_ambiguous`,
+`test_suppressed_objects_resolve_deterministically` (including the RR1-F02 causes `0 Tf`, `0 Tz` and out-of-range codes, zero-area twinlessness, and the RR1-F03 unit case: a split name whose second fragment is duplicated at +0.1 pt takes the second fragment's text, never the first's), `test_unmapped_characters_make_the_cell_ambiguous` (including a monkeypatched surrogate and NUL code point), `test_unknown_character_handle_is_parser_exception`, `test_fixture_text_state_is_reset_in_every_block`,
 `test_security_error_and_unknown_filter_are_encrypted`, `test_page_origin_is_validated`,
 `test_engine_provenance_is_outside_the_digest`;
 `test_schedule_full_profile.py::test_od_occlusion_admits_replaced_and_overlay_only`,
@@ -1175,6 +1212,11 @@ mutant left green is reported as redundancy, a masked test or an unreachable haz
 | M67 | guard: edit 1 golden byte | any golden | `test_golden_files_are_pinned_by_digest` |
 | M68 | guard: add `"application/pdf"` to `SUPPORTED_MEDIA_TYPES` | — | `test_generic_extraction_still_excludes_pdf` |
 | M69 | guard: `import logging` in `pdf.py` | — | `test_schedule_modules_neither_log_nor_print` |
+| M70 | rule: run twin resolution after the watermark step (pre-RR1 order) | family 14 `double_draw` | family 14 `double_draw` golden (becomes `UNSUPPORTED_LAYOUT`) |
+| M71 | rule: give a twinless suppressed object a guessed text instead of an unknown-text fragment | family 16 `zero_char_object` | family 16 `zero_char_object` golden, `test_suppressed_objects_resolve_deterministically` |
+| M72 | rule: twin = lowest-ordinal intersecting candidate (pre-RR1) | unit split-name duplicate case | `test_suppressed_objects_resolve_deterministically` |
+| M73 | rule: drop the surrogate/NUL clause of D-17 | unit monkeypatched code points | `test_unmapped_characters_make_the_cell_ambiguous` |
+| M74 | rule: apply the 250 mpt x-intersection test to a suppressed object and its twin | unit case over hand-built `PdfTextObject`s: a suppressed object whose box intersects its twin's by 200 mpt in x (not reachable through PDFium's ~1 pt envelope with the fixture glyphs, so it is a pure-algorithm case) | `test_suppressed_objects_resolve_deterministically` |
 
 ## 11. Deviations from R2 and residuals
 
@@ -1233,7 +1275,7 @@ mutant left green is reported as redundancy, a masked test or an unreachable haz
 | U-07 | Text render mode (invisible text) is not consulted | WP-04 security review |
 | U-08 | Linux identity of goldens is argued (Type3 bounds come from the file) and measured only on macOS at both PDFium versions locally; CI's Linux FAST/floor shards are the first Linux proof | S5a CI run |
 | U-09 | The R2 parser-only `< 30 s` target is asserted; the worker `< 60 s` target and RSS `<= 512 MiB` are not measurable without the worker | WP-03/WP-04 |
-| U-10 | Real-input geometry may depend on the host font environment when fonts are not embedded (measured for non-embedded `Arial`); WP-04 measures `FPDFFont_GetIsEmbedded` on the corpus and decides refuse/flag (D-36) | WP-04 |
+| U-10 | Real-input geometry may depend on the host font environment when fonts are not embedded (measured for non-embedded `Arial`); WP-04 measures `FPDFFont_GetIsEmbedded` on the corpus and decides refuse/flag (D-36) `engine` identifies the PDFium build, not the host's font set: 2 hosts with the same build and different system fonts produce different geometry with identical provenance, which WP-04's decision must account for | WP-04 |
 | U-11 | Refusing every security handler also refuses owner-password-only (permissions) exports; WP-04 confirms the corpus has no `/Encrypt` | WP-04 |
 | U-12 | PDFium is not thread-safe; if GoodNotes rendering and schedule parsing share a process, PDFium calls must be serialized | WP-03 |
 | U-13 | NFC and `str.isspace` follow the running Python's Unicode database; code points unassigned in an older database could normalize differently after a Python upgrade | WP-04 / Python upgrades |
@@ -1241,4 +1283,5 @@ mutant left green is reported as redundancy, a masked test or an unreachable haz
 | U-15 | PDFium's same-text suppression envelope (measured: x offsets up to at least 1.0 pt, not 2.0 pt; 0.3 pt in y; font ignored) is internal to PDFium and may change between builds; section 5.4 applies R2's 0.25 pt rule independently, and `test_object_text_is_attributed_non_generated_characters` pins the envelope so a change is seen | S5a tests / PDFium upgrades |
 | U-16 | The level-gap rule (D-33) and the 3.0 pt centroid separation (D-20, only 0.52 pt margin over the corpus's 3.52 pt minimum) assume the corpus indents each child exactly 1 step | WP-04 |
 | U-17 | Whether real fonts carry `/ToUnicode` (otherwise every cell is `unmapped` and every publication review-required) is unknown | WP-04 |
-| U-18 | Whether any corpus Activity ID contains consecutive spaces (D-30) | WP-04 |
+| U-18 | Whether any corpus Activity ID contains consecutive spaces (D-30). Within a publication a run-length-only difference fails closed as `DUPLICATE_ACTIVITY_ID`; **across** publications an ID whose source changes only in space-run length would be falsely merged into one Stable Activity — WP-01/WP-04 must know this | WP-04 |
+| U-19 | Corpus summaries whose 4 value cells are all blank (an empty WBS can print that way) become `AMBIGUOUS` under D-32, and through D-33 their children cascade to `HIERARCHY_AMBIGUOUS`; WP-04 counts them | WP-04 |

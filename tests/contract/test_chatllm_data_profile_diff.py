@@ -1006,3 +1006,106 @@ def test_a_v8_converged_client_plans_exactly_the_two_report_type_adds() -> None:
         True,
     )
     assert (listed.kind, listed.purpose, listed.is_write) == ("add", Purpose.REPORT_READ, False)
+
+
+# ---- Record lineage P1 (chatllm-data-v10, client exposure contract section 10) ----
+
+
+def _lineage_plane_split() -> tuple[frozenset[Capability], frozenset[Capability]]:
+    """The 27 exposed `LINEAGE` names and the 7 `PROGRAM_REPORTING` names.
+
+    Derived from the service's switch sets and the lineage vocabulary, never
+    from the policy's own name sets.
+    """
+    from my_pa.application.service import (
+        _LINEAGE_CAPABILITIES,
+        _PROGRAM_REPORTING_CAPABILITIES,
+    )
+    from my_pa.domain.lineage.vocabulary import (
+        ATTESTED_LINEAGE_WRITE_CAPABILITIES,
+        LINEAGE_BACKFILL_CAPABILITIES,
+    )
+
+    withheld = ATTESTED_LINEAGE_WRITE_CAPABILITIES | LINEAGE_BACKFILL_CAPABILITIES
+    lineage = frozenset(c for c in _LINEAGE_CAPABILITIES if c.value not in withheld)
+    return lineage, _PROGRAM_REPORTING_CAPABILITIES
+
+
+def _with_lineage(
+    planes: ChatLLMCompositionPlanes, *, lineage: bool, program_reporting: bool
+) -> ChatLLMCompositionPlanes:
+    from dataclasses import replace
+
+    return replace(planes, lineage=lineage, program_reporting=program_reporting)
+
+
+def test_a_v9_converged_client_plans_exactly_the_lineage_adds() -> None:
+    """A client converged on v9 needs exactly the 34 lineage grants, with exact fields."""
+    lineage, program = _lineage_plane_split()
+    exposed = lineage | program
+    assert len(exposed) == 34
+    v9 = desired_effective_capabilities(composed_capabilities(IMPLEMENTED, _FULL_PLANES))
+    assert not v9 & exposed
+    planes = _with_lineage(_FULL_PLANES, lineage=True, program_reporting=True)
+    composed = composed_capabilities(IMPLEMENTED, planes)
+    grants = tuple(_grant(capability) for capability in v9)
+    diff = diff_chatllm_data_profile(
+        implemented=IMPLEMENTED,
+        composed=composed,
+        grants=grants,
+        now=NOW,
+        resource=RESOURCE,
+        scope=SCOPE,
+    )
+    assert diff.profile_version == "chatllm-data-v10"
+    assert not diff.is_healthy()
+    assert diff.add == exposed
+    assert diff.renew == frozenset()
+    assert diff.unexpected_control_plane == frozenset()
+    actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
+    added = [action for action in actions if action.kind != "noop"]
+    assert len(added) == 34
+    for action in added:
+        assert action.kind == "add"
+        assert action.capability in exposed
+        assert action.purpose is chatllm_grant_purpose(action.capability)
+        assert action.is_write is is_write_capability(action.capability)
+        assert action.grant_id is None
+    assert sum(action.is_write for action in added) == 16
+
+
+def test_v10_adds_exactly_the_lineage_plane_names() -> None:
+    """chatllm-data-v10 = v9 + the 34 client-usable lineage-plane names.
+
+    Each is plane-conditional: across all sixty-four v9 compositions the two
+    new flags off leave every desired set free of lineage, and turning them on
+    adds exactly the composed part of the 34 and nothing else.
+    """
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v10"
+    lineage, program = _lineage_plane_split()
+    program_reads = {Capability.PROGRAMS_MEMBERS_RESOLVE, Capability.PROGRAMS_OVERVIEW}
+    for bits in range(64):
+        planes = ChatLLMCompositionPlanes(
+            managed_documents=bool(bits & 1),
+            relationship_intelligence=bool(bits & 2),
+            relationship_intelligence_writes=bool(bits & 4),
+            relationship_memory=bool(bits & 8),
+            constraints=bool(bits & 16),
+            knowledge_assertions=bool(bits & 32),
+        )
+        assert (planes.lineage, planes.program_reporting) == (False, False)
+        v9 = desired_effective_capabilities(composed_capabilities(frozenset(Capability), planes))
+        assert not v9 & (lineage | program), planes
+        on = desired_effective_capabilities(
+            composed_capabilities(
+                frozenset(Capability),
+                _with_lineage(planes, lineage=True, program_reporting=True),
+            )
+        )
+        expected = set(lineage | program)
+        if not planes.relationship_intelligence:
+            expected -= program_reads
+        if not planes.constraints:
+            expected.discard(Capability.PROGRAMS_OVERVIEW)
+        assert on - v9 == expected, planes
+        assert v9 <= on, planes

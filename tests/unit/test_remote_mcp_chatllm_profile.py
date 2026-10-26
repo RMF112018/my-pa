@@ -401,6 +401,102 @@ def test_v6_profile_apply_adds_the_knowledge_grants_only_with_the_plane_on(
     ]
 
 
+# ---- Record lineage P1 (chatllm-data-v10, client exposure contract section 10) ----
+
+
+def _lineage_exposed() -> tuple[frozenset[Capability], frozenset[Capability]]:
+    """The 27 `LINEAGE` and 7 `PROGRAM_REPORTING` names, from the switch sets."""
+    from my_pa.application.service import (
+        _LINEAGE_CAPABILITIES,
+        _PROGRAM_REPORTING_CAPABILITIES,
+    )
+    from my_pa.domain.lineage.vocabulary import (
+        ATTESTED_LINEAGE_WRITE_CAPABILITIES,
+        LINEAGE_BACKFILL_CAPABILITIES,
+    )
+
+    withheld = ATTESTED_LINEAGE_WRITE_CAPABILITIES | LINEAGE_BACKFILL_CAPABILITIES
+    lineage = frozenset(c for c in _LINEAGE_CAPABILITIES if c.value not in withheld)
+    return lineage, _PROGRAM_REPORTING_CAPABILITIES
+
+
+def _plan_with(
+    repository: RemoteIdentityRepository,
+    settings: SimpleNamespace,
+    capsys: pytest.CaptureFixture[str],
+) -> tuple[int, dict[str, object]]:
+    args = argparse.Namespace(
+        command="profile-plan",
+        oauth_client_id=CLIENT_ID,
+        scope=SCOPE,
+        resource=RESOURCE,
+        profile_version=CHATLLM_DATA_PROFILE_VERSION,
+        apply=False,
+    )
+    code = _run_profile_command(
+        argparse.ArgumentParser(prog="remote_mcp"),
+        args,
+        repository,
+        settings,  # type: ignore[arg-type]
+        WHEN,
+    )
+    return code, json.loads(capsys.readouterr().out)
+
+
+def test_v10_profile_plan_adds_the_lineage_grants_only_with_the_switch_on(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Switch off: no lineage action; on: the 27 `LINEAGE` adds; with Program
+    reporting and the entity plane: all 34, each under its one purpose."""
+    from my_pa.domain.identity.operation import permitted_purposes
+
+    lineage, program = _lineage_exposed()
+    assert (len(lineage), len(program)) == (27, 7)
+    every = {capability.value for capability in lineage | program}
+
+    def adds(plan: dict[str, object]) -> dict[str, tuple[str, bool]]:
+        actions = plan["actions"]
+        assert isinstance(actions, list)
+        return {
+            action["capability"]: (action["purpose"], action["write"])
+            for action in actions
+            if action["kind"] == "add"
+        }
+
+    def expected(names: frozenset[Capability]) -> dict[str, tuple[str, bool]]:
+        result: dict[str, tuple[str, bool]] = {}
+        for capability in names:
+            (purpose,) = permitted_purposes(capability)
+            result[capability.value] = (purpose.value, is_write_capability(capability))
+        return result
+
+    with _repository() as (_, repository):
+        _grant_v2_catalog(repository)
+        _profile(repository, "profile-apply", capsys)
+        # The switch off (the stand-in's default): converged, no lineage action.
+        code, off = _plan_with(repository, _FULL_PLANE_SETTINGS, capsys)
+        assert code == 0 and off["healthy"] is True
+        assert off["profile_version"] == "chatllm-data-v10"
+        assert not set(adds(off)) & every
+        # The lineage switch on: exactly the 27 `LINEAGE` adds.
+        on = SimpleNamespace(**{**vars(_FULL_PLANE_SETTINGS), "lineage_enabled": True})
+        code, lineage_plan = _plan_with(repository, on, capsys)
+        assert code == 1
+        assert adds(lineage_plan) == expected(lineage)
+        # Program reporting too, with the entity plane on: all 34.
+        both = SimpleNamespace(
+            **{
+                **vars(_FULL_PLANE_SETTINGS),
+                "lineage_enabled": True,
+                "program_reporting_enabled": True,
+            }
+        )
+        assert both.relationship_intelligence_enabled is True
+        code, both_plan = _plan_with(repository, both, capsys)
+        assert code == 1
+        assert adds(both_plan) == expected(lineage | program)
+
+
 # ---- KLP Step 8: the Knowledge Manager exact-client exception ----------------------
 
 #: The Knowledge-Manager-exception pair: planned only for a bound manager.

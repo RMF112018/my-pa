@@ -74,9 +74,11 @@ is not a defect.
 
 ## 3. What is implemented
 
-Four hundred and thirty-six Python modules under `src/my_pa` and eight hundred and twenty-three test modules —
+Four hundred and forty-one Python modules under `src/my_pa` and eight hundred and twenty-eight test modules —
 
-**Current-tree remeasurement (origin/main #340 MCP commissioning request evidence `cb9de85a` merged into record lineage S4, branch `feat/lineage-s4-program`, worker M7, 2026-10-25):** the two commands below count 436 source modules and 823 test modules: the S4 435/820 below plus the one source and three test modules #340 added on `main` (the 420/808 below less the 419/805 below). This is file-inventory evidence, not a test PASS receipt.
+**Current-tree remeasurement (CPM Workbench S5a WP-00 fixtures, branch `feat/cpm-p6-fixtures-parser`, worker P1, 2026-10-26):** the two commands below count 441 source modules and 828 test modules: the 436/823 below plus `src/my_pa/domain/schedule/__init__.py`, `src/my_pa/domain/schedule/model.py`, `src/my_pa/domain/schedule/canonical.py`, `src/my_pa/infrastructure/schedule/__init__.py` and `src/my_pa/infrastructure/schedule/full_profile.py`, and `tests/unit/test_schedule_model.py`, `tests/unit/test_schedule_full_profile.py`, `tests/unit/test_schedule_full_pdf.py`, `tests/unit/test_schedule_full_goldens.py` and `tests/architecture/test_cpm_full_parser_scope.py` (`tests/fixtures/schedule_full_pdf.py` is a fixture generator, not a `test_*.py` module). This is file-inventory evidence, not a test PASS receipt.
+
+**Historical remeasurement (origin/main #340 MCP commissioning request evidence `cb9de85a` merged into record lineage S4, branch `feat/lineage-s4-program`, worker M7, 2026-10-25):** the two commands below counted 436 source modules and 823 test modules: the S4 435/820 below plus the one source and three test modules #340 added on `main` (the 420/808 below less the 419/805 below). This is file-inventory evidence, not a test PASS receipt.
 
 **Historical remeasurement (origin/main #339 MCP database profiles `19426ed5` merged into record lineage S4, branch `feat/lineage-s4-program`, worker M6, 2026-10-24):** the two commands below counted 435 source modules and 820 test modules: the S4 432/817 below plus the three source and three test modules #339 added on `main` (the 419/805 below less the shared 416/802). This is file-inventory evidence, not a test PASS receipt.
 

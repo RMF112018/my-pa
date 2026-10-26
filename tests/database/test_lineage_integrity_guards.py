@@ -1185,7 +1185,12 @@ def test_an_anchor_binds_exactly_its_family(db_engine: Engine, world: World) -> 
 
 def test_attested_tables_refuse_a_non_local_operator_row(db_engine: Engine, world: World) -> None:
     p = world.principal
-    needle = "a_lineage_row_is_local_operator_attested"
+    # Record lineage S3.1 (S3.1 contract section 10.1, needle only): the four
+    # inconsistent pairs are still refused, by the S3.1 provenance CHECK on the
+    # revisions and events and by the creator CHECK on the root, which replace
+    # `a_lineage_row_is_local_operator_attested` there (the S3.1 revision).
+    root_needle = "a_record_link_creator_is_known"
+    needle = "a_lineage_row_provenance_is_consistent"
     for authority, channel in (
         ("ordinary_reviewer", "local_cli"),
         ("remote_operator_attested", "remote_operator_review"),
@@ -1208,7 +1213,7 @@ def test_attested_tables_refuse_a_non_local_operator_row(db_engine: Engine, worl
                 )
             ),
             CHECK,
-            needle,
+            root_needle,
         )
         _refused(
             db_engine,

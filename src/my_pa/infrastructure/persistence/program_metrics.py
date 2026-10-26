@@ -87,17 +87,27 @@ _OUTSTANDING_ISSUE_LINKS: Final = text(
 
 #: Section 3.3 (R4-F02, R4-F16): Issue-kind `project_situations` rows with no
 #: membership event for their triplet, per Project, split by the Issue's state.
+#: Record lineage S3.1 (S3.1 contract section 7.8, R31-F03): the same statement
+#: also counts the **unreviewed** links -- the latest event of the triplet is
+#: `client_identified`, in **any** state (`active` or `ended`), of an Issue that
+#: is not `closed` -- so a client's end of a link never silently shrinks
+#: `issue_outstanding`.
 _LEGACY_ISSUE_LINKS: Final = text(
     "SELECT ps.project_id,"
-    " count(*) FILTER (WHERE s.state IN ('open', 'active', 'suspended')) AS outstanding,"
-    " count(*) FILTER (WHERE s.state = 'closed') AS closed"
+    " count(*) FILTER (WHERE s.state IN ('open', 'active', 'suspended')"
+    " AND latest.acceptance_basis IS NULL) AS outstanding,"
+    " count(*) FILTER (WHERE s.state = 'closed' AND latest.acceptance_basis IS NULL) AS closed,"
+    " count(*) FILTER (WHERE s.state IN ('open', 'active', 'suspended')"
+    " AND latest.acceptance_basis = 'client_identified') AS unreviewed"
     " FROM knowledge.project_situations ps JOIN knowledge.situations s"
     " ON s.principal_id = :principal_id AND s.situation_id = ps.situation_id"
+    " LEFT JOIN LATERAL (SELECT m.acceptance_basis"
+    " FROM knowledge.issue_project_membership_events m"
+    " WHERE m.principal_id = :principal_id AND m.project_id = ps.project_id"
+    " AND m.issue_id = ps.situation_id"
+    " ORDER BY m.revision_no DESC LIMIT 1) latest ON true"
     " WHERE ps.principal_id = :principal_id AND ps.project_id = ANY(:project_ids)"
     " AND s.kind = 'issue_workstream'"
-    " AND NOT EXISTS (SELECT 1 FROM knowledge.issue_project_membership_events m"
-    " WHERE m.principal_id = :principal_id AND m.project_id = ps.project_id"
-    " AND m.issue_id = ps.situation_id)"
     " GROUP BY ps.project_id"
 ).bindparams(bindparam("principal_id"), bindparam("project_ids", type_=_IDS))
 
@@ -172,7 +182,7 @@ class SqlProgramMetricsRepository(ProgramMetricsRepository):
 
     def legacy_issue_links(
         self, principal_id: str, project_ids: Sequence[str]
-    ) -> Mapping[str, tuple[int, int]]:
+    ) -> Mapping[str, tuple[int, int, int]]:
         if not project_ids:
             return {}
         rows = program_statement(
@@ -181,7 +191,10 @@ class SqlProgramMetricsRepository(ProgramMetricsRepository):
                 {"principal_id": principal_id, "project_ids": list(project_ids)},
             ).all()
         )
-        return {row.project_id: (int(row.outstanding), int(row.closed)) for row in rows}
+        return {
+            row.project_id: (int(row.outstanding), int(row.closed), int(row.unreviewed))
+            for row in rows
+        }
 
     def sync_facts(
         self, principal_id: str, project_ids: Sequence[str]

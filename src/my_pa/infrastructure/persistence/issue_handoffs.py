@@ -103,6 +103,8 @@ _COLUMNS: Final = (
     _EVENTS.c.decision_channel,
     _EVENTS.c.source_capability,
     _EVENTS.c.commit_seq,
+    _EVENTS.c.asserting_client_id,
+    _EVENTS.c.user_directed_claim,
     _ANCHORS.c.source_family,
     _ANCHORS.c.source_root_id,
     _ANCHORS.c.source_version_kind,
@@ -166,6 +168,8 @@ _CORRECTION_COLUMNS: Final = (
     _CORRECTIONS.c.source_capability,
     _CORRECTIONS.c.recorded_at,
     _CORRECTIONS.c.commit_seq,
+    _CORRECTIONS.c.asserting_client_id,
+    _CORRECTIONS.c.user_directed_claim,
     _ANCHORS.c.source_family,
     _ANCHORS.c.source_root_id,
     _ANCHORS.c.source_version_kind,
@@ -207,6 +211,8 @@ def _to_correction(row: Row[Any]) -> HandoffCorrectionRecord:
         source_capability=row.source_capability,
         recorded_at=row.recorded_at,
         commit_seq=row.commit_seq,
+        asserting_client_id=row.asserting_client_id,
+        user_directed_claim=bool(row.user_directed_claim),
     )
 
 
@@ -243,6 +249,8 @@ def _to_record(row: Row[Any]) -> HandoffRecord:
         decision_channel=row.decision_channel,
         source_capability=row.source_capability,
         commit_seq=row.commit_seq,
+        asserting_client_id=row.asserting_client_id,
+        user_directed_claim=bool(row.user_directed_claim),
     )
 
 
@@ -316,6 +324,8 @@ class SqlIssueHandoffRepository(IssueHandoffRepository):
                     "authority_class": event.authority_class,
                     "decision_channel": event.decision_channel,
                     "source_capability": event.source_capability,
+                    "asserting_client_id": event.asserting_client_id,
+                    "user_directed_claim": event.user_directed_claim,
                 },
             )
         )
@@ -510,6 +520,8 @@ class SqlIssueHandoffRepository(IssueHandoffRepository):
                             "decision_channel": correction.decision_channel,
                             "source_capability": correction.source_capability,
                             "recorded_at": correction.recorded_at,
+                            "asserting_client_id": correction.asserting_client_id,
+                            "user_directed_claim": correction.user_directed_claim,
                         },
                     )
                 )

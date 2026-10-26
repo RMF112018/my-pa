@@ -3,9 +3,10 @@
 S1 contract sections 6.1, 7, 7.5 and 8, for the names the Issue slice declares
 (the six Issue-plane names) and the compatibility rule every S1 slice inherits:
 
-* every declared S1 name is `CHATLLM_OPERATOR_DECISION_REQUIRED`, scopeless,
-  not operator-only, in the `lineage` gateway feature, and in no ChatLLM data
-  profile;
+* every declared S1 name is `CHATLLM_DATA_CONDITIONAL` under the `LINEAGE`
+  prerequisite (P1 client exposure, chatllm-data-v10), scopeless, not
+  operator-only, in the `lineage` gateway feature, and desired by the ChatLLM
+  data profile exactly when the lineage plane is composed;
 * an S1 request refuses every server-owned field;
 * `lineage_enabled` off withholds every declared S1 name from the published
   surface and answers `unsupported` to an invocation;
@@ -81,6 +82,7 @@ from my_pa.domain.identity.chatllm_capability_policy import (
     CHATLLM_CAPABILITY_POLICY,
     CHATLLM_DATA_PROFILE_VERSION,
     ChatLLMCapabilityClass,
+    ChatLLMCompositionPrerequisite,
     is_chatllm_data_management,
 )
 from my_pa.domain.identity.operation import (
@@ -136,7 +138,6 @@ _S1_ADDITIVE: Final = frozenset(
         "records.associations.assert",
     }
 )
-_RATIONALE: Final = "record lineage S1; exposure is an operator decision (ADR-015, OD-07)"
 _ISSUE: Final = "sit_lineagefast00001"
 _PROJECT: Final = "prj_lineagefast00001"
 _TASK: Final = "tsk_lineagefast00001"
@@ -268,8 +269,11 @@ def test_s1_capabilities_are_operator_decision_required() -> None:
     assert S1_NAMES <= _LINEAGE_CAPABILITY_NAMES
     for capability in declared:
         policy = CHATLLM_CAPABILITY_POLICY[capability]
-        assert policy.classification is ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED
-        assert policy.exclusion_rationale == _RATIONALE
+        # P1 client exposure (operator directive 2026-10-26, chatllm-data-v10):
+        # the ChatLLM decision is made; the S1 names are plane-conditional data.
+        assert policy.classification is ChatLLMCapabilityClass.DATA_CONDITIONAL
+        assert policy.composition_prerequisite is ChatLLMCompositionPrerequisite.LINEAGE
+        assert policy.exclusion_rationale is None
         assert not is_operator_only(capability)
         assert capability in _SCOPELESS
         family = capability.value.split(".", 1)[0]
@@ -289,15 +293,36 @@ def test_s1_capabilities_are_operator_decision_required() -> None:
 
 
 def test_no_s1_capability_is_in_the_chatllm_data_profile() -> None:
-    from my_pa.application.chatllm_data_profile import desired_effective_capabilities
+    from my_pa.application.chatllm_data_profile import (
+        ChatLLMCompositionPlanes,
+        composed_capabilities,
+        desired_effective_capabilities,
+    )
 
     declared = _declared()
-    assert all(not is_chatllm_data_management(capability) for capability in declared)
     every = frozenset(Capability)
-    assert not desired_effective_capabilities(every) & declared
-    assert not desired_effective_capabilities(every, knowledge_manager=True) & declared
-    # No data-class member moved, so the profile version did not either.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v9"
+    # P1 client exposure (operator directive 2026-10-26): with the lineage plane
+    # off (the default) no S1 name is composed or desired ...
+    off = ChatLLMCompositionPlanes(
+        managed_documents=True,
+        relationship_intelligence=True,
+        relationship_intelligence_writes=True,
+        relationship_memory=True,
+        constraints=True,
+        knowledge_assertions=True,
+    )
+    composed_off = composed_capabilities(every, off)
+    assert not composed_off & declared
+    assert not desired_effective_capabilities(composed_off) & declared
+    assert not desired_effective_capabilities(composed_off, knowledge_manager=True) & declared
+    # ... and every S1 name is data management, desired exactly when composed.
+    assert all(is_chatllm_data_management(capability) for capability in declared)
+    composed_on = composed_capabilities(every, replace(off, lineage=True))
+    assert declared <= composed_on
+    assert declared <= desired_effective_capabilities(composed_on)
+    assert declared <= desired_effective_capabilities(composed_on, knowledge_manager=True)
+    # A data-class member moved, so the profile version did too.
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v10"
 
 
 # ---- request shapes ---------------------------------------------------------
@@ -625,8 +650,14 @@ def test_lineage_authority_ignores_the_knowledge_manager_allowlist(scene: Scene)
     )
     for command in (_samples()[Capability.ISSUES_PROJECT_LINKS_ADD],):
         envelope = _invoke(service, scene, command, remote_client=_CLIENT)
-        # Denied before any row and before the replay lookup: the FAST world
-        # models no Issue rows, so reaching the repository would not be `denied`.
-        assert _code(envelope) == "denied"
+        # S3.1 section 10.1 (the operator directives of 2026-10-20 and
+        # 2026-10-25): the write is open, so it is never `denied` for want of
+        # attestation; the allowlists confer nothing either way. The client
+        # holds no Issue read, so the S3.1 section 6.4 pre-check answers its
+        # hidden Issue exactly as an absent one, before any row (the FAST world
+        # models no Issue rows, so reaching the repository would not be this).
+        error = envelope.to_canonical_dict()["error"]
+        assert _code(envelope) == "not_found"
+        assert error["safe_details"] == ["issue_id"]  # type: ignore[index]
     with pytest.raises(DeniedError):
         attested_lineage_authority(remote)  # type: ignore[arg-type]

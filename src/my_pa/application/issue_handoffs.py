@@ -54,7 +54,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Final
 
-from my_pa.application.errors import ConflictError, InvalidRequestError, NotFoundError, SafeDetail
+from my_pa.application.errors import (
+    ConflictError,
+    DeniedError,
+    InvalidRequestError,
+    NotFoundError,
+    SafeDetail,
+)
 from my_pa.application.lineage_endpoints import (
     EvidenceAnchorInput,
     admit_evidence_set,
@@ -62,7 +68,8 @@ from my_pa.application.lineage_endpoints import (
     lock_lineage_sources,
     require_open_issues,
 )
-from my_pa.application.record_lineage import anchor_view
+from my_pa.application.lineage_rate import require_client_write_budget
+from my_pa.application.record_lineage import anchor_view, open_write_digest, reserve_open_write
 from my_pa.contracts.ports import (
     HandoffCorrectionRecord,
     HandoffRecord,
@@ -76,7 +83,6 @@ from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import ensure_utc
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.lineage.asof import CutAfterNowError, effective_known_at
-from my_pa.domain.lineage.canonical import request_digest
 from my_pa.domain.lineage.handoff import (
     ChainEvent,
     HandoffCorrectionFact,
@@ -100,7 +106,7 @@ from my_pa.domain.lineage.vocabulary import (
 from my_pa.domain.source.registry import issue_identifier
 
 if TYPE_CHECKING:
-    from my_pa.application.lineage_authority import LineageAuthority
+    from my_pa.application.lineage_authority import LineageProvenance
 
 __all__ = [
     "DEFAULT_HANDOFF_PAGE_SIZE",
@@ -263,6 +269,9 @@ def _correction_view(
         ),
         recorded_at=correction.recorded_at,
         authority_class=correction.authority_class,
+        acceptance_basis=AcceptanceBasis(correction.acceptance_basis),
+        user_directed_claim=correction.user_directed_claim,
+        asserting_client_id=correction.asserting_client_id,
     )
 
 
@@ -296,6 +305,8 @@ def _view(
         evidence=anchor_view(event.evidence, archived),
         acceptance_basis=AcceptanceBasis(event.acceptance_basis),
         authority_class=event.authority_class,
+        user_directed_claim=event.user_directed_claim,
+        asserting_client_id=event.asserting_client_id,
         current_effective_at=folded.current_effective_at,
         voided=folded.voided,
         correction_ids=tuple(
@@ -315,15 +326,20 @@ class IssueHandoffApplication:
         principal_id: str,
         request: HandoffRecordRequest,
         idempotency_key: str,
-        authority: LineageAuthority,
+        authority: LineageProvenance,
         now: datetime,
     ) -> HandoffResult:
-        """Append the next event of one `(Issue, Commitment)` chain (section 3.4)."""
+        """Append the next event of one `(Issue, Commitment)` chain (section 3.4).
+
+        S3.1: any admitted caller may record a handoff (it chains from the last
+        live event and removes nothing); a client's is counted against its
+        write budgets before the event is written.
+        """
         at = ensure_utc(now)
         issues, lineage, handoffs = uow.issues, uow.record_lineage, uow.issue_handoffs
-        digest = request_digest(_RECORD, principal_id, handoff_document(request))
-        prior = issues.reserve_write_request(
-            principal_id, _RECORD, idempotency_key, digest, created_at=at
+        digest = open_write_digest(_RECORD, principal_id, handoff_document(request), authority)
+        prior = reserve_open_write(
+            issues, principal_id, _RECORD, idempotency_key, digest, authority, at
         )
         if prior is not None:
             if prior.result_handoff_id is None:
@@ -390,6 +406,7 @@ class IssueHandoffApplication:
             refused = True
         if refused:
             raise InvalidRequestError(SafeDetail.FROM_RECORD)
+        require_client_write_budget(uow, principal_id, authority, authority.asserting_client_id, at)
         event = HandoffRecord(
             handoff_id=issue_identifier(IdKind.ISSUE_HANDOFF),
             issue_id=request.issue_id,
@@ -407,10 +424,12 @@ class IssueHandoffApplication:
                 anchor=anchor,
             ),
             reason=request.reason,
-            acceptance_basis=AcceptanceBasis.USER_CONFIRMED.value,
+            acceptance_basis=authority.acceptance_basis.value,
             authority_class=authority.authority_class.value,
             decision_channel=authority.decision_channel.value,
             source_capability=_RECORD,
+            asserting_client_id=authority.asserting_client_id,
+            user_directed_claim=authority.user_directed_claim,
         )
         lost = False
         try:
@@ -488,15 +507,21 @@ class IssueHandoffApplication:
         principal_id: str,
         request: HandoffCorrectRequest,
         idempotency_key: str,
-        authority: LineageAuthority,
+        authority: LineageProvenance,
         now: datetime,
     ) -> HandoffCorrectResult:
-        """Append one `retime` or `void` correction of one handoff event."""
+        """Append one `retime` or `void` correction of one handoff event.
+
+        S3.1 (section 4.4, the handoff analogue): a client may not correct a
+        handoff the human channel accepted -- the event or any of its
+        corrections `user_confirmed` -- (`denied`, under the chain lock), and
+        its correction is counted against its budgets before it is written.
+        """
         at = ensure_utc(now)
         issues, lineage, handoffs = uow.issues, uow.record_lineage, uow.issue_handoffs
-        digest = request_digest(_CORRECT, principal_id, correction_document(request))
-        prior = issues.reserve_write_request(
-            principal_id, _CORRECT, idempotency_key, digest, created_at=at
+        digest = open_write_digest(_CORRECT, principal_id, correction_document(request), authority)
+        prior = reserve_open_write(
+            issues, principal_id, _CORRECT, idempotency_key, digest, authority, at
         )
         if prior is not None:
             return _replayed_correction(uow, principal_id, prior.result_handoff_correction_id)
@@ -529,6 +554,15 @@ class IssueHandoffApplication:
         existing = handoffs.corrections_of(
             principal_id, [item.handoff_id for item in events], current=True
         )
+        if authority.acceptance_basis is AcceptanceBasis.CLIENT_IDENTIFIED and (
+            event.acceptance_basis == AcceptanceBasis.USER_CONFIRMED.value
+            or any(
+                correction.acceptance_basis == AcceptanceBasis.USER_CONFIRMED.value
+                for correction in existing.get(event.handoff_id, ())
+            )
+        ):
+            # S3.1 section 4.4: the history rule, under the chain's key.
+            raise DeniedError()
         chain = _chain(events, existing)
         target = next(item for item in chain if item.sequence_no == event.sequence_no)
         if target.voided:
@@ -545,6 +579,7 @@ class IssueHandoffApplication:
             recorded_at=at,
         ):
             raise InvalidRequestError(SafeDetail.EFFECTIVE_AT)
+        require_client_write_budget(uow, principal_id, authority, authority.asserting_client_id, at)
         earlier = existing.get(event.handoff_id, ())
         number = len(earlier) + 1
         correction = HandoffCorrectionRecord(
@@ -559,11 +594,13 @@ class IssueHandoffApplication:
                 anchor=anchor,
             ),
             reason=request.reason,
-            acceptance_basis=AcceptanceBasis.USER_CONFIRMED.value,
+            acceptance_basis=authority.acceptance_basis.value,
             authority_class=authority.authority_class.value,
             decision_channel=authority.decision_channel.value,
             source_capability=_CORRECT,
             recorded_at=at,
+            asserting_client_id=authority.asserting_client_id,
+            user_directed_claim=authority.user_directed_claim,
         )
         handoffs.insert_correction(principal_id, correction)
         issues.complete_write_request(

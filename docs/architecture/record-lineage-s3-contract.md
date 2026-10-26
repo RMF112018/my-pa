@@ -408,7 +408,7 @@ S1 §6.1 / S2 §6.1 reused. **Every S3 write is attested** (local operator only,
 before any row and before any replay lookup): `records.associations.contest`,
 `records.associations.reinstate`, `issues.handoffs.correct`, `records.backfill.plan`.
 The 2 backfill capabilities are also `_OPERATOR_ONLY` and sit behind their own switch
-(section 7.7).
+(section 7.7). *Amended by S3.1 ([S3.1 contract](record-lineage-s31-open-writes-contract.md) sections 3.1 and 6.2; ADR-015 decision 15): `records.associations.contest`, `records.associations.reinstate` and `issues.handoffs.correct` are no longer attested and record `client_identified` for a non-attested caller; the backfill is unchanged.*
 
 **Remote read grant re-check (R3-F13).** `invoke` does not check the grant set
 (G1-RD-008), so every lineage read handler — the 3 S3 reads, the widened
@@ -1034,7 +1034,7 @@ Program/report work packages; AT-020, AT-021 → out of scope until OD-06.
 
 | Item | Owner / reason |
 | --- | --- |
-| Proposals and review (`records.associations.propose`/`review`, `irp`, `ldec`, `review_accepted`) | not scheduled; S3's review path for backfill candidates is the operator's attested assert (D-07) |
+| Proposals and review (`records.associations.propose`/`review`, `irp`, `ldec`, `review_accepted`) | not scheduled; S3's review path for backfill candidates is the operator's attested assert (D-07). *S3.1 ([S3.1 contract](record-lineage-s31-open-writes-contract.md) section 7.5, D-03): a client's committed `client_identified` fact is the lineage proposal state and the operator's `confirm` its review; no `irp`/`ldec` plane is built.* |
 | Lineage Record Event family, `link_mutation_event_receipts` (`irec`) | not scheduled; commit marks are the lineage receipts (D-06) |
 | Decision membership (`decision` role, `continuity_decision`) | needs a Continuity Decision capability family first (no capability writes or reads `cdec_`; S2 D-11); not scheduled |
 | Native virtual edges `follow_up`, `constraint_follow_up`, `meeting_in_series`, `project_issue`, `entity_member_of` in reads | not scheduled: their native fields are mutable with no as-of history (D-05) |

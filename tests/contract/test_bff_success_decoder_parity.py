@@ -2006,6 +2006,15 @@ def _issues_read() -> dict[str, Any]:
     return service._issues_read(unit_of_work, authorization, command).payload
 
 
+#: S3.1 section 7.6: the labels of a human-channel fact entry.
+_OPERATOR_LABELS: Final[dict[str, Any]] = {
+    "acceptance_basis": AcceptanceBasis.USER_CONFIRMED,
+    "user_directed_claim": False,
+}
+#: S3.1 section 4.3: a synthetic OAuth client id, as a local reader sees it.
+LINEAGE_CLIENT_ID: Final = "client-synthetic-0001"
+
+
 def _issues_timeline() -> dict[str, Any]:
     """A current timeline page: lineage entries, a partial native Task event, a
     Constraint event with its recorded ball-in-court, and a cursor."""
@@ -2062,6 +2071,7 @@ def _issues_timeline() -> dict[str, Any]:
             project_id=LINEAGE_PROJECT_ID,
             membership_revision_no=1,
             link_state=IssueProjectMembershipState.ACTIVE,
+            **_OPERATOR_LABELS,
         ),
         lineage(
             TimelineEntryKind.MEMBERSHIP,
@@ -2075,6 +2085,7 @@ def _issues_timeline() -> dict[str, Any]:
             lifecycle_state=LinkLifecycleState.ACTIVE,
             from_ref=issue,
             to_ref=task,
+            **_OPERATOR_LABELS,
         ),
         lineage(
             TimelineEntryKind.ASSOCIATION,
@@ -2087,6 +2098,10 @@ def _issues_timeline() -> dict[str, Any]:
             lifecycle_state=LinkLifecycleState.CONTESTED,
             from_ref=task,
             to_ref=note,
+            # S3.1 section 7.6: a connected client's contest, its claim and client.
+            acceptance_basis=AcceptanceBasis.CLIENT_IDENTIFIED,
+            user_directed_claim=True,
+            asserting_client_id=LINEAGE_CLIENT_ID,
         ),
         lineage(
             TimelineEntryKind.HANDOFF,
@@ -2099,6 +2114,7 @@ def _issues_timeline() -> dict[str, Any]:
             from_holder=principal,
             to_holder=entity,
             voided=False,
+            **_OPERATOR_LABELS,
         ),
         lineage(
             TimelineEntryKind.HANDOFF_CORRECTION,
@@ -2109,6 +2125,7 @@ def _issues_timeline() -> dict[str, Any]:
             correction_id="ihcr_aaaaaaaa11111111",
             correction_action="retime",
             corrected_effective_at=AT,
+            **_OPERATOR_LABELS,
         ),
         native(
             "rcev_aaaaaaaa11111111",

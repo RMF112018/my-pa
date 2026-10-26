@@ -51,7 +51,10 @@ __all__ = [
 #: Section 3.2: the version of the metric catalogue an overview reports.
 PROGRAM_METRIC_SCHEMA_VERSION: Final = 1
 #: Section 3.2: the version of the overview calculation (and its digest prefix).
-PROGRAM_CALCULATION_VERSION: Final = "program-overview-v1"
+#: Record lineage S3.1 (S3.1 contract section 7.8) moves it to `v2`: unreviewed
+#: client-identified Issue links make the Issue metric `not_reportable`, and the
+#: answer gains their counts.
+PROGRAM_CALCULATION_VERSION: Final = "program-overview-v2"
 #: Section 7: at most 10 distinct Program Entities per request.
 MAX_PROGRAMS_PER_REQUEST: Final = 10
 #: Section 3.1 step 6: at most 100 distinct Projects over one request.

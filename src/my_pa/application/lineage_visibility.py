@@ -20,13 +20,19 @@ invisible node is not emitted, expanded or counted; a typed edge is emitted
 only when both endpoints are visible; an invisible anchor is dropped; and the
 answer says `restricted_evidence` (or `restricted: true`) -- never a count --
 whenever anything was withheld.
+
+**The client-id rule (S3.1 section 4.3).** A lineage view's
+`asserting_client_id` names the OAuth client that wrote a fact. It is shown
+only to a local reader: `withhold_client_ids` replaces every such value with
+`null` in an answer for a remote caller, who learns that a fact is
+`client_identified`, never which client -- not even its own -- wrote it.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, cast
 
 from my_pa.application.errors import UnsupportedError
 from my_pa.domain.identity.operation import Capability, granted_purposes
@@ -44,7 +50,12 @@ __all__ = [
     "LineageVisibility",
     "lineage_visibility",
     "require_read_grant",
+    "require_write_grant",
+    "withhold_client_ids",
 ]
+
+#: S3.1 section 4.3: the one answer key a remote reader never sees a value of.
+_CLIENT_ID_KEY: Final = "asserting_client_id"
 
 type Grants = frozenset[tuple[Capability, Purpose | None]]
 
@@ -90,6 +101,18 @@ def require_read_grant(grants: Grants | None, capability: Capability) -> None:
         raise UnsupportedError()
 
 
+def require_write_grant(grants: Grants | None, capability: Capability) -> None:
+    """S3.1 section 6.4 step 1: the write analogue of `require_read_grant` (R31-F01).
+
+    A remote caller without a grant on the open write it called, for one of
+    that write's permitted purposes, is `unsupported`: `invoke` does not consult
+    the grant set (G1-RD-008), so the handler re-checks it as defence in depth.
+    `None` (a local caller) always passes.
+    """
+    if grants is not None and not granted_purposes(capability, grants):
+        raise UnsupportedError()
+
+
 def _family_visible(family: RecordFamily, grants: Grants) -> bool:
     return any(
         granted_purposes(Capability(read), grants) for read in sorted(LINEAGE_FAMILY_READS[family])
@@ -112,3 +135,23 @@ def lineage_visibility(grants: Grants | None, capability: Capability) -> Lineage
         remote=True,
         grant_digest=grant_digest(_pairs(grants), capability.value),
     )
+
+
+def withhold_client_ids[T](document: T) -> T:
+    """S3.1 section 4.3: `document` with every `asserting_client_id` value `null`.
+
+    Applied to a remote caller's lineage answer (and, by `records.lineage.related`,
+    to the items its digest covers). A dict or list is rebuilt; every other value
+    is returned as it is. Nothing is read.
+    """
+    if isinstance(document, dict):
+        return cast(
+            "T",
+            {
+                key: None if key == _CLIENT_ID_KEY else withhold_client_ids(value)
+                for key, value in document.items()
+            },
+        )
+    if isinstance(document, list):
+        return cast("T", [withhold_client_ids(item) for item in document])
+    return document

@@ -46,6 +46,7 @@ from tests.schema import lineage_s2_schema_ahead_contract as gap
 from tests.schema.lineage_s2_schema_ahead_contract import S2_CAPABILITIES, S2_PURPOSES
 from tests.schema.lineage_s3_schema_ahead_contract import S3_CAPABILITIES, S3_PURPOSES
 from tests.schema.lineage_s4_schema_ahead_contract import S4_CAPABILITIES, S4_PURPOSES
+from tests.schema.lineage_s31_schema_ahead_contract import S31_CAPABILITIES
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.identity.purpose import Purpose
@@ -67,8 +68,10 @@ REVISION: Final = "d020b532ad7d"
 PREVIOUS: Final = "264310e0416a"
 #: Record lineage S3 (`6f1476b8da52`) and S4 (`c5260943d933`, ADR-015) are
 #: additive on this revision; the S4 revision is the head.
-HEAD: Final = "c5260943d933"
+HEAD: Final = "023f8f7eb499"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
+#: Record lineage S3.1 (`023f8f7eb499`, ADR-015 decision 15), additive on S4.
+S31_MIGRATION: Final = MIGRATIONS / "20261025_023f8f7eb499_record_lineage_s31.py"
 MIGRATION: Final = MIGRATIONS / "20261018_d020b532ad7d_record_lineage_s2.py"
 S1_MIGRATION: Final = MIGRATIONS / "20261017_264310e0416a_record_lineage_s1.py"
 #: The S3 revision, which adds columns and CHECKs to four of the tables this
@@ -194,7 +197,7 @@ def test_the_revision_is_the_single_head_on_264310e0416a() -> None:
     assert script.get_revision(PREVIOUS).down_revision == "b9025e7fb738"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
     assert MIGRATION.name.endswith("_record_lineage_s2.py")
-    assert len(list(MIGRATIONS.glob("*.py"))) == 122
+    assert len(list(MIGRATIONS.glob("*.py"))) == 123
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -224,9 +227,9 @@ def test_frozen_ddl_names_every_declared_constraint() -> None:
     """
     source = MIGRATION.read_text(encoding="utf-8")
     s1 = S1_MIGRATION.read_text(encoding="utf-8")
-    # A name the S3 revision adds to one of these tables is in that revision's
-    # text instead (the later revision owns it).
-    later = S3_MIGRATION.read_text(encoding="utf-8")
+    # A name the S3 or S3.1 revision adds to one of these tables is in that
+    # revision's text instead (the later revision owns it).
+    later = S3_MIGRATION.read_text(encoding="utf-8") + S31_MIGRATION.read_text(encoding="utf-8")
     flat = _flat(source)
     flat_later = _flat(later)
     for table in NEW_TABLES:
@@ -316,7 +319,13 @@ def test_at_vocabulary_adds_exactly_the_s2_names() -> None:
     # The head admits every declared name, and the S2 schema-ahead gap is
     # exactly the S2 names the domain does not declare yet (none).
     # The S3 names, declared since, are the S3 revision's (6f1476b8da52).
-    declared = {capability.value for capability in Capability} - S3_CAPABILITIES - S4_CAPABILITIES
+    # The S3.1 names too, the S3.1 revision's (023f8f7eb499).
+    declared = (
+        {capability.value for capability in Capability}
+        - S3_CAPABILITIES
+        - S4_CAPABILITIES
+        - S31_CAPABILITIES
+    )
     native = {capability.value for capability in NativeSourceCapability}
     assert set(at) == declared | native | gap.lineage_s2_admitted_ahead("capability")
     purposes = {purpose.value for purpose in Purpose} - S3_PURPOSES - S4_PURPOSES

@@ -1791,13 +1791,13 @@
           "name": "issues.close",
           "version": "v1",
           "availability": "available",
-          "operator_only": false
+          "operator_only": true
         },
         {
           "name": "issues.reopen",
           "version": "v1",
           "availability": "available",
-          "operator_only": false
+          "operator_only": true
         },
         {
           "name": "issues.closure_readiness",
@@ -1924,6 +1924,30 @@
           "version": "v1",
           "availability": "available",
           "operator_only": false
+        },
+        {
+          "name": "records.associations.confirm",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": true
+        },
+        {
+          "name": "issues.memberships.confirm",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": true
+        },
+        {
+          "name": "issues.project_links.confirm",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": true
+        },
+        {
+          "name": "records.lineage.related",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
         }
       ],
       "content_types": [
@@ -1950,11 +1974,11 @@
     "readiness": {
       "state": "degraded",
       "contract_version": "v1",
-      "implemented_capabilities": 229,
-      "total_capabilities": 229,
+      "implemented_capabilities": 233,
+      "total_capabilities": 233,
       "limitations": [
         "Content types awaiting an operator decision: application/pdf. They are reported rather than silently skipped.",
-        "Listings stop at the page size; truncation is disclosed. These issue a continuation cursor: commitments.history, commitments.list, commitments.search, commitments.v2.list, commitments.v2.search, commitments.v2.waiting_on, commitments.waiting_on, constraint_sync.conflicts, constraint_sync.delta, constraints.history, constraints.list, constraints.portfolio_list, constraints.portfolio_search, constraints.search, continuity.projects, entities.addresses.list, entities.aliases.list, entities.assignments.list, entities.communication.list, entities.graph, entities.identifiers.list, entities.identity_history, entities.names.list, entities.observations.list, entities.participations.list, entities.relationships, entities.search, entities.unresolved_mentions, goodnotes.notebooks.list, goodnotes.pages.list, goodnotes.pull, goodnotes.runs.list, goodnotes.search, issues.handoffs.list, issues.history, issues.list, issues.timeline, knowledge.assertions.list, knowledge.assertions.search, knowledge.search, meetings.list, meetings.notes.versions, meetings.search, record_events.list, records.associations.history, records.backfill.report, records.lineage, relationship_memory.history, relationship_memory.list, relationship_memory.search, reports.list, review.list, tasks.comments.list, tasks.history, tasks.list, tasks.search. Every other listing does not, so a caller cannot ask for the next page.",
+        "Listings stop at the page size; truncation is disclosed. These issue a continuation cursor: commitments.history, commitments.list, commitments.search, commitments.v2.list, commitments.v2.search, commitments.v2.waiting_on, commitments.waiting_on, constraint_sync.conflicts, constraint_sync.delta, constraints.history, constraints.list, constraints.portfolio_list, constraints.portfolio_search, constraints.search, continuity.projects, entities.addresses.list, entities.aliases.list, entities.assignments.list, entities.communication.list, entities.graph, entities.identifiers.list, entities.identity_history, entities.names.list, entities.observations.list, entities.participations.list, entities.relationships, entities.search, entities.unresolved_mentions, goodnotes.notebooks.list, goodnotes.pages.list, goodnotes.pull, goodnotes.runs.list, goodnotes.search, issues.handoffs.list, issues.history, issues.list, issues.timeline, knowledge.assertions.list, knowledge.assertions.search, knowledge.search, meetings.list, meetings.notes.versions, meetings.search, record_events.list, records.associations.history, records.backfill.report, records.lineage, records.lineage.related, relationship_memory.history, relationship_memory.list, relationship_memory.search, reports.list, review.list, tasks.comments.list, tasks.history, tasks.list, tasks.search. Every other listing does not, so a caller cannot ask for the next page.",
         "Model proposals and semantic retrieval are disabled; deterministic lexical retrieval remains active.",
         "Worker-plane health is unavailable, stale, absent for queued work, or reports dead-lettered work; inspect worker_planes."
       ]
@@ -4640,6 +4664,8 @@
         "lifecycle_state": "active",
         "acceptance_basis": "user_confirmed",
         "authority_class": "local_operator",
+        "user_directed_claim": false,
+        "asserting_client_id": null,
         "evidence": [],
         "created_at": "2026-08-09T12:00:00.000Z",
         "recorded_at": "2026-08-09T12:00:00.000Z"
@@ -4662,6 +4688,8 @@
         "lifecycle_state": "active",
         "acceptance_basis": "user_confirmed",
         "authority_class": "local_operator",
+        "user_directed_claim": false,
+        "asserting_client_id": null,
         "evidence": [
           {
             "anchor_id": "ian_aaaaaaaa11111111",
@@ -4755,6 +4783,8 @@
           "state": "active",
           "membership_revision_no": 1,
           "acceptance_basis": "user_confirmed",
+          "user_directed_claim": false,
+          "asserting_client_id": null,
           "evidence_anchor_id": null,
           "recorded_at": "2026-08-09T12:00:00.000Z"
         }
@@ -4807,7 +4837,10 @@
         "correction_action": null,
         "corrected_effective_at": null,
         "native": null,
-        "recorded_fields": null
+        "recorded_fields": null,
+        "acceptance_basis": null,
+        "user_directed_claim": null,
+        "asserting_client_id": null
       },
       {
         "entry_id": "ipme_aaaaaaaa11111111",
@@ -4843,7 +4876,10 @@
         "correction_action": null,
         "corrected_effective_at": null,
         "native": null,
-        "recorded_fields": null
+        "recorded_fields": null,
+        "acceptance_basis": "user_confirmed",
+        "user_directed_claim": false,
+        "asserting_client_id": null
       },
       {
         "entry_id": "irv_aaaaaaaa11111111",
@@ -4888,7 +4924,10 @@
         "correction_action": null,
         "corrected_effective_at": null,
         "native": null,
-        "recorded_fields": null
+        "recorded_fields": null,
+        "acceptance_basis": "user_confirmed",
+        "user_directed_claim": false,
+        "asserting_client_id": null
       },
       {
         "entry_id": "irv_bbbbbbbb22222222",
@@ -4930,7 +4969,10 @@
         "correction_action": null,
         "corrected_effective_at": null,
         "native": null,
-        "recorded_fields": null
+        "recorded_fields": null,
+        "acceptance_basis": "client_identified",
+        "user_directed_claim": true,
+        "asserting_client_id": "client-synthetic-0001"
       },
       {
         "entry_id": "ihnd_aaaaaaaa11111111",
@@ -4975,7 +5017,10 @@
         "correction_action": null,
         "corrected_effective_at": null,
         "native": null,
-        "recorded_fields": null
+        "recorded_fields": null,
+        "acceptance_basis": "user_confirmed",
+        "user_directed_claim": false,
+        "asserting_client_id": null
       },
       {
         "entry_id": "ihcr_aaaaaaaa11111111",
@@ -5014,7 +5059,10 @@
         "correction_action": "retime",
         "corrected_effective_at": "2026-08-09T12:00:00.000000Z",
         "native": null,
-        "recorded_fields": null
+        "recorded_fields": null,
+        "acceptance_basis": "user_confirmed",
+        "user_directed_claim": false,
+        "asserting_client_id": null
       },
       {
         "entry_id": "rcev_aaaaaaaa11111111",
@@ -5062,7 +5110,10 @@
           ],
           "source_capability": "tasks.update"
         },
-        "recorded_fields": null
+        "recorded_fields": null,
+        "acceptance_basis": null,
+        "user_directed_claim": null,
+        "asserting_client_id": null
       },
       {
         "entry_id": "rcev_bbbbbbbb22222222",
@@ -5120,7 +5171,10 @@
               "entity_id": "ent_aaaaaaaa11111111"
             }
           ]
-        }
+        },
+        "acceptance_basis": null,
+        "user_directed_claim": null,
+        "asserting_client_id": null
       }
     ],
     "complete_state": "complete",

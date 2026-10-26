@@ -357,7 +357,13 @@ def test_link_transition_table() -> None:
     }
     # `assert` writes revision 1 and is no transition; `ended` admits nothing.
     assert link_transition(LinkRevisionAction.ASSERT, active) is None
-    assert set(LINK_TRANSITIONS) == set(LinkRevisionAction) - {LinkRevisionAction.ASSERT}
+    # S3.1 (section 4.7) adds `confirm`: the human channel's promotion of a
+    # client-identified head, which keeps its state rather than moving it, so it
+    # is no row of this table (its rule is the S3.1 confirm rule).
+    assert set(LINK_TRANSITIONS) == set(LinkRevisionAction) - {
+        LinkRevisionAction.ASSERT,
+        LinkRevisionAction.CONFIRM,
+    }
     assert {active, contested} == LIVE_LINK_STATES
     # The contest rule: an exact `contradicts` anchor, beside any other role.
     exact = SourceVersionKind.IMMUTABLE_VERSION

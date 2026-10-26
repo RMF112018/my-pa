@@ -40,7 +40,11 @@ from my_pa.contracts.ports import (
     TimelineLinkRevision,
     TimelineNativeEvent,
 )
-from my_pa.domain.lineage.vocabulary import LinkLifecycleState, LinkRevisionAction
+from my_pa.domain.lineage.vocabulary import (
+    AcceptanceBasis,
+    LinkLifecycleState,
+    LinkRevisionAction,
+)
 from my_pa.domain.project_controls.party import PartyKind
 from my_pa.domain.project_controls.read_models import ConstraintPartyRow
 from my_pa.domain.record_events import RecordEventFamily
@@ -132,6 +136,9 @@ class SqlIssueTimelineRepository(IssueTimelineRepository):
                 revisions.c.action,
                 revisions.c.lifecycle_state,
                 revisions.c.recorded_at,
+                revisions.c.acceptance_basis,
+                revisions.c.asserting_client_id,
+                revisions.c.user_directed_claim,
             )
             .where(
                 _mine(revisions, principal_id),
@@ -150,6 +157,9 @@ class SqlIssueTimelineRepository(IssueTimelineRepository):
                     action=LinkRevisionAction(row.action),
                     lifecycle_state=LinkLifecycleState(row.lifecycle_state),
                     recorded_at=row.recorded_at,
+                    acceptance_basis=AcceptanceBasis(row.acceptance_basis),
+                    asserting_client_id=row.asserting_client_id,
+                    user_directed_claim=bool(row.user_directed_claim),
                 )
             )
         return {link_id: tuple(items) for link_id, items in found.items()}

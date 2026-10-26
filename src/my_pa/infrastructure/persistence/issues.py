@@ -59,6 +59,7 @@ from my_pa.contracts.ports import (
     LineageLinkEvidence,
     LineageReadTimeoutError,
     LineageSourceVersion,
+    LineageWriterBudget,
     LineageWriteRequestRecord,
     ProjectLinkEventRecord,
     RepositoryFailureError,
@@ -70,6 +71,8 @@ from my_pa.domain.common.classification import Classification
 from my_pa.domain.lineage.canonical import anchor_identity
 from my_pa.domain.lineage.model import EvidenceAnchor
 from my_pa.domain.lineage.vocabulary import (
+    CLIENT_DECISION_CHANNELS,
+    AcceptanceBasis,
     EvidenceRole,
     EvidenceSourceFamily,
     IssueProjectMembershipAction,
@@ -144,6 +147,8 @@ _EVENT_COLUMNS: Final = (
     issue_project_membership_events.c.decision_channel,
     issue_project_membership_events.c.source_capability,
     issue_project_membership_events.c.recorded_at,
+    issue_project_membership_events.c.asserting_client_id,
+    issue_project_membership_events.c.user_directed_claim,
     project_situations.c.project_situation_id,
 )
 
@@ -258,6 +263,8 @@ def _to_event(row: Row[Any]) -> ProjectLinkEventRecord:
         decision_channel=row.decision_channel,
         source_capability=row.source_capability,
         recorded_at=row.recorded_at,
+        asserting_client_id=row.asserting_client_id,
+        user_directed_claim=bool(row.user_directed_claim),
     )
 
 
@@ -308,6 +315,8 @@ class SqlIssueRepository(IssueRepository):
         request_digest: str,
         *,
         created_at: datetime,
+        decision_channel: str | None = None,
+        asserting_client_id: str | None = None,
     ) -> LineageWriteRequestRecord | None:
         request = lineage_write_requests
         inserted = _run(
@@ -322,6 +331,9 @@ class SqlIssueRepository(IssueRepository):
                             "idempotency_key": idempotency_key,
                             "request_digest": request_digest,
                             "created_at": created_at,
+                            # S3.1 section 5.2: the writer, immutable from here.
+                            "decision_channel": decision_channel,
+                            "asserting_client_id": asserting_client_id,
                         },
                     )
                 )
@@ -869,6 +881,8 @@ class SqlIssueRepository(IssueRepository):
                             "decision_channel": event.decision_channel,
                             "source_capability": event.source_capability,
                             "recorded_at": event.recorded_at,
+                            "asserting_client_id": event.asserting_client_id,
+                            "user_directed_claim": event.user_directed_claim,
                         },
                     )
                 )
@@ -1077,6 +1091,60 @@ class SqlIssueRepository(IssueRepository):
             for ordinal, link_id, revision_no in links
         ]
         _run(lambda: self._connection.execute(insert(lineage_write_request_links), rows))
+
+    # --- record lineage S3.1 (S3.1 contract sections 4.4 and 4.8) -------------
+
+    def client_write_budget(
+        self,
+        principal_id: str,
+        *,
+        decision_channel: str,
+        asserting_client_id: str | None,
+        hour_since: datetime,
+        day_since: datetime,
+    ) -> LineageWriterBudget:
+        request = lineage_write_requests
+        client = request.c.decision_channel.in_(sorted(CLIENT_DECISION_CHANNELS))
+        bucket = and_(
+            request.c.decision_channel == decision_channel,
+            request.c.asserting_client_id.is_(None)
+            if asserting_client_id is None
+            else request.c.asserting_client_id == asserting_client_id,
+        )
+        row = _run(
+            lambda: self._connection.execute(
+                select(
+                    func.count().filter(and_(bucket, request.c.created_at > hour_since)),
+                    func.count().filter(bucket),
+                    func.count(),
+                ).where(
+                    _mine(request, principal_id),
+                    request.c.completed_at.is_not(None),
+                    client,
+                    request.c.created_at > day_since,
+                )
+            ).one()
+        )
+        return LineageWriterBudget(
+            bucket_hour=int(row[0]), bucket_day=int(row[1]), principal_day=int(row[2])
+        )
+
+    def project_link_confirmed(self, principal_id: str, project_id: str, issue_id: str) -> bool:
+        events = issue_project_membership_events
+        return bool(
+            _run(
+                lambda: self._connection.execute(
+                    select(
+                        exists().where(
+                            _mine(events, principal_id),
+                            events.c.project_id == project_id,
+                            events.c.issue_id == issue_id,
+                            events.c.acceptance_basis == AcceptanceBasis.USER_CONFIRMED.value,
+                        )
+                    )
+                ).scalar_one()
+            )
+        )
 
     def write_request_links(
         self, principal_id: str, capability: str, idempotency_key: str

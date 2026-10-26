@@ -21,7 +21,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 
 pytestmark = pytest.mark.database
 
-HEAD = "c5260943d933"
+HEAD = "023f8f7eb499"
 PRODUCTION_RP_ID = "pa.bobby-fetting.me"
 PRODUCTION_ORIGIN = "https://pa.bobby-fetting.me"
 

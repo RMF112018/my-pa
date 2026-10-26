@@ -2,8 +2,8 @@ import { closed } from "../primitives";
 import type { Decoder } from "../types";
 import { strictObject, nullable, arrayOf, checked, text, boolean, enumeration, identifier, integer, timestamp, type Decoded } from "./continuity.projects.create";
 import {
-  ISSUE_STATES, LINEAGE_COMPLETENESS, LINK_LIFECYCLE_STATES, RELATION_TYPES,
-  issueTitle, lineageCursor, recordRef,
+  ACCEPTANCE_BASES, ISSUE_STATES, LINEAGE_COMPLETENESS, LINK_LIFECYCLE_STATES, RELATION_TYPES,
+  assertingClientId, issueTitle, lineageCursor, recordRef,
 } from "./records.lineage";
 
 /*
@@ -17,6 +17,13 @@ import {
  * and ball-in-court parties, rendered as `constraints.read` renders `bic`). No
  * entry carries an evidence anchor, a Project name or a count. The Python
  * models are `contracts/v1/issue_timeline.py`.
+ *
+ * S3.1 (contract section 7.6): every `project_link`, `membership`,
+ * `association`, `handoff` and `handoff_correction` entry states its
+ * `acceptance_basis` (`user_confirmed` or `client_identified`) and
+ * `user_directed_claim`, and `asserting_client_id` (`null` for the human
+ * channel and every remote reader); the 3 keys are `null` on the other kinds.
+ * `action` may name `confirm`.
  */
 const invalid = () => closed("upstream_contract_invalid", "Invalid capability success contract");
 
@@ -42,17 +49,21 @@ const ENTRY_PREFIX: Readonly<Record<TimelineEntryKind, string>> = {
   handoff: "ihnd", handoff_correction: "ihcr", native_event: "rcev",
 };
 /** The keys each kind carries; every other kind key is `null`. */
+/** S3.1 section 7.6: the provenance labels every fact entry carries. */
+const LABEL_KEYS = ["acceptance_basis", "user_directed_claim", "asserting_client_id"] as const;
 const KIND_KEYS: Readonly<Record<TimelineEntryKind, readonly string[]>> = {
   issue_revision: ["issue_version", "state", "title", "closed_at", "outcome"],
-  project_link: ["project_id", "membership_revision_no", "link_state"],
-  membership: ["link_id", "revision_no", "relation_type", "member_role", "lifecycle_state", "from", "to"],
-  association: ["link_id", "revision_no", "relation_type", "member_role", "lifecycle_state", "from", "to"],
-  handoff: ["handoff_id", "commitment_id", "sequence_no", "from_holder", "to_holder", "voided"],
-  handoff_correction: ["handoff_id", "correction_id", "correction_action", "corrected_effective_at"],
+  project_link: ["project_id", "membership_revision_no", "link_state", ...LABEL_KEYS],
+  membership: ["link_id", "revision_no", "relation_type", "member_role", "lifecycle_state", "from", "to", ...LABEL_KEYS],
+  association: ["link_id", "revision_no", "relation_type", "member_role", "lifecycle_state", "from", "to", ...LABEL_KEYS],
+  handoff: ["handoff_id", "commitment_id", "sequence_no", "from_holder", "to_holder", "voided", ...LABEL_KEYS],
+  handoff_correction: ["handoff_id", "correction_id", "correction_action", "corrected_effective_at", ...LABEL_KEYS],
   native_event: ["native", "recorded_fields"],
 };
 /** Kind keys that may stay `null` even on their own kind. */
-const OPTIONAL_KEYS = new Set(["closed_at", "outcome", "member_role", "corrected_effective_at", "recorded_fields"]);
+const OPTIONAL_KEYS = new Set([
+  "closed_at", "outcome", "member_role", "corrected_effective_at", "recorded_fields", "asserting_client_id",
+]);
 const ALL_KIND_KEYS = [...new Set(Object.values(KIND_KEYS).flat())];
 
 function prefixed(value: string, prefix: string): boolean {
@@ -124,6 +135,9 @@ const entryShape = strictObject({
   corrected_effective_at: nullable(timestamp),
   native: nullable(native),
   recorded_fields: nullable(recordedFields),
+  acceptance_basis: nullable(enumeration(ACCEPTANCE_BASES)),
+  user_directed_claim: nullable(boolean),
+  asserting_client_id: assertingClientId,
 });
 export type TimelineEntry = Decoded<typeof entryShape>;
 

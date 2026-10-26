@@ -12,7 +12,7 @@ database (the real remote-identity store half is
 * **KLP-AC-040 (overlay half).** A discovery client never receives `review.decide`
   (nor `knowledge.assertions.create`), whatever its grants say.
 * **KLP-AC-106 (repository half).** The ordinary ChatLLM profile is
-  `chatllm-data-v9` (v8 at KLP-WP-05, v7 at KLP-WP-04) and classifies submit/checkpoint
+  `chatllm-data-v10` (v8 at KLP-WP-05, v7 at KLP-WP-04) and classifies submit/checkpoint
   `CONTROL_PLANE_EXCLUDED`. KLP-WP-05: discovery clients are bound to
   `knowledge-discovery-v2` = v1 + `record_events.provenance`, exactly the
   matrix set, and never create, `review.decide`, list, search, history or
@@ -303,8 +303,9 @@ def test_the_gateway_passes_the_overlaid_pair_on(client: str) -> None:
 
 def test_the_ordinary_chatllm_profile_excludes_submit_and_checkpoint() -> None:
     # The matrix records the version KLP-WP-05 shipped; `chatllm-data-v9` then
-    # added only the two `reports.types.*` names, neither a Knowledge name.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v9"
+    # added only the two `reports.types.*` names and `chatllm-data-v10` only the
+    # record lineage plane, neither a Knowledge name.
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v10"
     assert MATRIX["profile_contract"]["ordinary_chatllm_versions"]["KLP-WP-05"] == (
         "chatllm-data-v8"
     )

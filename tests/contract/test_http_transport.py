@@ -113,6 +113,9 @@ from my_pa.application.commands import (
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
     ConfigureProjectControls,
+    ConfirmIssueMembership,
+    ConfirmIssueProjectLink,
+    ConfirmRecordAssociation,
     ContestRecordAssociation,
     CorrectGoodNotes,
     CorrectIssueHandoff,
@@ -246,6 +249,7 @@ from my_pa.application.commands import (
     ReadProjectControlsStatus,
     ReadRecordAssociationHistory,
     ReadRecordLineage,
+    ReadRelatedRecords,
     ReadReportManifest,
     ReadTask,
     RecordContextFeedback,
@@ -509,6 +513,10 @@ _UNCOMPOSED_CAPABILITIES = frozenset(
         Capability.COMMITMENTS_V2_SEARCH,
         Capability.COMMITMENTS_V2_WAITING_ON,
         Capability.REPORTS_MANIFEST,
+        Capability.RECORDS_ASSOCIATIONS_CONFIRM,
+        Capability.ISSUES_MEMBERSHIPS_CONFIRM,
+        Capability.ISSUES_PROJECT_LINKS_CONFIRM,
+        Capability.RECORDS_LINEAGE_RELATED,
     }
 )
 
@@ -1845,6 +1853,29 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.COMMITMENTS_V2_SEARCH: {"query": "http"},
         Capability.COMMITMENTS_V2_WAITING_ON: {},
         Capability.REPORTS_MANIFEST: {"report_id": "rpt_httpreport000001"},
+        # Record lineage S3.1 (S3.1 contract section 7).
+        Capability.RECORDS_ASSOCIATIONS_CONFIRM: {
+            "link_id": "irl_httplink00001",
+            "expected_revision": 1,
+            "idempotency_key": "http-records-associations-confirm-0001",
+            "reason": "the http association was confirmed",
+        },
+        Capability.ISSUES_MEMBERSHIPS_CONFIRM: {
+            "link_id": "irl_httplink00001",
+            "expected_revision": 1,
+            "idempotency_key": "http-issues-memberships-confirm-0001",
+            "reason": "the http membership was confirmed",
+        },
+        Capability.ISSUES_PROJECT_LINKS_CONFIRM: {
+            "issue_id": "sit_httpissue0001",
+            "project_id": "prj_httpproject0001",
+            "expected_membership_revision": 1,
+            "idempotency_key": "http-issues-project-links-confirm-0001",
+            "reason": "the http project link was confirmed",
+        },
+        Capability.RECORDS_LINEAGE_RELATED: {
+            "seeds": [{"family": "task", "record_id": "tsk_httptask00001"}]
+        },
     }
 
 
@@ -3090,6 +3121,29 @@ def commands_for(
         Capability.COMMITMENTS_V2_SEARCH: SearchCommitmentsV2(query="http"),
         Capability.COMMITMENTS_V2_WAITING_ON: WaitingOnV2(),
         Capability.REPORTS_MANIFEST: ReadReportManifest(report_id="rpt_httpreport000001"),
+        # Record lineage S3.1 (S3.1 contract section 7).
+        Capability.RECORDS_ASSOCIATIONS_CONFIRM: ConfirmRecordAssociation(
+            link_id="irl_httplink00001",
+            expected_revision=1,
+            idempotency_key="http-records-associations-confirm-0001",
+            reason="the http association was confirmed",
+        ),
+        Capability.ISSUES_MEMBERSHIPS_CONFIRM: ConfirmIssueMembership(
+            link_id="irl_httplink00001",
+            expected_revision=1,
+            idempotency_key="http-issues-memberships-confirm-0001",
+            reason="the http membership was confirmed",
+        ),
+        Capability.ISSUES_PROJECT_LINKS_CONFIRM: ConfirmIssueProjectLink(
+            issue_id="sit_httpissue0001",
+            project_id="prj_httpproject0001",
+            expected_membership_revision=1,
+            idempotency_key="http-issues-project-links-confirm-0001",
+            reason="the http project link was confirmed",
+        ),
+        Capability.RECORDS_LINEAGE_RELATED: ReadRelatedRecords(
+            seeds=({"family": "task", "record_id": "tsk_httptask00001"},)
+        ),
     }
 
 

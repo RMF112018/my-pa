@@ -12,6 +12,12 @@ S3 adds `ContestedLinkView` (one contested link in the Issue's context,
 `issues.closure_readiness`), `HandoffCorrectionView` (one append-only handoff
 correction) and three `HandoffView` keys: `current_effective_at`, `voided` and
 `correction_ids` (`effective_at` keeps its recorded S2 meaning, R3-F18).
+S3.1 adds `UnreviewedLinkView` (one link in the Issue's review scope whose
+head revision is `client_identified`, `issues.closure_readiness`) and the
+section 7.6 labels: `ProjectLinkView`, `HandoffView` and `HandoffCorrectionView`
+gain `user_directed_claim` and `asserting_client_id` (the writing OAuth client,
+`null` for every remote reader), and `HandoffCorrectionView` its
+`acceptance_basis`.
 No S1 key changes meaning; `state` may now be `closed` and `action` names the
 S2 actions. No closure evidence digest is ever shown (FR1-F05).
 
@@ -30,7 +36,11 @@ from typing import Any, Literal
 from pydantic import Field, field_validator, model_validator
 
 from my_pa.contracts.v1.base import StrictModel, UtcDatetime
-from my_pa.contracts.v1.record_lineage import EvidenceAnchorView, RecordRefView
+from my_pa.contracts.v1.record_lineage import (
+    ASSERTING_CLIENT_ID,
+    EvidenceAnchorView,
+    RecordRefView,
+)
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.lineage.model import (
     MAX_EVIDENCE_ANCHORS,
@@ -39,6 +49,7 @@ from my_pa.domain.lineage.model import (
     MAX_LINEAGE_REASON_CHARACTERS,
 )
 from my_pa.domain.lineage.vocabulary import (
+    MAX_UNREVIEWED_LINKS,
     AcceptanceBasis,
     EvidenceRole,
     HandoffCorrectionAction,
@@ -46,7 +57,10 @@ from my_pa.domain.lineage.vocabulary import (
     IssueClosureBlocker,
     IssueProjectMembershipState,
     IssueRevisionAction,
+    LinkLifecycleState,
+    LinkRevisionAction,
     MemberRole,
+    RecordLinkKind,
     RelationType,
 )
 
@@ -55,6 +69,7 @@ __all__ = [
     "MAX_CONTESTED_LINKS",
     "MAX_HANDOFF_CORRECTIONS",
     "MAX_ISSUE_PROJECT_LINKS",
+    "MAX_UNREVIEWED_LINKS",
     "ClosureBlockerView",
     "ContestedLinkView",
     "HandoffCorrectionView",
@@ -67,6 +82,7 @@ __all__ = [
     "IssueRevisionView",
     "IssueView",
     "ProjectLinkView",
+    "UnreviewedLinkView",
 ]
 
 #: At most this many Project links in one `IssueView` (section 7.1).
@@ -141,6 +157,9 @@ class ProjectLinkView(StrictModel):
     state: IssueProjectMembershipState
     membership_revision_no: int = Field(ge=1)
     acceptance_basis: AcceptanceBasis
+    #: S3.1 section 7.6: the writing client's unverified claim, and its OAuth id.
+    user_directed_claim: bool = False
+    asserting_client_id: str | None = ASSERTING_CLIENT_ID
     evidence_anchor_id: str | None = None
     recorded_at: UtcDatetime
 
@@ -276,6 +295,9 @@ class HandoffView(StrictModel):
     evidence: EvidenceAnchorView
     acceptance_basis: AcceptanceBasis
     authority_class: str
+    #: S3.1 section 7.6: the writing client's unverified claim, and its OAuth id.
+    user_directed_claim: bool = False
+    asserting_client_id: str | None = ASSERTING_CLIENT_ID
     #: S3 section 7.1: the current effective time at the read's `known_at` (the
     #: latest known `retime`'s instant, else `effective_at`), whether a `void`
     #: is known, and the known corrections in `correction_no` order.
@@ -327,6 +349,10 @@ class HandoffCorrectionView(StrictModel):
     evidence: EvidenceAnchorView
     recorded_at: UtcDatetime
     authority_class: str
+    #: S3.1 section 7.6: the correction's own basis, claim and writing client.
+    acceptance_basis: AcceptanceBasis = AcceptanceBasis.USER_CONFIRMED
+    user_directed_claim: bool = False
+    asserting_client_id: str | None = ASSERTING_CLIENT_ID
 
     @field_validator("correction_id")
     @classmethod
@@ -358,6 +384,34 @@ class ContestedLinkView(StrictModel):
 
     link_id: str
     relation_type: RelationType
+
+    @field_validator("link_id")
+    @classmethod
+    def _link_id(cls, value: str) -> str:
+        return validate_identifier(value, IdKind.RECORD_LINK)
+
+    def to_canonical_dict(self) -> dict[str, Any]:
+        """The JSON-mode representation."""
+        return self.model_dump(mode="json")
+
+
+class UnreviewedLinkView(StrictModel):
+    """One unreviewed link in an Issue's review scope (S3.1 contract sections 4.6 and 7.5).
+
+    Its head revision is `client_identified`: it holds the close until the human
+    channel confirms or revises it. `user_directed_claim` is the writing
+    client's own, unverified statement; it changes no outcome.
+    """
+
+    link_id: str
+    kind: RecordLinkKind
+    relation_type: RelationType
+    member_role: MemberRole | None = None
+    lifecycle_state: LinkLifecycleState
+    revision_no: int = Field(ge=1)
+    action: LinkRevisionAction
+    user_directed_claim: bool
+    recorded_at: UtcDatetime
 
     @field_validator("link_id")
     @classmethod

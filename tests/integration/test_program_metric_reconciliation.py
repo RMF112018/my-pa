@@ -15,6 +15,12 @@ suspended Issue is outstanding; overdue and due-soon are decided on each
 Project's own calendar; a verified zero is a reported `0`; the denominator
 names every Project state; the overview digest is stable and sensitive.
 
+Record lineage S3.1 (S3.1 contract section 7.8, worker N2) adds the
+unreviewed-link rows: an Issue link whose latest event is
+`client_identified`, active or ended, of an Issue not closed, makes the Issue
+metric `not_reportable` with the existing `issue_link_unverified`; a closed
+Issue's never gates; a confirmed link is reported.
+
 The Entity graph and the Constraint, sync and legacy facts are seeded by
 direct SQL (`lineage_s4_harness`), Commitments and Issue links natively.
 Every identity is synthetic.
@@ -32,11 +38,18 @@ from zoneinfo import ZoneInfo
 import pytest
 from sqlalchemy import text
 
-from my_pa.application.commands import ListCommitmentsV2, ReadPortfolioConstraintOverview
+from my_pa.application.commands import (
+    AddIssueProjectLink,
+    ConfirmIssueProjectLink,
+    EndIssueProjectLink,
+    ListCommitmentsV2,
+    ReadPortfolioConstraintOverview,
+)
 from my_pa.domain.project_controls.business_time import due_soon_through, project_today
 from my_pa.domain.project_controls.constraint import ConstraintLifecycleState
 from my_pa.domain.situation.continuity import CommitmentState
 from tests.database.lineage_issue_harness import OTHER_PRINCIPAL, PRINCIPAL
+from tests.database.lineage_record_harness import GATEWAY
 from tests.database.lineage_s4_harness import T0, S4Runtime
 
 pytestmark = pytest.mark.database
@@ -751,6 +764,127 @@ def test_a_legacy_link_of_a_closed_issue_is_disclosed_and_never_gates(runtime: S
         assert scope["project_ids_with_legacy_issue_links"] == []
 
 
+# --- record lineage S3.1 (S3.1 contract section 7.8, worker N2) -----------------
+
+
+def _client_link(runtime: S4Runtime, key: str, project_id: str) -> str:
+    """An Issue linked to `project_id` by a stdio client: the event is `client_identified`.
+
+    The link is written with the client's `user_directed` claim, which changes
+    no reportability outcome (S3.1 R31-F06).
+    """
+    issue_id = runtime.issue(f"s31-{key}")
+    runtime.ok(
+        AddIssueProjectLink(
+            issue_id=issue_id,
+            project_id=project_id,
+            expected_membership_revision=0,
+            idempotency_key=f"s31-plink-{key}",
+            user_directed=True,
+        )
+    )
+    return issue_id
+
+
+def _not_reportable(row: dict[str, Any]) -> tuple[Any, ...]:
+    return (row["value"], row["value_state"], row["reasons"])
+
+
+def test_an_unreviewed_issue_link_makes_the_issue_metric_not_reportable(
+    runtime: S4Runtime,
+) -> None:
+    program, members = _clean_program(runtime, "Unreviewed", 2)
+    _client_link(runtime, "unreviewed", members[0].project_id)
+    runtime.linked_issue("unreviewed-native", members[1].project_id)
+    answer = runtime.overview(program)
+    entry = _project(answer, members[0].project_id)
+    assert entry["unreviewed_issue_links"] == 1
+    assert (entry["legacy_issue_links"], entry["legacy_issue_links_closed"]) == (0, 0)
+    # Neither counted nor dropped: the existing reason, as a legacy link.
+    assert _not_reportable(_metric(entry["metrics"], "issue_outstanding")) == (
+        None,
+        "not_reportable",
+        ["issue_link_unverified"],
+    )
+    other = _project(answer, members[1].project_id)
+    assert other["unreviewed_issue_links"] == 0
+    assert _value(other["metrics"], "issue_outstanding") == 1
+    for scope in (answer["programs"][0], answer["portfolio"]):
+        total = _metric(scope["totals"], "issue_outstanding")
+        assert (total["value"], total["reasons"]) == (None, ["issue_link_unverified"])
+        assert scope["denominator"]["unreviewed_issue_links"] == 1
+        assert scope["project_ids_with_unreviewed_issue_links"] == [members[0].project_id]
+        assert scope["project_ids_with_legacy_issue_links"] == []
+    assert answer["calculation_version"] == "program-overview-v2"
+
+
+def test_a_client_ended_issue_link_makes_the_issue_metric_not_reportable(
+    runtime: S4Runtime,
+) -> None:
+    """R31-F03: a client's end must not silently shrink `issue_outstanding`."""
+    program, members = _clean_program(runtime, "Client ended", 1)
+    project_id = members[0].project_id
+    issue_id = _client_link(runtime, "ended", project_id)
+    runtime.ok(
+        EndIssueProjectLink(
+            issue_id=issue_id,
+            project_id=project_id,
+            expected_membership_revision=1,
+            idempotency_key="s31-plink-ended-end",
+            reason="A client ended the link.",
+        )
+    )
+    answer = runtime.overview(program)
+    entry = _project(answer, project_id)
+    assert entry["unreviewed_issue_links"] == 1
+    assert _not_reportable(_metric(entry["metrics"], "issue_outstanding")) == (
+        None,
+        "not_reportable",
+        ["issue_link_unverified"],
+    )
+    total = _metric(answer["portfolio"]["totals"], "issue_outstanding")
+    assert (total["value"], total["reasons"]) == (None, ["issue_link_unverified"])
+
+
+def test_an_unreviewed_link_of_a_closed_issue_never_gates(runtime: S4Runtime) -> None:
+    program, members = _clean_program(runtime, "Unreviewed closed", 1)
+    project_id = members[0].project_id
+    issue_id = _client_link(runtime, "closed", project_id)
+    runtime.seeds.close_issue(issue_id)
+    answer = runtime.overview(program)
+    entry = _project(answer, project_id)
+    assert entry["unreviewed_issue_links"] == 0
+    row = _metric(entry["metrics"], "issue_outstanding")
+    assert (row["value_state"], row["value"], row["reasons"]) == ("reported", 0, [])
+    for scope in (answer["programs"][0], answer["portfolio"]):
+        total = _metric(scope["totals"], "issue_outstanding")
+        assert (total["value_state"], total["value"]) == ("reported", 0)
+        assert scope["denominator"]["unreviewed_issue_links"] == 0
+        assert scope["project_ids_with_unreviewed_issue_links"] == []
+
+
+def test_a_confirmed_issue_link_is_reported(runtime: S4Runtime) -> None:
+    program, members = _clean_program(runtime, "Confirmed", 1)
+    project_id = members[0].project_id
+    issue_id = _client_link(runtime, "confirmed", project_id)
+    runtime.ok(
+        ConfirmIssueProjectLink(
+            issue_id=issue_id,
+            project_id=project_id,
+            expected_membership_revision=1,
+            idempotency_key="s31-plink-confirmed",
+            reason="Checked.",
+        ),
+        surface=GATEWAY,
+    )
+    answer = runtime.overview(program)
+    entry = _project(answer, project_id)
+    assert entry["unreviewed_issue_links"] == 0
+    assert _value(entry["metrics"], "issue_outstanding") == 1
+    total = _metric(answer["portfolio"]["totals"], "issue_outstanding")
+    assert (total["value_state"], total["value"]) == ("reported", 1)
+
+
 def test_a_suspended_issue_is_outstanding(runtime: S4Runtime) -> None:
     program, members = _clean_program(runtime, "Suspended", 1)
     project_id = members[0].project_id
@@ -914,6 +1048,8 @@ def test_the_denominator_names_every_project_state(runtime: S4Runtime) -> None:
             "conflict": 0,
             "calendar_unconfigured": 0,
         },
+        # S3.1 section 7.8 (lockstep): the unreviewed client-identified links.
+        "unreviewed_issue_links": 0,
     }
     assert g["project_ids_by_constraint_source_state"] == {
         "in_sync": [scene.b1.project_id],

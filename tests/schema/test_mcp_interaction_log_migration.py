@@ -71,7 +71,8 @@ def test_the_revision_is_on_the_report_type_registry_under_one_later_head() -> N
     revision, so it is no longer the head; it sits directly beneath the single head.
     """
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == ["c5260943d933"]
+    assert script.get_heads() == ["023f8f7eb499"]
+    assert script.get_revision("023f8f7eb499").down_revision == "c5260943d933"
     assert script.get_revision("c5260943d933").down_revision == "6f1476b8da52"
     assert script.get_revision("6f1476b8da52").down_revision == "d020b532ad7d"
     assert script.get_revision("264310e0416a").down_revision == "b9025e7fb738"

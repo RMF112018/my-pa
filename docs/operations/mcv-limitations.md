@@ -658,7 +658,12 @@ does not. It remains an unverified caller string.
 
 **Nothing here is commissioned.** The migration `1d9b248e7f83` and the TRUNCATE
 refusal `c8e4a1b70d35` are proven on disposable databases only. The ChatLLM
-data profile `chatllm-data-v9`, which adds `reports.types.create` and
+data profile `chatllm-data-v10`, which adds the 34 client-usable record lineage
+names as `DATA_CONDITIONAL` on the lineage switches and withholds Issue close and
+reopen, the 3 lineage `confirm` names and the 2 backfill names from every client
+(record lineage P1, ADR-015 decision 16,
+`ops/runbooks/remote-mcp-cloudflare.md`) on top of `chatllm-data-v9`'s
+`reports.types.create` and
 `reports.types.list` as `DATA_REQUIRED` on top of `chatllm-data-v8`'s
 `record_events.provenance` as
 `DATA_CONDITIONAL` on the Knowledge plane switch (KLP-WP-05) on top of

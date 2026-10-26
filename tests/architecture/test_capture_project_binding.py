@@ -43,8 +43,12 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 #: fact tables, the S3 CHECKs of `record_links` and `record_link_revisions`, the
 #: one-live-head predicate and the S3 result columns of `lineage_write_requests`;
 #: `captures` is untouched. Moved again by the record lineage S4 revision, which
-#: declares `intelligence_artifact_manifests`; `captures` is untouched.
-TABLES_SHA256: Final = "db0a8798cc9a6aa53524e11b6691091adf506abf4b569e4b12371c80fcba8b0c"
+#: declares `intelligence_artifact_manifests`; `captures` is untouched. Moved
+#: again by the record lineage S3.1 revision (ADR-015 decision 15), which
+#: declares the client provenance columns and CHECKs of the four fact tables,
+#: the root creator CHECK, the confirm CHECKs, the request-row writer columns,
+#: CHECK and index, and the schema-2 manifest version; `captures` is untouched.
+TABLES_SHA256: Final = "dcfd038683939255226b0e0aae84cce47c68918de894952d49dbbfc79c658bb3"
 WP03_MIGRATION_SHA256: Final = "098edd98ccc1846b01c58f42e296e4751e7841b562a2827616cc4337e174c354"
 WP03_MIGRATION: Final = (
     ROOT / "migrations/versions/20260914_e6a4c2f91b73_project_controls_run01_integrity.py"

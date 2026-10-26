@@ -211,6 +211,10 @@ _FULL_PLANE_SETTINGS = SimpleNamespace(
     # KLP-WP-03: the Knowledge plane off, its default; the profile then
     # neither composes nor demands the six Knowledge grants.
     knowledge_assertions_enabled=False,
+    # Record lineage P1 (chatllm-data-v10): both lineage switches off, their
+    # defaults; the profile then neither composes nor demands a lineage grant.
+    lineage_enabled=False,
+    program_reporting_enabled=False,
     # KLP-WP-04: no client is Knowledge-bound, so the ChatLLM profile tooling runs.
     knowledge_discovery_oauth_client_id_set=frozenset,
     knowledge_operator_review_oauth_client_id_set=frozenset,
@@ -281,7 +285,7 @@ def test_profile_apply_adds_the_meeting_grants_once_and_then_converges(
         desired = _grant_v2_catalog(repository)
         code, plan = _profile(repository, "profile-plan", capsys)
         assert code == 1
-        assert plan["profile_version"] == "chatllm-data-v9"
+        assert plan["profile_version"] == "chatllm-data-v10"
         assert plan["healthy"] is False
         assert plan["actions"] == [
             {
@@ -331,9 +335,9 @@ def test_profile_commands_refuse_the_previous_profile_version(
     with _repository() as (_, repository):
         _grant_v2_catalog(repository)
         with pytest.raises(SystemExit) as raised:
-            _profile(repository, "profile-apply", capsys, profile_version="chatllm-data-v3")
+            _profile(repository, "profile-apply", capsys, profile_version="chatllm-data-v9")
         assert raised.value.code == 2
-        assert "profile version must be chatllm-data-v9" in capsys.readouterr().err
+        assert "profile version must be chatllm-data-v10" in capsys.readouterr().err
         rows = repository.list_capability_grants(remote_client_id=CLIENT_UUID)
         assert not any(row.capability.startswith("meetings.") for row in rows)
 
@@ -384,7 +388,7 @@ def test_v6_profile_apply_adds_the_knowledge_grants_only_with_the_plane_on(
         )
         plan = json.loads(capsys.readouterr().out)
     assert code == 1
-    assert plan["profile_version"] == "chatllm-data-v9"
+    assert plan["profile_version"] == "chatllm-data-v10"
     assert plan["actions"] == [
         {
             "kind": "add",
@@ -395,6 +399,102 @@ def test_v6_profile_apply_adds_the_knowledge_grants_only_with_the_plane_on(
         }
         for capability, (purpose, write) in sorted(knowledge.items(), key=lambda i: i[0].value)
     ]
+
+
+# ---- Record lineage P1 (chatllm-data-v10, client exposure contract section 10) ----
+
+
+def _lineage_exposed() -> tuple[frozenset[Capability], frozenset[Capability]]:
+    """The 27 `LINEAGE` and 7 `PROGRAM_REPORTING` names, from the switch sets."""
+    from my_pa.application.service import (
+        _LINEAGE_CAPABILITIES,
+        _PROGRAM_REPORTING_CAPABILITIES,
+    )
+    from my_pa.domain.lineage.vocabulary import (
+        ATTESTED_LINEAGE_WRITE_CAPABILITIES,
+        LINEAGE_BACKFILL_CAPABILITIES,
+    )
+
+    withheld = ATTESTED_LINEAGE_WRITE_CAPABILITIES | LINEAGE_BACKFILL_CAPABILITIES
+    lineage = frozenset(c for c in _LINEAGE_CAPABILITIES if c.value not in withheld)
+    return lineage, _PROGRAM_REPORTING_CAPABILITIES
+
+
+def _plan_with(
+    repository: RemoteIdentityRepository,
+    settings: SimpleNamespace,
+    capsys: pytest.CaptureFixture[str],
+) -> tuple[int, dict[str, object]]:
+    args = argparse.Namespace(
+        command="profile-plan",
+        oauth_client_id=CLIENT_ID,
+        scope=SCOPE,
+        resource=RESOURCE,
+        profile_version=CHATLLM_DATA_PROFILE_VERSION,
+        apply=False,
+    )
+    code = _run_profile_command(
+        argparse.ArgumentParser(prog="remote_mcp"),
+        args,
+        repository,
+        settings,  # type: ignore[arg-type]
+        WHEN,
+    )
+    return code, json.loads(capsys.readouterr().out)
+
+
+def test_v10_profile_plan_adds_the_lineage_grants_only_with_the_switch_on(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Switch off: no lineage action; on: the 27 `LINEAGE` adds; with Program
+    reporting and the entity plane: all 34, each under its one purpose."""
+    from my_pa.domain.identity.operation import permitted_purposes
+
+    lineage, program = _lineage_exposed()
+    assert (len(lineage), len(program)) == (27, 7)
+    every = {capability.value for capability in lineage | program}
+
+    def adds(plan: dict[str, object]) -> dict[str, tuple[str, bool]]:
+        actions = plan["actions"]
+        assert isinstance(actions, list)
+        return {
+            action["capability"]: (action["purpose"], action["write"])
+            for action in actions
+            if action["kind"] == "add"
+        }
+
+    def expected(names: frozenset[Capability]) -> dict[str, tuple[str, bool]]:
+        result: dict[str, tuple[str, bool]] = {}
+        for capability in names:
+            (purpose,) = permitted_purposes(capability)
+            result[capability.value] = (purpose.value, is_write_capability(capability))
+        return result
+
+    with _repository() as (_, repository):
+        _grant_v2_catalog(repository)
+        _profile(repository, "profile-apply", capsys)
+        # The switch off (the stand-in's default): converged, no lineage action.
+        code, off = _plan_with(repository, _FULL_PLANE_SETTINGS, capsys)
+        assert code == 0 and off["healthy"] is True
+        assert off["profile_version"] == "chatllm-data-v10"
+        assert not set(adds(off)) & every
+        # The lineage switch on: exactly the 27 `LINEAGE` adds.
+        on = SimpleNamespace(**{**vars(_FULL_PLANE_SETTINGS), "lineage_enabled": True})
+        code, lineage_plan = _plan_with(repository, on, capsys)
+        assert code == 1
+        assert adds(lineage_plan) == expected(lineage)
+        # Program reporting too, with the entity plane on: all 34.
+        both = SimpleNamespace(
+            **{
+                **vars(_FULL_PLANE_SETTINGS),
+                "lineage_enabled": True,
+                "program_reporting_enabled": True,
+            }
+        )
+        assert both.relationship_intelligence_enabled is True
+        code, both_plan = _plan_with(repository, both, capsys)
+        assert code == 1
+        assert adds(both_plan) == expected(lineage | program)
 
 
 # ---- KLP Step 8: the Knowledge Manager exact-client exception ----------------------

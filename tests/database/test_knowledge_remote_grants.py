@@ -273,6 +273,10 @@ def test_profile_apply_installs_the_create_grant_with_its_purpose(
         relationship_intelligence_writes_enabled=True,
         relationship_memory_enabled=True,
         knowledge_assertions_enabled=True,
+        # Record lineage P1: the profile tooling reads both lineage switches
+        # too; off, their defaults.
+        lineage_enabled=False,
+        program_reporting_enabled=False,
         knowledge_discovery_oauth_client_id_set=frozenset,
         knowledge_operator_review_oauth_client_id_set=frozenset,
         chatllm_gateway_oauth_client_id_set=frozenset,

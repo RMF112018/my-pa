@@ -40,7 +40,10 @@ serialization victim is `TransactionConflictError` and answers `conflict`.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Mapping, Sequence
+import math
+import time
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Final
@@ -49,6 +52,7 @@ from sqlalchemy import (
     ColumnElement,
     Table,
     and_,
+    event,
     false,
     func,
     insert,
@@ -75,6 +79,7 @@ from my_pa.contracts.ports import (
     RecordLineageRepository,
     RecordLinkRecord,
     RepositoryFailureError,
+    ReviewScopeLink,
 )
 from my_pa.domain.capture.lifecycle import CaptureLifecycleState
 from my_pa.domain.common.classification import Classification
@@ -160,6 +165,8 @@ def _bound(table: Table, principal_id: str, values: dict[str, object]) -> dict[s
 
 #: PostgreSQL's `query_canceled`: a statement that outran `statement_timeout`.
 _QUERY_CANCELED: Final = "57014"
+#: S3.1 section 7.9: the per-statement cap of the lineage recompute (S4 D-36).
+_RECOMPUTE_STATEMENT_BUDGET_MS: Final = 2000
 
 
 def _bounded[ResultT](statement: Callable[[], ResultT]) -> ResultT:
@@ -575,6 +582,8 @@ class SqlRecordLineageRepository(RecordLineageRepository):
                             "evidence_set_digest": revision.evidence_set_digest,
                             "recorded_at": revision.recorded_at,
                             "member_native_version": revision.member_native_version,
+                            "asserting_client_id": revision.asserting_client_id,
+                            "user_directed_claim": revision.user_directed_claim,
                         },
                     )
                 )
@@ -677,6 +686,8 @@ class SqlRecordLineageRepository(RecordLineageRepository):
                 for item in cited
             ),
             member_native_version=row.member_native_version,
+            asserting_client_id=row.asserting_client_id,
+            user_directed_claim=bool(row.user_directed_claim),
         )
 
     def archived_capture_roots(
@@ -889,6 +900,68 @@ class SqlRecordLineageRepository(RecordLineageRepository):
         )
         return tuple(_to_head(row) for row in rows)
 
+    # --- record lineage S3.1 (S3.1 contract sections 4.4 and 4.6) -------------
+
+    def link_confirmed(self, principal_id: str, link_id: str) -> bool:
+        revisions = record_link_revisions
+        rows = self._rows(
+            select(revisions.c.revision_no)
+            .where(
+                _mine(revisions, principal_id),
+                revisions.c.link_id == link_id,
+                revisions.c.acceptance_basis == AcceptanceBasis.USER_CONFIRMED.value,
+            )
+            .limit(1)
+        )
+        return bool(rows)
+
+    def review_scope_links(
+        self, principal_id: str, issue_id: str, inside: Collection[RecordRef]
+    ) -> tuple[ReviewScopeLink, ...]:
+        pairs = sorted(
+            {(ref.family.value, ref.record_id) for ref in inside}
+            | {(RecordFamily.SITUATION.value, issue_id)}
+        )
+        revisions = record_link_revisions
+        rows = self._rows(
+            select(
+                *_HEAD_COLUMNS,
+                revisions.c.action.label("head_action"),
+                revisions.c.acceptance_basis.label("head_acceptance_basis"),
+                revisions.c.user_directed_claim.label("head_user_directed_claim"),
+                revisions.c.recorded_at.label("head_recorded_at"),
+            )
+            .select_from(
+                _heads_with_links().join(
+                    revisions,
+                    and_(
+                        matching_partition_criterion(revisions, record_link_heads),
+                        revisions.c.link_id == record_link_heads.c.link_id,
+                        revisions.c.revision_no == record_link_heads.c.revision_no,
+                    ),
+                )
+            )
+            .where(
+                _mine(record_link_heads, principal_id),
+                or_(
+                    record_links.c.context_issue_id == issue_id,
+                    tuple_(record_links.c.from_family, record_links.c.from_id).in_(pairs),
+                    tuple_(record_links.c.to_family, record_links.c.to_id).in_(pairs),
+                ),
+            )
+            .order_by(record_links.c.link_id.collate("C"))
+        )
+        return tuple(
+            ReviewScopeLink(
+                head=_to_head(row),
+                action=LinkRevisionAction(row.head_action),
+                acceptance_basis=AcceptanceBasis(row.head_acceptance_basis),
+                user_directed_claim=bool(row.head_user_directed_claim),
+                recorded_at=row.head_recorded_at,
+            )
+            for row in rows
+        )
+
     # --- the knowledge clock (S3 contract sections 3.4, 4.2 and 6.2) -------------
 
     def take_commit_mark(self, principal_id: str) -> int:
@@ -958,6 +1031,35 @@ class SqlRecordLineageRepository(RecordLineageRepository):
                 text(f"SET LOCAL statement_timeout = {int(timeout_ms)}")
             )
         )
+
+    @contextmanager
+    def bounded_by_deadline(self, deadline: float) -> Iterator[None]:
+        connection = self._connection
+        savepoint = connection.begin_nested()
+
+        def before(
+            _connection: Connection,
+            cursor: Any,  # noqa: ANN401 - the DBAPI cursor
+            _statement: str,
+            _parameters: object,
+            _context: object,
+            _executemany: bool,
+        ) -> None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise LineageReadTimeoutError("the lineage recompute spent its budget")
+            milliseconds = min(_RECOMPUTE_STATEMENT_BUDGET_MS, math.ceil(remaining * 1000))
+            # A validated integer; `SET LOCAL` takes no bind parameter.
+            cursor.execute(f"SET LOCAL statement_timeout = {milliseconds}")
+
+        event.listen(connection, "before_cursor_execute", before)
+        try:
+            yield
+        finally:
+            event.remove(connection, "before_cursor_execute", before)
+            # Always rolled back: the scope wrote nothing, a cancelled statement
+            # left the savepoint (not the commit) aborted, and `SET LOCAL` ends here.
+            savepoint.rollback()
 
     def live_links_incident(
         self, principal_id: str, refs: Collection[RecordRef], cut: LineageFactCut

@@ -64,16 +64,18 @@ as a virtual note edge of M1".
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final
 
 from my_pa.application.errors import (
     ConflictError,
+    DeniedError,
     InvalidRequestError,
     NotFoundError,
     SafeDetail,
@@ -89,7 +91,12 @@ from my_pa.application.lineage_endpoints import (
     require_open_issues,
     require_relation_evidence,
 )
-from my_pa.application.lineage_visibility import LineageVisibility, lineage_visibility
+from my_pa.application.lineage_rate import require_client_write_budget
+from my_pa.application.lineage_visibility import (
+    LineageVisibility,
+    lineage_visibility,
+    withhold_client_ids,
+)
 from my_pa.contracts.ports import (
     IssueRepository,
     LineageEndpoint,
@@ -97,6 +104,7 @@ from my_pa.contracts.ports import (
     LineageIssueAsOf,
     LineageLinkEvidence,
     LineageNoteVersionRef,
+    LineageReadTimeoutError,
     LineageResolvedRecord,
     LineageWriteRequestRecord,
     LinkHeadRecord,
@@ -104,6 +112,7 @@ from my_pa.contracts.ports import (
     RecordLineageRepository,
     RecordLinkRecord,
     RepositoryFailureError,
+    ReviewScopeLink,
     UnitOfWork,
 )
 from my_pa.contracts.v1.record_lineage import (
@@ -118,11 +127,19 @@ from my_pa.contracts.v1.record_lineage import (
     LinkHistoryRevisionView,
     LinkHistoryRootView,
     RecordRefView,
+    RelatedRecordsView,
+    RelatedRecordView,
     VirtualEdgeView,
 )
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import ensure_utc
 from my_pa.domain.identity.operation import Capability
+from my_pa.domain.intelligence.source_manifest import (
+    LineageRecomputeFailure,
+    LineageReferenceBlock,
+    lineage_section,
+    lineage_server_counts,
+)
 from my_pa.domain.lineage.asof import (
     CutAfterNowError,
     completeness,
@@ -130,12 +147,19 @@ from my_pa.domain.lineage.asof import (
     knowledge_cut,
     native_cut,
 )
-from my_pa.domain.lineage.canonical import evidence_set_digest, normalized_identity, request_digest
+from my_pa.domain.lineage.canonical import (
+    canonical_json,
+    evidence_set_digest,
+    normalized_identity,
+    request_digest,
+)
 from my_pa.domain.lineage.closure import (
     VERSIONED_MEMBER_FAMILIES,
     has_resolution_anchor,
     in_issue_context,
+    in_review_scope,
     is_contest_evidence,
+    is_unreviewed,
     link_transition,
 )
 from my_pa.domain.lineage.cursor import (
@@ -151,6 +175,7 @@ from my_pa.domain.lineage.cursor import (
 from my_pa.domain.lineage.model import EvidenceAnchor, RecordRef
 from my_pa.domain.lineage.vocabulary import (
     COMPOSITE_ONLY_RELATIONS,
+    LINEAGE_RELATED_DIGEST_PREFIX,
     RECORD_FAMILY_ID_KINDS,
     AcceptanceBasis,
     EvidenceAvailability,
@@ -170,11 +195,12 @@ from my_pa.domain.project_controls.constraint import ConstraintLifecycleState
 from my_pa.domain.source.registry import issue_identifier
 
 if TYPE_CHECKING:
-    from my_pa.application.lineage_authority import LineageAuthority
+    from my_pa.application.lineage_authority import LineageAuthority, LineageProvenance
 
 __all__ = [
     "DEFAULT_LINEAGE_DEPTH",
     "LINEAGE_DEADLINE_SECONDS",
+    "LINEAGE_RECOMPUTE_BUDGET_SECONDS",
     "LINEAGE_STATEMENT_TIMEOUT_MS",
     "MAX_BLOCKS_SEARCH",
     "MAX_LINEAGE_BYTES",
@@ -192,14 +218,18 @@ __all__ = [
     "LineageBoundedResult",
     "LineageReadRequest",
     "LineageReportedCuts",
+    "LinkConfirmRequest",
     "MembershipAddRequest",
     "MembershipCorrectRequest",
     "MembershipEndRequest",
     "RecordLineageApplication",
+    "RelatedBoundedResult",
+    "RelatedReadRequest",
     "anchor_view",
     "association_view",
     "association_views",
     "bounded_lineage",
+    "bounded_related",
     "evidence_availability",
     "insert_new_link",
     "issue_inside_set",
@@ -211,8 +241,13 @@ __all__ = [
     "links_in_context_at",
     "member_native_version",
     "read_lineage_as_of",
+    "read_related_as_of",
+    "recompute_lineage_reference",
+    "related_digest",
+    "related_request_document",
     "require_no_blocks_cycle",
     "traverse_lineage",
+    "unreviewed_links_in_scope",
     "visible_anchor_sets",
     "visible_association_views",
 ]
@@ -225,6 +260,8 @@ _CORRECT: Final = Capability.RECORDS_ASSOCIATIONS_CORRECT.value
 _END: Final = Capability.RECORDS_ASSOCIATIONS_END.value
 _CONTEST: Final = Capability.RECORDS_ASSOCIATIONS_CONTEST.value
 _REINSTATE: Final = Capability.RECORDS_ASSOCIATIONS_REINSTATE.value
+_CONFIRM: Final = Capability.RECORDS_ASSOCIATIONS_CONFIRM.value
+_MEMBERSHIP_CONFIRM: Final = Capability.ISSUES_MEMBERSHIPS_CONFIRM.value
 
 #: `records.lineage` bounds (section 7.2; design values, not benchmarks).
 MAX_LINEAGE_DEPTH: Final = 4
@@ -312,6 +349,15 @@ class AssociationEndRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class LinkConfirmRequest:
+    """`records.associations.confirm` / `issues.memberships.confirm`, parsed (S3.1 7.2)."""
+
+    link_id: str
+    expected_revision: int
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
 class LineageReadRequest:
     """`records.lineage`, parsed. S3 (section 7.2) adds the cuts and the paging fields.
 
@@ -335,6 +381,8 @@ class AssociationResult:
     association: AssociationView
     created: bool | None
     replayed: bool
+    #: S3.1 section 6.4: whether the answer filter withheld an anchor (remote).
+    restricted: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -404,6 +452,84 @@ def _revise_document(
     }
 
 
+def open_write_digest(
+    capability: str,
+    principal_id: str,
+    document: Mapping[str, object],
+    provenance: LineageProvenance,
+) -> str:
+    """S3.1 section 4.9: an open write's digest, binding a client writer and its claim.
+
+    The human channel's document is exactly the S1-S4 one, so every recorded
+    S1-S4 key replays byte-identically for the operator; a client's gains the
+    server-only `writer` key. `user_directed` enters the request document only
+    when `true`, so absent and `false` leave every existing digest unchanged.
+    """
+    claimed = dict(document)
+    if provenance.user_directed_claim:
+        claimed["user_directed"] = True
+    writer = (
+        None
+        if provenance.acceptance_basis is AcceptanceBasis.USER_CONFIRMED
+        else {
+            "decision_channel": provenance.decision_channel.value,
+            "asserting_client_id": provenance.asserting_client_id,
+        }
+    )
+    return request_digest(capability, principal_id, claimed, writer=writer)
+
+
+def reserve_open_write(
+    issues: IssueRepository,
+    principal_id: str,
+    capability: str,
+    idempotency_key: str,
+    digest: str,
+    provenance: LineageProvenance | LineageAuthority,
+    at: datetime,
+    *,
+    asserting_client_id: str | None = None,
+) -> LineageWriteRequestRecord | None:
+    """Reserve a lineage write request with its writer columns (S3.1 section 5.2)."""
+    client = getattr(provenance, "asserting_client_id", asserting_client_id)
+    return issues.reserve_write_request(
+        principal_id,
+        capability,
+        idempotency_key,
+        digest,
+        created_at=at,
+        decision_channel=provenance.decision_channel.value,
+        asserting_client_id=client,
+    )
+
+
+def require_client_may_revise(
+    lineage: RecordLineageRepository,
+    principal_id: str,
+    head: LinkHeadRecord,
+    action: LinkRevisionAction,
+    provenance: LineageProvenance,
+) -> None:
+    """S3.1 section 4.4: a client never revises lineage the human channel accepted.
+
+    Keyed on the link's **history**, not its head (RR1-F01): when any revision
+    of the link is `user_confirmed`, a client revision is `denied`, except 1
+    `contest` of an `active` link whose head is `user_confirmed` -- after
+    which the head is the client's contest and only the human channel writes
+    it. The caller holds the head `FOR UPDATE` and has passed the CAS check.
+    """
+    if provenance.acceptance_basis is not AcceptanceBasis.CLIENT_IDENTIFIED:
+        return
+    link_id = head.link.link_id
+    if not lineage.link_confirmed(principal_id, link_id):
+        return
+    if action is LinkRevisionAction.CONTEST and head.lifecycle_state is LinkLifecycleState.ACTIVE:
+        current = _revision_of(lineage, principal_id, link_id, head.revision_no)
+        if current.acceptance_basis is AcceptanceBasis.USER_CONFIRMED:
+            return
+    raise DeniedError()
+
+
 # ---------------------------------------------------------------------- views
 
 
@@ -468,6 +594,8 @@ def association_view(
         lifecycle_state=revision.lifecycle_state,
         acceptance_basis=revision.acceptance_basis,
         authority_class=revision.authority_class,
+        user_directed_claim=revision.user_directed_claim,
+        asserting_client_id=revision.asserting_client_id,
         evidence=tuple(anchor_view(cited, archived) for cited in revision.evidence),
         created_at=link.created_at,
         recorded_at=revision.recorded_at,
@@ -555,15 +683,17 @@ class RecordLineageApplication:
         principal_id: str,
         request: MembershipAddRequest,
         idempotency_key: str,
-        authority: LineageAuthority,
+        authority: LineageProvenance,
         now: datetime,
     ) -> AssociationResult:
         """An Issue membership of a non-Project record, or the active one it repeats."""
         at = ensure_utc(now)
         issues, lineage = uow.issues, uow.record_lineage
-        digest = request_digest(_MEMBERSHIP_ADD, principal_id, _membership_add_document(request))
-        prior = issues.reserve_write_request(
-            principal_id, _MEMBERSHIP_ADD, idempotency_key, digest, created_at=at
+        digest = open_write_digest(
+            _MEMBERSHIP_ADD, principal_id, _membership_add_document(request), authority
+        )
+        prior = reserve_open_write(
+            issues, principal_id, _MEMBERSHIP_ADD, idempotency_key, digest, authority, at
         )
         if prior is not None:
             return _replayed(uow, principal_id, prior)
@@ -614,6 +744,7 @@ class RecordLineageApplication:
             root,
             anchors,
             at,
+            authority,
             member_version=member_native_version(member),
         )
 
@@ -623,15 +754,15 @@ class RecordLineageApplication:
         principal_id: str,
         request: AssociationAssertRequest,
         idempotency_key: str,
-        authority: LineageAuthority,
+        authority: LineageProvenance,
         now: datetime,
     ) -> AssociationResult:
         """A semantic association, or the active one with the same identity."""
         at = ensure_utc(now)
         issues, lineage = uow.issues, uow.record_lineage
-        digest = request_digest(_ASSERT, principal_id, _assert_document(request))
-        prior = issues.reserve_write_request(
-            principal_id, _ASSERT, idempotency_key, digest, created_at=at
+        digest = open_write_digest(_ASSERT, principal_id, _assert_document(request), authority)
+        prior = reserve_open_write(
+            issues, principal_id, _ASSERT, idempotency_key, digest, authority, at
         )
         if prior is not None:
             return _replayed(uow, principal_id, prior)
@@ -719,7 +850,16 @@ class RecordLineageApplication:
             created_at=at,
         )
         return self._assert_root(
-            uow, principal_id, _ASSERT, idempotency_key, digest, root, anchors, at, blocks=blocks
+            uow,
+            principal_id,
+            _ASSERT,
+            idempotency_key,
+            digest,
+            root,
+            anchors,
+            at,
+            authority,
+            blocks=blocks,
         )
 
     @staticmethod
@@ -732,11 +872,17 @@ class RecordLineageApplication:
         root: RecordLinkRecord,
         anchors: tuple[EvidenceAnchor, ...],
         at: datetime,
+        provenance: LineageProvenance,
         *,
         member_version: int | None = None,
         blocks: tuple[RecordRef, RecordRef] | None = None,
     ) -> AssociationResult:
         """Section 6.2 steps 4 and 5, then the writes: a new root, or the active one.
+
+        S3.1 (sections 4.5 and 6.2 step 7): an identity answered `created:
+        false` keeps its provenance whoever asserts it, and -- like a new root
+        -- is checked against and counted toward a client's write budgets,
+        after every refusal and before its first row.
 
         `member_version` is the member's observed native `version` a new
         membership's revision 1 records (S2 section 3.3); `None` otherwise.
@@ -755,6 +901,9 @@ class RecordLineageApplication:
         if existing is not None:
             # The active link with this meaning answers; its authority and
             # evidence never change, and only the request row is written.
+            require_client_write_budget(
+                uow, principal_id, provenance, provenance.asserting_client_id, at
+            )
             revision = _revision_of(
                 lineage, principal_id, existing.link.link_id, existing.revision_no
             )
@@ -772,8 +921,17 @@ class RecordLineageApplication:
             return AssociationResult(association=view, created=False, replayed=False)
         if blocks is not None:
             require_no_blocks_cycle(lineage, principal_id, *blocks)
+        require_client_write_budget(
+            uow, principal_id, provenance, provenance.asserting_client_id, at
+        )
         revision = insert_new_link(
-            uow, principal_id, root, anchors, at, member_version=member_version
+            uow,
+            principal_id,
+            root,
+            anchors,
+            at,
+            provenance=provenance,
+            member_version=member_version,
         )
         issues.complete_write_request(
             principal_id,
@@ -796,11 +954,13 @@ class RecordLineageApplication:
         principal_id: str,
         request: MembershipEndRequest,
         idempotency_key: str,
-        authority: LineageAuthority,
+        authority: LineageProvenance,
         now: datetime,
     ) -> AssociationResult:
         """End an active Issue membership at its expected revision."""
-        digest = request_digest(_MEMBERSHIP_END, principal_id, _membership_end_document(request))
+        digest = open_write_digest(
+            _MEMBERSHIP_END, principal_id, _membership_end_document(request), authority
+        )
         return self._revise(
             uow,
             principal_id,
@@ -823,7 +983,7 @@ class RecordLineageApplication:
         principal_id: str,
         request: MembershipCorrectRequest,
         idempotency_key: str,
-        authority: LineageAuthority,
+        authority: LineageProvenance,
         now: datetime,
     ) -> AssociationResult:
         """Replace a membership's evidence set (S2 section 7.2); root, role and identity stay.
@@ -832,7 +992,9 @@ class RecordLineageApplication:
         head's, except the section 3.3 re-affirmation. The revision records the
         member's native `version` observed now.
         """
-        digest = request_digest(_MEMBERSHIP_CORRECT, principal_id, _revise_document(request))
+        digest = open_write_digest(
+            _MEMBERSHIP_CORRECT, principal_id, _revise_document(request), authority
+        )
         return self._revise(
             uow,
             principal_id,
@@ -855,11 +1017,11 @@ class RecordLineageApplication:
         principal_id: str,
         request: AssociationCorrectRequest,
         idempotency_key: str,
-        authority: LineageAuthority,
+        authority: LineageProvenance,
         now: datetime,
     ) -> AssociationResult:
         """Replace a semantic association's evidence set; the root never changes."""
-        digest = request_digest(_CORRECT, principal_id, _revise_document(request))
+        digest = open_write_digest(_CORRECT, principal_id, _revise_document(request), authority)
         return self._revise(
             uow,
             principal_id,
@@ -882,11 +1044,11 @@ class RecordLineageApplication:
         principal_id: str,
         request: AssociationEndRequest,
         idempotency_key: str,
-        authority: LineageAuthority,
+        authority: LineageProvenance,
         now: datetime,
     ) -> AssociationResult:
         """End a semantic association; an ended link is terminal in S1."""
-        digest = request_digest(_END, principal_id, _revise_document(request))
+        digest = open_write_digest(_END, principal_id, _revise_document(request), authority)
         return self._revise(
             uow,
             principal_id,
@@ -909,11 +1071,11 @@ class RecordLineageApplication:
         principal_id: str,
         request: AssociationCorrectRequest,
         idempotency_key: str,
-        authority: LineageAuthority,
+        authority: LineageProvenance,
         now: datetime,
     ) -> AssociationResult:
         """Dispute an active semantic association (S3 section 3.1): it reads `contested`."""
-        digest = request_digest(_CONTEST, principal_id, _revise_document(request))
+        digest = open_write_digest(_CONTEST, principal_id, _revise_document(request), authority)
         return self._revise(
             uow,
             principal_id,
@@ -936,11 +1098,11 @@ class RecordLineageApplication:
         principal_id: str,
         request: AssociationCorrectRequest,
         idempotency_key: str,
-        authority: LineageAuthority,
+        authority: LineageProvenance,
         now: datetime,
     ) -> AssociationResult:
         """Resolve a contested semantic association back to `active` (S3 section 3.1)."""
-        digest = request_digest(_REINSTATE, principal_id, _revise_document(request))
+        digest = open_write_digest(_REINSTATE, principal_id, _revise_document(request), authority)
         return self._revise(
             uow,
             principal_id,
@@ -971,13 +1133,13 @@ class RecordLineageApplication:
         evidence: tuple[EvidenceAnchorInput, ...],
         idempotency_key: str,
         digest: str,
-        authority: LineageAuthority,
+        authority: LineageProvenance,
         now: datetime,
     ) -> AssociationResult:
         at = ensure_utc(now)
         issues, lineage = uow.issues, uow.record_lineage
-        prior = issues.reserve_write_request(
-            principal_id, capability, idempotency_key, digest, created_at=at
+        prior = reserve_open_write(
+            issues, principal_id, capability, idempotency_key, digest, authority, at
         )
         if prior is not None:
             return _replayed(uow, principal_id, prior)
@@ -1021,6 +1183,9 @@ class RecordLineageApplication:
             raise RepositoryFailureError
         if head.revision_no != expected_revision:
             raise ConflictError(SafeDetail.STALE_VERSION)
+        # S3.1 section 4.4: under the head lock, after the CAS check, before
+        # any row and before the rate count.
+        require_client_may_revise(lineage, principal_id, head, action, authority)
         state = link_transition(action, head.lifecycle_state)
         if state is None:
             # S3 section 7.5: a contest of a non-active or a reinstate of a
@@ -1049,6 +1214,8 @@ class RecordLineageApplication:
             )
             if current.evidence_set_digest == digest_of_set and not reaffirmed:
                 raise InvalidRequestError(SafeDetail.EVIDENCE_ANCHORS)
+        # S3.1 section 6.2 step 7: every refusal is behind us; the first row follows.
+        require_client_write_budget(uow, principal_id, authority, authority.asserting_client_id, at)
         revision = LinkRevisionRecord(
             link_id=link_id,
             revision_no=head.revision_no + 1,
@@ -1056,7 +1223,7 @@ class RecordLineageApplication:
             predecessor_revision_no=head.revision_no,
             action=action,
             lifecycle_state=state,
-            acceptance_basis=AcceptanceBasis.USER_CONFIRMED,
+            acceptance_basis=authority.acceptance_basis,
             authority_class=authority.authority_class.value,
             decision_channel=authority.decision_channel.value,
             source_capability=capability,
@@ -1065,6 +1232,8 @@ class RecordLineageApplication:
             recorded_at=at,
             evidence=_inserted(issues, principal_id, anchors, at),
             member_native_version=observed,
+            asserting_client_id=authority.asserting_client_id,
+            user_directed_claim=authority.user_directed_claim,
         )
         lineage.append_revision(principal_id, revision)
         issues.complete_write_request(
@@ -1074,6 +1243,110 @@ class RecordLineageApplication:
             request_digest=digest,
             completed_at=at,
             result_link_id=link_id,
+            result_link_revision_no=revision.revision_no,
+        )
+        (view,) = _views(lineage, principal_id, [(link, revision)])
+        return AssociationResult(association=view, created=None, replayed=False)
+
+    # --- records.associations.confirm / issues.memberships.confirm (S3.1) -------
+
+    def confirm_link(
+        self,
+        uow: UnitOfWork,
+        principal_id: str,
+        request: LinkConfirmRequest,
+        idempotency_key: str,
+        authority: LineageAuthority,
+        now: datetime,
+        *,
+        kind: RecordLinkKind,
+    ) -> AssociationResult:
+        """Promote a client-identified link with a `confirm` revision (S3.1 sections 4.7, 7.2).
+
+        Attested: the handler refused every other caller before this, so the
+        digest is the human channel's document. The S1 `link_id` checks
+        (`not_found` alike for absent and foreign; the wrong kind is
+        `invalid_request`), the link's Issues in context `FOR SHARE` (a closed
+        one is `conflict` / `state`), the identity key, the head `FOR UPDATE`,
+        CAS, then section 4.7: the head revision must be `client_identified`
+        and `active` or `ended` (else `conflict` / `state`). Revision `n + 1`
+        keeps the head's state, re-cites its evidence anchor by anchor (same
+        anchors, roles and order, so the same digest) and copies its member
+        version, so stale evidence stays stale.
+        """
+        capability = _CONFIRM if kind is RecordLinkKind.SEMANTIC else _MEMBERSHIP_CONFIRM
+        at = ensure_utc(now)
+        issues, lineage = uow.issues, uow.record_lineage
+        digest = request_digest(
+            capability,
+            principal_id,
+            {
+                "link_id": request.link_id,
+                "expected_revision": request.expected_revision,
+                "reason": request.reason,
+            },
+        )
+        prior = reserve_open_write(
+            issues, principal_id, capability, idempotency_key, digest, authority, at
+        )
+        if prior is not None:
+            return _replayed(uow, principal_id, prior)
+        # S3 section 6.2 step 1b: the commit mark, before any other lock.
+        lineage.take_commit_mark(principal_id)
+        link = lineage.read_link(principal_id, request.link_id)
+        if link is None:
+            raise NotFoundError(SafeDetail.LINK_ID)
+        if link.kind is not kind:
+            raise InvalidRequestError(SafeDetail.LINK_ID)
+        named = _named_issues(link)
+        if link.kind is RecordLinkKind.SEMANTIC:
+            already = {issue_id for issue_id, _ in named}
+            named = named + tuple(
+                (issue_id, SafeDetail.CONTEXT_ISSUE_ID)
+                for issue_id in sorted(issues_in_context_of(lineage, principal_id, link))
+                if issue_id not in already
+            )
+        locked = lock_lineage_sources(issues, lineage, principal_id, issue_ids=named)
+        require_open_issues(locked)
+        lineage.lock_identity(principal_id, link.normalized_identity)
+        head = lineage.lock_head(principal_id, request.link_id)
+        if head is None:
+            raise RepositoryFailureError
+        if head.revision_no != request.expected_revision:
+            raise ConflictError(SafeDetail.STALE_VERSION)
+        current = _revision_of(lineage, principal_id, request.link_id, head.revision_no)
+        if not is_unreviewed(current.acceptance_basis) or head.lifecycle_state not in (
+            LinkLifecycleState.ACTIVE,
+            LinkLifecycleState.ENDED,
+        ):
+            # An already accepted head, or a contested one (a human who agrees
+            # with a client's dispute ends the link instead).
+            raise ConflictError(SafeDetail.STATE)
+        revision = LinkRevisionRecord(
+            link_id=request.link_id,
+            revision_no=head.revision_no + 1,
+            revision_id=issue_identifier(IdKind.RECORD_LINK_REVISION),
+            predecessor_revision_no=head.revision_no,
+            action=LinkRevisionAction.CONFIRM,
+            lifecycle_state=head.lifecycle_state,
+            acceptance_basis=AcceptanceBasis.USER_CONFIRMED,
+            authority_class=authority.authority_class.value,
+            decision_channel=authority.decision_channel.value,
+            source_capability=capability,
+            reason=request.reason,
+            evidence_set_digest=current.evidence_set_digest,
+            recorded_at=at,
+            evidence=current.evidence,
+            member_native_version=current.member_native_version,
+        )
+        lineage.append_revision(principal_id, revision)
+        issues.complete_write_request(
+            principal_id,
+            capability,
+            idempotency_key,
+            request_digest=digest,
+            completed_at=at,
+            result_link_id=request.link_id,
             result_link_revision_no=revision.revision_no,
         )
         (view,) = _views(lineage, principal_id, [(link, revision)])
@@ -1190,6 +1463,8 @@ class RecordLineageApplication:
                     lifecycle_state=revision.lifecycle_state,
                     acceptance_basis=revision.acceptance_basis,
                     authority_class=revision.authority_class,
+                    user_directed_claim=revision.user_directed_claim,
+                    asserting_client_id=revision.asserting_client_id,
                     reason=revision.reason,
                     evidence=evidence,
                     recorded_at=revision.recorded_at,
@@ -1214,6 +1489,18 @@ class RecordLineageApplication:
         """`records.lineage` (S3 section 7.2): as of a cut, visibility-filtered, paged."""
         return read_lineage_as_of(uow, principal_id, request, now=now, visibility=visibility)
 
+    def read_related(
+        self,
+        uow: UnitOfWork,
+        principal_id: str,
+        request: RelatedReadRequest,
+        *,
+        now: datetime,
+        visibility: LineageVisibility,
+    ) -> RelatedRecordsView:
+        """`records.lineage.related` (S3.1 section 7.4): related records of 1..25 seeds."""
+        return read_related_as_of(uow, principal_id, request, now=now, visibility=visibility)
+
 
 def insert_new_link(
     uow: UnitOfWork,
@@ -1222,6 +1509,7 @@ def insert_new_link(
     anchors: tuple[EvidenceAnchor, ...],
     at: datetime,
     *,
+    provenance: LineageProvenance,
     reason: str | None = None,
     member_version: int | None = None,
 ) -> LinkRevisionRecord:
@@ -1232,7 +1520,9 @@ def insert_new_link(
     proven no active head carries that identity. `reason` is revision 1's
     (a `created_to_resolve` purpose, S2 section 3.1; else `None`);
     `member_version` the member's observed native `version` a membership's
-    revision 1 records (S2 section 3.3; else `None`).
+    revision 1 records (S2 section 3.3; else `None`). `provenance` is the
+    writer's (S3.1 section 4.1): its basis, client and claim; the root carries
+    its class and channel.
     """
     revision = LinkRevisionRecord(
         link_id=root.link_id,
@@ -1241,7 +1531,7 @@ def insert_new_link(
         predecessor_revision_no=None,
         action=LinkRevisionAction.ASSERT,
         lifecycle_state=LinkLifecycleState.ACTIVE,
-        acceptance_basis=AcceptanceBasis.USER_CONFIRMED,
+        acceptance_basis=provenance.acceptance_basis,
         authority_class=root.authority_class,
         decision_channel=root.decision_channel,
         source_capability=root.source_capability,
@@ -1250,6 +1540,8 @@ def insert_new_link(
         recorded_at=at,
         evidence=_inserted(uow.issues, principal_id, anchors, at),
         member_native_version=member_version,
+        asserting_client_id=provenance.asserting_client_id,
+        user_directed_claim=provenance.user_directed_claim,
     )
     uow.record_lineage.insert_link(principal_id, root, revision)
     return revision
@@ -1436,6 +1728,31 @@ def links_in_context(
             from_ref=head.link.from_ref,
             to_ref=head.link.to_ref,
             context_issue_id=head.link.context_issue_id,
+            issue_id=issue_id,
+            inside=inside,
+        )
+    )
+
+
+def unreviewed_links_in_scope(
+    lineage: RecordLineageRepository, principal_id: str, issue_id: str
+) -> tuple[ReviewScopeLink, ...]:
+    """S3.1 section 4.6: every link in Issue *I*'s review scope whose head is unreviewed.
+
+    Current heads in any state (live and ended), by `link_id` (code point):
+    the links whose head revision is `client_identified`, which hold the close
+    until the human channel confirms or revises each.
+    """
+    inside = issue_inside_set(lineage, principal_id, issue_id)
+    return tuple(
+        candidate
+        for candidate in lineage.review_scope_links(principal_id, issue_id, inside)
+        if is_unreviewed(candidate.acceptance_basis)
+        and in_review_scope(
+            kind=candidate.head.link.kind,
+            from_ref=candidate.head.link.from_ref,
+            to_ref=candidate.head.link.to_ref,
+            context_issue_id=candidate.head.link.context_issue_id,
             issue_id=issue_id,
             inside=inside,
         )
@@ -1784,11 +2101,17 @@ class _Graph:
         return True
 
 
-def _matching_issues(graph: _Graph, pair: Sequence[RecordRef]) -> list[str]:
-    """Section 7.2 step 2 over the root's pair set; an invisible Issue is never a candidate."""
+def _matching_issues(
+    graph: _Graph, pair: Sequence[RecordRef], *, root: RecordRef | None = None
+) -> list[str]:
+    """Section 7.2 step 2 over the root's pair set; an invisible Issue is never a candidate.
+
+    `root` is the graph's own root unless given (S3.1: each related-read seed).
+    """
+    origin = graph.root if root is None else root
     matching: set[str] = set()
-    if graph.is_issue(graph.root):
-        matching.add(graph.root.record_id)
+    if graph.is_issue(origin):
+        matching.add(origin.record_id)
     pair_set = set(pair)
     for head in graph.reader.incident(pair_set):
         link = head.link
@@ -2559,3 +2882,683 @@ def _checked_cursor(
         if stated is not None and native > ensure_utc(stated):
             raise InvalidRequestError(SafeDetail.CURSOR)
     return cursor
+
+
+# --- records.lineage.related (S3.1 contract section 7.4) ------------------------------
+#
+# A multi-seed related-records read over the S3 traversal machinery: the same
+# as-of reader (`_AsOfReader`), the same Issue confinement (`_members_in`,
+# `_followable`), the same visibility rules (S3 section 6.4), budgets
+# (`MAX_LINEAGE_NODES`, `MAX_LINEAGE_EDGES`, the per-page deadline), cursor and
+# paging. One bounded result is recomputed per page; `related_sha256` binds it.
+
+_RECORDS_LINEAGE_RELATED: Final = Capability.RECORDS_LINEAGE_RELATED.value
+
+
+@dataclass(frozen=True, slots=True)
+class RelatedReadRequest:
+    """`records.lineage.related`, parsed (S3.1 section 7.4).
+
+    `seeds` are 1..25 distinct records in request order; `acceptance_bases` and
+    `relation_types` are the admitted filter sets in vocabulary order (the
+    defaults are every member); `page_size` is 10..100 and a `cursor` comes
+    only with a `page_size` (the command checked both).
+    """
+
+    seeds: tuple[RecordRef, ...]
+    max_depth: int
+    acceptance_bases: tuple[AcceptanceBasis, ...]
+    relation_types: tuple[RelationType, ...]
+    known_at: datetime | None = None
+    valid_at: datetime | None = None
+    page_size: int | None = None
+    cursor: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RelatedBoundedResult:
+    """The whole bounded result of one related read, before paging (section 7.4)."""
+
+    records: tuple[RelatedRecordView, ...]
+    links: tuple[AssociationView, ...]
+    virtual_edges: tuple[VirtualEdgeView, ...]
+    codes: frozenset[LineageCompleteness]
+    deadline_hit: bool
+    related_sha256: str
+
+
+class _Related:
+    """The traversal state of one related read: the S3 graph plus who reached what.
+
+    `graph.depth`, `graph.paths` and `graph.order` hold the union over seeds:
+    a record's least depth and the first reaching step in `(depth, seed
+    position, expansion order)`, where a seed's expansions run in order -- its
+    one hop, then each of its Issues in `issue_id` order -- and each one is
+    breadth-first in the S3 tie-break order.
+    """
+
+    def __init__(self, graph: _Graph, request: RelatedReadRequest) -> None:
+        self.graph = graph
+        self.bases = frozenset(request.acceptance_bases)
+        self.relations = frozenset(request.relation_types)
+        self.seeds_of: dict[RecordRef, set[int]] = {}
+        self.issues_of: dict[RecordRef, set[str]] = {}
+        self.revisions: dict[tuple[str, int], LinkRevisionRecord] = {}
+
+    def revision(self, head: LinkHeadRecord) -> LinkRevisionRecord:
+        key = (head.link.link_id, head.revision_no)
+        if key not in self.revisions:
+            self.revisions[key] = _revision_of(
+                self.graph.source, self.graph.owner, head.link.link_id, head.revision_no
+            )
+        return self.revisions[key]
+
+    def admitted(self, head: LinkHeadRecord) -> bool:
+        """Step 2: a link outside the filters is neither followed nor emitted."""
+        if head.link.relation_type not in self.relations:
+            return False
+        return self.revision(head).acceptance_basis in self.bases
+
+    def reach(
+        self,
+        ref: RecordRef,
+        depth: int,
+        step: tuple[RecordRef, _Via] | None,
+        position: int,
+        issue_id: str | None,
+    ) -> bool:
+        """Record that seed `position` (under `issue_id`) reached `ref` at `depth`.
+
+        A record new to the union is admitted against the node budget; a known
+        one keeps its least depth and the first step at it.
+        """
+        graph: _Graph = self.graph
+        known = graph.depth.get(ref)
+        if known is None:
+            if not graph.budget.admit(nodes=1):
+                return False
+            graph.depth[ref] = depth
+            graph.paths[ref] = step
+            graph.order.append(ref)
+        elif depth < known:
+            graph.depth[ref] = depth
+            graph.paths[ref] = step
+        self.seeds_of.setdefault(ref, set()).add(position)
+        if issue_id is not None:
+            self.issues_of.setdefault(ref, set()).add(issue_id)
+        return True
+
+
+def _related_seed(graph: _Graph, seed: RecordRef) -> None:
+    """Step 1: a seed absent, foreign, invisible or not known at the cut is `not_found`."""
+    graph.resolve((seed,))
+    if seed not in graph.resolved or not graph.visible(seed):
+        raise NotFoundError(SafeDetail.SEEDS)
+    if seed.family is RecordFamily.SITUATION:
+        if not _is_issue(seed, graph.resolved):
+            # As `records.lineage`'s origin (S1 section 3.2): not an Issue.
+            raise InvalidRequestError(SafeDetail.SEEDS)
+        if not graph.is_issue(seed):
+            raise NotFoundError(SafeDetail.SEEDS)
+    if seed.family is RecordFamily.MEETING_NOTE_VERSION and not graph.reader.note_in_cut(seed):
+        raise NotFoundError(SafeDetail.SEEDS)
+
+
+def _related_one_hop(state: _Related, position: int, seed: RecordRef) -> bool:
+    """Step 3a: every admitted live link incident to the seed's pair set, any context."""
+    graph = state.graph
+    pair = graph.extension(seed)
+    for head in graph.reader.incident(pair):
+        if graph.out_of_time():
+            return False
+        if not state.admitted(head):
+            continue
+        link = head.link
+        near = link.from_ref if link.from_ref in pair else link.to_ref
+        far = link.to_ref if near == link.from_ref else link.from_ref
+        if not (graph.visible(near) and graph.visible(far)):
+            # S3 section 6.4: neither emitted, expanded nor counted.
+            graph.restricted = True
+            continue
+        if not graph.follow(head):
+            return False
+        if near != seed and not state.reach(near, 1, (seed, (_VIRTUAL, None)), position, None):
+            return False
+        if not state.reach(far, 1, (near, (_TYPED, link.link_id)), position, None):
+            return False
+    if seed.family is RecordFamily.MEETING_NOTE_VERSION:
+        meeting = graph.meeting_of(seed)
+        if meeting is not None and not state.reach(
+            meeting, 1, (seed, (_VIRTUAL, None)), position, None
+        ):
+            return False
+    return True
+
+
+def _related_under_issue(
+    state: _Related, position: int, seed: RecordRef, issue_id: str, max_depth: int
+) -> bool:
+    """Step 3b: S3 section 7.2 step 3 from the seed under one visible Issue, to `max_depth`.
+
+    The Issue context is fixed for the whole expansion, so a shared Meeting,
+    Project, Series or participant never bridges 2 Issues (AT-006). Visited
+    records are this expansion's own, so a record another seed reached first
+    is still expanded here.
+    """
+    graph = state.graph
+    inside = _members_in(graph, issue_id)
+    if not state.reach(seed, 0, None, position, issue_id):
+        return False
+    seen = {seed}
+    frontier = [seed]
+    depth = 0
+    while frontier and depth < max_depth and not graph.budget.exhausted:
+        nxt: list[RecordRef] = []
+        for node in sorted(frontier, key=lambda ref: (ref.family.value, ref.record_id)):
+            if graph.out_of_time():
+                return False
+            extension = graph.extension(node)
+            for head in graph.reader.incident(extension):
+                if not _followable(head, issue_id, inside) or not state.admitted(head):
+                    continue
+                link = head.link
+                near = link.from_ref if link.from_ref in extension else link.to_ref
+                far = link.to_ref if near == link.from_ref else link.from_ref
+                if not (graph.visible(near) and graph.visible(far)):
+                    graph.restricted = True
+                    continue
+                if not graph.follow(head):
+                    return False
+                for ref, step in (
+                    (near, (node, (_VIRTUAL, None))),
+                    (far, (near, (_TYPED, link.link_id))),
+                ):
+                    if ref in seen:
+                        continue
+                    if not state.reach(ref, depth + 1, step, position, issue_id):
+                        return False
+                    seen.add(ref)
+                    nxt.append(ref)
+            if node.family is RecordFamily.MEETING_NOTE_VERSION:
+                parent = graph.meeting_of(node)
+                if parent is not None and parent not in seen:
+                    if not state.reach(
+                        parent, depth + 1, (node, (_VIRTUAL, None)), position, issue_id
+                    ):
+                        return False
+                    seen.add(parent)
+                    nxt.append(parent)
+        frontier = nxt
+        depth += 1
+    return True
+
+
+def related_digest(
+    request: RelatedReadRequest,
+    records: Sequence[RelatedRecordView],
+    links: Sequence[AssociationView],
+    virtual_edges: Sequence[VirtualEdgeView],
+    codes: Collection[LineageCompleteness],
+    *,
+    remote: bool,
+) -> str:
+    """Step 8: `related_sha256` over the whole bounded result, without the read stamps.
+
+    The items as this reader is answered them (a remote reader's without client
+    ids, section 4.3), so the digest is of metadata the reader can read.
+    """
+    state, qualifiers = completeness(codes)
+    document: dict[str, object] = {
+        "schema_version": 1,
+        "seeds": [_ref_document(seed) for seed in request.seeds],
+        "max_depth": request.max_depth,
+        "acceptance_bases": [basis.value for basis in request.acceptance_bases],
+        "relation_types": [relation.value for relation in request.relation_types],
+        "records": [record.to_canonical_dict() for record in records],
+        "links": [link.to_canonical_dict() for link in links],
+        "virtual_edges": [edge.to_canonical_dict() for edge in virtual_edges],
+        "complete_state": state.value,
+        "qualifiers": [code.value for code in qualifiers],
+    }
+    if remote:
+        document = withhold_client_ids(document)
+    body = LINEAGE_RELATED_DIGEST_PREFIX + canonical_json(document).encode("utf-8")
+    return hashlib.sha256(body).hexdigest()
+
+
+def bounded_related(
+    source: RecordLineageRepository,
+    principal_id: str,
+    request: RelatedReadRequest,
+    *,
+    reader: _CurrentReader,
+    visibility: LineageVisibility,
+    deadline: float | None,
+) -> RelatedBoundedResult:
+    """Section 7.4 steps 1 to 5, 7 and 8: the traversal of every seed, before paging.
+
+    The whole-query budgets are the S3 node and edge budgets; the byte bound
+    applies per page. Hidden data is never emitted, expanded or counted.
+    """
+    graph = _Graph(reader, request.seeds[0], visibility, paged=True, deadline=deadline)
+    for seed in request.seeds:
+        _related_seed(graph, seed)
+    state = _Related(graph, request)
+    codes: set[LineageCompleteness] = set()
+    for position, seed in enumerate(request.seeds):
+        state.reach(seed, 0, None, position, None)
+    for position, seed in enumerate(request.seeds):
+        if graph.budget.exhausted or graph.deadline_hit:
+            break
+        if not _related_one_hop(state, position, seed):
+            break
+        pair = graph.extension(seed)
+        matching = _matching_issues(graph, pair, root=seed)
+        if len(matching) > MAX_MATCHING_ISSUES:
+            codes.add(LineageCompleteness.TRUNCATED_BUDGET)
+        stopped = False
+        for issue_id in matching[:MAX_MATCHING_ISSUES]:
+            if not _related_under_issue(state, position, seed, issue_id, request.max_depth):
+                stopped = True
+                break
+        if stopped:
+            break
+    # Step 5 (S3 section 7.2): re-resolve every reached record natively.
+    reached = list(graph.order)
+    fresh = source.resolve_records(principal_id, reached)
+    dropped = {ref for ref in reached if ref not in fresh}
+    graph.resolved.update(fresh)
+    nodes = [ref for ref in reached if ref not in dropped]
+    heads = [
+        head
+        for head in graph.links.values()
+        if head.link.from_ref not in dropped and head.link.to_ref not in dropped
+    ]
+    virtual = _virtual_edges(graph, set(nodes))
+    if graph.budget.exhausted:
+        codes.add(LineageCompleteness.TRUNCATED_BUDGET)
+    if dropped:
+        codes.add(LineageCompleteness.PARTIAL_NATIVE_HISTORY)
+    graph.load_issues(ref.record_id for ref in nodes if ref.family is RecordFamily.SITUATION)
+    pairs = [
+        (head.link, state.revision(head)) for head in sorted(heads, key=lambda h: h.link.link_id)
+    ]
+    edges, withheld = visible_association_views(source, principal_id, pairs, visibility, reader)
+    if graph.restricted or withheld:
+        codes.add(LineageCompleteness.RESTRICTED_EVIDENCE)
+    records = tuple(
+        RelatedRecordView(
+            **_node_view(graph, ref).model_dump(),
+            seeds=tuple(sorted(state.seeds_of[ref])),
+            issue_ids=tuple(sorted(state.issues_of.get(ref, ())))[:MAX_MATCHING_ISSUES],
+        )
+        for ref in sorted(
+            nodes, key=lambda ref: (graph.depth[ref], ref.family.value, ref.record_id)
+        )
+    )
+    frozen = frozenset(codes)
+    return RelatedBoundedResult(
+        records=records,
+        links=tuple(edges),
+        virtual_edges=tuple(virtual),
+        codes=frozen,
+        deadline_hit=graph.deadline_hit,
+        related_sha256=related_digest(
+            request, records, edges, virtual, frozen, remote=visibility.remote
+        ),
+    )
+
+
+def related_request_document(request: RelatedReadRequest) -> dict[str, object]:
+    """The parsed request without its cursor, optional fields `null` (S3 section 5's `b`)."""
+    return {
+        "seeds": [_ref_document(seed) for seed in request.seeds],
+        "max_depth": request.max_depth,
+        "acceptance_bases": [basis.value for basis in request.acceptance_bases],
+        "relation_types": [relation.value for relation in request.relation_types],
+        "known_at": instant_token(request.known_at),
+        "valid_at": instant_token(request.valid_at),
+        "page_size": request.page_size,
+    }
+
+
+def _related_view(
+    request: RelatedReadRequest,
+    cuts: LineageReportedCuts,
+    codes: Collection[LineageCompleteness],
+    digest: str,
+    items: Sequence[RelatedRecordView | AssociationView | VirtualEdgeView],
+    next_cursor: str | None,
+) -> RelatedRecordsView:
+    state, qualifiers = completeness(codes)
+    return RelatedRecordsView(
+        seeds=tuple(_ref_view(seed) for seed in request.seeds),
+        records=tuple(item for item in items if isinstance(item, RelatedRecordView)),
+        links=tuple(item for item in items if isinstance(item, AssociationView)),
+        virtual_edges=tuple(item for item in items if isinstance(item, VirtualEdgeView)),
+        complete_state=state,
+        qualifiers=qualifiers,
+        known_at=cuts.known_at,
+        valid_at=cuts.valid_at,
+        lineage_valid_at=cuts.lineage_valid_at,
+        native_cut_at=cuts.native_cut_at,
+        related_sha256=digest,
+        next_cursor=next_cursor,
+    )
+
+
+def _related_restart(request: RelatedReadRequest, cuts: LineageReportedCuts) -> RelatedRecordsView:
+    """S3 section 7.2 step 7: `scope_changed_restart_required`, no item."""
+    code = frozenset({LineageCompleteness.SCOPE_CHANGED_RESTART_REQUIRED})
+    digest = related_digest(request, (), (), (), code, remote=False)
+    return _related_view(request, cuts, code, digest, (), None)
+
+
+def _related_document(
+    item: RelatedRecordView | AssociationView | VirtualEdgeView, *, remote: bool
+) -> object:
+    document = item.to_canonical_dict()
+    return withhold_client_ids(document) if remote else document
+
+
+def _related_page(
+    request: RelatedReadRequest,
+    result: RelatedBoundedResult,
+    cuts: LineageReportedCuts,
+    *,
+    after: str | None,
+    remote: bool,
+    cursor_for: Callable[[str], str],
+) -> RelatedRecordsView | None:
+    """Step 6: the items after `after`, up to `page_size` (or all) within 512 KiB.
+
+    `None` when `after` is not an item of this result. Without a `page_size`
+    the read is one page: what does not fit is dropped (`truncated_budget`).
+    """
+    items: list[RelatedRecordView | AssociationView | VirtualEdgeView] = [
+        *result.records,
+        *result.links,
+        *result.virtual_edges,
+    ]
+    keys = [_item_key(item) for item in items]
+    start = 0
+    if after is not None:
+        if after not in keys:
+            return None
+        start = keys.index(after) + 1
+    limit = len(items) if request.page_size is None else request.page_size
+    codes = set(result.codes)
+    frame = _size(
+        _related_view(
+            request,
+            cuts,
+            codes | {LineageCompleteness.TRUNCATED_BUDGET},
+            result.related_sha256,
+            (),
+            "x" * MAX_CURSOR_CHARACTERS,
+        ).to_canonical_dict()
+    )
+    chosen: list[RelatedRecordView | AssociationView | VirtualEdgeView] = []
+    size = frame
+    for item in items[start:]:
+        if len(chosen) >= limit:
+            break
+        grows = _size(_related_document(item, remote=remote)) + 1
+        if chosen and size + grows > MAX_LINEAGE_BYTES:
+            break
+        chosen.append(item)
+        size += grows
+    end = start + len(chosen)
+    more = end < len(items)
+    next_cursor: str | None = None
+    if more and request.page_size is None:
+        codes.add(LineageCompleteness.TRUNCATED_BUDGET)
+    elif more and chosen and not result.deadline_hit:
+        next_cursor = cursor_for(keys[end - 1])
+    return _related_view(request, cuts, codes, result.related_sha256, chosen, next_cursor)
+
+
+def _checked_related_cursor(
+    request: RelatedReadRequest, principal_id: str, *, horizon: datetime | None, now: datetime
+) -> LineageCursor:
+    """S3 section 7.2 step 7 for the related read: shape, binding, cuts."""
+    try:
+        cursor = decode_cursor(request.cursor, _lineage_position)
+    except CursorMalformedError as error:
+        raise InvalidRequestError(SafeDetail.CURSOR) from error
+    if cursor.record_event_watermark is not None:
+        raise InvalidRequestError(SafeDetail.CURSOR)
+    expected = cursor_binding(
+        capability=_RECORDS_LINEAGE_RELATED,
+        principal_id=principal_id,
+        request=related_request_document(request),
+        known_at=cursor.known_at,
+        lineage_valid_at=cursor.lineage_valid_at,
+        native_cut_at=cursor.native_cut_at,
+        record_event_watermark=None,
+    )
+    if cursor.binding != expected:
+        raise ConflictError(SafeDetail.CURSOR)
+    known, valid, native = cursor.known_at, cursor.lineage_valid_at, cursor.native_cut_at
+    if known is not None and (horizon is None or known > horizon):
+        raise InvalidRequestError(SafeDetail.CURSOR)
+    if (known is None) is not (valid is None) or (
+        known is not None and valid is not None and valid > known
+    ):
+        raise InvalidRequestError(SafeDetail.CURSOR)
+    if native is None or native > now:
+        raise InvalidRequestError(SafeDetail.CURSOR)
+    for stated in (request.known_at, request.valid_at):
+        if stated is not None and native > ensure_utc(stated):
+            raise InvalidRequestError(SafeDetail.CURSOR)
+    return cursor
+
+
+def read_related_as_of(
+    uow: UnitOfWork,
+    principal_id: str,
+    request: RelatedReadRequest,
+    *,
+    now: datetime,
+    visibility: LineageVisibility,
+) -> RelatedRecordsView:
+    """`records.lineage.related` (S3.1 section 7.4): as of a cut, visibility-filtered, paged."""
+    lineage = uow.record_lineage
+    lineage.bound_read_statements(LINEAGE_STATEMENT_TIMEOUT_MS)
+    at = ensure_utc(now)
+    horizon = lineage.commit_horizon(principal_id)
+    scope = scope_digest(visibility.grant_digest)
+    cursor: LineageCursor | None = None
+    if request.cursor is not None:
+        cursor = _checked_related_cursor(request, principal_id, horizon=horizon, now=at)
+        cuts = LineageReportedCuts(
+            known_at=cursor.known_at,
+            valid_at=request.valid_at if request.valid_at is not None else cursor.known_at,
+            lineage_valid_at=cursor.lineage_valid_at,
+            native_cut_at=cursor.native_cut_at,
+        )
+        if cursor.scope != scope:
+            return _related_restart(request, cuts)
+    else:
+        try:
+            cut = knowledge_cut(
+                known_at=request.known_at, valid_at=request.valid_at, now=at, horizon=horizon
+            )
+        except CutAfterNowError as error:
+            detail = SafeDetail.KNOWN_AT if error.field == "known_at" else SafeDetail.VALID_AT
+            raise InvalidRequestError(detail) from error
+        cuts = LineageReportedCuts(
+            known_at=cut.known_at,
+            valid_at=cut.valid_at,
+            lineage_valid_at=cut.lineage_valid_at,
+            native_cut_at=native_cut(
+                known_at=request.known_at, valid_at=request.valid_at, read_time=at
+            ),
+        )
+    t_v = cuts.lineage_valid_at
+    fact_cut = LineageFactCut(
+        watermark=None if t_v is None else lineage.commit_watermark(principal_id, t_v), at=t_v
+    )
+    native_cut_at = cuts.native_cut_at
+    if native_cut_at is None:
+        raise RepositoryFailureError
+    result = bounded_related(
+        lineage,
+        principal_id,
+        request,
+        reader=_AsOfReader(lineage, principal_id, fact_cut, native_cut_at),
+        visibility=visibility,
+        deadline=_monotonic() + LINEAGE_DEADLINE_SECONDS,
+    )
+    binding = cursor_binding(
+        capability=_RECORDS_LINEAGE_RELATED,
+        principal_id=principal_id,
+        request=related_request_document(request),
+        known_at=cuts.known_at,
+        lineage_valid_at=cuts.lineage_valid_at,
+        native_cut_at=cuts.native_cut_at,
+        record_event_watermark=None,
+    )
+
+    def cursor_for(position: str) -> str:
+        return encode_cursor(
+            LineageCursor(
+                binding=binding,
+                scope=scope,
+                known_at=cuts.known_at,
+                lineage_valid_at=cuts.lineage_valid_at,
+                native_cut_at=cuts.native_cut_at,
+                record_event_watermark=None,
+                position=position,
+            )
+        )
+
+    page = _related_page(
+        request,
+        result,
+        cuts,
+        after=None if cursor is None else str(cursor.position),
+        remote=visibility.remote,
+        cursor_for=cursor_for,
+    )
+    if page is None:
+        # R3-F14, R3-F23: a position that is not an item of the recomputed result.
+        return _related_restart(request, cuts)
+    return page
+
+
+# ---- S3.1 section 7.9: the `reports.commit` recompute of a lineage reference ----
+
+#: S3.1 section 7.9: the total budget of one report's lineage recompute; each
+#: statement runs under `min(2000, remaining)` ms (the S4 D-36 deadline hook).
+LINEAGE_RECOMPUTE_BUDGET_SECONDS: Final = 5.0
+_REFERENCE_INSTANT: Final = "%Y-%m-%dT%H:%M:%S.%fZ"
+
+
+class _CutBeyondHorizonError(Exception):
+    """The block's `known_at` lies after the Principal's commit horizon (or after now)."""
+
+
+def _recomputed_related(
+    lineage: RecordLineageRepository,
+    principal_id: str,
+    request: RelatedReadRequest,
+    *,
+    now: datetime,
+    visibility: LineageVisibility,
+    deadline: float,
+) -> dict[str, object] | None:
+    """Section 7.4 as one unpaged bounded result at the block's `known_at`: the `server` part.
+
+    `None` when the traversal deadline ended the result early (a spent budget).
+    """
+    known_at = request.known_at
+    horizon = lineage.commit_horizon(principal_id)
+    if known_at is None or horizon is None or known_at > horizon or known_at > now:
+        raise _CutBeyondHorizonError
+    cut = knowledge_cut(known_at=known_at, valid_at=None, now=now, horizon=horizon)
+    t_v = cut.lineage_valid_at
+    fact_cut = LineageFactCut(
+        watermark=None if t_v is None else lineage.commit_watermark(principal_id, t_v), at=t_v
+    )
+    native_cut_at = native_cut(known_at=known_at, valid_at=None, read_time=now)
+    result = bounded_related(
+        lineage,
+        principal_id,
+        request,
+        reader=_AsOfReader(lineage, principal_id, fact_cut, native_cut_at),
+        visibility=visibility,
+        deadline=deadline,
+    )
+    if result.deadline_hit:
+        return None
+    state, qualifiers = completeness(result.codes)
+    return {
+        "related_sha256": result.related_sha256,
+        "known_at": instant_token(cut.known_at),
+        "complete_state": state.value,
+        "qualifiers": [code.value for code in qualifiers],
+        "record_count": len(result.records),
+        **lineage_server_counts([link.to_canonical_dict() for link in result.links]),
+    }
+
+
+def recompute_lineage_reference(
+    uow: UnitOfWork,
+    principal_id: str,
+    block: LineageReferenceBlock,
+    *,
+    visibility: LineageVisibility | None,
+    now: datetime,
+) -> dict[str, object]:
+    """S3.1 section 7.9: the manifest's lineage section for one reference block.
+
+    `visibility` is `None` when `records.lineage.related` does not admit the
+    committing caller (its remote grant re-check); a seed of a family the
+    caller cannot see is not admitted either: both record `not_attempted` and
+    read nothing. Otherwise the section 7.4 computation runs for the block's
+    seeds, filters and `known_at` (`valid_at` omitted) with the caller's
+    visibility, as one unpaged bounded result, on the request's own work
+    connection, under the 5000 ms total budget (`bounded_by_deadline`: a
+    savepoint always rolled back, each statement at `min(2000, remaining)`
+    ms). The server's `related_sha256` equal to the claim is
+    `verified_at_commit`, else `changed_since_read`; a spent budget, a
+    statement timeout, a missing seed or a `known_at` after the horizon is
+    `recompute_failed` with its token and never refuses the commit.
+    """
+    if visibility is None or not all(visibility.sees(seed) for seed in block.seeds):
+        return lineage_section(block)
+    at = ensure_utc(now)
+    request = RelatedReadRequest(
+        seeds=block.seeds,
+        max_depth=block.max_depth,
+        acceptance_bases=block.acceptance_bases,
+        relation_types=block.relation_types,
+        known_at=datetime.strptime(block.known_at, _REFERENCE_INSTANT).replace(tzinfo=UTC),
+    )
+    lineage = uow.record_lineage
+    deadline = time.monotonic() + LINEAGE_RECOMPUTE_BUDGET_SECONDS
+    failure: LineageRecomputeFailure | None = None
+    server: dict[str, object] | None = None
+    try:
+        with lineage.bounded_by_deadline(deadline):
+            server = _recomputed_related(
+                lineage, principal_id, request, now=at, visibility=visibility, deadline=deadline
+            )
+    except _CutBeyondHorizonError:
+        failure = LineageRecomputeFailure.CUT_BEYOND_HORIZON
+    except (NotFoundError, InvalidRequestError):
+        # Section 7.4 step 1: a seed absent, foreign or not an Issue at the cut.
+        failure = LineageRecomputeFailure.SEED_NOT_FOUND
+    except LineageReadTimeoutError:
+        # A statement cancelled at the remaining budget spent the budget.
+        failure = (
+            LineageRecomputeFailure.BUDGET_EXCEEDED
+            if time.monotonic() >= deadline
+            else LineageRecomputeFailure.STATEMENT_TIMEOUT
+        )
+    if failure is None and server is None:
+        failure = LineageRecomputeFailure.BUDGET_EXCEEDED
+    if failure is not None:
+        return lineage_section(block, failure=failure)
+    return lineage_section(block, server=server, families_seen=visibility.families)

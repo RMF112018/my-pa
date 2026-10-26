@@ -4,10 +4,12 @@ FAST, against the composed service, the gateway composition and the identity
 registries. Worker M1's part of the S4 contract section 10 row (sections 6.1,
 6.3, 7 and 7.6):
 
-* all 7 S4 names are scopeless reads, `CHATLLM_OPERATOR_DECISION_REQUIRED` with
-  the S4 rationale, in no write, idempotent or additive set, under their
-  section 7 purposes and feature rows; the 30-name lineage set is unchanged;
-* S4 registers no report type and changes no grant, profile or data class;
+* all 7 S4 names are scopeless reads, `CHATLLM_DATA_CONDITIONAL` under the
+  `PROGRAM_REPORTING` prerequisite (P1 client exposure, chatllm-data-v10), in
+  no write, idempotent or additive set, under their section 7 purposes and
+  feature rows; the 30-name lineage set is unchanged;
+* S4 registers no report type and issues no grant (P1 then made the 7 data
+  names the profile planner plans);
 * `MY_PA_PROGRAM_REPORTING_ENABLED` and `MY_PA_LINEAGE_ENABLED` must both be on;
   the 2 Program reads also need the entity plane and the Program read factory,
   and the overview the Constraint plane;
@@ -56,6 +58,7 @@ from my_pa.domain.identity.chatllm_capability_policy import (
     CHATLLM_CAPABILITY_POLICY,
     CHATLLM_DATA_PROFILE_VERSION,
     ChatLLMCapabilityClass,
+    ChatLLMCompositionPrerequisite,
 )
 from my_pa.domain.identity.operation import (
     Capability,
@@ -197,10 +200,11 @@ def test_s4_capabilities_are_operator_decision_required_reads() -> None:
     assert {capability.value for capability in declared} == PROGRAM_REPORTING_CAPABILITIES
     assert {c.value for c in _PROGRAM_READ_CAPABILITIES} == PROGRAM_READ_CAPABILITIES
     assert PROGRAM_READ_CAPABILITIES == _PROGRAM_READS
-    # Not lineage capabilities: the 30-name lineage switch set is unchanged.
+    # Not lineage capabilities: the lineage switch set (30 names at S4, 34
+    # since S3.1 adds its 4) never holds an S4 name.
     assert not declared & _LINEAGE_CAPABILITIES
-    assert len(_LINEAGE_CAPABILITIES) == 30
-    assert len(list(Capability)) == 229
+    assert len(_LINEAGE_CAPABILITIES) == 34
+    assert len(list(Capability)) == 233
     for capability in declared:
         name = capability.value
         assert capability in _SCOPELESS
@@ -211,25 +215,26 @@ def test_s4_capabilities_are_operator_decision_required_reads() -> None:
         assert capability not in _IDEMPOTENT_REMOTE_CAPABILITIES
         assert not is_operator_only(capability)
         policy = CHATLLM_CAPABILITY_POLICY[capability]
-        assert policy.classification is ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED
-        assert policy.exclusion_rationale == (
-            "record lineage S4 Program reporting; exposure is an operator decision (ADR-015, OD-07)"
-        )
+        # P1 client exposure (operator directive 2026-10-26, chatllm-data-v10):
+        # the ChatLLM decision is made; the 7 are plane-conditional data.
+        assert policy.classification is ChatLLMCapabilityClass.DATA_CONDITIONAL
+        assert policy.composition_prerequisite is ChatLLMCompositionPrerequisite.PROGRAM_REPORTING
+        assert policy.exclusion_rationale is None
 
 
 def test_s4_registers_no_report_type_and_issues_no_grant() -> None:
     # The built-in report types are the S3 set: no Program report type.
     assert len(BUILTIN_REPORT_TYPES) == 5
     assert all("program" not in str(kind) for kind, _stage, _name, _text in BUILTIN_REPORT_TYPES)
-    # No data class moved, so the ChatLLM data profile did not either; no S4
-    # name is in a data class a profile is built from.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v9"
-    data = {ChatLLMCapabilityClass.DATA_REQUIRED, ChatLLMCapabilityClass.DATA_CONDITIONAL}
-    assert not {
-        capability
+    # P1 client exposure (operator directive 2026-10-26): every S4 name is in
+    # `DATA_CONDITIONAL`, so the profile planner -- never a bootstrap source --
+    # plans its grant; the data profile moved to v10 with it.
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v10"
+    assert all(
+        CHATLLM_CAPABILITY_POLICY[capability].classification
+        is ChatLLMCapabilityClass.DATA_CONDITIONAL
         for capability in _s4()
-        if CHATLLM_CAPABILITY_POLICY[capability].classification in data
-    }
+    )
     # No grant, profile or client allowlist source names an S4 capability.
     source = Path(__file__).resolve().parents[2] / "src" / "my_pa" / "bootstrap"
     for path in source.glob("*profile*.py"):

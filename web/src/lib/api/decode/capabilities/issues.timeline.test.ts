@@ -102,4 +102,29 @@ describe("issues.timeline strict canonical success", () => {
     const qualifiers = payload(); qualifiers.qualifiers = ["truncated_budget"];
     expect(decode(qualifiers).ok).toBe(false);
   });
+
+  it("holds the S3.1 provenance labels: every fact entry, and no other", () => {
+    // S3.1 section 7.6: the committed page holds a client's contest with its claim.
+    const client = entries(payload()).find((entry) => entry.acceptance_basis === "client_identified")!;
+    expect(client.user_directed_claim).toBe(true);
+    // A confirm action is a link action like any other.
+    const confirmed = payload();
+    Object.assign(entries(confirmed).find((entry) => entry.kind === "membership")!, { action: "confirm" });
+    expect(decode(confirmed).ok).toBe(true);
+    for (const [index, entry] of entries(payload()).entries()) {
+      const fact = !["issue_revision", "native_event"].includes(entry.kind as string);
+      const value = payload();
+      if (fact) {
+        entries(value)[index]!.acceptance_basis = null;
+      } else {
+        entries(value)[index]!.acceptance_basis = "user_confirmed";
+      }
+      expect(decode(value).ok, String(entry.kind)).toBe(false);
+      const claim = payload();
+      entries(claim)[index]!.user_directed_claim = fact ? null : false;
+      expect(decode(claim).ok, String(entry.kind)).toBe(false);
+    }
+    const basis = payload(); entries(basis)[1]!.acceptance_basis = "attested";
+    expect(decode(basis).ok).toBe(false);
+  });
 });

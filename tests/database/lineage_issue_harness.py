@@ -120,17 +120,21 @@ class LineageRuntime:
         purpose: Purpose | None = None,
         remote_client: str | None = None,
         surface: OperatorSurface | None = None,
+        grants: frozenset[tuple[Capability, Purpose | None]] | None = None,
     ) -> ResponseEnvelope:
         """One request. `remote_client` is an ordinary remote OAuth client with the grant.
 
         A local call carries no operator surface unless `surface` is given; the
         CLI and the HTTP gateway stamp one, which is what makes a caller
-        `local_operator` (S1 contract section 6.1).
+        `local_operator` (S1 contract section 6.1). `grants` replaces a remote
+        client's one grant with an exact set (S3.1: a remote writer that sees
+        the families its write names, section 6.4).
         """
         capability = command.capability
         chosen = purpose or sorted(permitted_purposes(capability))[0]
         remote = remote_client is not None
-        grants = frozenset({(capability, chosen)}) if remote else None
+        if grants is None:
+            grants = frozenset({(capability, chosen)}) if remote else None
         return self.service.invoke(
             RequestMetadata(
                 request_id=issue_identifier(IdKind.CORRELATION),

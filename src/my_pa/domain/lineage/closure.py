@@ -41,6 +41,16 @@ a semantic link with *I* as an endpoint; or a null-context semantic link whose
 two endpoints are both *inside* *I* (*I*, an active member, or a member of an
 active member's pair set). The gate's one S3 condition is that no link in the
 Issue's context has a `contested` head.
+
+**S3.1** (`docs/architecture/record-lineage-s31-open-writes-contract.md`
+sections 4.6 and 4.7) adds 1 condition: no link in the Issue's **review
+scope** (`in_review_scope`: the `in_issue_context` predicate over links in
+*any* head state, so ended heads count too) has an unreviewed head -- a
+`client_identified` head revision (`is_unreviewed`). And a mandatory member
+whose head revision is client-identified offers no resolution evidence
+(`MembershipHeadEvidence.accepted`): client resolution evidence never
+satisfies the gate until the human channel confirms or revises it. Nothing
+here reads a client's declared claim about who directed a write.
 """
 
 from __future__ import annotations
@@ -53,6 +63,7 @@ from typing import Final
 from my_pa.domain.lineage.model import EvidenceAnchor, RecordRef
 from my_pa.domain.lineage.vocabulary import (
     MANDATORY_MEMBER_ROLES,
+    AcceptanceBasis,
     EvidenceAvailability,
     EvidenceRole,
     IssueClosureBlocker,
@@ -71,7 +82,9 @@ __all__ = [
     "MembershipHeadEvidence",
     "has_resolution_anchor",
     "in_issue_context",
+    "in_review_scope",
     "is_contest_evidence",
+    "is_unreviewed",
     "link_transition",
     "member_blockers",
 ]
@@ -103,10 +116,15 @@ class MemberNativeFacts:
 
 @dataclass(frozen=True, slots=True)
 class MembershipHeadEvidence:
-    """The membership's head revision: its evidence set and observed member version."""
+    """The membership's head revision: its evidence set and observed member version.
+
+    S3.1 (section 4.6): `accepted` is false for a `client_identified` head,
+    whose anchors are then evaluated as no resolution evidence at all.
+    """
 
     anchors: tuple[EvidenceAnchor, ...]
     member_native_version: int | None
+    accepted: bool = True
 
 
 def has_resolution_anchor(anchors: Sequence[EvidenceAnchor]) -> bool:
@@ -158,12 +176,14 @@ def member_blockers(
     satisfied.
     """
     found = _native_blockers(native)
-    resolutions = [anchor for anchor in head_evidence.anchors if _is_resolution(anchor)]
+    # S3.1 section 4.6: a client's resolution evidence is not accepted-grade.
+    cited = head_evidence.anchors if head_evidence.accepted else ()
+    resolutions = [anchor for anchor in cited if _is_resolution(anchor)]
     if not resolutions:
         found.append(IssueClosureBlocker.RESOLUTION_EVIDENCE_MISSING)
     elif not any(availability(anchor) is EvidenceAvailability.AVAILABLE for anchor in resolutions):
         found.append(IssueClosureBlocker.RESOLUTION_EVIDENCE_UNAVAILABLE)
-    if any(anchor.role is EvidenceRole.CONTRADICTS for anchor in head_evidence.anchors):
+    if any(anchor.role is EvidenceRole.CONTRADICTS for anchor in cited):
         found.append(IssueClosureBlocker.RESOLUTION_EVIDENCE_CONTRADICTED)
     if (
         native.family in VERSIONED_MEMBER_FAMILIES
@@ -244,3 +264,37 @@ def in_issue_context(
     if context_issue_id == issue_id or issue in (from_ref, to_ref):
         return True
     return context_issue_id is None and from_ref in inside and to_ref in inside
+
+
+# --- S3.1: the review scope and the unreviewed condition (section 4.6) -------
+
+
+def is_unreviewed(acceptance_basis: AcceptanceBasis) -> bool:
+    """Whether a head revision of this basis holds the close until the human channel reviews it."""
+    return acceptance_basis is AcceptanceBasis.CLIENT_IDENTIFIED
+
+
+def in_review_scope(
+    *,
+    kind: RecordLinkKind,
+    from_ref: RecordRef,
+    to_ref: RecordRef,
+    context_issue_id: str | None,
+    issue_id: str,
+    inside: Collection[RecordRef],
+) -> bool:
+    """S3.1 section 4.6: whether one link, in any head state, is in Issue `issue_id`'s review scope.
+
+    The S3 predicate `in_issue_context`, applied to every link -- `active`,
+    `contested` and `ended` heads alike -- against the Issue's current inside
+    set, so a client's end of a mandatory member, reinstate of a contested link
+    or correction of resolution evidence stays in scope and holds the close.
+    """
+    return in_issue_context(
+        kind=kind,
+        from_ref=from_ref,
+        to_ref=to_ref,
+        context_issue_id=context_issue_id,
+        issue_id=issue_id,
+        inside=inside,
+    )

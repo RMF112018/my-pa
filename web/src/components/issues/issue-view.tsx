@@ -14,7 +14,7 @@ import type { IssuesReadResult } from "@/lib/api/decode/capabilities/issues.read
 import { fetchIssue, type ApiFailure } from "@/lib/api/work-client";
 import { IssueLineageTable } from "./issue-lineage-table";
 import { IssueTimeline } from "./issue-timeline";
-import { ISSUE_MESSAGES, instantWords, words } from "./presentation";
+import { ISSUE_MESSAGES, basisWords, instantWords, words } from "./presentation";
 
 type State =
   | { readonly kind: "loading" }
@@ -81,7 +81,7 @@ export function IssueView({ issueId }: { readonly issueId: string }) {
             <ul className="mt-1 grid gap-1">
               {issue.project_links.map((link) => (
                 <li key={link.project_situation_id} className="break-all">
-                  Project {link.project_id} <span className="text-muted">({words(link.state)})</span>
+                  Project {link.project_id} <span className="text-muted">({words(link.state)}; {basisWords(link)})</span>
                 </li>
               ))}
             </ul>

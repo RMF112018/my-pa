@@ -48,6 +48,7 @@ from tests.schema import lineage_schema_ahead_contract as lineage_gap
 from tests.schema.lineage_s2_schema_ahead_contract import S2_CAPABILITIES, S2_PURPOSES
 from tests.schema.lineage_s3_schema_ahead_contract import S3_CAPABILITIES, S3_PURPOSES
 from tests.schema.lineage_s4_schema_ahead_contract import S4_CAPABILITIES, S4_PURPOSES
+from tests.schema.lineage_s31_schema_ahead_contract import S31_CAPABILITIES
 from tests.schema.lineage_schema_ahead_contract import S1_CAPABILITIES, S1_PURPOSES
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
@@ -79,12 +80,14 @@ REVISION: Final = "264310e0416a"
 PREVIOUS: Final = "b9025e7fb738"
 #: Record lineage S2 (`d020b532ad7d`), S3 (`6f1476b8da52`) and S4 (`c5260943d933`,
 #: ADR-015) are additive on this revision; the S4 revision is the head.
-HEAD: Final = "c5260943d933"
+HEAD: Final = "023f8f7eb499"
 #: The S2 revision, the S1 suite's head before the S3 revision.
 S2_REVISION: Final = "d020b532ad7d"
 #: The revision that last stated `capability_is_known` and `purpose_is_known`.
 VOCABULARY_PREDECESSOR: Final = "a591b81f10a2"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
+#: Record lineage S3.1 (`023f8f7eb499`, ADR-015 decision 15), additive on S4.
+S31_MIGRATION: Final = MIGRATIONS / "20261025_023f8f7eb499_record_lineage_s31.py"
 MIGRATION: Final = MIGRATIONS / "20261017_264310e0416a_record_lineage_s1.py"
 #: The S2 revision, which adds columns and CHECKs to four of the eight S1 tables
 #: that `tables.py` now declares beside the S1 ones.
@@ -237,7 +240,7 @@ def test_the_revision_is_the_single_head_on_b9025e7fb738() -> None:
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "5c1e7a9b3d42"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
-    assert len(list(MIGRATIONS.glob("*.py"))) == 122
+    assert len(list(MIGRATIONS.glob("*.py"))) == 123
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -266,9 +269,13 @@ def test_frozen_ddl_names_every_declared_constraint() -> None:
     `tests/database/test_lineage_integrity_guards.py`; this is the static half.
     """
     source = MIGRATION.read_text(encoding="utf-8")
-    # A name the S2 or S3 revision adds to an S1 table is in that revision's text
-    # instead.
-    later = S2_MIGRATION.read_text(encoding="utf-8") + S3_MIGRATION.read_text(encoding="utf-8")
+    # A name the S2, S3 or S3.1 revision adds to an S1 table is in that
+    # revision's text instead.
+    later = (
+        S2_MIGRATION.read_text(encoding="utf-8")
+        + S3_MIGRATION.read_text(encoding="utf-8")
+        + S31_MIGRATION.read_text(encoding="utf-8")
+    )
     flat = _WHITESPACE.sub(" ", source)
     flat_later = _WHITESPACE.sub(" ", later)
     for table in NEW_TABLES:
@@ -360,6 +367,8 @@ def test_at_vocabulary_adds_exactly_the_s1_names() -> None:
         - S2_CAPABILITIES
         - S3_CAPABILITIES
         - S4_CAPABILITIES
+        # The S3.1 names too, the S3.1 revision's (023f8f7eb499).
+        - S31_CAPABILITIES
     )
     native = {capability.value for capability in NativeSourceCapability}
     assert set(at) == declared | native | S1_CAPABILITIES

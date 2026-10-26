@@ -25,6 +25,22 @@ export function words(value: string): string {
   return value.replaceAll("_", " ");
 }
 
+/** S3.1 section 8: the words for a fact's provenance label, never a colour alone. */
+export const PROVENANCE_WORDS = {
+  user_confirmed: "user confirmed",
+  client_identified: "identified by a connected client (unreviewed)",
+  userDirected: "user said they directed it (not verified)",
+} as const;
+
+/** A fact's basis in words, with the client's unverified claim when it made one. */
+export function basisWords(fact: {
+  readonly acceptance_basis: "user_confirmed" | "client_identified";
+  readonly user_directed_claim: boolean;
+}): string {
+  const basis = PROVENANCE_WORDS[fact.acceptance_basis];
+  return fact.user_directed_claim ? `${basis}; ${PROVENANCE_WORDS.userDirected}` : basis;
+}
+
 export const FAMILY_WORDS: Readonly<Record<RecordRefView["family"], string>> = {
   situation: "an Issue",
   meeting: "a Meeting",

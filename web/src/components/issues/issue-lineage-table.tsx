@@ -20,7 +20,7 @@ import type {
 import { fetchIssueLineage, type ApiFailure } from "@/lib/api/work-client";
 import { NoteVersionDrilldown } from "./note-version-drilldown";
 import {
-  FAMILY_WORDS, ISSUE_MESSAGES, RecordName, completenessMessages, familyName, words,
+  FAMILY_WORDS, ISSUE_MESSAGES, RecordName, basisWords, completenessMessages, familyName, words,
 } from "./presentation";
 
 export const LINEAGE_PAGE_SIZE = 25;
@@ -165,7 +165,7 @@ export function IssueLineageTable({ issueId, pageSize = LINEAGE_PAGE_SIZE }: { r
                   <Stacked label="Relation">{RELATION_WORDS[edge.relation_type]}{edge.member_role ? ` (${words(edge.member_role)})` : ""}</Stacked>
                   <Stacked label="To"><RecordName value={edge.to} /></Stacked>
                   <Stacked label="State">{words(edge.lifecycle_state)}</Stacked>
-                  <Stacked label="Basis">{words(edge.acceptance_basis)}</Stacked>
+                  <Stacked label="Basis">{basisWords(edge)}</Stacked>
                   <Stacked label="Recorded by">{words(edge.authority_class)}</Stacked>
                   <Stacked label="Evidence">
                     {edge.evidence.length === 0 ? "None" : (

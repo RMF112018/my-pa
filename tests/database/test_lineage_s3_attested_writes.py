@@ -24,6 +24,12 @@ remote lineage read without a grant on its own capability is `unsupported` (S3
 section 6.1, R3-F13), and another Principal's reads of this Principal's
 subjects answer exactly like reads of absent ones. Every identity here is
 synthetic.
+
+**S3.1** (S3.1 contract section 10.1, the operator directives of 2026-10-20
+and 2026-10-25): contest, reinstate and the handoff correction are open --
+admitted for a client on facts the human channel never accepted, recorded
+`client_identified`, and another writer's replay of the operator's request is
+`conflict` / `idempotency_conflict`. The backfill plan stays attested.
 """
 
 from __future__ import annotations
@@ -58,7 +64,7 @@ from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.lineage.vocabulary import LINEAGE_BACKFILL_CAPABILITIES
 from my_pa.domain.source.registry import issue_identifier
 from tests.database.lineage_issue_harness import OTHER_PRINCIPAL, PRINCIPAL, REMOTE_CLIENT, WHEN
-from tests.database.lineage_s2_harness import handoff
+from tests.database.lineage_s2_harness import assertion, handoff
 from tests.database.lineage_s3_harness import (
     GATEWAY,
     S3Runtime,
@@ -67,9 +73,11 @@ from tests.database.lineage_s3_harness import (
     contest,
     contradicts,
     correct_handoff,
+    corroborates,
     reinstate,
     shortly_after,
 )
+from tests.database.lineage_s31_harness import client_grants, fact_rows
 
 pytestmark = pytest.mark.database
 
@@ -131,21 +139,104 @@ def _reads(scene: dict[str, Any]) -> tuple[Command, ...]:
 
 
 def test_an_ordinary_remote_client_is_denied_every_s3_write(runtime: S3Runtime) -> None:
+    """S3.1 section 10.1 conversion (the operator directives of 2026-10-20 and 2026-10-25).
+
+    Before S3.1 a contest, a reinstate and a handoff correction by an ordinary
+    remote client or an unstamped local caller were `denied`. The directive
+    opens them: each is admitted and every fact row it writes is
+    `client_identified` -- here on a link and a handoff the client itself
+    recorded, which the human channel never accepted (S3.1 section 4.4) -- and
+    the operator's own follow-up requests, under their own keys, are admitted
+    as before. `records.backfill.plan` is not a lineage record and stays
+    attested: still `denied`, nothing written.
+    """
+    for key, kwargs, channel, client in (
+        ("remote", {"remote_client": REMOTE_CLIENT}, "remote_interactive", REMOTE_CLIENT),
+        ("unstamped", {}, "local_unattested", None),
+    ):
+        scene = _client_scene(runtime, f"admit-{key}", kwargs)
+        before = {name: fact_rows(runtime.engine, name) for name in _FACT_TABLES}
+        for name in _WRITES:
+            _granted_ok(runtime, scene[name], kwargs)
+        written = [
+            row
+            for name in _FACT_TABLES
+            for identity, row in fact_rows(runtime.engine, name).items()
+            if identity not in before[name]
+        ]
+        assert {row[5] for row in written} == {
+            "records.associations.contest",
+            "records.associations.reinstate",
+            "issues.handoffs.correct",
+        }, key
+        for row in written:
+            assert row[:5] == ("client_identified", "ordinary_reviewer", channel, client, False)
+    # The operator's own requests on its own scene are admitted, as before.
     scene = _scene(runtime, "deny")
-    plan = PlanLineageBackfill(idempotency_key="s3-deny-plan")
     for name in _WRITES:
-        before = all_s3_counts(runtime.engine)
-        command = scene[name]
-        assert _code(runtime, command, remote_client=REMOTE_CLIENT)[0] == "denied", name
-        assert _code(runtime, command)[0] == "denied", name
-        # Nothing written, and no commit mark taken.
-        assert all_s3_counts(runtime.engine) == before, name
-        # The operator's own request is admitted.
-        runtime.ok(command, surface=GATEWAY)
+        runtime.ok(scene[name], surface=GATEWAY)
+    plan = PlanLineageBackfill(idempotency_key="s3-deny-plan")
     before = all_s3_counts(runtime.engine)
     assert _code(runtime, plan, remote_client=REMOTE_CLIENT)[0] == "denied"
     assert _code(runtime, plan)[0] == "denied"
     assert all_s3_counts(runtime.engine) == before
+
+
+#: The S3.1 fact tables (section 5.1) the S3 writes reach.
+_FACT_TABLES: Final = ("record_link_revisions", "issue_responsibility_corrections")
+
+
+def _granted(command: Any, kwargs: dict[str, Any]) -> dict[str, Any]:  # noqa: ANN401
+    """A remote caller sees every family its write names (S3.1 section 6.4)."""
+    if "remote_client" in kwargs:
+        return {**kwargs, "grants": client_grants(command.capability)}
+    return kwargs
+
+
+def _granted_ok(runtime: S3Runtime, command: Any, kwargs: dict[str, Any]) -> dict[str, Any]:  # noqa: ANN401
+    return runtime.ok(command, **_granted(command, kwargs))
+
+
+def _client_scene(runtime: S3Runtime, key: str, kwargs: dict[str, Any]) -> dict[str, Any]:
+    """`_scene`'s writes on a `blocks` link and a handoff the client itself recorded."""
+    issue = runtime.issue(key)
+    first = runtime.task(f"{key}-a")
+    second = runtime.task(f"{key}-b")
+    meeting_id, note_id = runtime.note(f"{key}-source")
+    link = _granted_ok(
+        runtime,
+        assertion(
+            "blocks",
+            ("task", first),
+            ("task", second),
+            f"{key}-blocks",
+            (corroborates(meeting_id, note_id),),
+            context=issue,
+        ),
+        kwargs,
+    )["association"]["link_id"]
+    commitment = runtime.commitment(key)
+    runtime.member(issue, "commitment", commitment, key, "discussion")
+    created = str(runtime.commitment_view(commitment)["created_at"])
+    event = _granted_ok(
+        runtime,
+        handoff(
+            issue,
+            commitment,
+            "counterparty",
+            shortly_after(created, 10),
+            key,
+            runtime.handoff_anchor(f"{key}-handoff"),
+        ),
+        kwargs,
+    )["handoff"]
+    return {
+        "contest": contest(link, 1, key, (contradicts(meeting_id, note_id),)),
+        "reinstate": reinstate(link, 2, key, (corroborates(meeting_id, note_id),)),
+        "correct": correct_handoff(
+            event["handoff_id"], "void", key, contradicts(meeting_id, note_id)
+        ),
+    }
 
 
 def test_a_replayed_s3_write_from_an_ordinary_client_is_denied_before_the_replay_lookup(
@@ -156,9 +247,14 @@ def test_a_replayed_s3_write_from_an_ordinary_client_is_denied_before_the_replay
         command = scene[name]
         original = runtime.ok(command, surface=GATEWAY)
         assert original["replayed"] is False
-        # Exactly the operator's request, by a caller who may not make it.
-        assert _code(runtime, command, remote_client=REMOTE_CLIENT)[0] == "denied", name
-        assert _code(runtime, command)[0] == "denied", name
+        # Exactly the operator's request, by another writer. S3.1 section 10.1
+        # (the operator directives of 2026-10-20 and 2026-10-25; section 4.9):
+        # the writer is bound into the digest, so it is `conflict` /
+        # `idempotency_conflict` (S3.1 12.1 N2-01), never the stored answer.
+        expected = ("conflict", ["idempotency_conflict"])
+        remote = _granted(command, {"remote_client": REMOTE_CLIENT})
+        assert _code(runtime, command, **remote) == expected, name
+        assert _code(runtime, command) == expected, name
         replayed = runtime.ok(command, surface=GATEWAY)
         assert replayed["replayed"] is True
         assert {k: v for k, v in replayed.items() if k != "replayed"} == {

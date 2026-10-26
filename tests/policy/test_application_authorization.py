@@ -79,6 +79,9 @@ from my_pa.application.commands import (
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
     ConfigureProjectControls,
+    ConfirmIssueMembership,
+    ConfirmIssueProjectLink,
+    ConfirmRecordAssociation,
     ContestRecordAssociation,
     CorrectGoodNotes,
     CorrectIssueHandoff,
@@ -212,6 +215,7 @@ from my_pa.application.commands import (
     ReadProjectControlsStatus,
     ReadRecordAssociationHistory,
     ReadRecordLineage,
+    ReadRelatedRecords,
     ReadReportManifest,
     ReadTask,
     RecordContextFeedback,
@@ -1497,6 +1501,29 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         Capability.COMMITMENTS_V2_SEARCH: SearchCommitmentsV2(query="policy"),
         Capability.COMMITMENTS_V2_WAITING_ON: WaitingOnV2(),
         Capability.REPORTS_MANIFEST: ReadReportManifest(report_id="rpt_policyreport00001"),
+        # Record lineage S3.1 (S3.1 contract section 7).
+        Capability.RECORDS_ASSOCIATIONS_CONFIRM: ConfirmRecordAssociation(
+            link_id="irl_policylink00001",
+            expected_revision=1,
+            idempotency_key="policy-records-associations-confirm-0001",
+            reason="the policy association was confirmed",
+        ),
+        Capability.ISSUES_MEMBERSHIPS_CONFIRM: ConfirmIssueMembership(
+            link_id="irl_policylink00001",
+            expected_revision=1,
+            idempotency_key="policy-issues-memberships-confirm-0001",
+            reason="the policy membership was confirmed",
+        ),
+        Capability.ISSUES_PROJECT_LINKS_CONFIRM: ConfirmIssueProjectLink(
+            issue_id="sit_policyissue0001",
+            project_id="prj_policyproject0001",
+            expected_membership_revision=1,
+            idempotency_key="policy-issues-project-links-confirm-0001",
+            reason="the policy project link was confirmed",
+        ),
+        Capability.RECORDS_LINEAGE_RELATED: ReadRelatedRecords(
+            seeds=({"family": "task", "record_id": "tsk_policytask00001"},)
+        ),
     }
 
 
@@ -1977,6 +2004,10 @@ SCOPED_CAPABILITIES = [
         Capability.COMMITMENTS_V2_SEARCH,
         Capability.COMMITMENTS_V2_WAITING_ON,
         Capability.REPORTS_MANIFEST,
+        Capability.RECORDS_ASSOCIATIONS_CONFIRM,
+        Capability.ISSUES_MEMBERSHIPS_CONFIRM,
+        Capability.ISSUES_PROJECT_LINKS_CONFIRM,
+        Capability.RECORDS_LINEAGE_RELATED,
     }
 ]
 
@@ -2307,6 +2338,10 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.COMMITMENTS_V2_SEARCH,
         Capability.COMMITMENTS_V2_WAITING_ON,
         Capability.REPORTS_MANIFEST,
+        Capability.RECORDS_ASSOCIATIONS_CONFIRM,
+        Capability.ISSUES_MEMBERSHIPS_CONFIRM,
+        Capability.ISSUES_PROJECT_LINKS_CONFIRM,
+        Capability.RECORDS_LINEAGE_RELATED,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

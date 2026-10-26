@@ -60,4 +60,19 @@ describe("issues.read strict canonical success", () => {
       expect(decode(value).ok, state).toBe(false);
     }
   });
+
+  it("decodes a client-identified Project link and refuses an unknown basis", () => {
+    // S3.1 section 7.6: a Project link states its basis, claim and writing client.
+    const client = payload();
+    Object.assign((issue(client).project_links as Json[])[0]!, {
+      acceptance_basis: "client_identified", user_directed_claim: true, asserting_client_id: null,
+    });
+    expect(decode(client)).toEqual({ ok: true, value: client });
+    for (const basis of ["attested", "client_confirmed"]) {
+      const value = payload(); (issue(value).project_links as Json[])[0]!.acceptance_basis = basis;
+      expect(decode(value).ok, basis).toBe(false);
+    }
+    const missing = payload(); delete (issue(missing).project_links as Json[])[0]!.user_directed_claim;
+    expect(decode(missing).ok).toBe(false);
+  });
 });

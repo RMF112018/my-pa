@@ -43,6 +43,7 @@ from __future__ import annotations
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
@@ -440,6 +441,7 @@ __all__ = [
     "LineageResolvedRecord",
     "LineageSourceVersion",
     "LineageWriteRequestRecord",
+    "LineageWriterBudget",
     "LinkHeadRecord",
     "LinkRevisionRecord",
     "ManagedAdmission",
@@ -486,6 +488,7 @@ __all__ = [
     "RepositoryFailureError",
     "ReviewDecisionRequest",
     "ReviewRepository",
+    "ReviewScopeLink",
     "SearchOutcome",
     "SituationRepository",
     "SourceProviders",
@@ -9281,6 +9284,27 @@ class ProjectLinkEventRecord:
     decision_channel: str
     source_capability: str
     recorded_at: datetime
+    #: Record lineage S3.1 (S3.1 contract sections 4.1 and 5.1): the
+    #: authenticated OAuth client of a remote writer (else `None`) and the
+    #: client's declared, unverified `user_directed` claim.
+    asserting_client_id: str | None = None
+    user_directed_claim: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class LineageWriterBudget:
+    """The completed client lineage write requests a section 4.8 bound counts.
+
+    Record lineage S3.1 (S3.1 contract section 4.8): `bucket_hour` and
+    `bucket_day` are the writer bucket's -- `(decision_channel,
+    asserting_client_id)` -- completed requests with `created_at` after the
+    hour and day starts; `principal_day` every client bucket's of the
+    Principal after the day start.
+    """
+
+    bucket_hour: int
+    bucket_day: int
+    principal_day: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -9328,12 +9352,16 @@ class IssueRepository(ABC):
         request_digest: str,
         *,
         created_at: datetime,
+        decision_channel: str | None = None,
+        asserting_client_id: str | None = None,
     ) -> LineageWriteRequestRecord | None:
         """Reserve the request identity, or answer the committed winner.
 
         `None` when this call reserved it. A completed winner with the same
         digest is returned for replay; one with another digest raises
-        `LineageIdempotencyConflictError`.
+        `LineageIdempotencyConflictError`. S3.1 (section 5.2): the reserved row
+        records its writer -- the decision channel and, for a remote client,
+        its OAuth client id -- which never changes afterwards.
         """
 
     @abstractmethod
@@ -9535,6 +9563,32 @@ class IssueRepository(ABC):
     ) -> tuple[tuple[int, str, int], ...]:
         """A completed composite request's `(ordinal, link_id, revision_no)` rows, by ordinal."""
 
+    # --- record lineage S3.1 (S3.1 contract sections 4.4 and 4.8) -------------
+
+    def client_write_budget(
+        self,
+        principal_id: str,
+        *,
+        decision_channel: str,
+        asserting_client_id: str | None,
+        hour_since: datetime,
+        day_since: datetime,
+    ) -> LineageWriterBudget:
+        """The section 4.8 counts over completed client `lineage_write_requests` rows.
+
+        Read by a writer holding the Principal's commit mark, so the counts
+        cannot change before it commits. Non-abstract: a fake that writes no
+        lineage fact never needs it.
+        """
+        raise NotImplementedError
+
+    def project_link_confirmed(self, principal_id: str, project_id: str, issue_id: str) -> bool:
+        """Whether any event of the `(project, issue)` link is `user_confirmed` (S3.1 4.4).
+
+        Read under the triplet row lock. Non-abstract, on the same terms.
+        """
+        raise NotImplementedError
+
 
 # --- Record lineage S1: memberships, associations and the reverse read ---------
 #
@@ -9624,6 +9678,11 @@ class LinkRevisionRecord:
     #: Record lineage S2 (S2 contract section 3.3): the member's native
     #: `version` a membership writer observed; `None` for every other revision.
     member_native_version: int | None = None
+    #: Record lineage S3.1 (S3.1 contract sections 4.1 and 5.1): the remote
+    #: writer's OAuth client (else `None`) and its unverified `user_directed`
+    #: claim.
+    asserting_client_id: str | None = None
+    user_directed_claim: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -9633,6 +9692,22 @@ class LinkHeadRecord:
     link: RecordLinkRecord
     revision_no: int
     lifecycle_state: LinkLifecycleState
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewScopeLink:
+    """One link a close-gate review scope may hold, with its head revision's facts.
+
+    Record lineage S3.1 (S3.1 contract sections 4.6 and 7.5): the head in any
+    state, and the head revision's action, acceptance basis, unverified claim
+    and recording time.
+    """
+
+    head: LinkHeadRecord
+    action: LinkRevisionAction
+    acceptance_basis: AcceptanceBasis
+    user_directed_claim: bool
+    recorded_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -9939,6 +10014,20 @@ class RecordLineageRepository(ABC):
         """
         raise NotImplementedError
 
+    def bounded_by_deadline(self, deadline: float) -> AbstractContextManager[None]:
+        """A scope whose every statement runs under the remaining budget (S3.1 section 7.9).
+
+        The `reports.commit` recompute of a lineage reference reads on the
+        request's own work connection: inside the scope each statement runs
+        under `statement_timeout = min(2000, remaining)` ms of the monotonic
+        `deadline`, a statement at a spent budget raises
+        `LineageReadTimeoutError` before it is sent, and a cancelled statement
+        raises it too. The scope is a savepoint that is always rolled back, so a
+        cancelled statement never aborts the commit's transaction and no timeout
+        outlives the scope. Non-abstract, on the same terms.
+        """
+        raise NotImplementedError
+
     def live_links_incident(
         self, principal_id: str, refs: Collection[RecordRef], cut: LineageFactCut
     ) -> tuple[LinkHeadRecord, ...]:
@@ -10025,6 +10114,30 @@ class RecordLineageRepository(ABC):
         """
         raise NotImplementedError
 
+    # --- record lineage S3.1 (S3.1 contract sections 4.4 and 4.6) -------------
+
+    def link_confirmed(self, principal_id: str, link_id: str) -> bool:
+        """Whether any revision of the link is `user_confirmed` (the history rule, 4.4).
+
+        Read by a writer holding the link's head `FOR UPDATE`. Non-abstract, on
+        the same terms.
+        """
+        raise NotImplementedError
+
+    def review_scope_links(
+        self, principal_id: str, issue_id: str, inside: Collection[RecordRef]
+    ) -> tuple[ReviewScopeLink, ...]:
+        """S3.1 section 4.6's candidates: every link that may be in the review scope.
+
+        Either kind, any head state: a link whose context is the Issue, or with
+        an endpoint in `inside` (the Issue's current inside set, which holds the
+        Issue itself), each with its head revision's facts. No lock; ordered by
+        `link_id` in code-point order. The caller decides membership with
+        `domain.lineage.closure.in_review_scope`. Non-abstract, on the same
+        terms.
+        """
+        raise NotImplementedError
+
 
 # --- Record lineage S2: the responsibility handoff ledger ---------------------
 #
@@ -10066,6 +10179,9 @@ class HandoffRecord:
     source_capability: str
     #: S3 section 4.1: the event's commit mark; null on a pre-S3 row.
     commit_seq: int | None = None
+    #: S3.1 sections 4.1 and 5.1: the remote writer's OAuth client and claim.
+    asserting_client_id: str | None = None
+    user_directed_claim: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -10091,6 +10207,9 @@ class HandoffCorrectionRecord:
     source_capability: str
     recorded_at: datetime
     commit_seq: int | None = None
+    #: S3.1 sections 4.1 and 5.1: the remote writer's OAuth client and claim.
+    asserting_client_id: str | None = None
+    user_directed_claim: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -10209,7 +10328,11 @@ class IssueHandoffRepository(ABC):
 
 @dataclass(frozen=True, slots=True)
 class TimelineLinkRevision:
-    """One link revision as a timeline entry needs it: its recorded values, no evidence."""
+    """One link revision as a timeline entry needs it: its recorded values, no evidence.
+
+    S3.1 (section 7.6): with its acceptance basis, the writing client's OAuth id
+    and its unverified `user_directed` claim.
+    """
 
     link_id: str
     revision_no: int
@@ -10217,6 +10340,9 @@ class TimelineLinkRevision:
     action: LinkRevisionAction
     lifecycle_state: LinkLifecycleState
     recorded_at: datetime
+    acceptance_basis: AcceptanceBasis = AcceptanceBasis.USER_CONFIRMED
+    asserting_client_id: str | None = None
+    user_directed_claim: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -10658,10 +10784,13 @@ class ProgramMetricsRepository(ABC):
     @abstractmethod
     def legacy_issue_links(
         self, principal_id: str, project_ids: Sequence[str]
-    ) -> Mapping[str, tuple[int, int]]:
-        """Per Project, `(outstanding, closed)` Issue `project_situations` rows with no event.
+    ) -> Mapping[str, tuple[int, int, int]]:
+        """Per Project, `(outstanding, closed, unreviewed)` Issue link counts.
 
-        A Project with none has no key.
+        `outstanding` and `closed`: Issue `project_situations` rows with no
+        event, by the Issue's state. `unreviewed` (record lineage S3.1, section
+        7.8): links whose latest event is `client_identified`, in any state, of
+        an Issue that is not closed. A Project with no Issue link has no key.
         """
 
     @abstractmethod

@@ -19,6 +19,12 @@ The two relations `records.associations.assert` gains in S2 (`escalated_from`,
 answers like an absent one.
 
 Every identity here is synthetic.
+
+**S3.1** (S3.1 contract section 10.1, the operator directives of 2026-10-20
+and 2026-10-25): the membership correction, the handoff, the composites and
+the relation asserts are open -- admitted for a client as `client_identified`,
+and another writer's replay of the operator's request is `conflict` /
+`idempotency_conflict`. `issues.close` and `issues.reopen` stay attested.
 """
 
 from __future__ import annotations
@@ -32,7 +38,13 @@ import pytest
 from my_pa.application.commands import ListIssueHandoffs, ReadIssueClosureReadiness
 from my_pa.domain.task.lifecycle import TaskLifecycleState
 from tests.database.lineage_issue_harness import OTHER_PRINCIPAL, PRINCIPAL, REMOTE_CLIENT
-from tests.database.lineage_record_harness import NOTE_BODY, capture, meeting, note_anchor
+from tests.database.lineage_record_harness import (
+    NOTE_BODY,
+    capture,
+    meeting,
+    membership,
+    note_anchor,
+)
 from tests.database.lineage_s2_harness import (
     GATEWAY,
     REVIEW_DECISION,
@@ -46,6 +58,7 @@ from tests.database.lineage_s2_harness import (
     work_commitment,
     work_task,
 )
+from tests.database.lineage_s31_harness import client_grants, fact_rows
 from tests.database.test_commitment_entity_counterparty import seed_counterparty_entity
 
 pytestmark = pytest.mark.database
@@ -149,12 +162,57 @@ _WRITES: Final = ("correct", "handoff", "work_task", "work_commitment", "close",
 
 
 def test_an_ordinary_remote_client_is_denied_every_s2_write(runtime: S2Runtime) -> None:
+    """S3.1 section 10.1 conversion (the operator directives of 2026-10-20 and 2026-10-25).
+
+    Before S3.1 every S2 write by an ordinary remote client or an unstamped
+    local caller was `denied`. The directive opens the membership correction,
+    the handoff, both composites and the S2 relation asserts: each is admitted
+    and every fact row it writes is `client_identified`. `issues.close` and
+    `issues.reopen` are not lineage records and stay attested: still `denied`,
+    nothing written.
+    """
+    for key, kwargs, channel, client in (
+        ("remote", {"remote_client": REMOTE_CLIENT}, "remote_interactive", REMOTE_CLIENT),
+        ("unstamped", {}, "local_unattested", None),
+    ):
+        scene = _scene(runtime, f"admit-{key}")
+        relations = _relations(runtime, f"admit-{key}")
+        before = {name: fact_rows(runtime.engine, name) for name in _FACT_TABLES}
+        # The correction is of the caller's own membership: a client may not
+        # correct one the operator accepted (S3.1 section 4.4).
+        task_id = runtime.task(f"admit-{key}-own")
+        own = _granted_ok(
+            runtime, membership(scene["issue"], "task", task_id, f"admit-{key}-own"), kwargs
+        )["membership"]
+        _, _, own_anchor = runtime.evidence_source(f"admit-{key}-own")
+        _granted_ok(runtime, correct(own["link_id"], 1, f"admit-{key}-own", (own_anchor,)), kwargs)
+        for name in _WRITES[1:4]:
+            _granted_ok(runtime, scene[name], kwargs)
+        for command in relations:
+            _granted_ok(runtime, command, kwargs)
+        written = [
+            row
+            for name in _FACT_TABLES
+            for identity, row in fact_rows(runtime.engine, name).items()
+            if identity not in before[name]
+        ]
+        # The membership and its correction, the handoff, both composites'
+        # links and the 2 relations: every write left client rows.
+        assert {row[5] for row in written} == {
+            "issues.memberships.add",
+            "issues.memberships.correct",
+            "issues.handoffs.record",
+            "issues.work.create_task",
+            "issues.work.create_commitment",
+            "records.associations.assert",
+        }, key
+        for row in written:
+            assert row[:5] == ("client_identified", "ordinary_reviewer", channel, client, False)
+        # Close and reopen stay attested: `denied`, nothing written.
+        counts = all_s2_counts(runtime.engine)
+        assert _code(runtime, scene["close"], **_granted(scene["close"], kwargs))[0] == "denied"
+        assert all_s2_counts(runtime.engine) == counts
     scene = _scene(runtime, "deny")
-    before = all_s2_counts(runtime.engine)
-    for command in (scene[name] for name in _WRITES[:-1]):
-        assert _code(runtime, command, remote_client=REMOTE_CLIENT)[0] == "denied"
-        assert _code(runtime, command)[0] == "denied"
-    assert all_s2_counts(runtime.engine) == before
     runtime.ok(scene["correct"], surface=GATEWAY)
     runtime.ok(scene["close"], surface=GATEWAY)
     before = all_s2_counts(runtime.engine)
@@ -164,15 +222,21 @@ def test_an_ordinary_remote_client_is_denied_every_s2_write(runtime: S2Runtime) 
     # The reads are not attested: a recorded caller may evaluate the gate and list.
     assert runtime.ok(ReadIssueClosureReadiness(issue_id=scene["issue"]))["state"] == "closed"
     assert runtime.ok(ListIssueHandoffs(issue_id=scene["issue"]))["handoffs"] == []
-    # The S2 relations `records.associations.assert` admits are attested the same way.
-    relations = _relations(runtime, "deny")
-    before = all_s2_counts(runtime.engine)
-    for command in relations:
-        assert _code(runtime, command, remote_client=REMOTE_CLIENT)[0] == "denied"
-        assert _code(runtime, command)[0] == "denied"
-    assert all_s2_counts(runtime.engine) == before
-    for command in relations:
-        runtime.ok(command, surface=GATEWAY)
+
+
+#: The S3.1 fact tables (section 5.1) the S2 writes reach.
+_FACT_TABLES: Final = ("record_link_revisions", "issue_responsibility_events")
+
+
+def _granted(command: Any, kwargs: dict[str, Any]) -> dict[str, Any]:  # noqa: ANN401
+    """A remote caller sees every family its write names (S3.1 section 6.4)."""
+    if "remote_client" in kwargs:
+        return {**kwargs, "grants": client_grants(command.capability)}
+    return kwargs
+
+
+def _granted_ok(runtime: S2Runtime, command: Any, kwargs: dict[str, Any]) -> dict[str, Any]:  # noqa: ANN401
+    return runtime.ok(command, **_granted(command, kwargs))
 
 
 def test_a_replayed_s2_write_from_an_ordinary_client_is_denied_before_the_replay_lookup(
@@ -183,9 +247,20 @@ def test_a_replayed_s2_write_from_an_ordinary_client_is_denied_before_the_replay
         command = scene[name]
         original = runtime.ok(command, surface=GATEWAY)
         assert original["replayed"] is False
-        # Exactly the operator's request, by a caller who may not make it.
-        assert _code(runtime, command, remote_client=REMOTE_CLIENT)[0] == "denied", name
-        assert _code(runtime, command)[0] == "denied", name
+        # Exactly the operator's request, by another writer. S3.1 section 10.1
+        # (the operator directives of 2026-10-20 and 2026-10-25; section 4.9):
+        # the open writes bind the writer into the digest, so it is
+        # `conflict` / `idempotency_conflict` (S3.1 12.1 N2-01) -- never the
+        # operator's answer; close and reopen stay attested, `denied` before
+        # the replay lookup.
+        expected = (
+            ("denied", [])
+            if name in ("close", "reopen")
+            else ("conflict", ["idempotency_conflict"])
+        )
+        remote = _granted(command, {"remote_client": REMOTE_CLIENT})
+        assert _code(runtime, command, **remote) == expected, name
+        assert _code(runtime, command) == expected, name
         replayed = runtime.ok(command, surface=GATEWAY)
         assert replayed["replayed"] is True
         assert {k: v for k, v in replayed.items() if k != "replayed"} == {

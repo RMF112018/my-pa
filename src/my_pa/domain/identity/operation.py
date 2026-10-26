@@ -1053,6 +1053,16 @@ class Capability(StrEnum):
     COMMITMENTS_V2_SEARCH = "commitments.v2.search"
     COMMITMENTS_V2_WAITING_ON = "commitments.v2.waiting_on"
     REPORTS_MANIFEST = "reports.manifest"
+    #: Record lineage S3.1 (S3.1 contract section 7): the 3 attested `confirm`
+    #: writes, by which the human channel promotes a client-identified link,
+    #: membership or Project-link event with a new revision, and the bounded
+    #: multi-seed related-records read. All 4 are scopeless and withheld unless
+    #: `MY_PA_LINEAGE_ENABLED` is on; the 3 confirms are operator-only (section
+    #: 7.13): a remote caller is never attested.
+    RECORDS_ASSOCIATIONS_CONFIRM = "records.associations.confirm"
+    ISSUES_MEMBERSHIPS_CONFIRM = "issues.memberships.confirm"
+    ISSUES_PROJECT_LINKS_CONFIRM = "issues.project_links.confirm"
+    RECORDS_LINEAGE_RELATED = "records.lineage.related"
 
 
 class NativeSourceCapability(StrEnum):
@@ -1146,6 +1156,18 @@ _OPERATOR_ONLY: frozenset[AuthorizedCapability] = frozenset(
         # native corpus and writes a durable ledger.
         Capability.RECORDS_BACKFILL_PLAN,
         Capability.RECORDS_BACKFILL_REPORT,
+        # Record lineage S3.1 (S3.1 contract section 7.13, D-16): Issue close and
+        # reopen and the 3 confirms. A deliberate departure from this set's
+        # stated test -- none of them widens a later request's scope -- because
+        # each is attested to the local operator surface, so no remote caller
+        # can ever satisfy it: publishing it remotely would advertise a write a
+        # remote caller can only be denied. `issues.update` stays out (only its
+        # closed-Issue correction is attested, in the handler).
+        Capability.ISSUES_CLOSE,
+        Capability.ISSUES_REOPEN,
+        Capability.RECORDS_ASSOCIATIONS_CONFIRM,
+        Capability.ISSUES_MEMBERSHIPS_CONFIRM,
+        Capability.ISSUES_PROJECT_LINKS_CONFIRM,
     }
 )
 
@@ -1652,6 +1674,13 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.COMMITMENTS_V2_SEARCH: frozenset({Purpose.COMMITMENT_READ}),
         Capability.COMMITMENTS_V2_WAITING_ON: frozenset({Purpose.COMMITMENT_READ}),
         Capability.REPORTS_MANIFEST: frozenset({Purpose.REPORT_READ}),
+        # Record lineage S3.1 (S3.1 contract section 7): no new purpose. Each
+        # confirm takes the purpose of the write whose fact it promotes, and the
+        # related read is a lineage read.
+        Capability.RECORDS_ASSOCIATIONS_CONFIRM: frozenset({Purpose.RECORD_LINEAGE_AUTHORING}),
+        Capability.ISSUES_MEMBERSHIPS_CONFIRM: frozenset({Purpose.ISSUE_AUTHORING}),
+        Capability.ISSUES_PROJECT_LINKS_CONFIRM: frozenset({Purpose.ISSUE_AUTHORING}),
+        Capability.RECORDS_LINEAGE_RELATED: frozenset({Purpose.RECORD_LINEAGE_READ}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),
@@ -1839,6 +1868,11 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.RECORDS_ASSOCIATIONS_REINSTATE,
         Capability.ISSUES_HANDOFFS_CORRECT,
         Capability.RECORDS_BACKFILL_PLAN,
+        # Record lineage S3.1: the 3 confirms each append a revision or event that
+        # changes a fact's acceptance; `records.lineage.related` stays out.
+        Capability.RECORDS_ASSOCIATIONS_CONFIRM,
+        Capability.ISSUES_MEMBERSHIPS_CONFIRM,
+        Capability.ISSUES_PROJECT_LINKS_CONFIRM,
     }
 )
 

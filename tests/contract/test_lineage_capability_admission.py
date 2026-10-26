@@ -625,8 +625,14 @@ def test_lineage_authority_ignores_the_knowledge_manager_allowlist(scene: Scene)
     )
     for command in (_samples()[Capability.ISSUES_PROJECT_LINKS_ADD],):
         envelope = _invoke(service, scene, command, remote_client=_CLIENT)
-        # Denied before any row and before the replay lookup: the FAST world
-        # models no Issue rows, so reaching the repository would not be `denied`.
-        assert _code(envelope) == "denied"
+        # S3.1 section 10.1 (the operator directives of 2026-10-20 and
+        # 2026-10-25): the write is open, so it is never `denied` for want of
+        # attestation; the allowlists confer nothing either way. The client
+        # holds no Issue read, so the S3.1 section 6.4 pre-check answers its
+        # hidden Issue exactly as an absent one, before any row (the FAST world
+        # models no Issue rows, so reaching the repository would not be this).
+        error = envelope.to_canonical_dict()["error"]
+        assert _code(envelope) == "not_found"
+        assert error["safe_details"] == ["issue_id"]  # type: ignore[index]
     with pytest.raises(DeniedError):
         attested_lineage_authority(remote)  # type: ignore[arg-type]

@@ -2190,6 +2190,29 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.COMMITMENTS_V2_SEARCH: {"query": "parity"},
         Capability.COMMITMENTS_V2_WAITING_ON: {},
         Capability.REPORTS_MANIFEST: {"report_id": "rpt_parityreport00001"},
+        # Record lineage S3.1 (S3.1 contract section 7).
+        Capability.RECORDS_ASSOCIATIONS_CONFIRM: {
+            "link_id": "irl_paritylink00001",
+            "expected_revision": 1,
+            "idempotency_key": "parity-records-associations-confirm-0001",
+            "reason": "the parity association was confirmed",
+        },
+        Capability.ISSUES_MEMBERSHIPS_CONFIRM: {
+            "link_id": "irl_paritylink00001",
+            "expected_revision": 1,
+            "idempotency_key": "parity-issues-memberships-confirm-0001",
+            "reason": "the parity membership was confirmed",
+        },
+        Capability.ISSUES_PROJECT_LINKS_CONFIRM: {
+            "issue_id": "sit_parityissue0001",
+            "project_id": "prj_parityproject0001",
+            "expected_membership_revision": 1,
+            "idempotency_key": "parity-issues-project-links-confirm-0001",
+            "reason": "the parity project link was confirmed",
+        },
+        Capability.RECORDS_LINEAGE_RELATED: {
+            "seeds": [{"family": "task", "record_id": "tsk_paritytask00001"}]
+        },
     }
 
 
@@ -2325,7 +2348,7 @@ def test_there_are_three_transports_to_compare() -> None:
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
     # The command union and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 230, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 234, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -2701,6 +2724,10 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         Capability.COMMITMENTS_V2_SEARCH,
         Capability.COMMITMENTS_V2_WAITING_ON,
         Capability.REPORTS_MANIFEST,
+        Capability.RECORDS_ASSOCIATIONS_CONFIRM,
+        Capability.ISSUES_MEMBERSHIPS_CONFIRM,
+        Capability.ISSUES_PROJECT_LINKS_CONFIRM,
+        Capability.RECORDS_LINEAGE_RELATED,
     }
 )
 
@@ -3290,7 +3317,7 @@ def test_declared_unwired_capabilities_stay_separate_from_positive_parity(
     from my_pa.application.errors import UnsupportedError
 
     assert set(Capability) - set(_HANDLERS) == FUTURE_CAPABILITIES
-    assert len(IMPLEMENTED_CAPABILITIES) == 229
+    assert len(IMPLEMENTED_CAPABILITIES) == 233
     assert set(_BUILDERS) == set(IMPLEMENTED_CAPABILITIES)
     assert {Capability(tool.name) for tool in TOOLS} == set(IMPLEMENTED_CAPABILITIES)
 

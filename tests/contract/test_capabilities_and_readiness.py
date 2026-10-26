@@ -55,7 +55,7 @@ def manifest(implemented: frozenset[Capability] = EVERYTHING) -> CapabilityManif
 
 def test_manifest_lists_every_capability_exactly_once() -> None:
     names = [status.name for status in manifest().capabilities]
-    assert len(names) == len(Capability) == 229
+    assert len(names) == len(Capability) == 233
     assert set(names) == set(Capability)
     assert len(set(names)) == len(names)
 
@@ -293,6 +293,11 @@ def test_capability_names_match_the_published_contract() -> None:
         "commitments.v2.search",
         "commitments.v2.waiting_on",
         "reports.manifest",
+        # Record lineage S3.1 (contract section 7).
+        "records.associations.confirm",
+        "issues.memberships.confirm",
+        "issues.project_links.confirm",
+        "records.lineage.related",
     }
 
 
@@ -354,6 +359,16 @@ def test_the_operator_only_set_is_enrollment_and_governed_identity_correction() 
         # native corpus and writes a durable ledger.
         Capability.RECORDS_BACKFILL_PLAN,
         Capability.RECORDS_BACKFILL_REPORT,
+        # Record lineage S3.1 (S3.1 contract section 7.13, D-16; a Part D
+        # conversion, not the directive): Issue close and reopen and the 3
+        # confirms are attested to the local operator surface, so no remote
+        # caller can ever satisfy them. A deliberate departure from the
+        # scope-widening test above, recorded where the set is declared.
+        Capability.ISSUES_CLOSE,
+        Capability.ISSUES_REOPEN,
+        Capability.RECORDS_ASSOCIATIONS_CONFIRM,
+        Capability.ISSUES_MEMBERSHIPS_CONFIRM,
+        Capability.ISSUES_PROJECT_LINKS_CONFIRM,
     }
     assert is_operator_only(Capability.SOURCES_ENROLL)
     assert is_operator_only(Capability.ENTITIES_MERGE_PREVIEW)

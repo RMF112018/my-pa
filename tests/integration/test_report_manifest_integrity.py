@@ -450,7 +450,8 @@ def test_a_verified_program_reference_binds_the_server_state_as_the_caller_sees_
     assert server["membership"][0]["project_ids"] == [project]
     assert server["portfolio_project_ids"] == [project]
     assert server["metric_schema_version"] == 1
-    assert server["calculation_version"] == "program-overview-v1"
+    # S3.1 section 7.8 (lockstep): the overview calculation is `v2`.
+    assert server["calculation_version"] == "program-overview-v2"
     assert len(server["totals"]) == 2 * 13
     assert section["families_seen"] == ["commitment", "constraint", "entity", "issue", "project"]
     # The projected columns are copies of the manifest's fields.

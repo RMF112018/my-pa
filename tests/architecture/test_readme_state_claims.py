@@ -509,6 +509,12 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     227: "Two hundred and twenty-seven",
     228: "Two hundred and twenty-eight",
     229: "Two hundred and twenty-nine",
+    # Extended for record lineage S3.1, which took the public set to two
+    # hundred and thirty-three.
+    230: "Two hundred and thirty",
+    231: "Two hundred and thirty-one",
+    232: "Two hundred and thirty-two",
+    233: "Two hundred and thirty-three",
 }
 
 
@@ -651,8 +657,8 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     }
     default = len(frozenset(_HANDLERS) - withheld_families)
     withheld = total - default
-    assert implemented == 229
-    assert len(withheld_families) == 116
+    assert implemented == 233
+    assert len(withheld_families) == 120
     assert unwired == set()
     # Phase B's additions all arrived on the withheld side; GSQS B0's pair is
     # composed by default, and `RI-ENT-WP-10`'s five record-family reads arrived
@@ -699,7 +705,9 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # Record lineage S4's seven Program-reporting names are a sixth withheld
     # family (their own default-off sub-switch): the default is unchanged and
     # the withheld figure grows by seven.
-    assert default == 113 and total == 229 and withheld == 116
+    # Record lineage S3.1's names join the fifth (lineage) family: the
+    # default is unchanged and the withheld figure grows by four.
+    assert default == 113 and total == 233 and withheld == 120
 
     # Exercise the same application and MCP publication composition that owns
     # the current 91-tool measurement. GoodNotes pull is part of that measured
@@ -794,7 +802,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     system_context_text = SYSTEM_CONTEXT.read_text(encoding="utf-8")
     assert f"wires {implemented} through HTTP, MCP, and CLI composition" in system_context_text
     system_context = system_context_text.lower()
-    assert "two hundred and twenty-nine capabilities" in system_context
+    assert "two hundred and thirty-three capabilities" in system_context
     assert f"exposes {default} of them" in system_context
 
     architecture_index = (ROOT / "docs/architecture/00_ARCHITECTURE_INDEX.md").read_text(
@@ -803,7 +811,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     runbook = (ROOT / "ops/runbooks/mcp-and-cli-operations.md").read_text(encoding="utf-8")
     gateway_runbook = (ROOT / "ops/runbooks/gateway-operations.md").read_text(encoding="utf-8")
     assert f"default composition serves {default} of" in architecture_index
-    assert "two hundred and twenty-nine capabilities" in architecture_index
+    assert "two hundred and thirty-three capabilities" in architecture_index
     assert f"**{default} application-available capabilities**" in runbook
     assert f"publishes **{default - 3} tools**" in runbook
     assert f"unconfigured local stdio: {default - 3}" in runbook
@@ -856,7 +864,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert completion_unwired_claim in normalized_completion_state
 
     module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
-    assert "two hundred and twenty-nine capabilities" in module_boundaries
+    assert "two hundred and thirty-three capabilities" in module_boundaries
 
 
 def test_readme_declares_apple_first_personal_data_ingestion() -> None:

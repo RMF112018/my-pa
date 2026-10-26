@@ -75,9 +75,12 @@ S4_HANDLERS: Final = (
     "_program_read_plane",
 )
 
-#: S3 basis digest of `domain/lineage/vocabulary.py` (unchanged since `75707a8b`).
+#: Digest of `domain/lineage/vocabulary.py`: unchanged by S4 from the S3 basis
+#: (`75707a8b`, `64faec74...`), then moved by record lineage S3.1 (S3.1 contract
+#: section 4: `client_identified`, `confirm` and the S3.1 sets and bounds), the
+#: one later slice that widens it. S4 itself still changes no lineage vocabulary.
 LINEAGE_VOCABULARY_SHA256: Final = (
-    "64faec74fa514118c74064e74b88b29177f0027fb964eae4aec3d3c457b3f756"
+    "20818eb2a1cdfbdffb3cbe9d45be802c183b4a79aeba0c093124b4269469196e"
 )
 #: The S3 section 3 names S3 listed as "Program work"; S4 adds them nowhere (D-13).
 NOT_LINEAGE: Final = frozenset({"not_reportable", "source_not_integrated"})

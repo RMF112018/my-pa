@@ -1,6 +1,6 @@
 import { closed } from "../primitives";
 import type { Decoder } from "../types";
-import { strictObject, nullable, arrayOf, checked, text, integer, enumeration, identifier, timestamp, type Decoded } from "./continuity.projects.create";
+import { strictObject, nullable, arrayOf, checked, text, boolean, integer, enumeration, identifier, timestamp, type Decoded } from "./continuity.projects.create";
 
 /*
  * `records.lineage` (record lineage S1 contract sections 7.1 and 7.2), decoded
@@ -19,6 +19,12 @@ import { strictObject, nullable, arrayOf, checked, text, integer, enumeration, i
  * `native_cut_at`), `next_cursor` is an opaque base64url token or `null`, and
  * every node states the path step that reached it (`reached_from`,
  * `reached_via`, both `null` on the root).
+ *
+ * S3.1 (contract sections 4.3 and 7.6) widens in lockstep once more: an
+ * association's `acceptance_basis` admits `client_identified` (a connected
+ * client's unreviewed fact), and it states the client's unverified
+ * `user_directed_claim` and the writing OAuth client (`asserting_client_id`,
+ * `null` for the human channel and for every remote reader).
  */
 const invalid = () => closed("upstream_contract_invalid", "Invalid capability success contract");
 
@@ -50,6 +56,11 @@ export type LineageCompleteness = (typeof LINEAGE_COMPLETENESS)[number];
 const MAX_ISSUE_TITLE_CHARACTERS = 500;
 /** S3 section 5: an opaque cursor is unpadded base64url, at most 2048 characters. */
 const LINEAGE_CURSOR = /^[A-Za-z0-9_-]{1,2048}$/;
+/** Python `AcceptanceBasis` (S3.1 adds `client_identified`, S3.1 section 4.1). */
+export const ACCEPTANCE_BASES = ["user_confirmed", "client_identified"] as const;
+export type AcceptanceBasis = (typeof ACCEPTANCE_BASES)[number];
+/** Python `MAX_ASSERTING_CLIENT_ID_CHARACTERS`: an OAuth client id, 1..256 characters. */
+export const assertingClientId: Decoder<string | null> = nullable(text(1, 256));
 
 function prefixed(value: string, prefix: string): boolean {
   return new RegExp(`^${prefix}_[A-Za-z0-9]{8,64}$`).exec(value)?.[0] === value;
@@ -95,8 +106,10 @@ export const association = strictObject({
   context_issue_id: nullable(identifier("sit")),
   revision_no: integer(1),
   lifecycle_state: enumeration(LINK_LIFECYCLE_STATES),
-  acceptance_basis: enumeration(["user_confirmed"]),
+  acceptance_basis: enumeration(ACCEPTANCE_BASES),
   authority_class: text(1),
+  user_directed_claim: boolean,
+  asserting_client_id: assertingClientId,
   evidence: arrayOf(evidenceAnchor, 32),
   created_at: timestamp,
   recorded_at: timestamp,

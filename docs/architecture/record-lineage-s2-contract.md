@@ -462,7 +462,7 @@ building or returning the replayed response, so a non-attested caller replaying 
 operator's correction is `denied`; (2) on a first-time write, after the Issue lock finds
 it closed. A replay whose stored revision is not `corrected` is returned as in S1. Stored acceptance basis is `user_confirmed`; the native
 rows a composite creates are written with `TaskMutationActor.PRINCIPAL`, as the v1
-writers do.
+writers do. *Amended by S3.1 ([S3.1 contract](record-lineage-s31-open-writes-contract.md) sections 3.1, 4.9 and 6.2; ADR-015 decision 15): `issues.memberships.correct`, `issues.handoffs.record` and both composites are no longer attested and record `client_identified` for a non-attested caller; `issues.close`, `issues.reopen` and the closed-Issue correction stay attested exactly as above, and the R2-F14 invariant holds for the open writes in the form "a client re-sending another writer's key is `conflict`".*
 
 ### 6.2 Lock order (S1 §6.2, extended)
 

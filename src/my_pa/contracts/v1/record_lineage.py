@@ -19,6 +19,13 @@ membership or semantic association at one revision with its evidence; and the
 * `next_cursor` is always `null` in S1 and says nothing about completeness,
   which `complete_state` states.
 
+**S3.1 labels** (S3.1 contract sections 4.3 and 7.6): every revision-bearing
+view states its stored `acceptance_basis` (`user_confirmed`, the human channel,
+or `client_identified`, a connected client's unreviewed fact), the writing
+client's unverified `user_directed_claim`, and `asserting_client_id` -- the
+authenticated OAuth client that wrote it, shown only to a local reader and
+`null` for every remote one (`lineage_visibility.withhold_client_ids`).
+
 Every model is a `StrictModel`, so an unknown key -- a digest included -- is
 refused on construction, not silently dropped.
 """
@@ -26,7 +33,7 @@ refused on construction, not silently dropped.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 from pydantic import Field, field_validator, model_validator
 
@@ -35,6 +42,8 @@ from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.lineage.cursor import MAX_CURSOR_CHARACTERS, instant_token
 from my_pa.domain.lineage.model import MAX_ISSUE_TITLE_CHARACTERS
 from my_pa.domain.lineage.vocabulary import (
+    MAX_ASSERTING_CLIENT_ID_CHARACTERS,
+    MAX_RELATED_SEEDS,
     RECORD_FAMILY_ID_KINDS,
     AcceptanceBasis,
     EvidenceAvailability,
@@ -52,6 +61,7 @@ from my_pa.domain.lineage.vocabulary import (
 )
 
 __all__ = [
+    "ASSERTING_CLIENT_ID",
     "MAX_ISSUE_MEMBERSHIPS",
     "MAX_MATCHING_ISSUES",
     "AssociationView",
@@ -63,6 +73,8 @@ __all__ = [
     "LinkHistoryRevisionView",
     "LinkHistoryRootView",
     "RecordRefView",
+    "RelatedRecordView",
+    "RelatedRecordsView",
     "VirtualEdgeView",
 ]
 
@@ -70,6 +82,13 @@ __all__ = [
 MAX_ISSUE_MEMBERSHIPS = 100
 #: At most this many candidate Issues in one `records.lineage` (section 7.2).
 MAX_MATCHING_ISSUES = 20
+
+#: S3.1 section 4.3: a view's `asserting_client_id` -- the writing OAuth client,
+#: 1..256 characters, `null` for the human channel, an unstamped local caller
+#: and every remote reader.
+ASSERTING_CLIENT_ID: Final = Field(
+    default=None, min_length=1, max_length=MAX_ASSERTING_CLIENT_ID_CHARACTERS
+)
 
 #: The Issue states: S1's three and, from S2, `closed` (S2 section 3).
 _IssueState = Literal["open", "active", "suspended", "closed"]
@@ -126,6 +145,9 @@ class AssociationView(StrictModel):
     lifecycle_state: LinkLifecycleState
     acceptance_basis: AcceptanceBasis
     authority_class: str
+    #: S3.1 section 7.6: the writing client's unverified claim, and its OAuth id.
+    user_directed_claim: bool = False
+    asserting_client_id: str | None = ASSERTING_CLIENT_ID
     evidence: tuple[EvidenceAnchorView, ...] = Field(max_length=32)
     created_at: UtcDatetime
     recorded_at: UtcDatetime
@@ -170,6 +192,9 @@ class LinkHistoryRevisionView(StrictModel):
     lifecycle_state: LinkLifecycleState
     acceptance_basis: AcceptanceBasis
     authority_class: str
+    #: S3.1 section 7.6, as `AssociationView`.
+    user_directed_claim: bool = False
+    asserting_client_id: str | None = ASSERTING_CLIENT_ID
     reason: str | None
     evidence: tuple[EvidenceAnchorView, ...] = Field(max_length=32)
     recorded_at: UtcDatetime
@@ -352,5 +377,84 @@ class LineageView(StrictModel):
             "valid_at": instant_token(self.valid_at),
             "lineage_valid_at": instant_token(self.lineage_valid_at),
             "native_cut_at": instant_token(self.native_cut_at),
+            "next_cursor": self.next_cursor,
+        }
+
+
+class RelatedRecordView(LineageNodeView):
+    """One record a `records.lineage.related` read reached (S3.1 contract section 7.4).
+
+    The `LineageNodeView` keys -- `depth` is the least over every seed and
+    `reached_from` / `reached_via` the first reaching step -- plus `seeds`, the
+    0-based positions of every seed that reached it, and `issue_ids`, the
+    visible Issues (at most 20, sorted) under which it was reached.
+    """
+
+    seeds: tuple[int, ...] = Field(min_length=1, max_length=MAX_RELATED_SEEDS)
+    issue_ids: tuple[str, ...] = Field(default=(), max_length=MAX_MATCHING_ISSUES)
+
+    @model_validator(mode="after")
+    def _check_related(self) -> RelatedRecordView:
+        if list(self.seeds) != sorted(set(self.seeds)) or self.seeds[0] < 0:
+            raise ValueError("a related record names each reaching seed once, in order")
+        if list(self.issue_ids) != sorted(set(self.issue_ids)):
+            raise ValueError("a related record names each Issue once, sorted")
+        for issue_id in self.issue_ids:
+            validate_identifier(issue_id, IdKind.SITUATION)
+        return self
+
+
+class RelatedRecordsView(StrictModel):
+    """One `records.lineage.related` page (S3.1 contract section 7.4).
+
+    `seeds` echoes the request's seeds in order; `records`, `links` and
+    `virtual_edges` are this page's items of the one bounded result;
+    `related_sha256` is the digest of that whole result -- the same on every
+    page of one cursor chain, and reproduced by a read at the same explicit
+    `known_at` while visibility, native resolution and evidence availability
+    stay unchanged. It is a digest of metadata the reader can read, never of a
+    source or passage.
+    """
+
+    seeds: tuple[RecordRefView, ...] = Field(min_length=1, max_length=MAX_RELATED_SEEDS)
+    records: tuple[RelatedRecordView, ...] = Field(max_length=250)
+    links: tuple[AssociationView, ...]
+    virtual_edges: tuple[VirtualEdgeView, ...]
+    complete_state: LineageCompleteness
+    qualifiers: tuple[LineageCompleteness, ...]
+    known_at: datetime | None = None
+    valid_at: datetime | None = None
+    lineage_valid_at: datetime | None = None
+    native_cut_at: datetime | None = None
+    related_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    next_cursor: str | None = Field(
+        default=None, min_length=1, max_length=MAX_CURSOR_CHARACTERS, pattern=r"^[A-Za-z0-9_-]+$"
+    )
+
+    @model_validator(mode="after")
+    def _check(self) -> RelatedRecordsView:
+        if len(self.links) + len(self.virtual_edges) > 400:
+            raise ValueError("a related answer holds at most 400 edges")
+        if not self.qualifiers or self.qualifiers[0] is not self.complete_state:
+            raise ValueError("the complete_state is the first qualifier")
+        for instant in (self.known_at, self.valid_at, self.lineage_valid_at, self.native_cut_at):
+            if instant is not None and instant.tzinfo is None:
+                raise ValueError("a lineage cut is an aware instant")
+        return self
+
+    def to_canonical_dict(self) -> dict[str, Any]:
+        """The JSON-mode representation, each part through its own serializer."""
+        return {
+            "seeds": [seed.to_canonical_dict() for seed in self.seeds],
+            "records": [record.to_canonical_dict() for record in self.records],
+            "links": [link.to_canonical_dict() for link in self.links],
+            "virtual_edges": [edge.to_canonical_dict() for edge in self.virtual_edges],
+            "complete_state": self.complete_state.value,
+            "qualifiers": [code.value for code in self.qualifiers],
+            "known_at": instant_token(self.known_at),
+            "valid_at": instant_token(self.valid_at),
+            "lineage_valid_at": instant_token(self.lineage_valid_at),
+            "native_cut_at": instant_token(self.native_cut_at),
+            "related_sha256": self.related_sha256,
             "next_cursor": self.next_cursor,
         }

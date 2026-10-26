@@ -51,7 +51,13 @@ from my_pa.application.lineage_endpoints import (
     require_open_issues,
     require_relation_evidence,
 )
-from my_pa.application.record_lineage import association_views, insert_new_link
+from my_pa.application.lineage_rate import require_client_write_budget
+from my_pa.application.record_lineage import (
+    association_views,
+    insert_new_link,
+    open_write_digest,
+    reserve_open_write,
+)
 from my_pa.contracts.ports import (
     LineageEndpoint,
     LineageWriteRequestRecord,
@@ -63,7 +69,7 @@ from my_pa.contracts.ports import (
 from my_pa.contracts.v1.record_lineage import AssociationView
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import ensure_utc
-from my_pa.domain.lineage.canonical import normalized_identity, request_digest
+from my_pa.domain.lineage.canonical import normalized_identity
 from my_pa.domain.lineage.model import EvidenceAnchor, RecordRef
 from my_pa.domain.lineage.vocabulary import (
     MemberRole,
@@ -76,7 +82,7 @@ from my_pa.domain.source.registry import issue_identifier
 from my_pa.domain.task.lifecycle import TERMINAL_TASK_LIFECYCLE_STATES
 
 if TYPE_CHECKING:
-    from my_pa.application.lineage_authority import LineageAuthority
+    from my_pa.application.lineage_authority import LineageProvenance
 
 __all__ = [
     "AssociationIntent",
@@ -157,6 +163,8 @@ class WorkCompositeResult:
     membership: AssociationView
     associations: tuple[AssociationView, ...]
     replayed: bool
+    #: S3.1 section 6.4: whether the answer filter withheld an anchor (remote).
+    restricted: bool = False
 
 
 def _require_member(uow: UnitOfWork, principal_id: str, issue_id: str, member: RecordRef) -> None:
@@ -200,17 +208,22 @@ class IssueWorkApplication:
         principal_id: str,
         request: WorkCompositeRequest,
         idempotency_key: str,
-        authority: LineageAuthority,
+        authority: LineageProvenance,
         now: datetime,
         native_create: Callable[[], NativeCreated],
     ) -> WorkCompositeResult:
-        """The native create, its `work` membership and its intents, or nothing."""
+        """The native create, its `work` membership and its intents, or nothing.
+
+        S3.1 (section 6.2 step 7, RR1-F04): a client's composite is counted as
+        1 request against its write budgets after every refusal and before the
+        native create, so a composite past its budget creates no native record.
+        """
         at = ensure_utc(now)
         issues, lineage = uow.issues, uow.record_lineage
         capability = request.capability
-        digest = request_digest(capability, principal_id, request.digest_document())
-        prior = issues.reserve_write_request(
-            principal_id, capability, idempotency_key, digest, created_at=at
+        digest = open_write_digest(capability, principal_id, request.digest_document(), authority)
+        prior = reserve_open_write(
+            issues, principal_id, capability, idempotency_key, digest, authority, at
         )
         if prior is not None:
             return self._replayed(uow, principal_id, capability, idempotency_key, prior)
@@ -253,6 +266,7 @@ class IssueWorkApplication:
             offset += size
             _require_intent_rule(uow, principal_id, request, intent, target, anchors)
             admitted.append((intent, anchors))
+        require_client_write_budget(uow, principal_id, authority, authority.asserting_client_id, at)
         created = native_create()
         record = created.ref
         roots = [
@@ -287,10 +301,24 @@ class IssueWorkApplication:
                 raise RepositoryFailureError
         revisions = [
             insert_new_link(
-                uow, principal_id, roots[0], membership_set, at, member_version=created.version
+                uow,
+                principal_id,
+                roots[0],
+                membership_set,
+                at,
+                provenance=authority,
+                member_version=created.version,
             ),
             *(
-                insert_new_link(uow, principal_id, root, anchors, at, reason=intent.purpose)
+                insert_new_link(
+                    uow,
+                    principal_id,
+                    root,
+                    anchors,
+                    at,
+                    provenance=authority,
+                    reason=intent.purpose,
+                )
                 for root, (intent, anchors) in zip(roots[1:], admitted, strict=True)
             ),
         ]
@@ -323,7 +351,7 @@ class IssueWorkApplication:
         to_ref: RecordRef,
         relation: RelationType,
         issue_id: str,
-        authority: LineageAuthority,
+        authority: LineageProvenance,
         capability: str,
         at: datetime,
     ) -> RecordLinkRecord:

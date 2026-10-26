@@ -76,6 +76,9 @@ from my_pa.application.commands import (
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
     ConfigureProjectControls,
+    ConfirmIssueMembership,
+    ConfirmIssueProjectLink,
+    ConfirmRecordAssociation,
     ContestRecordAssociation,
     CorrectGoodNotes,
     CorrectIssueHandoff,
@@ -209,6 +212,7 @@ from my_pa.application.commands import (
     ReadProjectControlsStatus,
     ReadRecordAssociationHistory,
     ReadRecordLineage,
+    ReadRelatedRecords,
     ReadReportManifest,
     ReadTask,
     RecordContextFeedback,
@@ -761,6 +765,12 @@ def _requested_scope(
             | SearchCommitmentsV2()
             | WaitingOnV2()
             | ReadReportManifest()
+            # Record lineage S3.1: the same partition's link, Project-link and
+            # record rows; no source is named.
+            | ConfirmRecordAssociation()
+            | ConfirmIssueMembership()
+            | ConfirmIssueProjectLink()
+            | ReadRelatedRecords()
         ):
             return frozenset()
         case CreateCapture():

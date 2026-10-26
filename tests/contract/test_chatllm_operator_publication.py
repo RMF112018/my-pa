@@ -92,6 +92,14 @@ async def test_full_inventory_catalog_without_execution(scene: Scene) -> None:
     assert names == {c.value for c in ALL} - {
         Capability.RECORDS_BACKFILL_PLAN.value,
         Capability.RECORDS_BACKFILL_REPORT.value,
+        # Record lineage S3.1 (S3.1 contract section 7.13): Issue close and
+        # reopen and the 3 confirms are operator-only -- attested to the local
+        # operator surface -- so they are never remotely published either.
+        Capability.ISSUES_CLOSE.value,
+        Capability.ISSUES_REOPEN.value,
+        Capability.RECORDS_ASSOCIATIONS_CONFIRM.value,
+        Capability.ISSUES_MEMBERSHIPS_CONFIRM.value,
+        Capability.ISSUES_PROJECT_LINKS_CONFIRM.value,
     }
     # The deployed 190 remain individually present after main added report types
     # and record lineage S1 added the `issues.`, `records.` and `meetings.notes.` names.

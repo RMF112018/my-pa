@@ -1635,6 +1635,8 @@ tables; enabling remote writes for any client; any live migration, deployment or
 11). Nothing else in S3.1 is left for a worker to decide beyond local naming with no
 incumbent constraint.
 
+*Amended by the P1 client-exposure contract* ([`record-lineage-client-exposure-contract.md`](record-lineage-client-exposure-contract.md), ADR-015 decision 16, operator directive 2026-10-26): the ChatLLM classification gate above is decided — the client-usable lineage-plane names join the ChatLLM data profile `chatllm-data-v10` and the attested names become `CHATLLM_CONTROL_PLANE_EXCLUDED` — and that contract states the production environment, write gates and grants for the later deployment phase. The restricted-profile opt-in and its privilege mechanism, close and reopen, and every other gate in this section stand; the S3.1 section 10.2 row "ChatLLM gate (R31-F08)" is superseded by that contract's section 10.2 prerequisite rows. The text above is kept as written for S3.1.
+
 ## 14. Residual risks (stated plainly)
 
 - **The server cannot verify `client_identified` or `user_directed` claims.** It knows the

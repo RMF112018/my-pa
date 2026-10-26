@@ -146,4 +146,6 @@ A collector or researcher artifact may not carry it, and a malformed block is re
 the server found (`verified_at_commit`, `changed_since_read`, `recompute_failed` or
 `not_attempted`), its own digest and its counts of links by label and of claims are in the
 artifact's `reports.manifest`, which a remote reader can read in full only while it holds
-a `records.lineage.related` grant and sees every family the reference names.
+a `records.lineage.related` grant and sees the seeds' families and every family the
+committer could see when the server recomputed the read (all 7 lineage families for a
+report committed locally); a downstream report inherits that requirement.

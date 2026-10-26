@@ -14689,10 +14689,7 @@ class ApplicationService:
     # Four handlers: the 3 attested confirms and the related read. The switch
     # first (section 7.10); a confirm then derives attested authority -- `denied`
     # for a non-attested caller before any row and before the replay lookup --
-    # and the related read its remote grant re-check. The related read's use
-    # case is not implemented in this change: after those checks it answers
-    # `unsupported`, reading nothing, until its worker lands it (the S3 D-37
-    # precedent).
+    # and the related read its remote grant re-check before it reads anything.
 
     def _records_associations_confirm(
         self,

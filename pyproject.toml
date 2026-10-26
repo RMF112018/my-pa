@@ -191,6 +191,22 @@ classifiers = [
 #                     credential. Removal path: another pdfium binding, or drop
 #                     visual identity and revert to the explicit legacy
 #                     raw-representation profile.
+#                     CPM Full-Schedule use (S5a): current use also reads text
+#                     objects (geometry, base-font name, font size, matrix) and
+#                     the text page's per-character attribution from an
+#                     admitted Full-Schedule PDF in
+#                     `src/my_pa/infrastructure/schedule/pdf.py`, without
+#                     rendering. The 5.0 floor also carries every raw
+#                     `FPDFText_CountChars`/`GetUnicode`/`GetTextObject`/
+#                     `IsGenerated`/`HasUnicodeMapError`, `FPDFTextObj_GetFont`/
+#                     `GetFontSize`, `FPDFFont_GetBaseFontName`/`GetIsEmbedded`,
+#                     `FPDFPageObj_GetBounds`/`GetMatrix`, `FPDFPage_GetMediaBox`/
+#                     `GetCropBox`, `FPDF_GetPageSizeByIndexF` and
+#                     `FPDF_GetSecurityHandlerRevision` function the schedule
+#                     parser calls (the `PdfTextObj`/`PdfFont` helpers are
+#                     5.x-later and deliberately unused). Security surface adds
+#                     hostile admitted PDFs bounded by section 7 of
+#                     `docs/architecture/cpm-workbench-p6-full-v1-parser-contract.md`.
 dependencies = [
   "pydantic>=2.12,<3",
   "PyJWT[crypto]>=2.10.1,<3",

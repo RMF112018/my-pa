@@ -243,7 +243,7 @@ def _imports(path: Path) -> set[str]:
 #: Dependencies the package may import in exactly one subtree, and the subtree.
 #: See the module docstring: a transport library is not "in scope", it is in the
 #: transport.
-CONFINED_IMPORT_ROOTS = {
+CONFINED_IMPORT_ROOTS: dict[str, str | tuple[str, ...]] = {
     "starlette": "adapters",
     "mcp": "adapters",
     # PyJWT. One module verifies bearer tokens; nothing else in the tree may
@@ -252,7 +252,10 @@ CONFINED_IMPORT_ROOTS = {
     "jwt": "infrastructure/security",
     # pypdfium2 rasterizes admitted GoodNotes pages. Application code must not
     # import it; identity matching consumes PageRender values instead.
-    "pypdfium2": "infrastructure/goodnotes",
+    # GoodNotes keeps its subtree; inside the CPM Full-Schedule plane exactly
+    # one module may import the engine, so the pure parser algorithm in
+    # `infrastructure/schedule/full_profile.py` stays PDFium-free.
+    "pypdfium2": ("infrastructure/goodnotes", "infrastructure/schedule/pdf.py"),
     "webauthn": "infrastructure/security",
 }
 
@@ -369,14 +372,23 @@ def test_every_exemption_is_actually_used() -> None:
     assert not unused, f"{unused} is exempted from the SDK prohibition and imported by nothing"
 
 
+def _allowed(where: str, entry: str) -> bool:
+    """`entry` is a subtree (`a/b` admits `a/b/...`) or one exact module path."""
+    return where == entry or where.startswith(f"{entry}/")
+
+
+def _entries(value: str | tuple[str, ...]) -> tuple[str, ...]:
+    return (value,) if isinstance(value, str) else value
+
+
 @pytest.mark.parametrize("path", _modules(), ids=lambda p: str(p.name))
 def test_a_confined_dependency_is_imported_only_where_it_belongs(path: Path) -> None:
     where = path.relative_to(PACKAGE).as_posix()
     for root, subtree in CONFINED_IMPORT_ROOTS.items():
         if root not in _imports(path):
             continue
-        assert where.startswith(f"{subtree}/"), (
-            f"{where} imports {root!r}, which belongs to {subtree}/ and nowhere else"
+        assert any(_allowed(where, entry) for entry in _entries(subtree)), (
+            f"{where} imports {root!r}, which belongs to {list(_entries(subtree))} and nowhere else"
         )
 
 
@@ -384,13 +396,18 @@ def test_every_confined_dependency_is_actually_used_there() -> None:
     """A confinement nothing tests is a rule about an empty set.
 
     Without this, deleting the transport would leave the rule above passing on
-    every module in the tree while confining nothing.
+    every module in the tree while confining nothing. Every allowed entry of a
+    root must have at least one importer, so no allowance is an unused hole.
     """
     for root, subtree in CONFINED_IMPORT_ROOTS.items():
-        importers = [p for p in _modules() if root in _imports(p)]
+        importers = [p.relative_to(PACKAGE).as_posix() for p in _modules() if root in _imports(p)]
         assert importers, f"nothing imports {root!r}; the confinement guards nothing"
-        for path in importers:
-            assert path.relative_to(PACKAGE).as_posix().startswith(f"{subtree}/")
+        for entry in _entries(subtree):
+            assert any(_allowed(where, entry) for where in importers), (
+                f"nothing under {entry!r} imports {root!r}; that allowance guards nothing"
+            )
+        for where in importers:
+            assert any(_allowed(where, entry) for entry in _entries(subtree)), where
 
 
 def test_declared_runtime_dependencies_are_the_agreed_set() -> None:

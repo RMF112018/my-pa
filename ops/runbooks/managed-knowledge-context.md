@@ -61,7 +61,7 @@ returns a complete no-match or empty package and must not fabricate evidence.
 ChatLLM is a **full MY-PA application data manager**, not a system
 administrator. The machine-readable policy is
 `src/my_pa/domain/identity/chatllm_capability_policy.py` at profile version
-`chatllm-data-v9`. Do not grant every `Capability` enum member.
+`chatllm-data-v10`. Do not grant every `Capability` enum member.
 
 On the current head, the derived **effective** ChatLLM catalog is 164 names
 when documents, relationship intelligence (with writes), relationship memory,
@@ -76,7 +76,14 @@ registry's `reports.types.create` (write, `report_authoring`) and
 `reports.types.list` (read, `report_read`). `continuity.tasks.create` is
 compatibility-only; use Work `tasks.create`. Identity correction, source
 enrollment, GoodNotes pull, and `constraint_sync.*` are control-plane
-exclusions.
+exclusions. Since `chatllm-data-v10` (record lineage P1, ADR-015 decision 16) the
+34 client-usable lineage-plane names are `DATA_CONDITIONAL` on the lineage
+switches, so the target above grows to 191 with `MY_PA_LINEAGE_ENABLED` composed
+and to 198 with `MY_PA_PROGRAM_REPORTING_ENABLED` as well; `issues.close`,
+`issues.reopen`, the 3 `confirm` names and the 2 `records.backfill.` names are
+control-plane exclusions withheld from every client. The lineage grant set, its
+companions and the P2 procedure are in
+[`remote-mcp-cloudflare.md`](remote-mcp-cloudflare.md#record-lineage-client-exposure-p1).
 
 Dedicated ChatLLM **required data grants** use `expires_at = NULL`. OAuth
 access and refresh tokens remain finite (ADR-009). Client revoke, per-client
@@ -87,14 +94,14 @@ Inspect and (operator-gated) reconcile with:
 ```bash
 python apps/cli/remote_mcp.py profile-diff \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v9
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v10
 python apps/cli/remote_mcp.py profile-plan \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v9
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v10
 # operator-gated; never run against production from this runbook alone
 python apps/cli/remote_mcp.py profile-apply \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v9 \
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v10 \
   --apply
 ```
 
@@ -172,7 +179,7 @@ populates it. Every command below that writes is **operator-only**.
   `knowledge-profile-plan` / `knowledge-profile-apply --apply` for
   `knowledge-discovery-v2`, which adds only the `record_events.provenance`
   grant; an ordinary ChatLLM client re-runs `profile-plan` / `profile-apply`
-  for `chatllm-data-v9`, which carries the same read when the Knowledge plane is
+  for `chatllm-data-v10`, which carries the same read when the Knowledge plane is
   composed. Each of these commands prints `allowlist_fingerprint <hex>` so the operator can confirm
   which allowlists the process loaded.
 
@@ -204,7 +211,7 @@ strips or refuses them, and its profile tooling reports them as
    profile.
 4. Run `profile-plan` (shape under [Activation sequence](#activation-sequence)).
    The plan reports `knowledge_role: manager`. For a client already converged
-   on `chatllm-data-v9`, its `add` set must be exactly
+   on `chatllm-data-v10`, its `add` set must be exactly
    `knowledge.assertions.submit` and `knowledge.discovery.checkpoint` under
    `knowledge_assertion_observation` (write), with nothing revoked or replaced.
    Then run `profile-apply --apply`.
@@ -278,7 +285,7 @@ grant. **Nothing here is commissioned**, and this section authorizes no grant.
 - **Who already holds the pair.** The Knowledge discovery profile
   (`knowledge-discovery-v2`) and the operator-review profile
   (`knowledge-operator-review-v1`) do not include it. The ChatLLM profile
-  `chatllm-data-v9` **does** include `knowledge.assertions.search` once the
+  `chatllm-data-v10` **does** include `knowledge.assertions.search` once the
   Knowledge plane is composed. Applying that profile to a client of a process
   with the plane on therefore admits the plane for that client. Do not run
   `profile-apply` for such a process, and do not grant the search capability
@@ -329,13 +336,13 @@ steps require a separate operator decision.
    ```bash
    python apps/cli/remote_mcp.py profile-diff \
      --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v9
+     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v10
    python apps/cli/remote_mcp.py profile-plan \
      --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v9
+     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v10
    python apps/cli/remote_mcp.py profile-apply \
      --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v9 \
+     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v10 \
      --apply
    ```
 

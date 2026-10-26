@@ -77,7 +77,7 @@ _MEETINGS = _MEETING_READS | _MEETING_WRITES
 def test_policy_covers_every_public_capability_exactly_once() -> None:
     assert set(CHATLLM_CAPABILITY_POLICY) == set(Capability)
     assert len(CHATLLM_CAPABILITY_POLICY) == 233
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v9"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v10"
 
 
 def test_classification_counts_match_the_approved_plan() -> None:
@@ -88,11 +88,15 @@ def test_classification_counts_match_the_approved_plan() -> None:
     assert counts[ChatLLMCapabilityClass.DATA_REQUIRED] == 74
     # KLP-WP-03 (chatllm-data-v6): the six Knowledge Assertion names, 90 -> 96.
     # KLP-WP-05 (chatllm-data-v8): `record_events.provenance`, 96 -> 97.
-    assert counts[ChatLLMCapabilityClass.DATA_CONDITIONAL] == 97
+    # Record lineage P1 (chatllm-data-v10, operator directive 2026-10-26): the
+    # 34 client-usable lineage-plane names, 97 -> 131.
+    assert counts[ChatLLMCapabilityClass.DATA_CONDITIONAL] == 131
     assert counts[ChatLLMCapabilityClass.COMPATIBILITY_ONLY] == 2
     # KLP-WP-04 (chatllm-data-v7): submit and checkpoint are excluded, 15 -> 17.
     # Record lineage S3: the operator-only backfill pair is excluded, 17 -> 19.
-    assert counts[ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED] == 19
+    # Record lineage P1: Issue close and reopen and the 3 confirms are withheld
+    # from every client, 19 -> 24.
+    assert counts[ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED] == 24
     # Record lineage S1: the six Issue-plane names are an operator decision
     # (ADR-015, OD-07), 2 -> 8, and the eight remaining S1 names 8 -> 16; no
     # data-class member moves, so no profile bump. Record lineage S2's
@@ -100,8 +104,10 @@ def test_classification_counts_match_the_approved_plan() -> None:
     # Record lineage S3's six reads and writes too, 24 -> 30; no profile bump.
     # Record lineage S4's seven Program-reporting reads too, 30 -> 37; no
     # profile bump. Record lineage S3.1's 3 confirms and the related read too,
-    # 37 -> 41; no profile bump.
-    assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 41
+    # 37 -> 41; no profile bump. Record lineage P1 (operator directive
+    # 2026-10-26) makes the decision: 34 to data, 5 to excluded, 41 -> 2, and
+    # the profile bumps to v10.
+    assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 2
     assert counts[ChatLLMCapabilityClass.RETIRED] == 0
 
 

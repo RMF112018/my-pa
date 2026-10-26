@@ -2,7 +2,9 @@
 
 S2 contract sections 6.1, 7, 7.1, 7.5 and 8:
 
-* every S2 name is `CHATLLM_OPERATOR_DECISION_REQUIRED` with the S2 rationale,
+* the 6 non-attested S2 names are `CHATLLM_DATA_CONDITIONAL` under the
+  `LINEAGE` prerequisite and Issue close and reopen `CHATLLM_CONTROL_PLANE_EXCLUDED`
+  with the attested rationale (P1 client exposure, chatllm-data-v10); all are
   scopeless, not operator-only, in the `lineage` gateway feature; the six
   writes are writes and idempotent remotely, the three additive ones additive;
 * `issue_work_authoring` is the composites' own remote-write purpose and no
@@ -79,6 +81,7 @@ from my_pa.domain.identity.chatllm_capability_policy import (
     CHATLLM_CAPABILITY_POLICY,
     CHATLLM_DATA_PROFILE_VERSION,
     ChatLLMCapabilityClass,
+    ChatLLMCompositionPrerequisite,
 )
 from my_pa.domain.identity.operation import (
     Capability,
@@ -109,7 +112,11 @@ _ADDITIVE: Final = frozenset(
     {"issues.handoffs.record", "issues.work.create_task", "issues.work.create_commitment"}
 )
 _COMPOSITES: Final = frozenset({"issues.work.create_task", "issues.work.create_commitment"})
-_RATIONALE: Final = "record lineage S2; exposure is an operator decision (ADR-015, OD-07)"
+#: P1 client exposure (operator directive 2026-10-26): the withheld attested names.
+_ATTESTED_RATIONALE: Final = (
+    "attested to the local operator surface; withheld from every client "
+    "(operator directive 2026-10-26)"
+)
 _ISSUE: Final = "sit_lineages2fast0001"
 _LINK: Final = "irl_lineages2fast0001"
 _COMMITMENT: Final = "cmt_lineages2fast0001"
@@ -136,8 +143,17 @@ def test_s2_capabilities_are_operator_decision_required() -> None:
     assert len(_LINEAGE_CAPABILITIES) == 34
     for capability in declared:
         policy = CHATLLM_CAPABILITY_POLICY[capability]
-        assert policy.classification is ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED
-        assert policy.exclusion_rationale == _RATIONALE
+        # P1 client exposure (operator directive 2026-10-26, chatllm-data-v10):
+        # the 6 non-attested names are plane-conditional data; close and reopen
+        # are withheld from every client as control-plane excluded.
+        if capability in {Capability.ISSUES_CLOSE, Capability.ISSUES_REOPEN}:
+            assert policy.classification is ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED
+            assert policy.composition_prerequisite is ChatLLMCompositionPrerequisite.NONE
+            assert policy.exclusion_rationale == _ATTESTED_RATIONALE
+        else:
+            assert policy.classification is ChatLLMCapabilityClass.DATA_CONDITIONAL
+            assert policy.composition_prerequisite is ChatLLMCompositionPrerequisite.LINEAGE
+            assert policy.exclusion_rationale is None
         # S3.1 contract section 7.13 (D-16, a Part D conversion): Issue close and
         # reopen are operator-only, attested to the local operator surface; the
         # other 6 S2 names are not.
@@ -155,8 +171,8 @@ def test_s2_capabilities_are_operator_decision_required() -> None:
         purposes = permitted_purposes(capability)
         assert len(purposes) == 1
         assert bool(purposes & remote_mcp._WRITE_PURPOSES) is writes
-    # No data-class member moved, so the ChatLLM data profile did not either.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v9"
+    # P1 moved data-class members, so the ChatLLM data profile moved too.
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v10"
 
 
 def test_issue_work_authoring_is_its_own_purpose() -> None:

@@ -494,7 +494,7 @@ composition and in every MCP publication that composition produces.
   family, and each Meeting capability appears in it only for an authenticated
   client whose grants, purpose, capability version and write gates admit it.
 - **Desired ChatLLM profile.** The repository's ChatLLM data profile is
-  `chatllm-data-v9`. Since `chatllm-data-v3` it has classified the six
+  `chatllm-data-v10`. Since `chatllm-data-v3` it has classified the six
   `meetings.` names as `DATA_REQUIRED`: reads under `meeting_read`, writes under
   `meeting_authoring`; `chatllm-data-v4` adds `record_events.list` under
   `record_event_read`; `chatllm-data-v5` adds `capture.archive` and
@@ -519,7 +519,15 @@ composition and in every MCP publication that composition produces.
   Knowledge plane switch, and binds discovery clients to `knowledge-discovery-v2`;
   `chatllm-data-v9` adds the report type registry's `reports.types.create`
   under `report_authoring` (write) and `reports.types.list` under `report_read`
-  as `DATA_REQUIRED`, with the rest of `reports.*`.
+  as `DATA_REQUIRED`, with the rest of `reports.*`; `chatllm-data-v10` (record
+  lineage P1, ADR-015 decision 16) adds the 34 client-usable lineage-plane names
+  as `DATA_CONDITIONAL`: the 27 `issues.`, `records.` and `meetings.notes.` names
+  on `MY_PA_LINEAGE_ENABLED` and the 7 S4 reads on `MY_PA_PROGRAM_REPORTING_ENABLED`
+  as well (the 2 `programs.` reads also on the entity plane, `programs.overview`
+  also on the Constraint plane), and classifies `issues.close`, `issues.reopen` and
+  the 3 `confirm` names `CONTROL_PLANE_EXCLUDED` beside the 2 `records.backfill.`
+  names, withheld from every client (`ops/runbooks/remote-mcp-cloudflare.md`,
+  "Record lineage client exposure (P1)").
   That is repository desire only. Whether any deployed client holds those
   grants is a runtime fact this document does not state.
 
@@ -603,10 +611,10 @@ python -m alembic heads
 python apps/cli/health.py
 python apps/cli/remote_mcp.py profile-diff \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v9
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v10
 python apps/cli/remote_mcp.py profile-plan \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v9
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v10
 ```
 
 `apps/cli/health.py` answers `not_at_head` for a database below `c8e4a1b70d35`,

@@ -3,9 +3,10 @@
 FAST, against the composed service and the identity registries. Worker L1's
 part of the S3 contract section 10 row (registration, section 7 and 7.7):
 
-* the six lineage reads and writes are `CHATLLM_OPERATOR_DECISION_REQUIRED`,
-  scopeless, the `lineage` feature, writes keyed and attested, under their
-  section 7 purposes;
+* the six lineage reads and writes are `CHATLLM_DATA_CONDITIONAL` under the
+  `LINEAGE` prerequisite (P1 client exposure, chatllm-data-v10), scopeless,
+  the `lineage` feature, writes keyed and attested, under their section 7
+  purposes;
 * the two backfill capabilities are operator-only and
   `CHATLLM_CONTROL_PLANE_EXCLUDED` under their own `lineage_backfill` purpose;
 * the backfill sub-switch withholds both unless `lineage_enabled` and
@@ -67,6 +68,7 @@ from my_pa.domain.identity.chatllm_capability_policy import (
     CHATLLM_CAPABILITY_POLICY,
     CHATLLM_DATA_PROFILE_VERSION,
     ChatLLMCapabilityClass,
+    ChatLLMCompositionPrerequisite,
 )
 from my_pa.domain.identity.operation import (
     Capability,
@@ -229,13 +231,14 @@ def test_s3_capabilities_are_operator_decision_required() -> None:
         if name in _BACKFILL:
             continue
         policy = CHATLLM_CAPABILITY_POLICY[capability]
-        assert policy.classification is ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED
-        assert policy.exclusion_rationale == (
-            "record lineage S3; exposure is an operator decision (ADR-015, OD-07)"
-        )
+        # P1 client exposure (operator directive 2026-10-26, chatllm-data-v10):
+        # the ChatLLM decision is made; the 6 are plane-conditional data.
+        assert policy.classification is ChatLLMCapabilityClass.DATA_CONDITIONAL
+        assert policy.composition_prerequisite is ChatLLMCompositionPrerequisite.LINEAGE
+        assert policy.exclusion_rationale is None
         assert not is_operator_only(capability)
-    # No data-class member moved, so the ChatLLM data profile did not either.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v9"
+    # P1 moved data-class members, so the ChatLLM data profile moved too.
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v10"
 
 
 def test_backfill_capabilities_are_operator_only_and_control_plane_excluded() -> None:

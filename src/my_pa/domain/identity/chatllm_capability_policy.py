@@ -15,7 +15,7 @@ from typing import Final
 
 from my_pa.domain.identity.operation import Capability
 
-CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v9"
+CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v10"
 
 
 class ChatLLMCapabilityClass(StrEnum):
@@ -34,6 +34,12 @@ class ChatLLMCompositionPrerequisite(StrEnum):
     RELATIONSHIP_MEMORY = "RELATIONSHIP_MEMORY"
     CONSTRAINTS = "CONSTRAINTS"
     KNOWLEDGE_ASSERTIONS = "KNOWLEDGE_ASSERTIONS"
+    #: P1 client exposure (chatllm-data-v10): the record lineage plane switch
+    #: (`MY_PA_LINEAGE_ENABLED`).
+    LINEAGE = "LINEAGE"
+    #: P1 client exposure (chatllm-data-v10): the S4 Program reporting switch
+    #: (`MY_PA_PROGRAM_REPORTING_ENABLED`, which requires the lineage switch).
+    PROGRAM_REPORTING = "PROGRAM_REPORTING"
     NONE = "NONE"
 
 
@@ -243,6 +249,48 @@ _DATA_CONDITIONAL: Final[frozenset[Capability]] = frozenset(
         Capability.RELATIONSHIP_MEMORY_RESTORE,
         Capability.RELATIONSHIP_MEMORY_REVISE,
         Capability.RELATIONSHIP_MEMORY_SEARCH,
+        # Record lineage P1 client exposure (chatllm-data-v10; ADR-015 decision
+        # 16, operator directive 2026-10-26): the client-usable lineage plane.
+        # Conditional on `MY_PA_LINEAGE_ENABLED` by explicit name
+        # (`LINEAGE_DATA_NAMES`), so a build with the switch off neither composes
+        # nor demands their grants.
+        Capability.ISSUES_CREATE,
+        Capability.ISSUES_READ,
+        Capability.ISSUES_LIST,
+        Capability.ISSUES_UPDATE,
+        Capability.ISSUES_PROJECT_LINKS_ADD,
+        Capability.ISSUES_PROJECT_LINKS_END,
+        Capability.ISSUES_MEMBERSHIPS_ADD,
+        Capability.ISSUES_MEMBERSHIPS_END,
+        Capability.RECORDS_ASSOCIATIONS_ASSERT,
+        Capability.RECORDS_ASSOCIATIONS_CORRECT,
+        Capability.RECORDS_ASSOCIATIONS_END,
+        Capability.RECORDS_LINEAGE,
+        Capability.MEETINGS_NOTES_VERSIONS,
+        Capability.MEETINGS_NOTES_READ_VERSION,
+        Capability.ISSUES_CLOSURE_READINESS,
+        Capability.ISSUES_MEMBERSHIPS_CORRECT,
+        Capability.ISSUES_HANDOFFS_RECORD,
+        Capability.ISSUES_HANDOFFS_LIST,
+        Capability.ISSUES_WORK_CREATE_TASK,
+        Capability.ISSUES_WORK_CREATE_COMMITMENT,
+        Capability.RECORDS_ASSOCIATIONS_CONTEST,
+        Capability.RECORDS_ASSOCIATIONS_REINSTATE,
+        Capability.RECORDS_ASSOCIATIONS_HISTORY,
+        Capability.ISSUES_HISTORY,
+        Capability.ISSUES_TIMELINE,
+        Capability.ISSUES_HANDOFFS_CORRECT,
+        Capability.RECORDS_LINEAGE_RELATED,
+        # Record lineage P1 (chatllm-data-v10): the S4 Program reporting reads,
+        # conditional on `MY_PA_PROGRAM_REPORTING_ENABLED` by explicit name
+        # (`PROGRAM_REPORTING_DATA_NAMES`).
+        Capability.PROGRAMS_MEMBERS_RESOLVE,
+        Capability.PROGRAMS_OVERVIEW,
+        Capability.COMMITMENTS_V2_READ,
+        Capability.COMMITMENTS_V2_LIST,
+        Capability.COMMITMENTS_V2_SEARCH,
+        Capability.COMMITMENTS_V2_WAITING_ON,
+        Capability.REPORTS_MANIFEST,
     }
 )
 
@@ -284,6 +332,16 @@ _CONTROL_PLANE_EXCLUDED: Final[frozenset[Capability]] = frozenset(
         # run reads the whole native corpus and writes a durable ledger.
         Capability.RECORDS_BACKFILL_PLAN,
         Capability.RECORDS_BACKFILL_REPORT,
+        # Record lineage P1 (chatllm-data-v10; operator directive 2026-10-26):
+        # the attested lineage writes are withheld from every client. Excluded
+        # rather than left an operator decision, so an active grant on one is
+        # `UNEXPECTED_CONTROL_PLANE_GRANT` and the profile diff fails closed.
+        # Publication still withholds them as operator kind (`_OPERATOR_ONLY`).
+        Capability.ISSUES_CLOSE,
+        Capability.ISSUES_REOPEN,
+        Capability.RECORDS_ASSOCIATIONS_CONFIRM,
+        Capability.ISSUES_MEMBERSHIPS_CONFIRM,
+        Capability.ISSUES_PROJECT_LINKS_CONFIRM,
     }
 )
 
@@ -291,53 +349,6 @@ _OPERATOR_DECISION_REQUIRED: Final[frozenset[Capability]] = frozenset(
     {
         Capability.GSQS_START,
         Capability.GSQS_STATUS,
-        # Record lineage S1 (ADR-015, OD-07; S1 contract section 7): ChatLLM
-        # exposure of the lineage plane is an operator decision.
-        Capability.ISSUES_CREATE,
-        Capability.ISSUES_READ,
-        Capability.ISSUES_LIST,
-        Capability.ISSUES_UPDATE,
-        Capability.ISSUES_PROJECT_LINKS_ADD,
-        Capability.ISSUES_PROJECT_LINKS_END,
-        Capability.ISSUES_MEMBERSHIPS_ADD,
-        Capability.ISSUES_MEMBERSHIPS_END,
-        Capability.RECORDS_ASSOCIATIONS_ASSERT,
-        Capability.RECORDS_ASSOCIATIONS_CORRECT,
-        Capability.RECORDS_ASSOCIATIONS_END,
-        Capability.RECORDS_LINEAGE,
-        Capability.MEETINGS_NOTES_VERSIONS,
-        Capability.MEETINGS_NOTES_READ_VERSION,
-        # Record lineage S2 (S2 contract section 7): the same operator decision.
-        Capability.ISSUES_CLOSE,
-        Capability.ISSUES_REOPEN,
-        Capability.ISSUES_CLOSURE_READINESS,
-        Capability.ISSUES_MEMBERSHIPS_CORRECT,
-        Capability.ISSUES_HANDOFFS_RECORD,
-        Capability.ISSUES_HANDOFFS_LIST,
-        Capability.ISSUES_WORK_CREATE_TASK,
-        Capability.ISSUES_WORK_CREATE_COMMITMENT,
-        # Record lineage S3 (S3 contract section 7): the same operator decision.
-        Capability.RECORDS_ASSOCIATIONS_CONTEST,
-        Capability.RECORDS_ASSOCIATIONS_REINSTATE,
-        Capability.RECORDS_ASSOCIATIONS_HISTORY,
-        Capability.ISSUES_HISTORY,
-        Capability.ISSUES_TIMELINE,
-        Capability.ISSUES_HANDOFFS_CORRECT,
-        # Record lineage S4 (S4 contract section 6.1): the same operator decision.
-        Capability.PROGRAMS_MEMBERS_RESOLVE,
-        Capability.PROGRAMS_OVERVIEW,
-        Capability.COMMITMENTS_V2_READ,
-        Capability.COMMITMENTS_V2_LIST,
-        Capability.COMMITMENTS_V2_SEARCH,
-        Capability.COMMITMENTS_V2_WAITING_ON,
-        Capability.REPORTS_MANIFEST,
-        # Record lineage S3.1 (S3.1 contract section 7): the same operator
-        # decision; opening the lineage writes to connected clients changes no
-        # ChatLLM classification.
-        Capability.RECORDS_ASSOCIATIONS_CONFIRM,
-        Capability.ISSUES_MEMBERSHIPS_CONFIRM,
-        Capability.ISSUES_PROJECT_LINKS_CONFIRM,
-        Capability.RECORDS_LINEAGE_RELATED,
     }
 )
 
@@ -363,6 +374,62 @@ KNOWLEDGE_ASSERTION_DATA_NAMES: Final[frozenset[Capability]] = frozenset(
     }
 )
 
+#: Record lineage P1 (chatllm-data-v10): the 27 client-usable lineage data names,
+#: composed only by `MY_PA_LINEAGE_ENABLED`. An explicit name set and never a
+#: prefix: `meetings.notes.*` shares the `meetings.` prefix with always-composed
+#: names. Equals the service's `_LINEAGE_CAPABILITIES` minus the withheld
+#: attested and backfill names (pinned by a contract test; this domain module
+#: does not import the application's switch sets).
+LINEAGE_DATA_NAMES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.ISSUES_CREATE,
+        Capability.ISSUES_READ,
+        Capability.ISSUES_LIST,
+        Capability.ISSUES_UPDATE,
+        Capability.ISSUES_PROJECT_LINKS_ADD,
+        Capability.ISSUES_PROJECT_LINKS_END,
+        Capability.ISSUES_MEMBERSHIPS_ADD,
+        Capability.ISSUES_MEMBERSHIPS_END,
+        Capability.RECORDS_ASSOCIATIONS_ASSERT,
+        Capability.RECORDS_ASSOCIATIONS_CORRECT,
+        Capability.RECORDS_ASSOCIATIONS_END,
+        Capability.RECORDS_LINEAGE,
+        Capability.MEETINGS_NOTES_VERSIONS,
+        Capability.MEETINGS_NOTES_READ_VERSION,
+        Capability.ISSUES_CLOSURE_READINESS,
+        Capability.ISSUES_MEMBERSHIPS_CORRECT,
+        Capability.ISSUES_HANDOFFS_RECORD,
+        Capability.ISSUES_HANDOFFS_LIST,
+        Capability.ISSUES_WORK_CREATE_TASK,
+        Capability.ISSUES_WORK_CREATE_COMMITMENT,
+        Capability.RECORDS_ASSOCIATIONS_CONTEST,
+        Capability.RECORDS_ASSOCIATIONS_REINSTATE,
+        Capability.RECORDS_ASSOCIATIONS_HISTORY,
+        Capability.ISSUES_HISTORY,
+        Capability.ISSUES_TIMELINE,
+        Capability.ISSUES_HANDOFFS_CORRECT,
+        Capability.RECORDS_LINEAGE_RELATED,
+    }
+)
+
+#: Record lineage P1 (chatllm-data-v10): the 7 S4 Program reporting names,
+#: composed only by `MY_PA_PROGRAM_REPORTING_ENABLED` with the lineage switch
+#: (and, for the 2 Program reads, the entity plane; `programs.overview` also the
+#: Constraint plane). Explicit names: `commitments.v2.*` shares the
+#: `commitments.` prefix with always-composed names. Equals the service's
+#: `_PROGRAM_REPORTING_CAPABILITIES` (pinned by a contract test).
+PROGRAM_REPORTING_DATA_NAMES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.PROGRAMS_MEMBERS_RESOLVE,
+        Capability.PROGRAMS_OVERVIEW,
+        Capability.COMMITMENTS_V2_READ,
+        Capability.COMMITMENTS_V2_LIST,
+        Capability.COMMITMENTS_V2_SEARCH,
+        Capability.COMMITMENTS_V2_WAITING_ON,
+        Capability.REPORTS_MANIFEST,
+    }
+)
+
 _COMPATIBILITY_REPLACEMENTS: Final[Mapping[Capability, Capability]] = MappingProxyType(
     {
         Capability.CONTINUITY_TASKS_CREATE: Capability.TASKS_CREATE,
@@ -376,21 +443,10 @@ _GSQS_EXCLUSION: Final = "GSQS campaign lifecycle held out pending reclassificat
 _KNOWLEDGE_DISCOVERY_EXCLUSION: Final = (
     "bound Knowledge discovery-client control plane (exact allowlist and profile only)"
 )
-_LINEAGE_S1_EXCLUSION: Final = (
-    "record lineage S1; exposure is an operator decision (ADR-015, OD-07)"
-)
-_LINEAGE_S2_EXCLUSION: Final = (
-    "record lineage S2; exposure is an operator decision (ADR-015, OD-07)"
-)
-_LINEAGE_S3_EXCLUSION: Final = (
-    "record lineage S3; exposure is an operator decision (ADR-015, OD-07)"
-)
-_LINEAGE_S31_EXCLUSION: Final = (
-    "record lineage S3.1; exposure is an operator decision (ADR-015, OD-07)"
-)
 _LINEAGE_BACKFILL_EXCLUSION: Final = "operator-only lineage backfill"
-_PROGRAM_REPORTING_EXCLUSION: Final = (
-    "record lineage S4 Program reporting; exposure is an operator decision (ADR-015, OD-07)"
+_LINEAGE_ATTESTED_EXCLUSION: Final = (
+    "attested to the local operator surface; withheld from every client "
+    "(operator directive 2026-10-26)"
 )
 
 _EXCLUSION_RATIONALE: Final[Mapping[Capability, str]] = MappingProxyType(
@@ -416,47 +472,13 @@ _EXCLUSION_RATIONALE: Final[Mapping[Capability, str]] = MappingProxyType(
         Capability.GSQS_START: _GSQS_EXCLUSION,
         Capability.GSQS_STATUS: _GSQS_EXCLUSION,
         Capability.SOURCES_ENROLL: "operator-only source enrollment / authority expansion",
-        Capability.ISSUES_CREATE: _LINEAGE_S1_EXCLUSION,
-        Capability.ISSUES_READ: _LINEAGE_S1_EXCLUSION,
-        Capability.ISSUES_LIST: _LINEAGE_S1_EXCLUSION,
-        Capability.ISSUES_UPDATE: _LINEAGE_S1_EXCLUSION,
-        Capability.ISSUES_PROJECT_LINKS_ADD: _LINEAGE_S1_EXCLUSION,
-        Capability.ISSUES_PROJECT_LINKS_END: _LINEAGE_S1_EXCLUSION,
-        Capability.ISSUES_MEMBERSHIPS_ADD: _LINEAGE_S1_EXCLUSION,
-        Capability.ISSUES_MEMBERSHIPS_END: _LINEAGE_S1_EXCLUSION,
-        Capability.RECORDS_ASSOCIATIONS_ASSERT: _LINEAGE_S1_EXCLUSION,
-        Capability.RECORDS_ASSOCIATIONS_CORRECT: _LINEAGE_S1_EXCLUSION,
-        Capability.RECORDS_ASSOCIATIONS_END: _LINEAGE_S1_EXCLUSION,
-        Capability.RECORDS_LINEAGE: _LINEAGE_S1_EXCLUSION,
-        Capability.MEETINGS_NOTES_VERSIONS: _LINEAGE_S1_EXCLUSION,
-        Capability.MEETINGS_NOTES_READ_VERSION: _LINEAGE_S1_EXCLUSION,
-        Capability.ISSUES_CLOSE: _LINEAGE_S2_EXCLUSION,
-        Capability.ISSUES_REOPEN: _LINEAGE_S2_EXCLUSION,
-        Capability.ISSUES_CLOSURE_READINESS: _LINEAGE_S2_EXCLUSION,
-        Capability.ISSUES_MEMBERSHIPS_CORRECT: _LINEAGE_S2_EXCLUSION,
-        Capability.ISSUES_HANDOFFS_RECORD: _LINEAGE_S2_EXCLUSION,
-        Capability.ISSUES_HANDOFFS_LIST: _LINEAGE_S2_EXCLUSION,
-        Capability.ISSUES_WORK_CREATE_TASK: _LINEAGE_S2_EXCLUSION,
-        Capability.ISSUES_WORK_CREATE_COMMITMENT: _LINEAGE_S2_EXCLUSION,
-        Capability.RECORDS_ASSOCIATIONS_CONTEST: _LINEAGE_S3_EXCLUSION,
-        Capability.RECORDS_ASSOCIATIONS_REINSTATE: _LINEAGE_S3_EXCLUSION,
-        Capability.RECORDS_ASSOCIATIONS_HISTORY: _LINEAGE_S3_EXCLUSION,
-        Capability.ISSUES_HISTORY: _LINEAGE_S3_EXCLUSION,
-        Capability.ISSUES_TIMELINE: _LINEAGE_S3_EXCLUSION,
-        Capability.ISSUES_HANDOFFS_CORRECT: _LINEAGE_S3_EXCLUSION,
         Capability.RECORDS_BACKFILL_PLAN: _LINEAGE_BACKFILL_EXCLUSION,
         Capability.RECORDS_BACKFILL_REPORT: _LINEAGE_BACKFILL_EXCLUSION,
-        Capability.PROGRAMS_MEMBERS_RESOLVE: _PROGRAM_REPORTING_EXCLUSION,
-        Capability.PROGRAMS_OVERVIEW: _PROGRAM_REPORTING_EXCLUSION,
-        Capability.COMMITMENTS_V2_READ: _PROGRAM_REPORTING_EXCLUSION,
-        Capability.COMMITMENTS_V2_LIST: _PROGRAM_REPORTING_EXCLUSION,
-        Capability.COMMITMENTS_V2_SEARCH: _PROGRAM_REPORTING_EXCLUSION,
-        Capability.COMMITMENTS_V2_WAITING_ON: _PROGRAM_REPORTING_EXCLUSION,
-        Capability.REPORTS_MANIFEST: _PROGRAM_REPORTING_EXCLUSION,
-        Capability.RECORDS_ASSOCIATIONS_CONFIRM: _LINEAGE_S31_EXCLUSION,
-        Capability.ISSUES_MEMBERSHIPS_CONFIRM: _LINEAGE_S31_EXCLUSION,
-        Capability.ISSUES_PROJECT_LINKS_CONFIRM: _LINEAGE_S31_EXCLUSION,
-        Capability.RECORDS_LINEAGE_RELATED: _LINEAGE_S31_EXCLUSION,
+        Capability.ISSUES_CLOSE: _LINEAGE_ATTESTED_EXCLUSION,
+        Capability.ISSUES_REOPEN: _LINEAGE_ATTESTED_EXCLUSION,
+        Capability.RECORDS_ASSOCIATIONS_CONFIRM: _LINEAGE_ATTESTED_EXCLUSION,
+        Capability.ISSUES_MEMBERSHIPS_CONFIRM: _LINEAGE_ATTESTED_EXCLUSION,
+        Capability.ISSUES_PROJECT_LINKS_CONFIRM: _LINEAGE_ATTESTED_EXCLUSION,
     }
 )
 
@@ -486,6 +508,11 @@ def _prerequisite_of(
         return ChatLLMCompositionPrerequisite.NONE
     if capability in KNOWLEDGE_ASSERTION_DATA_NAMES:
         return ChatLLMCompositionPrerequisite.KNOWLEDGE_ASSERTIONS
+    # Record lineage P1: by explicit name, before any prefix rule.
+    if capability in LINEAGE_DATA_NAMES:
+        return ChatLLMCompositionPrerequisite.LINEAGE
+    if capability in PROGRAM_REPORTING_DATA_NAMES:
+        return ChatLLMCompositionPrerequisite.PROGRAM_REPORTING
     value = capability.value
     if value.startswith("documents."):
         return ChatLLMCompositionPrerequisite.MANAGED_DOCUMENTS

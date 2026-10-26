@@ -1,0 +1,79 @@
+{
+  "family": "bounds_exceeded",
+  "generator_version": 1,
+  "linkage": {
+    "basis": "failed",
+    "rows": []
+  },
+  "parse_inputs": {
+    "expected_data_date": null,
+    "limits": {
+      "max_rows": 3
+    }
+  },
+  "pdf_sha256": "fc85e1335f1862a23aa02e6b8daa6f45d55f2d96f8b96e4554505758db1c9dba",
+  "pdf_size_bytes": 8982,
+  "result": {
+    "counts": {
+      "activities": 0,
+      "ambiguous": 0,
+      "chart_objects_excluded": 0,
+      "duplicate_objects_collapsed": 0,
+      "issues": 1,
+      "milestones": 0,
+      "non_embedded_font_objects": 0,
+      "pages": 0,
+      "project_summaries": 0,
+      "rows": 0,
+      "suppressed_objects": 0,
+      "warnings": 0,
+      "watermark_objects_excluded": 0,
+      "wbs_summaries": 0
+    },
+    "data_date": null,
+    "document_sha256": "fc85e1335f1862a23aa02e6b8daa6f45d55f2d96f8b96e4554505758db1c9dba",
+    "document_size_bytes": 8982,
+    "issues": [
+      {
+        "code": "bounds_exceeded",
+        "field": null,
+        "page_number": null,
+        "row_ordinal": null,
+        "severity": "error"
+      }
+    ],
+    "outcome": "failed",
+    "parser_name": "cpm-workbench-full-parser",
+    "parser_version": "1",
+    "profile_id": "p6_full_v1",
+    "profile_version": 1,
+    "published_schedule_title": null,
+    "rows": [],
+    "run_date": null,
+    "schema": "cpm-full-parse-result-v1"
+  },
+  "result_sha256": "7298e8ddefe389e8d68c204705e019ba93017b2f5e808ebd1cda98676dd2c320",
+  "summary": {
+    "counts": {
+      "activities": 0,
+      "ambiguous": 0,
+      "chart_objects_excluded": 0,
+      "duplicate_objects_collapsed": 0,
+      "issues": 1,
+      "milestones": 0,
+      "non_embedded_font_objects": 0,
+      "pages": 0,
+      "project_summaries": 0,
+      "rows": 0,
+      "suppressed_objects": 0,
+      "warnings": 0,
+      "watermark_objects_excluded": 0,
+      "wbs_summaries": 0
+    },
+    "issue_counts": {
+      "bounds_exceeded": 1
+    },
+    "outcome": "failed"
+  },
+  "variant": "rows"
+}

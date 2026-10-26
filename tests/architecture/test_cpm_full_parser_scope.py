@@ -18,9 +18,13 @@ sections 1.2, 3.1, 7, 9 and 10.1. FAST guards over the committed tree:
   `math`, no `random`, no clock), and **only the generator names
   `write_goldens`**, so no test can silently regenerate a golden.
 
+* **The crosswalk is real.** Every test the contract's section 10.2-10.4
+  crosswalk names exists as a top-level test function in the module it names,
+  every name is still in the contract, and every section 10.3 gate name is an
+  assertion key inside `test_quality_gates_hold_over_every_case`.
+
 What it cannot prove: that a named test is collected and passes (the tiers
-run them). The crosswalk guard of contract section 10.4 is added by the WP-02
-parser change together with the tests it binds.
+run them).
 """
 
 from __future__ import annotations
@@ -42,6 +46,7 @@ DOMAIN: Final = ROOT / "src" / "my_pa" / "domain" / "schedule"
 INFRASTRUCTURE: Final = ROOT / "src" / "my_pa" / "infrastructure" / "schedule"
 GENERATOR: Final = ROOT / "tests" / "fixtures" / "schedule_full_pdf.py"
 GOLDENS: Final = ROOT / "tests" / "fixtures" / "schedule_full_goldens"
+CONTRACT: Final = ROOT / "docs" / "architecture" / "cpm-workbench-p6-full-v1-parser-contract.md"
 
 #: SHA-256 of lowercased `[A-Za-z0-9]+` tokens that must never appear (contract 10.1).
 DENYLIST_SHA256: Final = frozenset(
@@ -195,3 +200,151 @@ def test_only_the_generator_references_write_goldens() -> None:
             if named or imported:
                 wrong.append(f"{path.relative_to(ROOT)}:{getattr(node, 'lineno', '?')}")
     assert not wrong, wrong
+
+
+#: Contract sections 10.2-10.4: module -> the test functions the crosswalk names.
+CROSSWALK: Final[dict[str, tuple[str, ...]]] = {
+    "tests/unit/test_schedule_full_goldens.py": (
+        "test_every_case_matches_its_golden",
+        "test_linkage_is_eligible_only_for_complete_or_partial",
+        "test_merged_summary_label_is_never_an_activity_id",
+        "test_vertical_offset_summary_is_one_row",
+        "test_occluded_od_header_parses_and_only_warns",
+        "test_missing_id_row_invents_nothing_and_links_nothing",
+        "test_duration_date_tokens_stay_in_their_cells",
+        "test_chart_duplicates_contribute_zero_fragments",
+        "test_watermark_contributes_zero_fragments",
+        "test_exact_duplicate_collapses_and_overlap_is_ambiguous",
+        "test_quality_gates_hold_over_every_case",
+        "test_86_page_equivalent_reproduces_the_measured_corpus",
+        "test_generated_pdfs_are_deterministic_and_pinned",
+        "test_golden_files_are_pinned_by_digest",
+        "test_golden_directory_holds_exactly_the_registered_cases",
+        "test_86_page_equivalent_parse_time_is_reported",
+    ),
+    "tests/unit/test_schedule_full_pdf.py": (
+        "test_byte_cap_is_checked_before_pdfium_opens",
+        "test_page_cap_is_checked_before_any_page_loads",
+        "test_object_and_char_caps_stop_before_the_next_page",
+        "test_corrupt_encrypted_and_image_only_fail_closed",
+        "test_budget_refuses_at_first_and_mid_extraction_checkpoints",
+        "test_refusals_carry_codes_only",
+        "test_handles_are_closed_on_every_exit",
+        "test_extraction_is_identical_across_runs",
+        "test_form_xobject_text_is_unsupported_layout",
+        "test_object_text_is_attributed_non_generated_characters",
+        "test_no_generated_character_enters_evidence",
+        "test_suppressed_objects_resolve_deterministically",
+        "test_unmapped_characters_make_the_cell_ambiguous",
+        "test_unknown_character_handle_is_parser_exception",
+        "test_fixture_text_state_is_reset_in_every_block",
+        "test_zero_height_own_row_is_placed_by_the_seed_key",
+        "test_unknown_text_fragment_does_not_decide_the_row_case",
+        "test_security_error_and_unknown_filter_are_encrypted",
+        "test_page_origin_is_validated",
+        "test_engine_provenance_is_outside_the_digest",
+    ),
+    "tests/unit/test_schedule_full_profile.py": (
+        "test_production_limits_are_the_r2_bounds",
+        "test_limits_can_only_be_tightened",
+        "test_profile_constants_are_frozen",
+        "test_rows_group_by_seed_overlap_not_centre_distance",
+        "test_grouping_compares_to_the_fixed_seed",
+        "test_overlap_ratio_boundary_is_one_half",
+        "test_cell_band_boundaries_on_every_grid_line",
+        "test_classification_precedence",
+        "test_row_wrap_requires_pitch_below_10pt",
+        "test_hierarchy_clusters_and_stack",
+        "test_hierarchy_ambiguity_propagates",
+        "test_watermark_signature_and_ordinary_draft",
+        "test_missing_and_duplicate_ids_force_review_required",
+        "test_od_occlusion_admits_replaced_and_overlay_only",
+        "test_wrap_detects_bold_label_continuations",
+        "test_summary_requires_a_value_cell",
+        "test_level_gap_is_hierarchy_ambiguous",
+        "test_watermark_rotation_uses_decimal_tangents",
+    ),
+    "tests/unit/test_schedule_model.py": (
+        "test_activity_id_normalization_is_nfc_and_trim_only",
+        "test_cell_value_is_present_iff_published_value",
+        "test_cell_evidence_shape_is_cpm_full_cells_v1",
+        "test_closed_enums_have_exactly_the_r2_members",
+        "test_issue_severity_is_total",
+        "test_canonical_bytes_are_sorted_ascii_and_stable",
+        "test_canonical_numbers_are_fixed_decimal_strings",
+        "test_outcome_derivation_table",
+    ),
+    "tests/architecture/test_cpm_full_parser_scope.py": (
+        "test_schedule_files_carry_no_denylisted_token",
+        "test_generic_extraction_still_excludes_pdf",
+        "test_schedule_modules_neither_log_nor_print",
+    ),
+    "tests/architecture/test_scope_and_hygiene.py": (
+        "test_a_confined_dependency_is_imported_only_where_it_belongs",
+        "test_every_confined_dependency_is_actually_used_there",
+    ),
+}
+
+#: Contract section 10.3: one assertion key per R2 section 39 gate.
+QUALITY_GATES: Final = (
+    "id_precision",
+    "id_recall",
+    "id_exact",
+    "stable_false_merge",
+    "spurious_link",
+    "dropped_id_rows",
+    "summary_promotion",
+    "name_exact",
+    "date_accuracy",
+    "duration_accuracy",
+    "coerced_invalid",
+    "row_type_accuracy",
+    "hierarchy_accuracy",
+    "hierarchy_ambiguity_explicit",
+    "chart_admitted",
+    "watermark_admitted",
+    "wrap_concatenated",
+    "bad_identity_linked",
+    "provenance_match",
+    "review_required_links",
+)
+
+
+def _test_functions(path: Path) -> dict[str, ast.FunctionDef]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")
+    }
+
+
+def test_the_contract_crosswalk_names_tests_that_exist() -> None:
+    contract = CONTRACT.read_text(encoding="utf-8")
+    missing: list[str] = []
+    for module, names in CROSSWALK.items():
+        defined = _test_functions(ROOT / module)
+        for name in names:
+            if name not in defined:
+                missing.append(f"{module}::{name} is not defined")
+            if name not in contract:
+                missing.append(f"{name} is no longer named by the contract")
+    assert not missing, missing
+
+
+def test_every_quality_gate_is_an_assertion_of_the_gate_test() -> None:
+    contract = CONTRACT.read_text(encoding="utf-8")
+    goldens = ROOT / "tests" / "unit" / "test_schedule_full_goldens.py"
+    gate_test = _test_functions(goldens)["test_quality_gates_hold_over_every_case"]
+    asserted = {
+        node.slice.value
+        for statement in gate_test.body
+        if isinstance(statement, ast.Assert)
+        for node in ast.walk(statement.test)
+        if isinstance(node, ast.Subscript)
+        and isinstance(node.slice, ast.Constant)
+        and isinstance(node.slice.value, str)
+    }
+    assert asserted == set(QUALITY_GATES)
+    for gate in QUALITY_GATES:
+        assert f"`{gate}`" in contract, gate

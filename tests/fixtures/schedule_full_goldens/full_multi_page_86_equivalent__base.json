@@ -1,0 +1,41 @@
+{
+  "family": "full_multi_page_86_equivalent",
+  "generator_version": 1,
+  "linkage": {
+    "basis": "review_required",
+    "rows": []
+  },
+  "parse_inputs": {
+    "expected_data_date": null,
+    "limits": "production"
+  },
+  "pdf_sha256": "db2f8945c8d41611695245de8ba040327b65874899f8f413de7a141dfae8ff3d",
+  "pdf_size_bytes": 2619466,
+  "result": null,
+  "result_sha256": "7f181ed70c960d6bf0b707847623bb0e0a9c2a4bb7c1ba27f1b9742b20452995",
+  "summary": {
+    "counts": {
+      "activities": 2900,
+      "ambiguous": 1,
+      "chart_objects_excluded": 10160,
+      "duplicate_objects_collapsed": 0,
+      "issues": 5,
+      "milestones": 64,
+      "non_embedded_font_objects": 0,
+      "pages": 86,
+      "project_summaries": 1,
+      "rows": 3408,
+      "suppressed_objects": 0,
+      "warnings": 1,
+      "watermark_objects_excluded": 86,
+      "wbs_summaries": 442
+    },
+    "issue_counts": {
+      "activity_like_row_missing_id": 1,
+      "header_od_occluded": 1,
+      "invalid_duration": 3
+    },
+    "outcome": "review_required"
+  },
+  "variant": "base"
+}

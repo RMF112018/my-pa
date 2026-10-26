@@ -1,0 +1,77 @@
+{
+  "family": "wrong_page_size",
+  "generator_version": 1,
+  "linkage": {
+    "basis": "failed",
+    "rows": []
+  },
+  "parse_inputs": {
+    "expected_data_date": null,
+    "limits": "production"
+  },
+  "pdf_sha256": "b7e2733873fd6172ca77d8d3ac762ba95c4297995252be3892682e1921b3d7b1",
+  "pdf_size_bytes": 5855,
+  "result": {
+    "counts": {
+      "activities": 0,
+      "ambiguous": 0,
+      "chart_objects_excluded": 0,
+      "duplicate_objects_collapsed": 0,
+      "issues": 1,
+      "milestones": 0,
+      "non_embedded_font_objects": 0,
+      "pages": 0,
+      "project_summaries": 0,
+      "rows": 0,
+      "suppressed_objects": 0,
+      "warnings": 0,
+      "watermark_objects_excluded": 0,
+      "wbs_summaries": 0
+    },
+    "data_date": null,
+    "document_sha256": "b7e2733873fd6172ca77d8d3ac762ba95c4297995252be3892682e1921b3d7b1",
+    "document_size_bytes": 5855,
+    "issues": [
+      {
+        "code": "corrupt_pdf",
+        "field": null,
+        "page_number": null,
+        "row_ordinal": null,
+        "severity": "error"
+      }
+    ],
+    "outcome": "failed",
+    "parser_name": "cpm-workbench-full-parser",
+    "parser_version": "1",
+    "profile_id": "p6_full_v1",
+    "profile_version": 1,
+    "published_schedule_title": null,
+    "rows": [],
+    "run_date": null,
+    "schema": "cpm-full-parse-result-v1"
+  },
+  "result_sha256": "db783b6f24e1c737eb778034e4188189a6fe915ea86dd4a32c6ce5345a389961",
+  "summary": {
+    "counts": {
+      "activities": 0,
+      "ambiguous": 0,
+      "chart_objects_excluded": 0,
+      "duplicate_objects_collapsed": 0,
+      "issues": 1,
+      "milestones": 0,
+      "non_embedded_font_objects": 0,
+      "pages": 0,
+      "project_summaries": 0,
+      "rows": 0,
+      "suppressed_objects": 0,
+      "warnings": 0,
+      "watermark_objects_excluded": 0,
+      "wbs_summaries": 0
+    },
+    "issue_counts": {
+      "corrupt_pdf": 1
+    },
+    "outcome": "failed"
+  },
+  "variant": "zero_pages"
+}

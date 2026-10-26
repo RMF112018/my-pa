@@ -1,0 +1,79 @@
+{
+  "family": "bounds_exceeded",
+  "generator_version": 1,
+  "linkage": {
+    "basis": "failed",
+    "rows": []
+  },
+  "parse_inputs": {
+    "expected_data_date": null,
+    "limits": {
+      "max_text_chars": 200
+    }
+  },
+  "pdf_sha256": "47c16cb6da90ce75b292436bf7cdff3157ae88ca599ab37106e52144db09bb8a",
+  "pdf_size_bytes": 13013,
+  "result": {
+    "counts": {
+      "activities": 0,
+      "ambiguous": 0,
+      "chart_objects_excluded": 0,
+      "duplicate_objects_collapsed": 0,
+      "issues": 1,
+      "milestones": 0,
+      "non_embedded_font_objects": 0,
+      "pages": 0,
+      "project_summaries": 0,
+      "rows": 0,
+      "suppressed_objects": 0,
+      "warnings": 0,
+      "watermark_objects_excluded": 0,
+      "wbs_summaries": 0
+    },
+    "data_date": null,
+    "document_sha256": "47c16cb6da90ce75b292436bf7cdff3157ae88ca599ab37106e52144db09bb8a",
+    "document_size_bytes": 13013,
+    "issues": [
+      {
+        "code": "bounds_exceeded",
+        "field": null,
+        "page_number": null,
+        "row_ordinal": null,
+        "severity": "error"
+      }
+    ],
+    "outcome": "failed",
+    "parser_name": "cpm-workbench-full-parser",
+    "parser_version": "1",
+    "profile_id": "p6_full_v1",
+    "profile_version": 1,
+    "published_schedule_title": null,
+    "rows": [],
+    "run_date": null,
+    "schema": "cpm-full-parse-result-v1"
+  },
+  "result_sha256": "b240e11bcb6c9cdebe0159aafc6b05018597ad93f388c803ce50190687bf0ee9",
+  "summary": {
+    "counts": {
+      "activities": 0,
+      "ambiguous": 0,
+      "chart_objects_excluded": 0,
+      "duplicate_objects_collapsed": 0,
+      "issues": 1,
+      "milestones": 0,
+      "non_embedded_font_objects": 0,
+      "pages": 0,
+      "project_summaries": 0,
+      "rows": 0,
+      "suppressed_objects": 0,
+      "warnings": 0,
+      "watermark_objects_excluded": 0,
+      "wbs_summaries": 0
+    },
+    "issue_counts": {
+      "bounds_exceeded": 1
+    },
+    "outcome": "failed"
+  },
+  "variant": "chars"
+}

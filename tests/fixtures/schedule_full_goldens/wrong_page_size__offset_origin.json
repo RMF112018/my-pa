@@ -1,0 +1,77 @@
+{
+  "family": "wrong_page_size",
+  "generator_version": 1,
+  "linkage": {
+    "basis": "failed",
+    "rows": []
+  },
+  "parse_inputs": {
+    "expected_data_date": null,
+    "limits": "production"
+  },
+  "pdf_sha256": "5a139b195c3f6d3d2409ae461d680e8d27884d716a20a53420434aa9e53a39b3",
+  "pdf_size_bytes": 8985,
+  "result": {
+    "counts": {
+      "activities": 0,
+      "ambiguous": 0,
+      "chart_objects_excluded": 0,
+      "duplicate_objects_collapsed": 0,
+      "issues": 1,
+      "milestones": 0,
+      "non_embedded_font_objects": 0,
+      "pages": 0,
+      "project_summaries": 0,
+      "rows": 0,
+      "suppressed_objects": 0,
+      "warnings": 0,
+      "watermark_objects_excluded": 0,
+      "wbs_summaries": 0
+    },
+    "data_date": null,
+    "document_sha256": "5a139b195c3f6d3d2409ae461d680e8d27884d716a20a53420434aa9e53a39b3",
+    "document_size_bytes": 8985,
+    "issues": [
+      {
+        "code": "unsupported_layout",
+        "field": null,
+        "page_number": 1,
+        "row_ordinal": null,
+        "severity": "error"
+      }
+    ],
+    "outcome": "failed",
+    "parser_name": "cpm-workbench-full-parser",
+    "parser_version": "1",
+    "profile_id": "p6_full_v1",
+    "profile_version": 1,
+    "published_schedule_title": null,
+    "rows": [],
+    "run_date": null,
+    "schema": "cpm-full-parse-result-v1"
+  },
+  "result_sha256": "609b5c881a06928fa38ad32211b86beeba0f3cdd7b5ed4553cf6eb0e820e6f7b",
+  "summary": {
+    "counts": {
+      "activities": 0,
+      "ambiguous": 0,
+      "chart_objects_excluded": 0,
+      "duplicate_objects_collapsed": 0,
+      "issues": 1,
+      "milestones": 0,
+      "non_embedded_font_objects": 0,
+      "pages": 0,
+      "project_summaries": 0,
+      "rows": 0,
+      "suppressed_objects": 0,
+      "warnings": 0,
+      "watermark_objects_excluded": 0,
+      "wbs_summaries": 0
+    },
+    "issue_counts": {
+      "unsupported_layout": 1
+    },
+    "outcome": "failed"
+  },
+  "variant": "offset_origin"
+}

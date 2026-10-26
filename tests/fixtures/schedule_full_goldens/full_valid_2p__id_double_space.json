@@ -1,0 +1,1552 @@
+{
+  "family": "full_valid_2p",
+  "generator_version": 1,
+  "linkage": {
+    "basis": "eligible",
+    "rows": [
+      {
+        "published_activity_id": "SYN-1000",
+        "row_ordinal": 3
+      },
+      {
+        "published_activity_id": "SYN 1001",
+        "row_ordinal": 4
+      },
+      {
+        "published_activity_id": "SYN-1002",
+        "row_ordinal": 5
+      },
+      {
+        "published_activity_id": "SYN-1003",
+        "row_ordinal": 6
+      },
+      {
+        "published_activity_id": "SYN-1004",
+        "row_ordinal": 8
+      },
+      {
+        "published_activity_id": "SYN-1005",
+        "row_ordinal": 9
+      },
+      {
+        "published_activity_id": "SYN-1006",
+        "row_ordinal": 10
+      }
+    ]
+  },
+  "parse_inputs": {
+    "expected_data_date": null,
+    "limits": "production"
+  },
+  "pdf_sha256": "570fb78c2c196f8d3ac81d67be8dd3863144f63ad9199b9577134f8cb13734b0",
+  "pdf_size_bytes": 13014,
+  "result": {
+    "counts": {
+      "activities": 5,
+      "ambiguous": 0,
+      "chart_objects_excluded": 0,
+      "duplicate_objects_collapsed": 0,
+      "issues": 0,
+      "milestones": 2,
+      "non_embedded_font_objects": 0,
+      "pages": 2,
+      "project_summaries": 1,
+      "rows": 10,
+      "suppressed_objects": 0,
+      "warnings": 0,
+      "watermark_objects_excluded": 0,
+      "wbs_summaries": 2
+    },
+    "data_date": "2026-05-04",
+    "document_sha256": "570fb78c2c196f8d3ac81d67be8dd3863144f63ad9199b9577134f8cb13734b0",
+    "document_size_bytes": 13014,
+    "issues": [],
+    "outcome": "complete",
+    "parser_name": "cpm-workbench-full-parser",
+    "parser_version": "1",
+    "profile_id": "p6_full_v1",
+    "profile_version": 1,
+    "published_schedule_title": "Synthetic Project Schedule",
+    "rows": [
+      {
+        "activity_name": "Synthetic Project",
+        "bbox_normalized": [
+          "0.042949",
+          "0.126263",
+          "0.484886",
+          "0.137626"
+        ],
+        "bbox_pdf": [
+          "52.570",
+          "683.000",
+          "593.500",
+          "692.000"
+        ],
+        "cell_evidence": {
+          "cells": {
+            "activity_id": {
+              "fragments": [],
+              "state": "published_blank",
+              "text": null
+            },
+            "activity_name": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "52.570",
+                    "683.000",
+                    "137.570",
+                    "692.000"
+                  ],
+                  "font": "Arial,Bold",
+                  "font_size": "10.000",
+                  "raw": "Synthetic Project"
+                }
+              ],
+              "state": "published_value",
+              "text": "Synthetic Project"
+            },
+            "finish": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "562.000",
+                    "683.600",
+                    "593.500",
+                    "689.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "30-Oct-26"
+                }
+              ],
+              "state": "published_value",
+              "text": "30-Oct-26"
+            },
+            "original_duration": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "454.500",
+                    "683.600",
+                    "465.000",
+                    "689.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "120"
+                }
+              ],
+              "state": "published_value",
+              "text": "120"
+            },
+            "remaining_duration": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "489.000",
+                    "683.600",
+                    "496.000",
+                    "689.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "80"
+                }
+              ],
+              "state": "published_value",
+              "text": "80"
+            },
+            "start": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "501.000",
+                    "683.600",
+                    "532.500",
+                    "689.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "04-May-26"
+                }
+              ],
+              "state": "published_value",
+              "text": "04-May-26"
+            }
+          },
+          "schema": "cpm-full-cells-v1"
+        },
+        "finish": {
+          "marker": null,
+          "state": "published_value",
+          "value": "2026-10-30"
+        },
+        "hierarchy_path": [],
+        "indent_level": 0,
+        "original_duration": {
+          "state": "published_value",
+          "value": "120.000"
+        },
+        "page_number": 1,
+        "parent_row_ordinal": null,
+        "physical_line_ordinal": 1,
+        "published_activity_id": null,
+        "remaining_duration": {
+          "state": "published_value",
+          "value": "80.000"
+        },
+        "row_ordinal": 1,
+        "row_type": "project_summary",
+        "start": {
+          "marker": null,
+          "state": "published_value",
+          "value": "2026-05-04"
+        },
+        "warning_codes": []
+      },
+      {
+        "activity_name": "Synthetic Phase A",
+        "bbox_normalized": [
+          "0.046389",
+          "0.146970",
+          "0.484886",
+          "0.156061"
+        ],
+        "bbox_pdf": [
+          "56.780",
+          "668.400",
+          "593.500",
+          "675.600"
+        ],
+        "cell_evidence": {
+          "cells": {
+            "activity_id": {
+              "fragments": [],
+              "state": "published_blank",
+              "text": null
+            },
+            "activity_name": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "56.780",
+                    "668.400",
+                    "124.780",
+                    "675.600"
+                  ],
+                  "font": "Arial,Bold",
+                  "font_size": "8.000",
+                  "raw": "Synthetic Phase A"
+                }
+              ],
+              "state": "published_value",
+              "text": "Synthetic Phase A"
+            },
+            "finish": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "562.000",
+                    "668.600",
+                    "593.500",
+                    "674.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "31-Jul-26"
+                }
+              ],
+              "state": "published_value",
+              "text": "31-Jul-26"
+            },
+            "original_duration": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "458.000",
+                    "668.600",
+                    "465.000",
+                    "674.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "60"
+                }
+              ],
+              "state": "published_value",
+              "text": "60"
+            },
+            "remaining_duration": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "489.000",
+                    "668.600",
+                    "496.000",
+                    "674.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "40"
+                }
+              ],
+              "state": "published_value",
+              "text": "40"
+            },
+            "start": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "501.000",
+                    "668.600",
+                    "532.500",
+                    "674.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "04-May-26"
+                }
+              ],
+              "state": "published_value",
+              "text": "04-May-26"
+            }
+          },
+          "schema": "cpm-full-cells-v1"
+        },
+        "finish": {
+          "marker": null,
+          "state": "published_value",
+          "value": "2026-07-31"
+        },
+        "hierarchy_path": [
+          "Synthetic Project"
+        ],
+        "indent_level": 1,
+        "original_duration": {
+          "state": "published_value",
+          "value": "60.000"
+        },
+        "page_number": 1,
+        "parent_row_ordinal": 1,
+        "physical_line_ordinal": 2,
+        "published_activity_id": null,
+        "remaining_duration": {
+          "state": "published_value",
+          "value": "40.000"
+        },
+        "row_ordinal": 2,
+        "row_type": "wbs_summary",
+        "start": {
+          "marker": null,
+          "state": "published_value",
+          "value": "2026-05-04"
+        },
+        "warning_codes": []
+      },
+      {
+        "activity_name": "Synthetic activity 001",
+        "bbox_normalized": [
+          "0.049265",
+          "0.166793",
+          "0.484886",
+          "0.174747"
+        ],
+        "bbox_pdf": [
+          "60.300",
+          "653.600",
+          "593.500",
+          "659.900"
+        ],
+        "cell_evidence": {
+          "cells": {
+            "activity_id": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "60.300",
+                    "653.600",
+                    "88.300",
+                    "659.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "SYN-1000"
+                }
+              ],
+              "state": "published_value",
+              "text": "SYN-1000"
+            },
+            "activity_name": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "134.000",
+                    "653.600",
+                    "211.000",
+                    "659.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "Synthetic activity 001"
+                }
+              ],
+              "state": "published_value",
+              "text": "Synthetic activity 001"
+            },
+            "finish": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "562.000",
+                    "653.600",
+                    "593.500",
+                    "659.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "15-May-26"
+                }
+              ],
+              "state": "published_value",
+              "text": "15-May-26"
+            },
+            "original_duration": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "458.000",
+                    "653.600",
+                    "465.000",
+                    "659.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "10"
+                }
+              ],
+              "state": "published_value",
+              "text": "10"
+            },
+            "remaining_duration": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "492.500",
+                    "653.600",
+                    "496.000",
+                    "659.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "5"
+                }
+              ],
+              "state": "published_value",
+              "text": "5"
+            },
+            "start": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "501.000",
+                    "653.600",
+                    "532.500",
+                    "659.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "04-May-26"
+                }
+              ],
+              "state": "published_value",
+              "text": "04-May-26"
+            }
+          },
+          "schema": "cpm-full-cells-v1"
+        },
+        "finish": {
+          "marker": null,
+          "state": "published_value",
+          "value": "2026-05-15"
+        },
+        "hierarchy_path": [
+          "Synthetic Project",
+          "Synthetic Phase A"
+        ],
+        "indent_level": 2,
+        "original_duration": {
+          "state": "published_value",
+          "value": "10.000"
+        },
+        "page_number": 1,
+        "parent_row_ordinal": 2,
+        "physical_line_ordinal": 3,
+        "published_activity_id": "SYN-1000",
+        "remaining_duration": {
+          "state": "published_value",
+          "value": "5.000"
+        },
+        "row_ordinal": 3,
+        "row_type": "activity",
+        "start": {
+          "marker": null,
+          "state": "published_value",
+          "value": "2026-05-04"
+        },
+        "warning_codes": []
+      },
+      {
+        "activity_name": "Synthetic activity 002",
+        "bbox_normalized": [
+          "0.049265",
+          "0.185732",
+          "0.484886",
+          "0.193687"
+        ],
+        "bbox_pdf": [
+          "60.300",
+          "638.600",
+          "593.500",
+          "644.900"
+        ],
+        "cell_evidence": {
+          "cells": {
+            "activity_id": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "60.300",
+                    "638.600",
+                    "91.800",
+                    "644.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "SYN 1001"
+                }
+              ],
+              "state": "published_value",
+              "text": "SYN 1001"
+            },
+            "activity_name": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "134.000",
+                    "638.600",
+                    "211.000",
+                    "644.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "Synthetic activity 002"
+                }
+              ],
+              "state": "published_value",
+              "text": "Synthetic activity 002"
+            },
+            "finish": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "562.000",
+                    "638.600",
+                    "593.500",
+                    "644.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "27-May-26"
+                }
+              ],
+              "state": "published_value",
+              "text": "27-May-26"
+            },
+            "original_duration": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "451.000",
+                    "638.600",
+                    "465.000",
+                    "644.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "12.5"
+                }
+              ],
+              "state": "published_value",
+              "text": "12.5"
+            },
+            "remaining_duration": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "492.500",
+                    "638.600",
+                    "496.000",
+                    "644.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "0"
+                }
+              ],
+              "state": "published_value",
+              "text": "0"
+            },
+            "start": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "501.000",
+                    "638.600",
+                    "536.000",
+                    "644.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "11-May-26*"
+                }
+              ],
+              "state": "published_value",
+              "text": "11-May-26*"
+            }
+          },
+          "schema": "cpm-full-cells-v1"
+        },
+        "finish": {
+          "marker": null,
+          "state": "published_value",
+          "value": "2026-05-27"
+        },
+        "hierarchy_path": [
+          "Synthetic Project",
+          "Synthetic Phase A"
+        ],
+        "indent_level": 2,
+        "original_duration": {
+          "state": "published_value",
+          "value": "12.500"
+        },
+        "page_number": 1,
+        "parent_row_ordinal": 2,
+        "physical_line_ordinal": 4,
+        "published_activity_id": "SYN 1001",
+        "remaining_duration": {
+          "state": "published_value",
+          "value": "0.000"
+        },
+        "row_ordinal": 4,
+        "row_type": "activity",
+        "start": {
+          "marker": "*",
+          "state": "published_value",
+          "value": "2026-05-11"
+        },
+        "warning_codes": []
+      },
+      {
+        "activity_name": "Synthetic start milestone",
+        "bbox_normalized": [
+          "0.049265",
+          "0.204672",
+          "0.435049",
+          "0.212626"
+        ],
+        "bbox_pdf": [
+          "60.300",
+          "623.600",
+          "532.500",
+          "629.900"
+        ],
+        "cell_evidence": {
+          "cells": {
+            "activity_id": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "60.300",
+                    "623.600",
+                    "88.300",
+                    "629.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "SYN-1002"
+                }
+              ],
+              "state": "published_value",
+              "text": "SYN-1002"
+            },
+            "activity_name": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "134.000",
+                    "623.600",
+                    "221.500",
+                    "629.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "Synthetic start milestone"
+                }
+              ],
+              "state": "published_value",
+              "text": "Synthetic start milestone"
+            },
+            "finish": {
+              "fragments": [],
+              "state": "published_blank",
+              "text": null
+            },
+            "original_duration": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "461.500",
+                    "623.600",
+                    "465.000",
+                    "629.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "0"
+                }
+              ],
+              "state": "published_value",
+              "text": "0"
+            },
+            "remaining_duration": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "492.500",
+                    "623.600",
+                    "496.000",
+                    "629.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "0"
+                }
+              ],
+              "state": "published_value",
+              "text": "0"
+            },
+            "start": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "501.000",
+                    "623.600",
+                    "532.500",
+                    "629.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "04-May-26"
+                }
+              ],
+              "state": "published_value",
+              "text": "04-May-26"
+            }
+          },
+          "schema": "cpm-full-cells-v1"
+        },
+        "finish": {
+          "marker": null,
+          "state": "published_blank",
+          "value": null
+        },
+        "hierarchy_path": [
+          "Synthetic Project",
+          "Synthetic Phase A"
+        ],
+        "indent_level": 2,
+        "original_duration": {
+          "state": "published_value",
+          "value": "0.000"
+        },
+        "page_number": 1,
+        "parent_row_ordinal": 2,
+        "physical_line_ordinal": 5,
+        "published_activity_id": "SYN-1002",
+        "remaining_duration": {
+          "state": "published_value",
+          "value": "0.000"
+        },
+        "row_ordinal": 5,
+        "row_type": "milestone",
+        "start": {
+          "marker": null,
+          "state": "published_value",
+          "value": "2026-05-04"
+        },
+        "warning_codes": []
+      },
+      {
+        "activity_name": "Synthetic activity 004",
+        "bbox_normalized": [
+          "0.049265",
+          "0.223611",
+          "0.484886",
+          "0.231566"
+        ],
+        "bbox_pdf": [
+          "60.300",
+          "608.600",
+          "593.500",
+          "614.900"
+        ],
+        "cell_evidence": {
+          "cells": {
+            "activity_id": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "60.300",
+                    "608.600",
+                    "88.300",
+                    "614.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "SYN-1003"
+                }
+              ],
+              "state": "published_value",
+              "text": "SYN-1003"
+            },
+            "activity_name": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "134.000",
+                    "608.600",
+                    "211.000",
+                    "614.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "Synthetic activity 004"
+                }
+              ],
+              "state": "published_value",
+              "text": "Synthetic activity 004"
+            },
+            "finish": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "562.000",
+                    "608.600",
+                    "593.500",
+                    "614.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "12-Jun-26"
+                }
+              ],
+              "state": "published_value",
+              "text": "12-Jun-26"
+            },
+            "original_duration": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "458.000",
+                    "608.600",
+                    "465.000",
+                    "614.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "20"
+                }
+              ],
+              "state": "published_value",
+              "text": "20"
+            },
+            "remaining_duration": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "489.000",
+                    "608.600",
+                    "496.000",
+                    "614.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "20"
+                }
+              ],
+              "state": "published_value",
+              "text": "20"
+            },
+            "start": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "501.000",
+                    "608.600",
+                    "532.500",
+                    "614.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "18-May-26"
+                }
+              ],
+              "state": "published_value",
+              "text": "18-May-26"
+            }
+          },
+          "schema": "cpm-full-cells-v1"
+        },
+        "finish": {
+          "marker": null,
+          "state": "published_value",
+          "value": "2026-06-12"
+        },
+        "hierarchy_path": [
+          "Synthetic Project",
+          "Synthetic Phase A"
+        ],
+        "indent_level": 2,
+        "original_duration": {
+          "state": "published_value",
+          "value": "20.000"
+        },
+        "page_number": 1,
+        "parent_row_ordinal": 2,
+        "physical_line_ordinal": 6,
+        "published_activity_id": "SYN-1003",
+        "remaining_duration": {
+          "state": "published_value",
+          "value": "20.000"
+        },
+        "row_ordinal": 6,
+        "row_type": "activity",
+        "start": {
+          "marker": null,
+          "state": "published_value",
+          "value": "2026-05-18"
+        },
+        "warning_codes": []
+      },
+      {
+        "activity_name": "Synthetic Phase B",
+        "bbox_normalized": [
+          "0.046389",
+          "0.128030",
+          "0.484886",
+          "0.137121"
+        ],
+        "bbox_pdf": [
+          "56.780",
+          "683.400",
+          "593.500",
+          "690.600"
+        ],
+        "cell_evidence": {
+          "cells": {
+            "activity_id": {
+              "fragments": [],
+              "state": "published_blank",
+              "text": null
+            },
+            "activity_name": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "56.780",
+                    "683.400",
+                    "124.780",
+                    "690.600"
+                  ],
+                  "font": "Arial,Bold",
+                  "font_size": "8.000",
+                  "raw": "Synthetic Phase B"
+                }
+              ],
+              "state": "published_value",
+              "text": "Synthetic Phase B"
+            },
+            "finish": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "562.000",
+                    "683.600",
+                    "593.500",
+                    "689.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "31-Jul-26"
+                }
+              ],
+              "state": "published_value",
+              "text": "31-Jul-26"
+            },
+            "original_duration": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "458.000",
+                    "683.600",
+                    "465.000",
+                    "689.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "60"
+                }
+              ],
+              "state": "published_value",
+              "text": "60"
+            },
+            "remaining_duration": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "489.000",
+                    "683.600",
+                    "496.000",
+                    "689.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "40"
+                }
+              ],
+              "state": "published_value",
+              "text": "40"
+            },
+            "start": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "501.000",
+                    "683.600",
+                    "532.500",
+                    "689.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "04-May-26"
+                }
+              ],
+              "state": "published_value",
+              "text": "04-May-26"
+            }
+          },
+          "schema": "cpm-full-cells-v1"
+        },
+        "finish": {
+          "marker": null,
+          "state": "published_value",
+          "value": "2026-07-31"
+        },
+        "hierarchy_path": [
+          "Synthetic Project"
+        ],
+        "indent_level": 1,
+        "original_duration": {
+          "state": "published_value",
+          "value": "60.000"
+        },
+        "page_number": 2,
+        "parent_row_ordinal": 1,
+        "physical_line_ordinal": 1,
+        "published_activity_id": null,
+        "remaining_duration": {
+          "state": "published_value",
+          "value": "40.000"
+        },
+        "row_ordinal": 7,
+        "row_type": "wbs_summary",
+        "start": {
+          "marker": null,
+          "state": "published_value",
+          "value": "2026-05-04"
+        },
+        "warning_codes": []
+      },
+      {
+        "activity_name": "Synthetic activity 005",
+        "bbox_normalized": [
+          "0.049265",
+          "0.147854",
+          "0.484886",
+          "0.155808"
+        ],
+        "bbox_pdf": [
+          "60.300",
+          "668.600",
+          "593.500",
+          "674.900"
+        ],
+        "cell_evidence": {
+          "cells": {
+            "activity_id": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "60.300",
+                    "668.600",
+                    "88.300",
+                    "674.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "SYN-1004"
+                }
+              ],
+              "state": "published_value",
+              "text": "SYN-1004"
+            },
+            "activity_name": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "134.000",
+                    "668.600",
+                    "211.000",
+                    "674.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "Synthetic activity 005"
+                }
+              ],
+              "state": "published_value",
+              "text": "Synthetic activity 005"
+            },
+            "finish": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "562.000",
+                    "668.600",
+                    "593.500",
+                    "674.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "21-Aug-26"
+                }
+              ],
+              "state": "published_value",
+              "text": "21-Aug-26"
+            },
+            "original_duration": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "458.000",
+                    "668.600",
+                    "465.000",
+                    "674.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "15"
+                }
+              ],
+              "state": "published_value",
+              "text": "15"
+            },
+            "remaining_duration": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "489.000",
+                    "668.600",
+                    "496.000",
+                    "674.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "15"
+                }
+              ],
+              "state": "published_value",
+              "text": "15"
+            },
+            "start": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "501.000",
+                    "668.600",
+                    "532.500",
+                    "674.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "03-Aug-26"
+                }
+              ],
+              "state": "published_value",
+              "text": "03-Aug-26"
+            }
+          },
+          "schema": "cpm-full-cells-v1"
+        },
+        "finish": {
+          "marker": null,
+          "state": "published_value",
+          "value": "2026-08-21"
+        },
+        "hierarchy_path": [
+          "Synthetic Project",
+          "Synthetic Phase B"
+        ],
+        "indent_level": 2,
+        "original_duration": {
+          "state": "published_value",
+          "value": "15.000"
+        },
+        "page_number": 2,
+        "parent_row_ordinal": 7,
+        "physical_line_ordinal": 2,
+        "published_activity_id": "SYN-1004",
+        "remaining_duration": {
+          "state": "published_value",
+          "value": "15.000"
+        },
+        "row_ordinal": 8,
+        "row_type": "activity",
+        "start": {
+          "marker": null,
+          "state": "published_value",
+          "value": "2026-08-03"
+        },
+        "warning_codes": []
+      },
+      {
+        "activity_name": "Synthetic finish milestone",
+        "bbox_normalized": [
+          "0.049265",
+          "0.166793",
+          "0.484886",
+          "0.174747"
+        ],
+        "bbox_pdf": [
+          "60.300",
+          "653.600",
+          "593.500",
+          "659.900"
+        ],
+        "cell_evidence": {
+          "cells": {
+            "activity_id": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "60.300",
+                    "653.600",
+                    "88.300",
+                    "659.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "SYN-1005"
+                }
+              ],
+              "state": "published_value",
+              "text": "SYN-1005"
+            },
+            "activity_name": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "134.000",
+                    "653.600",
+                    "225.000",
+                    "659.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "Synthetic finish milestone"
+                }
+              ],
+              "state": "published_value",
+              "text": "Synthetic finish milestone"
+            },
+            "finish": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "562.000",
+                    "653.600",
+                    "593.500",
+                    "659.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "30-Oct-26"
+                }
+              ],
+              "state": "published_value",
+              "text": "30-Oct-26"
+            },
+            "original_duration": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "461.500",
+                    "653.600",
+                    "465.000",
+                    "659.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "0"
+                }
+              ],
+              "state": "published_value",
+              "text": "0"
+            },
+            "remaining_duration": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "492.500",
+                    "653.600",
+                    "496.000",
+                    "659.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "0"
+                }
+              ],
+              "state": "published_value",
+              "text": "0"
+            },
+            "start": {
+              "fragments": [],
+              "state": "published_blank",
+              "text": null
+            }
+          },
+          "schema": "cpm-full-cells-v1"
+        },
+        "finish": {
+          "marker": null,
+          "state": "published_value",
+          "value": "2026-10-30"
+        },
+        "hierarchy_path": [
+          "Synthetic Project",
+          "Synthetic Phase B"
+        ],
+        "indent_level": 2,
+        "original_duration": {
+          "state": "published_value",
+          "value": "0.000"
+        },
+        "page_number": 2,
+        "parent_row_ordinal": 7,
+        "physical_line_ordinal": 3,
+        "published_activity_id": "SYN-1005",
+        "remaining_duration": {
+          "state": "published_value",
+          "value": "0.000"
+        },
+        "row_ordinal": 9,
+        "row_type": "milestone",
+        "start": {
+          "marker": null,
+          "state": "published_blank",
+          "value": null
+        },
+        "warning_codes": []
+      },
+      {
+        "activity_name": "Synthetic activity 007",
+        "bbox_normalized": [
+          "0.049265",
+          "0.185732",
+          "0.484886",
+          "0.193687"
+        ],
+        "bbox_pdf": [
+          "60.300",
+          "638.600",
+          "593.500",
+          "644.900"
+        ],
+        "cell_evidence": {
+          "cells": {
+            "activity_id": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "60.300",
+                    "638.600",
+                    "88.300",
+                    "644.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "SYN-1006"
+                }
+              ],
+              "state": "published_value",
+              "text": "SYN-1006"
+            },
+            "activity_name": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "134.000",
+                    "638.600",
+                    "211.000",
+                    "644.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "Synthetic activity 007"
+                }
+              ],
+              "state": "published_value",
+              "text": "Synthetic activity 007"
+            },
+            "finish": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "562.000",
+                    "638.600",
+                    "593.500",
+                    "644.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "10-Sep-26"
+                }
+              ],
+              "state": "published_value",
+              "text": "10-Sep-26"
+            },
+            "original_duration": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "461.500",
+                    "638.600",
+                    "465.000",
+                    "644.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "8"
+                }
+              ],
+              "state": "published_value",
+              "text": "8"
+            },
+            "remaining_duration": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "492.500",
+                    "638.600",
+                    "496.000",
+                    "644.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "8"
+                }
+              ],
+              "state": "published_value",
+              "text": "8"
+            },
+            "start": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "501.000",
+                    "638.600",
+                    "532.500",
+                    "644.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "01-Sep-26"
+                }
+              ],
+              "state": "published_value",
+              "text": "01-Sep-26"
+            }
+          },
+          "schema": "cpm-full-cells-v1"
+        },
+        "finish": {
+          "marker": null,
+          "state": "published_value",
+          "value": "2026-09-10"
+        },
+        "hierarchy_path": [
+          "Synthetic Project",
+          "Synthetic Phase B"
+        ],
+        "indent_level": 2,
+        "original_duration": {
+          "state": "published_value",
+          "value": "8.000"
+        },
+        "page_number": 2,
+        "parent_row_ordinal": 7,
+        "physical_line_ordinal": 4,
+        "published_activity_id": "SYN-1006",
+        "remaining_duration": {
+          "state": "published_value",
+          "value": "8.000"
+        },
+        "row_ordinal": 10,
+        "row_type": "activity",
+        "start": {
+          "marker": null,
+          "state": "published_value",
+          "value": "2026-09-01"
+        },
+        "warning_codes": []
+      }
+    ],
+    "run_date": "2026-05-11",
+    "schema": "cpm-full-parse-result-v1"
+  },
+  "result_sha256": "4498fcccbe5028293d856d3974c9cd925ab78a7a8c121b8422bb8e7f644a34b2",
+  "summary": {
+    "counts": {
+      "activities": 5,
+      "ambiguous": 0,
+      "chart_objects_excluded": 0,
+      "duplicate_objects_collapsed": 0,
+      "issues": 0,
+      "milestones": 2,
+      "non_embedded_font_objects": 0,
+      "pages": 2,
+      "project_summaries": 1,
+      "rows": 10,
+      "suppressed_objects": 0,
+      "warnings": 0,
+      "watermark_objects_excluded": 0,
+      "wbs_summaries": 2
+    },
+    "issue_counts": {},
+    "outcome": "complete"
+  },
+  "variant": "id_double_space"
+}

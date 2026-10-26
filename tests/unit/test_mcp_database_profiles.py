@@ -265,8 +265,8 @@ def test_managed_store_suppression_skips_factory_and_legacy_default_composes(
     suppressed = gateway.build_gateway_runtime(
         settings,
         data_engine=engine,
-        independent_audit_engine=engine,
-        controls_engine=engine,
+        independent_audit_engine=MagicMock(),
+        controls_engine=MagicMock(),
         permit_managed_documents=False,
     )
     factory.assert_not_called()
@@ -274,8 +274,8 @@ def test_managed_store_suppression_skips_factory_and_legacy_default_composes(
     legacy = gateway.build_gateway_runtime(
         settings,
         data_engine=engine,
-        independent_audit_engine=engine,
-        controls_engine=engine,
+        independent_audit_engine=MagicMock(),
+        controls_engine=MagicMock(),
     )
     factory.assert_called_once_with(settings, engine)
     assert legacy.service._managed_store_or_none is store
@@ -385,12 +385,13 @@ def test_restricted_composition_never_builds_the_program_engine_from_settings(
         pytest.fail("an injected data engine must not be paired with a settings-built pool")
 
     monkeypatch.setattr(gateway, "create_database_engine", forbidden)
-    engine = MagicMock()
+    # Three distinct engines and pools: #340 refuses an injected data engine
+    # that shares an engine or pool with the audit or control path.
     restricted = gateway.build_gateway_runtime(
         settings,
-        data_engine=engine,
-        independent_audit_engine=engine,
-        controls_engine=engine,
+        data_engine=MagicMock(),
+        independent_audit_engine=MagicMock(),
+        controls_engine=MagicMock(),
         permit_reenrichment=False,
         permit_managed_documents=False,
     )

@@ -19,6 +19,13 @@ S5a and section 11 records why.
 full. All counts in this file are digits on purpose (spelled-count guard). No path to a
 file that does not yet exist is written as a Markdown link (the CI relative-link check).
 
+**Revision R5-1.** Design review R5 (verdict BLOCK at `33748fc1`) findings R5-F01…F15 are
+resolved in place: text acquisition from the text page's attributed characters with a
+deterministic suppressed-object rule (sections 2.4, 5.4), the bold-label wrap and the R2
+§15.6 summary rule (5.9, 5.10), the OD overlay shape (4.5), level gaps (5.11), the
+non-embedded-font residual and `engine` provenance (1.3, 6.4, 6.6), a reachable prove-red
+plan (10.6), and the minor items (sections 2.1, 2.3, 4.2, 4.6, 5.2, 5.14, 6.2, 7, 11).
+
 **Neutrality.** No proprietary project, company, person, filename, activity ID, title or
 schedule byte from the R2 research corpus appears in this contract, in S5a source, in
 S5a fixtures or in S5a goldens. Synthetic text is invented (`Synthetic Project`,
@@ -61,9 +68,12 @@ S5a fixtures or in S5a goldens. Synthetic text is invented (`Synthetic Project`,
 ### 1.3 What "done" means for S5a
 
 `parse_full_schedule(bytes)` returns a deterministic, bounded, typed
-`ScheduleParseResult` whose canonical bytes are identical across runs, across macOS and
-Linux, and across `pypdfium2` 5.0.0 (floor, PDFium 143.0.7483.0) and 5.13.0 (PDFium
-153.0.7999.0); every R2 §37 family has a generated fixture, independent ground truth and a
+`ScheduleParseResult` whose canonical bytes are identical across runs; for the **synthetic
+fixtures** (whose Type3 fonts carry their own glyph boxes) they are also identical across
+macOS and Linux and across `pypdfium2` 5.0.0 (floor, PDFium 143.0.7483.0) and 5.13.0
+(PDFium 153.0.7999.0). For real inputs whose fonts are not embedded, geometry may depend on
+the host font environment (U-10); the result therefore carries the PDFium build as
+non-digested provenance (section 6.4). Every R2 §37 family has a generated fixture, independent ground truth and a
 pinned golden; every parser-scope R2 §38 assertion and §39 gate has a named test; FAST,
 ruff, ruff format, mypy (current and floor-pinned) and the shard partition proof are
 green. Nothing is persisted or served.
@@ -77,19 +87,19 @@ green. Nothing is persisted or served.
 | # | R2 claim / assumption | Repository truth at `787d806a` | S5a decision |
 |---|---|---|---|
 | T-01 | Reviewed head `d6c706bb`, 178 capabilities, 47 purposes, Alembic 108 / head `7d9a450dfd07` | Head `787d806a`; Alembic head `c5260943d933` (122 revisions per `docs/architecture/00_ARCHITECTURE_INDEX.md`) | S5a touches none of these registries; nothing to rederive except module/test counts (T-14) |
-| T-02 | `pypdfium2` is an existing dependency usable for schedule parsing | `pyproject.toml` declares `"pypdfium2>=5.0,<6"`; its comment block (lines 178–193) states the use as "pinned pdfium rasterizer for GoodNotes visual page identity" only, with "Floor 5.0" justified by `PYPDFIUM_INFO`/`PDFIUM_INFO` | Range unchanged. The comment block gains a schedule paragraph (section 7.6): current use now also "read text objects (text, base-font name, font size, bounds, matrix) from an admitted Full-Schedule PDF under `src/my_pa/infrastructure/schedule/pdf.py`; no rendering" and the floor rationale gains "the raw `FPDFTextObj_*`/`FPDFFont_*`/`FPDFPageObj_*` functions S5a uses exist at 5.0.0" |
+| T-02 | `pypdfium2` is an existing dependency usable for schedule parsing | `pyproject.toml` declares `"pypdfium2>=5.0,<6"`; its comment block (lines 178–193) states the use as "pinned pdfium rasterizer for GoodNotes visual page identity" only, with "Floor 5.0" justified by `PYPDFIUM_INFO`/`PDFIUM_INFO` | Range unchanged. The comment block gains a schedule paragraph (section 7.6): current use now also "read text objects (geometry, base-font name, font size, matrix) and the text page's per-character attribution from an admitted Full-Schedule PDF under `src/my_pa/infrastructure/schedule/pdf.py`; no rendering" and the floor rationale gains "the raw `FPDFText_*`/`FPDFTextObj_*`/`FPDFFont_*`/`FPDFPageObj_*`/`FPDFPage_Get*Box` functions S5a uses exist at 5.0.0" |
 | T-03 | "Exact two-subtree confinement" (R2 §41, R2-AC-008) | `tests/architecture/test_scope_and_hygiene.py` `CONFINED_IMPORT_ROOTS` maps each root to **one** subtree string; `"pypdfium2": "infrastructure/goodnotes"`; importers today: `infrastructure/goodnotes/pdf.py`, `infrastructure/goodnotes/visual.py` | Guard change in section 2.2 (module-exact for schedule — D-03) |
 | T-04 | Application must not import a PDF engine | `tests/architecture/test_dependency_direction.py` `PROVIDER_AND_PARSER_ROOTS` includes `pypdfium2`; application/adapters/contracts rules and the planted-import self-test already cover it; `test_domain_uses_only_the_standard_library` forbids third-party imports under `domain/` | No change to that file. `domain/schedule` is stdlib-only by that existing rule |
 | T-05 | R2 §12.1 primitive "`PdfTextObj`" (R2-D-007) | The helper class `pypdfium2.PdfTextObj` (and `PdfFont`) exists at 5.13.0 but **not** at the 5.0.0 floor (measured: floor `dir(pypdfium2)` has no `PdfTextObj`, no `PdfFont`) | S5a uses only `PdfDocument`/`PdfPage`/`PdfTextPage` helpers (present at both) plus raw `pypdfium2.raw` functions (section 2.3). The repository record type is named `PdfTextObject` (R2 §43.4) and is not the library class — D-05 |
 | T-06 | GoodNotes idiom | `src/my_pa/infrastructure/goodnotes/pdf.py`: `import pypdfium2 as pdfium  # type: ignore[import-untyped]`; `%PDF` magic check before `pdfium.PdfDocument(payload)`; `PdfiumError` mapped to `ValueError` with a fixed message; `document.close()` in `finally` | Same import line and ignore code; same magic-before-open order (stricter: `%PDF-` at offset 0); same close-in-`finally`; refusal carries a closed code, never a message containing source text |
 | T-07 | — | `pypdfium2` is untyped (`import-untyped`); everything from `pypdfium2.raw` is `Any` under strict mypy | `pdf.py` converts every raw return to a concrete Python type at the call site (`int(...)`, `float(...)`, `bytes(...)`) so no `Any` escapes the module |
-| T-08 | Tests in `tests/unit/test_schedule_full_profile.py` etc. (R2 §42) | `tests/unit/` holds 234 entries, none schedule-named; markers are strict (`--strict-markers`); `slow` is excluded from every CI lane (`tests/architecture/test_knowledge_tests_declare_lanes.py` docstring and the FAST `-m` expression) | S5a test modules are unmarked FAST tests; nothing S5a needs may be `slow` (section 10.4) |
+| T-08 | Tests in `tests/unit/test_schedule_full_profile.py` etc. (R2 §42) | `git ls-files tests/unit` lists 234 tracked files, none schedule-named; markers are strict (`--strict-markers`); `slow` is excluded from every CI lane (`tests/architecture/test_knowledge_tests_declare_lanes.py` docstring and the FAST `-m` expression) | S5a test modules are unmarked FAST tests; nothing S5a needs may be `slow` (section 10.4) |
 | T-09 | — | CI is sharded: `tests/ci_shard.py` places any file absent from `tests/ci_shard_weights.json` by a stable SHA-256 of its path; `python -m tests.ci_shard verify --lane fast --shards 3 -m "<FAST expression>"` is the partition proof run by `validate-static`; `tests/architecture/test_ci_shards*.py` pin the matrix | New test files need no weight-table edit; implementers run the verify command (section 10.5) |
 | T-10 | — | `.github/workflows/repository-checks.yml` runs on `ubuntu-latest`; the `dependency-floor` job installs every runtime floor (`pypdfium2==5.0.0` among them) and runs FAST and a bare `mypy` | Goldens must be byte-identical on Linux and at the floor — section 6.6 and D-14 make that hold by construction |
 | T-11 | Synthetic fixtures via "a small vector/text PDF generator" | Precedent `tests/fixtures/tbr_workbook.py` writes real OOXML with stdlib only; `src/my_pa/infrastructure/goodnotes/pdf.py` `_assemble_pdf` writes a minimal xref PDF with stdlib only | Generator `tests/fixtures/schedule_full_pdf.py`, stdlib only (section 8) |
 | T-12 | Generic extraction must stay separate | `SUPPORTED_MEDIA_TYPES: Final = frozenset({"text/markdown", "text/plain"})` in `src/my_pa/domain/extraction/text.py`; `application/capabilities.py` derives its content-type manifest from it | Unchanged; a scope test re-asserts it (section 10.1) |
 | T-13 | `domain/schedule/model.py` is WP-01 | Neither `src/my_pa/domain/schedule/` nor `src/my_pa/infrastructure/schedule/` exists | S5a creates both with the parser-facing subset only (section 3) — D-01 |
-| T-14 | Count guards | `tests/architecture/test_spelled_counts_match_the_sets_they_name.py::test_section_3_states_the_module_counts_it_says_it_derives` binds `docs/plans/mcv-completion-plan.md` line 77 ("436 … Python modules under `src/my_pa` and 823 … test modules", spelled out) to `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"` | S5a adds 6 source modules (436 → 442) and 5 test modules (823 → 828); the implementer who lands the last module updates that sentence (spelled out, in the file's own style) and adds a dated "Current-tree remeasurement" paragraph after it, demoting the previous one to "Historical", re-measured with the two commands |
+| T-14 | Count guards | `tests/architecture/test_spelled_counts_match_the_sets_they_name.py::test_section_3_states_the_module_counts_it_says_it_derives` binds `docs/plans/mcv-completion-plan.md` line 77 ("436 … Python modules under `src/my_pa` and 823 … test modules", spelled out) to `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"` | S5a adds 6 source modules (436 → 442) and 5 test modules (823 → 828); the implementer who lands the last module updates that sentence (spelled out, in the file's own style) and adds a dated "Current-tree remeasurement" paragraph after it, demoting the previous one to "Historical", re-measured with the two commands. **Also lockstep (F10):** `tests/architecture/test_claimed_test_counts_match_collection.py` binds, by equality, figures in `docs/plans/relationship-intelligence-implementation-plan.md` — the "Types" row's mypy corpus "clean over N files" (line 663 at the basis, 616; derived from `[tool.mypy] files`, which the 6 new `src` modules change), the "FAST tier validation" row's collected/passed figures (line 660 at the basis; the new FAST tests change them) and the "Architecture tier" row's collected/passed figure (line 661 at the basis; the new architecture module changes it). The last-landing implementer re-measures each with the command the row names and adds a dated current paragraph in the row's own style, demoting the prior one to "Historical" |
 | T-15 | — | ruff: line length 100, `select` includes `S` (bandit) and `ANN`; `tests/**` ignores only `S101` | The generator's RC4/MD5 key derivation must call `hashlib.md5(..., usedforsecurity=False)` (S324); no `random`; no `assert` in `src/` |
 | T-16 | — | mypy: `strict = true`, `warn_unreachable`, files `src migrations apps ops`; floor venv available at `/tmp/m1-floor` (Python 3.12, `pypdfium2` 5.0.0, SQLAlchemy 2.0.32, mypy 2.4.0) | Both the current venv and the floor venv run a bare `mypy` clean |
 | T-17 | Architecture docs registration | Lineage contracts are registered only as rows of the "Architecture documents" table in `docs/architecture/00_ARCHITECTURE_INDEX.md`; `docs/00_REPOSITORY_SOURCE_INDEX.md` routes to that index | This contract is registered the same way (one row) |
@@ -128,15 +138,16 @@ Verified by reading `pypdfium2.raw` argtypes in `~/my-pa/.venv` (5.13.0) and
 
 | Purpose | Call | Notes |
 |---|---|---|
-| open | `pypdfium2.PdfDocument(data: bytes, password=None)` | raises `PdfiumError` with `.err_code` (`raw.FPDF_ERR_PASSWORD` = 4, `raw.FPDF_ERR_FORMAT` = 3, measured at both versions); `data` must be `bytes` (a `str` is a path) |
+| open | `pypdfium2.PdfDocument(data: bytes, password=None)` | raises `PdfiumError` with `.err_code` (`raw.FPDF_ERR_PASSWORD` = 4, `raw.FPDF_ERR_SECURITY` = 5, `raw.FPDF_ERR_FORMAT` = 3, measured at both versions; an `/Encrypt` with an unknown `/Filter` gives 5, a `/Standard` handler with an unsupported revision gives 4); `data` must be `bytes` (a `str` is a path) |
 | encryption | `raw.FPDF_GetSecurityHandlerRevision(doc.raw)` | `-1` means unencrypted; an RC4 rev-2 file with an empty user password **opens** and returns 2 (measured) |
 | page count | `len(doc)` (`FPDF_GetPageCount`) | page tree only; no content parse |
 | page size without loading | `raw.FPDF_GetPageSizeByIndexF(doc.raw, i, byref(FS_SIZEF))` | checked for every page before any page loads |
-| page | `doc[i]` → `PdfPage`; `raw.FPDFPage_GetRotation(page.raw)`; `page.close()` | |
-| text page | `page.get_textpage()` → `PdfTextPage`; `.close()` | required by `FPDFTextObj_GetText` |
+| page | `doc[i]` → `PdfPage`; `raw.FPDFPage_GetRotation(page.raw)`; `raw.FPDFPage_GetMediaBox` / `raw.FPDFPage_GetCropBox(page.raw, &l, &b, &r, &t)`; `page.close()` | `GetCropBox` returns 0 when no `/CropBox` is present (measured); an offset `/MediaBox [100 50 1324 842]` passes the size-by-index check (measured), hence V7's origin check |
+| text page | `page.get_textpage()` → `PdfTextPage`; `.close()` | the source of every character (section 2.4) |
+| characters | `raw.FPDFText_CountChars(tp)`, `raw.FPDFText_GetUnicode(tp, i)`, `raw.FPDFText_GetTextObject(tp, i)`, `raw.FPDFText_IsGenerated(tp, i)`, `raw.FPDFText_HasUnicodeMapError(tp, i)` | the only text source (section 2.4); `GetTextObject` returns NULL for generated characters (measured); handles are compared by `ctypes.cast(h, c_void_p).value` |
+| embedding | `raw.FPDFFont_GetIsEmbedded(font)` | 1 for the Type3 fixtures (measured); counted, not enforced (D-36) |
 | objects | `raw.FPDFPage_CountObjects`, `raw.FPDFPage_GetObject`, `raw.FPDFPageObj_GetType` (`FPDF_PAGEOBJ_TEXT`, `FPDF_PAGEOBJ_FORM`) | top level only; forms see below |
 | form XObject | `raw.FPDFFormObj_CountObjects`, `raw.FPDFFormObj_GetObject` | used only to count nested objects and detect nested text (section 5.2 V8) |
-| text | `raw.FPDFTextObj_GetText(obj, textpage, buf, n)` | returns byte length of UTF-16LE including a 2-byte NUL |
 | font | `raw.FPDFTextObj_GetFont(obj)`, `raw.FPDFFont_GetBaseFontName(font, buf, n)` | NUL-terminated bytes, decoded `latin-1` (lossless) |
 | size | `raw.FPDFTextObj_GetFontSize(obj, byref(c_float))` | the `Tf` size; matrix scale is separate |
 | bounds | `raw.FPDFPageObj_GetBounds(obj, &l, &b, &r, &t)` | page space, glyph-tight (measured: depends on the font program — section 6.6) |
@@ -144,9 +155,60 @@ Verified by reading `pypdfium2.raw` argtypes in `~/my-pa/.venv` (5.13.0) and
 
 Not called: rendering (`FPDF_RenderPage*`, `PdfPage.render`), `init_forms`/
 `FPDFDOC_InitFormFillEnvironment`, attachments, bookmarks, links, actions, annotations,
-`PdfTextPage.get_text_range`/character APIs, `FPDFPageObj_GetRotatedBounds`,
-`PdfPage.get_objects`. The installed PDFium builds report empty feature flags
-(`PDFIUM_INFO.flags == ()`, origin `pdfium-binaries`), i.e. no V8 and no XFA.
+`FPDFTextObj_GetText` (section 2.4), `PdfTextPage.get_text_range`,
+`FPDFPageObj_GetRotatedBounds`, `PdfPage.get_objects`. The installed PDFium builds report
+empty feature flags (`PDFIUM_INFO.flags == ()`, origin `pdfium-binaries`), i.e. no V8 and no
+XFA. ctypes note: any UTF-16 buffer API takes a `POINTER(c_ushort)` (a `c_char` array raises
+`ctypes.ArgumentError`); base-font names take a `c_char` buffer.
+
+### 2.4 Measured text-page behaviour and the text-acquisition rule (R5-F01)
+
+PDFium has no API that returns a text object's characters independent of the text page,
+and the text page rewrites what it reports. Measured with throwaway Type3 probes
+(identity `/ToUnicode`), byte-identical results at 5.0.0 and 5.13.0:
+
+| Drawn | `FPDFTextObj_GetText` | non-generated characters attributed by `FPDFText_GetTextObject` |
+|---|---|---|
+| a 22-character name, then the same name at +0.1 / +0.25 / +0.3 / +0.5 / +1.0 pt in x | first object full; second `''` | first object full; **second: 0 characters** |
+| the same name at +2.0 pt | both full | both full |
+| name, identical copy, copy at +0.2 pt | full, `''`, `''` | full, 0, 0 |
+| `5` then `5` at +0.3 / +0.5 / +1.0 pt | `'5'`, `''` | 1, 0 |
+| `5` then `5` at +2.0 / +3.6 pt | both `'5'` | 1, 1 |
+| `5` then `8` at +0.0 / +0.3 pt (different text) | `'5'`, `'8'` | 1, 1 |
+| `Same` regular then `Same` **bold**, same position (either order) or bold at +0.3 pt | first full, second `''` | first full, second 0 (font ignored) |
+| `Same` and `Same` at +0.3 pt in y | first full, second `''` | 4, 0 |
+| `SYN  1000` (2 spaces) | `'SYN 1000'` | `SYN 1000` (the run is collapsed inside the text page) |
+| `A<TAB>B  C` | `'A\tB C'` | `A\tB C` |
+| `  Pad  ` | `' Pad '` | ` Pad ` |
+| ID `SYN-1000`, then a name and `5` on the same line | `'SYN-1000 '`, `'Synthetic activity 001 '`, `'5'` | `SYN-1000`, `Synthetic activity 001`, `5`; the 2 trailing spaces are generated characters attributed to no object |
+| `Dup` at x 134 and `Dup` at x 620 on one line | `'Dup '`, `'Dup'` | `Dup`, `Dup` (+1 generated space) |
+| `Dup` on 2 rows 15 pt apart | both `'Dup'` | both `Dup` (+ generated `\r\n`) |
+| `() Tj` (empty show) | — | produces **no page object at all** |
+| `( ) Tj` | `' '` | 1 character (a space) |
+| glyphs with no `/ToUnicode` and non-standard glyph names | — | code-point fallback with `HasUnicodeMapError == 1` on every character |
+
+**Rule.** For each page, `pdf.py` walks the text page once and builds, per top-level text
+object, the string of its attributed characters in character-index order, keeping only
+characters with `IsGenerated == 0` and a non-NULL `GetTextObject`. That string is the
+object's `text`. Consequences, all fixed by this contract:
+
+1. Generated characters never enter evidence (no dependency on neighbouring objects).
+2. **Suppressed objects.** A top-level text object with 0 attributed characters is
+   `suppressed = True` (PDFium judged it a same-text near-duplicate of an earlier object;
+   since an empty show produces no object, there is no other way to reach 0). Its geometry,
+   font and size are still read. Section 5.4 resolves it deterministically; it is never
+   silently dropped and never first-write-wins.
+3. **Whitespace runs.** A run of consecutive spaces inside one object is reported as one
+   space; exact internal-whitespace preservation (R2 §16.4) is impossible through PDFium.
+   Recorded as D-30 with a WP-04 owner (U-18). A within-publication pair of IDs differing
+   only in run length becomes a `DUPLICATE_ACTIVITY_ID` (fails closed).
+4. **Unmapped characters.** An object with any attributed character whose
+   `HasUnicodeMapError == 1`, or whose code point is 0 or a surrogate, is `unmapped = True`;
+   section 5.7 makes its cell `AMBIGUOUS` (D-17).
+5. The measured suppression envelope (same text; up to at least 1.0 pt in x, not at 2.0 pt;
+   0.3 pt in y; any font) is PDFium-internal and is **not** a profile constant. R2 §12.7's
+   0.25 pt tolerance is applied by section 5.4 to the suppressed object's geometry, so the
+   R2 semantics hold whatever PDFium's envelope is (U-15).
 
 ---
 
@@ -204,8 +266,9 @@ canonical sort order.
 | `ScheduleDateCell` | `state: ScheduleCellState, value: date \| None, marker: str \| None` | value iff `PUBLISHED_VALUE`; `marker in (None, "*")`; marker only with a value |
 | `ScheduleParseIssue` | `code, severity, page_number: int \| None, row_ordinal: int \| None, field: ScheduleFieldCode \| None` | severity must equal `ISSUE_SEVERITY[code]` |
 | `ParsedScheduleRow` | `row_ordinal: int` (1-based), `page_number: int` (1-based), `physical_line_ordinal: int` (1-based within page), `row_type`, `indent_level: int \| None`, `parent_row_ordinal: int \| None`, `hierarchy_path: tuple[str, ...] \| None`, `published_activity_id: str \| None`, `activity_name: str \| None`, `original_duration: ScheduleDurationCell`, `remaining_duration: ScheduleDurationCell`, `start: ScheduleDateCell`, `finish: ScheduleDateCell`, `box: ScheduleBox`, `page_width_mpt: int`, `page_height_mpt: int`, `cells: tuple[ScheduleCellEvidence, ...]`, `warning_codes: tuple[ScheduleIssueCode, ...]` | invariants in section 6.1 |
-| `ScheduleParseCounts` | `pages, rows, project_summaries, wbs_summaries, activities, milestones, ambiguous, chart_objects_excluded, watermark_objects_excluded, duplicate_objects_collapsed, issues, warnings` (all `int`) | derived, never independently set |
-| `ScheduleParseResult` | `parser_name: str, parser_version: str, profile_id: str, profile_version: int, document_sha256: str, document_size_bytes: int, outcome: SchedulePublicationStatus, published_schedule_title: str \| None, data_date: date \| None, run_date: date \| None, counts: ScheduleParseCounts, rows: tuple[ParsedScheduleRow, ...], issues: tuple[ScheduleParseIssue, ...]` | `outcome` in the 4 terminal members; `FAILED` ⇒ `rows == ()` |
+| `ScheduleParseCounts` | `pages, rows, project_summaries, wbs_summaries, activities, milestones, ambiguous, chart_objects_excluded, watermark_objects_excluded, suppressed_objects, duplicate_objects_collapsed, non_embedded_font_objects, issues, warnings` (all `int`) | derived, never independently set; `issues`/`warnings` count de-duplicated issues, `duplicate_objects_collapsed` counts objects (section 5.14) |
+| `ScheduleParseEngine` | `pypdfium2_version: str, pdfium_version: str` | provenance from `pypdfium2.version.PYPDFIUM_INFO`/`PDFIUM_INFO`; **outside** the canonical object and digest (section 6.4) so WP-01 can persist it on the parser run |
+| `ScheduleParseResult` | `parser_name: str, parser_version: str, profile_id: str, profile_version: int, document_sha256: str, document_size_bytes: int, outcome: SchedulePublicationStatus, published_schedule_title: str \| None, data_date: date \| None, run_date: date \| None, counts: ScheduleParseCounts, rows: tuple[ParsedScheduleRow, ...], issues: tuple[ScheduleParseIssue, ...], engine: ScheduleParseEngine` | `outcome` in the 4 terminal members; `FAILED` ⇒ `rows == ()` |
 | `normalize_activity_id(raw: str) -> str` | `unicodedata.normalize("NFC", raw).strip()` | R2 §16.2: NFC + surrounding whitespace only; case, punctuation, internal whitespace, `.1` preserved |
 | `normalize_display_text(raw: str) -> str` | NFC, then every run of `str.isspace()` characters → one ASCII space, then strip | names, labels, metadata, header anchors |
 | `parse_profile_date(token: str) -> tuple[date, str \| None] \| None` | grammar of section 4.7; `None` for any grammar or calendar failure | |
@@ -229,7 +292,7 @@ canonical sort order.
 
 | Symbol | Module | Signature-level intent |
 |---|---|---|
-| `PdfTextObject` | `pdf.py` | frozen slots dataclass: `page_number: int, object_ordinal: int` (0-based top-level index), `text: str` (raw decoded), `font_base_name: str` (raw, may carry a subset prefix), `font_size_mpt: int`, `box: ScheduleBox`, `matrix: tuple[Decimal, Decimal, Decimal, Decimal, Decimal, Decimal]` (exact `Decimal(float)` of `a b c d e f`); property `normalized_box(page)` per R2 §12.3 |
+| `PdfTextObject` | `pdf.py` | frozen slots dataclass: `page_number: int, object_ordinal: int` (0-based top-level index), `text: str` (attributed non-generated characters, section 2.4; `""` iff suppressed), `suppressed: bool`, `unmapped: bool`, `font_base_name: str` (raw, may carry a subset prefix), `font_embedded: bool`, `font_size_mpt: int`, `box: ScheduleBox`, `matrix: tuple[Decimal, Decimal, Decimal, Decimal, Decimal, Decimal]` (exact `Decimal(float)` of `a b c d e f`); property `normalized_box(page)` per R2 §12.3 |
 | `PdfPageText` | `pdf.py` | `page_number, width_mpt, height_mpt, objects: tuple[PdfTextObject, ...]` |
 | `PdfDocumentText` | `pdf.py` | `page_count: int, pages: tuple[PdfPageText, ...]` |
 | `ScheduleParseRefusal(Exception)` | `pdf.py` | carries `code: ScheduleIssueCode` only; `str(exc) == code.value`; never source text |
@@ -239,7 +302,7 @@ canonical sort order.
 | `ScheduleParseLimits` | `full_profile.py` | frozen dataclass of section 4.10; `PRODUCTION_LIMITS`; `__post_init__` refuses any field greater than its production value (limits may only tighten — D-24) |
 | `PageZones` | `full_profile.py` | `page_number, metadata_objects, table_objects, chart_excluded: int, watermark_excluded: int` |
 | `exclude_profile_non_data(page: PdfPageText, profile) -> PageZones` | `full_profile.py` | section 5.3; raises `UNSUPPORTED_LAYOUT` for a rotated table object |
-| `collapse_duplicate_objects(objects) -> tuple[tuple[PdfTextObject, ...], tuple[PdfTextObject, ...]]` | `full_profile.py` | section 5.4; returns (kept, collapsed) |
+| `collapse_duplicate_objects(objects) -> DuplicateResolution` | `full_profile.py` | section 5.4; returns kept objects (suppressed ones carrying their twin's text), collapsed objects with their twin, and issue drafts |
 | `ProfileValidation` | `full_profile.py` | `title, data_date, run_date` (coherent values or `None`), `issues` |
 | `validate_full_profile(zones: Sequence[PageZones], profile, *, expected_data_date: date \| None) -> ProfileValidation` | `full_profile.py` | V11–V13 of section 5.2; raises `UNSUPPORTED_LAYOUT` for a page-1 classification failure |
 | `PdfPhysicalRow` | `full_profile.py` | `page_number, physical_line_ordinal, seed: PdfTextObject, objects: tuple[PdfTextObject, ...]` (x-ordered), `box: ScheduleBox` |
@@ -276,6 +339,7 @@ No parser registry, plugin system, profile registry or future-profile abstractio
 | `PAGE_HEIGHT_MPT` | 792,000 |
 | `PAGE_SIZE_TOLERANCE_MPT` | 500 (inclusive, each dimension, measured from `FPDF_GetPageSizeByIndexF`) |
 | page rotation | `FPDFPage_GetRotation == 0` |
+| page origin | `/MediaBox` lower-left within 500 mpt of `(0, 0)`; if `FPDFPage_GetCropBox` reports a box, it equals the MediaBox within 500 mpt on every edge (R5-F12) |
 
 ### 4.3 X grid (R2 §12.4, exact)
 
@@ -311,7 +375,7 @@ against `normalize_display_text(text)` of one whole near-horizontal text object.
 | Evidence | Where | Exact rule |
 |---|---|---|
 | column anchors | column-header band, x-centre `< 615.5` | exactly one object per column whose text equals `Activity ID`, `Activity Name`, `OD`, `RD`, `Start`, `Finish` respectively and whose x-centre lies in that column's band (section 4.3); no other column-header-band object with x-centre `< 615.5` |
-| OD occlusion exception (R2 §12.5) | column-header band | the `OD` anchor is absent, **exactly one** other object has x-centre in the OD band and text matching the date grammar (section 4.7), and the other 5 anchors are exact with no further extra object → warning `HEADER_OD_OCCLUDED` (page ref, field `ORIGINAL_DURATION`) |
+| OD occlusion exception (R2 §12.5, §13.4.6, §37.6) | column-header band | the other 5 anchors are exact, **exactly one** non-anchor object has x-centre in the OD band and text matching the date grammar (section 4.7), no further extra object exists, and either (a) **replaced**: no `OD` anchor is present, or (b) **overlay**: exactly one `OD` anchor is present in the OD band → warning `HEADER_OD_OCCLUDED` (page ref, field `ORIGINAL_DURATION`). Anything else is a header mismatch |
 | Layout | top metadata band | regex `^Layout: (?P<value>\S.{0,198})$`; exactly one per page |
 | Data Date | header or footer zone | regex `^Data Date: (?P<date>\S+)$` with `date` passing section 4.7 **without** a marker; exactly one per page |
 | Run Date | header or footer zone | regex `^Run Date: (?P<date>\S+)$`, same date rule; exactly one per page |
@@ -328,7 +392,7 @@ An object is the profile watermark only if **all** hold:
 |---|---|
 | normalized text | exactly `DRAFT` |
 | bbox | each edge within ±12.0 pt (12,000 mpt, inclusive) of `(309.0, 244.0, 872.0, 503.0)` |
-| rotation | `theta = degrees(atan2(b, a))` from the matrix, `5.0 <= abs(theta) <= 85.0` |
+| rotation | with the exact `Decimal` matrix: `a > 0` and `WATERMARK_TAN_MIN * a <= abs(b) <= WATERMARK_TAN_MAX * a`, where `WATERMARK_TAN_MIN = Decimal("0.087489")` (tan 5°) and `WATERMARK_TAN_MAX = Decimal("11.430052")` (tan 85°); no float trigonometry (R5-F11) |
 | zone | y-centre in the data zone and x-centre `< 615.5` (it is examined after the chart rule) |
 
 Justification: R2 states the corpus bbox "roughly" to whole points; ±12 pt covers that
@@ -363,11 +427,11 @@ conversion (R2 §12.12).
 |---|---|---|
 | `ROW_OVERLAP_RATIO` | `1/2`, applied as `2 * intersection >= min(seed_height, obj_height)` | R2 §12.8 |
 | `ROW_MAX_SPAN_MPT` | 16,000 | R2 §12.8 |
-| `WRAP_PITCH_MPT` | 10,000 (strictly less) | R2 §12.9 |
+| `WRAP_PITCH_MPT` | 10,000 (strictly less) | R2 §12.9; measured as top-edge pitch (D-21; the corpus row pitch is not stated by R2 — U-02) |
 | `DUPLICATE_EDGE_TOLERANCE_MPT` | 250 (inclusive, every edge) | R2 §12.7 |
 | `CELL_OVERLAP_MPT` | 250 (x-intersection strictly greater ⇒ overlapping) | S5a, equal to the duplicate tolerance (D-04) |
 | `INDENT_TOLERANCE_MPT` | 1,500 | R2 §14.2 |
-| `INDENT_MIN_SEPARATION_MPT` | 3,000 (= 2 × tolerance) | S5a (D-20) |
+| `INDENT_MIN_SEPARATION_MPT` | 3,000 (= 2 × tolerance) | S5a (D-20); the corpus's smallest measured centroid gap is 3.52 pt, a margin of only 0.52 pt (U-16) |
 | `REGULAR_FONT` / `BOLD_FONT` | `"Arial"` / `"Arial,Bold"` after prefix normalization | R2 §13.3 |
 | `SUBSET_PREFIX` | `^[A-Z]{6}\+` removed once | R2 §12.1 |
 | `TITLE_MAX_CHARS` | 300 | S5a |
@@ -389,10 +453,10 @@ filename, byte count, digest, title or token of the corpus is encoded.
 | `max_pages` | 250 | `BOUNDS_EXCEEDED` |
 | `max_text_objects` | 250,000 (text objects incl. nested in forms, whitespace-only included) | `BOUNDS_EXCEEDED` |
 | `max_page_objects` | 1,000,000 (all object types incl. nested) | `BOUNDS_EXCEEDED` (D-08) |
-| `max_text_chars` | 2,000,000 (sum of `len(text)` over decoded text objects) | `BOUNDS_EXCEEDED` |
+| `max_text_chars` | 2,000,000 (`FPDFText_CountChars` summed over pages, checked right after each text page loads and before any character is read) | `BOUNDS_EXCEEDED` |
 | `max_rows` | 25,000 | `BOUNDS_EXCEEDED` |
 | `max_issues` | 50,000 (after de-duplication) | `BOUNDS_EXCEEDED` |
-| `max_row_warnings` | 16 | `BOUNDS_EXCEEDED` |
+| `max_row_warnings` | 16 (unreachable at production values: at most 9 distinct row-referencing codes exist (the 8 row codes of section 5.14 plus `DUPLICATE_TEXT_OBJECT_COLLAPSED`), so only an injected limit can exercise it — a green production-limit test is not coverage) | `BOUNDS_EXCEEDED` |
 | `max_hierarchy_depth` | 32 (indent clusters; also bounds `hierarchy_path`) | `BOUNDS_EXCEEDED` |
 | `max_cell_evidence_bytes` | 16,384 (canonical bytes of one row's `cpm-full-cells-v1`) | `BOUNDS_EXCEEDED` |
 | `max_form_depth` | 4 (form XObject nesting walked for counting) | `UNSUPPORTED_LAYOUT` |
@@ -421,14 +485,14 @@ before step (9).
 |---|---|---|
 | V1 | `len(data) > max_bytes` | `SOURCE_TOO_LARGE`, before any PDFium call |
 | V2 | `not data.startswith(b"%PDF-")` (empty included) | `UNSUPPORTED_MEDIA_TYPE`, before any PDFium call |
-| V3 | open; `PdfiumError.err_code == FPDF_ERR_PASSWORD` | `ENCRYPTED_PDF` (no password is ever supplied) |
+| V3 | open; `PdfiumError.err_code in {FPDF_ERR_PASSWORD, FPDF_ERR_SECURITY}` | `ENCRYPTED_PDF` (no password is ever supplied; error 5 = unsupported security handler, R5-F09) |
 | V3' | open fails otherwise | `CORRUPT_PDF` |
 | V4 | `FPDF_GetSecurityHandlerRevision != -1` | `ENCRYPTED_PDF` (D-13) |
 | V5 | page count `0` (defensive: measured, PDFium already refuses an empty page tree at V3') | `UNSUPPORTED_LAYOUT`; `> max_pages` → `BOUNDS_EXCEEDED`, before any page load |
 | V6 | every page's size by index (no load) within section 4.2 | else `UNSUPPORTED_LAYOUT` |
-| V7 | per page, after load: rotation `0` (catches `/Rotate 180`, whose size by index is unswapped) | else `UNSUPPORTED_LAYOUT` |
-| V8 | per page: cumulative object counts after `FPDFPage_CountObjects` and each form walk (before reading any text of that page); a form XObject containing a text object at any depth, or nesting deeper than `max_form_depth` → `UNSUPPORTED_LAYOUT` (D-09); cumulative characters after each object; UTF-16 decode is strict and failure → `PARSER_EXCEPTION` (D-17) | caps → `BOUNDS_EXCEEDED` |
-| V9 | no decoded text object with non-whitespace text in the whole document | `IMAGE_ONLY_PDF` |
+| V7 | per page, after load: rotation `0` (catches `/Rotate 180`, whose size by index is unswapped) and the section 4.2 origin rule (MediaBox/CropBox) | else `UNSUPPORTED_LAYOUT` |
+| V8 | per page: cumulative object counts after `FPDFPage_CountObjects` and each form walk (before reading any text of that page); a form XObject containing a text object at any depth, or nesting deeper than `max_form_depth` → `UNSUPPORTED_LAYOUT` (D-09); cumulative characters from `FPDFText_CountChars` right after the text page loads; then the section 2.4 attribution walk | caps → `BOUNDS_EXCEEDED` |
+| V9 | no text object in the whole document with a non-whitespace attributed character | `IMAGE_ONLY_PDF` |
 | V10 | zone partition; a remaining table object not near-horizontal | `UNSUPPORTED_LAYOUT` |
 | V11 | page 1: column anchors exact or OD-occluded; Layout, Data Date, Run Date, title, signature each present exactly once and valid; signature `n == 1` | else `UNSUPPORTED_LAYOUT` (classification, R2 §11 — D-12) |
 | V12 | pages 2..N: column anchors exact or OD-occluded | else `HEADER_SIGNATURE_MISMATCH` (page ref, error) |
@@ -436,8 +500,9 @@ before step (9).
 | V13' | `expected_data_date is not None` and the coherent Data Date differs | `EXPECTED_DATA_DATE_MISMATCH` (no page ref); skipped when Data Date is incoherent |
 
 V1–V10 failures stop the parse: outcome `FAILED`, `rows == ()`, `issues ==` the one
-refusal issue (D-16). Whitespace-only text objects count toward caps (V8) and are then
-dropped; they are never evidence.
+refusal issue (D-16). Non-suppressed text objects whose attributed text is whitespace only
+count toward caps (V8) and are then dropped; they are never evidence. Suppressed objects
+are **not** dropped (section 5.4).
 
 ### 5.3 Exclusion order per page (R2 §§12.4–12.6)
 
@@ -451,16 +516,33 @@ For each kept text object, in object order:
    `watermark_objects_excluded`.
 4. **Rotation:** any remaining (table) object not near-horizontal → `UNSUPPORTED_LAYOUT`.
 
-### 5.4 Duplicate collapse (R2 §12.7)
+### 5.4 Suppressed objects and duplicate collapse (R2 §12.7, R5-F01)
 
-Separately within the metadata set and within the table set of each page: two objects are
-exact duplicates iff `normalize_display_text(text)` is equal, the prefix-normalized base
-font is equal, and every bbox edge differs by `<= 250` mpt. Process objects in
-`object_ordinal` order; an object that duplicates an earlier **kept** object is collapsed
-into it. Each collapse emits `DUPLICATE_TEXT_OBJECT_COLLAPSED` (warning; page ref; for the
-table set, the row ref and field of the kept object once rows exist; for the metadata set,
-no row and no field) and increments `duplicate_objects_collapsed`. Non-identical overlap is
-never collapsed (section 5.7).
+Runs separately within the metadata set and within the table set of each page, after
+section 5.3 (a suppressed object is zoned by its own geometry like any other), processing
+objects in `object_ordinal` order.
+
+1. **Twin of a suppressed object.** For a suppressed object `S`, its twin `M` is the
+   lowest-`object_ordinal` **non-suppressed** object in the same set on the same page whose
+   box intersects `S`'s box with positive area. If none exists, `S` has no twin: in the
+   table set it becomes a fragment of unknown text in its band, making that cell
+   `AMBIGUOUS` + `AMBIGUOUS_CELL` (field = its band); in the metadata set it is ignored.
+   With a twin, `S.text := M.text` (PDFium suppresses only same-text objects, section 2.4).
+2. **Exact duplicate.** An object `O` (suppressed with a twin, or not suppressed) is an
+   exact duplicate of an earlier **kept** object `K` iff `normalize_display_text` of both
+   texts is equal, the prefix-normalized base fonts are equal, and every box edge differs by
+   `<= 250` mpt. `O` is collapsed into the earliest such `K`: issue
+   `DUPLICATE_TEXT_OBJECT_COLLAPSED` (warning; page ref; in the table set the row ref and
+   field of `K` once rows exist; in the metadata set no row and no field), and
+   `duplicate_objects_collapsed += 1`.
+3. **Not a duplicate.** A suppressed `S` with a twin that is not collapsed stays a kept
+   fragment carrying the twin's text. Then section 5.7 decides: same band and row as `M` →
+   the two overlap → `OVERLAPPING_CELL_TEXT` (cell `AMBIGUOUS`); a different font class from
+   `M` in the left region → the "mixed" case (row `AMBIGUOUS`, R2 §13.3); a different band
+   or row from `M` → `S`'s cell `AMBIGUOUS` + `AMBIGUOUS_CELL` (field = `S`'s band). Never
+   first-write-wins.
+4. `suppressed_objects` counts every suppressed object on every page (all zones except
+   chart, which section 5.3 removes first).
 
 ### 5.5 Physical row grouping (R2 §12.8)
 
@@ -489,7 +571,10 @@ only (R2 §13.3).
 
 1. Each row object goes to the band containing its x-centre (section 4.3). An object with
    x-centre `< 37.0` → row `AMBIGUOUS` + `AMBIGUOUS_CELL` (field `None`). An `OTHER`-font
-   object → row `AMBIGUOUS` + `AMBIGUOUS_CELL` (field = its band).
+   object → row `AMBIGUOUS` + `AMBIGUOUS_CELL` (field = its band). An `unmapped` object
+   (section 2.4) or a twinless suppressed object (section 5.4) → its cell `AMBIGUOUS` +
+   `AMBIGUOUS_CELL` (field = its band); in the ID or Name band that makes the row
+   `AMBIGUOUS` through section 5.10 rule 5 or 8.
 2. Within one cell, fragments are ordered by `x0`. Two fragments **overlap** iff their
    x-intersection `> 250` mpt. Any overlap → cell state `AMBIGUOUS`, `text` = the
    x-ordered join, issue `OVERLAPPING_CELL_TEXT` (field). Never last-write-wins.
@@ -520,13 +605,20 @@ OD/RD/Start/Finish accept `REGULAR` or `BOLD` fragments (D-23).
   `EXTRACTION_FAILED` + `INVALID_DATE` (field).
 - An `AMBIGUOUS` cell has no typed value.
 
-### 5.9 Row wrap (R2 §12.9)
+### 5.9 Row wrap (R2 §12.9, R5-F02)
 
 Checked before classification. Physical row `R` (not the first row on its page) with
-predecessor `P` on the same page is a wrap line iff `P.box.y1 - R.box.y1 < 10,000` and `R`
-has no object in the ID, OD, RD, Start or Finish bands and at least 1 object in the Name
-band. Then `R` is `AMBIGUOUS` + `ROW_WRAP_UNSUPPORTED`; `P` is unchanged; nothing is
-concatenated. There is no cross-page detection or continuation.
+predecessor `P` on the same page is a wrap line iff **all** hold:
+
+- `P.box.y1 - R.box.y1 < 10,000` (top-edge pitch);
+- `R` has no `REGULAR`-font object in the ID band (a regular ID would be an independent
+  identity cell; a bold label continuation starting at the indent x is not);
+- `R` has no object in the OD, RD, Start or Finish bands;
+- `R` has at least 1 object, of any font class, in the merged label region `[37.0, 435.5)`.
+
+Then `R` is `AMBIGUOUS` + `ROW_WRAP_UNSUPPORTED`; `P` is unchanged; nothing is
+concatenated. There is no cross-page detection or continuation. A bold-label line at normal
+pitch with no OD/RD/Start/Finish is not a wrap; section 5.10 rule 6 decides it.
 
 ### 5.10 Classification precedence (R2 §15)
 
@@ -539,7 +631,8 @@ Applied to each non-wrap row after section 5.7 (first match wins):
 | 3 | ID-bearing with ID and name `PUBLISHED_VALUE`, OD and RD both `PUBLISHED_VALUE` equal to 0, without the exact date pattern | `AMBIGUOUS` | `AMBIGUOUS_CELL` (field `None`) |
 | 4 | ID-bearing with ID and name `PUBLISHED_VALUE` | `ACTIVITY` | cell issues stay on their cells |
 | 5 | ID-bearing with the ID or the name cell not `PUBLISHED_VALUE` (blank or `AMBIGUOUS`) | `AMBIGUOUS` | `AMBIGUOUS_CELL` (field = the first of `ACTIVITY_ID`, `ACTIVITY_NAME` that is not `PUBLISHED_VALUE`) |
-| 6 | summary label present and its cell not `AMBIGUOUS` | `WBS_SUMMARY` (section 5.11 may promote one to `PROJECT_SUMMARY`) | — |
+| 6 | summary label present, its cell not `AMBIGUOUS`, and the required cells structurally present (R2 §15.6): at least 1 of OD/RD/Start/Finish not `PUBLISHED_BLANK` | `WBS_SUMMARY` (section 5.11 may promote one to `PROJECT_SUMMARY`) | — |
+| 6' | summary label present, label cell not `AMBIGUOUS`, but OD/RD/Start/Finish all `PUBLISHED_BLANK` | `AMBIGUOUS` | `AMBIGUOUS_CELL` (field `None`) (D-32) |
 | 7 | "no label" with at least one of OD/RD/Start/Finish populated, or "name only" | `AMBIGUOUS` | `ACTIVITY_LIKE_ROW_MISSING_ID` (`ACTIVITY_ID`) |
 | 8 | anything else | `AMBIGUOUS` | `AMBIGUOUS_CELL` (field `None`) |
 
@@ -566,7 +659,10 @@ activity; chart text never completes a missing identity (it was excluded in sect
    push. Activity/milestone at level `L`: parent = nearest stack entry with level `< L`;
    stack unchanged.
 5. A row is **determinate** iff its own cluster is determinate, and either it is a summary
-   at level 0 with no parent, or it has a parent that is itself determinate. Indeterminate
+   at level 0 with no parent, or it has a parent **whose level is exactly `L - 1`** and that
+   is itself determinate. A skipped level (parent at `L - 2` or shallower, or no parent at
+   `L > 0`) is the R2 §14.12 "missing/invalid lower-level parent" and is indeterminate
+   (D-33). Indeterminate
    rows: `parent_row_ordinal = None`, `hierarchy_path = None`, `indent_level` kept when its
    cluster is determinate else `None`, issue `HIERARCHY_AMBIGUOUS` (field `HIERARCHY`).
    Indeterminacy therefore propagates to descendants (D-19); no parent is ever invented.
@@ -608,7 +704,10 @@ is coherent across every page, else `None` (D-18).
 | `DUPLICATE_TEXT_OBJECT_COLLAPSED` | warning | yes | table: yes | table: kept object's field |
 | row codes (`OVERLAPPING_CELL_TEXT`, `ROW_WRAP_UNSUPPORTED`, `ACTIVITY_LIKE_ROW_MISSING_ID`, `DUPLICATE_ACTIVITY_ID`, `INVALID_DATE`, `INVALID_DURATION`, `AMBIGUOUS_CELL`, `HIERARCHY_AMBIGUOUS`) | error | yes | yes | per section 5 |
 
-Issues are de-duplicated on `(code, page_number, row_ordinal, field)` and sorted by
+Issues are de-duplicated on `(code, page_number, row_ordinal, field)` (so 2 objects
+collapsed into the same kept object yield 1 `DUPLICATE_TEXT_OBJECT_COLLAPSED` issue while
+`counts.duplicate_objects_collapsed == 2`; `counts.issues`, `counts.warnings` and the golden
+`issue_counts` count de-duplicated issues — R5-F07) and sorted by
 `(page_number or 0, row_ordinal or 0, code declaration index, field declaration index or
 -1)`. More than `max_issues` → `BOUNDS_EXCEEDED`. A row's `warning_codes` = the distinct
 codes of all issues referencing it (both severities, the R2 column name is kept), in
@@ -649,13 +748,13 @@ assertions.
 | Value | Canonical form |
 |---|---|
 | geometry (mpt int) | decimal string with exactly 3 decimals, sign only when negative: `"598.600"` |
-| normalized row box (R2 §12.3) | `x0/W, (H - y1)/H, x1/W, (H - y0)/H` with `W`/`H` the page's measured mpt; `Decimal` division under `localcontext(prec=28)`, quantized to `0.000001` `ROUND_HALF_EVEN`, string `"0.042956"` |
+| normalized row box (R2 §12.3) | `x0/W, (H - y1)/H, x1/W, (H - y0)/H` with `W`/`H` the page's measured mpt; `Decimal` division under `localcontext(prec=28)`, quantized to `0.000001` `ROUND_HALF_EVEN`, string `"0.042956"`; a quantized negative zero is replaced by `Decimal(0)` before `str()` so `-0.000000` never appears (the same rule applies to every decimal string here) |
 | font size | 3-decimal string from mpt |
 | duration | `str(value)` of the quantized `Decimal` (`"12.000"`) |
 | date | ISO `YYYY-MM-DD` |
 | enum | its string value |
 | absent | JSON `null` |
-| raw text | exactly as decoded (not normalized); normalized fields are NFC |
+| raw text | the object's attributed non-generated characters as PDFium's text page reports them (section 2.4: whitespace runs already collapsed, never generated characters); not further normalized; normalized fields are NFC |
 
 No `float` reaches the canonical object.
 
@@ -684,14 +783,17 @@ Keys: `schema` (`cpm-full-parse-result-v1`), `parser_name`, `parser_version`, `p
 `remaining_duration`, `start` `{state, value, marker}`, `finish`, `bbox_pdf` (4 strings),
 `bbox_normalized` (4 strings), `cell_evidence` (section 6.3 object), `warning_codes`.
 Issue keys: `code`, `severity`, `page_number`, `row_ordinal`, `field`. Rows in
-`row_ordinal` order; issues in section 5.14 order.
+`row_ordinal` order; issues in section 5.14 order. `ScheduleParseResult.engine` is **not**
+a key: the canonical object and its digest must not vary with the installed PDFium build
+(goldens are shared by the floor and current venvs); the engine is provenance carried
+beside it (R5-F05).
 
 ### 6.5 Canonical JSON
 
 `json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
 allow_nan=False).encode("ascii")`, no trailing newline. `ensure_ascii=True` makes the
-bytes ASCII regardless of platform encoding; strict UTF-16 decoding (V8) guarantees no
-lone surrogate reaches it. Digest: SHA-256 of those bytes, lowercase hex.
+bytes ASCII regardless of platform encoding; the section 2.4 `unmapped` rule keeps
+surrogate and NUL code points out of every evidence string. Digest: SHA-256 of those bytes, lowercase hex.
 
 ### 6.6 Cross-run and cross-platform determinism
 
@@ -699,13 +801,20 @@ lone surrogate reaches it. Digest: SHA-256 of those bytes, lowercase hex.
   formatting, no `dict`/`set` iteration order dependence, no clock, no randomness.
 - PDFium text bounds are glyph-tight and depend on the font program: measured, a
   non-embedded `/TrueType /BaseFont /Arial` gives `x1 = 70.800` for an 8-character string
-  where the advance-width sum gives `71.136`, and an unknown font name gives different
-  bounds again — i.e. the substituted system font decides the box. The fixture fonts are
-  therefore **Type3** fonts (section 8.2) whose glyph boxes come from `d1` in the PDF
-  itself; measured at 5.0.0 and 5.13.0, bounds equal the analytic values exactly
-  (`SYN-1000` at 7 pt from (40, 600): `[40.000, 598.600, 71.136, 604.900]`). Goldens are
-  therefore expected byte-identical on macOS and Linux and at the floor; the
-  `dependency-floor` and `validate` FAST shards prove it on Linux (D-14).
+  where its `/Widths` (556) advance sum gives `71.136`, and an unknown font name gives
+  different bounds again — i.e. the substituted system font decides the box. The fixture
+  fonts are therefore **Type3** fonts (section 8.2) whose glyph boxes come from `d1` in the
+  PDF itself; measured at 5.0.0 and 5.13.0, bounds equal the analytic values exactly
+  (`SYN-1000` at 7 pt from (40, 600) with 500-unit glyphs: `[40.000, 598.600, 68.000,
+  604.900]`). Fixture goldens are therefore expected byte-identical on macOS and Linux and
+  at the floor; the `dependency-floor` and `validate` FAST shards prove it on Linux (D-14,
+  U-08).
+- **Real inputs are not covered by that argument.** If a real export does not embed its
+  fonts, the same bytes can yield different geometry on different hosts under the same
+  `PARSER_VERSION` (U-10). S5a decision (D-36): such objects are accepted, counted in
+  `counts.non_embedded_font_objects` (a property of the bytes, so it is in the digest), and
+  the PDFium build is carried as `engine` provenance; WP-04 measures embedding on the corpus
+  and decides whether to refuse.
 - The canonical result deliberately excludes PDFium/`pypdfium2` versions; a PDFium change
   that alters output fails the goldens, which is the intended signal.
 
@@ -717,12 +826,13 @@ lone surrogate reaches it. Digest: SHA-256 of those bytes, lowercase hex.
 |---|---|
 | byte bombs | V1 size check before any PDFium call (test monkeypatches `PdfDocument` to fail if called) |
 | page bombs | V5 page count from the page tree, V6 sizes by index, both before any page load |
-| object/char bombs | V8 cumulative caps checked after each page's object count and form walk (before reading that page's text) and after each object's text — the parse stops early, never after materializing the document |
+| object/char bombs | V8 cumulative caps checked after each page's object count and form walk (before reading that page's text) and after each text page's `FPDFText_CountChars` (before reading any character) — the parse stops early, never after materializing the document |
 | decompression bombs | **Residual.** PDFium inflates a page's content streams inside `FPDF_LoadPage`; one hostile page can allocate before any cap is read, and the cooperative budget cannot pre-empt C code. Mitigations in S5a: the 16 MiB input cap, per-page object/char caps, the budget between pages, and handle release. Subprocess isolation with `RLIMIT_AS` is **out of scope** for S5a (it changes the worker's process model, which is WP-03's, and is not cheap to make deterministic in tests); recorded as U-05 for WP-03 |
 | active content | no JavaScript (PDFium builds have no V8: `PDFIUM_INFO.flags == ()`), no form environment (`init_forms` never called), no actions/links/annotations/attachments read, no rendering, no network or file I/O (PDFium has none on this path; input is in-memory bytes) |
-| encryption | no password is ever passed; V3 `FPDF_ERR_PASSWORD` and V4 revision `!= -1` both refuse, so an empty-user-password file is refused too |
+| encryption | no password is ever passed; V3 `FPDF_ERR_PASSWORD`/`FPDF_ERR_SECURITY` and V4 revision `!= -1` all refuse, so an empty-user-password file and an unknown security handler are refused too |
 | resource cleanup | `PdfTextPage.close()`, `PdfPage.close()`, `PdfDocument.close()` each in `finally`, innermost first, on every path including refusals and budget expiry (test counts closes) |
-| error mapping | `PdfiumError` → `CORRUPT_PDF`/`ENCRYPTED_PDF`; strict decode failure → `PARSER_EXCEPTION`; any other `Exception` escaping steps (3)–(12) of section 5.1 → `PARSER_EXCEPTION`; `MemoryError` re-raised (transient, WP-03 retries); results carry codes only |
+| error mapping | `PdfiumError` → `CORRUPT_PDF`/`ENCRYPTED_PDF`; any other `Exception` escaping steps (3)–(12) of section 5.1 → `PARSER_EXCEPTION`; `MemoryError` re-raised (transient, WP-03 retries); results carry codes only |
+| concurrency | PDFium is not thread-safe; S5a calls it from one thread per process and holds no global state. If GoodNotes rendering and schedule parsing ever share a process, WP-03 must serialize PDFium use (U-12) |
 | redaction | `ScheduleParseRefusal` text is its code; no module in either schedule package imports `logging` or calls `print`; no exception chains source text (`raise ... from None` on mapping); the scope guard enforces the import/print rule |
 
 ### 7.5 Exception contract of `parse_full_schedule`
@@ -734,11 +844,14 @@ error).
 ### 7.6 `pyproject.toml` comment (range unchanged)
 
 The `pypdfium2` paragraph keeps its GoodNotes text and adds: current use also reads text
-objects (text, base-font name, font size, bounds, matrix) from an admitted Full-Schedule
-PDF in `src/my_pa/infrastructure/schedule/pdf.py` without rendering; the 5.0 floor also
-carries every raw `FPDFTextObj_*`, `FPDFFont_GetBaseFontName`, `FPDFPageObj_GetBounds`,
-`FPDFPageObj_GetMatrix`, `FPDF_GetPageSizeByIndexF` and
-`FPDF_GetSecurityHandlerRevision` function the schedule parser calls (the
+objects (geometry, base-font name, font size, matrix) and the text page's per-character
+attribution from an admitted Full-Schedule PDF in
+`src/my_pa/infrastructure/schedule/pdf.py` without rendering; the 5.0 floor also carries
+every raw `FPDFText_CountChars`/`GetUnicode`/`GetTextObject`/`IsGenerated`/
+`HasUnicodeMapError`, `FPDFTextObj_GetFont`/`GetFontSize`, `FPDFFont_GetBaseFontName`/
+`GetIsEmbedded`, `FPDFPageObj_GetBounds`/`GetMatrix`, `FPDFPage_GetMediaBox`/
+`GetCropBox`, `FPDF_GetPageSizeByIndexF` and `FPDF_GetSecurityHandlerRevision` function
+the schedule parser calls (the
 `PdfTextObj`/`PdfFont` helpers are 5.x-later and deliberately unused); security surface
 adds hostile admitted PDFs bounded by section 7 of this contract. Nothing else in the file
 changes.
@@ -750,7 +863,7 @@ changes.
 ### 8.1 Generator
 
 `tests/fixtures/schedule_full_pdf.py` — stdlib only (`hashlib`, `dataclasses`, `decimal`,
-`datetime`, `math`, `json`, `pathlib`, `argparse`); no PDF library. It mirrors
+`datetime`, `json`, `pathlib`, `argparse`; no `math` — R5-F11); no PDF library. It mirrors
 `_assemble_pdf` in `src/my_pa/infrastructure/goodnotes/pdf.py`: `%PDF-1.7`, objects in a
 fixed order, a classic xref, a trailer; no `/Info`, no timestamps, no random `/ID` (the
 encrypted fixture uses the fixed `/ID` `000102…0f`). Content-stream numbers are written
@@ -762,16 +875,26 @@ function `build(family, variant) -> FixtureCase` returning `pdf: bytes`,
 ### 8.2 Fonts and text objects
 
 - Two Type3 fonts per document: `/BaseFont /Arial` and `/BaseFont /Arial,Bold`; the
-  `subset` variant uses `/BaseFont /SYNABC+Arial,Bold` (6 capitals + `+`). Each: one
-  shared `CharProc` per code 32..126 drawing a box with `500 0 0 -200 500 700 d1`,
-  `/FontMatrix [0.001 0 0 0.001 0 0]`, `/Widths` all 500, `/Encoding /Differences`, and a
-  `/ToUnicode` identity CMap for 0x20..0x7E (measured to round-trip text exactly at both
-  PDFium versions). An `OTHER`-font variant uses `/BaseFont /Courier`.
-- Analytic bounds of a string of `n` characters at size `s` from origin `(x, y)`:
-  `[x, y - 0.2s, x + 0.5ns, y + 0.7s]`. Body size 7 pt, level-1 summaries 8 pt, the project
-  summary 10 pt, title 12 pt.
-- One text object per `BT … Tf … Tm … Tj ET` block; rotation by a `Tm` with `cos/sin`
-  written to 6 decimals.
+  `subset` variant uses `/BaseFont /SYNABC+Arial,Bold` (6 capitals + `+`). Default
+  ("uniform") metrics: one shared `CharProc` per code 32..126 drawing a box with
+  `500 0 0 -200 500 700 d1`, `/FontMatrix [0.001 0 0 0.001 0 0]`, `/Widths` all 500,
+  `/Encoding /Differences`, and a `/ToUnicode` identity CMap for 0x20..0x7E. With these,
+  each object's attributed characters equal its string except that a run of spaces is
+  reported as one space (section 2.4, measured at both PDFium versions); fixtures that are
+  not about that behaviour contain no double spaces. An `OTHER`-font variant uses
+  `/BaseFont /Courier`; the `unmapped` variant omits `/ToUnicode`.
+- **"glyph_metrics" fonts (R5-F05):** per-glyph `CharProc`s with distinct `d1` boxes —
+  digits `500 0 0 0 500 650`, lowercase without descender `500 0 0 0 500 500`, descenders
+  `g j p q y` `500 0 0 -200 500 500`, capitals and punctuation `500 0 0 0 500 700`, and a
+  non-zero left-side bearing on `1` (`500 0 80 0 420 650`) — so heights and left edges
+  depend on content, as in a real font. Truth for those variants is computed from the same
+  per-glyph table.
+- Analytic bounds for the uniform metrics, `n` characters at size `s` from origin
+  `(x, y)`: `[x, y - 0.2s, x + 0.5ns, y + 0.7s]`. Body size 7 pt, level-1 summaries 8 pt,
+  the project summary 10 pt, title 12 pt.
+- One text object per `BT … Tf … Tm … Tj ET` block. Rotation `Tm` entries are literal
+  `Decimal` constants: 7° watermark `0.992546 0.121869 -0.121869 0.992546`; 0.4° skew
+  `0.999976 0.006981 -0.006981 0.999976`; 1° skew `0.999848 0.017452 -0.017452 0.999848`.
 
 ### 8.3 Common synthetic page frame
 
@@ -782,9 +905,9 @@ function `build(family, variant) -> FixtureCase` returning `pdf: bytes`,
 | Data Date / Run Date | `Data Date: 04-May-26` at (300, 740); `Run Date: 11-May-26` at (900, 740) |
 | column anchors | regular 7 pt at y 710, x0 = 38.88, 134.52, 446.63, 478.20, 520.50, 576.97 (R2 §13.2 starts) |
 | chart timescale header | `May 26` at (700, 710) (header zone, right of the chart boundary) |
-| rows | first baseline 685, pitch 15 pt, 40 rows maximum per page (last baseline 100) |
+| rows | first baseline 685, pitch 15 pt (a synthetic choice: R2 states no row pitch — U-02), 40 rows maximum per page (last baseline 100) |
 | row cells | ID at the level's indent x; name x0 134.0; OD right edge 465.0; RD right edge 496.0; Start x0 501.0; Finish x0 562.0 |
-| indent x by level | R2 measured centroids 52.57, 56.78, 60.30, 63.88, 67.70, 71.53, 75.35, 79.08 |
+| indent x by level | R2 measured centroids 52.57, 56.78, 60.30, 63.88, 67.70, 71.53, 75.35, 79.08; **jitter (R5-F06):** in families 5 and 19, ID-bearing rows at level 4 alternate left edge `+0.0` / `+0.6` pt (at least 2 rows each), so the level-4 cluster spans 0.6 pt and its centroid stays at least 3.23 pt from both neighbours; every other level is exact |
 | chart duplicates | name at x0 620.0 and dates at x0 700.0 on the row baseline |
 | footer | `Synthetic legend` at (40, 60); `Summary Page n of m` at (1000, 40) |
 | neutral content | IDs `SYN-1000`…, names `Synthetic activity 001`…, labels `Synthetic Phase A`… |
@@ -803,12 +926,12 @@ against. Goldens (section 9) only pin bytes.
 
 | # | Family (variants) | P | Key rows / construction | Expected | Proves (R2 §38 / §39 / AC) |
 |---|---|---|---|---|---|
-| 1 | `full_valid_2p` (`base`, `subset_prefix`) | 2 | project summary L0, 2 WBS L1, activities L2, a Start-only and a Finish-only milestone (OD 0, RD 0), one date with `*`; `subset_prefix` uses the prefixed bold base name | C | row types, milestone pattern, marker, prefix normalization; ID precision/recall, name/date/duration accuracy; AC-009, 018 |
-| 2 | `full_merged_summary_label` | 1 | bold L1 label from x0 52.57 whose box crosses 131.0, OD/RD/dates aligned | C | §38 merged label never an ID; no summary→activity promotion; AC-012 |
-| 3 | `full_summary_vertical_offset` | 1 | 10 pt bold project label with centre 3.0 pt above the 7 pt numeric cells' centre (overlap ratio ≈ 0.74) | C | §38 one row by overlap; AC-012 |
-| 4 | `full_summary_zero_zero` | 1 | blank-ID bold summary with OD `0`, RD `0`, one Start date | C | stays `WBS_SUMMARY`, never milestone; AC-018 |
-| 5 | `full_nested_hierarchy` | 3 | all 8 indent levels; repeated label `Synthetic Phase A` at 2 positions; page 2 opens with activities whose parent summary is on page 1 | C | exact parents/paths, stack carry, repeated labels distinct; hierarchy gate; AC-019 |
-| 6 | `full_header_occluded_od` | 2 | page 2 OD anchor replaced by `04-May-26` with x0 436.0 | C + `HEADER_OD_OCCLUDED` (page 2) | §38 parses and warns only; AC-014 |
+| 1 | `full_valid_2p` (`base`, `subset_prefix`, `zone_edges`, `split_name`, `id_double_space`) | 2 | project summary L0, 2 WBS L1, activities L2, a Start-only and a Finish-only milestone (OD 0, RD 0), one date with `*`, every ID followed by its name and cells on the same line; `subset_prefix` uses the prefixed bold base name; `zone_edges` adds activity rows whose objects' y-centres are exactly 700.000 and 95.000 pt; `split_name` draws one name as 2 abutting objects overlapping by 0.2 pt in x; `id_double_space` draws ID `SYN  1001` (2 spaces) | C; `split_name` name text is the 2 fragments joined by one space; `id_double_space` publishes `SYN 1001` (measured collapse, D-30) | row types, milestone pattern, marker, prefix normalization, zone-edge inclusivity, cell-overlap threshold, no generated characters in evidence; ID precision/recall, name/date/duration accuracy; AC-009, 018 |
+| 2 | `full_merged_summary_label` (`base`, `label_only`) | 1 | bold L1 label from x0 52.57 whose box crosses 131.0, OD/RD/dates aligned; `label_only`: a bold label row at normal pitch with all 4 value cells blank | C / R (`label_only` row `AMBIGUOUS` + `AMBIGUOUS_CELL`, D-32) | §38 merged label never an ID; no summary→activity promotion; R2 §15.6 required cells; AC-012 |
+| 3 | `full_summary_vertical_offset` (`base`, `glyph_metrics`) | 1 | 10 pt bold project label with centre 3.0 pt above the 7 pt numeric cells' centre (overlap ratio ≈ 0.74); `glyph_metrics` repeats the page with the per-glyph font (descender labels, digit-only cells, a bearing on `1`) | C | §38 one row by overlap under uniform and realistic metrics; AC-012 |
+| 4 | `full_summary_zero_zero` (`base`, `id_both_dates`) | 1 | blank-ID bold summary with OD `0`, RD `0`, one Start date; `id_both_dates`: an ID-bearing row with OD `0`, RD `0` and both dates | C / R (row `AMBIGUOUS` + `AMBIGUOUS_CELL`, section 5.10 rule 3) | stays `WBS_SUMMARY`, never milestone; malformed zero-duration not guessed; AC-018 |
+| 5 | `full_nested_hierarchy` | 3 | all 8 indent levels with every child exactly 1 level below its parent; level-4 jitter (section 8.3); repeated label `Synthetic Phase A` at 2 positions; page 2 opens with activities whose parent summary is on page 1 | C | exact parents/paths, stack carry, repeated labels distinct; hierarchy gate; AC-019 |
+| 6 | `full_header_occluded_od` (`replaced`, `overlay`) | 2 | page 2 OD anchor replaced by `04-May-26` with x0 436.0 / page 2 keeps its OD anchor and also carries `04-May-26` at x0 436.0 | C + `HEADER_OD_OCCLUDED` (page 2), both variants | §38 parses and warns only; R2 §12.5/§13.4.6/§37.6 both shapes; AC-014 |
 | 7 | `full_header_mismatch` (`later_page`, `first_page`) | 2 | `RD` and `Start` anchors missing on page 2 / page 1 | R + `HEADER_SIGNATURE_MISMATCH` / F `UNSUPPORTED_LAYOUT` | AC-014 refusal |
 | 8 | `full_missing_activity_id` | 2 | page 2 row with OD/RD/Start/Finish only, plus its name in the chart region | R + `ACTIVITY_LIKE_ROW_MISSING_ID` | §38 invents no ID/name, links nothing; missing-ID gate; AC-016, 021 |
 | 9 | `full_duplicate_activity_id` | 1 | two activities `SYN-1100` with different names | R + `DUPLICATE_ACTIVITY_ID` ×2 | no winner; zero links; AC-021 |
@@ -816,19 +939,19 @@ against. Goldens (section 9) only pin bytes.
 | 11 | `full_duration_date_in_od` | 1 | an activity with `15-Mar-28` at OD x0 436.0 | P + `INVALID_DURATION` | same; AC-017 |
 | 12 | `full_invalid_date` | 1 | `31-Feb-27` in Finish; `30-Foo-26` in Start | P + `INVALID_DATE` ×2 | coercion gate; AC-023 |
 | 13 | `full_chart_duplicates` | 1 | every row's name/dates repeated at x0 620/700 | C, `chart_objects_excluded` > 0 | §38 zero chart fragments; chart gate; AC-010 |
-| 14 | `full_draft_watermark` (`signature`, `off_signature`) | 1 | rotated (7°) `DRAFT` with box inside the tolerance crossing the table; an activity named `DRAFT`; `off_signature` shifts the box 20 pt | C, `watermark_objects_excluded == 1`, `DRAFT` name kept / F `UNSUPPORTED_LAYOUT` | §38 watermark zero fragments; watermark gate; AC-011 |
-| 15 | `full_duplicate_text_object` | 1 | one activity name drawn 3 times: identically and 0.2 pt shifted; on another activity the OD token `5` drawn twice 0.3 pt apart | P: `DUPLICATE_TEXT_OBJECT_COLLAPSED` ×2 (warnings) and `OVERLAPPING_CELL_TEXT` ×1 on that OD cell | §38 exact duplicate collapses; tolerance boundary |
-| 16 | `full_overlapping_cell_text` (`od`, `id`) | 1 | `5` and `8` overlapping in OD / two overlapping regular IDs | P + `OVERLAPPING_CELL_TEXT` / R (row `AMBIGUOUS`) | §38 non-identical overlap ambiguous; no last-write-wins |
-| 17 | `full_ambiguous_hierarchy` (`close_centroids`, `orphan`) | 1 | edges at 52.57 and 54.40 / a level-2 activity before any summary | P + `HIERARCHY_AMBIGUOUS` | every ambiguity explicit; AC-019 |
-| 18 | `full_row_wrap_unsupported` | 1 | an activity followed by a regular name-only line 8 pt lower | R + `ROW_WRAP_UNSUPPORTED` | wrap-concatenation gate = 0; AC-013 |
+| 14 | `full_draft_watermark` (`signature`, `off_signature`, `slight_skew`, `skew_1deg`) | 1 | rotated (7°) `DRAFT` whose box edges each sit 6–10 pt (not 0) from the signature box, crossing the table; an activity named `DRAFT`; `off_signature` moves every edge 20 pt; `slight_skew` adds an activity name at 0.4°; `skew_1deg` at 1° | C, `watermark_objects_excluded == 1`, `DRAFT` name kept / F `UNSUPPORTED_LAYOUT` / C / F `UNSUPPORTED_LAYOUT` | §38 watermark zero fragments; watermark gate; near-horizontal boundary; AC-011 |
+| 15 | `full_duplicate_text_object` (`base`, `shift_0_5`, `bold_over_regular`, `same_text_2pt`) | 1 | `base`: one activity name drawn 3 times (identical, identical, +0.2 pt in x — measured: 2 suppressed objects) and, on another activity, OD `5` drawn twice 0.3 pt apart (measured: second suppressed); `shift_0_5`: a name redrawn +0.5 pt (suppressed); `bold_over_regular`: a regular name redrawn in bold at the same position (suppressed); `same_text_2pt`: OD `5` redrawn +2.0 pt (measured: **not** suppressed) | `base`: P — 1 `DUPLICATE_TEXT_OBJECT_COLLAPSED` issue (`counts.duplicate_objects_collapsed == 2`, `suppressed_objects == 3`) and `OVERLAPPING_CELL_TEXT` on the OD cell; `shift_0_5`: R (name cell overlapping → row `AMBIGUOUS`); `bold_over_regular`: R (mixed → row `AMBIGUOUS`); `same_text_2pt`: P (`OVERLAPPING_CELL_TEXT`) | §38 exact duplicate collapses; R2 §12.7 0.25 pt boundary with PDFium suppression; R2 §13.3 mixed style; no first-write-wins |
+| 16 | `full_overlapping_cell_text` (`od`, `id`, `id_split`, `unmapped`) | 1 | `5` and `8` 0.3 pt apart in OD (measured: both reported) / IDs `SYN-1101` and `SYN-1102` 0.3 pt apart / an ID drawn as `SYN-` and `1201` abutting without overlap / an activity name in a font without `/ToUnicode` | P + `OVERLAPPING_CELL_TEXT` / R (row `AMBIGUOUS`) / R (ID cell with 2 fragments, D-11) / R (unmapped name → row `AMBIGUOUS`) | §38 non-identical overlap ambiguous; no last-write-wins; identity never assembled from pieces |
+| 17 | `full_ambiguous_hierarchy` (`close_centroids`, `orphan`, `level_gap`) | 1 | edges at 52.57 and 54.40 / a level-2 activity before any summary / a level-3 activity directly under a level-1 summary (no level-2 summary) | P + `HIERARCHY_AMBIGUOUS` (all 3) | every ambiguity explicit; R2 §14.12; AC-019 |
+| 18 | `full_row_wrap_unsupported` (`regular_name`, `bold_label`) | 1 | an activity followed by a regular name-only line 8 pt lower / a bold summary label followed by a bold continuation line starting at the same indent x (inside the ID band) 8 pt lower | R + `ROW_WRAP_UNSUPPORTED` (both) | wrap-concatenation gate = 0; no phantom summary; AC-013 |
 | 19 | `full_multi_page_86_equivalent` | 86 | 54 pages × 40 rows + 32 pages × 39 rows = 3408 rows: 443 summaries (1 project + 442 WBS), 2964 ID-bearing (2900 activities, 32 Start-only and 32 Finish-only milestones), 1 missing-ID row on page 21; OD occlusion on page 37; date tokens in a summary RD (page 55), an activity RD (page 58), an activity OD (page 61); watermark and chart duplicates on every page | R; counts equal `MEASURED_CORPUS`; issues: 1 missing-ID, 1 occlusion warning, 3 invalid-duration | corpus-shape reproduction; performance target; AC-037 |
 | 20 | `corrupt_pdf` (`garbage`, `not_a_pdf`, `empty`) | — | `%PDF-1.7\n` + 8 × `\x00garbage\n` (measured `FPDF_ERR_FORMAT`) / `not a pdf` / `b""` | F `CORRUPT_PDF` / F `UNSUPPORTED_MEDIA_TYPE` ×2 | AC-007 |
-| 21 | `encrypted_pdf` (`user_password`, `empty_user_password`) | 1 | RC4 40-bit, standard handler R2, `/P -44`, stdlib RC4 + `hashlib.md5(usedforsecurity=False)`; user `synthetic-user` / empty, owner `synthetic-owner` | F `ENCRYPTED_PDF` ×2 (measured: error 4 / opens with revision 2) | AC-007 |
+| 21 | `encrypted_pdf` (`user_password`, `empty_user_password`, `unknown_filter`) | 1 | RC4 40-bit, standard handler R2, `/P -44`, stdlib RC4 + `hashlib.md5(usedforsecurity=False)`; user `synthetic-user` / empty, owner `synthetic-owner` / `/Encrypt << /Filter /SynUnknown … >>` | F `ENCRYPTED_PDF` ×3 (measured: error 4 / opens with revision 2 / error 5) | AC-007 |
 | 22 | `image_only_pdf` | 1 | correct page size, one 1×1 DeviceGray image XObject and a filled path, no text | F `IMAGE_ONLY_PDF` | AC-007 |
-| 23 | `wrong_page_size` (`letter`, `rotated`, `zero_pages`) | 1 | 612×792 / `/Rotate 90` (measured: size by index reads 792×1224, so V6 refuses) / empty `/Kids` (measured: PDFium refuses to open) | F `UNSUPPORTED_LAYOUT` ×2 / F `CORRUPT_PDF` | AC-009 |
+| 23 | `wrong_page_size` (`letter`, `rotated`, `rotated_180`, `offset_origin`, `zero_pages`) | 1 | 612×792 / `/Rotate 90` (measured: size by index reads 792×1224, so V6 refuses) / `/Rotate 180` (size unswapped; V7 refuses) / `/MediaBox [100 50 1324 842]` (measured: passes the size check; V7 origin refuses) / empty `/Kids` (measured: PDFium refuses to open) | F `UNSUPPORTED_LAYOUT` ×4 / F `CORRUPT_PDF` | AC-009 |
 | 24 | `page_metadata_mismatch` (`data_date`, `run_date`, `title`, `page_number`, `page_total`) | 2 | page 2 differs in the named item | R + `PAGE_METADATA_MISMATCH` (page 2) | AC-015 |
 | 25 | `expected_data_date_mismatch` (`mismatch`, `match`) | 2 | `full_valid_2p` bytes with `expected_data_date` 2026-05-05 / 2026-05-04 | R + `EXPECTED_DATA_DATE_MISMATCH` / C | AC-015 |
-| 26 | `bounds_exceeded` (`bytes`, `pages`, `text_objects`, `page_objects`, `chars`, `rows`, `issues`, `row_warnings`, `hierarchy_depth`, `cell_evidence`, `form_text`, `time_first`, `time_mid`) | varies | `bytes`: valid bytes padded after `%%EOF` to 16 MiB + 1 (production); `pages`: 251 blank frame-size pages (production); the others use tightened `ScheduleParseLimits` on small documents (e.g. `max_rows=3` with 4 rows); `form_text`: a form XObject holding a text object; `time_*`: fake clock per section 5.15 | F `SOURCE_TOO_LARGE` / `BOUNDS_EXCEEDED` / `UNSUPPORTED_LAYOUT` / `PROCESSING_BUDGET_EXCEEDED` | AC-007; production limit values pinned separately by `test_production_limits_are_the_r2_bounds` |
+| 26 | `bounds_exceeded` (`bytes`, `pages`, `text_objects`, `page_objects`, `chars`, `rows`, `issues`, `row_warnings`, `hierarchy_depth`, `cell_evidence`, `form_text`, `form_depth`, `time_first`, `time_mid`) | varies | `bytes`: valid bytes padded after `%%EOF` to 16 MiB + 1 (production); `pages`: 251 blank frame-size pages (production); the others use tightened `ScheduleParseLimits` on small documents (e.g. `max_rows=3` with 4 rows); `form_text`: a form XObject holding a text object; `form_depth`: 5 nested form XObjects holding only a path (production `max_form_depth`); `time_*`: fake clock per section 5.15 | F `SOURCE_TOO_LARGE` / `BOUNDS_EXCEEDED` / `UNSUPPORTED_LAYOUT` / `PROCESSING_BUDGET_EXCEEDED` | AC-007; production limit values pinned separately by `test_production_limits_are_the_r2_bounds` |
 
 Decision on bounds variants: the two caps checked before PDFium does page work (bytes,
 pages) use **production** values on real oversized inputs (cheap: padding and blank pages);
@@ -859,6 +982,8 @@ process. A miss is reported, not hidden behind `slow` (section 10.4).
   family 26 `bytes`/`pages` cases, which record `result: null` and rely on
   `result_sha256` + `summary`.
 - Golden expectations are not ground truth: section 8.4 truth is compared independently.
+- `ScheduleParseResult.engine` is never written to a golden (it differs between the floor
+  and current venvs, which share the goldens).
 - Regeneration is explicit only:
   `PYTHONPATH=src python -m tests.fixtures.schedule_full_pdf write-goldens` (writes every
   file, prints each path and digest). No test calls the writer.
@@ -904,7 +1029,7 @@ golden directory, tokenizing on `[A-Za-z0-9]+`.
 
 | §38 assertion | Test |
 |---|---|
-| golden row fields (page, ordinals, type, indent, parent, path, ID, name, OD/RD, Start/Finish + marker, bboxes, cell evidence, warnings, outcome) | `test_every_case_matches_its_golden` (parametrized) |
+| golden row fields (page, ordinals, type, indent, parent, path, ID, name, OD/RD, Start/Finish + marker, bboxes, cell evidence, warnings, outcome) | `test_every_case_matches_its_golden` (parametrized over every family and variant of section 8.5) |
 | canonicalization linkage / NULL linkage | `test_linkage_is_eligible_only_for_complete_or_partial` |
 | merged bold label is one summary, never an ID | `test_merged_summary_label_is_never_an_activity_id` |
 | vertical-offset summary is one row | `test_vertical_offset_summary_is_one_row` |
@@ -960,7 +1085,15 @@ Other required tests: `test_schedule_model.py::test_closed_enums_have_exactly_th
 `test_canonical_numbers_are_fixed_decimal_strings`, `test_outcome_derivation_table`;
 `test_schedule_full_pdf.py::test_handles_are_closed_on_every_exit`,
 `test_extraction_is_identical_across_runs`, `test_form_xobject_text_is_unsupported_layout`,
-`test_undecodable_text_is_parser_exception` (monkeypatched decode input);
+`test_object_text_is_attributed_non_generated_characters` (section 2.4 table rows as
+assertions, including the measured suppression and whitespace-collapse cases, so a PDFium
+upgrade that changes them fails here first), `test_no_generated_character_enters_evidence`,
+`test_suppressed_objects_resolve_deterministically`, `test_unmapped_characters_make_the_cell_ambiguous`,
+`test_security_error_and_unknown_filter_are_encrypted`, `test_page_origin_is_validated`,
+`test_engine_provenance_is_outside_the_digest`;
+`test_schedule_full_profile.py::test_od_occlusion_admits_replaced_and_overlay_only`,
+`test_wrap_detects_bold_label_continuations`, `test_summary_requires_a_value_cell`,
+`test_level_gap_is_hierarchy_ambiguous`, `test_watermark_rotation_uses_decimal_tangents`;
 `test_schedule_full_goldens.py::test_golden_directory_holds_exactly_the_registered_cases`,
 `test_86_page_equivalent_parse_time_is_reported` (prints the duration; asserts only the
 R2 30 s parser-only ceiling). `slow` is not used: it is excluded from every CI lane.
@@ -980,34 +1113,68 @@ FAST selection in chunks.
 
 ### 10.6 Prove-red plan (one mutant at a time, revert after each)
 
-| Mutant | Must fail |
-|---|---|
-| each of the 7 grid constants ± 1,000 mpt (7 runs) | `test_profile_constants_are_frozen` and `test_cell_band_boundaries_on_every_grid_line`; the 131.0 and 615.5 mutants also fail families 2 and 13 |
-| `ROW_OVERLAP_RATIO` to `3/4` | `test_overlap_ratio_boundary_is_one_half`, family 3 golden |
-| `ROW_MAX_SPAN_MPT` to 30,000 | the row-span case in `test_rows_group_by_seed_overlap_not_centre_distance` |
-| `CHART_BOUNDARY` to 700.0 | family 13 golden, `chart_admitted` gate |
-| watermark text `DRAFT` → `DRAFTX`, or tolerance 12 → 2 pt | family 14 (`signature` becomes `UNSUPPORTED_LAYOUT`) |
-| `DUPLICATE_EDGE_TOLERANCE_MPT` 250 → 100 / → 400 | family 15 (0.2 pt pair no longer collapses / 0.3 pt pair collapses) |
-| `INDENT_TOLERANCE_MPT` 1,500 → 500 | family 5 golden, `hierarchy_accuracy` |
-| rule: y-centre grouping with 2 pt tolerance replacing overlap | family 3, `test_rows_group_by_seed_overlap_not_centre_distance` |
-| rule: union instead of fixed seed | `test_grouping_compares_to_the_fixed_seed` |
-| rule: last-write-wins in a cell | family 16, `test_exact_duplicate_collapses_and_overlap_is_ambiguous` |
-| rule: chart-side repair of a missing name | family 8, `test_missing_id_row_invents_nothing_and_links_nothing` |
-| rule: date token in OD/RD shifted into Start | families 10–11, `coerced_invalid` |
-| rule: split a bold label at 131.0 into ID + name | family 2, `test_merged_summary_label_is_never_an_activity_id` |
-| rule: V1 after open | `test_byte_cap_is_checked_before_pdfium_opens` |
-| rule: drop the revision check (V4) | family 21 `empty_user_password` |
-| rule: concatenate a wrap line | family 18, `wrap_concatenated` |
-| guard: `import pypdfium2` in `full_profile.py` | `test_a_confined_dependency_is_imported_only_where_it_belongs` |
-| guard: remove the import from `pdf.py` | `test_every_confined_dependency_is_actually_used_there` |
-| guard: edit 1 golden byte | `test_golden_files_are_pinned_by_digest` |
-| guard: add `"application/pdf"` to `SUPPORTED_MEDIA_TYPES` | `test_generic_extraction_still_excludes_pdf` |
-| guard: `import logging` in `pdf.py` | `test_schedule_modules_neither_log_nor_print` |
+Each row names a fixture or unit case that makes the mutant **reachable** (R5-F06); a
+mutant left green is reported as redundancy, a masked test or an unreachable hazard, never
+"covered".
 
-A mutant that leaves every test green is reported as redundancy, a masked test, or an
-unreachable hazard — never as "covered".
-
----
+| # | Mutant | Reached by | Must fail |
+|---|---|---|---|
+| M01–M14 | each of the 7 grid constants `+1,000` and `-1,000` mpt (**14 runs**) | unit band-boundary cases sit exactly on and 1 mpt either side of every line | `test_profile_constants_are_frozen`, `test_cell_band_boundaries_on_every_grid_line`; the 131.0 and 615.5 mutants also fail families 2 and 13 |
+| M15 | `ROW_OVERLAP_RATIO` `1/2` → `3/4` | family 3 (ratio ≈ 0.74) | family 3 golden, `test_overlap_ratio_boundary_is_one_half` |
+| M16 | `ROW_MAX_SPAN_MPT` 16,000 → 30,000 | unit row-span case (a 20 pt tall object overlapping a 7 pt seed) | `test_rows_group_by_seed_overlap_not_centre_distance` |
+| M17 | `CHART_BOUNDARY` → 700.0 | family 13 (chart name at x0 620) | family 13 golden, `chart_admitted` gate |
+| M18 | watermark text `DRAFT` → `DRAFTX` | family 14 `signature` | family 14 golden (becomes `UNSUPPORTED_LAYOUT`) |
+| M19 | watermark tolerance 12 → 5 pt | family 14 `signature` (edges 6–10 pt off the signature) | family 14 golden |
+| M20 | `WATERMARK_TAN_MIN` → `0.13` (above tan 7° = 0.122785) | family 14 `signature` | family 14 golden, `test_watermark_rotation_uses_decimal_tangents` |
+| M21 | `NEAR_HORIZONTAL_TAN` 0.01 → 0.005 | family 14 `slight_skew` (tan 0.4° = 0.00698) | family 14 `slight_skew` golden |
+| M22 | `NEAR_HORIZONTAL_TAN` 0.01 → 0.02 | family 14 `skew_1deg` (tan 1° = 0.01745) | family 14 `skew_1deg` golden |
+| M23 | `DUPLICATE_EDGE_TOLERANCE_MPT` 250 → 100 | family 15 `base` (+0.2 pt suppressed copy) | family 15 golden (`counts.duplicate_objects_collapsed` 1, name overlapping) |
+| M24 | `DUPLICATE_EDGE_TOLERANCE_MPT` 250 → 400 | family 15 `base` (+0.3 pt suppressed `5`) | family 15 golden (OD collapses instead of overlapping) |
+| M25 | `CELL_OVERLAP_MPT` 250 → 100 | family 1 `split_name` (0.2 pt overlap) | family 1 `split_name` golden |
+| M26 | `CELL_OVERLAP_MPT` 250 → 4,000 | family 16 `od` (3.2 pt overlap) | family 16 `od` golden |
+| M27 | `INDENT_TOLERANCE_MPT` 1,500 → 500 | families 5 and 19 level-4 jitter (0.6 pt) | family 5 golden, `hierarchy_accuracy`, family 19 summary |
+| M28 | `INDENT_MIN_SEPARATION_MPT` 3,000 → 1,000 | family 17 `close_centroids` (1.83 pt) | family 17 golden |
+| M29 | `INDENT_MIN_SEPARATION_MPT` 3,000 → 3,600 | family 5 (3.52 pt gap) | family 5 golden |
+| M30 | `WRAP_PITCH_MPT` 10,000 → 7,000 | family 18 (8 pt pitch) | family 18 goldens |
+| M31 | `WRAP_PITCH_MPT` 10,000 → 16,000 | family 2 `label_only` (15 pt pitch) | family 2 `label_only` golden (becomes a wrap) |
+| M32 | data zone top 700.0 → 699.9 | family 1 `zone_edges` | family 1 `zone_edges` golden |
+| M33 | data zone bottom 95.0 → 95.1 | family 1 `zone_edges` | family 1 `zone_edges` golden |
+| M34 | header split 724.0 → 745.0 | base frame (Layout centre 741.75 enters the column-header band) | every C golden (page-1 `UNSUPPORTED_LAYOUT`) |
+| M35 | header split 724.0 → 705.0 | base frame (anchor centre 711.75 leaves the band) | every C golden |
+| M36 | `max_form_depth` 4 → 8 | family 26 `form_depth` | family 26 `form_depth` golden |
+| M37 | rule: y-centre grouping with 2 pt tolerance replacing overlap | family 3 | family 3, `test_rows_group_by_seed_overlap_not_centre_distance` |
+| M38 | rule: union instead of fixed seed | unit chaining case | `test_grouping_compares_to_the_fixed_seed` |
+| M39 | rule: drop suppressed objects (first-write-wins) | family 15 all variants | family 15 goldens, `test_suppressed_objects_resolve_deterministically` |
+| M40 | rule: last-write-wins in a cell | family 16 `od` | family 16, `test_exact_duplicate_collapses_and_overlap_is_ambiguous` |
+| M41 | rule: build text with `FPDFTextObj_GetText` (keeps generated characters) | family 1 `base` (ID and name on one line) | `test_no_generated_character_enters_evidence`, family 1 golden |
+| M42 | rule: chart-side repair of a missing name | family 8 | family 8, `test_missing_id_row_invents_nothing_and_links_nothing` |
+| M43 | rule: date token in OD/RD shifted into Start | families 10–11 | families 10–11, `coerced_invalid` |
+| M44 | rule: split a bold label at 131.0 into ID + name | family 2 | family 2, `test_merged_summary_label_is_never_an_activity_id` |
+| M45 | rule: wrap requires no object at all in the ID band (pre-R5 rule) | family 18 `bold_label` | family 18 `bold_label` golden |
+| M46 | rule: summary without the R2 §15.6 required-cell check | family 2 `label_only` | family 2 `label_only` golden |
+| M47 | rule: OD occlusion only when the anchor is absent | family 6 `overlay` | family 6 `overlay` golden, `test_od_occlusion_admits_replaced_and_overlay_only` |
+| M48 | rule: accept any lower-level parent (level gaps) | family 17 `level_gap` | family 17 `level_gap` golden |
+| M49 | rule: any `AMBIGUOUS` row → `PARTIAL` (undo D-10) | family 16 `id` | family 16 `id` golden, `test_outcome_derivation_table` |
+| M50 | rule: page-1 header failure → review (undo D-12) | family 7 `first_page` | family 7 `first_page` golden |
+| M51 | rule: concatenate multi-fragment ID (undo D-11) | family 16 `id_split` | family 16 `id_split` golden |
+| M52 | rule: milestone allows both dates | family 4 `id_both_dates` | family 4 `id_both_dates` golden |
+| M53 | rule: duplicate ID keeps the first occurrence | family 9 | family 9 golden, `bad_identity_linked` |
+| M54 | rule: drop V2 (`%PDF-` magic) | family 20 `not_a_pdf` | family 20 golden (becomes `CORRUPT_PDF`) |
+| M55 | rule: V1 after open | `test_byte_cap_is_checked_before_pdfium_opens` | that test |
+| M56 | rule: drop V4 (revision check) | family 21 `empty_user_password` | family 21 golden |
+| M57 | rule: map error 5 to `CORRUPT_PDF` | family 21 `unknown_filter` | family 21 golden |
+| M58 | rule: drop V6 size check | family 23 `letter` | family 23 `letter` golden |
+| M59 | rule: drop V7 rotation check | family 23 `rotated_180` | family 23 `rotated_180` golden |
+| M60 | rule: drop V7 origin check | family 23 `offset_origin` | family 23 `offset_origin` golden |
+| M61 | rule: treat unmapped characters as mapped | family 16 `unmapped` | family 16 `unmapped` golden |
+| M62 | rule: concatenate a wrap line | family 18 | family 18, `wrap_concatenated` |
+| M63 | rule: remove one `close()` from a `finally` | `test_handles_are_closed_on_every_exit` | that test |
+| M64 | rule: include `engine` in the canonical object | `test_engine_provenance_is_outside_the_digest` | that test (and the floor-venv golden run) |
+| M65 | guard: `import pypdfium2` in `full_profile.py` | section 2.2 | `test_a_confined_dependency_is_imported_only_where_it_belongs` |
+| M66 | guard: remove the import from `pdf.py` | section 2.2 | `test_every_confined_dependency_is_actually_used_there` |
+| M67 | guard: edit 1 golden byte | any golden | `test_golden_files_are_pinned_by_digest` |
+| M68 | guard: add `"application/pdf"` to `SUPPORTED_MEDIA_TYPES` | — | `test_generic_extraction_still_excludes_pdf` |
+| M69 | guard: `import logging` in `pdf.py` | — | `test_schedule_modules_neither_log_nor_print` |
 
 ## 11. Deviations from R2 and residuals
 
@@ -1024,18 +1191,18 @@ unreachable hazard — never as "covered".
 | D-07 | bytes over bound listed under both `source_too_large` and `bounds_exceeded` | bytes → `SOURCE_TOO_LARGE`; all other caps → `BOUNDS_EXCEEDED` | one code per condition, matching the worker's fetch-cap code |
 | D-08 | 250k text-object bound only | adds 1,000,000 all-object bound | path/image object bombs are otherwise unbounded |
 | D-09 | forms not mentioned | text inside a form XObject → `UNSUPPORTED_LAYOUT` | nested bounds are form-space; fail closed rather than guess (U-04) |
-| D-10 | ambiguous cell → partial or review by identity impact | any `AMBIGUOUS` row → `REVIEW_REQUIRED`; ambiguous non-identity cell → `PARTIAL` | an ambiguous row may hide an ID; review is the safe side |
-| D-11 | concatenate fragments within a cell | ID cell with more than 1 fragment → ambiguous | identity is never assembled from pieces |
+| D-10 | ambiguous cell → partial or review by identity impact | any `AMBIGUOUS` row → `REVIEW_REQUIRED`; ambiguous non-identity cell → `PARTIAL` | an ambiguous row may hide an ID; R2 §17.3 step 3 and the §39 dropped-row gate cannot hold under `PARTIAL` (endorsed by R5). Stricter than R2 §22 for a non-identity `OTHER`-font object in a numeric band, which also makes its row `AMBIGUOUS`. `AMBIGUOUS_CELL` in section 5.13 rule 3 is reachable only through non-row cases and is harmless |
+| D-11 | concatenate fragments within a cell | ID cell with more than 1 fragment → ambiguous | identity is never assembled from pieces; generated characters cannot create fragments (section 2.4). If real exports split IDs across objects, every publication becomes review-required (U-14) |
 | D-12 | header failures → review | page-1 classification failure → `UNSUPPORTED_LAYOUT`; later pages → review | §11 says non-matching PDFs are unsupported |
 | D-13 | "encrypted/password-required → fail" | any security handler refuses, even with an empty user password | measured: such files open silently |
 | D-14 | generator unspecified | Type3 fixture fonts with `Arial`/`Arial,Bold` base names | measured: non-embedded font bounds depend on font substitution |
 | D-15 | memory/time bounds enforced | decompression inside `FPDF_LoadPage` is not pre-emptible; no subprocess isolation in S5a | see U-05 |
 | D-16 | failed = no accepted parse | `FAILED` results carry no rows and exactly 1 issue | deterministic, minimal |
-| D-17 | — | strict UTF-16 decode; failure → `PARSER_EXCEPTION` | PostgreSQL JSONB rejects lone surrogates |
+| D-17 | — | an object with any `HasUnicodeMapError` character, NUL or surrogate code point is `unmapped`; its table cell is `AMBIGUOUS` + `AMBIGUOUS_CELL`; metadata ignores it | measured: without `/ToUnicode` PDFium falls back to the code with the error flag set; fail closed per object rather than refusing the document; keeps lone surrogates out of JSONB |
 | D-18 | metadata retained after coherence | per-item `None` when incoherent | never claim a coherent value that is not |
 | D-19 | ambiguity never invents a parent | indeterminacy propagates to descendants | a path through an indeterminate ancestor is not deterministic |
 | D-20 | nearest-centroid assignment | own fixed-seed cluster; adjacent centroids `>= 3.0` pt apart or indeterminate | nearest-centroid can cross clusters; measured centroids are 3.52–4.21 pt apart |
-| D-21 | "within <10 pt of the preceding row cluster" | top-edge pitch `< 10.0` pt with no ID/numeric/date cell | the measured row pitch (~15 pt) makes bbox-gap readings flag every row |
+| D-21 | "within <10 pt of the preceding row cluster" with no independent ID/numeric/date cells | top-edge pitch `< 10.0` pt; no **regular** object in the ID band; no OD/RD/Start/Finish object; at least 1 object in `[37.0, 435.5)` | a bold continuation of a summary label starts at its indent x, inside the ID band, and must not become a phantom summary (R5-F02). Top-edge pitch is a synthetic reading of R2's phrase; the corpus row pitch is not stated by R2 (U-02) |
 | D-22 | 16 pt span "may" | over-span row → `AMBIGUOUS` + `AMBIGUOUS_CELL` | R2 gives no consequence |
 | D-23 | style contract for IDs/labels | numeric/date cells accept regular or bold | R2 is silent; summaries plausibly print bold numbers |
 | D-24 | bounds fixed | injectable limits that may only tighten | deterministic bounds tests without giant fixtures |
@@ -1044,17 +1211,34 @@ unreachable hazard — never as "covered".
 | D-27 | parser name/version unnamed | `cpm-workbench-full-parser` / `"1"` | needed for canonical bytes |
 | D-28 | duplicate collapse "before row grouping" | also within metadata objects; never chart objects | duplicated header text must not fail "exactly one" rules |
 | D-29 | non-negative decimal | quantized 3 dp; 9 integer digits max; no leading zeros | `NUMERIC(12,3)` fit and one canonical form |
+| D-30 | internal whitespace in IDs preserved exactly (§16.4) | a run of spaces inside one text object is reported by PDFium as one space; IDs are published as reported | measured at both PDFium versions; no PDFium API returns the uncollapsed string (U-18) |
+| D-31 | duplicates collapse; distinct overlaps are ambiguous (§12.7) | PDFium-suppressed same-text objects are kept, given their twin's text, and then judged by the R2 0.25 pt rule (section 5.4) | measured: PDFium empties same-text objects within about 1 pt in any font; without this rule overlap would be silently first-write-wins (R5-F01) |
+| D-32 | summaries need structurally present required cells (§15.6) | a bold label row needs at least 1 non-blank OD/RD/Start/Finish; otherwise `AMBIGUOUS` | fail closed on a label-only line that could be a wrap or stray text |
+| D-33 | missing/invalid lower-level parent → `hierarchy_ambiguous` (§14.12) | a parent must be exactly 1 level shallower | a skipped level is the R2 evidence of a missing parent; assumes the export indents a child exactly 1 step (U-16) |
+| D-34 | OD header "absent/replaced" and "replaces/overlays" | both the replaced and the overlay shape admitted, nothing broader | R2 §12.5, §13.4.6, §37.6 read together (R5-F03) |
+| D-35 | page size only | MediaBox origin and CropBox equality also checked | measured: an offset MediaBox passes the size check, and every zone assumes a (0,0) origin |
+| D-36 | determinism across platforms | real non-embedded-font inputs accepted, counted and paired with `engine` provenance outside the digest | refusing could fail a corpus whose embedding is unknown; WP-04 decides (U-10) |
+| D-37 | encrypted → fail | `FPDF_ERR_SECURITY` (5) also → `ENCRYPTED_PDF` | measured: an unknown security handler returns 5 |
 
 ### 11.2 Residuals and unknowns
 
 | ID | Item | Owner |
 |---|---|---|
 | U-01 | No real corpus is available: every synthetic-assumption constant (sections 4.4 bands, 4.5 grammars, 4.6 angle/tolerance) is unverified against real bytes; an export that differs fails `UNSUPPORTED_LAYOUT`/review (fail closed, R2 §51.9) | WP-04 authorized-corpus evaluation; any change bumps `PARSER_VERSION` |
-| U-02 | Header/metadata token shapes and the 724 pt split are assumptions | WP-04 |
+| U-02 | Header/metadata token shapes, the 724 pt split, the row pitch (R2 states none; fixtures use 15 pt) and the top-edge wrap reading are assumptions | WP-04 |
 | U-03 | Watermark angle range and ±12 pt tolerance are assumptions | WP-04 |
-| U-04 | Whether real exports wrap table text in form XObjects is unknown; S5a refuses | WP-04 |
+| U-04 | Whether real exports put table text, or the `DRAFT` watermark itself, inside form XObjects is unknown; S5a refuses text in forms, so a form-wrapped watermark would make the corpus `FAILED`, not `REVIEW_REQUIRED` — WP-04 must check before accepting D-09 | WP-04 |
 | U-05 | Decompression-bomb memory inside one page load is bounded only by the 16 MiB input; subprocess/`RLIMIT_AS` isolation is a WP-03 decision | WP-03 |
 | U-06 | Specialty layouts sharing the same 6 columns and metadata cannot be distinguished without real layout values; R2 already defers them | future profile package |
 | U-07 | Text render mode (invisible text) is not consulted | WP-04 security review |
 | U-08 | Linux identity of goldens is argued (Type3 bounds come from the file) and measured only on macOS at both PDFium versions locally; CI's Linux FAST/floor shards are the first Linux proof | S5a CI run |
 | U-09 | The R2 parser-only `< 30 s` target is asserted; the worker `< 60 s` target and RSS `<= 512 MiB` are not measurable without the worker | WP-03/WP-04 |
+| U-10 | Real-input geometry may depend on the host font environment when fonts are not embedded (measured for non-embedded `Arial`); WP-04 measures `FPDFFont_GetIsEmbedded` on the corpus and decides refuse/flag (D-36) | WP-04 |
+| U-11 | Refusing every security handler also refuses owner-password-only (permissions) exports; WP-04 confirms the corpus has no `/Encrypt` | WP-04 |
+| U-12 | PDFium is not thread-safe; if GoodNotes rendering and schedule parsing share a process, PDFium calls must be serialized | WP-03 |
+| U-13 | NFC and `str.isspace` follow the running Python's Unicode database; code points unassigned in an older database could normalize differently after a Python upgrade | WP-04 / Python upgrades |
+| U-14 | D-11 assumes one text object per published Activity ID; WP-04 measures it on the corpus | WP-04 |
+| U-15 | PDFium's same-text suppression envelope (measured: x offsets up to at least 1.0 pt, not 2.0 pt; 0.3 pt in y; font ignored) is internal to PDFium and may change between builds; section 5.4 applies R2's 0.25 pt rule independently, and `test_object_text_is_attributed_non_generated_characters` pins the envelope so a change is seen | S5a tests / PDFium upgrades |
+| U-16 | The level-gap rule (D-33) and the 3.0 pt centroid separation (D-20, only 0.52 pt margin over the corpus's 3.52 pt minimum) assume the corpus indents each child exactly 1 step | WP-04 |
+| U-17 | Whether real fonts carry `/ToUnicode` (otherwise every cell is `unmapped` and every publication review-required) is unknown | WP-04 |
+| U-18 | Whether any corpus Activity ID contains consecutive spaces (D-30) | WP-04 |

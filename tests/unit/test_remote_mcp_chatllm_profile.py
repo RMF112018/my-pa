@@ -211,6 +211,10 @@ _FULL_PLANE_SETTINGS = SimpleNamespace(
     # KLP-WP-03: the Knowledge plane off, its default; the profile then
     # neither composes nor demands the six Knowledge grants.
     knowledge_assertions_enabled=False,
+    # Record lineage P1 (chatllm-data-v10): both lineage switches off, their
+    # defaults; the profile then neither composes nor demands a lineage grant.
+    lineage_enabled=False,
+    program_reporting_enabled=False,
     # KLP-WP-04: no client is Knowledge-bound, so the ChatLLM profile tooling runs.
     knowledge_discovery_oauth_client_id_set=frozenset,
     knowledge_operator_review_oauth_client_id_set=frozenset,
@@ -281,7 +285,7 @@ def test_profile_apply_adds_the_meeting_grants_once_and_then_converges(
         desired = _grant_v2_catalog(repository)
         code, plan = _profile(repository, "profile-plan", capsys)
         assert code == 1
-        assert plan["profile_version"] == "chatllm-data-v9"
+        assert plan["profile_version"] == "chatllm-data-v10"
         assert plan["healthy"] is False
         assert plan["actions"] == [
             {
@@ -331,9 +335,9 @@ def test_profile_commands_refuse_the_previous_profile_version(
     with _repository() as (_, repository):
         _grant_v2_catalog(repository)
         with pytest.raises(SystemExit) as raised:
-            _profile(repository, "profile-apply", capsys, profile_version="chatllm-data-v3")
+            _profile(repository, "profile-apply", capsys, profile_version="chatllm-data-v9")
         assert raised.value.code == 2
-        assert "profile version must be chatllm-data-v9" in capsys.readouterr().err
+        assert "profile version must be chatllm-data-v10" in capsys.readouterr().err
         rows = repository.list_capability_grants(remote_client_id=CLIENT_UUID)
         assert not any(row.capability.startswith("meetings.") for row in rows)
 
@@ -384,7 +388,7 @@ def test_v6_profile_apply_adds_the_knowledge_grants_only_with_the_plane_on(
         )
         plan = json.loads(capsys.readouterr().out)
     assert code == 1
-    assert plan["profile_version"] == "chatllm-data-v9"
+    assert plan["profile_version"] == "chatllm-data-v10"
     assert plan["actions"] == [
         {
             "kind": "add",

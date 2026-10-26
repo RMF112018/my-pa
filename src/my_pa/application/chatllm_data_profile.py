@@ -26,6 +26,7 @@ from my_pa.domain.identity.operation import (
     permitted_purposes,
 )
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.program.vocabulary import PROGRAM_READ_CAPABILITIES
 
 #: Must stay aligned with `CANONICAL_REMOTE_PURPOSES` in the remote adapter.
 #: Duplicated here so application code does not import an outer layer.
@@ -47,6 +48,12 @@ _CHATLLM_MULTI_PURPOSE_STAMP: Final[Mapping[Capability, Purpose]] = MappingProxy
 #: the equality). No other control-plane name is ever a manager exception.
 KNOWLEDGE_MANAGER_GRANT_EXCEPTIONS: Final[frozenset[Capability]] = frozenset(
     {Capability.KNOWLEDGE_ASSERTIONS_SUBMIT, Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT}
+)
+
+#: Record lineage S4: the 2 Program reads (`PROGRAM_READ_CAPABILITIES` in the
+#: Program vocabulary), which need the entity plane besides both switches.
+_PROGRAM_READ_NAMES: Final[frozenset[Capability]] = frozenset(
+    capability for capability in Capability if capability.value in PROGRAM_READ_CAPABILITIES
 )
 
 FAILING_OUTCOMES: Final = frozenset(
@@ -83,6 +90,12 @@ class ChatLLMCompositionPlanes:
     #: KLP-WP-03: `MY_PA_KNOWLEDGE_ASSERTIONS_ENABLED` (which requires the
     #: Relationship Intelligence plane). Default off, as the switch is.
     knowledge_assertions: bool = False
+    #: Record lineage P1 (chatllm-data-v10): `MY_PA_LINEAGE_ENABLED`. Default
+    #: off, as the switch is.
+    lineage: bool = False
+    #: Record lineage P1 (chatllm-data-v10): `MY_PA_PROGRAM_REPORTING_ENABLED`
+    #: (which requires the lineage switch). Default off, as the switch is.
+    program_reporting: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,6 +202,19 @@ def _prerequisite_holds(
         # The plane requires Relationship Intelligence (`Settings._check`); the
         # conjunction is restated so a hand-built plane set cannot compose it alone.
         return planes.knowledge_assertions and planes.relationship_intelligence
+    if prerequisite is ChatLLMCompositionPrerequisite.LINEAGE:
+        return planes.lineage
+    if prerequisite is ChatLLMCompositionPrerequisite.PROGRAM_REPORTING:
+        # The service's own conditions (`ApplicationService.available_capabilities`):
+        # both switches; the 2 Program reads also need the entity plane (their
+        # subjects are Entities) and `programs.overview` the Constraint plane.
+        # The Program read factory exists in every composition the planner
+        # models (it is absent only in a restricted-profile composition).
+        if not (planes.lineage and planes.program_reporting):
+            return False
+        if capability in _PROGRAM_READ_NAMES and not planes.relationship_intelligence:
+            return False
+        return not (capability is Capability.PROGRAMS_OVERVIEW and not planes.constraints)
     raise RuntimeError(f"unknown ChatLLM composition prerequisite: {prerequisite!r}")
 
 

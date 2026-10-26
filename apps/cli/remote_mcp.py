@@ -151,6 +151,10 @@ def _planes_from_settings(settings: Settings) -> ChatLLMCompositionPlanes:
         knowledge_assertions=(
             settings.knowledge_assertions_enabled and settings.relationship_intelligence_enabled
         ),
+        # Record lineage P1 (chatllm-data-v10): the planner desires lineage
+        # grants only when it runs with the serving process's switches.
+        lineage=settings.lineage_enabled,
+        program_reporting=settings.program_reporting_enabled,
     )
 
 

@@ -5,14 +5,17 @@ part of the S3.1 contract section 10 "Admission" row (sections 4.1, 6.1, 7 and
 7.10):
 
 * the 4 new names -- the 3 confirms and `records.lineage.related` -- are
-  `CHATLLM_OPERATOR_DECISION_REQUIRED`, scopeless, the `lineage` feature, under
-  the section 7 purposes; the confirms are keyed, operator-only writes;
+  scopeless (P1 client exposure, chatllm-data-v10: the confirms
+  `CHATLLM_CONTROL_PLANE_EXCLUDED`, the related read `CHATLLM_DATA_CONDITIONAL`),
+  the `lineage` feature, under the section 7 purposes; the confirms are keyed, operator-only writes;
 * `MY_PA_LINEAGE_ENABLED` off withholds all 4 and every handler answers
   `unsupported` first;
 * no S3.1 request, new or open, admits a server-owned or provenance field;
 * the open writes derive their provenance from server-stamped context and never
   answer `denied` for want of attestation; the attested set still does;
-* no S3.1 name is in the ChatLLM data profile, and no non-lineage v1 shape moves;
+* the ChatLLM data profile desires exactly the 34 client-usable lineage-plane
+  names when composed and none of the 7 withheld (P1), and no non-lineage v1
+  shape moves;
 * the tool descriptions of the S3.1 commands carry the section 7.12 guidance.
 
 Every value is synthetic.
@@ -69,6 +72,7 @@ from my_pa.domain.identity.chatllm_capability_policy import (
     CHATLLM_CAPABILITY_POLICY,
     CHATLLM_DATA_PROFILE_VERSION,
     ChatLLMCapabilityClass,
+    ChatLLMCompositionPrerequisite,
     is_chatllm_data_management,
 )
 from my_pa.domain.identity.operation import (
@@ -84,6 +88,7 @@ from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.lineage.vocabulary import (
     ATTESTED_LINEAGE_WRITE_CAPABILITIES,
     CONFIRM_CAPABILITIES,
+    LINEAGE_BACKFILL_CAPABILITIES,
     LINEAGE_WRITE_CAPABILITIES,
     OPEN_LINEAGE_WRITE_CAPABILITIES,
     AcceptanceBasis,
@@ -105,7 +110,11 @@ _PURPOSES: Final = {
     "issues.project_links.confirm": Purpose.ISSUE_AUTHORING,
     "records.lineage.related": Purpose.RECORD_LINEAGE_READ,
 }
-_RATIONALE: Final = "record lineage S3.1; exposure is an operator decision (ADR-015, OD-07)"
+#: P1 client exposure (operator directive 2026-10-26): the withheld attested names.
+_ATTESTED_RATIONALE: Final = (
+    "attested to the local operator surface; withheld from every client "
+    "(operator directive 2026-10-26)"
+)
 #: Section 1, Part A: the 14 lineage writes the operator directives open.
 _OPEN: Final = frozenset(
     {
@@ -254,8 +263,17 @@ def test_s31_capabilities_are_operator_decision_required() -> None:
     for capability in declared:
         name = capability.value
         policy = CHATLLM_CAPABILITY_POLICY[capability]
-        assert policy.classification is ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED
-        assert policy.exclusion_rationale == _RATIONALE
+        # P1 client exposure (operator directive 2026-10-26, chatllm-data-v10):
+        # the related read is plane-conditional data; the confirms are withheld
+        # from every client as control-plane excluded.
+        if name in CONFIRM_CAPABILITIES:
+            assert policy.classification is ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED
+            assert policy.composition_prerequisite is ChatLLMCompositionPrerequisite.NONE
+            assert policy.exclusion_rationale == _ATTESTED_RATIONALE
+        else:
+            assert policy.classification is ChatLLMCapabilityClass.DATA_CONDITIONAL
+            assert policy.composition_prerequisite is ChatLLMCompositionPrerequisite.LINEAGE
+            assert policy.exclusion_rationale is None
         assert capability in _SCOPELESS
         assert _FEATURE_BY_FAMILY[name.split(".", 1)[0]] == "lineage"
         assert permitted_purposes(capability) == frozenset({_PURPOSES[name]})
@@ -271,10 +289,11 @@ def test_s31_capabilities_are_operator_decision_required() -> None:
     counts = dict.fromkeys(ChatLLMCapabilityClass, 0)
     for policy in CHATLLM_CAPABILITY_POLICY.values():
         counts[policy.classification] += 1
-    assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 41
+    # P1: only the GSQS pair remains an operator decision.
+    assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 2
     assert len(Capability) == 233
-    # No data-class member moved, so the ChatLLM data profile did not either.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v9"
+    # P1 moved data-class members, so the ChatLLM data profile moved too.
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v10"
 
 
 def test_switch_off_withholds_every_s31_capability(scene: Scene) -> None:
@@ -446,7 +465,11 @@ def test_remaining_gated_capabilities_derive_attested_authority(scene: Scene) ->
 
 
 def test_no_s31_capability_is_in_the_chatllm_data_profile() -> None:
-    from my_pa.application.chatllm_data_profile import desired_effective_capabilities
+    from my_pa.application.chatllm_data_profile import (
+        ChatLLMCompositionPlanes,
+        composed_capabilities,
+        desired_effective_capabilities,
+    )
 
     declared = _declared()
     lineage_plane = _LINEAGE_CAPABILITIES | frozenset(
@@ -454,14 +477,46 @@ def test_no_s31_capability_is_in_the_chatllm_data_profile() -> None:
         for capability in Capability
         if capability.value in PROGRAM_REPORTING_CAPABILITIES
     )
-    assert all(not is_chatllm_data_management(capability) for capability in lineage_plane)
+    # P1 client exposure (operator directive 2026-10-26): the 7 withheld names.
+    withheld = frozenset(
+        capability
+        for capability in Capability
+        if capability.value in CONFIRM_CAPABILITIES | LINEAGE_BACKFILL_CAPABILITIES
+        or capability in {Capability.ISSUES_CLOSE, Capability.ISSUES_REOPEN}
+    )
+    assert len(withheld) == 7
+    exposed = lineage_plane - withheld
+    assert len(exposed) == 34
+    assert all(is_chatllm_data_management(capability) for capability in exposed)
+    assert not any(is_chatllm_data_management(capability) for capability in withheld)
     every = frozenset(Capability)
     for knowledge_manager in (False, True):
+        # From the all-composed set exactly the 34 are desired, none of the 7.
         desired = desired_effective_capabilities(every, knowledge_manager=knowledge_manager)
-        assert not desired & declared
-        # Opening the writes moved no lineage-plane name into the profile.
-        assert not desired & lineage_plane
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v9"
+        assert desired & lineage_plane == exposed
+        assert not desired & withheld
+    # With the lineage plane off (the default) no S3.1 data name is composed and
+    # no S3.1 name is desired. The planner models composition by prerequisite
+    # only, so the 3 excluded confirms (prerequisite `NONE`) stay in its composed
+    # set whatever the planes, exactly as the backfill pair always has; the
+    # service withholds them by its switch, and no profile ever desires them.
+    off = ChatLLMCompositionPlanes(
+        managed_documents=True,
+        relationship_intelligence=True,
+        relationship_intelligence_writes=True,
+        relationship_memory=True,
+        constraints=True,
+        knowledge_assertions=True,
+        program_reporting=True,
+    )
+    composed_off = composed_capabilities(every, off)
+    assert not composed_off & (declared - withheld)
+    for knowledge_manager in (False, True):
+        assert not (
+            desired_effective_capabilities(composed_off, knowledge_manager=knowledge_manager)
+            & lineage_plane
+        )
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v10"
 
 
 # ---- client guidance (section 7.12) ----------------------------------------------

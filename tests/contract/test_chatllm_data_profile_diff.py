@@ -441,7 +441,7 @@ def test_no_path_grants_every_capability_enum_member() -> None:
     assert Capability.SOURCES_ENROLL not in desired
     assert Capability.GSQS_START not in desired
     assert Capability.CONTINUITY_TASKS_CREATE not in desired
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v9"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v10"
 
 
 def test_mismatched_purpose_or_write_is_add_not_noop() -> None:
@@ -695,7 +695,7 @@ def test_a_v2_converged_client_plans_exactly_the_six_meeting_adds() -> None:
         scope=SCOPE,
     )
     assert not diff.is_healthy()
-    assert diff.profile_version == "chatllm-data-v9"
+    assert diff.profile_version == "chatllm-data-v10"
     assert diff.add == _MEETINGS
     assert diff.renew == frozenset()
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
@@ -718,7 +718,7 @@ def test_a_v3_converged_client_plans_exactly_the_record_events_add() -> None:
         scope=SCOPE,
     )
     assert not diff.is_healthy()
-    assert diff.profile_version == "chatllm-data-v9"
+    assert diff.profile_version == "chatllm-data-v10"
     assert diff.add == feed
     assert diff.renew == frozenset()
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
@@ -745,7 +745,7 @@ def test_a_v4_converged_client_plans_exactly_the_capture_lifecycle_adds() -> Non
         scope=SCOPE,
     )
     assert not diff.is_healthy()
-    assert diff.profile_version == "chatllm-data-v9"
+    assert diff.profile_version == "chatllm-data-v10"
     assert diff.add == lifecycle
     assert diff.renew == frozenset()
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
@@ -856,7 +856,7 @@ def test_v6_demands_the_knowledge_grants_only_when_the_plane_is_composed() -> No
         resource=RESOURCE,
         scope=SCOPE,
     )
-    assert diff.profile_version == "chatllm-data-v9"
+    assert diff.profile_version == "chatllm-data-v10"
     assert diff.add == _KNOWLEDGE_V8
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
     added = {action.capability: action for action in actions if action.kind == "add"}
@@ -929,7 +929,7 @@ def test_v8_adds_exactly_provenance_and_still_excludes_the_discovery_pair() -> N
     Knowledge plane (and the entity plane it requires) is composed, and submit
     and checkpoint are never desired.
     """
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v9"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v10"
     provenance = Capability.RECORD_EVENTS_PROVENANCE
     assert is_chatllm_data_management(provenance)
     discovery = {Capability.KNOWLEDGE_ASSERTIONS_SUBMIT, Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT}
@@ -957,7 +957,7 @@ def test_v9_adds_exactly_the_report_type_registry_on_every_composition() -> None
     sixty-four compositions both are desired, and nothing else moved: the v8
     plane-conditional and excluded names keep exactly their v8 behaviour.
     """
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v9"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v10"
     for capability in _REPORT_TYPES:
         assert is_chatllm_data_management(capability)
     discovery = {Capability.KNOWLEDGE_ASSERTIONS_SUBMIT, Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT}
@@ -992,7 +992,7 @@ def test_a_v8_converged_client_plans_exactly_the_two_report_type_adds() -> None:
         scope=SCOPE,
     )
     assert not diff.is_healthy()
-    assert diff.profile_version == "chatllm-data-v9"
+    assert diff.profile_version == "chatllm-data-v10"
     assert diff.add == _REPORT_TYPES
     assert diff.renew == frozenset()
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)

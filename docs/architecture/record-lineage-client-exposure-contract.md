@@ -669,7 +669,7 @@ the function is kept; no skip or xfail is added. Owner P1-A.
 | `tests/contract/test_lineage_s4_capability_admission.py::test_s4_capabilities_are_operator_decision_required_reads` | the 7 `OPERATOR_DECISION_REQUIRED` with the S4 rationale | each `DATA_CONDITIONAL` / `PROGRAM_REPORTING`, rationale `None` |
 | `tests/contract/test_lineage_s4_capability_admission.py::test_s4_registers_no_report_type_and_issues_no_grant` | no S4 name in a data class | every S4 name in `DATA_CONDITIONAL` (the profile planner, never a bootstrap source, plans its grant); the report-type and bootstrap-source halves unchanged |
 | `tests/contract/test_lineage_s31_capability_admission.py::test_s31_capabilities_are_operator_decision_required` | the 4 S3.1 names `OPERATOR_DECISION_REQUIRED`; 41 in that class | `records.lineage.related` `DATA_CONDITIONAL` / `LINEAGE`; the 3 confirms `CONTROL_PLANE_EXCLUDED` with `_LINEAGE_ATTESTED_EXCLUSION`; 2 in `OPERATOR_DECISION_REQUIRED` |
-| `tests/contract/test_lineage_s31_capability_admission.py::test_no_s31_capability_is_in_the_chatllm_data_profile` | no lineage-plane name desired from the all-composed set | from the all-composed set exactly the 34 exposed names are desired and none of the 7 withheld, ordinary and Knowledge Manager alike; with the lineage plane off no S3.1 name is composed |
+| `tests/contract/test_lineage_s31_capability_admission.py::test_no_s31_capability_is_in_the_chatllm_data_profile` | no lineage-plane name desired from the all-composed set | from the all-composed set exactly the 34 exposed names are desired and none of the 7 withheld, ordinary and Knowledge Manager alike; with the lineage plane off no non-withheld S3.1 name (`records.lineage.related`) is composed and no lineage-plane name is desired (section 12.1, D-1: the 3 confirms, `CONTROL_PLANE_EXCLUDED` with prerequisite `NONE`, stay in `composed_capabilities` as the backfill pair always did, and are never desired) |
 | `tests/contract/test_chatllm_capability_policy.py::test_classification_counts_match_the_approved_plan` | 97 / 19 / 41 | 131 `DATA_CONDITIONAL`, 24 `CONTROL_PLANE_EXCLUDED`, 2 `OPERATOR_DECISION_REQUIRED` |
 
 **Admitted lockstep edits (assertions kept):** every `"chatllm-data-v9"` literal and
@@ -761,8 +761,80 @@ prove-red is reported as redundancy, a masked test or an unreachable hazard, nev
 
 ### 12.1 As implemented
 
-Reserved for the P1 workers' resolutions (P1-A, P1-B), each reported in its handoff and
-accepted by the Orchestrator.
+The P1 workers' resolutions, each reported in its handoff and accepted by the
+Orchestrator (P1-A's pending the final review).
+
+**P1-A** (`7a7c33fe` code and conversions, `45ce9ad1` FAST guards, `86702997` database end
+to end, `600f7902` plan-document re-measure):
+
+- **Measured targets equal section 4.2:** 164 / 191 / 198 / 130; classes `DATA_REQUIRED`
+  74, `DATA_CONDITIONAL` 131, `COMPATIBILITY_ONLY` 2, `CONTROL_PLANE_EXCLUDED` 24,
+  `OPERATOR_DECISION_REQUIRED` 2.
+- **D-1 (section 10.1 row corrected).** The S3.1 row's "with the lineage plane off no S3.1
+  name is composed" was false for the 3 confirms: as `CONTROL_PLANE_EXCLUDED` names their
+  prerequisite is `NONE`, so `composed_capabilities` keeps them whatever the lineage plane
+  says, exactly as it always kept the backfill pair. The implemented assertion is: with
+  the lineage plane off no non-withheld S3.1 name (`records.lineage.related`) is composed
+  and no lineage-plane name is desired. Safe: a `CONTROL_PLANE_EXCLUDED` name is never
+  desired, and an active grant on one is `UNEXPECTED_CONTROL_PLANE_GRANT`. The row above
+  now states this.
+- **D-2 (fixture lockstep).** 2 `SimpleNamespace` `Settings` stand-ins gained
+  `lineage_enabled=False` and `program_reporting_enabled=False` because
+  `_planes_from_settings` now reads both: `_FULL_PLANE_SETTINGS` in
+  `tests/unit/test_remote_mcp_chatllm_profile.py` and the profile-apply stand-in of
+  `tests/database/test_knowledge_remote_grants.py::test_profile_apply_installs_the_create_grant_with_its_purpose`.
+  No assertion changed (the KLP-WP-03 precedent).
+- **D-3 (plan pins).** The FAST and database collection figures and the test-module count
+  of `docs/plans/relationship-intelligence-implementation-plan.md` and
+  `docs/plans/mcv-completion-plan.md` moved by the P1-A tests: FAST 36272 → 36291 (the 14
+  new FAST tests and 5 auto-parametrized rows of
+  `test_every_other_control_plane_name_stays_unexpected_for_a_manager` for the 5 newly
+  `CONTROL_PLANE_EXCLUDED` names), database 4859 → 4871, test modules 840 → 842. P1-B
+  moves them again for its 2 modules (below).
+- **Extra lockstep literal.** `tests/contract/test_chatllm_data_profile_diff.py::test_a_v8_converged_client_plans_exactly_the_two_report_type_adds`
+  carried a v9 literal not in the section 10.1 list; it moved to v10 with its assertions
+  kept. Every function P1-A edited for the conversions and the version literals:
+  `tests/contract/test_chatllm_capability_policy.py` (`test_policy_covers_every_public_capability_exactly_once`,
+  `test_classification_counts_match_the_approved_plan`);
+  `tests/contract/test_chatllm_data_profile_diff.py` (the 7 functions of the admitted
+  lockstep list and the v8 one above); `tests/contract/test_chatllm_knowledge_manager_profile.py::test_the_manager_exception_set_is_exactly_the_discovery_pair`;
+  the 8 admission-module conversions of section 10.1;
+  `tests/unit/test_knowledge_discovery_profile.py::test_the_ordinary_chatllm_profile_excludes_submit_and_checkpoint`;
+  `tests/unit/test_remote_mcp_chatllm_profile.py` (the 3 admitted functions and the
+  stand-in).
+- **Section 5.3 re-runs, as observed.** The "`client_identified` default" and "claim
+  never upgrades" breaks redden the named test through the database CHECK
+  `a_lineage_row_provenance_is_consistent` (a layered guard) before the test's own basis
+  assertion is reached — red for the right hazard, by the outer layer. On the
+  hidden-is-absent row a 34-only client's assert answers `not_found` with detail `to` or
+  `from` (the test accepts either endpoint). The withheld test's canonical-catalog
+  absence runs with the backfill switch on but Program reporting off. The
+  server-derived-client-id break substitutes a constant for the stamped id, because a
+  payload field carrying it is refused by the strict schema first.
+
+**P1-B:**
+
+- **Runbook section and guards as section 6.5.** The section "Record lineage client
+  exposure (P1)" in `ops/runbooks/remote-mcp-cloudflare.md` carries the section 6.3
+  blocks, the section 7 matrix and widening statement, the step 7 recon and its stop
+  conditions, the section 6.4 commands, grant table and companion table, the section 6.2
+  value, the section 13 steps and the section 14 residuals. The 8 runbook guards also
+  require the runbook's env blocks, opt-in line and companion table to equal this
+  contract's (sections 6.2, 6.3 and 6.4), so the 2 documents cannot drift apart.
+- **`test_the_runbooks_state_the_v10_profile_version` is parametrized** over the 6 files
+  (6 nodes, one per path). A file may still name `chatllm-data-v9` only historically
+  ("since `chatllm-data-v9`", "`chatllm-data-v9` adds", "`chatllm-data-v9`'s", "converged
+  on `chatllm-data-v9`"); any other occurrence is a current-version statement and fails.
+  `ops/runbooks/gateway-operations.md` and `docs/operations/record-lineage-client-guidance.md`
+  carried no v9 literal; each gained its v10 statement and a pointer to the runbook
+  section.
+- **Full-inventory count.** The "full inventory" paragraph now states that the ordinary
+  profile excludes 28 names (24 `CONTROL_PLANE_EXCLUDED`, 2 `COMPATIBILITY_ONLY`, 2
+  `OPERATOR_DECISION_REQUIRED`): the 21 reviewed for individual grants, as before, and
+  the 7 withheld lineage names, never granted.
+- **Plan pins.** Re-measured for the 2 P1-B modules (10 FAST functions, 15 FAST nodes):
+  FAST 36291 → 36306 (36232 passed, 74 skipped), Architecture tier 7943 → 7945, test
+  modules 842 → 844; the database tier is unchanged at 4871.
 
 ## 13. Operator gates that remain (P2)
 

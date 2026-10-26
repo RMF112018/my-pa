@@ -93,6 +93,16 @@ gateway's stamped operator surface); a remote client is `denied`. Whatever the
 switch says, `tasks.create`, `commitments.create` and `continuity.tasks.create`
 refuse an Issue `situation_id`.
 
+**Record lineage client exposure (P1, ADR-015 decision 16).** Since the ChatLLM data
+profile `chatllm-data-v10`, the 34 client-usable lineage-plane names are
+`DATA_CONDITIONAL` for the ChatLLM profile: the planner desires them exactly when this
+process composes them (`MY_PA_LINEAGE_ENABLED`, and `MY_PA_PROGRAM_REPORTING_ENABLED` for
+the 7 S4 reads), and `issues.close`, `issues.reopen`, the 3 `confirm` names and both
+`records.backfill.` names are `CONTROL_PLANE_EXCLUDED`, withheld from every client. The
+production environment block, switch matrix, grant and companion tables, read-only recon
+and residual risks are in
+[`remote-mcp-cloudflare.md`, "Record lineage client exposure (P1)"](remote-mcp-cloudflare.md#record-lineage-client-exposure-p1).
+
 **Record lineage S3 backfill (`MY_PA_LINEAGE_BACKFILL_ENABLED`, default off).** The
 two operator-only backfill dry-run capabilities, `records.backfill.plan` and
 `records.backfill.report`, are served only while this switch **and**

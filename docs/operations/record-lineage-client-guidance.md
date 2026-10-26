@@ -4,9 +4,15 @@
 ([contract](../architecture/record-lineage-s31-open-writes-contract.md) section 7.12,
 [ADR-015](../decisions/ADR-015-record-lineage-and-issue-situations.md) decision 15). It
 describes what a connected MCP client may do with lineage once an operator has turned it
-on. It turns nothing on: `MY_PA_LINEAGE_ENABLED` is off by default, every lineage
-capability needs a grant the operator issues, and every lineage name stays an operator
-decision for the ChatLLM profile.
+on. It turns nothing on: `MY_PA_LINEAGE_ENABLED` is off by default, and every lineage
+capability needs a grant the operator issues. Since the ChatLLM data profile
+`chatllm-data-v10` (record lineage P1,
+[contract](../architecture/record-lineage-client-exposure-contract.md), ADR-015 decision
+16), the 34 client-usable lineage names are part of the ChatLLM profile whenever the
+serving process composes them, and the same 34 are the grant set for the ChatGPT
+connector; Issue close and reopen, the 3 `confirm` capabilities and `records.backfill.*`
+stay withheld from every client. The operator's procedure is in
+[`remote-mcp-cloudflare.md`](../../ops/runbooks/remote-mcp-cloudflare.md#record-lineage-client-exposure-p1).
 
 Lineage records **why** records belong together: an Issue and its members, a Commitment
 and the exact note passage it came from, a Task that blocks another. A connected client

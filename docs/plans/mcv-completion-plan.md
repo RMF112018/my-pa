@@ -74,9 +74,11 @@ is not a defect.
 
 ## 3. What is implemented
 
-Four hundred and thirty-seven Python modules under `src/my_pa` and eight hundred and forty test modules —
+Four hundred and thirty-seven Python modules under `src/my_pa` and eight hundred and forty-two test modules —
 
-**Current-tree remeasurement (reconciled record lineage S4 `ecea6204`, which contains origin/main #340 MCP commissioning request evidence `cb9de85a`, merged into record lineage S3.1, branch `feat/lineage-s31-open-writes`, worker N5, 2026-10-26):** the two commands below count 437 source modules and 840 test modules: the S3.1 436/837 below plus the one source and three test modules #340 added on `main` (the M7 436/823 below less the S4 435/820 below; `src/my_pa/contracts/mcp_database_witness.py`, `tests/contract/test_mcp_database_witness.py`, `tests/contract/test_oauth_staging_surface.py` and `tests/unit/test_mcp_database_witness.py`). This is file-inventory evidence, not a test PASS receipt.
+**Current-tree remeasurement (record lineage P1 client exposure, branch `feat/lineage-client-exposure`, worker P1-A, 2026-10-26):** the two commands below count 437 source modules and 842 test modules: the N5 437/840 below plus the 2 P1-A test modules `tests/contract/test_lineage_client_exposure_policy.py` and `tests/integration/test_lineage_client_exposure.py` (no source module is added). This is file-inventory evidence, not a test PASS receipt.
+
+**Historical remeasurement (reconciled record lineage S4 `ecea6204`, which contains origin/main #340 MCP commissioning request evidence `cb9de85a`, merged into record lineage S3.1, branch `feat/lineage-s31-open-writes`, worker N5, 2026-10-26):** the two commands below counted 437 source modules and 840 test modules: the S3.1 436/837 below plus the one source and three test modules #340 added on `main` (the M7 436/823 below less the S4 435/820 below; `src/my_pa/contracts/mcp_database_witness.py`, `tests/contract/test_mcp_database_witness.py`, `tests/contract/test_oauth_staging_surface.py` and `tests/unit/test_mcp_database_witness.py`). This is file-inventory evidence, not a test PASS receipt.
 
 **Historical remeasurement (origin/main #340 MCP commissioning request evidence `cb9de85a` merged into record lineage S4, branch `feat/lineage-s4-program`, worker M7, 2026-10-25):** the two commands below counted 436 source modules and 823 test modules: the S4 435/820 below plus the one source and three test modules #340 added on `main` (the 420/808 below less the 419/805 below). This is file-inventory evidence, not a test PASS receipt.
 

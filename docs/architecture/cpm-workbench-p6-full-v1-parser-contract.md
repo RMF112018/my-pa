@@ -359,7 +359,10 @@ No parser registry, plugin system, profile registry or future-profile abstractio
 - `PROFILE_ID = "p6_full_v1"`, `PROFILE_VERSION = 1`, `DOCUMENT_TYPE = "full"`.
 - `PARSER_NAME = "cpm-workbench-full-parser"`, `PARSER_VERSION = "1"`. The version
   changes whenever identical bytes could produce a different `ScheduleParseResult`
-  (R2 §43.6); a golden digest change without a version bump fails review.
+  (R2 §43.6); a golden digest change without a version bump fails review. (FR5 re-review 1:
+  the bump rule is relative to the last *merged* parser. Before S5a merges, the parser is
+  unreleased and changes land under `"1"`; `"1"` freezes at merge, and every later change that
+  could alter a result for identical bytes bumps it.)
 
 ### 4.2 Page geometry
 
@@ -1189,7 +1192,7 @@ upgrade that changes them fails here first), `test_no_generated_character_enters
 `test_a_suppressed_copy_in_another_cell_is_ambiguous` (FR5-F01: PDFium probe, cross-row unit case, collapsed-twin redirect),
 `test_budget_checkpoints_every_1000_objects` (FR5-F04), `test_budget_checkpoints_every_1000_characters` and
 `test_form_objects_join_the_cap_before_their_children_are_read` (FR5-F07),
-`test_metadata_ignores_unmapped_objects` (FR5-F05, D-17), `test_overlapping_title_pieces_never_publish_a_doubled_title` (D-39),
+`test_metadata_ignores_unmapped_objects` (FR5-F05, D-17), `test_overlapping_title_pieces_never_publish_a_doubled_title` (D-39), `test_a_stacked_two_line_title_is_joined` (D-39 needs the y-overlap; mutant B6),
 `test_engine_provenance_is_outside_the_digest`;
 `test_schedule_full_profile.py::test_od_occlusion_admits_replaced_and_overlay_only`,
 `test_wrap_detects_bold_label_continuations`, `test_summary_requires_a_value_cell`,
@@ -1291,6 +1294,7 @@ mutant left green is reported as redundancy, a masked test or an unreachable haz
 | M83 | rule: overlapping title pieces publish the joined title (undo D-39) | fake-bold title +0.3 / +0.5 pt | `test_overlapping_title_pieces_never_publish_a_doubled_title` |
 | M84 | rule: no checkpoint in the character walk | a page of 1,440 characters, 30 objects | `test_budget_checkpoints_every_1000_characters` |
 | M85 | rule: a form subtree is counted before the cap is compared | 4-deep path-only form, tight cap | `test_form_objects_join_the_cap_before_their_children_are_read` |
+| B6 | rule: D-39 without its positive-area (y-overlap) condition | stacked two-line title | `test_a_stacked_two_line_title_is_joined` |
 
 FR5 column note: M30, M31 and M45 are killed by their named goldens plus truth and unit tests;
 no section 10.3 gate fails for them (the wrap gate detects concatenation only, M62). M43 and
@@ -1371,3 +1375,4 @@ A14) exists because the first summary can only be determinate at level 0.
 | U-19 | Corpus summaries whose 4 value cells are all blank (an empty WBS can print that way) become `AMBIGUOUS` under D-32, and through D-33 their children cascade to `HIERARCHY_AMBIGUOUS`; WP-04 counts them | WP-04 |
 | U-20 | Whether real exports carry a per-page `/MediaBox` (D-41). A page-tree-inherited box fails the whole publication `UNSUPPORTED_LAYOUT`; `FPDF_GetPageBoundingBox` is inheritance-aware (measured `[0 0 1224 792]`) and could replace the call after a contract amendment | WP-04 |
 | U-21 | Metadata near-duplicates other than the title (FR5-F07): Layout, dates, signature and anchors already fail closed through their "exactly once" rules; a non-text metadata near-duplicate class is not otherwise detected | WP-04 |
+| U-22 | D-39 availability risk: a real export that double-draws its title to fake bold (offset beyond the 0.25 pt duplicate tolerance) would make **every** publication `FAILED` (`UNSUPPORTED_LAYOUT` on page 1). Fail-closed by design; WP-04 must measure whether the corpus title is drawn once, and if not, a profile change (bumping `PARSER_VERSION`) must decide how such a redraw is resolved. A stacked multi-line title (pieces disjoint in y) is unaffected and pinned by `test_a_stacked_two_line_title_is_joined` | WP-04 |

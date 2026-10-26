@@ -51,6 +51,7 @@ from my_pa.infrastructure.schedule.full_profile import (
     ProfileTextObject,
     assign_full_cells,
     classify_full_row,
+    collapse_duplicate_objects,
     exclude_profile_non_data,
     group_table_rows_by_overlap,
     parse_full_schedule,
@@ -857,6 +858,21 @@ def test_page_origin_is_validated() -> None:
         SchedulePublicationStatus.COMPLETE
     )
     assert parse_full_schedule(same_crop).outcome is SchedulePublicationStatus.COMPLETE
+    # An offset CropBox of the profile size passes V6 (size by index reads
+    # media ∩ crop = 1224 x 792, measured) and is refused only by the V7
+    # CropBox == MediaBox rule (review FR5-F02).
+    offset_crop = pdf.replace(media, b"/MediaBox [0 0 1324 842] /CropBox [100 50 1324 842]", 1)
+    document = pdfium.PdfDocument(offset_crop)
+    try:
+        size = pdfium_c.FS_SIZEF()
+        assert pdfium_c.FPDF_GetPageSizeByIndexF(document.raw, 0, ctypes.byref(size))
+        assert (size.width, size.height) == (1224.0, 792.0)
+    finally:
+        document.close()
+    assert _only_issue(parse_full_schedule(offset_crop)) == (
+        ScheduleIssueCode.UNSUPPORTED_LAYOUT,
+        1,
+    )
     other_crop = pdf.replace(media, media + b" /CropBox [0 0 1224 700]", 1)
     assert _only_issue(parse_full_schedule(other_crop)) == (
         ScheduleIssueCode.UNSUPPORTED_LAYOUT,
@@ -1033,3 +1049,172 @@ def test_engine_provenance_is_outside_the_digest() -> None:
     golden = gen.golden_path("full_valid_2p", "base").read_bytes()
     assert b"engine" not in golden
     assert result.engine.pdfium_version.encode("ascii") not in golden
+
+
+# --- review FR5 additions ------------------------------------------------------------
+
+
+def test_a_suppressed_copy_in_another_cell_is_ambiguous() -> None:
+    """Contract 5.4 step 3: a twin in another band or row never joins silently."""
+    name_cell = (ScheduleIssueCode.AMBIGUOUS_CELL, ScheduleFieldCode.ACTIVITY_NAME)
+    # Measured through PDFium (review FR5-F01): the ID's centre is 130.8 pt,
+    # its same-text redraw +0.5 pt (centre 131.3, Name band) is suppressed.
+    pdf = _probe(
+        _draw("SYN-1000", "116.8"),
+        _draw("SYN-1000", "117.3"),
+        _draw(NAME, "150"),
+        _draw("5", "461.5"),
+        _draw("5", "492.5"),
+        _draw("04-May-26", "501"),
+        _draw("15-May-26", "562"),
+    )
+    page = _extract(pdf).pages[0]
+    assert [o.suppressed for o in page.objects][:2] == [False, True]
+    zones = exclude_profile_non_data(page, gen_profile())
+    (row,) = _classify_rows(*zones.table_objects)
+    assert row.row_type is ScheduleRowType.AMBIGUOUS
+    assert row.assigned.cells[1].state is ScheduleCellState.AMBIGUOUS
+    assert row.assigned.cells[1].text == f"SYN-1000 {NAME}"
+    assert name_cell in row.issues
+    # Pure algorithm, another row: the copy overlaps its twin but under half
+    # of the seed, so it groups into a row of its own and taints that cell.
+    ident = _object("SYN-1", (60_300, 598_600, 77_800, 604_900), 0)
+    name = _object(NAME, (134_000, 598_600, 211_000, 604_900), 1)
+    low = _object(NAME, (134_300, 594_600, 211_300, 600_900), 2, suppressed=True)
+    rows = _classify_rows(*_zones(ident, name, low).values())
+    assert len(rows) == 2
+    assert rows[0].row_type is ScheduleRowType.ACTIVITY
+    assert rows[1].assigned.cells[1].state is ScheduleCellState.AMBIGUOUS
+    assert name_cell in rows[1].issues
+    # A twin that itself collapsed is represented by the object it collapsed
+    # into: in the same cell that is an overlap, never a clean join.
+    first = _object(NAME, (134_000, 598_600, 211_000, 604_900), 0)
+    again = _object(NAME, (134_100, 598_600, 211_100, 604_900), 1)
+    copy = _object(NAME, (134_400, 598_600, 211_400, 604_900), 2, suppressed=True)
+    owner = _object("SYN-1", (60_300, 598_600, 77_800, 604_900), 3)
+    resolution = collapse_duplicate_objects(
+        _zones(first, again, copy, owner).values(), gen_profile()
+    )
+    assert [gone.ordinal for gone, _into in resolution.collapsed] == [1]
+    (kept_copy,) = [o for o in resolution.kept if o.ordinal == 2]
+    assert kept_copy.twin == 0  # whichever twin was chosen, it now names a kept object
+    (row,) = _classify_rows(*resolution.kept)
+    assert row.assigned.cells[1].state is ScheduleCellState.AMBIGUOUS
+
+
+def test_budget_checkpoints_every_1000_objects(calls: _Calls) -> None:
+    """Contract 5.1: a page of more than 1,000 objects is checked mid-page."""
+    draws = [_draw("x", str(40 + (i % 50) * 10), str(120 + (i // 50) * 10)) for i in range(1_100)]
+    pdf = _probe(*draws)
+    counter = [0]
+    inner = gen.fake_clock(3)
+
+    def clock() -> float:
+        counter[0] += 1
+        return inner()
+
+    result = parse_full_schedule(pdf, clock=clock, deadline=1.0)
+    assert _only_issue(result) == (ScheduleIssueCode.PROCESSING_BUDGET_EXCEEDED, None)
+    # After V2, after open, before page 1; the 4th read, at object 1,000,
+    # expires before the text page is ever loaded.
+    assert (counter[0], calls.pages, calls.textpages) == (4, 1, 0)
+
+
+def _small_pdf(edit: Callable[[list[gen.Draw]], None] | None = None) -> bytes:
+    plan = gen.Plan([*gen.default_fonts(), gen.FontSpec(gen.UNMAPPED, "Arial", to_unicode=False)])
+    page = plan.new_page()
+    plan.frame(page, 1)
+    gen._project(plan, page, 1)
+    gen._wbs(plan, page, 2, 1, "Synthetic Phase A")
+    gen._standard_activity(plan, page, 3, 2, 0)
+    if edit is not None:
+        edit(plan.pages[0])
+    return gen.assemble_document(plan.page_specs(), plan.fonts)
+
+
+def test_metadata_ignores_unmapped_objects() -> None:
+    """D-17: an unmapped metadata object is ignored, so a required item is missing."""
+    assert parse_full_schedule(_small_pdf()).outcome is SchedulePublicationStatus.COMPLETE
+
+    def unmap_data_date(draws: list[gen.Draw]) -> None:
+        index = next(i for i, d in enumerate(draws) if d.text.startswith("Data Date: "))
+        draws[index] = dataclasses.replace(draws[index], font=gen.UNMAPPED)
+
+    pdf = _small_pdf(unmap_data_date)
+    (data_date,) = [o for o in _extract(pdf).pages[0].objects if o.text.startswith("Data Date: ")]
+    assert data_date.unmapped and data_date.text == "Data Date: 04-May-26"
+    assert _only_issue(parse_full_schedule(pdf)) == (ScheduleIssueCode.UNSUPPORTED_LAYOUT, 1)
+
+
+def test_overlapping_title_pieces_never_publish_a_doubled_title() -> None:
+    """D-39 (review FR5-F07): a fake-bold title redraw is not a doubled title."""
+    for dx in ("0.3", "0.5"):
+
+        def fake_bold(draws: list[gen.Draw], dx: str = dx) -> None:
+            title = next(d for d in draws if d.text == gen.TITLE)
+            draws.append(dataclasses.replace(title, x=title.x + D(dx)))
+
+        pdf = _small_pdf(fake_bold)
+        # Measured at 5.0.0 and 5.13.0: the 12 pt redraw keeps its characters.
+        titles = [o.text for o in _extract(pdf).pages[0].objects if o.text == gen.TITLE]
+        assert len(titles) == 2
+        result = parse_full_schedule(pdf)
+        assert _only_issue(result) == (ScheduleIssueCode.UNSUPPORTED_LAYOUT, 1), dx
+
+    # A redraw within 0.25 pt is an exact duplicate: collapsed, title kept.
+    def near(draws: list[gen.Draw]) -> None:
+        title = next(d for d in draws if d.text == gen.TITLE)
+        draws.append(dataclasses.replace(title, x=title.x + D("0.2")))
+
+    result = parse_full_schedule(_small_pdf(near))
+    assert result.published_schedule_title == gen.TITLE
+    assert result.counts.duplicate_objects_collapsed == 1
+
+
+def test_budget_checkpoints_every_1000_characters(calls: _Calls) -> None:
+    """FR5-F07: the per-page attribution walk is cooperative too."""
+    line = "Synthetic activity text " * 2  # 48 characters per object
+    draws = [_draw(line, "40", str(120 + i * 10)) for i in range(30)]
+    pdf = _probe(*draws)
+    counter = [0]
+    inner = gen.fake_clock(3)
+
+    def clock() -> float:
+        counter[0] += 1
+        return inner()
+
+    result = parse_full_schedule(pdf, clock=clock, deadline=1.0)
+    assert _only_issue(result) == (ScheduleIssueCode.PROCESSING_BUDGET_EXCEEDED, None)
+    # Fewer than 1,000 objects, more than 1,000 characters: the 4th read is
+    # at character 1,000 of page 1, before the walk ends.
+    assert (counter[0], calls.pages, calls.textpages) == (4, 1, 1)
+    assert 0 < calls.unicode < 30 * len(line.rstrip())
+
+
+def test_form_objects_join_the_cap_before_their_children_are_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FR5-F07: a form's object count is compared before its subtree is walked."""
+    plan = gen._small_plan()
+    spec = gen.PageSpec(tuple(plan.pages[0]), form=gen.FormSpec(depth=4, text=None))
+    pdf = gen.assemble_document((spec,), plan.fonts)
+    reads = [0]
+    real = pdfium_c.FPDFFormObj_GetObject
+
+    def counting(form: object, index: int) -> object:
+        reads[0] += 1
+        return real(form, index)
+
+    monkeypatch.setattr(pdfium_c, "FPDFFormObj_GetObject", counting)
+    top_level = len(plan.pages[0]) + 1  # the text objects and the form object
+    tight = ScheduleParseLimits(max_page_objects=top_level)
+    assert _only_issue(parse_full_schedule(pdf, limits=tight)) == (
+        ScheduleIssueCode.BOUNDS_EXCEEDED,
+        None,
+    )
+    assert reads == [0]
+    # With room for the whole subtree the walk completes and the page parses.
+    reads[0] = 0
+    roomy = ScheduleParseLimits(max_page_objects=top_level + 4)
+    assert parse_full_schedule(pdf, limits=roomy).outcome is SchedulePublicationStatus.COMPLETE
+    assert reads == [4]

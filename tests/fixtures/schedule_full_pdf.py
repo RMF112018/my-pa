@@ -1699,11 +1699,39 @@ def full_duplicate_text_object(variant: str) -> FixtureCase:
         plan.rows[-1].cells[ACTIVITY_NAME].state = AMBIGUOUS
         plan.rows[-1].cells[ACTIVITY_ID].state = AMBIGUOUS
         outcome = REVIEW_REQUIRED
+    elif variant == "cross_band":
+        # Contract 5.4 step 3 (review FR5-F01): the ID's x-centre sits 0.2 pt
+        # left of 131.0 and its same-text redraw 0.5 pt right of it is
+        # suppressed by PDFium, so the copy carries the ID's text into the
+        # Name band. The Name cell is AMBIGUOUS + AMBIGUOUS_CELL (never
+        # first-write-wins), which makes the ID-bearing row AMBIGUOUS (rule 5).
+        id_x = D("116.8")  # 8 glyphs: centre 130.8 pt
+        copy = Draw("SYN-1090", REGULAR, BODY, id_x + D("0.5"), y_name, suppressed=True)
+        late_name = Draw(name, REGULAR, BODY, D(150), y_name)
+        plan.activity(
+            p1,
+            y_name,
+            2,
+            "SYN-1090",
+            name,
+            dur("10"),
+            dur("5"),
+            day(_d(5, 4)),
+            day(_d(5, 15)),
+            x_shift=id_x - INDENT[2],
+            name_draws=[copy, late_name],
+            row_type=AMBIGUOUS,
+            issues=[("ambiguous_cell", ACTIVITY_NAME)],
+        )
+        _ambiguous_row_from_activity(plan)
+        plan.rows[-1].cells[ACTIVITY_NAME].state = AMBIGUOUS
+        _standard_activity(plan, p1, first + 1, 2, 91)
+        outcome = REVIEW_REQUIRED
     else:  # same_text_2pt
         plan.activity(
             p1, y_name, 2, "SYN-1090", name, dur("10"), dur("5"), day(_d(5, 4)), day(_d(5, 15))
         )
-    if variant != "shift_0_5" and variant != "bold_over_regular":
+    if variant not in ("shift_0_5", "bold_over_regular", "cross_band"):
         # OD `5` drawn twice: 0.3 pt apart (suppressed, not collapsed) or 2.0 pt
         # apart (`same_text_2pt`: both reported).
         offset = D("2.0") if variant == "same_text_2pt" else D("0.3")
@@ -2303,7 +2331,14 @@ FAMILIES: Mapping[str, tuple[Builder, tuple[str, ...]]] = {
     ),
     "full_duplicate_text_object": (
         full_duplicate_text_object,
-        ("base", "shift_0_5", "bold_over_regular", "same_text_2pt", "under_watermark"),
+        (
+            "base",
+            "shift_0_5",
+            "bold_over_regular",
+            "same_text_2pt",
+            "under_watermark",
+            "cross_band",
+        ),
     ),
     "full_overlapping_cell_text": (
         full_overlapping_cell_text,

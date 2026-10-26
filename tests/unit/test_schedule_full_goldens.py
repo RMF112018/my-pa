@@ -186,6 +186,10 @@ PDF_PINS: Final[dict[tuple[str, str], tuple[str, int]]] = {
         "333844bc04bb18e827f2cc1e50918c991baa60b5a4e62a147fb1be4895236996",
         14794,
     ),
+    ("full_duplicate_text_object", "cross_band"): (
+        "caab9c5a42b1cc4d69a9c499820b64e9063f8685e109ed3c6fc4acc6c05a4194",
+        9065,
+    ),
     ("full_overlapping_cell_text", "od"): (
         "9a9fa59c56365a2a76f9cdd74500de5af5f4facf451dad29df4516e1aa61fdc6",
         9544,
@@ -394,7 +398,7 @@ def test_the_registry_holds_the_26_r2_families_in_contract_order() -> None:
         "expected_data_date_mismatch",
         "bounds_exceeded",
     ]
-    assert len(gen.CASES) == len(set(gen.CASES)) == 76
+    assert len(gen.CASES) == len(set(gen.CASES)) == 77
     assert set(PDF_PINS) == set(gen.CASES)
     assert set(gen.CASES) >= gen.RESULTLESS_CASES
 
@@ -716,6 +720,9 @@ GOLDEN_FILE_SHA256: Final[dict[str, str]] = {
     ),
     "full_duplicate_text_object__under_watermark.json": (
         "0303b85398f0b86169354a8efa5bc08bb6571bca3c0804f51650de5c49a006bb"
+    ),
+    "full_duplicate_text_object__cross_band.json": (
+        "5045d85d2e741fbe9173f53da9c88ff159a0b5d8b47725303d986681d5db7448"
     ),
     "full_overlapping_cell_text__od.json": (
         "7dda5a2e548e6bcdcde8ee4938d7463d23fd16ea97cfc98eff2dbb6f88698479"
@@ -1297,6 +1304,19 @@ def test_exact_duplicate_collapses_and_overlap_is_ambiguous() -> None:
         ("same_text_2pt", SchedulePublicationStatus.PARTIAL),
     ):
         assert _parse("full_duplicate_text_object", variant).outcome is outcome
+    # Contract 5.4 step 3 (FR5-F01): a suppressed copy carried into another
+    # band never joins that cell's text silently.
+    cross = _parse("full_duplicate_text_object", "cross_band")
+    assert cross.outcome is SchedulePublicationStatus.REVIEW_REQUIRED
+    (row,) = [r for r in cross.rows if r.cells[0].text == "SYN-1090"]
+    assert row.row_type is ScheduleRowType.AMBIGUOUS
+    assert row.cells[1].state is ScheduleCellState.AMBIGUOUS
+    assert [f.raw for f in row.cells[1].fragments] == ["SYN-1090", "Synthetic activity 090"]
+    assert [(i.code, i.field) for i in cross.issues if i.row_ordinal == row.row_ordinal] == [
+        (ScheduleIssueCode.AMBIGUOUS_CELL, ScheduleFieldCode.ACTIVITY_NAME)
+    ]
+    assert cross.counts.suppressed_objects == 1
+    assert "SYN-1090" not in [r.published_activity_id for r in stable_link_candidates(cross)]
     od = _parse("full_overlapping_cell_text", "od")
     cell = od.rows[3].cells[2]
     assert (cell.state, cell.text) == (ScheduleCellState.AMBIGUOUS, "5 8")

@@ -613,6 +613,10 @@ ChatLLM profile classifies them `CONTROL_PLANE_EXCLUDED`, so an active grant on 
 
 ### Production environment block (P2; names and values, no secrets)
 
+Set these lines only after the read-only recon below has passed against the currently
+deployed environment and durable state (P2 step 6): the remote block turns on
+`MY_PA_REMOTE_WRITES_ENABLED`, 1 of the 3 remote write gates.
+
 Remote MCP process — the owner-only file named by `MY_PA_REMOTE_ENV_FILE`; set or change
 exactly these lines:
 
@@ -681,18 +685,19 @@ how the operator learns the real set. Turning remote writes on is therefore a de
 about each write-enabled client's whole write grant set; the per-client flag is the control
 that limits it to the 2 named clients.
 
-### Read-only recon before any write gate opens
+### Read-only recon before any environment change or write gate opens
 
 A read-only database enumeration, run in P2 by the operator or the Manager (never by a
 repository worker), of every remote client: its `writes_enabled` flag, the durable global
 `writes_enabled` and `remote_enabled` controls, and every active capability grant
 (capability, purpose, `is_write`, scope, resource, expiry, grant UUID); plus, from the
-deployed remote env file, `MY_PA_REMOTE_WRITES_ENABLED`,
+currently deployed remote env file (before any line of the environment block is set),
+`MY_PA_REMOTE_WRITES_ENABLED`,
 `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`, and membership of each client id in
 `MY_PA_MCP_CHATLLM_GATEWAY_OAUTH_CLIENT_IDS` and
 `MY_PA_MCP_CHATLLM_OPERATOR_OAUTH_CLIENT_IDS`. Record the ChatLLM and ChatGPT client ids.
 
-**Stop** (no write gate is opened) if any client other than those 2 holds a write grant
+**Stop** (no environment line is set and no write gate is opened) if any client other than those 2 holds a write grant
 together with a write flag that is or would become effective; if any client holds an
 active grant on one of the 7 withheld names (revoke it first by UUID, then re-run this
 step); or if either named client holds write grants beyond those the operator has decided
@@ -723,6 +728,12 @@ health-gated, so this check is the operator's.
    below (a client converged on `chatllm-data-v9`), apply it. If it adds more (a client
    not on the full-data profile, which the ChatGPT client may be), applying it
    deliberately grants the whole v10 profile, companions included.
+   With the Knowledge plane composed (`MY_PA_KNOWLEDGE_ASSERTIONS_ENABLED` and
+   `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`), applying v10 also grants
+   `knowledge.assertions.search` and so admits the Knowledge Assertion context plane
+   to that client (read side); do not apply it for such a process until the operator
+   has decided that under the [`managed-knowledge-context.md`](managed-knowledge-context.md#the-knowledge_assertion-context-plane-klp-wp-06) gate ("Who
+   already holds the pair").
 2. **The 34 plus chosen companions.** Issue the 34 individually with `grant
    --oauth-client-id … --scope my-pa.read --capability <name> --purpose <purpose>
    [--write] --resource "$OAUTH_AUDIENCE"` from the grant table below (`--write` for the
@@ -815,12 +826,17 @@ None of these is authorized by the repository change; each is the operator's:
    with the deployed compose files and overlays reused exactly.
 5. Before recreating, verify read-only that the remote env has the database profiles off
    and no opt-in; stop if not.
-6. Set the environment lines above; recreate.
-7. Run the read-only recon above; stop on any stop condition.
+6. Run the read-only recon above against the currently deployed env file and durable
+   state, before any environment line is set; stop on any stop condition.
+7. Only if steps 5 and 6 passed: set the environment lines above; recreate. (The remote
+   block turns on `MY_PA_REMOTE_WRITES_ENABLED`, 1 of the 3 remote write gates, so the
+   recon must precede it.)
 8. `control --remote-enabled --writes-enabled`; `set-client-writes` for the 2 clients only.
 9. `profile-diff` / `profile-plan` v10 per client; then `profile-apply` or the 34 plus
-   chosen companions. Require `healthy: true` before and after; if
-   `unexpected_control_plane` names a withheld lineage name, revoke it (UUID from step 7)
+   chosen companions (with the Knowledge plane composed, `profile-apply` also admits
+   `knowledge.assertions.search`, gated by
+   [`managed-knowledge-context.md`](managed-knowledge-context.md)). Require `healthy: true` before and after; if
+   `unexpected_control_plane` names a withheld lineage name, revoke it (UUID from step 6)
    and re-diff.
 10. Acceptance with synthetic, non-personal data, per client: `profile-diff` healthy, and
     the client's publication (façade `my_pa.describe` or canonical `tools/list`, per its

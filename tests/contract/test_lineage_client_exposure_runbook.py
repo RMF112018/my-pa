@@ -364,3 +364,66 @@ def test_no_runbook_offers_a_withheld_lineage_grant() -> None:
     for name in _WITHHELD_NAMES:
         assert f"`{name}`" in section, name
     assert "Never grant a withheld name" in section
+
+
+# ---- the P2 order (FRP1-F01) -----------------------------------------------------
+
+_STEP: Final = re.compile(r"^(\d+)\. (.*)$")
+
+
+def _numbered_steps(text: str) -> dict[int, str]:
+    """Each top-level numbered item of `text`, with its indented continuation lines."""
+    steps: dict[int, str] = {}
+    current: int | None = None
+    for line in text.splitlines():
+        matched = _STEP.match(line)
+        if matched is not None:
+            current = int(matched.group(1))
+            assert current not in steps, current
+            steps[current] = matched.group(2)
+        elif current is not None and line.startswith("   "):
+            steps[current] += " " + line.strip()
+        elif line.strip():
+            current = None
+    return steps
+
+
+def _p2_step_lists() -> dict[str, dict[int, str]]:
+    contract = CONTRACT.read_text(encoding="utf-8")
+    section_13 = contract[
+        contract.index("\n## 13. Operator gates that remain (P2)\n") : contract.index("\n## 14. ")
+    ]
+    runbook = _section(_p1_section(), "### P2 steps (operator, in order)")
+    return {
+        "contract section 13": _numbered_steps(section_13),
+        RUNBOOK.name: _numbered_steps(runbook),
+    }
+
+
+def test_the_read_only_recon_precedes_the_environment_change() -> None:
+    for where, steps in _p2_step_lists().items():
+        assert list(steps) == list(range(1, len(steps) + 1)), (where, list(steps))
+        (recon,) = [
+            number
+            for number, text in steps.items()
+            if "Read-only recon" in text or "read-only recon above" in text
+        ]
+        (environment,) = [number for number, text in steps.items() if "environment lines" in text]
+        (writes,) = [
+            number
+            for number, text in steps.items()
+            if text.startswith("`control --remote-enabled --writes-enabled`")
+        ]
+        # The recon reads the deployed state before any switch or write gate moves.
+        assert recon < environment < writes, (where, recon, environment, writes)
+        assert "currently deployed" in steps[recon], where
+        # The environment change is conditional on the recon having passed.
+        assert steps[environment].startswith("Only if"), where
+        assert (
+            f"step {recon}" in steps[environment]
+            or f"steps {recon - 1} and {recon}" in steps[environment]
+        ), where
+        # Every later reference to the recon names its step number.
+        for number, text in steps.items():
+            if "UUID from step" in text:
+                assert f"UUID from step {recon})" in text, (where, number)

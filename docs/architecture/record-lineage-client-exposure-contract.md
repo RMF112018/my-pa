@@ -510,8 +510,9 @@ python apps/cli/remote_mcp.py profile-plan --oauth-client-id "$CLIENT" --scope m
 python apps/cli/remote_mcp.py profile-apply --oauth-client-id "$CLIENT" --scope my-pa.read --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v10 --apply
 ```
 
-Before these commands, run the section 13 step 7 read-only recon; the `control` line
-runs only if it passes.
+Before these commands — and before any section 6.3 environment line is set — run the
+section 13 step 6 read-only recon against the currently deployed env file and durable
+state; the environment change (step 7) and the `control` line run only if it passes.
 
 **Health.** P2 requires `profile-diff` to report `healthy: true` for each client before
 and after apply. If `unexpected_control_plane` names a withheld lineage name, revoke that
@@ -525,6 +526,12 @@ not health-gated, so this check is the operator's.
    converged on v9), apply it. If it adds more (a client not on the full-data profile,
    which the ChatGPT client may be), applying it deliberately grants the whole v10
    profile, companions included.
+   With the Knowledge plane composed (`MY_PA_KNOWLEDGE_ASSERTIONS_ENABLED` and
+   `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`), applying v10 also grants
+   `knowledge.assertions.search` and so admits the Knowledge Assertion context plane
+   to that client (read side); do not apply it for such a process until the operator
+   has decided that under the `ops/runbooks/managed-knowledge-context.md` gate ("Who
+   already holds the pair").
 2. **The 34 plus chosen companions.** Issue the 34 individually with `grant
    --oauth-client-id … --scope my-pa.read --capability <name> --purpose <purpose>
    [--write] --resource "$OAUTH_AUDIENCE"` (the runbook's grant table: the section 3
@@ -569,7 +576,7 @@ inventory" paragraph ("individual purpose-bound grants for the 21 excluded names
 existing `grant` CLI for eligible individual grants") states that the 7 withheld lineage
 names (`issues.close`, `issues.reopen`, the 3 confirms, the 2 backfill names) are
 `CONTROL_PLANE_EXCLUDED` but are **never** part of an inventory grant, and its count moves
-with them. The runbook section also carries the section 13 step 7 recon and its stop
+with them. The runbook section also carries the section 13 step 6 recon and its stop
 conditions, and the section 6.4 companion table. The 6 files are:
 `ops/runbooks/remote-mcp-cloudflare.md`, `ops/runbooks/gateway-operations.md`,
 `ops/runbooks/mcp-and-cli-operations.md`, `ops/runbooks/managed-knowledge-context.md`,
@@ -601,7 +608,7 @@ granted `entities.merge` / `split` (and previews) and `sources.enroll`. Individu
 granted control-plane writes — the runbook's "full inventory" grants of `constraint_sync.*`,
 the GoodNotes pull names and `gsqs.start` — open the same way. No read-only CLI lists a
 client's grants, and `profile-diff` reports a non-desired name `EXCLUDED` whether or not
-it is granted, so the section 13 step 7 recon (a database read) is how the operator
+it is granted, so the section 13 step 6 recon (a database read) is how the operator
 learns the real set. The v10 profile part is up to 103 writes with every plane composed
 (102 without the Knowledge plane): the 16 lineage writes and 87 others — the `tasks.*`, `commitments.*`, `capture.*`, `meetings.*`,
 `constraints.*` / `constraint_categories.*`, `continuity.*`, `documents.*`, `entities.*`,
@@ -651,7 +658,7 @@ table and the section 10.1 table the way the S3.1 scope guard parses S3.1 §10.
 | Profile diff (P1-A) | existing `tests/contract/test_chatllm_data_profile_diff.py` | new `test_a_v9_converged_client_plans_exactly_the_lineage_adds` (34 `add` actions, each its section 3 purpose and write flag); new `test_v10_adds_exactly_the_lineage_plane_names` (v10 = v9 + the 34, plane-conditional; every v9 behaviour across the 64 old compositions unchanged with both new flags off) | FAST |
 | Planner CLI (P1-A) | existing `tests/unit/test_remote_mcp_chatllm_profile.py` | new `test_v10_profile_plan_adds_the_lineage_grants_only_with_the_switch_on` (Settings with the switch off: no lineage action; on: the 27 `LINEAGE` adds; with Program reporting and the entity plane: all 34) | FAST |
 | Client path end to end (P1-A) | `tests/integration/test_lineage_client_exposure.py` | `test_a_v10_chatllm_client_describes_exactly_the_client_usable_lineage_names` (compact publication, planner-provisioned grants, both switches and writes on: `my_pa.describe` lists exactly the 34 and none of the 7); `test_a_v10_chatllm_client_commits_client_identified_lineage_through_the_facade` (assert and membership add through `my_pa.write`, rows `client_identified` / `ordinary_reviewer` / `remote_interactive` with the client id, `user_directed: true` stored as the claim only); `test_withheld_lineage_names_are_absent_and_unsupported_for_a_v10_client` (close, reopen, 3 confirms, 2 backfill names, each also granted directly: absent from describe and the canonical catalog, `unsupported` through every invoker); `test_with_remote_writes_off_a_v10_client_sees_only_the_lineage_reads`; `test_two_remote_clients_keep_separate_client_ids_and_budgets` (a compact ChatLLM client and a canonical ChatGPT-shaped client); `test_a_v10_client_cannot_supply_provenance_or_a_key_through_the_facade`; `test_a_v10_client_cannot_revise_accepted_lineage`; `test_a_v10_client_reads_program_reporting_on_the_default_path` (`programs.overview`, `commitments.v2.list` and `reports.manifest` answer; a restricted-profile composition still withholds `programs.*`); `test_the_lineage_switch_off_withholds_every_lineage_name_from_a_v10_client`; `test_a_34_only_client_sees_a_non_issue_endpoint_as_absent_until_its_family_read_is_granted` (RP1-F01: a client holding exactly the 34 asserts a Task–Meeting link and seeds `records.lineage.related` with a Task: both answer as absent / Issue-only; after a `tasks.read` and `meetings.read` grant both succeed; `issues.work.create_task` is `denied` until `tasks.create` is granted); `test_a_v10_client_fact_holds_the_close_until_a_cli_confirm` (RR1-F01 option a: a v10 client's `end` of a mandatory member leaves an ended `client_identified` head that holds `issues.close` with `conflict` / `closure_gate` until the local operator's CLI confirm of that end, after which the close succeeds; an additional assertion keeps the live case — a v10 client's membership add also holds the close until confirmed); `test_a_v10_client_write_without_its_own_grant_is_unsupported` (RR1-F02: invokes the application service with a remote `Authorization` whose grants are the v10 planner set minus `records.associations.assert`, as `tests/security/test_lineage_s31_write_visibility.py` does with `runtime.client_refused(..., grants=client_grants(..., without=(name,)))`: `unsupported`, nothing written; it may also assert that the façade answers `unsupported`, but the façade answer alone does not pin the re-check) | database |
-| Runbook drift (P1-B) | `tests/contract/test_lineage_client_exposure_runbook.py` | `test_the_documented_opt_in_value_equals_the_admissible_set` (exact string equality with the sorted, comma-joined `MCP_PROFILE_OPT_IN_CAPABILITY_NAMES`, both directions); `test_the_documented_opt_in_value_needs_the_database_profiles` (Settings refuses it with profiles off, accepts it with profiles on and placeholder files); `test_the_documented_env_blocks_name_real_settings_whose_defaults_are_off` (every name maps to a `Settings` field; each code default is off; no opt-in or profile variable in either block); `test_the_documented_grant_table_equals_the_v10_lineage_set` (names, purposes and write flags equal section 3 and the policy); `test_the_documented_companion_table_equals_the_family_reads_and_composite_grants` (the section 6.4 companion table equals `LINEAGE_FAMILY_READS` minus the Issue reads plus `_COMPOSITE_NATIVE_GRANTS`, each with its permitted purpose and write flag); `test_the_runbooks_state_the_v10_profile_version` (no `chatllm-data-v9` remains as the current version in any of the 6 files of section 6.5, each named by path); `test_no_runbook_offers_a_withheld_lineage_grant` (the inventory paragraph names the 7 withheld names as never granted; no grant table row or `grant` command in the 6 files names one); `test_the_documented_opt_in_line_occurs_exactly_once_and_is_labelled_documentation_only` (RP1-F08 non-vacuity) | FAST |
+| Runbook drift (P1-B) | `tests/contract/test_lineage_client_exposure_runbook.py` | `test_the_documented_opt_in_value_equals_the_admissible_set` (exact string equality with the sorted, comma-joined `MCP_PROFILE_OPT_IN_CAPABILITY_NAMES`, both directions); `test_the_documented_opt_in_value_needs_the_database_profiles` (Settings refuses it with profiles off, accepts it with profiles on and placeholder files); `test_the_documented_env_blocks_name_real_settings_whose_defaults_are_off` (every name maps to a `Settings` field; each code default is off; no opt-in or profile variable in either block); `test_the_documented_grant_table_equals_the_v10_lineage_set` (names, purposes and write flags equal section 3 and the policy); `test_the_documented_companion_table_equals_the_family_reads_and_composite_grants` (the section 6.4 companion table equals `LINEAGE_FAMILY_READS` minus the Issue reads plus `_COMPOSITE_NATIVE_GRANTS`, each with its permitted purpose and write flag); `test_the_runbooks_state_the_v10_profile_version` (no `chatllm-data-v9` remains as the current version in any of the 6 files of section 6.5, each named by path); `test_no_runbook_offers_a_withheld_lineage_grant` (the inventory paragraph names the 7 withheld names as never granted; no grant table row or `grant` command in the 6 files names one); `test_the_documented_opt_in_line_occurs_exactly_once_and_is_labelled_documentation_only` (RP1-F08 non-vacuity); `test_the_read_only_recon_precedes_the_environment_change` (FRP1-F01: in section 13 and the runbook's P2 steps the recon step precedes the step setting the section 6.3 lines, which is conditional on it, which precedes `control --writes-enabled`) | FAST |
 | Scope (P1-B) | `tests/architecture/test_record_lineage_client_exposure_scope.py` | `test_every_client_exposure_crosswalk_test_exists`; `test_every_client_exposure_conversion_exists` | FAST |
 
 ### 10.1 Existing tests converted by the directive (names kept: S1–S3.1 §10 bind them)
@@ -730,13 +737,14 @@ prove-red is reported as redundancy, a masked test or an unreachable hazard, nev
 | env block names | misspell `MY_PA_PROGRAM_REPORTING_ENABLED` in the runbook block | `test_the_documented_env_blocks_name_real_settings_whose_defaults_are_off` |
 | grant table | give `records.lineage.related` purpose `report_read` in the runbook table | `test_the_documented_grant_table_equals_the_v10_lineage_set` |
 | contract table | change one section 3 row's v10 class | `test_the_policy_matches_the_contract_exposure_table` |
+| recon before the environment change (FRP1-F01) | swap the recon and environment steps in the runbook's P2 steps (separately, in section 13) | `test_the_read_only_recon_precedes_the_environment_change` |
 | S3.1 re-runs | each exact break of the section 5.3 table (11 rows) | the P1 test that row names |
 
 ## 11. Deferred work and its owner
 
 | Item | Owner / reason |
 | --- | --- |
-| A read-only CLI listing a client's grants and write flags | P2 uses a read-only database enumeration (section 13 step 7); a later operator-tooling item |
+| A read-only CLI listing a client's grants and write flags | P2 uses a read-only database enumeration (section 13 step 6); a later operator-tooling item |
 | A privilege mechanism for existing objects on the fixed MCP roles (lineage tables; `commitments.v2.*` sources) | S3.1 §11, unchanged: a separately reviewed security package; until then no lineage call works on a restricted profile |
 | `programs.*` and `reports.manifest` on the restricted profiles | S4 D-46 / S3.1 D-21 stand: the Program engine would read with broader credentials than the injected role, and `intelligence_` objects are not grantable to MCP roles; no safe alternative is proposed |
 | A distinct provenance channel for ChatLLM | not needed (section 5.1); revisit only with a server-verifiable vendor signal |
@@ -757,7 +765,7 @@ prove-red is reported as redundancy, a masked test or an unreachable hazard, nev
 | DV-07 | "re-run S3.1 prove-reds on this path" | the ChatLLM path is the S3.1 remote path; S3.1's façade rows already ran with compact publication | the section 5.3 subset re-runs with a v10-planner-provisioned client |
 | DV-08 | ChatLLM gateway "profile name/version" bump | `chatllm-gateway-v1` is a publication shape the change does not touch | only `chatllm-data` bumps (v9 → v10) |
 | DV-09 | backfill switch "on" (RP1-F09: least privilege would leave it unset remotely; uniformity under "all switches on" accepted) | both backfill names are operator kind and never published remotely; the planner does not model the restricted-profile Program factory | set in both files for uniformity; inert remotely (section 6.3); the planner's `PROGRAM_REPORTING` rule models the default path only |
-| DV-10 | a drift test for the opt-in set | the env block and the grant table can drift the same way | 8 runbook guards (section 10) |
+| DV-10 | a drift test for the opt-in set | the env block and the grant table can drift the same way | 9 runbook guards (section 10) |
 
 ### 12.1 As implemented
 
@@ -816,9 +824,9 @@ to end, `600f7902` plan-document re-measure):
 
 - **Runbook section and guards as section 6.5.** The section "Record lineage client
   exposure (P1)" in `ops/runbooks/remote-mcp-cloudflare.md` carries the section 6.3
-  blocks, the section 7 matrix and widening statement, the step 7 recon and its stop
+  blocks, the section 7 matrix and widening statement, the step 6 recon and its stop
   conditions, the section 6.4 commands, grant table and companion table, the section 6.2
-  value, the section 13 steps and the section 14 residuals. The 8 runbook guards also
+  value, the section 13 steps and the section 14 residuals. The 9 runbook guards (1 added by FRP1-F01) also
   require the runbook's env blocks, opt-in line and companion table to equal this
   contract's (sections 6.2, 6.3 and 6.4), so the 2 documents cannot drift apart.
 - **`test_the_runbooks_state_the_v10_profile_version` is parametrized** over the 6 files
@@ -832,8 +840,17 @@ to end, `600f7902` plan-document re-measure):
   profile excludes 28 names (24 `CONTROL_PLANE_EXCLUDED`, 2 `COMPATIBILITY_ONLY`, 2
   `OPERATOR_DECISION_REQUIRED`): the 21 reviewed for individual grants, as before, and
   the 7 withheld lineage names, never granted.
-- **Plan pins.** Re-measured for the 2 P1-B modules (10 FAST functions, 15 FAST nodes):
-  FAST 36291 → 36306 (36232 passed, 74 skipped), Architecture tier 7943 → 7945, test
+- **FRP1 required changes.** F01: the read-only recon is section 13 step 6, before the
+  environment change (step 7, conditional on it) and every write gate; the runbook's P2
+  steps, its recon heading and section 6.4 follow, guarded by
+  `test_the_read_only_recon_precedes_the_environment_change`. F02:
+  `ops/runbooks/gateway-operations.md` states that `issues.project_links.add` / `end` are
+  open S3.1 writes recorded `client_identified` and only `confirm` is attested, and
+  qualifies its S1 count. F03: section 6.4 item 1, step 9 and the runbook state that,
+  with the Knowledge plane composed, applying v10 also admits
+  `knowledge.assertions.search` under the `managed-knowledge-context.md` gate.
+- **Plan pins.** Re-measured for the 2 P1-B modules (11 FAST functions, 16 FAST nodes):
+  FAST 36291 → 36307 (36233 passed, 74 skipped), Architecture tier 7943 → 7945, test
   modules 842 → 844; the database tier is unchanged at 4871.
 
 ## 13. Operator gates that remain (P2)
@@ -848,25 +865,30 @@ None of these is authorized by P1; each is the operator's, in this order:
    MCP with the deployed compose files and overlays reused exactly.
 5. Before recreating, verify read-only that the remote env has the database profiles
    off and no opt-in (section 6.3); stop if not.
-6. Set the section 6.3 environment lines; recreate.
-7. **Read-only recon before any write gate opens (RP1-F02).** A read-only database
+6. **Read-only recon before any environment change or write gate opens (RP1-F02,
+   FRP1-F01).** A read-only database
    enumeration, run in P2 by the operator or the Manager (never by a P1 worker), of every
    remote client: its `writes_enabled` flag, the durable global `writes_enabled` and
    `remote_enabled` controls, and every active capability grant (capability, purpose,
-   `is_write`, scope, resource, expiry, grant UUID); plus, from the deployed remote env
-   file, `MY_PA_REMOTE_WRITES_ENABLED`, `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`, and
+   `is_write`, scope, resource, expiry, grant UUID); plus, from the currently deployed
+   remote env file (before any section 6.3 line is set), `MY_PA_REMOTE_WRITES_ENABLED`, `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`, and
    membership of each client id in `MY_PA_MCP_CHATLLM_GATEWAY_OAUTH_CLIENT_IDS` and
    `MY_PA_MCP_CHATLLM_OPERATOR_OAUTH_CLIENT_IDS`. Record the ChatLLM and ChatGPT client
-   ids. **Stop** (no write gate is opened) if any client other than those 2 holds a write
+   ids. **Stop** (no environment line is set and no write gate is opened) if any client other than those 2 holds a write
    grant together with a write flag that is or would become effective; if any client
    holds an active grant on one of the 7 withheld names (revoke it first by UUID, then
    re-run this step); or if either named client holds write grants beyond those the
    operator has decided to open (section 7). The runbook section carries this step and
    these stop conditions verbatim.
+7. Only if steps 5 and 6 passed: set the section 6.3 environment lines; recreate. (The
+   remote block turns on `MY_PA_REMOTE_WRITES_ENABLED`, 1 of the 3 remote write gates,
+   so the recon must precede it.)
 8. `control --remote-enabled --writes-enabled`; `set-client-writes` for the 2 clients only.
 9. `profile-diff` / `profile-plan` v10 per client; then `profile-apply` or the 34 plus
-   chosen companions (section 6.4). Require `healthy: true` before and after; if
-   `unexpected_control_plane` names a withheld lineage name, revoke it (UUID from step 7)
+   chosen companions (section 6.4; with the Knowledge plane composed, `profile-apply`
+   also admits `knowledge.assertions.search`, gated by
+   `ops/runbooks/managed-knowledge-context.md`). Require `healthy: true` before and after; if
+   `unexpected_control_plane` names a withheld lineage name, revoke it (UUID from step 6)
    and re-diff.
 10. Acceptance with synthetic, non-personal data, per client: `profile-diff` healthy, and
     the client's publication (façade `my_pa.describe` or canonical `tools/list`, per its
@@ -930,7 +952,7 @@ Every S3.1 §14 residual becomes live once the 2 clients are provisioned and wri
 
 - **Remote writes widen every write.** Remote writes open every active write grant of each
   write-enabled client, including any individually granted control-plane or
-  operator-ceiling writes; up to 103 from the v10 profile alone (section 7). The step 7
+  operator-ceiling writes; up to 103 from the v10 profile alone (section 7). The step 6
   recon is the control.
 - **Unreviewed Issue edits.** `issues.create` and `issues.update` are recorded writes, not
   reviewable facts: either client can create Issues and rename, re-describe, suspend or

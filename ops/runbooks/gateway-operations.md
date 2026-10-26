@@ -84,12 +84,16 @@ Turning the switch off again is the same reset in the other direction.
 
 **Record lineage S1 (`MY_PA_LINEAGE_ENABLED`, default off).** The lineage plane
 (ADR-015) has its own switch beside `MY_PA_KNOWLEDGE_ASSERTIONS_ENABLED` and depends
-on no other. Off withholds every S1 lineage capability -- today the fourteen
-`issues.`, `records.` and `meetings.notes.` names -- from `capabilities.get`, readiness, the MCP tool list and the ChatLLM
+on no other. Off withholds every lineage capability it gates -- the `issues.`,
+`records.` and `meetings.notes.` names (14 in the S1 set; S2, S3 and S3.1
+widened it) -- from `capabilities.get`, readiness, the MCP tool list and the ChatLLM
 profile, and an invocation answers `unsupported` and writes nothing. Turning it on
-or off changes no row: the S1 schema is present and dormant either way. The two
-`issues.project_links.` writes are local-operator only (the CLI and this
-gateway's stamped operator surface); a remote client is `denied`. Whatever the
+or off changes no row: the S1 schema is present and dormant either way. Since S3.1,
+`issues.project_links.add` and `issues.project_links.end` are open writes a granted
+remote client may call, recorded `client_identified` (both are in the P1 grant
+table); only `issues.project_links.confirm` is attested to the local operator (the
+CLI and this gateway's stamped operator surface), and a remote client never reaches
+it. Whatever the
 switch says, `tasks.create`, `commitments.create` and `continuity.tasks.create`
 refuse an Issue `situation_id`.
 

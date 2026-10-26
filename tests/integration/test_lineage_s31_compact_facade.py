@@ -630,19 +630,23 @@ def test_two_clients_asserting_one_identity_get_created_false_not_conflict(
 # ---- the #339 restricted-profile path (section 7.11) ------------------------------------
 
 
-def _privilege_less_engine(url: str) -> Engine:
-    """An engine whose sessions act as `pg_read_all_data`: it reads, and writes nothing.
+def _privilege_less_engine(url: str, role: str = "pg_read_all_data") -> Engine:
+    """An engine whose sessions act as a predefined role, without creating a role.
 
     The fixed MCP data roles hold no privilege on any lineage table (no reviewed
-    `McpObjectGrant` names one, S4 D-46); a predefined read-only role stands in
-    for them without creating a role in the cluster.
+    `McpObjectGrant` names one, S4 D-46). `pg_read_all_data` reads every table
+    and writes nothing: it stands in for the write side. `pg_write_all_data`
+    writes but has no SELECT on any table (worker N4, FR31-F02): it stands in
+    for the read side, stricter than the fixed roles, which may read their
+    granted non-lineage objects.
     """
     engine = create_database_engine(url, statement_timeout_ms=30_000)
 
     @event.listens_for(engine, "connect")
-    def act_as_reader(connection: Any, _record: Any) -> None:  # noqa: ANN401
+    def act_as(connection: Any, _record: Any) -> None:  # noqa: ANN401
         cursor = connection.cursor()
-        cursor.execute("SET ROLE pg_read_all_data")
+        # A fixed predefined role name, never caller input.
+        cursor.execute(f"SET ROLE {role}")
         cursor.close()
 
     return engine
@@ -701,6 +705,54 @@ def test_an_opted_in_lineage_write_on_a_profile_service_fails_closed_and_writes_
         profiles.close()
         control_engines = {control.work_engine, control.audit_engine}
         for engine in control_engines:
+            engine.dispose()
+
+
+def test_an_opted_in_lineage_read_on_a_profile_service_fails_closed(
+    runtime: S31Runtime,
+) -> None:
+    """Section 7.11, the read side (FR31-F02): no SELECT on lineage tables is `internal_error`."""
+    scene = _scene(runtime, "profile-read")
+    url = runtime.engine.url.render_as_string(hide_password=False)
+    settings = Settings(database_url=url, lineage_enabled=True)
+    control = build_gateway_runtime(settings)
+    engines = (
+        _privilege_less_engine(url, "pg_write_all_data"),
+        _privilege_less_engine(url, "pg_write_all_data"),
+    )
+    services = [
+        build_gateway_runtime(
+            settings,
+            data_engine=engine,
+            independent_audit_engine=control.audit_engine,
+            controls_engine=control.work_engine,
+            permit_reenrichment=False,
+            permit_managed_documents=False,
+        ).service
+        for engine in engines
+    ]
+    profiles = McpDatabaseServices(
+        services[0],
+        services[1],
+        frozenset({CLIENT}),
+        frozenset(),
+        engines,
+        opt_ins=frozenset({"records.lineage.related", *READS}),
+    )
+    try:
+        routed = profiles.access(_context(_grants("records.lineage.related")), write_allowed=False)
+        assert routed is not None
+        assert routed.service is services[0]
+        assert "records.lineage.related" in (routed.allowed_capabilities or ())
+        before = all_lineage_counts(runtime.engine)
+        app = _app(control.service, {"client": routed}, require_bound_service=True)
+        seeds = {"seeds": [{"family": "task", "record_id": scene["task"]}]}
+        (answer,) = _run(app, [("client", _read("records.lineage.related", seeds))])
+        assert _refusal(answer)[0] == "internal_error"
+        assert all_lineage_counts(runtime.engine) == before
+    finally:
+        profiles.close()
+        for engine in {control.work_engine, control.audit_engine}:
             engine.dispose()
 
 

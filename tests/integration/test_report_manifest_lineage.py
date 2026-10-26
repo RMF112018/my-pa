@@ -37,6 +37,7 @@ from sqlalchemy import Engine, event, text
 
 import my_pa.application.record_lineage as lineage_module
 import my_pa.application.service as service_module
+import my_pa.infrastructure.persistence.record_lineage as lineage_store
 from my_pa.application.commands import ReadRelatedRecords, ReadReportManifest
 from my_pa.domain.intelligence.catalog import IntelligenceStage
 from my_pa.domain.intelligence.source_manifest import manifest_digest
@@ -283,6 +284,57 @@ def test_a_failed_lineage_recompute_never_refuses_the_commit(
         assert decoded["release_requirement"]["lineage_families"] == families
     # Each commit wrote its artifact and its manifest: nothing was refused.
     assert runtime.manifest(spent["report_id"])["manifest_state"] == "recorded"
+
+
+def test_a_cancelled_recompute_statement_is_recorded_and_the_commit_succeeds(
+    runtime: S31ReportRuntime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FR31-F01: PostgreSQL really cancels a recompute statement; the commit still lands.
+
+    Test seam only (nothing here ships): the per-statement cap is 100 ms and the
+    recompute's watermark read first sleeps 0.5 s on the same connection, so the
+    server cancels it (`query_canceled`) with budget left. Without the
+    recompute's savepoint that cancellation aborts the commit's transaction.
+    """
+    scene = _scene(runtime, "lmf-cancel")
+    answer = _read(runtime, scene["task"])
+    original = lineage_store.SqlRecordLineageRepository.commit_watermark
+    slept: list[str] = []
+
+    def slow_watermark(
+        self: lineage_store.SqlRecordLineageRepository, principal_id: str, at: datetime
+    ) -> int | None:
+        slept.append("pg_sleep")
+        lineage_store._bounded(lambda: self._connection.execute(text("SELECT pg_sleep(0.5)")))
+        return original(self, principal_id, at)
+
+    monkeypatch.setattr(lineage_store, "_RECOMPUTE_STATEMENT_BUDGET_MS", 100)
+    monkeypatch.setattr(
+        lineage_store.SqlRecordLineageRepository, "commit_watermark", slow_watermark
+    )
+    before = _manifest_count(runtime.engine)
+    _, written = _synthesis(
+        runtime, "lmf-cancel", lineage_reference(answer, (("task", scene["task"]),))
+    )
+    assert slept == ["pg_sleep"]
+    decoded = _decoded(runtime, written["report_id"])
+    lineage = decoded["lineage"]
+    assert lineage["verification_state"] == "recompute_failed"
+    assert lineage["recompute_failure"] == "statement_timeout"
+    assert lineage["server"] is None and lineage["families_seen"] is None
+    # The commit wrote its run, its artifact and its manifest: researcher's two,
+    # then the synthesizer's.
+    assert _manifest_count(runtime.engine) == before + 3
+    assert runtime.manifest(written["report_id"])["manifest_state"] == "recorded"
+    # The cancellation and its 100 ms cap ended with the recompute: a later
+    # commit in a fresh transaction is unaffected.
+    monkeypatch.undo()
+    _, after = _synthesis(
+        runtime, "lmf-cancel-after", lineage_reference(answer, (("task", scene["task"]),))
+    )
+    assert _decoded(runtime, after["report_id"])["lineage"]["verification_state"] == (
+        "verified_at_commit"
+    )
 
 
 def test_a_manifest_without_a_lineage_reference_stays_schema_1(

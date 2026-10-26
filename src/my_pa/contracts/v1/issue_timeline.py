@@ -10,6 +10,13 @@ the Record Event vocabulary a native entry names (the S1 scope guard,
 native record (a native entry names the event's own columns, and only a
 Constraint event carries its stored revision snapshot's `recorded_fields`), no
 Project name, no evidence anchor, no count and no `principal_id`.
+
+**S3.1 labels** (S3.1 contract section 7.6): a `project_link`, `membership`,
+`association`, `handoff` or `handoff_correction` entry states its row's
+`acceptance_basis` and `user_directed_claim`, and `asserting_client_id` (the
+writing OAuth client, `null` for the human channel, an unstamped local caller
+and every remote reader); the 3 keys are `null` on an `issue_revision` and a
+`native_event`. `action` may name `confirm`.
 """
 
 from __future__ import annotations
@@ -21,10 +28,11 @@ from pydantic import Field, model_validator
 
 from my_pa.contracts.v1.base import StrictModel
 from my_pa.contracts.v1.issues import HandoffHolderView
-from my_pa.contracts.v1.record_lineage import RecordRefView
+from my_pa.contracts.v1.record_lineage import ASSERTING_CLIENT_ID, RecordRefView
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.lineage.cursor import instant_token
 from my_pa.domain.lineage.vocabulary import (
+    AcceptanceBasis,
     HandoffCorrectionAction,
     IssueProjectMembershipState,
     LineageCompleteness,
@@ -38,6 +46,7 @@ from my_pa.domain.record_events import RecordEventFamily, RecordEventKind
 __all__ = [
     "TIMELINE_ENTRY_ID_KINDS",
     "TIMELINE_KIND_RANKS",
+    "TIMELINE_LABELLED_KINDS",
     "TIMELINE_PLANE_RANKS",
     "IssueTimelineView",
     "TimelineEntryView",
@@ -61,6 +70,17 @@ TIMELINE_ENTRY_ID_KINDS: dict[TimelineEntryKind, IdKind] = {
     TimelineEntryKind.HANDOFF_CORRECTION: IdKind.ISSUE_HANDOFF_CORRECTION,
     TimelineEntryKind.NATIVE_EVENT: IdKind.RECORD_EVENT,
 }
+
+#: S3.1 section 7.6: the kinds whose entries carry the provenance labels.
+TIMELINE_LABELLED_KINDS: frozenset[TimelineEntryKind] = frozenset(
+    {
+        TimelineEntryKind.PROJECT_LINK,
+        TimelineEntryKind.MEMBERSHIP,
+        TimelineEntryKind.ASSOCIATION,
+        TimelineEntryKind.HANDOFF,
+        TimelineEntryKind.HANDOFF_CORRECTION,
+    }
+)
 
 
 class TimelineNativeView(StrictModel):
@@ -126,6 +146,10 @@ class TimelineEntryView(StrictModel):
     # native_event
     native: TimelineNativeView | None = None
     recorded_fields: dict[str, Any] | None = None
+    # S3.1: project_link, membership, association, handoff, handoff_correction
+    acceptance_basis: AcceptanceBasis | None = None
+    user_directed_claim: bool | None = None
+    asserting_client_id: str | None = ASSERTING_CLIENT_ID
 
     @model_validator(mode="after")
     def _check(self) -> TimelineEntryView:
@@ -140,6 +164,13 @@ class TimelineEntryView(StrictModel):
         for instant in (self.at, self.recorded_at, self.closed_at, self.corrected_effective_at):
             if instant is not None and instant.tzinfo is None:
                 raise ValueError("a timeline instant is aware")
+        labelled = self.kind in TIMELINE_LABELLED_KINDS
+        if labelled is (self.acceptance_basis is None) or labelled is (
+            self.user_directed_claim is None
+        ):
+            raise ValueError("a fact entry, and only one, carries its provenance labels")
+        if not labelled and self.asserting_client_id is not None:
+            raise ValueError("only a fact entry names its writing client")
         return self
 
     def to_canonical_dict(self) -> dict[str, Any]:
@@ -190,6 +221,11 @@ class TimelineEntryView(StrictModel):
             "corrected_effective_at": instant_token(self.corrected_effective_at),
             "native": None if self.native is None else self.native.to_canonical_dict(),
             "recorded_fields": self.recorded_fields,
+            "acceptance_basis": (
+                None if self.acceptance_basis is None else self.acceptance_basis.value
+            ),
+            "user_directed_claim": self.user_directed_claim,
+            "asserting_client_id": self.asserting_client_id,
         }
 
 

@@ -86,6 +86,9 @@ from my_pa.application.commands import (
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
     ConfigureProjectControls,
+    ConfirmIssueMembership,
+    ConfirmIssueProjectLink,
+    ConfirmRecordAssociation,
     ConstraintUpdateField,
     ContestRecordAssociation,
     CorrectGoodNotes,
@@ -220,6 +223,7 @@ from my_pa.application.commands import (
     ReadProjectControlsStatus,
     ReadRecordAssociationHistory,
     ReadRecordLineage,
+    ReadRelatedRecords,
     ReadReportManifest,
     ReadTask,
     RecordContextFeedback,
@@ -2612,6 +2616,20 @@ _LINEAGE_LIST_KEYS: Final = (
 )
 
 
+#: S3.1 section 7.4: the related read's lists, converted to tuples here and
+#: validated by the command (a non-list is refused there, naming its field).
+_RELATED_LIST_KEYS: Final = ("seeds", "acceptance_bases", "relation_types")
+
+
+def _related_request(payload: Mapping[str, Any]) -> dict[str, Any]:
+    converted = dict(payload)
+    for key in _RELATED_LIST_KEYS:
+        value = converted.get(key)
+        if isinstance(value, list):
+            converted[key] = tuple(value)
+    return converted
+
+
 def _with_evidence_tuple(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Record lineage: an evidence-set (or intent) list becomes a tuple; nothing else converts.
 
@@ -2894,6 +2912,15 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
             **_with_project_ids(payload)
         ),
         Capability.REPORTS_MANIFEST: lambda payload: ReadReportManifest(**payload),
+        # Record lineage S3.1 (S3.1 contract sections 7.2 to 7.4).
+        Capability.RECORDS_ASSOCIATIONS_CONFIRM: lambda payload: ConfirmRecordAssociation(
+            **payload
+        ),
+        Capability.ISSUES_MEMBERSHIPS_CONFIRM: lambda payload: ConfirmIssueMembership(**payload),
+        Capability.ISSUES_PROJECT_LINKS_CONFIRM: lambda payload: ConfirmIssueProjectLink(**payload),
+        Capability.RECORDS_LINEAGE_RELATED: lambda payload: ReadRelatedRecords(
+            **_related_request(payload)
+        ),
     }
 )
 

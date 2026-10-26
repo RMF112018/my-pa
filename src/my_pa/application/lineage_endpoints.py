@@ -110,6 +110,7 @@ __all__ = [
     "insert_evidence_anchor",
     "lock_evidence_source",
     "lock_lineage_sources",
+    "lock_order_families",
     "parse_evidence_anchor",
     "parse_evidence_anchors",
     "parse_record_ref",
@@ -643,6 +644,52 @@ def _evidence_targets(anchor: EvidenceAnchorInput, detail: SafeDetail) -> list[_
             )
         )
     return targets
+
+
+#: S3.1 section 6.4: the record family whose visibility a lock target needs.
+_TOKEN_FAMILY: Final[Mapping[str, RecordFamily]] = {
+    **{family.value: family for family in RecordFamily},
+    _CAPTURE_ROOT_FAMILY: RecordFamily.CAPTURE_VERSION,
+}
+
+
+def lock_order_families(
+    *,
+    issue_ids: Sequence[tuple[str, SafeDetail]] = (),
+    endpoints: Sequence[tuple[RecordRef, SafeDetail]] = (),
+    anchors: Sequence[EvidenceAnchorInput] = (),
+    anchor_detail: SafeDetail = SafeDetail.EVIDENCE_ANCHORS,
+) -> tuple[tuple[RecordFamily, SafeDetail], ...]:
+    """The families `lock_lineage_sources` would share, in its lock order, with each refusal.
+
+    Record lineage S3.1 (section 6.4): a remote write's hidden-is-absent
+    pre-check walks the subjects in exactly the order validation refuses an
+    absent one, so a hidden subject answers what an absent one would. Pure:
+    it reads nothing (a Capture version endpoint's root is not resolved; its
+    version share stands for it).
+    """
+    targets: list[_LockTarget] = [
+        _LockTarget(
+            token=RecordFamily.SITUATION.value, identifier=issue_id, kind="issue", refusal=detail
+        )
+        for issue_id, detail in issue_ids
+    ]
+    targets.extend(
+        _LockTarget(
+            token=ref.family.value,
+            identifier=ref.record_id,
+            kind="endpoint",
+            refusal=detail,
+            ref=ref,
+        )
+        for ref, detail in endpoints
+    )
+    for anchor in anchors:
+        targets.extend(_evidence_targets(anchor, anchor_detail))
+    return tuple(
+        (_TOKEN_FAMILY[target.token], target.refusal)
+        for target in sorted(targets, key=_LockTarget.order)
+    )
 
 
 def lock_lineage_sources(

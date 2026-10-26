@@ -224,6 +224,11 @@ class ProjectFacts:
     legacy_issue_links_closed: int | None
     constraint_source_state: ConstraintSourceState | None
     constraint_counts: Mapping[MetricId, int] | None
+    #: Record lineage S3.1 (S3.1 contract section 7.8): the Project's Issue
+    #: links whose latest event is `client_identified` (any state) of an Issue
+    #: not closed. Like a legacy link, neither counted nor dropped: it makes the
+    #: Issue metric `not_reportable` (`issue_link_unverified`).
+    unreviewed_issue_links: int | None = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -277,6 +282,11 @@ def _family_facts_missing(definition: MetricDefinition, facts: ProjectFacts) -> 
     return facts.constraint_source_state is None
 
 
+def _unverified_links(facts: ProjectFacts) -> bool:
+    """Section 3.3 (R4-F02) and S3.1 section 7.8: an outstanding legacy or unreviewed link."""
+    return (facts.legacy_issue_links or 0) > 0 or (facts.unreviewed_issue_links or 0) > 0
+
+
 def project_metric(
     metric_id: MetricId, facts: ProjectFacts, *, visible: Collection[ProgramFamily]
 ) -> MetricValue:
@@ -294,9 +304,7 @@ def project_metric(
         counts = facts.commitment_counts or {}
         return _value(definition, counts.get(metric_id, 0), ())
     if definition.family is ProgramFamily.ISSUE:
-        reasons = (
-            (NotReportableReason.ISSUE_LINK_UNVERIFIED,) if (facts.legacy_issue_links or 0) else ()
-        )
+        reasons = (NotReportableReason.ISSUE_LINK_UNVERIFIED,) if _unverified_links(facts) else ()
         return _value(definition, len(facts.issue_ids or ()), reasons)
     if facts.constraint_counts is None:
         return _value(definition, None, (NotReportableReason.CALENDAR_UNCONFIGURED,))
@@ -336,7 +344,7 @@ def scope_total(
     if definition.family is ProgramFamily.COMMITMENT:
         value = sum((facts.commitment_counts or {}).get(metric_id, 0) for facts in projects)
     elif definition.family is ProgramFamily.ISSUE:
-        if any((facts.legacy_issue_links or 0) > 0 for facts in projects):
+        if any(_unverified_links(facts) for facts in projects):
             reasons.add(NotReportableReason.ISSUE_LINK_UNVERIFIED)
         distinct: set[str] = set()
         for facts in projects:
@@ -366,6 +374,10 @@ class ScopeDenominator:
     projects_by_constraint_source_state: Mapping[ConstraintSourceState, int] | None
     project_ids_by_constraint_source_state: Mapping[ConstraintSourceState, tuple[str, ...]] | None
     project_ids_with_legacy_issue_links: tuple[str, ...] | None
+    #: S3.1 section 7.8: the unreviewed Issue links (`None` with the `issue`
+    #: family invisible, as the legacy parts).
+    unreviewed_issue_links: int | None = None
+    project_ids_with_unreviewed_issue_links: tuple[str, ...] | None = None
 
 
 def scope_denominator(
@@ -406,6 +418,14 @@ def scope_denominator(
         ),
         project_ids_with_legacy_issue_links=(
             tuple(sorted(facts.project_id for facts in projects if facts.legacy_issue_links))
+            if issue_seen
+            else None
+        ),
+        unreviewed_issue_links=(
+            sum(facts.unreviewed_issue_links or 0 for facts in projects) if issue_seen else None
+        ),
+        project_ids_with_unreviewed_issue_links=(
+            tuple(sorted(facts.project_id for facts in projects if facts.unreviewed_issue_links))
             if issue_seen
             else None
         ),

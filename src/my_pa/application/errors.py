@@ -59,6 +59,7 @@ __all__ = [
     "InvalidRequestError",
     "NotFoundError",
     "QuarantinedError",
+    "RateLimitedError",
     "SafeDetail",
     "UnavailableError",
     "UnsupportedError",
@@ -608,6 +609,20 @@ class SafeDetail(StrEnum):
     #: Principal. `VALID_AT`, `STRUCTURED_CONTENT` and `ARTIFACT_ID` are reused.
     PROGRAM_ENTITY_IDS = "program_entity_ids"
     PROJECT_IDS = "project_ids"
+    #: Record lineage S3.1 (S3.1 contract section 7.7). `USER_DIRECTED` a
+    #: `user_directed: true` sent by the human channel (the directing user
+    #: itself); `LINEAGE_WRITE_BUDGET` a client lineage write past a section 4.8
+    #: budget (`rate_limited`); `SEEDS`, `ACCEPTANCE_BASES` and `RELATION_TYPES`
+    #: the `records.lineage.related` fields of those names (a malformed,
+    #: duplicate, empty or oversize list; `SEEDS` also a seed absent, foreign,
+    #: invisible or not known at the cut). `IDEMPOTENCY_KEY`, `STATE`,
+    #: `LINK_ID`, `MAX_DEPTH`, `KNOWN_AT`, `VALID_AT`, `CURSOR`, `PAGE_SIZE` and
+    #: `STRUCTURED_CONTENT` are reused.
+    USER_DIRECTED = "user_directed"
+    LINEAGE_WRITE_BUDGET = "lineage_write_budget"
+    SEEDS = "seeds"
+    ACCEPTANCE_BASES = "acceptance_bases"
+    RELATION_TYPES = "relation_types"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a
@@ -708,6 +723,16 @@ class ConflictError(ApplicationError):
     """A version, idempotency, cursor, or state conflict. Retry after refresh."""
 
     code = ErrorCode.CONFLICT
+
+
+class RateLimitedError(ApplicationError):
+    """A bounded resource limit was reached; retry later (bounded retry).
+
+    Record lineage S3.1 (S3.1 contract section 4.8): a client lineage write past
+    its writer bucket's or its Principal's rolling budget. Nothing is written.
+    """
+
+    code = ErrorCode.RATE_LIMITED
 
 
 class QuarantinedError(ApplicationError):

@@ -91,6 +91,10 @@ _ENTRY_KEYS: Final = frozenset(
         "corrected_effective_at",
         "native",
         "recorded_fields",
+        # S3.1 lockstep (S3.1 contract sections 7.6 and 10.1): the provenance labels.
+        "acceptance_basis",
+        "user_directed_claim",
+        "asserting_client_id",
     }
 )
 

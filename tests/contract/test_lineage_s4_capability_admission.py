@@ -197,10 +197,11 @@ def test_s4_capabilities_are_operator_decision_required_reads() -> None:
     assert {capability.value for capability in declared} == PROGRAM_REPORTING_CAPABILITIES
     assert {c.value for c in _PROGRAM_READ_CAPABILITIES} == PROGRAM_READ_CAPABILITIES
     assert PROGRAM_READ_CAPABILITIES == _PROGRAM_READS
-    # Not lineage capabilities: the 30-name lineage switch set is unchanged.
+    # Not lineage capabilities: the lineage switch set (30 names at S4, 34
+    # since S3.1 adds its 4) never holds an S4 name.
     assert not declared & _LINEAGE_CAPABILITIES
-    assert len(_LINEAGE_CAPABILITIES) == 30
-    assert len(list(Capability)) == 229
+    assert len(_LINEAGE_CAPABILITIES) == 34
+    assert len(list(Capability)) == 233
     for capability in declared:
         name = capability.value
         assert capability in _SCOPELESS

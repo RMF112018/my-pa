@@ -47,6 +47,7 @@ from sqlalchemy.exc import DBAPIError
 from tests.schema import lineage_s3_schema_ahead_contract as gap
 from tests.schema.lineage_s3_schema_ahead_contract import S3_CAPABILITIES, S3_PURPOSES
 from tests.schema.lineage_s4_schema_ahead_contract import S4_CAPABILITIES, S4_PURPOSES
+from tests.schema.lineage_s31_schema_ahead_contract import S31_CAPABILITIES
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.identity.purpose import Purpose
@@ -72,8 +73,10 @@ SCHEMA: Final = "knowledge"
 REVISION: Final = "6f1476b8da52"
 PREVIOUS: Final = "d020b532ad7d"
 #: Record lineage S4 (`c5260943d933`, ADR-015) is additive on this revision.
-HEAD: Final = "c5260943d933"
+HEAD: Final = "023f8f7eb499"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
+#: Record lineage S3.1 (`023f8f7eb499`, ADR-015 decision 15), additive on S4.
+S31_MIGRATION: Final = MIGRATIONS / "20261025_023f8f7eb499_record_lineage_s31.py"
 MIGRATION: Final = MIGRATIONS / "20261019_6f1476b8da52_record_lineage_s3.py"
 S2_MIGRATION: Final = MIGRATIONS / "20261018_d020b532ad7d_record_lineage_s2.py"
 S1_MIGRATION: Final = MIGRATIONS / "20261017_264310e0416a_record_lineage_s1.py"
@@ -226,7 +229,7 @@ def test_the_revision_is_the_single_head_on_d020b532ad7d() -> None:
     assert script.get_revision(PREVIOUS).down_revision == "264310e0416a"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
     assert MIGRATION.name.endswith("_record_lineage_s3.py")
-    assert len(list(MIGRATIONS.glob("*.py"))) == 122
+    assert len(list(MIGRATIONS.glob("*.py"))) == 123
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -266,14 +269,21 @@ def test_frozen_ddl_names_every_declared_constraint() -> None:
     """
     source = MIGRATION.read_text(encoding="utf-8")
     earlier = S1_MIGRATION.read_text(encoding="utf-8") + S2_MIGRATION.read_text(encoding="utf-8")
+    # A name the S3.1 revision adds to one of these tables is in its text instead.
+    later = S31_MIGRATION.read_text(encoding="utf-8")
     flat = _joined(source)
     for table in NEW_TABLES:
         assert f"CREATE TABLE knowledge.{table.name} (" in source
         for column in table.c:
-            assert re.search(rf"\b{column.name}\b", source), (table.name, column.name)
+            assert re.search(rf"\b{column.name}\b", source) or re.search(
+                rf"ADD COLUMN {column.name}\b", later
+            ), (table.name, column.name)
         for constraint in table.constraints:
             if constraint.name is not None and not str(constraint.name).startswith("_"):
-                assert str(constraint.name) in source, (table.name, constraint.name)
+                assert str(constraint.name) in source or str(constraint.name) in later, (
+                    table.name,
+                    constraint.name,
+                )
         for index in table.indexes:
             assert f"INDEX {index.name} ON knowledge.{table.name}" in flat, index.name
     for table in ALTERED_TABLES:
@@ -284,12 +294,15 @@ def test_frozen_ddl_names_every_declared_constraint() -> None:
         # Every name the S1 and S2 revisions do not create is this revision's.
         for name in declared:
             if name not in earlier:
-                assert name in source, (table.name, name)
+                assert name in source or name in later, (table.name, name)
         for name in WIDENED.get(table.name, frozenset()):
             assert name in declared and name in earlier and name in source, (table.name, name)
         for index in table.indexes:
             if f"INDEX {index.name} " not in _flat(earlier):
-                assert f"INDEX {index.name} ON knowledge.{table.name}" in flat, index.name
+                assert (
+                    f"INDEX {index.name} ON knowledge.{table.name}" in flat
+                    or f"INDEX {index.name} ON knowledge.{table.name}" in _joined(later)
+                ), index.name
     for function in FUNCTIONS | set(REPLACED_FUNCTIONS):
         assert f"knowledge.{function}(" in flat, function
     for table_name, trigger in TRIGGERS:
@@ -381,7 +394,8 @@ def test_at_vocabulary_adds_exactly_the_s3_names() -> None:
     # The head admits every declared name, and the S3 schema-ahead gap is
     # exactly the S3 names the domain does not declare yet (none).
     # The S4 names, declared since, are the S4 revision's (c5260943d933).
-    declared = {capability.value for capability in Capability} - S4_CAPABILITIES
+    # The S3.1 names too, the S3.1 revision's (023f8f7eb499).
+    declared = {capability.value for capability in Capability} - S4_CAPABILITIES - S31_CAPABILITIES
     native = {capability.value for capability in NativeSourceCapability}
     assert set(at) == declared | native | gap.lineage_s3_admitted_ahead("capability")
     purposes = {purpose.value for purpose in Purpose} - S4_PURPOSES

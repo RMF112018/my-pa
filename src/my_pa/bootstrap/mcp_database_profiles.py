@@ -21,6 +21,7 @@ from my_pa.contracts.mcp_database_profiles import (
     MCP_DATABASE_TRANSPORT_QUERY_KEYS,
     MCP_PROFILE_WRITE_CAPABILITIES,
     McpDatabaseProfile,
+    opted_in_write_capabilities,
     profile_capabilities,
 )
 from my_pa.contracts.mcp_database_witness import (
@@ -146,6 +147,9 @@ class McpDatabaseServices:
     read_clients: frozenset[str] = field(repr=False)
     write_clients: frozenset[str] = field(repr=False)
     engines: tuple[Engine, Engine] = field(repr=False)
+    #: Record lineage S3.1 (S3.1 contract section 7.11): the operator's opt-in
+    #: names (`MY_PA_MCP_DATABASE_PROFILE_OPT_INS`), default empty.
+    opt_ins: frozenset[str] = field(default=frozenset(), repr=False)
     witness_enabled: bool = False
     controls_engine: Engine | None = field(default=None, repr=False, compare=False)
 
@@ -158,8 +162,11 @@ class McpDatabaseServices:
         # Durable write switches are not a capability/purpose grant. Token scope,
         # expiry/revocation and deny overlays may have removed the last write.
         # Explicit None retains the existing durable wildcard-purpose semantics.
+        # S3.1 section 7.11 (R31-F04): an opted-in write grant survives too, so
+        # an rw-listed client granted only opted-in writes gets the rw service.
+        writes = MCP_PROFILE_WRITE_CAPABILITIES | opted_in_write_capabilities(self.opt_ins)
         surviving_write = any(
-            capability in MCP_PROFILE_WRITE_CAPABILITIES
+            capability in writes
             and capability.value in (context.allowed_capabilities or ())
             and (purpose is None or purpose in permitted_purposes(capability))
             for capability, purpose in (context.capability_purposes or ())
@@ -174,7 +181,9 @@ class McpDatabaseServices:
             )
         else:
             return None
-        allowed = profile_capabilities(profile) & (context.allowed_capabilities or frozenset())
+        allowed = profile_capabilities(profile, self.opt_ins) & (
+            context.allowed_capabilities or frozenset()
+        )
         purposes = frozenset(
             (capability, purpose)
             for capability, purpose in (context.capability_purposes or ())
@@ -247,6 +256,7 @@ def build_mcp_database_services(
             settings.mcp_database_ro_clients(),
             settings.mcp_database_rw_clients(),
             (engines[0], engines[1]),
+            opt_ins=settings.mcp_database_profile_opt_in_set(),
             witness_enabled=settings.mcp_database_witness_enabled,
             controls_engine=control.work_engine,
         )

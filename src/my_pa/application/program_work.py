@@ -144,6 +144,9 @@ def _project_view(
         ),
         legacy_issue_links=facts.legacy_issue_links,
         legacy_issue_links_closed=facts.legacy_issue_links_closed,
+        unreviewed_issue_links=(
+            None if facts.legacy_issue_links is None else facts.unreviewed_issue_links
+        ),
         metrics=tuple(
             MetricView.of(project_metric(row.metric_id, facts, visible=visible))
             for row in METRIC_CATALOGUE
@@ -179,7 +182,7 @@ def program_overview_in(
         else None
     )
     issue_ids: dict[str, set[str]] | None = None
-    legacy: Mapping[str, tuple[int, int]] | None = None
+    legacy: Mapping[str, tuple[int, int, int]] | None = None
     if ProgramFamily.ISSUE in families:
         issue_ids = {project_id: set() for project_id in project_ids}
         for project_id, issue_id in metrics.outstanding_issue_links(principal_id, project_ids):
@@ -194,7 +197,7 @@ def program_overview_in(
     facts: dict[str, ProjectFacts] = {}
     for project_id in project_ids:
         constraint = None if constraints is None else constraints[project_id]
-        links = None if legacy is None else legacy.get(project_id, (0, 0))
+        links = None if legacy is None else legacy.get(project_id, (0, 0, 0))
         facts[project_id] = ProjectFacts(
             project_id=project_id,
             commitment_counts=None if commitments is None else commitments.get(project_id, {}),
@@ -203,6 +206,7 @@ def program_overview_in(
             legacy_issue_links_closed=None if links is None else links[1],
             constraint_source_state=None if constraint is None else constraint.source_state,
             constraint_counts=None if constraint is None else constraint.counts,
+            unreviewed_issue_links=None if links is None else links[2],
         )
 
     def scope(program: ProgramResolution) -> OverviewProgramView:

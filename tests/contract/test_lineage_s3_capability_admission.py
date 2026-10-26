@@ -214,7 +214,8 @@ def test_s3_capabilities_are_operator_decision_required() -> None:
     declared = _s3()
     assert {capability.value for capability in declared} == S3_NAMES
     assert declared <= _LINEAGE_CAPABILITIES
-    assert len(_LINEAGE_CAPABILITIES) == 30
+    # Record lineage S3.1 adds its 4 names to the same switch set, 30 -> 34.
+    assert len(_LINEAGE_CAPABILITIES) == 34
     for capability in declared:
         name = capability.value
         assert capability in _SCOPELESS
@@ -496,6 +497,14 @@ _S3_VIEW_ADDITIONS: Final[dict[str, frozenset[str]]] = {
         {"qualifiers", "known_at", "valid_at", "lineage_valid_at", "native_cut_at"}
     ),
 }
+#: S3.1 contract section 7.6 (an admitted lockstep edit, S3.1 section 10.1): the
+#: provenance labels S3.1 adds beside the S3 additions; the subset assertion stays.
+_S31_LABELS: Final = frozenset({"user_directed_claim", "asserting_client_id"})
+_S31_VIEW_ADDITIONS: Final[dict[str, frozenset[str]]] = {
+    "AssociationView": _S31_LABELS,
+    "ProjectLinkView": _S31_LABELS,
+    "HandoffView": _S31_LABELS,
+}
 
 
 def test_s1_and_s2_views_keep_every_key() -> None:
@@ -514,7 +523,9 @@ def test_s1_and_s2_views_keep_every_key() -> None:
     for name, basis in _S2_BASIS_VIEW_KEYS.items():
         keys = frozenset(views[name].model_fields)
         assert basis <= keys, f"{name} lost {sorted(basis - keys)}"
-        assert keys - basis == _S3_VIEW_ADDITIONS.get(name, frozenset()), name
+        assert keys - basis == _S3_VIEW_ADDITIONS.get(name, frozenset()) | _S31_VIEW_ADDITIONS.get(
+            name, frozenset()
+        ), name
 
 
 #: S1 contract section 7.2: the top-level and node keys of an S1 answer.

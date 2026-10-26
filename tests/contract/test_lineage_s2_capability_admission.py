@@ -131,13 +131,19 @@ def test_s2_capabilities_are_operator_decision_required() -> None:
     declared = _s2()
     assert {capability.value for capability in declared} == S2_NAMES
     assert declared <= _LINEAGE_CAPABILITIES
-    # Record lineage S3 adds its own names to the same switch set, 22 -> 30.
-    assert len(_LINEAGE_CAPABILITIES) == 30
+    # Record lineage S3 adds its own names to the same switch set, 22 -> 30, and
+    # S3.1 its 4, 30 -> 34.
+    assert len(_LINEAGE_CAPABILITIES) == 34
     for capability in declared:
         policy = CHATLLM_CAPABILITY_POLICY[capability]
         assert policy.classification is ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED
         assert policy.exclusion_rationale == _RATIONALE
-        assert not is_operator_only(capability)
+        # S3.1 contract section 7.13 (D-16, a Part D conversion): Issue close and
+        # reopen are operator-only, attested to the local operator surface; the
+        # other 6 S2 names are not.
+        assert is_operator_only(capability) is (
+            capability in {Capability.ISSUES_CLOSE, Capability.ISSUES_REOPEN}
+        )
         assert capability in _SCOPELESS
         assert _FEATURE_BY_FAMILY[capability.value.split(".", 1)[0]] == "lineage"
         writes = capability.value in _WRITES
@@ -373,7 +379,9 @@ def test_s1_lineage_views_keep_every_s1_key() -> None:
         "title",
         "updated_at",
     }
-    assert set(AssociationView.model_fields) == {
+    # S3.1 lockstep (S3.1 contract sections 7.6 and 10.1): exactly the 2
+    # provenance labels added; every S1 key kept.
+    assert set(AssociationView.model_fields) - {"user_directed_claim", "asserting_client_id"} == {
         "link_id",
         "kind",
         "relation_type",
@@ -624,8 +632,10 @@ def test_existing_v1_shapes_are_unchanged_by_s2() -> None:
     # The handoff view's keys (S2 section 7.1), with `from`/`to` on the wire; S3
     # lockstep (S3 contract sections 7.1 and 8.1): exactly 3 keys added, every
     # S2 key kept with `effective_at` in its recorded meaning.
-    assert {"current_effective_at", "voided", "correction_ids"} <= _names(HandoffView)
-    assert _names(HandoffView) - {"current_effective_at", "voided", "correction_ids"} == {
+    # S3.1 lockstep (S3.1 sections 7.6 and 10.1): exactly the 2 provenance labels.
+    s31 = {"user_directed_claim", "asserting_client_id"}
+    assert {"current_effective_at", "voided", "correction_ids"} | s31 <= _names(HandoffView)
+    assert _names(HandoffView) - {"current_effective_at", "voided", "correction_ids"} - s31 == {
         "handoff_id",
         "issue_id",
         "commitment_id",

@@ -478,6 +478,9 @@ def test_ending_a_membership_is_the_only_way_past_an_unsatisfiable_member(
         "contested_links": [],
         "contested_links_truncated": False,
         "restricted": False,
+        # S3.1 section 7.5 lockstep: no unreviewed client fact in the review scope.
+        "unreviewed_links": [],
+        "unreviewed_links_truncated": False,
     }
     _ok(runtime, close(issue, 1, "scope-2", _closure_set(runtime, "scope-2")))
 
@@ -741,6 +744,9 @@ def test_closure_readiness_names_each_blocked_member(runtime: S2Runtime) -> None
         "contested_links": [],
         "contested_links_truncated": False,
         "restricted": False,
+        # S3.1 section 7.5 lockstep: no unreviewed client fact in the review scope.
+        "unreviewed_links": [],
+        "unreviewed_links_truncated": False,
     }
 
 

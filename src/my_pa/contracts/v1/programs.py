@@ -307,6 +307,8 @@ class OverviewDenominatorView(StrictModel):
     legacy_issue_links: int | None = Field(ge=0)
     legacy_issue_links_closed: int | None = Field(ge=0)
     projects_by_constraint_source_state: ConstraintSourceStateCountsView | None
+    #: Record lineage S3.1 (section 7.8): unreviewed client-identified Issue links.
+    unreviewed_issue_links: int | None = Field(ge=0)
 
     @classmethod
     def of(cls, denominator: ScopeDenominator) -> OverviewDenominatorView:
@@ -319,6 +321,7 @@ class OverviewDenominatorView(StrictModel):
             projects_by_constraint_source_state=(
                 None if counts is None else ConstraintSourceStateCountsView.of(counts)
             ),
+            unreviewed_issue_links=denominator.unreviewed_issue_links,
         )
 
 
@@ -340,6 +343,8 @@ class OverviewProgramView(StrictModel):
     denominator: OverviewDenominatorView
     project_ids_by_constraint_source_state: ConstraintSourceStateProjectsView | None
     project_ids_with_legacy_issue_links: tuple[str, ...] | None
+    #: Record lineage S3.1 (section 7.8): Projects with unreviewed Issue links.
+    project_ids_with_unreviewed_issue_links: tuple[str, ...] | None
     totals: tuple[MetricView, ...]
 
     @classmethod
@@ -361,6 +366,9 @@ class OverviewProgramView(StrictModel):
             denominator=OverviewDenominatorView.of(denominator),
             project_ids_by_constraint_source_state=_projects_by_state(denominator),
             project_ids_with_legacy_issue_links=denominator.project_ids_with_legacy_issue_links,
+            project_ids_with_unreviewed_issue_links=(
+                denominator.project_ids_with_unreviewed_issue_links
+            ),
             totals=tuple(MetricView.of(metric) for metric in totals),
         )
 
@@ -373,6 +381,8 @@ class OverviewPortfolioView(StrictModel):
     denominator: OverviewDenominatorView
     project_ids_by_constraint_source_state: ConstraintSourceStateProjectsView | None
     project_ids_with_legacy_issue_links: tuple[str, ...] | None
+    #: Record lineage S3.1 (section 7.8): Projects with unreviewed Issue links.
+    project_ids_with_unreviewed_issue_links: tuple[str, ...] | None
     totals: tuple[MetricView, ...]
 
     @classmethod
@@ -394,6 +404,9 @@ class OverviewPortfolioView(StrictModel):
             denominator=OverviewDenominatorView.of(denominator),
             project_ids_by_constraint_source_state=_projects_by_state(denominator),
             project_ids_with_legacy_issue_links=denominator.project_ids_with_legacy_issue_links,
+            project_ids_with_unreviewed_issue_links=(
+                denominator.project_ids_with_unreviewed_issue_links
+            ),
             totals=tuple(MetricView.of(metric) for metric in totals),
         )
 
@@ -439,6 +452,8 @@ class OverviewProjectView(StrictModel):
     constraint_sync: ConstraintSyncView | None
     legacy_issue_links: int | None = Field(ge=0)
     legacy_issue_links_closed: int | None = Field(ge=0)
+    #: Record lineage S3.1 (section 7.8): unreviewed client-identified Issue links.
+    unreviewed_issue_links: int | None = Field(ge=0)
     metrics: tuple[MetricView, ...]
 
 
@@ -455,7 +470,7 @@ class ProgramOverviewView(StrictModel):
     source_cutoff_at: str
     lineage_known_at: str | None
     metric_schema_version: Literal[1]
-    calculation_version: Literal["program-overview-v1"]
+    calculation_version: Literal["program-overview-v2"]
     programs: tuple[OverviewProgramView, ...] = Field(min_length=1)
     portfolio: OverviewPortfolioView
     per_project: tuple[OverviewProjectView, ...]

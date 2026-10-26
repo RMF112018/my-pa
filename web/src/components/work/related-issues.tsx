@@ -20,6 +20,7 @@
  */
 import Link from "next/link";
 import { useEffect, useId, useState } from "react";
+import { basisWords } from "@/components/issues/presentation";
 import { Button } from "@/components/ui/button";
 import type {
   AssociationView,
@@ -183,7 +184,7 @@ function Edge({ edge, root }: { readonly edge: AssociationView; readonly root: R
         {relationWords(edge, root)}{edge.lifecycle_state === "contested" ? " (contested)" : null}
       </p>
       <p className="mt-1 text-muted">
-        State: {words(edge.lifecycle_state)} · Basis: {words(edge.acceptance_basis)} · Recorded by: {words(edge.authority_class)}
+        State: {words(edge.lifecycle_state)} · Basis: {basisWords(edge)} · Recorded by: {words(edge.authority_class)}
       </p>
       {edge.evidence.length > 0 ? (
         <ul className="mt-2 grid gap-2" aria-label="Evidence">

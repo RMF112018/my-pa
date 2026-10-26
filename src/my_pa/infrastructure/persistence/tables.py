@@ -200,6 +200,7 @@ from my_pa.domain.lineage.vocabulary import (
     ATTESTED_AUTHORITY_CLASSES,
     ATTESTED_DECISION_CHANNELS,
     BACKFILL_WRITE_CAPABILITIES,
+    CLIENT_DECISION_CHANNELS,
     COMPOSITE_CAPABILITIES,
     HANDOFF_CAPABILITIES,
     HANDOFF_CORRECTION_CAPABILITIES,
@@ -208,6 +209,7 @@ from my_pa.domain.lineage.vocabulary import (
     ISSUE_STATES,
     LINEAGE_WRITE_CAPABILITIES,
     LINK_REVISION_CAPABILITIES,
+    MAX_ASSERTING_CLIENT_ID_CHARACTERS,
     MEMBER_VERSION_CAPABILITIES,
     MEMBERSHIP_EVENT_CAPABILITIES,
     RECORD_FAMILY_ID_KINDS,
@@ -10329,8 +10331,10 @@ intelligence_artifact_manifests = Table(
     ),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _is_identifier("artifact_id", IdKind.INTELLIGENCE_ARTIFACT),
+    # S3.1 section 5.3 (`023f8f7eb499`): schema 1, or schema 2 with its
+    # `lineage` section (`a_manifest_names_its_own_artifact` checks which).
     CheckConstraint(
-        f"manifest_schema_version = {REPORT_MANIFEST_SCHEMA_VERSION}",
+        f"manifest_schema_version IN ({REPORT_MANIFEST_SCHEMA_VERSION}, 2)",
         name="a_manifest_schema_version_is_known",
     ),
     CheckConstraint(
@@ -16522,6 +16526,48 @@ def _local_operator_attested() -> CheckConstraint:
     )
 
 
+#: S3.1 section 5.1 (`023f8f7eb499`): the provenance every fact row records,
+#: replacing `a_lineage_row_is_local_operator_attested` on the four fact tables.
+#: The human channel's rows are `user_confirmed` / `local_operator` with no
+#: client and no claim; a connected client's are `client_identified` /
+#: `ordinary_reviewer`, a remote one's naming its OAuth client and a stdio or
+#: unstamped local one's naming none.
+def _s31_fact_provenance() -> tuple[CheckConstraint, CheckConstraint]:
+    return (
+        CheckConstraint(
+            "asserting_client_id IS NULL OR char_length(asserting_client_id) BETWEEN 1 AND "
+            f"{MAX_ASSERTING_CLIENT_ID_CHARACTERS}",
+            name="an_asserting_client_is_bounded",
+        ),
+        CheckConstraint(
+            "(acceptance_basis = 'user_confirmed' AND authority_class = 'local_operator' AND "
+            f"decision_channel IN ({_literals(ATTESTED_DECISION_CHANNELS)}) AND "
+            "asserting_client_id IS NULL AND NOT user_directed_claim) OR (acceptance_basis = "
+            "'client_identified' AND authority_class = 'ordinary_reviewer' AND ((decision_channel "
+            "= 'remote_interactive' AND asserting_client_id IS NOT NULL) OR (decision_channel = "
+            "'local_unattested' AND asserting_client_id IS NULL)))",
+            name="a_lineage_row_provenance_is_consistent",
+        ),
+    )
+
+
+#: S3.1 section 5.1: the two columns S3.1 adds to each fact table. A constant
+#: default, so no existing row is rewritten.
+def _s31_fact_columns() -> tuple[Column[str], Column[bool]]:
+    return (
+        Column("asserting_client_id", Text),
+        Column("user_directed_claim", Boolean, nullable=False, server_default=text("false")),
+    )
+
+
+#: S3.1 section 5.1: a `confirm` revision or event is the human channel's.
+def _confirmation_is_operator_attested() -> CheckConstraint:
+    return CheckConstraint(
+        "action <> 'confirm' OR acceptance_basis = 'user_confirmed'",
+        name="a_confirmation_is_operator_attested",
+    )
+
+
 #: S3 section 4.1 `a_lineage_fact_names_its_commit_mark`: a fact row's
 #: `commit_seq` names a mark of its own Principal. The value is set by the
 #: `a_lineage_fact_takes_its_commit_mark` trigger, never by a writer.
@@ -16849,6 +16895,7 @@ issue_project_membership_events = Table(
     Column("recorded_at", DateTime(timezone=True), nullable=False),
     #: S3 section 4.1: this row's transaction's commit mark (null before S3).
     Column("commit_seq", BigInteger),
+    *_s31_fact_columns(),
     PrimaryKeyConstraint("principal_id", "membership_event_id"),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _is_identifier("membership_event_id", IdKind.ISSUE_PROJECT_MEMBERSHIP_EVENT),
@@ -16882,15 +16929,22 @@ issue_project_membership_events = Table(
         "revision_no = 1 OR predecessor_revision_no IS NOT DISTINCT FROM revision_no - 1",
         name="a_membership_event_follows_the_prior_revision",
     ),
+    # S3.1 section 5.1: a `confirm` keeps its predecessor's state.
     CheckConstraint(
-        "(action = 'end') = (state = 'ended')",
+        "(action = 'end' AND state = 'ended') OR (action = 'confirm') OR (action IN ('assert', "
+        "'reinstate') AND state = 'active')",
         name="a_membership_event_ends_exactly_when_it_ends",
     ),
     CheckConstraint(
         "action <> 'end' OR reason IS NOT NULL",
         name="an_ended_membership_event_states_its_reason",
     ),
-    _local_operator_attested(),
+    CheckConstraint(
+        "action <> 'confirm' OR reason IS NOT NULL",
+        name="a_project_link_confirmation_states_its_reason",
+    ),
+    *_s31_fact_provenance(),
+    _confirmation_is_operator_attested(),
     UniqueConstraint(
         "principal_id",
         "project_id",
@@ -17036,7 +17090,14 @@ record_links = Table(
         'COLLATE "C", from_id COLLATE "C") < (to_family COLLATE "C", to_id COLLATE "C"))',
         name="a_related_context_is_canonical_and_scoped",
     ),
-    _local_operator_attested(),
+    # S3.1 section 5.2: the root's creator is the human channel or a connected
+    # client; its client is revision 1's.
+    CheckConstraint(
+        "(authority_class = 'local_operator' AND decision_channel IN "
+        f"({_literals(ATTESTED_DECISION_CHANNELS)})) OR (authority_class = 'ordinary_reviewer' "
+        f"AND decision_channel IN ({_literals(CLIENT_DECISION_CHANNELS)}))",
+        name="a_record_link_creator_is_known",
+    ),
     ForeignKeyConstraint(
         ["context_issue_id", "principal_id", "context_issue_kind"],
         [
@@ -17097,6 +17158,7 @@ record_link_revisions = Table(
     Column("member_native_version", Integer),
     #: S3 section 4.1: this row's transaction's commit mark (null before S3).
     Column("commit_seq", BigInteger),
+    *_s31_fact_columns(),
     PrimaryKeyConstraint("principal_id", "link_id", "revision_no"),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _is_identifier("link_id", IdKind.RECORD_LINK),
@@ -17128,12 +17190,16 @@ record_link_revisions = Table(
         "DISTINCT FROM revision_no - 1 AND action <> 'assert')",
         name="a_link_revision_follows_its_predecessor",
     ),
+    # S3.1 section 5.1: a `confirm` keeps its predecessor's state, `ended` included.
     CheckConstraint(
-        "(action = 'end') = (lifecycle_state = 'ended')",
+        "(action = 'end' AND lifecycle_state = 'ended') OR (action = 'confirm' AND "
+        "lifecycle_state IN ('active', 'ended')) OR (action NOT IN ('end', 'confirm') AND "
+        "lifecycle_state <> 'ended')",
         name="a_link_revision_ends_exactly_when_it_ends",
     ),
     CheckConstraint(
-        "action NOT IN ('contest', 'correct_evidence', 'end', 'reinstate') OR reason IS NOT NULL",
+        "action NOT IN ('confirm', 'contest', 'correct_evidence', 'end', 'reinstate') OR reason "
+        "IS NOT NULL",
         name="a_link_revision_states_its_reason",
     ),
     # S3 section 4.1.
@@ -17148,12 +17214,14 @@ record_link_revisions = Table(
         "member_native_version IS NULL OR member_native_version >= 1",
         name="a_member_native_version_is_positive",
     ),
+    # S3.1 section 4.7: a membership confirm copies its head's member version.
     CheckConstraint(
         "member_native_version IS NULL OR source_capability IN "
-        f"({_literals(MEMBER_VERSION_CAPABILITIES)})",
+        f"({_literals(MEMBER_VERSION_CAPABILITIES | {'issues.memberships.confirm'})})",
         name="only_membership_writes_record_a_member_version",
     ),
-    _local_operator_attested(),
+    *_s31_fact_provenance(),
+    _confirmation_is_operator_attested(),
     UniqueConstraint(
         "principal_id", "revision_id", name="a_link_revision_is_identified_within_its_principal"
     ),
@@ -17300,6 +17368,10 @@ lineage_write_requests = Table(
     Column("result_handoff_correction_id", Text),
     Column("result_backfill_run_id", Text),
     Column("result_backfill_checkpoint", Integer),
+    #: S3.1 section 5.2: the writer, set at reservation and never changed (null
+    #: on every pre-S3.1 row); the client write budgets count by it.
+    Column("decision_channel", Text),
+    Column("asserting_client_id", Text),
     PrimaryKeyConstraint("principal_id", "capability", "idempotency_key"),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _is_identifier("result_issue_id", IdKind.SITUATION),
@@ -17416,6 +17488,16 @@ lineage_write_requests = Table(
         "AND result_handoff_correction_id IS NULL AND commit_seq IS NULL)",
         name="a_completed_backfill_write_names_its_run",
     ),
+    # S3.1 section 5.2.
+    CheckConstraint(
+        "(decision_channel IS NULL AND asserting_client_id IS NULL) OR (decision_channel IN "
+        f"({_literals(ATTESTED_DECISION_CHANNELS | {'local_unattested'})}) AND "
+        "asserting_client_id IS NULL) OR (decision_channel IS NOT NULL AND decision_channel = "
+        "'remote_interactive' AND asserting_client_id IS NOT NULL AND "
+        "char_length(asserting_client_id) BETWEEN 1 AND "
+        f"{MAX_ASSERTING_CLIENT_ID_CHARACTERS})",
+        name="a_lineage_write_request_writer_is_known",
+    ),
     UniqueConstraint(
         "principal_id", "commit_seq", name="a_lineage_write_request_names_its_commit_mark_once"
     ),
@@ -17483,6 +17565,13 @@ lineage_write_requests = Table(
         ],
         ondelete="RESTRICT",
         name="a_lineage_write_request_names_a_backfill_run",
+    ),
+    Index(
+        "lineage_write_requests_by_writer",
+        "principal_id",
+        "decision_channel",
+        "asserting_client_id",
+        "created_at",
     ),
 )
 
@@ -17578,6 +17667,7 @@ issue_responsibility_events = Table(
     Column("source_capability", Text, nullable=False),
     #: S3 section 4.1: this row's transaction's commit mark (null before S3).
     Column("commit_seq", BigInteger),
+    *_s31_fact_columns(),
     PrimaryKeyConstraint("principal_id", "handoff_id"),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _is_identifier("handoff_id", IdKind.ISSUE_HANDOFF),
@@ -17617,7 +17707,7 @@ issue_responsibility_events = Table(
     ),
     _one_of("acceptance_basis", AcceptanceBasis, name="a_handoff_acceptance_basis_is_known"),
     _one_of("source_capability", HANDOFF_CAPABILITIES, name="a_handoff_capability_is_known"),
-    _local_operator_attested(),
+    *_s31_fact_provenance(),
     UniqueConstraint(
         "principal_id",
         "issue_id",
@@ -17801,6 +17891,7 @@ issue_responsibility_corrections = Table(
     Column("source_capability", Text, nullable=False),
     Column("recorded_at", DateTime(timezone=True), nullable=False),
     Column("commit_seq", BigInteger, nullable=False),
+    *_s31_fact_columns(),
     PrimaryKeyConstraint("principal_id", "correction_id"),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _is_identifier("correction_id", IdKind.ISSUE_HANDOFF_CORRECTION),
@@ -17840,7 +17931,7 @@ issue_responsibility_corrections = Table(
         HANDOFF_CORRECTION_CAPABILITIES,
         name="a_handoff_correction_capability_is_known",
     ),
-    _local_operator_attested(),
+    *_s31_fact_provenance(),
     UniqueConstraint(
         "principal_id", "handoff_id", "correction_no", name="one_correction_per_number"
     ),

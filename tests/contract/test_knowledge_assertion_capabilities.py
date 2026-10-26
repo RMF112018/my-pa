@@ -967,6 +967,11 @@ _POST_KLP_CAPABILITIES: Final = frozenset(
         "commitments.v2.search",
         "commitments.v2.waiting_on",
         "reports.manifest",
+        # Record lineage S3.1.
+        "records.associations.confirm",
+        "issues.memberships.confirm",
+        "issues.project_links.confirm",
+        "records.lineage.related",
     }
 )
 _EVENT: Final = "rcev_fastworld000000001"

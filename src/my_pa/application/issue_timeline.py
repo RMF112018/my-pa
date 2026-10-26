@@ -94,6 +94,7 @@ from my_pa.domain.lineage.cursor import (
 from my_pa.domain.lineage.handoff import HandoffCorrectionFact, chain_state
 from my_pa.domain.lineage.model import RecordRef
 from my_pa.domain.lineage.vocabulary import (
+    AcceptanceBasis,
     HandoffCorrectionAction,
     HandoffHolderKind,
     LineageCompleteness,
@@ -277,6 +278,9 @@ def _link_entries(
                     lifecycle_state=revision.lifecycle_state,
                     from_ref=_ref_view(link.from_ref),
                     to_ref=_ref_view(link.to_ref),
+                    acceptance_basis=revision.acceptance_basis,
+                    user_directed_claim=revision.user_directed_claim,
+                    asserting_client_id=revision.asserting_client_id,
                 )
             )
     return entries
@@ -364,6 +368,9 @@ def _handoff_entries(
                     from_holder=_holder(event.from_holder_kind, event.from_entity_id),
                     to_holder=_holder(event.to_holder_kind, event.to_entity_id),
                     voided=folded.voided,
+                    acceptance_basis=AcceptanceBasis(event.acceptance_basis),
+                    user_directed_claim=event.user_directed_claim,
+                    asserting_client_id=event.asserting_client_id,
                 )
             )
         for correction in shown:
@@ -380,6 +387,9 @@ def _handoff_entries(
                     correction_id=correction.correction_id,
                     correction_action=HandoffCorrectionAction(correction.action),
                     corrected_effective_at=correction.corrected_effective_at,
+                    acceptance_basis=AcceptanceBasis(correction.acceptance_basis),
+                    user_directed_claim=correction.user_directed_claim,
+                    asserting_client_id=correction.asserting_client_id,
                 )
             )
     return entries, withheld
@@ -669,6 +679,9 @@ def read_issue_timeline(
             project_id=event.project_id,
             membership_revision_no=event.revision_no,
             link_state=event.state,
+            acceptance_basis=AcceptanceBasis(event.acceptance_basis),
+            user_directed_claim=event.user_directed_claim,
+            asserting_client_id=event.asserting_client_id,
         )
         for event in timeline.project_link_events(principal_id, request.issue_id, valid)
     )

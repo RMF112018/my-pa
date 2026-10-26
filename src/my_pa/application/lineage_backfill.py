@@ -228,7 +228,13 @@ def plan_backfill(
     issues = uow.issues
     digest = request_digest(_PLAN, principal_id, plan_document(request))
     prior = issues.reserve_write_request(
-        principal_id, _PLAN, idempotency_key, digest, created_at=at
+        principal_id,
+        _PLAN,
+        idempotency_key,
+        digest,
+        created_at=at,
+        # S3.1 section 5.2: the writer, recorded on every later request row.
+        decision_channel=authority.decision_channel.value,
     )
     if prior is not None:
         return _replayed(uow, principal_id, request, prior)

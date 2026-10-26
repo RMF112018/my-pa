@@ -1,7 +1,7 @@
 import { closed } from "../primitives";
 import type { Decoder } from "../types";
 import { strictObject, nullable, arrayOf, checked, text, boolean, enumeration, identifier, integer, timestamp, type Decoded } from "./continuity.projects.create";
-import { ISSUE_STATES, association, evidenceAnchor, issueTitle } from "./records.lineage";
+import { ACCEPTANCE_BASES, ISSUE_STATES, assertingClientId, association, evidenceAnchor, issueTitle } from "./records.lineage";
 
 /*
  * `issues.read` (record lineage S1 contract section 7.1, S2 section 7.1 and S3
@@ -12,6 +12,10 @@ import { ISSUE_STATES, association, evidenceAnchor, issueTitle } from "./records
  * answers are two closed shapes and any other key refuses the whole answer.
  * The Python models are `IssueView`, `ProjectLinkView` and `IssueClosureView`
  * in `contracts/v1/issues.py`.
+ *
+ * S3.1 (section 7.6): a Project link's `acceptance_basis` admits
+ * `client_identified`, and it states `user_directed_claim` and
+ * `asserting_client_id`, as an association does.
  */
 const invalid = () => closed("upstream_contract_invalid", "Invalid capability success contract");
 
@@ -23,7 +27,9 @@ const projectLink = strictObject({
   project_situation_id: identifier("psit"),
   state: enumeration(["active", "ended"]),
   membership_revision_no: integer(1),
-  acceptance_basis: enumeration(["user_confirmed"]),
+  acceptance_basis: enumeration(ACCEPTANCE_BASES),
+  user_directed_claim: boolean,
+  asserting_client_id: assertingClientId,
   evidence_anchor_id: nullable(identifier("ian")),
   recorded_at: timestamp,
 });

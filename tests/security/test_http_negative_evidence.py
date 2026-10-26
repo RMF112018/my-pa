@@ -325,6 +325,10 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         Capability.COMMITMENTS_V2_SEARCH,
         Capability.COMMITMENTS_V2_WAITING_ON,
         Capability.REPORTS_MANIFEST,
+        Capability.RECORDS_ASSOCIATIONS_CONFIRM,
+        Capability.ISSUES_MEMBERSHIPS_CONFIRM,
+        Capability.ISSUES_PROJECT_LINKS_CONFIRM,
+        Capability.RECORDS_LINEAGE_RELATED,
     }
 )
 
@@ -1607,6 +1611,29 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
         Capability.COMMITMENTS_V2_SEARCH: {"query": "wire"},
         Capability.COMMITMENTS_V2_WAITING_ON: {},
         Capability.REPORTS_MANIFEST: {"report_id": "rpt_wirereport000001"},
+        # Record lineage S3.1 (S3.1 contract section 7).
+        Capability.RECORDS_ASSOCIATIONS_CONFIRM: {
+            "link_id": "irl_wirelink00001",
+            "expected_revision": 1,
+            "idempotency_key": "wire-records-associations-confirm-0001",
+            "reason": "the wire association was confirmed",
+        },
+        Capability.ISSUES_MEMBERSHIPS_CONFIRM: {
+            "link_id": "irl_wirelink00001",
+            "expected_revision": 1,
+            "idempotency_key": "wire-issues-memberships-confirm-0001",
+            "reason": "the wire membership was confirmed",
+        },
+        Capability.ISSUES_PROJECT_LINKS_CONFIRM: {
+            "issue_id": "sit_wireissue0001",
+            "project_id": "prj_wireproject0001",
+            "expected_membership_revision": 1,
+            "idempotency_key": "wire-issues-project-links-confirm-0001",
+            "reason": "the wire project link was confirmed",
+        },
+        Capability.RECORDS_LINEAGE_RELATED: {
+            "seeds": [{"family": "task", "record_id": "tsk_wiretask00001"}]
+        },
     }
 
 
@@ -2329,6 +2356,10 @@ SCOPED_CAPABILITIES = [
         Capability.COMMITMENTS_V2_SEARCH,
         Capability.COMMITMENTS_V2_WAITING_ON,
         Capability.REPORTS_MANIFEST,
+        Capability.RECORDS_ASSOCIATIONS_CONFIRM,
+        Capability.ISSUES_MEMBERSHIPS_CONFIRM,
+        Capability.ISSUES_PROJECT_LINKS_CONFIRM,
+        Capability.RECORDS_LINEAGE_RELATED,
     }
 ]
 

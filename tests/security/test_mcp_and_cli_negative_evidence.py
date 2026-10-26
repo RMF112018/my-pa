@@ -604,6 +604,10 @@ SCOPED_CAPABILITIES = [
         Capability.COMMITMENTS_V2_SEARCH,
         Capability.COMMITMENTS_V2_WAITING_ON,
         Capability.REPORTS_MANIFEST,
+        Capability.RECORDS_ASSOCIATIONS_CONFIRM,
+        Capability.ISSUES_MEMBERSHIPS_CONFIRM,
+        Capability.ISSUES_PROJECT_LINKS_CONFIRM,
+        Capability.RECORDS_LINEAGE_RELATED,
     }
 ]
 

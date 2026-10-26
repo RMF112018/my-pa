@@ -3,7 +3,7 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import fixtures from "@/lib/api/decode/fixtures/python/success.json";
 import { IssueLineageTable } from "@/components/issues/issue-lineage-table";
-import { ISSUE_MESSAGES } from "@/components/issues/presentation";
+import { ISSUE_MESSAGES, PROVENANCE_WORDS } from "@/components/issues/presentation";
 
 /*
  * AT-024 (S3, web component): the Issue lineage table (S3 contract section
@@ -54,6 +54,23 @@ describe("IssueLineageTable", () => {
     expect(within(origin).getByText("Meeting note version 1, characters 16–36 (origin)")).toBeInTheDocument();
     // Anchors open the drilldown, only on explicit action.
     expect(within(origin).getByRole("button", { name: "Open note version" })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("says in words that a client-identified link is unreviewed and its claim unverified", async () => {
+    // S3.1 contract section 8: never by colour alone, and never as accepted.
+    const answer = page();
+    Object.assign((answer.typed_edges as Json[])[1]!, {
+      acceptance_basis: "client_identified", authority_class: "ordinary_reviewer",
+      user_directed_claim: true, asserting_client_id: "synthetic-client-0001",
+    });
+    stub(() => backend(answer));
+    render(<IssueLineageTable issueId={ISSUE_ID} />);
+    const links = await screen.findByRole("table", { name: "Links" });
+    const origin = within(links).getByTestId("lineage-link-irl_bbbbbbbb22222222");
+    expect(within(origin).getByText(
+      `${PROVENANCE_WORDS.client_identified}; ${PROVENANCE_WORDS.userDirected}`,
+    )).toBeInTheDocument();
+    expect(within(origin).queryByText("user confirmed")).toBeNull();
   });
 
   it("shows the restricted, truncated and restart messages", async () => {

@@ -16,7 +16,7 @@ import type { IssuesTimelineResult, TimelineEntry } from "@/lib/api/decode/capab
 import type { RecordRefView } from "@/lib/api/decode/capabilities/records.lineage";
 import { fetchIssueTimeline, type ApiFailure } from "@/lib/api/work-client";
 import {
-  FAMILY_WORDS, ISSUE_MESSAGES, RecordName, completenessMessages, instantWords, words,
+  FAMILY_WORDS, ISSUE_MESSAGES, RecordName, basisWords, completenessMessages, instantWords, words,
 } from "./presentation";
 
 export const TIMELINE_PAGE_SIZE = 25;
@@ -29,11 +29,13 @@ const LINK_ACTIONS: Readonly<Record<string, string>> = {
   correct_evidence: "evidence corrected",
   contest: "contested",
   reinstate: "reinstated",
+  confirm: "confirmed",
 };
 const PROJECT_ACTIONS: Readonly<Record<string, string>> = {
   assert: "Linked to a Project",
   end: "Project link ended",
   reinstate: "Project link reinstated",
+  confirm: "Project link confirmed",
 };
 const NATIVE_FAMILY: Readonly<Record<string, string>> = {
   task: "Task", commitment: "Commitment", constraint: "Constraint", meeting: "Meeting", capture: "Capture",
@@ -112,6 +114,14 @@ function EntryDetail({ entry }: { readonly entry: TimelineEntry }) {
     return (
       <p className="text-muted break-words">
         Recorded state: {words(fields.lifecycle_state)} · Ball in court: {parties.length > 0 ? parties.join(", ") : "nobody recorded"}
+      </p>
+    );
+  }
+  if (entry.acceptance_basis !== null && entry.user_directed_claim !== null) {
+    // S3.1 section 8: a fact entry says how it was recorded.
+    return (
+      <p className="text-muted">
+        Basis: {basisWords({ acceptance_basis: entry.acceptance_basis, user_directed_claim: entry.user_directed_claim })}
       </p>
     );
   }

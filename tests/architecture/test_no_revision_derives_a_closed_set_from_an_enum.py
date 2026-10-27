@@ -832,9 +832,10 @@ def test_the_chain_is_readable_and_non_empty() -> None:
     # `d020b532ad7d` (record lineage S2, ADR-015) as 120, and `6f1476b8da52`
     # (record lineage S3, ADR-015) as 121, and `c5260943d933` (record lineage
     # S4, ADR-015) as 122, and `023f8f7eb499` (record lineage S3.1, ADR-015
-    # decision 15) as 123.
-    assert len(revisions) == 123
-    assert len({revision for revision, _ in revisions}) == 123
+    # decision 15) as 123, and `6c2306330ceb` (CPM Workbench S5b-1, the
+    # Schedule foundation) as 124.
+    assert len(revisions) == 124
+    assert len({revision for revision, _ in revisions}) == 124
     assert {
         "9c6b4a18ed72",
         "1a4c9e77b2d5",

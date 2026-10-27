@@ -1215,9 +1215,11 @@ class ScheduleAdmission:
 
     def __post_init__(self) -> None:
         _identifier(self.operation_id, IdKind.OPERATION)
-        if (self.publication.series_id, self.publication.principal_id) != (
+        # `series_id` is the Series' primary key, so equal ids are one Series
+        # (and so one Principal and Project); no Principal is read here.
+        if (self.publication.series_id, self.publication.project_id) != (
             self.series.series_id,
-            self.series.principal_id,
+            self.series.project_id,
         ):
             raise ValueError("an admission's publication belongs to its series")
         if not isinstance(self.outcome, ScheduleAdmissionOutcome):

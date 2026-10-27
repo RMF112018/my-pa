@@ -25,6 +25,14 @@ from the repository root; future files are written as code spans, never as Markd
 (CI relative-link check); no `path:line` citation is used for a file this slice edits
 (citation guard). All counts are digits on purpose (spelled-count guard).
 
+**Revision R6-1.** Design review R6 (PASS_WITH_REQUIRED_CHANGES at `c5c89634`) findings
+R6-F01…F14 and the conditions of rulings (a)–(e) are resolved in place. Where each one
+landed: F01 sections 4.10, 4.10.4, 5.2, 5.5; F02 sections 3.4, 6, 9.3; F03 sections 4.10.1,
+4.10.2, 5.5; F04/F05/F12 section 5.5; F06/F08 section 9.2; F07 sections 4.2, 5.1; F09
+section 8.3; F10/F11 sections 4.11, 8.2; F13 section 4.10; F14 sections 4, 4.4, 5.5, 8.1,
+9.1; rulings (a) section 3.3, (b) sections 3.4, 6, 9.3, (c) sections 5.3, 5.5, (d) section
+9.2 U-03, (e) section 9.3.
+
 ---
 
 ## 1. Scope
@@ -152,10 +160,23 @@ SCHEDULE_JOBS: Final = JobPlane(
 ```
 
 Consequence, stated: a `schedule_jobs` row can exist only through the repository admission
-method, which no capability reaches in WP-01, so production holds none. A guard test pins
-the non-runnable state (section 8.1, `test_schedule_plane_is_not_runnable_before_its_handler`);
-WP-03 inverts it. WP-03's revision widens the heartbeat CHECK together with the audit sets
-(D-03).
+method, which no capability reaches in WP-01, so production holds none.
+
+**Four-surface guard (ruling (a)).** FAST
+`tests/architecture/test_cpm_workbench_foundation_scope.py::test_schedule_plane_is_not_runnable_before_its_handler`
+asserts `"schedule"` is absent from each of the 4 surfaces separately, so WP-03 must flip
+each explicitly:
+
+| # | Surface | Read as |
+|---|---|---|
+| 1 | `apps/worker.py` `_PLANES` and `_JOB_PLANES` | imported module attributes |
+| 2 | heartbeat CHECK literal at head | `worker_plane_is_known` text on `tables.worker_heartbeats` |
+| 3 | `worker_health` heartbeat allowlist and health map | `record_worker_heartbeat(..., plane="schedule")` raises `ValueError` and `worker_plane_health(..., plane_name="schedule")` raises `ValueError` (in-memory: both validate before any statement; a principal identifier is passed, the connection is a `MagicMock` that must see no call) |
+| 4 | `ApplicationService` worker-plane fallback tuple and the `SqlAlchemyUnitOfWork` worker-health read | AST of `src/my_pa/application/service.py` and `src/my_pa/infrastructure/persistence/unit_of_work.py`: no `"schedule"` string literal inside the `("capture", "enrollment")` plane tuples |
+
+**WP-03's revision is additive only:** a later revision on top of this one, restating the
+audit and heartbeat CHECKs from byte-copied BEFORE texts; it never edits this revision.
+Nothing in WP-01 depends on that revision existing (D-03).
 
 ### 3.4 Support uniques on live tables
 
@@ -164,11 +185,19 @@ WP-03 inverts it. WP-03's revision widens the heartbeat CHECK together with the 
 | `knowledge.enrollments` | `an_enrollment_is_identified_within_its_principal` | `(enrollment_id, principal_id)` | `enrollment_id` is the single-column PK, so every composite is distinct | one row per accepted enrollment (operator-scale; unmeasured in production — U-01) |
 | `knowledge.source_object_versions` | `a_source_version_is_identified_with_its_object` | `(version_id, source_object_id)` | `version_id` is the single-column PK | one row per observed source version (unmeasured — U-01) |
 
-Mechanics (D-05), both inside the revision transaction (`transaction_per_migration=True` in
-`migrations/env.py`):
+Mechanics (D-05). Everything runs inside the one revision transaction
+(`transaction_per_migration=True` in `migrations/env.py`), and **PostgreSQL holds every lock
+until that transaction commits**. The live-table work is therefore the **last** thing
+`upgrade()` does (section 6, R6-F02): every CPM table, index, function and trigger already
+exists, so the window in which live tables are locked is only steps 2–5 below plus commit.
 
-1. `SET LOCAL lock_timeout = '10s'` — a busy table aborts the revision cleanly instead of
-   queueing every later reader behind an `ACCESS EXCLUSIVE` request.
+1. `SET LOCAL lock_timeout = '10s'` as the first statement of `upgrade()` (and of
+   `downgrade()`). `SET LOCAL` is transaction-scoped: it does not survive the revision
+   transaction (tested). A lock not obtained within 10 s aborts the whole revision with
+   SQLSTATE `55P03` (`lock_not_available`) and rolls back everything, leaving the database at
+   `023f8f7eb499` (tested). No `statement_timeout` is set: `migrations/env.py` builds the
+   migration engine with `statement_timeout_ms=None` on purpose, and an index build must not
+   be killed halfway.
 2. **Catalog preflight** (no row scan): a `DO` block raises `restrict_violation` with
    `'cpm workbench preflight: % no longer has its single-column primary key %'` unless
    `pg_constraint` holds a `contype = 'p'` constraint on `knowledge.enrollments` whose
@@ -176,17 +205,25 @@ Mechanics (D-05), both inside the revision transaction (`transaction_per_migrati
    `knowledge.source_object_versions`. This is the reachable form of "refuse rather than
    guess": if the PK premise holds, duplicates are impossible; if it does not, nothing is
    altered.
-3. `CREATE UNIQUE INDEX <name> ON knowledge.<table> (<cols>)` — `SHARE` lock: reads continue,
-   writes wait for the build (index over a PK-unique leading column; linear in table size).
-4. `ALTER TABLE knowledge.<table> ADD CONSTRAINT <name> UNIQUE USING INDEX <name>` —
-   `ACCESS EXCLUSIVE`, catalog-only, milliseconds.
-5. The new tables' composite FKs to `projects`, `enrollments`, `enrollment_objects`,
-   `source_object_versions` take `SHARE ROW EXCLUSIVE` on the referenced tables; validation
-   scans the new, empty referencing tables only.
+3. `CREATE UNIQUE INDEX <name> ON knowledge.<table> (<cols>)` — takes `SHARE` (writers wait,
+   readers continue) **held until commit**; the build is linear in table size.
+4. `ALTER TABLE knowledge.<table> ADD CONSTRAINT <name> UNIQUE USING INDEX <name>` — takes
+   `ACCESS EXCLUSIVE`, **held until commit**: from here to commit every reader of
+   `enrollments` and `source_object_versions` (gateway source-scope authorization, the
+   enrollment worker, searches) waits. Step 5 and commit are the only work left, so the
+   window is short; it is not "milliseconds" and the operator gate says so (section 9.3).
+5. `ALTER TABLE … ADD CONSTRAINT … FOREIGN KEY` for the 4 FKs into existing tables
+   (`schedule_series → projects`, `schedule_publications → enrollments`,
+   `→ enrollment_objects`, `→ source_object_versions`): each takes `SHARE ROW EXCLUSIVE` on
+   the referenced table, held until commit; validation scans the new, empty referencing
+   tables only.
 
-`CONCURRENTLY` is not used (it cannot run in the revision transaction). Downgrade drops only
-these 2 constraints (`ALTER TABLE … DROP CONSTRAINT`, which drops the index). Section 9.3
-states the deploy-time operator gate.
+An index-only FK target (no `ADD CONSTRAINT … USING INDEX`, avoiding `ACCESS EXCLUSIVE`) is
+**not** adopted: it is unproven on the scratch PostgreSQL 15 and would make the uniques
+invisible as constraints. `CONCURRENTLY` is not used (it cannot run in the revision
+transaction). Downgrade drops only these 2 constraints (`ALTER TABLE … DROP CONSTRAINT`,
+`ACCESS EXCLUSIVE`, which drops the index), under the same `lock_timeout`. Section 9.3 states
+the deploy-time operator gate.
 
 ### 3.5 Principal partition
 
@@ -217,7 +254,7 @@ Conventions for every table below: `text` identifiers with `_is_identifier` CHEC
 `<column>_is_an_opaque_identifier`); every foreign key `ON DELETE RESTRICT`, `MATCH SIMPLE`;
 timestamps `timestamptz NOT NULL DEFAULT now()` unless stated; closed sets are **frozen
 literals in the revision** and `_one_of`/`_each_one_of` from the live enum in `tables.py`
-(sorted literals, identical text); constraint names are ≤ 63 bytes. "SHA" means CHECK
+(literals in **sorted** order in both, identical text — R6-F14; `tables.py` builds the error-code set with `_literals(ErrorCode)`, not the enum-order join `jobs` uses); constraint names are ≤ 63 bytes. "SHA" means CHECK
 `<col> ~ '^[0-9a-f]{64}$'`.
 
 ### 4.1 `schedule_series` (append-only)
@@ -246,7 +283,7 @@ literals in the revision** and `_one_of`/`_each_one_of` from the live enum in `t
 | `enrollment_id` | text | no | — | `enr` |
 | `source_object_id` | text | no | — | `obj` |
 | `source_version_id` | text | no | — | `ver` |
-| `idempotency_key` | text | no | — | `a_schedule_idempotency_key_is_bounded`: `char_length BETWEEN 1 AND 128` |
+| `idempotency_key` | text | no | — | `a_schedule_idempotency_key_is_bounded`: `idempotency_key ~ '^[A-Za-z0-9_-]{8,128}$'` (the `a_project_history_idempotency_key_is_bounded` / `CONSTRAINT_IDEMPOTENCY_KEY_PATTERN` precedent, R6-F07) |
 | `request_digest` | text | no | — | SHA, `a_schedule_request_digest_is_sha256` |
 | `publication_role` | text | no | — | `a_schedule_publication_role_is_known`: `IN ('baseline','reference','update')` |
 | `baseline_kind` | text | yes | — | `a_schedule_baseline_kind_is_known`: `IS NULL OR IN ('contract','working')` |
@@ -323,7 +360,7 @@ DELETE`), `a_schedule_publication_has_its_job` (F4, constraint trigger `AFTER IN
 | `max_attempts` | integer | no | `3` | |
 | `lease_owner` | text | yes | — | |
 | `lease_expires_at` | timestamptz | yes | — | |
-| `last_error_code` | text | yes | — | `a_schedule_job_error_code_is_public`: `IS NULL OR IN ('invalid_request','ambiguous_request','denied','unavailable','unsupported','not_found','conflict','rate_limited','quarantined','cancelled','internal_error')` |
+| `last_error_code` | text | yes | — | `a_schedule_job_error_code_is_public`: `IS NULL OR IN ('ambiguous_request','cancelled','conflict','denied','internal_error','invalid_request','not_found','quarantined','rate_limited','unavailable','unsupported')` |
 | `next_attempt_at` | timestamptz | no | `now()` | |
 | `dead_lettered_at` | timestamptz | yes | — | |
 | `created_at`, `updated_at` | timestamptz | no | `now()` | |
@@ -461,7 +498,7 @@ Uniques, FKs, indexes:
 | rows | parser runs, publications, rows (parent), activities | same run; same Series; same run parent; exact-ID stable link |
 | issues | publications, parser runs, rows | same publication; same run; a row of that run |
 
-All `ON DELETE RESTRICT`. No runtime path deletes from `projects`, `enrollments`,
+The 4 FKs into existing tables (series → `projects`; publications → `enrollments`, `enrollment_objects`, `source_object_versions`) are added by `ALTER TABLE` at the very end of `upgrade()` (section 6, R6-F02); every other FK is inline or, for the accepted run, added right after the run table. All `ON DELETE RESTRICT` (deliberate; U-10). No runtime path deletes from `projects`, `enrollments`,
 `enrollment_objects`, `sources`, `source_objects` or `source_object_versions` (`git grep` of
 `.delete(`/`DELETE FROM` over `src` and `apps` at the basis finds none).
 
@@ -474,13 +511,13 @@ the new database-only constraint and its revision.
 
 ### 4.10 Functions and triggers
 
-All functions are `LANGUAGE plpgsql`, in `knowledge`, take no argument, and raise with
+All trigger functions (F1–F8) are `LANGUAGE plpgsql`, in `knowledge`, take no argument, and raise with
 `ERRCODE = 'restrict_violation'` (transition/immutability) or `'check_violation'` (a
 deferred completeness rule). Messages carry no identifier or content.
 
 | # | Function | Attached as | Rule |
 |---|---|---|---|
-| F1 | `schedule_rows_are_append_only()` | `BEFORE UPDATE OR DELETE FOR EACH ROW` on series, activities, import issues | `'% is append-only', TG_TABLE_NAME` (S1 body) |
+| F1 | `schedule_relations_are_append_only()` | `BEFORE UPDATE OR DELETE FOR EACH ROW` on series, activities, import issues | `'% is append-only', TG_TABLE_NAME` (S1 body) |
 | F2 | `schedule_relations_refuse_truncate()` | `BEFORE TRUNCATE FOR EACH STATEMENT` on all 7 | refuses only when the table holds a row (S1 body) |
 | F3 | `a_schedule_publication_follows_its_lifecycle()` | `BEFORE INSERT OR UPDATE OR DELETE FOR EACH ROW` on publications | see 4.10.1 |
 | F4 | `a_schedule_publication_has_its_job()` | constraint trigger `AFTER INSERT`, deferred, on publications | at commit `EXISTS (SELECT 1 FROM schedule_jobs WHERE publication_id = NEW.publication_id AND principal_id = NEW.principal_id)`, else `check_violation` (D-12) |
@@ -488,6 +525,12 @@ deferred completeness rule). Messages carry no identifier or content.
 | F6 | `a_schedule_parser_run_follows_its_lifecycle()` | `BEFORE INSERT OR UPDATE OR DELETE FOR EACH ROW` on parser runs | see 4.10.2 |
 | F7 | `a_schedule_row_changes_only_by_linking()` | `BEFORE INSERT OR UPDATE OR DELETE FOR EACH ROW` on rows | see 4.10.3 |
 | F8 | `a_schedule_issue_is_recorded_while_processing()` | `BEFORE INSERT FOR EACH ROW` on import issues | publication `status = 'processing'`; when `parser_run_id` is set, that run `status = 'running'` |
+| F9 | `schedule_run_outcome(run_id text) RETURNS text` | not a trigger: `LANGUAGE sql STABLE`, called by F3, F6 and the repository | the frozen S5a outcome ladder over the run's stored issues and rows (section 4.10.4) |
+
+Triggers are created with the default `ENABLE` (origin) mode, as every lineage trigger, so
+`session_replication_role = replica` bypasses them; `ENABLE ALWAYS` is **not** adopted (the
+lineage test harnesses seed under replica, and the owner can disable any trigger anyway —
+U-06 stands; R6-F14 item 5 declined).
 
 #### 4.10.1 F3 — publication lifecycle
 
@@ -510,6 +553,8 @@ deferred completeness rule). Messages carry no identifier or content.
 | `processing → failed` | `completed_at`, `issue_count`; `document_*` unchanged if already set |
 
   Any other pair (including `queued → terminal` and a same-status `queued` update) is refused.
+- **No running run at terminal (R6-F03):** every transition to a terminal status is refused
+  while any `schedule_parser_runs` row of this publication has `status = 'running'`.
 - **Terminal verification** on `processing → complete|partial|review_required` (reads only):
   the accepted run (FK proves it belongs to this publication) has `status = 'parsed'` and
   `document_sha256 = NEW.document_sha256`; `NEW.page_count = run.page_count`;
@@ -517,6 +562,9 @@ deferred completeness rule). Messages carry no identifier or content.
   `NEW.activity_count = count(rows of the run with row_type IN ('activity','milestone'))`;
   `NEW.ambiguous_row_count = count(rows with row_type = 'ambiguous')`;
   `NEW.issue_count = run.issue_count = count(issues with parser_run_id = run)`;
+  **`NEW.status = knowledge.schedule_run_outcome(NEW.accepted_parser_run_id)`** (R6-F01: the
+  terminal status is the issue-derived outcome, never the caller's choice; a run whose
+  derived outcome is `failed` cannot be accepted at all);
   for `complete|partial`: **no** activity/milestone row of the run has
   `schedule_activity_id IS NULL`; for `review_required`: **no** row of the run has
   `schedule_activity_id IS NOT NULL`.
@@ -528,12 +576,33 @@ deferred completeness rule). Messages carry no identifier or content.
 - **INSERT:** `status = 'running'`; the publication has `status = 'processing'` and
   `document_sha256 = NEW.document_sha256` (bytes are pinned before parsing).
 - **DELETE:** refused.
-- **UPDATE:** refused when `OLD.status <> 'running'`; `NEW.status` must differ from
+- **UPDATE:** refused when `OLD.status <> 'running'`; refused unless the publication has
+  `status = 'processing'` (R6-F03: no run changes under a terminal publication); `NEW.status` must differ from
   `OLD.status` (`running → parsed | failed` only); every column except `status`,
   `completed_at`, the 4 counts, `parse_result_sha256` and `failure_code` is unchanged.
   `running → parsed` additionally requires `NEW.row_count = count(rows of the run)`,
   `NEW.issue_count = count(issues of the run)`, `NEW.warning_count = count(issues of the run
-  with severity 'warning')`.
+  with severity 'warning')`, and **no issue of the run carries a failed-ladder code**
+  (section 4.10.4; R6-F01): a FAILED parse ends only through `fail_publication`.
+
+#### 4.10.4 F9 — the frozen outcome ladder (S5a `derive_outcome`)
+
+The revision freezes the S5a §5.13 ladder as literal sets (sorted), and
+`knowledge.schedule_run_outcome(run_id)` returns, first match wins:
+
+| # | Condition over the run's `schedule_import_issues.code` and `schedule_rows.row_type` | Result |
+|---|---|---|
+| 1 | any code in `('bounds_exceeded','corrupt_pdf','encrypted_pdf','image_only_pdf','parser_exception','processing_budget_exceeded','source_too_large','unsupported_layout','unsupported_media_type')` | `'failed'` |
+| 2 | any code in `('activity_like_row_missing_id','duplicate_activity_id','expected_data_date_mismatch','header_signature_mismatch','page_metadata_mismatch','row_wrap_unsupported')`, or any row with `row_type = 'ambiguous'` | `'review_required'` |
+| 3 | any code in `('ambiguous_cell','hierarchy_ambiguous','invalid_date','invalid_duration','overlapping_cell_text')` | `'partial'` |
+| 4 | otherwise (`header_od_occluded`, `duplicate_text_object_collapsed` do not downgrade) | `'complete'` |
+
+`source_version_changed` is in no set: it is never a run issue (S5a raises on it; F8 lets it
+in only as a run-less issue). The 3 sets plus the 2 warnings plus `source_version_changed`
+partition the 23 codes exactly; a FAST test asserts the partition against
+`model._FAILED_CODES`, `_REVIEW_CODES`, `_PARTIAL_CODES` and `ISSUE_SEVERITY`, and a database
+parity test asserts `schedule_run_outcome` equals `derive_outcome` for every single code and
+for the ambiguous-row case (`test_sql_outcome_ladder_equals_derive_outcome`).
 
 #### 4.10.3 F7 — rows: immutable content, set-once link
 
@@ -554,9 +623,15 @@ The revision executes **no `GRANT` and no `REVOKE`** and does not call
 runs the migration, exactly as every S1–S3.1 lineage table. Roles: the migrating/application
 role (owner) holds owner privileges; **`my_pa_mcp_ro`, `my_pa_mcp_rw` and `PUBLIC` hold
 none**; the Record Event `my_pa_owner`/`my_pa_migrator`/`my_pa_runtime` roles are not
-referenced. Tested by section 8.1 (static) and 8.2 (catalog: no `information_schema.role_table_grants`
-row for any of the 7 tables whose grantee is not the owner). Production default privileges
-are an operator gate (section 9.3).
+referenced. Tested (R6-F11) statically (no `GRANT`/`REVOKE`/`mcp_object_grants` in the
+revision) and in the catalog after empty→head: `pg_class.relacl IS NULL` for all 7 tables;
+on the scratch cluster the test creates `my_pa_mcp_ro`/`my_pa_mcp_rw` as `NOLOGIN` roles if
+absent and asserts `has_table_privilege(<role>, 'knowledge.<table>',
+'SELECT,INSERT,UPDATE,DELETE,TRUNCATE')` is false for `PUBLIC`, both roles and all 7 tables;
+`relacl` of `knowledge.enrollments` and `knowledge.source_object_versions` is byte-identical
+before upgrade, after upgrade and after downgrade (`test_no_grant_beyond_the_owner`,
+`test_live_table_acls_are_unchanged`). Production default privileges and runtime-role reach
+are a blocking operator gate (section 9.3).
 
 ---
 
@@ -580,7 +655,7 @@ Reused unchanged from S5a: `ScheduleRowType`, `ScheduleCellState`, `ScheduleIssu
 `MAX_PUBLISHED_ACTIVITY_ID_CHARACTERS = 256`, `MAX_ACTIVITY_NAME_CHARACTERS = 2000`,
 `MAX_HIERARCHY_LABEL_CHARACTERS = 2000`, `MAX_CELL_EVIDENCE_BYTES = 16384`,
 `MAX_SCHEDULE_SOURCE_BYTES = 16777216`, `MAX_SCHEDULE_BATCH = 1000`,
-`MAX_SCHEDULE_IDEMPOTENCY_KEY_CHARACTERS = 128`, `SCHEDULE_MEDIA_TYPE = "application/pdf"`.
+`MAX_SCHEDULE_IDEMPOTENCY_KEY_CHARACTERS = 128`, `SCHEDULE_IDEMPOTENCY_KEY_PATTERN = re.compile(r"\A[A-Za-z0-9_-]{8,128}\Z")` (R6-F07), `SCHEDULE_MEDIA_TYPE = "application/pdf"`.
 
 ### 5.2 Records (frozen slots dataclasses, `__post_init__` invariants, fixed `ValueError` messages, IDs via `validate_identifier`)
 
@@ -588,7 +663,7 @@ Reused unchanged from S5a: `ScheduleRowType`, `ScheduleCellState`, `ScheduleIssu
 |---|---|
 | `ScheduleSeriesName` | `name: str`, `key: str` (built only by `normalize_series_name`) |
 | `ScheduleSeries` | `series_id`, `principal_id`, `project_id`, `name`, `name_key`, `created_at: datetime` |
-| `ScheduleImportRequest` | `project_id`, `series_id: str \| None`, `series_name: ScheduleSeriesName \| None` (exactly one set), `enrollment_id`, `source_object_id`, `source_version_id`, `publication_role`, `baseline_kind: ScheduleBaselineKind \| None` (set iff `BASELINE`), `expected_data_date: date \| None`, `supersedes_publication_id: str \| None`, `idempotency_key: str` (1..128) |
+| `ScheduleImportRequest` | `project_id`, `series_id: str \| None`, `series_name: ScheduleSeriesName \| None` (exactly one set), `enrollment_id`, `source_object_id`, `source_version_id`, `publication_role`, `baseline_kind: ScheduleBaselineKind \| None` (set iff `BASELINE`), `expected_data_date: date \| None`, `supersedes_publication_id: str \| None`, `idempotency_key: str` (matches `SCHEDULE_IDEMPOTENCY_KEY_PATTERN`) |
 | `SchedulePublication` | every section 4.2 column, typed (`status: SchedulePublicationStatus`, roles as enums, counts `int \| None`) |
 | `ScheduleParserIdentity` | `parser_name`, `parser_version`, `profile_id`, `profile_version: int`, `pypdfium2_version`, `pdfium_version` (from `ScheduleParseResult` + `ScheduleParseEngine`) |
 | `ScheduleParserRun` | every section 4.5 column, typed |
@@ -597,10 +672,10 @@ Reused unchanged from S5a: `ScheduleRowType`, `ScheduleCellState`, `ScheduleIssu
 | `ScheduleImportIssue` | `issue_id`, `publication_id`, `parser_run_id: str \| None`, `issue: ScheduleParseIssue` |
 | `ScheduleLease` | `operation_id`, `owner`, `attempt: int` (from `LeasedJob`) |
 | `ScheduleAdmission` | `series: ScheduleSeries`, `publication: SchedulePublication`, `operation_id: str`, `outcome: ScheduleAdmissionOutcome`, `series_created: bool` |
-| `SchedulePlan` | `publication: SchedulePublication`, `max_fetch_bytes: int` (= `min(enrollments.max_bytes, 16777216)`), `attempt: int` |
+| `SchedulePlan` | `publication: SchedulePublication`, `attempt: int`, `terminal: bool`, `max_fetch_bytes: int \| None` (= `min(enrollments.max_bytes, 16777216)` when `terminal` is false, `None` when true) — R6-F05 |
 | `ScheduleParserRunStart` | `run: ScheduleParserRun`, `reused: bool` |
 | `ScheduleCanonicalizationProgress` | `linked: int`, `created: int`, `remaining: int` |
-| `ScheduleFinalization` | `status: SchedulePublicationStatus` (one of `COMPLETE`, `PARTIAL`, `REVIEW_REQUIRED`), `accepted_parser_run_id`, `published_schedule_title`, `data_date`, `run_date` |
+| `ScheduleFinalization` | `accepted_parser_run_id`, `published_schedule_title`, `data_date`, `run_date` — **no status field**: `finalize_publication` derives the status (R6-F01) |
 
 ### 5.3 Pure functions
 
@@ -608,7 +683,7 @@ Reused unchanged from S5a: `ScheduleRowType`, `ScheduleCellState`, `ScheduleIssu
 |---|---|---|
 | `normalize_series_name(raw: str) -> ScheduleSeriesName` | `model.py` | R2 §10.1: NFC; every run of `str.isspace()` characters → one ASCII space; strip; reject (raise `InvalidScheduleSeriesNameError(ValueError)`) when any character's `unicodedata.category` is `Cc`, `Cf`, `Cs`, `Co` or `Cn`, or length not in 1..200; `key = unicodedata.normalize("NFC", name.casefold())` |
 | `schedule_import_request_digest(principal_id: str, request: ScheduleImportRequest) -> str` | `canonical.py` | `hashlib.sha256(b"cpm-schedule-import-v1\n" + canonical_json_bytes({"principal_id": principal_id, "request": {...}})).hexdigest()`, where `request` has exactly the keys `project_id`, `series_id`, `series_name_key`, `enrollment_id`, `source_object_id`, `source_version_id`, `publication_role`, `baseline_kind`, `expected_data_date` (ISO `YYYY-MM-DD`), `supersedes_publication_id`, absent values `null`; `idempotency_key` is excluded; `canonical_json_bytes` is the S5a encoder (sorted keys, compact, ASCII, no NaN) — D-14 |
-| `validate_row_for_persistence(row: ParsedScheduleRow) -> None` | `model.py` | raises `ScheduleRowBoundsError(ValueError)` when `len(cell_evidence_bytes(row)) > 16384`, the published ID exceeds 256, the name exceeds 2000, any hierarchy label exceeds 2000 or is empty, or the path exceeds 32; the repository calls it for every row before any insert of a batch (lives in `canonical.py` if the import order requires) |
+| `validate_row_for_persistence(row: ParsedScheduleRow) -> None` | `model.py` | raises `ScheduleRowBoundsError(ValueError)` when `len(cell_evidence_bytes(row)) > 16384`, the published ID exceeds 256, the name exceeds 2000, any hierarchy label exceeds 2000 or is empty, or the path exceeds 32; the repository calls it for every row before any insert of a batch (lives in `canonical.py` if the import order requires). **Failure path (ruling (c)):** `insert_rows` raises `ScheduleRowBoundsError` and writes nothing; the attempt (WP-03's handler; WP-01's test plays it) then calls `fail_publication(BOUNDS_EXCEEDED, parser_run_id=<the running run>)` — a deterministic `failed`, never a transient retry (`test_row_bounds_violation_fails_the_publication`). The per-label bound (non-empty, ≤ 2000) is **domain-only**: the database checks only `cardinality(hierarchy_path) <= 32`, since a CHECK cannot iterate array elements without a helper function |
 | `effective_publication_status(status: SchedulePublicationStatus, *, job_failed: bool) -> SchedulePublicationStatus` | `model.py` | `FAILED` when `status in {QUEUED, PROCESSING}` and `job_failed`; else `status` (R2 §10.6, no write-on-read) |
 
 The database half of §10.1 is the section 4.1 CHECK (length, trim, no double space, no ASCII/C1
@@ -679,15 +754,15 @@ interval '1 second'` (permitted by F5 on a running row).
 | Method | Order inside the one transaction | Outcomes |
 |---|---|---|
 | `admit_publication` | (1) partitioned read of a publication by `(principal_id, idempotency_key)`: found → digest equal ⇒ `REPLAYED` (series, publication, its job's `operation_id`), else raise `IDEMPOTENCY_KEY_CONFLICT`; (2) project owned (`_mine(projects)`) else `PROJECT_NOT_FOUND`; (3) enrollment owned else `ENROLLMENT_NOT_FOUND`; `(enrollment_id, source_object_id)` in `enrollment_objects` (joined) else `SOURCE_OBJECT_NOT_ENROLLED`; `(source_version_id, source_object_id)` in `source_object_versions` else `SOURCE_VERSION_NOT_FOUND`; `media_type = 'application/pdf'` else `UNSUPPORTED_MEDIA_TYPE`; `'application/pdf' = ANY(enrollments.media_types)` else `MEDIA_TYPE_NOT_ENROLLED`; `size_bytes IS NULL OR <= 16777216` else `SOURCE_TOO_LARGE`; (4) series: by `series_id` (partitioned, same project) else `SERIES_NOT_FOUND`, or by `(project_id, name_key)` — absent ⇒ create later; (5) existing series: publication by `(principal_id, series_id, source_version_id)` → same `publication_role`, `baseline_kind`, `expected_data_date`, `supersedes_publication_id` ⇒ `REPLAYED`, else `SOURCE_VERSION_CONFLICT`; (6) `supersedes_publication_id`: `SELECT … FOR UPDATE` partitioned in the same project/series else `SUPERSEDED_PUBLICATION_NOT_FOUND`; effective status terminal else `…_NOT_TERMINAL`; different `source_version_id` else `…_SAME_SOURCE_VERSION`; no publication already supersedes it else `…_HAS_SUCCESSOR`; (7) writes: series `INSERT … ON CONFLICT (principal_id, project_id, name_key) DO NOTHING RETURNING`, re-select on a lost race; publication `INSERT … ON CONFLICT DO NOTHING RETURNING`; no row ⇒ re-run (1), (5), (6) and classify (replay or the matching conflict); inserted ⇒ `enqueue_job(connection, publication_id, plane=SCHEDULE_JOBS)` | `ScheduleAdmission(CREATED \| REPLAYED)`; every rejection is `ScheduleAdmissionRejectedError(reason)` raised, so the UoW rolls back any series row of step 7 (D-16). A cross-Principal Project/Series/enrollment/publication is the matching `*_NOT_FOUND`, indistinguishable from absent |
-| `begin_processing` | lease; publication `FOR UPDATE` (partitioned); `queued` → `processing` (`processing_started_at = now()`); `processing` unchanged; terminal → `ScheduleIntegrityError("publication_terminal")`; read `enrollments.max_bytes` | `SchedulePlan` |
+| `begin_processing` | lease; publication `FOR UPDATE` (partitioned); `queued` → `processing` (`processing_started_at = now()`); `processing` unchanged; **terminal → `SchedulePlan(terminal=True, max_fetch_bytes=None)` and no write** (R6-F05: a reclaimed attempt after a committed terminal outcome lets the handler return normally so the generic job completes, R2 §22/§24); otherwise read `enrollments.max_bytes` | `SchedulePlan` |
 | `pin_document` | lease; publication `FOR UPDATE`; status `processing`; NULL → set; already set and equal ⇒ no-op; different ⇒ `ScheduleIntegrityError("document_changed")` | — |
 | `start_parser_run` | lease; publication must be `processing` with a pinned document; existing `parsed` run with the exact identity and document digest ⇒ return it (`reused=True`); existing `running` run of `lease.attempt` ⇒ return it; every `running` run of an earlier attempt → `failed` (`failure_code` NULL, `completed_at = now()`); insert a `running` run (`attempt_number = lease.attempt`, `operation_id = lease.operation_id`) | `ScheduleParserRunStart` |
-| `insert_rows` | `1 <= len(rows) <= 1000` else `ValueError`; `validate_row_for_persistence` on every row first; lease; run `running`; ordinals contiguous from `max(row_ordinal)+1` of the run; issue `srow` IDs; map `parent_row_ordinal` → `parent_row_id` from the same run (this batch or earlier); `cell_evidence = cell_evidence_object(row)`; `bbox_*_mpt` from `row.box`; one multi-row insert | rows inserted |
+| `insert_rows` | `1 <= len(rows) <= 1000` else `ValueError`; `validate_row_for_persistence` on every row first; lease; run `running`; **`row.row_ordinal` is stored verbatim** (R6-F04): the batch's ordinals must be strictly consecutive and its first must equal `coalesce(max(row_ordinal), 0) + 1` of the run, else `ScheduleIntegrityError("row_ordinal_gap")` and nothing is written; issue `srow` IDs; map `parent_row_ordinal` → `parent_row_id` from the same run (this batch or earlier); `cell_evidence = cell_evidence_object(row)`; `bbox_*_mpt` from `row.box`; one multi-row insert. Issues naming a `row_ordinal` are inserted only after that row (the issue→row FK is immediate). No write batch is retried inside one attempt: any failure releases the attempt, and F6's count equalities fail a duplicated issue batch closed (intended backstop) | rows inserted |
 | `insert_issues` | `0 < len(issues) <= 1000`; lease; `parser_run_id` (if set) is a `running` run of the publication; severity from the record (DB re-checks) | issues inserted |
 | `finish_parser_run` | lease; exactly one of `parsed` (with digest) / `failure_code` path; `parsed`: counts from `ScheduleParseCounts` (`rows`, `pages`, `issues`, `warnings`); F6 verifies against stored rows/issues | `ScheduleParserRun` |
-| `canonicalize_batch` | lease; run `parsed`, publication `processing`; identity gate re-checked in SQL: no `ambiguous` row in the run and no duplicate `published_activity_id` among its activity/milestone rows, else `ScheduleIntegrityError("identity_gate")`; next ≤ `limit` unlinked activity/milestone rows in `row_ordinal` order; `INSERT INTO schedule_activities … ON CONFLICT (principal_id, series_id, published_activity_id) DO NOTHING`; select their IDs; `UPDATE schedule_rows SET schedule_activity_id = … WHERE schedule_activity_id IS NULL` | progress (re-entrant after lease loss: already-linked rows are skipped) |
-| `finalize_publication` | lease; publication `FOR UPDATE`; accepted run `parsed`; counts derived by SQL from the run's rows/issues; `COMPLETE`/`PARTIAL` require zero unlinked ID-bearing rows, `REVIEW_REQUIRED` zero linked rows, else `ScheduleIntegrityError("incomplete_canonicalization")`; one UPDATE to terminal (F3 re-verifies) | `SchedulePublication` |
-| `fail_publication` | lease; publication `FOR UPDATE`, `processing`; `ISSUE_SEVERITY[code]` must be `ERROR`; when `parser_run_id` is given that run must still be `running` (F8): insert the issue of `code` unless an identical `(code, parser_run_id)` issue exists, then set the run `failed` with `failure_code = code`; without a run (for example `source_version_changed`) insert the run-less issue; then status `failed`, `issue_count` = this publication's issue rows, `completed_at = now()` — one transaction | `SchedulePublication` |
+| `canonicalize_batch` | lease; run `parsed`, publication `processing`; **outcome gate (R6-F01): `schedule_run_outcome(run) IN ('complete','partial')`**, plus no duplicate `published_activity_id` among the run's activity/milestone rows, else `ScheduleIntegrityError("identity_gate")`; next ≤ `limit` unlinked activity/milestone rows in `row_ordinal` order; `INSERT INTO schedule_activities … ON CONFLICT (principal_id, series_id, published_activity_id) DO NOTHING` with the values **sorted by `published_activity_id`** so concurrent canonicalizations of 2 publications of one Series take index locks in one order (R6-F12; a `40P01` deadlock is still a transient attempt failure, and re-entry is safe); select their IDs; `UPDATE schedule_rows SET schedule_activity_id = … WHERE schedule_activity_id IS NULL` | progress (re-entrant after lease loss: already-linked rows are skipped) |
+| `finalize_publication` | lease; publication `FOR UPDATE`; accepted run `parsed`; **status = `schedule_run_outcome(run)`** (R6-F01; `failed` ⇒ `ScheduleIntegrityError("status_mismatch")`); counts derived by SQL from the run's rows/issues; `COMPLETE`/`PARTIAL` require zero unlinked ID-bearing rows, `REVIEW_REQUIRED` zero linked rows, else `ScheduleIntegrityError("incomplete_canonicalization")`; **every other `running` run of the publication → `failed` (`failure_code` NULL, `completed_at = now()`)** (R6-F03); one UPDATE to terminal (F3 re-verifies all of it) | `SchedulePublication` |
+| `fail_publication` | lease; publication `FOR UPDATE`, `processing`; `ISSUE_SEVERITY[code]` must be `ERROR`; when `parser_run_id` is given that run must still be `running` (F8): insert the issue of `code` unless an issue with the same `code` and `parser_run_id IS NOT DISTINCT FROM` the given run exists (R6-F14), then set the run `failed` with `failure_code = code`; without a run (for example `source_version_changed`) insert the run-less issue under the same de-duplication; **then every remaining `running` run of the publication → `failed` (`failure_code` NULL)** (R6-F03); then status `failed`, `issue_count` = this publication's issue rows, `completed_at = now()` — one transaction | `SchedulePublication` |
 | `get_effective_status` | partitioned publication + `job_for(…, plane=SCHEDULE_JOBS)` (which derives `failed` for an abandoned final attempt); `effective_publication_status` | status or `None` |
 
 ### 5.6 `SqlAlchemyScheduleUnitOfWork`
@@ -729,31 +804,48 @@ the engine default (`READ COMMITTED`); races are resolved by the uniques plus
   publication statuses, 3 run statuses, 3 roles, 2 baseline kinds, 2 severities, 4 job
   states, 11 error codes, written out; none derived from an enum or `MetaData`.
 
-**upgrade()** in order:
+**upgrade()** in order (R6-F02: every CPM object first, the live-table work last, so live
+tables are locked only from step 6 to commit):
 
-1. `SET LOCAL lock_timeout = '10s'`.
-2. PK catalog preflight (section 3.4 step 2).
-3. The 2 support uniques (`CREATE UNIQUE INDEX`, then `ADD CONSTRAINT … USING INDEX`).
-4. `CREATE TABLE` in order: `schedule_series`, `schedule_publications` (without the
-   accepted-run FK), `schedule_activities`, `schedule_jobs`, `schedule_parser_runs`,
-   `schedule_rows`, `schedule_import_issues`; each followed by its `CREATE [UNIQUE] INDEX`
-   statements.
-5. `ALTER TABLE knowledge.schedule_publications ADD CONSTRAINT
+1. `SET LOCAL lock_timeout = '10s'` (transaction-local; section 3.4 step 1).
+2. `CREATE TABLE` in order: `schedule_series`, `schedule_publications`,
+   `schedule_activities`, `schedule_jobs`, `schedule_parser_runs`, `schedule_rows`,
+   `schedule_import_issues`, each followed by its `CREATE [UNIQUE] INDEX` statements. These
+   `CREATE TABLE` statements carry **no FK into an existing table** (no reference to
+   `projects`, `enrollments`, `enrollment_objects` or `source_object_versions`) and no
+   accepted-run FK; every FK among the 7 new tables is inline.
+3. `ALTER TABLE knowledge.schedule_publications ADD CONSTRAINT
    a_schedule_publication_accepts_one_of_its_runs FOREIGN KEY …`.
-6. `CREATE FUNCTION` F1–F8.
-7. `CREATE TRIGGER` / `CREATE CONSTRAINT TRIGGER` (section 4.10), from a `_triggers()` tuple.
+4. `CREATE FUNCTION` F1–F9.
+5. `CREATE TRIGGER` / `CREATE CONSTRAINT TRIGGER` (section 4.10), from a `_triggers()` tuple.
+6. PK catalog preflight (section 3.4 step 2).
+7. The 2 support uniques: `CREATE UNIQUE INDEX` ×2, then `ADD CONSTRAINT … USING INDEX` ×2.
+8. The 4 FKs into existing tables by `ALTER TABLE … ADD CONSTRAINT`:
+   `a_schedule_series_names_a_project_of_its_principal`,
+   `a_schedule_publication_names_an_enrollment_of_its_principal`,
+   `a_schedule_publication_names_an_enrolled_object`,
+   `a_schedule_publication_names_a_version_of_its_object`.
+
+`tables.py` declares every FK on its table as usual (only the accepted-run FK needs
+`use_alter=True`); the ordering above is the revision's, and the
+`test_frozen_ddl_names_every_declared_constraint` name parity still holds.
 
 **downgrade()** in order:
 
-1. Refusal `DO` block: `IF EXISTS (SELECT 1 FROM knowledge.schedule_series) OR EXISTS (…
+1. `SET LOCAL lock_timeout = '10s'` (R6-F02, ruling (b): `DROP CONSTRAINT` on a live table
+   takes `ACCESS EXCLUSIVE`).
+2. Refusal `DO` block: `IF EXISTS (SELECT 1 FROM knowledge.schedule_series) OR EXISTS (…
    schedule_publications) OR … (all 7) THEN RAISE EXCEPTION 'cpm workbench rows exist;
    refusing to downgrade <rev>' USING ERRCODE = 'restrict_violation'`.
-2. `DROP TRIGGER` in reverse; `DROP FUNCTION knowledge.<name>()` in reverse.
-3. Drop `a_schedule_publication_accepts_one_of_its_runs`.
-4. `DROP TABLE … RESTRICT` in reverse creation order.
-5. `ALTER TABLE knowledge.source_object_versions DROP CONSTRAINT
+3. `DROP TRIGGER` in reverse; `DROP FUNCTION knowledge.<name>(<signature>)` in reverse
+   (`(text)` for F9, `()` for the rest).
+4. Drop `a_schedule_publication_accepts_one_of_its_runs`.
+5. `DROP TABLE … RESTRICT` in reverse creation order (this removes the 4 FKs into existing
+   tables with their tables).
+6. `ALTER TABLE knowledge.source_object_versions DROP CONSTRAINT
    a_source_version_is_identified_with_its_object`; same for
-   `an_enrollment_is_identified_within_its_principal` on `enrollments`.
+   `an_enrollment_is_identified_within_its_principal` on `enrollments` — last, so live
+   tables are locked only from step 5 to commit.
 
 No audit or heartbeat vocabulary is restated in either direction.
 
@@ -779,7 +871,7 @@ I6-A lands first; I6-B starts from I6-A's head. Neither edits `apps/worker.py`,
 | Module | Tier | Content |
 |---|---|---|
 | `tests/unit/test_schedule_foundation_domain.py` | FAST | enums, records, `normalize_series_name`, digest golden vectors, `validate_row_for_persistence`, `effective_publication_status` |
-| `tests/schema/test_cpm_workbench_migration.py` | FAST (static) + `migration_empty_to_head` + `migration_edge` (filename default) | graph, freeze, offline SQL, empty→head, predecessor→head, preflight, downgrade |
+| `tests/schema/test_cpm_workbench_migration.py` | static tests: no `database` marker, so they run in FAST **and** carry the auto-applied `migration_edge` marker (`tests/db/fixtures.py`, `_migration.py` filename rule — R6-F14); database tests: explicit `migration_empty_to_head`, otherwise the `migration_edge` default | graph, freeze, offline SQL, empty→head, predecessor→head, preflight, downgrade |
 | `tests/database/test_cpm_workbench_schema_guards.py` | `database` (`database_clone` default) | every CHECK/FK/unique/trigger at head |
 | `tests/database/test_cpm_workbench_persistence.py` | `database` (`database_clone`) | repository/UoW, idempotency, lease, partition |
 | `tests/architecture/test_cpm_workbench_foundation_scope.py` | FAST | `schedule` plane not runnable; no `GRANT`; ports not on `UnitOfWork` |
@@ -792,22 +884,28 @@ I6-A lands first; I6-B starts from I6-A's head. Neither edits `apps/worker.py`,
 | §43.2 | domain: `test_new_enums_have_exact_members_and_order`; migration: `test_frozen_literals_equal_the_domain_enums` |
 | §10.1 | domain: `test_series_name_normalization_vectors`, `test_series_name_rejects_each_category`; guards: `test_series_name_check_refuses_untrimmed_doubled_and_control` |
 | §9.2, §9.3, AC-004 | persistence: `test_admission_refuses_each_unproven_binding` (parametrized over the 8 binding refusals), `test_cross_principal_bindings_are_not_found`; guards: `test_publication_cannot_cross_enrollment_object_or_version` |
-| §10.2, §23, AC-025 | persistence: `test_same_key_same_request_replays`, `test_same_key_different_request_conflicts`, `test_same_version_same_series_replays_when_metadata_agrees`, `test_same_version_same_series_conflicts_when_metadata_differs`, `test_same_version_other_series_is_a_new_publication`, `test_rejected_admission_writes_nothing` |
+| §10.2, §23, AC-025 | persistence: `test_same_key_same_request_replays`, `test_same_key_different_request_conflicts`, `test_same_version_same_series_replays_when_metadata_agrees`, `test_same_version_same_series_conflicts_when_metadata_differs`, `test_same_version_other_series_is_a_new_publication`, `test_rejected_admission_writes_nothing`, `test_failed_version_cannot_be_reimported_into_its_series` (R6-F06: pins U-09 — a failed, effective-failed or review-required publication of version V in Series S makes every later admission of V into S replay or conflict) |
 | §10.3, AC-027 | guards: `test_baseline_kind_is_required_exactly_for_baseline` |
 | §10.4 | persistence: `test_supersession_rules`; guards: `test_supersession_is_same_series_once_and_not_self` |
+| §21, §24 finalization, R6-F01 | domain: `test_outcome_ladder_sets_partition_the_issue_codes`; guards: `test_sql_outcome_ladder_equals_derive_outcome` (parametrized over all 23 codes + the ambiguous-row case), `test_terminal_status_must_equal_the_derived_outcome`, `test_parsed_run_refuses_a_failed_ladder_code`; persistence: `test_finalize_derives_the_status`, `test_canonicalize_refuses_a_review_or_failed_outcome` |
+| R6-F03 | guards: `test_no_terminal_transition_while_a_run_is_running`, `test_parser_run_cannot_change_under_a_terminal_publication`; persistence: `test_fail_publication_closes_running_runs`, `test_finalize_closes_other_running_runs` |
+| R6-F04/F05 | persistence: `test_row_ordinals_are_stored_verbatim_and_gaps_refused`, `test_begin_processing_on_a_terminal_publication_returns_a_terminal_plan` |
 | §10.6, AC-026 | domain: `test_effective_status_derivation`; persistence: `test_exhausted_job_reads_effective_failed_without_writing` |
 | §16.15, §17.3, AC-021/022 | guards: `test_row_content_is_immutable`, `test_row_link_is_set_once`, `test_row_link_requires_parsed_run_and_processing_publication`, `test_link_binds_exact_id_and_series`; persistence: `test_review_required_publication_links_nothing`, `test_canonicalization_is_resumable_after_lease_loss` |
 | §17.2, AC-023 | guards: `test_four_state_typed_value_matrix` (parametrized OD/RD/Start/Finish × 4 states × value present/absent) |
 | §18.1–18.7, AC-036 | migration: `test_empty_to_head_creates_exactly_the_seven_tables`, `test_frozen_ddl_names_every_declared_constraint`, `test_runtime_metadata_matches_the_revision` |
-| §18.8.1–2 | migration: `test_support_uniques_exist_and_existing_rows_survive`, `test_preflight_refuses_without_the_primary_key` |
+| §18.8.1–2 | migration: `test_support_uniques_exist_and_existing_rows_survive`, `test_preflight_refuses_without_the_primary_key`, `test_live_table_work_is_last_in_the_upgrade` (offline SQL order: no statement naming `enrollments`, `enrollment_objects`, `source_object_versions` or `projects` precedes the last `CREATE TRIGGER`), `test_lock_timeout_is_transaction_local` (a fresh transaction after upgrade and after downgrade reads the server default), `test_a_held_lock_aborts_the_upgrade_cleanly` (another connection holds `ROW EXCLUSIVE` on `knowledge.enrollments` in an open transaction; upgrade fails with SQLSTATE `55P03`; the database is still at `023f8f7eb499` with none of the 7 tables, functions or the 2 uniques) |
+| §4.11, R6-F11 | migration: `test_the_revision_writes_no_row_and_grants_nothing` (static), `test_no_grant_beyond_the_owner` (`relacl IS NULL`; `has_table_privilege` false for `PUBLIC`, `my_pa_mcp_ro`, `my_pa_mcp_rw`), `test_live_table_acls_are_unchanged` |
+| R6-F08 | guards: `test_source_delete_is_refused_while_a_publication_references_it` (`DELETE FROM knowledge.sources` / `source_objects` fail with `foreign_key_violation` while a publication exists; pins U-10) |
 | §19.13, AC-036 | migration: `test_downgrade_refuses_while_any_cpm_row_exists` (parametrized over 7 tables), `test_clean_downgrade_removes_only_cpm_objects_and_reupgrades` |
 | §19.3, §19.14 | migration: `test_the_revision_is_the_single_head_on_023f8f7eb499`, `test_the_revision_imports_no_package_module`, `test_the_revision_writes_no_row_and_grants_nothing` |
 | §20, AC-024 | persistence: `test_row_round_trips_the_parsed_record_field_for_field` |
 | §21, §22 | persistence: `test_fail_publication_records_a_safe_issue_and_terminalizes` |
+| ruling (d), R6-F12 | persistence: `test_orphan_stable_activity_is_reused_not_duplicated` (a canonicalization batch runs, the publication then fails; a later publication of the same Series links the same `schedule_activity_id`), `test_stable_activities_are_inserted_in_published_id_order` |
 | §24, AC-030 | persistence: `test_every_worker_write_refuses_after_lease_loss` (parametrized over the 9 lease methods), `test_row_batch_is_at_most_one_thousand`, `test_finalization_verifies_completeness` |
 | §25, AC-029 (WP-01 part) | scope: `test_schedule_plane_is_not_runnable_before_its_handler`; persistence: `test_admission_enqueues_exactly_one_schedule_job` |
-| §35 | `test_principal_partition_is_reached_through_the_guard.py` (registry); persistence: `test_other_principal_reads_none_and_writes_nothing` |
-| §36 bounds | domain: `test_row_bounds_are_enforced_before_persistence`; guards: `test_cell_evidence_hierarchy_and_warning_bounds` |
+| §35 | `test_principal_partition_is_reached_through_the_guard.py` (registry); persistence: `test_other_principal_reads_none_and_writes_nothing`, `test_schedule_jobs_are_partitioned` (R6-F10: `claim_job(principal_id=<other>, plane=SCHEDULE_JOBS)` returns `None` and `job_for(…, principal_id=<other>, plane=SCHEDULE_JOBS)` returns `None`; extending `tests/security/test_cross_principal_queue_isolation.py` stays with WP-04) |
+| §36 bounds, ruling (c) | domain: `test_row_bounds_are_enforced_before_persistence`; persistence: `test_row_bounds_violation_fails_the_publication`; guards: `test_cell_evidence_hierarchy_and_warning_bounds` |
 
 ### 8.3 Prove-red table (break exactly one guard, show the named test fails for that reason, revert)
 
@@ -849,6 +947,46 @@ I6-A lands first; I6-B starts from I6-A's head. Neither edits `apps/worker.py`,
 | P39 | remove `hold_lease` from one worker method (9 runs) | `test_every_worker_write_refuses_after_lease_loss[<method>]` |
 | P40 | register `schedule` in `apps/worker.py` `_PLANES` | `test_schedule_plane_is_not_runnable_before_its_handler` |
 | P41 | skip `validate_row_for_persistence` | `test_row_bounds_are_enforced_before_persistence` |
+| P42 | F3: drop the `status = schedule_run_outcome(...)` check | `test_terminal_status_must_equal_the_derived_outcome` |
+| P43 | F9: move one code between ladder sets (one run per set) | `test_sql_outcome_ladder_equals_derive_outcome[<code>]` |
+| P44 | F6: drop the failed-ladder-code refusal on `running → parsed` | `test_parsed_run_refuses_a_failed_ladder_code` |
+| P45 | `finalize_publication`: take the status from the caller | `test_finalize_derives_the_status` |
+| P46 | `canonicalize_batch`: drop the outcome gate | `test_canonicalize_refuses_a_review_or_failed_outcome` |
+| P47 | F3: drop the no-running-run-at-terminal check | `test_no_terminal_transition_while_a_run_is_running` |
+| P48 | F6: drop the publication-processing condition on UPDATE | `test_parser_run_cannot_change_under_a_terminal_publication` |
+| P49 | `fail_publication` / `finalize_publication`: skip closing running runs (2 runs) | `test_fail_publication_closes_running_runs` / `test_finalize_closes_other_running_runs` |
+| P50 | F3 INSERT: drop the predecessor-version-differs check | `test_supersession_needs_a_different_source_version` |
+| P51 | F3: allow `document_*` value → other value while processing | `test_pinned_document_is_set_once` |
+| P52 | F3: drop the failed `issue_count` equality, then (separately) the at-least-one-error check (2 runs) | `test_failed_publication_counts_its_issues` / `test_failed_publication_needs_an_error_issue` |
+| P53 | F3: drop the DELETE refusal | `test_publication_is_never_deleted` |
+| P54 | F5: drop the comparison of each identity column (5 runs: `operation_id`, `publication_id`, `principal_id`, `max_attempts`, `created_at`) | `test_job_identity_column_is_immutable[<column>]` |
+| P55 | F5: drop the INSERT shape check; drop the DELETE refusal (2 runs) | `test_job_is_inserted_queued_and_unleased` / `test_job_is_never_deleted` |
+| P56 | F6 INSERT: drop the processing-publication condition; drop the digest equality (2 runs) | `test_parser_run_starts_only_on_a_pinned_processing_publication[<case>]` |
+| P57 | F6: drop the column-immutability comparison | `test_parser_run_identity_is_immutable` |
+| P58 | F6: drop the `issue_count` equality; drop the `warning_count` equality (2 runs) | `test_parsed_run_counts_match_issues[<count>]` |
+| P59 | F7 INSERT: drop `schedule_activity_id IS NULL` | `test_row_is_inserted_unlinked` |
+| P60 | F7 INSERT: drop the parent-ordinal check | `test_parent_row_precedes_its_child` |
+| P61 | F7 UPDATE: drop the run-`parsed` condition | `test_row_link_requires_a_parsed_run` |
+| P62 | F7 UPDATE: allow value → NULL; allow value → same value (2 runs) | `test_row_link_cannot_be_cleared` / `test_row_link_cannot_be_reset` |
+| P63 | F8: drop the run-`running` branch | `test_run_issue_requires_a_running_run` |
+| P64 | drop `a_schedule_series_name_is_unique_within_its_project` | `test_series_name_key_is_unique_within_its_project` |
+| P65 | drop `a_schedule_attempt_starts_one_parser_run` | `test_one_parser_run_per_attempt` |
+| P66 | drop `a_schedule_issue_row_has_its_run` | `test_row_issue_needs_its_run` |
+| P67 | `a_schedule_publication_records_its_progress`: drop one status branch (4 runs: queued, processing, parsed-terminal, failed) | `test_publication_progress_columns_follow_status[<branch>]` (each case violates only its own branch) |
+| P68 | drop the `a_schedule_issue_names_a_row_of_its_run` FK | `test_issue_row_ordinal_names_a_row_of_its_run` |
+| P69 | downgrade: omit one support-unique drop (2 runs) | `test_clean_downgrade_removes_only_cpm_objects_and_reupgrades` |
+| P70 | `SET` instead of `SET LOCAL` for `lock_timeout` | `test_lock_timeout_is_transaction_local` |
+| P71 | remove `lock_timeout` from `upgrade()` | `test_a_held_lock_aborts_the_upgrade_cleanly` (fails by timing out its own bounded wait instead of seeing `55P03`) |
+| P72 | move the support-unique step before the `CREATE TABLE` steps | `test_live_table_work_is_last_in_the_upgrade` |
+| P73 | `GRANT SELECT` on one CPM table to `my_pa_mcp_ro` in the scratch database before the check | `test_no_grant_beyond_the_owner` |
+| P74 | change `RESTRICT` to `CASCADE` on `a_schedule_publication_names_a_version_of_its_object` | `test_source_delete_is_refused_while_a_publication_references_it` |
+| P75 | drop `partition_criterion` from the shared `job_for` (then, separately, from the `claim_job` subquery) — 2 runs | `test_schedule_jobs_are_partitioned` (the existing plane tests also redden; that is expected shared coverage, not redundancy) |
+| P76 | canonicalization inserts in row order instead of published-ID order | `test_stable_activities_are_inserted_in_published_id_order` |
+| P77 | `begin_processing`: raise on terminal instead of returning a terminal plan | `test_begin_processing_on_a_terminal_publication_returns_a_terminal_plan` |
+| P78 | `insert_rows`: assign ordinals instead of storing them | `test_row_ordinals_are_stored_verbatim_and_gaps_refused` |
+| P79 | the four-surface guard: add `"schedule"` to each surface in turn (4 runs) | `test_schedule_plane_is_not_runnable_before_its_handler` (the message names the surface) |
+| P80 | admission: drop the idempotency-key pattern CHECK | `test_idempotency_key_has_the_precedent_shape` |
+| P81 | `fail_publication`: compare `parser_run_id` with `=` (run-less de-duplication) | `test_run_less_failure_issue_is_recorded_once` |
 
 A prove-red that stays green is reported as redundancy, a masked test or an unreachable
 hazard, never as "covered" (for example, a CHECK that a trigger already forces is expected
@@ -896,6 +1034,9 @@ inline password), removed at the end.
 | D-22 | §43.3 `ScheduleChange`, `ScheduleCursor`, `ScheduleApplication`, paged reads | WP-03 | comparison/cursor/read services are WP-03 by §44 |
 | D-23 | §18.2 counts | `activity_count` = activity + milestone rows; `issue_count` = accepted run's issues (failed: all of the publication's) | exact derivation the F3 trigger verifies |
 | D-24 | §42 test module names | section 8.1 names | one module per tier |
+| D-25 | §10.1 `name_key = casefold(name)` | `name_key = NFC(casefold(name))` | `str.casefold` can leave a non-NFC string; re-normalizing makes equal keys byte-equal (R6-F14) |
+| D-26 | §23/§9.1 idempotency key unspecified | `^[A-Za-z0-9_-]{8,128}$` | the repository's project-history and Constraint Management precedent; no free text in a key column (R6-F07) |
+| D-27 | §24 finalization "issue-derived status" (unspecified form) | the S5a ladder frozen as SQL `schedule_run_outcome`; `finalize_publication` derives the status; F3 enforces equality; canonicalization gated on `complete`/`partial` | the caller cannot choose a status the evidence does not support (R6-F01) |
 
 ### 9.2 Residuals and unknowns
 
@@ -903,21 +1044,48 @@ inline password), removed at the end.
 |---|---|---|
 | U-01 | Production row counts of `enrollments` and `source_object_versions` are unknown here (no production access) | operator, before deploy |
 | U-02 | Production default privileges (`ALTER DEFAULT PRIVILEGES`) for the migrating role are unknown; a default grant to an MCP role would extend to the 7 tables | operator, before deploy |
-| U-03 | A Stable Activity created by a canonicalization batch whose publication never finalizes stays (immutable) with no eligible observation; reads derive first-seen from eligible rows, so it is invisible | WP-03 reads |
+| U-03 | A Stable Activity created by a canonicalization batch whose publication never finalizes stays (immutable) with no eligible observation. Ruling (d): kept, not prevented (preventing would break §24's bounded batches). **WP-03 reads must treat a Stable Activity as visible only when it has a linked row in a `complete` or `partial` publication, and must never present `schedule_activities.created_at` as first-seen.** A later eligible publication of the same Series re-uses it through `ON CONFLICT` (`test_orphan_stable_activity_is_reused_not_duplicated`) | WP-03 reads |
 | U-04 | S5a U-18: an ID whose source differs only in space-run length across publications merges into one Stable Activity | WP-04 corpus |
 | U-05 | `[[:cntrl:]]` follows the server ctype for non-ASCII; the full category rule is domain-only | accepted |
 | U-06 | Owner/superuser can disable triggers (S1 §4.3, CR-014) | operator-gated role separation |
 | U-07 | Until WP-03, `schedule` jobs are claimable by no worker and invisible to health; nothing creates one in production | WP-03 |
-| U-08 | F3 terminal verification scans up to 25,000 rows of the accepted run inside the finalization transaction (index `a_schedule_row_ordinal_is_unique_within_its_run`) | WP-04 performance |
+| U-08 | F3 terminal verification (and F9) scans up to 25,000 rows and 50,000 issues of the accepted run inside the finalization transaction (indexes `a_schedule_row_ordinal_is_unique_within_its_run`, `schedule_import_issues_by_publication`) | WP-04 performance |
+| U-09 | (R6-F06) A `failed`, effective-failed or `review_required` publication of source version V in Series S blocks V in S for good: a new key replays it or conflicts (U2), even after transient exhaustion or a parser fix; only a new source version (with `supersedes`) or another Series admits it. Consistent with R2 §23; pinned by `test_failed_version_cannot_be_reimported_into_its_series` | WP-03 (surfaced conflict reason), WP-04 (operator documentation) |
+| U-10 | (R6-F08) The CPM FKs are `RESTRICT` while `sources → enrollments → enrollment_objects` and `source_objects → source_object_versions` cascade: once a publication exists, deleting its `sources`/`source_objects` row fails as a whole. No such path exists today; a future retention or erasure design must handle CPM rows first. Pinned by `test_source_delete_is_refused_while_a_publication_references_it` | WP-04 / future retention design |
 
 ### 9.3 Operator gates
 
-1. Deploying this revision alters 2 live tables: `SHARE` on each during its index build,
-   then `ACCESS EXCLUSIVE` for the catalog step; `lock_timeout` 10 s aborts cleanly if a
-   lock is not obtained. Before deploy: read-only `count(*)` of both tables, a quiet window
-   for the enrollment worker, a backup, and confirmation that the PKs exist (the preflight
-   refuses otherwise).
-2. Confirm no default privilege grants new `knowledge` tables to `my_pa_mcp_ro`,
-   `my_pa_mcp_rw` or `PUBLIC` (U-02).
-3. No production migration, grant, capability, worker plane or deployment is authorized by
-   this contract.
+Nothing below is performed by an agent: production stays out of agent reach, and this
+contract authorizes **no grant and no revoke**.
+
+1. **Lock window.** Deploying this revision alters 2 live tables at the end of the revision
+   transaction (section 3.4): `SHARE` on each from its index build, then `ACCESS EXCLUSIVE`
+   from `ADD CONSTRAINT … USING INDEX`, and `SHARE ROW EXCLUSIVE` on `projects`,
+   `enrollments`, `enrollment_objects` and `source_object_versions` from the 4 new FKs —
+   **all held until the revision commits**. While `ACCESS EXCLUSIVE` is held every reader of
+   those 2 tables (gateway source-scope authorization, the enrollment worker) waits. Before
+   deploy: read-only `count(*)` of both tables, a quiet window for the gateway and the
+   enrollment worker, a backup, and confirmation that both PKs exist (the preflight refuses
+   otherwise). **A `55P03` (`lock_not_available`) abort is a clean, retryable outcome** —
+   the whole revision rolls back; retry in a quieter window; never raise the 10 s timeout
+   without a new review. The same applies to a downgrade.
+2. **Blocking pre-deploy privilege gate (ruling (e)), read-only:**
+   1. Before the migration run
+      `SELECT defaclrole::regrole, defaclnamespace::regnamespace, defaclobjtype, defaclacl FROM pg_default_acl;`.
+      If any entry would apply to tables the migrating role creates in `knowledge` and names
+      `PUBLIC`, `my_pa_mcp_ro` or `my_pa_mcp_rw`, **STOP**: removing it is a separate
+      operator-authorized change, never part of this revision.
+   2. Name the roles the gateway and worker connect as, and confirm they reach the lineage
+      tables through the mechanism the 7 new tables will use (owner identity or default
+      privilege), by comparing `relacl` and owner of a lineage table such as
+      `knowledge.record_links`. If the Record Event roles (`my_pa_runtime`,
+      `my_pa_migrator`, `my_pa_owner`) are in use and the runtime role is not the owner, the
+      new tables will be **unreachable** to the runtime: a stop for WP-03 enablement, not
+      for this schema-only deploy.
+   3. After the migration: `has_table_privilege(<role>, 'knowledge.<table>',
+      'SELECT,INSERT,UPDATE,DELETE,TRUNCATE')` is false for `PUBLIC`, `my_pa_mcp_ro` and
+      `my_pa_mcp_rw` on all 7 tables, and `relacl` of `knowledge.enrollments` and
+      `knowledge.source_object_versions` is byte-identical to before.
+   4. Any deviation is a stop and is reported.
+3. No production migration, grant, revoke, capability, worker plane or deployment is
+   authorized by this contract.

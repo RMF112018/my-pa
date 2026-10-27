@@ -48,7 +48,7 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 #: declares the client provenance columns and CHECKs of the four fact tables,
 #: the root creator CHECK, the confirm CHECKs, the request-row writer columns,
 #: CHECK and index, and the schema-2 manifest version; `captures` is untouched.
-#: Moved again by the CPM Workbench S5b-1 revision `6c2306330ceb`, which
+#: Moved again by the CPM Workbench S5b-1 revision (the Schedule foundation), which
 #: declares the seven Schedule tables and a comment beside `enrollments` and
 #: `source_object_versions` naming their database-only support uniques;
 #: `captures` is untouched.

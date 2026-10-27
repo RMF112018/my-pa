@@ -255,6 +255,13 @@ def test_contract_prefixes_are_stable() -> None:
         # Record lineage S3 (S3 contract section 2).
         "ihcr",
         "lbfr",
+        # CPM Workbench S5b-1 (foundation contract section 3.1).
+        "sser",
+        "spub",
+        "sprun",
+        "srow",
+        "sact",
+        "siss",
     }
 
 

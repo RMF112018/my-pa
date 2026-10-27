@@ -8850,7 +8850,8 @@ class ScheduleRepository(ABC):
         lease: ScheduleLease,
         identity: ScheduleParserIdentity,
     ) -> ScheduleParserRunStart:
-        """Reuse an exact parsed run or this attempt's running run, else start one."""
+        """Reuse a parsed run of this parser, profile and document, or this
+        attempt's running run; else start one."""
 
     @abstractmethod
     def insert_rows(

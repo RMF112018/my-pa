@@ -1,0 +1,542 @@
+{
+  "family": "full_ambiguous_hierarchy",
+  "generator_version": 1,
+  "linkage": {
+    "basis": "eligible",
+    "rows": [
+      {
+        "published_activity_id": "SYN-1000",
+        "row_ordinal": 2
+      },
+      {
+        "published_activity_id": "SYN-1001",
+        "row_ordinal": 3
+      }
+    ]
+  },
+  "parse_inputs": {
+    "expected_data_date": null,
+    "limits": "production"
+  },
+  "pdf_sha256": "6776f23ecf6d6faa15043314f727ee1797c698c3d928b89f5a59e68c54f7dd09",
+  "pdf_size_bytes": 8581,
+  "result": {
+    "counts": {
+      "activities": 2,
+      "ambiguous": 0,
+      "chart_objects_excluded": 0,
+      "duplicate_objects_collapsed": 0,
+      "issues": 3,
+      "milestones": 0,
+      "non_embedded_font_objects": 0,
+      "pages": 1,
+      "project_summaries": 0,
+      "rows": 3,
+      "suppressed_objects": 0,
+      "warnings": 0,
+      "watermark_objects_excluded": 0,
+      "wbs_summaries": 1
+    },
+    "data_date": "2026-05-04",
+    "document_sha256": "6776f23ecf6d6faa15043314f727ee1797c698c3d928b89f5a59e68c54f7dd09",
+    "document_size_bytes": 8581,
+    "issues": [
+      {
+        "code": "hierarchy_ambiguous",
+        "field": "hierarchy",
+        "page_number": 1,
+        "row_ordinal": 1,
+        "severity": "error"
+      },
+      {
+        "code": "hierarchy_ambiguous",
+        "field": "hierarchy",
+        "page_number": 1,
+        "row_ordinal": 2,
+        "severity": "error"
+      },
+      {
+        "code": "hierarchy_ambiguous",
+        "field": "hierarchy",
+        "page_number": 1,
+        "row_ordinal": 3,
+        "severity": "error"
+      }
+    ],
+    "outcome": "partial",
+    "parser_name": "cpm-workbench-full-parser",
+    "parser_version": "1",
+    "profile_id": "p6_full_v1",
+    "profile_version": 1,
+    "published_schedule_title": "Synthetic Project Schedule",
+    "rows": [
+      {
+        "activity_name": "Synthetic Project",
+        "bbox_normalized": [
+          "0.042949",
+          "0.126263",
+          "0.484886",
+          "0.137626"
+        ],
+        "bbox_pdf": [
+          "52.570",
+          "683.000",
+          "593.500",
+          "692.000"
+        ],
+        "cell_evidence": {
+          "cells": {
+            "activity_id": {
+              "fragments": [],
+              "state": "published_blank",
+              "text": null
+            },
+            "activity_name": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "52.570",
+                    "683.000",
+                    "137.570",
+                    "692.000"
+                  ],
+                  "font": "Arial,Bold",
+                  "font_size": "10.000",
+                  "raw": "Synthetic Project"
+                }
+              ],
+              "state": "published_value",
+              "text": "Synthetic Project"
+            },
+            "finish": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "562.000",
+                    "683.600",
+                    "593.500",
+                    "689.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "30-Oct-26"
+                }
+              ],
+              "state": "published_value",
+              "text": "30-Oct-26"
+            },
+            "original_duration": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "454.500",
+                    "683.600",
+                    "465.000",
+                    "689.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "120"
+                }
+              ],
+              "state": "published_value",
+              "text": "120"
+            },
+            "remaining_duration": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "489.000",
+                    "683.600",
+                    "496.000",
+                    "689.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "80"
+                }
+              ],
+              "state": "published_value",
+              "text": "80"
+            },
+            "start": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "501.000",
+                    "683.600",
+                    "532.500",
+                    "689.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "04-May-26"
+                }
+              ],
+              "state": "published_value",
+              "text": "04-May-26"
+            }
+          },
+          "schema": "cpm-full-cells-v1"
+        },
+        "finish": {
+          "marker": null,
+          "state": "published_value",
+          "value": "2026-10-30"
+        },
+        "hierarchy_path": null,
+        "indent_level": null,
+        "original_duration": {
+          "state": "published_value",
+          "value": "120.000"
+        },
+        "page_number": 1,
+        "parent_row_ordinal": null,
+        "physical_line_ordinal": 1,
+        "published_activity_id": null,
+        "remaining_duration": {
+          "state": "published_value",
+          "value": "80.000"
+        },
+        "row_ordinal": 1,
+        "row_type": "wbs_summary",
+        "start": {
+          "marker": null,
+          "state": "published_value",
+          "value": "2026-05-04"
+        },
+        "warning_codes": [
+          "hierarchy_ambiguous"
+        ]
+      },
+      {
+        "activity_name": "Synthetic activity 001",
+        "bbox_normalized": [
+          "0.044444",
+          "0.147854",
+          "0.484886",
+          "0.155808"
+        ],
+        "bbox_pdf": [
+          "54.400",
+          "668.600",
+          "593.500",
+          "674.900"
+        ],
+        "cell_evidence": {
+          "cells": {
+            "activity_id": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "54.400",
+                    "668.600",
+                    "82.400",
+                    "674.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "SYN-1000"
+                }
+              ],
+              "state": "published_value",
+              "text": "SYN-1000"
+            },
+            "activity_name": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "134.000",
+                    "668.600",
+                    "211.000",
+                    "674.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "Synthetic activity 001"
+                }
+              ],
+              "state": "published_value",
+              "text": "Synthetic activity 001"
+            },
+            "finish": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "562.000",
+                    "668.600",
+                    "593.500",
+                    "674.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "15-May-26"
+                }
+              ],
+              "state": "published_value",
+              "text": "15-May-26"
+            },
+            "original_duration": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "458.000",
+                    "668.600",
+                    "465.000",
+                    "674.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "10"
+                }
+              ],
+              "state": "published_value",
+              "text": "10"
+            },
+            "remaining_duration": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "492.500",
+                    "668.600",
+                    "496.000",
+                    "674.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "5"
+                }
+              ],
+              "state": "published_value",
+              "text": "5"
+            },
+            "start": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "501.000",
+                    "668.600",
+                    "532.500",
+                    "674.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "04-May-26"
+                }
+              ],
+              "state": "published_value",
+              "text": "04-May-26"
+            }
+          },
+          "schema": "cpm-full-cells-v1"
+        },
+        "finish": {
+          "marker": null,
+          "state": "published_value",
+          "value": "2026-05-15"
+        },
+        "hierarchy_path": null,
+        "indent_level": null,
+        "original_duration": {
+          "state": "published_value",
+          "value": "10.000"
+        },
+        "page_number": 1,
+        "parent_row_ordinal": null,
+        "physical_line_ordinal": 2,
+        "published_activity_id": "SYN-1000",
+        "remaining_duration": {
+          "state": "published_value",
+          "value": "5.000"
+        },
+        "row_ordinal": 2,
+        "row_type": "activity",
+        "start": {
+          "marker": null,
+          "state": "published_value",
+          "value": "2026-05-04"
+        },
+        "warning_codes": [
+          "hierarchy_ambiguous"
+        ]
+      },
+      {
+        "activity_name": "Synthetic activity 002",
+        "bbox_normalized": [
+          "0.044444",
+          "0.166793",
+          "0.484886",
+          "0.174747"
+        ],
+        "bbox_pdf": [
+          "54.400",
+          "653.600",
+          "593.500",
+          "659.900"
+        ],
+        "cell_evidence": {
+          "cells": {
+            "activity_id": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "54.400",
+                    "653.600",
+                    "82.400",
+                    "659.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "SYN-1001"
+                }
+              ],
+              "state": "published_value",
+              "text": "SYN-1001"
+            },
+            "activity_name": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "134.000",
+                    "653.600",
+                    "211.000",
+                    "659.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "Synthetic activity 002"
+                }
+              ],
+              "state": "published_value",
+              "text": "Synthetic activity 002"
+            },
+            "finish": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "562.000",
+                    "653.600",
+                    "593.500",
+                    "659.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "15-May-26"
+                }
+              ],
+              "state": "published_value",
+              "text": "15-May-26"
+            },
+            "original_duration": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "458.000",
+                    "653.600",
+                    "465.000",
+                    "659.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "10"
+                }
+              ],
+              "state": "published_value",
+              "text": "10"
+            },
+            "remaining_duration": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "492.500",
+                    "653.600",
+                    "496.000",
+                    "659.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "5"
+                }
+              ],
+              "state": "published_value",
+              "text": "5"
+            },
+            "start": {
+              "fragments": [
+                {
+                  "bbox": [
+                    "501.000",
+                    "653.600",
+                    "532.500",
+                    "659.900"
+                  ],
+                  "font": "Arial",
+                  "font_size": "7.000",
+                  "raw": "04-May-26"
+                }
+              ],
+              "state": "published_value",
+              "text": "04-May-26"
+            }
+          },
+          "schema": "cpm-full-cells-v1"
+        },
+        "finish": {
+          "marker": null,
+          "state": "published_value",
+          "value": "2026-05-15"
+        },
+        "hierarchy_path": null,
+        "indent_level": null,
+        "original_duration": {
+          "state": "published_value",
+          "value": "10.000"
+        },
+        "page_number": 1,
+        "parent_row_ordinal": null,
+        "physical_line_ordinal": 3,
+        "published_activity_id": "SYN-1001",
+        "remaining_duration": {
+          "state": "published_value",
+          "value": "5.000"
+        },
+        "row_ordinal": 3,
+        "row_type": "activity",
+        "start": {
+          "marker": null,
+          "state": "published_value",
+          "value": "2026-05-04"
+        },
+        "warning_codes": [
+          "hierarchy_ambiguous"
+        ]
+      }
+    ],
+    "run_date": "2026-05-11",
+    "schema": "cpm-full-parse-result-v1"
+  },
+  "result_sha256": "1345a638d2d3c083b3134acc55cae58118485d1e7c0389b72554fdf01054447a",
+  "summary": {
+    "counts": {
+      "activities": 2,
+      "ambiguous": 0,
+      "chart_objects_excluded": 0,
+      "duplicate_objects_collapsed": 0,
+      "issues": 3,
+      "milestones": 0,
+      "non_embedded_font_objects": 0,
+      "pages": 1,
+      "project_summaries": 0,
+      "rows": 3,
+      "suppressed_objects": 0,
+      "warnings": 0,
+      "watermark_objects_excluded": 0,
+      "wbs_summaries": 1
+    },
+    "issue_counts": {
+      "hierarchy_ambiguous": 3
+    },
+    "outcome": "partial"
+  },
+  "variant": "close_centroids"
+}

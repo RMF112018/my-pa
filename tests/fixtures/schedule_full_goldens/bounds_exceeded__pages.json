@@ -1,0 +1,39 @@
+{
+  "family": "bounds_exceeded",
+  "generator_version": 1,
+  "linkage": {
+    "basis": "failed",
+    "rows": []
+  },
+  "parse_inputs": {
+    "expected_data_date": null,
+    "limits": "production"
+  },
+  "pdf_sha256": "401f525e2201eeea7d62689a97385cbbb79a50579ab569ec9ad25526de145e0b",
+  "pdf_size_bytes": 55753,
+  "result": null,
+  "result_sha256": "00eb732dafa53eb6c9d18a5b1e5c6f3be4c71a39982bc8a41701fa7d230d3e55",
+  "summary": {
+    "counts": {
+      "activities": 0,
+      "ambiguous": 0,
+      "chart_objects_excluded": 0,
+      "duplicate_objects_collapsed": 0,
+      "issues": 1,
+      "milestones": 0,
+      "non_embedded_font_objects": 0,
+      "pages": 0,
+      "project_summaries": 0,
+      "rows": 0,
+      "suppressed_objects": 0,
+      "warnings": 0,
+      "watermark_objects_excluded": 0,
+      "wbs_summaries": 0
+    },
+    "issue_counts": {
+      "bounds_exceeded": 1
+    },
+    "outcome": "failed"
+  },
+  "variant": "pages"
+}

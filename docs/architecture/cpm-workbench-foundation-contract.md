@@ -520,12 +520,25 @@ deferred completeness rule). Messages carry no identifier or content.
 | F1 | `schedule_relations_are_append_only()` | `BEFORE UPDATE OR DELETE FOR EACH ROW` on series, activities, import issues | `'% is append-only', TG_TABLE_NAME` (S1 body) |
 | F2 | `schedule_relations_refuse_truncate()` | `BEFORE TRUNCATE FOR EACH STATEMENT` on all 7 | refuses only when the table holds a row (S1 body) |
 | F3 | `a_schedule_publication_follows_its_lifecycle()` | `BEFORE INSERT OR UPDATE OR DELETE FOR EACH ROW` on publications | see 4.10.1 |
-| F4 | `a_schedule_publication_has_its_job()` | constraint trigger `AFTER INSERT`, deferred, on publications | at commit `EXISTS (SELECT 1 FROM schedule_jobs WHERE publication_id = NEW.publication_id AND principal_id = NEW.principal_id)`, else `check_violation` (D-12) |
+| F4 | `a_schedule_publication_has_its_job()` | constraint trigger `AFTER INSERT`, deferred, on publications | at commit `EXISTS (SELECT 1 FROM knowledge.schedule_jobs WHERE publication_id = NEW.publication_id AND principal_id = NEW.principal_id)`, else `check_violation` (D-12) |
 | F5 | `a_schedule_job_keeps_its_identity()` | `BEFORE INSERT OR UPDATE OR DELETE FOR EACH ROW` on jobs | section 4.4 |
 | F6 | `a_schedule_parser_run_follows_its_lifecycle()` | `BEFORE INSERT OR UPDATE OR DELETE FOR EACH ROW` on parser runs | see 4.10.2 |
 | F7 | `a_schedule_row_changes_only_by_linking()` | `BEFORE INSERT OR UPDATE OR DELETE FOR EACH ROW` on rows | see 4.10.3 |
 | F8 | `a_schedule_issue_is_recorded_while_processing()` | `BEFORE INSERT FOR EACH ROW` on import issues | publication `status = 'processing'`; when `parser_run_id` is set, that run `status = 'running'` |
 | F9 | `schedule_run_outcome(run_id text) RETURNS text` | not a trigger: `LANGUAGE sql STABLE`, called by F3, F6 and the repository | the frozen S5a outcome ladder over the run's stored issues and rows (section 4.10.4) |
+
+**Schema qualification (RR1-F01).** Every table a function body F1–F9 names is written
+schema-qualified as `knowledge.<table>` (for example `knowledge.schedule_jobs`,
+`knowledge.schedule_parser_runs`, `knowledge.schedule_rows`,
+`knowledge.schedule_import_issues`, `knowledge.schedule_publications`), so no body depends on
+`search_path`; the shorthand table names in this section's prose denote those qualified names.
+
+**F9 call sites (RR1-F03).** F9 takes a bare `run_id` and carries no Principal predicate, and
+the principal-partition registry scan cannot see inside SQL functions. It is therefore called
+only (i) inside triggers F3/F6 with `NEW.accepted_parser_run_id` or the row's own
+`parser_run_id`, which the composite FKs already bind to the row's Principal, or (ii) by
+`SqlScheduleRepository` with a run identifier it has just read under `_mine` (partitioned) in
+the same transaction. No other caller may pass a caller-supplied run identifier.
 
 Triggers are created with the default `ENABLE` (origin) mode, as every lineage trigger, so
 `session_replication_role = replica` bypasses them; `ENABLE ALWAYS` is **not** adopted (the
@@ -894,7 +907,7 @@ I6-A lands first; I6-B starts from I6-A's head. Neither edits `apps/worker.py`,
 | §16.15, §17.3, AC-021/022 | guards: `test_row_content_is_immutable`, `test_row_link_is_set_once`, `test_row_link_requires_parsed_run_and_processing_publication`, `test_link_binds_exact_id_and_series`; persistence: `test_review_required_publication_links_nothing`, `test_canonicalization_is_resumable_after_lease_loss` |
 | §17.2, AC-023 | guards: `test_four_state_typed_value_matrix` (parametrized OD/RD/Start/Finish × 4 states × value present/absent) |
 | §18.1–18.7, AC-036 | migration: `test_empty_to_head_creates_exactly_the_seven_tables`, `test_frozen_ddl_names_every_declared_constraint`, `test_runtime_metadata_matches_the_revision` |
-| §18.8.1–2 | migration: `test_support_uniques_exist_and_existing_rows_survive`, `test_preflight_refuses_without_the_primary_key`, `test_live_table_work_is_last_in_the_upgrade` (offline SQL order: no statement naming `enrollments`, `enrollment_objects`, `source_object_versions` or `projects` precedes the last `CREATE TRIGGER`), `test_lock_timeout_is_transaction_local` (a fresh transaction after upgrade and after downgrade reads the server default), `test_a_held_lock_aborts_the_upgrade_cleanly` (another connection holds `ROW EXCLUSIVE` on `knowledge.enrollments` in an open transaction; upgrade fails with SQLSTATE `55P03`; the database is still at `023f8f7eb499` with none of the 7 tables, functions or the 2 uniques) |
+| §18.8.1–2 | migration: `test_support_uniques_exist_and_existing_rows_survive`, `test_preflight_refuses_without_the_primary_key`, `test_live_table_work_is_last_in_the_upgrade` (offline SQL order: no statement matching the qualified, word-bounded names `knowledge.enrollments`, `knowledge.enrollment_objects`, `knowledge.source_object_versions` or `knowledge.projects` — regex `\bknowledge\.(enrollments\|enrollment_objects\|source_object_versions\|projects)\b` — precedes the last `CREATE TRIGGER`, so column names such as `project_id` or `enrollment_id` cannot match; RR1-F02), `test_lock_timeout_is_transaction_local` (a fresh transaction after upgrade and after downgrade reads the server default), `test_a_held_lock_aborts_the_upgrade_cleanly` (another connection holds `ROW EXCLUSIVE` on `knowledge.enrollments` in an open transaction; upgrade fails with SQLSTATE `55P03`; the database is still at `023f8f7eb499` with none of the 7 tables, functions or the 2 uniques) |
 | §4.11, R6-F11 | migration: `test_the_revision_writes_no_row_and_grants_nothing` (static), `test_no_grant_beyond_the_owner` (`relacl IS NULL`; `has_table_privilege` false for `PUBLIC`, `my_pa_mcp_ro`, `my_pa_mcp_rw`), `test_live_table_acls_are_unchanged` |
 | R6-F08 | guards: `test_source_delete_is_refused_while_a_publication_references_it` (`DELETE FROM knowledge.sources` / `source_objects` fail with `foreign_key_violation` while a publication exists; pins U-10) |
 | §19.13, AC-036 | migration: `test_downgrade_refuses_while_any_cpm_row_exists` (parametrized over 7 tables), `test_clean_downgrade_removes_only_cpm_objects_and_reupgrades` |

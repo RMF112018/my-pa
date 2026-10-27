@@ -1822,8 +1822,11 @@ def test_no_terminal_transition_while_a_run_is_running(db_engine: Engine, w: Wor
         sqlstate=RESTRICT_VIOLATION,
         names="a schedule publication ends with no parser run running",
     )
+    # The straggler's own error issue gives `failed` its evidence; a run-scoped
+    # issue of another attempt is outside the accepted run (D-23), so the
+    # running-run rule alone answers both ways (FR6-F01).
     with db_engine.begin() as c:
-        _issue(c, publication, None, 1, ScheduleIssueCode.SOURCE_VERSION_CHANGED)
+        _issue(c, publication, "sprun_cpmgrun002", 1, ScheduleIssueCode.CORRUPT_PDF)
     _refused(
         db_engine,
         lambda c: _fail(c, publication),
@@ -1833,6 +1836,24 @@ def test_no_terminal_transition_while_a_run_is_running(db_engine: Engine, w: Wor
     with db_engine.begin() as c:
         _fail_run(c, "sprun_cpmgrun002")
     _accepted(db_engine, lambda c: _finalize(c, publication, run))
+
+
+@pytest.mark.parametrize("code", ["source_version_changed", "corrupt_pdf"])
+def test_a_run_less_issue_refuses_every_success_terminal(
+    db_engine: Engine, w: World, code: str
+) -> None:
+    """FR6-F01: a run-less issue exists only for the fail path."""
+    publication, run, row = _parsed(db_engine, w)
+    with db_engine.begin() as c:
+        _link(c, row)
+        _issue(c, publication, None, 1, ScheduleIssueCode(code))
+    _refused(
+        db_engine,
+        lambda c: _finalize(c, publication, run),
+        sqlstate=RESTRICT_VIOLATION,
+        names="a schedule publication with a run-less issue ends failed",
+    )
+    _accepted(db_engine, lambda c: _fail(c, publication))
 
 
 def test_accepted_run_is_a_parsed_run_of_the_pinned_document(db_engine: Engine, w: World) -> None:
@@ -2175,6 +2196,37 @@ def test_parser_run_starts_only_on_a_pinned_processing_publication(
         _run(c, publication, "sprun_cpmgrun001", doc=doc)
 
     _refused(db_engine, write, sqlstate=RESTRICT_VIOLATION, names=names)
+
+
+@pytest.mark.parametrize("ending", ["complete", "failed"])
+def test_parser_run_cannot_start_under_a_terminal_publication(
+    db_engine: Engine, w: World, ending: str
+) -> None:
+    """FR6-F02: same pinned document, so only the processing condition answers."""
+    if ending == "complete":
+        publication, _, _ = _complete(db_engine, w)
+    else:
+        with db_engine.begin() as c:
+            publication = _admit(c, w, 1)
+            _process(c, publication)
+            _issue(c, publication, None, 1, ScheduleIssueCode.SOURCE_VERSION_CHANGED)
+            _fail(c, publication)
+    assert _publication_row_of(db_engine, publication)["document_sha256"] == DOC
+
+    def write(c: Connection) -> None:
+        _run(c, publication, "sprun_cpmgrun009", attempt=2, doc=DOC)
+
+    _refused(
+        db_engine,
+        write,
+        sqlstate=RESTRICT_VIOLATION,
+        names="a schedule parser run starts on a processing publication",
+    )
+
+
+def _publication_row_of(engine: Engine, publication: str) -> dict[str, object]:
+    with engine.connect() as c:
+        return _publication_row(c, publication)
 
 
 def test_terminal_parser_run_is_immutable(db_engine: Engine, w: World) -> None:

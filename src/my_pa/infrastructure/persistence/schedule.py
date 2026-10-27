@@ -792,6 +792,12 @@ class SqlScheduleRepository(ScheduleRepository):
             raise ScheduleIntegrityError("document_not_pinned")
         runs = schedule_parser_runs
         mine = [_mine(runs, principal_id), runs.c.publication_id == publication_id]
+        # FR6-F03: reuse is keyed by exactly the columns of
+        # `a_schedule_parse_is_accepted_once` -- parser, profile and document,
+        # not the PDFium engine versions, which the canonical result digest
+        # deliberately excludes (S5a section 6.4). One rule, one key: a parsed
+        # run survives an engine upgrade between attempts instead of colliding
+        # with the unique on every later attempt.
         reusable = (
             self._connection.execute(
                 select(runs).where(
@@ -801,8 +807,6 @@ class SqlScheduleRepository(ScheduleRepository):
                     runs.c.parser_version == identity.parser_version,
                     runs.c.profile_id == identity.profile_id,
                     runs.c.profile_version == identity.profile_version,
-                    runs.c.pypdfium2_version == identity.pypdfium2_version,
-                    runs.c.pdfium_version == identity.pdfium_version,
                     runs.c.document_sha256 == document,
                 )
             )
@@ -1160,6 +1164,21 @@ class SqlScheduleRepository(ScheduleRepository):
             raise ScheduleIntegrityError("parser_run_not_found")
         if run["status"] != _PARSED:
             raise ScheduleIntegrityError("parser_run_not_parsed")
+        # FR6-F01: a run-less issue (a fetch-time condition such as
+        # `source_version_changed`) exists only for the fail path; F3 refuses
+        # every success terminal while one is recorded.
+        issues = schedule_import_issues
+        run_less = self._connection.execute(
+            select(issues.c.issue_id)
+            .where(
+                _mine(issues, principal_id),
+                issues.c.publication_id == publication_id,
+                issues.c.parser_run_id.is_(None),
+            )
+            .limit(1)
+        ).first()
+        if run_less is not None:
+            raise ScheduleIntegrityError("run_less_issue")
         # R6-F01: the terminal status is the run's derived outcome, never the
         # caller's choice; a `failed` outcome cannot be accepted at all.
         status = self._outcome(accepted)

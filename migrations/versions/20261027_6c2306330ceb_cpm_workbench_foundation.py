@@ -753,6 +753,13 @@ _FUNCTIONS: Final[tuple[tuple[str, str, str], ...]] = (
             END IF;
             RETURN NEW;
           END IF;
+          IF EXISTS (
+            SELECT 1 FROM knowledge.schedule_import_issues i
+             WHERE i.publication_id = NEW.publication_id AND i.parser_run_id IS NULL
+          ) THEN
+            RAISE EXCEPTION 'a schedule publication with a run-less issue ends failed'
+              USING ERRCODE = 'restrict_violation';
+          END IF;
           SELECT r.status, r.document_sha256, r.page_count, r.row_count, r.issue_count
             INTO accepted
             FROM knowledge.schedule_parser_runs r

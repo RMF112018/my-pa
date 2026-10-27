@@ -1101,6 +1101,47 @@ def test_an_exact_parsed_run_is_reused_by_a_later_attempt(db_engine: Engine, w: 
     assert _count(db_engine, "schedule_parser_runs") == 1
 
 
+def test_a_parsed_run_survives_an_engine_upgrade(db_engine: Engine, w: World) -> None:
+    """FR6-F03: reuse is keyed by the accepted-once unique, not the engine."""
+    staged = _stage(db_engine, w, "parsed")
+    _expire(db_engine, staged.lease)
+    lease = _lease(db_engine, P, staged.publication)
+    upgraded = replace(IDENTITY, pypdfium2_version="5.14.0", pdfium_version="154.0.0.0")
+    reused = _do(db_engine, lambda r: r.start_parser_run(P, staged.publication, lease, upgraded))
+    assert reused.reused and reused.run.parser_run_id == staged.run
+    assert reused.run.pdfium_version == IDENTITY.pdfium_version  # provenance stays the run's
+    assert _count(db_engine, "schedule_parser_runs") == 1
+    run = str(staged.run)
+    _canonicalize(db_engine, P, run, lease)
+    assert _finalize(db_engine, P, staged.publication, run, lease) is (
+        SchedulePublicationStatus.COMPLETE
+    )
+
+
+def test_finalize_refuses_while_a_run_less_issue_is_recorded(db_engine: Engine, w: World) -> None:
+    """FR6-F01: a run-less issue ends the publication only through `fail_publication`."""
+    staged = _stage(db_engine, w, "canonicalized")
+    issue = [_issue(ScheduleIssueCode.SOURCE_VERSION_CHANGED)]
+    _do(db_engine, lambda r: r.insert_issues(P, staged.publication, staged.lease, None, issue))
+    before = _snapshot(db_engine)
+    with pytest.raises(ScheduleIntegrityError) as refused:
+        _do(
+            db_engine,
+            lambda r: r.finalize_publication(
+                P, staged.publication, staged.lease, _final(staged.run)
+            ),
+        )
+    assert refused.value.code == "run_less_issue"
+    assert _snapshot(db_engine) == before
+    failed = _do(
+        db_engine,
+        lambda r: r.fail_publication(
+            P, staged.publication, staged.lease, ScheduleIssueCode.SOURCE_VERSION_CHANGED, None
+        ),
+    )
+    assert failed.status is SchedulePublicationStatus.FAILED and failed.issue_count == 1
+
+
 def test_row_batch_is_at_most_one_thousand(db_engine: Engine, w: World) -> None:
     staged = _stage(db_engine, w, "running")
     run = str(staged.run)

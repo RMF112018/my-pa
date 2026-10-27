@@ -89,8 +89,8 @@ PREVIOUS_REVISION: Final = "16f05c46b8c3"
 #: Intelligence report type registry `a591b81f10a2` makes it 115, and the MCP
 #: interaction log `c8f7ae406d47` 116, and the Commitment counterparty Entity
 #: cutover `5c1e7a9b3d42` 117; the record lineage slices since (S1 to S4 and S3.1)
-#: make it 123.
-REVISION_FILE_COUNT: Final = 123
+#: make it 123, and the CPM Workbench S5b-1 foundation 124.
+REVISION_FILE_COUNT: Final = 124
 
 #: The revision's frozen salt, restated. If this and the revision ever disagree
 #: the expectations below stop matching, which is the point of restating it.

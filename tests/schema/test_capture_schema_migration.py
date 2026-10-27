@@ -262,6 +262,29 @@ LINEAGE_TRIGGERS: Final[frozenset[str]] = frozenset(
         "intelligence_artifact_manifests_are_append_only",
         "intelligence_manifests_refuse_truncate",
         "an_artifact_has_its_manifest",
+        # CPM Workbench S5b-1.
+        *(
+            f"{table}_are_append_only"
+            for table in ("schedule_series", "schedule_activities", "schedule_import_issues")
+        ),
+        *(
+            f"{table}_refuse_truncate"
+            for table in (
+                "schedule_series",
+                "schedule_publications",
+                "schedule_activities",
+                "schedule_jobs",
+                "schedule_parser_runs",
+                "schedule_rows",
+                "schedule_import_issues",
+            )
+        ),
+        "a_schedule_publication_follows_its_lifecycle",
+        "a_schedule_publication_has_its_job",
+        "a_schedule_job_keeps_its_identity",
+        "a_schedule_parser_run_follows_its_lifecycle",
+        "a_schedule_row_changes_only_by_linking",
+        "a_schedule_issue_is_recorded_while_processing",
     }
 )
 

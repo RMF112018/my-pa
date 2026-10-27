@@ -889,6 +889,10 @@ def test_schedule_jobs_are_partitioned(db_engine: Engine, w: World, other: World
         )
         assert job_for(c, admission.operation_id, principal_id=Q, plane=SCHEDULE_JOBS) is None
         assert job_for(c, admission.operation_id, principal_id=P, plane=SCHEDULE_JOBS) is not None
+    # The claim's row choice is partitioned too, not only its write: with an
+    # older job of P's queued, Q still claims its own rather than nothing.
+    theirs = _admit(db_engine, Q, _request(other, "cpm-key-theirs"))
+    assert _lease(db_engine, Q, theirs.publication.publication_id).attempt == 1
     lease = _lease(db_engine, P, admission.publication.publication_id)
     assert lease.attempt == 1
 

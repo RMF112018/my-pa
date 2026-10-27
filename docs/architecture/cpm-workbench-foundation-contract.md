@@ -57,7 +57,7 @@ section 8.3; F10/F11 sections 4.11, 8.2; F13 section 4.10; F14 sections 4, 4.4, 
 - WP-03: the schedule job handler (`infrastructure/jobs/schedule.py`), the provider read, the
   240 s budget, **`apps/worker.py` plane registration, `worker_heartbeats.plane` widening,
   the `worker_health.py` allowlist and health map, the `ApplicationService._capabilities_get`
-  worker fallback** (section 3.3), the 7 capabilities, 2 purposes, the `audit_events`
+  worker fallback** (section 3.3), the 7 Schedule capabilities, 2 purposes, the `audit_events`
   vocabulary widening (section 3.2), commands, normalization builders, policy, authorization,
   SafeDetails, ChatLLM policy/profile, remote MCP, `ScheduleApplication`, paged reads,
   `ScheduleCursor`, `ScheduleChange`/`ScheduleChangeKind`, `domain/schedule/compare.py`,
@@ -705,47 +705,100 @@ control); the category rule and the casefold key are domain-only (SQL has no cas
 ### 5.4 Ports (`src/my_pa/contracts/ports.py`, after the Constraint Management ports)
 
 ```python
-class ScheduleLeaseLostError(Exception): ...           # the caller's lease is gone; nothing written
-class ScheduleAdmissionRejectedError(Exception):       # typed rejection; the UoW rolls back
+class ScheduleLeaseLostError(Exception): ...  # the caller's lease is gone; nothing written
+
+
+class ScheduleAdmissionRejectedError(Exception):  # typed rejection; the UoW rolls back
     reason: ScheduleAdmissionRefusal
-class ScheduleIntegrityError(Exception):               # a §24 precondition failed (fixed code, no content)
+
+
+class ScheduleIntegrityError(Exception):  # a §24 precondition failed (fixed code, no content)
     code: str
+
 
 class ScheduleRepository(ABC):
     # admission (one transaction, no lease)
-    def admit_publication(self, principal_id: str, request: ScheduleImportRequest,
-                          request_digest: str) -> ScheduleAdmission: ...
+    def admit_publication(
+        self, principal_id: str, request: ScheduleImportRequest, request_digest: str
+    ) -> ScheduleAdmission: ...
     # worker transactions (each begins with hold_lease)
-    def begin_processing(self, principal_id: str, publication_id: str,
-                         lease: ScheduleLease) -> SchedulePlan: ...
-    def pin_document(self, principal_id: str, publication_id: str, lease: ScheduleLease,
-                     document_sha256: str, document_size_bytes: int) -> None: ...
-    def start_parser_run(self, principal_id: str, publication_id: str, lease: ScheduleLease,
-                         identity: ScheduleParserIdentity) -> ScheduleParserRunStart: ...
-    def insert_rows(self, principal_id: str, parser_run_id: str, lease: ScheduleLease,
-                    rows: Sequence[ParsedScheduleRow]) -> int: ...
-    def insert_issues(self, principal_id: str, publication_id: str, lease: ScheduleLease,
-                      parser_run_id: str | None, issues: Sequence[ScheduleParseIssue]) -> int: ...
-    def finish_parser_run(self, principal_id: str, parser_run_id: str, lease: ScheduleLease, *,
-                          parsed: ScheduleParseCounts | None, parse_result_sha256: str | None,
-                          failure_code: ScheduleIssueCode | None) -> ScheduleParserRun: ...
-    def canonicalize_batch(self, principal_id: str, parser_run_id: str, lease: ScheduleLease,
-                           limit: int = 1000) -> ScheduleCanonicalizationProgress: ...
-    def finalize_publication(self, principal_id: str, publication_id: str, lease: ScheduleLease,
-                             finalization: ScheduleFinalization) -> SchedulePublication: ...
-    def fail_publication(self, principal_id: str, publication_id: str, lease: ScheduleLease,
-                         code: ScheduleIssueCode, parser_run_id: str | None) -> SchedulePublication: ...
+    def begin_processing(
+        self, principal_id: str, publication_id: str, lease: ScheduleLease
+    ) -> SchedulePlan: ...
+    def pin_document(
+        self,
+        principal_id: str,
+        publication_id: str,
+        lease: ScheduleLease,
+        document_sha256: str,
+        document_size_bytes: int,
+    ) -> None: ...
+    def start_parser_run(
+        self,
+        principal_id: str,
+        publication_id: str,
+        lease: ScheduleLease,
+        identity: ScheduleParserIdentity,
+    ) -> ScheduleParserRunStart: ...
+    def insert_rows(
+        self,
+        principal_id: str,
+        parser_run_id: str,
+        lease: ScheduleLease,
+        rows: Sequence[ParsedScheduleRow],
+    ) -> int: ...
+    def insert_issues(
+        self,
+        principal_id: str,
+        publication_id: str,
+        lease: ScheduleLease,
+        parser_run_id: str | None,
+        issues: Sequence[ScheduleParseIssue],
+    ) -> int: ...
+    def finish_parser_run(
+        self,
+        principal_id: str,
+        parser_run_id: str,
+        lease: ScheduleLease,
+        *,
+        parsed: ScheduleParseCounts | None,
+        parse_result_sha256: str | None,
+        failure_code: ScheduleIssueCode | None,
+    ) -> ScheduleParserRun: ...
+    def canonicalize_batch(
+        self, principal_id: str, parser_run_id: str, lease: ScheduleLease, limit: int = 1000
+    ) -> ScheduleCanonicalizationProgress: ...
+    def finalize_publication(
+        self,
+        principal_id: str,
+        publication_id: str,
+        lease: ScheduleLease,
+        finalization: ScheduleFinalization,
+    ) -> SchedulePublication: ...
+    def fail_publication(
+        self,
+        principal_id: str,
+        publication_id: str,
+        lease: ScheduleLease,
+        code: ScheduleIssueCode,
+        parser_run_id: str | None,
+    ) -> SchedulePublication: ...
     # point reads (no lease, partitioned; cross-Principal answers None)
     def get_series(self, principal_id: str, series_id: str) -> ScheduleSeries | None: ...
-    def get_publication(self, principal_id: str, publication_id: str) -> SchedulePublication | None: ...
-    def get_effective_status(self, principal_id: str,
-                             publication_id: str) -> SchedulePublicationStatus | None: ...
-    def get_parser_runs(self, principal_id: str,
-                        publication_id: str) -> tuple[ScheduleParserRun, ...]: ...
+    def get_publication(
+        self, principal_id: str, publication_id: str
+    ) -> SchedulePublication | None: ...
+    def get_effective_status(
+        self, principal_id: str, publication_id: str
+    ) -> SchedulePublicationStatus | None: ...
+    def get_parser_runs(
+        self, principal_id: str, publication_id: str
+    ) -> tuple[ScheduleParserRun, ...]: ...
+
 
 class ScheduleUnitOfWork(ABC):
     def __enter__(self) -> ScheduleUnitOfWork: ...
-    def __exit__(self, exc_type, exc, traceback) -> None: ...   # commit on success, else roll back
+    def __exit__(self, exc_type, exc, traceback) -> None: ...  # commit on success, else roll back
     @property
     def schedules(self) -> ScheduleRepository: ...
 ```

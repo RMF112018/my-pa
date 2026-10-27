@@ -103,6 +103,7 @@ class World:
     second_version: str
     unenrolled_object: str
     unenrolled_version: str
+    third_version: str
 
     def series(self, n: int = 1) -> str:
         return f"sser_{self.tag}s{n:04d}"
@@ -126,6 +127,7 @@ def _world(engine: Engine, principal: str, tag: str) -> World:
         second_version=f"ver_{tag}0002",
         unenrolled_object=f"obj_{tag}0009",
         unenrolled_version=f"ver_{tag}0009",
+        third_version=f"ver_{tag}0003",
     )
     source = f"src_{tag}0001"
     with engine.begin() as c:
@@ -148,6 +150,7 @@ def _world(engine: Engine, principal: str, tag: str) -> World:
             (world.version, world.source_object, "fp-1"),
             (world.second_version, world.source_object, "fp-2"),
             (world.unenrolled_version, world.unenrolled_object, "fp-9"),
+            (world.third_version, world.source_object, "fp-3"),
         ):
             c.execute(
                 text(
@@ -1067,7 +1070,7 @@ def test_supersession_is_same_series_once_and_not_self(db_engine: Engine, w: Wor
     )
     _refused(
         db_engine,
-        lambda c: _admit(c, w, 4, series=1, version=w.unenrolled_version, supersedes=first),
+        lambda c: _admit(c, w, 4, series=1, version=w.third_version, supersedes=first),
         sqlstate=UNIQUE_VIOLATION,
         names="a_schedule_publication_is_superseded_once",
     )
@@ -1499,6 +1502,11 @@ def _unique_cases(w: World) -> dict[str, Callable[[Engine], Callable[[Connection
                     )
                 )
             )
+            c.execute(
+                insert(schedule_jobs).values(
+                    operation_id=w.job(2), publication_id=w.publication(2), principal_id=P
+                )
+            )
 
         return write
 
@@ -1510,7 +1518,7 @@ def _unique_cases(w: World) -> dict[str, Callable[[Engine], Callable[[Connection
         first, _, _ = _complete(engine, w, 1)
         with engine.begin() as c:
             _admit(c, w, 2, series=1, version=w.second_version, supersedes=first)
-        return lambda c: _admit(c, w, 3, series=1, version=w.unenrolled_version, supersedes=first)
+        return lambda c: _admit(c, w, 3, series=1, version=w.third_version, supersedes=first)
 
     def one_job(engine: Engine) -> Callable[[Connection], object]:
         publication, _ = _running(engine, w, 1)
@@ -2388,13 +2396,24 @@ _ROW_CONTENT: Final[dict[str, object]] = {
 
 @pytest.mark.parametrize("column", sorted(_ROW_CONTENT))
 def test_row_content_is_immutable(db_engine: Engine, w: World, column: str) -> None:
+    """A content change rides on an otherwise legal link, so only this check refuses."""
     _, _, row = _parsed(db_engine, w)
+    with db_engine.begin() as c:
+        c.execute(
+            text(
+                "INSERT INTO knowledge.schedule_activities (schedule_activity_id, principal_id, "
+                "project_id, series_id, published_activity_id) SELECT 'sact_cpmgcontent', "
+                "principal_id, project_id, series_id, published_activity_id FROM "
+                "knowledge.schedule_rows WHERE row_id = :r"
+            ),
+            {"r": row},
+        )
     _refused(
         db_engine,
         lambda c: c.execute(
             schedule_rows.update()
             .where(schedule_rows.c.row_id == row)
-            .values(**{column: _ROW_CONTENT[column]})
+            .values(schedule_activity_id="sact_cpmgcontent", **{column: _ROW_CONTENT[column]})
         ),
         sqlstate=RESTRICT_VIOLATION,
         names="schedule row content is immutable",

@@ -643,7 +643,10 @@ def test_series_name_check_refuses_untrimmed_doubled_and_control(db_engine: Engi
     for n, bad in enumerate((" Master", "Master ", "Master  Schedule", "Master\tX", "", "x" * 201)):
         _refused(
             db_engine,
-            _insert(schedule_series, _series_values(series_id=f"sser_cpmgcheck9{n}", name=bad)),
+            _insert(
+                schedule_series,
+                _series_values(series_id=f"sser_cpmgcheck9{n}", name=bad, name_key=f"key {n}"),
+            ),
             sqlstate=CHECK_VIOLATION,
             names=name,
             replica=True,

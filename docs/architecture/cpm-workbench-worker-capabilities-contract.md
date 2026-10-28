@@ -35,6 +35,12 @@ sections 3.3.2, 3.4.2, 3.4.6, 4.1; F06 section 6.3 (Q14, Q20a/b, Q27, Q38); F07 
 3.10; F12 sections 3.4.3, 3.4.8; ruling O-1 sections 6.2, 8.1 (E-02); ruling O-2 section 5
 (I7-A condition).
 
+**Revision R7-2.** R7 re-review 1 (PASS_WITH_REQUIRED_CHANGES at `60b80b04`): N1 (the R7-1
+parsed-run shortcut could not finalize — a parsed run stores no title, Data Date or Run
+Date) sections 3.3.1, 3.3.2, 4.1, 4.3, 5, 6.2, 6.3 (Q61), 8.2 (U2-11); N2 (fail-closed
+`running`-run rule) sections 3.3.1, 6.2; F01 practicality ruling sections 3.4.4, 3.4.8, 6.2,
+6.3, 7, 8.2 (U2-12), 8.3.
+
 **Conventions.** Paths are written in full from the repository root; files that do not
 exist yet are written as code spans, never as Markdown links (CI link check); no
 `path:line` citation is used (citation guard). Counts are digits (spelled-count guard).
@@ -179,12 +185,11 @@ checkpoint `C`. The module imports neither `pypdfium2` nor `my_pa.infrastructure
 | H2 | provider read phase | `engine.connect().execution_options(isolation_level="AUTOCOMMIT")` | module seam `_provider_for(connection, source_id)` = `RegisteredSourceProviders(connection).for_source(source_id)` (tests replace the seam with a fake `SourceProvider` serving synthetic bytes; extraction precedent `_provider`), then `metadata(source_object_id)`, `fetch(source_object_id, max_bytes=plan.max_fetch_bytes)` | no DB transaction around bytes; checks in 3.3.2 |
 | C2 | budget | | | |
 | H3 | (pin) | UoW | `pin_document(sha256(bytes), len(bytes))` | `ScheduleIntegrityError("document_changed")` → deterministic `source_version_changed` |
-| H3b | parsed-run lookup (R7-F04) | UoW (read) | `find_parsed_run(principal_id, publication_id, …)` with the S5b-1 reuse key `(EXPECTED_PARSER_NAME, EXPECTED_PARSER_VERSION, EXPECTED_PROFILE_ID, EXPECTED_PROFILE_VERSION, pinned document digest)`, engine versions excluded | found → skip H4–H6 and continue at H7 with that run (no respawn); the `EXPECTED_*` constants are mirrored in `infrastructure/jobs/schedule.py` (the parent may not import `full_profile`, which loads PDFium) and pinned equal to `full_profile`'s by a FAST test |
 | C3 | budget, then `wall = min(150, remaining − 60)`; `wall < 15` → deterministic `processing_budget_exceeded` without spawning | | | |
 | H4 | parser phase | `run_isolated_parse(bytes, expected_data_date, wall)` (3.4) | — | no DB transaction |
 | C4 | budget | | | |
 | H5 | parser-run batch | UoW | `start_parser_run(ScheduleParserIdentity(<result parser/profile fields>, <result.engine versions>))` | result `FAILED` → `fail_publication(<its single failed-ladder code>, run_id)`, return |
-| H6 | row/issue batches | one UoW per batch, `C` before each | `insert_rows` ×⌈rows/1000⌉ in ordinal order, then `insert_issues` ×⌈issues/1000⌉, then `finish_parser_run(parsed=result.counts, parse_result_sha256=…)` | skipped only when the returned run has `status == parsed` — `start_parser_run` also returns `reused=True` for this attempt's own `running` run, which still needs its batches (S5b-1 `insert_rows` ordinal rule: a batch resumes at the stored maximum ordinal + 1; issues are inserted only by an attempt that inserted the last row batch; if resumption cannot be expressed against the S5b-1 rules the implementer STOPs and reports); `ScheduleRowBoundsError` → `fail_publication(BOUNDS_EXCEEDED, run_id)` |
+| H6 | row/issue batches | one UoW per batch, `C` before each | `insert_rows` ×⌈rows/1000⌉ in ordinal order, then `insert_issues` ×⌈issues/1000⌉, then `finish_parser_run(parsed=result.counts, parse_result_sha256=…)` | skipped only when the returned run has `status == parsed` (R7-N1); then `parse_result_sha256(result)` must equal the reused run's stored `parse_result_sha256`, a mismatch being an invariant breach → transient `internal_error`, nothing written (a re-claim is a determinism check, not blind trust). A `running` run returned here (this attempt's own run, reachable only by a second call within one attempt) with **zero** stored rows and issues is treated as fresh and gets the full H6; **any** stored row or issue on it is an invariant breach → transient `internal_error`, no write (`insert_issues` has no idempotency guard, so no resumption is attempted; R7-N2); `ScheduleRowBoundsError` → `fail_publication(BOUNDS_EXCEEDED, run_id)` |
 | H7 | stable canonicalization | one UoW per batch, `C` before each | `canonicalize_batch(limit=1000)` until `remaining == 0` | only when the run outcome (= `result.outcome`) is `complete`/`partial` |
 | H8 | finalization | UoW | `finalize_publication(ScheduleFinalization(run_id, title, data_date, run_date))` | status derived by F9/F3 |
 | HF | deterministic terminal failure | UoW | `fail_publication(code, run_id or None)` then **return** | `run_id` only while that run is `running`; otherwise `None` (run-less issue, still `failed`) |
@@ -230,10 +235,11 @@ job (`succeeded`) while the publication is `failed`/`review_required` — the jo
 means "processing finished", not "publication succeeded" (R2 §22). Exhausted transient
 attempts leave the publication `queued`/`processing` and reads derive effective `failed`
 (S5b-1 `effective_publication_status`); no read writes. A re-claimed attempt re-reads,
-re-pins (equal digest = no-op), then H3b: an existing `parsed` run for the reuse key is
-continued at H7 **without respawning the child** (a re-parse is not timing-deterministic and a
-budget failure there would discard a persisted good parse, R7-F04); otherwise it re-parses and
-`start_parser_run` closes the earlier `running` run and starts a new one.
+re-pins (equal digest = no-op) and re-parses in the child; `start_parser_run` then either
+reuses the `parsed` run for the S5b-1 reuse key (H6 skipped after the `parse_result_sha256`
+equality check) or closes the earlier `running` run and starts a new one. A parsed run stores
+no title, Data Date or Run Date, so finalization always needs the re-parse's result (R7-N1);
+the cost is residual U2-11.
 
 ### 3.4 PDF isolation (S5a U-05, U-12)
 
@@ -311,7 +317,7 @@ the in-child cooperative deadline is `start + max(wall − 1.0, 0)`, never negat
 | Bound | Value | Enforced by |
 |---|---|---|
 | input | ≤ 16,777,216 bytes | handler before spawn; child exit 4 |
-| address space | 1,073,741,824 bytes (Linux only), **provisional** until measured (R7-F01): CI on Linux records the child's `VmSize`/`VmPeak` (`/proc/self/status`) after the parser import and after a parse of the largest synthetic golden; the constant is frozen only with ≥ 2× headroom over that peak, else the implementer STOPs and reports | `RLIMIT_AS`/`RLIMIT_DATA` |
+| address space | 1,073,741,824 bytes (Linux only), **provisional** (labelled so in its code comment; U2-12): no number is presented as measured unless measured on Linux (macOS has no `VmPeak`, and macOS VSZ includes the shared cache, so it is neither a proxy nor cited). Verification is the Linux-only `test_child_address_space_has_headroom` (3.4.8), enforced by the PR's ubuntu CI | `RLIMIT_AS`/`RLIMIT_DATA` |
 | CPU | `ceil(wall)+1` s soft (`SIGXCPU`), +1 hard | `RLIMIT_CPU` |
 | wall | `min(150, remaining − 60)` s, ≥ 15 s; parent kill at wall + 2 s | parent loop; in-child cooperative deadline at wall − 1 s |
 | open descriptors | 32 | `RLIMIT_NOFILE` |
@@ -372,6 +378,7 @@ handles hostile data and a compromised child must not gain code execution in the
 | Case | Construction | Expected |
 |---|---|---|
 | positive control (production limits) | the largest synthetic golden (`full_multi_page_86_equivalent`) and the bounds-maximal synthetic within production caps, under `PRODUCTION_CHILD_LIMITS` | each parses to its golden outcome with a digest equal to the in-process parse — the cap does not break benign documents (Linux) |
+| address-space headroom (R7 F01 ruling) | `test_child_address_space_has_headroom`, skipped exactly when `sys.platform != "linux"` (reason `Linux-only: RLIMIT_AS/VmPeak`; never "if the cap cannot be set", so an unsettable cap on Linux fails as exit 5 → transient instead of skipping): a test-only probe child, reachable **only** through the injectable test `command`, applies every production containment step **except** `RLIMIT_AS`/`RLIMIT_DATA` (so the peak is not censored), imports the parser, parses the largest synthetic golden and the bounds-maximal synthetic, and reports `VmPeak` from `/proc/self/status` | asserts `2 × VmPeak ≤ PRODUCTION_CHILD_LIMITS.address_space` and prints the measured value; fails in CI below 2× headroom. `ChildLimits` still refuses widening and the production path cannot omit the cap; FAST `test_child_command_applies_the_address_space_cap_on_linux` asserts `CHILD_COMMAND` always applies `RLIMIT_AS` on Linux |
 | positive control (bomb cap) | the 86-page fixture under the bomb test's `address_space = 268,435,456` | parses to its golden outcome — the bomb below fails because of the bomb (Linux) |
 | decompression bomb | 1 page, `FlateDecode` content stream of 536,870,912 zero bytes (≈ 0.5 MiB compressed), test limit `address_space = 268,435,456` | Linux: `failed`, code pinned to the measured member of {`bounds_exceeded`, `parser_exception`}, identical on 2 runs; parent RSS growth < 64 MiB |
 | page count | 251 minimal valid pages | `failed` / `bounds_exceeded` (S5a V-cap through the child) |
@@ -798,7 +805,7 @@ no `pg_catalog` write function, `SET TRANSACTION READ ONLY` first); database
 | `ChatLLMCompositionPrerequisite.SCHEDULE`, `SCHEDULE_DATA_NAMES`, `CHATLLM_DATA_PROFILE_VERSION = "chatllm-data-v11"` | `domain/identity/chatllm_capability_policy.py` | |
 | `ScheduleChangeKind` (11, R2 §43.2 order), `DELTA_ALGORITHM_VERSION = "cpm-workbench-full-delta-v1"` | `domain/schedule/compare.py` | |
 | `MAX_SCHEDULE_PAGE_SIZE = 100`, `DEFAULT_SCHEDULE_PAGE_SIZE = 25`, `MAX_SCHEDULE_CURSOR_CHARACTERS = 512`, `SCHEDULE_CURSOR_TTL_SECONDS = 300`, `SCHEDULE_CURSOR_VERSION = 1` | `domain/schedule/cursor.py` | |
-| `EXPECTED_PARSER_NAME`, `EXPECTED_PARSER_VERSION`, `EXPECTED_PROFILE_ID`, `EXPECTED_PROFILE_VERSION` (mirrors of `full_profile`, pinned by `test_expected_parser_identity_equals_full_profile`), `SCHEDULE_HANDLER_BUDGET_SECONDS = 240`, `SCHEDULE_PARSE_RESERVE_SECONDS = 60`, `SCHEDULE_PARSE_MAX_WALL_SECONDS = 150`, `SCHEDULE_PARSE_MIN_WALL_SECONDS = 15`, `SCHEDULE_MIN_LEASE_SECONDS = 300` | `infrastructure/jobs/schedule.py` | |
+| `SCHEDULE_HANDLER_BUDGET_SECONDS = 240`, `SCHEDULE_PARSE_RESERVE_SECONDS = 60`, `SCHEDULE_PARSE_MAX_WALL_SECONDS = 150`, `SCHEDULE_PARSE_MIN_WALL_SECONDS = 15`, `SCHEDULE_MIN_LEASE_SECONDS = 300` | `infrastructure/jobs/schedule.py` | |
 | `ChildLimits`, `PRODUCTION_CHILD_LIMITS` (address space 1,073,741,824; open files 32; output 134,217,728), `FRAME_MAGIC`, `FRAME_SCHEMA = "cpm-workbench-parse-frame-v1"`, `CHILD_COMMAND`, exit codes `EXIT_MEMORY = 3`, `EXIT_INPUT = 4`, `EXIT_CONTAINMENT = 5`, `EXIT_USAGE = 6` | `infrastructure/jobs/schedule_parser_process.py` (exit codes shared with the child module) | |
 
 ### 4.2 Records (frozen slots dataclasses, `__post_init__` invariants)
@@ -817,7 +824,6 @@ id, `ParsedScheduleRow` content); `ScheduleActivityObservation`. `domain/schedul
 ### 4.3 Ports (`contracts/ports.py`, on `ScheduleRepository`)
 
 ```text
-find_parsed_run(principal_id, publication_id, *, parser_name, parser_version, profile_id, profile_version, document_sha256) -> ScheduleParserRun | None   # I7-A, R7-F04
 owns_project(principal_id, project_id) -> bool
 list_series(principal_id, project_id, *, after: tuple[datetime, str] | None, limit) -> tuple[ScheduleSeriesSummary, ...]
 list_publications(principal_id, series_id, *, role, status, after: tuple[datetime, str] | None, limit) -> tuple[SchedulePublicationSummary, ...]
@@ -869,7 +875,7 @@ commit. So the revision moves with the registrations (E-06).
 
 | Package | Owns (writes only these) | Exit |
 |---|---|---|
-| **I7-A** worker + isolation | NEW `src/my_pa/infrastructure/jobs/schedule.py`, `schedule_parser_process.py`, `schedule_parser_child.py`; `src/my_pa/contracts/ports.py` + `src/my_pa/infrastructure/persistence/schedule.py` (`find_parsed_run`, R7-F04); `src/my_pa/domain/schedule/canonical.py` (`parse_result_from_object`), `model.py` (`SchedulePlan.source_id`), `__init__.py`; `src/my_pa/infrastructure/persistence/schedule.py` (`begin_processing` fills `source_id`); `src/my_pa/bootstrap/settings.py` (`schedule_enabled`); `src/my_pa/bootstrap/gateway.py` (factory composition); `src/my_pa/application/service.py` (ctor params only); NEW `tests/unit/test_schedule_parser_isolation.py`, `tests/database/test_cpm_workbench_worker.py`, `tests/architecture/test_cpm_workbench_worker_scope.py` (child import closure, no logging, parent never imports PDFium); `tests/unit/test_settings.py` (switch default); `tests/architecture/test_principal_partition_is_reached_through_the_guard.py` only if registration moves | handler runs end-to-end under `run_worker(…, plane=SCHEDULE_JOBS)` in database tests (no heartbeat); **ruling O-2 condition: I7-A leaves `apps/worker.py`, the heartbeat CHECK (and its `tables.py` literal) and `worker_health.py` untouched**, so the S5b-1 not-runnable guard stays green until I7-B converts it |
+| **I7-A** worker + isolation | NEW `src/my_pa/infrastructure/jobs/schedule.py`, `schedule_parser_process.py`, `schedule_parser_child.py`; `src/my_pa/domain/schedule/canonical.py` (`parse_result_from_object`), `model.py` (`SchedulePlan.source_id`), `__init__.py`; `src/my_pa/infrastructure/persistence/schedule.py` (`begin_processing` fills `source_id`); `src/my_pa/bootstrap/settings.py` (`schedule_enabled`); `src/my_pa/bootstrap/gateway.py` (factory composition); `src/my_pa/application/service.py` (ctor params only); NEW `tests/unit/test_schedule_parser_isolation.py`, `tests/database/test_cpm_workbench_worker.py`, `tests/architecture/test_cpm_workbench_worker_scope.py` (child import closure, no logging, parent never imports PDFium); `tests/unit/test_settings.py` (switch default); `tests/architecture/test_principal_partition_is_reached_through_the_guard.py` only if registration moves | handler runs end-to-end under `run_worker(…, plane=SCHEDULE_JOBS)` in database tests (no heartbeat); **ruling O-2 condition: I7-A leaves `apps/worker.py`, the heartbeat CHECK (and its `tables.py` literal) and `worker_health.py` untouched**, so the S5b-1 not-runnable guard stays green until I7-B converts it |
 | **I7-B** registration + policy closure + migration #2 | every row of section 3.12 except the real handler bodies; NEW migration; `tables.py` (heartbeat literal); `worker_health.py`; `unit_of_work.py`; `apps/worker.py`; `apps/cli/remote_mcp.py`; handler **stubs** (switch gate → `unsupported`, S3 D-37 precedent); converted `tests/architecture/test_cpm_workbench_foundation_scope.py`; NEW `tests/schema/test_cpm_workbench_vocabulary_migration.py`, `tests/contract/test_schedule_policy_closure.py`, `tests/contract/test_schedule_facade_catalog.py`; every pin of 3.13.5; `web/src/lib/api/decode/fixtures/python/success.json` (`git add -f` not needed for a tracked file; verify `git ls-tree`) | full FAST + doc guards + web checks green; 7 names closed on every surface; reads answer `unsupported` |
 | **I7-C** behaviour | `src/my_pa/application/schedules.py` (NEW), `src/my_pa/domain/schedule/compare.py` (NEW), `cursor.py` (NEW), `model.py` (read records), `src/my_pa/contracts/ports.py` (read methods), `src/my_pa/infrastructure/persistence/schedule.py` (read methods), `jobs.py` (`job_is_effectively_failed`), `src/my_pa/application/service.py` (7 handler bodies), `src/my_pa/application/disclosure.py` only if the builder lives there; NEW `tests/unit/test_schedule_compare.py`, `tests/unit/test_schedule_cursor.py`, `tests/unit/test_schedule_commands.py`, `tests/database/test_schedule_capabilities.py`, `tests/integration/test_schedule_compact_facade.py`, `tests/database/test_cpm_workbench_change_performance.py` | section 6 rows marked I7-C green |
 | **I7-D** WP-04 assurance | NEW `docs/architecture/cpm-workbench.md`, `ops/runbooks/cpm-workbench.md`, `docs/decisions/ADR-016-cpm-workbench-schedule-evidence.md` (+ index row), `src/my_pa/infrastructure/database/cpm_workbench_predeploy.py`, `ops/postgres/cpm_workbench_predeploy_check.py`, `tests/security/test_cpm_workbench_security.py`, `tests/database/test_cpm_workbench_predeploy.py`; `src/my_pa/application/capabilities.py` and `src/my_pa/domain/extraction/text.py` (comments only, R2 §8.4); `docs/architecture/00_ARCHITECTURE_INDEX.md`, `system-context.md`, `module-boundaries.md`, `docs/00_REPOSITORY_SOURCE_INDEX.md`, `ops/runbooks/README.md`, `ops/postgres/README.md`; this contract's section 7 table filled with executed results; `tests/ci_shard_weights.json` (`python -m tests.ci_shard weigh` from JUnit XML of the fast and migration lanes; S5a, S5b-1, S5b-2 modules; keep `verify` green and shard 1 no heavier than today); a FAST guard `test_the_s5b2_contract_crosswalk_names_tests_that_exist` | doc/count/link guards green; §45 table honest |
@@ -908,10 +914,10 @@ modules.
 | §9.4, AC-006 | worker: `test_version_change_at_metadata_fails_before_parsing`, `test_version_change_at_fetch_fails_before_parsing`, `test_truncated_fetch_is_source_too_large`, `test_provider_unavailable_is_transient_and_exhausts_to_effective_failed`, `test_provider_read_holds_no_transaction` (asserts no open transaction on the schedule UoW connection during the fake provider call) |
 | §10.1–§10.4, §23, AC-025 | capabilities: `test_import_replays_and_conflicts_per_section_23` (S5b-1 table through the capability), `test_import_creates_one_job` |
 | §10.6, §22, AC-026 | worker: `test_deterministic_failure_completes_the_job_and_fails_the_publication` (parametrized over every deterministic row of 3.3.2), `test_transient_failure_releases_and_retries`; capabilities: `test_exhausted_job_reads_effective_failed_without_writing` |
-| §24, AC-030 | worker: `test_every_phase_refuses_after_lease_loss` (lease expired before each of H1/H3/H5/H6/H7/H8), `test_no_write_after_lease_loss`, `test_lease_loss_is_counted_lost_not_released`, `test_reclaimed_attempt_reuses_the_parsed_run`, `test_reclaimed_attempt_with_parsed_run_does_not_respawn`, `test_running_run_of_this_attempt_still_gets_its_batches`, `test_expected_parser_identity_equals_full_profile`, `test_reclaimed_attempt_after_terminal_completes_without_writing` |
+| §24, AC-030 | worker: `test_every_phase_refuses_after_lease_loss` (lease expired before each of H1/H3/H5/H6/H7/H8), `test_no_write_after_lease_loss`, `test_lease_loss_is_counted_lost_not_released`, `test_reclaimed_attempt_reuses_the_parsed_run`, `test_reclaimed_reparse_digest_must_equal_the_reused_run`, `test_running_run_of_this_attempt_with_stored_rows_is_an_invariant_breach`, `test_reclaimed_attempt_after_terminal_completes_without_writing` |
 | §25 budget | worker: `test_budget_checkpoints_fail_with_processing_budget_exceeded` (fake clock at each checkpoint), `test_parse_is_not_spawned_with_less_than_the_minimum_wall` |
 | §25, AC-029 | foundation scope: `test_schedule_plane_is_runnable_on_all_four_surfaces`; worker scope: `test_worker_refuses_the_schedule_plane_while_disabled`, `test_worker_refuses_a_lease_shorter_than_three_hundred_seconds`; capabilities: `test_capabilities_get_reports_the_schedule_plane_only_when_enabled` |
-| U-05, §35 | isolation: every row of 3.4.8 (`test_decompression_bomb_fails_closed_on_linux`, `test_page_count_bound_through_the_child`, `test_deep_nesting_fails_closed`, `test_wall_timeout_is_processing_budget_exceeded`, `test_hung_child_is_killed_and_reaped`, `test_native_crash_is_parser_exception`, `test_external_kill_is_transient`, `test_oversized_output_is_bounds_exceeded`, `test_malformed_frame_is_transient`, `test_frame_for_other_bytes_is_transient`, `test_child_environment_is_scrubbed`, `test_containment_refuses_network_spawn_and_write`, `test_child_rlimits_are_set`, `test_containment_reports_the_memory_cap_per_platform`, `test_child_parse_equals_in_process_parse` (under `PRODUCTION_CHILD_LIMITS`), `test_largest_golden_parses_under_production_limits`, `test_benign_document_parses_under_the_bomb_cap`, `test_child_address_space_is_measured` (Linux CI, records `VmPeak`)); worker scope: `test_child_import_closure_has_no_network_or_database_module`, `test_the_worker_parent_never_imports_pdfium` |
+| U-05, §35 | isolation: every row of 3.4.8 (`test_decompression_bomb_fails_closed_on_linux`, `test_page_count_bound_through_the_child`, `test_deep_nesting_fails_closed`, `test_wall_timeout_is_processing_budget_exceeded`, `test_hung_child_is_killed_and_reaped`, `test_native_crash_is_parser_exception`, `test_external_kill_is_transient`, `test_oversized_output_is_bounds_exceeded`, `test_malformed_frame_is_transient`, `test_frame_for_other_bytes_is_transient`, `test_child_environment_is_scrubbed`, `test_containment_refuses_network_spawn_and_write`, `test_child_rlimits_are_set`, `test_containment_reports_the_memory_cap_per_platform`, `test_child_parse_equals_in_process_parse` (under `PRODUCTION_CHILD_LIMITS`), `test_largest_golden_parses_under_production_limits`, `test_benign_document_parses_under_the_bomb_cap`, `test_child_address_space_has_headroom` (Linux-only), `test_child_command_applies_the_address_space_cap_on_linux`); worker scope: `test_child_import_closure_has_no_network_or_database_module`, `test_the_worker_parent_never_imports_pdfium` |
 | §29, AC-028 | compare: `test_each_change_kind` (11 cases), `test_reintroduced_replaces_added`, `test_sign_convention`, `test_no_number_is_fabricated_for_non_value_states`, `test_marker_and_provenance_only_differences_emit_nothing`, `test_merge_is_single_pass` (counts comparisons ≤ 2N), `test_ordering_and_counts_by_kind`; capabilities: `test_changes_pagination_is_stable_across_pages`, `test_changes_eligibility_refusals`; performance: `test_change_scan_of_25000_rows_meets_the_target` |
 | §30, AC-027 | commands: `test_role_is_required_and_baseline_kind_follows_it`; capabilities: `test_series_latest_update_ignores_baselines_and_references`, `test_first_publication_is_not_a_baseline`; worker scope: `test_no_baseline_is_derived` |
 | §31, AC-031 | policy closure: `test_every_closed_surface_classifies_the_seven` (one assertion per surface of 3.12), `test_reads_are_scopeless_and_import_is_not`, `test_unchanged_surfaces_are_unchanged` |
@@ -997,12 +1003,19 @@ modules.
 | Q58 | heartbeat CHECK at head lacks `schedule` | `test_empty_to_head_admits_every_schedule_name_and_plane` |
 | Q59 | predeploy: add an `UPDATE` statement | `test_predeploy_sql_is_select_only` |
 | Q60 | `print(row.activity_name)` planted in the handler | `test_new_modules_neither_log_nor_print` |
+| Q61 | handler: skip the `parse_result_sha256` equality check on a reused `parsed` run | `test_reclaimed_reparse_digest_must_equal_the_reused_run` (R7-N1) |
 
 A prove-red that stays green is reported as redundancy, a masked test or an unreachable
 hazard, never as "covered" (for example Q08's second test is expected to be layered behind
 the first). A row whose test skips on the implementation host (Linux-only memory rows: the
 bomb, its positive controls, Q36[AS]) is reported "CI-only, not executed on the
-implementation host", never as a red proof, unless a Linux host is actually used.
+implementation host", never as a red proof, unless a Linux host is actually used. Per the
+R7 F01 practicality ruling, the implementer on macOS runs every non-Linux-gated isolation test
+and its prove-red locally (parity under production limits with AS not in force, CPU, wall,
+`FSIZE`, `NOFILE`, environment, audit hook, frame and kill cases) and reports the Linux-only
+rows (the headroom test, both positive controls, the bomb, Q36[AS]) in this table, in section
+7 (AC-007 memory) and in the handoff as "CI-only, not executed on the implementation host —
+pending the PR's ubuntu CI run", with no red proof and no pass claimed.
 
 ### 6.4 Commands (foreground, chunked, `PYTHONPATH=src`, `~/my-pa/.venv/bin/python`)
 
@@ -1027,7 +1040,7 @@ password), removed at the end.
 | 004 | test — 6.2 §9.2 row + S5b-1 composite-FK tests |
 | 005 | test — `test_generic_extraction_still_excludes_pdf` (S5a) + I7-D comment-only clarification |
 | 006 | test — 6.2 §9.4 row |
-| 007 | test — S5a bounds goldens + isolation suite (CPU/time through the child on every host); the **memory** sub-criterion is Linux-only and is reported "CI-only, not executed on the implementation host" unless a Linux CI run or Linux host shows the bomb and its positive controls passing — never an executed pass from a skip (R7-F01) |
+| 007 | test — S5a bounds goldens + isolation suite (CPU/time through the child on every host); the **memory** sub-criterion (headroom test, both positive controls, bomb) is Linux-only and is reported "CI-only, not executed on the implementation host — pending the PR's ubuntu CI run" unless a Linux CI run or Linux host shows it executed and passed — never an executed pass from a skip (R7-F01, U2-12) |
 | 008 | test — `test_scope_and_hygiene.py` PDFium confinement (unchanged: the child imports PDFium only through `infrastructure/schedule/pdf.py`) |
 | 009–019 | test — S5a goldens/profile suites (unchanged parser); isolation parity test proves the child path yields identical results |
 | 020–023 | test — S5b-1 schema-guard/persistence suites (unchanged) + 6.2 rows exercising them through the worker |
@@ -1073,6 +1086,8 @@ password), removed at the end.
 | ID | Item | Owner |
 |---|---|---|
 | U2-01 | Native code in the child can still issue socket syscalls (no seccomp/netns on Linux, no sandbox on macOS) | operator: network-less container for the schedule worker |
+| U2-11 | A timing-dependent child failure (wall/CPU budget) on a re-claim fails a publication whose parse is already persisted as a `parsed` run: the re-parse is required because a parsed run stores no title, Data Date or Run Date (R7-N1). R2 §22 makes budget failures terminal; R2 §36's admitted bound is the lever | WP-04 measurement; bound reduction if observed |
+| U2-12 | `RLIMIT_AS` 1 GiB is provisional and unverified on Linux until the PR's CI shows `test_child_address_space_has_headroom`, both positive controls and the bomb test **executed and passed** (not skipped); if the headroom test fails, the cap is re-derived as ≥ 2× the reported `VmPeak` (and ≤ any container memory limit) in a follow-up before merge. The STOP rule applies only when a real Linux measurement is in hand (for example a CI run the operator relays back) showing < 2× headroom: the implementer then stops and reports rather than re-tuning silently | operator pre-merge gate (section 8.3); I7-D runbook names the 4 tests to look for in the CI log |
 | U2-10 | A compromised child can (a) truncate, unlink, rename, chmod or create empty files the worker UID may modify (`RLIMIT_FSIZE` only stops growth; the audit hook covers Python calls only), and (b) return a well-formed frame with fabricated rows for the right digest, which would be persisted and served as `SOURCE_BOUND_DERIVED` | operator: dedicated UID, read-only root filesystem, no write access to source roots, network-less runtime (section 8.3) |
 | U2-02 | macOS cannot lower `RLIMIT_AS`: on dev hosts a bomb is bounded only by CPU/wall | accepted (prod and CI are Linux) |
 | U2-03 | A worker killed by `SIGKILL` leaves its child running until `RLIMIT_CPU` or a broken pipe ends it (≤ ~152 s CPU); no parent-death signal from the standard library | accepted, bounded |
@@ -1102,7 +1117,12 @@ password), removed at the end.
 4. Any ChatLLM profile apply to `chatllm-data-v11`, any remote grant on a schedule read.
 5. A runtime for the schedule worker that is network-less, runs under a dedicated UID with a
    read-only root filesystem and has no write access to any source root (U2-01, U2-10).
-6. The authorized real-corpus evaluation (R2 §39, S5a U-01) and XER/XML (WP-05B, unimplemented).
+6. **Pre-merge (U2-12):** the PR's ubuntu CI log shows `test_child_address_space_has_headroom`,
+   `test_largest_golden_parses_under_production_limits`,
+   `test_benign_document_parses_under_the_bomb_cap` and
+   `test_decompression_bomb_fails_closed_on_linux` executed and passed (not skipped); otherwise
+   the cap is re-derived before merge.
+7. The authorized real-corpus evaluation (R2 §39, S5a U-01) and XER/XML (WP-05B, unimplemented).
 
 ### 8.4 Open questions for review R7
 

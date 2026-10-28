@@ -528,6 +528,15 @@ class Settings(StrictModel):
     #: artifact whatever it says (S4 D-21). Enabling it anywhere but a test is an
     #: operator gate (S4 contract section 13).
     program_reporting_enabled: bool = False
+    #: CPM Workbench S5b-2 admission switch (worker contract section 3.1), env
+    #: `MY_PA_SCHEDULE_ENABLED`. Default off. Off withholds the 7 Schedule
+    #: capabilities from `capabilities.get`, readiness, the MCP tool list, the
+    #: remote profile and the ChatLLM composition, each Schedule handler answers
+    #: `unsupported`, the gateway composes no Schedule unit of work, and
+    #: `apps/worker.py` refuses the `schedule` plane. No dependency on another
+    #: switch; turning it on or off changes no row. Enabling it anywhere but a
+    #: test, or running a schedule worker, is an operator gate (contract 8.3).
+    schedule_enabled: bool = False
     #: KLP-WP-04 (R6 section 3.4, KLP-AC-019). The exact OAuth client ids bound
     #: as Knowledge discovery clients. Compared exactly, never by prefix; empty --
     #: the default -- binds no client, so `knowledge.assertions.submit` and

@@ -671,6 +671,7 @@ from my_pa.contracts.ports import (
     ProgramReadUnitOfWork,
     RelationshipMemoryRepository,
     ReviewDecisionRequest,
+    ScheduleUnitOfWork,
     SearchOutcome,
     TransactionConflictError,
     UnitOfWork,
@@ -4082,6 +4083,8 @@ class ApplicationService:
         lineage_backfill_enabled: bool = False,
         program_reporting_enabled: bool = False,
         program_read_unit_of_work: Callable[[], ProgramReadUnitOfWork] | None = None,
+        schedule_enabled: bool = False,
+        schedule_unit_of_work: Callable[[], ScheduleUnitOfWork] | None = None,
         knowledge_discovery_client_ids: frozenset[str] = frozenset(),
         knowledge_operator_review_client_ids: frozenset[str] = frozenset(),
         knowledge_manager_client_ids: frozenset[str] = frozenset(),
@@ -4150,6 +4153,13 @@ class ApplicationService:
         #: Record lineage S4 (contract section 6.3): the Program read unit of work
         #: on its own pool, or `None` -- then the 2 Program reads are withheld.
         self._program_read_unit_of_work = program_read_unit_of_work
+        #: CPM Workbench S5b-2 (worker contract section 3.1): the Schedule switch
+        #: and the Schedule unit-of-work factory, `None` unless the gateway
+        #: composed it (switch on, no restricted `data_engine`). Both default
+        #: off; nothing reads them yet -- the capability admission and the
+        #: handlers that consult them land with the registrations (I7-B).
+        self._schedule_enabled = schedule_enabled
+        self._schedule_unit_of_work = schedule_unit_of_work
         #: KLP-WP-04 (R6 section 6.1): the exact discovery allowlist the second
         #: service gate reads. Empty -- the default -- refuses every submit and
         #: checkpoint, so an unconfigured build fails closed for the role.

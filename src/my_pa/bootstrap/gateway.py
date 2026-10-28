@@ -203,7 +203,12 @@ from my_pa.application.webauthn_bff_attestation import verify_webauthn_attestati
 from my_pa.bootstrap.apple_machine_control import SqlAppleMachineControl
 from my_pa.bootstrap.goodnotes_rollout import allowed_activation_steps
 from my_pa.bootstrap.settings import AuthMode, Settings
-from my_pa.contracts.ports import ManagedByteStore, ProgramReadUnitOfWork, UnitOfWork
+from my_pa.contracts.ports import (
+    ManagedByteStore,
+    ProgramReadUnitOfWork,
+    ScheduleUnitOfWork,
+    UnitOfWork,
+)
 from my_pa.domain.capture.client import admit_client_binding, parse_client_credential
 from my_pa.domain.capture.errors import CaptureError
 from my_pa.domain.common.identifiers import IdKind
@@ -244,6 +249,7 @@ from my_pa.infrastructure.persistence.entity_reenrichment import (
 from my_pa.infrastructure.persistence.principal_scope import capture_context
 from my_pa.infrastructure.persistence.program_reads import SqlAlchemyProgramReadUnitOfWork
 from my_pa.infrastructure.persistence.registry import configured_source_roots
+from my_pa.infrastructure.persistence.schedule import SqlAlchemyScheduleUnitOfWork
 from my_pa.infrastructure.persistence.tables import (
     entity_reenrichment_subjects,
     entity_reenrichment_version_watermarks,
@@ -1100,6 +1106,18 @@ def build_gateway_runtime(
         None if program_read_engine is None else _program_read_factory(program_read_engine)
     )
 
+    # CPM Workbench S5b-2 (worker contract section 3.1): the Schedule unit of
+    # work, composed only while `MY_PA_SCHEDULE_ENABLED` is on and never in a
+    # restricted composition -- an injected `data_engine` is a fixed MCP
+    # database role, and no MCP role holds a privilege on the CPM tables
+    # (S5b-1 section 4.11), so the factory would only fail there.
+    def schedule_factory() -> ScheduleUnitOfWork:
+        return SqlAlchemyScheduleUnitOfWork(work_engine)
+
+    schedule_unit_of_work: Callable[[], ScheduleUnitOfWork] | None = (
+        schedule_factory if settings.schedule_enabled and data_engine is None else None
+    )
+
     # The same conjunction `ApplicationService.available_capabilities` applies,
     # spelled once here so the review surface turns on with the plane's own
     # capability names rather than separately. A memory binds its subject to an
@@ -1200,6 +1218,10 @@ def build_gateway_runtime(
             # the Program read factory on its own pool (`None` when off).
             program_reporting_enabled=settings.program_reporting_enabled,
             program_read_unit_of_work=program_read_unit_of_work,
+            # CPM Workbench S5b-2 (contract section 3.1): its own switch and the
+            # Schedule factory composed above (`None` when off or restricted).
+            schedule_enabled=settings.schedule_enabled,
+            schedule_unit_of_work=schedule_unit_of_work,
             # KLP-WP-04 (R6 section 6.1): the second service gate's allowlist.
             knowledge_discovery_client_ids=settings.knowledge_discovery_oauth_client_id_set(),
             # KLP-WP-04 slice C (R6 section 3.2): the operator-review allowlist the

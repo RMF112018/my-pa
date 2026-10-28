@@ -157,7 +157,9 @@ class _Job:
 
     def __init__(self, engine: Engine, job: LeasedJob, owner: str) -> None:
         self.engine = engine
-        self.principal_id = job.principal_id
+        #: The stored job row's Principal, returned by the claim (`claim_job`'s
+        #: `RETURNING`), never a request value.
+        self.principal = job.principal_id
         self.publication_id = job.subject_id
         self.lease = ScheduleLease(job.operation_id, owner, job.attempt)
         self.budget = ScheduleBudget(
@@ -178,7 +180,7 @@ class _Job:
         run_id = self.running_run_id
         self.transaction(
             lambda schedules: schedules.fail_publication(
-                self.principal_id, self.publication_id, self.lease, code, run_id
+                self.principal, self.publication_id, self.lease, code, run_id
             )
         )
 
@@ -206,7 +208,7 @@ def _process(attempt: _Job) -> None:
 
 
 def _phases(attempt: _Job) -> None:
-    principal, publication_id, lease = attempt.principal_id, attempt.publication_id, attempt.lease
+    principal, publication_id, lease = attempt.principal, attempt.publication_id, attempt.lease
     # H1: the plan.
     plan = attempt.transaction(
         lambda schedules: schedules.begin_processing(principal, publication_id, lease)
@@ -343,7 +345,7 @@ def _failed_code(result: ScheduleParseResult) -> ScheduleIssueCode:
 
 def _start_run(attempt: _Job, result: ScheduleParseResult) -> ScheduleParserRun:
     """H5: start (or reuse) the run; a reused `running` run must still be empty."""
-    principal, publication_id, lease = attempt.principal_id, attempt.publication_id, attempt.lease
+    principal, publication_id, lease = attempt.principal, attempt.publication_id, attempt.lease
     identity = ScheduleParserIdentity.from_parse_result(result)
 
     def start(schedules: ScheduleRepository) -> ScheduleParserRun:
@@ -368,7 +370,7 @@ def _batches[T](items: Sequence[T]) -> list[Sequence[T]]:
 
 def _store(attempt: _Job, run_id: str, result: ScheduleParseResult) -> None:
     """H6: rows in ordinal order, then issues, then the run's end; budget before each."""
-    principal, publication_id, lease = attempt.principal_id, attempt.publication_id, attempt.lease
+    principal, publication_id, lease = attempt.principal, attempt.publication_id, attempt.lease
     for rows in _batches(result.rows):
         _budget(attempt, "H6")
 
@@ -407,7 +409,7 @@ def _store(attempt: _Job, run_id: str, result: ScheduleParseResult) -> None:
 
 def _canonicalize(attempt: _Job, run_id: str) -> None:
     """H7: link every activity/milestone row, 1,000 at a time; budget before each."""
-    principal, lease = attempt.principal_id, attempt.lease
+    principal, lease = attempt.principal, attempt.lease
     while True:
         _budget(attempt, "H7")
         progress = attempt.transaction(

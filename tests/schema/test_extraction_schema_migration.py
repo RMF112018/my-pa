@@ -555,6 +555,18 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
     ),
     # Record lineage S4 (ADR-015): the immutable Intelligence report manifest.
     "c5260943d933": frozenset({"intelligence_artifact_manifests"}),
+    # CPM Workbench S5b-1: the Schedule foundation (R2 WP-01).
+    "6c2306330ceb": frozenset(
+        {
+            "schedule_series",
+            "schedule_publications",
+            "schedule_activities",
+            "schedule_jobs",
+            "schedule_parser_runs",
+            "schedule_rows",
+            "schedule_import_issues",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

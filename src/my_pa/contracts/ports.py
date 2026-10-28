@@ -256,6 +256,25 @@ from my_pa.domain.relationship.reenrichment import (
     ReenrichmentBinding,
     ReenrichmentWork,
 )
+from my_pa.domain.schedule import (
+    ParsedScheduleRow,
+    ScheduleAdmission,
+    ScheduleAdmissionRefusal,
+    ScheduleCanonicalizationProgress,
+    ScheduleFinalization,
+    ScheduleImportRequest,
+    ScheduleIssueCode,
+    ScheduleLease,
+    ScheduleParseCounts,
+    ScheduleParseIssue,
+    ScheduleParserIdentity,
+    ScheduleParserRun,
+    ScheduleParserRunStart,
+    SchedulePlan,
+    SchedulePublication,
+    SchedulePublicationStatus,
+    ScheduleSeries,
+)
 from my_pa.domain.search.query import SearchMatch, SearchQuery, SearchRequest
 from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
@@ -489,6 +508,11 @@ __all__ = [
     "ReviewDecisionRequest",
     "ReviewRepository",
     "ReviewScopeLink",
+    "ScheduleAdmissionRejectedError",
+    "ScheduleIntegrityError",
+    "ScheduleLeaseLostError",
+    "ScheduleRepository",
+    "ScheduleUnitOfWork",
     "SearchOutcome",
     "SituationRepository",
     "SourceProviders",
@@ -8732,6 +8756,215 @@ class ConstraintManagementUnitOfWork(ABC):
         Project state. What a Constraint service is entitled to is the lock and
         the ownership answer it returns.
         """
+
+
+# --- CPM Workbench S5b-1 Schedule ports (R2 WP-01) ----------------------------
+#
+# Contract: `docs/architecture/cpm-workbench-foundation-contract.md` sections
+# 5.4-5.7. A dedicated unit of work, deliberately *not* a member of `UnitOfWork`
+# (R2 section 8.2, D-21): it carries no Record Event buffer and no Project
+# repository, because WP-01 emits no Record Event and proves Project ownership
+# with a partitioned read inside its own transaction. Nothing outside the
+# repository's own tests reaches these ports until WP-03 composes them.
+
+
+class ScheduleLeaseLostError(Exception):
+    """The caller's lease on its `schedule_jobs` row is gone. Nothing was written.
+
+    Raised for every way a lease can be gone -- expired, reclaimed, never held,
+    or naming another publication or Principal -- because they are one fact to
+    the caller and telling them apart would describe a job it no longer holds.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("the schedule job lease is not held")
+
+
+class ScheduleAdmissionRejectedError(Exception):
+    """A typed admission rejection (R2 section 23). The unit of work rolls back.
+
+    Raised rather than returned so a Series row created earlier in the same
+    transaction can never commit beside a refused publication (D-16). The
+    message carries the reason code only, never an identifier or text.
+    """
+
+    def __init__(self, reason: ScheduleAdmissionRefusal) -> None:
+        super().__init__(f"schedule admission refused: {reason.value}")
+        self.reason = reason
+
+
+class ScheduleIntegrityError(Exception):
+    """A section 24 precondition failed. `code` is fixed text with no content."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(f"schedule integrity: {code}")
+        self.code = code
+
+
+class ScheduleRepository(ABC):
+    """The Schedule foundation tables, inside one `ScheduleUnitOfWork` transaction.
+
+    Every method takes the authenticated `principal_id` first and reaches the
+    partition through it; a row of another Principal reads as absent and is
+    never written. Every worker method begins by asserting the caller's lease
+    (`hold_lease` on `SCHEDULE_JOBS`) and raises `ScheduleLeaseLostError`
+    without writing when it is gone.
+    """
+
+    # -- admission (one transaction, no lease) --------------------------------
+
+    @abstractmethod
+    def admit_publication(
+        self, principal_id: str, request: ScheduleImportRequest, request_digest: str
+    ) -> ScheduleAdmission:
+        """Admit one publication and enqueue its one job, or replay the original.
+
+        Every refusal is `ScheduleAdmissionRejectedError`; a cross-Principal
+        Project, Series, enrollment or publication is the matching `*_NOT_FOUND`.
+        """
+
+    # -- worker transactions (each begins with the lease) ----------------------
+
+    @abstractmethod
+    def begin_processing(
+        self, principal_id: str, publication_id: str, lease: ScheduleLease
+    ) -> SchedulePlan:
+        """Move a queued publication to processing; a terminal one plans nothing."""
+
+    @abstractmethod
+    def pin_document(
+        self,
+        principal_id: str,
+        publication_id: str,
+        lease: ScheduleLease,
+        document_sha256: str,
+        document_size_bytes: int,
+    ) -> None:
+        """Pin the fetched document once; a different document is refused."""
+
+    @abstractmethod
+    def start_parser_run(
+        self,
+        principal_id: str,
+        publication_id: str,
+        lease: ScheduleLease,
+        identity: ScheduleParserIdentity,
+    ) -> ScheduleParserRunStart:
+        """Reuse a parsed run of this parser, profile and document, or this
+        attempt's running run; else start one."""
+
+    @abstractmethod
+    def insert_rows(
+        self,
+        principal_id: str,
+        parser_run_id: str,
+        lease: ScheduleLease,
+        rows: Sequence[ParsedScheduleRow],
+    ) -> int:
+        """Store 1..1000 consecutive rows of a running run, ordinals verbatim."""
+
+    @abstractmethod
+    def insert_issues(
+        self,
+        principal_id: str,
+        publication_id: str,
+        lease: ScheduleLease,
+        parser_run_id: str | None,
+        issues: Sequence[ScheduleParseIssue],
+    ) -> int:
+        """Store 1..1000 issues of a processing publication (and running run)."""
+
+    @abstractmethod
+    def finish_parser_run(
+        self,
+        principal_id: str,
+        parser_run_id: str,
+        lease: ScheduleLease,
+        *,
+        parsed: ScheduleParseCounts | None,
+        parse_result_sha256: str | None,
+        failure_code: ScheduleIssueCode | None,
+    ) -> ScheduleParserRun:
+        """End a running run as `parsed` (counts verified) or `failed`."""
+
+    @abstractmethod
+    def canonicalize_batch(
+        self,
+        principal_id: str,
+        parser_run_id: str,
+        lease: ScheduleLease,
+        limit: int = 1000,
+    ) -> ScheduleCanonicalizationProgress:
+        """Link the next unlinked activity/milestone rows to Stable Activities."""
+
+    @abstractmethod
+    def finalize_publication(
+        self,
+        principal_id: str,
+        publication_id: str,
+        lease: ScheduleLease,
+        finalization: ScheduleFinalization,
+    ) -> SchedulePublication:
+        """Move a processing publication to its derived terminal outcome."""
+
+    @abstractmethod
+    def fail_publication(
+        self,
+        principal_id: str,
+        publication_id: str,
+        lease: ScheduleLease,
+        code: ScheduleIssueCode,
+        parser_run_id: str | None,
+    ) -> SchedulePublication:
+        """Record one error issue and move a processing publication to `failed`."""
+
+    # -- point reads (no lease, partitioned; cross-Principal answers None) ------
+
+    @abstractmethod
+    def get_series(self, principal_id: str, series_id: str) -> ScheduleSeries | None:
+        """One of the Principal's Series, or `None`."""
+
+    @abstractmethod
+    def get_publication(self, principal_id: str, publication_id: str) -> SchedulePublication | None:
+        """One of the Principal's publications, or `None`."""
+
+    @abstractmethod
+    def get_effective_status(
+        self, principal_id: str, publication_id: str
+    ) -> SchedulePublicationStatus | None:
+        """The stored status, read as `FAILED` once the job is exhausted (R2 10.6)."""
+
+    @abstractmethod
+    def get_parser_runs(
+        self, principal_id: str, publication_id: str
+    ) -> tuple[ScheduleParserRun, ...]:
+        """Every parser run of one of the Principal's publications, by attempt."""
+
+
+class ScheduleUnitOfWork(ABC):
+    """One transaction over the Schedule foundation tables, and the repository inside it.
+
+    Commits when the block succeeds and rolls back when it raises, so a typed
+    admission refusal or a lost lease writes nothing.
+    """
+
+    @abstractmethod
+    def __enter__(self) -> ScheduleUnitOfWork:
+        """Begin the transaction and return the unit of work it belongs to."""
+
+    @abstractmethod
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Commit when the block succeeded, roll back when it did not."""
+
+    @property
+    @abstractmethod
+    def schedules(self) -> ScheduleRepository:
+        """The Schedule repository, inside this transaction."""
 
 
 # --- WP-MTG-02 Meeting records ports -----------------------------------------

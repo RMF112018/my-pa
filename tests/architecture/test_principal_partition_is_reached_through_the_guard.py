@@ -182,6 +182,17 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # revision party join `matching_partition_criterion`. It writes nothing
         # and no hand-written partition comparison.
         "infrastructure/persistence/issue_timeline.py",
+        # CPM Workbench S5b-1's Schedule foundation, in the `constraints.py`
+        # shape: every SELECT and UPDATE composes `_mine` over
+        # `partition_criterion`, every INSERT (including the `ON CONFLICT`
+        # Series, publication and Stable Activity inserts) composes `_bound` over
+        # `principal_bound_values`, and the one join of two partitioned tables
+        # (the canonicalization link) composes `matching_partition_criterion`.
+        # `enrollment_objects` (no partition column) is read only joined to
+        # `enrollments` under `_mine`, and `source_object_versions` only by the
+        # exact pair the request names. No raw SQL and no hand-written partition
+        # comparison.
+        "infrastructure/persistence/schedule.py",
         # KLP-WP-03's Knowledge Assertion plane. Every SELECT and UPDATE scopes
         # each table and alias it names through `partition_criterion`, every
         # INSERT (including the `ON CONFLICT` reservation and evidence upserts)
@@ -521,6 +532,13 @@ PER_MODULE_ONLY: Final = {
         "`principal_bound_values`, correlated event/link predicates use "
         "`matching_partition_criterion`; not yet in a dedicated statement-level "
         "scanner."
+    ),
+    "infrastructure/persistence/schedule.py": (
+        "CPM Workbench S5b-1: every SELECT/UPDATE composes `_mine` over "
+        "`partition_criterion`, every INSERT composes `_bound` over "
+        "`principal_bound_values`, the canonicalization link joins its two "
+        "partitioned tables with `matching_partition_criterion`; not yet in a "
+        "dedicated statement-level scanner."
     ),
     "infrastructure/persistence/continuity_read.py": (
         "one helper applies partition_criterion to every read-model table; the "

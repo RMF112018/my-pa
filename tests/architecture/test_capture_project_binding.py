@@ -48,7 +48,11 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 #: declares the client provenance columns and CHECKs of the four fact tables,
 #: the root creator CHECK, the confirm CHECKs, the request-row writer columns,
 #: CHECK and index, and the schema-2 manifest version; `captures` is untouched.
-TABLES_SHA256: Final = "dcfd038683939255226b0e0aae84cce47c68918de894952d49dbbfc79c658bb3"
+#: Moved again by the CPM Workbench S5b-1 revision (the Schedule foundation), which
+#: declares the seven Schedule tables and a comment beside `enrollments` and
+#: `source_object_versions` naming their database-only support uniques;
+#: `captures` is untouched.
+TABLES_SHA256: Final = "5a426d97f3341fbc0f1f198834d5d072d7b888acb0e1154df6069579856c83c4"
 WP03_MIGRATION_SHA256: Final = "098edd98ccc1846b01c58f42e296e4751e7841b562a2827616cc4337e174c354"
 WP03_MIGRATION: Final = (
     ROOT / "migrations/versions/20260914_e6a4c2f91b73_project_controls_run01_integrity.py"

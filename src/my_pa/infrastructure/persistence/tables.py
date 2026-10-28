@@ -370,6 +370,30 @@ from my_pa.domain.relationship.memory import (
     ContextLinkTargetType as MemoryContextLinkTargetType,
 )
 from my_pa.domain.relationship.profile import EvidenceAuthority
+from my_pa.domain.schedule import (
+    CELLS_SCHEMA,
+    ISSUE_SEVERITY,
+    MAX_ACTIVITY_NAME_CHARACTERS,
+    MAX_CELL_EVIDENCE_BYTES,
+    MAX_HIERARCHY_PATH,
+    MAX_PARSER_IDENTITY_CHARACTERS,
+    MAX_PUBLISHED_ACTIVITY_ID_CHARACTERS,
+    MAX_PUBLISHED_SCHEDULE_TITLE_CHARACTERS,
+    MAX_ROW_WARNING_CODES,
+    MAX_SCHEDULE_SOURCE_BYTES,
+    MAX_SERIES_NAME_CHARACTERS,
+    ROW_CELL_FIELDS,
+    SCHEDULE_IDEMPOTENCY_KEY_PATTERN,
+    ScheduleBaselineKind,
+    ScheduleCellState,
+    ScheduleFieldCode,
+    ScheduleIssueCode,
+    ScheduleIssueSeverity,
+    ScheduleParserRunStatus,
+    SchedulePublicationRole,
+    SchedulePublicationStatus,
+    ScheduleRowType,
+)
 from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
     CommitmentDirection,
@@ -563,6 +587,14 @@ source_objects = Table(
 #: the provider can prove the bytes by; the unique constraint means re-observing
 #: unchanged bytes reuses the existing `ver_…` rather than issuing a new one, so
 #: a version identifier binds an observation the way section 9.4 requires.
+#:
+#: CPM Workbench S5b-1 revision `6c2306330ceb` adds one database-only constraint
+#: to this table -- `a_source_version_is_identified_with_its_object UNIQUE
+#: (version_id, source_object_id)`, the target of
+#: `a_schedule_publication_names_a_version_of_its_object` -- by ALTER, and
+#: deliberately not here: historical revision `7e5a1fb93d62` builds this table
+#: from this declaration, so declaring it here would change what that revision
+#: emits (foundation contract section 3.4, D-04).
 source_object_versions = Table(
     "source_object_versions",
     METADATA,
@@ -598,6 +630,14 @@ source_object_versions = Table(
 #: on construction. They are not redundant: the domain type governs this
 #: process, and the constraint governs the table, including against a future
 #: writer or a hand-run statement.
+#:
+#: CPM Workbench S5b-1 revision `6c2306330ceb` adds one database-only constraint
+#: to this table -- `an_enrollment_is_identified_within_its_principal UNIQUE
+#: (enrollment_id, principal_id)`, the target of
+#: `a_schedule_publication_names_an_enrollment_of_its_principal` -- by ALTER, and
+#: deliberately not here, for the reason the `root_object_id` comment below
+#: gives: historical revision `7e5a1fb93d62` builds this table from this
+#: declaration (foundation contract section 3.4, D-04).
 enrollments = Table(
     "enrollments",
     METADATA,
@@ -18148,5 +18188,821 @@ lineage_backfill_items = Table(
         [f"{SCHEMA}.record_links.principal_id", f"{SCHEMA}.record_links.link_id"],
         ondelete="RESTRICT",
         name="a_backfill_item_names_a_link_of_its_principal",
+    ),
+)
+
+# --- CPM Workbench S5b-1: the Schedule foundation (R2 WP-01) ------------------
+#
+# Contract `docs/architecture/cpm-workbench-foundation-contract.md` section 4;
+# created by revision `6c2306330ceb` from frozen text. Every closed set below is
+# the live enum in sorted order, so the declared text equals the revision's.
+# The lifecycle, append-only and TRUNCATE guards are triggers that exist only in
+# the database (contract section 4.10). Every foreign key is `ON DELETE
+# RESTRICT`; the four into existing tables are added by `ALTER TABLE` at the end
+# of the revision, the accepted-run one right after `schedule_parser_runs`.
+
+_SCHEDULE_SHA256: Final = "^[0-9a-f]{64}$"
+_SCHEDULE_LINKABLE_ROW_TYPES: Final = "'activity', 'milestone'"
+
+
+def _schedule_sha(column: str, name: str) -> CheckConstraint:
+    return CheckConstraint(f"{column} ~ '{_SCHEDULE_SHA256}'", name=name)
+
+
+def _schedule_cell_state(column: str, name: str) -> CheckConstraint:
+    return CheckConstraint(f"{column} IN ({_literals(ScheduleCellState)})", name=name)
+
+
+#: One Schedule Series: a named sequence of publications within one Project.
+#: Append-only. `name_key` is `NFC(casefold(name))`, so names that differ only
+#: in case or whitespace are one Series.
+schedule_series = Table(
+    "schedule_series",
+    METADATA,
+    Column("series_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, nullable=False),
+    Column("name", Text, nullable=False),
+    Column("name_key", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    PrimaryKeyConstraint("series_id", name="schedule_series_pkey"),
+    _is_identifier("series_id", IdKind.SCHEDULE_SERIES),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    CheckConstraint(
+        f"char_length(name) BETWEEN 1 AND {MAX_SERIES_NAME_CHARACTERS} AND name = "
+        "btrim(name, ' ') AND position('  ' in name) = 0 AND name !~ '[[:cntrl:]]'",
+        name="a_schedule_series_name_is_normalized",
+    ),
+    CheckConstraint(
+        "char_length(name_key) BETWEEN 1 AND 800", name="a_schedule_series_key_is_bounded"
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "project_id",
+        "name_key",
+        name="a_schedule_series_name_is_unique_within_its_project",
+    ),
+    UniqueConstraint(
+        "series_id",
+        "principal_id",
+        "project_id",
+        name="a_schedule_series_is_identified_within_its_project",
+    ),
+    ForeignKeyConstraint(
+        ["project_id", "principal_id"],
+        [f"{SCHEMA}.projects.project_id", f"{SCHEMA}.projects.principal_id"],
+        ondelete="RESTRICT",
+        name="a_schedule_series_names_a_project_of_its_principal",
+    ),
+    Index("schedule_series_by_project", "principal_id", "project_id", "created_at", "series_id"),
+)
+
+_PUBLICATION_COUNTS: Final = (
+    "page_count",
+    "row_count",
+    "activity_count",
+    "ambiguous_row_count",
+    "issue_count",
+)
+
+#: One admitted Schedule publication: one source version of one enrolled PDF
+#: in one Series, moving `queued -> processing -> terminal` under the
+#: `a_schedule_publication_follows_its_lifecycle` trigger. The enrollment and
+#: source-version foreign keys target the database-only support uniques this
+#: revision adds (see the comments on `enrollments` and
+#: `source_object_versions`).
+schedule_publications = Table(
+    "schedule_publications",
+    METADATA,
+    Column("publication_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, nullable=False),
+    Column("series_id", Text, nullable=False),
+    Column("enrollment_id", Text, nullable=False),
+    Column("source_object_id", Text, nullable=False),
+    Column("source_version_id", Text, nullable=False),
+    Column("idempotency_key", Text, nullable=False),
+    Column("request_digest", Text, nullable=False),
+    Column("publication_role", Text, nullable=False),
+    Column("baseline_kind", Text),
+    Column("expected_data_date", Date),
+    Column("supersedes_publication_id", Text),
+    Column(
+        "status",
+        Text,
+        nullable=False,
+        server_default=text(f"'{SchedulePublicationStatus.QUEUED.value}'"),
+    ),
+    Column("document_sha256", Text),
+    Column("document_size_bytes", BigInteger),
+    Column("published_schedule_title", Text),
+    Column("data_date", Date),
+    Column("run_date", Date),
+    Column("accepted_parser_run_id", Text),
+    *(Column(name, Integer) for name in _PUBLICATION_COUNTS),
+    Column("admitted_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("processing_started_at", DateTime(timezone=True)),
+    Column("completed_at", DateTime(timezone=True)),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    PrimaryKeyConstraint("publication_id", name="schedule_publications_pkey"),
+    _is_identifier("publication_id", IdKind.SCHEDULE_PUBLICATION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _is_identifier("series_id", IdKind.SCHEDULE_SERIES),
+    _is_identifier("enrollment_id", IdKind.ENROLLMENT),
+    _is_identifier("source_object_id", IdKind.SOURCE_OBJECT),
+    _is_identifier("source_version_id", IdKind.VERSION),
+    _is_identifier("supersedes_publication_id", IdKind.SCHEDULE_PUBLICATION),
+    _is_identifier("accepted_parser_run_id", IdKind.SCHEDULE_PARSER_RUN),
+    _matches(
+        "idempotency_key",
+        SCHEDULE_IDEMPOTENCY_KEY_PATTERN.pattern,
+        name="a_schedule_idempotency_key_is_bounded",
+    ),
+    _schedule_sha("request_digest", "a_schedule_request_digest_is_sha256"),
+    _one_of(
+        "publication_role", SchedulePublicationRole, name="a_schedule_publication_role_is_known"
+    ),
+    CheckConstraint(
+        f"baseline_kind IS NULL OR baseline_kind IN ({_literals(ScheduleBaselineKind)})",
+        name="a_schedule_baseline_kind_is_known",
+    ),
+    CheckConstraint(
+        f"(publication_role = '{SchedulePublicationRole.BASELINE.value}') = "
+        "(baseline_kind IS NOT NULL)",
+        name="a_schedule_baseline_has_its_kind",
+    ),
+    CheckConstraint(
+        "supersedes_publication_id IS NULL OR supersedes_publication_id <> publication_id",
+        name="a_schedule_publication_does_not_supersede_itself",
+    ),
+    _one_of("status", SchedulePublicationStatus, name="a_schedule_publication_status_is_known"),
+    _schedule_sha("document_sha256", "a_schedule_document_digest_is_sha256"),
+    CheckConstraint(
+        "(document_sha256 IS NULL) = (document_size_bytes IS NULL) AND (document_size_bytes "
+        f"IS NULL OR document_size_bytes BETWEEN 0 AND {MAX_SCHEDULE_SOURCE_BYTES})",
+        name="a_schedule_document_is_pinned_whole",
+    ),
+    CheckConstraint(
+        "published_schedule_title IS NULL OR char_length(published_schedule_title) BETWEEN 1 "
+        f"AND {MAX_PUBLISHED_SCHEDULE_TITLE_CHARACTERS}",
+        name="a_schedule_title_is_bounded",
+    ),
+    CheckConstraint(
+        " AND ".join(f"({name} IS NULL OR {name} >= 0)" for name in _PUBLICATION_COUNTS),
+        name="a_schedule_publication_count_is_not_negative",
+    ),
+    CheckConstraint(
+        "(status <> 'queued' OR (processing_started_at IS NULL AND completed_at IS NULL AND "
+        "accepted_parser_run_id IS NULL AND document_sha256 IS NULL AND page_count IS NULL AND "
+        "row_count IS NULL AND activity_count IS NULL AND ambiguous_row_count IS NULL AND "
+        "issue_count IS NULL AND published_schedule_title IS NULL AND data_date IS NULL AND "
+        "run_date IS NULL)) AND (status <> 'processing' OR (processing_started_at IS NOT NULL "
+        "AND completed_at IS NULL AND accepted_parser_run_id IS NULL AND page_count IS NULL AND "
+        "row_count IS NULL AND activity_count IS NULL AND ambiguous_row_count IS NULL AND "
+        "issue_count IS NULL AND published_schedule_title IS NULL AND data_date IS NULL AND "
+        "run_date IS NULL)) AND (status NOT IN ('complete', 'partial', 'review_required') OR "
+        "(processing_started_at IS NOT NULL AND completed_at IS NOT NULL AND "
+        "accepted_parser_run_id IS NOT NULL AND document_sha256 IS NOT NULL AND page_count IS "
+        "NOT NULL AND row_count IS NOT NULL AND activity_count IS NOT NULL AND "
+        "ambiguous_row_count IS NOT NULL AND issue_count IS NOT NULL)) AND (status <> 'failed' "
+        "OR (processing_started_at IS NOT NULL AND completed_at IS NOT NULL AND issue_count IS "
+        "NOT NULL AND issue_count >= 1 AND accepted_parser_run_id IS NULL AND page_count IS "
+        "NULL AND row_count IS NULL AND activity_count IS NULL AND ambiguous_row_count IS NULL "
+        "AND published_schedule_title IS NULL AND data_date IS NULL AND run_date IS NULL))",
+        name="a_schedule_publication_records_its_progress",
+    ),
+    UniqueConstraint(
+        "principal_id", "idempotency_key", name="a_schedule_publication_key_is_used_once"
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "series_id",
+        "source_version_id",
+        name="a_schedule_source_version_is_published_once_per_series",
+    ),
+    UniqueConstraint(
+        "publication_id",
+        "principal_id",
+        "project_id",
+        "series_id",
+        name="a_schedule_publication_is_identified_within_its_series",
+    ),
+    UniqueConstraint(
+        "publication_id",
+        "principal_id",
+        name="a_schedule_publication_is_identified_within_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["series_id", "principal_id", "project_id"],
+        [
+            f"{SCHEMA}.schedule_series.series_id",
+            f"{SCHEMA}.schedule_series.principal_id",
+            f"{SCHEMA}.schedule_series.project_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_schedule_publication_names_its_series",
+    ),
+    ForeignKeyConstraint(
+        ["enrollment_id", "principal_id"],
+        [f"{SCHEMA}.enrollments.enrollment_id", f"{SCHEMA}.enrollments.principal_id"],
+        ondelete="RESTRICT",
+        name="a_schedule_publication_names_an_enrollment_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["enrollment_id", "source_object_id"],
+        [
+            f"{SCHEMA}.enrollment_objects.enrollment_id",
+            f"{SCHEMA}.enrollment_objects.source_object_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_schedule_publication_names_an_enrolled_object",
+    ),
+    ForeignKeyConstraint(
+        ["source_version_id", "source_object_id"],
+        [
+            f"{SCHEMA}.source_object_versions.version_id",
+            f"{SCHEMA}.source_object_versions.source_object_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_schedule_publication_names_a_version_of_its_object",
+    ),
+    ForeignKeyConstraint(
+        ["supersedes_publication_id", "principal_id", "project_id", "series_id"],
+        [
+            f"{SCHEMA}.schedule_publications.publication_id",
+            f"{SCHEMA}.schedule_publications.principal_id",
+            f"{SCHEMA}.schedule_publications.project_id",
+            f"{SCHEMA}.schedule_publications.series_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_schedule_publication_supersedes_within_its_series",
+    ),
+    ForeignKeyConstraint(
+        ["accepted_parser_run_id", "publication_id", "principal_id"],
+        [
+            f"{SCHEMA}.schedule_parser_runs.parser_run_id",
+            f"{SCHEMA}.schedule_parser_runs.publication_id",
+            f"{SCHEMA}.schedule_parser_runs.principal_id",
+        ],
+        ondelete="RESTRICT",
+        # `use_alter` because the accepted run names its publication and the
+        # publication names its accepted run: neither table can be created or
+        # dropped before the other without it (revision step 3).
+        use_alter=True,
+        name="a_schedule_publication_accepts_one_of_its_runs",
+    ),
+    Index(
+        "a_schedule_publication_is_superseded_once",
+        "principal_id",
+        "supersedes_publication_id",
+        unique=True,
+        postgresql_where=text("supersedes_publication_id IS NOT NULL"),
+    ),
+    Index(
+        "schedule_publications_by_series",
+        "principal_id",
+        "series_id",
+        "admitted_at",
+        "publication_id",
+    ),
+    Index("schedule_publications_by_status", "principal_id", "project_id", "status"),
+)
+
+#: One Stable Schedule Activity: an exact published activity ID within one
+#: Series. Append-only, and deliberately nothing else: no name, date, duration,
+#: hierarchy or first-seen column (R2 section 16.14).
+schedule_activities = Table(
+    "schedule_activities",
+    METADATA,
+    Column("schedule_activity_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, nullable=False),
+    Column("series_id", Text, nullable=False),
+    Column("published_activity_id", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    PrimaryKeyConstraint("schedule_activity_id", name="schedule_activities_pkey"),
+    _is_identifier("schedule_activity_id", IdKind.SCHEDULE_ACTIVITY),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _is_identifier("series_id", IdKind.SCHEDULE_SERIES),
+    CheckConstraint(
+        "char_length(published_activity_id) BETWEEN 1 AND "
+        f"{MAX_PUBLISHED_ACTIVITY_ID_CHARACTERS} AND published_activity_id = "
+        "btrim(published_activity_id)",
+        name="a_schedule_activity_id_is_exact",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "series_id",
+        "published_activity_id",
+        name="a_schedule_activity_id_is_unique_within_its_series",
+    ),
+    UniqueConstraint(
+        "schedule_activity_id",
+        "principal_id",
+        "series_id",
+        "published_activity_id",
+        name="a_schedule_activity_is_identified_with_its_published_id",
+    ),
+    ForeignKeyConstraint(
+        ["series_id", "principal_id", "project_id"],
+        [
+            f"{SCHEMA}.schedule_series.series_id",
+            f"{SCHEMA}.schedule_series.principal_id",
+            f"{SCHEMA}.schedule_series.project_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_schedule_activity_belongs_to_its_series",
+    ),
+)
+
+#: One job per admitted publication (`UNIQUE (publication_id)`), on the same
+#: columns and lease rules as `jobs`, so the `jobs.py` functions run unchanged
+#: through `SCHEDULE_JOBS`. The `a_schedule_job_keeps_its_identity` trigger adds
+#: identity and terminal immutability and refuses every delete (contract D-11).
+schedule_jobs = Table(
+    "schedule_jobs",
+    METADATA,
+    Column("operation_id", Text, nullable=False),
+    Column("publication_id", Text, nullable=False),
+    Column("state", Text, nullable=False, server_default=JobState.QUEUED.value),
+    Column("attempt_count", Integer, nullable=False, server_default="0"),
+    Column("max_attempts", Integer, nullable=False, server_default=str(DEFAULT_MAX_ATTEMPTS)),
+    Column("lease_owner", Text),
+    Column("lease_expires_at", DateTime(timezone=True)),
+    Column("last_error_code", Text),
+    Column("next_attempt_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("dead_lettered_at", DateTime(timezone=True)),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("principal_id", Text, nullable=False),
+    PrimaryKeyConstraint("operation_id", name="schedule_jobs_pkey"),
+    _is_identifier("operation_id", IdKind.OPERATION),
+    _is_identifier("publication_id", IdKind.SCHEDULE_PUBLICATION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("state", JobState, name="a_schedule_job_state_is_known"),
+    CheckConstraint(
+        f"last_error_code IS NULL OR last_error_code IN ({_literals(ErrorCode)})",
+        name="a_schedule_job_error_code_is_public",
+    ),
+    CheckConstraint(
+        "(lease_owner IS NULL) = (lease_expires_at IS NULL)",
+        name="a_schedule_lease_has_an_owner_and_an_expiry",
+    ),
+    CheckConstraint(
+        f"(state = '{JobState.RUNNING.value}') = (lease_owner IS NOT NULL)",
+        name="a_schedule_job_is_running_exactly_while_leased",
+    ),
+    CheckConstraint(
+        f"(state = '{JobState.FAILED.value}') = (dead_lettered_at IS NOT NULL)",
+        name="a_failed_schedule_job_is_dead_lettered",
+    ),
+    CheckConstraint(
+        f"attempt_count >= 0 AND max_attempts BETWEEN 1 AND {DEFAULT_MAX_ATTEMPTS * 10} "
+        "AND attempt_count <= max_attempts",
+        name="a_schedule_job_attempts_are_bounded",
+    ),
+    UniqueConstraint("publication_id", name="a_schedule_publication_has_one_job"),
+    UniqueConstraint(
+        "operation_id",
+        "publication_id",
+        "principal_id",
+        name="a_schedule_job_is_identified_with_its_publication",
+    ),
+    ForeignKeyConstraint(
+        ["publication_id", "principal_id"],
+        [
+            f"{SCHEMA}.schedule_publications.publication_id",
+            f"{SCHEMA}.schedule_publications.principal_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_schedule_job_names_a_publication_of_its_principal",
+    ),
+    Index("schedule_jobs_by_state", "state", "created_at"),
+    Index(
+        "schedule_jobs_by_principal_claim_order",
+        "principal_id",
+        "state",
+        "next_attempt_at",
+        "created_at",
+    ),
+)
+
+_RUN_COUNTS: Final = ("page_count", "row_count", "issue_count", "warning_count")
+
+#: One parser attempt on a publication's pinned document: `running`, then once
+#: `parsed` or `failed` (`a_schedule_parser_run_follows_its_lifecycle`). A
+#: `failed` run with no `failure_code` ended without a deterministic code
+#: (abandoned or transient, contract D-09).
+schedule_parser_runs = Table(
+    "schedule_parser_runs",
+    METADATA,
+    Column("parser_run_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, nullable=False),
+    Column("series_id", Text, nullable=False),
+    Column("publication_id", Text, nullable=False),
+    Column("operation_id", Text, nullable=False),
+    Column("attempt_number", Integer, nullable=False),
+    Column("parser_name", Text, nullable=False),
+    Column("parser_version", Text, nullable=False),
+    Column("profile_id", Text, nullable=False),
+    Column("profile_version", Integer, nullable=False),
+    Column("pypdfium2_version", Text, nullable=False),
+    Column("pdfium_version", Text, nullable=False),
+    Column("document_sha256", Text, nullable=False),
+    Column(
+        "status",
+        Text,
+        nullable=False,
+        server_default=text(f"'{ScheduleParserRunStatus.RUNNING.value}'"),
+    ),
+    *(Column(name, Integer) for name in _RUN_COUNTS),
+    Column("parse_result_sha256", Text),
+    Column("failure_code", Text),
+    Column("started_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("completed_at", DateTime(timezone=True)),
+    PrimaryKeyConstraint("parser_run_id", name="schedule_parser_runs_pkey"),
+    _is_identifier("parser_run_id", IdKind.SCHEDULE_PARSER_RUN),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _is_identifier("series_id", IdKind.SCHEDULE_SERIES),
+    _is_identifier("publication_id", IdKind.SCHEDULE_PUBLICATION),
+    _is_identifier("operation_id", IdKind.OPERATION),
+    CheckConstraint("attempt_number >= 1", name="a_schedule_attempt_is_positive"),
+    CheckConstraint(
+        " AND ".join(
+            f"char_length({name}) BETWEEN 1 AND {MAX_PARSER_IDENTITY_CHARACTERS}"
+            for name in ("parser_name", "parser_version", "profile_id")
+        )
+        + " AND profile_version >= 1",
+        name="a_schedule_parser_identity_is_bounded",
+    ),
+    CheckConstraint(
+        " AND ".join(
+            f"char_length({name}) BETWEEN 1 AND {MAX_PARSER_IDENTITY_CHARACTERS}"
+            for name in ("pypdfium2_version", "pdfium_version")
+        ),
+        name="a_schedule_parser_engine_is_bounded",
+    ),
+    _schedule_sha("document_sha256", "a_schedule_parsed_document_is_sha256"),
+    _one_of("status", ScheduleParserRunStatus, name="a_schedule_parser_run_status_is_known"),
+    CheckConstraint(
+        " AND ".join(f"({name} IS NULL OR {name} >= 0)" for name in _RUN_COUNTS)
+        + " AND (warning_count IS NULL OR issue_count IS NULL OR warning_count <= issue_count)",
+        name="a_schedule_parser_run_count_is_not_negative",
+    ),
+    _schedule_sha("parse_result_sha256", "a_schedule_parse_result_is_sha256"),
+    CheckConstraint(
+        f"failure_code IS NULL OR failure_code IN ({_literals(ScheduleIssueCode)})",
+        name="a_schedule_parser_failure_code_is_known",
+    ),
+    CheckConstraint(
+        "(status <> 'running' OR (completed_at IS NULL AND page_count IS NULL AND row_count IS "
+        "NULL AND issue_count IS NULL AND warning_count IS NULL AND parse_result_sha256 IS NULL "
+        "AND failure_code IS NULL)) AND (status <> 'parsed' OR (completed_at IS NOT NULL AND "
+        "page_count IS NOT NULL AND row_count IS NOT NULL AND issue_count IS NOT NULL AND "
+        "warning_count IS NOT NULL AND parse_result_sha256 IS NOT NULL AND failure_code IS "
+        "NULL)) AND (status <> 'failed' OR (completed_at IS NOT NULL AND page_count IS NULL AND "
+        "row_count IS NULL AND issue_count IS NULL AND warning_count IS NULL AND "
+        "parse_result_sha256 IS NULL))",
+        name="a_schedule_parser_run_records_its_outcome",
+    ),
+    UniqueConstraint(
+        "parser_run_id",
+        "publication_id",
+        "principal_id",
+        name="a_schedule_parser_run_is_identified_within_its_publication",
+    ),
+    UniqueConstraint(
+        "publication_id", "attempt_number", name="a_schedule_attempt_starts_one_parser_run"
+    ),
+    ForeignKeyConstraint(
+        ["publication_id", "principal_id", "project_id", "series_id"],
+        [
+            f"{SCHEMA}.schedule_publications.publication_id",
+            f"{SCHEMA}.schedule_publications.principal_id",
+            f"{SCHEMA}.schedule_publications.project_id",
+            f"{SCHEMA}.schedule_publications.series_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_schedule_parser_run_names_its_publication",
+    ),
+    ForeignKeyConstraint(
+        ["operation_id", "publication_id", "principal_id"],
+        [
+            f"{SCHEMA}.schedule_jobs.operation_id",
+            f"{SCHEMA}.schedule_jobs.publication_id",
+            f"{SCHEMA}.schedule_jobs.principal_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_schedule_parser_run_names_its_job",
+    ),
+    Index(
+        "a_schedule_parse_is_accepted_once",
+        "publication_id",
+        "parser_name",
+        "parser_version",
+        "profile_id",
+        "profile_version",
+        "document_sha256",
+        unique=True,
+        postgresql_where=text(f"status = '{ScheduleParserRunStatus.PARSED.value}'"),
+    ),
+    Index("schedule_parser_runs_by_publication", "principal_id", "publication_id", "status"),
+)
+
+
+def _schedule_typed_duration(prefix: str) -> CheckConstraint:
+    return CheckConstraint(
+        f"({prefix}_value IS NOT NULL) = ({prefix}_state = "
+        f"'{ScheduleCellState.PUBLISHED_VALUE.value}') AND ({prefix}_value IS NULL OR "
+        f"{prefix}_value >= 0)",
+        name=f"a_schedule_row_{prefix}_is_typed",
+    )
+
+
+def _schedule_typed_date(prefix: str) -> CheckConstraint:
+    return CheckConstraint(
+        f"({prefix}_date IS NOT NULL) = ({prefix}_state = "
+        f"'{ScheduleCellState.PUBLISHED_VALUE.value}')",
+        name=f"a_schedule_row_{prefix}_is_typed",
+    )
+
+
+def _schedule_marker(prefix: str) -> CheckConstraint:
+    return CheckConstraint(
+        f"{prefix}_marker IS NULL OR ({prefix}_marker = '*' AND {prefix}_date IS NOT NULL)",
+        name=f"a_schedule_row_{prefix}_marker_is_known",
+    )
+
+
+#: One physical row of a parsed publication, the S5a `ParsedScheduleRow` field
+#: for field: content and provenance are immutable, and the only change is the
+#: set-once stable link (`a_schedule_row_changes_only_by_linking`). The link
+#: foreign key binds Principal, Series and the exact published ID. The
+#: 16 KiB bound of R2 section 18.6 is on the canonical bytes and is checked by
+#: `validate_row_for_persistence`; `jsonb::text` is not that encoding, so the
+#: database bound is twice it (contract D-20).
+schedule_rows = Table(
+    "schedule_rows",
+    METADATA,
+    Column("row_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, nullable=False),
+    Column("series_id", Text, nullable=False),
+    Column("publication_id", Text, nullable=False),
+    Column("parser_run_id", Text, nullable=False),
+    Column("schedule_activity_id", Text),
+    Column("row_ordinal", Integer, nullable=False),
+    Column("page_number", Integer, nullable=False),
+    Column("physical_line_ordinal", Integer, nullable=False),
+    Column("row_type", Text, nullable=False),
+    Column("indent_level", Integer),
+    Column("parent_row_id", Text),
+    Column("hierarchy_path", ARRAY(Text)),
+    Column("published_activity_id", Text),
+    Column("activity_name", Text),
+    Column("od_state", Text, nullable=False),
+    Column("od_value", Numeric(12, 3)),
+    Column("rd_state", Text, nullable=False),
+    Column("rd_value", Numeric(12, 3)),
+    Column("start_state", Text, nullable=False),
+    Column("start_date", Date),
+    Column("start_marker", Text),
+    Column("finish_state", Text, nullable=False),
+    Column("finish_date", Date),
+    Column("finish_marker", Text),
+    Column("bbox_x0_mpt", Integer, nullable=False),
+    Column("bbox_y0_mpt", Integer, nullable=False),
+    Column("bbox_x1_mpt", Integer, nullable=False),
+    Column("bbox_y1_mpt", Integer, nullable=False),
+    Column("page_width_mpt", Integer, nullable=False),
+    Column("page_height_mpt", Integer, nullable=False),
+    Column("cell_evidence", JSONB, nullable=False),
+    Column("warning_codes", ARRAY(Text), nullable=False, server_default="{}"),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    PrimaryKeyConstraint("row_id", name="schedule_rows_pkey"),
+    _is_identifier("row_id", IdKind.SCHEDULE_ROW),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _is_identifier("series_id", IdKind.SCHEDULE_SERIES),
+    _is_identifier("publication_id", IdKind.SCHEDULE_PUBLICATION),
+    _is_identifier("parser_run_id", IdKind.SCHEDULE_PARSER_RUN),
+    _is_identifier("schedule_activity_id", IdKind.SCHEDULE_ACTIVITY),
+    _is_identifier("parent_row_id", IdKind.SCHEDULE_ROW),
+    CheckConstraint(
+        "row_ordinal >= 1 AND page_number >= 1 AND physical_line_ordinal >= 1",
+        name="a_schedule_row_position_is_positive",
+    ),
+    _one_of("row_type", ScheduleRowType, name="a_schedule_row_type_is_known"),
+    CheckConstraint(
+        "indent_level IS NULL OR indent_level >= 0", name="a_schedule_row_indent_is_not_negative"
+    ),
+    CheckConstraint(
+        f"hierarchy_path IS NULL OR cardinality(hierarchy_path) <= {MAX_HIERARCHY_PATH}",
+        name="a_schedule_row_hierarchy_is_bounded",
+    ),
+    CheckConstraint(
+        "published_activity_id IS NULL OR (char_length(published_activity_id) BETWEEN 1 AND "
+        f"{MAX_PUBLISHED_ACTIVITY_ID_CHARACTERS} AND published_activity_id = "
+        "btrim(published_activity_id))",
+        name="a_schedule_row_activity_id_is_exact",
+    ),
+    CheckConstraint(
+        "activity_name IS NULL OR char_length(activity_name) BETWEEN 1 AND "
+        f"{MAX_ACTIVITY_NAME_CHARACTERS}",
+        name="a_schedule_row_name_is_bounded",
+    ),
+    _schedule_cell_state("od_state", "a_schedule_row_od_state_is_known"),
+    _schedule_cell_state("rd_state", "a_schedule_row_rd_state_is_known"),
+    _schedule_cell_state("start_state", "a_schedule_row_start_state_is_known"),
+    _schedule_cell_state("finish_state", "a_schedule_row_finish_state_is_known"),
+    _schedule_typed_duration("od"),
+    _schedule_typed_duration("rd"),
+    _schedule_typed_date("start"),
+    _schedule_typed_date("finish"),
+    _schedule_marker("start"),
+    _schedule_marker("finish"),
+    CheckConstraint(
+        "bbox_x0_mpt <= bbox_x1_mpt AND bbox_y0_mpt <= bbox_y1_mpt",
+        name="a_schedule_row_box_is_ordered",
+    ),
+    CheckConstraint(
+        "page_width_mpt > 0 AND page_height_mpt > 0", name="a_schedule_row_page_is_sized"
+    ),
+    CheckConstraint(
+        f"jsonb_typeof(cell_evidence) = 'object' AND cell_evidence ->> 'schema' = "
+        f"'{CELLS_SCHEMA}' AND (cell_evidence -> 'cells') ?& ARRAY["
+        + ", ".join(f"'{field.value}'" for field in ROW_CELL_FIELDS)
+        + f"] AND octet_length(cell_evidence::text) <= {MAX_CELL_EVIDENCE_BYTES * 2}",
+        name="a_schedule_row_cell_evidence_is_bounded",
+    ),
+    CheckConstraint(
+        f"cardinality(warning_codes) <= {MAX_ROW_WARNING_CODES}",
+        name="a_schedule_row_warnings_are_bounded",
+    ),
+    _each_one_of("warning_codes", ScheduleIssueCode, name="a_schedule_row_warning_codes_are_known"),
+    CheckConstraint(
+        f"(row_type IN ({_SCHEDULE_LINKABLE_ROW_TYPES}) AND published_activity_id IS NOT NULL "
+        "AND activity_name IS NOT NULL) OR (row_type IN ('project_summary', 'wbs_summary') AND "
+        "published_activity_id IS NULL AND activity_name IS NOT NULL) OR (row_type = "
+        "'ambiguous' AND published_activity_id IS NULL AND activity_name IS NULL)",
+        name="a_schedule_row_identity_matches_its_type",
+    ),
+    CheckConstraint(
+        f"schedule_activity_id IS NULL OR row_type IN ({_SCHEDULE_LINKABLE_ROW_TYPES})",
+        name="a_schedule_row_links_only_an_activity_or_milestone",
+    ),
+    UniqueConstraint(
+        "parser_run_id", "row_ordinal", name="a_schedule_row_ordinal_is_unique_within_its_run"
+    ),
+    UniqueConstraint("row_id", "parser_run_id", name="a_schedule_row_is_identified_within_its_run"),
+    ForeignKeyConstraint(
+        ["parser_run_id", "publication_id", "principal_id"],
+        [
+            f"{SCHEMA}.schedule_parser_runs.parser_run_id",
+            f"{SCHEMA}.schedule_parser_runs.publication_id",
+            f"{SCHEMA}.schedule_parser_runs.principal_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_schedule_row_belongs_to_its_run",
+    ),
+    ForeignKeyConstraint(
+        ["publication_id", "principal_id", "project_id", "series_id"],
+        [
+            f"{SCHEMA}.schedule_publications.publication_id",
+            f"{SCHEMA}.schedule_publications.principal_id",
+            f"{SCHEMA}.schedule_publications.project_id",
+            f"{SCHEMA}.schedule_publications.series_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_schedule_row_belongs_to_its_publication",
+    ),
+    ForeignKeyConstraint(
+        ["parent_row_id", "parser_run_id"],
+        [f"{SCHEMA}.schedule_rows.row_id", f"{SCHEMA}.schedule_rows.parser_run_id"],
+        ondelete="RESTRICT",
+        name="a_schedule_row_parent_is_in_its_run",
+    ),
+    ForeignKeyConstraint(
+        ["schedule_activity_id", "principal_id", "series_id", "published_activity_id"],
+        [
+            f"{SCHEMA}.schedule_activities.schedule_activity_id",
+            f"{SCHEMA}.schedule_activities.principal_id",
+            f"{SCHEMA}.schedule_activities.series_id",
+            f"{SCHEMA}.schedule_activities.published_activity_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_schedule_row_links_its_exact_activity",
+    ),
+    Index(
+        "schedule_rows_by_published_id",
+        "parser_run_id",
+        "published_activity_id",
+        postgresql_where=text("published_activity_id IS NOT NULL"),
+    ),
+    Index(
+        "schedule_rows_by_stable_activity",
+        "principal_id",
+        "schedule_activity_id",
+        "publication_id",
+        postgresql_where=text("schedule_activity_id IS NOT NULL"),
+    ),
+    Index(
+        "schedule_rows_by_parent",
+        "parser_run_id",
+        "parent_row_id",
+        postgresql_where=text("parent_row_id IS NOT NULL"),
+    ),
+)
+
+#: One import issue: codes and positions only -- no raw text, filename,
+#: locator, exception, stack or path column (R2 section 18.7). Append-only, and
+#: recorded only while its publication is `processing` (and, for a run issue,
+#: while that run is `running`).
+schedule_import_issues = Table(
+    "schedule_import_issues",
+    METADATA,
+    Column("issue_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, nullable=False),
+    Column("series_id", Text, nullable=False),
+    Column("publication_id", Text, nullable=False),
+    Column("parser_run_id", Text),
+    Column("severity", Text, nullable=False),
+    Column("code", Text, nullable=False),
+    Column("page_number", Integer),
+    Column("row_ordinal", Integer),
+    Column("field", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    PrimaryKeyConstraint("issue_id", name="schedule_import_issues_pkey"),
+    _is_identifier("issue_id", IdKind.SCHEDULE_IMPORT_ISSUE),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _is_identifier("series_id", IdKind.SCHEDULE_SERIES),
+    _is_identifier("publication_id", IdKind.SCHEDULE_PUBLICATION),
+    _is_identifier("parser_run_id", IdKind.SCHEDULE_PARSER_RUN),
+    _one_of("severity", ScheduleIssueSeverity, name="a_schedule_issue_severity_is_known"),
+    _one_of("code", ScheduleIssueCode, name="a_schedule_issue_code_is_known"),
+    CheckConstraint(
+        "(page_number IS NULL OR page_number >= 1) AND (row_ordinal IS NULL OR row_ordinal >= 1)",
+        name="a_schedule_issue_position_is_positive",
+    ),
+    CheckConstraint(
+        f"field IS NULL OR field IN ({_literals(ScheduleFieldCode)})",
+        name="a_schedule_issue_field_is_known",
+    ),
+    CheckConstraint(
+        f"(severity = '{ScheduleIssueSeverity.WARNING.value}') = (code IN ("
+        + _literals(
+            frozenset(
+                code.value
+                for code, severity in ISSUE_SEVERITY.items()
+                if severity is ScheduleIssueSeverity.WARNING
+            )
+        )
+        + "))",
+        name="a_schedule_issue_severity_matches_its_code",
+    ),
+    CheckConstraint(
+        "row_ordinal IS NULL OR parser_run_id IS NOT NULL",
+        name="a_schedule_issue_row_has_its_run",
+    ),
+    ForeignKeyConstraint(
+        ["publication_id", "principal_id", "project_id", "series_id"],
+        [
+            f"{SCHEMA}.schedule_publications.publication_id",
+            f"{SCHEMA}.schedule_publications.principal_id",
+            f"{SCHEMA}.schedule_publications.project_id",
+            f"{SCHEMA}.schedule_publications.series_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_schedule_issue_belongs_to_its_publication",
+    ),
+    ForeignKeyConstraint(
+        ["parser_run_id", "publication_id", "principal_id"],
+        [
+            f"{SCHEMA}.schedule_parser_runs.parser_run_id",
+            f"{SCHEMA}.schedule_parser_runs.publication_id",
+            f"{SCHEMA}.schedule_parser_runs.principal_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_schedule_issue_belongs_to_its_run",
+    ),
+    ForeignKeyConstraint(
+        ["parser_run_id", "row_ordinal"],
+        [f"{SCHEMA}.schedule_rows.parser_run_id", f"{SCHEMA}.schedule_rows.row_ordinal"],
+        ondelete="RESTRICT",
+        name="a_schedule_issue_names_a_row_of_its_run",
+    ),
+    Index(
+        "schedule_import_issues_by_publication",
+        "principal_id",
+        "publication_id",
+        "severity",
+        "code",
     ),
 )

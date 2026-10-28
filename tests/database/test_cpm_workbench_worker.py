@@ -22,7 +22,7 @@ from datetime import UTC, date, datetime
 from typing import Any, Final
 
 import pytest
-from sqlalchemy import Engine, text
+from sqlalchemy import Connection, Engine, text
 
 from my_pa.contracts.ports import ScheduleRepository
 from my_pa.contracts.v1.errors import ErrorCode
@@ -297,6 +297,10 @@ class FakeProvider(SourceProvider):
         self._overrun = overrun
         self._on_fetch = on_fetch
         self.fetched_max_bytes: int | None = None
+        #: The read-phase connection the handler handed the seam. Like the real
+        #: registry identity, `metadata` issues a statement on it, so a read
+        #: phase run inside a transaction would show as `idle in transaction`.
+        self.connection: Connection | None = None
 
     @property
     def source_id(self) -> str:
@@ -307,6 +311,8 @@ class FakeProvider(SourceProvider):
         return iter(())
 
     def metadata(self, source_object_id: str) -> SourceObject:
+        if self.connection is not None:
+            self.connection.execute(text("SELECT 1"))
         if self._metadata_error is not None:
             raise self._metadata_error
         return SourceObject(
@@ -341,7 +347,12 @@ class FakeProvider(SourceProvider):
 
 
 def _serve(monkeypatch: pytest.MonkeyPatch, provider: SourceProvider | None) -> None:
-    monkeypatch.setattr(handler_module, "_provider_for", lambda _connection, _source: provider)
+    def provide(connection: Connection, _source: str) -> SourceProvider | None:
+        if isinstance(provider, FakeProvider):
+            provider.connection = connection
+        return provider
+
+    monkeypatch.setattr(handler_module, "_provider_for", provide)
 
 
 def _no_parse(monkeypatch: pytest.MonkeyPatch) -> list[bytes]:

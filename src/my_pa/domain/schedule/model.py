@@ -1230,21 +1230,33 @@ class ScheduleAdmission:
 
 @dataclass(frozen=True, slots=True)
 class SchedulePlan:
-    """What one attempt may do: nothing when terminal, else fetch at most this."""
+    """What one attempt may do: nothing when terminal, else fetch at most this.
+
+    `source_id` (S5b-2 contract section 3.3.1, E-03) is the source the
+    publication's enrollment reads, so the worker can select the provider; it
+    is read in the same plan transaction and is `None` on a terminal plan.
+    `begin_processing` always sets it on a non-terminal plan; it defaults to
+    `None` only so the S5b-1 constructions stay valid, and the worker treats a
+    non-terminal plan without it as an invariant breach.
+    """
 
     publication: SchedulePublication
     attempt: int
     terminal: bool
     max_fetch_bytes: int | None
+    source_id: str | None = None
 
     def __post_init__(self) -> None:
         if not _positive_int(self.attempt):
             raise ValueError("a plan attempt is a positive integer")
         if self.terminal != (self.publication.status in TERMINAL_OUTCOMES):
             raise ValueError("a plan is terminal exactly when its publication is")
+        _optional_identifier(self.source_id, IdKind.SOURCE)
         if self.terminal:
             if self.max_fetch_bytes is not None:
                 raise ValueError("a terminal plan fetches nothing")
+            if self.source_id is not None:
+                raise ValueError("a terminal plan names no source")
         elif not (
             _non_negative_int(self.max_fetch_bytes)
             and self.max_fetch_bytes <= MAX_SCHEDULE_SOURCE_BYTES  # type: ignore[operator]

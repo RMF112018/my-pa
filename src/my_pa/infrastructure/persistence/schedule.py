@@ -728,17 +728,20 @@ class SqlScheduleRepository(ScheduleRepository):
                 .mappings()
                 .one()
             )
-        max_bytes = self._connection.execute(
-            select(enrollments.c.max_bytes).where(
+        # S5b-2 E-03: the source the worker selects its provider by, read in
+        # this same plan transaction from the publication's own enrollment.
+        enrollment = self._connection.execute(
+            select(enrollments.c.max_bytes, enrollments.c.source_id).where(
                 _mine(enrollments, principal_id),
                 enrollments.c.enrollment_id == publication["enrollment_id"],
             )
-        ).scalar_one()
+        ).one()
         return SchedulePlan(
             publication=_to_publication(publication, principal_id),
             attempt=lease.attempt,
             terminal=False,
-            max_fetch_bytes=min(int(max_bytes), MAX_SCHEDULE_SOURCE_BYTES),
+            max_fetch_bytes=min(int(enrollment.max_bytes), MAX_SCHEDULE_SOURCE_BYTES),
+            source_id=str(enrollment.source_id),
         )
 
     def pin_document(
@@ -1331,6 +1334,28 @@ class SqlScheduleRepository(ScheduleRepository):
             .order_by(schedule_parser_runs.c.attempt_number)
         ).mappings()
         return tuple(_to_run(row, principal_id) for row in found)
+
+    def count_parser_run_contents(self, principal_id: str, parser_run_id: str) -> tuple[int, int]:
+        # S5b-2 contract 3.3.1 H6 (R7-N2, R7-N3): the worker reads this before
+        # any write to a `running` run returned to it, because `insert_issues`
+        # has no ordinal guard and a resumed run would duplicate its issues.
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        rows = self._connection.execute(
+            select(func.count())
+            .select_from(schedule_rows)
+            .where(
+                _mine(schedule_rows, principal_id), schedule_rows.c.parser_run_id == parser_run_id
+            )
+        ).scalar_one()
+        issues = self._connection.execute(
+            select(func.count())
+            .select_from(schedule_import_issues)
+            .where(
+                _mine(schedule_import_issues, principal_id),
+                schedule_import_issues.c.parser_run_id == parser_run_id,
+            )
+        ).scalar_one()
+        return int(rows), int(issues)
 
 
 class SqlAlchemyScheduleUnitOfWork(ScheduleUnitOfWork):

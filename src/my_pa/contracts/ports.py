@@ -8940,6 +8940,16 @@ class ScheduleRepository(ABC):
     ) -> tuple[ScheduleParserRun, ...]:
         """Every parser run of one of the Principal's publications, by attempt."""
 
+    @abstractmethod
+    def count_parser_run_contents(self, principal_id: str, parser_run_id: str) -> tuple[int, int]:
+        """`(rows, issues)` stored under one of the Principal's parser runs.
+
+        S5b-2 (worker contract 3.3.1 H6, R7-N3): the worker reads it before any
+        write to a `running` run it was handed, so a run already holding rows or
+        issues is detected as an invariant breach instead of being resumed. An
+        unknown or foreign run counts `(0, 0)`.
+        """
+
 
 class ScheduleUnitOfWork(ABC):
     """One transaction over the Schedule foundation tables, and the repository inside it.

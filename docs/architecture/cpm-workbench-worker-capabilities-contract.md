@@ -26,6 +26,15 @@ Measured: 233 `Capability` members, 60 `Purpose` members, 156 `IdKind` members, 
 ChatLLM data profile `chatllm-data-v10`. Production runs the database at `023f8f7eb499`;
 neither CPM revision is deployed.
 
+**Revision R7-1.** Design review R7 (PASS_WITH_REQUIRED_CHANGES at `4c80aea9`) findings
+R7-F01…F12 and the rulings' conditions are resolved in place: F01 sections 3.4.4, 3.4.7,
+3.4.8, 6.2, 6.3, 7; F02 sections 3.4.2, 3.4.5, 8.2 (U2-10), 8.3; F03 sections 3.5, 3.5.3,
+3.6, 3.12, 6.2, 6.3 (Q18b), 8.1 (E-12); F04 sections 3.3.1, 3.3.2, 4.1, 4.3, 5, 6.2; F05
+sections 3.3.2, 3.4.2, 3.4.6, 4.1; F06 section 6.3 (Q14, Q20a/b, Q27, Q38); F07 section
+3.13.5; F08 sections 3.8, 6.2; F09 sections 3.1, 8.3; F10 section 3.7; F11 sections 3.9,
+3.10; F12 sections 3.4.3, 3.4.8; ruling O-1 sections 6.2, 8.1 (E-02); ruling O-2 section 5
+(I7-A condition).
+
 **Conventions.** Paths are written in full from the repository root; files that do not
 exist yet are written as code spans, never as Markdown links (CI link check); no
 `path:line` citation is used (citation guard). Counts are digits (spelled-count guard).
@@ -123,7 +132,7 @@ shard partition proof, doc and count guards and the web checks are green.
 | ChatLLM | prerequisite `SCHEDULE` holds iff `ChatLLMCompositionPlanes.schedule` (new field, default `False`); `apps/cli/remote_mcp.py` `_planes_from_settings` sets `schedule=settings.schedule_enabled` |
 | Remote | nothing schedule-related exists remotely while off (derived from `available_capabilities`) |
 | Off → on / on → off | changes no row; `schedule_jobs` queued while off are not claimed until a schedule worker runs with the switch on |
-| Tests | FAST `test_schedule_switch_defaults_off`; database `test_switch_off_withholds_and_refuses_every_schedule_capability` (parametrized over 7: absent from `available_capabilities` and `capabilities.get`, handler `unsupported`, nothing written, MCP tool list lacks it); FAST `test_worker_refuses_the_schedule_plane_while_disabled`; FAST planner tests of section 3.13.1 |
+| Tests | FAST `test_schedule_switch_defaults_off`; database `test_switch_off_withholds_and_refuses_every_schedule_capability` (parametrized over 7: absent from `available_capabilities` and `capabilities.get`, handler `unsupported`, no schedule row written — the authorization audit row `invoke` writes before any handler is expected and asserted, R7-F09 — MCP tool list lacks it); FAST `test_worker_refuses_the_schedule_plane_while_disabled`; FAST planner tests of section 3.13.1 |
 
 ### 3.2 Worker plane — the 4 surfaces move together (I7-B)
 
@@ -170,11 +179,12 @@ checkpoint `C`. The module imports neither `pypdfium2` nor `my_pa.infrastructure
 | H2 | provider read phase | `engine.connect().execution_options(isolation_level="AUTOCOMMIT")` | module seam `_provider_for(connection, source_id)` = `RegisteredSourceProviders(connection).for_source(source_id)` (tests replace the seam with a fake `SourceProvider` serving synthetic bytes; extraction precedent `_provider`), then `metadata(source_object_id)`, `fetch(source_object_id, max_bytes=plan.max_fetch_bytes)` | no DB transaction around bytes; checks in 3.3.2 |
 | C2 | budget | | | |
 | H3 | (pin) | UoW | `pin_document(sha256(bytes), len(bytes))` | `ScheduleIntegrityError("document_changed")` → deterministic `source_version_changed` |
+| H3b | parsed-run lookup (R7-F04) | UoW (read) | `find_parsed_run(principal_id, publication_id, …)` with the S5b-1 reuse key `(EXPECTED_PARSER_NAME, EXPECTED_PARSER_VERSION, EXPECTED_PROFILE_ID, EXPECTED_PROFILE_VERSION, pinned document digest)`, engine versions excluded | found → skip H4–H6 and continue at H7 with that run (no respawn); the `EXPECTED_*` constants are mirrored in `infrastructure/jobs/schedule.py` (the parent may not import `full_profile`, which loads PDFium) and pinned equal to `full_profile`'s by a FAST test |
 | C3 | budget, then `wall = min(150, remaining − 60)`; `wall < 15` → deterministic `processing_budget_exceeded` without spawning | | | |
 | H4 | parser phase | `run_isolated_parse(bytes, expected_data_date, wall)` (3.4) | — | no DB transaction |
 | C4 | budget | | | |
 | H5 | parser-run batch | UoW | `start_parser_run(ScheduleParserIdentity(<result parser/profile fields>, <result.engine versions>))` | result `FAILED` → `fail_publication(<its single failed-ladder code>, run_id)`, return |
-| H6 | row/issue batches | one UoW per batch, `C` before each | `insert_rows` ×⌈rows/1000⌉ in ordinal order, then `insert_issues` ×⌈issues/1000⌉, then `finish_parser_run(parsed=result.counts, parse_result_sha256=…)` | skipped entirely when `reused=True`; `ScheduleRowBoundsError` → `fail_publication(BOUNDS_EXCEEDED, run_id)` |
+| H6 | row/issue batches | one UoW per batch, `C` before each | `insert_rows` ×⌈rows/1000⌉ in ordinal order, then `insert_issues` ×⌈issues/1000⌉, then `finish_parser_run(parsed=result.counts, parse_result_sha256=…)` | skipped only when the returned run has `status == parsed` — `start_parser_run` also returns `reused=True` for this attempt's own `running` run, which still needs its batches (S5b-1 `insert_rows` ordinal rule: a batch resumes at the stored maximum ordinal + 1; issues are inserted only by an attempt that inserted the last row batch; if resumption cannot be expressed against the S5b-1 rules the implementer STOPs and reports); `ScheduleRowBoundsError` → `fail_publication(BOUNDS_EXCEEDED, run_id)` |
 | H7 | stable canonicalization | one UoW per batch, `C` before each | `canonicalize_batch(limit=1000)` until `remaining == 0` | only when the run outcome (= `result.outcome`) is `complete`/`partial` |
 | H8 | finalization | UoW | `finalize_publication(ScheduleFinalization(run_id, title, data_date, run_date))` | status derived by F9/F3 |
 | HF | deterministic terminal failure | UoW | `fail_publication(code, run_id or None)` then **return** | `run_id` only while that run is `running`; otherwise `None` (run-less issue, still `failed`) |
@@ -199,7 +209,8 @@ cannot be pre-empted, so a call returning after lease expiry is caught by the ne
 | provider lookup `None` or adapter `ValueError` | transient | `JobExecutionError(UNAVAILABLE)` |
 | `ProviderError` (incl. `TraversalDeniedError`: absent and refused are one answer) | transient | `JobExecutionError(UNAVAILABLE)`; exhaustion → effective `failed` (R2 §22 "source read unavailable before bytes are proven") |
 | `VersionChangedError`; `metadata().version_id` or `fetch().version_id` ≠ pinned | deterministic | `failed` / `source_version_changed` (run-less) |
-| `metadata().media_type != "application/pdf"` | deterministic | `failed` / `unsupported_media_type` (run-less) |
+| `metadata().media_type` is a string other than `"application/pdf"` | deterministic | `failed` / `unsupported_media_type` (run-less) |
+| `metadata().media_type is None` (provider reports no type) | accepted | admission already proved the stored version's type is PDF; the `%PDF-` check below still applies (R7-F05) |
 | `metadata().size_bytes > max_fetch_bytes`; `fetch().is_truncated`; `len(bytes) > 16 MiB` | deterministic | `failed` / `source_too_large` (run-less) |
 | bytes do not start with `%PDF-` (checked before spawning) | deterministic | `failed` / `unsupported_media_type` (run-less) |
 | `pin_document` → `ScheduleIntegrityError("document_changed")` (same version id, different bytes on a retry) | deterministic | `failed` / `source_version_changed` (run-less) |
@@ -219,8 +230,10 @@ job (`succeeded`) while the publication is `failed`/`review_required` — the jo
 means "processing finished", not "publication succeeded" (R2 §22). Exhausted transient
 attempts leave the publication `queued`/`processing` and reads derive effective `failed`
 (S5b-1 `effective_publication_status`); no read writes. A re-claimed attempt re-reads,
-re-pins (equal digest = no-op), re-parses (deterministic) and `start_parser_run` either
-reuses the parsed run (skip H6) or closes the earlier `running` run and starts a new one.
+re-pins (equal digest = no-op), then H3b: an existing `parsed` run for the reuse key is
+continued at H7 **without respawning the child** (a re-parse is not timing-deterministic and a
+budget failure there would discard a persisted good parse, R7-F04); otherwise it re-parses and
+`start_parser_run` closes the earlier `running` run and starts a new one.
 
 ### 3.4 PDF isolation (S5a U-05, U-12)
 
@@ -254,8 +267,10 @@ threads or reused across documents).
 `main(args) -> int`, in this order:
 
 1. `apply_containment(ChildLimits.from_args(wall))` part 1: `RLIMIT_CORE = (0, 0)`,
-   `RLIMIT_FSIZE = (0, 0)` (no regular-file write of any size, native code included; pipes
-   are unaffected).
+   `RLIMIT_FSIZE = (0, 0)` (no write may grow a regular file past 0 bytes, native code
+   included; pipes are unaffected). It does **not** stop native code from truncating
+   (`O_TRUNC`), unlinking, renaming, changing permissions of, or creating empty files the
+   worker UID may modify (U2-10).
 2. import `my_pa.infrastructure.schedule` (loads PDFium) — before the descriptor cap.
 3. part 2: on Linux `RLIMIT_AS = RLIMIT_DATA = (1 GiB, 1 GiB)` — failure to set → exit 5; on
    macOS the call raises `ValueError` (measured) and the cap is recorded as not in force;
@@ -265,7 +280,7 @@ threads or reused across documents).
    `os.exec`, `os.posix_spawn`, `os.fork`, `os.forkpty`, `os.spawn`, `ctypes.dlopen`, and
    `open` with any write/append/create/update mode. Read-only `open` stays allowed (lazy
    stdlib imports).
-5. read `stdin.buffer.read(16_777_217)`; more than 16 MiB → exit 4.
+5. argv is validated first (bad argv → exit 6); read `stdin.buffer.read(16_777_217)`; more than 16 MiB → exit 4.
 6. `parse_full_schedule(data, expected_data_date=…, deadline=monotonic_start + wall_s − 1.0)`
    (production limits; S5a code unchanged). `MemoryError` → exit 3 (nothing written).
 7. write `FRAME_MAGIC + canonical_json_bytes({"schema": "cpm-workbench-parse-frame-v1",
@@ -288,14 +303,15 @@ capped at `MAX_CHILD_OUTPUT_BYTES + 1 = 134_217_729` bytes, against `deadline =
 monotonic() + wall_seconds + 2.0`. `finally`: if the child is alive, `os.killpg(pid,
 SIGKILL)`; always `process.wait(timeout=5)` (no zombie). `command` and `limits` are
 injectable for tests only (tightened, never widened: `ChildLimits` refuses values above
-production, as `ScheduleParseLimits` does).
+production, as `ScheduleParseLimits` does, and a test wall below `MIN_TEST_WALL_SECONDS = 1.0`;
+the in-child cooperative deadline is `start + max(wall − 1.0, 0)`, never negative — R7-F12).
 
 #### 3.4.4 Bounds
 
 | Bound | Value | Enforced by |
 |---|---|---|
 | input | ≤ 16,777,216 bytes | handler before spawn; child exit 4 |
-| address space | 1,073,741,824 bytes (Linux only) | `RLIMIT_AS`/`RLIMIT_DATA` |
+| address space | 1,073,741,824 bytes (Linux only), **provisional** until measured (R7-F01): CI on Linux records the child's `VmSize`/`VmPeak` (`/proc/self/status`) after the parser import and after a parse of the largest synthetic golden; the constant is frozen only with ≥ 2× headroom over that peak, else the implementer STOPs and reports | `RLIMIT_AS`/`RLIMIT_DATA` |
 | CPU | `ceil(wall)+1` s soft (`SIGXCPU`), +1 hard | `RLIMIT_CPU` |
 | wall | `min(150, remaining − 60)` s, ≥ 15 s; parent kill at wall + 2 s | parent loop; in-child cooperative deadline at wall − 1 s |
 | open descriptors | 32 | `RLIMIT_NOFILE` |
@@ -307,13 +323,20 @@ production, as `ScheduleParseLimits` does).
 Enforced: no credentials or database URL can reach the child (empty environment, `-I`, no
 inherited descriptors besides 0/1/2, `stderr` discarded); the child's import closure contains
 no networking or database module (FAST guard); every Python-level socket, process-spawn,
-exec, `ctypes.dlopen` and file-write attempt raises (audit hook); regular-file writes by any
-code, native included, are impossible (`RLIMIT_FSIZE = 0`); descriptor count is capped.
+exec, `ctypes.dlopen` and file-write attempt raises (audit hook); no code, native included,
+can grow a regular file (`RLIMIT_FSIZE = 0`); descriptor count is capped.
 **Not enforced:** native PDFium code issuing raw `socket(2)`/`connect(2)` system calls after
 memory corruption. Neither macOS (no supported sandbox API) nor the Linux container (no
 seccomp profile or network namespace is configured, and creating one needs privileges the
 worker does not hold) prevents it. Residual U2-01; an operator-level mitigation is a
-network-less container for the schedule worker (section 8.3).
+network-less container for the schedule worker (section 8.3). **Also not enforced (U2-10):**
+native file-system effects that do not grow a file (truncate, unlink, rename, chmod, mkdir,
+empty-file creation) under the worker's UID, and **result forgery** — a compromised child can
+return a well-formed frame for the right digest with fabricated rows; the parent's checks
+prove the frame's shape and its binding to the bytes sent, not the truth of its rows, and
+forged rows would be served as `SOURCE_BOUND_DERIVED`. Mitigations are operator-level
+(section 8.3): a dedicated UID with a read-only root filesystem and no write access to any
+source root, and the network-less runtime.
 
 #### 3.4.6 Deterministic mapping of child outcomes
 
@@ -325,7 +348,8 @@ network-less container for the schedule worker (section 8.3).
 | parent wall deadline reached (child killed by the parent) | deterministic | `processing_budget_exceeded` |
 | killed by `SIGXCPU` | deterministic | `processing_budget_exceeded` |
 | exit 3 (`MemoryError`) | deterministic | `bounds_exceeded` |
-| exit 4 (oversized stdin / bad argv) | deterministic | `source_too_large` |
+| exit 4 (oversized stdin) | deterministic | `source_too_large` |
+| exit 6 (bad argv — a parent programming error, R7-F05) | transient | `internal_error` |
 | killed by `SIGSEGV`, `SIGBUS`, `SIGILL`, `SIGTRAP`, `SIGABRT`, `SIGFPE` (native crash, incl. PDFium's own allocation-failure crash under `RLIMIT_AS`) | deterministic | `parser_exception` |
 | killed by `SIGKILL` not sent by the parent (external OOM killer, operator) | transient | `internal_error` |
 | exit 5 (Linux memory cap could not be set), any other exit code or signal, `OSError` at spawn | transient | `internal_error` |
@@ -340,17 +364,19 @@ handles hostile data and a compromised child must not gain code execution in the
 
 | Platform | `RLIMIT_AS` | Consequence |
 |---|---|---|
-| Linux (CI `ubuntu-latest`, production container) | enforced | memory tests run; a bomb ends `bounds_exceeded` or `parser_exception` (pinned per test, measured) |
+| Linux (CI `ubuntu-latest`, production container) | enforced | memory tests run **in CI only** unless a Linux host is used; each is reported "CI-only, not executed on the implementation host" until a CI run shows it (R7-F01); a bomb ends `bounds_exceeded` or `parser_exception` (pinned per test, measured) |
 | macOS (dev) | cannot be lowered (`ValueError`, measured on the basis host) | memory tests skip with reason `RLIMIT_AS is enforced only on Linux`; `test_containment_reports_the_memory_cap_per_platform` asserts the report on both |
 
 #### 3.4.8 Hostile-PDF tests (generated in-test, small, deterministic, stdlib `zlib` only)
 
 | Case | Construction | Expected |
 |---|---|---|
+| positive control (production limits) | the largest synthetic golden (`full_multi_page_86_equivalent`) and the bounds-maximal synthetic within production caps, under `PRODUCTION_CHILD_LIMITS` | each parses to its golden outcome with a digest equal to the in-process parse — the cap does not break benign documents (Linux) |
+| positive control (bomb cap) | the 86-page fixture under the bomb test's `address_space = 268,435,456` | parses to its golden outcome — the bomb below fails because of the bomb (Linux) |
 | decompression bomb | 1 page, `FlateDecode` content stream of 536,870,912 zero bytes (≈ 0.5 MiB compressed), test limit `address_space = 268,435,456` | Linux: `failed`, code pinned to the measured member of {`bounds_exceeded`, `parser_exception`}, identical on 2 runs; parent RSS growth < 64 MiB |
 | page count | 251 minimal valid pages | `failed` / `bounds_exceeded` (S5a V-cap through the child) |
 | deep nesting | page `/Resources` holding 100,000 nested arrays | `failed` / code pinned (measured; `corrupt_pdf` or `parser_exception`), parent survives |
-| timeout | the 86-page fixture with `wall_seconds = 0.2` (test limit) | `failed` / `processing_budget_exceeded` |
+| timeout (in-child path) | the 86-page fixture with `wall_seconds = MIN_TEST_WALL_SECONDS = 1.0` (in-child deadline `start + 0`) | the child returns a run-scoped `FAILED` result with `processing_budget_exceeded` (the parent kill at 3 s is not reached); the parent-kill path is the hang row |
 | hang | probe child `time.sleep(60)` | parent kills at wall + 2 s; `processing_budget_exceeded`; no zombie (`waitpid` reaped) |
 | crash | probe `os.kill(os.getpid(), SIGSEGV)` | `parser_exception` |
 | external kill | probe `os.kill(os.getpid(), SIGKILL)` | transient `internal_error` |
@@ -376,7 +402,7 @@ Command summaries (first docstring line = `TOOLS` description):
 
 | Command | Summary |
 |---|---|
-| `ImportSchedulePublication` | Admit one enrolled schedule PDF version as a publication of a Schedule Series and queue its parse (local operator only). |
+| `ImportSchedulePublication` | Admit one enrolled schedule PDF version as a publication of a Schedule Series and queue its parse (attested local operator: CLI or HTTP gateway only). |
 | `ListScheduleSeries` | List a Project's Schedule Series, newest first, with each one's latest comparison-eligible update. |
 | `ListSchedulePublications` | List one Schedule Series' publications, newest admission first, with effective status and counts. |
 | `ReadSchedulePublication` | Read one schedule publication: source identity, document digest, published metadata, status, job, parser runs and issue counts by code. |
@@ -417,6 +443,7 @@ exception text or a `schedule_activities.created_at`.
 |---|---|
 | switch off / factory absent | `unsupported` (no detail) |
 | import from a remote composition (`transport is REMOTE_CLIENT` or `capability_grants is not None` or `authenticated_client_id is not None`) | `unsupported` (defence in depth; it is never published remotely) |
+| import from any local caller without an attested operator surface (stdio MCP, which runs `LOCAL` with no `operator_surface`; any unattested composition) | `denied` — `attested_lineage_authority(authorization)` (`src/my_pa/application/lineage_authority.py`, the S3.1 D-16 mechanism the backfill report and confirm handlers already call) admits only `operator_surface ∈ {CLI, HTTP_GATEWAY}`, stamped only by `adapters/cli/app.py` and `adapters/http/app.py`; fail-closed (E-12, R7-F03) |
 | remote read without a grant on that capability for `schedule_read` | `unsupported` (`require_read_grant`) |
 | foreign or absent enrollment (import) | `denied` from authorization (empty requested scope), audited; the admission refusal `ENROLLMENT_NOT_FOUND` is the backstop → `not_found(ENROLLMENT_ID)` |
 | `PROJECT_NOT_FOUND` / `SERIES_NOT_FOUND` / `SOURCE_OBJECT_NOT_ENROLLED` / `SOURCE_VERSION_NOT_FOUND` / `SUPERSEDED_PUBLICATION_NOT_FOUND` | `not_found(PROJECT_ID / SERIES_ID / SOURCE_OBJECT_ID / SOURCE_VERSION_ID / SUPERSEDES_PUBLICATION_ID)` |
@@ -436,7 +463,7 @@ do not distinguish "another Principal's" from "absent" beyond the one partitione
 
 ### 3.6 Import admission
 
-1. `_schedule_plane()`; local-operator transport check (3.5.3).
+1. `_schedule_plane()`; remote-composition refusal; `attested_lineage_authority(authorization)` (result discarded; `denied` unless CLI or HTTP gateway) — all before any read or write (3.5.3, E-12).
 2. `command.import_request()` builds the S5b-1 `ScheduleImportRequest` (series name normalized
    by `normalize_series_name`, R2 §10.1; role/baseline enums; date parsed).
 3. `digest = schedule_import_request_digest(principal_id, request)` (S5b-1 D-14).
@@ -463,10 +490,11 @@ S5b-1 composite FKs/partitioned reads.
 | Encoding | unpadded base64url of canonical JSON (sorted keys, compact, ASCII) `{"b": <64 hex>, "p": [<position>], "t": <int epoch seconds>, "v": 1}` |
 | Length | `MAX_SCHEDULE_CURSOR_CHARACTERS = 512`; a longer input is refused before decoding; every position below encodes far under the bound (largest: history, 3 short scalars), and an encoder result over 512 is a programming error (`ValueError`) |
 | TTL | `SCHEDULE_CURSOR_TTL_SECONDS = 300`, compared with `authorization.at` |
-| Binding `b` | SHA-256 of canonical JSON `{"capability", "cursor_version": 1, "principal_id", "purpose", "request": <normalized command fields without cursor>, "page_size": <effective>, "order": <order id>}` |
+| Binding `b` | SHA-256 of canonical JSON `{"capability", "cursor_version": 1, "principal_id", "purpose", "request": <normalized command fields without cursor>, "page_size": <effective>, "order": <order id>}` plus, for changes, `"algorithm_version": "cpm-workbench-full-delta-v1"` (offset semantics depend on it; R7-F10). `t` is **not** covered by `b`, so the TTL is advisory against a caller who edits `t` (the search precedent has the same property); a `t` later than `authorization.at` + 5 s is refused |
 | Order ids | `series_created_desc_id_desc`, `publications_admitted_desc_id_desc`, `activities_row_ordinal_asc_row_id_asc`, `history_data_date_asc_admitted_asc_id_asc`, `changes_offset_in_published_id_kind_field_order` |
 | Positions `p` | series `[created_at, series_id]`; publications `[admitted_at, publication_id]`; activities `[row_ordinal, row_id]`; history `[data_date, admitted_at, publication_id]`; changes `[offset]` — the number of entries of the (filtered) sorted change list already returned, stable because both inputs are terminal and immutable and the algorithm is versioned; an offset beyond the list is `conflict(CURSOR)`; instants as `YYYY-MM-DDTHH:MM:SS.ffffffZ`, dates ISO; each element shape-checked |
-| Refusals | malformed, expired, binding mismatch: one `ScheduleCursorError` → `conflict(CURSOR)` (search precedent, R2 §32.1) |
+| Refusals | malformed, expired, future-issued, binding mismatch: one `ScheduleCursorError` → `conflict(CURSOR)` (search precedent, R2 §32.1) |
+| Order of checks | decode, binding and TTL (pure) **before** the root lookup, so a bad cursor never reaches the database and never distinguishes a present root from an absent one (R7-F10) |
 | Authority | none; every page is re-authorized by `invoke`, re-partitioned, re-checked for visibility; not a MAC — a forged position can only skip to rows the same query could read |
 | Next cursor | issued only when a `page_size + 1`-th row exists (`Truncation(is_truncated=True, reason="page_size_reached", next_cursor=…)`) |
 
@@ -484,7 +512,7 @@ the one; history: the observed ones on the page; changes: the pair).
 | Field | Rule |
 |---|---|
 | `scope` | sorted unique `source_ids` (from the publication's enrollment, partitioned join) and `enrollment_ids` |
-| `coverage` | over the referenced set P: `eligible = |P|`, `processed` = effective complete+partial, `quarantined` = review_required, `unsupported` = failed (persisted or effective); state: `not_enrolled` if P empty (all counts 0), `processed` if all complete, `queued` if all queued/processing, `quarantined` if all review_required, `unsupported` if all failed, else `partially_processed` |
+| `coverage` | over the referenced set P: `eligible = |P|`, `processed` = effective complete+partial, `quarantined` = review_required, `unsupported` = failed (persisted or effective); state: `eligible` with every count 0 if P is empty (an ordinary case — a Series with no eligible update, an empty filtered page — never `not_enrolled`, which would claim nothing is enrolled; R7-F08; scope and references empty, `partial_result` false unless truncated), `processed` if all complete, `queued` if all queued/processing, `quarantined` if all review_required, `unsupported` if all failed, else `partially_processed` |
 | `freshness` | `observed_at = authorization.at`, `CURRENT_FOR_OBSERVED_VERSION` |
 | `trust` | `TrustLevel.SOURCE_BOUND_DERIVED`, basis `("cpm-workbench-full-parser", "p6_full_v1")`, plus `"cpm-workbench-full-delta-v1"` for changes |
 | `source_references` | one `SourceReference(source_id, source_object_id, source_version_id)` per referenced publication, sorted |
@@ -512,6 +540,9 @@ Principal.
 | history | rows `r` with `r.schedule_activity_id = :id`, joined to publications `p` with `r.parser_run_id = p.accepted_parser_run_id` and `p.status IN ('complete','partial')`, ordered `(p.data_date, p.admitted_at, p.publication_id)` | **U-03**: the Stable Activity is visible iff at least 1 such row exists; otherwise `not_found(SCHEDULE_ACTIVITY_ID)`, identical to absent or foreign; `created_at` never returned |
 | changes | section 3.10 | section 3.10 |
 
+History may list a superseded predecessor and its successor with the same Data Date; both
+are actual observations ordered by `(data_date, admitted_at, publication_id)` (R7-F11).
+
 Invariant check: an eligible publication with `data_date IS NULL` contradicts T2-27 →
 `InternalError` (never a guessed order).
 
@@ -530,7 +561,9 @@ published_activity_id, activity_name, row_type, hierarchy_path, original_duratio
 remaining_duration, start, finish)`. `prior_observations(principal_id, series_id,
 before=key(from), schedule_activity_ids)` returns the ids among the given set that have a
 linked accepted-run row in an eligible publication of the Series with key `< key(from)` (one
-statement, `= ANY(:ids)`). The application merges the 2 sorted streams once (O(N), exact
+statement, `= ANY(:ids)`). "Eligible" here is any role — update, baseline, reference — and
+includes superseded predecessors (R2 §29.3 and §10.4: supersession never hides the
+predecessor; R7-F11). The application merges the 2 sorted streams once (O(N), exact
 `published_activity_id` equality = same Stable Activity inside one Series), calls
 `prior_observations` once with the B-only ids, and builds the full change list.
 
@@ -551,7 +584,7 @@ For a matched pair, rules are evaluated independently; one pair may emit several
 | `hierarchy_changed` | both paths non-NULL and differ | `hierarchy` | paths | null |
 | `field_state_changed` | for OD/RD/Start/Finish: states differ (at least 1 side not `published_value`); for hierarchy: exactly 1 side NULL (`before_state`/`after_state` = `published_value` for a path, `ambiguous` for NULL) | the field code | `{state, …}` per side | null — never fabricated |
 
-Not changes: equal values; both sides the same non-value state; a marker-only difference on
+OD/RD values are compared as `Decimal`, never as strings (R7-F11). Not changes: equal values; both sides the same non-value state; a marker-only difference on
 an equal date (residual U2-07); bbox/style/page/ordinal differences (provenance, R2 §29.5).
 
 **Ordering and pagination.** Sort `(published_activity_id, kind_rank, field_rank)` where
@@ -584,7 +617,7 @@ members and classifying each as closed (must change) or feature-local (must not)
 | File | Symbol | Change |
 |---|---|---|
 | `src/my_pa/domain/identity/operation.py` | `Capability` | +7 members (appended) |
-| same | `_OPERATOR_ONLY` | + import (comment: attested-local precedent S3.1 D-16; never satisfiable remotely) |
+| same | `_OPERATOR_ONLY` | + import (comment: attested-local, S3.1 D-16; the handler reuses `attested_lineage_authority`; never satisfiable remotely or over stdio MCP) |
 | same | `_PERMITTED_PURPOSES` | import → `{SCHEDULE_IMPORT}`; 6 reads → `{SCHEDULE_READ}` |
 | same | `_WRITE_CAPABILITIES`, `_ADDITIVE_WRITE_CAPABILITIES` | + import (both) |
 | `src/my_pa/domain/identity/purpose.py` | `Purpose` | `SCHEDULE_IMPORT = "schedule_import"`, `SCHEDULE_READ = "schedule_read"` (appended; D-91 comments) |
@@ -654,6 +687,11 @@ factory; asserted by `test_schedule_names_join_no_profile_ceiling_or_opt_in`.
 `test_chatllm_capability_policy.py`, `test_cli_transport.py` (`_BUILDERS`),
 `test_lineage_s31_capability_admission.py`, `test_lineage_s4_capability_admission.py`,
 `test_mcp_transport.py` (`TOOLS`), `test_transport_parity.py`,
+`tests/unit/test_constraint_authoring_vocabulary.py`,
+`tests/security/test_no_capability_accepts_a_server_owned_field.py`; the ChatLLM class counts in
+`tests/contract/test_chatllm_capability_policy.py` (`DATA_CONDITIONAL` 131 → 137,
+`CONTROL_PLANE_EXCLUDED` 24 → 25); **not** `tests/schema/test_record_lineage_s3_migration.py`'s
+frozen historical literal, which must not move;
 `tests/schema/test_project_controls_run01_integrity_migration.py`; `len(Purpose)` 60 → 62 and
 the published purpose tail in `test_lineage_s31_capability_admission.py`,
 `test_lineage_s4_capability_admission.py`, `test_commitment_v1_strict_client.py`;
@@ -760,8 +798,8 @@ no `pg_catalog` write function, `SET TRANSACTION READ ONLY` first); database
 | `ChatLLMCompositionPrerequisite.SCHEDULE`, `SCHEDULE_DATA_NAMES`, `CHATLLM_DATA_PROFILE_VERSION = "chatllm-data-v11"` | `domain/identity/chatllm_capability_policy.py` | |
 | `ScheduleChangeKind` (11, R2 §43.2 order), `DELTA_ALGORITHM_VERSION = "cpm-workbench-full-delta-v1"` | `domain/schedule/compare.py` | |
 | `MAX_SCHEDULE_PAGE_SIZE = 100`, `DEFAULT_SCHEDULE_PAGE_SIZE = 25`, `MAX_SCHEDULE_CURSOR_CHARACTERS = 512`, `SCHEDULE_CURSOR_TTL_SECONDS = 300`, `SCHEDULE_CURSOR_VERSION = 1` | `domain/schedule/cursor.py` | |
-| `SCHEDULE_HANDLER_BUDGET_SECONDS = 240`, `SCHEDULE_PARSE_RESERVE_SECONDS = 60`, `SCHEDULE_PARSE_MAX_WALL_SECONDS = 150`, `SCHEDULE_PARSE_MIN_WALL_SECONDS = 15`, `SCHEDULE_MIN_LEASE_SECONDS = 300` | `infrastructure/jobs/schedule.py` | |
-| `ChildLimits`, `PRODUCTION_CHILD_LIMITS` (address space 1,073,741,824; open files 32; output 134,217,728), `FRAME_MAGIC`, `FRAME_SCHEMA = "cpm-workbench-parse-frame-v1"`, `CHILD_COMMAND`, exit codes `EXIT_MEMORY = 3`, `EXIT_INPUT = 4`, `EXIT_CONTAINMENT = 5` | `infrastructure/jobs/schedule_parser_process.py` (exit codes shared with the child module) | |
+| `EXPECTED_PARSER_NAME`, `EXPECTED_PARSER_VERSION`, `EXPECTED_PROFILE_ID`, `EXPECTED_PROFILE_VERSION` (mirrors of `full_profile`, pinned by `test_expected_parser_identity_equals_full_profile`), `SCHEDULE_HANDLER_BUDGET_SECONDS = 240`, `SCHEDULE_PARSE_RESERVE_SECONDS = 60`, `SCHEDULE_PARSE_MAX_WALL_SECONDS = 150`, `SCHEDULE_PARSE_MIN_WALL_SECONDS = 15`, `SCHEDULE_MIN_LEASE_SECONDS = 300` | `infrastructure/jobs/schedule.py` | |
+| `ChildLimits`, `PRODUCTION_CHILD_LIMITS` (address space 1,073,741,824; open files 32; output 134,217,728), `FRAME_MAGIC`, `FRAME_SCHEMA = "cpm-workbench-parse-frame-v1"`, `CHILD_COMMAND`, exit codes `EXIT_MEMORY = 3`, `EXIT_INPUT = 4`, `EXIT_CONTAINMENT = 5`, `EXIT_USAGE = 6` | `infrastructure/jobs/schedule_parser_process.py` (exit codes shared with the child module) | |
 
 ### 4.2 Records (frozen slots dataclasses, `__post_init__` invariants)
 
@@ -779,6 +817,7 @@ id, `ParsedScheduleRow` content); `ScheduleActivityObservation`. `domain/schedul
 ### 4.3 Ports (`contracts/ports.py`, on `ScheduleRepository`)
 
 ```text
+find_parsed_run(principal_id, publication_id, *, parser_name, parser_version, profile_id, profile_version, document_sha256) -> ScheduleParserRun | None   # I7-A, R7-F04
 owns_project(principal_id, project_id) -> bool
 list_series(principal_id, project_id, *, after: tuple[datetime, str] | None, limit) -> tuple[ScheduleSeriesSummary, ...]
 list_publications(principal_id, series_id, *, role, status, after: tuple[datetime, str] | None, limit) -> tuple[SchedulePublicationSummary, ...]
@@ -830,7 +869,7 @@ commit. So the revision moves with the registrations (E-06).
 
 | Package | Owns (writes only these) | Exit |
 |---|---|---|
-| **I7-A** worker + isolation | NEW `src/my_pa/infrastructure/jobs/schedule.py`, `schedule_parser_process.py`, `schedule_parser_child.py`; `src/my_pa/domain/schedule/canonical.py` (`parse_result_from_object`), `model.py` (`SchedulePlan.source_id`), `__init__.py`; `src/my_pa/infrastructure/persistence/schedule.py` (`begin_processing` fills `source_id`); `src/my_pa/bootstrap/settings.py` (`schedule_enabled`); `src/my_pa/bootstrap/gateway.py` (factory composition); `src/my_pa/application/service.py` (ctor params only); NEW `tests/unit/test_schedule_parser_isolation.py`, `tests/database/test_cpm_workbench_worker.py`, `tests/architecture/test_cpm_workbench_worker_scope.py` (child import closure, no logging, parent never imports PDFium); `tests/unit/test_settings.py` (switch default); `tests/architecture/test_principal_partition_is_reached_through_the_guard.py` only if registration moves | handler runs end-to-end under `run_worker(…, plane=SCHEDULE_JOBS)` in database tests (no heartbeat, no `apps/worker.py` change); S5b-1 not-runnable guard still green |
+| **I7-A** worker + isolation | NEW `src/my_pa/infrastructure/jobs/schedule.py`, `schedule_parser_process.py`, `schedule_parser_child.py`; `src/my_pa/contracts/ports.py` + `src/my_pa/infrastructure/persistence/schedule.py` (`find_parsed_run`, R7-F04); `src/my_pa/domain/schedule/canonical.py` (`parse_result_from_object`), `model.py` (`SchedulePlan.source_id`), `__init__.py`; `src/my_pa/infrastructure/persistence/schedule.py` (`begin_processing` fills `source_id`); `src/my_pa/bootstrap/settings.py` (`schedule_enabled`); `src/my_pa/bootstrap/gateway.py` (factory composition); `src/my_pa/application/service.py` (ctor params only); NEW `tests/unit/test_schedule_parser_isolation.py`, `tests/database/test_cpm_workbench_worker.py`, `tests/architecture/test_cpm_workbench_worker_scope.py` (child import closure, no logging, parent never imports PDFium); `tests/unit/test_settings.py` (switch default); `tests/architecture/test_principal_partition_is_reached_through_the_guard.py` only if registration moves | handler runs end-to-end under `run_worker(…, plane=SCHEDULE_JOBS)` in database tests (no heartbeat); **ruling O-2 condition: I7-A leaves `apps/worker.py`, the heartbeat CHECK (and its `tables.py` literal) and `worker_health.py` untouched**, so the S5b-1 not-runnable guard stays green until I7-B converts it |
 | **I7-B** registration + policy closure + migration #2 | every row of section 3.12 except the real handler bodies; NEW migration; `tables.py` (heartbeat literal); `worker_health.py`; `unit_of_work.py`; `apps/worker.py`; `apps/cli/remote_mcp.py`; handler **stubs** (switch gate → `unsupported`, S3 D-37 precedent); converted `tests/architecture/test_cpm_workbench_foundation_scope.py`; NEW `tests/schema/test_cpm_workbench_vocabulary_migration.py`, `tests/contract/test_schedule_policy_closure.py`, `tests/contract/test_schedule_facade_catalog.py`; every pin of 3.13.5; `web/src/lib/api/decode/fixtures/python/success.json` (`git add -f` not needed for a tracked file; verify `git ls-tree`) | full FAST + doc guards + web checks green; 7 names closed on every surface; reads answer `unsupported` |
 | **I7-C** behaviour | `src/my_pa/application/schedules.py` (NEW), `src/my_pa/domain/schedule/compare.py` (NEW), `cursor.py` (NEW), `model.py` (read records), `src/my_pa/contracts/ports.py` (read methods), `src/my_pa/infrastructure/persistence/schedule.py` (read methods), `jobs.py` (`job_is_effectively_failed`), `src/my_pa/application/service.py` (7 handler bodies), `src/my_pa/application/disclosure.py` only if the builder lives there; NEW `tests/unit/test_schedule_compare.py`, `tests/unit/test_schedule_cursor.py`, `tests/unit/test_schedule_commands.py`, `tests/database/test_schedule_capabilities.py`, `tests/integration/test_schedule_compact_facade.py`, `tests/database/test_cpm_workbench_change_performance.py` | section 6 rows marked I7-C green |
 | **I7-D** WP-04 assurance | NEW `docs/architecture/cpm-workbench.md`, `ops/runbooks/cpm-workbench.md`, `docs/decisions/ADR-016-cpm-workbench-schedule-evidence.md` (+ index row), `src/my_pa/infrastructure/database/cpm_workbench_predeploy.py`, `ops/postgres/cpm_workbench_predeploy_check.py`, `tests/security/test_cpm_workbench_security.py`, `tests/database/test_cpm_workbench_predeploy.py`; `src/my_pa/application/capabilities.py` and `src/my_pa/domain/extraction/text.py` (comments only, R2 §8.4); `docs/architecture/00_ARCHITECTURE_INDEX.md`, `system-context.md`, `module-boundaries.md`, `docs/00_REPOSITORY_SOURCE_INDEX.md`, `ops/runbooks/README.md`, `ops/postgres/README.md`; this contract's section 7 table filled with executed results; `tests/ci_shard_weights.json` (`python -m tests.ci_shard weigh` from JUnit XML of the fast and migration lanes; S5a, S5b-1, S5b-2 modules; keep `verify` green and shard 1 no heavier than today); a FAST guard `test_the_s5b2_contract_crosswalk_names_tests_that_exist` | doc/count/link guards green; §45 table honest |
@@ -865,20 +904,20 @@ modules.
 | R2 | Tests (module: function) |
 |---|---|
 | §9.1, AC-003 | commands: `test_import_accepts_exactly_the_contract_fields`, `test_import_refuses_path_locator_filename_and_body_fields` (parametrized unknown keys), `test_import_requires_exactly_one_of_series_id_and_name`, `test_import_requires_a_source_version` |
-| §9.2–§9.3, AC-004 | policy closure: `test_import_is_operator_only_write_additive_with_one_purpose`, `test_import_scope_is_its_own_enrollment_source`; capabilities: `test_import_with_another_principals_enrollment_is_denied_and_writes_nothing`, `test_import_admission_refusals_map_to_safe_errors` (parametrized over the 14 refusals) |
+| §9.2–§9.3, AC-004 | policy closure: `test_import_is_operator_only_write_additive_with_one_purpose`, `test_import_scope_is_its_own_enrollment_source`; capabilities: `test_import_with_another_principals_enrollment_is_denied_and_writes_nothing`, `test_import_admission_refusals_map_to_safe_errors` (parametrized over the 14 refusals), `test_import_over_stdio_mcp_is_denied_and_writes_nothing` (through `adapters/mcp/server.py`'s local composition), `test_import_without_an_attested_surface_is_denied` (service invoked with `LOCAL`, no `operator_surface`), `test_import_from_cli_and_http_gateway_is_admitted` |
 | §9.4, AC-006 | worker: `test_version_change_at_metadata_fails_before_parsing`, `test_version_change_at_fetch_fails_before_parsing`, `test_truncated_fetch_is_source_too_large`, `test_provider_unavailable_is_transient_and_exhausts_to_effective_failed`, `test_provider_read_holds_no_transaction` (asserts no open transaction on the schedule UoW connection during the fake provider call) |
 | §10.1–§10.4, §23, AC-025 | capabilities: `test_import_replays_and_conflicts_per_section_23` (S5b-1 table through the capability), `test_import_creates_one_job` |
 | §10.6, §22, AC-026 | worker: `test_deterministic_failure_completes_the_job_and_fails_the_publication` (parametrized over every deterministic row of 3.3.2), `test_transient_failure_releases_and_retries`; capabilities: `test_exhausted_job_reads_effective_failed_without_writing` |
-| §24, AC-030 | worker: `test_every_phase_refuses_after_lease_loss` (lease expired before each of H1/H3/H5/H6/H7/H8), `test_no_write_after_lease_loss`, `test_reclaimed_attempt_reuses_the_parsed_run`, `test_reclaimed_attempt_after_terminal_completes_without_writing` |
+| §24, AC-030 | worker: `test_every_phase_refuses_after_lease_loss` (lease expired before each of H1/H3/H5/H6/H7/H8), `test_no_write_after_lease_loss`, `test_lease_loss_is_counted_lost_not_released`, `test_reclaimed_attempt_reuses_the_parsed_run`, `test_reclaimed_attempt_with_parsed_run_does_not_respawn`, `test_running_run_of_this_attempt_still_gets_its_batches`, `test_expected_parser_identity_equals_full_profile`, `test_reclaimed_attempt_after_terminal_completes_without_writing` |
 | §25 budget | worker: `test_budget_checkpoints_fail_with_processing_budget_exceeded` (fake clock at each checkpoint), `test_parse_is_not_spawned_with_less_than_the_minimum_wall` |
 | §25, AC-029 | foundation scope: `test_schedule_plane_is_runnable_on_all_four_surfaces`; worker scope: `test_worker_refuses_the_schedule_plane_while_disabled`, `test_worker_refuses_a_lease_shorter_than_three_hundred_seconds`; capabilities: `test_capabilities_get_reports_the_schedule_plane_only_when_enabled` |
-| U-05, §35 | isolation: every row of 3.4.8 (`test_decompression_bomb_fails_closed_on_linux`, `test_page_count_bound_through_the_child`, `test_deep_nesting_fails_closed`, `test_wall_timeout_is_processing_budget_exceeded`, `test_hung_child_is_killed_and_reaped`, `test_native_crash_is_parser_exception`, `test_external_kill_is_transient`, `test_oversized_output_is_bounds_exceeded`, `test_malformed_frame_is_transient`, `test_frame_for_other_bytes_is_transient`, `test_child_environment_is_scrubbed`, `test_containment_refuses_network_spawn_and_write`, `test_child_rlimits_are_set`, `test_containment_reports_the_memory_cap_per_platform`, `test_child_parse_equals_in_process_parse`); worker scope: `test_child_import_closure_has_no_network_or_database_module`, `test_the_worker_parent_never_imports_pdfium` |
+| U-05, §35 | isolation: every row of 3.4.8 (`test_decompression_bomb_fails_closed_on_linux`, `test_page_count_bound_through_the_child`, `test_deep_nesting_fails_closed`, `test_wall_timeout_is_processing_budget_exceeded`, `test_hung_child_is_killed_and_reaped`, `test_native_crash_is_parser_exception`, `test_external_kill_is_transient`, `test_oversized_output_is_bounds_exceeded`, `test_malformed_frame_is_transient`, `test_frame_for_other_bytes_is_transient`, `test_child_environment_is_scrubbed`, `test_containment_refuses_network_spawn_and_write`, `test_child_rlimits_are_set`, `test_containment_reports_the_memory_cap_per_platform`, `test_child_parse_equals_in_process_parse` (under `PRODUCTION_CHILD_LIMITS`), `test_largest_golden_parses_under_production_limits`, `test_benign_document_parses_under_the_bomb_cap`, `test_child_address_space_is_measured` (Linux CI, records `VmPeak`)); worker scope: `test_child_import_closure_has_no_network_or_database_module`, `test_the_worker_parent_never_imports_pdfium` |
 | §29, AC-028 | compare: `test_each_change_kind` (11 cases), `test_reintroduced_replaces_added`, `test_sign_convention`, `test_no_number_is_fabricated_for_non_value_states`, `test_marker_and_provenance_only_differences_emit_nothing`, `test_merge_is_single_pass` (counts comparisons ≤ 2N), `test_ordering_and_counts_by_kind`; capabilities: `test_changes_pagination_is_stable_across_pages`, `test_changes_eligibility_refusals`; performance: `test_change_scan_of_25000_rows_meets_the_target` |
 | §30, AC-027 | commands: `test_role_is_required_and_baseline_kind_follows_it`; capabilities: `test_series_latest_update_ignores_baselines_and_references`, `test_first_publication_is_not_a_baseline`; worker scope: `test_no_baseline_is_derived` |
 | §31, AC-031 | policy closure: `test_every_closed_surface_classifies_the_seven` (one assertion per surface of 3.12), `test_reads_are_scopeless_and_import_is_not`, `test_unchanged_surfaces_are_unchanged` |
-| §31.3–§31.4, AC-032 | policy closure: `test_v11_reads_are_data_conditional_under_schedule`, `test_import_is_control_plane_excluded`, `test_v11_targets`, `test_planner_desires_schedule_reads_only_with_the_switch`, `test_active_import_grant_is_unexpected_control_plane`, `test_import_is_never_remote_published` (default, `remote.operator`, compact operator), `test_import_is_not_remote_idempotent`, `test_schedule_names_join_no_profile_ceiling_or_opt_in`; capabilities: `test_remote_import_is_unsupported_even_for_an_operator_principal`, `test_remote_read_without_grant_is_unsupported` |
+| §31.3–§31.4, AC-032 | policy closure: `test_every_data_required_policy_is_always_composed` (every `DATA_REQUIRED` policy has prerequisite `ALWAYS`; ruling O-1), `test_v11_reads_are_data_conditional_under_schedule`, `test_import_is_control_plane_excluded`, `test_v11_targets`, `test_planner_desires_schedule_reads_only_with_the_switch`, `test_active_import_grant_is_unexpected_control_plane`, `test_import_is_never_remote_published` (default, `remote.operator`, compact operator), `test_import_is_not_remote_idempotent`, `test_schedule_names_join_no_profile_ceiling_or_opt_in`; capabilities: `test_remote_import_is_unsupported_even_for_an_operator_principal`, `test_remote_read_without_grant_is_unsupported` |
 | §32, AC-033 | cursor: `test_round_trip`, `test_length_bound`, `test_ttl`, `test_binding_covers_every_field` (parametrized: capability, principal, purpose, each filter, pair ids, page size, order), `test_forged_position_reads_nothing_unauthorized`; capabilities: `test_page_of_100_and_101_rows`, `test_cursor_conflicts` |
-| §32.8 | capabilities: `test_disclosure_per_read` (scope, coverage, trust, references, truncation) |
+| §32.8 | capabilities: `test_disclosure_per_read` (scope, coverage, trust, references, truncation, and the empty-P `eligible`/0 case for each read) |
 | U-03 | capabilities: `test_orphan_stable_activity_is_not_found_like_absent`, `test_history_never_reports_created_at` |
 | RR1-I01 | capabilities: `test_issue_counts_are_limited_to_the_accepted_run` |
 | §35 cross-Principal | capabilities: `test_cross_principal_roots_are_not_found_identically` (every read, every root) |
@@ -908,20 +947,22 @@ modules.
 | Q11 | `_SCOPELESS`: drop one read (6 runs) | `test_reads_are_scopeless_and_import_is_not` and the matching capability test (`scope_not_authorized`) |
 | Q12 | `_SCOPELESS`: add import | `test_reads_are_scopeless_and_import_is_not` |
 | Q13 | `_requested_scope`: import returns `frozenset()` | `test_import_scope_is_its_own_enrollment_source` |
-| Q14 | `_requested_scope`: import reads the enrollment row directly (any Principal) | `test_import_with_another_principals_enrollment_is_denied_and_writes_nothing` |
+| Q14 | `_requested_scope`: import reads the enrollment row directly (any Principal) | `test_import_with_another_principals_enrollment_is_denied_and_writes_nothing` — its fixture gives both Principals enrollments on the **same** `source_id`, so the held-scope rule (`requested ⊆ authorized`) cannot mask the break; the test asserts the audited `denied` from authorization (R7-F06) |
 | Q15 | `_WRITE_PURPOSES`: drop `SCHEDULE_IMPORT` | `test_every_closed_surface_classifies_the_seven[remote_write]` |
 | Q16 | add import to `_REMOTE_OPERATOR_IDENTITY_CAPABILITIES` (then, separately, to the compact operator exception) — 2 runs | `test_import_is_never_remote_published[<profile>]` |
 | Q17 | add import to `_IDEMPOTENT_REMOTE_CAPABILITIES` | `test_import_is_not_remote_idempotent` |
-| Q18 | import handler: drop the local-transport check | `test_remote_import_is_unsupported_even_for_an_operator_principal` (invoked on the service directly; the publication layer would mask it) |
+| Q18b | import handler: drop the `attested_lineage_authority` call | `test_import_over_stdio_mcp_is_denied_and_writes_nothing`, `test_import_without_an_attested_surface_is_denied` |
+| Q18 | import handler: drop the remote-composition check | `test_remote_import_is_unsupported_even_for_an_operator_principal` (invoked on the service directly; the publication layer would mask it) |
 | Q19 | one read handler: drop `require_read_grant` (6 runs) | `test_remote_read_without_grant_is_unsupported[<capability>]` |
-| Q20 | ChatLLM: one read `DATA_REQUIRED` (prerequisite `ALWAYS`) | `test_v11_reads_are_data_conditional_under_schedule`, `test_planner_desires_schedule_reads_only_with_the_switch` |
+| Q20a | ChatLLM: move one read to `_DATA_REQUIRED` (class only; it stays in `SCHEDULE_DATA_NAMES`) | `test_v11_reads_are_data_conditional_under_schedule`, `test_every_data_required_policy_is_always_composed` |
+| Q20b | ChatLLM: drop one read from `SCHEDULE_DATA_NAMES` (prerequisite becomes `ALWAYS`) | `test_planner_desires_schedule_reads_only_with_the_switch` |
 | Q21 | ChatLLM: import moved to `DATA_CONDITIONAL` | `test_import_is_control_plane_excluded`, `test_active_import_grant_is_unexpected_control_plane` |
 | Q22 | `_prerequisite_holds`: `SCHEDULE` returns `True` | `test_planner_desires_schedule_reads_only_with_the_switch` |
 | Q23 | `CHATLLM_DATA_PROFILE_VERSION` left at v10 | `test_v11_targets` |
 | Q24 | `_FEATURE_BY_FAMILY`: drop one family (4 runs) | `test_every_schedule_capability_has_a_catalog_entry` |
 | Q25 | add a schedule read to `MCP_PROFILE_OPT_IN_READ_CAPABILITIES` | `test_schedule_names_join_no_profile_ceiling_or_opt_in` |
 | Q26 | gateway composes the factory also with an injected `data_engine` | `test_profile_service_composes_no_schedule_capability` |
-| Q27 | `hold_lease` bypass: handler calls a repository method with a stale lease and catches `ScheduleLeaseLostError` | `test_no_write_after_lease_loss` |
+| Q27 | handler: drop the `ScheduleLeaseLostError → LeaseLostError` translation | `test_lease_loss_is_counted_lost_not_released` (asserts the `run_worker` outcome `lost`, not `released`/`internal_error`; R7-F06) |
 | Q28 | handler skips the budget check before H6 | `test_budget_checkpoints_fail_with_processing_budget_exceeded[H6]` |
 | Q29 | 3.3.2: classify `VersionChangedError` transient | `test_version_change_at_fetch_fails_before_parsing` |
 | Q30 | 3.3.2: classify `ProviderError` deterministic | `test_provider_unavailable_is_transient_and_exhausts_to_effective_failed` |
@@ -930,9 +971,9 @@ modules.
 | Q33 | drop the output cap | `test_oversized_output_is_bounds_exceeded` |
 | Q34 | drop the parent wall kill | `test_hung_child_is_killed_and_reaped` (bounded by its own test timeout) |
 | Q35 | `env = os.environ.copy()` | `test_child_environment_is_scrubbed` |
-| Q36 | drop each rlimit (CORE, FSIZE, NOFILE, CPU, AS) — 5 runs | `test_child_rlimits_are_set[<limit>]` (AS on Linux only) |
+| Q36 | drop each rlimit (CORE, FSIZE, NOFILE, CPU, AS) — 5 runs | `test_child_rlimits_are_set[<limit>]` (AS: Linux only — "CI-only, not executed on the implementation host" unless a Linux host is used, R7-F01) |
 | Q37 | drop the audit hook | `test_containment_refuses_network_spawn_and_write` |
-| Q38 | decoder skips the canonical round-trip check | `test_malformed_frame_is_transient` (round-trip variant) |
+| Q38 | decoder skips the canonical round-trip check | `test_non_canonical_frame_is_transient` — concrete frame: a row whose `original_duration.value` is `"1.50"` (values are built through the domain constructors, so `Decimal("1.50")` decodes, and only the round trip, which re-renders `"1.500"`, refuses it) |
 | Q39 | decoder skips the digest/size equality | `test_frame_for_other_bytes_is_transient` |
 | Q40 | child imports `sqlalchemy` (planted) | `test_child_import_closure_has_no_network_or_database_module` |
 | Q41 | handler imports `my_pa.infrastructure.schedule.pdf` | `test_the_worker_parent_never_imports_pdfium` |
@@ -959,7 +1000,9 @@ modules.
 
 A prove-red that stays green is reported as redundancy, a masked test or an unreachable
 hazard, never as "covered" (for example Q08's second test is expected to be layered behind
-the first).
+the first). A row whose test skips on the implementation host (Linux-only memory rows: the
+bomb, its positive controls, Q36[AS]) is reported "CI-only, not executed on the
+implementation host", never as a red proof, unless a Linux host is actually used.
 
 ### 6.4 Commands (foreground, chunked, `PYTHONPATH=src`, `~/my-pa/.venv/bin/python`)
 
@@ -984,7 +1027,7 @@ password), removed at the end.
 | 004 | test — 6.2 §9.2 row + S5b-1 composite-FK tests |
 | 005 | test — `test_generic_extraction_still_excludes_pdf` (S5a) + I7-D comment-only clarification |
 | 006 | test — 6.2 §9.4 row |
-| 007 | test — S5a bounds goldens + isolation suite (memory/CPU/time through the child) |
+| 007 | test — S5a bounds goldens + isolation suite (CPU/time through the child on every host); the **memory** sub-criterion is Linux-only and is reported "CI-only, not executed on the implementation host" unless a Linux CI run or Linux host shows the bomb and its positive controls passing — never an executed pass from a skip (R7-F01) |
 | 008 | test — `test_scope_and_hygiene.py` PDFium confinement (unchanged: the child imports PDFium only through `infrastructure/schedule/pdf.py`) |
 | 009–019 | test — S5a goldens/profile suites (unchanged parser); isolation parity test proves the child path yields identical results |
 | 020–023 | test — S5b-1 schema-guard/persistence suites (unchanged) + 6.2 rows exercising them through the worker |
@@ -1013,7 +1056,7 @@ password), removed at the end.
 | ID | R2 | S5b-2 | Reason |
 |---|---|---|---|
 | E-01 | §8.5: Schedule factory composed unconditionally, no feature flag | default-off `MY_PA_SCHEDULE_ENABLED`; factory only with the switch and without a restricted `data_engine` | brief; lineage/program precedent; profile roles hold no CPM privilege |
-| E-02 | §31.2/§31.3 reads `DATA_REQUIRED`, `chatllm-data-v4` | `DATA_CONDITIONAL` under prerequisite `SCHEDULE`, `chatllm-data-v11` | a switch-gated name is conditional in this repo (lineage/program precedent; `DATA_REQUIRED` = always composed); v10 is current |
+| E-02 | §31.2/§31.3 reads `DATA_REQUIRED`, `chatllm-data-v4`; the S5b-2 brief: "six reads DATA_REQUIRED behind a new composition prerequisite/switch following the lineage/program precedent" | `DATA_CONDITIONAL` under prerequisite `SCHEDULE`, `chatllm-data-v11` | a switch-gated name is conditional in this repo (all 74 `DATA_REQUIRED` names are `ALWAYS`; every gated plane, including the cited lineage/program precedent, is `DATA_CONDITIONAL`); v10 is current. **R7 ruling O-1: UPHELD** — the brief's substantive instruction (a new prerequisite, a default-off switch, the lineage/program precedent) is met in full; the literal `DATA_REQUIRED` contradicts that precedent. Guarded by the FAST invariant `test_every_data_required_policy_is_always_composed` |
 | E-03 | §43.3 `SchedulePlan` (S5b-1 §5.2 fields) | adds `source_id` | the provider is selected by source; read in the same plan transaction |
 | E-04 | §8.1 parser runs inside the worker | parser runs in a contained child process | S5a U-05/U-12 |
 | E-05 | §40 events/metrics vocabulary | no emitter; persisted counters, job state and plane health only | no logging/metrics sink exists in the job plane; adding one is a separate design |
@@ -1021,7 +1064,8 @@ password), removed at the end.
 | E-07 | §32.5 activities list "rows" | only `activity`/`milestone` rows; summaries appear in `hierarchy_path` | the output names a Stable Activity per row; complete/partial runs hold no ambiguous rows |
 | E-08 | §32.1 changes keyset `(published_activity_id, change_kind_rank)` | changes cursor position is an offset into the deterministic sorted list | a published ID (≤ 256 Unicode characters) cannot fit the 512-character cursor and would put source text in a token; immutable terminal inputs make the offset stable |
 | E-09 | §29.3 hierarchy `field_state_changed` unspecified for NULL paths | NULL ↔ path is `field_state_changed(hierarchy)` with states `ambiguous`/`published_value` | deterministic, no fabricated path |
-| E-10 | §31.4 import boundary by policy | plus a handler local-transport check | remote clients are `PrincipalKind.OPERATOR`; policy alone would not refuse |
+| E-10 | §31.4 import boundary by policy | plus a handler remote-composition check (`unsupported`) | remote clients are `PrincipalKind.OPERATOR`; policy alone would not refuse |
+| E-12 | §31.4 "Local HTTP/local MCP/CLI use the canonical import command" | import is **attested-local only** (CLI, HTTP gateway) through the existing S3.1 D-16 check `attested_lineage_authority`; local stdio MCP and any unattested local caller are `denied`, fail-closed, until an operator decision admits them | orchestrator decision on R7-F03 (option (a)): import is the only path feeding hostile PDFs to PDFium and is tied to an operator source-admission decision; a local AI agent over stdio MCP must not queue imports |
 | E-11 | §22 "source read unavailable" only | `TraversalDeniedError` treated as unavailable (transient) | absent and refused are one provider answer; exhaustion still ends effective `failed` |
 
 ### 8.2 Residuals and unknowns
@@ -1029,6 +1073,7 @@ password), removed at the end.
 | ID | Item | Owner |
 |---|---|---|
 | U2-01 | Native code in the child can still issue socket syscalls (no seccomp/netns on Linux, no sandbox on macOS) | operator: network-less container for the schedule worker |
+| U2-10 | A compromised child can (a) truncate, unlink, rename, chmod or create empty files the worker UID may modify (`RLIMIT_FSIZE` only stops growth; the audit hook covers Python calls only), and (b) return a well-formed frame with fabricated rows for the right digest, which would be persisted and served as `SOURCE_BOUND_DERIVED` | operator: dedicated UID, read-only root filesystem, no write access to source roots, network-less runtime (section 8.3) |
 | U2-02 | macOS cannot lower `RLIMIT_AS`: on dev hosts a bomb is bounded only by CPU/wall | accepted (prod and CI are Linux) |
 | U2-03 | A worker killed by `SIGKILL` leaves its child running until `RLIMIT_CPU` or a broken pipe ends it (≤ ~152 s CPU); no parent-death signal from the standard library | accepted, bounded |
 | U2-04 | Parent decode of a maximal frame (≈ 46 MB nominal, cap 128 MiB) can raise worker RSS by several hundred MiB | WP-04 measure |
@@ -1041,14 +1086,22 @@ password), removed at the end.
 
 ### 8.3 Operator gates (nothing here is performed by an agent)
 
-1. Deploying migration #2: `ACCESS EXCLUSIVE` + validating scan on `knowledge.audit_events`
+1. **Deploy order (R7-F09).** Migration #2 must be applied **before** any code carrying the 7
+   Schedule names serves a request: `invoke` audits every call before any handler, switch on
+   or off, so a call naming a schedule capability against the old `capability_is_known` CHECK
+   fails (closed, as `internal_error`). **Once migration #2 is applied, any audited call naming
+   a schedule capability or purpose — including a denied or `unsupported` probe — writes an
+   audit row that makes migration #2's downgrade refusal permanent** (by design; audit rows
+   are never deleted). The I7-D runbook states both.
+   Deploying migration #2: `ACCESS EXCLUSIVE` + validating scan on `knowledge.audit_events`
    and `worker_heartbeats` held to commit; read P3 first, choose a quiet window; a `55P03`
    abort is clean and retryable.
 2. The S5b-1 §9.3 gates (P1–P8 of section 3.16) before and after both CPM revisions.
 3. Enabling `MY_PA_SCHEDULE_ENABLED` anywhere but a test; running a schedule worker; source
    designation for schedule PDFs (OD-06) and the enrollment that admits `application/pdf`.
 4. Any ChatLLM profile apply to `chatllm-data-v11`, any remote grant on a schedule read.
-5. A network-less runtime for the schedule worker (U2-01).
+5. A runtime for the schedule worker that is network-less, runs under a dedicated UID with a
+   read-only root filesystem and has no write access to any source root (U2-01, U2-10).
 6. The authorized real-corpus evaluation (R2 §39, S5a U-01) and XER/XML (WP-05B, unimplemented).
 
 ### 8.4 Open questions for review R7
@@ -1060,3 +1113,9 @@ password), removed at the end.
 | O-3 | Native-crash signals map to deterministic `parser_exception` (a PDFium OOM crash under `RLIMIT_AS` is indistinguishable from a segfault) | accepted mapping; reviewer to rule |
 | O-4 | `TraversalDeniedError` transient (E-11) vs deterministic | transient |
 | O-5 | Activities list excludes summary rows (E-07) | exclude |
+
+**R7 rulings (recorded).** O-1 UPHELD (condition: E-02 quotes the brief and the ruling; FAST
+`test_every_data_required_policy_is_always_composed`). O-2 UPHELD (condition: I7-A leaves
+`apps/worker.py`, the heartbeat CHECK and `worker_health.py` untouched, section 5). O-3 UPHELD,
+conditional on the R7-F01 positive controls (section 3.4.8). O-4 UPHELD. O-5 UPHELD. R7-F03:
+the orchestrator chose attested-local only (E-12).

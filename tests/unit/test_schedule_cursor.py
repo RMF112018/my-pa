@@ -92,37 +92,36 @@ def test_round_trip(order: ScheduleCursorOrder) -> None:
     assert set(document) == {"b", "p", "t", "v"}
 
 
-def test_length_bound() -> None:
+def test_length_bound(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Over 512 characters is refused before a byte of it is decoded.
+
+    No token this module can issue reaches the bound (every position is a few
+    short scalars), so the bound's job is to keep an oversized input away from
+    the decoder: the decoder here records every call.
+    """
     binding = _binding()
-    with pytest.raises(ScheduleCursorError):
-        decode_schedule_cursor(
-            "A" * (MAX_SCHEDULE_CURSOR_CHARACTERS + 1),
-            binding=binding,
-            order=ScheduleCursorOrder.SERIES,
-            now=NOW,
-        )
-    # The bound is checked before anything is decoded: an over-long token that
-    # is otherwise a perfectly valid cursor is refused.
+    order = ScheduleCursorOrder.SERIES
+    decoded: list[str] = []
+    real = cursor_module._document
+
+    def recording(token: str) -> object:
+        decoded.append(token)
+        return real(token)
+
+    monkeypatch.setattr(cursor_module, "_document", recording)
     valid = encode_schedule_cursor(
-        binding=binding,
-        order=ScheduleCursorOrder.SERIES,
-        position=_POSITIONS[ScheduleCursorOrder.SERIES],
-        issued_at=NOW,
-    )
-    padded = _token(
-        {
-            "b": binding,
-            "p": [INSTANT.strftime("%Y-%m-%dT%H:%M:%S.%fZ"), "sser_" + "a" * 64],
-            "t": int(NOW.timestamp()),
-            "v": 1,
-        }
+        binding=binding, order=order, position=_POSITIONS[order], issued_at=NOW
     )
     assert len(valid) <= MAX_SCHEDULE_CURSOR_CHARACTERS
-    long_token = padded + "A" * (MAX_SCHEDULE_CURSOR_CHARACTERS + 1 - len(padded))
-    with pytest.raises(ScheduleCursorError):
-        decode_schedule_cursor(
-            long_token, binding=binding, order=ScheduleCursorOrder.SERIES, now=NOW
-        )
+    assert decode_schedule_cursor(valid, binding=binding, order=order, now=NOW)
+    assert decoded == [valid]
+    for long_token in (
+        "A" * (MAX_SCHEDULE_CURSOR_CHARACTERS + 1),
+        valid + "A" * (MAX_SCHEDULE_CURSOR_CHARACTERS + 1 - len(valid)),
+    ):
+        with pytest.raises(ScheduleCursorError):
+            decode_schedule_cursor(long_token, binding=binding, order=order, now=NOW)
+    assert decoded == [valid], "an over-long cursor reached the decoder"
     # An encoder result over the bound is a programming error, never a token.
     with pytest.raises(ValueError, match="exceeds its bound"):
         encode_schedule_cursor(
@@ -291,7 +290,9 @@ def test_binding_covers_every_field(field: str, monkeypatch: pytest.MonkeyPatch)
         monkeypatch.setattr(cursor_module, "DELTA_ALGORITHM_VERSION", "cpm-workbench-full-delta-v2")
         other = _binding(**changes)
     elif field == "order":
-        other = _binding(order=ScheduleCursorOrder.HISTORY)
+        # Two orders neither of which binds the algorithm, so only the order differs.
+        base = _binding(order=ScheduleCursorOrder.SERIES)
+        other = _binding(order=ScheduleCursorOrder.PUBLICATIONS)
     else:
         varied: dict[str, Any] = {
             "capability": "schedule_changes.list",

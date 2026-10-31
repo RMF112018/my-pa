@@ -10,9 +10,12 @@ rather than something a caller infers from a length.
   came from.
 * `UNSUPPORTED` — the media type is not one this extractor handles. That
   includes `application/pdf`, which is *reported*, not skipped: `P00-OD-003` is
-  an open operator decision and no PDF library is a dependency of this
-  repository. It also includes a media type of `None`, which means "not
-  identified", which is not the same as "text".
+  an open operator decision and this extractor reads no PDF. (The CPM Workbench
+  Full-Schedule parser reads schedule PDFs through its own operator-only import
+  and contained `schedule` worker; that specialized path does not resolve
+  `P00-OD-003` and does not widen this extractor, R2 section 8.4.) It also
+  includes a media type of `None`, which means "not identified", which is not
+  the same as "text".
 * `QUARANTINED` — processing stopped for one of the section 12 triggers, and the
   reason says which. A decode failure lands here, never in an empty string.
 

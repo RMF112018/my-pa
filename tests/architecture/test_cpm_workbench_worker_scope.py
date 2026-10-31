@@ -17,6 +17,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -239,3 +240,49 @@ def test_no_baseline_is_derived() -> None:
             if "current_baseline" in name.lower() or "previous" in name.lower()
         )
         assert not derived, f"{path.name} derives a pair: {derived}"
+
+
+# ---- the S5b-2 contract's crosswalk is real (contract sections 6-8; I7-D) ---------------
+
+CONTRACT: Final = ROOT / "docs/architecture/cpm-workbench-worker-capabilities-contract.md"
+#: A backticked test function name, optionally with a parameter id, closed by its backtick.
+_NAMED_TEST: Final = re.compile(r"`(test_[a-z0-9_]+)(?:\[[^\]`]*\])?`")
+_NAMED_MODULE: Final = re.compile(r"`(tests/[a-z0-9_/]+\.py)`")
+
+
+def _crosswalk_text() -> str:
+    """Sections 6 (test plan, R2 clause map, prove-red), 7 (section 45) and 8."""
+    text = CONTRACT.read_text(encoding="utf-8")
+    start = text.index("\n## 6. Test plan and crosswalk")
+    return text[start:]
+
+
+def _defined_tests() -> set[str]:
+    defined: set[str] = set()
+    for path in (ROOT / "tests").rglob("test_*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        defined |= {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+            and node.name.startswith("test_")
+        }
+    return defined
+
+
+def test_the_s5b2_contract_crosswalk_names_tests_that_exist() -> None:
+    """Every test function and test module sections 6-8 name exists in the tree.
+
+    It cannot prove a named test is collected or passes (the tiers run them; the
+    section 7 table records the executed results), only that the crosswalk does
+    not cite a test nobody wrote or one a rename left behind.
+    """
+    text = _crosswalk_text()
+    named = set(_NAMED_TEST.findall(text))
+    assert len(named) >= 120, f"the crosswalk parse found only {len(named)} names"
+    missing = sorted(named - _defined_tests())
+    assert not missing, f"the contract names tests that do not exist: {missing}"
+    modules = set(_NAMED_MODULE.findall(text))
+    assert modules, "the crosswalk names no module?"
+    absent = sorted(module for module in modules if not (ROOT / module).is_file())
+    assert not absent, f"the contract names test modules that do not exist: {absent}"

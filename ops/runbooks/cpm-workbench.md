@@ -90,7 +90,9 @@ check repairs anything.
    `plane schedule disabled`). Turning it on or off changes no row; jobs queued while it was
    off are claimed only by a schedule worker running with it on.
 4. **Import is operator-only and attested-local.** Only the CLI (`apps/cli/invoke.py`) and the
-   HTTP gateway stamp an operator surface; stdio MCP, any unattested local caller and every
+   HTTP gateway stamp an operator surface (the gateway stamps it on every `invoke` request it
+   accepts, so any caller the gateway authenticates as the operator — in `entra` mode an
+   Entra-authenticated operator — may import; the S3.1 D-16 precedent); stdio MCP, any unattested local caller and every
    remote client are refused (`denied` / `unsupported`). Every import needs an operator
    **source-admission decision**: which source is designated for schedule PDFs (open decision
    **OD-06**) and an enrollment whose media allowlist admits `application/pdf`. No source is
@@ -104,15 +106,22 @@ check repairs anything.
    the implementation host and are **CI-only, not executed on the implementation host**. The
    PR's ubuntu CI log (the FAST `validate` shards) must show each **executed and passed, not
    skipped**:
-   - `tests/unit/test_schedule_parser_isolation.py::test_child_address_space_has_headroom`
-     (prints the measured `VmPeak`; requires 2 × `VmPeak` ≤ 1 GiB)
-   - `tests/unit/test_schedule_parser_isolation.py::test_largest_golden_parses_under_production_limits`
+   - `tests/unit/test_schedule_parser_isolation.py::test_child_address_space_has_headroom[largest_golden]`
+     and `[bounds_maximal]` (each prints its measured `VmPeak`; each requires 2 × `VmPeak` ≤ 1 GiB)
+   - `tests/unit/test_schedule_parser_isolation.py::test_largest_golden_parses_under_production_limits[largest_golden]`
+     and `[bounds_maximal]`
    - `tests/unit/test_schedule_parser_isolation.py::test_benign_document_parses_under_the_bomb_cap`
    - `tests/unit/test_schedule_parser_isolation.py::test_decompression_bomb_fails_closed_on_linux`
    - `tests/unit/test_schedule_parser_isolation.py::test_child_rlimits_are_set[RLIMIT_AS-expected4]`
 
-   If the headroom test fails, the 1 GiB cap is re-derived as at least 2 × the reported
-   `VmPeak` (and no more than any container memory limit) in a follow-up **before merge**.
+   `bounds_maximal` is a synthetic generated at test time at the page cap (250 pages) with
+   23,250 rows (93 % of the 25,000-row cap) and 96 % of the character cap. **Risk:** FR7's
+   linear extrapolation from macOS RSS gives about 560 MiB at 25,000 rows, above the 512 MiB
+   the 2× rule allows; on macOS (no cap, RSS not `VmPeak`) the bounds-maximal child peaked at
+   440 MiB. Both are observations, not Linux measurements. If either headroom node fails, the
+   1 GiB cap is re-derived as at least 2 × the reported `VmPeak` (and no more than any
+   container memory limit), or the admitted bound is reduced (R2 section 36), **before merge**.
+   The cap is not changed on an extrapolation alone.
    The decompression bomb's Linux failure code is pinned to the measured member of
    {`bounds_exceeded`, `parser_exception`} only once a CI run reports it.
 7. **ChatLLM and remote.** Any `profile-apply` to `chatllm-data-v11` and any remote grant on a
@@ -160,7 +169,9 @@ effective `failed`.
 | U2-06 | migration #2's validating scan of `audit_events` under `ACCESS EXCLUSIVE` | section 2 step 3 |
 | U2-07 | a marker-only Start/Finish change on an equal date is not a v1 change kind | future delta version |
 | U2-08 | parser and persistence durations are not recorded | future observability design |
-| U2-12 | `RLIMIT_AS` 1 GiB is provisional | gate 6 |
+| U2-12 | `RLIMIT_AS` 1 GiB is provisional; the bounds-maximal case may need more than half of it | gate 6 |
+| U2-13 | a tiny hostile page (≈ 2.6 KB showing 200,000 text objects) keeps PDFium busy inside one call the cooperative deadline cannot interrupt; it ends `processing_budget_exceeded` at the wall (up to about 152 s of worker time per admission, one attempt, no retry) | accepted; the import is operator-only — admit only documents from the designated source |
+| U2-14 | `tests/ci_shard_weights.json` was weighed on macOS, where the Linux memory tests skip | re-weigh both lanes with `python -m tests.ci_shard weigh` from the first ubuntu CI JUnit of the PR |
 | S5a U-01 | no real corpus evaluation | gate 8 |
 
 ## 7. Not run, and why

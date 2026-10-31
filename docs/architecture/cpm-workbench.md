@@ -170,8 +170,14 @@ filesystem and no write access to any source root.
 
 On the implementation host (macOS, Homebrew PostgreSQL 15 scratch cluster, synthetic data):
 a 25,000-row A→B delta in 0.709 s against a 5 s target, and a 25,000-row import plus
-persistence in 18.6 s (worker I7-C). The Linux-only address-space tests of the parser child
-are **CI-only, not executed on the implementation host** (runbook gate 6).
+persistence in 18.6 s (worker I7-C). The bounds-maximal synthetic (250 pages, 23,250 rows)
+parsed `complete` in the contained child with a peak RSS of 440 MiB on macOS, where no
+address-space cap applies — an observation, not the Linux `VmPeak` the 2× rule needs. The
+Linux-only address-space tests of the parser child (7 nodes, both the 86-page golden and the
+bounds-maximal case) are **CI-only, not executed on the implementation host** (runbook gate 6).
+A tiny text-flood page spends the whole parse wall inside one PDFium call (residual U2-13).
+`tests/ci_shard_weights.json` is macOS-derived and is to be re-weighed from the first ubuntu CI
+JUnit (U2-14).
 
 ## 10. Residuals
 

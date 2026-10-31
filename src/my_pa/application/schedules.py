@@ -24,7 +24,7 @@ publications the answer references, never of the enrolled corpus.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, fields
+from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Final
@@ -40,6 +40,7 @@ from my_pa.application.commands import (
     ReadSchedulePublication,
 )
 from my_pa.application.errors import (
+    ApplicationError,
     ConflictError,
     DeniedError,
     InternalError,
@@ -134,41 +135,59 @@ _PARTIAL_STATES: Final = frozenset(
 )
 _DURATION_PLACES: Final = Decimal("0.001")
 
-#: Section 3.5.3: each typed admission refusal and its public answer.
-_REFUSALS: Final[Mapping[ScheduleAdmissionRefusal, Callable[[], Exception]]] = {
-    ScheduleAdmissionRefusal.PROJECT_NOT_FOUND: lambda: NotFoundError(SafeDetail.PROJECT_ID),
-    ScheduleAdmissionRefusal.SERIES_NOT_FOUND: lambda: NotFoundError(SafeDetail.SERIES_ID),
-    ScheduleAdmissionRefusal.ENROLLMENT_NOT_FOUND: lambda: NotFoundError(SafeDetail.ENROLLMENT_ID),
-    ScheduleAdmissionRefusal.SOURCE_OBJECT_NOT_ENROLLED: lambda: NotFoundError(
-        SafeDetail.SOURCE_OBJECT_ID
+#: Section 3.5.3: each typed admission refusal and its public answer, as the
+#: error class and its details (constructed by name, never dispatched through a
+#: table of callables).
+_REFUSALS: Final[
+    Mapping[ScheduleAdmissionRefusal, tuple[type[ApplicationError], tuple[SafeDetail, ...]]]
+] = {
+    ScheduleAdmissionRefusal.PROJECT_NOT_FOUND: (NotFoundError, (SafeDetail.PROJECT_ID,)),
+    ScheduleAdmissionRefusal.SERIES_NOT_FOUND: (NotFoundError, (SafeDetail.SERIES_ID,)),
+    ScheduleAdmissionRefusal.ENROLLMENT_NOT_FOUND: (NotFoundError, (SafeDetail.ENROLLMENT_ID,)),
+    ScheduleAdmissionRefusal.SOURCE_OBJECT_NOT_ENROLLED: (
+        NotFoundError,
+        (SafeDetail.SOURCE_OBJECT_ID,),
     ),
-    ScheduleAdmissionRefusal.SOURCE_VERSION_NOT_FOUND: lambda: NotFoundError(
-        SafeDetail.SOURCE_VERSION_ID
+    ScheduleAdmissionRefusal.SOURCE_VERSION_NOT_FOUND: (
+        NotFoundError,
+        (SafeDetail.SOURCE_VERSION_ID,),
     ),
-    ScheduleAdmissionRefusal.UNSUPPORTED_MEDIA_TYPE: lambda: UnsupportedError(
-        SafeDetail.SOURCE_VERSION_ID
+    ScheduleAdmissionRefusal.UNSUPPORTED_MEDIA_TYPE: (
+        UnsupportedError,
+        (SafeDetail.SOURCE_VERSION_ID,),
     ),
-    ScheduleAdmissionRefusal.MEDIA_TYPE_NOT_ENROLLED: DeniedError,
-    ScheduleAdmissionRefusal.SOURCE_TOO_LARGE: lambda: UnsupportedError(SafeDetail.MAX_BYTES),
-    ScheduleAdmissionRefusal.SUPERSEDED_PUBLICATION_NOT_FOUND: lambda: NotFoundError(
-        SafeDetail.SUPERSEDES_PUBLICATION_ID
+    ScheduleAdmissionRefusal.MEDIA_TYPE_NOT_ENROLLED: (DeniedError, ()),
+    ScheduleAdmissionRefusal.SOURCE_TOO_LARGE: (UnsupportedError, (SafeDetail.MAX_BYTES,)),
+    ScheduleAdmissionRefusal.SUPERSEDED_PUBLICATION_NOT_FOUND: (
+        NotFoundError,
+        (SafeDetail.SUPERSEDES_PUBLICATION_ID,),
     ),
-    ScheduleAdmissionRefusal.SUPERSEDED_PUBLICATION_NOT_TERMINAL: lambda: ConflictError(
-        SafeDetail.SUPERSEDES_PUBLICATION_ID
+    ScheduleAdmissionRefusal.SUPERSEDED_PUBLICATION_NOT_TERMINAL: (
+        ConflictError,
+        (SafeDetail.SUPERSEDES_PUBLICATION_ID,),
     ),
-    ScheduleAdmissionRefusal.SUPERSEDED_PUBLICATION_SAME_SOURCE_VERSION: lambda: (
-        InvalidRequestError(SafeDetail.SUPERSEDES_PUBLICATION_ID)
+    ScheduleAdmissionRefusal.SUPERSEDED_PUBLICATION_SAME_SOURCE_VERSION: (
+        InvalidRequestError,
+        (SafeDetail.SUPERSEDES_PUBLICATION_ID,),
     ),
-    ScheduleAdmissionRefusal.SUPERSEDED_PUBLICATION_HAS_SUCCESSOR: lambda: ConflictError(
-        SafeDetail.SUPERSEDES_PUBLICATION_ID
+    ScheduleAdmissionRefusal.SUPERSEDED_PUBLICATION_HAS_SUCCESSOR: (
+        ConflictError,
+        (SafeDetail.SUPERSEDES_PUBLICATION_ID,),
     ),
-    ScheduleAdmissionRefusal.IDEMPOTENCY_KEY_CONFLICT: lambda: ConflictError(
-        SafeDetail.IDEMPOTENCY_KEY
+    ScheduleAdmissionRefusal.IDEMPOTENCY_KEY_CONFLICT: (
+        ConflictError,
+        (SafeDetail.IDEMPOTENCY_KEY,),
     ),
-    ScheduleAdmissionRefusal.SOURCE_VERSION_CONFLICT: lambda: ConflictError(
-        SafeDetail.SOURCE_VERSION_ID
+    ScheduleAdmissionRefusal.SOURCE_VERSION_CONFLICT: (
+        ConflictError,
+        (SafeDetail.SOURCE_VERSION_ID,),
     ),
 }
+
+
+def _refusal_error(refusal: ScheduleAdmissionRefusal) -> ApplicationError:
+    error_class, details = _REFUSALS[refusal]
+    return error_class(*details)
 
 
 @dataclass(frozen=True, slots=True)
@@ -498,9 +517,9 @@ def _plain(value: object) -> object:
 def _request_of(command: object) -> dict[str, object]:
     """The normalized command fields a cursor binds, without the cursor and page size."""
     return {
-        item.name: _plain(getattr(command, item.name))
-        for item in fields(command)  # type: ignore[arg-type]
-        if item.name not in {"cursor", "page_size"}
+        name: _plain(value)
+        for name, value in asdict(command).items()  # type: ignore[call-overload]
+        if name not in {"cursor", "page_size"}
     }
 
 
@@ -620,7 +639,7 @@ class ScheduleApplication:
             refusal = error.reason
         if refusal is not None:
             # Raised outside the handler so the refusal is not left in `__context__`.
-            raise _REFUSALS[refusal]()
+            raise _refusal_error(refusal)
         if status is None:  # pragma: no cover - the admission just read it
             raise InternalError()
         source_id = next(

@@ -175,7 +175,7 @@ parsed `complete` in the contained child with a peak RSS of 440 MiB on macOS, wh
 address-space cap applies — an observation, not the Linux `VmPeak` the 2× rule needs. The
 Linux-only address-space tests of the parser child (7 nodes, both the 86-page golden and the
 bounds-maximal case) are **CI-only, not executed on the implementation host** (runbook gate 6).
-A 2,610-byte text-flood page keeps PDFium inside one page load past the whole parse wall, so the child is ended from outside and the publication fails `processing_budget_exceeded` (residual U2-13).
+A 2,610-byte text-flood page drives PDFium to an early call boundary, then one long native call past the whole parse wall, so the child is ended from outside (or stops itself at the early boundary on a slow host) and the publication fails `processing_budget_exceeded` (residual U2-13).
 `tests/ci_shard_weights.json` is macOS-derived and is to be re-weighed from the first ubuntu CI
 JUnit (U2-14).
 

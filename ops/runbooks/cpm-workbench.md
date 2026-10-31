@@ -170,7 +170,7 @@ effective `failed`.
 | U2-07 | a marker-only Start/Finish change on an equal date is not a v1 change kind | future delta version |
 | U2-08 | parser and persistence durations are not recorded | future observability design |
 | U2-12 | `RLIMIT_AS` 1 GiB is provisional; the bounds-maximal case may need more than half of it | gate 6 |
-| U2-13 | a tiny hostile page (2,610 bytes: 200,000 text-show operations with no positioning) keeps PDFium inside one page load for over 20 s, which the cooperative deadline cannot interrupt; the child is ended from outside at the wall (`RLIMIT_CPU` or the parent kill, at most about 152 s of worker time per admission) and the publication fails `processing_budget_exceeded` on its one attempt, no retry | accepted; the import is operator-only — admit only documents from the designated source |
+| U2-13 | a tiny hostile page (2,610 bytes: 200,000 text-show operations with no positioning) drives PDFium to an early call boundary, then one long native call the cooperative deadline cannot interrupt; the child is ended from outside at the wall (`RLIMIT_CPU` or the parent kill, at most about 152 s of worker time per admission), or stops itself at the early boundary if its deadline has already passed, and the publication fails `processing_budget_exceeded` on its one attempt, no retry | accepted; the import is operator-only — admit only documents from the designated source |
 | U2-14 | `tests/ci_shard_weights.json` was weighed on macOS, where the Linux memory tests skip | re-weigh both lanes with `python -m tests.ci_shard weigh` from the first ubuntu CI JUnit of the PR |
 | S5a U-01 | no real corpus evaluation | gate 8 |
 

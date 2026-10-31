@@ -208,9 +208,9 @@ def _decompression_bomb() -> bytes:
 
 def _text_flood(operations: int = 200_000) -> bytes:
     """FR7-F04: 1 page, a ~2.6 KB PDF whose Flate content is `BT /F1 1 Tf` and then
-    `(x) Tj` 200,000 times with no `Td` (FR7's variant): PDFium spends well over 20 s
-    inside one page load on the implementation host (FR7 measured 21.2 s and 21.5 s
-    at a 20 s wall)."""
+    `(x) Tj` 200,000 times with no `Td` (FR7's variant). PDFium reaches an early call
+    boundary (about 1.2-2.9 s, host-speed dependent), then one long native call
+    (FR7 measured 21.2 s and 21.5 s in total at a 20 s wall)."""
     font = b"<< /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >>"
     content = b"BT /F1 1 Tf " + b"(x) Tj " * operations + b"ET"
     return _one_page(font, zlib.compress(content, 9), b"/Filter /FlateDecode ")
@@ -390,23 +390,25 @@ def test_child_address_space_has_headroom(name: str) -> None:
 # ---- the S5a bounds and the wall through the child -----------------------------------
 
 
-#: The flood's wall. Small to keep the test cheap, yet far below the single
-#: PDFium call's duration (over 20 s here), so the call reliably outlasts it.
+#: The flood's wall: small to keep the test cheap; far below the long native
+#: call's duration, so the parse never finishes inside it.
 TEXT_FLOOD_WALL: Final = 5.0
 
 
 def test_text_flood_outlasts_the_wall_and_ends_processing_budget_exceeded() -> None:
-    """FR7-F04 (residual U2-13): one native PDFium call outlives the cooperative deadline.
+    """FR7-F04 (residual U2-13): a native PDFium call outlives the cooperative deadline.
 
-    The in-child deadline (wall - 1 s) cannot interrupt PDFium inside the page
-    load, so the child is still in that call at the wall and is ended from
-    outside -- by `RLIMIT_CPU` (`SIGXCPU` at ceil(wall) + 1 s CPU) or the parent
-    kill at wall + 2 s -- never by itself. The answer is the run-less
-    `DeterministicFailure(processing_budget_exceeded)`; the elapsed time is at
-    least the wall and at most the wall plus the kill grace. On Linux the
-    address-space cap may end it first (`bounds_exceeded`, or `parser_exception`
-    for a native allocation crash). Measured on the implementation host: about
-    6.05 s, ended by `SIGXCPU`, on every run.
+    The flood reaches an early call boundary and then enters one long native
+    call the in-child deadline (wall - 1 s) cannot interrupt. Which of 2 budget
+    answers comes back depends on host speed (FR7 re-review 2, measured on
+    efficiency cores): if the deadline has already passed at the early boundary,
+    the child stops itself with a run-scoped `FAILED` result coded
+    `processing_budget_exceeded`; otherwise it is still inside the long call at
+    the wall and is ended from outside (`SIGXCPU` at ceil(wall) + 1 s CPU, or the
+    parent kill at wall + 2 s), a run-less `DeterministicFailure` with the same
+    code, after at least the wall. Both are budget answers; elapsed is never more
+    than the wall plus the kill grace. On Linux the address-space cap may end it
+    first (`bounds_exceeded`, or `parser_exception` for a native allocation crash).
     """
     started = time.monotonic()
     outcome = run_isolated_parse(
@@ -416,10 +418,14 @@ def test_text_flood_outlasts_the_wall_and_ends_processing_budget_exceeded() -> N
     allowed = {ScheduleIssueCode.PROCESSING_BUDGET_EXCEEDED}
     if LINUX:
         allowed |= {ScheduleIssueCode.BOUNDS_EXCEEDED, ScheduleIssueCode.PARSER_EXCEPTION}
-    # Run-less: the child produced no result of its own; it was ended from outside.
-    assert isinstance(outcome, DeterministicFailure), outcome
-    assert outcome.code in allowed, outcome
-    if outcome.code is ScheduleIssueCode.PROCESSING_BUDGET_EXCEEDED:
+    assert _failed_code(outcome) in allowed, outcome
+    # A run-scoped answer (the child stopped itself at a call boundary past its
+    # deadline) carries no timing claim; a run-less budget answer was ended from
+    # outside, so only after the wall.
+    if (
+        isinstance(outcome, DeterministicFailure)
+        and outcome.code is ScheduleIssueCode.PROCESSING_BUDGET_EXCEEDED
+    ):
         assert elapsed >= TEXT_FLOOD_WALL, elapsed
     assert elapsed <= TEXT_FLOOD_WALL + process.PARENT_KILL_GRACE_SECONDS + 1.0, elapsed
 

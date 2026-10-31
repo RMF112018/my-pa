@@ -798,6 +798,18 @@ no `pg_catalog` write function, `SET TRANSACTION READ ONLY` first); database
 `test_predeploy_checks_pass_on_a_clean_scratch_database` and
 `test_predeploy_check_reports_a_planted_default_privilege` (scratch cluster only).
 
+*Implementation note I7-D (trivial resolutions):* the module adds a check P0 that reads
+`transaction_read_only` and stops unless it is `on`; P5 is one SHA-256 over both tables'
+`relacl` text (the `after` phase stops without the `before` digest, passed as
+`--before-acl-sha256`); P6 and P8 stop when a CPM table is absent; P8 requires `SELECT` and
+`INSERT` on all 7 tables and `UPDATE` on publications, jobs, parser runs and rows (the tables
+the worker and import update or lock `FOR UPDATE`); P4's stop is labelled a stop for
+enablement in the runbook. Results are `pass`/`stop`/`report` (`CheckStatus.HOLDS`, `STOP`,
+`REPORT`); the runner exits 1 on any stop. The database module holds 10 tests (the 2 named
+above plus a global and an other-schema default privilege, a planted grant, an ACL change, a
+narrowed CHECK, the after-phase stop without a digest, the open-transaction refusal and the
+ops runner's output), all on per-test scratch clones.
+
 ---
 
 ## 4. Symbol inventory
@@ -1036,35 +1048,51 @@ password), removed at the end.
 
 ---
 
-## 7. R2 §45 acceptance criteria (planned disposition; I7-D records executed results)
+## 7. R2 §45 acceptance criteria (executed results, I7-D)
 
-| AC | Planned disposition |
-|---|---|
-| 001 | test — existing `test_schedule_files_carry_no_denylisted_token` (S5a) extended by I7-D to the S5b-2 modules |
-| 002 | test — `test_scope_and_hygiene.py` dependency scan (no XER/XML/P6 runtime); I7-D asserts the new modules too |
-| 003 | test — 6.2 §9.1 row |
-| 004 | test — 6.2 §9.2 row + S5b-1 composite-FK tests |
-| 005 | test — `test_generic_extraction_still_excludes_pdf` (S5a) + I7-D comment-only clarification |
-| 006 | test — 6.2 §9.4 row |
-| 007 | test — S5a bounds goldens + isolation suite (CPU/time through the child on every host); the **memory** sub-criterion (headroom test, both positive controls, bomb) is Linux-only and is reported "CI-only, not executed on the implementation host — pending the PR's ubuntu CI run" unless a Linux CI run or Linux host shows it executed and passed — never an executed pass from a skip (R7-F01, U2-12) |
-| 008 | test — `test_scope_and_hygiene.py` PDFium confinement (unchanged: the child imports PDFium only through `infrastructure/schedule/pdf.py`) |
-| 009–019 | test — S5a goldens/profile suites (unchanged parser); isolation parity test proves the child path yields identical results |
-| 020–023 | test — S5b-1 schema-guard/persistence suites (unchanged) + 6.2 rows exercising them through the worker |
-| 024 | test — worker `test_served_facts_trace_to_source_job_parser_and_cell` (new, I7-C) + S5b-1 round-trip |
-| 025 | test — 6.2 §10/§23 row |
-| 026 | test — 6.2 §10.6 row |
-| 027 | test — 6.2 §30 row |
-| 028 | test — 6.2 §29 row |
-| 029 | test — 6.2 §25 row |
-| 030 | test — 6.2 §24 row |
-| 031 | test — 6.2 §31 row |
-| 032 | test — 6.2 §31.3 row; "no live grant/profile apply" is a doc statement (nothing in the repo applies one) |
-| 033 | test — 6.2 §32 row |
-| 034 | test — 6.2 §40 row |
-| 035 | test — I7-D `test_no_cross_domain_link_frontend_or_legacy_write` (schema/source diff guard) |
-| 036 | test, with deviation — S5b-1 migration suite + 3.14 suite; CPM spans 2 revisions (S5b-1 D-03) |
-| 037 | test (synthetic) + operator-gated — S5a quality/performance gates pass on synthetic goldens; the authorized real corpus evaluation (U-01 of S5a) is operator-gated: no real PDF exists here |
-| 038 | doc — I7-D current-state docs, rederived counts, ChatLLM v11, boundaries; no deployment claim |
+Executed by worker I7-D on 2026-10-31 on the implementation host (macOS, Python 3.12.13,
+Homebrew PostgreSQL 15.15 scratch cluster on loopback, `PGTZ=UTC`, synthetic data only), over
+the code of the final S5b-2 head (the commits after the run change documents, count pins and
+`tests/ci_shard_weights.json` only). Whole-tier results of that run: FAST 38,400 collected —
+38,257 passed, 136 skipped (macOS-only and Linux-only skips; CI states 74), 7 failed, all 7
+count/prose pins this package then re-measured (5) or rephrased (1) and a head-pin list the
+security module's migration path tripped (1), each re-run green after the fix; database tier
+(`database or recovery or e2e`) 5,312 collected — 5,294 passed, 15 skipped, 2 failed, 1 failed
+then fixed and re-run green (table note b); migration lanes (`migration_edge or migration`,
+1,683, and `migration_empty_to_head`, 20) 1,703 passed. A count is the executed node count of
+the named tests (parametrized cases counted). "CI-only" means skipped on this host and
+**not** executed here; it is never counted as a pass.
+
+| AC | Criterion (R2 §45, abridged) | Tests | Executed result |
+|---|---|---|---|
+| 001 | neutral naming | `test_schedule_files_carry_no_denylisted_token`, `test_generated_fixtures_carry_no_denylisted_token` (S5a), `test_s5b2_files_carry_no_denylisted_token` (S5b-2 sources, tests, docs) | met — 3 passed |
+| 002 | no XER/XML/P6 runtime | `test_no_prohibited_dependency_is_imported` (every `src/my_pa` module, the 7 S5b-2 modules included), `test_no_xer_or_xml_runtime_in_the_schedule_plane` | met — 451 + 1 passed |
+| 003 | one PDF object + exact version only | 6.2 §9.1 row | met — 23 passed |
+| 004 | own-enrollment scope, operator-only, structural admission | 6.2 §9.2 row; S5b-1 composite-FK tests in `tests/database/test_cpm_workbench_schema_guards.py` | met — 20 passed (+ the S5b-1 module, 199 passed). Note: 2 admission refusals (`ENROLLMENT_NOT_FOUND`, `SUPERSEDED_PUBLICATION_SAME_SOURCE_VERSION`) are unreachable through the capability (earlier checks refuse first) and are proved at the repository layer only (I7-C) |
+| 005 | generic extraction unchanged | `test_generic_extraction_still_excludes_pdf`; comment-only clarification in `src/my_pa/application/capabilities.py` and `src/my_pa/domain/extraction/text.py` | met — 1 passed |
+| 006 | provider read outside a transaction, version recheck | 6.2 §9.4 row | met — 10 passed |
+| 007 | bounds and corrupt/encrypted/image-only fail closed | S5a `test_corrupt_encrypted_and_image_only_fail_closed`, `test_production_limits_are_the_r2_bounds`, `test_bounds_variants_only_tighten_production_limits`, goldens; through the child: `test_page_count_bound_through_the_child`, `test_wall_timeout_is_processing_budget_exceeded`, `test_hung_child_is_killed_and_reaped`, `test_oversized_output_is_bounds_exceeded`, `test_deep_nesting_fails_closed`, `test_child_rlimits_are_set` | **partially met.** CPU/time/page/output/descriptor/file-write bounds met — all passed (`test_child_rlimits_are_set` 4 of 5 cases). The **memory** sub-criterion is **CI-only, not executed on the implementation host — pending the PR's ubuntu CI run**: `test_child_address_space_has_headroom`, `test_largest_golden_parses_under_production_limits`, `test_benign_document_parses_under_the_bomb_cap`, `test_decompression_bomb_fails_closed_on_linux`, `test_child_rlimits_are_set[RLIMIT_AS-expected4]` (5 skipped here; operator gate 6) |
+| 008 | PDFium sole engine, confined | `test_a_confined_dependency_is_imported_only_where_it_belongs`, `test_every_confined_dependency_is_actually_used_there`, `test_the_worker_parent_never_imports_pdfium` | met — 451 + 1 + 1 passed |
+| 009–019 | profile geometry, chart clip, watermark, grouping, wrap, header, page coherence, missing ID, durations, row type, hierarchy | S5a suites `tests/unit/test_schedule_full_goldens.py` (`test_every_case_matches_its_golden` and 24 more), `tests/unit/test_schedule_full_profile.py`, `tests/unit/test_schedule_full_pdf.py`, `tests/unit/test_schedule_model.py` (unchanged parser); child parity `test_child_parse_equals_in_process_parse` | met — 329 + 56 + 103 + 100 passed; parity 65 passed |
+| 020–023 | exact-ID identity, identity gate, immutability, cell states | S5b-1 `tests/database/test_cpm_workbench_schema_guards.py`, `tests/database/test_cpm_workbench_persistence.py`, `tests/unit/test_schedule_foundation_domain.py`; through the worker: 6.2 §24 and §20 rows | met — 199 + 81 + 30 passed |
+| 024 | every served fact traces to source, job, parser and cell | `test_served_facts_trace_to_source_job_parser_and_cell` | met — 1 passed |
+| 025 | idempotency/supersession/source-version reuse | 6.2 §10/§23 row; `test_failed_version_reimport_is_a_source_version_conflict`; S5b-1 `test_failed_version_cannot_be_reimported_into_its_series` | met — 2 + 1 + 3 passed |
+| 026 | truthful persisted/effective status, no repair on read | 6.2 §10.6 row | met — 17 passed |
+| 027 | explicit baselines | 6.2 §30 row | met — 4 passed |
+| 028 | on-demand O(N) delta, 11 kinds, `to − from` | 6.2 §29 row (with `test_change_scan_of_25000_rows_meets_the_target`: 0.709 s for 25,000 rows per side against 5 s, I7-C) | met — 23 passed |
+| 029 | JobPlane reused, plane on every surface | 6.2 §25 row | met — 5 passed |
+| 030 | §24 boundaries, lease recheck on every write | 6.2 §24 row; budget row | met — 13 + 8 passed |
+| 031 | 7 capabilities and 2 purposes closed on every surface | 6.2 §31 row; catalog and façade rows | met — 19 + 8 + 9 passed |
+| 032 | ChatLLM classification, import excluded, remote not widened | 6.2 §31.3 row | **met with deviation E-02** (R7 ruling O-1): reads are `DATA_CONDITIONAL` under `SCHEDULE` in `chatllm-data-v11`, not R2's `DATA_REQUIRED` in v4 — 18 passed. "No live grant/profile apply" holds because nothing in the repository applies one |
+| 033 | bounded pages, 512-character 300 s request-bound cursors | 6.2 §32 row | met — 20 passed |
+| 034 | no content in errors/logs/metrics | 6.2 §40 row (`test_errors_carry_no_content`, `test_job_error_is_a_public_code`, `test_new_modules_neither_log_nor_print`, `test_child_stderr_is_discarded`); `test_new_worker_modules_neither_log_nor_print` | met — 4 + 1 passed. No metrics emitter exists (E-05) |
+| 035 | no cross-domain link, frontend, legacy write or generic-PDF widening | `test_no_cross_domain_link_frontend_or_legacy_write`, `test_generic_extraction_still_excludes_pdf` | met — 1 + 1 passed |
+| 036 | migration | S5b-1 `tests/schema/test_cpm_workbench_migration.py` and section 3.14's `tests/schema/test_cpm_workbench_vocabulary_migration.py` (static, `migration_edge`, `migration_empty_to_head`) | **met with deviation** S5b-1 D-03 (CPM spans 2 revisions) — 33 + 20 passed; whole migration lanes 1,703 passed |
+| 037 | synthetic goldens, quality and performance gates; real corpus | `test_quality_gates_hold_over_every_case`, `test_every_case_matches_its_golden`, performance `test_change_scan_of_25000_rows_meets_the_target` | **synthetic part met** — 1 + 77 + 1 passed; the authorized real-corpus evaluation (R2 §39, S5a U-01) is **operator-gated, not executed**: no real PDF exists here |
+| 038 | current-state docs re-derived, no deployment claim | `docs/architecture/cpm-workbench.md`, `ops/runbooks/cpm-workbench.md`, ADR-016, the indexes; guards `test_claimed_test_counts_match_collection.py`, `test_spelled_counts_match_the_sets_they_name.py`, `test_entity_plane_prose_matches_the_capability_sets.py`, `test_readme_state_claims.py`, `test_the_s5b2_contract_crosswalk_names_tests_that_exist` | met — each guard green after the I7-D re-measurement (the 7 FAST failures above). ChatLLM state is v11 (E-02), not R2's v4 |
+| pre-deploy | section 3.16 gates | `test_predeploy_sql_is_select_only`, `tests/database/test_cpm_workbench_predeploy.py` (10, scratch clones only) | written and tested — 1 + 10 passed; **never run against any real database** (operator gate 2) |
+
+Table notes. (a) The 2 database failures are `tests/contract/test_health_probe.py::test_a_database_at_head_reports_ready_and_exits_zero` and `::test_a_database_one_revision_behind_names_what_it_is_and_what_head_is`, which assert a PostgreSQL 17 server (`server_version` starts with `17.`); the host cluster is 15.15, so they are environmental and pass only on the CI image `postgres:17`; the 15 skips are `tests/database/test_mcp_database_profiles.py` cases that run only in CI's dedicated MCP-profile step. Neither is CPM code. (b) `tests/database/test_knowledge_remote_grants.py::test_profile_apply_installs_the_create_grant_with_its_purpose` failed (`SimpleNamespace` settings stub lacked `schedule_enabled`, which I7-B's `_planes_from_settings` now reads); I7-D added the field to the stub and the module re-ran 34 passed.
 
 ---
 
@@ -1092,17 +1120,17 @@ password), removed at the end.
 | ID | Item | Owner |
 |---|---|---|
 | U2-01 | Native code in the child can still issue socket syscalls (no seccomp/netns on Linux, no sandbox on macOS) | operator: network-less container for the schedule worker |
-| U2-11 | A timing-dependent child failure (wall/CPU budget) on a re-claim fails a publication whose parse is already persisted as a `parsed` run: the re-parse is required because a parsed run stores no title, Data Date or Run Date (R7-N1). R2 §22 makes budget failures terminal; R2 §36's admitted bound is the lever | WP-04 measurement; bound reduction if observed |
-| U2-12 | `RLIMIT_AS` 1 GiB is provisional and unverified on Linux until the PR's CI shows `test_child_address_space_has_headroom`, both positive controls and the bomb test **executed and passed** (not skipped); if the headroom test fails, the cap is re-derived as ≥ 2× the reported `VmPeak` (and ≤ any container memory limit) in a follow-up before merge. The STOP rule applies only when a real Linux measurement is in hand (for example a CI run the operator relays back) showing < 2× headroom: the implementer then stops and reports rather than re-tuning silently | operator pre-merge gate (section 8.3); I7-D runbook names the 4 tests to look for in the CI log |
-| U2-10 | A compromised child can (a) truncate, unlink, rename, chmod or create empty files the worker UID may modify (`RLIMIT_FSIZE` only stops growth; the audit hook covers Python calls only), and (b) return a well-formed frame with fabricated rows for the right digest, which would be persisted and served as `SOURCE_BOUND_DERIVED` | operator: dedicated UID, read-only root filesystem, no write access to source roots, network-less runtime (section 8.3) |
 | U2-02 | macOS cannot lower `RLIMIT_AS`: on dev hosts a bomb is bounded only by CPU/wall | accepted (prod and CI are Linux) |
 | U2-03 | A worker killed by `SIGKILL` leaves its child running until `RLIMIT_CPU` or a broken pipe ends it (≤ ~152 s CPU); no parent-death signal from the standard library | accepted, bounded |
-| U2-04 | Parent decode of a maximal frame (≈ 46 MB nominal, cap 128 MiB) can raise worker RSS by several hundred MiB | WP-04 measure |
-| U2-05 | Persistence time for 25,000 rows plus canonicalization inside the 60 s reserve is unmeasured | I7-C/I7-D measure; on a miss reduce the admitted bound (R2 §36) |
+| U2-04 | Parent decode of a maximal frame (≈ 46 MB nominal, cap 128 MiB) can raise worker RSS by several hundred MiB | WP-04 measure — **not measured** in S5b-2 (no maximal frame was decoded under an RSS probe); the runbook asks the operator to size the worker container for it |
+| U2-05 | Persistence time for 25,000 rows plus canonicalization inside the 60 s reserve | measured by I7-C on the implementation host: 25,000-row import plus persistence 18.6 s, inside the reserve; production unmeasured — on a miss reduce the admitted bound (R2 §36) |
 | U2-06 | `audit_events` validating scan under `ACCESS EXCLUSIVE` in migration #2; production row count unknown | operator gate 1 |
 | U2-07 | A Start/Finish marker change on an equal date (planned → actual) is not a v1 change kind | future delta version |
 | U2-08 | Parser and persistence durations are not recorded (E-05) | future observability design |
 | U2-09 | `budget` failure after a legitimate slow persistence permanently blocks that version in that Series (S5b-1 U-09) | operator documentation (I7-D runbook) |
+| U2-10 | A compromised child can (a) truncate, unlink, rename, chmod or create empty files the worker UID may modify (`RLIMIT_FSIZE` only stops growth; the audit hook covers Python calls only), and (b) return a well-formed frame with fabricated rows for the right digest, which would be persisted and served as `SOURCE_BOUND_DERIVED` | operator: dedicated UID, read-only root filesystem, no write access to source roots, network-less runtime (section 8.3) |
+| U2-11 | A timing-dependent child failure (wall/CPU budget) on a re-claim fails a publication whose parse is already persisted as a `parsed` run: the re-parse is required because a parsed run stores no title, Data Date or Run Date (R7-N1). R2 §22 makes budget failures terminal; R2 §36's admitted bound is the lever | WP-04 measurement; bound reduction if observed |
+| U2-12 | `RLIMIT_AS` 1 GiB is provisional and unverified on Linux until the PR's CI shows `test_child_address_space_has_headroom`, both positive controls and the bomb test **executed and passed** (not skipped); if the headroom test fails, the cap is re-derived as ≥ 2× the reported `VmPeak` (and ≤ any container memory limit) in a follow-up before merge. The STOP rule applies only when a real Linux measurement is in hand (for example a CI run the operator relays back) showing < 2× headroom: the implementer then stops and reports rather than re-tuning silently | operator pre-merge gate (section 8.3); I7-D runbook names the 4 tests to look for in the CI log |
 | carried | S5b-1 U-06 (owner can disable triggers), U-09 (failed version blocks the Series), U-10 (RESTRICT FKs) — documented in the I7-D runbook; S5a U-01 (no real corpus) | operator / WP-04 |
 
 ### 8.3 Operator gates (nothing here is performed by an agent)

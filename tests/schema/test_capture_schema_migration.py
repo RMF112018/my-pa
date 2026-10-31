@@ -620,6 +620,15 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "issues.memberships.confirm",
         "issues.project_links.confirm",
         "records.lineage.related",
+        # CPM Workbench S5b-2, admitted by its vocabulary revision with the domain declaring
+        # every name in the same change.
+        "schedule_publications.import",
+        "schedule_series.list",
+        "schedule_publications.list",
+        "schedule_publications.read",
+        "schedule_activities.list",
+        "schedule_activities.history",
+        "schedule_changes.list",
     }
 )
 

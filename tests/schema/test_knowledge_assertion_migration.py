@@ -55,6 +55,7 @@ from sqlalchemy import Engine, Table, insert, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
 from tests.schema import knowledge_schema_ahead_contract as contract
+from tests.schema.cpm_workbench_vocabulary_contract import S5B2_CAPABILITIES, S5B2_PURPOSES
 from tests.schema.lineage_s2_schema_ahead_contract import S2_CAPABILITIES as LINEAGE_S2_CAPABILITIES
 from tests.schema.lineage_s2_schema_ahead_contract import S2_PURPOSES as LINEAGE_S2_PURPOSES
 from tests.schema.lineage_s3_schema_ahead_contract import S3_CAPABILITIES as LINEAGE_S3_CAPABILITIES
@@ -2109,9 +2110,15 @@ _ADMITTED_AFTER_THIS_REVISION: Final = (
     | LINEAGE_S4_CAPABILITIES
     # And the record lineage S3.1 revision with its own (no purpose).
     | LINEAGE_S31_CAPABILITIES
+    # And the CPM Workbench S5b-2 vocabulary revision with its own.
+    | S5B2_CAPABILITIES
 )
 _PURPOSES_ADMITTED_AFTER_THIS_REVISION: Final = (
-    LINEAGE_S1_PURPOSES | LINEAGE_S2_PURPOSES | LINEAGE_S3_PURPOSES | LINEAGE_S4_PURPOSES
+    LINEAGE_S1_PURPOSES
+    | LINEAGE_S2_PURPOSES
+    | LINEAGE_S3_PURPOSES
+    | LINEAGE_S4_PURPOSES
+    | S5B2_PURPOSES
 )
 
 

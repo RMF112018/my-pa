@@ -372,8 +372,8 @@ def _support_uniques(engine: Engine) -> set[str]:
         )
 
 
-def _assert_present(engine: Engine) -> None:
-    assert _version(engine) == HEAD
+def _assert_present(engine: Engine, *, at: str = REVISION) -> None:
+    assert _version(engine) == at
     assert _relations(engine) >= set(CPM_TABLES)
     assert _functions(engine) >= set(CPM_FUNCTIONS)
     assert _support_uniques(engine) == {name for _, name, _ in SUPPORT_UNIQUES}
@@ -395,7 +395,7 @@ def test_empty_to_head_creates_exactly_the_seven_tables(
     command.upgrade(_config(), PREVIOUS)
     before = _relations(engine)
     command.upgrade(_config(), "head")
-    _assert_present(engine)
+    _assert_present(engine, at=HEAD)
     assert _relations(engine) - before == set(CPM_TABLES)
     with engine.connect() as connection:
         triggers = set(

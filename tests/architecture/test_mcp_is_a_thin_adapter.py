@@ -358,6 +358,13 @@ EXEMPT_PROPERTIES: Final[frozenset[tuple[str, str]]] = frozenset(
         # renaming it to dodge the scan would put the wire, the domain and the
         # schema out of step to satisfy a substring.
         ("entities.split", "target_entity_id"),
+        # CPM Workbench S5b-2 (worker contract section 3.5.1):
+        # the leading WBS labels of a schedule's published hierarchy, matched
+        # exactly against stored `hierarchy_path` entries -- schedule text, not
+        # where a file lives. It trips the scan on the substring "prefix"; its
+        # items are 1..2,000-character labels that nothing resolves, opens or
+        # fetches, and the name is the contract's and the stored column's.
+        ("schedule_activities.list", "hierarchy_prefix"),
         # Opaque product-issued synchronization identities, never external
         # locations or workbook paths. The provider identity uses the neutral
         # wire name `external_identity` and is deliberately not exempted.
@@ -714,8 +721,9 @@ def test_the_location_scan_would_catch_one() -> None:
     # on the S2 anchor-bearing writes. Plus the S2 Commitment composite's nested
     # `commitments.create` `direction`. Plus the S3 anchor-bearing writes. Plus
     # the S4 v2 list and search siblings' `direction`. Plus record lineage
-    # S3.1's 14 open writes' boolean `user_directed` claim.
-    assert len(EXEMPT_PROPERTIES) == 53
+    # S3.1's 14 open writes' boolean `user_directed` claim. Plus CPM Workbench
+    # S5b-2's `hierarchy_prefix` (schedule WBS labels).
+    assert len(EXEMPT_PROPERTIES) == 54
     for tool_name, property_name in EXEMPT_PROPERTIES:
         tool = next(entry for entry in TOOLS if entry.name == tool_name)
         assert property_name in set(_schema_property_names(tool.input_schema))

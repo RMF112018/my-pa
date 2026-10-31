@@ -178,6 +178,7 @@ from my_pa.application.commands import (
     GetSourceMetadata,
     GetSourceStatus,
     GetTaskHistory,
+    ImportSchedulePublication,
     ListCaptures,
     ListCommitments,
     ListCommitmentsV2,
@@ -208,6 +209,10 @@ from my_pa.application.commands import (
     ListRelationshipMemories,
     ListReportTypes,
     ListReviewCases,
+    ListScheduleActivities,
+    ListScheduleChanges,
+    ListSchedulePublications,
+    ListScheduleSeries,
     ListSituations,
     ListSources,
     ListTaskComments,
@@ -251,6 +256,8 @@ from my_pa.application.commands import (
     ReadRecordLineage,
     ReadRelatedRecords,
     ReadReportManifest,
+    ReadScheduleActivityHistory,
+    ReadSchedulePublication,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
@@ -517,6 +524,14 @@ _UNCOMPOSED_CAPABILITIES = frozenset(
         Capability.ISSUES_MEMBERSHIPS_CONFIRM,
         Capability.ISSUES_PROJECT_LINKS_CONFIRM,
         Capability.RECORDS_LINEAGE_RELATED,
+        # CPM Workbench S5b-2: the Schedule plane, behind `MY_PA_SCHEDULE_ENABLED`.
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT,
+        Capability.SCHEDULE_SERIES_LIST,
+        Capability.SCHEDULE_PUBLICATIONS_LIST,
+        Capability.SCHEDULE_PUBLICATIONS_READ,
+        Capability.SCHEDULE_ACTIVITIES_LIST,
+        Capability.SCHEDULE_ACTIVITIES_HISTORY,
+        Capability.SCHEDULE_CHANGES_LIST,
     }
 )
 
@@ -1876,6 +1891,26 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.RECORDS_LINEAGE_RELATED: {
             "seeds": [{"family": "task", "record_id": "tsk_httptask00001"}]
         },
+        # CPM Workbench S5b-2 (contract section 3.5.1): synthetic identifiers.
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT: {
+            "project_id": "prj_httpproject0001",
+            "series_name": "Http master schedule",
+            "enrollment_id": scene.enrollment.enrollment_id,
+            "source_object_id": "obj_httpobject0001",
+            "source_version_id": "ver_httpversion0001",
+            "publication_role": "baseline",
+            "baseline_kind": "contract",
+            "idempotency_key": "http-schedule-import-0001",
+        },
+        Capability.SCHEDULE_SERIES_LIST: {"project_id": "prj_httpproject0001"},
+        Capability.SCHEDULE_PUBLICATIONS_LIST: {"series_id": "sser_httpseries0001"},
+        Capability.SCHEDULE_PUBLICATIONS_READ: {"publication_id": "spub_httppublic001"},
+        Capability.SCHEDULE_ACTIVITIES_LIST: {"publication_id": "spub_httppublic001"},
+        Capability.SCHEDULE_ACTIVITIES_HISTORY: {"schedule_activity_id": "sact_httpactivity01"},
+        Capability.SCHEDULE_CHANGES_LIST: {
+            "from_publication_id": "spub_httppublic001",
+            "to_publication_id": "spub_httppublic002",
+        },
     }
 
 
@@ -3143,6 +3178,32 @@ def commands_for(
         ),
         Capability.RECORDS_LINEAGE_RELATED: ReadRelatedRecords(
             seeds=({"family": "task", "record_id": "tsk_httptask00001"},)
+        ),
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT: ImportSchedulePublication(
+            project_id="prj_httpproject0001",
+            series_name="Http master schedule",
+            enrollment_id=scene.enrollment.enrollment_id,
+            source_object_id="obj_httpobject0001",
+            source_version_id="ver_httpversion0001",
+            publication_role="baseline",
+            baseline_kind="contract",
+            idempotency_key="http-schedule-import-0001",
+        ),
+        Capability.SCHEDULE_SERIES_LIST: ListScheduleSeries(project_id="prj_httpproject0001"),
+        Capability.SCHEDULE_PUBLICATIONS_LIST: ListSchedulePublications(
+            series_id="sser_httpseries0001"
+        ),
+        Capability.SCHEDULE_PUBLICATIONS_READ: ReadSchedulePublication(
+            publication_id="spub_httppublic001"
+        ),
+        Capability.SCHEDULE_ACTIVITIES_LIST: ListScheduleActivities(
+            publication_id="spub_httppublic001"
+        ),
+        Capability.SCHEDULE_ACTIVITIES_HISTORY: ReadScheduleActivityHistory(
+            schedule_activity_id="sact_httpactivity01"
+        ),
+        Capability.SCHEDULE_CHANGES_LIST: ListScheduleChanges(
+            from_publication_id="spub_httppublic001", to_publication_id="spub_httppublic002"
         ),
     }
 

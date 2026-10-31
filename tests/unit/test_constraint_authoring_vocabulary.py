@@ -105,8 +105,9 @@ def test_the_authoring_purpose_exists_and_is_the_only_one_added() -> None:
 
 def test_the_two_vocabularies_are_the_sizes_this_package_states() -> None:
     """The counts the census documents and the migration are written against."""
-    assert len(Capability) == 233
-    assert len(Purpose) == 60
+    # CPM Workbench S5b-2: the 7 Schedule names and their 2 purposes.
+    assert len(Capability) == 240
+    assert len(Purpose) == 62
 
 
 def test_no_public_migration_capability_exists() -> None:
@@ -121,7 +122,12 @@ def test_no_public_migration_capability_exists() -> None:
         for capability in Capability
         if "migrat" in capability.value or "import" in capability.value
     ]
-    assert named == []
+    # The one exception is exact and named: CPM Workbench S5b-2's
+    # `schedule_publications.import` admits an enrolled schedule PDF version as
+    # Schedule evidence (worker and capabilities contract section 3.5). It is not
+    # Constraint legacy-import or migration tooling, it is operator-only and
+    # attested to the local operator surface, and no Constraint name may join it.
+    assert named == [Capability.SCHEDULE_PUBLICATIONS_IMPORT]
 
 
 # ---- T07-02: the purpose mapping --------------------------------------------

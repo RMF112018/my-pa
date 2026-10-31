@@ -608,6 +608,13 @@ SCOPED_CAPABILITIES = [
         Capability.ISSUES_MEMBERSHIPS_CONFIRM,
         Capability.ISSUES_PROJECT_LINKS_CONFIRM,
         Capability.RECORDS_LINEAGE_RELATED,
+        # CPM Workbench S5b-2: the 6 Schedule reads, also in `_SCOPELESS`.
+        Capability.SCHEDULE_SERIES_LIST,
+        Capability.SCHEDULE_PUBLICATIONS_LIST,
+        Capability.SCHEDULE_PUBLICATIONS_READ,
+        Capability.SCHEDULE_ACTIVITIES_LIST,
+        Capability.SCHEDULE_ACTIVITIES_HISTORY,
+        Capability.SCHEDULE_CHANGES_LIST,
     }
 ]
 

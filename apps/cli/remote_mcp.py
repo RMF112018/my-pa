@@ -155,6 +155,8 @@ def _planes_from_settings(settings: Settings) -> ChatLLMCompositionPlanes:
         # grants only when it runs with the serving process's switches.
         lineage=settings.lineage_enabled,
         program_reporting=settings.program_reporting_enabled,
+        # CPM Workbench S5b-2 (chatllm-data-v11): the Schedule reads likewise.
+        schedule=settings.schedule_enabled,
     )
 
 

@@ -314,6 +314,16 @@ from my_pa.domain.relationship.proposal_payload import (
     EntityProposalKind,
     discriminated_payload_branches,
 )
+from my_pa.domain.schedule import (
+    InvalidScheduleSeriesNameError,
+    ScheduleBaselineKind,
+    ScheduleImportRequest,
+    SchedulePublicationRole,
+    SchedulePublicationStatus,
+    ScheduleRowType,
+    ScheduleSeriesName,
+    normalize_series_name,
+)
 from my_pa.domain.search.query import MAX_QUERY_CHARACTERS, SearchQuery, SearchQueryError
 from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
@@ -14661,6 +14671,369 @@ class ReadRelatedRecords:
         return refs
 
 
+# CPM Workbench S5b-2 (worker and capabilities contract sections 3.5 and 3.5.1).
+# Every field is checked here, so a transport that builds one of these has
+# already refused a malformed request with the field's own detail; nothing in a
+# Schedule command names a path, locator, filename, URL, bytes, Principal or
+# scope.
+
+#: Contract section 3.5.1: page sizes are 1..100, default 25 (T2-21).
+MAX_SCHEDULE_COMMAND_PAGE_SIZE: Final = 100
+#: A raw Series name longer than this is refused before normalization.
+MAX_SCHEDULE_SERIES_NAME_INPUT_CHARACTERS: Final = 1_000
+#: `hierarchy_prefix` bounds: 1..32 labels of 1..2,000 characters each.
+MAX_SCHEDULE_HIERARCHY_PREFIX_LABELS: Final = 32
+MAX_SCHEDULE_HIERARCHY_LABEL_CHARACTERS: Final = 2_000
+#: The 11 `cpm-workbench-full-delta-v1` change kinds in rank order (contract
+#: section 3.10); `domain.schedule.compare.ScheduleChangeKind` restates them.
+SCHEDULE_CHANGE_KIND_VALUES: Final[tuple[str, ...]] = (
+    "added",
+    "removed",
+    "reintroduced",
+    "renamed",
+    "row_type_changed",
+    "original_duration_changed",
+    "remaining_duration_changed",
+    "start_changed",
+    "finish_changed",
+    "hierarchy_changed",
+    "field_state_changed",
+)
+_SCHEDULE_IDEMPOTENCY_KEY: Final = re.compile(r"[A-Za-z0-9_-]{8,128}")
+_SCHEDULE_ROW_TYPES: Final[tuple[ScheduleRowType, ...]] = (
+    ScheduleRowType.ACTIVITY,
+    ScheduleRowType.MILESTONE,
+)
+
+
+def _schedule_page_size(value: object) -> None:
+    if value is None:
+        return
+    if type(value) is not int or not 1 <= value <= MAX_SCHEDULE_COMMAND_PAGE_SIZE:
+        raise InvalidRequestError(SafeDetail.PAGE_SIZE)
+
+
+def _schedule_cursor(value: object) -> None:
+    if value is None:
+        return
+    if not isinstance(value, str) or not value or len(value) > 512:
+        raise InvalidRequestError(SafeDetail.CURSOR)
+
+
+def _schedule_id(value: object, kind: IdKind, detail: SafeDetail) -> None:
+    if not isinstance(value, str):
+        raise InvalidRequestError(detail)
+    _identifier(value, kind, detail)
+
+
+def _optional_schedule_id(value: object, kind: IdKind, detail: SafeDetail) -> None:
+    if value is not None:
+        _schedule_id(value, kind, detail)
+
+
+def _schedule_text(value: object, detail: SafeDetail) -> None:
+    """Refuse a present value that is not a string, naming the field and never the value."""
+    if value is not None and not isinstance(value, str):
+        raise InvalidRequestError(detail)
+
+
+def _schedule_choice[E: StrEnum](
+    value: object, vocabulary: tuple[E, ...], detail: SafeDetail
+) -> E | None:
+    """A closed-vocabulary value by its wire spelling, or a refusal listing the vocabulary."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        for member in vocabulary:
+            if member.value == value:
+                return member
+    raise invalid_choice(detail, vocabulary)
+
+
+def _schedule_date(value: object, detail: SafeDetail) -> date | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise InvalidRequestError(detail)
+    return date.fromisoformat(_iso_date(value, detail))
+
+
+def _schedule_date_range(low: str | None, high: str | None) -> None:
+    first = _schedule_date(low, SafeDetail.DATE_RANGE)
+    last = _schedule_date(high, SafeDetail.DATE_RANGE)
+    if first is not None and last is not None and first > last:
+        raise InvalidRequestError(SafeDetail.DATE_RANGE)
+
+
+@dataclass(frozen=True, slots=True)
+class ImportSchedulePublication:
+    """Admit one enrolled schedule PDF version as a publication of a Schedule Series and queue its parse (attested local operator: CLI or HTTP gateway only).
+
+    `schedule_publications.import`: names the Series by id or by a new or
+    existing name (exactly one), the caller's own enrollment, the enrolled
+    object and its exact version, and an explicit role. Fetches no bytes; the
+    contained parse runs on the `schedule` worker plane.
+    """  # noqa: E501
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_PUBLICATIONS_IMPORT
+
+    project_id: str
+    enrollment_id: str
+    source_object_id: str
+    source_version_id: str
+    publication_role: str
+    idempotency_key: str
+    series_id: str | None = None
+    series_name: str | None = None
+    baseline_kind: str | None = None
+    expected_data_date: str | None = None
+    supersedes_publication_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _idempotency_key(self.idempotency_key)
+        _schedule_text(self.publication_role, SafeDetail.PUBLICATION_ROLE)
+        _schedule_text(self.baseline_kind, SafeDetail.BASELINE_KIND)
+        _schedule_text(self.expected_data_date, SafeDetail.EXPECTED_DATA_DATE)
+        self.import_request()
+
+    def import_request(self) -> ScheduleImportRequest:
+        """The S5b-1 admission request this command states (contract section 3.6)."""
+        _schedule_id(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        if (self.series_id is None) == (self.series_name is None):
+            raise InvalidRequestError(SafeDetail.SERIES_ID)
+        _optional_schedule_id(self.series_id, IdKind.SCHEDULE_SERIES, SafeDetail.SERIES_ID)
+        name = None if self.series_name is None else _schedule_series_name(self.series_name)
+        _schedule_id(self.enrollment_id, IdKind.ENROLLMENT, SafeDetail.ENROLLMENT_ID)
+        _schedule_id(self.source_object_id, IdKind.SOURCE_OBJECT, SafeDetail.SOURCE_OBJECT_ID)
+        _schedule_id(self.source_version_id, IdKind.VERSION, SafeDetail.SOURCE_VERSION_ID)
+        role = _schedule_choice(
+            self.publication_role, tuple(SchedulePublicationRole), SafeDetail.PUBLICATION_ROLE
+        )
+        if role is None:
+            # Section 3.11: the role is explicit; nothing defaults it.
+            raise InvalidRequestError(SafeDetail.PUBLICATION_ROLE)
+        kind = _schedule_choice(
+            self.baseline_kind, tuple(ScheduleBaselineKind), SafeDetail.BASELINE_KIND
+        )
+        if (role is SchedulePublicationRole.BASELINE) != (kind is not None):
+            raise InvalidRequestError(SafeDetail.BASELINE_KIND)
+        expected = _schedule_date(self.expected_data_date, SafeDetail.EXPECTED_DATA_DATE)
+        _optional_schedule_id(
+            self.supersedes_publication_id,
+            IdKind.SCHEDULE_PUBLICATION,
+            SafeDetail.SUPERSEDES_PUBLICATION_ID,
+        )
+        key: object = self.idempotency_key
+        if not isinstance(key, str) or _SCHEDULE_IDEMPOTENCY_KEY.fullmatch(key) is None:
+            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+        return ScheduleImportRequest(
+            project_id=self.project_id,
+            series_id=self.series_id,
+            series_name=name,
+            enrollment_id=self.enrollment_id,
+            source_object_id=self.source_object_id,
+            source_version_id=self.source_version_id,
+            publication_role=role,
+            baseline_kind=kind,
+            expected_data_date=expected,
+            supersedes_publication_id=self.supersedes_publication_id,
+            idempotency_key=key,
+        )
+
+
+def _schedule_series_name(value: object) -> ScheduleSeriesName:
+    if not isinstance(value, str) or len(value) > MAX_SCHEDULE_SERIES_NAME_INPUT_CHARACTERS:
+        raise InvalidRequestError(SafeDetail.SERIES_NAME)
+    try:
+        return normalize_series_name(value)
+    except InvalidScheduleSeriesNameError:
+        pass
+    # Raised outside the handler so the refused name is not left in `__context__`.
+    raise InvalidRequestError(SafeDetail.SERIES_NAME)
+
+
+@dataclass(frozen=True, slots=True)
+class ListScheduleSeries:
+    """List a Project's Schedule Series, newest first, with each one's latest comparison-eligible update.
+
+    `schedule_series.list`: one page of the Project's Series; a Series'
+    latest update is its newest complete or partial `update` publication
+    (baselines and references never are).
+    """  # noqa: E501
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_SERIES_LIST
+
+    project_id: str
+    page_size: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _schedule_page_size(self.page_size)
+        _schedule_cursor(self.cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class ListSchedulePublications:
+    """List one Schedule Series' publications, newest admission first, with effective status and counts.
+
+    `schedule_publications.list`: optionally filtered by role and by
+    effective status (a queued or processing publication whose job is
+    exhausted reads as `failed`).
+    """  # noqa: E501
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_PUBLICATIONS_LIST
+
+    series_id: str
+    publication_role: str | None = None
+    status: str | None = None
+    page_size: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.series_id, IdKind.SCHEDULE_SERIES, SafeDetail.SERIES_ID)
+        _schedule_text(self.publication_role, SafeDetail.PUBLICATION_ROLE)
+        _schedule_text(self.status, SafeDetail.STATUS)
+        _schedule_choice(
+            self.publication_role, tuple(SchedulePublicationRole), SafeDetail.PUBLICATION_ROLE
+        )
+        _schedule_choice(self.status, tuple(SchedulePublicationStatus), SafeDetail.STATUS)
+        _schedule_page_size(self.page_size)
+        _schedule_cursor(self.cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadSchedulePublication:
+    """Read one schedule publication: source identity, document digest, published metadata, status, job, parser runs and issue counts by code.
+
+    `schedule_publications.read`: issue counts of an accepted publication
+    are its accepted parser run's only.
+    """  # noqa: E501
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_PUBLICATIONS_READ
+
+    publication_id: str
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.publication_id, IdKind.SCHEDULE_PUBLICATION, SafeDetail.PUBLICATION_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class ListScheduleActivities:
+    """List one complete or partial publication's activities and milestones in published schedule order.
+
+    `schedule_activities.list`: optionally filtered by row type, by a leading
+    hierarchy path and by inclusive Start/Finish date ranges.
+    """  # noqa: E501
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_ACTIVITIES_LIST
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "hierarchy_prefix": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": MAX_SCHEDULE_HIERARCHY_PREFIX_LABELS,
+                "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": MAX_SCHEDULE_HIERARCHY_LABEL_CHARACTERS,
+                },
+            },
+        }
+    )
+
+    publication_id: str
+    row_type: str | None = None
+    hierarchy_prefix: tuple[str, ...] | None = None
+    start_from: str | None = None
+    start_to: str | None = None
+    finish_from: str | None = None
+    finish_to: str | None = None
+    page_size: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.publication_id, IdKind.SCHEDULE_PUBLICATION, SafeDetail.PUBLICATION_ID)
+        _schedule_text(self.row_type, SafeDetail.ROW_TYPE)
+        _schedule_text(self.start_from, SafeDetail.DATE_RANGE)
+        _schedule_text(self.start_to, SafeDetail.DATE_RANGE)
+        _schedule_text(self.finish_from, SafeDetail.DATE_RANGE)
+        _schedule_text(self.finish_to, SafeDetail.DATE_RANGE)
+        _schedule_choice(self.row_type, _SCHEDULE_ROW_TYPES, SafeDetail.ROW_TYPE)
+        prefix: object = self.hierarchy_prefix
+        if prefix is not None and (
+            not isinstance(prefix, tuple)
+            or not 1 <= len(prefix) <= MAX_SCHEDULE_HIERARCHY_PREFIX_LABELS
+            or not all(
+                isinstance(label, str)
+                and 1 <= len(label) <= MAX_SCHEDULE_HIERARCHY_LABEL_CHARACTERS
+                for label in prefix
+            )
+        ):
+            raise InvalidRequestError(SafeDetail.HIERARCHY_PREFIX)
+        _schedule_date_range(self.start_from, self.start_to)
+        _schedule_date_range(self.finish_from, self.finish_to)
+        _schedule_page_size(self.page_size)
+        _schedule_cursor(self.cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadScheduleActivityHistory:
+    """Read one Stable Activity's observations in its Series' complete and partial publications, oldest Data Date first.
+
+    `schedule_activities.history`: only actual observations; never a
+    "first seen" date.
+    """  # noqa: E501
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_ACTIVITIES_HISTORY
+
+    schedule_activity_id: str
+    page_size: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _schedule_id(
+            self.schedule_activity_id, IdKind.SCHEDULE_ACTIVITY, SafeDetail.SCHEDULE_ACTIVITY_ID
+        )
+        _schedule_page_size(self.page_size)
+        _schedule_cursor(self.cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class ListScheduleChanges:
+    """Compare two publications of one Series and list the exact per-activity changes from the first to the second.
+
+    `schedule_changes.list`: delta algorithm `cpm-workbench-full-delta-v1`,
+    computed on demand; the caller chooses both publications, of any roles.
+    """  # noqa: E501
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_CHANGES_LIST
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {"change_kind": {"type": "string", "enum": list(SCHEDULE_CHANGE_KIND_VALUES)}}
+    )
+
+    from_publication_id: str
+    to_publication_id: str
+    change_kind: str | None = None
+    page_size: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _schedule_id(
+            self.from_publication_id, IdKind.SCHEDULE_PUBLICATION, SafeDetail.FROM_PUBLICATION_ID
+        )
+        _schedule_id(
+            self.to_publication_id, IdKind.SCHEDULE_PUBLICATION, SafeDetail.TO_PUBLICATION_ID
+        )
+        kind: object = self.change_kind
+        if kind is not None and kind not in SCHEDULE_CHANGE_KIND_VALUES:
+            raise invalid_choice(SafeDetail.CHANGE_KIND, SCHEDULE_CHANGE_KIND_VALUES)
+        _schedule_page_size(self.page_size)
+        _schedule_cursor(self.cursor)
+
+
 type Command = (
     GetCapabilities
     | ListSources
@@ -14895,6 +15268,13 @@ type Command = (
     | ConfirmIssueMembership
     | ConfirmIssueProjectLink
     | ReadRelatedRecords
+    | ImportSchedulePublication
+    | ListScheduleSeries
+    | ListSchedulePublications
+    | ReadSchedulePublication
+    | ListScheduleActivities
+    | ReadScheduleActivityHistory
+    | ListScheduleChanges
 )
 
 

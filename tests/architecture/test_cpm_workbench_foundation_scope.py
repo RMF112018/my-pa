@@ -1,10 +1,11 @@
-"""What the S5b-1 Schedule foundation deliberately does not do yet (foundation contract 3.3, 5.4).
+"""The S5b-1 Schedule foundation's boundaries (foundation contract 3.3, 5.4).
 
-WP-01 adds the `SCHEDULE_JOBS` plane constant and nothing that could run it:
-no worker plane, no heartbeat vocabulary, no health surface and no
-application fallback names `schedule` until WP-03 lands the handler (D-02).
-Each of the four surfaces is asserted separately, so WP-03 has to flip each
-one on purpose and a message names the surface that moved.
+WP-01 added the `SCHEDULE_JOBS` plane constant and nothing that could run it.
+S5b-2 (WP-03, worker and capabilities contract section 3.2) moved the four
+surfaces together: the worker plane, the heartbeat vocabulary, the health
+surface and the application fallback now name `schedule` (the last two only
+while the Schedule plane is served). Each surface is still asserted
+separately, so a message names the surface that moved.
 
 The dedicated `ScheduleUnitOfWork` stays out of the general `UnitOfWork`
 (D-21), the repository module writes no raw SQL and no grant, and the admission
@@ -22,41 +23,68 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Final
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from apps import worker as worker_app
+from tests.conftest import Scene, build_service, metadata_for
 
+from my_pa.application.commands import GetCapabilities
 from my_pa.contracts import ports
+from my_pa.domain.identity.operation import Capability
+from my_pa.domain.identity.purpose import Purpose
+from my_pa.infrastructure.jobs.schedule import process_schedule_publication
 from my_pa.infrastructure.persistence import jobs, worker_health
+from my_pa.infrastructure.persistence import unit_of_work as unit_of_work_module
 from my_pa.infrastructure.persistence.tables import worker_heartbeats
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEDULE_MODULE: Final = ROOT / "src/my_pa/infrastructure/persistence/schedule.py"
-PLANE_TUPLE_FILES: Final = (
-    ROOT / "src/my_pa/application/service.py",
-    ROOT / "src/my_pa/infrastructure/persistence/unit_of_work.py",
-)
 PRINCIPAL: Final = "prn_cpmscope0001"
 
 
-def _plane_tuples(path: Path) -> list[tuple[str, ...]]:
-    """Every tuple of string literals naming both the capture and enrollment planes."""
-    found = []
-    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-        if isinstance(node, ast.Tuple) and all(
-            isinstance(item, ast.Constant) and isinstance(item.value, str) for item in node.elts
-        ):
-            values = tuple(str(item.value) for item in node.elts)  # type: ignore[attr-defined]
-            if {"capture", "enrollment"} <= set(values):
-                found.append(values)
-    return found
+def _uow_planes(*, schedule_enabled: bool) -> list[str]:
+    """The planes the unit-of-work health read asks `worker_plane_health` for."""
+    asked: list[str] = []
+
+    def health(_connection: object, *, principal_id: str, plane_name: str) -> object:
+        asked.append(plane_name)
+        return worker_health.WorkerPlaneHealth(plane_name, "idle_or_not_required", 0, 0, None)
+
+    with patch.object(unit_of_work_module, "worker_plane_health", health):
+        unit_of_work_module._WorkerHealth(
+            MagicMock(), schedule_enabled=schedule_enabled
+        ).for_principal(PRINCIPAL)
+    return asked
 
 
-def test_schedule_plane_is_not_runnable_before_its_handler() -> None:
-    # 1. `apps/worker.py`: `--plane schedule` stays an argparse error.
-    assert "schedule" not in worker_app._PLANES, "surface 1: apps/worker.py _PLANES"
-    assert "schedule" not in worker_app._JOB_PLANES, "surface 1: apps/worker.py _JOB_PLANES"
+def _fallback_planes(scene: Scene, *, schedule_enabled: bool) -> list[str]:
+    """The planes `capabilities.get` reports when no worker-health read exists."""
+    service = build_service(scene.world, scene.providers, schedule_enabled=schedule_enabled)
+    envelope = service.invoke(
+        metadata_for(Capability.CAPABILITIES_GET, Purpose.STATUS_OBSERVATION, scene.principal),
+        GetCapabilities(),
+        principal=scene.principal,
+    )
+    assert envelope.error is None and envelope.result is not None, envelope.error
+    planes = envelope.result["worker_planes"]
+    assert isinstance(planes, list)
+    assert all(plane["state"] == "unavailable" for plane in planes), "the fallback was not reached"
+    return [str(plane["plane"]) for plane in planes]
+
+
+def test_schedule_plane_is_runnable_on_all_four_surfaces(scene: Scene) -> None:
+    """S5b-2 (worker and capabilities contract section 3.2): the 4 surfaces moved together.
+
+    Converted in place from S5b-1's `test_schedule_plane_is_not_runnable_before_its_handler`;
+    each surface is still asserted separately and a message names it.
+    """
+    # 1. `apps/worker.py`: the schedule job plane and its handler.
+    assert worker_app._JOB_PLANES.get("schedule") == (
+        jobs.SCHEDULE_JOBS,
+        process_schedule_publication,
+    ), "surface 1: apps/worker.py _JOB_PLANES"
+    assert "schedule" in worker_app._PLANES, "surface 1: apps/worker.py _PLANES"
     # 2. The heartbeat CHECK at head.
     (plane_check,) = (
         constraint
@@ -65,26 +93,36 @@ def test_schedule_plane_is_not_runnable_before_its_handler() -> None:
     )
     check_text = str(plane_check.sqltext)  # type: ignore[attr-defined]
     assert "'capture'" in check_text, "surface 2: the heartbeat CHECK was not read"
-    assert "schedule" not in check_text, "surface 2: worker_heartbeats.worker_plane_is_known"
-    # 3. The heartbeat allowlist and the health map refuse before any statement.
+    assert "'schedule'" in check_text, "surface 2: worker_heartbeats.worker_plane_is_known"
+    # 3. The heartbeat allowlist and the health map admit the plane.
     connection = MagicMock()
-    with pytest.raises(ValueError, match="unknown worker plane"):
-        worker_health.record_worker_heartbeat(
-            connection, owner="cpm-scope", principal_id=PRINCIPAL, plane="schedule"
-        )
-    assert not connection.mock_calls, "surface 3: record_worker_heartbeat issued a statement"
-    with pytest.raises(ValueError, match="unknown worker plane"):
-        worker_health.worker_plane_health(connection, principal_id=PRINCIPAL, plane_name="schedule")
-    assert not connection.mock_calls, "surface 3: worker_plane_health issued a statement"
-    # 4. The application fallback and the unit-of-work health read.
-    for path in PLANE_TUPLE_FILES:
-        tuples = _plane_tuples(path)
-        assert tuples, f"surface 4: no worker-plane tuple found in {path.name}"
-        for values in tuples:
-            assert "schedule" not in values, f"surface 4: {path.name} names a schedule plane"
+    worker_health.record_worker_heartbeat(
+        connection, owner="cpm-scope", principal_id=PRINCIPAL, plane="schedule"
+    )
+    assert len(connection.execute.mock_calls) == 1, "surface 3: record_worker_heartbeat"
+    health = MagicMock()
+    health.scalar.side_effect = RuntimeError("first statement reached")
+    with pytest.raises(RuntimeError, match="first statement reached"):
+        worker_health.worker_plane_health(health, principal_id=PRINCIPAL, plane_name="schedule")
+    # 4. The unit-of-work health read and the application fallback name `schedule`
+    # exactly when the Schedule plane is served (both polarities).
+    assert _uow_planes(schedule_enabled=False) == ["capture", "enrollment"], (
+        "surface 4: the unit-of-work read names schedule while the plane is off"
+    )
+    assert _uow_planes(schedule_enabled=True) == ["capture", "enrollment", "schedule"], (
+        "surface 4: the unit-of-work read omits schedule while the plane is on"
+    )
+    assert _fallback_planes(scene, schedule_enabled=False) == ["capture", "enrollment"], (
+        "surface 4: the service fallback names schedule while the plane is off"
+    )
+    assert _fallback_planes(scene, schedule_enabled=True) == [
+        "capture",
+        "enrollment",
+        "schedule",
+    ], "surface 4: the service fallback omits schedule while the plane is on"
 
 
-def test_schedule_jobs_is_a_plane_constant_only() -> None:
+def test_schedule_jobs_is_the_schedule_plane() -> None:
     assert "SCHEDULE_JOBS" in jobs.__all__
     plane = jobs.SCHEDULE_JOBS
     assert (plane.table.name, plane.subject, plane.owner_table.name) == (
@@ -94,7 +132,7 @@ def test_schedule_jobs_is_a_plane_constant_only() -> None:
     )
     assert plane.lease_generation is None and plane.pause_cause is None
     planes = {plane for plane, _ in worker_app._JOB_PLANES.values()}
-    assert jobs.SCHEDULE_JOBS not in planes
+    assert jobs.SCHEDULE_JOBS in planes
 
 
 def test_schedule_ports_are_not_on_the_general_unit_of_work() -> None:

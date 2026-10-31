@@ -70,6 +70,11 @@ _FEATURE_BY_FAMILY: Final[Mapping[str, str]] = {
     # Record lineage S4 (contract section 7): the 2 Program reads. The v2
     # Commitment reads stay `work` and `reports.manifest` stays `reports`.
     "programs": "programs",
+    # CPM Workbench S5b-2 (contract section 3.13.3): the 7 Schedule names.
+    "schedule_series": "schedule",
+    "schedule_publications": "schedule",
+    "schedule_activities": "schedule",
+    "schedule_changes": "schedule",
 }
 
 _WRAPPER_SCHEMA: Final[dict[str, Any]] = {

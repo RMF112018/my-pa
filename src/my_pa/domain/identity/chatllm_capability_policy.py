@@ -15,7 +15,7 @@ from typing import Final
 
 from my_pa.domain.identity.operation import Capability
 
-CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v10"
+CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v11"
 
 
 class ChatLLMCapabilityClass(StrEnum):
@@ -40,6 +40,9 @@ class ChatLLMCompositionPrerequisite(StrEnum):
     #: P1 client exposure (chatllm-data-v10): the S4 Program reporting switch
     #: (`MY_PA_PROGRAM_REPORTING_ENABLED`, which requires the lineage switch).
     PROGRAM_REPORTING = "PROGRAM_REPORTING"
+    #: CPM Workbench S5b-2 (chatllm-data-v11): the Schedule switch
+    #: (`MY_PA_SCHEDULE_ENABLED`); needs no other plane.
+    SCHEDULE = "SCHEDULE"
     NONE = "NONE"
 
 
@@ -291,6 +294,16 @@ _DATA_CONDITIONAL: Final[frozenset[Capability]] = frozenset(
         Capability.COMMITMENTS_V2_SEARCH,
         Capability.COMMITMENTS_V2_WAITING_ON,
         Capability.REPORTS_MANIFEST,
+        # CPM Workbench S5b-2 (chatllm-data-v11; worker and capabilities contract
+        # section 3.13.1, E-02): the 6 Schedule reads, conditional on
+        # `MY_PA_SCHEDULE_ENABLED` by explicit name (`SCHEDULE_DATA_NAMES`), so a
+        # build with the switch off neither composes nor demands their grants.
+        Capability.SCHEDULE_SERIES_LIST,
+        Capability.SCHEDULE_PUBLICATIONS_LIST,
+        Capability.SCHEDULE_PUBLICATIONS_READ,
+        Capability.SCHEDULE_ACTIVITIES_LIST,
+        Capability.SCHEDULE_ACTIVITIES_HISTORY,
+        Capability.SCHEDULE_CHANGES_LIST,
     }
 )
 
@@ -342,6 +355,10 @@ _CONTROL_PLANE_EXCLUDED: Final[frozenset[Capability]] = frozenset(
         Capability.RECORDS_ASSOCIATIONS_CONFIRM,
         Capability.ISSUES_MEMBERSHIPS_CONFIRM,
         Capability.ISSUES_PROJECT_LINKS_CONFIRM,
+        # CPM Workbench S5b-2 (chatllm-data-v11): the operator-only, attested-local
+        # schedule import admits a source PDF for the contained parser; an active
+        # grant on it is `UNEXPECTED_CONTROL_PLANE_GRANT`.
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT,
     }
 )
 
@@ -430,6 +447,20 @@ PROGRAM_REPORTING_DATA_NAMES: Final[frozenset[Capability]] = frozenset(
     }
 )
 
+#: CPM Workbench S5b-2 (chatllm-data-v11): the 6 Schedule reads, composed only by
+#: `MY_PA_SCHEDULE_ENABLED`. Explicit names, matched before any prefix rule.
+#: Equals the service's `_SCHEDULE_READ_CAPABILITIES` (pinned by a contract test).
+SCHEDULE_DATA_NAMES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.SCHEDULE_SERIES_LIST,
+        Capability.SCHEDULE_PUBLICATIONS_LIST,
+        Capability.SCHEDULE_PUBLICATIONS_READ,
+        Capability.SCHEDULE_ACTIVITIES_LIST,
+        Capability.SCHEDULE_ACTIVITIES_HISTORY,
+        Capability.SCHEDULE_CHANGES_LIST,
+    }
+)
+
 _COMPATIBILITY_REPLACEMENTS: Final[Mapping[Capability, Capability]] = MappingProxyType(
     {
         Capability.CONTINUITY_TASKS_CREATE: Capability.TASKS_CREATE,
@@ -444,6 +475,9 @@ _KNOWLEDGE_DISCOVERY_EXCLUSION: Final = (
     "bound Knowledge discovery-client control plane (exact allowlist and profile only)"
 )
 _LINEAGE_BACKFILL_EXCLUSION: Final = "operator-only lineage backfill"
+_SCHEDULE_IMPORT_EXCLUSION: Final = (
+    "operator-only schedule source admission (local operator surface; source designation OD-06)"
+)
 _LINEAGE_ATTESTED_EXCLUSION: Final = (
     "attested to the local operator surface; withheld from every client "
     "(operator directive 2026-10-26)"
@@ -479,6 +513,7 @@ _EXCLUSION_RATIONALE: Final[Mapping[Capability, str]] = MappingProxyType(
         Capability.RECORDS_ASSOCIATIONS_CONFIRM: _LINEAGE_ATTESTED_EXCLUSION,
         Capability.ISSUES_MEMBERSHIPS_CONFIRM: _LINEAGE_ATTESTED_EXCLUSION,
         Capability.ISSUES_PROJECT_LINKS_CONFIRM: _LINEAGE_ATTESTED_EXCLUSION,
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT: _SCHEDULE_IMPORT_EXCLUSION,
     }
 )
 
@@ -513,6 +548,8 @@ def _prerequisite_of(
         return ChatLLMCompositionPrerequisite.LINEAGE
     if capability in PROGRAM_REPORTING_DATA_NAMES:
         return ChatLLMCompositionPrerequisite.PROGRAM_REPORTING
+    if capability in SCHEDULE_DATA_NAMES:
+        return ChatLLMCompositionPrerequisite.SCHEDULE
     value = capability.value
     if value.startswith("documents."):
         return ChatLLMCompositionPrerequisite.MANAGED_DOCUMENTS

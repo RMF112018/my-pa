@@ -1063,6 +1063,18 @@ class Capability(StrEnum):
     ISSUES_MEMBERSHIPS_CONFIRM = "issues.memberships.confirm"
     ISSUES_PROJECT_LINKS_CONFIRM = "issues.project_links.confirm"
     RECORDS_LINEAGE_RELATED = "records.lineage.related"
+    #: CPM Workbench S5b-2 (worker and capabilities contract section 3.5): the
+    #: operator-only, attested-local, additive import of one enrolled schedule
+    #: PDF version as a Schedule Series publication, and the 6 scopeless Schedule
+    #: reads. All 7 are withheld unless `MY_PA_SCHEDULE_ENABLED` is on (section
+    #: 3.1).
+    SCHEDULE_PUBLICATIONS_IMPORT = "schedule_publications.import"
+    SCHEDULE_SERIES_LIST = "schedule_series.list"
+    SCHEDULE_PUBLICATIONS_LIST = "schedule_publications.list"
+    SCHEDULE_PUBLICATIONS_READ = "schedule_publications.read"
+    SCHEDULE_ACTIVITIES_LIST = "schedule_activities.list"
+    SCHEDULE_ACTIVITIES_HISTORY = "schedule_activities.history"
+    SCHEDULE_CHANGES_LIST = "schedule_changes.list"
 
 
 class NativeSourceCapability(StrEnum):
@@ -1168,6 +1180,12 @@ _OPERATOR_ONLY: frozenset[AuthorizedCapability] = frozenset(
         Capability.RECORDS_ASSOCIATIONS_CONFIRM,
         Capability.ISSUES_MEMBERSHIPS_CONFIRM,
         Capability.ISSUES_PROJECT_LINKS_CONFIRM,
+        # CPM Workbench S5b-2 (contract section 3.12, E-12): the schedule import
+        # feeds a source PDF to the contained parser and is tied to an operator
+        # source-admission decision (OD-06). It is attested to the local operator
+        # surface (S3.1 D-16: the handler calls `attested_lineage_authority`),
+        # so it is never satisfiable remotely or over stdio MCP.
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT,
     }
 )
 
@@ -1681,6 +1699,16 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.ISSUES_MEMBERSHIPS_CONFIRM: frozenset({Purpose.ISSUE_AUTHORING}),
         Capability.ISSUES_PROJECT_LINKS_CONFIRM: frozenset({Purpose.ISSUE_AUTHORING}),
         Capability.RECORDS_LINEAGE_RELATED: frozenset({Purpose.RECORD_LINEAGE_READ}),
+        # CPM Workbench S5b-2 (contract section 3.12): 2 purposes of their own
+        # (D-91: schedule evidence is a source-bound derived plane no existing
+        # purpose names). Import admits a source version; the 6 reads share one.
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT: frozenset({Purpose.SCHEDULE_IMPORT}),
+        Capability.SCHEDULE_SERIES_LIST: frozenset({Purpose.SCHEDULE_READ}),
+        Capability.SCHEDULE_PUBLICATIONS_LIST: frozenset({Purpose.SCHEDULE_READ}),
+        Capability.SCHEDULE_PUBLICATIONS_READ: frozenset({Purpose.SCHEDULE_READ}),
+        Capability.SCHEDULE_ACTIVITIES_LIST: frozenset({Purpose.SCHEDULE_READ}),
+        Capability.SCHEDULE_ACTIVITIES_HISTORY: frozenset({Purpose.SCHEDULE_READ}),
+        Capability.SCHEDULE_CHANGES_LIST: frozenset({Purpose.SCHEDULE_READ}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),
@@ -1873,6 +1901,8 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.RECORDS_ASSOCIATIONS_CONFIRM,
         Capability.ISSUES_MEMBERSHIPS_CONFIRM,
         Capability.ISSUES_PROJECT_LINKS_CONFIRM,
+        # CPM Workbench S5b-2: the import inserts a publication and queues its job.
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT,
     }
 )
 
@@ -1992,6 +2022,9 @@ _ADDITIVE_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         # Record lineage S3: a backfill plan appends ledger rows only. Contest,
         # reinstate and the handoff correction change what a link or handoff means.
         Capability.RECORDS_BACKFILL_PLAN,
+        # CPM Workbench S5b-2: the import inserts a publication (and at most a
+        # new Series) and one job; it never rewrites an existing publication.
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT,
     }
 )
 

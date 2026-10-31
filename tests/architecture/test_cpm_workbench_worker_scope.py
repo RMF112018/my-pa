@@ -6,6 +6,9 @@ print: the only bytes any of them writes are the child's one frame on its
 `stdout`. The closures are measured in fresh isolated interpreters, so nothing
 this test process has already imported can hide or fake a module.
 
+The `schedule` worker plane refuses to run (exit 2, before an engine is built)
+while `MY_PA_SCHEDULE_ENABLED` is off or with a lease shorter than 300 s.
+
 FAST: no database, no PDF; two short subprocesses.
 """
 
@@ -13,10 +16,13 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 from typing import Final
+
+import pytest
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 SRC: Final = ROOT / "src"
@@ -143,3 +149,51 @@ def test_new_worker_modules_neither_log_nor_print() -> None:
             assert writes == ["sys.stdout.buffer.write", "sys.stdout.buffer.flush"], writes
         else:
             assert writes == [], f"{path.name}: {writes}"
+
+
+# ---- the `schedule` plane's own refusals (contract 3.1, 3.2; I7-B) ---------------
+
+
+class _EngineBuiltError(Exception):
+    """Raised by the stand-in engine factory: the refusal did not come first."""
+
+
+def _run_worker(monkeypatch: pytest.MonkeyPatch, *, enabled: bool | None, argv: list[str]) -> int:
+    """`apps/worker.py` `main` with a synthetic environment and no engine factory."""
+    from apps import worker as worker_app
+
+    for key in [key for key in os.environ if key.startswith("MY_PA_")]:
+        monkeypatch.delenv(key)
+    monkeypatch.setenv("MY_PA_DATABASE_URL", "postgresql+psycopg://someone@db.invalid:5432/x")
+    if enabled is not None:
+        monkeypatch.setenv("MY_PA_SCHEDULE_ENABLED", "true" if enabled else "false")
+
+    def no_engine(*_args: object, **_kwargs: object) -> object:
+        raise _EngineBuiltError
+
+    monkeypatch.setattr(worker_app, "create_database_engine", no_engine)
+    return worker_app.main(argv)
+
+
+@pytest.mark.parametrize("enabled", [None, False], ids=["unset", "false"])
+def test_worker_refuses_the_schedule_plane_while_disabled(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], enabled: bool | None
+) -> None:
+    """Exit 2 with one message, before an engine, a claim or a heartbeat."""
+    code = _run_worker(monkeypatch, enabled=enabled, argv=["run", "--plane", "schedule", "--once"])
+    assert code == 2
+    assert capsys.readouterr().out == "plane schedule disabled\n"
+
+
+def test_worker_refuses_a_lease_shorter_than_three_hundred_seconds(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """299 s is refused before an engine; 300 s passes the refusal (the engine is reached)."""
+    argv = ["run", "--plane", "schedule", "--once", "--lease-seconds"]
+    assert _run_worker(monkeypatch, enabled=True, argv=[*argv, "299"]) == 2
+    assert capsys.readouterr().out == "plane schedule requires --lease-seconds >= 300\n"
+    with pytest.raises(_EngineBuiltError):
+        _run_worker(monkeypatch, enabled=True, argv=[*argv, "300"])
+    # The other planes keep their own lease rules: a short lease is not refused there.
+    with pytest.raises(_EngineBuiltError):
+        _run_worker(monkeypatch, enabled=False, argv=["run", "--plane", "capture", *argv[3:], "60"])

@@ -76,8 +76,8 @@ _MEETINGS = _MEETING_READS | _MEETING_WRITES
 
 def test_policy_covers_every_public_capability_exactly_once() -> None:
     assert set(CHATLLM_CAPABILITY_POLICY) == set(Capability)
-    assert len(CHATLLM_CAPABILITY_POLICY) == 233
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v10"
+    assert len(CHATLLM_CAPABILITY_POLICY) == 240
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v11"
 
 
 def test_classification_counts_match_the_approved_plan() -> None:
@@ -89,14 +89,16 @@ def test_classification_counts_match_the_approved_plan() -> None:
     # KLP-WP-03 (chatllm-data-v6): the six Knowledge Assertion names, 90 -> 96.
     # KLP-WP-05 (chatllm-data-v8): `record_events.provenance`, 96 -> 97.
     # Record lineage P1 (chatllm-data-v10, operator directive 2026-10-26): the
-    # 34 client-usable lineage-plane names, 97 -> 131.
-    assert counts[ChatLLMCapabilityClass.DATA_CONDITIONAL] == 131
+    # 34 client-usable lineage-plane names, 97 -> 131. CPM Workbench S5b-2
+    # (chatllm-data-v11): the 6 Schedule reads, 131 -> 137.
+    assert counts[ChatLLMCapabilityClass.DATA_CONDITIONAL] == 137
     assert counts[ChatLLMCapabilityClass.COMPATIBILITY_ONLY] == 2
     # KLP-WP-04 (chatllm-data-v7): submit and checkpoint are excluded, 15 -> 17.
     # Record lineage S3: the operator-only backfill pair is excluded, 17 -> 19.
     # Record lineage P1: Issue close and reopen and the 3 confirms are withheld
-    # from every client, 19 -> 24.
-    assert counts[ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED] == 24
+    # from every client, 19 -> 24. CPM Workbench S5b-2 (chatllm-data-v11): the
+    # operator-only schedule import, 24 -> 25.
+    assert counts[ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED] == 25
     # Record lineage S1: the six Issue-plane names are an operator decision
     # (ADR-015, OD-07), 2 -> 8, and the eight remaining S1 names 8 -> 16; no
     # data-class member moves, so no profile bump. Record lineage S2's

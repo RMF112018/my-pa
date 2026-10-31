@@ -221,6 +221,7 @@ from my_pa.application.commands import (
     GetSourceMetadata,
     GetSourceStatus,
     GetTaskHistory,
+    ImportSchedulePublication,
     ListCaptures,
     ListCommitments,
     ListCommitmentsV2,
@@ -252,6 +253,10 @@ from my_pa.application.commands import (
     ListRelationshipMemories,
     ListReportTypes,
     ListReviewCases,
+    ListScheduleActivities,
+    ListScheduleChanges,
+    ListSchedulePublications,
+    ListScheduleSeries,
     ListSituations,
     ListSources,
     ListTaskComments,
@@ -296,6 +301,8 @@ from my_pa.application.commands import (
     ReadRecordLineage,
     ReadRelatedRecords,
     ReadReportManifest,
+    ReadScheduleActivityHistory,
+    ReadSchedulePublication,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
@@ -4156,8 +4163,8 @@ class ApplicationService:
         #: CPM Workbench S5b-2 (worker contract section 3.1): the Schedule switch
         #: and the Schedule unit-of-work factory, `None` unless the gateway
         #: composed it (switch on, no restricted `data_engine`). Both default
-        #: off; nothing reads them yet -- the capability admission and the
-        #: handlers that consult them land with the registrations (I7-B).
+        #: off; `available_capabilities` withholds the 7 Schedule names and every
+        #: Schedule handler answers `unsupported` unless both are present.
         self._schedule_enabled = schedule_enabled
         self._schedule_unit_of_work = schedule_unit_of_work
         #: KLP-WP-04 (R6 section 6.1): the exact discovery allowlist the second
@@ -4371,6 +4378,12 @@ class ApplicationService:
             served -= _PROGRAM_READ_CAPABILITIES
         if self._constraint_management_unit_of_work is None:
             served -= {Capability.PROGRAMS_OVERVIEW}
+        # CPM Workbench S5b-2 (contract section 3.1): its own switch and the
+        # Schedule factory (absent in a restricted composition) withhold the 7
+        # Schedule names from `capabilities.get`, readiness, the MCP tool list,
+        # the remote profile, the facade and the ChatLLM composition.
+        if not (self._schedule_enabled and self._schedule_unit_of_work is not None):
+            served -= _SCHEDULE_CAPABILITIES
         # A proposal surface without a trusted server registration would
         # advertise a write every authenticated caller can only be denied.
         # Withhold both producer capabilities when composition has no exact
@@ -4729,6 +4742,20 @@ class ApplicationService:
         self._require_work_evidence(unit_of_work, principal_id, evidence_ref)
         self._require_current_counterparty(unit_of_work, principal_id, counterparty_entity_id)
 
+    def _schedule_is_composed(self) -> bool:
+        """Whether the Schedule plane is served: its switch and its factory (contract 3.1)."""
+        return self._schedule_enabled and self._schedule_unit_of_work is not None
+
+    def _fallback_worker_planes(self) -> tuple[str, ...]:
+        """The planes reported `unavailable` when no worker-health read exists.
+
+        The same planes the SQL worker-health read enumerates (contract section
+        3.2, surface 4): `schedule` only while the Schedule plane is served.
+        """
+        if self._schedule_is_composed():
+            return ("capture", "enrollment", "schedule")
+        return ("capture", "enrollment")
+
     def _capabilities_get(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: GetCapabilities
     ) -> _Result:
@@ -4770,7 +4797,7 @@ class ApplicationService:
                     "dead_lettered": None,
                     "last_heartbeat_at": None,
                 }
-                for plane in ("capture", "enrollment")
+                for plane in self._fallback_worker_planes()
             ]
         readiness = build_readiness_report(manifest, model_route=self._model_gate.route)
         unhealthy_workers = [
@@ -13442,6 +13469,16 @@ class ApplicationService:
         require_read_grant(authorization.capability_grants, capability)
         return lineage_visibility(authorization.capability_grants, capability)
 
+    def _schedule_plane(self) -> None:
+        """Refuse unless the Schedule plane is composed (contract section 3.1).
+
+        Asked first by every Schedule handler, before any read, write or replay:
+        `invoke` routes into `_HANDLERS` without consulting
+        `available_capabilities`, so the withheld names must refuse here too.
+        """
+        if not self._schedule_is_composed():
+            raise UnsupportedError()
+
     def _program_plane(self) -> None:
         """Refuse unless both the lineage and the Program-reporting switches are on.
 
@@ -14798,6 +14835,80 @@ class ApplicationService:
             payload=view.to_canonical_dict(),
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
         )
+
+    # CPM Workbench S5b-2 (contract section 3.5). Registration stubs (S3 D-37
+    # precedent): each asks the switch first, then answers `unsupported` until
+    # the behaviour package replaces its body.
+    def _schedule_publications_import(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ImportSchedulePublication,
+    ) -> _Result:
+        """`schedule_publications.import`: admit one enrolled PDF version (section 3.6)."""
+        del unit_of_work, authorization, command
+        self._schedule_plane()
+        raise UnsupportedError()
+
+    def _schedule_series_list(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListScheduleSeries
+    ) -> _Result:
+        """`schedule_series.list`: a Project's Schedule Series (section 3.9)."""
+        del unit_of_work, authorization, command
+        self._schedule_plane()
+        raise UnsupportedError()
+
+    def _schedule_publications_list(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListSchedulePublications,
+    ) -> _Result:
+        """`schedule_publications.list`: one Series' publications (section 3.9)."""
+        del unit_of_work, authorization, command
+        self._schedule_plane()
+        raise UnsupportedError()
+
+    def _schedule_publications_read(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReadSchedulePublication,
+    ) -> _Result:
+        """`schedule_publications.read`: one publication (section 3.9)."""
+        del unit_of_work, authorization, command
+        self._schedule_plane()
+        raise UnsupportedError()
+
+    def _schedule_activities_list(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListScheduleActivities,
+    ) -> _Result:
+        """`schedule_activities.list`: one publication's activities (section 3.9)."""
+        del unit_of_work, authorization, command
+        self._schedule_plane()
+        raise UnsupportedError()
+
+    def _schedule_activities_history(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReadScheduleActivityHistory,
+    ) -> _Result:
+        """`schedule_activities.history`: one Stable Activity's observations (section 3.9)."""
+        del unit_of_work, authorization, command
+        self._schedule_plane()
+        raise UnsupportedError()
+
+    def _schedule_changes_list(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListScheduleChanges
+    ) -> _Result:
+        """`schedule_changes.list`: the A-to-B delta of two publications (section 3.10)."""
+        del unit_of_work, authorization, command
+        self._schedule_plane()
+        raise UnsupportedError()
 
     def _program_reference_recompute(
         self, authorization: Authorization
@@ -17145,6 +17256,14 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.ISSUES_MEMBERSHIPS_CONFIRM: ApplicationService._issues_memberships_confirm,
         Capability.ISSUES_PROJECT_LINKS_CONFIRM: ApplicationService._issues_project_links_confirm,
         Capability.RECORDS_LINEAGE_RELATED: ApplicationService._records_lineage_related,
+        # CPM Workbench S5b-2 (contract section 3.5).
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT: ApplicationService._schedule_publications_import,
+        Capability.SCHEDULE_SERIES_LIST: ApplicationService._schedule_series_list,
+        Capability.SCHEDULE_PUBLICATIONS_LIST: ApplicationService._schedule_publications_list,
+        Capability.SCHEDULE_PUBLICATIONS_READ: ApplicationService._schedule_publications_read,
+        Capability.SCHEDULE_ACTIVITIES_LIST: ApplicationService._schedule_activities_list,
+        Capability.SCHEDULE_ACTIVITIES_HISTORY: ApplicationService._schedule_activities_history,
+        Capability.SCHEDULE_CHANGES_LIST: ApplicationService._schedule_changes_list,
         Capability.MEETINGS_NOTES_VERSIONS: ApplicationService._meetings_notes_versions,
         Capability.MEETINGS_NOTES_READ_VERSION: ApplicationService._meetings_notes_read_version,
         Capability.RECORD_EVENTS_LIST: ApplicationService._record_events_list,
@@ -17649,6 +17768,24 @@ _PROGRAM_REPORTING_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
 _PROGRAM_READ_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     capability for capability in Capability if capability.value in PROGRAM_READ_CAPABILITIES
 )
+
+#: CPM Workbench S5b-2 (contract section 3.1): the 7 Schedule names, withheld
+#: unless `schedule_enabled` is on and the Schedule factory is composed.
+_SCHEDULE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT,
+        Capability.SCHEDULE_SERIES_LIST,
+        Capability.SCHEDULE_PUBLICATIONS_LIST,
+        Capability.SCHEDULE_PUBLICATIONS_READ,
+        Capability.SCHEDULE_ACTIVITIES_LIST,
+        Capability.SCHEDULE_ACTIVITIES_HISTORY,
+        Capability.SCHEDULE_CHANGES_LIST,
+    }
+)
+#: The 6 Schedule reads (`SCHEDULE_DATA_NAMES` in the ChatLLM policy).
+_SCHEDULE_READ_CAPABILITIES: Final[frozenset[Capability]] = _SCHEDULE_CAPABILITIES - {
+    Capability.SCHEDULE_PUBLICATIONS_IMPORT
+}
 
 #: KLP-WP-04: the bound discovery client's two writes. Withheld from every
 #: publication without an authenticated client and refused by the second

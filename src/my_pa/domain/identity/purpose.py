@@ -464,3 +464,15 @@ class Purpose(StrEnum):
     # read purpose of its own, used by exactly `programs.members.resolve` and
     # `programs.overview`.
     PROGRAM_REPORTING_READ = "program_reporting_read"
+    # CPM Workbench S5b-2 (worker and capabilities contract section 3.12), on
+    # `D-91`: would reuse widen the grant? Every existing purpose would: an import
+    # admits an enrolled source PDF version into a durable Schedule Series and
+    # queues the contained parse, which no source or knowledge purpose names. A
+    # write purpose of its own, used by exactly `schedule_publications.import`
+    # (operator-only, attested-local).
+    SCHEDULE_IMPORT = "schedule_import"
+    # On `D-91`: would reuse widen the grant? Every existing read purpose would:
+    # the 6 Schedule reads disclose parsed schedule rows, their history and the
+    # A-to-B delta, which no existing purpose names. A read purpose of its own,
+    # used by exactly the 6 Schedule reads.
+    SCHEDULE_READ = "schedule_read"

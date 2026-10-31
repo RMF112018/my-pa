@@ -87,7 +87,7 @@ principal is the only principal; no credential is issued, read, or required.
 `OPERATOR` rather than `GATEWAY` because the process *is* the operator's local
 transport — a `GATEWAY` principal cannot invoke `sources.enroll`, so the choice
 is between naming what this is and shipping a transport that cannot reach one of
-the 233 capabilities.
+the 240 capabilities.
 
 `entra` composes `entra_authenticator` instead and issues **no** process
 principal. Every request presents a bearer token, the token's validated
@@ -1147,6 +1147,9 @@ def build_gateway_runtime(
             # this line.
             relationship_intelligence_enabled=settings.relationship_intelligence_enabled,
             goodnotes_pull_enabled=settings.goodnotes_pull_enabled,
+            # CPM Workbench S5b-2 (contract section 3.2): the worker-health read
+            # names `schedule` exactly when the Schedule factory is composed.
+            schedule_enabled=schedule_unit_of_work is not None,
         )
 
     def task_management_unit_of_work() -> SqlAlchemyTaskManagementUnitOfWork:

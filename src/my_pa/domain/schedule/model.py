@@ -50,6 +50,8 @@ __all__ = [
     "TERMINAL_OUTCOMES",
     "InvalidScheduleSeriesNameError",
     "ParsedScheduleRow",
+    "ScheduleActivityObservation",
+    "ScheduleActivityRowView",
     "ScheduleAdmission",
     "ScheduleAdmissionOutcome",
     "ScheduleAdmissionRefusal",
@@ -67,6 +69,8 @@ __all__ = [
     "ScheduleImportRequest",
     "ScheduleIssueCode",
     "ScheduleIssueSeverity",
+    "ScheduleJobView",
+    "ScheduleLatestUpdate",
     "ScheduleLease",
     "ScheduleParseCounts",
     "ScheduleParseEngine",
@@ -78,12 +82,16 @@ __all__ = [
     "ScheduleParserRunStatus",
     "SchedulePlan",
     "SchedulePublication",
+    "SchedulePublicationDetail",
     "SchedulePublicationRole",
     "SchedulePublicationStatus",
+    "SchedulePublicationSummary",
     "ScheduleRowBoundsError",
     "ScheduleRowType",
     "ScheduleSeries",
     "ScheduleSeriesName",
+    "ScheduleSeriesSummary",
+    "ScheduleSourceBinding",
     "StableScheduleActivity",
     "StoredScheduleRow",
     "derive_outcome",
@@ -1311,3 +1319,179 @@ def effective_publication_status(
     ):
         return SchedulePublicationStatus.FAILED
     return status
+
+
+# --- S5b-2 read records (R2 WP-03) -------------------------------------------
+#
+# Contract: `docs/architecture/cpm-workbench-worker-capabilities-contract.md`
+# sections 3.5.2, 3.9 and 4.2. What the 6 Schedule reads hand the application:
+# every value was read under the caller's partition, and none carries a
+# `schedule_activities.created_at` (R2 section 16.14, S5b-1 U-03).
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduleSourceBinding:
+    """The enrolled source state one publication was admitted from (disclosure input)."""
+
+    source_id: str
+    enrollment_id: str
+    source_object_id: str
+    source_version_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.source_id, IdKind.SOURCE)
+        _identifier(self.enrollment_id, IdKind.ENROLLMENT)
+        _identifier(self.source_object_id, IdKind.SOURCE_OBJECT)
+        _identifier(self.source_version_id, IdKind.VERSION)
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduleLatestUpdate:
+    """A Series' newest complete or partial `update` publication (never a baseline)."""
+
+    publication_id: str
+    data_date: date
+    status: SchedulePublicationStatus
+    source: ScheduleSourceBinding
+
+    def __post_init__(self) -> None:
+        _identifier(self.publication_id, IdKind.SCHEDULE_PUBLICATION)
+        if not _is_optional_date(self.data_date) or self.data_date is None:
+            raise ValueError("a latest update carries its data date")
+        if self.status not in (
+            SchedulePublicationStatus.COMPLETE,
+            SchedulePublicationStatus.PARTIAL,
+        ):
+            raise ValueError("a latest update is complete or partial")
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduleSeriesSummary:
+    series_id: str
+    name: str
+    created_at: datetime
+    publication_count: int
+    latest_update: ScheduleLatestUpdate | None
+
+    def __post_init__(self) -> None:
+        _identifier(self.series_id, IdKind.SCHEDULE_SERIES)
+        if not _non_negative_int(self.publication_count):
+            raise ValueError("a publication count is a non-negative integer")
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduleJobView:
+    """The content-free job state a publication read reports."""
+
+    operation_id: str
+    state: str
+    attempt_count: int
+    max_attempts: int
+    last_error_code: str | None
+
+    def __post_init__(self) -> None:
+        _identifier(self.operation_id, IdKind.OPERATION)
+        if not _non_negative_int(self.attempt_count) or not _positive_int(self.max_attempts):
+            raise ValueError("job attempt counts are integers")
+
+
+@dataclass(frozen=True, slots=True)
+class SchedulePublicationSummary:
+    """One publication with its effective status, operation, source and accepted parser."""
+
+    publication: SchedulePublication
+    effective_status: SchedulePublicationStatus
+    operation_id: str
+    source: ScheduleSourceBinding
+    accepted_parser: ScheduleParserIdentity | None
+
+    def __post_init__(self) -> None:
+        _identifier(self.operation_id, IdKind.OPERATION)
+        if (self.accepted_parser is None) != (self.publication.accepted_parser_run_id is None):
+            raise ValueError("a summary names its accepted parser exactly when it has one")
+
+
+@dataclass(frozen=True, slots=True)
+class SchedulePublicationDetail:
+    """One publication in full: job, every parser run and issue counts by code."""
+
+    publication: SchedulePublication
+    effective_status: SchedulePublicationStatus
+    job: ScheduleJobView
+    runs: tuple[ScheduleParserRun, ...]
+    issue_counts: Mapping[ScheduleIssueCode, int]
+    source: ScheduleSourceBinding
+
+    def __post_init__(self) -> None:
+        if any(not _positive_int(count) for count in self.issue_counts.values()):
+            raise ValueError("issue counts name only codes that occur")
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduleActivityRowView:
+    """One accepted-run activity or milestone row as `schedule_activities.list` serves it."""
+
+    row_id: str
+    schedule_activity_id: str
+    published_activity_id: str
+    activity_name: str
+    row_type: ScheduleRowType
+    row_ordinal: int
+    page_number: int
+    physical_line_ordinal: int
+    hierarchy_path: tuple[str, ...] | None
+    original_duration: ScheduleDurationCell
+    remaining_duration: ScheduleDurationCell
+    start: ScheduleDateCell
+    finish: ScheduleDateCell
+    warning_codes: tuple[ScheduleIssueCode, ...]
+    box: ScheduleBox
+    page_width_mpt: int
+    page_height_mpt: int
+
+    def __post_init__(self) -> None:
+        _identifier(self.row_id, IdKind.SCHEDULE_ROW)
+        _identifier(self.schedule_activity_id, IdKind.SCHEDULE_ACTIVITY)
+        if self.row_type not in _LINKABLE_ROW_TYPES:
+            raise ValueError("only activity and milestone rows are listed")
+        if not all(
+            _positive_int(value)
+            for value in (
+                self.row_ordinal,
+                self.page_number,
+                self.physical_line_ordinal,
+                self.page_width_mpt,
+                self.page_height_mpt,
+            )
+        ):
+            raise ValueError("row ordinals and page dimensions are positive integers")
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduleActivityObservation:
+    """One Stable Activity's row in one complete or partial publication of its Series."""
+
+    publication_id: str
+    publication_role: SchedulePublicationRole
+    baseline_kind: ScheduleBaselineKind | None
+    status: SchedulePublicationStatus
+    data_date: date
+    admitted_at: datetime
+    activity_name: str
+    row_type: ScheduleRowType
+    hierarchy_path: tuple[str, ...] | None
+    original_duration: ScheduleDurationCell
+    remaining_duration: ScheduleDurationCell
+    start: ScheduleDateCell
+    finish: ScheduleDateCell
+    source: ScheduleSourceBinding
+
+    def __post_init__(self) -> None:
+        _identifier(self.publication_id, IdKind.SCHEDULE_PUBLICATION)
+        if self.status not in (
+            SchedulePublicationStatus.COMPLETE,
+            SchedulePublicationStatus.PARTIAL,
+        ):
+            raise ValueError("an observation comes from a complete or partial publication")
+        if self.row_type not in _LINKABLE_ROW_TYPES:
+            raise ValueError("an observation is an activity or milestone row")

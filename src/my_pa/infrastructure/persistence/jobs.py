@@ -133,6 +133,7 @@ __all__ = [
     "enqueue_job",
     "hold_lease",
     "job_for",
+    "job_is_effectively_failed",
     "job_principal",
     "job_state",
     "reap_abandoned_jobs",
@@ -253,6 +254,18 @@ def _abandoned(plane: JobPlane) -> ColumnElement[bool]:
         table.c.lease_expires_at <= func.now(),
         table.c.attempt_count >= table.c.max_attempts,
     )
+
+
+def job_is_effectively_failed(plane: JobPlane) -> ColumnElement[bool]:
+    """A job that reads `failed`: stored `failed`, or an abandoned final attempt.
+
+    CPM Workbench S5b-2 (worker contract section 3.9): the predicate `job_for`
+    reports and `reap_abandoned_jobs` eventually writes, as a column expression
+    a read can filter and project on, so a listing's effective status and a
+    point read's agree. A fragment, not a statement: the caller's statement
+    carries the partition.
+    """
+    return or_(plane.table.c.state == JobState.FAILED.value, _abandoned(plane))
 
 
 #: A worker names itself with a bounded token. The pattern excludes `.`, `:`,

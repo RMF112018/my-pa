@@ -324,6 +324,7 @@ from my_pa.domain.schedule import (
     ScheduleSeriesName,
     normalize_series_name,
 )
+from my_pa.domain.schedule.compare import ScheduleChangeKind
 from my_pa.domain.search.query import MAX_QUERY_CHARACTERS, SearchQuery, SearchQueryError
 from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
@@ -14685,19 +14686,10 @@ MAX_SCHEDULE_SERIES_NAME_INPUT_CHARACTERS: Final = 1_000
 MAX_SCHEDULE_HIERARCHY_PREFIX_LABELS: Final = 32
 MAX_SCHEDULE_HIERARCHY_LABEL_CHARACTERS: Final = 2_000
 #: The 11 `cpm-workbench-full-delta-v1` change kinds in rank order (contract
-#: section 3.10); `domain.schedule.compare.ScheduleChangeKind` restates them.
-SCHEDULE_CHANGE_KIND_VALUES: Final[tuple[str, ...]] = (
-    "added",
-    "removed",
-    "reintroduced",
-    "renamed",
-    "row_type_changed",
-    "original_duration_changed",
-    "remaining_duration_changed",
-    "start_changed",
-    "finish_changed",
-    "hierarchy_changed",
-    "field_state_changed",
+#: section 3.10), read off `domain.schedule.compare.ScheduleChangeKind` so the
+#: command and the delta cannot name different vocabularies.
+SCHEDULE_CHANGE_KIND_VALUES: Final[tuple[str, ...]] = tuple(
+    kind.value for kind in ScheduleChangeKind
 )
 _SCHEDULE_IDEMPOTENCY_KEY: Final = re.compile(r"[A-Za-z0-9_-]{8,128}")
 _SCHEDULE_ROW_TYPES: Final[tuple[ScheduleRowType, ...]] = (

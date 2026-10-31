@@ -628,6 +628,7 @@ from my_pa.application.relationship_memory import (
     RelationshipMemoryService,
     ReviseMemoryCommand,
 )
+from my_pa.application.schedules import ScheduleApplication
 from my_pa.application.tasks import (
     TaskManagementService,
     TaskMutationReceipt,
@@ -14836,9 +14837,16 @@ class ApplicationService:
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_LINEAGE_TRUST_BASIS),
         )
 
-    # CPM Workbench S5b-2 (contract section 3.5). Registration stubs (S3 D-37
-    # precedent): each asks the switch first, then answers `unsupported` until
-    # the behaviour package replaces its body.
+    # CPM Workbench S5b-2 (contract sections 3.5-3.11). Each handler asks the
+    # switch first, before any read, write or replay; a read then re-checks the
+    # remote grant (T2-24: `invoke` does not consult the grant set), and the
+    # behaviour runs in `application.schedules` on the Schedule unit of work.
+    def _schedule_application(self) -> ScheduleApplication:
+        factory = self._schedule_unit_of_work
+        if factory is None:  # pragma: no cover - `_schedule_plane` refused first
+            raise UnsupportedError()
+        return ScheduleApplication(factory)
+
     def _schedule_publications_import(
         self,
         unit_of_work: UnitOfWork,
@@ -14846,17 +14854,20 @@ class ApplicationService:
         command: ImportSchedulePublication,
     ) -> _Result:
         """`schedule_publications.import`: admit one enrolled PDF version (section 3.6)."""
-        del unit_of_work, authorization, command
+        del unit_of_work
         self._schedule_plane()
-        raise UnsupportedError()
+        answer = self._schedule_application().import_publication(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
 
     def _schedule_series_list(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListScheduleSeries
     ) -> _Result:
         """`schedule_series.list`: a Project's Schedule Series (section 3.9)."""
-        del unit_of_work, authorization, command
+        del unit_of_work
         self._schedule_plane()
-        raise UnsupportedError()
+        require_read_grant(authorization.capability_grants, command.capability)
+        answer = self._schedule_application().list_series(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
 
     def _schedule_publications_list(
         self,
@@ -14865,9 +14876,11 @@ class ApplicationService:
         command: ListSchedulePublications,
     ) -> _Result:
         """`schedule_publications.list`: one Series' publications (section 3.9)."""
-        del unit_of_work, authorization, command
+        del unit_of_work
         self._schedule_plane()
-        raise UnsupportedError()
+        require_read_grant(authorization.capability_grants, command.capability)
+        answer = self._schedule_application().list_publications(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
 
     def _schedule_publications_read(
         self,
@@ -14876,9 +14889,11 @@ class ApplicationService:
         command: ReadSchedulePublication,
     ) -> _Result:
         """`schedule_publications.read`: one publication (section 3.9)."""
-        del unit_of_work, authorization, command
+        del unit_of_work
         self._schedule_plane()
-        raise UnsupportedError()
+        require_read_grant(authorization.capability_grants, command.capability)
+        answer = self._schedule_application().read_publication(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
 
     def _schedule_activities_list(
         self,
@@ -14887,9 +14902,11 @@ class ApplicationService:
         command: ListScheduleActivities,
     ) -> _Result:
         """`schedule_activities.list`: one publication's activities (section 3.9)."""
-        del unit_of_work, authorization, command
+        del unit_of_work
         self._schedule_plane()
-        raise UnsupportedError()
+        require_read_grant(authorization.capability_grants, command.capability)
+        answer = self._schedule_application().list_activities(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
 
     def _schedule_activities_history(
         self,
@@ -14898,17 +14915,21 @@ class ApplicationService:
         command: ReadScheduleActivityHistory,
     ) -> _Result:
         """`schedule_activities.history`: one Stable Activity's observations (section 3.9)."""
-        del unit_of_work, authorization, command
+        del unit_of_work
         self._schedule_plane()
-        raise UnsupportedError()
+        require_read_grant(authorization.capability_grants, command.capability)
+        answer = self._schedule_application().activity_history(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
 
     def _schedule_changes_list(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListScheduleChanges
     ) -> _Result:
         """`schedule_changes.list`: the A-to-B delta of two publications (section 3.10)."""
-        del unit_of_work, authorization, command
+        del unit_of_work
         self._schedule_plane()
-        raise UnsupportedError()
+        require_read_grant(authorization.capability_grants, command.capability)
+        answer = self._schedule_application().list_changes(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
 
     def _program_reference_recompute(
         self, authorization: Authorization

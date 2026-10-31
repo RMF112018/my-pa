@@ -74,7 +74,9 @@ is not a defect.
 
 ## 3. What is implemented
 
-Four hundred and forty-four Python modules under `src/my_pa` and eight hundred and fifty-four test modules —
+Four hundred and forty-seven Python modules under `src/my_pa` and eight hundred and sixty test modules —
+
+**Current-tree remeasurement (CPM Workbench S5b-2 worker and capabilities, branch `feat/cpm-s5b-worker`, workers I7-A and I7-B, 2026-10-31):** the two commands below count 447 source modules and 860 test modules: the S5b-1 444/854 below plus the three source modules `src/my_pa/infrastructure/jobs/schedule.py`, `schedule_parser_process.py` and `schedule_parser_child.py` and the six S5b-2 test modules `tests/unit/test_schedule_parser_isolation.py`, `tests/database/test_cpm_workbench_worker.py`, `tests/architecture/test_cpm_workbench_worker_scope.py`, `tests/schema/test_cpm_workbench_vocabulary_migration.py`, `tests/contract/test_schedule_policy_closure.py` and `tests/contract/test_schedule_facade_catalog.py` (measured, never summed).
 
 **Current-tree remeasurement (CPM Workbench S5b-1 foundation, branch `feat/cpm-s5b-foundation`, workers I6-A and I6-B, 2026-10-27):** the two commands below count 444 source modules and 854 test modules: the MR5 443/849 below plus the one source module `src/my_pa/infrastructure/persistence/schedule.py` and the five S5b-1 test modules `tests/schema/test_cpm_workbench_migration.py`, `tests/database/test_cpm_workbench_schema_guards.py`, `tests/unit/test_schedule_foundation_domain.py`, `tests/database/test_cpm_workbench_persistence.py` and `tests/architecture/test_cpm_workbench_foundation_scope.py`. This is file-inventory evidence, not a test PASS receipt.
 

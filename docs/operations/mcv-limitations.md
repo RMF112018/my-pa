@@ -658,7 +658,11 @@ does not. It remains an unverified caller string.
 
 **Nothing here is commissioned.** The migration `1d9b248e7f83` and the TRUNCATE
 refusal `c8e4a1b70d35` are proven on disposable databases only. The ChatLLM
-data profile `chatllm-data-v10`, which adds the 34 client-usable record lineage
+data profile `chatllm-data-v11`, which adds the 6 CPM Workbench Schedule reads as
+`DATA_CONDITIONAL` on `MY_PA_SCHEDULE_ENABLED` and withholds the operator-only
+`schedule_publications.import` from every client (CPM Workbench S5b-2,
+[contract](../architecture/cpm-workbench-worker-capabilities-contract.md) section
+3.13) on top of `chatllm-data-v10`, which adds the 34 client-usable record lineage
 names as `DATA_CONDITIONAL` on the lineage switches and withholds Issue close and
 reopen, the 3 lineage `confirm` names and the 2 backfill names from every client
 (record lineage P1, ADR-015 decision 16,

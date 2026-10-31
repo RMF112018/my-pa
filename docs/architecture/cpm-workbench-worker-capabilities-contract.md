@@ -293,6 +293,11 @@ threads or reused across documents).
    "engine": {"pdfium_version": …, "pypdfium2_version": …}, "result":
    parse_result_object(result)})` to stdout; exit 0. `FRAME_MAGIC = b"CPMWB-PARSE-1\n"`.
 
+   *Implementation note I7-A (orchestrator-ratified):* the frame object carries a 4th exact
+   key, `"page_dimensions": [[page, width_mpt, height_mpt], …]`, strictly increasing by page
+   and equal to the set of pages that carry rows (the canonical result object does not hold
+   page dimensions, which the row rebuild needs); the parent refuses any other key set.
+
 The child imports only the standard library, `my_pa.domain.schedule`,
 `my_pa.domain.common.identifiers` and `my_pa.infrastructure.schedule` (measured closure: no
 `sqlalchemy`, `psycopg`, `socket`, `ssl`, `http`; `urllib.parse` only), prints nothing and
@@ -360,8 +365,9 @@ source root, and the network-less runtime.
 | killed by `SIGKILL` not sent by the parent (external OOM killer, operator) | transient | `internal_error` |
 | exit 5 (Linux memory cap could not be set), any other exit code or signal, `OSError` at spawn | transient | `internal_error` |
 
-Decoding: `parse_result_from_object(obj, engine)` (new, `src/my_pa/domain/schedule/canonical.py`)
-rebuilds a `ScheduleParseResult` with exact key sets and closed values, then requires
+Decoding: `parse_result_from_object(obj, engine, page_dimensions)` (new,
+`src/my_pa/domain/schedule/canonical.py`; *implementation note I7-A*: it takes the frame's
+`page_dimensions` as `{page: (width_mpt, height_mpt)}`) rebuilds a `ScheduleParseResult` with exact key sets and closed values, then requires
 `canonical_json_bytes(parse_result_object(rebuilt)) == canonical_json_bytes(obj)`; JSON is
 parsed with `parse_constant` refusing `NaN`/`Infinity`. JSON (not `pickle`) because the child
 handles hostile data and a compromised child must not gain code execution in the parent.
@@ -979,7 +985,7 @@ modules.
 | Q35 | `env = os.environ.copy()` | `test_child_environment_is_scrubbed` |
 | Q36 | drop each rlimit (CORE, FSIZE, NOFILE, CPU, AS) — 5 runs | `test_child_rlimits_are_set[<limit>]` (AS: Linux only — "CI-only, not executed on the implementation host" unless a Linux host is used, R7-F01) |
 | Q37 | drop the audit hook | `test_containment_refuses_network_spawn_and_write` |
-| Q38 | decoder skips the canonical round-trip check | `test_non_canonical_frame_is_transient` — concrete frame: a row whose `original_duration.value` is `"1.50"` (values are built through the domain constructors, so `Decimal("1.50")` decodes, and only the round trip, which re-renders `"1.500"`, refuses it) |
+| Q38 | decoder skips the canonical round-trip check | `test_non_canonical_frame_is_transient` — concrete frame: a row whose derived `bbox_normalized` is tampered (*implementation note I7-A*: the originally named `original_duration.value` of `"1.50"` is refused by the domain constructor itself, so it cannot isolate the round trip; `bbox_normalized` is read by nothing but the round trip) |
 | Q39 | decoder skips the digest/size equality | `test_frame_for_other_bytes_is_transient` |
 | Q40 | child imports `sqlalchemy` (planted) | `test_child_import_closure_has_no_network_or_database_module` |
 | Q41 | handler imports `my_pa.infrastructure.schedule.pdf` | `test_the_worker_parent_never_imports_pdfium` |

@@ -1070,8 +1070,10 @@ the code of the final S5b-2 head (the commits after the run change documents, co
 38,257 passed, 136 skipped (macOS-only and Linux-only skips; CI states 74), 7 failed, all 7
 count/prose pins this package then re-measured (5) or rephrased (1) and a head-pin list the
 security module's migration path tripped (1), each re-run green after the fix; the full FAST
-selection re-run at the final head (after those fixes): 38,400 collected — 38,264 passed, 136
-skipped, 0 failed; database tier
+selection re-run at the I7-D head (after those fixes): 38,400 collected — 38,264 passed, 136
+skipped, 0 failed; and at the FR7-corrective head: 38,407 collected — 38,269 passed, 138
+skipped (the 2 new bounds-maximal Linux-only nodes), 0 failed, with the façade end-to-end
+database module 11 passed (the 2 new gateway-composition cases included); database tier
 (`database or recovery or e2e`) 5,312 collected — 5,294 passed, 15 skipped, 2 failed, 1 failed
 then fixed and re-run green (table note b); migration lanes (`migration_edge or migration`,
 1,683, and `migration_empty_to_head`, 20) 1,703 passed. A count is the executed node count of

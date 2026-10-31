@@ -207,9 +207,12 @@ def _decompression_bomb() -> bytes:
 
 
 def _text_flood(operations: int = 200_000) -> bytes:
-    """FR7-F04: 1 page, a ~2.6 KB PDF whose Flate content shows `(x)` 200,000 times."""
+    """FR7-F04: 1 page, a ~2.6 KB PDF whose Flate content is `BT /F1 1 Tf` and then
+    `(x) Tj` 200,000 times with no `Td` (FR7's variant): PDFium spends well over 20 s
+    inside one page load on the implementation host (FR7 measured 21.2 s and 21.5 s
+    at a 20 s wall)."""
     font = b"<< /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >>"
-    content = b"BT /F1 7 Tf 40 300 Td " + b"(x) Tj " * operations + b"ET"
+    content = b"BT /F1 1 Tf " + b"(x) Tj " * operations + b"ET"
     return _one_page(font, zlib.compress(content, 9), b"/Filter /FlateDecode ")
 
 
@@ -387,20 +390,23 @@ def test_child_address_space_has_headroom(name: str) -> None:
 # ---- the S5a bounds and the wall through the child -----------------------------------
 
 
-#: The flood's wall: long enough that the in-child deadline (wall - 1 s) is not
-#: already past when PDFium starts, short enough to keep the test cheap.
-TEXT_FLOOD_WALL: Final = 2.0
+#: The flood's wall. Small to keep the test cheap, yet far below the single
+#: PDFium call's duration (over 20 s here), so the call reliably outlasts it.
+TEXT_FLOOD_WALL: Final = 5.0
 
 
-def test_text_flood_spends_the_wall_and_ends_processing_budget_exceeded() -> None:
+def test_text_flood_outlasts_the_wall_and_ends_processing_budget_exceeded() -> None:
     """FR7-F04 (residual U2-13): one native PDFium call outlives the cooperative deadline.
 
-    A tiny document makes PDFium build 200,000 text objects inside one page load,
-    which the in-child deadline cannot interrupt; the parse ends at the wall
-    (in-child after the call returns, or by the parent kill at wall + 2 s), never
-    later, and always as a budget failure. The wall itself -- not the document's
-    size -- is what bounds the worker time such an admission costs. On Linux the
-    address-space cap may end it first (`bounds_exceeded` or `parser_exception`).
+    The in-child deadline (wall - 1 s) cannot interrupt PDFium inside the page
+    load, so the child is still in that call at the wall and is ended from
+    outside -- by `RLIMIT_CPU` (`SIGXCPU` at ceil(wall) + 1 s CPU) or the parent
+    kill at wall + 2 s -- never by itself. The answer is the run-less
+    `DeterministicFailure(processing_budget_exceeded)`; the elapsed time is at
+    least the wall and at most the wall plus the kill grace. On Linux the
+    address-space cap may end it first (`bounds_exceeded`, or `parser_exception`
+    for a native allocation crash). Measured on the implementation host: about
+    6.05 s, ended by `SIGXCPU`, on every run.
     """
     started = time.monotonic()
     outcome = run_isolated_parse(
@@ -410,9 +416,11 @@ def test_text_flood_spends_the_wall_and_ends_processing_budget_exceeded() -> Non
     allowed = {ScheduleIssueCode.PROCESSING_BUDGET_EXCEEDED}
     if LINUX:
         allowed |= {ScheduleIssueCode.BOUNDS_EXCEEDED, ScheduleIssueCode.PARSER_EXCEPTION}
-    assert _failed_code(outcome) in allowed, outcome
-    # It ran past the in-child deadline (wall - 1 s): the deadline did not stop it early.
-    assert elapsed >= TEXT_FLOOD_WALL - 1.0, elapsed
+    # Run-less: the child produced no result of its own; it was ended from outside.
+    assert isinstance(outcome, DeterministicFailure), outcome
+    assert outcome.code in allowed, outcome
+    if outcome.code is ScheduleIssueCode.PROCESSING_BUDGET_EXCEEDED:
+        assert elapsed >= TEXT_FLOOD_WALL, elapsed
     assert elapsed <= TEXT_FLOOD_WALL + process.PARENT_KILL_GRACE_SECONDS + 1.0, elapsed
 
 

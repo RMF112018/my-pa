@@ -140,6 +140,17 @@ The Work plane now routes all nineteen Task and Commitment capabilities:
 the revision admits the three missing Commitment operations and the web BFF
 routes the whole plane.
 
+CPM Workbench (branch `feat/cpm-s5b-worker`, not merged or deployed; current
+state in [`cpm-workbench.md`](cpm-workbench.md), decision
+[`ADR-016`](../decisions/ADR-016-cpm-workbench-schedule-evidence.md)) adds a
+default-off schedule-evidence plane behind `MY_PA_SCHEDULE_ENABLED`: an
+operator-only, attested-local (CLI or HTTP gateway) import of one enrolled
+schedule PDF version, a `schedule` worker plane that parses it in a contained
+child process (new trust boundary inside TB-02: the child holds no
+environment, credential or database connection, and its native code is
+mitigated only by the operator's runtime), and 6 scopeless reads. Generic PDF
+extraction stays decision-gated.
+
 Historical note: the earlier figures (eleven, then twenty-one revisions; eight,
 then twelve capabilities) were accurate at their dated work-package heads. They
 are preserved in campaign records and are not current-state claims.
@@ -491,5 +502,6 @@ This document is invalidated by a material change to ADR-001/ADR-002, compositio
 - [`../specs/mcv-read-only-vertical-slice.md`](../specs/mcv-read-only-vertical-slice.md)
 - [`module-boundaries.md`](module-boundaries.md)
 - [`data-authority.md`](data-authority.md)
+- [`cpm-workbench.md`](cpm-workbench.md)
 - [`../security/threat-model.md`](../security/threat-model.md)
 - [`../../PHASE-00-OPEN-DECISION-LEDGER.md`](../../PHASE-00-OPEN-DECISION-LEDGER.md)

@@ -20,6 +20,7 @@ transient, and those tests fail.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import math
@@ -104,6 +105,60 @@ def _largest() -> gen.FixtureCase:
     return gen.build("full_multi_page_86_equivalent", "base")
 
 
+#: The bounds-maximal synthetic (contract 3.4.8, FR7-F01): the S5a page cap of
+#: 250 pages, each holding the most 7-point rows the `p6_full_v1` data zone
+#: admits without two rows' glyph boxes overlapping (93 at a 6.4 pt pitch from
+#: a 690 pt first baseline), so 23,250 rows -- 93 % of the 25,000-row cap,
+#: which 250 pages of this geometry cannot reach. Names are padded so PDFium's
+#: character count (1,928,357, measured with pypdfium2 5.0) is 96 % of the
+#: 2,000,000-character cap, with a margin so an engine's generated-character
+#: accounting cannot tip it over. Measured: 142,749 text objects (57 % of
+#: 250,000) and about 12.4 MB (74 % of 16 MiB). Every string is neutral
+#: synthetic text; the document is generated at test time and never committed.
+BOUNDS_MAXIMAL_PAGES: Final = 250
+BOUNDS_MAXIMAL_ROWS_PER_PAGE: Final = 93
+_BOUNDS_MAXIMAL_PITCH: Final = gen.D("6.4")
+_BOUNDS_MAXIMAL_FIRST_BASELINE: Final = gen.D(690)
+_BOUNDS_MAXIMAL_NAME: Final = "Synthetic bounds-maximal activity {:05d} pad"
+
+
+@functools.cache
+def _bounds_maximal() -> gen.FixtureCase:
+    plan = gen.Plan()
+    pages = [plan.new_page() for _ in range(BOUNDS_MAXIMAL_PAGES)]
+    for page in pages:
+        plan.frame(page, BOUNDS_MAXIMAL_PAGES)
+    index = 0
+    for page in pages:
+        for line in range(BOUNDS_MAXIMAL_ROWS_PER_PAGE):
+            y = _BOUNDS_MAXIMAL_FIRST_BASELINE - _BOUNDS_MAXIMAL_PITCH * line
+            if page == 1 and line == 0:
+                plan.summary(
+                    page,
+                    y,
+                    0,
+                    "Synthetic Project",
+                    gen.dur("120"),
+                    gen.dur("80"),
+                    gen.day(gen._d(5, 4)),
+                    gen.day(gen._d(10, 30)),
+                )
+                continue
+            plan.activity(
+                page,
+                y,
+                1,
+                f"SYN-{10000 + index}",
+                _BOUNDS_MAXIMAL_NAME.format(index),
+                gen.dur("10"),
+                gen.dur("5"),
+                gen.day(gen._d(5, 4)),
+                gen.day(gen._d(5, 15)),
+            )
+            index += 1
+    return plan.case("bounds_maximal", "base", gen.COMPLETE)
+
+
 # ---- hand-built hostile PDFs (stdlib only) ------------------------------------------
 
 
@@ -151,6 +206,13 @@ def _decompression_bomb() -> bytes:
     return _one_page(b"<< >>", stream, b"/Filter /FlateDecode ")
 
 
+def _text_flood(operations: int = 200_000) -> bytes:
+    """FR7-F04: 1 page, a ~2.6 KB PDF whose Flate content shows `(x)` 200,000 times."""
+    font = b"<< /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >>"
+    content = b"BT /F1 7 Tf 40 300 Td " + b"(x) Tj " * operations + b"ET"
+    return _one_page(font, zlib.compress(content, 9), b"/Filter /FlateDecode ")
+
+
 # ---- parity under production limits ---------------------------------------------------
 
 
@@ -195,15 +257,56 @@ def test_oversized_input_is_source_too_large() -> None:
 # ---- the Linux memory rows ------------------------------------------------------------
 
 
+#: The benign documents the Linux memory rows parse (contract 3.4.8): the
+#: largest S5a golden and the bounds-maximal synthetic, with their outcomes.
+MEMORY_CASES: Final = {
+    "largest_golden": (_largest, SchedulePublicationStatus.REVIEW_REQUIRED),
+    "bounds_maximal": (_bounds_maximal, SchedulePublicationStatus.COMPLETE),
+}
+
+
+def test_bounds_maximal_synthetic_is_at_or_near_every_production_cap() -> None:
+    """The bounds-maximal case is within production caps and near the binding ones.
+
+    Runs on every platform (the Linux rows below depend on it being what it says).
+    """
+    import pypdfium2 as pdfium
+    import pypdfium2.raw as pdfium_c
+
+    from my_pa.infrastructure.schedule.full_profile import ScheduleParseLimits
+
+    limits = ScheduleParseLimits()
+    case = _bounds_maximal()
+    draws = [draw for page in case.pages for draw in page.draws]
+    assert len(case.pages) == limits.max_pages == BOUNDS_MAXIMAL_PAGES
+    assert len(case.truth.rows) == BOUNDS_MAXIMAL_PAGES * BOUNDS_MAXIMAL_ROWS_PER_PAGE
+    assert 0.9 * limits.max_rows <= len(case.truth.rows) <= limits.max_rows
+    assert len(draws) <= limits.max_text_objects
+    assert len(case.pdf) <= limits.max_bytes
+    document = pdfium.PdfDocument(case.pdf)
+    try:
+        characters = 0
+        for page in document:
+            textpage = page.get_textpage()
+            characters += int(pdfium_c.FPDFText_CountChars(textpage.raw))
+            textpage.close()
+    finally:
+        document.close()
+    assert 0.95 * limits.max_text_chars <= characters <= limits.max_text_chars, characters
+
+
 @LINUX_ONLY
-def test_largest_golden_parses_under_production_limits() -> None:
-    """Positive control: the 1 GiB cap does not break the largest benign document."""
-    case = _largest()
+@pytest.mark.parametrize("name", MEMORY_CASES)
+def test_largest_golden_parses_under_production_limits(name: str) -> None:
+    """Positive control: the 1 GiB cap breaks neither the largest golden nor the
+    bounds-maximal synthetic (contract 3.4.8, FR7-F01)."""
+    build, expected = MEMORY_CASES[name]
+    case = build()
     outcome = run_isolated_parse(
         case.pdf, expected_data_date=case.expected_data_date, wall_seconds=WALL
     )
     assert isinstance(outcome, ParsedResult), outcome
-    assert outcome.result.outcome is SchedulePublicationStatus.REVIEW_REQUIRED
+    assert outcome.result.outcome is expected
     assert outcome.result == parse_full_schedule(
         case.pdf, expected_data_date=case.expected_data_date
     )
@@ -269,17 +372,48 @@ sys.stdout.write(str(int(peak.split()[1]) * 1024) + " " + str(len(frame)))
 
 
 @LINUX_ONLY
-def test_child_address_space_has_headroom() -> None:
-    """R7 F01 ruling: 2 x the uncapped `VmPeak` must fit the provisional 1 GiB cap."""
-    case = _largest()
+@pytest.mark.parametrize("name", MEMORY_CASES)
+def test_child_address_space_has_headroom(name: str) -> None:
+    """R7 F01 ruling: 2 x the uncapped `VmPeak` must fit the provisional 1 GiB cap,
+    for the largest golden and the bounds-maximal synthetic (FR7-F01)."""
+    case = MEMORY_CASES[name][0]()
     exchange = _exchange(_probe(_HEADROOM_PROBE), data=case.pdf, wall=WALL)
     assert exchange.returncode == 0, exchange
     peak, frame_bytes = (int(value) for value in exchange.output.split())
-    print(f"child VmPeak bytes: {peak} (frame {frame_bytes} bytes)")
+    print(f"child VmPeak bytes [{name}]: {peak} (frame {frame_bytes} bytes)")
     assert 2 * peak <= PRODUCTION_CHILD_LIMITS.address_space
 
 
 # ---- the S5a bounds and the wall through the child -----------------------------------
+
+
+#: The flood's wall: long enough that the in-child deadline (wall - 1 s) is not
+#: already past when PDFium starts, short enough to keep the test cheap.
+TEXT_FLOOD_WALL: Final = 2.0
+
+
+def test_text_flood_spends_the_wall_and_ends_processing_budget_exceeded() -> None:
+    """FR7-F04 (residual U2-13): one native PDFium call outlives the cooperative deadline.
+
+    A tiny document makes PDFium build 200,000 text objects inside one page load,
+    which the in-child deadline cannot interrupt; the parse ends at the wall
+    (in-child after the call returns, or by the parent kill at wall + 2 s), never
+    later, and always as a budget failure. The wall itself -- not the document's
+    size -- is what bounds the worker time such an admission costs. On Linux the
+    address-space cap may end it first (`bounds_exceeded` or `parser_exception`).
+    """
+    started = time.monotonic()
+    outcome = run_isolated_parse(
+        _text_flood(), expected_data_date=None, wall_seconds=TEXT_FLOOD_WALL
+    )
+    elapsed = time.monotonic() - started
+    allowed = {ScheduleIssueCode.PROCESSING_BUDGET_EXCEEDED}
+    if LINUX:
+        allowed |= {ScheduleIssueCode.BOUNDS_EXCEEDED, ScheduleIssueCode.PARSER_EXCEPTION}
+    assert _failed_code(outcome) in allowed, outcome
+    # It ran past the in-child deadline (wall - 1 s): the deadline did not stop it early.
+    assert elapsed >= TEXT_FLOOD_WALL - 1.0, elapsed
+    assert elapsed <= TEXT_FLOOD_WALL + process.PARENT_KILL_GRACE_SECONDS + 1.0, elapsed
 
 
 def test_page_count_bound_through_the_child() -> None:
@@ -463,6 +597,27 @@ def test_frame_keys_and_page_dimensions_are_exact() -> None:
         frame = json.loads(json.dumps(good))
         mutate(frame)
         assert classify_exchange(_exchange_of(frame), case.pdf) == TRANSIENT
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [
+        [[2, 1224000, 792000], [1, 1224000, 792000]],
+        [[1, 1224000, 792000], [1, 1224000, 792000]],
+        [[1, 1224000, 792000], [3, 1224000, 792000], [2, 1224000, 792000]],
+    ],
+    ids=["descending", "duplicate", "out_of_order_tail"],
+)
+def test_page_dimensions_are_strictly_increasing(entries: list[list[int]]) -> None:
+    """Contract 3.4.2's rule pinned at the decoder itself (FR7-F03).
+
+    Through `classify_exchange` the canonical round trip and the row-page
+    equality would also refuse such a frame, so the frame test alone cannot
+    show this clause holds; here it is the only refusal on the path.
+    """
+    increasing = [[1, 1224000, 792000], [2, 1224000, 792000], [3, 1224000, 792000]]
+    assert process._page_dimensions(increasing) == dict.fromkeys((1, 2, 3), (1224000, 792000))
+    assert process._page_dimensions(entries) is None
 
 
 def test_non_finite_json_is_transient() -> None:

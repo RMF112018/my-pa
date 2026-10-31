@@ -409,6 +409,36 @@ def test_profile_service_composes_no_schedule_capability(rt: ScheduleRuntime) ->
             engine.dispose()
 
 
+@pytest.mark.parametrize(
+    ("enabled", "planes"),
+    [(False, ["capture", "enrollment"]), (True, ["capture", "enrollment", "schedule"])],
+    ids=["switch_off", "switch_on"],
+)
+def test_gateway_composition_discloses_the_schedule_plane_only_with_the_switch(
+    rt: ScheduleRuntime, enabled: bool, planes: list[str]
+) -> None:
+    """Contract 3.2 through the real composition root (FR7-F02).
+
+    `build_gateway_runtime` hands the worker-health read the conjunction of the
+    switch and the composed factory; with the switch off `capabilities.get`
+    reports exactly the 2 planes it reported before S5b-2 (and never reads
+    `schedule_jobs`), with it on the `schedule` plane joins them.
+    """
+    runtime = build_gateway_runtime(Settings(database_url=rt.url, schedule_enabled=enabled))
+    try:
+        envelope = rt.invoke(
+            GetCapabilities(), purpose=Purpose.STATUS_OBSERVATION, service=runtime.service
+        )
+        assert envelope.error is None, envelope.error
+        result = envelope.to_canonical_dict()["result"]
+        assert isinstance(result, dict)
+        assert [plane["plane"] for plane in result["worker_planes"]] == planes
+        assert (set(runtime.service.available_capabilities) >= SEVEN) is enabled
+    finally:
+        for engine in {runtime.work_engine, runtime.audit_engine}:
+            engine.dispose()
+
+
 def test_manifest_and_web_fixture_agree_for_schedule(rt: ScheduleRuntime) -> None:
     served = rt.ok(GetCapabilities(), purpose=Purpose.STATUS_OBSERVATION)["manifest"][
         "capabilities"

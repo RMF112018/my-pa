@@ -197,3 +197,45 @@ def test_worker_refuses_a_lease_shorter_than_three_hundred_seconds(
     # The other planes keep their own lease rules: a short lease is not refused there.
     with pytest.raises(_EngineBuiltError):
         _run_worker(monkeypatch, enabled=False, argv=["run", "--plane", "capture", *argv[3:], "60"])
+
+
+# ---- no baseline is ever derived (contract 3.11; I7-C) -------------------------------
+
+#: The modules that read and compare publications: neither may choose a baseline.
+BASELINE_FREE: Final = (
+    SRC / "my_pa/application/schedules.py",
+    SRC / "my_pa/domain/schedule/compare.py",
+)
+
+
+def test_no_baseline_is_derived() -> None:
+    """R2 section 30: an update is never a baseline, and nothing infers one.
+
+    The role is an explicit command field with no default (the command test
+    proves that); here, neither the read service nor the delta holds a
+    `"baseline"` literal to default to, a `BASELINE` role member to choose, or
+    a `current_baseline` / `previous` symbol to look one up by. A comparison
+    pair is always the caller's two ids.
+    """
+    for path in BASELINE_FREE:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        literals = [
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and node.value == "baseline"
+        ]
+        assert not literals, f"{path.name} holds a 'baseline' literal"
+        identifiers = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+        identifiers |= {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+        identifiers |= {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef | ast.ClassDef | ast.AsyncFunctionDef)
+        }
+        assert "BASELINE" not in identifiers, f"{path.name} names the baseline role"
+        derived = sorted(
+            name
+            for name in identifiers
+            if "current_baseline" in name.lower() or "previous" in name.lower()
+        )
+        assert not derived, f"{path.name} derives a pair: {derived}"

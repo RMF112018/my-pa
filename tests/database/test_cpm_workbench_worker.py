@@ -1070,3 +1070,90 @@ def test_count_parser_run_contents_is_partitioned(
     assert counts == (run.row_count, run.issue_count)
     assert counts[0] > 0 and counts[1] > 0
     assert _read(db_engine, lambda r: r.count_parser_run_contents(Q, run.parser_run_id)) == (0, 0)
+
+
+# ---- served facts trace to their evidence (R2 section 20, AC-024; I7-C) ------------------
+
+
+def test_served_facts_trace_to_source_job_parser_and_cell(
+    db_engine: Engine, w: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real contained parse, served by the reads, traced back link by link.
+
+    Every activity the reads serve names its Stable Activity and its row's own
+    page, physical line and normalized box; the publication read names the
+    enrolled source version, the job that processed it and the accepted parser
+    run, whose result digest is the digest of the very parse the child made.
+    """
+    from my_pa.application.commands import ListScheduleActivities, ReadSchedulePublication
+    from my_pa.domain.schedule import ScheduleRowType, normalized_box_strings
+    from tests.database.schedule_capability_harness import ScheduleRuntime
+
+    case = _small()
+    expected = parse_full_schedule(case.pdf)
+    admission = _admit(db_engine, w)
+    publication_id = admission.publication.publication_id
+    _serve(monkeypatch, FakeProvider(w, case.pdf))
+    assert _run_worker(db_engine).completed == 1
+    runtime = ScheduleRuntime(db_engine.url.render_as_string(hide_password=False))
+    try:
+        read = runtime.ok(ReadSchedulePublication(publication_id=publication_id), principal_id=P)
+        listed = runtime.ok(
+            ListScheduleActivities(publication_id=publication_id, page_size=100), principal_id=P
+        )
+    finally:
+        runtime.close()
+    # Source: the enrolled object and its exact version, bound in the disclosure.
+    assert (read["enrollment_id"], read["source_object_id"], read["source_version_id"]) == (
+        w.enrollment,
+        w.source_object,
+        w.version,
+    )
+    assert read["__disclosure__"]["source_references"] == [
+        {"source_id": w.source, "source_object_id": w.source_object, "version_id": w.version}
+    ]
+    assert read["document_sha256"] == hashlib.sha256(case.pdf).hexdigest()
+    # Job: the one job admission enqueued, finished.
+    assert read["job"]["operation_id"] == admission.operation_id
+    assert read["job"]["state"] == "succeeded"
+    # Parser: the accepted run is the parse of these bytes.
+    (run,) = _read(db_engine, lambda r: r.get_parser_runs(P, publication_id))
+    assert read["accepted_parser_run_id"] == run.parser_run_id
+    assert run.parse_result_sha256 == parse_result_sha256(expected)
+    (served_run,) = read["parser_runs"]
+    assert (served_run["parser_name"], served_run["profile_id"]) == (
+        expected.parser_name,
+        expected.profile_id,
+    )
+    # Cell: each served activity is its parsed row, with the row's provenance.
+    parsed = [
+        row
+        for row in expected.rows
+        if row.row_type in (ScheduleRowType.ACTIVITY, ScheduleRowType.MILESTONE)
+    ]
+    served = listed["activities"]
+    assert len(served) == len(parsed) > 0
+    for row, activity in zip(parsed, served, strict=True):
+        assert activity["published_activity_id"] == row.published_activity_id
+        assert activity["activity_name"] == row.activity_name
+        assert activity["row_ordinal"] == row.row_ordinal
+        assert activity["hierarchy_path"] == (
+            None if row.hierarchy_path is None else list(row.hierarchy_path)
+        )
+        assert activity["start"]["value"] == (
+            None if row.start.value is None else row.start.value.isoformat()
+        )
+        assert activity["original_duration"]["state"] == row.original_duration.state.value
+        assert activity["provenance"] == {
+            "page_number": row.page_number,
+            "physical_line_ordinal": row.physical_line_ordinal,
+            "bbox_normalized": normalized_box_strings(
+                row.box, row.page_width_mpt, row.page_height_mpt
+            ),
+        }
+        stored = _read(
+            db_engine,
+            lambda r, sact=activity["schedule_activity_id"]: r.activity_is_visible(P, sact),
+        )
+        assert stored is not None
+        assert stored.published_activity_id == row.published_activity_id

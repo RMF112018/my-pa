@@ -1731,9 +1731,11 @@ worker_heartbeats = Table(
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     # `reenrichment` joins the two queue planes because the re-enrichment worker
     # is a third one: without it that worker's liveness was unrecordable, and an
-    # absent re-enrichment worker read exactly like a working one.
+    # absent re-enrichment worker read exactly like a working one. `schedule`
+    # (CPM Workbench S5b-2, contract section 3.2) is the CPM import job plane.
     CheckConstraint(
-        "plane IN ('capture', 'enrollment', 'reenrichment')", name="worker_plane_is_known"
+        "plane IN ('capture', 'enrollment', 'reenrichment', 'schedule')",
+        name="worker_plane_is_known",
     ),
     CheckConstraint(
         "worker_owner ~ '^[A-Za-z0-9_-]{4,64}$'",

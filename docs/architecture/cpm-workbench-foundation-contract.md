@@ -33,6 +33,12 @@ section 8.3; F10/F11 sections 4.11, 8.2; F13 section 4.10; F14 sections 4, 4.4, 
 9.1; rulings (a) section 3.3, (b) sections 3.4, 6, 9.3, (c) sections 5.3, 5.5, (d) section
 9.2 U-03, (e) section 9.3.
 
+**Successor (S5b-2).** WP-03/WP-04 are specified by
+[`cpm-workbench-worker-capabilities-contract.md`](cpm-workbench-worker-capabilities-contract.md):
+it moves the 4 worker surfaces of section 3.3 together, adds the second CPM revision that
+widens the audit and heartbeat vocabularies (D-01 to D-03), and applies U-03 and RR1-I01 to
+the reads. This contract's text is unchanged.
+
 ---
 
 ## 1. Scope

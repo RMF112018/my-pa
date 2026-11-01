@@ -410,10 +410,19 @@ class _Operations(OperationQueue):
 
 
 class _WorkerHealth(WorkerHealthRepository):
-    """The two content-free worker-plane reads on this transaction."""
+    """The content-free worker-plane reads on this transaction.
 
-    def __init__(self, connection: Connection) -> None:
+    `capture` and `enrollment` always; `schedule` only when the composition says
+    the Schedule plane is served (CPM Workbench S5b-2 contract section 3.2,
+    surface 4) -- with it off, `schedule_jobs` is never read, which a restricted
+    profile role could not do anyway.
+    """
+
+    def __init__(self, connection: Connection, *, schedule_enabled: bool = False) -> None:
         self._connection = connection
+        self._planes: tuple[str, ...] = (
+            ("capture", "enrollment", "schedule") if schedule_enabled else ("capture", "enrollment")
+        )
 
     def for_principal(self, principal_id: str) -> tuple[WorkerPlaneStatus, ...]:
         def statement() -> tuple[WorkerPlaneStatus, ...]:
@@ -429,7 +438,7 @@ class _WorkerHealth(WorkerHealthRepository):
                     worker_plane_health(
                         self._connection, principal_id=principal_id, plane_name=plane
                     )
-                    for plane in ("capture", "enrollment")
+                    for plane in self._planes
                 )
             )
 
@@ -1218,6 +1227,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         relationship_memory_enabled: bool = False,
         relationship_intelligence_enabled: bool = False,
         goodnotes_pull_enabled: bool = False,
+        schedule_enabled: bool = False,
     ) -> None:
         """Take the engine, the audit sink, and which optional planes are composed.
 
@@ -1256,6 +1266,10 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self._relationship_memory_enabled = relationship_memory_enabled
         self._relationship_intelligence_enabled = relationship_intelligence_enabled
         self._goodnotes_pull_enabled = goodnotes_pull_enabled
+        # CPM Workbench S5b-2 (contract section 3.2): the gateway passes the same
+        # conjunction it composes the Schedule factory with; off, the worker-health
+        # read does not name the `schedule` plane.
+        self._schedule_enabled = schedule_enabled
         self._context: AbstractContextManager[Connection] | None = None
         self._connection: Connection | None = None
         self._record_events = RecordEventBuffer()
@@ -1432,7 +1446,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
 
     @property
     def worker_health(self) -> WorkerHealthRepository:
-        return _WorkerHealth(self._open)
+        return _WorkerHealth(self._open, schedule_enabled=self._schedule_enabled)
 
     @property
     def managed_documents(self) -> ManagedDocumentRepository:

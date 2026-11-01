@@ -972,6 +972,14 @@ _POST_KLP_CAPABILITIES: Final = frozenset(
         "issues.memberships.confirm",
         "issues.project_links.confirm",
         "records.lineage.related",
+        # CPM Workbench S5b-2 (worker and capabilities contract section 3.5).
+        "schedule_publications.import",
+        "schedule_series.list",
+        "schedule_publications.list",
+        "schedule_publications.read",
+        "schedule_activities.list",
+        "schedule_activities.history",
+        "schedule_changes.list",
     }
 )
 _EVENT: Final = "rcev_fastworld000000001"

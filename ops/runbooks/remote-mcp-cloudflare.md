@@ -421,11 +421,11 @@ enabled. Match the authenticated token-derived client ID, never a request field.
 This separate ceiling can publish `sources.enroll` and the four identity correction
 names alongside ordinary capabilities. It creates no grants and changes neither
 principal identity nor domain, client/global write, source, composition or
-Knowledge gates. Existing clients and the ordinary `chatllm-data-v10` profile
+Knowledge gates. Existing clients and the ordinary `chatllm-data-v11` profile
 retain their existing behavior when this new setting is absent.
 
 For a full inventory, reconcile the ordinary profile first. The ordinary profile
-excludes 28 names. Explicitly review individual purpose-bound grants for 21 of them:
+excludes 29 names. Explicitly review individual purpose-bound grants for 21 of them:
 the seven `constraint_sync.*`, four identity corrections, `sources.enroll`, three
 GoodNotes pull protocol names, two Knowledge discovery writes, two compatibility
 names and `gsqs.start/status`. Use the existing `grant` CLI for eligible individual
@@ -435,7 +435,10 @@ grants. The other 7 are the withheld lineage names `issues.close`, `issues.reope
 they are `CONTROL_PLANE_EXCLUDED` (attested to the local operator surface, or the
 operator-only backfill dry run) and are **never** part of an inventory grant, an
 individual grant or a profile (operator directive 2026-10-26; see
-[Record lineage client exposure (P1)](#record-lineage-client-exposure-p1)).
+[Record lineage client exposure (P1)](#record-lineage-client-exposure-p1)). The 29th,
+`schedule_publications.import` (CPM Workbench S5b-2, `chatllm-data-v11`), is likewise
+`CONTROL_PLANE_EXCLUDED`, operator-only and attested to the local operator surface: never
+remotely published and never part of any grant or profile.
 The two Knowledge discovery writes require the existing exact Knowledge Manager
 binding and `profile-apply`; raw `grant` refuses them. An ordinary profile diff
 flags other control-plane grants as unexpected, so it is not the full inventory
@@ -596,7 +599,9 @@ grant, purpose and write gates. A remote client reaches a lineage capability exa
 the process composes it (the switches below), the client holds its own durable grant on it,
 and — for a write — every remote write gate is open. The compact façade
 (`MY_PA_MCP_CHATLLM_GATEWAY_ENABLED` and its allowlist) changes only the tool shape, never
-what is reachable. The ChatLLM data profile is `chatllm-data-v10`: it plans the 34
+what is reachable. The ChatLLM data profile is `chatllm-data-v11` (since
+`chatllm-data-v10`; v11 adds only the 6 CPM Workbench Schedule reads on
+`MY_PA_SCHEDULE_ENABLED`): it plans the 34
 client-usable lineage-plane names as `DATA_CONDITIONAL` on the `LINEAGE` or
 `PROGRAM_REPORTING` prerequisite, so `profile-plan` adds them exactly when the planner runs
 with the serving process's switches on. The restricted MCP database profiles are **not**
@@ -711,9 +716,9 @@ Run these only after the recon passes:
 python apps/cli/remote_mcp.py control --remote-enabled --writes-enabled
 python apps/cli/remote_mcp.py set-client-writes --oauth-client-id "$CHATLLM_OAUTH_CLIENT_ID" --writes-enabled
 python apps/cli/remote_mcp.py set-client-writes --oauth-client-id "$CHATGPT_OAUTH_CLIENT_ID" --writes-enabled
-python apps/cli/remote_mcp.py profile-diff --oauth-client-id "$CLIENT" --scope my-pa.read --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v10
-python apps/cli/remote_mcp.py profile-plan --oauth-client-id "$CLIENT" --scope my-pa.read --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v10
-python apps/cli/remote_mcp.py profile-apply --oauth-client-id "$CLIENT" --scope my-pa.read --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v10 --apply
+python apps/cli/remote_mcp.py profile-diff --oauth-client-id "$CLIENT" --scope my-pa.read --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v11
+python apps/cli/remote_mcp.py profile-plan --oauth-client-id "$CLIENT" --scope my-pa.read --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v11
+python apps/cli/remote_mcp.py profile-apply --oauth-client-id "$CLIENT" --scope my-pa.read --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v11 --apply
 ```
 
 **Health.** P2 requires `profile-diff` to report `healthy: true` for each client before and

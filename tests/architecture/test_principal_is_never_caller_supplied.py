@@ -231,6 +231,12 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # Remote grant staging compares the NAS-issued contract Principal with the
     # store's authenticated Principal partition before persisting any bounds.
     "infrastructure/persistence/native_sources.py": (("grant", "principal_id"),),
+    # CPM Workbench S5b-2 (worker contract 3.3): the schedule handler reads
+    # `job.principal_id` once off the `LeasedJob` that `claim_job` returned from
+    # the stored `schedule_jobs` row (`RETURNING`), never a request value; every
+    # write then holds the lease, whose job row must name that Principal's
+    # publication and attempt (`SqlScheduleRepository._job_names`).
+    "infrastructure/jobs/schedule.py": (("job", "principal_id"),),
     # WP02 opaque-session rotate reads `current.principal_id` off the row loaded
     # by token hash so the successor is bound to the same Principal. The value
     # is server-owned session state, not a request-body owner.

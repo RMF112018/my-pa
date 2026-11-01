@@ -21,6 +21,14 @@ ledger and not about the code, and reporting it as merely unimplemented would
 lose the distinction section 12 requires between "not supported" and "not
 decided".
 
+That status concerns **generic source-text extraction only** (CPM Workbench R2
+section 8.4). The specialized Full-Schedule parser is capability-specific: the
+operator-only `schedule_publications.import` may name an enrolled PDF version,
+and the `schedule` worker parses it in a contained child under the stricter
+schedule contract (`docs/architecture/cpm-workbench.md`). That path neither
+resolves `P00-OD-003` nor adds PDF to `SUPPORTED_MEDIA_TYPES`, so this content
+type stays `decision_gated` here whatever the schedule plane does.
+
 The limits are the object the enforcing code path reads. `capabilities.get`
 publishes the same `EffectiveLimits` instance that `sources.fetch` clamps
 against, that `sources.list` sizes its page from, and that `sources.enroll`
@@ -55,7 +63,8 @@ __all__ = [
 
 #: Reported rather than silently absent, and `decision_gated` rather than
 #: unavailable, because the reason it cannot be read is an operator decision
-#: (`P00-OD-003`) and not a missing implementation.
+#: (`P00-OD-003`) and not a missing implementation. Generic text extraction
+#: only: the Schedule parser's PDF path is a separate, capability-specific one.
 DECISION_GATED_MEDIA_TYPE = "application/pdf"
 
 

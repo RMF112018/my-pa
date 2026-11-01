@@ -2213,6 +2213,25 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.RECORDS_LINEAGE_RELATED: {
             "seeds": [{"family": "task", "record_id": "tsk_paritytask00001"}]
         },
+        # CPM Workbench S5b-2 (contract section 3.5.1): synthetic identifiers.
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT: {
+            "project_id": "prj_parityproject0001",
+            "series_name": "Parity master schedule",
+            "enrollment_id": scene.enrollment.enrollment_id,
+            "source_object_id": "obj_parityobject0001",
+            "source_version_id": "ver_parityversion001",
+            "publication_role": "update",
+            "idempotency_key": "parity-schedule-import-0001",
+        },
+        Capability.SCHEDULE_SERIES_LIST: {"project_id": "prj_parityproject0001"},
+        Capability.SCHEDULE_PUBLICATIONS_LIST: {"series_id": "sser_parityseries0001"},
+        Capability.SCHEDULE_PUBLICATIONS_READ: {"publication_id": "spub_paritypublic001"},
+        Capability.SCHEDULE_ACTIVITIES_LIST: {"publication_id": "spub_paritypublic001"},
+        Capability.SCHEDULE_ACTIVITIES_HISTORY: {"schedule_activity_id": "sact_parityactivity01"},
+        Capability.SCHEDULE_CHANGES_LIST: {
+            "from_publication_id": "spub_paritypublic001",
+            "to_publication_id": "spub_paritypublic002",
+        },
     }
 
 
@@ -2348,7 +2367,7 @@ def test_there_are_three_transports_to_compare() -> None:
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
     # The command union and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 234, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 241, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -2728,6 +2747,15 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         Capability.ISSUES_MEMBERSHIPS_CONFIRM,
         Capability.ISSUES_PROJECT_LINKS_CONFIRM,
         Capability.RECORDS_LINEAGE_RELATED,
+        # CPM Workbench S5b-2: the Schedule plane, behind `MY_PA_SCHEDULE_ENABLED`
+        # (off here).
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT,
+        Capability.SCHEDULE_SERIES_LIST,
+        Capability.SCHEDULE_PUBLICATIONS_LIST,
+        Capability.SCHEDULE_PUBLICATIONS_READ,
+        Capability.SCHEDULE_ACTIVITIES_LIST,
+        Capability.SCHEDULE_ACTIVITIES_HISTORY,
+        Capability.SCHEDULE_CHANGES_LIST,
     }
 )
 
@@ -3317,7 +3345,7 @@ def test_declared_unwired_capabilities_stay_separate_from_positive_parity(
     from my_pa.application.errors import UnsupportedError
 
     assert set(Capability) - set(_HANDLERS) == FUTURE_CAPABILITIES
-    assert len(IMPLEMENTED_CAPABILITIES) == 233
+    assert len(IMPLEMENTED_CAPABILITIES) == 240
     assert set(_BUILDERS) == set(IMPLEMENTED_CAPABILITIES)
     assert {Capability(tool.name) for tool in TOOLS} == set(IMPLEMENTED_CAPABILITIES)
 

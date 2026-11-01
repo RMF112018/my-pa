@@ -85,6 +85,11 @@ _WRITE_PURPOSES: Final = frozenset(
         Purpose.ISSUE_WORK_AUTHORING,
         # Record lineage S3: the operator-only backfill's purpose.
         Purpose.LINEAGE_BACKFILL,
+        # CPM Workbench S5b-2 (contract section 3.12): the operator-only schedule
+        # import's purpose; the import is never published remotely, and this keeps
+        # it a write if a later publication rule ever reached it. `schedule_read`
+        # stays out.
+        Purpose.SCHEDULE_IMPORT,
         Purpose.CONTEXT_PREFERENCE,
         Purpose.GOODNOTES_PROPOSAL,
         Purpose.REPORT_AUTHORING,

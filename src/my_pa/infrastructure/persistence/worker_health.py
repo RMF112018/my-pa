@@ -9,7 +9,12 @@ from sqlalchemy import Connection, column, func, select
 from sqlalchemy.dialects.postgresql import insert
 
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
-from my_pa.infrastructure.persistence.jobs import CAPTURE_JOBS, ENROLLMENT_JOBS, JobPlane
+from my_pa.infrastructure.persistence.jobs import (
+    CAPTURE_JOBS,
+    ENROLLMENT_JOBS,
+    SCHEDULE_JOBS,
+    JobPlane,
+)
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
     partition_criterion,
@@ -40,8 +45,9 @@ def record_worker_heartbeat(
     # re-enrichment worker reports liveness like the other two, and its backlog
     # lives in its own table rather than in a `JobPlane`, so the read below has
     # nothing to answer for it and says so by refusing rather than by returning a
-    # zero backlog that would read as "idle".
-    if plane not in {"capture", "enrollment", "reenrichment"}:
+    # zero backlog that would read as "idle". `schedule` (CPM Workbench S5b-2,
+    # contract section 3.2) is a job plane like capture and enrollment.
+    if plane not in {"capture", "enrollment", "reenrichment", "schedule"}:
         raise ValueError("unknown worker plane")
     context = capture_context(principal_id)
     statement = insert(worker_heartbeats).values(
@@ -77,7 +83,11 @@ def worker_plane_health(
     stale_after: timedelta = timedelta(minutes=6),
 ) -> WorkerPlaneHealth:
     validate_identifier(principal_id, IdKind.PRINCIPAL)
-    planes: dict[str, JobPlane] = {"capture": CAPTURE_JOBS, "enrollment": ENROLLMENT_JOBS}
+    planes: dict[str, JobPlane] = {
+        "capture": CAPTURE_JOBS,
+        "enrollment": ENROLLMENT_JOBS,
+        "schedule": SCHEDULE_JOBS,
+    }
     if plane_name not in planes:
         raise ValueError("unknown worker plane")
     plane = planes[plane_name]

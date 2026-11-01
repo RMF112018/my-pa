@@ -45,6 +45,7 @@ from sqlalchemy import Engine, Table, insert, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
 from tests.schema import lineage_schema_ahead_contract as lineage_gap
+from tests.schema.cpm_workbench_vocabulary_contract import S5B2_CAPABILITIES, S5B2_PURPOSES
 from tests.schema.lineage_s2_schema_ahead_contract import S2_CAPABILITIES, S2_PURPOSES
 from tests.schema.lineage_s3_schema_ahead_contract import S3_CAPABILITIES, S3_PURPOSES
 from tests.schema.lineage_s4_schema_ahead_contract import S4_CAPABILITIES, S4_PURPOSES
@@ -80,7 +81,7 @@ REVISION: Final = "264310e0416a"
 PREVIOUS: Final = "b9025e7fb738"
 #: Record lineage S2 (`d020b532ad7d`), S3 (`6f1476b8da52`) and S4 (`c5260943d933`,
 #: ADR-015) are additive on this revision; the S4 revision is the head.
-HEAD: Final = "6c2306330ceb"
+HEAD: Final = "621ef6786c64"
 #: The S2 revision, the S1 suite's head before the S3 revision.
 S2_REVISION: Final = "d020b532ad7d"
 #: The revision that last stated `capability_is_known` and `purpose_is_known`.
@@ -240,7 +241,7 @@ def test_the_revision_is_the_single_head_on_b9025e7fb738() -> None:
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "5c1e7a9b3d42"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
-    assert len(list(MIGRATIONS.glob("*.py"))) == 124
+    assert len(list(MIGRATIONS.glob("*.py"))) == 125
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -369,12 +370,20 @@ def test_at_vocabulary_adds_exactly_the_s1_names() -> None:
         - S4_CAPABILITIES
         # The S3.1 names too, the S3.1 revision's (023f8f7eb499).
         - S31_CAPABILITIES
+        # The CPM Workbench S5b-2 names too, that revision's (621ef6786c64).
+        - S5B2_CAPABILITIES
     )
     native = {capability.value for capability in NativeSourceCapability}
     assert set(at) == declared | native | S1_CAPABILITIES
     assert (
         set(purposes_at)
-        == ({purpose.value for purpose in Purpose} - S2_PURPOSES - S3_PURPOSES - S4_PURPOSES)
+        == (
+            {purpose.value for purpose in Purpose}
+            - S2_PURPOSES
+            - S3_PURPOSES
+            - S4_PURPOSES
+            - S5B2_PURPOSES
+        )
         | S1_PURPOSES
     )
 

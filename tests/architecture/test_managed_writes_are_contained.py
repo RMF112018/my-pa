@@ -81,6 +81,12 @@ REGISTERED_WRITERS: Final[dict[str, str]] = {
         "OCR child; the descriptor names no filesystem path and this call mutates neither "
         "source files nor managed documents."
     ),
+    "src/my_pa/infrastructure/jobs/schedule_parser_process.py": (
+        "CPM Workbench S5b-2 `_pump` calls os.write only on stdin.fileno() of its own "
+        "Popen(stdin=PIPE), streaming the admitted schedule PDF bytes to the contained "
+        "parser child; the descriptor names no filesystem path and this call mutates "
+        "neither source files nor managed documents."
+    ),
     "ops/nas/remote/render-cloudflared-config.py": (
         "writes a non-secret tunnel configuration to an explicit operator output path and "
         "refuses overwrite; it is deployment configuration, not user or managed content."

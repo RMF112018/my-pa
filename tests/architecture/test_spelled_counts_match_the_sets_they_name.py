@@ -564,6 +564,15 @@ _ORDINAL_UNITS = (
     "two-hundred-thirty-second",
     "two-hundred-thirty-third",
     "two-hundred-thirty-fourth",
+    # CPM Workbench S5b-2 takes it to two hundred and forty; dense through the
+    # two-hundred-forty-first.
+    "two-hundred-thirty-fifth",
+    "two-hundred-thirty-sixth",
+    "two-hundred-thirty-seventh",
+    "two-hundred-thirty-eighth",
+    "two-hundred-thirty-ninth",
+    "two-hundred-fortieth",
+    "two-hundred-forty-first",
 )
 
 

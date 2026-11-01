@@ -62,6 +62,9 @@ _COMPOSED_DEPENDENCY_ATTRIBUTES: Final[frozenset[str]] = frozenset(
         # Record lineage S4 (contract section 6.3): the Program read factory,
         # composed by `bootstrap/gateway.py` from the switch below.
         "_program_read_unit_of_work",
+        # CPM Workbench S5b-2 (contract section 3.1): the Schedule factory,
+        # composed by `bootstrap/gateway.py` from the switch below.
+        "_schedule_unit_of_work",
     }
 )
 
@@ -171,7 +174,7 @@ def test_the_derivation_finds_the_switches_the_published_surface_branches_on() -
     """
     variables = _switch_variables()
     assert variables, "no switch narrows the published surface, so this module proves nothing"
-    assert len(variables) == 9, (
+    assert len(variables) == 10, (
         "the published surface is narrowed by a different number of switches than "
         f"this guard knows about: {sorted(variables)}"
     )
@@ -189,6 +192,8 @@ def test_the_derivation_finds_the_switches_the_published_surface_branches_on() -
         "lineage_backfill_enabled",
         # Record lineage S4 (contract section 7.6): the Program-reporting sub-switch.
         "program_reporting_enabled",
+        # CPM Workbench S5b-2 (contract section 3.1): the Schedule switch.
+        "schedule_enabled",
     }
 
 

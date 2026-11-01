@@ -141,6 +141,7 @@ from my_pa.application.commands import (
     GetSourceMetadata,
     GetSourceStatus,
     GetTaskHistory,
+    ImportSchedulePublication,
     ListCaptures,
     ListCommitments,
     ListCommitmentsV2,
@@ -171,6 +172,10 @@ from my_pa.application.commands import (
     ListRelationshipMemories,
     ListReportTypes,
     ListReviewCases,
+    ListScheduleActivities,
+    ListScheduleChanges,
+    ListSchedulePublications,
+    ListScheduleSeries,
     ListSituations,
     ListSources,
     ListTaskComments,
@@ -214,6 +219,8 @@ from my_pa.application.commands import (
     ReadRecordLineage,
     ReadRelatedRecords,
     ReadReportManifest,
+    ReadScheduleActivityHistory,
+    ReadSchedulePublication,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
@@ -771,6 +778,14 @@ def _requested_scope(
             | ConfirmIssueMembership()
             | ConfirmIssueProjectLink()
             | ReadRelatedRecords()
+            # CPM Workbench S5b-2: the same partition's Series, publication, row
+            # and Stable Activity rows; no source is named.
+            | ListScheduleSeries()
+            | ListSchedulePublications()
+            | ReadSchedulePublication()
+            | ListScheduleActivities()
+            | ReadScheduleActivityHistory()
+            | ListScheduleChanges()
         ):
             return frozenset()
         case CreateCapture():
@@ -781,6 +796,10 @@ def _requested_scope(
         case ListSources() | GetSourceMetadata() | FetchSource() | EnrollSource():
             return frozenset({command.source_id})
         case SearchKnowledge() | ReadKnowledge():
+            return _scope_of_enrollment(command.enrollment_id, enrollments)
+        case ImportSchedulePublication():
+            # CPM Workbench S5b-2 (contract section 3.6): the source of the
+            # caller's own enrollment; another Principal's is empty, so denied.
             return _scope_of_enrollment(command.enrollment_id, enrollments)
         case GetSourceStatus():
             return _status_scope(unit_of_work, command, enrollments, principal_id=principal_id)

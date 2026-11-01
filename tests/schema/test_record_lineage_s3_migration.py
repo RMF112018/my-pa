@@ -73,7 +73,7 @@ SCHEMA: Final = "knowledge"
 REVISION: Final = "6f1476b8da52"
 PREVIOUS: Final = "d020b532ad7d"
 #: Record lineage S4 (`c5260943d933`, ADR-015) is additive on this revision.
-HEAD: Final = "023f8f7eb499"
+HEAD: Final = "6c2306330ceb"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 #: Record lineage S3.1 (`023f8f7eb499`, ADR-015 decision 15), additive on S4.
 S31_MIGRATION: Final = MIGRATIONS / "20261025_023f8f7eb499_record_lineage_s31.py"
@@ -229,7 +229,7 @@ def test_the_revision_is_the_single_head_on_d020b532ad7d() -> None:
     assert script.get_revision(PREVIOUS).down_revision == "264310e0416a"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
     assert MIGRATION.name.endswith("_record_lineage_s3.py")
-    assert len(list(MIGRATIONS.glob("*.py"))) == 123
+    assert len(list(MIGRATIONS.glob("*.py"))) == 124
 
 
 # ---- the freeze -------------------------------------------------------------

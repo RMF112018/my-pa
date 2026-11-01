@@ -262,6 +262,9 @@ environment, or imports `my_pa.infrastructure.persistence`, `my_pa.application`,
 
 ### 3.2 How WP-01 reuses this without rework
 
+*Forward pointer: WP-01 is specified by the S5b-1
+[foundation contract](cpm-workbench-foundation-contract.md); this section is unchanged.*
+
 WP-01 adds persistence-facing members to `src/my_pa/domain/schedule/model.py`
 (`SchedulePublicationRole`, `ScheduleBaselineKind`, `ScheduleParserRunStatus`, records
 with IDs) and maps `ParsedScheduleRow` field-for-field onto `schedule_rows` columns: the

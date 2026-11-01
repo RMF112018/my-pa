@@ -6,6 +6,10 @@ canonical object: geometry is integer millipoints written as fixed 3-decimal
 strings, derived ratios are `Decimal` quantized to 6 places, durations are the
 quantized `Decimal`'s string. `ScheduleParseResult.engine` is deliberately not
 a key, so the digest never varies with the installed PDFium build.
+
+The S5b-1 foundation (`docs/architecture/cpm-workbench-foundation-contract.md`
+section 5.3) adds the admission request digest and the persistence bound
+check; both reuse the one canonical encoder below.
 """
 
 from __future__ import annotations
@@ -16,13 +20,20 @@ from decimal import ROUND_HALF_EVEN, Decimal, localcontext
 from typing import Final
 
 from my_pa.domain.schedule.model import (
+    MAX_ACTIVITY_NAME_CHARACTERS,
+    MAX_CELL_EVIDENCE_BYTES,
+    MAX_HIERARCHY_LABEL_CHARACTERS,
+    MAX_HIERARCHY_PATH,
+    MAX_PUBLISHED_ACTIVITY_ID_CHARACTERS,
     ParsedScheduleRow,
     ScheduleBox,
     ScheduleCellEvidence,
     ScheduleDateCell,
     ScheduleDurationCell,
+    ScheduleImportRequest,
     ScheduleParseIssue,
     ScheduleParseResult,
+    ScheduleRowBoundsError,
 )
 
 __all__ = [
@@ -35,6 +46,8 @@ __all__ = [
     "normalized_box_strings",
     "parse_result_object",
     "parse_result_sha256",
+    "schedule_import_request_digest",
+    "validate_row_for_persistence",
 ]
 
 CELLS_SCHEMA: Final = "cpm-full-cells-v1"
@@ -201,3 +214,53 @@ def canonical_json_bytes(obj: object) -> bytes:
 def parse_result_sha256(result: ScheduleParseResult) -> str:
     """Lowercase hex SHA-256 of the canonical result bytes."""
     return hashlib.sha256(canonical_json_bytes(parse_result_object(result))).hexdigest()
+
+
+#: Domain separation for the admission digest (contract section 5.3, D-14).
+_IMPORT_REQUEST_DOMAIN: Final = b"cpm-schedule-import-v1\n"
+
+
+def schedule_import_request_digest(principal_id: str, request: ScheduleImportRequest) -> str:
+    """The admission request digest: everything but the idempotency key.
+
+    The Series is named by id or by its casefold key, so two requests whose
+    names differ only in case or whitespace digest equal.
+    """
+    expected = request.expected_data_date
+    body = {
+        "principal_id": principal_id,
+        "request": {
+            "project_id": request.project_id,
+            "series_id": request.series_id,
+            "series_name_key": None if request.series_name is None else request.series_name.key,
+            "enrollment_id": request.enrollment_id,
+            "source_object_id": request.source_object_id,
+            "source_version_id": request.source_version_id,
+            "publication_role": request.publication_role.value,
+            "baseline_kind": None if request.baseline_kind is None else request.baseline_kind.value,
+            "expected_data_date": None if expected is None else expected.isoformat(),
+            "supersedes_publication_id": request.supersedes_publication_id,
+        },
+    }
+    return hashlib.sha256(_IMPORT_REQUEST_DOMAIN + canonical_json_bytes(body)).hexdigest()
+
+
+def validate_row_for_persistence(row: ParsedScheduleRow) -> None:
+    """Refuse a row a stored row cannot hold, before any insert (contract 5.3).
+
+    The per-label hierarchy bound is enforced here only: the database checks
+    the path's cardinality, not each element.
+    """
+    if len(cell_evidence_bytes(row)) > MAX_CELL_EVIDENCE_BYTES:
+        raise ScheduleRowBoundsError("a row's cell evidence exceeds 16384 canonical bytes")
+    published = row.published_activity_id
+    if published is not None and len(published) > MAX_PUBLISHED_ACTIVITY_ID_CHARACTERS:
+        raise ScheduleRowBoundsError("a published activity id exceeds 256 characters")
+    if row.activity_name is not None and len(row.activity_name) > MAX_ACTIVITY_NAME_CHARACTERS:
+        raise ScheduleRowBoundsError("an activity name exceeds 2000 characters")
+    path = row.hierarchy_path
+    if path is not None:
+        if len(path) > MAX_HIERARCHY_PATH:
+            raise ScheduleRowBoundsError("a hierarchy path exceeds 32 labels")
+        if any(not 1 <= len(label) <= MAX_HIERARCHY_LABEL_CHARACTERS for label in path):
+            raise ScheduleRowBoundsError("a hierarchy label is 1 to 2000 characters")

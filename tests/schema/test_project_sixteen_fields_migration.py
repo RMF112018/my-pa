@@ -32,7 +32,7 @@ REVISION: Final = "cc373834a485"
 PREVIOUS: Final = "93f3aa113f58"
 #: The chain head: `a591b81f10a2` (Intelligence report type registry) is additive
 #: on `REVISION`.
-HEAD: Final = "023f8f7eb499"
+HEAD: Final = "6c2306330ceb"
 MIGRATION: Final = VERSIONS / "20261011_cc373834a485_project_sixteen_fields.py"
 PRINCIPAL_A: Final = "prn_aaaa0001aaaa0001aaaa0001"
 PRINCIPAL_B: Final = "prn_bbbb0002bbbb0002bbbb0002"
@@ -90,7 +90,7 @@ def test_the_revision_is_directly_on_the_focus_area_revision_under_one_later_hea
     """
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "c5260943d933"
+    assert script.get_revision(HEAD).down_revision == "023f8f7eb499"
     assert script.get_revision("c5260943d933").down_revision == "6f1476b8da52"
     assert script.get_revision("6f1476b8da52").down_revision == "d020b532ad7d"
     assert script.get_revision("d020b532ad7d").down_revision == "264310e0416a"

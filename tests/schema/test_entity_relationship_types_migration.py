@@ -364,6 +364,14 @@ def test_downgrading_one_step_removes_exactly_this_table_and_restores_the_origin
         "lineage_backfill_items",
         # Record lineage S4 stacks its one.
         "intelligence_artifact_manifests",
+        # CPM Workbench S5b-1 stacks its seven.
+        "schedule_series",
+        "schedule_publications",
+        "schedule_activities",
+        "schedule_jobs",
+        "schedule_parser_runs",
+        "schedule_rows",
+        "schedule_import_issues",
     }
     # The rest of the entity plane survives the downgrade of this revision alone.
     assert {

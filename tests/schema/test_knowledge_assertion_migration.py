@@ -83,7 +83,7 @@ PREVIOUS: Final = "0641c354ca85"
 #: on `REVISION`, `cc373834a485` (Continuity Project sixteen-field admission) is
 #: additive on it, and `a591b81f10a2` (Intelligence report type registry) is
 #: additive on that, so a database upgraded to head stands there.
-HEAD: Final = "023f8f7eb499"
+HEAD: Final = "6c2306330ceb"
 MIGRATION: Final = VERSIONS / "20261004_6734f039f7a6_knowledge_assertion_layer.py"
 RESTRICT_VIOLATION: Final = "23001"
 FOREIGN_KEY_VIOLATION: Final = "23503"
@@ -197,7 +197,7 @@ def test_the_revision_is_directly_on_0641c354ca85_under_one_later_head() -> None
     """AC-076: one current head; the revision was generated from the sole head."""
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "c5260943d933"
+    assert script.get_revision(HEAD).down_revision == "023f8f7eb499"
     assert script.get_revision("c5260943d933").down_revision == "6f1476b8da52"
     assert script.get_revision("6f1476b8da52").down_revision == "d020b532ad7d"
     assert script.get_revision("d020b532ad7d").down_revision == "264310e0416a"
@@ -217,7 +217,7 @@ def test_the_revision_is_directly_on_0641c354ca85_under_one_later_head() -> None
     # R6 counted 112 files at this revision; `93f3aa113f58`, `cc373834a485`,
     # `a591b81f10a2`, `c8f7ae406d47` and `HEAD` are the five files added since.
     assert migration_contract["expected_post_r6_revision_file_count"] == 112
-    assert len(files) == 123
+    assert len(files) == 124
     assert [path.name for path in VERSIONS.glob("*_knowledge_assertion_layer.py")] == [
         MIGRATION.name
     ]

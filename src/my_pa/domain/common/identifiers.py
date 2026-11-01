@@ -518,6 +518,21 @@ class IdKind(StrEnum):
     #: prefix of either, and neither is a prefix of any.
     ISSUE_HANDOFF_CORRECTION = "ihcr"
     LINEAGE_BACKFILL_RUN = "lbfr"
+    #: CPM Workbench S5b-1 (foundation contract section 3.1, R2 section 43.1):
+    #: one Schedule Series, one admitted publication, one parser run, one
+    #: stored row, one Stable Schedule Activity and one import issue. The
+    #: publication's job reuses `OPERATION`. Checked against all 150 prior
+    #: members before use (a grep of each `<prefix>_` over `src`, `tests`,
+    #: `web/src` and `migrations`, and the uniqueness assertion in
+    #: `tests/unit/test_identifiers.py`): none collides, no member is a prefix
+    #: of any, and none is a prefix of a member (nearest: `sub`, `src`,
+    #: `span`, `sit`, `stage`, `sevd`, `sobs`, `smem`).
+    SCHEDULE_SERIES = "sser"
+    SCHEDULE_PUBLICATION = "spub"
+    SCHEDULE_PARSER_RUN = "sprun"
+    SCHEDULE_ROW = "srow"
+    SCHEDULE_ACTIVITY = "sact"
+    SCHEDULE_IMPORT_ISSUE = "siss"
 
 
 class InvalidIdentifierError(ValueError):

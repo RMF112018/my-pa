@@ -116,11 +116,14 @@ from my_pa.infrastructure.persistence.tables import (
     capture_versions,
     enrollments,
     jobs,
+    schedule_jobs,
+    schedule_publications,
 )
 
 __all__ = [
     "CAPTURE_JOBS",
     "ENROLLMENT_JOBS",
+    "SCHEDULE_JOBS",
     "JobPlane",
     "JobRecord",
     "LeasedJob",
@@ -193,6 +196,17 @@ CAPTURE_JOBS: Final = JobPlane(
     owner_column="owner_principal_id",
     lease_generation="lease_generation",
     pause_cause="pause_cause",
+)
+
+#: CPM Workbench S5b-1: one job per admitted Schedule publication (R2 section 25).
+#: Not registered in `apps/worker.py` until WP-03 adds its handler.
+SCHEDULE_JOBS: Final = JobPlane(
+    schedule_jobs,
+    "publication_id",
+    IdKind.SCHEDULE_PUBLICATION,
+    owner_table=schedule_publications,
+    owner_key="publication_id",
+    owner_column="principal_id",
 )
 
 

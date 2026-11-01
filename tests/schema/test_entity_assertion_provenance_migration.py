@@ -296,6 +296,14 @@ def test_downgrading_one_step_removes_exactly_these_two_tables(migrated_engine: 
         "lineage_backfill_items",
         # Record lineage S4 stacks its one.
         "intelligence_artifact_manifests",
+        # CPM Workbench S5b-1 stacks its seven.
+        "schedule_series",
+        "schedule_publications",
+        "schedule_activities",
+        "schedule_jobs",
+        "schedule_parser_runs",
+        "schedule_rows",
+        "schedule_import_issues",
     }
     assert {
         "entities",

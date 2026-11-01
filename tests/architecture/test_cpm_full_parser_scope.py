@@ -9,8 +9,10 @@ sections 1.2, 3.1, 7, 9 and 10.1. FAST guards over the committed tree:
   generated fixture or golden file carries a denylisted research-corpus token.
   The denylist is held as SHA-256 digests of lowercased word tokens, so this
   guard carries no proprietary string itself.
-* **Import allowlist.** `domain/schedule` is standard-library only plus itself;
-  `infrastructure/schedule` reaches the domain package, itself and (through
+* **Import allowlist.** `domain/schedule` is standard-library only plus itself
+  and, since S5b-1, `my_pa.domain.common.identifiers` (its records validate
+  their identifiers; `docs/architecture/cpm-workbench-foundation-contract.md`
+  D-18); `infrastructure/schedule` reaches the domain package, itself and (through
   `pdf.py` alone, enforced by `test_scope_and_hygiene.py`) `pypdfium2`; neither
   imports persistence, application, adapters, bootstrap or contracts.
 * **No logging, printing, file or environment access** in either package.
@@ -125,7 +127,7 @@ def test_schedule_import_allowlist() -> None:
     stdlib = sys.stdlib_module_names
     wrong: list[str] = []
     for package, allowed in (
-        (DOMAIN, ("my_pa.domain.schedule",)),
+        (DOMAIN, ("my_pa.domain.schedule", "my_pa.domain.common.identifiers")),
         (INFRASTRUCTURE, ("my_pa.domain.schedule", "my_pa.infrastructure.schedule", "pypdfium2")),
     ):
         for path in _modules(package):

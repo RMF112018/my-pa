@@ -158,7 +158,11 @@ def _limit_memory(limits: ChildLimits) -> ContainmentReport:
         resource.setrlimit(resource.RLIMIT_AS, cap)
         resource.setrlimit(resource.RLIMIT_DATA, cap)
     except (ValueError, OSError):
-        if sys.platform == "linux":
+        # Read into a `str` first: mypy treats a literal `sys.platform == ...`
+        # as a static platform check, so under `--platform linux` (CI) it would
+        # mark the `return` below unreachable. The runtime test is unchanged.
+        platform: str = sys.platform
+        if platform == "linux":
             raise ContainmentError("the address-space cap could not be set") from None
         return ContainmentReport(memory_capped=False)
     return ContainmentReport(memory_capped=True)

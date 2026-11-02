@@ -1054,7 +1054,10 @@ FAST over new and touched modules then the full FAST selection in chunks; `-m "d
 not migration_edge and not migration_empty_to_head and not migration"` over the new database
 modules; `-m migration_empty_to_head` and `-m migration_edge` over the migration modules; the
 full `tests/architecture`; `ruff check .`; `ruff format --check .` (formats Markdown Python
-fences too); `mypy` (current and the floor venv); `python -m tests.ci_shard verify --lane
+fences too); `mypy` (current and the floor venv), each run both at the host default and
+with `--platform linux`, because mypy evaluates `sys.platform` comparisons statically and
+CI runs on Linux (a macOS-only run passed the child's section 3.4.7 branch that CI then
+reported unreachable); `python -m tests.ci_shard verify --lane
 fast --shards 3 -m "<FAST expression>"` and the migration lane; web checks in I7-B. Homebrew
 `postgres@15` scratch cluster (`initdb --auth=trust`, loopback, `PGTZ=UTC`, no inline
 password), removed at the end.

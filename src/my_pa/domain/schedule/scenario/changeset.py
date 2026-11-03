@@ -278,7 +278,7 @@ class _Working:
     def optional_calendar_key(self, value: object) -> str | None:
         return None if value is None else self.calendar_key(value)
 
-    def put(self, activity: ScenarioActivity, **changes: Any) -> None:
+    def put(self, activity: ScenarioActivity, changes: Mapping[str, Any]) -> None:
         self.activities[activity.key] = _build(lambda: replace(activity, **changes))
 
     # --- ops ---------------------------------------------------------------------------
@@ -333,7 +333,7 @@ class _Working:
             changes["wbs_path"] = _wbs(fields["wbs_path"])
         if "calendar" in fields:
             changes["calendar"] = self.optional_calendar_key(fields["calendar"])
-        self.put(activity, **changes)
+        self.put(activity, changes)
 
     def activity_remove(self, op: Mapping[str, object]) -> None:
         fields = _fields(op, frozenset({"key"}))
@@ -354,7 +354,7 @@ class _Working:
         complete = activity.progress is not None and activity.progress.actual_finish is not None
         if complete and changes.get("remaining_minutes", 0) != 0:
             raise _fail(ChangeOpError.PROGRESS_INVALID)
-        self.put(activity, **changes)
+        self.put(activity, changes)
 
     def distribution_set(self, op: Mapping[str, object]) -> None:
         fields = _fields(op, frozenset({"key", "distribution"}))
@@ -364,11 +364,11 @@ class _Working:
             distribution: DurationDistribution = distribution_from_object(raw)
         except ValueError:
             raise _fail(_INVALID) from None
-        self.put(activity, distribution=distribution)
+        self.put(activity, {"distribution": distribution})
 
     def distribution_clear(self, op: Mapping[str, object]) -> None:
         fields = _fields(op, frozenset({"key"}))
-        self.put(self.activity(fields["key"]), distribution=None)
+        self.put(self.activity(fields["key"]), {"distribution": None})
 
     def _pair(self, fields: Mapping[str, object]) -> tuple[str, str]:
         pred, succ = _text(fields["pred"]), _text(fields["succ"])
@@ -476,14 +476,14 @@ class _Working:
         )
         if mixes_mandatory:
             raise _fail(ChangeOpError.CONSTRAINT_CONFLICT)
-        self.put(activity, constraints=(*kept, ActivityConstraint(kind, when)))
+        self.put(activity, {"constraints": (*kept, ActivityConstraint(kind, when))})
 
     def constraint_clear(self, op: Mapping[str, object]) -> None:
         fields = _fields(op, frozenset({"key", "type"}))
         kind = _enum(ConstraintType, fields["type"])
         activity = self.activity(fields["key"])
         kept = tuple(item for item in activity.constraints if item.type is not kind)
-        self.put(activity, constraints=kept)
+        self.put(activity, {"constraints": kept})
 
     def progress_set(self, op: Mapping[str, object]) -> None:
         fields = _fields(
@@ -506,11 +506,11 @@ class _Working:
         changes: dict[str, Any] = {"progress": progress}
         if remaining_given:
             changes["remaining_minutes"] = remaining
-        self.put(activity, **changes)
+        self.put(activity, changes)
 
     def progress_clear(self, op: Mapping[str, object]) -> None:
         fields = _fields(op, frozenset({"key"}))
-        self.put(self.activity(fields["key"]), progress=None)
+        self.put(self.activity(fields["key"]), {"progress": None})
 
     def data_date_set(self, op: Mapping[str, object]) -> None:
         fields = _fields(op, frozenset({"at"}))

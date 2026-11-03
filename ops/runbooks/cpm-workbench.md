@@ -141,6 +141,13 @@ MY_PA_SCHEDULE_ENABLED=true .venv/bin/python apps/worker.py run --plane schedule
 MY_PA_SCHEDULE_ENABLED=true .venv/bin/python apps/cli/invoke.py schedule_publications.import [options]
 ```
 
+**Import roles from Schedule Scenarios S6-2 until S6-3** (schedule scenarios contract
+S6-2-D04, sections 12.2 and 14.9): `schedule_publications.import` refuses role `baseline` with
+`invalid_request(PUBLICATION_ROLE)` whatever the switches (a baseline import needs the
+section 12.3 approval fields, which arrive with S6-3); role `reference` and baseline kind
+`working` are retired and refused; `schedule_publications.list` refuses the filter
+`publication_role=reference` with `invalid_request(PUBLICATION_ROLE)`. Import role `update`.
+
 `capabilities.get` then reports the `schedule` plane's backlog, dead-lettered count and
 heartbeat, which degrade readiness exactly as the other planes do.
 `schedule_publications.read` shows status, counts, issue counts by safe code, the job's

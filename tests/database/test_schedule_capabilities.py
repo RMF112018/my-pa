@@ -314,7 +314,7 @@ def test_import_replays_and_conflicts_per_section_23(rt: ScheduleRuntime, w: Wor
             w,
             object_id,
             version_id,
-            publication_role="reference",
+            expected_data_date="2026-10-01",
             idempotency_key="schedule-replay-0003",
         ),
         surface=OperatorSurface.CLI,
@@ -495,7 +495,7 @@ def test_import_admission_refusals_map_to_safe_errors(
             w,
             object_id,
             version_id,
-            publication_role="reference",
+            expected_data_date="2026-10-01",
             idempotency_key="schedule-conflict-0002",
         )
     else:
@@ -1365,6 +1365,13 @@ def test_forged_cursor_position_stays_inside_the_callers_partition(
 def test_series_latest_update_ignores_baselines_and_references(
     rt: ScheduleRuntime, w: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """A newer baseline publication is never the latest update.
+
+    Schedule Scenarios S6-2 retired role `reference` and kind `working`
+    (schedule scenarios contract section 12.2; the command refusals are
+    `tests/unit/test_schedule_commands.py`'s), so the baseline publication is
+    admitted with an import-time approval.
+    """
     update = rt.publish(monkeypatch, w, _activities("A-1"), data_date=D1)
     series = rt.ok(ReadSchedulePublication(publication_id=update))["series_id"]
     baseline = rt.publish(
@@ -1374,17 +1381,16 @@ def test_series_latest_update_ignores_baselines_and_references(
         data_date=D2,
         series_id=series,
         role="baseline",
-        baseline_kind="working",
+        baseline_kind="approved_update",
     )
-    rt.publish(monkeypatch, w, _activities("A-1"), data_date=D3, series_id=series, role="reference")
     (row,) = rt.ok(ListScheduleSeries(project_id=w.project))["series"]
-    assert row["publication_count"] == 3
+    assert row["publication_count"] == 2
     assert row["latest_update"] == {"publication_id": update, "data_date": D1.isoformat()}
     roles = {
         p["publication_id"]: (p["publication_role"], p["baseline_kind"])
         for p in rt.ok(ListSchedulePublications(series_id=series))["publications"]
     }
-    assert roles[baseline] == ("baseline", "working")
+    assert roles[baseline] == ("baseline", "approved_update")
     assert {p for p, (role, _) in roles.items() if role == "baseline"} == {baseline}
     only_baselines = rt.ok(ListSchedulePublications(series_id=series, publication_role="baseline"))
     assert [p["publication_id"] for p in only_baselines["publications"]] == [baseline]

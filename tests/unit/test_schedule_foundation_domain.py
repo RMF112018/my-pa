@@ -36,6 +36,7 @@ from my_pa.domain.schedule import (
     ScheduleDateCell,
     ScheduleDurationCell,
     ScheduleFinalization,
+    ScheduleImportApproval,
     ScheduleImportIssue,
     ScheduleImportRequest,
     ScheduleIssueCode,
@@ -237,6 +238,15 @@ def test_schedule_id_kinds_have_their_prefixes() -> None:
         IdKind.SCHEDULE_ROW: "srow",
         IdKind.SCHEDULE_ACTIVITY: "sact",
         IdKind.SCHEDULE_IMPORT_ISSUE: "siss",
+        # Schedule Scenarios S6-2 (schedule scenarios contract section 14.2).
+        IdKind.SCHEDULE_SCENARIO: "sscn",
+        IdKind.SCHEDULE_SCENARIO_VERSION: "sscv",
+        IdKind.SCHEDULE_CPM_RUN: "scpm",
+        IdKind.SCHEDULE_SCENARIO_OUTPUT: "ssco",
+        IdKind.SCHEDULE_SERIES_MATCH: "ssmd",
+        IdKind.SCHEDULE_BASELINE: "sbl",
+        IdKind.SCHEDULE_BASELINE_EVENT: "sbev",
+        IdKind.SCHEDULE_GOVERNING_EVENT: "sgov",
     }
     others = [kind.value for kind in IdKind if not kind.name.startswith("SCHEDULE_")]
     for kind in IdKind:
@@ -252,9 +262,10 @@ def test_new_enums_have_exact_members_and_order() -> None:
         SchedulePublicationRole: [
             ("UPDATE", "update"),
             ("BASELINE", "baseline"),
-            ("REFERENCE", "reference"),
         ],
-        ScheduleBaselineKind: [("WORKING", "working"), ("CONTRACT", "contract")],
+        # Schedule Scenarios S6-2 (contract section 12.2): `reference` and
+        # `working` are retired; the kinds are S6-1 `BaselineType`'s.
+        ScheduleBaselineKind: [("CONTRACT", "contract"), ("APPROVED_UPDATE", "approved_update")],
         ScheduleParserRunStatus: [
             ("RUNNING", "running"),
             ("PARSED", "parsed"),
@@ -362,7 +373,7 @@ def test_import_request_invariants() -> None:
         {"series_id": SER},
         {"series_name": None},
         {"publication_role": SchedulePublicationRole.BASELINE},
-        {"baseline_kind": ScheduleBaselineKind.WORKING},
+        {"baseline_kind": ScheduleBaselineKind.CONTRACT},
         {"idempotency_key": "short"},
         {"idempotency_key": "has space key"},
         {"idempotency_key": "k" * 129},
@@ -375,9 +386,16 @@ def test_import_request_invariants() -> None:
     _request(
         publication_role=SchedulePublicationRole.BASELINE,
         baseline_kind=ScheduleBaselineKind.CONTRACT,
+        approval=_APPROVAL,
     )
     assert SCHEDULE_IDEMPOTENCY_KEY_PATTERN.fullmatch("A" * 128)
 
+
+#: Schedule Scenarios S6-2 (contract section 14.7.2): a baseline request
+#: carries its import-time approval.
+_APPROVAL = ScheduleImportApproval(
+    approval_reference="Synthetic approval", effective_from=WHEN.date(), reason="Synthetic"
+)
 
 #: Golden vectors: the digest of a fixed request, pinned (contract 5.3, D-14).
 _GOLDEN_BY_NAME = "f70986a38ede215036c64dbe2c4600c7a1d2ae77557f6c4a567c932c9f457101"
@@ -413,7 +431,8 @@ def test_request_digest_excludes_the_key_and_folds_the_name() -> None:
         _request(supersedes_publication_id="spub_s5bdomain0009"),
         _request(
             publication_role=SchedulePublicationRole.BASELINE,
-            baseline_kind=ScheduleBaselineKind.WORKING,
+            baseline_kind=ScheduleBaselineKind.CONTRACT,
+            approval=_APPROVAL,
         ),
         _request(source_version_id="ver_s5bdomain0002"),
         _request(series_id=SER, series_name=None),

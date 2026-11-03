@@ -176,19 +176,31 @@ def test_role_is_required_and_baseline_kind_follows_it() -> None:
     assert refused.allowed_values[SafeDetail.PUBLICATION_ROLE] == tuple(
         role.value for role in SchedulePublicationRole
     )
-    # A baseline names its kind; nothing else may.
-    assert _refused(_payload(publication_role="baseline")).safe_details == (
-        SafeDetail.BASELINE_KIND,
+    # Only a baseline names a kind (and, from S6-2 until S6-3, no baseline is
+    # imported: `test_baseline_import_is_refused_until_the_approval_fields_exist`).
+    for kind in ScheduleBaselineKind:
+        assert _refused(_payload(baseline_kind=kind.value)).safe_details == (
+            SafeDetail.BASELINE_KIND,
+        )
+    assert _build(_payload(publication_role="update")).import_request().baseline_kind is None
+    # Schedule Scenarios S6-2 retired `reference` and `working` (contract 12.2).
+    assert _refused(_payload(publication_role="reference")).safe_details == (
+        SafeDetail.PUBLICATION_ROLE,
     )
     assert _refused(_payload(baseline_kind="working")).safe_details == (SafeDetail.BASELINE_KIND,)
-    assert _refused(
-        _payload(publication_role="reference", baseline_kind="contract")
-    ).safe_details == (SafeDetail.BASELINE_KIND,)
-    for kind in ScheduleBaselineKind:
-        command = _build(_payload(publication_role="baseline", baseline_kind=kind.value))
-        assert command.import_request().baseline_kind is kind
-    for role in ("update", "reference"):
-        assert _build(_payload(publication_role=role)).import_request().baseline_kind is None
+
+
+def test_baseline_import_is_refused_until_the_approval_fields_exist() -> None:
+    """Schedule scenarios contract S6-2-D04: role `baseline` is refused until S6-3.
+
+    Whatever the kind (or none), the refusal is `invalid_request(PUBLICATION_ROLE)`,
+    never an unclassified error from a request record that requires an approval.
+    """
+    for kind in (None, *(member.value for member in ScheduleBaselineKind), "working"):
+        refused = _refused(_payload(publication_role="baseline", baseline_kind=kind))
+        assert refused.safe_details == (SafeDetail.PUBLICATION_ROLE,), kind
+    # The role is still a known value: the refusal lists no other vocabulary.
+    assert "baseline" in {role.value for role in SchedulePublicationRole}
 
 
 @pytest.mark.parametrize(
@@ -254,6 +266,10 @@ def test_publication_list_filters_are_closed_vocabularies() -> None:
     command = _build({**base, "publication_role": "baseline", "status": "failed"}, capability)
     assert isinstance(command, ListSchedulePublications)
     assert _refused({**base, "publication_role": "current"}, capability).safe_details == (
+        SafeDetail.PUBLICATION_ROLE,
+    )
+    # Schedule Scenarios S6-2 (contract 12.2): the retired role is refused.
+    assert _refused({**base, "publication_role": "reference"}, capability).safe_details == (
         SafeDetail.PUBLICATION_ROLE,
     )
     assert _refused({**base, "status": "done"}, capability).safe_details == (SafeDetail.STATUS,)

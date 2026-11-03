@@ -1898,8 +1898,9 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "enrollment_id": scene.enrollment.enrollment_id,
             "source_object_id": "obj_httpobject0001",
             "source_version_id": "ver_httpversion0001",
-            "publication_role": "baseline",
-            "baseline_kind": "contract",
+            # Schedule Scenarios S6-2 (S6-2-D04): a baseline import is refused
+            # until S6-3, so the sample imports an update.
+            "publication_role": "update",
             "idempotency_key": "http-schedule-import-0001",
         },
         Capability.SCHEDULE_SERIES_LIST: {"project_id": "prj_httpproject0001"},
@@ -3185,8 +3186,7 @@ def commands_for(
             enrollment_id=scene.enrollment.enrollment_id,
             source_object_id="obj_httpobject0001",
             source_version_id="ver_httpversion0001",
-            publication_role="baseline",
-            baseline_kind="contract",
+            publication_role="update",
             idempotency_key="http-schedule-import-0001",
         ),
         Capability.SCHEDULE_SERIES_LIST: ListScheduleSeries(project_id="prj_httpproject0001"),

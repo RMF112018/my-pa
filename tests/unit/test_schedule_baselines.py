@@ -82,35 +82,32 @@ class Project:
             return plan
         when = recorded_at or self.clock
         self.clock = when
-        if plan.governing:
-            self.governing.append(
-                GoverningEvent(
-                    seq=len(self.governing) + 1,
-                    baseline_id=plan.baseline_id or "",
+        if plan.action is not None:
+            baseline_id = plan.baseline_id
+            if baseline_id is None:
+                self.minted += 1
+                baseline_id = f"sbl_{self.minted:010d}"
+            assert plan.publication_id is not None
+            self.events.append(
+                BaselineEvent(
+                    seq=len(self.events) + 1,
+                    baseline_id=baseline_id,
+                    publication_id=plan.publication_id,
+                    action=plan.action,
                     recorded_at=when,
+                    type=type_,
+                    label=plan.label,
+                    effective_from=effective_from,
+                    supersedes_baseline_id=supersedes,
+                    proposal_ordinal=plan.proposal_ordinal,
+                    writer_bucket=bucket,
                 )
             )
-            return plan
-        baseline_id = plan.baseline_id
-        if baseline_id is None:
-            self.minted += 1
-            baseline_id = f"sbl_{self.minted:010d}"
-        assert plan.action is not None and plan.publication_id is not None
-        self.events.append(
-            BaselineEvent(
-                seq=len(self.events) + 1,
-                baseline_id=baseline_id,
-                publication_id=plan.publication_id,
-                action=plan.action,
-                recorded_at=when,
-                type=type_,
-                label=plan.label,
-                effective_from=effective_from,
-                supersedes_baseline_id=supersedes,
-                proposal_ordinal=plan.proposal_ordinal,
-                writer_bucket=bucket,
+        if plan.governing:
+            governed = plan.baseline_id or self.events[-1].baseline_id
+            self.governing.append(
+                GoverningEvent(seq=len(self.governing) + 1, baseline_id=governed, recorded_at=when)
             )
-        )
         return plan
 
     def import_approve(

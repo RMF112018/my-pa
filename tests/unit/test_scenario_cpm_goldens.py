@@ -565,3 +565,27 @@ def test_maximal_network_operations_and_time_are_reported() -> None:
     assert result.operations <= 2_100_000 < CPM_OPERATION_BUDGET
     assert size <= 64 * 1024 * 1024
     assert elapsed <= 10.0
+
+
+def test_open_end_bound_applies_when_every_outgoing_bound_is_skipped() -> None:
+    """S6-D08 beyond G22: A's only outgoing (SS) is skipped, so A takes PF, not its EF.
+
+    G22 cannot tell PF from A's own finish (A ends the project there); an
+    unrelated 5-day C moves PF to 01-12 16:00, so A keeps 3 days of float.
+    """
+    content = network(
+        [task("A", 2 * DAY, started="01-05 08:00"), task("B", DAY), task("C", 5 * DAY)],
+        [link("A", "B", "SS")],
+        data_date="01-06 00:00",
+    )
+    result = run_cpm(content)
+    by_key = {item.key: item for item in result.activities}
+    assert result.summary.project_finish == at("01-12 16:00")
+    a, b = by_key["x:A"], by_key["x:B"]
+    assert (a.early_finish, a.late_start, a.late_finish) == (
+        at("01-07 16:00"),
+        at("01-11 08:00"),
+        at("01-12 16:00"),
+    )
+    assert (a.total_float_minutes, b.total_float_minutes) == (1440, 1920)
+    assert result.critical_paths == (("x:C",),)

@@ -18,8 +18,8 @@ The three implementation contracts control the detail and are not repeated here:
 | S5b-2 (WP-03 + WP-04) | [`cpm-workbench-worker-capabilities-contract.md`](cpm-workbench-worker-capabilities-contract.md) | revision `621ef6786c64`, the `schedule` worker plane and contained parser child, 7 Schedule capabilities, policy closure, ChatLLM `chatllm-data-v11`, the default-off switch, pre-deploy checks, this assurance set |
 
 Successor work (proposed, not implemented): the Schedule Scenarios slices S6-1 to S6-3 are
-specified in [`schedule-scenarios-contract.md`](schedule-scenarios-contract.md) under the
-2026-11-03 amendment to ADR-016; nothing in this document changes until they land.
+specified in [`schedule-scenarios-contract.md`](schedule-scenarios-contract.md) under
+[`ADR-017`](../decisions/ADR-017-schedule-scenarios-and-baselines.md); nothing in this document changes until they land.
 
 ## 1. What it is
 

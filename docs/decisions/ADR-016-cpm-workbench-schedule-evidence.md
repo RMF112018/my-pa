@@ -105,49 +105,11 @@ Implemented and test-isolated on `feat/cpm-s5b-worker`: S5a parser, S5b-1 schema
 pre-deploy checks and assurance documents. The R2 section 45 acceptance criteria are recorded
 with executed results in section 7 of the S5b-2 contract. Nothing is deployed.
 
-## Amendment — 2026-11-03 operator directive (Schedule Scenarios; proposed, not ratified)
+## Partially superseded by ADR-017 (2026-11-03)
 
-- **Status:** directive-selected design only. Nothing in this amendment is implemented,
-  merged, migrated, granted or deployed; it is not ratified for production. Its new switch
-  `MY_PA_SCHEDULE_SCENARIOS_ENABLED` is default off and effective only together with
-  `MY_PA_SCHEDULE_ENABLED`. Repository note: the S5a, S5b-1 and S5b-2 slices this ADR
-  records are merged on `main` (#344, #345, #347; `83e79817`); the status and basis lines
-  above are left as written.
-- **Authority:** the operator directive of 2026-11-03, given directly to the Manager — "The
-  write capabilities need to be able to create entirely new versions of the schedule data
-  for the purpose of running what-if scenarios, updating schedules, Monte Carlo sims, etc as
-  well as creating lineage records for the schedule data." — with 2 operator decisions:
-  schedule logic is client-authored in scenario versions that start from a published
-  baseline, and the server provides a deterministic CPM engine while Monte Carlo runs
-  client-side and is stored as client-asserted output. A further operator addition the same
-  day adds series auto-matching on import and a derived current version with attributed
-  authority designations. The contract is
-  [`schedule-scenarios-contract.md`](../architecture/schedule-scenarios-contract.md).
-- **Supersession clause.** The Supersession section above requires a superseding ADR to
-  persist deltas or to link schedule evidence to another domain. This amendment is that
-  record for exactly the points below (the precedent is ADR-015 decisions 15 and 16); review
-  R8 is asked to rule whether a separate ADR is required instead.
-
-**R2 exclusions reversed** (for scenario data only): application-computed CPM, calendars,
-relationships, critical path and float (R2 §6) — computed by the server over client-authored
-scenario versions, never over a publication; persisted derived schedule data (R2 §6, §29.6)
-— scenario versions, CPM results and client outputs are immutable persisted rows, while the
-publication delta stays on-demand; schedule-specific links (R2 §6, §33) — only as ADR-015
-lineage associations (ADR-015 decision 17), never a native column, coercion or mutation.
-
-**Invariants kept:** publications remain immutable source-bound derived evidence and nothing
-in the scenario plane writes an S5 table (decision 1); one profile and engine for parsing
-(decision 2); import operator-only and attested-local (decision 4) — auto-matching adds an
-additive import form whose binding is a second operator-attributed admission, and decision
-6's exact-ID rule governs matching too; changes between publications stay derived (decision
-7); baselines stay explicit (decision 8) — the new "current published version" is derived
-over `update` publications only and never names a baseline; off by default (decision 9).
-Client claims never become source-verified; scenario data is never counted in
-source-certified or Program reporting and the Program-level critical path stays UNPROVEN
-(OD-08); a scenario CPM is per version and labelled non-authoritative.
-
-**What is and is not verified.** The server verifies shapes, bounds, ownership, references,
-idempotency, compare-and-swap and its own deterministic computation. It cannot verify that
-client-authored logic, durations, distributions, designations or Monte Carlo results are
-true, nor who composed a client call; it records them as `client_authored` /
-`client_asserted` / `client_identified` and never upgrades them.
+Decisions 1, 4, 7 and 8 and the cross-domain-links exclusion are partially superseded by
+[ADR-017](ADR-017-schedule-scenarios-and-baselines.md) (Schedule Scenarios, server CPM and
+operator-approved baselines; proposed under the operator directive of 2026-11-03, not
+ratified, nothing deployed), exactly as its supersession table lists; every other decision
+here stands. Repository note: the S5a, S5b-1 and S5b-2 slices this ADR records are merged on
+`main` (#344, #345, #347; `83e79817`); the status and basis lines above are left as written.

@@ -2,14 +2,16 @@
 
 **Status:** proposed implementation contract for the Schedule Scenarios slice on the local
 branch `feat/schedule-scenarios-engine`. It is the single document the S6-1 (pure domain and
-deterministic CPM engine), S6-2 (schema, migration, persistence, unit of work) and S6-3
-(capabilities, handlers, façade, catalog, ChatLLM, remote policy, lineage endpoints, guidance)
-implementers code against. Nothing it describes is implemented, merged, migrated, granted or
-deployed. It authorizes **no** production migration, grant, `profile-apply`, OAuth change or
-deployment, and its switch `MY_PA_SCHEDULE_SCENARIOS_ENABLED` is **off by default** and
-stacks on `MY_PA_SCHEDULE_ENABLED` (also off by default). The decision record is the
-2026-11-03 amendment to
-[`ADR-016`](../decisions/ADR-016-cpm-workbench-schedule-evidence.md) and decision 17 of
+deterministic CPM engine), S6-2 (schema, migrations, persistence, unit of work, worker hook)
+and S6-3 (capabilities, handlers, façade, catalog, ChatLLM, remote policy, lineage endpoints,
+guidance) implementers code against. Nothing it describes is implemented, merged, migrated,
+granted or deployed. It authorizes **no** production migration, grant, `profile-apply`, OAuth
+change or deployment, and its switch `MY_PA_SCHEDULE_SCENARIOS_ENABLED` is **off by
+default** and stacks on `MY_PA_SCHEDULE_ENABLED` (also off by default). The governing
+decision record is
+[`ADR-017`](../decisions/ADR-017-schedule-scenarios-and-baselines.md), which partially
+supersedes [`ADR-016`](../decisions/ADR-016-cpm-workbench-schedule-evidence.md); the lineage
+vocabulary growth is decision 17 of
 [`ADR-015`](../decisions/ADR-015-record-lineage-and-issue-situations.md). It extends, and
 never forks, the S5a, S5b-1 and S5b-2 contracts
 ([`cpm-workbench-p6-full-v1-parser-contract.md`](cpm-workbench-p6-full-v1-parser-contract.md),
@@ -22,24 +24,38 @@ cited "S5a §n", "S5b-1 §n", "S5b-2 §n") and the lineage contracts
 [`record-lineage-s4-program-contract.md`](record-lineage-s4-program-contract.md); cited "S1
 §n", "S3.1 §n", "P1 §n", "S4 §n").
 
-**Authority.** The operator directive of 2026-11-03, given directly to the Manager and
-quoted in its brief: "The write capabilities need to be able to create entirely new versions
-of the schedule data for the purpose of running what-if scenarios, updating schedules, Monte
-Carlo sims, etc as well as creating lineage records for the schedule data." The operator's
-2 accompanying decisions: (1) schedule **logic** (relationships, lags, calendars,
-constraints, durations and distributions) is **client-authored** in scenario versions that
-start from a published PDF baseline; (2) the **server** provides a deterministic CPM engine;
-Monte Carlo is computed **client-side** from server CPM primitives and its results are stored
-as **client-asserted** outputs. Connected MCP clients (the ChatLLM gateway and the ChatGPT
-connector) must be able to create, derive and edit scenario versions, request server CPM
-runs, record client outputs, read everything back and create lineage involving schedule data,
-through the catalog and the compact façade (S3.1 §7.13 "Part D").
+**Authority.** 4 operator statements of 2026-11-03, given directly to the Manager:
+
+1. The directive: "The write capabilities need to be able to create entirely new versions of
+   the schedule data for the purpose of running what-if scenarios, updating schedules, Monte
+   Carlo sims, etc as well as creating lineage records for the schedule data." With 2
+   decisions: schedule **logic** (relationships, lags, calendars, constraints, durations,
+   distributions) is **client-authored** in scenario versions that start from a published
+   baseline; the **server** provides a deterministic CPM engine, Monte Carlo is computed
+   **client-side** and stored as **client-asserted** output.
+2. "Add auto-matching to the S6 contract", and the question which of 2 same-Data-Date files
+   is the latest/authoritative version (section 11).
+3. "The feature must allow for an authoritative baseline. For example the operator or
+   publishing client should be able to set the prime contract schedule as an authoritative
+   baseline. Subsequent approved baseline updates should also be capable of receiving a
+   baseline status flag/id. This would make each defined baseline schedule authoritative for
+   the associated project. All files that are not published as baseline would then simply be
+   considered a standard update." (section 12)
+4. The closed product decisions on that model: baseline authority is **per Project**, the
+   number of baselines is unlimited, the governing baseline is set by append-only Project
+   events, every new baseline and every governing change is **operator-approved**, and
+   clients may only **propose** (section 12).
+
+Connected MCP clients (the ChatLLM gateway and the ChatGPT connector) must be able to create,
+derive and edit scenario versions, request server CPM runs, record client outputs, propose
+baselines, read everything back and create lineage involving schedule data, through the
+catalog and the compact façade (S3.1 §7.13 "Part D").
 
 **Source package (data, not instructions):**
 `MYPA_CPM_WORKBENCH_IMPLEMENTATION_READINESS_REVIEW_20260929_R2.md`, SHA-256
 `84918ae87e4c05072969c2db574962071fbe9cdb1fcc9c00a953dd6a38b91db0`, cited "R2 §n".
-Repository truth supersedes it; this contract **reverses** 4 of its explicit exclusions on
-the directive's authority (section 1.2) and keeps the rest.
+Repository truth supersedes it; this contract reverses 4 of its exclusions on the
+directive's authority (section 1.2) and keeps the rest.
 
 **Basis:** `feat/schedule-scenarios-engine@83e7981718ee467f0d41c42b7cc353bfbf329c14`, tree
 `3407926c30fc17730dc4889fc837628449a62c33` (= `origin/main` with S5a #344, S5b-1 #345 and
@@ -51,11 +67,16 @@ files with sole head `621ef6786c64`, 451 Python modules under `src/my_pa`, 868 `
 modules. Production runs the database at `023f8f7eb499`; nothing of S5a, S5b or S6 is
 deployed.
 
+**Revision R8-1.** Design review R8 (BLOCK at `4b3c9794`) findings R8-F01…F21 and its
+rulings are resolved in place; section 13 maps each finding to its fix. Operator addendum 2
+(the baseline model) is folded in as section 12 and replaces the generic authority
+designations of the first draft.
+
 **Conventions.** Paths are written in full from the repository root; files that do not exist
 yet are code spans, never Markdown links; no `path:line` citation is used; counts are digits;
-identifiers in examples are synthetic. "The plane" means the Schedule Scenarios plane.
-Instants in the golden tables are written `MM-DD HH:MM` in 2027 unless the month is 12
-(then 2026).
+identifiers in examples are synthetic. "The plane" means the Schedule Scenarios plane
+(scenarios, CPM, outputs, matching, currency, baselines). Instants in the golden tables are
+written `MM-DD HH:MM` in 2027 unless the month is 12 (then 2026).
 
 ---
 
@@ -65,33 +86,35 @@ Instants in the golden tables are written `MM-DD HH:MM` in 2027 unless the month
 
 | Item | Slice | Section |
 |---|---|---|
-| Scenario, immutable append-only Scenario Version, content document and its hash, baseline snapshot from an accepted publication | S6-1 (pure), S6-2 (rows) | 2 |
-| Change-set grammar (bounded ops) and deterministic application | S6-1 | 2.9 |
-| Relationships FS/SS/FF/SF with signed lags, integer-minute calendars, constraints, durations, distribution data, progress and data date | S6-1 | 2.4–2.8 |
-| Deterministic CPM engine `my-pa-cpm-v1`: passes, floats, critical paths, cycles, issues, canonical output and hash, operation budget | S6-1 | 3 |
-| Client-asserted outputs (Monte Carlo and kin): typed bounded payloads, server consistency checks | S6-1 (validation), S6-2/S6-3 | 4 |
-| Lineage: 5 endpoint families, 3 new relations, 2 widened relations, native virtual edges | S6-2 (vocabulary + CHECK), S6-3 (validators, reads) | 5 |
-| 14 capabilities, 2 purposes, switch, ChatLLM `chatllm-data-v12`, remote and façade | S6-3 | 6 |
-| Addendum: series auto-matching on import; derived current published version; append-only authority designations; 4 more capabilities | S6-1 (pure), S6-2, S6-3 | 11 |
+| Scenario, immutable append-only Scenario Version, content document and hash, baseline snapshot | S6-1 (pure), S6-2 (rows) | 2 |
+| Change-set grammar and deterministic application | S6-1 | 2.9 |
+| Relationships, integer-minute calendars, constraints, durations, distribution data, progress | S6-1 | 2.4–2.8 |
+| Deterministic CPM engine `my-pa-cpm-v1` | S6-1 | 3 |
+| Client-asserted outputs | S6-1 (validation), S6-2/S6-3 | 4 |
+| Lineage: 6 endpoint families, 3 new relations, 2 widened relations, native virtual edges | S6-2, S6-3 | 5 |
+| 26 capabilities, 3 purposes, switch, ChatLLM `chatllm-data-v12`, remote and façade | S6-3 | 6 |
 | OD-08 labelling and exclusion from Program reporting | S6-3 guards | 7 |
-| Bounds, DoS analysis, isolation | all | 8 |
+| Bounds, quotas, DoS analysis, isolation | all | 8 |
+| Series auto-matching on import; derived current standard update | S6-1 (pure), S6-2, S6-3 | 11 |
+| Operator-approved Project baselines, governing-baseline events, `reference` role retirement | S6-1 (pure), S6-2, S6-3 | 12 |
 
 ### 0.2 Status (honest)
 
 Directive-selected design, not ratified for production. Nothing is implemented, merged,
 migrated, granted or deployed. Every switch is default off in code. The server verifies
-shapes, bounds, ownership, references and its own computation; it cannot verify that any
-client-authored logic, duration, distribution or Monte Carlo result is true, and never says
+shapes, bounds, ownership, references, idempotency, compare-and-swap and its own
+computation; it cannot verify that any client-authored logic, duration, distribution, Monte
+Carlo result or baseline proposal is true, nor who composed a client call, and it never says
 so (section 7).
 
 ### 0.3 Out of scope (all slices)
 
 Production anything; real schedule files; XER/XML; server-side Monte Carlo sampling or any
 server randomness; resource loading/levelling; probabilistic branching, risk events and
-duration correlation (S6-U03); a Program-level critical path (stays **UNPROVEN**, section
-7); converting scenario data into a publication, a Stable Activity or any source-bound row;
-web UI; editing S5a/S5b behaviour, profile constants or goldens; a scenario Record Event
-family; persisted lineage of scenario activities below the version grain (S6-U05).
+duration correlation (S6-U03); a Program-level critical path (stays **UNPROVEN**); converting
+scenario data into a publication, a Stable Activity or any source-bound row; web UI; editing
+S5a/S5b behaviour, profile constants, goldens or merged revisions; a scenario Record Event
+family; lineage below the version grain (S6-U05).
 
 ---
 
@@ -99,67 +122,75 @@ family; persisted lineage of scenario activities below the version grain (S6-U05
 
 ### 1.1 Repository truth (re-measured at the basis)
 
-| # | Directive / R2 claim | Repository truth at `83e79817` | Decision |
+| # | Claim | Repository truth at `83e79817` | Decision |
 |---|---|---|---|
-| T6-01 | Activities have stable identity across publications | `StableScheduleActivity` (`sact_`) = exact published Activity ID inside one Series (`src/my_pa/domain/schedule/model.py`); visible only through a row of the accepted parser run of a `complete`/`partial` publication (S5b-1 U-03, S5b-2 §3.9) | a baseline-derived scenario activity is keyed by its `sact_` id; client-added activities get a scenario-local key `x:<token>` (section 2.4); a client can never mint an `sact_` key |
-| T6-02 | The PDF yields schedule logic | The parser yields per row only: `published_activity_id`, `activity_name`, `row_type` (`activity`/`milestone`; summaries and `ambiguous` rows are never activities), `hierarchy_path` (≤ 32 labels), `original_duration`/`remaining_duration` (`ScheduleDurationCell`: `Decimal` with exponent −3, **no unit** — S5a §4.8 "No unit conversion"), `start`/`finish` (`ScheduleDateCell`: a `date`, no time, and a raw `*` marker that S5a §4.7 says has **no meaning**), plus the publication `data_date` (always set for `complete`/`partial`, S5b-2 T2-27). No relationship, lag, calendar, constraint, float, actual or critical flag exists | logic is client-authored (operator decision 1); the snapshot copies durations through a client-declared `minutes_per_source_unit` (section 2.5) and keeps the published dates and marker only as an inert `published_reference` |
-| T6-03 | Publication states | `SchedulePublicationStatus`: `queued`, `processing`, `complete`, `partial`, `review_required`, `failed`; effective status (`effective_publication_status`) reads `failed` for an exhausted job | a snapshot source must be **effective** `complete` or `partial` (as `schedule_activities.list`), any role |
-| T6-04 | Schedule tables | S5b-1 (`6c2306330ceb`): 7 `knowledge.schedule_*` tables, Principal-partitioned, F1–F9 guards; S5b-2 (`621ef6786c64`) admitted the vocabulary | S6-2 adds new `knowledge.schedule_scenario*` / `schedule_cpm_runs` tables only; no S5 table or revision is edited |
-| T6-05 | S5b-2 surface | 7 capabilities (`schedule_publications.import` operator-only attested-local; 6 scopeless reads, purpose `schedule_read`), switch `MY_PA_SCHEDULE_ENABLED` (`Settings.schedule_enabled`), ChatLLM `chatllm-data-v11` with prerequisite `SCHEDULE`, feature label `schedule` via `_FEATURE_BY_FAMILY`, targets 164/98 (full/default, switch off), 170 (full + schedule), 204 (full + lineage + program + schedule), 136 (default + all 3), 512 compositions | the plane stacks on the schedule switch; ChatLLM `chatllm-data-v12` with prerequisite `SCHEDULE_SCENARIOS` (section 6.6) |
-| T6-06 | Lineage families/relations | `src/my_pa/domain/lineage/vocabulary.py`: `RecordFamily` 7 members; `RelationType` 8 (`issue_member` + 7 semantic); `RELATION_MATRIX`; `RECORD_FAMILY_ID_KINDS`; `LINEAGE_FAMILY_READS`; `NativeVirtualEdge` 1 member; DB CHECKs `a_record_link_from_family_is_known`, `…_to_family_is_known`, `from_id_is_an_opaque_identifier`, `a_record_link_relation_type_is_known`, `a_record_link_pair_is_admitted` derived from these in `tables.py`; evidence rules in `src/my_pa/application/lineage_endpoints.py` `require_relation_evidence` | widened together in S6-2 (enum + CHECK in one revision) per ADR-015 decision 6 and the S1 "widen both together" rule; ADR-015 decision 17 records the amendment (section 5) |
-| T6-07 | Lineage provenance and rate | S3.1: acceptance basis `client_identified` vs `user_confirmed`, decision channels, `asserting_client_id` (≤ 256), `user_directed` claim; budgets 120/hour and 1,000/day per writer bucket, 2,000/day per Principal (`src/my_pa/application/lineage_rate.py`); write-path disclosure: a subject in a family the caller may not read answers as absent | reused unchanged for schedule-family links; the plane's own writes reuse the provenance derivation and get their own budget (section 8.3) |
-| T6-08 | Program reporting / OD-08 | `src/my_pa/domain/program/vocabulary.py` `ProgramFamily` (6 members, no schedule); `src/my_pa/domain/program/reportability.py` `METRIC_CATALOGUE` (no schedule metric); S4 §12: `programs.schedule.milestones` not built; manifest lineage section `src/my_pa/domain/intelligence/source_manifest.py` (`_block_seeds`, `lineage_server_counts`, `lineage_section`) reads every `RecordFamily` member | scenario data joins no Program family or metric; the manifest lineage section is pinned to the 7 pre-S6 families (section 7) |
-| T6-09 | Counts | 240 capabilities, 62 purposes, 156 `IdKind` | +14 → 254, +2 → 64, +4 → 160 (sections 2.1, 6) |
-| T6-10 | `IdKind` prefixes | 156 members; prefix-free rule (no member a prefix of another) asserted by `tests/unit/test_identifiers.py` | `sscn`, `sscv`, `scpm`, `ssco` collide with none and are prefix-free against all 156 (measured by enumeration; a grep of `sscn_`, `sscv_`, `scpm_`, `ssco_` over `src`, `tests`, `web/src`, `migrations` finds nothing) |
-| T6-11 | Decimal/time conventions | durations `Decimal` quantized to 3 places (`DURATION_EXPONENT = -3`); dates `datetime.date`; no `float` in canonical objects (S5a §6) | the plane uses **integer minutes** only (section 3.1); `Decimal` appears only in the snapshot conversion |
-| T6-12 | Canonical JSON / hash helpers | `src/my_pa/domain/schedule/canonical.py` `canonical_json_bytes` (sorted keys, compact, `ensure_ascii=True`, `allow_nan=False`); digests are `sha256(domain_prefix + canonical)` lowercase hex (`schedule_import_request_digest`, prefix `b"cpm-schedule-import-v1\n"`) | every plane digest reuses `canonical_json_bytes` with its own `\n`-terminated domain prefix (section 2.3) |
-| T6-13 | Cursor | `src/my_pa/domain/schedule/cursor.py`: base64url canonical JSON, 512 characters, TTL 300 s, binding = SHA-256 of capability/Principal/purpose/request/page size/order, `ScheduleCursorOrder` (5 orders) | S6-3 appends orders to `ScheduleCursorOrder` (section 6.4); no second cursor module |
-| T6-14 | Domain package guards | `tests/architecture/test_cpm_full_parser_scope.py`: everything under `src/my_pa/domain/schedule` is stdlib-only plus `my_pa.domain.schedule` and `my_pa.domain.common.identifiers`, neither logs nor prints nor opens files, and carries no denylisted token | the S6-1 package lives at `src/my_pa/domain/schedule/scenario/` so those guards bind it automatically; S6-1 adds a no-float/no-clock/no-randomness guard (section 9.1) |
-| T6-15 | Disclosure trust levels | `TrustLevel`: `SOURCE_ORIGINAL`, `SOURCE_BOUND_DERIVED`, `MODEL_PROPOSED` (the last unused in `src`) | every plane answer is `MODEL_PROPOSED` with basis tokens; no new member (S6-D11, ruling R-3) |
-| T6-16 | Remote idempotency | `src/my_pa/adapters/remote_request.py`: `_IDEMPOTENT_REMOTE_CAPABILITIES` = keyed writes whose key the server stamps from the payload (a remote caller may not send `idempotency_key`); `is_remote_idempotent` = server-replay set or `LINEAGE_WRITE_CAPABILITIES` | the 4 plane writes join `_IDEMPOTENT_REMOTE_CAPABILITIES`, and `is_remote_idempotent` gains them (section 6.7) |
-| T6-17 | Scopeless policy | `src/my_pa/domain/policy/decision.py` `_SCOPELESS` holds the lineage writes and the 6 schedule reads | all 14 plane names join `_SCOPELESS`; `_requested_scope` empty-scope arm |
-| T6-18 | Restricted MCP profiles | `src/my_pa/contracts/mcp_database_profiles.py`: no CPM privilege in any ceiling or opt-in | no plane name joins any ceiling or opt-in; a restricted composition never composes the plane factory |
+| T6-01 | Activities have stable identity across publications | `StableScheduleActivity` (`sact_`) = exact published Activity ID inside one Series (`src/my_pa/domain/schedule/model.py`); visible only through a row of the accepted run of a `complete`/`partial` publication (S5b-1 U-03) | baseline-derived scenario activities are keyed by `sact_`; client-added ones by `x:<token>`; a client never mints an `sact_` key |
+| T6-02 | The PDF yields schedule logic | Per row only: `published_activity_id`, `activity_name`, `row_type` (`activity`/`milestone`), `hierarchy_path` (≤ 32 labels), `original_duration`/`remaining_duration` (`ScheduleDurationCell`, `Decimal` exponent −3, `0 ≤ value < 1,000,000,000`, **no unit**, S5a §4.8), `start`/`finish` (a `date` and a `*` marker with **no meaning**, S5a §4.7), plus the publication `data_date` (always set for `complete`/`partial`, S5b-2 T2-27). No relationship, lag, calendar, constraint, float or actual | logic is client-authored; the snapshot converts durations through a client-declared `minutes_per_source_unit` and keeps published dates only as an inert `published_reference` |
+| T6-03 | Publication states | `SchedulePublicationStatus` 6 members; effective status reads `failed` for an exhausted job | an eligible publication is **effective** `complete`/`partial` |
+| T6-04 | Schedule tables | S5b-1 (`6c2306330ceb`) 7 Principal-partitioned tables with F1–F9 guards; S5b-2 (`621ef6786c64`) vocabulary | S6-2 adds tables and one restating revision (section 12.2); no merged revision is edited |
+| T6-05 | S5b-2 surface | 7 capabilities (import operator-only attested-local; 6 scopeless reads, purpose `schedule_read`), switch `MY_PA_SCHEDULE_ENABLED`, ChatLLM `chatllm-data-v11` prerequisite `SCHEDULE`, feature `schedule`, targets 164/98 (switch off), 170 (full + schedule), 204 (full + lineage + program + schedule), 136 (default + all 3), 512 compositions | the plane stacks on the schedule switch; `chatllm-data-v12` (section 6.6) |
+| T6-06 | Lineage vocabulary | `src/my_pa/domain/lineage/vocabulary.py`: `RecordFamily` 7, `RelationType` 8, `RELATION_MATRIX`, `RECORD_FAMILY_ID_KINDS`, `LINEAGE_FAMILY_READS`, `NativeVirtualEdge` 1; DB CHECKs derived from them in `tables.py`; evidence rules in `src/my_pa/application/lineage_endpoints.py` | widened together in S6-2 (section 5) |
+| T6-07 | Lineage provenance and rate | S3.1: `client_identified`/`user_confirmed`, channels, `asserting_client_id`, `user_directed`; budgets 120/hour and 1,000/day per writer bucket, 2,000/day per Principal | reused for schedule-family links; the plane has its own budgets (section 8.3) |
+| T6-08 | Program reporting / OD-08 | `ProgramFamily` 6 members; `METRIC_CATALOGUE` has no schedule metric; S4 §12 `programs.schedule.milestones` not built; the manifest lineage section (`src/my_pa/domain/intelligence/source_manifest.py` `_block_seeds`, `lineage_server_counts`, `lineage_section`) reads every `RecordFamily` member | no Program family or metric; the manifest lineage section is pinned to the 7 pre-S6 families (section 7) |
+| T6-09 | Counts | 240 capabilities, 62 purposes, 156 `IdKind` | 266, 65, 164 (sections 2.1, 6) |
+| T6-10 | `IdKind` prefixes | prefix-free rule asserted by `tests/unit/test_identifiers.py` | `sscn`, `sscv`, `scpm`, `ssco`, `ssmd`, `sbl`, `sbev`, `sgov` are prefix-free against all 156 and each other, and absent from `src`, `tests`, `web/src`, `migrations` (measured) |
+| T6-11 | Decimal/time | durations `Decimal` 3 places; dates `datetime.date`; no `float` in canonical objects | the plane uses integer minutes only |
+| T6-12 | Canonical JSON | `src/my_pa/domain/schedule/canonical.py` `canonical_json_bytes` (sorted, compact, ASCII, no NaN); digests are `sha256(domain_prefix + canonical)` | reused with a `\n`-terminated prefix per document |
+| T6-13 | Cursor | `src/my_pa/domain/schedule/cursor.py` `ScheduleCursorOrder` (5 orders), 512 characters, TTL 300 s | S6-3 appends orders |
+| T6-14 | Domain package guards | `tests/architecture/test_cpm_full_parser_scope.py` binds all of `src/my_pa/domain/schedule` (stdlib + itself + identifiers; no logging, printing, file access; no denylisted token) | the S6-1 modules live under that package |
+| T6-15 | Trust levels | `TrustLevel` 3 members; `MODEL_PROPOSED` unused in `src` | every plane answer is `MODEL_PROPOSED` with basis tokens (R8 ruling R-3) |
+| T6-16 | Remote keys | `src/my_pa/adapters/remote_request.py`: `_IDEMPOTENT_REMOTE_CAPABILITIES` (server-stamped payload key); `_CLIENT_BOUND_KEY_CAPABILITIES` binds the stamped key to the OAuth client (today the open lineage writes); `is_remote_idempotent` | the 6 client-usable plane writes join **both** sets (R8-F09) |
+| T6-17 | Scopeless policy | `_SCOPELESS` in `src/my_pa/domain/policy/decision.py` | all 26 plane names join it |
+| T6-18 | Restricted MCP profiles | no CPM privilege in any ceiling or opt-in | unchanged |
+| T6-19 | Series binding at import | `ScheduleImportRequest` needs exactly one of `series_id`/`series_name`; `admit_publication` resolves or creates the Series in the admission transaction before any byte is fetched; `series_id` is not null | matching (needs parsed IDs) cannot bind the admitted publication itself (section 11) |
+| T6-20 | Immutable parse products | rows, runs and Stable Activities are immutable and Series-scoped | a publication is never moved between Series |
+| T6-21 | Source-version re-admission | same Series + source version: replay only if role, baseline kind, expected Data Date and supersedes all equal, else `SOURCE_VERSION_CONFLICT`; across Series admissible | section 11.2 defines `already_present` |
+| T6-22 | One job per publication | `a_schedule_publication_has_one_job` | every admission gets its own job |
+| T6-23 | Same-Data-Date files | both retained; no stored latest pointer; order `(data_date, admitted_at, publication_id)`; `latest_update` in `schedule_series.list` = max among role `update`, `complete`/`partial`; only explicit relation `supersedes_publication_id` (≤ 1 successor) | currency derived (section 11.3) |
+| T6-24 | Series rows | `schedule_series` append-only (F1/F2) | no column added; intake marker in a new table |
+| T6-25 | Roles today | `SchedulePublicationRole` = `update`, `baseline`, `reference`; `ScheduleBaselineKind` = `working`, `contract` (set iff `baseline`); used by `src/my_pa/application/commands.py` (validation), `tables.py` (CHECKs derived from the enums), `src/my_pa/infrastructure/persistence/schedule.py`, `src/my_pa/application/schedules.py` (`latest_update` = role `update`; the delta pairs any roles); the S5b-1 revision holds frozen literals; FAST guard `tests/architecture/test_cpm_workbench_worker_scope.py` forbids a `BASELINE`/`previous`/`current_baseline` symbol in `application/schedules.py` and `domain/schedule/compare.py` | section 12.2 retires `reference` and redefines the kinds by a new additive revision; baseline logic lives in new modules, never in those 2 files |
 
-### 1.2 R2 exclusions: reversed and kept
+### 1.2 R2 exclusions and ADR-016 decisions: reversed and kept (recorded in ADR-017)
 
-| R2 | Exclusion | Decision |
+| Source | Exclusion / decision | Decision |
 |---|---|---|
-| §6 | "application-computed CPM, calendars, relationships, critical path, float" | **Reversed** for scenario versions only: the server computes CPM over client-authored logic, labelled `server_computed` over `client_authored` input, never over a publication |
-| §6 / §29.6 | persisted comparison data (and by implication persisted derived schedule data) | **Reversed** for scenarios: versions, CPM results and client outputs are persisted, immutable rows. The publication delta stays on-demand and unpersisted |
-| §6 / §33 | "schedule-specific Task/Commitment/Entity/Constraint links" | **Reversed** only as lineage associations (ADR-015 ledger) between the 5 families of section 5 and existing families, `client_identified` unless the human channel writes them; no native record is mutated, coerced or linked by a column |
-| §6 | (no scenario data) | **Reversed**: scenario data is a new, explicitly non-authoritative data class |
-| §6, §34 | fuzzy ID matching; AI-resolved canonical facts; XER/XML; frontend; production | **Kept** |
-| §10, §29 | publications immutable source facts; baselines explicit | **Kept**: nothing in this plane writes a `schedule_*` S5 table |
-| ADR-016 decision 4 | import operator-only attested-local | **Kept**: the plane reads accepted publications; it imports nothing |
-| OD-08 | uncertified totals never reported | **Kept**: section 7 |
+| R2 §6 | application-computed CPM, calendars, relationships, critical path, float | **Reversed** for scenario versions only, never over a publication |
+| R2 §6, §29.6 | persisted derived schedule data | **Reversed** for scenarios: versions, CPM results, outputs, match decisions and baseline events are immutable rows; the publication delta stays on demand |
+| R2 §6, §33; ADR-016 decision 1 | schedule-specific links to native records | **Reversed** only as ADR-015 lineage associations (section 5); no native column, coercion or mutation |
+| ADR-016 decision 4 | import operator-only, attested-local | **Kept**, extended: an auto-matched import may be completed by a worker-performed second admission that inherits the operator's attested import (section 11.2) |
+| ADR-016 decision 7 | changes derived, never stored | **Kept** for the delta; the baseline comparison reuses it on demand |
+| ADR-016 decision 8 / R2 §30 | role is a required input; `reference` role; nothing derives a baseline or a previous publication | **Superseded**: a baseline is an operator-approved Baseline object (section 12); `reference` is retired; a derived "current standard update" exists (section 11.3); nothing derives a baseline |
+| R2 §6, §34 | fuzzy matching; AI facts; XER/XML; frontend; production | **Kept** (matching is exact-ID only) |
+| OD-08 | uncertified totals never reported | **Kept** (section 7) |
 
 ---
 
 ## 2. Domain model
 
-### 2.1 Identifiers (S6-2 adds them; S6-1 code does not need them)
+### 2.1 Identifiers (S6-2 adds them)
 
 | `IdKind` member | Prefix | Row |
 |---|---|---|
 | `SCHEDULE_SCENARIO` | `sscn` | one Scenario |
 | `SCHEDULE_SCENARIO_VERSION` | `sscv` | one immutable Scenario Version |
-| `SCHEDULE_CPM_RUN` | `scpm` | one server CPM run of one version under one engine version |
+| `SCHEDULE_CPM_RUN` | `scpm` | one CPM run of one version under one engine version |
 | `SCHEDULE_SCENARIO_OUTPUT` | `ssco` | one client-asserted output |
+| `SCHEDULE_SERIES_MATCH` | `ssmd` | one auto-match decision |
+| `SCHEDULE_BASELINE` | `sbl` | one Baseline (proposed or approved) |
+| `SCHEDULE_BASELINE_EVENT` | `sbev` | one baseline lifecycle event |
+| `SCHEDULE_GOVERNING_EVENT` | `sgov` | one governing-baseline event |
 
-Appended after `SCHEDULE_IMPORT_ISSUE` with the S5b-1 comment form (156 → 160). The plane's
-idempotency ledger is keyed by `(principal_id, capability, idempotency_key)` (section 6.3)
-and mints no identifier kind of its own.
+Appended after `SCHEDULE_IMPORT_ISSUE` (156 → 164). The plane's idempotency ledger is keyed by
+`(principal_id, capability, idempotency_key)` and mints no identifier kind of its own.
 
 ### 2.2 Scenario and Scenario Version
 
 | Record | Fields | Rules |
 |---|---|---|
-| Scenario | `scenario_id`, `principal_id`, `project_id`, `series_id`, `name` (`normalize_display_text`, 1..200 characters, the Series-name refusal set), `description` (0..2,000 characters or null), `origin_kind` ∈ `publication`\|`version`, `origin_publication_id` (`spub`, iff `publication`), `origin_version_id` (`sscv`, iff `version`, of the same Principal, any Scenario of the same Series), provenance (section 6.5), `created_at` | immutable after insert (no update capability exists; S6-U01). `project_id`/`series_id` are the origin's |
-| Scenario Version | `version_id`, `principal_id`, `scenario_id`, `version_no` (1..500), `parent_version_id` (null iff `version_no = 1`, else the version `version_no − 1` of the same Scenario), `label` ∈ `what_if`\|`update`\|`simulation_input`, `note` (0..2,000 characters or null), `content_sha256`, `content_size_bytes`, content (section 2.3), `change_set_sha256` and change set (null iff `version_no = 1`), `snapshot_report` (iff `version_no = 1`), counts (`activity_count`, `relationship_count`, `calendar_count`), `distribution_spec_sha256` (section 4.3), provenance, `created_at` | immutable, append-only. A Scenario is a **linear** chain; a branch is a new Scenario whose version 1 copies another version (`origin_kind = version`). Version 1 is the exact snapshot (publication origin) or the byte-identical copy of the origin version's content (version origin); edits start at version 2 (S6-D03) |
+| Scenario | `scenario_id`, `principal_id`, `project_id`, `series_id`, `name` (`normalize_display_text`, 1..200 characters, the Series-name refusal set), `description` (0..2,000 or null), `origin_kind` ∈ `publication`\|`version`, `origin_publication_id` (`spub`, iff `publication`), `origin_baseline_id` (`sbl`, set iff the Scenario was created `from_baseline_id`; the Baseline's exact publication is `origin_publication_id`), `origin_version_id` (`sscv`, iff `version`), provenance (section 6.5), `created_at` | immutable (S6-U01). The origin publication is eligible and not in an intake Series (section 11.2); a baseline origin is an **approved** Baseline (section 12) |
+| Scenario Version | `version_id`, `principal_id`, `scenario_id`, `version_no` (1..500), `parent_version_id` (null iff `version_no = 1`, else `version_no − 1`), `label` ∈ `what_if`\|`update`\|`simulation_input`, `note` (0..2,000 or null), `content_sha256`, `content_size_bytes`, content, `change_set_sha256` and change set (null iff `version_no = 1`), `snapshot_report` (iff `version_no = 1` from a publication), counts, `distribution_spec_sha256`, provenance, `created_at` | immutable, append-only; a Scenario is a **linear** chain; a branch is a new Scenario whose version 1 copies another version byte-for-byte; edits start at version 2 (S6-D03) |
 
-The label is metadata, never semantics: the engine never reads it. `update` means "the client
-updated this schedule (progress, re-forecast)"; `simulation_input` means "prepared for a
-client Monte Carlo"; `what_if` is everything else. None makes the version authoritative.
+The label is metadata; the engine never reads it, and no label makes a version authoritative.
 
 ### 2.3 Content document and its hash
 
@@ -196,85 +227,79 @@ The content of one version is the canonical object `schedule-scenario-content-v1
 
 | Rule | Value |
 |---|---|
-| Fixed keys | every key above is present on every object; absent values are explicit `null` (`wbs_path`, `calendar`, `original_minutes`, `remaining_minutes`, `progress`, `distribution`, `published_reference`, `must_finish_by`); `constraints` is a list (possibly empty) |
-| Ordering | `calendars` by `key`; `exceptions` by `date`; `activities` by `key`; `constraints` by `type` in the order `SNET, FNET, SNLT, FNLT, MSO, MFO`; `relationships` by `(pred, succ)`; all string comparison is Python `str` order (code points) |
-| Strings | NFC (`normalize_display_text` for `name` and each `wbs_path` label; keys are ASCII by grammar) |
-| Numbers | Python `int` only; a `bool` is never an `int`; no `float`, no `Decimal` (durations in `published_reference` are the S5b-2 decimal **strings**) |
-| Instants | `YYYY-MM-DDTHH:MM`, minute resolution, naive (the schedule's own wall clock; no time zone is modelled, S6-D07) |
-| Bytes | `canonical_json_bytes(document)` (T6-12) |
-| Hash | `content_sha256 = sha256(b"schedule-scenario-content-v1\n" + bytes)` lowercase hex |
-| Excluded | every identifier of the version, Scenario, parent, label, note, provenance and time, so equal logic hashes equal across versions and Scenarios |
-| Bound | `content_size_bytes ≤ 33,554,432` (32 MiB) or the write is `invalid_request(CONTENT_SIZE)` |
+| Fixed keys | every key above is present; absent values are explicit `null`; `constraints` is a list |
+| Ordering | `calendars` by `key`; `exceptions` by `date`; `activities` by `key`; `constraints` by `SNET, FNET, SNLT, FNLT, MSO, MFO`; `relationships` by `(pred, succ)`; Python `str` order (code points) |
+| Strings | NFC (`normalize_display_text` for `name` and each `wbs_path` label) |
+| Numbers | Python `int` only (never `bool`); no `float`, no `Decimal` |
+| Instants | `YYYY-MM-DDTHH:MM`, minute resolution, naive (S6-D07) |
+| Hash | `content_sha256 = sha256(b"schedule-scenario-content-v1\n" + canonical_json_bytes(document))` |
+| Excluded | every identifier, label, note, provenance and time of the version |
+| Bound | ≤ 33,554,432 bytes (32 MiB) or `invalid_request(CONTENT_SIZE)` |
 
-The change set (section 2.9) is stored as `schedule-scenario-change-set-v1`
-(`{"schema": ..., "ops": [...]}`, ops in request order) with
-`change_set_sha256 = sha256(b"schedule-scenario-change-set-v1\n" + canonical)`.
+The change set is stored as `schedule-scenario-change-set-v1` (`{"schema", "ops"}`, request
+order) with `change_set_sha256 = sha256(b"schedule-scenario-change-set-v1\n" + canonical)`.
 
 ### 2.4 Activities and keys
 
 | Field | Rule |
 |---|---|
-| `key` | baseline: the `sact_` identifier (validated `IdKind.SCHEDULE_ACTIVITY`); added: `x:` + `[A-Za-z0-9_.-]{1,64}`. Unique within a version. `activity.add` refuses an `sact_` key (`invalid_request(ACTIVITY_KEY)`), so a client never fabricates source identity. A key removed in a version may be re-added later only if it is an `x:` key; a removed baseline activity cannot be restored in that Scenario (fork an earlier version instead; S6-U02) |
+| `key` | baseline: the `sact_` id; added: `x:` + `[A-Za-z0-9_.-]{1,64}`; unique per version; `activity.add` refuses an `sact_` key; a removed `sact_` activity cannot be restored in that Scenario (S6-U02) |
 | `name` | 1..2,000 characters after `normalize_display_text` |
-| `kind` | `task` or `milestone`; a `milestone` has `original_minutes = remaining_minutes = 0` |
-| `wbs_path` | null or 1..32 labels, each 1..2,000 characters (S5b constants); inert to the engine |
-| `calendar` | null (= `settings.default_calendar`) or an existing calendar key |
-| `original_minutes` | null or 0..5,256,000; informational to the engine |
-| `remaining_minutes` | null or 0..5,256,000; the duration the engine schedules (section 3.5); null makes the CPM run `rejected` with `missing_duration` |
-| `published_reference` | set only by the snapshot, never by an op; null for added activities |
+| `kind` | `task` or `milestone`; a milestone has both durations 0 |
+| `wbs_path` | null or 1..32 labels of 1..2,000 characters; inert |
+| `calendar` | null (= default) or an existing key |
+| `original_minutes` | null or 0..5,256,000; informational |
+| `remaining_minutes` | null or 0..5,256,000; the scheduled duration; null rejects the run (`missing_duration`) |
+| `published_reference` | set only by the snapshot; null for added activities |
 
 ### 2.5 Baseline snapshot (version 1 from a publication)
 
-Input: an owned publication whose **effective** status is `complete` or `partial` (else
-`conflict(STATUS)`), `minutes_per_source_unit` (integer 1..1,440, required — the PDF carries
-no unit, T6-02; S6-O02), 1..32 calendars, `default_calendar`, and an optional
-`data_date_time` (`HH:MM`, default `00:00`).
+Input: an owned, eligible, non-intake publication (else `conflict(STATUS)`), named directly
+(`from_publication_id`) or through an approved Baseline (`from_baseline_id`);
+`minutes_per_source_unit` (1..1,440, required, no default — the PDF carries no unit);
+1..32 calendars; `default_calendar`; optional `data_date_time` (`HH:MM`, default `00:00`).
 
 | Content field | Snapshot value |
 |---|---|
-| `data_date` | the publication's `data_date` at `data_date_time` |
-| `settings` | `default_calendar` as given; `lag_calendar = predecessor`, `progress_policy = retained_logic`, `must_finish_by = null`, `critical_float_threshold_minutes = 0` (S6-O03..O06 defaults) |
-| activities | exactly the accepted parser run's `activity` and `milestone` rows (the `schedule_activities.list` set, bounded 25,000), one per Stable Activity; `ambiguous` and summary rows are never copied |
-| `key` | the row's `schedule_activity_id` |
-| `name`, `wbs_path` | `activity_name`, `hierarchy_path` |
+| `data_date` | publication `data_date` at `data_date_time` |
+| `settings` | given default calendar; `lag_calendar = predecessor`, `progress_policy = retained_logic`, `must_finish_by = null`, threshold 0 |
+| activities | exactly the accepted run's `activity`/`milestone` rows (≤ 25,000); never `ambiguous` or summary rows |
+| `key`, `name`, `wbs_path` | `schedule_activity_id`, `activity_name`, `hierarchy_path` |
 | `kind` | `activity → task`, `milestone → milestone` |
 | `calendar` | null |
-| `original_minutes` / `remaining_minutes` | for a `published_value` cell: `int((value * minutes_per_source_unit).quantize(Decimal(1), ROUND_HALF_EVEN))`; any other state: null. A `milestone` gets 0 and 0 whatever its cells say. A non-integral product is counted in `snapshot_report.durations_quantized` |
-| `constraints`, `progress`, `distribution` | empty, null, null — the `*` marker is **not** read as an actual or a constraint (S5a §4.7) |
-| `published_reference` | the publication id, the published Activity ID and the 4 cells as S5b-2 §3.5.2 serializes them |
+| `original_minutes` / `remaining_minutes` | for a `published_value` cell `v` (`0 ≤ v`): `m = int((v * minutes_per_source_unit).quantize(Decimal(1), ROUND_HALF_EVEN))`; if `m > 5,256,000` the field is **null** and counted in `durations_out_of_range` (never clamped; the run then rejects with `missing_duration` until the client sets it, R8-F05); other states: null (counted `original_missing`/`remaining_missing`); a milestone gets 0 and 0; a non-integral product is counted in `durations_quantized` |
+| `constraints`, `progress`, `distribution` | empty, null, null (the `*` marker is never read) |
+| `published_reference` | publication id, published Activity ID and the 4 cells as S5b-2 §3.5.2 serializes them |
 | relationships | none |
 
-`snapshot_report` = `{activities, milestones, durations_quantized, original_missing,
-remaining_missing}` (non-negative integers). A snapshot whose content exceeds 32 MiB is
-`invalid_request(CONTENT_SIZE)`.
+`snapshot_report` = `{activities, milestones, durations_quantized, durations_out_of_range,
+original_missing, remaining_missing}`.
 
 ### 2.6 Relationships
 
-`{pred, succ, type ∈ FS|SS|FF|SF, lag_minutes}`; both keys exist in the version (else the op
-is refused, so a stored version has no dangling reference); `pred ≠ succ`; at most one
-relationship per ordered `(pred, succ)` (a second type between the same pair is refused,
-S6-D05); `lag_minutes` is a signed integer in `[−1,051,200, 1,051,200]`; a negative lag is a
-lead and is allowed. Cycles are **storable** (a client may be mid-edit) and are reported by
-the CPM run (section 3.4).
+`{pred, succ, type ∈ FS|SS|FF|SF, lag_minutes}`; both keys exist; `pred ≠ succ`; ≤ 1
+relationship per ordered pair (S6-D05); `lag_minutes ∈ [−1,051,200, 1,051,200]` working
+minutes on the lag calendar (on a 480-minute-per-day calendar that is about 8.4 calendar
+years; the horizon check of section 3.2 still bounds it, R8-F19). Cycles are storable and
+reported by the run.
 
 ### 2.7 Calendars
 
 | Item | Rule |
 |---|---|
-| `key` | `[a-z0-9_-]{1,32}`, unique; 1..32 calendars per version |
-| `week` | exactly 7 day patterns, Monday first (`date.weekday()` order) |
-| day pattern / exception intervals | 0..4 intervals `[s, e)`, integers, `0 ≤ s < e ≤ 1,440`, sorted, strictly separated (`e_k < s_{k+1}`, so the representation is canonical — touching intervals must be merged by the client) |
-| working week | the 7 patterns together hold ≥ 1 working minute, else `invalid_request(CALENDAR)` |
-| `exceptions` | dates `2000-01-01..2099-12-31`, unique; intervals replace that date's pattern; an empty list is a holiday; ≤ 1,000 per calendar and ≤ 2,000 per version |
-| default | `settings.default_calendar` must exist; `calendar.remove` of the default or of a referenced calendar is refused |
+| `key` | `[a-z0-9_-]{1,32}`, unique; 1..32 per version |
+| `week` | 7 day patterns, Monday first |
+| intervals | 0..4 per day, `0 ≤ s < e ≤ 1,440`, sorted, strictly separated (`e_k < s_{k+1}`) |
+| working week | ≥ 1 working minute across the 7 patterns, else `invalid_request(CALENDAR)` |
+| `exceptions` | dates 2000-01-01..2099-12-31, unique; replace the day's pattern; empty = holiday; ≤ 1,000 per calendar, ≤ 2,000 per version |
+| default | must exist; removing the default or a referenced calendar is refused |
 
-### 2.8 Constraints, progress, durations and distributions
+### 2.8 Constraints, progress, durations, distributions
 
-**Constraints** (closed set; at most 1 "early" ∈ {`SNET`, `FNET`} and at most 1 "late" ∈
-{`SNLT`, `FNLT`}, or exactly 1 "mandatory" ∈ {`MSO`, `MFO`} and nothing else; `at` within the
-horizon of section 3.1). Semantics are in section 3.5/3.6; they apply only to `not_started`
-activities, and a constraint on a started activity is kept in content and reported
-`constraint_ignored_started`.
+**Constraints:** at most 1 early (`SNET`/`FNET`) and 1 late (`SNLT`/`FNLT`), or exactly 1
+mandatory (`MSO`/`MFO`) alone; `at` within the horizon. They apply only to `not_started`
+activities (S6-D15, recorded as operator decision S6-O16); a started activity's constraint is
+kept and reported `constraint_ignored_started`.
 
 | Type | Kind | Forward | Backward |
 |---|---|---|---|
@@ -282,78 +307,62 @@ activities, and a constraint on a started activity is kept in content and report
 | `FNET` | hard early | start bound `retreat(C, at, d)` | — |
 | `SNLT` | soft late | — (violation reported) | finish bound `advance(C, at, d)` |
 | `FNLT` | soft late | — (violation reported) | finish bound `at` |
-| `MSO` | mandatory | start := `at` (overrides logic, reported) | finish := `advance(C, at, d)` |
+| `MSO` | mandatory | start := `at` | finish := `advance(C, at, d)` |
 | `MFO` | mandatory | start := `retreat(C, at, d)` | finish := `at` |
 
-**Progress.** `progress` null = `not_started`; `{actual_start, null}` = `in_progress`;
-`{actual_start, actual_finish}` = `complete`. `actual_start ≤ data_date`;
-`actual_start ≤ actual_finish ≤ data_date`; `actual_finish` without `actual_start` is
-refused; a `complete` activity has `remaining_minutes = 0` (the op sets it); an
-`in_progress` activity keeps its `remaining_minutes` (≥ 0). Out-of-sequence progress is
-**stored** and reported (section 3.10), never refused.
+**Progress:** null = `not_started`; `{actual_start, null}` = `in_progress`; both =
+`complete`; `actual_start ≤ actual_finish ≤ data_date`; finish without start refused;
+`complete` forces `remaining_minutes = 0`. Out-of-sequence progress is stored and reported.
 
-**Durations.** Integer working minutes on the activity's calendar. The engine reads only
-`remaining_minutes` (section 3.5).
-
-**Distributions** (data only; the server never samples, ever). Each applies to the
-activity's remaining duration, in integer minutes in `[0, 5,256,000]`:
-
-| `kind` | Fields | Validation |
-|---|---|---|
-| `triangular` | `min`, `mode`, `max` | `min ≤ mode ≤ max`, `min < max` |
-| `pert` | `min`, `mode`, `max` | same (the client's PERT shape parameter is its own; not stored) |
-| `uniform` | `min`, `max` | `min < max` |
-| `bounded_normal` | `mean`, `sd`, `min`, `max` | `sd > 0`, `min ≤ mean ≤ max`, `min < max` |
+**Distributions** (data only; the server never samples), integer minutes in
+`[0, 5,256,000]`, applying to remaining duration: `triangular` (`min ≤ mode ≤ max`,
+`min < max`), `pert` (same), `uniform` (`min < max`), `bounded_normal` (`sd > 0`,
+`min ≤ mean ≤ max`, `min < max`).
 
 ### 2.9 Change-set grammar and application
 
-A change set is 1..5,000 ops, canonical size ≤ 4,194,304 bytes. Ops apply **in request
-order** to a working copy of the parent content; each op is validated against the state left
-by the ops before it; the first failing op refuses the whole change set and nothing is
-written. The pure function returns `ChangeSetRefusal(op_index, op_error)`; the public error
-is `invalid_request` with the safe details `CHANGE_SET` and the one `SafeDetail` member
-named for its `op_error` (for example `change_set_key_absent`). The repository's error
-contract carries only closed tokens, so the 0-based `op_index` is **not** disclosed in this
-slice (S6-U09). No content is echoed. After the last op the whole
-content is re-validated (sections 2.4–2.8) and canonicalized; an empty effective change
-(content hash equal to the parent's) is allowed and recorded.
+1..5,000 ops, canonical ≤ 4,194,304 bytes, applied **in request order** to a working copy of
+the parent content, each validated against the state left by the ops before it; then the
+whole content is re-validated and canonicalized. The pure function returns
+`ChangeSetRefusal(op_index, op_error)` on the first failure; a failure of the final
+re-validation is `op_index = len(ops)`, `op_error = content_invalid` (R8-F18). The public
+error is `invalid_request` with the safe details `CHANGE_SET` and the `SafeDetail` member
+named `change_set_<op_error>`; the error contract carries only closed tokens, so `op_index`
+is not disclosed (S6-U09). Nothing is written on a refusal. An empty effective change is
+allowed and recorded.
 
 | Op | Fields | Effect / refusal |
 |---|---|---|
-| `activity.add` | `key` (`x:`), `name`, `kind`, `calendar`, `original_minutes`, `remaining_minutes`, `wbs_path` | adds; refuses an existing key or an `sact_` key |
-| `activity.edit` | `key`, any of `name`, `kind`, `calendar`, `wbs_path` | sets the given fields; `kind → milestone` requires both durations 0 |
-| `activity.remove` | `key` | removes it **and** every relationship naming it; the cascade count is in `application_report.relationships_removed` |
-| `duration.set` | `key`, `original_minutes` and/or `remaining_minutes` (null clears) | — |
-| `distribution.set` / `distribution.clear` | `key`, `distribution` | — |
-| `relationship.add` | `pred`, `succ`, `type`, `lag_minutes` | refuses an existing pair, a self-loop, a missing key |
-| `relationship.edit` | `pred`, `succ`, `type` and/or `lag_minutes` | refuses an absent pair |
-| `relationship.remove` | `pred`, `succ` | refuses an absent pair |
-| `calendar.put` | a whole calendar | creates or replaces |
-| `calendar.remove` | `key` | refuses the default or a referenced calendar |
-| `calendar.exception.put` / `calendar.exception.remove` | `key`, `date`, `intervals` | — |
-| `constraint.set` / `constraint.clear` | `key`, `type`, `at` | `set` replaces the same slot; mixing mandatory with others is refused |
-| `progress.set` | `key`, `actual_start`, `actual_finish`, `remaining_minutes` | the section 2.8 rules, against the data date **after** this op's predecessors |
-| `progress.clear` | `key` | back to `not_started` |
-| `data_date.set` | `at` | re-validated at the end (progress must stay ≤ the new data date) |
-| `settings.set` | any of `default_calendar`, `lag_calendar`, `progress_policy`, `must_finish_by`, `critical_float_threshold_minutes` (0..525,600) | — |
+| `activity.add` | `key` (`x:`), `name`, `kind`, `calendar`, `original_minutes`, `remaining_minutes`, `wbs_path` | refuses an existing or `sact_` key |
+| `activity.edit` | `key`, any of `name`, `kind`, `calendar`, `wbs_path` | `kind → milestone` needs both durations 0 |
+| `activity.remove` | `key` | also removes its relationships (`application_report.relationships_removed`) |
+| `duration.set` | `key`, `original_minutes` and/or `remaining_minutes` | — |
+| `distribution.set` / `.clear` | `key`, `distribution` | — |
+| `relationship.add` / `.edit` / `.remove` | `pred`, `succ`, `type`, `lag_minutes` | existing pair, self-loop, missing key refused |
+| `calendar.put` / `.remove` | calendar / `key` | default or referenced calendar not removable |
+| `calendar.exception.put` / `.remove` | `key`, `date`, `intervals` | — |
+| `constraint.set` / `.clear` | `key`, `type`, `at` | slot rules |
+| `progress.set` / `.clear` | `key`, `actual_start`, `actual_finish`, `remaining_minutes` | section 2.8 rules against the current working data date |
+| `data_date.set` | `at` | checked again in the final re-validation |
+| `settings.set` | any settings field (threshold 0..525,600) | — |
 
-`op_error` codes (closed): `unknown_op`, `invalid_field`, `key_exists`, `key_absent`,
+`op_error` (closed, 14): `unknown_op`, `invalid_field`, `key_exists`, `key_absent`,
 `source_key_refused`, `relationship_exists`, `relationship_absent`, `self_loop`,
 `calendar_absent`, `calendar_in_use`, `constraint_conflict`, `progress_invalid`,
-`bound_exceeded`. `application_report` = `{ops_applied, relationships_removed,
-content_changed: bool}`.
+`bound_exceeded`, `content_invalid`. `application_report` = `{ops_applied,
+relationships_removed, content_changed}`.
 
-### 2.10 Version bounds
+### 2.10 Version and storage bounds
 
 | Bound | Value |
 |---|---|
-| activities | 25,000 (the S5a row cap) |
-| relationships | 100,000 |
-| calendars | 32; exceptions 1,000 per calendar, 2,000 per version |
+| activities / relationships | 25,000 / 100,000 |
+| calendars / exceptions | 32 / 1,000 per calendar, 2,000 per version |
 | versions per Scenario | 500 |
-| Scenarios per Principal | 200 |
-| versions per Principal | 20,000 |
-| content | 32 MiB canonical |
+| Scenarios per Principal / versions per Principal | 200 / 20,000 |
+| content per version | 32 MiB canonical |
+| stored plane bytes per Principal (canonical content + results + outputs) | 2 GiB (`rate_limited(STORAGE_QUOTA)` beyond) |
+| new stored plane bytes per Principal per rolling day | 256 MiB |
 
 ---
 
@@ -361,67 +370,56 @@ content_changed: bool}`.
 
 ### 3.1 Time model
 
-Integer minutes on one naive axis: minute `0` = `2000-01-01T00:00`, horizon `H = 52,596,000`
-= `2100-01-01T00:00`; valid instants are `0 ≤ t ≤ H`. Minute `m` is the half-open interval
-`[m, m+1)`. Integers make every operation exact and platform-independent; `Decimal` would
-add nothing (all inputs are whole minutes) and `float` is forbidden (S6-D06). Day index
-`k = m // 1440`, minute-of-day `m % 1440`, date `2000-01-01 + k days`, weekday from
-`date.weekday()`.
+Integer minutes on one naive axis: minute `0` = `2000-01-01T00:00`, `H = 52,596,000` =
+`2100-01-01T00:00`; valid instants `0 ≤ t ≤ H`. Minute `m` is `[m, m+1)`. Day index
+`m // 1440`, minute-of-day `m % 1440`, weekday from `date.weekday()`. No `float` (S6-D06).
 
 ### 3.2 Calendar functions (calendar `C`)
 
 | Function | Definition |
 |---|---|
-| `working(C, m)` | the day's pattern is the exception's intervals if the date has an exception, else `week[weekday]`; `m` works iff its minute-of-day lies in some `[s, e)` |
-| `W(C, a, b)` | `a ≤ b`: the number of working minutes `m` with `a ≤ m < b`; `a > b`: `−W(C, b, a)` (signed, additive: `W(a,c) = W(a,b) + W(b,c)`) |
-| `advance(C, t, d)`, `d ≥ 0` | `d = 0`: `t`. Else the smallest `t′ > t` with `W(C, t, t′) = d` (the end of the `d`-th working minute at or after `t`) |
-| `retreat(C, t, d)`, `d ≥ 0` | `d = 0`: `t`. Else the largest `t′ < t` with `W(C, t′, t) = d` (the start of the `d`-th working minute before `t`) |
-| `next_work(C, t)` | the smallest `m ≥ t` with `working(C, m)` |
-| `prev_end(C, t)` | the largest `m ≤ t` with `working(C, m − 1)` |
+| `working(C, m)` | the day's pattern is the exception's intervals if the date has one, else `week[weekday]`; `m` works iff its minute-of-day is in some `[s, e)` |
+| `W(C, a, b)` | `a ≤ b`: count of working `m` with `a ≤ m < b`; `a > b`: `−W(C, b, a)` (signed, additive) |
+| `advance(C, t, d)` | `d = 0`: `t`; else the smallest `t′ > t` with `W(C, t, t′) = d` |
+| `retreat(C, t, d)` | `d = 0`: `t`; else the largest `t′ < t` with `W(C, t′, t) = d` |
+| `next_work(C, t)` | smallest `m ≥ t` with `working(C, m)` |
+| `prev_end(C, t)` | largest `m ≤ t` with `working(C, m − 1)` |
 | `shift(C, t, L)` | `advance(C, t, L)` if `L ≥ 0`, else `retreat(C, t, −L)` |
-| `twenty_four_hour` | the implicit calendar in which every minute works (`W = b − a`, `advance = t + d`, …) |
+| `twenty_four_hour` | every minute works |
 
-Any result outside `[0, H]` rejects the run with `horizon_exceeded`. Implementation
-requirement (not semantics): a per-calendar cumulative working-minute table by day over the
-span reached, so each function is `O(log days)`; a minute-by-minute loop is forbidden outside
-tests.
+A result outside `[0, H]` stops the run: `rejected`, 1 issue `horizon_exceeded` naming the
+activity being computed and, when the failing call came from a relationship bound, that
+relationship (`pred`, `succ`), else `pred = succ = null` (R8-F02). Implementation
+requirement: per-calendar cumulative day tables over the span reached, `O(log days)` per
+call; minute loops only in tests.
 
 ### 3.3 States, durations, lag calendar
 
-`state(j)` from progress (section 2.8). `C_j` = the activity's calendar or the default.
-`d_j = remaining_minutes` (for `not_started` and `in_progress`). `snap(j, t) = next_work(C_j,
-t)` if `d_j > 0`, else `t`; `snap_back(j, t) = prev_end(C_j, t)` if `d_j > 0`, else `t`.
-The lag calendar `Lc(i, k)` of relationship `i → k` is `C_i` (`predecessor`, default), `C_k`
-(`successor`) or `twenty_four_hour`, from `settings.lag_calendar`. `D` = the data date.
+`state(j)` from progress. `C_j` = the activity's calendar or the default. `d_j =
+remaining_minutes`. `snap(j, t) = next_work(C_j, t)` if `d_j > 0` else `t`;
+`snap_back(j, t) = prev_end(C_j, t)` if `d_j > 0` else `t`. `Lc(i, k)` = `C_i`
+(`predecessor`, default), `C_k` (`successor`) or `twenty_four_hour`. `D` = the data date.
 
 ### 3.4 Validation, topological order and cycles
 
-Checked in this order; the first failing check rejects the run (status `rejected`, no
-dates) and emits 1 issue per offending element: `empty_network` (0 activities),
-`unknown_calendar` (per activity naming an absent calendar), `dangling_relationship` (per
-relationship naming an absent key; both impossible for a stored version, checked
-defensively), `missing_duration` (per incomplete activity with `remaining_minutes = null`),
-then the topological sort.
+The first failing check rejects the run with 1 issue per offending element: `empty_network`
+(subject fields null), `unknown_calendar` (per activity), `dangling_relationship` (per
+relationship), `missing_duration` (per incomplete activity with null `remaining_minutes`),
+then the sort.
 
-**Order.** Kahn's algorithm with a min-heap on `key`: start with every activity of in-degree
-0; pop the smallest key; append it; for each outgoing relationship in `succ` order decrement
-the successor's in-degree and push it at 0. The pop sequence is the **topological order**
-and `topo_index` (0-based). It depends only on content, never on input order.
+**Order.** Kahn with a min-heap on `key`; successors decremented in `succ` order; the pop
+sequence is the topological order and `topo_index`.
 
-**Cycle.** If fewer than all activities are popped, let `R` be the residual set. From
-`s = min(R)`, repeatedly step to the smallest-key predecessor of the current node that lies
-in `R` (every node of `R` has one) until a node repeats; the repeated segment, reversed into
-successor order and rotated to start at its smallest key, is **the** reported cycle. The run
-is `rejected` with one issue `cycle_detected` carrying `cycle` (the first 100 keys) and
-`cycle_length`, and the summary carries `residual_count = |R|`. Cost `O(V + E)`.
+**Cycle.** If not all are popped, `R` = residual set; from `s = min(R)` step repeatedly to the
+smallest-key predecessor inside `R` until a node repeats; the repeated segment, reversed into
+successor order and rotated to its smallest key, is the cycle. The run is `rejected` with 1
+issue `cycle_detected` (subject fields null) and the summary carries `cycle` (first 100 keys),
+`cycle_length` and `residual_count = |R|` (R8-F02); all 3 are null when there is no cycle.
 
 ### 3.5 Forward pass (topological order)
 
-For each activity `j`:
-
-1. `complete`: `ES = actual_start`, `EF = actual_finish`; nothing else.
-2. Relationship bounds of an incoming `i → j` (type, lag `L`, `Lc = Lc(i, j)`), using `i`'s
-   already computed `ES_i`, `EF_i`:
+1. `complete`: `ES = actual_start`, `EF = actual_finish`.
+2. Bounds from an incoming `i → j` (lag `L`, `Lc = Lc(i, j)`):
 
    | Type | Bound on `j`'s start |
    |---|---|
@@ -430,93 +428,89 @@ For each activity `j`:
    | FF | `retreat(C_j, shift(Lc, EF_i, L), d_j)` |
    | SF | `retreat(C_j, shift(Lc, ES_i, L), d_j)` |
 
-3. `not_started`: `x = snap(j, max({D} ∪ relationship bounds ∪ {SNET at} ∪ {retreat(C_j,
-   FNET at, d_j)}))`. Mandatory pin `p` (`MSO`: `at`; `MFO`: `retreat(C_j, at, d_j)`): if
-   `p < D`, report `mandatory_constraint_before_data_date` and drop the pin (both passes);
-   else if `x > p` report `mandatory_constraint_overrides_logic`; then `x = p` (no snap).
-   `ES = x`, `EF = advance(C_j, x, d_j)`.
-4. `in_progress`: `ES = actual_start` (reported). The remaining work starts at
-   `RS = snap(j, max({D} ∪ bounds))`, where the bounds are those of step 2 under
-   `retained_logic` and none under `progress_override`; `EF = advance(C_j, RS, d_j)`.
-   Constraints are ignored (section 2.8).
+3. `not_started`: `x = snap(j, max({D} ∪ bounds ∪ {SNET at} ∪ {retreat(C_j, FNET at,
+   d_j)}))`. Mandatory pin `p` (`MSO`: `at`; `MFO`: `retreat(C_j, at, d_j)`): if `p < D`
+   report `mandatory_constraint_before_data_date` and drop the pin in both passes; else if
+   `x > p` report `mandatory_constraint_overrides_logic`; then `x = p` (no snap).
+   `ES = RS = x`, `EF = advance(C_j, x, d_j)`.
+4. `in_progress`: `ES = actual_start`; `RS = snap(j, max({D} ∪ bounds))` with the step 2
+   bounds under `retained_logic` and none under `progress_override`; `EF = advance(C_j, RS,
+   d_j)`; constraints ignored.
 
-`RS_j = ES_j` for a `not_started` activity. Project finish `PF = max EF` over **all**
-activities.
+`PF = max EF` over all activities.
 
 ### 3.6 Backward pass (reverse topological order)
 
-A relationship `j → k` is **considered** unless `k` is `complete`, or `k` is `in_progress`
-under `progress_override`. For each activity `j`:
+`j → k` is **considered** unless `k` is `complete`, or `k` is `in_progress` under
+`progress_override`.
 
-1. `complete`: `LS = ES`, `LF = EF`; total and free float are `null`; never critical.
-2. Bounds on `j`'s finish from each considered `j → k` (`Lc = Lc(j, k)`; `LS_k`, `LF_k`
-   already computed; for an `in_progress` `k`, `LS_k` is its late remaining start):
+1. `complete`: `LS = ES`, `LF = EF`; floats null; never critical.
+2. Finish bounds from each considered `j → k` (`Lc = Lc(j, k)`):
 
-   | Type | Bound on `j`'s finish | When `j` is `in_progress` |
+   | Type | Bound | `j` `in_progress` |
    |---|---|---|
    | FS | `shift(Lc, LS_k, −L)` | applies |
    | FF | `shift(Lc, LF_k, −L)` | applies |
-   | SS | `advance(C_j, shift(Lc, LS_k, −L), d_j)` | skipped (its start has happened) |
+   | SS | `advance(C_j, shift(Lc, LS_k, −L), d_j)` | skipped |
    | SF | `advance(C_j, shift(Lc, LF_k, −L), d_j)` | skipped |
 
-3. If step 2 produced **no** bound — `j` has no considered outgoing relationship, or `j` is
-   `in_progress` and every considered one is SS/SF — add the open-end bound
-   `must_finish_by` if set, else `PF` (S6-D08).
+3. If step 2 produced no bound, add `must_finish_by` if set, else `PF` (S6-D08, accepted by
+   R8 ruling R-2).
 4. `not_started` only: add `FNLT at` and `advance(C_j, SNLT at, d_j)`.
-5. `y = snap_back(j, min(bounds))`; a kept mandatory pin overrides: `MFO`: `y = at`; `MSO`:
-   `y = advance(C_j, at, d_j)`. `LF = y`, `LS = retreat(C_j, y, d_j)` (for an
-   `in_progress` activity `LS` is its late **remaining** start).
+5. `y = snap_back(j, min(bounds))`; a kept pin overrides (`MFO`: `y = at`; `MSO`: `y =
+   advance(C_j, at, d_j)`). `LF = y`, `LS = retreat(C_j, y, d_j)` (late remaining start for
+   `in_progress`).
 
 ### 3.7 Floats
 
 | Quantity | Definition |
 |---|---|
-| total float `TF_j` (incomplete) | `W(C_j, EF_j, LF_j)` in minutes, signed (= `W(C_j, RS_j, LS_j)` by additivity) |
-| relationship slack `rff_r` (considered `i → k`) | `B_r` = `shift(Lc, EF_i, L)` for FS/FF, `shift(Lc, ES_i, L)` for SS/SF; `Q_r` = `RS_k` for FS/SS, `EF_k` for FF/SF; `rff_r = W(C_k, B_r, Q_r)` (successor calendar) |
-| free float `FF_j` (incomplete) | `min({TF_j} ∪ {rff_r : r considered outgoing from j})` — so `FF ≤ TF`; an open finish has `FF = TF` |
-| driving | `rff_r = 0` |
-| violated | `rff_r < 0` (only a mandatory pin produces it) |
+| `TF_j` (incomplete) | `W(C_j, EF_j, LF_j)`, signed (= `W(C_j, RS_j, LS_j)`) |
+| `rff_r` (considered `i → k`) | `B_r` = `shift(Lc, EF_i, L)` (FS/FF) or `shift(Lc, ES_i, L)` (SS/SF); `Q_r` = `RS_k` (FS/SS) or `EF_k` (FF/SF); `rff_r = W(C_k, B_r, Q_r)` |
+| `FF_j` (incomplete) | `min({TF_j} ∪ {rff_r : considered outgoing})` |
+| driving / violated | `rff_r = 0` / `rff_r < 0` |
 
 ### 3.8 Critical activities and paths
 
-- **Critical:** incomplete and `TF ≤ critical_float_threshold_minutes` (default 0; the
-  longest-path definition is not offered, S6-O07).
-- **Critical graph:** critical activities and the driving relationships between 2 critical
-  activities.
-- **Paths:** start nodes = critical activities with no incoming critical-graph edge, in key
-  order; from each, depth-first, successors in key order, emitting the path at every node
-  with no outgoing critical-graph edge. Every descent ends in an emitted path, so the work is
-  at most `MAX_CRITICAL_PATHS × V` steps. Emission stops at `MAX_CRITICAL_PATHS = 16` paths
-  or before a path that would take the emitted key total past
-  `MAX_CRITICAL_PATH_KEYS = 50,000`.
-- **Count:** `critical_path_count` = the number of maximal paths by dynamic programming over
-  the critical graph (`O(V + E)`), saturating at 1,000,000; `critical_paths_truncated =
-  count > emitted`.
+Critical = incomplete and `TF ≤ critical_float_threshold_minutes`. Critical graph = critical
+activities and driving relationships between them. Start nodes = critical activities with no
+incoming critical edge, key order; depth-first, successors in key order; a path is emitted at
+each node with no outgoing critical edge. Emission stops at `MAX_CRITICAL_PATHS = 16` or before
+a path that would take the emitted key total past `MAX_CRITICAL_PATH_KEYS = 50,000`.
+`critical_path_count` = maximal paths by dynamic programming, saturating at 1,000,000;
+`critical_paths_truncated = count > emitted`.
 
 ### 3.9 Open ends
 
-`open_starts` = activities with no incoming relationship; `open_finishes` = no outgoing
-relationship (structural, any state); each listed by key, first 1,000, with full counts.
+`open_starts` / `open_finishes` = activities with no incoming / outgoing relationship; first
+1,000 each by key, with full counts.
 
-### 3.10 Issues
+### 3.10 Issues (closed, 16)
 
-| Code | Severity | Emitted when |
+| Code | Severity | Emitted when (subject) |
 |---|---|---|
-| `empty_network`, `unknown_calendar`, `dangling_relationship`, `missing_duration`, `cycle_detected`, `horizon_exceeded`, `operation_budget_exceeded` | error (run `rejected`) | section 3.4 / 3.2 / 3.11 |
-| `out_of_sequence` | warning | a relationship `i → k` with `k` started and: FS with `i` not complete; SS with `i` not started; FF with `k` complete and `i` not complete; SF with `k` complete and `i` not started |
-| `constraint_ignored_started` | warning | a started activity carries a constraint |
-| `mandatory_constraint_overrides_logic` | warning | section 3.5 step 3 |
-| `mandatory_constraint_before_data_date` | warning | section 3.5 step 3 |
-| `start_no_later_than_violated` | warning | `ES_j > SNLT at` |
-| `finish_no_later_than_violated` | warning | `EF_j > FNLT at` |
-| `must_finish_by_violated` | warning (project) | `PF > must_finish_by` |
-| `relationship_violated` | warning | `rff_r < 0` |
+| `empty_network` | error | section 3.4 (none) |
+| `unknown_calendar` | error | section 3.4 (activity) |
+| `dangling_relationship` | error | section 3.4 (relationship) |
+| `missing_duration` | error | section 3.4 (activity) |
+| `cycle_detected` | error | section 3.4 (none; cycle in summary) |
+| `horizon_exceeded` | error | section 3.2 (activity, optional relationship) |
+| `operation_budget_exceeded` | error | section 3.11 (none) |
+| `out_of_sequence` | warning | `i → k`, `k` started and: FS with `i` not complete; SS with `i` not started; FF with `k` complete and `i` not complete; SF with `k` complete and `i` not started (relationship) |
+| `constraint_ignored_started` | warning | a started activity has a constraint (activity) |
+| `mandatory_constraint_overrides_logic` | warning | section 3.5 (activity) |
+| `mandatory_constraint_before_data_date` | warning | section 3.5 (activity) |
+| `start_no_later_than_violated` | warning | `ES_j > SNLT at` (activity) |
+| `finish_no_later_than_violated` | warning | `EF_j > FNLT at` (activity) |
+| `must_finish_by_violated` | warning | `PF > must_finish_by` (none) |
+| `relationship_violated` | warning | `rff_r < 0` (relationship) |
+| `dangling_finish` | warning | an incomplete activity with ≥ 1 outgoing relationship and none of type FS or FF: its finish is driven only by the open-end bound (R8-F03) (activity) |
 
-An issue is `{code, severity, activity_key | null, pred | null, succ | null}`; sorted by
-`(severity rank error→warning, code declaration order, activity_key, pred, succ)` with null
-first; the first 1,000 are listed and `issue_counts` holds every code's full count.
+An issue is `{code, severity, activity_key, pred, succ}` (nullable subjects); sorted by
+`(error before warning, code in table order, activity_key, pred, succ)`, null first; first
+1,000 listed; `issue_counts` holds all 16 codes.
 
-### 3.11 Output document, hash, determinism, budget
+### 3.11 Output, hash, determinism, budget, execution
 
 `schedule-cpm-result-v1`:
 
@@ -526,7 +520,7 @@ first; the first 1,000 are listed and `issue_counts` holds every code's full cou
   "engine_version": "my-pa-cpm-v1",
   "input_content_sha256": "<64 hex>",
   "status": "computed | rejected",
-  "summary": {"data_date": "...", "project_finish": "... | null", "must_finish_by": "... | null", "activity_count": 0, "relationship_count": 0, "critical_count": 0, "negative_float_count": 0, "open_start_count": 0, "open_finish_count": 0, "critical_path_count": 0, "critical_paths_truncated": false, "residual_count": 0},
+  "summary": {"data_date": "...", "project_finish": "... | null", "must_finish_by": "... | null", "activity_count": 0, "relationship_count": 0, "critical_count": 0, "negative_float_count": 0, "open_start_count": 0, "open_finish_count": 0, "critical_path_count": 0, "critical_paths_truncated": false, "cycle": null, "cycle_length": null, "residual_count": null},
   "issue_counts": {"<code>": 0},
   "issues": [],
   "open_starts": [], "open_finishes": [],
@@ -536,81 +530,91 @@ first; the first 1,000 are listed and `issue_counts` holds every code's full cou
 }
 ```
 
-`issue_counts` holds all 15 codes of section 3.10. `activities` by key, `relationships` by `(pred, succ)`
-(a not-considered relationship has `slack_minutes = null`, `driving = false`). A `rejected`
-run has `project_finish = null` and empty `activities`, `relationships`, `critical_paths`
-and open-end lists. `result_sha256 = sha256(b"schedule-cpm-result-v1\n" +
-canonical_json_bytes(result))`; result ≤ 32 MiB.
+A `rejected` run has `project_finish = null` and empty lists. `result_sha256 =
+sha256(b"schedule-cpm-result-v1\n" + canonical)`. **Result bound 64 MiB** (R8-F16: a maximal
+network with 66-character keys measures about 34 MB, so the bound is unreachable from valid
+content; persistence treats a larger document as `internal_error`).
 
-- **Determinism.** The output is a pure function of `(content bytes, engine_version)`: no
-  clock, randomness, environment, locale, hash-seed-dependent iteration (no iteration over a
-  `set` or `dict` whose order reaches the output without a sort), no `float`. Identical input
-  gives byte-identical output on every platform.
-- **Engine version.** `my-pa-cpm-v1`; any change that could alter a result for identical
-  content bumps it (the S5a parser-version rule). A run is keyed by `(version_id,
-  engine_version)`.
-- **Operation budget.** The engine counts 1 unit per activity visit, per relationship visit
-  and per calendar-function call in every phase; at 4,000,000 units it stops and the run is
-  `rejected` with `operation_budget_exceeded`. At the section 2.10 maxima (V = 25,000,
-  E = 100,000) the work is ≤ 2,100,000 units — sort 125,000; forward ≤ 4 per relationship
-  and 5 per activity (525,000); backward the same (525,000); slack 3 per relationship
-  (300,000); total float 1 per activity (25,000); critical count 125,000; paths ≤ 16 ×
-  25,000 (400,000) — so the budget is a defence in depth and a wall clock is never
-  consulted.
+- **Determinism.** A pure function of `(content bytes, engine_version)`: no clock,
+  randomness, environment, locale or unsorted `set`/`dict` iteration reaching the output, no
+  `float`. Byte-identical on every platform. Any change that could alter a result bumps the
+  engine version; a run is keyed by `(version_id, engine_version)`.
+- **Operation budget** (R8-F04). `run_cpm(content, *, operation_budget:
+  int = CPM_OPERATION_BUDGET)`, keyword-only, production value `CPM_OPERATION_BUDGET =
+  4,000,000`, never set from a request. Counting rule: +1 per heap pop; +1 per relationship
+  examined by the sort; +1 per activity entered and +1 per relationship examined in the
+  forward pass, the backward pass and the slack phase; +1 per outermost calendar-function call
+  (`W`, `advance`, `retreat`, `next_work`, `prev_end`; `shift` counts as its inner call); +1
+  per depth-first step and per dynamic-programming node of section 3.8. Before each increment,
+  if the counter equals the budget, the run stops: `rejected`, 1 issue
+  `operation_budget_exceeded` (no subject). Test: for G02 the frozen exact count `n` computes
+  with budget `n` and rejects with `n − 1` (P16). At the maxima the work is ≤ 2,100,000.
+- **Execution** (R8 ruling R-5). `schedule_cpm_runs.create` computes **outside** any database
+  transaction or lock: it reads the version, computes, then inserts by the natural key
+  `(principal_id, version_id, engine_version)` with `ON CONFLICT DO NOTHING` and returns the
+  existing run on conflict. At most 1 concurrent compute per Principal (a process-local lock
+  plus `pg_try_advisory_lock` on the Principal; a second caller gets `conflict(CPM_RUN)`
+  without computing). S6-1 measures the maximal network (target ≤ 10 s on the CI host); a
+  miss moves compute to a worker plane by a contract revision **before** S6-3 (S6-U06).
 
-### 3.12 Golden vectors (S6-1 commits each as a fixture with these exact expectations)
+### 3.12 Golden vectors (S6-1 commits each with these exact expectations)
 
-Common: calendar `std` = Monday–Friday `[[480, 960]]` (08:00–16:00, 480 minutes per day),
-Saturday and Sunday `[]`; default `std`; `D = 2027-01-04T00:00` (a Monday) unless stated;
-`lag_calendar = predecessor`, `progress_policy = retained_logic`, threshold 0; "1d" = 480
-minutes. Every network was computed by hand and cross-checked with a minute-by-minute
-throwaway implementation of sections 3.2–3.8 (not committed).
+Common: calendar `std` = Monday–Friday `[[480, 960]]`, weekend `[]`; default `std`;
+`D = 2027-01-04T00:00` (Monday) unless stated; `predecessor`, `retained_logic`, threshold 0;
+"1d" = 480 minutes. Each was hand-computed and cross-checked with a throwaway minute-by-minute
+implementation (not committed); R8 re-derived G01–G16 by hand.
 
 | # | Network | Activity: ES – EF / LS – LF / TF / FF | Critical paths | Issues / other |
 |---|---|---|---|---|
 | G01 | A 3d | A 01-04 08:00 – 01-06 16:00 / same / 0 / 0 | [A] | PF 01-06 16:00 |
 | G02 | A 1d →FS B 2d →FS D 1d; A →FS C 1d →FS D | A 01-04 08:00 – 01-04 16:00 / same / 0 / 0; B 01-05 08:00 – 01-06 16:00 / same / 0 / 0; C 01-05 08:00 – 01-05 16:00 / 01-06 08:00 – 01-06 16:00 / 480 / 480; D 01-07 08:00 – 01-07 16:00 / same / 0 / 0 | [A, B, D] | slack A→B 0, A→C 0, B→D 0, C→D 480 |
-| G03 | A 3d; A →SS+480 B 2d; A →FF+480 C 1d | A 01-04 08:00 – 01-06 16:00 / same / 0 / 0; B 01-05 08:00 – 01-06 16:00 / 01-06 08:00 – 01-07 16:00 / 480 / 480; C 01-07 08:00 – 01-07 16:00 / same / 0 / 0 | [A, C] | PF 01-07 16:00 |
-| G04 | A 2d →FS−240 B 1d | A 01-04 08:00 – 01-05 16:00 / same / 0 / 0; B 01-05 12:00 – 01-06 12:00 / same / 0 / 0 | [A, B] | lead crosses no non-working time |
-| G05 | A 1d →SF+1440 B 1d | A 01-04 08:00 – 01-04 16:00 / same / 0 / 0; B 01-06 08:00 – 01-06 16:00 / same / 0 / 0 | [A, B] | B's finish bound = `advance(01-04 08:00, 1440)` = 01-06 16:00 |
-| G06a | calendar `c6` = Monday–Saturday 08:00–16:00; A 1d on `c6`, `SNET 01-08T00:00`; A →FS+960 B 1d (`std`); `lag_calendar = predecessor` | A 01-08 08:00 – 01-08 16:00 / same / 0 / 0; B 01-12 08:00 – 01-12 16:00 / same / 0 / 0 | [A, B] | lag on `c6`: Sat 01-09 + Mon 01-11 → 01-11 16:00 |
-| G06b | G06a with `lag_calendar = successor` | A 01-08 08:00 – 01-08 16:00 / 01-09 08:00 – 01-09 16:00 / 480 / 0; B 01-13 08:00 – 01-13 16:00 / same / 0 / 0 | [B] | lag on `std` → 01-12 16:00; A may finish Saturday on `c6` without delaying B |
-| G06c | G06a with `lag_calendar = twenty_four_hour` | A as G06b (TF 480, FF 0); B 01-11 08:00 – 01-11 16:00 / same / 0 / 0 | [B] | 01-08 16:00 + 960 = 01-09 08:00 → B snaps to Monday |
-| G07 | `std` with exception `2027-01-05: []`; A 3d | A 01-04 08:00 – 01-07 16:00 / same / 0 / 0 | [A] | the holiday is skipped |
-| G08 | A 2d →FS B 2d `FNLT 01-05T16:00`; C 1d `SNET 01-06T12:00` | A 01-04 08:00 – 01-05 16:00 / 12-31 08:00 – 01-01 16:00 / −960 / −960; B 01-06 08:00 – 01-07 16:00 / 01-04 08:00 – 01-05 16:00 / −960 / −960; C 01-06 12:00 – 01-07 12:00 / 01-07 08:00 – 01-07 16:00 / 240 / 240 | [A, B] | `finish_no_later_than_violated` (B); negative-float count 2; PF 01-07 16:00 |
-| G09 | A 2d →FS B 1d `MSO 01-05T08:00` | A 01-04 08:00 – 01-05 16:00 / 01-01 08:00 – 01-04 16:00 / −480 / −480; B 01-05 08:00 – 01-05 16:00 / same / 0 / 0 | [A], [B] | `mandatory_constraint_overrides_logic` (B), `relationship_violated` (A→B, slack −480) |
+| G03 | A 3d; A →SS+480 B 2d; A →FF+480 C 1d | A 01-04 08:00 – 01-06 16:00 / same / 0 / 0; B 01-05 08:00 – 01-06 16:00 / 01-06 08:00 – 01-07 16:00 / 480 / 480; C 01-07 08:00 – 01-07 16:00 / same / 0 / 0 | [A, C] | `dangling_finish` none (A has FF) |
+| G04 | A 2d →FS−240 B 1d | A 01-04 08:00 – 01-05 16:00 / same / 0 / 0; B 01-05 12:00 – 01-06 12:00 / same / 0 / 0 | [A, B] | — |
+| G05 | A 1d →SF+1440 B 1d | A 01-04 08:00 – 01-04 16:00 / same / 0 / 0; B 01-06 08:00 – 01-06 16:00 / same / 0 / 0 | [A, B] | `dangling_finish` (A) |
+| G06a | `c6` = Mon–Sat 08:00–16:00; A 1d on `c6`, `SNET 01-08T00:00`; A →FS+960 B 1d; `predecessor` | A 01-08 08:00 – 01-08 16:00 / same / 0 / 0; B 01-12 08:00 – 01-12 16:00 / same / 0 / 0 | [A, B] | lag on `c6` ends 01-11 16:00 |
+| G06b | G06a, `successor` | A 01-08 08:00 – 01-08 16:00 / 01-09 08:00 – 01-09 16:00 / 480 / 0; B 01-13 08:00 – 01-13 16:00 / same / 0 / 0 | [B] | lag on `std` ends 01-12 16:00 |
+| G06c | G06a, `twenty_four_hour` | A as G06b (TF 480, FF 0); B 01-11 08:00 – 01-11 16:00 / same / 0 / 0 | [B] | slack A→B on `std` = 0 (on `c6` it would be 480) |
+| G07 | `std` + exception `2027-01-05: []`; A 3d | A 01-04 08:00 – 01-07 16:00 / same / 0 / 0 | [A] | — |
+| G08 | A 2d →FS B 2d `FNLT 01-05T16:00`; C 1d `SNET 01-06T12:00` | A 01-04 08:00 – 01-05 16:00 / 12-31 08:00 – 01-01 16:00 / −960 / −960; B 01-06 08:00 – 01-07 16:00 / 01-04 08:00 – 01-05 16:00 / −960 / −960; C 01-06 12:00 – 01-07 12:00 / 01-07 08:00 – 01-07 16:00 / 240 / 240 | [A, B] | `finish_no_later_than_violated` (B); negative-float count 2 |
+| G09 | A 2d →FS B 1d `MSO 01-05T08:00` | A 01-04 08:00 – 01-05 16:00 / 01-01 08:00 – 01-04 16:00 / −480 / −480; B 01-05 08:00 – 01-05 16:00 / same / 0 / 0 | [A], [B] | `mandatory_constraint_overrides_logic` (B), `relationship_violated` (A→B, −480) |
 | G10 | A 5d; `must_finish_by 01-07T16:00` | A 01-04 08:00 – 01-08 16:00 / 01-01 08:00 – 01-07 16:00 / −480 / −480 | [A] | `must_finish_by_violated` |
-| G11a | `D = 01-06T00:00`; A complete (01-04 08:00 – 01-04 16:00); B in progress (start 01-05 08:00, remaining 2d); C 1d; E in progress (start 01-05 08:00, remaining 1d); A→B, B→C, C→E all FS | A actuals, TF/FF null; B ES 01-05 08:00, RS 01-06 08:00, EF 01-07 16:00 / LS 01-06 08:00 – 01-07 16:00 / 0 / 0; C 01-08 08:00 – 01-08 16:00 / same / 0 / 0; E ES 01-05 08:00, RS 01-11 08:00, EF 01-11 16:00 / 01-11 08:00 – 01-11 16:00 / 0 / 0 | [B, C, E] | `out_of_sequence` (C→E); A→B slack 480 (not in the critical graph: A is complete) |
-| G11b | G11a with `progress_override` | B as G11a; C 01-08 08:00 – 01-08 16:00 / same / 0 / 0; E ES 01-05 08:00, RS 01-06 08:00, EF 01-06 16:00 / 01-08 08:00 – 01-08 16:00 / 960 / 960 | [B, C] | `out_of_sequence` (C→E); C→E not considered; PF 01-08 16:00 |
-| G12 | M0 milestone →FS A 1d →FS M1 milestone | M0 01-04 00:00 – 01-04 00:00 / 01-04 08:00 – 01-04 08:00 / 0 / 0; A 01-04 08:00 – 01-04 16:00 / same / 0 / 0; M1 01-04 16:00 – 01-04 16:00 / same / 0 / 0 | [M0, A, M1] | a milestone is never snapped; M0's 8 non-working hours are 0 working minutes of float |
-| G13 | A 1d → B 2d → E 1d; A → C 2d → E (FS) | A 01-04 08:00 – 16:00, B and C 01-05 08:00 – 01-06 16:00, E 01-07 08:00 – 16:00, all late = early, TF 0 | [A, B, E], [A, C, E] | `critical_path_count` 2 |
-| G14 | A→B, B→C, C→A, D→A, C→Z (FS, 1d each) | rejected | — | `cycle_detected`, `cycle = [A, B, C]`, `cycle_length` 3, `residual_count` 4 |
-| G15 | A 1d → B 3d → E 1d; A → C 1d → X 1d → E (FS) | A, B, E TF 0; C 01-05 08:00 – 16:00 / 01-06 08:00 – 16:00 / 480 / 0; X 01-06 08:00 – 16:00 / 01-07 08:00 – 16:00 / 480 / 480 | [A, B, E] | free float < total float (shared float) |
+| G11a | `D = 01-06T00:00`; A complete 01-04 08:00 – 01-04 16:00; B started 01-05 08:00, remaining 2d; C 1d; E started 01-05 08:00, remaining 1d; A→B, B→C, C→E FS | A TF/FF null; B ES 01-05 08:00, RS 01-06 08:00, EF 01-07 16:00 / 01-06 08:00 – 01-07 16:00 / 0 / 0; C 01-08 08:00 – 01-08 16:00 / same / 0 / 0; E ES 01-05 08:00, RS 01-11 08:00, EF 01-11 16:00 / 01-11 08:00 – 01-11 16:00 / 0 / 0 | [B, C, E] | `out_of_sequence` (C→E); slack A→B 480 |
+| G11b | G11a, `progress_override` | B as G11a; C 01-08 08:00 – 01-08 16:00 / same / 0 / 0; E ES 01-05 08:00, RS 01-06 08:00, EF 01-06 16:00 / 01-08 08:00 – 01-08 16:00 / 960 / 960 | [B, C] | `out_of_sequence` (C→E); C→E not considered |
+| G12 | M0 milestone →FS A 1d →FS M1 milestone | M0 01-04 00:00 – 01-04 00:00 / 01-04 08:00 – 01-04 08:00 / 0 / 0; A 01-04 08:00 – 01-04 16:00 / same / 0 / 0; M1 01-04 16:00 – 01-04 16:00 / same / 0 / 0 | [M0, A, M1] | milestones never snapped |
+| G13 | A 1d → B 2d → E 1d; A → C 2d → E (FS) | all TF 0; B and C 01-05 08:00 – 01-06 16:00; E 01-07 08:00 – 16:00 | [A, B, E], [A, C, E] | `critical_path_count` 2 |
+| G14 | A→B, B→C, C→A, D→A, C→Z (FS, 1d) | rejected | — | `cycle_detected`; summary `cycle` [A, B, C], `cycle_length` 3, `residual_count` 4 |
+| G15 | A 1d → B 3d → E 1d; A → C 1d → X 1d → E (FS) | A, B, E TF 0; C 01-05 08:00 – 16:00 / 01-06 08:00 – 16:00 / 480 / 0; X 01-06 08:00 – 16:00 / 01-07 08:00 – 16:00 / 480 / 480 | [A, B, E] | FF < TF |
 | G16 | A with `remaining_minutes = null` | rejected | — | `missing_duration` (A) |
+| G17 | A 1d `FNET 01-06T16:00` | A 01-06 08:00 – 01-06 16:00 / same / 0 / 0 | [A] | FNET forward |
+| G18 | A 2d →FS B 1d `SNLT 01-05T08:00` | A 01-04 08:00 – 01-05 16:00 / 01-01 08:00 – 01-04 16:00 / −480 / −480; B 01-06 08:00 – 01-06 16:00 / 01-05 08:00 – 01-05 16:00 / −480 / −480 | [A, B] | `start_no_later_than_violated` (B) |
+| G19 | A 1d `MFO 01-06T16:00`; B 1d | A 01-06 08:00 – 01-06 16:00 / same / 0 / 0; B 01-04 08:00 – 01-04 16:00 / 01-06 08:00 – 01-06 16:00 / 960 / 960 | [A] | MFO pins both passes |
+| G20 | `D = 01-06T00:00`; A 1d `MSO 01-04T08:00` | A 01-06 08:00 – 01-06 16:00 / same / 0 / 0 | [A] | `mandatory_constraint_before_data_date` (A) |
+| G21 | `D = 01-06T00:00`; A started 01-05 08:00, remaining 1d, `SNET 01-08T00:00` | A ES 01-05 08:00, RS 01-06 08:00, EF 01-06 16:00 / 01-06 08:00 – 01-06 16:00 / 0 / 0 | [A] | `constraint_ignored_started` (A) |
+| G22 | `D = 01-06T00:00`; A started 01-05 08:00, remaining 2d; A →SS B 1d | A ES 01-05 08:00, RS 01-06 08:00, EF 01-07 16:00 / 01-06 08:00 – 01-07 16:00 / 0 / 0; B 01-06 08:00 – 01-06 16:00 / 01-07 08:00 – 01-07 16:00 / 480 / 480 | [A] | S6-D08: A's only outgoing (SS) is skipped, open-end bound PF; `dangling_finish` (A) |
+| G23 | `D = 01-06T00:00`, `progress_override`; A 1d →SS B started 01-05 08:00, remaining 1d | A 01-06 08:00 – 01-06 16:00 / same / 0 / 0; B ES 01-05 08:00, RS 01-06 08:00, EF 01-06 16:00 / 01-06 08:00 – 01-06 16:00 / 0 / 0 | [A], [B] | `out_of_sequence` (A→B); `dangling_finish` (A); A→B not considered, so not a critical edge |
+| G24 | `D = 2099-12-31T00:00` (Thursday); A 2d | rejected | — | `horizon_exceeded` (A, no relationship) |
+| S1 | snapshot, `minutes_per_source_unit = 480`: OD `1.500`, RD `0.001`, OD `999999999.000` (3 activities) | `720`; `0` (0.48 → 0, quantized); null (out of range) | — | `durations_quantized` 1, `durations_out_of_range` 1 |
 
-S6-1 also commits a byte-exact `result_sha256` for each vector (computed by the
-implementation, then frozen and reviewed; a change needs an engine-version bump) and a
-`content_sha256` vector for G02.
+The `dangling_finish` rule is structural (any outgoing relationship, none FS/FF), whatever is
+considered. S6-1 also freezes a `result_sha256` per
+vector (a change needs an engine-version bump) and a `content_sha256` for G02.
 
-### 3.13 Oracle approach (independent of the engine)
+### 3.13 Oracle approach
 
-1. **Calendar oracle.** A test-only minute-by-minute implementation of section 3.2 over
-   seeded random calendars (`random.Random(seed)` in the test, fixed seed list) and windows
-   of ≤ 21 days, compared with the engine's `W`, `advance`, `retreat`, `next_work`,
-   `prev_end` on every probed instant.
-2. **Longest-path oracle.** On `twenty_four_hour` calendars (so the passes reduce to
-   difference constraints), seeded random DAGs of 2..7 activities with all 4 types, lags in
-   `[−480, 480]`, durations in `[0, 960]`, no constraints, no progress: `ES_j` must equal the
-   maximum, over every path from the data-date source, of the summed edge weights (FS:
-   `d_i + L`, SS: `L`, FF: `d_i + L − d_j`, SF: `L − d_j`), found by **enumerating every
-   path** (not by relaxation); `LF_j` likewise by enumerating paths to the sink; TF and the
-   critical set follow. At least 2,000 random DAGs.
-3. **Properties** (seeded random networks on `std`): byte-identical output across 2 runs and
-   across input permutations of activities, relationships, calendars and exceptions;
-   `FF ≤ TF`; `TF = W(C, RS, LS) = W(C, EF, LF)`; with no constraint, progress or
-   `must_finish_by` at least 1 activity has `TF = 0` and every critical path starts at an
-   open start and ends at an activity whose `EF = PF`; increasing one remaining duration never
-   decreases `PF` (no constraint, no progress).
+1. **Calendar oracle:** a test-only minute-by-minute implementation over seeded random
+   calendars (`random.Random(seed)` in the test, fixed seeds) and windows ≤ 21 days,
+   compared with every calendar function at every probed instant.
+2. **Longest-path oracle:** on `twenty_four_hour`, seeded random DAGs of 2..7 activities, all
+   4 types, lags in `[−480, 480]`, durations in `[0, 960]`, no constraints or progress: `ES`
+   equals the maximum over **every enumerated path** from the data-date source of summed
+   weights (FS `d_i + L`, SS `L`, FF `d_i + L − d_j`, SF `L − d_j`); `LF` likewise to the sink;
+   TF and the critical set follow; ≥ 2,000 DAGs.
+3. **Properties** on seeded random networks on `std`: byte-identical output across 2 runs and
+   across input permutations; `FF ≤ TF`; `TF = W(C, RS, LS) = W(C, EF, LF)`. Restricted to
+   **FS-only networks with non-negative lags, no constraint, progress or `must_finish_by`**
+   (R8-F03: SS/FF/SF and leads admit dangling-finish float and the duration paradox): at least
+   1 activity has `TF = 0`; every critical path ends at an activity with `EF = PF`; increasing
+   one remaining duration never decreases `PF`.
 
 ---
 
@@ -620,240 +624,238 @@ implementation, then frozen and reviewed; a change needs an engine-version bump)
 
 | Part | Fields and bounds |
 |---|---|
-| binding | `version_id` (owned), `content_sha256` (must equal the version's), `base_cpm_run_id` (optional; an owned `computed` run of the same version) |
-| `kind` | `monte_carlo` \| `criticality` \| `sensitivity` (closed) |
-| `run_config` | `tool_name` and `tool_version` (`[A-Za-z0-9._-]{1,64}`), `seed` (`[A-Za-z0-9_-]{1,128}`), `iterations` 1..1,000,000, `sampling = independent` (closed), `engine` ∈ `my-pa-cpm-v1` (the client reimplemented this contract) \| `server_runs` (it called the server per iteration) \| `other`, `distribution_spec_sha256` |
-| `finish_percentiles` | ≤ 99 entries `{p: 1..99, finish: instant}`, `p` strictly increasing, `finish` non-decreasing |
-| `finish_histogram` | ≤ 200 bins `{start, end, count}`, contiguous (`end_k = start_{k+1}`), `start < end`, counts sum to `iterations` |
-| `deterministic_finish` | instant; must equal `base_cpm_run_id`'s `project_finish` when that is given |
-| `activity_criticality` | ≤ 25,000 `{activity_key, critical_iterations: 0..iterations}`, keys unique and present in the version |
-| `activity_finish_percentiles` | ≤ 2,000 activities × ≤ 9 `{p, finish}` (same monotonic rules) |
+| binding | `version_id` (owned), `content_sha256` (= the version's), optional `base_cpm_run_id` (an owned `computed` run of that version) |
+| `kind` | `monte_carlo` \| `criticality` \| `sensitivity` |
+| `run_config` | `tool_name`, `tool_version` (`[A-Za-z0-9._-]{1,64}`), `seed` (`[A-Za-z0-9_-]{1,128}`), `iterations` 1..1,000,000, `sampling = independent`, `engine` ∈ `my-pa-cpm-v1` \| `server_runs` \| `other`, `distribution_spec_sha256` |
+| `finish_percentiles` | ≤ 99 `{p: 1..99, finish}`, `p` strictly increasing, `finish` non-decreasing |
+| `finish_histogram` | ≤ 200 contiguous bins `{start, end, count}`, `start < end`, counts sum to `iterations` |
+| `deterministic_finish` | equals `base_cpm_run_id`'s `project_finish` when given |
+| `activity_criticality` | ≤ 25,000 `{activity_key, critical_iterations: 0..iterations}`, keys unique and present |
+| `activity_finish_percentiles` | ≤ 2,000 activities × ≤ 9 `{p, finish}`, same monotonic rules |
 | `sensitivity` | ≤ 2,000 `{activity_key, metric ∈ spearman_rank_milli \| duration_cruciality_milli, value: −1,000..1,000}` |
 
-Every number is an integer (fractions in milli-units); an unknown key is
-`invalid_request(OUTPUT)`. `payload_sha256 = sha256(b"schedule-scenario-output-v1\n" +
-canonical)`.
+Integers only; unknown key `invalid_request(OUTPUT)`; `payload_sha256 =
+sha256(b"schedule-scenario-output-v1\n" + canonical)`.
 
-### 4.2 Server checks (schema, bounds, consistency — nothing else)
+### 4.2 Server checks (schema, bounds, consistency only)
 
-Shape and bounds above; binding equalities; percentile and histogram monotonicity and sums;
-activity keys exist; `distribution_spec_sha256` equals the server's recomputation (section
-4.3), so an output always names the distributions it claims to have sampled; `kind`-specific
-presence (`monte_carlo` needs `finish_percentiles` or `finish_histogram`; `criticality`
-needs `activity_criticality`; `sensitivity` needs `sensitivity`). The server **never**
-re-samples, re-runs or judges plausibility. Stored and served with `authority =
-client_asserted`, `authoritative = false`, the writer's provenance and the client id (local
-readers only, S3.1 §4.1).
+Shape; binding equalities; monotonicity and sums; keys exist; `distribution_spec_sha256`
+equals the server's recomputation; kind-specific presence. The server never re-samples or
+judges plausibility. Labels `authority = client_asserted`, `authoritative = false`.
 
 ### 4.3 Distribution digest
 
-`distribution_spec_sha256 = sha256(b"schedule-scenario-distributions-v1\n" +
-canonical_json_bytes([{"key": k, "distribution": dist} for each activity with a
-distribution, by key]))`; stored on every version; the empty list has its own fixed digest.
+`sha256(b"schedule-scenario-distributions-v1\n" + canonical_json_bytes([{"key",
+"distribution"} for each activity with one, by key]))`, stored on every version.
 
 ---
 
-## 5. Scenario lineage (ADR-015 decision 17)
+## 5. Scenario and schedule lineage (ADR-015 decision 17)
 
 ### 5.1 New endpoint families (`RecordFamily`, appended)
 
 | Family | Id kind | Linkable when | Read grant set (`LINEAGE_FAMILY_READS`) |
 |---|---|---|---|
-| `schedule_publication` | `spub` | effective `complete`/`partial` | `schedule_publications.read`, `schedule_publications.list` |
-| `schedule_activity` | `sact` | visible under S5b-1 U-03 | `schedule_activities.history`, `schedule_activities.list` |
+| `schedule_publication` | `spub` | eligible and not intake | `schedule_publications.read`, `schedule_publications.list` |
+| `schedule_activity` | `sact` | visible (S5b-1 U-03) and its Series is not intake | `schedule_activities.history`, `schedule_activities.list` |
+| `schedule_baseline` | `sbl` | exists (any lifecycle state; reads show it) | `schedule_baselines.read`, `schedule_baselines.list` |
 | `scenario` | `sscn` | exists | `schedule_scenarios.read`, `schedule_scenarios.list` |
 | `scenario_version` | `sscv` | exists | `schedule_scenario_versions.read` |
 | `scenario_output` | `ssco` | exists | `schedule_scenario_outputs.read`, `schedule_scenario_outputs.list` |
 
-The 5 families exist for lineage only while the plane is effective (section 6.2) **and**
-`MY_PA_LINEAGE_ENABLED` is on; otherwise naming one is answered exactly as an absent record
-(`not_found`), and lineage reads withhold such endpoints as they withhold a family the caller
-may not read (S3 §6.4), with no hidden count.
+The 6 families are linkable only while the plane is effective and `MY_PA_LINEAGE_ENABLED` is
+on; otherwise naming one in a **new** assertion is answered as absent, and reads withhold such
+endpoints as they withhold an unreadable family (S3 §6.4), with no hidden count.
 
-### 5.2 Relations (closed; the minimal set the use cases need)
+**Existing links when a family is withheld** (R8-F10). The human channel's `confirm`, `end`
+and `contest` of an existing link, and Issue close/reopen, never require a withheld endpoint
+to be readable: they act on the link's identity and head, re-validate only the endpoints the
+caller can see, and record the withheld endpoint by its stored identifier. A
+`client_identified` link to a withheld endpoint therefore stays confirmable or endable, and
+an Issue never becomes unclosable because the plane was switched off
+(`test_withheld_family_link_stays_confirmable_and_endable`, S6-3).
+
+### 5.2 Relations
 
 | Relation | Kind | From | To | Evidence rule | Use case |
 |---|---|---|---|---|---|
-| `concerns` (new) | semantic | `scenario`, `scenario_version`, `scenario_output` | `situation`, `constraint`, `task`, `commitment`, `schedule_activity` | none | "this what-if / this simulation is about Issue X, Constraint Y, activity Z" |
-| `delays` (new) | semantic | `constraint`, `situation` | `schedule_activity` | ≥ 1 exact-version `corroborates` anchor (the `blocks` rule) | "this constraint / Issue delays this activity" — a causal claim, so it needs cited evidence |
-| `mitigates` (new) | semantic | `task`, `commitment`, `scenario_version` | `constraint`, `situation` | ≥ 1 exact-version `corroborates` anchor | "this work / this recovery version mitigates the constraint" |
-| `discusses` (widened) | semantic | `meeting`, `meeting_note_version` (unchanged) | + `schedule_publication`, `schedule_activity`, `scenario`, `scenario_output` | unchanged (a `discussion` note anchor) | a meeting reviewed an update, an activity, a scenario or a simulation |
-| `originated_from` (widened) | semantic | + `scenario_version` | `meeting_note_version`, `capture_version` (unchanged) | unchanged (exact `origin` anchor on the `to` version) | the version's change set came from a decision in that note or capture |
+| `concerns` (new) | semantic | `scenario`, `scenario_version`, `scenario_output` | `situation`, `constraint`, `task`, `commitment`, `schedule_activity`, `schedule_baseline` | none | a what-if or simulation is about an Issue, Constraint, activity or baseline |
+| `delays` (new) | semantic | `constraint`, `situation` | `schedule_activity` | ≥ 1 exact-version `corroborates` anchor | a cited causal claim |
+| `mitigates` (new) | semantic | `task`, `commitment`, `scenario_version` | `constraint`, `situation` | ≥ 1 exact-version `corroborates` anchor | a cited recovery claim |
+| `discusses` (widened) | semantic | `meeting`, `meeting_note_version` | + `schedule_publication`, `schedule_activity`, `schedule_baseline`, `scenario`, `scenario_output` | unchanged | a meeting reviewed it |
+| `originated_from` (widened) | semantic | + `scenario_version`, `schedule_baseline` | `meeting_note_version`, `capture_version` | unchanged (exact `origin` anchor) | a version's change set, or a baseline's approval, came from that note or capture (the "approved by" evidence link) |
 
-`issue_member`, `blocks`, `related_context`, `delegated_from`, `escalated_from` and
-`created_to_resolve` are **not** widened (the close gate's mandatory-member semantics are
-untouched; S6-D12). `concerns`, `delays`, `mitigates` are contestable (`CONTESTABLE_RELATIONS`
-= every semantic relation) and not composite-only. Directions are as tabled; none is
-symmetric.
+`issue_member` and the other relations are not widened (S6-D12). The 3 new relations are
+contestable, not composite-only, not symmetric.
 
-**Structural edges are native, never ledger rows** (ADR-015 decision 2). New
-`NativeVirtualEdge` members, read-only, derived from the plane's own columns:
-`scenario_version_of` (version → Scenario), `scenario_version_parent` (version → its
-parent), `scenario_based_on_publication` (Scenario → origin publication),
-`scenario_forked_from_version` (Scenario → origin version) and `scenario_output_of` (output
-→ version). No CPM-run edge exists (a run is not an endpoint family; it is reached from its
-version). A client cannot assert `derived_from`, `based_on` or `used_in` — those facts are
-columns.
+**Native virtual edges** (columns, never ledger rows; a client cannot assert them):
+`scenario_version_of`, `scenario_version_parent`, `scenario_based_on_publication`,
+`scenario_based_on_baseline`, `scenario_forked_from_version`, `scenario_output_of`,
+`schedule_baseline_designates` (Baseline → its publication), `schedule_baseline_supersedes`
+(Baseline → the Baseline it supersedes).
 
-### 5.3 Validators (S1 style, in the S1 order)
+### 5.3 Validators
 
-Strict `IdKind` per family → Principal ownership (another Principal's row is `not_found`,
-byte-identical to absent) → family linkability (table 5.1) → relation matrix → evidence rule
-→ lock: the 5 new families' rows are append-only, so the writer takes `FOR SHARE` on each
-named row in the S1 `(family token, identifier)` order (decision 9; the family tokens sort as
-strings, so `scenario…` and `schedule_…` interleave deterministically with the existing
-tokens). Provenance (`client_identified` / `user_confirmed`), `user_directed`, the client
-budgets, idempotency, replay and the "clients never remove accepted lineage" rule are S3.1's,
-unchanged. The server never creates a lineage fact from similarity, shared names, shared
-dates or shared WBS (no similarity → causation); every link is a writer's explicit assertion.
+Strict `IdKind` → Principal ownership (foreign = `not_found`, byte-identical to absent) →
+family linkability → relation matrix → evidence rule → `FOR SHARE` on each named row in the S1
+`(family token, identifier)` order. S3.1 provenance, budgets, idempotency, replay and the
+"clients never remove accepted lineage" rule are unchanged. No link is ever created from
+similarity, shared names, dates or WBS.
 
-### 5.4 Schema (S6-2) and the ADR process
+### 5.4 Schema and ADR process
 
-S6-2's revision widens, in one change with the Python vocabulary: the `record_links`
-family CHECKs, `from_id_is_an_opaque_identifier`/`to_id_…` (family → id kind),
-`a_record_link_relation_type_is_known`, `a_record_link_pair_is_admitted` (regenerated from
-`RELATION_MATRIX`), `RECORD_FAMILY_ID_KINDS`, `LINEAGE_FAMILY_READS` and the read-side
-endpoint resolvers. `LINEAGE_READ_GENERATION` is bumped 1 → 2 (traversal now reaches new
-families; every old lineage cursor is refused once). ADR-015 decision 17 is the amendment
-decision 6 requires; the migration and tests are S6-2's.
+S6-2's first revision widens, with the Python vocabulary, the `record_links` family CHECKs,
+the family → identifier CHECKs, the relation-type CHECK and `a_record_link_pair_is_admitted`;
+`LINEAGE_READ_GENERATION` 1 → 2. ADR-015 decision 17 is the amendment decision 6 requires.
 
 ---
 
 ## 6. Capabilities (S6-3)
 
-### 6.1 Names, kinds, purposes
+### 6.1 Names, kinds, purposes (the one authoritative count set, R8-F21)
 
-Section 11.4 adds 4 more names (designations, currency, match decisions) and supersedes the
-counts below. 2 new purposes, appended: `schedule_scenario_authoring` (joins `_WRITE_PURPOSES`) and
-`schedule_scenario_read`. All 14 names are scopeless (`_SCOPELESS`), not operator-only, and
-classified on every closed surface S5b-2 §3.12 lists.
+3 new purposes, appended: `schedule_analysis_authoring` (client-usable writes; joins
+`_WRITE_PURPOSES`), `schedule_analysis_read` (reads) and `schedule_baseline_approval`
+(operator-only writes; joins `_WRITE_PURPOSES`, as `schedule_import` did). All 26 names are
+scopeless.
 
-| Capability | Kind | Purpose | Additive | Summary (first docstring line) |
-|---|---|---|---|---|
-| `schedule_scenarios.create` | write | `schedule_scenario_authoring` | yes | Create a Schedule Scenario whose version 1 is a snapshot of one complete or partial publication, or a copy of an existing scenario version. |
-| `schedule_scenario_versions.create` | write | same | yes | Append one immutable version to a Scenario by applying a bounded change set to its current head version. |
-| `schedule_cpm_runs.create` | write | same | yes | Run the deterministic server CPM engine over one scenario version and store its result (replays the existing run for the same version and engine). |
-| `schedule_scenario_outputs.record` | write | same | yes | Record a client-computed (client-asserted) analysis output such as Monte Carlo percentiles, bound to one scenario version. |
-| `schedule_scenarios.list` | read | `schedule_scenario_read` | — | List a Project's (or one Series') Schedule Scenarios, newest first. |
-| `schedule_scenarios.read` | read | same | — | Read one Scenario and a page of its versions, newest first. |
-| `schedule_scenario_versions.read` | read | same | — | Read one scenario version's metadata, settings, calendars, counts and digests. |
-| `schedule_scenario_versions.activities` | read | same | — | List one scenario version's activities in key order. |
-| `schedule_scenario_versions.relationships` | read | same | — | List one scenario version's relationships in predecessor, successor order. |
-| `schedule_scenario_versions.changes` | read | same | — | List the change-set ops that produced one scenario version, in applied order. |
-| `schedule_cpm_runs.read` | read | same | — | Read one server CPM run: status, summary, issues, open ends and critical paths. |
-| `schedule_cpm_runs.activities` | read | same | — | List one CPM run's per-activity dates, floats and criticality in key order. |
-| `schedule_scenario_outputs.list` | read | same | — | List one scenario version's client-asserted outputs, newest first. |
-| `schedule_scenario_outputs.read` | read | same | — | Read one client-asserted output in full. |
+| Capability | Kind | Purpose | Summary (first docstring line) |
+|---|---|---|---|
+| `schedule_scenarios.create` | write | `schedule_analysis_authoring` | Create a Schedule Scenario whose version 1 is a snapshot of one eligible publication or approved baseline, or a copy of an existing scenario version. |
+| `schedule_scenario_versions.create` | write | same | Append one immutable version to a Scenario by applying a bounded change set to its current head version. |
+| `schedule_cpm_runs.create` | write | same | Run the deterministic server CPM engine over one scenario version and store its result (replays the existing run for the same version and engine). |
+| `schedule_scenario_outputs.record` | write | same | Record a client-computed (client-asserted) analysis output such as Monte Carlo percentiles, bound to one scenario version. |
+| `schedule_baselines.propose` | write | same | Propose one eligible publication as a Project baseline; a proposal is not a baseline until the operator approves it. |
+| `schedule_baselines.withdraw` | write | same | Withdraw a pending baseline proposal (its proposer's channel or the operator). |
+| `schedule_baselines.approve` | operator | `schedule_baseline_approval` | Approve a pending baseline proposal, or designate and approve a publication directly (attested local operator only). |
+| `schedule_baselines.reject` | operator | same | Reject a pending baseline proposal (attested local operator only). |
+| `schedule_baselines.revoke` | operator | same | Revoke an approved, non-governing baseline (attested local operator only). |
+| `schedule_baselines.set_governing` | operator | same | Designate which approved baseline governs the Project (attested local operator only). |
+| `schedule_scenarios.list` | read | `schedule_analysis_read` | List a Project's (or one Series') Schedule Scenarios, newest first. |
+| `schedule_scenarios.read` | read | same | Read one Scenario and a page of its versions, newest first. |
+| `schedule_scenario_versions.read` | read | same | Read one scenario version's metadata, settings, calendars, counts and digests. |
+| `schedule_scenario_versions.activities` | read | same | List one scenario version's activities in key order. |
+| `schedule_scenario_versions.relationships` | read | same | List one scenario version's relationships in predecessor, successor order. |
+| `schedule_scenario_versions.changes` | read | same | List the change-set ops that produced one scenario version, in applied order. |
+| `schedule_cpm_runs.read` | read | same | Read one server CPM run: status, summary, issues, open ends and critical paths. |
+| `schedule_cpm_runs.activities` | read | same | List one CPM run's per-activity dates, floats and criticality in key order. |
+| `schedule_scenario_outputs.list` | read | same | List one scenario version's client-asserted outputs, newest first. |
+| `schedule_scenario_outputs.read` | read | same | Read one client-asserted output in full. |
+| `schedule_series.current` | read | same | Read a Series' derived current standard update and its same-Data-Date ambiguity. |
+| `schedule_series.match_decisions` | read | same | List a Project's series auto-match decisions with their candidates and scores, newest first. |
+| `schedule_baselines.list` | read | same | List a Project's baselines and proposals with lifecycle status, governing flag and provenance. |
+| `schedule_baselines.read` | read | same | Read one baseline or proposal with its full event history and provenance. |
+| `schedule_baselines.governing` | read | same | Read the Project's governing baseline now or as of an instant. |
+| `schedule_baselines.compare` | read | same | Compare an approved baseline's publication with a later publication of the same Series (the exact per-activity delta). |
 
-Counts: `Capability` 240 → 254, `Purpose` 62 → 64; the audit vocabulary CHECK restated by
-S6-3's revision 251 → 265 capability literals (254 + 11 native) and 62 → 64 purposes.
-`_FEATURE_BY_FAMILY`: `schedule_scenarios`, `schedule_scenario_versions`,
-`schedule_cpm_runs`, `schedule_scenario_outputs` → `schedule`. `facade_kind`: 4 `write`, 10
-`read`.
+| Count | Basis → S6 |
+|---|---|
+| `Capability` | 240 → 266 (6 client writes, 4 operator-only writes, 16 reads) |
+| `Purpose` | 62 → 65 |
+| audit capability literals (S6-3 revision) | 251 → 277 (266 + 11 native) |
+| audit purpose literals | 62 → 65 |
+| `IdKind` | 156 → 164 |
+| `_OPERATOR_ONLY` | + 4 |
+| `_FEATURE_BY_FAMILY` | `schedule_scenarios`, `schedule_scenario_versions`, `schedule_cpm_runs`, `schedule_scenario_outputs`, `schedule_baselines` → `schedule` (`schedule_series` already is) |
+| `facade_kind` | 6 `write`, 4 `operator`, 16 `read` |
 
 ### 6.2 Switch
 
 `Settings.schedule_scenarios_enabled: bool = False`, env `MY_PA_SCHEDULE_SCENARIOS_ENABLED`.
 The plane is **effective** iff `schedule_enabled and schedule_scenarios_enabled` and the
-gateway composed the plane factory (`data_engine is None`; a restricted MCP-profile
-composition never composes it). The scenario switch alone is refused by nothing and does
-nothing. Gate points: `ApplicationService.available_capabilities` subtracts the 14 when not
-effective (absent from `capabilities.get`, readiness, MCP tool list, remote profile, façade,
-ChatLLM composition); each handler first calls `_schedule_scenario_plane()` → `unsupported`
-before any read, write or replay; the lineage family admission of section 5.1; the ChatLLM
-prerequisite; `apps/cli/remote_mcp.py` `_planes_from_settings`. Off → on → off changes no row.
+gateway composed the plane factory (`data_engine is None`). Gate points:
+`available_capabilities` subtracts the 26; each handler calls `_schedule_scenario_plane()`
+first (`unsupported`); the import's `series_auto` form (section 11.2) is
+`invalid_request(SERIES_AUTO)` and its baseline approval fields (section 12.3) are refused
+the same way while not effective; lineage family admission (5.1); the ChatLLM prerequisite;
+`apps/cli/remote_mcp.py` `_planes_from_settings`. Off → on → off changes no row. Worker
+behaviour while off: section 11.2 step 6.
 
 ### 6.3 Inputs (strict; unknown key → `invalid_request`)
 
 | Capability | Fields |
 |---|---|
-| `schedule_scenarios.create` | exactly one of `from_publication_id` (`spub`) / `from_version_id` (`sscv`); `name`; `description`; `label`; with a publication: `minutes_per_source_unit`, `calendars` (1..32), `default_calendar`, `data_date_time`; `idempotency_key` (`^[A-Za-z0-9_-]{8,128}$`) |
-| `schedule_scenario_versions.create` | `scenario_id`; `expected_head_version_no` (CAS: must equal the current head, else `conflict(EXPECTED_VERSION)`); `label`; `note`; `change_set`; `idempotency_key` |
-| `schedule_cpm_runs.create` | `version_id`; `idempotency_key`. The natural key `(version_id, my-pa-cpm-v1)` also dedups: an existing run is returned with `created: false` and nothing is computed |
+| `schedule_scenarios.create` | exactly one of `from_publication_id` / `from_baseline_id` / `from_version_id`; `name`; `description`; `label`; with a publication or baseline: `minutes_per_source_unit`, `calendars`, `default_calendar`, `data_date_time`; `idempotency_key` |
+| `schedule_scenario_versions.create` | `scenario_id`; `expected_head_version_no` (else `conflict(EXPECTED_VERSION)`); `label`; `note`; `change_set`; `idempotency_key` |
+| `schedule_cpm_runs.create` | `version_id`; `idempotency_key` (the natural key also dedups) |
 | `schedule_scenario_outputs.record` | section 4.1 document; `idempotency_key` |
-| reads | the id; `page_size` 1..100 (default 25); `cursor` ≤ 512; `schedule_scenarios.list`: `project_id`, optional `series_id`; `schedule_cpm_runs.activities`: optional `critical_only` |
+| `schedule_baselines.*` writes | section 12.4 |
+| reads | the id; `page_size` 1..100 (default 25); `cursor` ≤ 512; `schedule_scenarios.list`: `project_id`, optional `series_id`; `schedule_cpm_runs.activities`: optional `critical_only`; `schedule_baselines.governing`: `project_id`, optional `as_of` |
 
-Idempotency: `(principal_id, capability, idempotency_key)` in one plane request ledger
-(S6-2), request digest `sha256(b"schedule-scenario-request-v1\n" + canonical({principal_id,
-capability, request without key}))`; same key and digest → the recorded outcome with
-`replayed: true`; same key, other digest → `conflict(IDEMPOTENCY_KEY)`. The remote boundary
-stamps the key (T6-16).
+Idempotency: `(principal_id, capability, idempotency_key)` in the plane request ledger;
+digest `sha256(b"schedule-scenario-request-v1\n" + canonical({principal_id, capability,
+request without key}))`; same key and digest replays (`replayed: true`); same key, other
+digest `conflict(IDEMPOTENCY_KEY)`.
 
-### 6.4 Outputs, cursors, disclosure
+### 6.4 Outputs, cursors, disclosure, labels
 
-Every write answers ids, `version_no`, digests, `created`, `replayed` and (create/versions)
-the `snapshot_report` / `application_report`. Reads page from the stored immutable documents
-in their canonical order; `ScheduleCursorOrder` gains `scenarios_created_desc_id_desc`,
-`versions_no_desc`, `scenario_content_offset` (activities, relationships, changes, CPM
-activities: a bare offset bound to the version or run id, as the delta's) and
-`outputs_created_desc_id_desc`. Disclosure: `scope` = the source and enrollment of the
-Scenario's root publication; `source_references` = that publication's source version;
+Writes answer ids, numbers, digests, `created`, `replayed` and reports. Reads page stored
+immutable documents in canonical order; `ScheduleCursorOrder` gains
+`scenarios_created_desc_id_desc`, `versions_no_desc`, `scenario_content_offset`,
+`outputs_created_desc_id_desc`, `match_decisions_created_desc_id_desc`,
+`baselines_label_asc`. Disclosure: `scope`/`source_references` of the root publication(s);
 `trust = MODEL_PROPOSED` with basis `("schedule_scenario", "client_authored")`, plus
-`("schedule_cpm", "my-pa-cpm-v1", "server_computed")` for runs and
-`("schedule_scenario_output", "client_asserted")` for outputs; `classification
-PRIVATE_LOCAL`. Every payload object carries the labels `data_class: "schedule_scenario"`,
-`authority` ∈ `client_authored` \| `server_computed` \| `client_asserted`,
-`authoritative: false`, `reportable: false`. Hidden = absent: another Principal's id, an id
-while the plane is off, and an absent id answer identically.
+`("schedule_cpm", "my-pa-cpm-v1", "server_computed")` for runs,
+`("schedule_scenario_output", "client_asserted")` for outputs and
+`("schedule_baseline", "operator_approved" | "proposed")` for baselines; classification
+`PRIVATE_LOCAL`. Payload labels: `data_class`, `authority` ∈ `client_authored` \|
+`server_computed` \| `client_asserted` \| `operator_approved` \| `proposed`,
+`authoritative`, `reportable: false`. `authoritative` is `true` only on an approved
+baseline (section 12); guidance must not render `MODEL_PROPOSED` as "AI-generated" (R8 R-3).
+Hidden = absent.
 
 ### 6.5 Provenance of plane rows
 
-Every Scenario, version, run and output row stores `authority_class`, `decision_channel` and
-`asserting_client_id` (remote only) derived exactly as S3.1 §6.1 derives lineage provenance,
-and `user_directed` as an unverified claim. No request field carries a Principal, actor,
-channel or time. There is no `confirm`: scenario data is never accepted-grade whoever wrote
-it.
+Every row stores `authority_class`, `decision_channel`, `asserting_client_id` (remote only),
+`acceptance_basis` (`user_confirmed` for the attested local operator, else
+`client_identified`) and the unverified `user_directed` claim, derived as S3.1 §6.1. No
+request field carries them.
 
 ### 6.6 ChatLLM `chatllm-data-v12`
 
-All 14 names `CHATLLM_DATA_CONDITIONAL` under new prerequisite `SCHEDULE_SCENARIOS`, which
-holds iff `planes.schedule and planes.schedule_scenarios` (new field
-`ChatLLMCompositionPlanes.schedule_scenarios: bool = False`). Expected (re-measured by the
-implementer; a difference is reported, never forced): policy size 240 → 254;
-`DATA_CONDITIONAL` 137 → 151; full and default targets unchanged with the switch off (164,
-98); full + schedule + scenarios 184; full + lineage + program + schedule + scenarios 218;
-default + all 4 switches 150; compositions 512 → 1,024. The import stays
-`CONTROL_PLANE_EXCLUDED`.
+The 22 client-usable names (6 writes, 16 reads) are `CHATLLM_DATA_CONDITIONAL` under new
+prerequisite `SCHEDULE_SCENARIOS` (holds iff `planes.schedule and
+planes.schedule_scenarios`; new field `ChatLLMCompositionPlanes.schedule_scenarios`); the 4
+operator-only names are `CHATLLM_CONTROL_PLANE_EXCLUDED` (rationale "attested operator
+baseline approval"). Expected, re-measured by S6-3 (a difference is reported, never forced):
+policy 240 → 266; `DATA_CONDITIONAL` 137 → 159; `CONTROL_PLANE_EXCLUDED` 25 → 29; full 164
+and default 98 unchanged with the switch off; full + schedule + scenarios 192; full + lineage
++ program + schedule + scenarios 226; default + all 4 switches 158; compositions 512 → 1,024.
 
 ### 6.7 Remote, façade, grants
 
-Writes are `write` kind (purpose in `_WRITE_PURPOSES`): published only with remote writes
-enabled and a grant; reads `read` kind. The 4 writes join `_IDEMPOTENT_REMOTE_CAPABILITIES`
-and `is_remote_idempotent` (MCP `idempotentHint` true); `schedule_scenarios.create` with an
-identical payload therefore replays rather than creating a second Scenario (S6-D14).
-`_SERVER_REPLAY_REMOTE_CAPABILITIES` and `REMOTE_OWNED_PAYLOAD_FIELDS` are unchanged. Every
-remote read and write re-checks its own grant (`require_read_grant` precedent) after the
-switch gate. No MCP database profile ceiling or opt-in changes.
+The 6 client writes are `write` kind; they join `_IDEMPOTENT_REMOTE_CAPABILITIES`,
+`_CLIENT_BOUND_KEY_CAPABILITIES` (the stamped key binds the OAuth client, so 2 clients with
+identical payloads create 2 rows — `test_identical_payloads_from_two_clients_create_two_rows`,
+R8-F09) and `is_remote_idempotent`. The 4 operator-only writes are `operator` kind, in
+`_OPERATOR_ONLY`, withheld by `remote_tool_names` and the façade, and refused in the handler
+unless `attested_lineage_authority` admits the caller (CLI or HTTP gateway), exactly like the
+lineage confirms. Reads `read` kind. Every remote call re-checks its own grant. No MCP
+database profile changes.
 
-**Façade end to end** (S6-3, S3.1 Part D shape, default remote path): `my_pa.describe` lists
-exactly the eligible plane names with summary, kind, feature `schedule` and `idempotent`;
-`my_pa.write` creates a Scenario from a synthetic publication, appends a version, runs CPM
-and records an output; `my_pa.read` reads each back; a write via `my_pa.read` (or the
-reverse) is `invalid_request`; a name not admitted (no grant, switch off, plane not
-effective) is absent from describe and `unsupported` at call; the interaction log records
-the canonical capability; lineage `records.associations.assert` with `concerns` from the
-version to an Issue succeeds and is `client_identified`. ChatLLM path: the planner desires
-the 14 exactly when both planes are on.
+**Façade end to end** (S3.1 Part D shape): `my_pa.describe` lists exactly the eligible
+client-usable names; `my_pa.write` creates a Scenario, appends a version, runs CPM, records an
+output and proposes a baseline; `my_pa.read` reads each back; an operator name is absent and
+`unsupported`; a name not admitted is absent and `unsupported`; lineage
+`records.associations.assert` (`concerns`, version → Issue) is `client_identified`. ChatLLM:
+the planner desires the 22 exactly when both planes are on and never the 4.
 
-**Operator grant table and pre-deploy gates** (written by S6-3 into
-`ops/runbooks/cpm-workbench.md`, never performed by an agent): apply S6-2 and S6-3
-revisions; set `MY_PA_SCHEDULE_ENABLED`, `MY_PA_SCHEDULE_SCENARIOS_ENABLED` (and
-`MY_PA_LINEAGE_ENABLED` for lineage); ChatLLM `profile-apply` to `chatllm-data-v12`; grant
-the 14 names to the ChatGPT connector's client; run the read-only pre-deploy checks S6-2
-adds (tables, triggers, CHECKs, no grant to profile roles).
+**Operator gates** (written into `ops/runbooks/cpm-workbench.md` by S6-3, never performed by
+an agent): apply the S6-2 and S6-3 revisions; set the switches; ChatLLM `profile-apply` to
+v12; grant the client-usable names; run the read-only pre-deploy checks.
 
 ---
 
 ## 7. Reporting and disclosure (OD-08)
 
-| Rule | Enforcement point (guarded by S6-3) |
+| Rule | Enforcement point (S6-3 guard) |
 |---|---|
-| Scenario data never enters a Program total or certified report | `ProgramFamily` gains no member; `METRIC_CATALOGUE` gains no metric; no module under `src/my_pa/application/program_*.py`, `src/my_pa/domain/program/` or `src/my_pa/contracts/v1/programs.py` imports a plane module or table (AST guard) |
-| The report-manifest lineage section never counts or seeds a schedule family | `src/my_pa/domain/intelligence/source_manifest.py` `_block_seeds`, `lineage_server_counts` and `lineage_section` admit only the 7 pre-S6 families (a pinned frozenset, not `RecordFamily`); a guard fails if a new family reaches them (S6-U04 if the operator wants scenario lineage in reports later) |
-| Program critical path | **UNPROVEN**: no Program-level schedule read exists; a scenario CPM is per version and labelled non-authoritative; no capability aggregates runs across Projects |
-| Labels everywhere | section 6.4; the TOOLS summaries say "client-asserted" / "scenario" |
-| Baseline vs scenario | publications stay `SOURCE_BOUND_DERIVED` and immutable; nothing writes an S5 table (AST guard over plane persistence: no insert/update/delete on a `schedule_` S5 table) |
-| Lineage close gate | a `client_identified` `concerns`/`delays`/`mitigates` link to an Issue is in its review scope (S3.1 §4.6), holding the close gate until confirmed — unchanged behaviour |
+| Plane data never enters a Program total or certified report | no `ProgramFamily` member or `METRIC_CATALOGUE` metric; AST guard: nothing under `src/my_pa/application/program_*.py`, `src/my_pa/domain/program/` or `src/my_pa/contracts/v1/programs.py` imports a plane module or table |
+| The manifest lineage section never seeds or counts a schedule family | `src/my_pa/domain/intelligence/source_manifest.py` `_block_seeds`, `lineage_server_counts`, `lineage_section` admit only a pinned frozenset of the 7 pre-S6 families (S6-U04) |
+| Program critical path | **UNPROVEN**; a scenario CPM is per version and non-authoritative |
+| Baselines | only an **approved** baseline is `authoritative: true`; every output naming a baseline shows its provenance (proposer channel and client id for local readers, approving operator channel, dates); a proposal is labelled `proposed`, is never shown as a baseline or governing, and is refused by `compare`, `set_governing` and `from_baseline_id`; no certified output exists today (OD-08), so "authoritative" means authoritative for scenario derivation and baseline comparison only |
+| Publications | stay `SOURCE_BOUND_DERIVED`; no plane path writes an S5 table except the section 11.2 second admission (an ordinary admission through `admit_publication`) and the section 12.3 import-time approval (AST guard over plane persistence) |
+| Close gate | a `client_identified` schedule-family link to an Issue holds its close until confirmed (S3.1 §4.6), always confirmable (section 5.1) |
 
 ---
 
@@ -863,432 +865,543 @@ adds (tables, triggers, CHECKs, no grant to profile roles).
 
 | Step | Cost |
 |---|---|
-| change-set application | `O(ops × log V)` plus one `O(V + E)` re-validation; ≤ 5,000 ops |
-| topological sort, cycle report | `O((V + E) log V)` (heap), `O(V + E)` |
-| each pass | `O(V + E)` calendar calls, each `O(log days)`; ≤ 4 calls per element |
-| slack, critical count | `O(E)`, `O(V + E)` |
-| path enumeration | ≤ 16 × V steps (every descent emits); no exponential blow-up; the count saturates at 1,000,000 |
-| calendar tables | ≤ 32 × 36,525 day entries |
-| operation budget | 4,000,000 units, pure counting (section 3.11) |
+| change-set application | `O(ops × log V)` + `O(V + E)` re-validation |
+| sort, cycle report | `O((V + E) log V)`, `O(V + E)` |
+| each pass | `O(V + E)` calls of `O(log days)` |
+| path enumeration | ≤ 16 × V steps; count saturates at 1,000,000 |
+| calendar tables | ≤ 32 × 36,525 entries |
+| operation budget | section 3.11 |
+| matcher | ≤ 50 candidates × 25,000 IDs per decision (section 11.2.1) |
 
-Degenerate inputs: cycles (rejected with a bounded report), self-loops and duplicates
-(refused at the op), dangling references (impossible in a stored version), all-holiday
-calendars (refused: ≥ 1 working minute per week; exceptions bounded, so `advance` always
-terminates inside the horizon or rejects), extreme lags (bounded ±2 years), long chains
-(bounded by V). Target: a maximal network (25,000 activities, 100,000 relationships, 32
-calendars) computes in ≤ 10 s on the CI host, measured by S6-1 (`slow`) and S6-3
-(`database`+`slow`); a miss is reported, never hidden, and moves the compute to a worker
-plane by a contract revision (S6-U06).
+Degenerate inputs: cycles (rejected, bounded report), self-loops and duplicates (refused),
+dangling references (impossible), all-holiday calendars (refused), extreme lags (bounded;
+section 2.6), long chains (bounded by V). Synchronous CPM conditions: section 3.11.
 
 ### 8.2 Isolation, integrity
 
-Principal partition on every row and principal-composite foreign keys (S6-2); hidden =
-absent; append-only `BEFORE UPDATE OR DELETE` and `BEFORE TRUNCATE` refusals on every plane
-table (S5b-1 F-guard precedent), the request ledger's single `reserved → completed`
-transition; CAS on version append; idempotent writes; content and result digests recomputed
-from the stored bytes on every read (a mismatch is `internal_error`, never served).
+Principal partition and principal-composite foreign keys; hidden = absent; append-only and
+TRUNCATE-refusal triggers on every plane table; single `reserved → completed` request-ledger
+transition; CAS on version append; digests recomputed from stored bytes on read (mismatch =
+`internal_error`).
 
-### 8.3 Rate and volume bounds (non-attested writers; the human channel is not limited)
+### 8.3 Rate, refusal and volume bounds (client channels; the attested operator is not limited)
 
 | Bound | Value |
 |---|---|
-| plane writes per writer bucket | 120 per rolling hour, 1,000 per rolling day (the 4 writes together; replays and refusals consume nothing) |
+| plane writes per writer bucket | 120 per rolling hour, 1,000 per rolling day (the 6 client writes together; replays consume nothing) |
 | plane writes per Principal (client channels) | 2,000 per rolling day |
-| CPM compute per Principal | 2,500,000 activity-units per rolling hour (a run costs its activity count; a natural-key replay costs 0) |
-| storage | section 2.10; outputs ≤ 100 per version |
-
-Reaching one answers `rate_limited` with a plane detail and writes nothing (S3.1 §4.8
-precedent).
+| **refused** plane writes per writer bucket | 120 per rolling hour, counted after authentication and the switch gate (R8-F06); reaching it answers `rate_limited` before any parse of the payload |
+| new stored bytes per writer bucket | 128 MiB per rolling day |
+| stored and new bytes per Principal | section 2.10 (2 GiB, 256 MiB per day) |
+| CPM compute per Principal | 2,500,000 activity-units per rolling hour; 1 concurrent compute |
+| pending baseline proposals per Project | 50 |
+| outputs per version | 100 |
 
 ### 8.4 AI boundary
 
-A client (human or model) authors logic and asserts outputs; the server computes only CPM.
-Nothing a client writes becomes source-bound, accepted-grade or reportable; no
-model-confidence field exists; the server never infers a relationship, duration, calendar or
-lineage link.
+A client authors logic, asserts outputs and proposes baselines; the server computes only CPM
+and deterministic matching. Nothing a client writes becomes source-bound, accepted-grade,
+approved or reportable.
 
 ---
 
 ## 9. Delivery plan and work split
 
-Serial: S6-1 → S6-2 → S6-3, one worker at a time, each on this branch.
+Serial: S6-1 → S6-2 → S6-3, one worker at a time on this branch.
 
 ### 9.1 S6-1 (worker I8): pure domain and engine — no migration, no IO
 
-Owned paths (new): `src/my_pa/domain/schedule/scenario/__init__.py` (re-exports, no
-logic), `src/my_pa/domain/schedule/scenario/model.py` (enums, bounds, content records with
-`__post_init__` invariants, distributions, constraints, progress), `…/calendar.py`
-(calendar records and the section 3.2 functions), `…/canonical.py` (content, change-set,
-result, output and distribution documents and digests; decoders for stored documents),
-`…/changeset.py` (op grammar and application, `ChangeSetRefusal(op_index, op_error)`),
-`…/snapshot.py` (section 2.5 over `ScheduleActivityRowView` values), `…/cpm.py`
-(`ENGINE_VERSION`, `run_cpm(content) -> CpmResult`), `…/outputs.py` (section 4 validation).
-Tests (new): `tests/unit/test_scenario_model.py`, `tests/unit/test_scenario_calendar.py`,
+Owned paths (new): `src/my_pa/domain/schedule/scenario/__init__.py`, `…/model.py`,
+`…/calendar.py`, `…/canonical.py`, `…/changeset.py`, `…/snapshot.py`, `…/cpm.py`,
+`…/outputs.py`; `src/my_pa/domain/schedule/series_match.py`;
+`src/my_pa/domain/schedule/currency.py`; `src/my_pa/domain/schedule/baselines.py`. Tests:
+`tests/unit/test_scenario_model.py`, `tests/unit/test_scenario_calendar.py`,
 `tests/unit/test_scenario_changeset.py`, `tests/unit/test_scenario_snapshot.py`,
 `tests/unit/test_scenario_cpm_goldens.py`, `tests/unit/test_scenario_cpm_oracle.py`,
 `tests/unit/test_scenario_cpm_properties.py`, `tests/unit/test_scenario_outputs.py`,
-`tests/architecture/test_scenario_engine_scope.py`; fixtures under
-`tests/fixtures/schedule_scenario/`. Shard weights for heavy modules (`python -m
-tests.ci_shard weigh`), partition proof green.
+`tests/unit/test_schedule_series_match.py`, `tests/unit/test_schedule_currency.py`,
+`tests/unit/test_schedule_baselines.py`, `tests/architecture/test_scenario_engine_scope.py`;
+fixtures under `tests/fixtures/schedule_scenario/`. Shard weights and partition proof.
 
 | Public symbol (minimum) | Module |
 |---|---|
-| `ScenarioContent`, `ScenarioActivity`, `ScenarioRelationship`, `ScenarioCalendar`, `ScenarioSettings`, `ActivityConstraint`, `ActivityProgress`, `DurationDistribution`, `RelationshipType`, `ConstraintType`, `ActivityKind`, `VersionLabel`, `LagCalendar`, `ProgressPolicy` | `model.py` |
-| `working`, `working_minutes`, `advance`, `retreat`, `next_work`, `prev_end`, `shift` | `calendar.py` |
-| `content_document`, `content_sha256`, `change_set_sha256`, `result_document`, `result_sha256`, `distribution_spec_sha256`, `output_payload_sha256`, `scenario_request_digest` | `canonical.py` |
-| `ChangeOp` (closed op union), `apply_change_set`, `ChangeSetRefusal`, `ApplicationReport` | `changeset.py` |
-| `snapshot_from_publication`, `SnapshotReport` | `snapshot.py` |
-| `ENGINE_VERSION = "my-pa-cpm-v1"`, `run_cpm`, `CpmResult`, `CpmIssueCode`, `CpmActivityResult` | `cpm.py` |
-| `validate_output`, `OutputKind`, `OutputRefusal` | `outputs.py` |
+| content records and enums (`ScenarioContent`, `ScenarioActivity`, `ScenarioRelationship`, `ScenarioCalendar`, `ScenarioSettings`, `ActivityConstraint`, `ActivityProgress`, `DurationDistribution`, `RelationshipType`, `ConstraintType`, `ActivityKind`, `VersionLabel`, `LagCalendar`, `ProgressPolicy`) | `scenario/model.py` |
+| `working`, `working_minutes`, `advance`, `retreat`, `next_work`, `prev_end`, `shift` | `scenario/calendar.py` |
+| `content_sha256`, `change_set_sha256`, `result_sha256`, `distribution_spec_sha256`, `output_payload_sha256`, `scenario_request_digest` and their documents | `scenario/canonical.py` |
+| `ChangeOp`, `apply_change_set`, `ChangeSetRefusal`, `ApplicationReport` | `scenario/changeset.py` |
+| `snapshot_from_publication`, `SnapshotReport` | `scenario/snapshot.py` |
+| `ENGINE_VERSION`, `CPM_OPERATION_BUDGET`, `run_cpm`, `CpmResult`, `CpmIssueCode` | `scenario/cpm.py` |
+| `validate_output`, `OutputKind`, `OutputRefusal` | `scenario/outputs.py` |
+| `SERIES_MATCH_VERSION`, `match_series`, `MatchOutcome`, `MatchReason`, `MatchCandidate` | `series_match.py` |
+| `current_standard_update`, `PublicationOrderKey` | `currency.py` |
+| `BaselineAction`, `BaselineType`, `baseline_status`, `governing_baseline`, `next_baseline_label` | `baselines.py` |
 
-The scope guard asserts: stdlib + `my_pa.domain.schedule` + `my_pa.domain.common.identifiers`
-only (inherited); no import of `random`, `time`, `secrets`, `uuid` or `os`; no call of
-`now`, `today` or `utcnow`; no `float(` call, no float literal and no `/` operator (`ast.Div`;
-integer `//` only) anywhere in the package; no `print`/`open`/logging (inherited).
+None of these modules names `BASELINE`/`previous`/`current_baseline` in
+`application/schedules.py` or `domain/schedule/compare.py` (the T6-25 guard stays green).
+The scope guard asserts, for all S6-1 modules: stdlib + `my_pa.domain.schedule` +
+`my_pa.domain.common.identifiers` only (inherited); no import of `random`, `time`, `secrets`,
+`uuid` or `os`; no `now`/`today`/`utcnow` call; no `float(` call, float literal or `/`
+operator (`ast.Div`).
 
-| Prove-red (break exactly one thing; the named test fails for that reason) | Test |
+| Prove-red (one break; the named test fails for that reason) | Test |
 |---|---|
 | P01 drop `snap` on the forward start | `test_golden_network_matches[G02]` |
 | P02 lag calendar always predecessor | `test_golden_network_matches[G06b]` |
 | P03 FF bound without `retreat` | `test_golden_network_matches[G03]` |
-| P04 TF as absolute minutes instead of `W` | `test_golden_network_matches[G02]` (C: 1,440 ≠ 480) |
-| P05 Kahn pops insertion order, not min key | `test_topological_order_is_key_ordered` |
-| P06 cycle not rotated to its smallest key | `test_golden_network_matches[G14]` |
+| P04 TF as absolute minutes | `test_golden_network_matches[G02]` |
+| P05 Kahn pops insertion order | `test_topological_order_is_key_ordered` |
+| P06 cycle not rotated | `test_golden_network_matches[G14]` |
 | P07 path enumeration uncapped | `test_critical_path_enumeration_is_bounded` |
-| P08 a float in the engine | `test_scenario_package_has_no_float_clock_or_randomness` |
-| P09 content digest without its domain prefix | `test_content_sha256_vector` |
-| P10 ops sorted instead of applied in request order | `test_change_set_applies_in_request_order` |
-| P11 snapshot rounds half-up | `test_snapshot_quantizes_half_even` |
-| P12 retained logic ignored for in-progress work | `test_golden_network_matches[G11a]` |
-| P13 SNLT/FNLT violation not reported | `test_golden_network_matches[G08]` |
-| P14 MSO not overriding logic | `test_golden_network_matches[G09]` |
+| P08 a float in a module | `test_scenario_package_has_no_float_clock_or_randomness` |
+| P09 content digest without prefix | `test_content_sha256_vector` |
+| P10 ops sorted instead of request order | `test_change_set_applies_in_request_order` |
+| P11 snapshot rounds half-up | `test_golden_snapshot[S1]` |
+| P12 retained logic ignored | `test_golden_network_matches[G11a]` |
+| P13a FNLT violation not reported | `test_golden_network_matches[G08]` |
+| P13b SNLT backward bound or violation dropped | `test_golden_network_matches[G18]` |
+| P14 MSO not overriding | `test_golden_network_matches[G09]` |
 | P15 `must_finish_by` ignored | `test_golden_network_matches[G10]` |
-| P16 operation budget not enforced | `test_operation_budget_rejects_deterministically` |
-| P17 horizon check removed | `test_horizon_exceeded_is_rejected` |
-| P18 distribution digest check removed | `test_output_distribution_digest_must_match` |
+| P16 budget check off by one or removed | `test_operation_budget_is_exact` (G02 with `n` and `n − 1`) |
+| P17 horizon check removed | `test_golden_network_matches[G24]` |
+| P18 output distribution digest check removed | `test_output_distribution_digest_must_match` |
 | P19 histogram sum check removed | `test_output_histogram_counts_sum_to_iterations` |
-| P20 `activity.add` admits an `sact_` key | `test_added_activity_cannot_take_a_source_key` |
+| P20 `activity.add` admits `sact_` | `test_added_activity_cannot_take_a_source_key` |
 | P21 milestone snapped | `test_golden_network_matches[G12]` |
-| P22 slack on predecessor calendar | `test_golden_network_matches[G06b]` (FF of A) |
+| P22 slack on predecessor calendar | `test_golden_network_matches[G06c]` (R8-F07) |
+| P31 FNET forward bound dropped | `test_golden_network_matches[G17]` |
+| P32 MFO pin dropped | `test_golden_network_matches[G19]` |
+| P33 pin before data date kept | `test_golden_network_matches[G20]` |
+| P34 constraint applied to started work | `test_golden_network_matches[G21]` |
+| P35 S6-D08 open-end bound dropped | `test_golden_network_matches[G22]` |
+| P36 progress_override still considers SS into started work | `test_golden_network_matches[G23]` |
+| P37 out-of-range duration clamped | `test_golden_snapshot[S1]` |
+| P38 final re-validation token missing | `test_final_revalidation_refuses_with_content_invalid` |
 
-Acceptance (S6-1): every golden vector and frozen digest; oracle ≥ 2,000 DAGs and the calendar
-oracle; properties; prove-red table executed; FAST, ruff, ruff format, mypy strict (default
-and `--platform linux`, repo venv and floor-pinned venv), shard verify and doc guards green;
-the maximal-network timing measured and reported.
+Rows P23–P30 and P39–P46 are in sections 11.5 and 12.7. Acceptance (S6-1): every vector and
+frozen digest; oracles; properties; every prove-red row executed; FAST, ruff, ruff format,
+mypy strict (default and `--platform linux`, repo and floor-pinned venvs), shard verify and
+doc guards green; maximal-network timing reported.
 
-### 9.2 S6-2: schema, migration, persistence, unit of work
+### 9.2 S6-2: schema, migrations, persistence, unit of work, worker hook
 
-One additive revision on `621ef6786c64` (sole head after): 4 `IdKind`s; tables
-`knowledge.schedule_scenarios`, `knowledge.schedule_scenario_versions` (content and change
-set as zlib-compressed canonical bytes plus `*_sha256` and `*_size_bytes`; UNIQUE
-`(principal_id, scenario_id, version_no)`; parent and origin principal-composite FKs
-`RESTRICT`), `knowledge.schedule_cpm_runs` (UNIQUE `(principal_id, version_id,
-engine_version)`; result compressed, summary columns), `knowledge.schedule_scenario_outputs`,
-`knowledge.schedule_scenario_write_requests` (idempotency ledger); every CHECK of sections
-2–4 that is a column property (bounds, closed vocabularies, digest shape, label, version
-numbering); append-only and TRUNCATE-refusal triggers; downgrade refused once any plane row
-or plane audit name exists. The lineage widening of section 5.4 in the same revision. A
-`ScenarioUnitOfWork` / `SqlScenarioRepository` (own factory; principal-scoped statements;
-bounded zlib decompression that refuses a size mismatch). Acceptance: database tier by
-marker (append-only, TRUNCATE, CAS race, idempotency, cross-Principal `not_found`,
-digest-recompute, lineage CHECK widening, downgrade refusal), migration tiers, schema parity,
-pre-deploy read-only checks. No capability.
+Revision A (on `621ef6786c64`): the 8 `IdKind`s' tables
+(`knowledge.schedule_scenarios`, `schedule_scenario_versions` with zlib-compressed canonical
+content and change set plus digests and sizes and UNIQUE `(principal_id, scenario_id,
+version_no)`, `schedule_cpm_runs` with UNIQUE `(principal_id, version_id, engine_version)`,
+`schedule_scenario_outputs`, `schedule_scenario_write_requests`, `schedule_intake_series`,
+`schedule_series_match_decisions`, `schedule_baselines`, `schedule_baseline_events`,
+`schedule_governing_events`); column CHECKs; append-only and TRUNCATE-refusal triggers;
+principal-composite FKs `RESTRICT`; the lineage widening (5.4); the role retirement and
+baseline-kind restatement of section 12.2; downgrade refused once any plane row or plane
+audit name exists. `ScenarioUnitOfWork` / repository with bounded decompression; the
+auto-match worker hook (11.2); the import admission changes (11.2, 12.3); read-only
+pre-deploy checks. Acceptance: database tier by marker (append-only, TRUNCATE, CAS race,
+idempotency, cross-Principal `not_found`, digest recompute, lineage CHECKs, role
+retirement and its refusal, match finalization never aborted, baseline lifecycle and
+governing transitions), migration tiers, schema parity. No capability.
 
 ### 9.3 S6-3: capabilities, policy, ChatLLM, remote, lineage endpoints, guidance
 
-Second additive revision (audit capability/purpose vocabulary 251 → 265 / 62 → 64); the 14
-commands, handlers, `_BUILDERS`, `_HANDLERS`, purposes, `_SCOPELESS`, `_requested_scope`,
-`_WRITE_PURPOSES`, `_IDEMPOTENT_REMOTE_CAPABILITIES`, `is_remote_idempotent`,
-`_FEATURE_BY_FAMILY`, ChatLLM v12, switch, cursor orders, `SafeDetail` members
-(`SCENARIO_ID`, `SCENARIO_VERSION_ID`, `CPM_RUN_ID`, `OUTPUT_ID`, `EXPECTED_VERSION`,
-`CHANGE_SET`, `CONTENT_SIZE`, `OUTPUT`, `MINUTES_PER_SOURCE_UNIT`, `CALENDAR`,
-`ACTIVITY_KEY`, `LABEL`, and 1 `change_set_<op_error>` member per section 2.9 `op_error`
-code), lineage endpoint validators and resolvers, OD-08 guards, rate
-budgets, regenerated web fixture, count pins in lockstep, runbook and client guidance.
-Acceptance: switch-off withholding parametrized over 14; façade e2e (FAST catalog test +
-database façade test); ChatLLM planner targets; remote grant re-check; lineage `concerns`,
-`delays`, `mitigates`, widened `discusses`/`originated_from` admitted and every other pair
-refused; OD-08 guards; rate budgets; prove-red of every new guard.
+Revision B: audit vocabulary 251 → 277 / 62 → 65. The 26 commands, handlers, `_BUILDERS`,
+`_HANDLERS`, purposes, `_SCOPELESS`, `_requested_scope`, `_OPERATOR_ONLY`,
+`_WRITE_PURPOSES`, `_IDEMPOTENT_REMOTE_CAPABILITIES`, `_CLIENT_BOUND_KEY_CAPABILITIES`,
+`is_remote_idempotent`, `_FEATURE_BY_FAMILY`, ChatLLM v12, switch, cursor orders, the import
+command's additive fields, `SafeDetail` members (`SCENARIO_ID`, `SCENARIO_VERSION_ID`,
+`CPM_RUN_ID`, `CPM_RUN`, `OUTPUT_ID`, `EXPECTED_VERSION`, `CHANGE_SET`, 14
+`change_set_<op_error>`, `CONTENT_SIZE`, `OUTPUT`, `MINUTES_PER_SOURCE_UNIT`, `CALENDAR`,
+`ACTIVITY_KEY`, `LABEL`, `SERIES_AUTO`, `BASELINE_ID`, `BASELINE_TYPE`,
+`APPROVAL_REFERENCE`, `EFFECTIVE_FROM`, `GOVERNING`, `REASON`, `STORAGE_QUOTA`), lineage
+validators and resolvers, OD-08 guards, budgets and quotas, regenerated web fixture,
+lockstep count pins, runbook and client guidance.
 
-### 9.4 Crosswalk (directive → section → first test)
+### 9.4 Crosswalk (requirement → section → first test)
 
-| Directive requirement | Section | Test (slice) |
+| Requirement | Section | Test (slice) |
 |---|---|---|
-| create entirely new versions of schedule data | 2.2, 2.5, 2.9 | `test_snapshot_copies_exactly_the_accepted_run` (S6-1), `test_version_append_is_cas_guarded` (S6-2) |
-| what-if scenarios / updating schedules | 2.9, 2.8 | `test_change_set_applies_in_request_order`, `test_golden_network_matches[G11a]` (S6-1) |
-| Monte Carlo sims (client-side) | 4 | `test_output_histogram_counts_sum_to_iterations` (S6-1), `test_output_record_is_client_asserted` (S6-3) |
-| server CPM | 3 | `test_golden_network_matches` (S6-1), `test_cpm_run_replays_by_natural_key` (S6-2/3) |
-| lineage records for schedule data | 5 | `test_scenario_lineage_relations_are_admitted` (S6-3) |
-| connected clients through catalog and façade | 6.6, 6.7 | `test_scenario_facade_end_to_end` (S6-3) |
+| new versions of schedule data | 2.2, 2.5, 2.9 | `test_golden_snapshot` (S6-1), `test_version_append_is_cas_guarded` (S6-2) |
+| what-if / updating schedules | 2.8, 2.9 | `test_change_set_applies_in_request_order`, `test_golden_network_matches[G11a]` (S6-1) |
+| Monte Carlo client-side | 4 | `test_output_histogram_counts_sum_to_iterations` (S6-1), `test_output_record_is_client_asserted` (S6-3) |
+| server CPM | 3 | `test_golden_network_matches` (S6-1), `test_cpm_run_replays_by_natural_key` (S6-2) |
+| lineage for schedule data | 5 | `test_scenario_lineage_relations_are_admitted`, `test_withheld_family_link_stays_confirmable_and_endable` (S6-3) |
+| clients via catalog and façade | 6.6, 6.7 | `test_scenario_facade_end_to_end`, `test_identical_payloads_from_two_clients_create_two_rows` (S6-3) |
 | OD-08 kept | 7 | `test_scenario_data_reaches_no_program_surface` (S6-3) |
+| auto-matching | 11 | section 11.5 |
+| authoritative baselines | 12 | section 12.7 |
 
 ---
 
-## 10. Deviations, residuals, open operator decisions, questions for R8
+## 10. Decisions, residuals, open operator decisions
 
 ### 10.1 Decisions (S6-D)
 
 | ID | Decision | Why |
 |---|---|---|
-| S6-D01 | Scenario lineage reuses the ADR-015 ledger (new families and relations) rather than a schedule-only link table | one owner of semantic links; S3.1 provenance, budgets and disclosure apply unchanged |
-| S6-D02 | Structural facts (parent, origin, output-of) are native columns exposed as native virtual edges, never client-assertable relations | ADR-015 decision 2 |
-| S6-D03 | Version 1 is the exact snapshot or exact copy; edits begin at version 2; no blank Scenario | provenance of the baseline stays provable by digest; operator decision 1 |
-| S6-D04 | A Scenario is a linear chain; branching is a new Scenario | CAS on one head; no merge semantics |
-| S6-D05 | ≤ 1 relationship per ordered pair | P6 parity; unambiguous slack |
-| S6-D06 | Integer minutes, naive wall clock, horizon 2000–2099 | exactness; matches the S5a date window |
-| S6-D07 | No time zones or DST | schedules are wall-clock; a zone-aware model is a later engine version |
-| S6-D08 | Open-end bound applies whenever the step-2 bound set is empty | keeps `min` defined for an in-progress activity whose only successors are SS/SF |
-| S6-D09 | CPM runs are persisted (immutable, keyed by version and engine) and computed synchronously inside the request | cheap re-reads and stable lineage targets; budgeted; S6-U06 if too slow |
-| S6-D10 | Cycles are storable; the run reports them | a client may edit across several versions |
-| S6-D11 | Disclosure trust `MODEL_PROPOSED` for all plane answers (no new `TrustLevel`) | the lowest existing level; never upgraded by who wrote it |
-| S6-D12 | `issue_member` not widened | the close gate's mandatory-member semantics stay as reviewed |
-| S6-D13 | Manifest lineage section pinned to the 7 pre-S6 families | OD-08 conservatism |
-| S6-D14 | All 4 writes are remote-stamped idempotent; an identical `schedule_scenarios.create` replays | the remote key is a payload digest; a client wanting 2 identical Scenarios changes the name |
-| S6-D15 | Constraints apply only to not-started activities | simple, P6-like; reported when ignored |
+| S6-D01 | lineage reuses the ADR-015 ledger | one owner of semantic links |
+| S6-D02 | structural facts are native virtual edges | ADR-015 decision 2 |
+| S6-D03 | version 1 is the exact snapshot or copy; edits from version 2; no blank Scenario | provable baseline provenance |
+| S6-D04 | a Scenario is linear; branching is a new Scenario | one CAS head |
+| S6-D05 | ≤ 1 relationship per ordered pair | unambiguous slack |
+| S6-D06 | integer minutes, horizon 2000–2099 | exactness |
+| S6-D07 | no time zones or DST | wall-clock schedules |
+| S6-D08 | open-end bound when step 2 yields none | R8 R-2 accepted; reported via `dangling_finish` |
+| S6-D09 | CPM runs persisted, computed synchronously under the section 3.11 conditions | R8 R-5 |
+| S6-D10 | cycles storable, reported by the run | multi-version edits |
+| S6-D11 | trust `MODEL_PROPOSED` everywhere | R8 R-3 |
+| S6-D12 | `issue_member` not widened | close-gate semantics |
+| S6-D13 | manifest lineage section pinned to 7 families | OD-08 |
+| S6-D14 | client writes stamped, client-bound keys | R8-F09 |
+| S6-D15 | constraints apply only to not-started activities (default; S6-O16) | R8 R-2 |
+| S6-D16..D27 | sections 11 and 12 | — |
 
 ### 10.2 Residuals (S6-U)
 
 | ID | Residual | Owner |
 |---|---|---|
 | S6-U01 | Scenario name/description immutable; no archive | later slice |
-| S6-U02 | A removed baseline activity cannot be restored in the same Scenario | fork an earlier version |
-| S6-U03 | No correlation, risk events, probabilistic branching, resources | later engine/output version |
-| S6-U04 | Reports cannot cite scenario lineage in a manifest | operator decision, later slice |
-| S6-U05 | Lineage grain is the version, not the scenario activity | later family if needed |
-| S6-U06 | Synchronous CPM timing at maxima unmeasured until S6-1 | S6-1 measures; contract revision if missed |
-| S6-U07 | The engine's "retained logic" is this contract's definition (section 3.5/3.6), not a claim of P6 equivalence | stated in guidance |
-| S6-U08 | Content is stored per version in full (no delta storage) | bounded by section 2.10 |
-| S6-U09 | A refused change set names the `op_error` class but not the op's index (closed-token error contract) | an error-contract extension, later slice |
+| S6-U02 | a removed baseline activity cannot be restored in that Scenario | fork |
+| S6-U03 | no correlation, risk events, branching, resources | later version |
+| S6-U04 | reports cannot cite schedule-family lineage in a manifest | operator, later |
+| S6-U05 | lineage grain is the version | later family |
+| S6-U06 | synchronous CPM timing unmeasured until S6-1 | S6-1; worker plane before S6-3 if missed |
+| S6-U07 | "retained logic" is this contract's definition, not a P6 equivalence claim | guidance |
+| S6-U08 | full content stored per version | bounded by quotas |
+| S6-U09 | a refused change set does not disclose the op index | error-contract extension |
+| S6-U10..U14 | sections 11 and 12 | — |
 
-### 10.3 Open operator (product) decisions, each with the default this contract proceeds on
+### 10.3 Open operator (product) decisions with the default this contract proceeds on
 
-| ID | Decision | Default chosen |
+Decided and removed from this list: Monte Carlo location (operator decision; client-side),
+baseline scope (per Project), baseline approval and confirm semantics (operator approval
+required; clients propose), client-designation guard rails (operator approval; section 8.3
+bounds), governing-baseline mechanism (append-only operator events), the first draft's
+generic designations (replaced).
+
+| ID | Choice | Default |
 |---|---|---|
-| S6-O01 | Monte Carlo location | client-side only (operator decision 2); no server sampling |
-| S6-O02 | Source duration unit | client must declare `minutes_per_source_unit`; no default |
-| S6-O03 | Lag calendar | `predecessor` (settable per version) |
-| S6-O04 | Out-of-sequence policy | `retained_logic` (settable per version) |
-| S6-O05 | Critical definition | `TF ≤ 0` (threshold settable 0..525,600 minutes) |
-| S6-O06 | Open-end late finish | project finish, or `must_finish_by` when set |
-| S6-O07 | Longest-path critical definition | not offered |
-| S6-O08 | Server evaluation with client duration overrides (per-iteration server CPM) | not built; a client may call `schedule_cpm_runs.create` on `simulation_input` versions within the rate bounds |
-| S6-O09 | Rate and storage bounds (section 8.3, 2.10) | as tabled |
-| S6-O10 | Exposure | ChatLLM `DATA_CONDITIONAL` (writes included) and remote grants by the operator; switches default off |
-
-### 10.4 Items the contract asks review R8 to rule on
-
-- R-1: whether ADR-016's Supersession clause ("a superseding ADR is required … to persist
-  deltas, to link schedule evidence to another domain") is satisfied by the in-place
-  2026-11-03 amendment (this contract's choice, matching ADR-015 decisions 15–16) or needs a
-  separate ADR-017.
-- R-2: S6-D08 (the empty-bound-set rule) and S6-D15.
-- R-3: S6-D11 (`MODEL_PROPOSED` for operator-authored scenario data).
-- R-4: the writes as ChatLLM `DATA_CONDITIONAL` (S6-O10), mirroring P1's open lineage writes.
-- R-5: synchronous CPM (S6-D09) versus a worker plane.
-- R-6: the auto-match flow of section 11.2 (intake Series and a second admission) and
-  S6-O12 (automatic attach without confirmation).
-- R-7: currency and designation semantics of section 11.3 (S6-D17, S6-D18, S6-O13, S6-O14).
+| S6-O02 | source duration unit | client declares `minutes_per_source_unit`; no default |
+| S6-O03 | lag calendar | `predecessor` |
+| S6-O04 | out-of-sequence policy | `retained_logic` |
+| S6-O05 | critical definition | `TF ≤ 0` |
+| S6-O06 | open-end late finish | PF or `must_finish_by` |
+| S6-O07 | longest-path definition | not offered |
+| S6-O08 | per-iteration server evaluation with duration overrides | not built |
+| S6-O09 | rate, refusal, byte and storage bounds | section 8.3 and 2.10 values |
+| S6-O10 | ChatLLM exposure | 22 names `DATA_CONDITIONAL`, 4 `CONTROL_PLANE_EXCLUDED`; switches default off |
+| S6-O11 | matcher thresholds | consider 300, match 800, margin 500, minimum 20 IDs, name-agreement veto 600 |
+| S6-O12 | auto-attach on `matched` | yes, only with the name-agreement veto (operator item A; R8 ruling) |
+| S6-O13 | currency excludes approved baselines and considers every other eligible publication | yes |
+| S6-O15 | intake publications finalized while the plane is off | match decided and recorded as evidence; no admission (section 11.2 step 6) |
+| S6-O16 | constraints on started activities | ignored and reported `constraint_ignored_started`; R8 recommends applying finish-side constraints (FNET forward, FNLT/MFO backward) to in-progress remaining work in a later engine version, because ignoring them drops contractual-deadline negative float exactly when it matters |
+| S6-O17 | a Series with updates but no approved baseline | `compare` unavailable for it; reads report `no_baseline_in_series`; the governing baseline is still reported for the Project |
+| S6-O18 | governing baseline in Series X while updates arrive in Series Y | the governing baseline compares only within X; reads of Y report `governing_baseline_in_other_series` and list Y's own approved baselines, which the caller may name explicitly; no cross-Series comparison |
+| S6-O19 | as-of semantics | by the governing events' recorded time (what the record said on that instant); the baseline's `effective_from` is shown, not used for selection |
+| S6-O20 | baseline labels | `BL-<n>` with `n` = the Project's approval ordinal from 0, never reused (a revoked or ineligible baseline keeps its label) |
+| S6-O21 | first approved baseline becomes governing automatically | no; governing is always an explicit operator event |
+| S6-O22 | revoking the governing baseline | refused (`conflict(GOVERNING)`) until governing moves |
 
 ---
 
-## 11. Addendum (operator, 2026-11-03): series auto-matching and publication currency and authority
+## 11. Series auto-matching and the current standard update (operator item A, item B1)
 
-Operator additions relayed by the Manager on 2026-11-03: "add auto-matching to the S6
-contract", and "if two schedule files with the same Data Date are uploaded, are both
-retained, and which is the latest/authoritative version?". Both are in scope of S6 and of
-review R8; sections 0–10 are unchanged except where this section says so.
+### 11.1 Repository truth
 
-### 11.1 Repository truth (re-measured at the basis)
+T6-19 to T6-24 (section 1.1): the Series is final at admission; parse products are immutable
+and Series-scoped; same-Series re-admission replays only on equal fields; 1 job per
+publication; same-Data-Date files are all retained with no stored pointer; `schedule_series`
+is append-only.
 
-| # | Fact at `83e79817` | Consequence |
-|---|---|---|
-| T6-19 | `ScheduleImportRequest` needs exactly one of `series_id` / `series_name`; `admit_publication` resolves or creates the Series **in the admission transaction**, before any byte is fetched (S5b-1 `admit_publication` steps 4 and 7); `schedule_publications.series_id` is not null | the Series is final at admission; matching needs parsed Activity IDs, which exist only after the worker parses — so matching cannot bind the admitted publication itself |
-| T6-20 | Stable Activities are created per Series during the worker's canonicalization; rows, runs and activities are immutable (F-guards) | a publication cannot be moved between Series after parsing |
-| T6-21 | UNIQUE `(principal_id, series_id, source_version_id)` behaviour: the same source version re-admitted to the same Series replays or conflicts (S5b-1 step 5); across Series it is admissible | a matched source version can be admitted a second time into the matched Series |
-| T6-22 | One job per publication (`a_schedule_publication_has_one_job`); a job is enqueued only on insert | a second admission gets its own job; nothing reuses a job |
-| T6-23 | Both same-Data-Date publications are retained (immutable; a different source version is a new publication); there is no stored latest/current pointer; reads order by `(data_date, admitted_at, publication_id)`; `schedule_series.list`'s `latest_update` = max of that key among role `update`, status `complete`/`partial`; the only explicit relation is `supersedes_publication_id` (at most 1 successor per predecessor; supersession never hides the predecessor) | currency is derived, never stored; authority is a separate, append-only, attributed claim |
-| T6-24 | `schedule_series` is append-only (F1/F2); the Series name refusal set is `normalize_series_name` | no column is added to S5 tables; an intake marker lives in a new table |
+### 11.2 Auto-matching flow (S6-D16)
 
-### 11.2 A — auto-matching (deterministic, conservative, evidence-recorded)
-
-**Flow (S6-D16).**
-
-1. `schedule_publications.import` gains an **additive** request form: exactly one of
-   `series_id`, `series_name`, or `series_auto: true` (with optional `series_name_if_new`).
-   The 2 existing forms are byte-for-byte unchanged, including their request digest
-   (`cpm-schedule-import-v1`); the auto form digests under
-   `b"cpm-schedule-import-v2\n"` with the added keys `series_auto` and
-   `series_name_if_new_key`. An explicit `series_id` or `series_name` **always** wins: the
-   matcher is never consulted for it.
-2. An auto import is admitted, in the same S5b-1 transaction, into the Project's **intake
-   Series** — an ordinary `schedule_series` row named `Schedule intake (unmatched)`, created
-   on first use and marked by a row in the new append-only table
-   `knowledge.schedule_intake_series (principal_id, project_id, series_id)`, UNIQUE per
-   `(principal_id, project_id)`. A caller `series_name` whose key equals the intake name's
-   key is refused `invalid_request(SERIES_NAME)` (additive refusal). The publication is
-   parsed by its one job exactly like any other.
-3. When the worker finalizes an intake publication as `complete` or `partial`, the same
-   finalization transaction computes the match (11.2.1) over the Project's non-intake
-   Series and writes one immutable **match decision** (`ssmd_`, table
-   `knowledge.schedule_series_match_decisions`): publication id, outcome, `threshold_version`
-   `series-match-v1`, incoming ID count, every candidate considered with its score, current
-   publication id, Data Date and `data_date_coherent`, title equality (evidence only), and
-   the resulting publication id if any. A `review_required` or `failed` intake publication
-   gets a decision with outcome `not_eligible` and no candidates.
-4. Outcome `matched`: in that transaction, a second publication of the **same source
-   version** is admitted into the matched Series (new `spub_`, its own job, the original
-   role, baseline kind and expected Data Date, `admission_basis = auto_match`, the decision
-   id; idempotency key derived as `sha256("series-match-v1\n" + decision_id)` truncated to 64
-   hex). It is parsed again by its own job (deterministic: same parse result digest).
-   Outcome `no_match` with `series_name_if_new`: the same, into a Series created with that
-   name — unless a non-intake Series already has that name key, which makes the outcome
-   `ambiguous` (`name_conflict`) and creates nothing. `no_match` without a name: outcome
-   `needs_series`. `ambiguous`: nothing is admitted.
-5. The intake publication is never deleted, hidden or moved; it stays readable, labelled
-   `series_kind: intake`, can never be current (11.3), and cannot seed a Scenario
-   (`schedule_scenarios.create` refuses it with `conflict(STATUS)`). The operator resolves
-   `ambiguous`/`needs_series` by an explicit import (`series_id` or `series_name`) of the
-   same source version — an ordinary admission.
-
-Provenance: the auto admission inherits the attested local-operator authority of the import
-that caused it (import is operator-only, ADR-016 decision 4) and records
-`admission_basis = auto_match` plus the decision id; no client can trigger it.
+1. `schedule_publications.import` gains an additive form: exactly one of `series_id`,
+   `series_name` or `series_auto: true` (with optional `series_name_if_new`). The auto form
+   requires role `update`, refuses `supersedes_publication_id` and any baseline field
+   (`invalid_request(SERIES_AUTO)`; auto-matching never creates a baseline, R8-F12). Requests
+   without any S6 field keep the `cpm-schedule-import-v1` digest byte-for-byte; a request with
+   any S6 field digests under `b"cpm-schedule-import-v2\n"` with the added keys present
+   (null when absent). An explicit `series_id`/`series_name` always wins; the matcher is
+   never consulted for it.
+2. Each auto import is admitted into its **own** intake Series (R8-F11: no Stable Activity
+   identity is shared between unrelated files), named `Schedule intake ` + the first 12 hex
+   characters of the request digest and marked by a row in append-only
+   `knowledge.schedule_intake_series (principal_id, project_id, series_id,
+   publication_id)`. A caller `series_name` whose key starts with the key of `schedule intake
+   ` is refused `invalid_request(SERIES_NAME)` (additive). Intake Series and their
+   publications and activities are excluded from currency, baselines, scenario seeding, the
+   delta (`invalid_request(TO_PUBLICATION_ID)` for an intake pair) and lineage linkability,
+   and are labelled `series_kind: intake` in S5 reads (additive field).
+3. When the worker finalizes an intake publication, the finalization transaction takes
+   `pg_advisory_xact_lock` on `(principal_id, project_id)` (R8-F15), reads at most 50
+   non-intake Series of the Project by `(created_at, series_id)` — more than 50 makes the
+   outcome `ambiguous`/`candidate_bound` without scoring — computes the match (11.2.1) and
+   writes 1 immutable decision (`ssmd_`, `knowledge.schedule_series_match_decisions`):
+   publication, outcome, single reason, `threshold_version series-match-v1`, incoming ID
+   count, every candidate considered (Series, current publication, Data Date, score,
+   `data_date_coherent`, `name_agreement_permille`, `title_equal`), and the resulting or
+   existing publication id.
+4. The resulting admission (outcomes `matched`, `created`) runs in a **savepoint** inside that
+   transaction through `admit_publication` with role `update`, the intake's expected Data
+   Date, `admission_basis = auto_match` and the decision id; its idempotency key is
+   `sha256("series-match-v1\n" + decision_id)` (first 64 hex). If the target Series already
+   holds that source version, no admission is attempted: outcome `already_present` with the
+   existing publication. Any admission refusal rolls back only the savepoint and is recorded
+   as outcome `admission_refused` with the refusal token; finalization always commits
+   (R8-F12). The new publication is parsed by its own job (same parse digest).
+5. Outcome set (closed, R8-F14): `matched`, `created` (`no_match` + `series_name_if_new`, the
+   name free under the lock), `ambiguous`, `needs_series` (`no_match` without a name),
+   `already_present`, `admission_refused`, `not_eligible` (intake publication
+   `review_required`/`failed`). `ambiguous` carries exactly 1 reason by precedence:
+   `candidate_bound` > `insufficient_evidence` > `multiple_high` > `margin` >
+   `data_date_incoherent` > `evidence_conflict` > `name_conflict`.
+6. Plane off at finalization (S6-O15, R8): the worker still computes and records the decision
+   (evidence only) and performs **no** admission; the decision carries
+   `admission_skipped: plane_disabled`. The operator resolves by an explicit import later.
+7. The intake publication is never deleted, hidden or moved; the operator resolves
+   `ambiguous`/`needs_series` by an explicit import. Provenance: the second admission inherits
+   the attested local-operator authority of the import that caused it (a change to ADR-016
+   decision 4 recorded in ADR-017); no client can trigger it.
 
 #### 11.2.1 Matcher `series-match-v1` (pure; S6-1)
 
-Inputs: the incoming accepted run's set `A` of exact published Activity IDs (activity and
-milestone rows), its Data Date; per candidate Series (non-intake, same Project) the set `B`
-of its **current published version** (11.3), or, when it has none, of its newest eligible
-publication of any role by `(data_date, admitted_at, publication_id)`; candidates with no
-eligible publication are skipped. Exact string equality only (R2 §16; no fuzzy, case or
-whitespace folding beyond the parser's own normalization).
+Inputs: the incoming accepted run's set `A` of exact published Activity IDs with their
+normalized names, and its Data Date; per candidate Series the ID→name map `B` of its current
+standard update (11.3), else of its newest eligible publication by the order key; Series with
+no eligible publication are skipped. Exact string equality only (R2 §16).
 
 | Rule | Value |
 |---|---|
-| score | `floor(1000 × |A ∩ B| / |A ∪ B|)` (Jaccard, per-mille, integers) |
+| score | `floor(1000 × |A ∩ B| / |A ∪ B|)` |
 | considered | score ≥ 300 |
-| data-date coherent | incoming Data Date ≥ the candidate's Data Date |
-| `matched` | `|A| ≥ 20`, exactly 1 candidate with score ≥ 800, it is data-date coherent, and every other candidate scores < 500 |
-| `ambiguous` | some candidate is considered but `matched` fails (reasons, closed: `multiple_high`, `margin`, `data_date_incoherent`, `insufficient_evidence`, `name_conflict`) |
-| `no_match` | no candidate considered |
-| candidate order | score desc, then Series `created_at` asc, then `series_id` asc |
-| title | recorded (`title_equal: bool`), never read by the outcome |
-
-Vectors (S6-1 commits each; IDs synthetic):
+| data-date coherent | incoming Data Date ≥ candidate Data Date |
+| name agreement | `floor(1000 × |{id ∈ A ∩ B : name_A(id) = name_B(id)}| / |A ∩ B|)` (exact normalized names); **veto only**: it can demote, never select (R8-F13) |
+| `matched` | `|A| ≥ 20`, exactly 1 candidate ≥ 800, coherent, name agreement ≥ 600, every other candidate < 500 |
+| `ambiguous` | some candidate considered and `matched` fails |
+| `no_match` | none considered |
+| candidate order | score desc, Series `created_at` asc, `series_id` asc |
+| title | recorded (`title_equal`), never read by the outcome |
 
 | # | Incoming `A` | Candidates | Outcome |
 |---|---|---|---|
-| M1 | `S1..S100` | X = `S1..S95 ∪ T1..T5` (904); Y = `S1..S10 ∪ U1..U90` (52) | `matched` X |
-| M2 | `S1..S100` | X as M1 (904); Y = `S1..S90 ∪ V1..V10` (818) | `ambiguous` `multiple_high` [X, Y] |
-| M3 | `S1..S100` | X = `W1..W100` (0) | `no_match` → `needs_series`, or a new Series when `series_name_if_new` is given |
-| M4 (ID reuse) | `A1000..A1099`, Data Date 2027-01-04 | X = `A1000..A1099` with Data Date 2027-02-01 (1000) | `ambiguous` `data_date_incoherent` |
-| M5 (small set) | `S1..S12` | X = `S1..S12` (1000) | `ambiguous` `insufficient_evidence` |
-| M6a | `S1..S100` | X 850, Y 520 | `ambiguous` `margin` |
-| M6b | `S1..S100` | X 850, Y 499 | `matched` X |
-| M7 (title trap) | `S1..S100`, title equal to Y's | X 904, Y 52 | `matched` X (title ignored) |
+| M1 | `S1..S100`, names `N1..N100` | X = `S1..S95 ∪ T1..T5`, same names (904, agreement 1000); Y = `S1..S10 ∪ U1..U90` (52) | `matched` X |
+| M1c | `S1..S100` | X = `s1..s100` (lower case) (0) | `needs_series` (case is never folded) |
+| M2 | M1 | X (904); Y = `S1..S90 ∪ V1..V10`, same names (818) | `ambiguous` `multiple_high` |
+| M3 | `S1..S100` | X = `W1..W100` (0) | `needs_series`, or `created` with `series_name_if_new` |
+| M4 | `A1000..A1099`, Data Date 2027-01-04 | X same IDs and names, Data Date 2027-02-01 (1000) | `ambiguous` `data_date_incoherent` |
+| M5 | `S1..S12` | X = `S1..S12` (1000) | `ambiguous` `insufficient_evidence` |
+| M6a | `S1..S100` | X = `S1..S90 ∪ P1..P10` (818); Y = `S1..S69 ∪ Q1..Q31` (526); names agree | `ambiguous` `margin` |
+| M6b | `S1..S100` | X as M6a (818); Y = `S1..S66 ∪ Q1..Q34` (492) | `matched` X |
+| M7 | `S1..S100`, title equal to Y's | X as M1 (904); Y as M1 (52) | `matched` X (title ignored) |
+| M8 | `A1000..A1099` (default P6 numbering), names `GC-1..GC-100` | X = `A1000..A1099`, names `SUB-1..SUB-100`, coherent (1000, agreement 0) | `ambiguous` `evidence_conflict` |
+| M9 | `S1..S100` | X `matched`-grade, but X already holds the same source version | `already_present` |
 
-### 11.3 B — currency and authority
+Unless a row says otherwise, every incoming set has a coherent Data Date and every
+candidate's names agree with the incoming names on the shared IDs.
 
-**Derived current published version (S6-D17).** Per non-intake Series: the eligible set
-`E` = publications with role `update`, effective status `complete` or `partial`, and no
-successor whose effective status is `complete` or `partial` (a `failed`/`review_required`
-successor does not displace its predecessor). `current` = max of `E` by `(data_date,
-admitted_at, publication_id)`; null if `E` is empty. `same_data_date_ambiguity` = more than
-1 member of `E` has the maximum Data Date. A `review_required` or `failed` publication can
-never be current; nothing is deleted or hidden. Baselines and references are never current
-(R2 §30: baselines are explicit).
+### 11.3 Derived current standard update (S6-D17; R8 R-7 accepted)
+
+Per non-intake Series: `E` = publications that are effective `complete`/`partial`, are **not**
+the publication of an approved, eligible, non-revoked Baseline at read time (section 12), and
+have no effective `complete`/`partial` successor. `current` = max of `E` by the one order key
+`(data_date, admitted_at, publication_id)` (the key the S5b-2 reads use; defined once as
+`PublicationOrderKey`); null if `E` is empty. `same_data_date_ambiguity` = more than 1 member
+of `E` has the maximum Data Date. A `review_required`/`failed` publication is never current;
+nothing is hidden. Baseline status never depends on the order and the order never depends on
+baseline status beyond membership of `E`. The S5b-2 `latest_update` of `schedule_series.list`
+keeps its merged definition (declared role `update`); `schedule_series.current` is the
+derived rule (S6-U11).
 
 | # | Series | Current | Ambiguity |
 |---|---|---|---|
-| C1 | P1, P2 both `update`, `complete`, Data Date 2027-01-31, P2 admitted later | P2 | true |
-| C2 | C1 with P2 `supersedes` P1 | P2 | false |
+| C1 | P1, P2 updates, `complete`, Data Date 01-31, P2 admitted later | P2 | true |
+| C2 | C1 with P2 superseding P1 | P2 | false |
 | C3 | P1 (01-31, complete), P2 (02-28, `review_required`) | P1 | false |
-| C4 | P1 (01-31, complete), P2 (02-28, `failed`, supersedes P1) | P1 | false |
-| C5 | P1 `update` (01-31), B1 `baseline` (02-28) | P1 | false |
-| C6 | only a `baseline` | null | false |
+| C4 | P1 (01-31), P2 (02-28, `failed`, supersedes P1) | P1 | false |
+| C5 | P1 (01-31) standard update; B1 (02-28) the publication of an approved baseline | P1 | false |
+| C6 | only B1 (approved baseline) | null | false |
+| C7 | C5 with B1's baseline revoked | B1 | false |
+| C8 | P1 (01-31); B1 (02-28) with a pending proposal only | B1 | false |
 
-**Authority designation events (S6-D18).** Append-only table
-`knowledge.schedule_authority_designations` (`sdsg_`): `designation_id`, `principal_id`,
-`series_id`, `publication_id` (must be in that Series, non-intake, effective `complete` or
-`partial`; else `conflict(STATUS)`), `scope` ∈ `series_current` (authoritative for the Series)
-\| `data_date` (authoritative among publications sharing its Data Date), `action` ∈
-`designate` \| `revoke` (`revoke` names the `designation_id` it revokes, same Principal,
-Series and scope, not already revoked), `reason` (1..2,000 characters, required), provenance
-derived as section 6.5 (`acceptance_basis` `user_confirmed` for the attested local operator,
-`client_identified` otherwise), `recorded_at`. Never updated or deleted; a reversal is a later
-event. Effective designation per `(series, scope[, data_date])` and per basis = the latest
-non-revoked `designate` event. Reads report the derived current, the effective
-`user_confirmed` designation and the effective `client_identified` designation separately;
-**only a `user_confirmed` designation is ever treated as authoritative in anything
-certified**, and nothing certified reads currency at all today (OD-08, section 7); a client
-designation is shown labelled `client_identified`. A designation whose publication is later
-superseded or whose Data Date is overtaken is still shown, flagged `designation_stale`.
+C5/C6 (R8-F20 a) no longer key on a role: a publication is a baseline iff an approved Baseline
+names it; `reference` is retired (section 12.2).
 
-**Scenarios (S6-D19).** `schedule_scenarios.create` takes an explicit `from_publication_id`
-only; there is no "current" pointer argument. A client wanting the current version reads
-`schedule_series.current` first and passes the id; the Scenario records that exact id.
-
-### 11.4 Capabilities (added to section 6)
-
-| Capability | Kind | Purpose | Summary |
-|---|---|---|---|
-| `schedule_designations.record` | write (additive) | `schedule_scenario_authoring` | Record an append-only authority designation (or its revocation) of one publication within its Series, with a reason. |
-| `schedule_designations.list` | read | `schedule_scenario_read` | List a Series' authority designation events, newest first. |
-| `schedule_series.current` | read | `schedule_scenario_read` | Read a Series' derived current published version, its same-Data-Date ambiguity, and its effective operator and client designations. |
-| `schedule_series.match_decisions` | read | `schedule_scenario_read` | List a Project's series auto-match decisions with their candidates and scores, newest first. |
-
-Same switch, gates, scopelessness, labels, rate budget (the designation write counts in the
-section 8.3 write budget), remote and façade rules as section 6; `schedule_designations` →
-feature `schedule`; `schedule_designations.record` joins `_IDEMPOTENT_REMOTE_CAPABILITIES`.
-`schedule_publications.import` stays operator-only, attested-local and
-`CONTROL_PLANE_EXCLUDED`; only its request grows. **Counts change accordingly** (supersede
-the section 6.1/6.6/9.3 figures): 18 plane capabilities (5 writes, 13 reads); `Capability`
-240 → 258; audit capability literals 251 → 269; `Purpose` 62 → 64 (unchanged by the
-addendum); `IdKind` 156 → 162 (`sdsg`, `ssmd` added; both prefix-free against all 156 and
-absent from `src`, `tests`, `web/src`, `migrations`); ChatLLM `DATA_CONDITIONAL` 137 → 155,
-policy 258, full + schedule + scenarios 188, full + lineage + program + schedule +
-scenarios 222, default + all 4 switches 154 (re-measured by S6-3). `SafeDetail` gains
-`DESIGNATION_ID`, `SCOPE`, `REASON`, `SERIES_AUTO`.
-
-### 11.5 Work split, prove-red and crosswalk
+### 11.4 Work split, prove-red, crosswalk, decisions
 
 | Slice | Owns |
 |---|---|
-| S6-1 | pure `src/my_pa/domain/schedule/series_match.py` (`SERIES_MATCH_VERSION`, `match_series`, `MatchOutcome`, `MatchReason`, `MatchCandidate`) and `src/my_pa/domain/schedule/currency.py` (`current_publication`, `effective_designations`); tests `tests/unit/test_schedule_series_match.py` (M1–M7), `tests/unit/test_schedule_currency.py` (C1–C6 and designation revoke/stale vectors). Both modules sit under the S5a package guards (stdlib only) and the S6-1 no-float guard is extended to them |
-| S6-2 | `schedule_intake_series`, `schedule_series_match_decisions`, `schedule_authority_designations` tables (append-only, TRUNCATE refusal, principal-composite FKs `RESTRICT`); the 2 `IdKind`s; the import request v2 digest and admission of the auto form; the worker finalization hook (match + auto admission in the finalization transaction, lease-checked); repository reads |
-| S6-3 | the import command's additive fields; the 4 capabilities; reads; labels; guidance; the S5b-2 contract gains a forward note, never a rewrite |
+| S6-1 | `series_match.py` (M1–M9), `currency.py` (C1–C8) |
+| S6-2 | intake table and naming; v2 import digest and auto form; worker hook (lock, bound, savepoint, outcomes, plane-off rule); decisions table |
+| S6-3 | import command fields; `schedule_series.current`, `schedule_series.match_decisions`; `series_kind` label |
+
+### 11.5 Prove-red and crosswalk (section 11)
 
 | Prove-red | Test |
 |---|---|
-| P23 matcher folds case | `test_series_match_vectors[M1]` plus a case-variant vector `M1c` (must not match) |
+| P23 matcher folds case | `test_series_match_vectors[M1c]` (R8-F08) |
 | P24 margin rule removed | `test_series_match_vectors[M6a]` |
 | P25 data-date coherence removed | `test_series_match_vectors[M4]` |
 | P26 title used as a tiebreak | `test_series_match_vectors[M7]` |
-| P27 failed successor displaces | `test_current_publication_vectors[C4]` |
-| P28 ambiguity flag omitted | `test_current_publication_vectors[C1]` |
+| P27 failed successor displaces | `test_current_standard_update_vectors[C4]` |
+| P28 ambiguity flag omitted | `test_current_standard_update_vectors[C1]` |
 | P29 explicit `series_name` consults the matcher | `test_explicit_series_never_matches` (S6-2) |
-| P30 client designation treated as authoritative | `test_only_operator_designations_are_authoritative` (S6-3) |
+| P30 name-agreement veto removed | `test_series_match_vectors[M8]` |
+| P39 one shared intake Series | `test_each_auto_import_gets_its_own_intake_series` (S6-2) |
+| P40 admission refusal aborts finalization | `test_match_admission_refusal_is_recorded_not_raised` (S6-2) |
 
 | Requirement | Section | First test |
 |---|---|---|
-| auto-matching, conservative, evidence recorded | 11.2 | `test_series_match_vectors` (S6-1), `test_auto_import_records_a_match_decision` (S6-2) |
+| conservative, evidence-recorded auto-matching | 11.2 | `test_series_match_vectors` (S6-1), `test_auto_import_records_a_match_decision` (S6-2) |
 | explicit Series always wins | 11.2 step 1 | `test_explicit_series_never_matches` (S6-2) |
-| same-Data-Date retention and current version | 11.3 | `test_current_publication_vectors` (S6-1), `test_series_current_read_reports_ambiguity` (S6-3) |
-| attributed authority designation | 11.3 | `test_designations_are_append_only_and_revocable` (S6-2) |
-| scenarios name the exact publication | 11.3 | `test_scenario_records_the_exact_publication` (S6-3) |
+| same-Data-Date retention and current version | 11.3 | `test_current_standard_update_vectors` (S6-1), `test_series_current_read_reports_ambiguity` (S6-3) |
 
-### 11.6 Decisions, residuals and open product choices (continuing section 10)
+| ID | Decision / residual |
+|---|---|
+| S6-D16 | binding by a second admission after parsing, 1 intake Series per auto import |
+| S6-D17 | currency derived over eligible non-baseline publications, never stored |
+| S6-U10 | a matched auto import is parsed twice |
+| S6-U11 | `latest_update` (S5b-2) and `schedule_series.current` differ when a declared update is an approved baseline; guidance names the derived read as current |
+| S6-U12 | matching reads only a candidate's single current (or newest) publication |
 
-| ID | Decision / residual / choice | Default or owner |
+---
+
+## 12. Operator-approved Project baselines (operator addendum 2, closed decisions)
+
+### 12.1 Model (S6-D18..D27)
+
+| Item | Rule |
+|---|---|
+| status of a publication | binary: **baseline** iff an approved, eligible, non-revoked Baseline names it; every other publication is a **standard update** (the `reference` role is retired, 12.2) |
+| Baseline (`sbl_`) | `baseline_id`, `principal_id`, `project_id`, `series_id` (its publication's), `publication_id` (exact, immutable; eligible and not intake), `type` ∈ `contract` (prime contract schedule) \| `approved_update` (approved rebaseline, change or time extension), `created_at`; a row is created by a proposal or by a direct operator approval |
+| events (`sbev_`) | append-only `propose`, `approve`, `reject`, `withdraw`, `revoke`; each with server-derived provenance (6.5), `reason` (1..2,000) and `recorded_at`; `approve` also carries `label` (`BL-<n>`), `approval_reference` (1..500, required), `effective_from` (date, required), optional `supersedes_baseline_id` (an approved baseline of the same Project) |
+| lifecycle | `proposed` → `approved` \| `rejected` \| `withdrawn` (terminal); `approved` → `revoked` (terminal); derived, never updated |
+| eligibility | a Baseline is **effective** iff approved, not revoked, and its publication is effective `complete`/`partial`; an import-time approval whose publication finalizes `review_required`/`failed` reads `ineligible` and never counts |
+| uniqueness | ≤ 1 pending proposal and ≤ 1 approved non-revoked Baseline per publication; ≤ 50 pending proposals per Project |
+| scope | **per Project** (operator decision 1); unlimited count; a Baseline attaches to a publication in any non-intake Series of the Project |
+| governing | append-only Project events (`sgov_`): `project_id`, `baseline_id` (effective), `reason`, operator provenance, `recorded_at`; governing now = the latest event's Baseline; as of `t` = the latest event with `recorded_at ≤ t` (S6-O19); the governing Baseline need not be the latest or most recent (BL-0 may stay governing) |
+| superseded | a Baseline named by a later approval's `supersedes_baseline_id` is labelled `superseded` (historical); it stays readable and may still be governing if the operator says so |
+| comparisons | within one Series only (Stable Activity identity is Series-scoped): `schedule_baselines.compare` pairs an effective Baseline's publication with a later eligible publication of the **same** Series (else `invalid_request(TO_PUBLICATION_ID)`), using `cpm-workbench-full-delta-v1` on demand, and labels the answer with the Baseline's label, type and provenance |
+| scenarios | `from_baseline_id` requires an effective Baseline and records both the Baseline id and its exact publication; `from_publication_id` records the publication only (a pending proposal never changes this) |
+| auto-matching | never creates, proposes or carries a baseline (11.2 step 1) |
+
+### 12.2 Role retirement and the merged columns (R8-F20 a, b, d)
+
+S6-2 revision A, additive, restates on `knowledge.schedule_publications`:
+`publication_role IN ('update', 'baseline')` and `baseline_kind IS NULL OR baseline_kind IN
+('contract', 'approved_update')`, by dropping and re-adding the 2 CHECKs by name (the S5b-2
+restating precedent); the S5b-1 revision's frozen literals are untouched. The upgrade
+**refuses** while any publication row has role `reference` or `baseline` (such rows carry the
+old kinds and no Baseline object; production has applied neither S5 revision, so none exists
+there; a scratch database with such rows must be rebuilt). `SchedulePublicationRole` loses
+`REFERENCE`; `ScheduleBaselineKind` becomes `CONTRACT`, `APPROVED_UPDATE`; every lockstep
+test and fixture moves with it. Meaning after S6-2: the column records only the **import-time
+declaration**; the Baseline objects are the one source of truth (one mechanism, R8-F20 b).
+The delta's "any roles" rule (S5b-2 §3.10) is unchanged; `latest_update` keeps its merged
+definition (S6-U11).
+
+### 12.3 Who designates (R8-F20 c)
+
+| Path | Rule |
+|---|---|
+| operator at import | `schedule_publications.import` with role `baseline` (operator-only, attested-local, ADR-016 decision 4) now **requires** `baseline_type`, `approval_reference`, `effective_from` and a `reason`; the admission transaction writes the publication, its job, the Baseline row and 1 `approve` event attributed to the attested operator ("approved in the same act"); eligibility is decided when the parse finalizes |
+| operator after the fact | `schedule_baselines.approve` with `publication_id` (direct) or `baseline_id` (a pending proposal), same approval fields; refused unless the publication is eligible now |
+| client | `schedule_baselines.propose` (`publication_id`, `type`, `reason`) only; a client never imports, so a "publishing client" proposes on the publication the operator imported; a proposal is not a baseline, not governing, not authoritative |
+| reject / withdraw / revoke / set governing | `reject`, `revoke`, `set_governing`: operator only; `withdraw`: the proposer's writer bucket or the operator |
+
+### 12.4 Capability inputs
+
+| Capability | Fields |
+|---|---|
+| `schedule_baselines.propose` | `publication_id`, `type`, `reason`, `idempotency_key` |
+| `schedule_baselines.withdraw` | `baseline_id`, `reason`, `idempotency_key` |
+| `schedule_baselines.approve` | exactly one of `baseline_id` / `publication_id` (+ `type` when direct), `approval_reference`, `effective_from`, optional `supersedes_baseline_id`, `reason`, `idempotency_key` |
+| `schedule_baselines.reject` / `.revoke` | `baseline_id`, `reason`, `idempotency_key` |
+| `schedule_baselines.set_governing` | `project_id`, `baseline_id` (effective), `expected_governing_baseline_id` (CAS; null for the first), `reason`, `idempotency_key` |
+| `schedule_baselines.list` | `project_id`, optional `series_id`, optional `status`, page |
+| `schedule_baselines.read` | `baseline_id` |
+| `schedule_baselines.governing` | `project_id`, optional `as_of` |
+| `schedule_baselines.compare` | `baseline_id`, `to_publication_id`, optional `change_kind`, page |
+
+Errors: an illegal transition (`approve` of a withdrawn proposal, a second approval of one
+publication, revoking a revoked Baseline) is `conflict(BASELINE_ID)`; revoking the governing
+Baseline `conflict(GOVERNING)`; an ineligible or intake publication `conflict(STATUS)`.
+
+### 12.5 Baseline vectors (S6-1 `baselines.py`, pure over event lists)
+
+| # | Events (Project p) | Result |
 |---|---|---|
-| S6-D16 | Auto-matching binds by a **second admission** after parsing; the intake publication stays as evidence | the Series is final at admission in the merged contract (T6-19/20) |
-| S6-D17 | Currency is derived (role `update`, eligible, not displaced by an eligible successor), never stored | R2 §10.4 and §30 |
-| S6-D18 | Authority is an append-only attributed claim; only `user_confirmed` counts for anything certified | OD-08, S3.1 provenance |
-| S6-D19 | Scenarios always name the exact publication | no implicit pointer |
-| S6-U10 | A matched auto import is parsed twice (intake and matched Series) | accepted cost; deterministic |
-| S6-U11 | Matching uses only the candidate's single current (or newest) publication's ID set, not its history | later matcher version |
-| S6-O11 | Matcher thresholds (consider 300, match 800, margin 500, minimum 20 IDs) | as tabled (`series-match-v1`) |
-| S6-O12 | `matched` attaches automatically (no confirmation step) | yes, per the addendum; R8 to rule whether an operator confirmation is safer |
-| S6-O13 | Currency considers role `update` only | yes |
-| S6-O14 | Client designations are accepted (labelled `client_identified`) rather than refused | accepted, labelled, never authoritative |
-| S6-O15 | The 4 addendum capabilities sit behind `MY_PA_SCHEDULE_SCENARIOS_ENABLED`; the import's auto form behind the same switch | yes (off: the auto form is `invalid_request(SERIES_AUTO)`) |
+| B1 | operator import-approves P0 `contract` | BL-0 approved, effective; governing null |
+| B2 | B1 + `set_governing` BL-0 | governing BL-0 |
+| B3 | B2 + client proposes P5 `approved_update` | P5 `proposed`; not a baseline; governing BL-0; P5 still a standard update for currency |
+| B4 | B3 + operator approves the proposal (supersedes BL-0) | BL-1 approved; BL-0 `superseded`; governing still BL-0 |
+| B5 | B4 + `set_governing` BL-1 at `t2` | governing BL-1; as of `t1 < t2` BL-0 |
+| B6 | B5 + `revoke` BL-1 | `conflict(GOVERNING)` |
+| B7 | client proposal + `reject` | `rejected`; no label consumed |
+| B8 | import-approve P9 whose parse ends `failed` | `ineligible`; label BL-<n> consumed; never governing |
+| B9 | 2 proposals on one publication | the second `conflict(BASELINE_ID)` |
+| B10 | `compare` BL-0 with a publication of another Series | `invalid_request(TO_PUBLICATION_ID)` |
+
+### 12.6 Decisions, residuals, open choices (continuing section 10)
+
+| ID | Item |
+|---|---|
+| S6-D18 | baselines are operator-approved Baseline objects with append-only events; publications stay immutable |
+| S6-D19 | scenarios name the exact publication and, when used, the exact Baseline |
+| S6-D20 | authority per Project; unlimited baselines (operator decision 1) |
+| S6-D21 | governing set only by operator events; any effective Baseline may govern |
+| S6-D22 | clients only propose; proposals are never authoritative (operator decision 2) |
+| S6-D23 | import-time baseline = operator approval in the same act; one mechanism |
+| S6-D24 | `reference` retired, kinds redefined, by a restating revision that refuses old rows |
+| S6-D25 | comparisons stay within one Series |
+| S6-D26 | as-of by recorded time |
+| S6-D27 | currency excludes effective baseline publications |
+| S6-U13 | a scratch database holding S5 `baseline`/`reference` rows cannot upgrade; rebuild it |
+| S6-U14 | `effective_from` is metadata; contractual effective-date selection is a later read |
+| open | S6-O13, S6-O17 to S6-O22 (section 10.3) |
+
+### 12.7 Prove-red and crosswalk
+
+| Prove-red | Test |
+|---|---|
+| P41 a proposal counted as a baseline | `test_baseline_vectors[B3]` |
+| P42 approval of a superseding baseline moves governing | `test_baseline_vectors[B4]` |
+| P43 as-of uses effective_from instead of recorded time | `test_baseline_vectors[B5]` |
+| P44 governing revocable | `test_baseline_vectors[B6]` |
+| P45 ineligible baseline counted | `test_baseline_vectors[B8]` |
+| P46 currency ignores baseline exclusion | `test_current_standard_update_vectors[C5]` |
+| P47 role `reference` still admitted | `test_reference_role_is_retired` (S6-2) |
+| P48 client reaches approve | `test_baseline_approval_is_attested_operator_only` (S6-3) |
+
+| Requirement (operator) | Section | First test |
+|---|---|---|
+| authoritative baseline, BL-0 prime contract, later approved updates | 12.1, 12.5 | `test_baseline_vectors` (S6-1) |
+| every other file a standard update | 12.1, 11.3 | `test_current_standard_update_vectors[C5]` (S6-1) |
+| per-Project authority, governing by events | 12.1 | `test_baseline_vectors[B5]` (S6-1), `test_governing_events_are_append_only` (S6-2) |
+| operator approval required; clients propose | 12.3 | `test_baseline_approval_is_attested_operator_only` (S6-3) |
+| provenance on every output | 7, 12.1 | `test_baseline_outputs_show_provenance` (S6-3) |
+| scenarios record the exact baseline | 12.1 | `test_scenario_records_the_exact_baseline` (S6-3) |
+
+---
+
+## 13. R8 findings → fixes (revision R8-1)
+
+| Finding | Fix (section) |
+|---|---|
+| F01 | ADR-017 written; ADR-016 amendment reduced to a pointer; header; 1.2 |
+| F02 | cycle fields in `summary`; subjects of `horizon_exceeded` and `operation_budget_exceeded` (3.2, 3.4, 3.10, 3.11) |
+| F03 | properties restricted to FS-only, non-negative lags; `dangling_finish` warning (3.10, 3.13) |
+| F04 | keyword-only `operation_budget`, exact counting rule, P16 rewritten (3.11, 9.1) |
+| F05 | out-of-range durations null and counted; vector S1 (2.5, 3.12) |
+| F06 | refusal metering, byte quotas (2.10, 8.3; S6-O09) |
+| F07 | P22 → G06c (9.1) |
+| F08 | M1c defined and named alone (11.2.1, 11.5) |
+| F09 | client-bound keys; 2-client test (6.7) |
+| F10 | withheld-family links stay confirmable and endable (5.1) |
+| F11 | 1 intake Series per auto import (safer: no identity is ever shared, so no exclusion rule can be missed), plus exclusion from delta, lineage, currency, baselines and seeding (11.2 step 2) |
+| F12 | `already_present`; auto form refuses `supersedes` and baseline fields; savepoint, `admission_refused` (11.2 steps 1, 4) |
+| F13 | name-agreement veto (demote only), M8 (11.2.1) |
+| F14 | closed outcome set, single reason by precedence (11.2 step 5) |
+| F15 | Project advisory lock, 50-candidate bound, name collision under the lock (11.2 step 3) |
+| F16 | result bound 64 MiB (3.11) |
+| F17 | G17–G24, P13a/P13b and P31–P36 (3.12, 9.1) |
+| F18 | `content_invalid`, `op_index = len(ops)` (2.9) |
+| F19 | lag text corrected (2.6) |
+| F20 | sections 12.2, 12.3, 11.3 (C5–C8), 11.2 step 1 |
+| F21 | one count set (6.1) |

@@ -102,6 +102,8 @@ XER/XML; frontend UI.
   not effective, so with only `MY_PA_SCHEDULE_ENABLED` on, the import admits role `update` only.
 - Baseline and governing events form per-Project ordered chains written under a Project lock;
   as-of answers are "as recorded", never by `effective_from`.
+- Revoking a baseline is final for its publication; recovery means approving a different
+  publication. The effective baseline type is the one recorded at approval.
 - A matched auto import is parsed twice; a CPM run is computed synchronously within bounds,
   or moved to a worker plane if the measured time misses its target.
 

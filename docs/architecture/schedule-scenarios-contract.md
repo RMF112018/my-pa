@@ -1075,7 +1075,7 @@ lockstep count pins, runbook and client guidance.
 | S6-U07 | "retained logic" is this contract's definition, not a P6 equivalence claim | guidance |
 | S6-U08 | full content stored per version | bounded by quotas |
 | S6-U09 | a refused change set does not disclose the op index | error-contract extension |
-| S6-U10..U14 | sections 11 and 12 | — |
+| S6-U10..U15 | sections 11 and 12 | — |
 
 ### 10.3 Open operator (product) decisions with the default this contract proceeds on
 
@@ -1278,12 +1278,12 @@ names it; `reference` is retired (section 12.2).
 | Item | Rule |
 |---|---|
 | status of a publication | binary: **baseline** iff an approved, eligible, non-revoked Baseline names it; every other publication is a **standard update** (the `reference` role is retired, 12.2) |
-| Baseline (`sbl_`) | `baseline_id`, `principal_id`, `project_id`, `series_id` (its publication's), `publication_id` (exact, immutable; eligible and not intake), `type` ∈ `contract` (prime contract schedule) \| `approved_update` (approved rebaseline, change or time extension), `created_at`; a row is created by a proposal or by a direct operator approval |
-| events (`sbev_`) | append-only `propose`, `approve`, `reject`, `withdraw`, `revoke`; each with `baseline_id`, `publication_id`, server-derived provenance (6.5), `reason` (1..2,000), and the Project chain fields: `seq` (1, 2, … per Project), `previous_event_id` (null iff `seq = 1`), `recorded_at`; `approve` also carries `label` (`BL-<n>`), `approval_reference` (1..500, required), `effective_from` (date, required), optional `supersedes_baseline_id` (an approved baseline of the same Project); `propose` carries `proposal_ordinal` (section 12.1 "enforcement") |
+| Baseline (`sbl_`) | `baseline_id`, `principal_id`, `project_id`, `series_id` (its publication's), `publication_id` (exact, immutable; eligible and not intake), `type` ∈ `contract` (prime contract schedule) \| `approved_update` (approved rebaseline, change or time extension) — the **proposed** type, shown as such; the Baseline's **effective** type is the `type` of its `approve` event, which may differ after a direct approval adopts a proposal (RR2-F01) — `created_at`; a row is created by a proposal or by a direct operator approval |
+| events (`sbev_`) | append-only `propose`, `approve`, `reject`, `withdraw`, `revoke`; each with `baseline_id`, `publication_id`, server-derived provenance (6.5), `reason` (1..2,000), and the Project chain fields: `seq` (1, 2, … per Project), `previous_event_id` (null iff `seq = 1`), `recorded_at`; `approve` also carries `type` (the effective type), `label` (`BL-<n>`), `approval_reference` (1..500, required), `effective_from` (date, required), optional `supersedes_baseline_id` (an approved baseline of the same Project); `propose` carries `proposal_ordinal` (section 12.1 "enforcement") |
 | lifecycle | `proposed` → `approved` \| `rejected` \| `withdrawn` (terminal); `approved` → `revoked` (terminal); derived, never updated |
 | eligibility | a Baseline is **effective** iff approved, not revoked, and its publication is effective `complete`/`partial`; an import-time approval whose publication finalizes `review_required`/`failed` reads `ineligible` and never counts |
 | uniqueness | ≤ 1 pending proposal per publication; a publication is approved **at most once ever** (a revoked Baseline's publication is not re-approvable; S6-D28); ≤ 50 pending proposals per Project and ≤ 10 per writer bucket per Project |
-| enforcement (RR1-F03) | every baseline and governing write first takes `pg_advisory_xact_lock` on `(principal_id, project_id)` and validates under it. Database backstops on `schedule_baseline_events`: UNIQUE `(principal_id, project_id, seq)`; partial UNIQUE `(principal_id, baseline_id) WHERE action IN ('approve', 'reject', 'withdraw')` (one decision per proposal); partial UNIQUE `(principal_id, baseline_id) WHERE action = 'revoke'`; partial UNIQUE `(principal_id, publication_id) WHERE action = 'approve'` (one approval per publication); partial UNIQUE `(principal_id, project_id, label) WHERE action = 'approve'` (labels never reused); partial UNIQUE `(principal_id, publication_id, proposal_ordinal) WHERE action = 'propose'`, where `proposal_ordinal` = the number of earlier proposals of that publication that already have a decision, computed under the lock — a second pending proposal computes the same ordinal and collides. The pending caps are lock-enforced (counted under the lock), not constraint-enforced. Each invariant has a database-tier race test (section 12.7) |
+| enforcement (RR1-F03) | every baseline and governing write — including the import-time approval written inside the S5 admission transaction (it consumes a `seq` and a label; RR2-F04) — first takes `pg_advisory_xact_lock` on `(principal_id, project_id)` and validates under it. These writes run at READ COMMITTED (the repository default) and read the chain head, counts and pending state in statements issued **after** the lock, so each read sees every write committed before the lock was granted (RR2-F03). Database backstops on `schedule_baseline_events`: UNIQUE `(principal_id, project_id, seq)`; partial UNIQUE `(principal_id, baseline_id) WHERE action IN ('approve', 'reject', 'withdraw')` (one decision per proposal); partial UNIQUE `(principal_id, baseline_id) WHERE action = 'revoke'`; partial UNIQUE `(principal_id, publication_id) WHERE action = 'approve'` (one approval per publication); partial UNIQUE `(principal_id, project_id, label) WHERE action = 'approve'` (labels never reused); partial UNIQUE `(principal_id, publication_id, proposal_ordinal) WHERE action = 'propose'`, where `proposal_ordinal` = the number of earlier proposals of that publication that already have a decision, computed under the lock — a second pending proposal computes the same ordinal and collides. The pending caps are lock-enforced (counted under the lock), not constraint-enforced. Each invariant has a database-tier race test (section 12.7) |
 | scope | **per Project** (operator decision 1); unlimited count; a Baseline attaches to a publication in any non-intake Series of the Project |
 | governing | append-only Project chain (`sgov_`): `project_id`, `baseline_id` (effective), `reason`, operator provenance, `seq` (1, 2, …), `previous_governing_event_id` (null iff `seq = 1`; equal to the event named by the CAS `expected_governing_baseline_id`), `recorded_at`; UNIQUE `(principal_id, project_id, seq)` and a principal-composite FK to the predecessor. **Order (RR1-F02):** under the Project lock the writer reads the head, takes `recorded_at = clock_timestamp()` **after** acquiring the lock, and a CHECK-by-trigger refuses a `recorded_at` earlier than the predecessor's, so recorded time is non-decreasing along the chain. Governing now = the event with the maximum `seq`; as of `t` = the event with the maximum `seq` among those with `recorded_at ≤ t` (equal timestamps resolve by `seq`); reads say "as recorded". The baseline event chain follows the same rules. The governing Baseline need not be the latest or most recent (BL-0 may stay governing) |
 | superseded | a Baseline named by a later approval's `supersedes_baseline_id` is labelled `superseded` (historical); it stays readable and may still be governing if the operator says so |
@@ -1336,7 +1336,7 @@ role `update` only. ADR-017 "Consequences" states it; `test_baseline_import_refu
 
 Errors: an illegal transition (`approve` of a withdrawn proposal, a second approval of one
 publication, revoking a revoked Baseline, a lost race on any section 12.1 backstop) is
-`conflict(BASELINE_ID)`; a pending cap reached is `rate_limited(BASELINE_ID)`; revoking the governing
+`conflict(BASELINE_ID)`; a pending cap reached is `rate_limited(BASELINE_ID)`; on a governing write, a lost `seq` race or an `expected_governing_baseline_id` mismatch is `conflict(GOVERNING)` (RR2-F04); revoking the governing
 Baseline `conflict(GOVERNING)`; an ineligible or intake publication `conflict(STATUS)`.
 
 ### 12.5 Baseline vectors (S6-1 `baselines.py`, pure over event lists)
@@ -1373,6 +1373,7 @@ Baseline `conflict(GOVERNING)`; an ineligible or intake publication `conflict(ST
 | S6-D29 | baseline and governing events are per-Project `seq` chains written under the Project lock with `clock_timestamp()` after the lock; reads are "as recorded" |
 | S6-U13 | a scratch database holding S5 `baseline`/`reference` rows cannot upgrade; rebuild it |
 | S6-U14 | `effective_from` is metadata; contractual effective-date selection is a later read |
+| S6-U15 | revoking a Baseline is final for its publication (S6-D28); recovery means approving a different publication. The `schedule_baselines.revoke` docstring (hence its catalog summary or description) and the runbook section S6-3 writes must state this warning (RR2-F02) |
 | open | S6-O13, S6-O17 to S6-O22 (section 10.3) |
 
 ### 12.7 Prove-red and crosswalk
@@ -1447,3 +1448,12 @@ Baseline `conflict(GOVERNING)`; an ineligible or intake publication `conflict(ST
 | RR1-F08 | `originated_from` from a Baseline admitted only while it is approved; never presented as approval evidence otherwise (5.2) |
 | RR1-F09 | ADR-017 wording: "baselines are never derived (now operator-approved objects)" |
 | RR1-F10 | dedicated connection and unconditional `try/finally` unlock for the CPM advisory lock (3.11) |
+
+### 13.2 R8 re-review 2 findings → fixes (non-blocking; PASS at `c8a899ab`)
+
+| Finding | Fix (section) |
+|---|---|
+| RR2-F01 | the effective Baseline type is the `approve` event's `type`; the row's `type` is the proposed type (12.1) |
+| RR2-F02 | residual S6-U15 (revocation is final for its publication) with the docstring and runbook warning required of S6-3 (12.6) |
+| RR2-F03 | READ COMMITTED and head reads in statements after the lock (12.1) |
+| RR2-F04 | the import-time approval takes the Project lock inside the admission transaction; a lost governing `seq` race is `conflict(GOVERNING)` (12.1, 12.4) |

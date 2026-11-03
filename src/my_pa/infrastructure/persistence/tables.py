@@ -212,9 +212,9 @@ from my_pa.domain.lineage.vocabulary import (
     MAX_ASSERTING_CLIENT_ID_CHARACTERS,
     MEMBER_VERSION_CAPABILITIES,
     MEMBERSHIP_EVENT_CAPABILITIES,
-    RECORD_FAMILY_ID_KINDS,
     RECORD_LINK_CAPABILITIES,
-    RELATION_MATRIX,
+    STORED_RECORD_FAMILY_ID_KINDS,
+    STORED_RELATION_MATRIX,
     AcceptanceBasis,
     EvidenceSourceFamily,
     ExistingLinkState,
@@ -226,7 +226,6 @@ from my_pa.domain.lineage.vocabulary import (
     LinkLifecycleState,
     LinkRevisionAction,
     MemberRole,
-    RecordFamily,
     RecordLinkKind,
     SituationKind,
     SourceVersionKind,
@@ -394,6 +393,18 @@ from my_pa.domain.schedule import (
     SchedulePublicationStatus,
     ScheduleRowType,
 )
+from my_pa.domain.schedule.baselines import BaselineAction, BaselineType
+from my_pa.domain.schedule.model import ScheduleAdmissionRefusal
+from my_pa.domain.schedule.plane import (
+    MATCH_INTEGRITY_REFUSAL,
+    PLANE_WRITE_CAPABILITIES,
+    MatchAdmissionSkip,
+    PlaneResultKind,
+)
+from my_pa.domain.schedule.scenario.cpm import CpmStatus
+from my_pa.domain.schedule.scenario.model import VersionLabel
+from my_pa.domain.schedule.scenario.outputs import OutputKind
+from my_pa.domain.schedule.series_match import MatchOutcome, MatchReason
 from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
     CommitmentDirection,
@@ -16539,22 +16550,25 @@ _LINEAGE_SHA256: Final = "^[0-9a-f]{64}$"
 
 
 def _family_identifier(family_column: str, id_column: str, *, name: str) -> CheckConstraint:
-    """`id_column` carries the identifier kind its `family_column` names."""
+    """`id_column` carries the identifier kind its `family_column` names.
+
+    Built from the storage vocabulary (schedule scenarios contract section
+    14.7.4, amendment S6-2-D01): the 7 public families and the 6 Schedule ones
+    S6-2 admits before S6-3 makes them public, in token order.
+    """
     branches = " OR ".join(
-        f"({family_column} = '{family.value}' AND {id_column} ~ "
-        f"'^{kind.value}_{_IDENTIFIER_SUFFIX}$')"
-        for family, kind in sorted(RECORD_FAMILY_ID_KINDS.items())
+        f"({family_column} = '{family}' AND {id_column} ~ '^{kind.value}_{_IDENTIFIER_SUFFIX}$')"
+        for family, kind in sorted(STORED_RECORD_FAMILY_ID_KINDS.items())
     )
     return CheckConstraint(branches, name=name)
 
 
 def _relation_matrix() -> str:
-    """The S1 relation matrix (section 3.1) as one disjunction."""
+    """The stored relation matrix (S1 section 3.1, widened by S6-2) as one disjunction."""
     return " OR ".join(
-        f"(relation_type = '{relation.value}' AND kind = '{kind.value}' AND from_family IN "
-        f"({_literals(frozenset(f.value for f in sources))}) AND to_family IN "
-        f"({_literals(frozenset(f.value for f in targets))}))"
-        for relation, (kind, sources, targets) in sorted(RELATION_MATRIX.items())
+        f"(relation_type = '{relation}' AND kind = '{kind}' AND from_family IN "
+        f"({_literals(sources)}) AND to_family IN ({_literals(targets)}))"
+        for relation, (kind, sources, targets) in sorted(STORED_RELATION_MATRIX.items())
     )
 
 
@@ -17068,13 +17082,24 @@ record_links = Table(
     _is_identifier("link_id", IdKind.RECORD_LINK),
     _is_identifier("context_issue_id", IdKind.SITUATION),
     _one_of("kind", RecordLinkKind, name="a_record_link_kind_is_known"),
-    _one_of("from_family", RecordFamily, name="a_record_link_from_family_is_known"),
-    _one_of("to_family", RecordFamily, name="a_record_link_to_family_is_known"),
+    # Schedule Scenarios S6-2 (contract section 14.7.4, S6-2-D01): the family,
+    # identifier, relation and pair CHECKs admit the storage vocabulary, a
+    # superset of the public enums until S6-3 widens them.
+    _one_of(
+        "from_family",
+        frozenset(STORED_RECORD_FAMILY_ID_KINDS),
+        name="a_record_link_from_family_is_known",
+    ),
+    _one_of(
+        "to_family",
+        frozenset(STORED_RECORD_FAMILY_ID_KINDS),
+        name="a_record_link_to_family_is_known",
+    ),
     _family_identifier("from_family", "from_id", name="from_id_is_an_opaque_identifier"),
     _family_identifier("to_family", "to_id", name="to_id_is_an_opaque_identifier"),
     _one_of(
         "relation_type",
-        frozenset(relation.value for relation in RELATION_MATRIX),
+        frozenset(STORED_RELATION_MATRIX),
         name="a_record_link_relation_type_is_known",
     ),
     CheckConstraint(
@@ -18274,6 +18299,13 @@ _PUBLICATION_COUNTS: Final = (
 #: source-version foreign keys target the database-only support uniques this
 #: revision adds (see the comments on `enrollments` and
 #: `source_object_versions`).
+#:
+#: Schedule Scenarios S6-2 (schedule scenarios contract sections 12.2 and
+#: 14.3.12): its revision restates `a_schedule_publication_role_is_known` (no
+#: `reference`) and `a_schedule_baseline_kind_is_known` (`approved_update`,
+#: `contract`) from the live enums, and adds the database-only trigger
+#: `a_schedule_intake_series_admits_no_other_publication` (G10: no publication
+#: joins a Series an intake row marks).
 schedule_publications = Table(
     "schedule_publications",
     METADATA,
@@ -19006,5 +19038,990 @@ schedule_import_issues = Table(
         "publication_id",
         "severity",
         "code",
+    ),
+)
+
+# --- Schedule Scenarios S6-2: the scenario and baseline plane -----------------
+#
+# Contract `docs/architecture/schedule-scenarios-contract.md` section 14.3;
+# created by the S6-2 revision from frozen text. Every closed set is the live
+# domain symbol in sorted order, so the declared text equals the revision's.
+# The append-only, TRUNCATE, chain, lifecycle and deferred completeness guards
+# (G1-G15, section 14.4) are triggers that exist only in the database. Every
+# foreign key is `ON DELETE RESTRICT`; the 8 into the S5 tables are added by
+# `ALTER TABLE` late in the revision (section 14.6.2 step 8), the circular fork
+# key right after the versions table (step 4). Every plane table is Principal
+# partitioned and refuses `DELETE`.
+
+_PLANE_NAME_CHARACTERS: Final = 200
+_PLANE_REASON_CHARACTERS: Final = 2000
+_PLANE_KEY_PATTERN: Final = "^[A-Za-z0-9_-]{8,128}$"
+_MAX_SCENARIO_VERSIONS: Final = 500
+_MAX_SCENARIO_CONTENT_BYTES: Final = 33554432
+_MAX_SCENARIO_CHANGE_SET_BYTES: Final = 4194304
+_MAX_SCENARIO_CHANGE_SET_OPS: Final = 5000
+_MAX_SCENARIO_ACTIVITIES: Final = 25000
+_MAX_SCENARIO_RELATIONSHIPS: Final = 100000
+_MAX_SCENARIO_CALENDARS: Final = 32
+_MAX_PLANE_CPM_RESULT_BYTES: Final = 67108864
+_MAX_PLANE_OUTPUT_BYTES: Final = 1048576
+_MAX_PLANE_ITERATIONS: Final = 1000000
+#: Every stored zlib bound is its canonical bound plus 65,536 bytes (14.3.7).
+_ZLIB_HEADROOM: Final = 65536
+_MAX_MATCH_CANDIDATES: Final = 50
+_MAX_MATCH_CANDIDATE_BYTES: Final = 65536
+_SNAPSHOT_COUNTS: Final = (
+    "snapshot_activities",
+    "snapshot_milestones",
+    "snapshot_durations_quantized",
+    "snapshot_durations_out_of_range",
+    "snapshot_original_missing",
+    "snapshot_remaining_missing",
+)
+#: Section 14.3.2: the refusal tokens a match decision records.
+_MATCH_ADMISSION_REFUSALS: Final[frozenset[str]] = frozenset(
+    member.value for member in ScheduleAdmissionRefusal
+) | {MATCH_INTEGRITY_REFUSAL}
+#: The 4 decision channels the plane admits (the S3.1 attested and client sets).
+_PLANE_CHANNELS: Final[frozenset[str]] = ATTESTED_DECISION_CHANNELS | CLIENT_DECISION_CHANNELS
+_RESULT_PREFIXES: Final = (
+    (PlaneResultKind.SCENARIO, IdKind.SCHEDULE_SCENARIO),
+    (PlaneResultKind.VERSION, IdKind.SCHEDULE_SCENARIO_VERSION),
+    (PlaneResultKind.CPM_RUN, IdKind.SCHEDULE_CPM_RUN),
+    (PlaneResultKind.OUTPUT, IdKind.SCHEDULE_SCENARIO_OUTPUT),
+    (PlaneResultKind.BASELINE_EVENT, IdKind.SCHEDULE_BASELINE_EVENT),
+    (PlaneResultKind.GOVERNING_EVENT, IdKind.SCHEDULE_GOVERNING_EVENT),
+)
+
+
+def _plane_name(column: str) -> str:
+    """Section 14.3 `N(col)`: the `a_schedule_series_name_is_normalized` body."""
+    return (
+        f"char_length({column}) BETWEEN 1 AND {_PLANE_NAME_CHARACTERS} AND {column} = "
+        f"btrim({column}, ' ') AND position('  ' in {column}) = 0 AND {column} !~ "
+        "'[[:cntrl:]]'"
+    )
+
+
+def _provenance_columns() -> tuple[Column[object], ...]:
+    """Section 6.5: who wrote one plane row."""
+    return (
+        Column("authority_class", Text, nullable=False),
+        Column("decision_channel", Text, nullable=False),
+        Column("asserting_client_id", Text),
+        Column("acceptance_basis", Text, nullable=False),
+        Column("user_directed_claim", Boolean, nullable=False, server_default=text("false")),
+    )
+
+
+def _provenance_checks(short: str) -> tuple[CheckConstraint, CheckConstraint]:
+    """Section 14.3 `a_<t>_creator_is_known` and `a_<t>_client_is_bounded`."""
+    return (
+        CheckConstraint(
+            f"(authority_class = 'local_operator' AND decision_channel IN "
+            f"({_literals(ATTESTED_DECISION_CHANNELS)}) AND acceptance_basis = 'user_confirmed' "
+            "AND asserting_client_id IS NULL) OR (authority_class = 'ordinary_reviewer' AND "
+            f"decision_channel IN ({_literals(CLIENT_DECISION_CHANNELS)}) AND acceptance_basis = "
+            "'client_identified' AND (asserting_client_id IS NOT NULL) = (decision_channel = "
+            "'remote_interactive'))",
+            name=f"a_{short}_creator_is_known",
+        ),
+        CheckConstraint(
+            "asserting_client_id IS NULL OR char_length(asserting_client_id) BETWEEN 1 AND "
+            f"{MAX_ASSERTING_CLIENT_ID_CHARACTERS}",
+            name=f"a_{short}_client_is_bounded",
+        ),
+    )
+
+
+def _plane_fk(
+    columns: list[str], table: str, targets: list[str], *, name: str, use_alter: bool = False
+) -> ForeignKeyConstraint:
+    return ForeignKeyConstraint(
+        columns,
+        [f"{SCHEMA}.{table}.{target}" for target in targets],
+        ondelete="RESTRICT",
+        name=name,
+        use_alter=use_alter,
+    )
+
+
+_PUBLICATION_U3: Final = ["publication_id", "principal_id", "project_id", "series_id"]
+_SERIES_COMPOSITE: Final = ["series_id", "principal_id", "project_id"]
+
+
+#: Section 14.3.1: one automatic import's own intake Series (section 11.2 step
+#: 2), marked once with its only publication. G9/G10 keep it at one.
+schedule_intake_series = Table(
+    "schedule_intake_series",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, nullable=False),
+    Column("series_id", Text, nullable=False),
+    Column("publication_id", Text, nullable=False),
+    Column("series_name_if_new", Text),
+    Column("series_name_if_new_key", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    PrimaryKeyConstraint("principal_id", "series_id", name="schedule_intake_series_pkey"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _is_identifier("series_id", IdKind.SCHEDULE_SERIES),
+    _is_identifier("publication_id", IdKind.SCHEDULE_PUBLICATION),
+    CheckConstraint(
+        f"series_name_if_new IS NULL OR ({_plane_name('series_name_if_new')})",
+        name="an_intake_new_series_name_is_normalized",
+    ),
+    CheckConstraint(
+        "series_name_if_new_key IS NULL OR char_length(series_name_if_new_key) BETWEEN 1 AND 800",
+        name="an_intake_new_series_key_is_bounded",
+    ),
+    CheckConstraint(
+        "(series_name_if_new IS NULL) = (series_name_if_new_key IS NULL)",
+        name="an_intake_new_series_name_is_whole",
+    ),
+    UniqueConstraint("principal_id", "publication_id", name="an_intake_publication_is_marked_once"),
+    UniqueConstraint(
+        "principal_id",
+        "series_id",
+        "publication_id",
+        name="an_intake_series_is_identified_with_its_publication",
+    ),
+    _plane_fk(
+        _SERIES_COMPOSITE,
+        "schedule_series",
+        _SERIES_COMPOSITE,
+        name="an_intake_series_is_a_series_of_its_project",
+    ),
+    _plane_fk(
+        _PUBLICATION_U3,
+        "schedule_publications",
+        _PUBLICATION_U3,
+        name="an_intake_series_marks_its_publication",
+    ),
+)
+
+#: Section 14.3.2: one series auto-match decision of an intake publication
+#: (section 11.2), recorded once; no provenance (S6-2-D13).
+schedule_series_match_decisions = Table(
+    "schedule_series_match_decisions",
+    METADATA,
+    Column("decision_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, nullable=False),
+    Column("intake_series_id", Text, nullable=False),
+    Column("intake_publication_id", Text, nullable=False),
+    Column("outcome", Text, nullable=False),
+    Column("reason", Text),
+    Column("threshold_version", Text, nullable=False),
+    Column("incoming_id_count", Integer, nullable=False),
+    Column("candidates", JSONB, nullable=False),
+    Column("target_series_id", Text),
+    Column("resulting_publication_id", Text),
+    Column("admission_refusal", Text),
+    Column("admission_skipped", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    PrimaryKeyConstraint("decision_id", name="schedule_series_match_decisions_pkey"),
+    _is_identifier("decision_id", IdKind.SCHEDULE_SERIES_MATCH),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _is_identifier("intake_series_id", IdKind.SCHEDULE_SERIES),
+    _is_identifier("intake_publication_id", IdKind.SCHEDULE_PUBLICATION),
+    _is_identifier("target_series_id", IdKind.SCHEDULE_SERIES),
+    _is_identifier("resulting_publication_id", IdKind.SCHEDULE_PUBLICATION),
+    _one_of("outcome", MatchOutcome, name="a_series_match_outcome_is_known"),
+    CheckConstraint(
+        f"reason IS NULL OR reason IN ({_literals(MatchReason)})",
+        name="a_series_match_reason_is_known",
+    ),
+    CheckConstraint(
+        "(outcome = 'ambiguous') = (reason IS NOT NULL)",
+        name="an_ambiguous_match_states_one_reason",
+    ),
+    CheckConstraint(
+        "threshold_version ~ '^series-match-v[1-9][0-9]{0,3}$'",
+        name="a_series_match_threshold_version_is_known",
+    ),
+    CheckConstraint("incoming_id_count >= 0", name="a_series_match_count_is_not_negative"),
+    CheckConstraint(
+        "jsonb_typeof(candidates) = 'array' AND jsonb_array_length(candidates) <= "
+        f"{_MAX_MATCH_CANDIDATES} AND octet_length(candidates::text) <= "
+        f"{_MAX_MATCH_CANDIDATE_BYTES}",
+        name="a_series_match_candidates_are_bounded",
+    ),
+    CheckConstraint(
+        "admission_refusal IS NULL OR admission_refusal IN "
+        f"({_literals(_MATCH_ADMISSION_REFUSALS)})",
+        name="a_series_match_refusal_is_known",
+    ),
+    CheckConstraint(
+        "admission_skipped IS NULL OR admission_skipped = "
+        f"'{MatchAdmissionSkip.PLANE_DISABLED.value}'",
+        name="a_series_match_skip_is_known",
+    ),
+    CheckConstraint(
+        "(outcome IN ('matched', 'created') AND admission_refusal IS NULL AND "
+        "((admission_skipped IS NULL AND target_series_id IS NOT NULL AND "
+        "resulting_publication_id IS NOT NULL) OR (admission_skipped IS NOT NULL AND "
+        "resulting_publication_id IS NULL AND (outcome = 'matched') = (target_series_id IS "
+        "NOT NULL)))) OR (outcome = 'already_present' AND target_series_id IS NOT NULL AND "
+        "resulting_publication_id IS NOT NULL AND admission_refusal IS NULL AND "
+        "admission_skipped IS NULL) OR (outcome = 'admission_refused' AND "
+        "resulting_publication_id IS NULL AND admission_refusal IS NOT NULL AND "
+        "admission_skipped IS NULL) OR (outcome IN ('ambiguous', 'needs_series', "
+        "'not_eligible') AND target_series_id IS NULL AND resulting_publication_id IS NULL AND "
+        "admission_refusal IS NULL AND admission_skipped IS NULL)",
+        name="a_series_match_records_its_result",
+    ),
+    UniqueConstraint(
+        "principal_id", "intake_publication_id", name="an_intake_publication_is_decided_once"
+    ),
+    _plane_fk(
+        ["principal_id", "intake_series_id", "intake_publication_id"],
+        "schedule_intake_series",
+        ["principal_id", "series_id", "publication_id"],
+        name="a_series_match_decides_an_intake_publication",
+    ),
+    _plane_fk(
+        ["intake_publication_id", "principal_id", "project_id", "intake_series_id"],
+        "schedule_publications",
+        _PUBLICATION_U3,
+        name="a_series_match_names_its_intake_publication",
+    ),
+    _plane_fk(
+        ["target_series_id", "principal_id", "project_id"],
+        "schedule_series",
+        _SERIES_COMPOSITE,
+        name="a_series_match_targets_a_series_of_its_project",
+    ),
+    _plane_fk(
+        ["resulting_publication_id", "principal_id", "project_id", "target_series_id"],
+        "schedule_publications",
+        _PUBLICATION_U3,
+        name="a_series_match_names_a_publication_of_its_target",
+    ),
+    Index(
+        "schedule_series_match_decisions_by_project",
+        "principal_id",
+        "project_id",
+        "created_at",
+        "decision_id",
+    ),
+)
+
+#: Section 14.3.3: one Project Baseline (a proposal or an approval) naming one
+#: publication; its lifecycle is its events (section 12.1).
+schedule_baselines = Table(
+    "schedule_baselines",
+    METADATA,
+    Column("baseline_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, nullable=False),
+    Column("series_id", Text, nullable=False),
+    Column("publication_id", Text, nullable=False),
+    Column("type", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    PrimaryKeyConstraint("baseline_id", name="schedule_baselines_pkey"),
+    _is_identifier("baseline_id", IdKind.SCHEDULE_BASELINE),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _is_identifier("series_id", IdKind.SCHEDULE_SERIES),
+    _is_identifier("publication_id", IdKind.SCHEDULE_PUBLICATION),
+    _one_of("type", BaselineType, name="a_schedule_baseline_type_is_known"),
+    UniqueConstraint(
+        "baseline_id",
+        "principal_id",
+        "project_id",
+        name="a_schedule_baseline_is_identified_within_its_project",
+    ),
+    UniqueConstraint(
+        "baseline_id",
+        "principal_id",
+        "project_id",
+        "publication_id",
+        name="a_schedule_baseline_is_identified_with_its_publication",
+    ),
+    UniqueConstraint(
+        "baseline_id",
+        "principal_id",
+        "publication_id",
+        name="a_schedule_baseline_names_its_publication",
+    ),
+    _plane_fk(
+        _PUBLICATION_U3,
+        "schedule_publications",
+        _PUBLICATION_U3,
+        name="a_schedule_baseline_names_a_publication_of_its_series",
+    ),
+    Index(
+        "schedule_baselines_by_project", "principal_id", "project_id", "created_at", "baseline_id"
+    ),
+    Index("schedule_baselines_by_publication", "principal_id", "publication_id"),
+)
+
+#: Section 14.3.4: one event of the Project's Baseline chain (section 12.1).
+schedule_baseline_events = Table(
+    "schedule_baseline_events",
+    METADATA,
+    Column("event_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, nullable=False),
+    Column("baseline_id", Text, nullable=False),
+    Column("publication_id", Text, nullable=False),
+    Column("action", Text, nullable=False),
+    Column("seq", Integer, nullable=False),
+    Column("previous_event_id", Text),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("type", Text),
+    Column("label", Text),
+    Column("approval_reference", Text),
+    Column("effective_from", Date),
+    Column("supersedes_baseline_id", Text),
+    Column("proposal_ordinal", Integer),
+    Column("approved_at_import", Boolean),
+    *_provenance_columns(),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    PrimaryKeyConstraint("event_id", name="schedule_baseline_events_pkey"),
+    _is_identifier("event_id", IdKind.SCHEDULE_BASELINE_EVENT),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _is_identifier("baseline_id", IdKind.SCHEDULE_BASELINE),
+    _is_identifier("publication_id", IdKind.SCHEDULE_PUBLICATION),
+    _is_identifier("previous_event_id", IdKind.SCHEDULE_BASELINE_EVENT),
+    _is_identifier("supersedes_baseline_id", IdKind.SCHEDULE_BASELINE),
+    _one_of("action", BaselineAction, name="a_schedule_baseline_action_is_known"),
+    CheckConstraint("seq >= 1", name="a_schedule_baseline_event_seq_is_positive"),
+    CheckConstraint(
+        "(seq = 1) = (previous_event_id IS NULL)",
+        name="a_schedule_baseline_event_chain_starts_once",
+    ),
+    CheckConstraint(
+        f"char_length(reason) BETWEEN 1 AND {_PLANE_REASON_CHARACTERS}",
+        name="a_schedule_baseline_reason_is_bounded",
+    ),
+    CheckConstraint(
+        f"type IS NULL OR type IN ({_literals(BaselineType)})",
+        name="a_schedule_baseline_event_type_is_known",
+    ),
+    CheckConstraint(
+        "label IS NULL OR label ~ '^BL-(0|[1-9][0-9]{0,8})$'",
+        name="a_schedule_baseline_label_is_well_formed",
+    ),
+    CheckConstraint(
+        "approval_reference IS NULL OR char_length(approval_reference) BETWEEN 1 AND 500",
+        name="a_schedule_approval_reference_is_bounded",
+    ),
+    CheckConstraint(
+        "supersedes_baseline_id IS NULL OR supersedes_baseline_id <> baseline_id",
+        name="a_schedule_baseline_does_not_supersede_itself",
+    ),
+    CheckConstraint(
+        "proposal_ordinal IS NULL OR proposal_ordinal >= 0",
+        name="a_schedule_proposal_ordinal_is_not_negative",
+    ),
+    CheckConstraint(
+        "(action = 'propose' AND type IS NOT NULL AND proposal_ordinal IS NOT NULL AND label IS "
+        "NULL AND approval_reference IS NULL AND effective_from IS NULL AND "
+        "supersedes_baseline_id IS NULL AND approved_at_import IS NULL) OR (action = 'approve' "
+        "AND type IS NOT NULL AND label IS NOT NULL AND approval_reference IS NOT NULL AND "
+        "effective_from IS NOT NULL AND approved_at_import IS NOT NULL AND proposal_ordinal IS "
+        "NULL) OR (action IN ('reject', 'withdraw', 'revoke') AND type IS NULL AND label IS NULL "
+        "AND approval_reference IS NULL AND effective_from IS NULL AND supersedes_baseline_id IS "
+        "NULL AND proposal_ordinal IS NULL AND approved_at_import IS NULL)",
+        name="a_schedule_baseline_event_carries_its_fields",
+    ),
+    CheckConstraint(
+        "action NOT IN ('approve', 'reject', 'revoke') OR authority_class = 'local_operator'",
+        name="a_schedule_baseline_decision_is_operator_attested",
+    ),
+    *_provenance_checks("baseline_event"),
+    UniqueConstraint(
+        "principal_id", "project_id", "seq", name="a_schedule_baseline_event_seq_is_used_once"
+    ),
+    UniqueConstraint(
+        "event_id",
+        "principal_id",
+        "project_id",
+        name="a_schedule_baseline_event_is_identified_within_its_project",
+    ),
+    _plane_fk(
+        ["baseline_id", "principal_id", "project_id", "publication_id"],
+        "schedule_baselines",
+        ["baseline_id", "principal_id", "project_id", "publication_id"],
+        name="a_schedule_baseline_event_names_its_baseline",
+    ),
+    _plane_fk(
+        ["previous_event_id", "principal_id", "project_id"],
+        "schedule_baseline_events",
+        ["event_id", "principal_id", "project_id"],
+        name="a_schedule_baseline_event_follows_its_predecessor",
+    ),
+    _plane_fk(
+        ["supersedes_baseline_id", "principal_id", "project_id"],
+        "schedule_baselines",
+        ["baseline_id", "principal_id", "project_id"],
+        name="a_schedule_baseline_event_supersedes_a_baseline_of_its_project",
+    ),
+    Index(
+        "a_schedule_baseline_is_decided_once",
+        "principal_id",
+        "baseline_id",
+        unique=True,
+        postgresql_where=text("action IN ('approve', 'reject', 'withdraw')"),
+    ),
+    Index(
+        "a_schedule_baseline_is_revoked_once",
+        "principal_id",
+        "baseline_id",
+        unique=True,
+        postgresql_where=text("action = 'revoke'"),
+    ),
+    Index(
+        "a_schedule_publication_is_approved_once",
+        "principal_id",
+        "publication_id",
+        unique=True,
+        postgresql_where=text("action = 'approve'"),
+    ),
+    Index(
+        "a_schedule_baseline_label_is_used_once",
+        "principal_id",
+        "project_id",
+        "label",
+        unique=True,
+        postgresql_where=text("action = 'approve'"),
+    ),
+    Index(
+        "a_schedule_proposal_ordinal_is_used_once",
+        "principal_id",
+        "publication_id",
+        "proposal_ordinal",
+        unique=True,
+        postgresql_where=text("action = 'propose'"),
+    ),
+    Index("schedule_baseline_events_by_baseline", "principal_id", "baseline_id", "seq"),
+)
+
+#: Section 14.3.5: one event of the Project's governing-Baseline chain.
+schedule_governing_events = Table(
+    "schedule_governing_events",
+    METADATA,
+    Column("governing_event_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, nullable=False),
+    Column("baseline_id", Text, nullable=False),
+    Column("seq", Integer, nullable=False),
+    Column("previous_governing_event_id", Text),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    Column("reason", Text, nullable=False),
+    *_provenance_columns(),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    PrimaryKeyConstraint("governing_event_id", name="schedule_governing_events_pkey"),
+    _is_identifier("governing_event_id", IdKind.SCHEDULE_GOVERNING_EVENT),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _is_identifier("baseline_id", IdKind.SCHEDULE_BASELINE),
+    _is_identifier("previous_governing_event_id", IdKind.SCHEDULE_GOVERNING_EVENT),
+    CheckConstraint("seq >= 1", name="a_governing_event_seq_is_positive"),
+    CheckConstraint(
+        "(seq = 1) = (previous_governing_event_id IS NULL)",
+        name="a_governing_event_chain_starts_once",
+    ),
+    CheckConstraint(
+        f"char_length(reason) BETWEEN 1 AND {_PLANE_REASON_CHARACTERS}",
+        name="a_governing_reason_is_bounded",
+    ),
+    *_provenance_checks("governing_event"),
+    CheckConstraint(
+        "authority_class = 'local_operator'", name="a_governing_event_is_operator_attested"
+    ),
+    UniqueConstraint(
+        "principal_id", "project_id", "seq", name="a_governing_event_seq_is_used_once"
+    ),
+    UniqueConstraint(
+        "governing_event_id",
+        "principal_id",
+        "project_id",
+        name="a_governing_event_is_identified_within_its_project",
+    ),
+    _plane_fk(
+        ["previous_governing_event_id", "principal_id", "project_id"],
+        "schedule_governing_events",
+        ["governing_event_id", "principal_id", "project_id"],
+        name="a_governing_event_follows_its_predecessor",
+    ),
+    _plane_fk(
+        ["baseline_id", "principal_id", "project_id"],
+        "schedule_baselines",
+        ["baseline_id", "principal_id", "project_id"],
+        name="a_governing_event_names_a_baseline_of_its_project",
+    ),
+)
+
+#: Section 14.3.6: one Schedule Scenario of one Series, started from an
+#: eligible publication (optionally its approved Baseline) or forked from a
+#: version (G3); it has its version 1 at commit (G4).
+schedule_scenarios = Table(
+    "schedule_scenarios",
+    METADATA,
+    Column("scenario_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, nullable=False),
+    Column("series_id", Text, nullable=False),
+    Column("name", Text, nullable=False),
+    Column("description", Text),
+    Column("origin_kind", Text, nullable=False),
+    Column("origin_publication_id", Text),
+    Column("origin_baseline_id", Text),
+    Column("origin_version_id", Text),
+    *_provenance_columns(),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    PrimaryKeyConstraint("scenario_id", name="schedule_scenarios_pkey"),
+    _is_identifier("scenario_id", IdKind.SCHEDULE_SCENARIO),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _is_identifier("series_id", IdKind.SCHEDULE_SERIES),
+    _is_identifier("origin_publication_id", IdKind.SCHEDULE_PUBLICATION),
+    _is_identifier("origin_baseline_id", IdKind.SCHEDULE_BASELINE),
+    _is_identifier("origin_version_id", IdKind.SCHEDULE_SCENARIO_VERSION),
+    CheckConstraint(_plane_name("name"), name="a_schedule_scenario_name_is_normalized"),
+    CheckConstraint(
+        f"description IS NULL OR char_length(description) <= {_PLANE_REASON_CHARACTERS}",
+        name="a_schedule_scenario_description_is_bounded",
+    ),
+    _one_of(
+        "origin_kind",
+        frozenset({"publication", "version"}),
+        name="a_schedule_scenario_origin_kind_is_known",
+    ),
+    CheckConstraint(
+        "(origin_kind = 'publication' AND origin_publication_id IS NOT NULL AND "
+        "origin_version_id IS NULL) OR (origin_kind = 'version' AND origin_version_id IS NOT "
+        "NULL AND origin_publication_id IS NULL AND origin_baseline_id IS NULL)",
+        name="a_schedule_scenario_origin_is_whole",
+    ),
+    *_provenance_checks("scenario"),
+    UniqueConstraint(
+        "scenario_id",
+        "principal_id",
+        "project_id",
+        "series_id",
+        name="a_schedule_scenario_is_identified_within_its_series",
+    ),
+    _plane_fk(
+        _SERIES_COMPOSITE,
+        "schedule_series",
+        _SERIES_COMPOSITE,
+        name="a_schedule_scenario_names_a_series_of_its_project",
+    ),
+    _plane_fk(
+        ["origin_publication_id", "principal_id", "project_id", "series_id"],
+        "schedule_publications",
+        _PUBLICATION_U3,
+        name="a_schedule_scenario_starts_from_a_publication_of_its_series",
+    ),
+    _plane_fk(
+        ["origin_baseline_id", "principal_id", "origin_publication_id"],
+        "schedule_baselines",
+        ["baseline_id", "principal_id", "publication_id"],
+        name="a_schedule_scenario_starts_from_a_baseline_of_its_publication",
+    ),
+    _plane_fk(
+        ["origin_version_id", "principal_id", "project_id", "series_id"],
+        "schedule_scenario_versions",
+        ["version_id", "principal_id", "project_id", "series_id"],
+        name="a_schedule_scenario_forks_a_version_of_its_series",
+        # A Scenario may fork a version and a version belongs to a Scenario:
+        # neither table can be created or dropped before the other without it
+        # (revision step 4; the S5b-1 accepted-run precedent).
+        use_alter=True,
+    ),
+    Index(
+        "schedule_scenarios_by_project", "principal_id", "project_id", "created_at", "scenario_id"
+    ),
+    Index("schedule_scenarios_by_series", "principal_id", "series_id", "created_at", "scenario_id"),
+)
+
+#: Section 14.3.7: one immutable Scenario version (a linear chain, G5); its
+#: content and change set are zlib streams of canonical bytes (S6-2-D11).
+schedule_scenario_versions = Table(
+    "schedule_scenario_versions",
+    METADATA,
+    Column("version_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, nullable=False),
+    Column("series_id", Text, nullable=False),
+    Column("scenario_id", Text, nullable=False),
+    Column("version_no", Integer, nullable=False),
+    Column("parent_version_id", Text),
+    Column("label", Text, nullable=False),
+    Column("note", Text),
+    Column("content_zlib", LargeBinary, nullable=False),
+    Column("content_sha256", Text, nullable=False),
+    Column("content_size_bytes", Integer, nullable=False),
+    Column("change_set_zlib", LargeBinary),
+    Column("change_set_sha256", Text),
+    Column("change_set_size_bytes", Integer),
+    Column("change_set_op_count", Integer),
+    Column("ops_applied", Integer),
+    Column("relationships_removed", Integer),
+    Column("content_changed", Boolean),
+    *(Column(name, Integer) for name in _SNAPSHOT_COUNTS),
+    Column("activity_count", Integer, nullable=False),
+    Column("relationship_count", Integer, nullable=False),
+    Column("calendar_count", Integer, nullable=False),
+    Column("distribution_spec_sha256", Text, nullable=False),
+    *_provenance_columns(),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    PrimaryKeyConstraint("version_id", name="schedule_scenario_versions_pkey"),
+    _is_identifier("version_id", IdKind.SCHEDULE_SCENARIO_VERSION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _is_identifier("series_id", IdKind.SCHEDULE_SERIES),
+    _is_identifier("scenario_id", IdKind.SCHEDULE_SCENARIO),
+    _is_identifier("parent_version_id", IdKind.SCHEDULE_SCENARIO_VERSION),
+    CheckConstraint(
+        f"version_no BETWEEN 1 AND {_MAX_SCENARIO_VERSIONS}",
+        name="a_scenario_version_number_is_bounded",
+    ),
+    CheckConstraint(
+        "(version_no = 1) = (parent_version_id IS NULL)",
+        name="a_scenario_version_has_a_parent_after_the_first",
+    ),
+    _one_of("label", VersionLabel, name="a_scenario_version_label_is_known"),
+    CheckConstraint(
+        f"note IS NULL OR char_length(note) <= {_PLANE_REASON_CHARACTERS}",
+        name="a_scenario_version_note_is_bounded",
+    ),
+    CheckConstraint(
+        f"octet_length(content_zlib) BETWEEN 1 AND {_MAX_SCENARIO_CONTENT_BYTES + _ZLIB_HEADROOM}",
+        name="a_scenario_content_is_stored_bounded",
+    ),
+    _schedule_sha("content_sha256", "a_scenario_content_digest_is_sha256"),
+    CheckConstraint(
+        f"content_size_bytes BETWEEN 1 AND {_MAX_SCENARIO_CONTENT_BYTES}",
+        name="a_scenario_content_size_is_bounded",
+    ),
+    CheckConstraint(
+        "change_set_zlib IS NULL OR octet_length(change_set_zlib) BETWEEN 1 AND "
+        f"{_MAX_SCENARIO_CHANGE_SET_BYTES + _ZLIB_HEADROOM}",
+        name="a_scenario_change_set_is_stored_bounded",
+    ),
+    _schedule_sha("change_set_sha256", "a_scenario_change_set_digest_is_sha256"),
+    CheckConstraint(
+        "change_set_size_bytes IS NULL OR change_set_size_bytes BETWEEN 1 AND "
+        f"{_MAX_SCENARIO_CHANGE_SET_BYTES}",
+        name="a_scenario_change_set_size_is_bounded",
+    ),
+    CheckConstraint(
+        "(change_set_op_count IS NULL OR change_set_op_count BETWEEN 1 AND "
+        f"{_MAX_SCENARIO_CHANGE_SET_OPS}) AND (ops_applied IS NULL OR ops_applied BETWEEN 0 "
+        "AND change_set_op_count) AND (relationships_removed IS NULL OR relationships_removed "
+        ">= 0)",
+        name="a_scenario_change_counts_are_bounded",
+    ),
+    CheckConstraint(
+        " AND ".join(f"({name} IS NULL OR {name} >= 0)" for name in _SNAPSHOT_COUNTS),
+        name="a_scenario_snapshot_counts_are_not_negative",
+    ),
+    CheckConstraint(
+        f"activity_count BETWEEN 0 AND {_MAX_SCENARIO_ACTIVITIES} AND relationship_count "
+        f"BETWEEN 0 AND {_MAX_SCENARIO_RELATIONSHIPS} AND calendar_count BETWEEN 1 AND "
+        f"{_MAX_SCENARIO_CALENDARS}",
+        name="a_scenario_version_counts_are_bounded",
+    ),
+    _schedule_sha("distribution_spec_sha256", "a_scenario_distribution_digest_is_sha256"),
+    CheckConstraint(
+        "(version_no = 1) = (change_set_zlib IS NULL) AND (change_set_zlib IS NULL) = "
+        "(change_set_sha256 IS NULL) AND (change_set_zlib IS NULL) = (change_set_size_bytes IS "
+        "NULL) AND (change_set_zlib IS NULL) = (change_set_op_count IS NULL) AND "
+        "(change_set_zlib IS NULL) = (ops_applied IS NULL) AND (change_set_zlib IS NULL) = "
+        "(relationships_removed IS NULL) AND (change_set_zlib IS NULL) = (content_changed IS "
+        "NULL)",
+        name="a_scenario_change_set_is_whole",
+    ),
+    CheckConstraint(
+        "("
+        + " AND ".join(f"{name} IS NULL" for name in _SNAPSHOT_COUNTS)
+        + ") OR (version_no = 1 AND "
+        + " AND ".join(f"{name} IS NOT NULL" for name in _SNAPSHOT_COUNTS)
+        + ")",
+        name="a_scenario_snapshot_report_is_whole",
+    ),
+    *_provenance_checks("scenario_version"),
+    UniqueConstraint(
+        "principal_id", "scenario_id", "version_no", name="a_scenario_version_number_is_used_once"
+    ),
+    UniqueConstraint(
+        "version_id",
+        "principal_id",
+        "scenario_id",
+        name="a_scenario_version_is_identified_within_its_scenario",
+    ),
+    UniqueConstraint(
+        "version_id",
+        "principal_id",
+        "project_id",
+        "series_id",
+        name="a_scenario_version_is_identified_within_its_series",
+    ),
+    UniqueConstraint(
+        "version_id",
+        "principal_id",
+        "content_sha256",
+        name="a_scenario_version_is_identified_with_its_content",
+    ),
+    _plane_fk(
+        ["scenario_id", "principal_id", "project_id", "series_id"],
+        "schedule_scenarios",
+        ["scenario_id", "principal_id", "project_id", "series_id"],
+        name="a_scenario_version_belongs_to_its_scenario",
+    ),
+    _plane_fk(
+        ["parent_version_id", "principal_id", "scenario_id"],
+        "schedule_scenario_versions",
+        ["version_id", "principal_id", "scenario_id"],
+        name="a_scenario_version_follows_its_parent",
+    ),
+    Index("schedule_scenario_versions_by_principal_time", "principal_id", "created_at"),
+)
+
+#: Section 14.3.8: one server CPM run of one version's exact content; computed
+#: once per engine (the natural key, section 3.11).
+schedule_cpm_runs = Table(
+    "schedule_cpm_runs",
+    METADATA,
+    Column("cpm_run_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("version_id", Text, nullable=False),
+    Column("engine_version", Text, nullable=False),
+    Column("input_content_sha256", Text, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("result_zlib", LargeBinary, nullable=False),
+    Column("result_sha256", Text, nullable=False),
+    Column("result_size_bytes", Integer, nullable=False),
+    Column("activity_count", Integer, nullable=False),
+    Column("relationship_count", Integer, nullable=False),
+    Column("project_finish", Text),
+    *_provenance_columns(),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    PrimaryKeyConstraint("cpm_run_id", name="schedule_cpm_runs_pkey"),
+    _is_identifier("cpm_run_id", IdKind.SCHEDULE_CPM_RUN),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("version_id", IdKind.SCHEDULE_SCENARIO_VERSION),
+    CheckConstraint(
+        "engine_version ~ '^my-pa-cpm-v[1-9][0-9]{0,3}$'", name="a_cpm_run_engine_version_is_known"
+    ),
+    _schedule_sha("input_content_sha256", "a_cpm_run_input_digest_is_sha256"),
+    _one_of("status", CpmStatus, name="a_cpm_run_status_is_known"),
+    CheckConstraint(
+        f"octet_length(result_zlib) BETWEEN 1 AND {_MAX_PLANE_CPM_RESULT_BYTES + _ZLIB_HEADROOM}",
+        name="a_cpm_result_is_stored_bounded",
+    ),
+    _schedule_sha("result_sha256", "a_cpm_result_digest_is_sha256"),
+    CheckConstraint(
+        f"result_size_bytes BETWEEN 1 AND {_MAX_PLANE_CPM_RESULT_BYTES}",
+        name="a_cpm_result_size_is_bounded",
+    ),
+    CheckConstraint(
+        f"activity_count BETWEEN 0 AND {_MAX_SCENARIO_ACTIVITIES} AND relationship_count "
+        f"BETWEEN 0 AND {_MAX_SCENARIO_RELATIONSHIPS}",
+        name="a_cpm_run_counts_are_bounded",
+    ),
+    CheckConstraint(
+        "project_finish IS NULL OR project_finish ~ "
+        "'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}$'",
+        name="a_cpm_run_finish_is_an_instant",
+    ),
+    CheckConstraint(
+        "status = 'computed' OR project_finish IS NULL", name="a_rejected_cpm_run_has_no_finish"
+    ),
+    *_provenance_checks("cpm_run"),
+    UniqueConstraint(
+        "principal_id", "version_id", "engine_version", name="a_cpm_run_is_computed_once"
+    ),
+    UniqueConstraint(
+        "cpm_run_id", "principal_id", "version_id", name="a_cpm_run_is_identified_with_its_version"
+    ),
+    _plane_fk(
+        ["version_id", "principal_id", "input_content_sha256"],
+        "schedule_scenario_versions",
+        ["version_id", "principal_id", "content_sha256"],
+        name="a_cpm_run_computes_its_version_content",
+    ),
+    Index("schedule_cpm_runs_by_principal_time", "principal_id", "created_at"),
+)
+
+#: Section 14.3.9: one client-asserted output bound to one version's content
+#: (section 4.1), optionally to one of its computed runs (G6).
+schedule_scenario_outputs = Table(
+    "schedule_scenario_outputs",
+    METADATA,
+    Column("output_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("version_id", Text, nullable=False),
+    Column("content_sha256", Text, nullable=False),
+    Column("base_cpm_run_id", Text),
+    Column("kind", Text, nullable=False),
+    Column("iterations", Integer, nullable=False),
+    Column("distribution_spec_sha256", Text, nullable=False),
+    Column("payload_zlib", LargeBinary, nullable=False),
+    Column("payload_sha256", Text, nullable=False),
+    Column("payload_size_bytes", Integer, nullable=False),
+    *_provenance_columns(),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    PrimaryKeyConstraint("output_id", name="schedule_scenario_outputs_pkey"),
+    _is_identifier("output_id", IdKind.SCHEDULE_SCENARIO_OUTPUT),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("version_id", IdKind.SCHEDULE_SCENARIO_VERSION),
+    _is_identifier("base_cpm_run_id", IdKind.SCHEDULE_CPM_RUN),
+    _schedule_sha("content_sha256", "a_scenario_output_content_digest_is_sha256"),
+    _one_of("kind", OutputKind, name="a_scenario_output_kind_is_known"),
+    CheckConstraint(
+        f"iterations BETWEEN 1 AND {_MAX_PLANE_ITERATIONS}",
+        name="a_scenario_output_iterations_are_bounded",
+    ),
+    _schedule_sha("distribution_spec_sha256", "a_scenario_output_distribution_digest_is_sha256"),
+    CheckConstraint(
+        f"octet_length(payload_zlib) BETWEEN 1 AND {_MAX_PLANE_OUTPUT_BYTES + _ZLIB_HEADROOM}",
+        name="a_scenario_output_is_stored_bounded",
+    ),
+    _schedule_sha("payload_sha256", "a_scenario_output_payload_digest_is_sha256"),
+    CheckConstraint(
+        f"payload_size_bytes BETWEEN 1 AND {_MAX_PLANE_OUTPUT_BYTES}",
+        name="a_scenario_output_size_is_bounded",
+    ),
+    *_provenance_checks("scenario_output"),
+    _plane_fk(
+        ["version_id", "principal_id", "content_sha256"],
+        "schedule_scenario_versions",
+        ["version_id", "principal_id", "content_sha256"],
+        name="a_scenario_output_binds_its_version_content",
+    ),
+    _plane_fk(
+        ["base_cpm_run_id", "principal_id", "version_id"],
+        "schedule_cpm_runs",
+        ["cpm_run_id", "principal_id", "version_id"],
+        name="a_scenario_output_names_a_run_of_its_version",
+    ),
+    Index(
+        "schedule_scenario_outputs_by_version",
+        "principal_id",
+        "version_id",
+        "created_at",
+        "output_id",
+    ),
+    Index("schedule_scenario_outputs_by_principal_time", "principal_id", "created_at"),
+)
+
+#: Section 14.3.10: the plane's idempotency ledger (section 6.3); a row moves
+#: once from reserved to complete (G7) and is never left reserved (G8).
+schedule_scenario_write_requests = Table(
+    "schedule_scenario_write_requests",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("capability", Text, nullable=False),
+    Column("idempotency_key", Text, nullable=False),
+    Column("request_digest", Text, nullable=False),
+    Column("decision_channel", Text, nullable=False),
+    Column("asserting_client_id", Text),
+    Column("result_kind", Text),
+    Column("result_id", Text),
+    Column("result_created", Boolean),
+    Column("result_bytes", BigInteger),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("completed_at", DateTime(timezone=True)),
+    PrimaryKeyConstraint(
+        "principal_id",
+        "capability",
+        "idempotency_key",
+        name="schedule_scenario_write_requests_pkey",
+    ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of(
+        "capability", PLANE_WRITE_CAPABILITIES, name="a_plane_write_request_capability_is_known"
+    ),
+    CheckConstraint(
+        f"idempotency_key ~ '{_PLANE_KEY_PATTERN}'", name="a_plane_write_request_key_is_bounded"
+    ),
+    _schedule_sha("request_digest", "a_plane_write_request_digest_is_sha256"),
+    _one_of("decision_channel", _PLANE_CHANNELS, name="a_plane_write_request_channel_is_known"),
+    CheckConstraint(
+        "(asserting_client_id IS NOT NULL) = (decision_channel = 'remote_interactive') AND "
+        "(asserting_client_id IS NULL OR char_length(asserting_client_id) BETWEEN 1 AND "
+        f"{MAX_ASSERTING_CLIENT_ID_CHARACTERS})",
+        name="a_plane_write_request_client_is_whole",
+    ),
+    CheckConstraint(
+        f"result_kind IS NULL OR result_kind IN ({_literals(PlaneResultKind)})",
+        name="a_plane_write_request_result_kind_is_known",
+    ),
+    CheckConstraint(
+        "result_id IS NULL OR "
+        + " OR ".join(
+            f"(result_kind = '{kind.value}' AND result_id ~ "
+            f"'^{prefix.value}_{_IDENTIFIER_SUFFIX}$')"
+            for kind, prefix in _RESULT_PREFIXES
+        ),
+        name="a_plane_write_request_result_is_typed",
+    ),
+    CheckConstraint(
+        "result_bytes IS NULL OR result_bytes >= 0",
+        name="a_plane_write_request_bytes_are_not_negative",
+    ),
+    CheckConstraint(
+        "completed_at IS NOT NULL OR (result_kind IS NULL AND result_id IS NULL AND "
+        "result_created IS NULL AND result_bytes IS NULL)",
+        name="an_incomplete_plane_write_request_names_no_result",
+    ),
+    CheckConstraint(
+        "completed_at IS NULL OR (result_id IS NOT NULL AND result_created IS NOT NULL AND "
+        "result_bytes IS NOT NULL AND result_kind = CASE capability WHEN "
+        "'schedule_scenarios.create' THEN 'scenario' WHEN 'schedule_scenario_versions.create' "
+        "THEN 'version' WHEN 'schedule_cpm_runs.create' THEN 'cpm_run' WHEN "
+        "'schedule_scenario_outputs.record' THEN 'output' WHEN "
+        "'schedule_baselines.set_governing' THEN 'governing_event' ELSE 'baseline_event' END)",
+        name="a_complete_plane_write_request_names_its_result",
+    ),
+    Index(
+        "schedule_scenario_write_requests_by_bucket",
+        "principal_id",
+        "decision_channel",
+        "asserting_client_id",
+        "completed_at",
+    ),
+    Index("schedule_scenario_write_requests_by_principal", "principal_id", "completed_at"),
+)
+
+#: Section 14.3.11 (amendment S6-2-D03): one refused client plane write, kept
+#: after the refused transaction rolled back so the section 8.3 refused-write
+#: bound survives it.
+schedule_scenario_write_refusals = Table(
+    "schedule_scenario_write_refusals",
+    METADATA,
+    Column("refusal_no", BigInteger, Identity(), nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("capability", Text, nullable=False),
+    Column("decision_channel", Text, nullable=False),
+    Column("asserting_client_id", Text),
+    Column("error_code", Text, nullable=False),
+    Column("refused_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    PrimaryKeyConstraint("refusal_no", name="schedule_scenario_write_refusals_pkey"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("capability", PLANE_WRITE_CAPABILITIES, name="a_plane_refusal_capability_is_known"),
+    _one_of("decision_channel", _PLANE_CHANNELS, name="a_plane_refusal_channel_is_known"),
+    CheckConstraint(
+        "(asserting_client_id IS NOT NULL) = (decision_channel = 'remote_interactive') AND "
+        "(asserting_client_id IS NULL OR char_length(asserting_client_id) BETWEEN 1 AND "
+        f"{MAX_ASSERTING_CLIENT_ID_CHARACTERS})",
+        name="a_plane_refusal_client_is_whole",
+    ),
+    _one_of("error_code", ErrorCode, name="a_plane_refusal_code_is_public"),
+    Index(
+        "schedule_scenario_write_refusals_by_bucket",
+        "principal_id",
+        "decision_channel",
+        "asserting_client_id",
+        "refused_at",
     ),
 )

@@ -9,6 +9,7 @@ missing; milestones get 0 and 0; published dates stay inert.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from typing import Final
@@ -37,6 +38,7 @@ from my_pa.domain.schedule.scenario.snapshot import (
     SnapshotRefusalReason,
     SnapshotReport,
     snapshot_from_publication,
+    snapshot_wbs_path,
 )
 from tests.fixtures.schedule_scenario import STD
 
@@ -206,3 +208,38 @@ def test_a_boundary_product_is_kept_and_one_more_unit_is_out_of_range() -> None:
     assert minutes == {"Y1": (5_256_000, None), "Y2": (5_256_000, None)}
     assert snapshot.report.durations_out_of_range == 2
     assert snapshot.report.durations_quantized == 0
+
+
+def test_hierarchy_paths_map_deterministically() -> None:
+    """Section 2.5 (FR8-F02): empty or holed paths are null; labels are normalized."""
+    paths = {
+        "H1": None,
+        "H2": (),
+        "H3": ("",),
+        "H4": ("Site", "   "),
+        "H5": ("  Site ", "Zone\t1"),
+    }
+    rows = tuple(
+        replace(_row(index, name, _duration("1.000"), _duration("1.000")), hierarchy_path=path)
+        for index, (name, path) in enumerate(paths.items(), 1)
+    )
+    content = _snapshot(rows).content
+    by_published = {
+        activity.published_reference.published_activity_id: activity.wbs_path  # type: ignore[union-attr]
+        for activity in content.activities
+    }
+    assert by_published == {
+        "H1": None,
+        "H2": None,
+        "H3": None,
+        "H4": None,
+        "H5": ("Site", "Zone 1"),
+    }
+    assert snapshot_wbs_path(("a",) * 32) == ("a",) * 32
+
+
+def test_a_row_a_scenario_activity_cannot_hold_is_a_closed_refusal() -> None:
+    unnamed = replace(_row(1, "U1", _duration("1.000"), _duration("1.000")), activity_name="   ")
+    with pytest.raises(SnapshotRefusalError) as raised:
+        _snapshot((unnamed,))
+    assert raised.value.reason is SnapshotRefusalReason.ROWS

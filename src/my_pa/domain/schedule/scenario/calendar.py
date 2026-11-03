@@ -21,6 +21,7 @@ the engine turns it into the `horizon_exceeded` rejection.
 
 from __future__ import annotations
 
+from array import array
 from bisect import bisect_right
 from datetime import date
 from functools import cache, lru_cache
@@ -36,6 +37,7 @@ from my_pa.domain.schedule.scenario.model import (
 
 __all__ = [
     "AXIS_DAYS",
+    "COMPILED_CALENDAR_CACHE_SIZE",
     "CalendarHorizonError",
     "CompiledCalendar",
     "advance",
@@ -66,24 +68,44 @@ def _pattern_minutes(pattern: DayPattern) -> int:
 
 
 class CompiledCalendar:
-    """Per-day patterns and the cumulative working-minute table of one calendar."""
+    """The cumulative working-minute table of one calendar over the whole axis.
 
-    __slots__ = ("_cumulative", "_patterns", "_total", "key")
+    Memory (FR8-F06, residual S6-U16): the day patterns are not materialised per
+    day; a day's pattern is its exception's, else its weekday's, and the
+    cumulative table is one `array('q')` of 36,526 entries (about 0.3 MB).
+    """
 
-    def __init__(self, key: str, patterns: list[DayPattern]) -> None:
-        if len(patterns) != AXIS_DAYS:
-            raise ValueError("a compiled calendar covers every axis day")
+    __slots__ = ("_cumulative", "_exceptions", "_total", "_week", "key")
+
+    def __init__(
+        self, key: str, week: tuple[DayPattern, ...], exceptions: dict[int, DayPattern]
+    ) -> None:
+        if len(week) != 7 or not all(0 <= day < AXIS_DAYS for day in exceptions):
+            raise ValueError("a compiled calendar has 7 weekday patterns and axis exceptions")
         self.key = key
-        self._patterns = patterns
-        cumulative = [0]
-        cumulative.extend(accumulate(_pattern_minutes(pattern) for pattern in patterns))
+        self._week = week
+        self._exceptions = exceptions
+        weekly = [_pattern_minutes(pattern) for pattern in week]
+        cumulative = array("q", [0])
+        cumulative.extend(
+            accumulate(
+                _pattern_minutes(exceptions[day])
+                if day in exceptions
+                else weekly[(_FIRST_WEEKDAY + day) % 7]
+                for day in range(AXIS_DAYS)
+            )
+        )
         self._cumulative = cumulative
         self._total = cumulative[-1]
+
+    def _pattern(self, day: int) -> DayPattern:
+        found = self._exceptions.get(day)
+        return self._week[(_FIRST_WEEKDAY + day) % 7] if found is None else found
 
     def is_working(self, minute: int) -> bool:
         _check_minute(minute)
         day, minute_of_day = divmod(minute, MINUTES_PER_DAY)
-        return any(start <= minute_of_day < end for start, end in self._patterns[day])
+        return any(start <= minute_of_day < end for start, end in self._pattern(day))
 
     def worked_before(self, instant: int) -> int:
         """`F(t)`: working minutes in `[0, t)`."""
@@ -93,7 +115,7 @@ class CompiledCalendar:
             return self._total
         partial = sum(
             min(end, minute_of_day) - start
-            for start, end in self._patterns[day]
+            for start, end in self._pattern(day)
             if start < minute_of_day
         )
         return self._cumulative[day] + partial
@@ -104,7 +126,7 @@ class CompiledCalendar:
             raise CalendarHorizonError("no such working minute on the axis")
         day = bisect_right(self._cumulative, index) - 1
         remainder = index - self._cumulative[day]
-        for start, end in self._patterns[day]:
+        for start, end in self._pattern(day):
             if remainder < end - start:
                 return day * MINUTES_PER_DAY + start + remainder
             remainder -= end - start
@@ -126,20 +148,24 @@ def _check_duration(value: int) -> None:
         raise ValueError("a calendar duration is a non-negative integer")
 
 
-@lru_cache(maxsize=64)
+#: One content's calendars (at most 32) plus headroom; about 0.3 MB each.
+COMPILED_CALENDAR_CACHE_SIZE: Final = 40
+
+
+@lru_cache(maxsize=COMPILED_CALENDAR_CACHE_SIZE)
 def compile_calendar(calendar: ScenarioCalendar) -> CompiledCalendar:
-    """Compile a calendar (memoized: a compiled calendar is never mutated)."""
-    week = calendar.week
-    patterns = [week[(_FIRST_WEEKDAY + day) % 7] for day in range(AXIS_DAYS)]
-    for exception in calendar.exceptions:
-        patterns[exception.day.toordinal() - _EPOCH_ORDINAL] = exception.intervals
-    return CompiledCalendar(calendar.key, patterns)
+    """Compile a calendar (memoized by value: a compiled calendar is never mutated)."""
+    exceptions = {
+        exception.day.toordinal() - _EPOCH_ORDINAL: exception.intervals
+        for exception in calendar.exceptions
+    }
+    return CompiledCalendar(calendar.key, calendar.week, exceptions)
 
 
 @cache
 def twenty_four_hour_calendar() -> CompiledCalendar:
     """The `twenty_four_hour` lag calendar: every minute works."""
-    return CompiledCalendar("twenty_four_hour", [_ALL_DAY] * AXIS_DAYS)
+    return CompiledCalendar("twenty_four_hour", (_ALL_DAY,) * 7, {})
 
 
 def working(calendar: CompiledCalendar, minute: int) -> bool:

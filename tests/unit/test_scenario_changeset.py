@@ -436,7 +436,7 @@ def test_grammar_refusals() -> None:
     )
     assert _refused([{"op": "settings.set"}]) == ChangeSetRefusal(0, E.INVALID_FIELD)
     assert _refused([{"op": "data_date.set", "at": float("nan")}]) == ChangeSetRefusal(
-        0, E.BOUND_EXCEEDED
+        0, E.INVALID_FIELD
     )
     assert {member.value for member in ChangeOp} == {
         "activity.add",
@@ -505,3 +505,21 @@ def test_applied_content_reruns_cleanly(op: dict[str, object]) -> None:
     content = _applied([op]).content
     assert content.calendars == (STD,)
     assert at("01-04 00:00") <= content.data_date
+
+
+def test_progress_finish_after_the_data_date_is_refused_at_its_op() -> None:
+    """Section 2.9: `progress.set` is checked against the working data date at its own op.
+
+    A later `data_date.set` that would make the finish admissible does not rescue it.
+    """
+    parent = network([task("A", DAY)], data_date="01-04 00:00")
+    ops = [
+        {
+            "op": "progress.set",
+            "key": "x:A",
+            "actual_start": "2027-01-01T08:00",
+            "actual_finish": "2027-01-05T08:00",
+        },
+        {"op": "data_date.set", "at": "2027-01-06T00:00"},
+    ]
+    assert _refused(ops, parent) == ChangeSetRefusal(0, E.PROGRESS_INVALID)

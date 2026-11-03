@@ -909,7 +909,12 @@ def _rejected(
 
 
 def run_cpm(content: ScenarioContent, *, operation_budget: int = CPM_OPERATION_BUDGET) -> CpmResult:
-    """Compute one content under `my-pa-cpm-v1` (section 3). Never raises for content."""
+    """Compute one content under `my-pa-cpm-v1` (section 3). Never raises for content.
+
+    The content must already have passed `content_problem` (S6-2 obligation,
+    FR8-F07): the record admits duplicate activity keys, and a run over them
+    would compute a collapsed network without saying so.
+    """
     if type(operation_budget) is not int or operation_budget < 0:
         raise ValueError("the operation budget is a non-negative integer")
     if not isinstance(content, ScenarioContent):

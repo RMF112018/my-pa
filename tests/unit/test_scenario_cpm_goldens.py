@@ -11,6 +11,7 @@ exact for G02 (P16).
 from __future__ import annotations
 
 import time
+from itertools import pairwise
 from typing import Final
 
 import pytest
@@ -589,3 +590,138 @@ def test_open_end_bound_applies_when_every_outgoing_bound_is_skipped() -> None:
     )
     assert (a.total_float_minutes, b.total_float_minutes) == (1440, 1920)
     assert result.critical_paths == (("x:C",),)
+
+
+# --- FR8-F01: rules the golden vectors alone did not pin ---------------------------------
+
+
+def _codes(
+    result: CpmResult, code: CpmIssueCode
+) -> list[tuple[str | None, str | None, str | None]]:
+    return [(i.activity_key, i.pred, i.succ) for i in result.issues if i.code is code]
+
+
+def test_ss_out_of_sequence_needs_an_unstarted_predecessor() -> None:
+    """Section 3.10: SS into started work is out of sequence only if the pred has not started."""
+    started = network(
+        [task("A", DAY, started="01-05 08:00"), task("B", DAY, started="01-05 08:00")],
+        [link("A", "B", "SS")],
+        data_date="01-06 00:00",
+    )
+    assert _codes(run_cpm(started), C.OUT_OF_SEQUENCE) == []
+    unstarted = network(
+        [task("A", DAY), task("B", DAY, started="01-05 08:00")],
+        [link("A", "B", "SS")],
+        data_date="01-06 00:00",
+    )
+    assert _codes(run_cpm(unstarted), C.OUT_OF_SEQUENCE) == [(None, "x:A", "x:B")]
+
+
+def test_dangling_finish_is_only_for_incomplete_activities() -> None:
+    """Section 3.10: a complete activity with only SS/SF outgoing is not a dangling finish."""
+    complete = network(
+        [task("A", 0, started="01-04 08:00", finished="01-04 16:00"), task("B", DAY)],
+        [link("A", "B", "SS")],
+        data_date="01-06 00:00",
+    )
+    assert _codes(run_cpm(complete), C.DANGLING_FINISH) == []
+    in_progress = network(
+        [task("A", DAY, started="01-04 08:00"), task("B", DAY)],
+        [link("A", "B", "SS")],
+        data_date="01-06 00:00",
+    )
+    assert _codes(run_cpm(in_progress), C.DANGLING_FINISH) == [("x:A", None, None)]
+
+
+def test_must_finish_by_bounds_only_activities_without_a_successor_bound() -> None:
+    """Section 3.6 step 3 (S6-D08): must_finish_by joins the bounds only when step 2 gave none.
+
+    A 1d -FS-960-> B 1d; must_finish_by 01-08 16:00. B (no successor) takes it:
+    LF_B 01-08 16:00, LS_B 01-08 08:00. A's bound is shift(LS_B, +960) = 01-11
+    16:00, which is later than must_finish_by and must not be cut to it.
+    """
+    result = run_cpm(
+        network(
+            [task("A", DAY), task("B", DAY)],
+            [link("A", "B", "FS", -960)],
+            must_finish_by="01-08 16:00",
+        )
+    )
+    by_key = {item.key: item for item in result.activities}
+    assert (by_key["x:B"].late_start, by_key["x:B"].late_finish) == (
+        at("01-08 08:00"),
+        at("01-08 16:00"),
+    )
+    assert (by_key["x:A"].late_start, by_key["x:A"].late_finish) == (
+        at("01-11 08:00"),
+        at("01-11 16:00"),
+    )
+    assert by_key["x:A"].total_float_minutes == 2400
+    assert _codes(result, C.MUST_FINISH_BY_VIOLATED) == []
+
+
+def test_cycle_walk_steps_to_the_smallest_key_predecessor() -> None:
+    """Section 3.4: from min(R), step to the smallest-key predecessor inside R.
+
+    A has 2 residual predecessors (B and C); the walk takes B, so the cycle is
+    [A, B], never [A, C].
+    """
+    result = run_cpm(
+        network(
+            [task(name, DAY) for name in ("A", "B", "C")],
+            [link("A", "B"), link("B", "A"), link("A", "C"), link("C", "A")],
+        )
+    )
+    assert result.status is CpmStatus.REJECTED
+    assert result.summary.cycle == ("x:A", "x:B")
+    assert (result.summary.cycle_length, result.summary.residual_count) == (2, 3)
+
+
+def test_critical_path_emission_stops_before_the_key_cap() -> None:
+    """Section 3.8: emission stops before a path that would pass 50,000 emitted keys.
+
+    A 20,000-activity zero-duration chain forks into 3 sinks: 3 critical paths
+    of 20,001 keys. 2 fit (40,002); the third would make 60,003, so it is not
+    emitted though fewer than 16 paths were.
+    """
+    chain = [f"N{index:05d}" for index in range(20_000)]
+    sinks = ["Z1", "Z2", "Z3"]
+    result = run_cpm(
+        network(
+            [task(name, 0) for name in chain + sinks],
+            [link(a, b) for a, b in pairwise(chain)] + [link(chain[-1], sink) for sink in sinks],
+        )
+    )
+    assert result.status is CpmStatus.COMPUTED
+    assert [path[-1] for path in result.critical_paths] == ["x:Z1", "x:Z2"]
+    assert all(len(path) == 20_001 for path in result.critical_paths)
+    assert result.summary.critical_path_count == 3
+    assert result.summary.critical_paths_truncated is True
+
+
+def test_critical_path_count_saturates_across_start_nodes() -> None:
+    """Section 3.8: the total saturates at 1,000,000 even when no node's own count does.
+
+    Two disjoint 19-rung diamond ladders: 2^19 = 524,288 paths each, 1,048,576
+    in all.
+    """
+    activities, relationships = [], []
+    for prefix in ("P", "Q"):
+        activities.append(task(f"{prefix}S0", DAY))
+        for rung in range(19):
+            top, bottom, join = (
+                f"{prefix}T{rung:02d}",
+                f"{prefix}U{rung:02d}",
+                f"{prefix}S{rung + 1}",
+            )
+            activities += [task(top, DAY), task(bottom, DAY), task(join, DAY)]
+            relationships += [
+                link(f"{prefix}S{rung}", top),
+                link(f"{prefix}S{rung}", bottom),
+                link(top, join),
+                link(bottom, join),
+            ]
+    result = run_cpm(network(activities, relationships))
+    assert 2 * 2**19 > CRITICAL_PATH_COUNT_CAP > 2**19
+    assert result.summary.critical_path_count == CRITICAL_PATH_COUNT_CAP
+    assert result.summary.critical_paths_truncated is True

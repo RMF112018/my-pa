@@ -7,8 +7,10 @@ every S6-1 module (the `scenario` package plus `series_match.py`,
 * imports are the standard library, `my_pa.domain.schedule` and
   `my_pa.domain.common.identifiers` only (the S5a allowlist, inherited);
 * no import of `random`, `time`, `secrets`, `uuid` or `os` (no randomness,
-  clock or environment);
-* no `now`/`today`/`utcnow` call;
+  clock or environment), nor of `io`, `pathlib`, `socket`, `subprocess`,
+  `shutil`, `tempfile` or `logging` (FR8-F07: the standard-library allowlist
+  alone would admit them);
+* no `now`/`today`/`utcnow` call, and no `open`/`print`/`input` call;
 * no `float(` call, `float` literal or `/` operator (`ast.Div`): the engine is
   integer minutes only (S6-D06).
 
@@ -38,8 +40,24 @@ S61_MODULES: Final = (
     SCHEDULE / "baselines.py",
 )
 ALLOWED_PREFIXES: Final = ("my_pa.domain.schedule", "my_pa.domain.common.identifiers")
-FORBIDDEN_ROOTS: Final = frozenset({"random", "time", "secrets", "uuid", "os"})
-FORBIDDEN_CALLS: Final = frozenset({"now", "today", "utcnow"})
+#: The contract's list, plus IO and process modules the stdlib allowlist would admit (FR8-F07).
+FORBIDDEN_ROOTS: Final = frozenset(
+    {
+        "random",
+        "time",
+        "secrets",
+        "uuid",
+        "os",
+        "io",
+        "pathlib",
+        "socket",
+        "subprocess",
+        "shutil",
+        "tempfile",
+        "logging",
+    }
+)
+FORBIDDEN_CALLS: Final = frozenset({"now", "today", "utcnow", "open", "print", "input"})
 
 
 def _imports(tree: ast.AST) -> list[tuple[int, str]]:
@@ -136,6 +154,12 @@ def test_the_guard_sees_each_forbidden_form() -> None:
         "x = 3 / 2\n": "uses the / operator",
         "x = 3\nx /= 2\n": "uses the / operator",
         "from . import model\n": "relative import",
+        "import socket\n": "imports socket",
+        "import subprocess\n": "imports subprocess",
+        "from pathlib import Path\n": "imports pathlib",
+        "import io\n": "imports io",
+        "x = open('f')\n": "calls open()",
+        "print(1)\n": "calls print()",
     }
     for source, expected in samples.items():
         found = _source_violations(source, "probe.py")
@@ -150,6 +174,13 @@ CROSSWALK: Final[dict[str, tuple[str, ...]]] = {
         "test_topological_order_is_key_ordered",
         "test_critical_path_enumeration_is_bounded",
         "test_operation_budget_is_exact",
+        "test_open_end_bound_applies_when_every_outgoing_bound_is_skipped",
+        "test_ss_out_of_sequence_needs_an_unstarted_predecessor",
+        "test_dangling_finish_is_only_for_incomplete_activities",
+        "test_must_finish_by_bounds_only_activities_without_a_successor_bound",
+        "test_cycle_walk_steps_to_the_smallest_key_predecessor",
+        "test_critical_path_emission_stops_before_the_key_cap",
+        "test_critical_path_count_saturates_across_start_nodes",
     ),
     "tests/architecture/test_scenario_engine_scope.py": (
         "test_scenario_package_has_no_float_clock_or_randomness",
@@ -159,13 +190,17 @@ CROSSWALK: Final[dict[str, tuple[str, ...]]] = {
         "test_change_set_applies_in_request_order",
         "test_added_activity_cannot_take_a_source_key",
         "test_final_revalidation_refuses_with_content_invalid",
+        "test_progress_finish_after_the_data_date_is_refused_at_its_op",
     ),
     "tests/unit/test_scenario_snapshot.py": ("test_golden_snapshot",),
     "tests/unit/test_scenario_outputs.py": (
         "test_output_distribution_digest_must_match",
         "test_output_histogram_counts_sum_to_iterations",
     ),
-    "tests/unit/test_schedule_series_match.py": ("test_series_match_vectors",),
+    "tests/unit/test_schedule_series_match.py": (
+        "test_series_match_vectors",
+        "test_a_second_candidate_at_exactly_the_margin_is_ambiguous",
+    ),
     "tests/unit/test_schedule_currency.py": ("test_current_standard_update_vectors",),
     "tests/unit/test_schedule_baselines.py": ("test_baseline_vectors",),
 }

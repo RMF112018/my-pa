@@ -543,7 +543,7 @@
       "tests/unit/test_review_policy.py": 0.2,
       "tests/unit/test_scenario_calendar.py": 4.6,
       "tests/unit/test_scenario_changeset.py": 0.0,
-      "tests/unit/test_scenario_cpm_goldens.py": 1.8,
+      "tests/unit/test_scenario_cpm_goldens.py": 2.1,
       "tests/unit/test_scenario_cpm_oracle.py": 0.3,
       "tests/unit/test_scenario_cpm_properties.py": 0.3,
       "tests/unit/test_scenario_model.py": 0.0,

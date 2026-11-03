@@ -572,13 +572,15 @@ _HANDLERS: Final[dict[ChangeOp, Callable[[_Working, Mapping[str, object]], None]
 _OP_NAMES: Final = frozenset(member.value for member in ChangeOp)
 
 
-def _change_set_fits(ops: Sequence[object]) -> bool:
+def _change_set_misfit(ops: Sequence[object]) -> ChangeOpError | None:
+    """`bound_exceeded` outside the bounds; `invalid_field` when not JSON-encodable."""
     if not 1 <= len(ops) <= MAX_CHANGE_SET_OPS:
-        return False
+        return ChangeOpError.BOUND_EXCEEDED
     try:
-        return len(change_set_bytes(ops)) <= MAX_CHANGE_SET_BYTES
+        encoded = change_set_bytes(ops)
     except (TypeError, ValueError):
-        return False
+        return ChangeOpError.INVALID_FIELD
+    return ChangeOpError.BOUND_EXCEEDED if len(encoded) > MAX_CHANGE_SET_BYTES else None
 
 
 def apply_change_set(
@@ -586,11 +588,13 @@ def apply_change_set(
 ) -> ChangeSetApplied | ChangeSetRefusal:
     """Apply `ops` in request order (section 2.9); never raises for client input.
 
-    A change set outside 1..5,000 ops or 4,194,304 canonical bytes (or not
-    JSON-encodable) is refused before any op as `(0, bound_exceeded)`.
+    A change set outside 1..5,000 ops or 4,194,304 canonical bytes is refused before
+    any op as `(0, bound_exceeded)`; one that is not JSON-encodable (which a JSON
+    transport can never send) as `(0, invalid_field)`.
     """
-    if not _change_set_fits(ops):
-        return ChangeSetRefusal(0, ChangeOpError.BOUND_EXCEEDED)
+    misfit = _change_set_misfit(ops)
+    if misfit is not None:
+        return ChangeSetRefusal(0, misfit)
     working = _Working(parent)
     for index, op in enumerate(ops):
         if not isinstance(op, Mapping):

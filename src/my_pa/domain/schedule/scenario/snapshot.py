@@ -51,6 +51,7 @@ __all__ = [
     "SnapshotRefusalReason",
     "SnapshotReport",
     "snapshot_from_publication",
+    "snapshot_wbs_path",
 ]
 
 MAX_MINUTES_PER_SOURCE_UNIT: Final = 1_440
@@ -113,6 +114,20 @@ class _Counter:
         return minutes
 
 
+def snapshot_wbs_path(hierarchy_path: tuple[str, ...] | None) -> tuple[str, ...] | None:
+    """Section 2.5 (FR8-F02): the published hierarchy as an inert `wbs_path`.
+
+    Each label is normalized. A missing or empty path is null; so is a path in
+    which any label normalizes to nothing (the S5 parser stores an unnamed
+    parent as `""`), because a path with a hole in it would misstate the
+    hierarchy and `wbs_path` is inert, so dropping it cannot change a result.
+    """
+    if not hierarchy_path:
+        return None
+    labels = tuple(normalize_display_text(label) for label in hierarchy_path)
+    return None if any(not label for label in labels) else labels
+
+
 def snapshot_from_publication(
     *,
     publication_id: str,
@@ -141,14 +156,6 @@ def snapshot_from_publication(
     activities: list[ScenarioActivity] = []
     milestones = 0
     for row in rows:
-        reference = PublishedReference(
-            publication_id=publication_id,
-            published_activity_id=row.published_activity_id,
-            original_duration=row.original_duration,
-            remaining_duration=row.remaining_duration,
-            start=row.start,
-            finish=row.finish,
-        )
         is_milestone = row.row_type is ScheduleRowType.MILESTONE
         if is_milestone:
             milestones += 1
@@ -157,21 +164,30 @@ def snapshot_from_publication(
         else:
             original = counter.minutes(row.original_duration, factor, original=True)
             remaining = counter.minutes(row.remaining_duration, factor, original=False)
-        path = row.hierarchy_path
-        activities.append(
-            ScenarioActivity(
-                key=row.schedule_activity_id,
-                name=normalize_display_text(row.activity_name),
-                kind=ActivityKind.MILESTONE if is_milestone else ActivityKind.TASK,
-                wbs_path=None
-                if path is None
-                else tuple(normalize_display_text(label) for label in path),
-                calendar=None,
-                original_minutes=original,
-                remaining_minutes=remaining,
-                published_reference=reference,
+        try:
+            activities.append(
+                ScenarioActivity(
+                    key=row.schedule_activity_id,
+                    name=normalize_display_text(row.activity_name),
+                    kind=ActivityKind.MILESTONE if is_milestone else ActivityKind.TASK,
+                    wbs_path=snapshot_wbs_path(row.hierarchy_path),
+                    calendar=None,
+                    original_minutes=original,
+                    remaining_minutes=remaining,
+                    published_reference=PublishedReference(
+                        publication_id=publication_id,
+                        published_activity_id=row.published_activity_id,
+                        original_duration=row.original_duration,
+                        remaining_duration=row.remaining_duration,
+                        start=row.start,
+                        finish=row.finish,
+                    ),
+                )
             )
-        )
+        except ValueError:
+            # Anything else a row view admits but a scenario activity does not
+            # (an unnamed row, a non-Stable key) is a closed refusal, never a bare error.
+            raise SnapshotRefusalError(SnapshotRefusalReason.ROWS) from None
     try:
         content = ScenarioContent(
             data_date=instant,

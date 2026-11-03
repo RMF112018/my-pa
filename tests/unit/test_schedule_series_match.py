@@ -307,3 +307,12 @@ def test_outcomes_and_reasons_are_closed() -> None:
         "evidence_conflict",
         "name_conflict",
     ]
+
+
+def test_a_second_candidate_at_exactly_the_margin_is_ambiguous() -> None:
+    """Section 11.2.1: every other candidate must be < 500, so exactly 500 fails `matched`."""
+    at_margin = candidate("Y", S100 + ids("Z", 1, 100), order=1)
+    decision = match_series(_incoming(S100), [candidate("X", X_M1), at_margin])
+    scores = sorted(item.score for item in decision.candidates)
+    assert scores == [500, 904]
+    assert (decision.outcome, decision.reason) == (MatchOutcome.AMBIGUOUS, MatchReason.MARGIN)

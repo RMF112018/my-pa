@@ -1567,7 +1567,9 @@ controls for S6-2. Operator decisions (sections 10.3, 12) and S6-1 engine semant
 reopened.
 
 **Revision R9-1.** Design review R9 (PASS_WITH_REQUIRED_CHANGES at `a444e21b`) findings
-R9-F01…F13 are resolved in place; section 14.13 maps each finding to its fix.
+R9-F01…F13 are resolved in place; section 14.13 maps each finding to its fix. **Revision R9-2:** re-review RR1
+(PASS_WITH_REQUIRED_CHANGES at `b612db98`) findings RR1-F01…F05 are resolved in place; the
+end of section 14.13 maps them.
 
 ### 14.1 Repository reauthentication at `a66a6e32`
 
@@ -1920,6 +1922,11 @@ bare identifier. A BEFORE trigger runs before the AFTER FK check, so a trigger t
 row under those columns returns `NEW` without deciding, and the FK then refuses with
 `foreign_key_violation` (`23503`): another Principal's row can neither decide a refusal class
 nor serve as an existence oracle (the S5 precedent qualifies by `principal_id` the same way).
+This "absent ⇒ defer" rule applies only to the **subject** lookup the FK also names. It does
+**not** apply to aggregates where absence is meaningful — G14 (a)/G15 (a) chain start (no
+event ⇒ `seq` must be 1), G5 "no version of the Scenario exists", G12 "no `approve` exists",
+G9's publication set, G4/G8/G13 completeness — which are evaluated on the (Principal-qualified)
+empty read and decide (RR1-F05).
 
 | # | Function | Attached | Rule |
 |---|---|---|---|
@@ -2046,7 +2053,7 @@ reports them).
 **Scratch-cluster measurement (R9-F10; I9-A performs it, nothing real is touched).** On the
 Homebrew `postgres@15` scratch cluster at `621ef6786c64`, I9-A seeds synthetic `record_links`
 rows (the `tests/database/test_lineage_benchmark.py` harness shape: synthetic Principals and
-identifiers, inserted under `session_replication_role = replica` so no endpoint row is needed,
+identifiers, inserted after `SET LOCAL session_replication_role = replica` so no endpoint row is needed,
 then `ANALYZE`) at 10^5 and at 10^6 rows, runs revision A's upgrade, and records for each size:
 the wall time of the live phase C statement (from just before the `ALTER TABLE` to its return,
 measured by `clock_timestamp()` around it in a measurement-only copy of the statement, not in
@@ -2290,7 +2297,7 @@ transition; G8 refuses a commit that leaves it reserved). A refusal raised after
 
 | Write | Inside the one write transaction, after the prologue |
 |---|---|
-| Scenario from a publication or Baseline | read is done before (14.8.3); with `from_baseline_id`, take J and re-read that the Baseline is effective (approved, not revoked, publication `complete`/`partial`); insert the Scenario and version 1 (snapshot columns set); G3, G5, G4 at commit |
+| Scenario from a publication or Baseline | read is done before (14.8.3); with `from_baseline_id`, take J and re-read that the Baseline is effective (approved, not revoked, publication `complete`/`partial`). Not effective ⇒ raise `BaselineWriteRefusedError` (RR1-F04; S6-2-D20): revoked or never approved ⇒ `CONFLICT_BASELINE_ID` (`conflict(BASELINE_ID)`), publication not `complete`/`partial` ⇒ `CONFLICT_STATUS` (`conflict(STATUS)`), section 12.4/7; absent or another Principal's ⇒ `PlaneSubjectAbsentError` (`not_found`). Otherwise insert the Scenario and version 1 (snapshot columns set); G3, G5, G4 at commit |
 | Scenario from a version (fork) | `INSERT … SELECT` copying `content_zlib`, `content_sha256`, `content_size_bytes`, the 3 counts and `distribution_spec_sha256` from the source version (partitioned), so the copy is byte-for-byte without decompression; G5 re-checks; source absent ⇒ raise `PlaneSubjectAbsentError`. The copy is stored again physically, so its `content_size_bytes` counts as new stored bytes toward the 2 GiB, 256 MiB and 128 MiB quotas (`stored_bytes` = `content_size_bytes`; S6-U08, R9-F13) |
 | Version append (CAS) | `head_version` (max `version_no`) read after the lock; `head ≠ expected_head_version_no` ⇒ raise `ScenarioHeadMovedError(head_version_no)` (`conflict(EXPECTED_VERSION)`; the transaction rolls back, R9-F08); else insert `version_no = expected + 1`, `parent_version_id = head`; the UNIQUE and G5 are the backstop when the lock is absent |
 | CPM run | 14.8.4 |
@@ -2351,6 +2358,7 @@ that no cycle exists are:
 | S5 import with approval | J → (role `baseline` has no auto form) the non-intake predecessor's `FOR UPDATE` when superseding → FK `KEY SHARE` on its Series |
 | S5 import without approval, second admission | no P or J of its own; row and FK locks as today |
 | worker finalization (H8, `fail`) | job row (`hold_lease`, `FOR UPDATE`) → its publication `FOR UPDATE` → (intake only) J → the second admission's inserts (FK `KEY SHARE` on the target Series) |
+| CPM compute (14.8.4) | C: a session `pg_try_advisory_lock` on the dedicated lease connection, which **never waits** (a miss answers busy) and is held across steps 3–5; meanwhile steps 3 and 5 take P and row locks on other connections as a plane client write does (RR1-F05) |
 
 No path takes P after J. Every J holder other than the hook touches no intake publication,
 intake job row or intake Series (G3, G9–G12), and the hook's row locks are exactly those intake
@@ -2367,9 +2375,17 @@ admit_compute)` (section 3.11, R8 ruling R-5, RR1-F10):
    `load_content` (verified).
 2. Lease: a module-level `dict[str, threading.Lock]` (guarded) — non-blocking acquire, lost ⇒
    `CpmComputeBusyError`; then a lease connection opened **outside the application pool**
-   (R9-F12): a process-cached lease engine `create_engine(engine.url, poolclass=NullPool,
-   isolation_level="AUTOCOMMIT")` built from the same URL and connect arguments, so a held
-   lease never consumes one of the request pool's connections while steps 3 and 5 take theirs;
+   (R9-F12). `schedule_cpm_lease.py` owns a small factory `lease_engine(url: URL) -> Engine`
+   that takes the parsed `URL` object (never `str(engine.url)`, which masks the password) and
+   builds `create_engine(url, poolclass=NullPool, isolation_level="AUTOCOMMIT",
+   connect_args={})` with its connect arguments stated explicitly — no `statement_timeout`,
+   because the lease connection runs only `pg_try_advisory_lock`/`pg_advisory_unlock` — cached
+   per `URL` in the process and `dispose()`d at shutdown (RR1-F03). `create_database_engine`
+   is not reused: it has no pool-class parameter and its connect arguments cannot be read back
+   from an `Engine`. A held lease thus never consumes one of the request pool's connections
+   while steps 3 and 5 take theirs. Lease connections sit **outside** the gateway's pool of 5
+   (`src/my_pa/bootstrap/gateway.py`): at most 1 extra connection per concurrently computing
+   Principal per process, to be counted against `max_connections` (runbook, S6-2-U12);
    `SELECT pg_try_advisory_lock(C)`; false ⇒ release the process lock,
    `connection.invalidate()`, `CpmComputeBusyError`. `run_cpm` is injected through a
    keyword (`compute=run_cpm`) so tests block it on a barrier.
@@ -2435,7 +2451,13 @@ same transaction, it calls the plane helper (`schedule_scenarios.py`,
 reads the chain after the lock, decides `ApproveRequest(type = request.baseline_kind,
 publication_id = new, effective_from, at_import=True)`, inserts the Baseline row and the
 `approve` event (`approved_at_import = true`, label `BL-<n>`, provenance `local_operator` /
-`operator_channel` / `user_confirmed`). Replay by source version for role `baseline` also
+`operator_channel` / `user_confirmed`). A refusal there is impossible by construction (an
+at-import approval of a publication just admitted always yields a plan: it cannot be approved
+already, eligibility is skipped at import, and it names no superseded Baseline unless S6-3's
+command does — a `supersedes_baseline_id` refusal is the one decide-time refusal and S6-3 must
+validate it before the admission); any other refusal or backstop error there is an integrity
+error (`ScheduleIntegrityError("import_approval")`), never mapped to an admission refusal
+(RR1-F04). Replay by source version for role `baseline` also
 compares the stored `approve` event's `type`, `approval_reference`, `effective_from` and
 `reason` (any difference ⇒ `SOURCE_VERSION_CONFLICT`).
 
@@ -2509,15 +2531,22 @@ H8 (`finalize_publication`) and `_Job.fail` (`fail_publication`) run in a
     data_date_coherent, name_agreement_permille, title_equal}` in matcher order); release the
     outer savepoint.
 
-**Failure semantics (R9-F01; R8-F12 stands unamended).** Any `sqlalchemy.exc.IntegrityError`,
-`ScenarioIntegrityError` or `ScheduleIntegrityError` raised by steps 3–10 (a decision CHECK or
-G11 refusal, a malformed candidate, a digest failure while reading candidate rows, an
-unresolved admission race) ⇒ roll back to the **outer** savepoint and return
-`SeriesMatchUndecided(code)` (the error class name or constraint name); the finalization then
+**Failure semantics (R9-F01, RR1-F01; R8-F12 stands unamended).** The classification is
+by **transience**, not by a list of defects. Only these propagate out of steps 3–10, as a
+transient attempt failure (the whole finalization rolls back and the attempt bound applies):
+`sqlalchemy.exc.OperationalError` and `sqlalchemy.exc.InterfaceError` (with psycopg these carry
+`40001`, `40P01`, `55P03`, `57014`, the `08` connection class and the `53` resource class);
+`ScheduleLeaseLostError` (should any hook path ever hold the lease); and any `BaseException`
+that is not an `Exception` (`KeyboardInterrupt`, `SystemExit`, cancellation). **Every other
+`Exception`** raised in steps 3–10 — among them `sqlalchemy.exc.IntegrityError`, `DataError`
+(class `22`), `ProgrammingError` (class `42`) and `InternalError` (a plpgsql `RAISE` with the
+default `P0001`), `ScenarioIntegrityError`, `ScheduleIntegrityError`, and Python `ValueError`
+(the section 14.7.2 request invariants, the admission's digest check, S6-1 record
+constructors fed stored data), `TypeError` and `KeyError` (building the candidates JSON) —
+rolls back to the **outer** savepoint and returns `SeriesMatchUndecided(code)` (the exception
+class name, or the constraint name when the driver reports one); the finalization then
 commits with the terminal status and **no decision**, so an evidence defect never fails a
-parsed publication. Only connection-level or operational errors (`OperationalError`,
-`InterfaceError`, a serialization or deadlock SQLSTATE of class `40`) propagate as a transient
-attempt failure. Recording *why* durably is not feasible in S6-2: the decision row is what
+parsed publication. Recording *why* durably is not feasible in S6-2: the decision row is what
 failed, the closed outcome set (R8-F14) has no "undecided" member, and the worker may not log
 (`test_new_worker_modules_neither_log_nor_print`); the returned code is discarded by the S6-2
 worker and S6-3 reads present an intake publication with no decision as **undecided**
@@ -2548,10 +2577,20 @@ New `src/my_pa/infrastructure/database/schedule_scenarios_predeploy.py` (the
 `cpm_workbench_predeploy.py` shape: `STATEMENTS` all `SELECT`, one transaction starting `SET
 TRANSACTION READ ONLY`, always rolled back; no connection string, application row or
 exception text in a result). Every statement reads catalogs or catalog functions **except
-Q2's** `SELECT EXISTS (SELECT 1 FROM knowledge.schedule_publications WHERE publication_role IN
-('baseline', 'reference'))`, a deliberate operator-wide, cross-Principal boolean (R9-F09): the
-module is registered in `tests/architecture/test_principal_partition_is_reached_through_the_guard.py`
-with that reason (the operator pre-deploy aggregate; it returns 1 boolean and never a row).
+Q2's** retired-role probe, a deliberate operator-wide, cross-Principal boolean (R9-F09). It is
+**not** a raw string: `test_raw_sql_carries_the_partition_on_every_table_reference` scans every
+string constant of every module under `src/my_pa` and has no exemption registry (RR1-F02).
+Q2 is therefore built with the expression language over the declaration,
+`RETIRED_ROLE_PROBE = select(exists().where(schedule_publications.c.publication_role.in_(("baseline",
+"reference"))))`, kept beside (not inside) the string `STATEMENTS` map, and the module —
+which then imports a partitioned declaration — is registered in `QUARANTINED` of
+`tests/architecture/test_principal_partition_is_reached_through_the_guard.py` with the reason
+"read-only operator pre-deploy aggregate: one cross-Principal `EXISTS` boolean over
+`schedule_publications` that returns no row and no identifier; it builds no other SQL over a
+partitioned table". This is the mechanism the guard has (option (a) of RR1-F02, verified
+against `test_every_module_naming_a_partitioned_table_is_guarded_or_registered`, which accounts
+modules by their imports from `tables.py`). The select-only security test compiles the probe
+with the PostgreSQL dialect and asserts it is a single `SELECT`.
 The script runs, as the S5 precedent does, **as the runtime role the gateway and worker
 connect as** (stated in the runbook): Q4 and Q8 evaluate that role as `current_user`, and Q4
 also reports the owner of `knowledge.record_links` (the migrating role) for comparison, thin runner
@@ -2630,7 +2669,7 @@ revision.
 | engine runs only verified stored content (9.1.1 FR8-F07) | persistence `test_cpm_runs_only_on_verified_stored_content` |
 | digest recompute on read (8.2) | persistence `test_tampered_content_reads_as_an_integrity_error` (parametrized: content, change set, result, output) |
 | bounded decompression (8.1) | unit `test_decompression_is_bounded` |
-| idempotency (6.3) | persistence `test_same_key_same_request_replays`, `test_same_key_other_request_conflicts`, `test_a_refused_write_leaves_no_reservation` (parametrized: a refusal before the insert, `ScenarioHeadMovedError`, a `BaselineWriteRefusedError`, `PlaneSubjectAbsentError`; R9-F08) |
+| idempotency (6.3) | persistence `test_same_key_same_request_replays`, `test_same_key_other_request_conflicts`, `test_a_refused_write_leaves_no_reservation` (parametrized: a refusal before the insert, `ScenarioHeadMovedError`, a `BaselineWriteRefusedError`, `PlaneSubjectAbsentError`, `baseline_not_effective` for Scenario-from-Baseline; R9-F08, RR1-F04) |
 | cross-Principal `not_found` (8.2) | persistence `test_other_principal_reads_none_and_writes_nothing` |
 | append-only and TRUNCATE (8.2) | guards `test_plane_table_is_append_only[<table>]` (10), `test_plane_table_refuses_truncate_when_it_holds_rows[<table>]` (11) |
 | ledger transition (8.2) | guards `test_write_request_completes_once`, `test_write_request_is_never_left_reserved` |
@@ -2642,12 +2681,12 @@ revision.
 | refusal recorded, finalization commits (11.2 step 4, P40) | matching `test_match_admission_refusal_is_recorded_not_raised` |
 | plane off (11.2 step 6) | matching `test_plane_off_records_the_decision_without_admitting` |
 | candidate bound under the lock (11.2 step 3) | matching `test_more_than_fifty_series_is_candidate_bound` (parametrized: 51 eligible Series; 51 Series of which 3 have no eligible publication — still `candidate_bound` with an empty `candidates` array; R9-F07) |
-| finalization never fails on a hook defect (11.2 step 4, R8-F12) | matching `test_hook_defect_commits_finalization_without_a_decision` (a forced decision-insert `IntegrityError` and a forced `ScenarioIntegrityError` through a test seam: the intake publication is terminal `complete`, no decision row, the job succeeds) |
+| finalization never fails on a hook defect (11.2 step 4, R8-F12) | matching `test_hook_defect_commits_finalization_without_a_decision` (parametrized through a test seam: a decision-insert `IntegrityError`, a `ScenarioIntegrityError`, a `ValueError`, a `DataError`; each case: the intake publication is terminal `complete`, no decision row, the job succeeds), and `test_transient_hook_error_still_propagates` (a seam raises `OperationalError`: the finalization rolls back, the publication stays `processing`, the attempt is released for retry; RR1-F01) |
 | exhausted intake job (S6-2-U09) | matching `test_exhausted_intake_job_has_no_decision_and_breaks_nothing` (the job dead-letters; the publication reads effective `failed`; no decision; a later explicit import admits) |
 | `created` never joins an unscored Series (R9-F02) | matching `test_created_never_joins_a_series_created_after_the_free_read` (a barrier seam between the `FREE` read and the admission; an explicit import of that name commits in between; expected `ambiguous`/`name_conflict`, no publication added to the operator's Series) |
 | trigger lookups are Principal-qualified (R9-F06) | guards `test_a_foreign_principal_subject_is_a_foreign_key_violation` (parametrized: another Principal's publication as a Scenario origin, as a Baseline publication and as a baseline-event subject; SQLSTATE `23503`, never `23001`) |
 | import-time approval only in its own admission (G14 (d)) | guards `test_import_approval_needs_a_publication_of_this_transaction` |
-| each section 12.1 index refuses on its own | guards `test_baseline_backstop_index_refuses_alone[<index>]` (7: the 5 partial uniques and the 2 `seq` uniques; rows inserted under `session_replication_role = replica`, so G12–G15 and the FK triggers do not fire, with distinct `seq` values except in the `seq` cases; `unique_violation` naming exactly that index) |
+| each section 12.1 index refuses on its own | guards `test_baseline_backstop_index_refuses_alone[<index>]` (7: the 5 partial uniques and the 2 `seq` uniques; rows inserted after `SET LOCAL session_replication_role = replica` (transaction-scoped, so no pooled connection keeps it; RR1-F05), so G12–G15 and the FK triggers do not fire, with distinct `seq` values except in the `seq` cases; `unique_violation` naming exactly that index) |
 | intake Series holds 1 publication (G9, G10) | guards `test_intake_series_admits_no_other_publication` |
 | baseline lifecycle (12.1) | baselines `test_baseline_lifecycle_transitions`, `test_direct_approval_adopts_a_pending_proposal` (B11), `test_import_time_approval_is_written_in_the_admission` |
 | governing transitions (12.1) | baselines `test_governing_events_are_append_only`, `test_revoking_the_governing_baseline_is_refused`, `test_governing_as_of_reads_recorded_order_not_effective_from` (B5 values; P43 obligation) |
@@ -2717,6 +2756,9 @@ revision.
 | P2-52 | one trigger (G3, G12 or G14) looks its subject up by bare identifier and refuses when absent (3 runs) | `test_a_foreign_principal_subject_is_a_foreign_key_violation[<case>]` |
 | P2-53 | `append_version` returns instead of raising on a moved head; `write_baseline` returns its refusal (2 runs) | `test_a_refused_write_leaves_no_reservation[<case>]` (the commit fails with G8's `check_violation`) |
 | P2-54 | G14 (d) drops the `admitted_at = now()` condition | `test_import_approval_needs_a_publication_of_this_transaction` |
+| P2-55 | remove the predeploy module's `QUARANTINED` entry; then (separately) write Q2 as a raw string (2 runs) | `test_every_module_naming_a_partitioned_table_is_guarded_or_registered`; `test_raw_sql_carries_the_partition_on_every_table_reference[<module>]` (RR1-F02) |
+| P2-56 | the hook classifies by the old defect list (a `ValueError` propagates) | `test_hook_defect_commits_finalization_without_a_decision[value_error]` (RR1-F01) |
+| P2-57 | Scenario-from-Baseline returns instead of raising when the Baseline is no longer effective | `test_a_refused_write_leaves_no_reservation[baseline_not_effective]` (RR1-F04) |
 
 A prove-red that stays green is reported as redundancy, a masked test or an unreachable
 hazard, never "covered" (P2-06, P2-20's race tests, P2-24d and P2-33 name their expected
@@ -2772,10 +2814,11 @@ stopped and removed at the end.
 | S6-2-U04 | a lost compute lease can let 2 computes of one Principal overlap; integrity holds by the natural key | accepted |
 | S6-2-U05 | `schedule_scenario_write_refusals` has no retention (≤ 120 rows per bucket per hour) | later retention design |
 | S6-2-U06 | a 48-bit intake-name prefix collision between 2 different auto requests would put the second into the first's intake Series' name; G10 refuses it (an attempt failure, not a shared identity) | accepted (probability about 2^-48 per pair) |
-| S6-2-U07 | the matcher reads up to 50 × 25,000 rows inside the finalization transaction under J | bounded (section 8.1); measure in S6-3 |
+| S6-2-U07 | the matcher reads up to 50 × 25,000 rows inside the finalization transaction under J. The worker engine's 30 s `statement_timeout` (`src/my_pa/infrastructure/database/engine.py`) means a matcher read, or a J wait, that deterministically exceeds 30 s raises `57014`, which is classed transient (RR1-F01): it is retried to the attempt bound and the intake publication then reads effectively `failed`. Accepted only because the bounded read is expected to be far below 30 s | bounded (section 8.1); S6-3 measures the maximal read on the server host |
 | S6-2-U08 | owner/superuser can disable the plane triggers (S5b-1 U-06) | operator-gated role separation |
 | S6-2-U09 | an intake publication whose job exhausts its attempts or is abandoned never reaches H8 or `_Job.fail`, so it has no decision (its effective status is `failed`, nothing is written); the operator resolves it by an explicit import (R9-F01) | operator; S6-3 reads show it as undecided |
 | S6-2-U10 | a deterministic hook defect leaves an intake publication terminal with no decision; the reason is not recorded durably (no outcome member, no worker logging) | operator (explicit import); S6-3 reads show it as undecided |
+| S6-2-U12 | CPM lease connections are outside the gateway's pool bound: up to 1 extra server connection per concurrently computing Principal per process (RR1-F03) | operator: count against `max_connections` (runbook, S6-3 enablement) |
 | S6-2-U11 | a 32-bit `hashtext('cpm:' …)` collision between 2 Principals makes one answer a spurious `conflict(CPM_RUN)`; a P/J collision between 2 writers can surface a detected `40P01` (transient `internal_error`) | accepted (R9-F11, R9-F12) |
 
 #### 14.12.3 Open S6-3 item recorded by R9 (ruling 4)
@@ -2814,3 +2857,13 @@ are resolved in place; the Orchestrator chose option (a) for R9-F01.
 | R9-F12 | the lease connection comes from a `NullPool` lease engine; the spurious `conflict(CPM_RUN)` on a key collision is accepted (14.8.4; S6-2-D18, S6-2-U11) |
 | R9-F13 | G14 (d) requires `admitted_at = now()` (P2-54); G14 (b)/G15 (b) `check_violation` maps to `internal_error`; "about 120"; `writer_bucket -> str \| None`; the append reads the parent by `expected_head_version_no` and refuses before computing; fork bytes count toward the quotas; `test_compute_lease_never_blocks_the_write_transaction` in the crosswalk (14.3.11, 14.4, 14.7.3, 14.8.2, 14.8.3, 14.11.2) |
 | Ruling 4 | recorded as open S6-3 item S6-3-O01 (14.12.3) |
+
+**Re-review RR1 (PASS_WITH_REQUIRED_CHANGES at `b612db98`) → fixes (revision R9-2).**
+
+| Finding | Fix (section) |
+|---|---|
+| RR1-F01 | the hook classifies by transience: only `OperationalError`, `InterfaceError`, `ScheduleLeaseLostError` and non-`Exception` `BaseException` propagate; every other `Exception` rolls back to the outer savepoint and returns `SeriesMatchUndecided`; the hook-defect test gains `ValueError` and `DataError` cases plus `test_transient_hook_error_still_propagates`; the 30 s `statement_timeout` (`57014`) case is disclosed in S6-2-U07; P2-56 (14.8.7, 14.11, 14.12.2) |
+| RR1-F02 | option (a): Q2 is an expression-language `EXISTS` over the `schedule_publications` declaration, never a raw string, and the predeploy module is registered in `QUARANTINED` (verified: the raw-SQL scan has no exemption registry; module accounting is by imports); P2-55 (14.9) |
+| RR1-F03 | `lease_engine(url: URL)` factory with explicit connect arguments, cached per URL and disposed at shutdown; lease connections are outside the pool of 5 (S6-2-U12) (14.8.4) |
+| RR1-F04 | Scenario-from-Baseline raises `BaselineWriteRefusedError` (`conflict(BASELINE_ID)` / `conflict(STATUS)`) or `PlaneSubjectAbsentError`; an import-time approval refusal is an integrity error by construction; P2-57 and a new no-reservation case (14.8.2, 14.8.5) |
+| RR1-F05 | `SET LOCAL session_replication_role = replica`; a C row in the lock inventory; the "absent ⇒ defer" rule limited to subject lookups (14.4, 14.6.3, 14.8.4, 14.11.2) |

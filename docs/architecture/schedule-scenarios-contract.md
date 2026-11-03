@@ -2380,7 +2380,11 @@ admit_compute)` (section 3.11, R8 ruling R-5, RR1-F10):
    builds `create_engine(url, poolclass=NullPool, isolation_level="AUTOCOMMIT",
    connect_args={})` with its connect arguments stated explicitly — no `statement_timeout`,
    because the lease connection runs only `pg_try_advisory_lock`/`pg_advisory_unlock` — cached
-   per `URL` in the process and `dispose()`d at shutdown (RR1-F03). `create_database_engine`
+   per `URL` in the process and `dispose()`d at shutdown (RR1-F03). The cache is safe under
+   concurrent first use: it is created and read under a module lock (the process-lock dict's
+   guard or a lock of its own), and test fixtures that create per-test scratch databases
+   dispose the cached lease engines at teardown, so neither engines nor connections leak
+   across tests (RR2-F02). `create_database_engine`
    is not reused: it has no pool-class parameter and its connect arguments cannot be read back
    from an `Engine`. A held lease thus never consumes one of the request pool's connections
    while steps 3 and 5 take theirs. Lease connections sit **outside** the gateway's pool of 5
@@ -2453,9 +2457,11 @@ publication_id = new, effective_from, at_import=True)`, inserts the Baseline row
 `approve` event (`approved_at_import = true`, label `BL-<n>`, provenance `local_operator` /
 `operator_channel` / `user_confirmed`). A refusal there is impossible by construction (an
 at-import approval of a publication just admitted always yields a plan: it cannot be approved
-already, eligibility is skipped at import, and it names no superseded Baseline unless S6-3's
-command does — a `supersedes_baseline_id` refusal is the one decide-time refusal and S6-3 must
-validate it before the admission); any other refusal or backstop error there is an integrity
+already, eligibility is skipped at import, and it never carries `supersedes_baseline_id`:
+section 12.3 defines the import-time fields as `baseline_type`, `approval_reference`,
+`effective_from` and `reason` only. Should S6-3 ever add a supersedes field there, the decision
+must be made under J inside the admission (validating it outside J would race a concurrent
+`revoke`), with a typed refusal that rolls the admission back; RR2-F02); any other refusal or backstop error there is an integrity
 error (`ScheduleIntegrityError("import_approval")`), never mapped to an admission refusal
 (RR1-F04). Replay by source version for role `baseline` also
 compares the stored `approve` event's `type`, `approval_reference`, `effective_from` and
@@ -2488,6 +2494,9 @@ H8 (`finalize_publication`) and `_Job.fail` (`fail_publication`) run in a
 
 1. Not an intake publication (no intake row) ⇒ return `None` with no lock and no further read.
 2. **Outer savepoint** (R9-F01): `outer = connection.begin_nested()`. Steps 3–10 run inside it.
+   Both savepoints are used as `begin_nested()` context managers, so rolling back the outer
+   one also closes an open inner one; if the rollback to the outer savepoint itself raises
+   (for example a broken connection), that error propagates as transient (RR2-F02).
 3. J on `(principal_id, project_id)`; a decision for this intake publication already exists ⇒
    return it (UNIQUE backstop; re-entry cannot normally occur because the terminal update
    commits with the decision).
@@ -2591,6 +2600,17 @@ partitioned table". This is the mechanism the guard has (option (a) of RR1-F02, 
 against `test_every_module_naming_a_partitioned_table_is_guarded_or_registered`, which accounts
 modules by their imports from `tables.py`). The select-only security test compiles the probe
 with the PostgreSQL dialect and asserts it is a single `SELECT`.
+
+**Quarantine pin (RR2-F01).** `QUARANTINED` exempts the whole module from import accounting,
+so an exact pin keeps the registration from widening: I9-B adds the FAST test
+`test_predeploy_module_touches_only_the_retired_role_probe` (in
+`tests/architecture/test_schedule_scenarios_persistence_scope.py`), an AST check that
+`src/my_pa/infrastructure/database/schedule_scenarios_predeploy.py` imports exactly
+`{"schedule_publications"}` from `my_pa.infrastructure.persistence.tables` and references that
+name only inside the `RETIRED_ROLE_PROBE` assignment. An ad-hoc declaration such as
+`sqlalchemy.table("schedule_publications", column(…), schema="knowledge")` or a `text()`
+statement must not be used instead: the first would evade both the import accounting and the
+raw-SQL scan, the second the raw-SQL scan's purpose.
 The script runs, as the S5 precedent does, **as the runtime role the gateway and worker
 connect as** (stated in the runbook): Q4 and Q8 evaluate that role as `current_user`, and Q4
 also reports the owner of `knowledge.record_links` (the migrating role) for comparison, thin runner
@@ -2759,6 +2779,7 @@ revision.
 | P2-55 | remove the predeploy module's `QUARANTINED` entry; then (separately) write Q2 as a raw string (2 runs) | `test_every_module_naming_a_partitioned_table_is_guarded_or_registered`; `test_raw_sql_carries_the_partition_on_every_table_reference[<module>]` (RR1-F02) |
 | P2-56 | the hook classifies by the old defect list (a `ValueError` propagates) | `test_hook_defect_commits_finalization_without_a_decision[value_error]` (RR1-F01) |
 | P2-57 | Scenario-from-Baseline returns instead of raising when the Baseline is no longer effective | `test_a_refused_write_leaves_no_reservation[baseline_not_effective]` (RR1-F04) |
+| P2-58 | import a second partitioned declaration into the predeploy module; then (separately) reference `schedule_publications` outside `RETIRED_ROLE_PROBE` (2 runs) | `test_predeploy_module_touches_only_the_retired_role_probe` (RR2-F01) |
 
 A prove-red that stays green is reported as redundancy, a masked test or an unreachable
 hazard, never "covered" (P2-06, P2-20's race tests, P2-24d and P2-33 name their expected
@@ -2867,3 +2888,10 @@ are resolved in place; the Orchestrator chose option (a) for R9-F01.
 | RR1-F03 | `lease_engine(url: URL)` factory with explicit connect arguments, cached per URL and disposed at shutdown; lease connections are outside the pool of 5 (S6-2-U12) (14.8.4) |
 | RR1-F04 | Scenario-from-Baseline raises `BaselineWriteRefusedError` (`conflict(BASELINE_ID)` / `conflict(STATUS)`) or `PlaneSubjectAbsentError`; an import-time approval refusal is an integrity error by construction; P2-57 and a new no-reservation case (14.8.2, 14.8.5) |
 | RR1-F05 | `SET LOCAL session_replication_role = replica`; a C row in the lock inventory; the "absent ⇒ defer" rule limited to subject lookups (14.4, 14.6.3, 14.8.4, 14.11.2) |
+
+**Re-review RR2 (PASS_WITH_REQUIRED_CHANGES at `638d9b90`) → fixes (revision R9-3).**
+
+| Finding | Fix (section) |
+|---|---|
+| RR2-F01 | FAST AST pin `test_predeploy_module_touches_only_the_retired_role_probe` (I9-B): the predeploy module imports exactly `{"schedule_publications"}` from `tables.py` and uses it only inside `RETIRED_ROLE_PROBE`; ad-hoc `sqlalchemy.table()` or `text()` alternatives are forbidden; P2-58 (14.9) |
+| RR2-F02 | the import-time approval never carries `supersedes_baseline_id` (a future field would be decided under J with a typed refusal); the lease-engine cache is lock-guarded and disposed by test fixtures; both hook savepoints are `begin_nested()` context managers and a failed outer rollback propagates as transient (14.8.4, 14.8.5, 14.8.7) |

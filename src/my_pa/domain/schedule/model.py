@@ -828,9 +828,8 @@ class ScheduleImportApproval:
     def __post_init__(self) -> None:
         if not _is_display_text(self.approval_reference, MAX_APPROVAL_REFERENCE_CHARACTERS):
             raise ValueError("an approval reference is 1 to 500 normalized characters")
-        if not (
-            isinstance(self.effective_from, date) and not isinstance(self.effective_from, datetime)
-        ):
+        effective: object = self.effective_from
+        if not isinstance(effective, date) or isinstance(effective, datetime):
             raise ValueError("an approval is effective from a date")
         if not _is_display_text(self.reason, MAX_APPROVAL_REASON_CHARACTERS):
             raise ValueError("an approval reason is 1 to 2000 normalized characters")

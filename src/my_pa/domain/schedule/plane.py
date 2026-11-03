@@ -151,8 +151,9 @@ class PlaneProvenance:
         if not isinstance(self.user_directed_claim, bool):
             raise ValueError("a user-directed claim is a boolean")
         client = self.asserting_client_id
-        if client is not None and not (
-            isinstance(client, str) and 1 <= len(client) <= _MAX_ASSERTING_CLIENT_ID_CHARACTERS
+        given: object = client
+        if given is not None and not (
+            isinstance(given, str) and 1 <= len(given) <= _MAX_ASSERTING_CLIENT_ID_CHARACTERS
         ):
             raise ValueError("an asserting client id is 1 to 256 characters")
         if self.authority_class == "local_operator":

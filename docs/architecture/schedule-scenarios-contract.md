@@ -2177,89 +2177,166 @@ Ports in `src/my_pa/contracts/ports.py` after the Schedule ports. Records are fr
 dataclasses; errors carry a fixed code and no content.
 
 ```python
-class ScenarioIntegrityError(Exception):   # a stored digest, size or decode check failed
-    code: str                              # "content_digest", "content_decode", "result_digest", ...
+class ScenarioIntegrityError(Exception):  # a stored digest, size or decode check failed
+    code: str  # "content_digest", "content_decode", "result_digest", ...
 
-class CpmComputeBusyError(Exception): ...  # the Principal's compute lease is held -> conflict(CPM_RUN)
+
+class CpmComputeBusyError(
+    Exception
+): ...  # the Principal's compute lease is held -> conflict(CPM_RUN)
+
 
 class ScheduleBaselineRaceError(Exception):  # a section 12.1 backstop refused a lost race
-    code: str                                # the constraint or trigger name
+    code: str  # the constraint or trigger name
+
 
 # R9-F08: every non-success after `reserve_request` is raised, so the UoW rolls back the
 # reservation and G8 never turns a refusal into `internal_error`.
-class ScenarioHeadMovedError(Exception):     # CAS lost -> conflict(EXPECTED_VERSION)
+class ScenarioHeadMovedError(Exception):  # CAS lost -> conflict(EXPECTED_VERSION)
     head_version_no: int
+
 
 class BaselineWriteRefusedError(Exception):  # decide_baseline_write refused
     refusal: BaselineRefusal
 
-class PlaneSubjectAbsentError(Exception): ...  # a named subject is absent or another Principal's -> not_found
+
+class PlaneSubjectAbsentError(
+    Exception
+): ...  # a named subject is absent or another Principal's -> not_found
+
 
 class PlaneReservationOutcome(StrEnum):
-    RESERVED = "reserved"; REPLAYED = "replayed"; CONFLICT = "conflict"
+    RESERVED = "reserved"
+    REPLAYED = "replayed"
+    CONFLICT = "conflict"
+
 
 @dataclass(frozen=True, slots=True)
 class PlaneReservation:
     outcome: PlaneReservationOutcome
-    result_kind: PlaneResultKind | None = None    # set on REPLAYED
+    result_kind: PlaneResultKind | None = None  # set on REPLAYED
     result_id: str | None = None
     result_created: bool | None = None
 
-@dataclass(frozen=True, slots=True)
-class PlaneWriteCounts:         # completed client-channel ledger rows (replays never add a row)
-    bucket_hour: int; bucket_day: int; principal_day: int
 
 @dataclass(frozen=True, slots=True)
-class PlaneByteCounts:          # canonical bytes: content + results + outputs (section 2.10)
-    principal_total: int; principal_day: int; bucket_day: int
+class PlaneWriteCounts:  # completed client-channel ledger rows (replays never add a row)
+    bucket_hour: int
+    bucket_day: int
+    principal_day: int
+
+
+@dataclass(frozen=True, slots=True)
+class PlaneByteCounts:  # canonical bytes: content + results + outputs (section 2.10)
+    principal_total: int
+    principal_day: int
+    bucket_day: int
+
 
 class ScenarioRepository(ABC):
     # prologue of every plane write transaction
     def lock_principal(self, principal_id: str) -> None: ...
-    def reserve_request(self, principal_id: str, capability: str, idempotency_key: str,
-                        request_digest: str, writer: PlaneProvenance) -> PlaneReservation: ...
-    def complete_request(self, principal_id: str, capability: str, idempotency_key: str,
-                         result_id: str, *, created: bool, stored_bytes: int) -> None: ...
+    def reserve_request(
+        self,
+        principal_id: str,
+        capability: str,
+        idempotency_key: str,
+        request_digest: str,
+        writer: PlaneProvenance,
+    ) -> PlaneReservation: ...
+    def complete_request(
+        self,
+        principal_id: str,
+        capability: str,
+        idempotency_key: str,
+        result_id: str,
+        *,
+        created: bool,
+        stored_bytes: int,
+    ) -> None: ...
     # bound reads (S6-3 applies the limits)
-    def client_write_counts(self, principal_id: str, writer: PlaneProvenance, at: datetime) -> PlaneWriteCounts: ...
-    def plane_byte_counts(self, principal_id: str, writer: PlaneProvenance, at: datetime) -> PlaneByteCounts: ...
+    def client_write_counts(
+        self, principal_id: str, writer: PlaneProvenance, at: datetime
+    ) -> PlaneWriteCounts: ...
+    def plane_byte_counts(
+        self, principal_id: str, writer: PlaneProvenance, at: datetime
+    ) -> PlaneByteCounts: ...
     def scenario_and_version_counts(self, principal_id: str) -> tuple[int, int]: ...
     def output_count(self, principal_id: str, version_id: str) -> int: ...
     def cpm_units_since(self, principal_id: str, since: datetime) -> int: ...
     def refusal_count(self, principal_id: str, writer: PlaneProvenance, since: datetime) -> int: ...
-    def record_refusal(self, principal_id: str, writer: PlaneProvenance, capability: str,
-                       error_code: str) -> None: ...
+    def record_refusal(
+        self, principal_id: str, writer: PlaneProvenance, capability: str, error_code: str
+    ) -> None: ...
     # scenarios and versions
-    def snapshot_source(self, principal_id: str, publication_id: str) -> ScenarioSnapshotSource | None: ...
-    def insert_scenario(self, principal_id: str, scenario: NewScenario,
-                        first_version: NewScenarioVersion, writer: PlaneProvenance) -> StoredScenarioVersion: ...
-    def fork_scenario(self, principal_id: str, scenario: NewScenario, source_version_id: str,
-                      label: VersionLabel, note: str | None, writer: PlaneProvenance) -> StoredScenarioVersion: ...  # raises PlaneSubjectAbsentError
+    def snapshot_source(
+        self, principal_id: str, publication_id: str
+    ) -> ScenarioSnapshotSource | None: ...
+    def insert_scenario(
+        self,
+        principal_id: str,
+        scenario: NewScenario,
+        first_version: NewScenarioVersion,
+        writer: PlaneProvenance,
+    ) -> StoredScenarioVersion: ...
+    def fork_scenario(
+        self,
+        principal_id: str,
+        scenario: NewScenario,
+        source_version_id: str,
+        label: VersionLabel,
+        note: str | None,
+        writer: PlaneProvenance,
+    ) -> StoredScenarioVersion: ...  # raises PlaneSubjectAbsentError
     def head_version(self, principal_id: str, scenario_id: str) -> StoredScenarioVersion | None: ...
-    def append_version(self, principal_id: str, scenario_id: str, expected_head_version_no: int,
-                       version: NewScenarioVersion, writer: PlaneProvenance) -> StoredScenarioVersion: ...  # raises ScenarioHeadMovedError
+    def append_version(
+        self,
+        principal_id: str,
+        scenario_id: str,
+        expected_head_version_no: int,
+        version: NewScenarioVersion,
+        writer: PlaneProvenance,
+    ) -> StoredScenarioVersion: ...  # raises ScenarioHeadMovedError
     def get_scenario(self, principal_id: str, scenario_id: str) -> StoredScenario | None: ...
     def get_version(self, principal_id: str, version_id: str) -> StoredScenarioVersion | None: ...
-    def load_content(self, principal_id: str, version_id: str) -> VerifiedScenarioContent | None: ...
+    def load_content(
+        self, principal_id: str, version_id: str
+    ) -> VerifiedScenarioContent | None: ...
     def load_change_set(self, principal_id: str, version_id: str) -> VerifiedDocument | None: ...
     # CPM runs
-    def get_cpm_run(self, principal_id: str, version_id: str, engine_version: str) -> StoredCpmRun | None: ...
-    def insert_cpm_run(self, principal_id: str, run: NewCpmRun, writer: PlaneProvenance) -> tuple[StoredCpmRun, bool]: ...
+    def get_cpm_run(
+        self, principal_id: str, version_id: str, engine_version: str
+    ) -> StoredCpmRun | None: ...
+    def insert_cpm_run(
+        self, principal_id: str, run: NewCpmRun, writer: PlaneProvenance
+    ) -> tuple[StoredCpmRun, bool]: ...
     def load_cpm_result(self, principal_id: str, cpm_run_id: str) -> VerifiedDocument | None: ...
     # outputs
-    def insert_output(self, principal_id: str, output: NewScenarioOutput, writer: PlaneProvenance) -> StoredScenarioOutput: ...
+    def insert_output(
+        self, principal_id: str, output: NewScenarioOutput, writer: PlaneProvenance
+    ) -> StoredScenarioOutput: ...
     def get_output(self, principal_id: str, output_id: str) -> StoredScenarioOutput | None: ...
     def load_output(self, principal_id: str, output_id: str) -> VerifiedDocument | None: ...
     # baselines and governing (each takes the Project lock itself)
-    def write_baseline(self, principal_id: str, request: BaselineRequest, *, reason: str,
-                       approval: ScheduleImportApproval | None, writer: PlaneProvenance,
-                       project_id: str | None = None,   # required for SetGoverningRequest
-                       ) -> BaselineWritten: ...   # raises BaselineWriteRefusedError, PlaneSubjectAbsentError
+    def write_baseline(
+        self,
+        principal_id: str,
+        request: BaselineRequest,
+        *,
+        reason: str,
+        approval: ScheduleImportApproval | None,
+        writer: PlaneProvenance,
+        project_id: str | None = None,  # required for SetGoverningRequest
+    ) -> BaselineWritten: ...  # raises BaselineWriteRefusedError, PlaneSubjectAbsentError
     def baseline_chain(self, principal_id: str, project_id: str) -> BaselineChain: ...
-    def governing_as_of(self, principal_id: str, project_id: str, as_of: datetime | None) -> str | None: ...
+    def governing_as_of(
+        self, principal_id: str, project_id: str, as_of: datetime | None
+    ) -> str | None: ...
     # worker hook (inside the S5 finalization transaction)
-    def finalize_intake(self, principal_id: str, publication_id: str, *,
-                        plane_effective: bool) -> SeriesMatchRecord | SeriesMatchUndecided | None: ...
+    def finalize_intake(
+        self, principal_id: str, publication_id: str, *, plane_effective: bool
+    ) -> SeriesMatchRecord | SeriesMatchUndecided | None: ...
+
 
 class ScenarioUnitOfWork(ABC):
     def __enter__(self) -> ScenarioUnitOfWork: ...
@@ -2267,7 +2344,7 @@ class ScenarioUnitOfWork(ABC):
     @property
     def scenarios(self) -> ScenarioRepository: ...
     @property
-    def schedules(self) -> ScheduleRepository: ...   # the S5 repository on the same connection
+    def schedules(self) -> ScheduleRepository: ...  # the S5 repository on the same connection
 ```
 
 `ScenarioUnitOfWork` is not on `UnitOfWork`, has no `record_events` or `projects` member and

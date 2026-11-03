@@ -55,7 +55,7 @@ tests assert the correspondence.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Final
+from typing import Any, Final
 
 from sqlalchemy import (
     ARRAY,
@@ -19103,7 +19103,7 @@ def _plane_name(column: str) -> str:
     )
 
 
-def _provenance_columns() -> tuple[Column[object], ...]:
+def _provenance_columns() -> tuple[Column[Any], ...]:
     """Section 6.5: who wrote one plane row."""
     return (
         Column("authority_class", Text, nullable=False),

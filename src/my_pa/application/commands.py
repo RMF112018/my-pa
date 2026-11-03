@@ -14812,7 +14812,8 @@ class ImportSchedulePublication:
         kind = _schedule_choice(
             self.baseline_kind, tuple(ScheduleBaselineKind), SafeDetail.BASELINE_KIND
         )
-        if (role is SchedulePublicationRole.BASELINE) != (kind is not None):
+        if kind is not None:
+            # Only a baseline names its kind, and no baseline reaches here (D04).
             raise InvalidRequestError(SafeDetail.BASELINE_KIND)
         expected = _schedule_date(self.expected_data_date, SafeDetail.EXPECTED_DATA_DATE)
         _optional_schedule_id(

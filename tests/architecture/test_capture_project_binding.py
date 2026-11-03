@@ -56,7 +56,7 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 #: Moved again by the Schedule Scenarios S6-2 revision, which declares the 11 plane
 #: tables, restates the 2 publication CHECKs and builds the 6 `record_links`
 #: CHECKs from the lineage storage vocabulary; `captures` is untouched.
-TABLES_SHA256: Final = "57e828e6b7afe9b4d92eabda893beaf62fd3ce0b15cd6a5bae7b601bc11c3e35"
+TABLES_SHA256: Final = "ddb77223417236275a59ac33eba29321fd8989a5c44cc80771ccabde97a981e4"
 WP03_MIGRATION_SHA256: Final = "098edd98ccc1846b01c58f42e296e4751e7841b562a2827616cc4337e174c354"
 WP03_MIGRATION: Final = (
     ROOT / "migrations/versions/20260914_e6a4c2f91b73_project_controls_run01_integrity.py"

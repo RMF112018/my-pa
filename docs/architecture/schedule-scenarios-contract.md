@@ -4,10 +4,12 @@
 branch `feat/schedule-scenarios-engine`. It is the single document the S6-1 (pure domain and
 deterministic CPM engine), S6-2 (schema, migrations, persistence, unit of work, worker hook)
 and S6-3 (capabilities, handlers, façade, catalog, ChatLLM, remote policy, lineage endpoints,
-guidance) implementers code against. Nothing it describes is implemented, merged, migrated,
-granted or deployed. It authorizes **no** production migration, grant, `profile-apply`, OAuth
-change or deployment, and its switch `MY_PA_SCHEDULE_SCENARIOS_ENABLED` is **off by
-default** and stacks on `MY_PA_SCHEDULE_ENABLED` (also off by default). The governing
+guidance) implementers code against. Only S6-1 (the pure domain and engine) is implemented,
+on this branch and unmerged (section 9.1.1); S6-2 and S6-3 are not implemented, and nothing
+is merged, migrated, granted or deployed. It authorizes **no** production migration, grant,
+`profile-apply`, OAuth change or deployment, and its switch `MY_PA_SCHEDULE_SCENARIOS_ENABLED`
+(added by S6-3; it does not exist yet) is to be **off by default** and stacks on
+`MY_PA_SCHEDULE_ENABLED` (off by default). The governing
 decision record is
 [`ADR-017`](../decisions/ADR-017-schedule-scenarios-and-baselines.md), which partially
 supersedes [`ADR-016`](../decisions/ADR-016-cpm-workbench-schedule-evidence.md); the lineage
@@ -103,8 +105,10 @@ written `MM-DD HH:MM` in 2027 unless the month is 12 (then 2026).
 
 ### 0.2 Status (honest)
 
-Directive-selected design, not ratified for production. Nothing is implemented, merged,
-migrated, granted or deployed. Every switch is default off in code. The server verifies
+Directive-selected design, not ratified for production. S6-1 (the pure domain and the
+CPM engine, section 9.1) is implemented on `feat/schedule-scenarios-engine` and not merged;
+S6-2 and S6-3 are not implemented. Nothing is merged, migrated, granted or deployed, and the
+plane's switch does not exist yet (S6-3 adds it, default off). The server verifies
 shapes, bounds, ownership, references, idempotency, compare-and-swap and its own
 computation; it cannot verify that any client-authored logic, duration, distribution, Monte
 Carlo result or baseline proposal is true, nor who composed a client call, and it never says
@@ -267,7 +271,7 @@ Input: an owned, eligible, non-intake publication (else `conflict(STATUS)`), nam
 | `data_date` | publication `data_date` at `data_date_time` |
 | `settings` | given default calendar; `lag_calendar = predecessor`, `progress_policy = retained_logic`, `must_finish_by = null`, threshold 0 |
 | activities | exactly the accepted run's `activity`/`milestone` rows (≤ 25,000); never `ambiguous` or summary rows |
-| `key`, `name`, `wbs_path` | `schedule_activity_id`, `activity_name`, `hierarchy_path` |
+| `key`, `name`, `wbs_path` | `schedule_activity_id`, `activity_name`, `hierarchy_path`; each label (and the name) through `normalize_display_text`. A null or empty `hierarchy_path` gives `wbs_path = null`, and so does a path in which any label normalizes to nothing (S5 stores an unnamed parent as `""`): a path with a hole would misstate the hierarchy, and `wbs_path` is inert, so nulling it changes no result, whereas a refusal would make the whole publication unusable for an inert field (FR8-F02). A row a scenario activity still cannot hold (for example an unnamed row) refuses the snapshot `invalid_request(ROWS)`, never an unclassified error |
 | `kind` | `activity → task`, `milestone → milestone` |
 | `calendar` | null |
 | `original_minutes` / `remaining_minutes` | for a `published_value` cell `v` (`0 ≤ v`): `m = int((v * minutes_per_source_unit).quantize(Decimal(1), ROUND_HALF_EVEN))`; if `m > 5,256,000` the field is **null** and counted in `durations_out_of_range` (never clamped; the run then rejects with `missing_duration` until the client sets it, R8-F05); other states: null (counted `original_missing`/`remaining_missing`); a milestone gets 0 and 0; a non-integral product is counted in `durations_quantized` |
@@ -993,9 +997,10 @@ doc guards green; maximal-network timing reported.
 
 #### 9.1.1 S6-1 executed results (worker I8, 2026-11-03)
 
-Measured on the branch, not claimed: the tests named below ran green; the
-prove-red rows each went red for the stated reason (the handoff carries the
-table). Nothing here was run against a database, CI or production.
+Measured on the branch, not claimed: the tests named below ran green and each
+prove-red row recorded here went red for the stated reason. Nothing here was run
+against a database, CI or production. The 12 S6-1 test modules collect 441 tests
+(431 at the first handoff; FR8 corrective round 1 added 10).
 
 | Item | Result |
 |---|---|
@@ -1003,6 +1008,42 @@ table). Nothing here was run against a database, CI or production.
 | Frozen digests | a `result_sha256` per vector G01-G24 and the G02 `content_sha256`, pinned in `tests/unit/test_scenario_cpm_goldens.py` |
 | Maximal network (R8 ruling R-5) | 25,000 activities with 66-character keys, 100,000 relationships (24,999 FS plus 75,001 FF/SF), 32 calendars with 62 holidays each, 2 constraints on every not-started activity: computed in 1,077,389 operations (budget 4,000,000; section 3.11 bound 2,100,000) in about 1.1 s on the local developer host (Apple M4 Pro, CPython 3.12.13); canonical content 27,270,007 bytes, result document 30,501,253 bytes. The CI-host figure is not yet measured (S6-U06) |
 | Oracles and properties | calendar functions against a minute-by-minute oracle (24 seeded calendars); ES/EF/LS/LF/TF and the critical set against path enumeration on 2,000 seeded DAGs; the section 3.13 properties on 60 seeded networks each |
+
+Prove-red rows whose named test cannot prove the rule alone (FR8-F04, FR8 ruling c):
+
+| Row | Proving mutation and test |
+|---|---|
+| P35 | as written ("open-end bound dropped") it fails `G22` only by a crash (`min()` of no bound), and the coherent variant (a skipped-only activity takes its own EF) is masked on `G22` because A ends the project there. The proof is that coherent variant (P35b) on `test_open_end_bound_applies_when_every_outgoing_bound_is_skipped` (`tests/unit/test_scenario_cpm_goldens.py`) |
+| P36 | as written it fails `G23` only by a crash (no anchor for the newly considered relationship). The proof is P36c (the same change with anchors always computed) on `G23` (`[['A', 'B']]` instead of `[['A'], ['B']]`); the anchors-alone control stays green |
+| P43 | the literal hazard (as-of resolved by `effective_from`) cannot be expressed in S6-1, because `governing_baseline` never receives `effective_from` (a structural guard). The substitute mutation (the as-of filter dropped) goes red on `B5`. **S6-2/S6-3 obligation:** the read that resolves `as_of` (`schedule_baselines.governing`) is tested with B5's `effective_from` values, so a read path that selects by `effective_from` goes red |
+
+Rules the vectors alone did not pin (FR8-F01); each test went red against FR8's named mutant:
+
+| FR8 mutant | Rule | Test |
+|---|---|---|
+| M02 | SS `out_of_sequence` only when the predecessor has not started (3.10) | `test_ss_out_of_sequence_needs_an_unstarted_predecessor` |
+| M06 | `dangling_finish` only for incomplete activities (3.10) | `test_dangling_finish_is_only_for_incomplete_activities` |
+| M08 | `must_finish_by` is a bound only when step 2 produced none (3.6, S6-D08) | `test_must_finish_by_bounds_only_activities_without_a_successor_bound` |
+| M19 | the cycle walk steps to the smallest-key predecessor (3.4) | `test_cycle_walk_steps_to_the_smallest_key_predecessor` |
+| M21 | emission stops before the 50,000-key total (3.8) | `test_critical_path_emission_stops_before_the_key_cap` |
+| M22 | `critical_path_count` saturates at 1,000,000 across start nodes (3.8) | `test_critical_path_count_saturates_across_start_nodes` |
+| M15 | a second candidate at exactly 500 fails `matched` (11.2.1) | `test_a_second_candidate_at_exactly_the_margin_is_ambiguous` |
+| M17 | `progress.set` with a finish after the working data date is refused at that op (2.9) | `test_progress_finish_after_the_data_date_is_refused_at_its_op` |
+
+Change outside the section 9.1 owned paths (FR8-F05, accepted by FR8 ruling a):
+`tests/architecture/test_user_owned_tables_are_partitioned.py` scans for string literals
+beginning with a migration-target schema name (`calendar.` among them). The 4 section 2.9 op
+names `calendar.put`, `calendar.remove`, `calendar.exception.put` and
+`calendar.exception.remove` are exempt there only as exact whole literals, and only in
+`src/my_pa/domain/schedule/scenario/changeset.py`. `test_the_non_schema_literal_exemption_is_exact`
+pins this. The target revision's 11 `calendar.*` tables are all named `calendar_*`, so the
+exempt literals cannot name one.
+
+Obligations carried to S6-2 (FR8-F07): `run_cpm` computes the `ScenarioContent` it is given.
+That record admits duplicate activity keys, which only `content_problem` refuses, so S6-2 runs
+the engine only on stored content that passed `content_problem` (decoded from bytes whose
+digest is rechecked). A change set that is not JSON-encodable is refused
+`(0, invalid_field)`; a JSON transport cannot produce one.
 
 Resolutions this contract left open, taken by I8 (each pinned by a test):
 
@@ -1103,6 +1144,7 @@ lockstep count pins, runbook and client guidance.
 | S6-U07 | "retained logic" is this contract's definition, not a P6 equivalence claim | guidance |
 | S6-U08 | full content stored per version | bounded by quotas |
 | S6-U09 | a refused change set does not disclose the op index | error-contract extension |
+| S6-U16 | a compiled calendar covers the whole 2000-2099 axis, not only the span reached (section 3.2): about 0.31 MB each after FR8-F06 (measured: 32 calendars retain 10,042,704 bytes; it was 57 MB before the tables were compacted), memoized by value in a process cache bounded at 40 (about 12.6 MB) | S6-3 sizing on the server host; a span-limited table in a later engine version if needed |
 | S6-U10..U15 | sections 11 and 12 | — |
 
 ### 10.3 Open operator (product) decisions with the default this contract proceeds on

@@ -20,8 +20,13 @@ The three implementation contracts control the detail and are not repeated here:
 Successor work: the Schedule Scenarios slices S6-1 to S6-3 are
 specified in [`schedule-scenarios-contract.md`](schedule-scenarios-contract.md) under
 [`ADR-017`](../decisions/ADR-017-schedule-scenarios-and-baselines.md). S6-1 (the pure domain
-and engine) is implemented on `feat/schedule-scenarios-engine` and not merged; S6-2 and S6-3
-are not implemented; nothing is deployed. Nothing in this document changes until they land.
+and engine) is implemented and merged (#348); S6-2 is designed (contract section 14) and not
+implemented; S6-3 is not implemented; nothing is deployed. This document describes the merged
+S5 behaviour and changes when they land. **Announced change (S6-2, not yet implemented):** the
+`reference` role and kind `working` are retired, every role-`baseline` import is refused
+`invalid_request(PUBLICATION_ROLE)` until S6-3 adds the approval fields, and
+`schedule_publications.list` refuses the filter `publication_role=reference` (contract section
+12.2, S6-2-D04).
 
 ## 1. What it is
 

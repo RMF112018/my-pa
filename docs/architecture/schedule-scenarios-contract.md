@@ -1390,7 +1390,11 @@ kind `working` are refused at import whatever the switches; from S6-3 on, a role
 import needs the section 12.3 fields and is therefore refused `invalid_request(BASELINE_TYPE)`
 while the plane is not effective, so with only `MY_PA_SCHEDULE_ENABLED` on the import admits
 role `update` only. ADR-017 "Consequences" states it; `test_baseline_import_refused_while_plane_off`
-(S6-3) and `test_reference_role_is_retired` (S6-2) pin it.
+(S6-3) and `test_reference_role_is_retired` (S6-2) pin it. **Amendment (section 14,
+S6-2-D04; R9-F05):** in the interval from S6-2 to S6-3 every role-`baseline` import is refused
+`invalid_request(PUBLICATION_ROLE)` whatever the switches (the approval fields do not exist
+yet), and `schedule_publications.list` refuses the filter `publication_role=reference` with
+`invalid_request(PUBLICATION_ROLE)` (an S5 read-behaviour change of the enum lockstep).
 
 ### 12.3 Who designates (R8-F20 c)
 
@@ -1478,6 +1482,13 @@ Baseline `conflict(GOVERNING)`; an ineligible or intake publication `conflict(ST
 | P55 direct approval creates a second Baseline | `test_baseline_vectors[B11]` |
 | P56 role `baseline` admitted with the plane off | `test_baseline_import_refused_while_plane_off` (S6-3) |
 
+**Amended by section 14.11 (R9-F03).** P50 and P54 go red by the class of the loser's answer
+(a decide-time `conflict(BASELINE_ID)` / `rate_limited(BASELINE_ID)`, never a lost race on the
+`seq` UNIQUE). P51–P53's race tests are layered behind the per-Project `seq` UNIQUE and are
+expected green when only their partial unique is dropped; each partial unique is proved alone
+by `test_baseline_backstop_index_refuses_alone[<index>]`. Every race test synchronizes by
+barriers and seams, never sleeps.
+
 | Requirement (operator) | Section | First test |
 |---|---|---|
 | authoritative baseline, BL-0 prime contract, later approved updates | 12.1, 12.5 | `test_baseline_vectors` (S6-1) |
@@ -1555,6 +1566,9 @@ explicitly (each marked **amendment**, with its reason, section 14.12) and this 
 controls for S6-2. Operator decisions (sections 10.3, 12) and S6-1 engine semantics are not
 reopened.
 
+**Revision R9-1.** Design review R9 (PASS_WITH_REQUIRED_CHANGES at `a444e21b`) findings
+R9-F01…F13 are resolved in place; section 14.13 maps each finding to its fix.
+
 ### 14.1 Repository reauthentication at `a66a6e32`
 
 | # | Claim (this contract or the brief) | Repository truth at `a66a6e32` | Decision |
@@ -1564,7 +1578,7 @@ reopened.
 | R2-03 | `tables.py` layout and guards | `src/my_pa/infrastructure/persistence/tables.py` (19,010 lines) derives closed sets from live enums (`_one_of`, `_literals`, `_is_identifier`, `_IDENTIFIER_SUFFIX` = `[A-Za-z0-9]{8,64}`); the S5 tables sit at its end; `tests/architecture/test_capture_project_binding.py` pins `TABLES_SHA256`; per-revision parity is `tests/schema/test_cpm_workbench_migration.py::test_runtime_metadata_matches_the_revision` (a scratch schema built from `tables.py` compared to the migrated catalog) | 11 new tables appended after the S5 tables; `TABLES_SHA256` re-pinned; a revision-A parity test of the same shape |
 | R2-04 | Principal-partition guard registry | `tests/architecture/test_principal_partition_is_reached_through_the_guard.py`: exact sets `REACHED_THROUGH_THE_GUARD` (holds `infrastructure/persistence/schedule.py`), `PER_MODULE_ONLY` (with a reason per module), `STATEMENT_LEVEL`, `HAND_WRITTEN_COMPARISONS`, `UNPARTITIONED_JOB_STATEMENTS`; raw `text()` must carry the partition | the 2 new SQL modules (14.8) join `REACHED_THROUGH_THE_GUARD` and `PER_MODULE_ONLY` (the `schedule.py` shape: module-local `_mine`/`_bound`, no `text()`); advisory locks are written with `func.pg_advisory_xact_lock`/`func.hashtext`, never `text()` |
 | R2-05 | S5b-1/S5b-2 schedule tables and triggers | 7 tables (`schedule_series`, `schedule_publications`, `schedule_activities`, `schedule_jobs`, `schedule_parser_runs`, `schedule_rows`, `schedule_import_issues`), functions F1–F9 under CPM-owned names (S5b-1 §4.10); `schedule_publications` U3 `a_schedule_publication_is_identified_within_its_series (publication_id, principal_id, project_id, series_id)`; `schedule_series` `a_schedule_series_is_identified_within_its_project (series_id, principal_id, project_id)`; CHECKs `a_schedule_publication_role_is_known` = `publication_role IN ('baseline', 'reference', 'update')` and `a_schedule_baseline_kind_is_known` = `baseline_kind IS NULL OR baseline_kind IN ('contract', 'working')`, frozen in `6c2306330ceb` inside `CREATE TABLE` | revision A references U3 and the Series composite; restates the 2 CHECKs by name; adds 1 trigger on `schedule_publications` (G10); edits no merged revision |
-| R2-06 | Restating precedent | `621ef6786c64` `_restate(table, name, expression)` = `op.drop_constraint` then `op.create_check_constraint`, with byte-copied BEFORE texts and a `DO` refusal before any downgrade restore; `SET LOCAL lock_timeout = '10s'` first in both directions | the same helper shape and order |
+| R2-06 | Restating precedent | `621ef6786c64` `_restate(table, name, expression)` = `op.drop_constraint` then `op.create_check_constraint`, with byte-copied BEFORE texts and a `DO` refusal before any downgrade restore; `SET LOCAL lock_timeout = '10s'` first in both directions | the same order; the restatements of one table are batched into one multi-clause `ALTER TABLE` (one validating pass, R9-F10) |
 | R2-07 | Downgrade refusal convention | `DO $$ … RAISE EXCEPTION '…' USING ERRCODE = 'restrict_violation'` before any drop; reverse-order drops, `RESTRICT` | the same; refusal set in 14.6 |
 | R2-08 | `record_links` CHECKs and the lineage vocabulary | `src/my_pa/domain/lineage/vocabulary.py`: `RecordFamily` 7, `RelationType` 8, `RELATION_MATRIX`, `RECORD_FAMILY_ID_KINDS`, `LINEAGE_FAMILY_READS`, `LINEAGE_READ_GENERATION: Final = 1` (consumed by `src/my_pa/domain/lineage/cursor.py` `scope_digest`). Only `record_links` carries `RecordFamily` CHECKs: `a_record_link_from_family_is_known`, `a_record_link_to_family_is_known`, `from_id_is_an_opaque_identifier`, `to_id_is_an_opaque_identifier` (all frozen by `264310e0416a` inside `CREATE TABLE`, never restated), `a_record_link_relation_type_is_known` and `a_record_link_pair_is_admitted` (last restated by `6f1476b8da52`, its `_WIDENED_CHECKS` AT texts). `tables.py` builds them with `_one_of(…, RecordFamily)`, `_family_identifier` and `_relation_matrix` over the live enums | widened by revision A (14.6) from a **storage vocabulary**, not from the public enums (amendment S6-2-D01) |
 | R2-09 | Widening the public lineage enums is harmless before S6-3 | it is not: `RecordFamily` feeds the `records.associations.assert` input schema enum (`src/my_pa/application/commands.py`, `"enum": [member.value for member in RecordFamily]`), `parse_record_ref` admits any member (`src/my_pa/application/lineage_endpoints.py`), `lineage_visibility.py` iterates every member against `LINEAGE_FAMILY_READS`, and `record_lineage.py` `_NATIVE` maps only the 7 families (a new member would reach a `KeyError`). `RelationType` likewise feeds `CONTESTABLE_RELATIONS` and the assert schema | the public enums, `RELATION_MATRIX`, `RECORD_FAMILY_ID_KINDS`, `LINEAGE_FAMILY_READS` and the generation move in S6-3 with the validators (S6-2-D01, S6-2-D02) |
@@ -1880,7 +1894,7 @@ worst-case expansion of 5 bytes per 16 KiB block plus its header at 64 MiB.)
 | `refused_at` | timestamptz | no | `now()` |
 
 - Index `schedule_scenario_write_refusals_by_bucket (principal_id, decision_channel, asserting_client_id, refused_at)`.
-- Triggers G1, G2. Written in its own short transaction after the refused one rolled back (14.8.5); never written for an attested operator or for a refusal answered by the refusal bound itself, so it holds at most 120 rows per writer bucket per hour (retention: S6-2-U05).
+- Triggers G1, G2. Written in its own short transaction after the refused one rolled back (14.8.5); never written for an attested operator or for a refusal answered by the refusal bound itself, so it holds about 120 rows per writer bucket per hour at most (a soft bound: the count is read outside P before a separate insert transaction, R9-F13) (retention: S6-2-U05).
 
 #### 14.3.12 Changes to existing tables
 
@@ -1899,6 +1913,14 @@ S5 function (D-13 precedent: plane-local downgrade). SQLSTATE: `restrict_violati
 (`23001`) for immutability, transition, chain and lifecycle legality; `check_violation`
 (`23514`) for deferred completeness and the `recorded_at` order (section 12.1 "CHECK-by-trigger").
 
+**Principal-qualified lookups (R9-F06).** Every row a plane trigger reads is selected by
+`principal_id = NEW.principal_id` **and** the composite columns its FK names (for example the
+origin publication by `(publication_id, principal_id, project_id, series_id)`), never by a
+bare identifier. A BEFORE trigger runs before the AFTER FK check, so a trigger that finds no
+row under those columns returns `NEW` without deciding, and the FK then refuses with
+`foreign_key_violation` (`23503`): another Principal's row can neither decide a refusal class
+nor serve as an existence oracle (the S5 precedent qualifies by `principal_id` the same way).
+
 | # | Function | Attached | Rule |
 |---|---|---|---|
 | G1 | `schedule_plane_rows_are_append_only()` | `BEFORE UPDATE OR DELETE FOR EACH ROW` on the 10 append-only plane tables (all but the ledger) | `'% is append-only', TG_TABLE_NAME` |
@@ -1914,7 +1936,7 @@ S5 function (D-13 precedent: plane-local downgrade). SQLSTATE: `restrict_violati
 | G11 | `a_series_match_decision_follows_its_intake()` | `BEFORE INSERT` on decisions | the intake publication's stored status is terminal; `outcome = 'not_eligible'` iff that status `NOT IN ('complete', 'partial')`; a set `target_series_id` is not an intake Series |
 | G12 | `a_schedule_baseline_names_an_admissible_publication()` | `BEFORE INSERT` on baselines | the publication's Series is not intake; no other Baseline row names the publication with an `approve` event (a revoked publication is not re-approvable, S6-D28; the partial unique is the race backstop) |
 | G13 | `a_schedule_baseline_has_its_first_event()` | constraint trigger `AFTER INSERT`, deferred, on baselines | at commit an event of the Baseline with action `propose` or `approve` exists, else `check_violation` |
-| G14 | `a_schedule_baseline_event_extends_its_chain()` | `BEFORE INSERT` on baseline events | (a) **chain:** `NEW.seq = 1 + coalesce(max(seq), 0)` over the Project's events and `NEW.previous_event_id` is the event at that maximum; (b) **order:** `NEW.recorded_at >= predecessor.recorded_at` else `check_violation`; (c) **lifecycle** over the Baseline's prior events: `propose` and a direct `approve` need none; an adopting `approve`, `reject` and `withdraw` need the latest to be `propose` with no decision; `revoke` needs an `approve` and no `revoke`, and refuses when the Project's governing head names this Baseline (S6-O22); (d) **eligibility:** `propose` and an `approve` with `approved_at_import = false` need the publication's stored `status IN ('complete', 'partial')`; `approved_at_import = true` needs `status = 'queued'` (the publication was admitted in this transaction); (e) **label:** an `approve`'s `label = 'BL-' || <count of the Project's approve events>`; (f) **ordinal:** a `propose`'s `proposal_ordinal` = the count of earlier `propose` events of that publication whose Baseline has a decision; (g) **supersedes:** a set `supersedes_baseline_id` has an `approve` and no `revoke` |
+| G14 | `a_schedule_baseline_event_extends_its_chain()` | `BEFORE INSERT` on baseline events | (a) **chain:** `NEW.seq = 1 + coalesce(max(seq), 0)` over the Project's events and `NEW.previous_event_id` is the event at that maximum; (b) **order:** `NEW.recorded_at >= predecessor.recorded_at` else `check_violation`; (c) **lifecycle** over the Baseline's prior events: `propose` and a direct `approve` need none; an adopting `approve`, `reject` and `withdraw` need the latest to be `propose` with no decision; `revoke` needs an `approve` and no `revoke`, and refuses when the Project's governing head names this Baseline (S6-O22); (d) **eligibility:** `propose` and an `approve` with `approved_at_import = false` need the publication's stored `status IN ('complete', 'partial')`; `approved_at_import = true` needs `status = 'queued'` **and** the publication's `admitted_at = now()` (transaction-start time, the default the admission used: it was admitted in this transaction; R9-F13); (e) **label:** an `approve`'s `label = 'BL-' || <count of the Project's approve events>`; (f) **ordinal:** a `propose`'s `proposal_ordinal` = the count of earlier `propose` events of that publication whose Baseline has a decision; (g) **supersedes:** a set `supersedes_baseline_id` has an `approve` and no `revoke` |
 | G15 | `a_schedule_governing_event_extends_its_chain()` | `BEFORE INSERT` on governing events | (a) chain and (b) order as G14 over the governing chain; (c) the Baseline has an `approve`, no `revoke`, and its publication's stored status is `complete`/`partial` |
 
 G14 (a)–(f) and G15 (a)–(c) read under READ COMMITTED inside the writer's transaction; they
@@ -1939,7 +1961,8 @@ Their read-side exposure is S6-3.
 `alembic revision` against the re-authenticated sole head; `down_revision = "621ef6786c64"`;
 1 revision (the section 9.2 "revision A"; no second S6-2 revision is justified: every object
 is additive and one transaction gives one rollback unit). Imports `from alembic import op` and
-`typing.Final` only. Docstring in the `621ef6786c64` style: the ordered steps, "No role grant
+`typing.Final` only. Docstring in the `621ef6786c64` style (its `_restate` helper is replaced by a per-table multi-clause
+`ALTER TABLE` builder, section 14.6.2 steps 7 and 9): the ordered steps, "No role grant
 changes", "No backfill", the upgrade and downgrade refusals, operator authority. Frozen
 literals (written out, sorted, never derived): the 7 match outcomes, 7 reasons, 14 + 1
 refusal tokens, 5 baseline actions, 2 baseline types, 2 origin kinds, 3 labels, 2 run
@@ -1977,10 +2000,13 @@ asserts each AT literal equals `str(CheckConstraint.sqltext)` of the `tables.py`
 5. `CREATE FUNCTION` G1–G15.
 6. `CREATE TRIGGER` / `CREATE CONSTRAINT TRIGGER` on the new tables (a `_triggers()` tuple).
 7. **Live phase A — `schedule_publications`** (S5; live if the S5 revisions were applied and
-   used): `DROP CONSTRAINT a_schedule_publication_role_is_known` (takes `ACCESS EXCLUSIVE`,
-   held to commit); the **authoritative** refusal `DO` block of step 2 (no row can be
-   inserted from here to commit); `ADD CONSTRAINT a_schedule_publication_role_is_known CHECK
-   (…)`; drop and re-add `a_schedule_baseline_kind_is_known`; `CREATE TRIGGER
+   used): `LOCK TABLE knowledge.schedule_publications IN ACCESS EXCLUSIVE MODE` (held to
+   commit); the **authoritative** refusal `DO` block of step 2 (no row can be inserted from
+   here to commit); **one** `ALTER TABLE knowledge.schedule_publications DROP CONSTRAINT
+   a_schedule_publication_role_is_known, ADD CONSTRAINT a_schedule_publication_role_is_known
+   CHECK (…), DROP CONSTRAINT a_schedule_baseline_kind_is_known, ADD CONSTRAINT
+   a_schedule_baseline_kind_is_known CHECK (…)` (PostgreSQL validates every new CHECK of one
+   `ALTER TABLE` in a single table pass); `CREATE TRIGGER
    a_schedule_intake_series_admits_no_other_publication`.
 8. **Live phase B — FKs into S5 tables**, by `ALTER TABLE <new table> ADD CONSTRAINT …
    FOREIGN KEY`: the 2 intake FKs, the 3 decision FKs into `schedule_series` /
@@ -1989,8 +2015,12 @@ asserts each AT literal equals `str(CheckConstraint.sqltext)` of the `tables.py`
    `a_schedule_scenario_starts_from_a_publication_of_its_series` (8 FKs; each takes `SHARE
    ROW EXCLUSIVE` on the referenced S5 table, held to commit; validation scans the empty new
    table).
-9. **Live phase C — `record_links`** (production-live): the 6 restatements by `_restate`,
-   last, so `record_links` is locked only from here to commit.
+9. **Live phase C — `record_links`** (production-live): the 6 restatements as **one**
+   `ALTER TABLE knowledge.record_links DROP CONSTRAINT <n1>, ADD CONSTRAINT <n1> CHECK (…), …`
+   statement (6 drop/add pairs, one validating pass; R9-F10), last, so `record_links` is
+   locked only from here to commit. This varies the `_restate` precedent (one `ALTER TABLE`
+   per CHECK) deliberately: the result in the catalog is identical and the `ACCESS
+   EXCLUSIVE` window holds 1 scan instead of 6.
 
 `tables.py` declares every FK on its table as usual (`use_alter=True` only for the circular
 fork FK); the order above is the revision's, and a name-parity test
@@ -2000,8 +2030,8 @@ fork FK); the order above is the revision's, and a name-parity test
 
 | Table | Live where | Statement | Lock (held to commit) | Scan | Who waits |
 |---|---|---|---|---|---|
-| `record_links` | production (`023f8f7eb499`) | 6 × `DROP CONSTRAINT` + `ADD CONSTRAINT … CHECK` | `ACCESS EXCLUSIVE` from the first `DROP` | 6 sequential validating scans (a widening cannot fail on an existing row) | every lineage read and write: `records.lineage*`, `records.associations.*`, `issues.*` close gate and timeline, the ChatLLM and remote lineage reads |
-| `schedule_publications` | only after the S5 revisions are applied | 2 restatements + `CREATE TRIGGER` | `ACCESS EXCLUSIVE` | 2 validating scans (they can fail only on a retired-role row, which step 7's refusal excludes first) | the schedule import, the schedule worker, the 6 schedule reads |
+| `record_links` | production (`023f8f7eb499`) | 1 `ALTER TABLE` with 6 `DROP CONSTRAINT` + `ADD CONSTRAINT … CHECK` pairs | `ACCESS EXCLUSIVE` | 1 validating pass checking the 6 CHECKs (a widening cannot fail on an existing row) | every lineage read and write: `records.lineage*`, `records.associations.*`, `issues.*` close gate and timeline, the ChatLLM and remote lineage reads |
+| `schedule_publications` | only after the S5 revisions are applied | `LOCK TABLE`, 1 `ALTER TABLE` with 2 restatements, `CREATE TRIGGER` | `ACCESS EXCLUSIVE` | 1 validating pass (it can fail only on a retired-role row, which step 7's refusal excludes first) | the schedule import, the schedule worker, the 6 schedule reads |
 | `schedule_publications`, `schedule_series` | as above | 8 FKs from new (empty) tables | `SHARE ROW EXCLUSIVE` | none on the referenced table; each new table scanned (empty) | writers of those 2 tables (import, worker) |
 
 `lock_timeout = '10s'` bounds each acquisition: a lock not obtained aborts the whole revision
@@ -2009,9 +2039,24 @@ with `55P03` and leaves the database at `621ef6786c64` (tested). No `statement_t
 (the migration engine is built with `statement_timeout_ms=None`). `NOT VALID` + `VALIDATE` is
 not adopted: inside one revision transaction the `ADD` already holds `ACCESS EXCLUSIVE` to
 commit, so it would save nothing and would leave `pg_get_constraintdef` differing from
-`tables.py`. Runtime: the validating scans are linear in `record_links` and
+`tables.py`. Runtime: the validating passes are linear in `record_links` and
 `schedule_publications` row counts, which are operator-scale and unknown here (S6-2-U01; Q3
 reports them).
+
+**Scratch-cluster measurement (R9-F10; I9-A performs it, nothing real is touched).** On the
+Homebrew `postgres@15` scratch cluster at `621ef6786c64`, I9-A seeds synthetic `record_links`
+rows (the `tests/database/test_lineage_benchmark.py` harness shape: synthetic Principals and
+identifiers, inserted under `session_replication_role = replica` so no endpoint row is needed,
+then `ANALYZE`) at 10^5 and at 10^6 rows, runs revision A's upgrade, and records for each size:
+the wall time of the live phase C statement (from just before the `ALTER TABLE` to its return,
+measured by `clock_timestamp()` around it in a measurement-only copy of the statement, not in
+the revision), the wall time of the whole upgrade, and the table size (`pg_relation_size`).
+Same for live phase A at 10^4 `schedule_publications` rows. The figures, the host (CPU,
+PostgreSQL minor version) and the commands go into the executed-results subsection of section
+14, and the runbook turns Q3's `reltuples` into an expected window by linear scaling, with the
+go/no-go rule "the expected phase C time is well under the 10 s `lock_timeout` budget the
+quiet window allows; otherwise stop and review". The measurement is a script under the test
+module's helpers, run once by hand in the foreground; it is not a CI test.
 
 #### 14.6.4 `downgrade()` in order
 
@@ -2025,8 +2070,8 @@ reports them).
    G15…G1.
 4. Drop `a_schedule_scenario_forks_a_version_of_its_series`; `DROP TABLE … RESTRICT` in
    reverse creation order (removes the 8 FKs into S5 tables with their tables).
-5. Restore the 2 `schedule_publications` CHECKs to their BEFORE texts.
-6. Restore the 6 `record_links` CHECKs to their BEFORE texts — last.
+5. Restore the 2 `schedule_publications` CHECKs to their BEFORE texts (one `ALTER TABLE`).
+6. Restore the 6 `record_links` CHECKs to their BEFORE texts (one `ALTER TABLE`) — last.
 
 `tests/schema/test_every_revision_denotes_one_schema.py` (chain-agnostic) then proves the
 downgraded catalog equals a fresh build at `621ef6786c64`.
@@ -2091,7 +2136,7 @@ allowlist: stdlib, `my_pa.domain.schedule`, `my_pa.domain.common.identifiers`):
 | `MatchAdmissionSkip` | `PLANE_DISABLED = "plane_disabled"` |
 | `MATCH_INTEGRITY_REFUSAL` | `"integrity_violation"` |
 | `PlaneProvenance` | frozen record `authority_class`, `decision_channel`, `asserting_client_id`, `acceptance_basis`, `user_directed_claim`, validating the section 14.3 creator rule (frozen literal sets; a FAST test pins them equal to the lineage vocabulary sets) |
-| `writer_bucket(decision_channel, asserting_client_id) -> str` | `decision_channel + "\x1f" + (asserting_client_id or "")` — the string S6-1 `ProposeRequest.writer_bucket` / `BaselineEvent.writer_bucket` carry; `None` for an attested operator |
+| `writer_bucket(decision_channel, asserting_client_id) -> str \| None` | `None` for an attested channel (`local_cli`, `local_web`); otherwise `decision_channel + "\x1f" + (asserting_client_id or "")` — the string S6-1 `ProposeRequest.writer_bucket` / `BaselineEvent.writer_bucket` carry (R9-F13) |
 | `MAX_CPM_RESULT_BYTES` | 67,108,864 (section 3.11) |
 
 #### 14.7.4 Lineage storage vocabulary (`src/my_pa/domain/lineage/vocabulary.py`; amendment S6-2-D01)
@@ -2133,6 +2178,16 @@ class CpmComputeBusyError(Exception): ...  # the Principal's compute lease is he
 class ScheduleBaselineRaceError(Exception):  # a section 12.1 backstop refused a lost race
     code: str                                # the constraint or trigger name
 
+# R9-F08: every non-success after `reserve_request` is raised, so the UoW rolls back the
+# reservation and G8 never turns a refusal into `internal_error`.
+class ScenarioHeadMovedError(Exception):     # CAS lost -> conflict(EXPECTED_VERSION)
+    head_version_no: int
+
+class BaselineWriteRefusedError(Exception):  # decide_baseline_write refused
+    refusal: BaselineRefusal
+
+class PlaneSubjectAbsentError(Exception): ...  # a named subject is absent or another Principal's -> not_found
+
 class PlaneReservationOutcome(StrEnum):
     RESERVED = "reserved"; REPLAYED = "replayed"; CONFLICT = "conflict"
 
@@ -2172,10 +2227,10 @@ class ScenarioRepository(ABC):
     def insert_scenario(self, principal_id: str, scenario: NewScenario,
                         first_version: NewScenarioVersion, writer: PlaneProvenance) -> StoredScenarioVersion: ...
     def fork_scenario(self, principal_id: str, scenario: NewScenario, source_version_id: str,
-                      label: VersionLabel, note: str | None, writer: PlaneProvenance) -> StoredScenarioVersion | None: ...
+                      label: VersionLabel, note: str | None, writer: PlaneProvenance) -> StoredScenarioVersion: ...  # raises PlaneSubjectAbsentError
     def head_version(self, principal_id: str, scenario_id: str) -> StoredScenarioVersion | None: ...
     def append_version(self, principal_id: str, scenario_id: str, expected_head_version_no: int,
-                       version: NewScenarioVersion, writer: PlaneProvenance) -> StoredScenarioVersion | HeadMoved: ...
+                       version: NewScenarioVersion, writer: PlaneProvenance) -> StoredScenarioVersion: ...  # raises ScenarioHeadMovedError
     def get_scenario(self, principal_id: str, scenario_id: str) -> StoredScenario | None: ...
     def get_version(self, principal_id: str, version_id: str) -> StoredScenarioVersion | None: ...
     def load_content(self, principal_id: str, version_id: str) -> VerifiedScenarioContent | None: ...
@@ -2192,12 +2247,12 @@ class ScenarioRepository(ABC):
     def write_baseline(self, principal_id: str, request: BaselineRequest, *, reason: str,
                        approval: ScheduleImportApproval | None, writer: PlaneProvenance,
                        project_id: str | None = None,   # required for SetGoverningRequest
-                       ) -> BaselineWritten | BaselineRefusal | None: ...   # None = subject absent
+                       ) -> BaselineWritten: ...   # raises BaselineWriteRefusedError, PlaneSubjectAbsentError
     def baseline_chain(self, principal_id: str, project_id: str) -> BaselineChain: ...
     def governing_as_of(self, principal_id: str, project_id: str, as_of: datetime | None) -> str | None: ...
     # worker hook (inside the S5 finalization transaction)
     def finalize_intake(self, principal_id: str, publication_id: str, *,
-                        plane_effective: bool) -> SeriesMatchRecord | None: ...
+                        plane_effective: bool) -> SeriesMatchRecord | SeriesMatchUndecided | None: ...
 
 class ScenarioUnitOfWork(ABC):
     def __enter__(self) -> ScenarioUnitOfWork: ...
@@ -2211,11 +2266,11 @@ class ScenarioUnitOfWork(ABC):
 `ScenarioUnitOfWork` is not on `UnitOfWork`, has no `record_events` or `projects` member and
 is not composed into `ApplicationService` or the gateway in S6-2 (S6-3 composes the plane
 factory). Record fields (`NewScenario`, `NewScenarioVersion`, `StoredScenario`,
-`StoredScenarioVersion`, `HeadMoved(head_version_no)`, `NewCpmRun`, `StoredCpmRun`,
+`StoredScenarioVersion`, `NewCpmRun`, `StoredCpmRun`,
 `NewScenarioOutput`, `StoredScenarioOutput`, `ScenarioSnapshotSource`,
 `VerifiedScenarioContent(content, canonical, size)`, `VerifiedDocument(document, canonical)`,
 `BaselineWritten(baseline_id, event_id | governing_event_id, label, seq)`,
-`BaselineChain(events, governing)`, `SeriesMatchRecord`) are the section 14.3 columns, typed
+`BaselineChain(events, governing)`, `SeriesMatchRecord`, `SeriesMatchUndecided(code)`) are the section 14.3 columns, typed
 with the S6-1 enums; I9-B names any helper record not listed here and reports it.
 `SqlAlchemyScenarioUnitOfWork(engine)` is the `SqlAlchemyScheduleUnitOfWork` shape; both
 properties raise `RuntimeError` outside a transaction. Isolation: the engine default, READ
@@ -2236,8 +2291,8 @@ transition; G8 refuses a commit that leaves it reserved). A refusal raised after
 | Write | Inside the one write transaction, after the prologue |
 |---|---|
 | Scenario from a publication or Baseline | read is done before (14.8.3); with `from_baseline_id`, take J and re-read that the Baseline is effective (approved, not revoked, publication `complete`/`partial`); insert the Scenario and version 1 (snapshot columns set); G3, G5, G4 at commit |
-| Scenario from a version (fork) | `INSERT … SELECT` copying `content_zlib`, `content_sha256`, `content_size_bytes`, the 3 counts and `distribution_spec_sha256` from the source version (partitioned), so the copy is byte-for-byte without decompression; G5 re-checks |
-| Version append (CAS) | `head_version` (max `version_no`) read after the lock; `head ≠ expected_head_version_no` ⇒ `HeadMoved` (`conflict(EXPECTED_VERSION)`), nothing written; else insert `version_no = expected + 1`, `parent_version_id = head`; the UNIQUE and G5 are the backstop when the lock is absent |
+| Scenario from a version (fork) | `INSERT … SELECT` copying `content_zlib`, `content_sha256`, `content_size_bytes`, the 3 counts and `distribution_spec_sha256` from the source version (partitioned), so the copy is byte-for-byte without decompression; G5 re-checks; source absent ⇒ raise `PlaneSubjectAbsentError`. The copy is stored again physically, so its `content_size_bytes` counts as new stored bytes toward the 2 GiB, 256 MiB and 128 MiB quotas (`stored_bytes` = `content_size_bytes`; S6-U08, R9-F13) |
+| Version append (CAS) | `head_version` (max `version_no`) read after the lock; `head ≠ expected_head_version_no` ⇒ raise `ScenarioHeadMovedError(head_version_no)` (`conflict(EXPECTED_VERSION)`; the transaction rolls back, R9-F08); else insert `version_no = expected + 1`, `parent_version_id = head`; the UNIQUE and G5 are the backstop when the lock is absent |
 | CPM run | 14.8.4 |
 | Output | `output_count < 100` is S6-3's limit read here; insert; G6 |
 | Baseline / governing | `write_baseline` (14.8.5) |
@@ -2248,7 +2303,10 @@ transition; G8 refuses a commit that leaves it reserved). A refusal raised after
   change-set application (`apply_change_set`) run on data read in a short read transaction
   (`snapshot_source` reads the eligible, non-intake publication and its accepted run's
   `activity`/`milestone` rows — terminal and immutable, so a stale read is impossible;
-  `load_content` reads the parent), then the canonical bytes are compressed outside any
+  for an append, the read transaction reads the head and, when `head ≠
+  expected_head_version_no`, raises `ScenarioHeadMovedError` **before computing**; otherwise
+  `load_content` reads exactly the version with `version_no = expected_head_version_no`, which
+  is the parent the write re-checks under P (R9-F13)), then the canonical bytes are compressed outside any
   transaction; the write transaction re-validates only what can change (CAS head, Baseline
   effectiveness under the Project lock).
 - **Compression:** `zlib.compress(canonical, 6)`; the compressed bytes need not be
@@ -2275,14 +2333,31 @@ transition; G8 refuses a commit that leaves it reserved). A refusal raised after
 Collision avoidance: both namespaces differ from `LINEAGE_ADVISORY_NAMESPACE` (`0x4C494E45`)
 and live in the two-int key space, which no single-bigint key in `src/` can reach. C has its
 own namespace so a 32-bit `hashtext` collision can never make a held compute lease block a P
-or J lock of the same request (which would wait on its own session's lease). A `hashtext`
-collision between 2 P or J keys only serializes 2 unrelated writers; P and J colliding in one
-transaction is re-entrant. **Lock order:** P → J → row locks. The worker hook takes J after
-its own intake publication's `FOR UPDATE` (S5 finalization); this cannot deadlock with a
-baseline writer, which takes no row lock (eligibility reads stored terminal status, which is
-immutable), nor with the import-time approval (J, then at most the non-intake predecessor's
-`FOR UPDATE`; an intake publication is never a predecessor because G10 keeps every other
-publication out of an intake Series).
+or J lock of the same request (which would wait on its own session's lease, a hang PostgreSQL
+cannot detect). A `hashtext` collision between 2 P or J keys only serializes 2 unrelated
+writers; P and J colliding in one transaction is re-entrant; a collision between one writer's
+P and another's J can at worst produce a `deadlock_detected` (`40P01`), which PostgreSQL
+detects and which is a transient refusal (`internal_error`, retried), never a silent hang. A
+`hashtext('cpm:' …)` collision between 2 Principals makes one of them answer a spurious
+`conflict(CPM_RUN)` while the other computes; accepted (S6-2-U11).
+
+**Lock order (R9-F11).** There is no single global order; the partial order and the argument
+that no cycle exists are:
+
+| Holder | Takes, in order |
+|---|---|
+| plane client write (scenario, version, run, output) | P → FK `KEY SHARE` on referenced plane rows and on terminal S5 rows (origin publication, Series) |
+| baseline / governing write, Scenario-from-Baseline | P → J → FK `KEY SHARE` on the Baseline's terminal publication and Series; no other row lock |
+| S5 import with approval | J → (role `baseline` has no auto form) the non-intake predecessor's `FOR UPDATE` when superseding → FK `KEY SHARE` on its Series |
+| S5 import without approval, second admission | no P or J of its own; row and FK locks as today |
+| worker finalization (H8, `fail`) | job row (`hold_lease`, `FOR UPDATE`) → its publication `FOR UPDATE` → (intake only) J → the second admission's inserts (FK `KEY SHARE` on the target Series) |
+
+No path takes P after J. Every J holder other than the hook touches no intake publication,
+intake job row or intake Series (G3, G9–G12), and the hook's row locks are exactly those intake
+rows, so a J holder never waits on a lock the hook holds while the hook waits on J. The
+finalizing worker updates no `schedule_series` row, so its FK `KEY SHARE` locks conflict with no
+J holder's. Baseline writers read eligibility from immutable terminal status and take no row
+lock beyond FK `KEY SHARE` on terminal rows, which no worker updates.
 
 `compute_and_store_cpm_run(engine, principal_id, version_id, *, capability_key, writer,
 admit_compute)` (section 3.11, R8 ruling R-5, RR1-F10):
@@ -2291,9 +2366,13 @@ admit_compute)` (section 3.11, R8 ruling R-5, RR1-F10):
    `get_cpm_run(…, ENGINE_VERSION)` (found ⇒ go to step 5 with that run, computing nothing);
    `load_content` (verified).
 2. Lease: a module-level `dict[str, threading.Lock]` (guarded) — non-blocking acquire, lost ⇒
-   `CpmComputeBusyError`; then `connection = engine.connect().execution_options(isolation_level=
-   "AUTOCOMMIT")` dedicated to the lease, `SELECT pg_try_advisory_lock(C)`; false ⇒ release
-   the process lock, `connection.invalidate()`, `CpmComputeBusyError`.
+   `CpmComputeBusyError`; then a lease connection opened **outside the application pool**
+   (R9-F12): a process-cached lease engine `create_engine(engine.url, poolclass=NullPool,
+   isolation_level="AUTOCOMMIT")` built from the same URL and connect arguments, so a held
+   lease never consumes one of the request pool's connections while steps 3 and 5 take theirs;
+   `SELECT pg_try_advisory_lock(C)`; false ⇒ release the process lock,
+   `connection.invalidate()`, `CpmComputeBusyError`. `run_cpm` is injected through a
+   keyword (`compute=run_cpm`) so tests block it on a barrier.
 3. `admit_compute(units)` (S6-3's activity-units-per-hour check, given
    `cpm_units_since` read in a short read transaction while the lease is held).
 4. `run_cpm(content)` outside any transaction, with no database lock other than C;
@@ -2305,8 +2384,9 @@ admit_compute)` (section 3.11, R8 ruling R-5, RR1-F10):
    (`created = false`); `complete_request`.
 6. `finally` (always, whatever happened): `SELECT pg_advisory_unlock(C)` on the dedicated
    connection (an error or a `false` answer is swallowed: the lease was already lost), then
-   `connection.invalidate()` and `close()` — the connection is **never** returned to the pool,
-   so no pooled connection can carry a session lock — then release the process lock.
+   `connection.invalidate()` and `close()` — the connection never belongs to the request pool
+   and is never reused, so no pooled connection can carry a session lock — then release the
+   process lock.
 
 Lease loss (the dedicated connection dies mid-compute): PostgreSQL releases C; the result is
 still a deterministic function of `(content, engine_version)` and the insert is idempotent by
@@ -2329,7 +2409,9 @@ transaction (prologue done):
    chain and the request name (stored `status IN ('complete', 'partial')` and not intake).
 4. `decide_baseline_write(events, governing, request, eligible_publication_ids=…)` (S6-1; it
    carries the pending caps, the adoption rule of RR1-F05 and the transitions). A refusal is
-   returned unchanged (S6-3 maps it).
+   **raised** as `BaselineWriteRefusedError(refusal)` so the transaction rolls back with the
+   reservation (R9-F08); S6-3 maps the carried `BaselineRefusal`. An absent subject (step 1)
+   raises `PlaneSubjectAbsentError` (`not_found`).
 5. On a plan: a new Baseline row when `plan.baseline_id is None` (propose, or a direct approval
    with no pending proposal; the row's `type` is the request's); the event with `seq =
    len(events) + 1`, `previous_event_id` = the head, `recorded_at = clock_timestamp()`,
@@ -2339,7 +2421,8 @@ transaction (prologue done):
 Lost races on a backstop (`unique_violation` on any section 12.1 index, or G14/G15
 `restrict_violation`) surface as `ScheduleBaselineRaceError(code)` with the constraint name, and
 S6-3 maps them to `conflict(BASELINE_ID)` or, on the governing chain, `conflict(GOVERNING)`
-(RR2-F04). `governing_as_of(project, as_of)` = the governing event with the maximum `seq` among
+(RR2-F04). A G14 (b)/G15 (b) `check_violation` (a wall-clock regression between 2 writes) is
+not a race: it maps to `internal_error` and the client retries (R9-F13). `governing_as_of(project, as_of)` = the governing event with the maximum `seq` among
 those with `recorded_at <= as_of` (ties by `seq`), never `effective_from` (section 9.1.1, P43
 obligation).
 
@@ -2378,42 +2461,69 @@ until S6-3.
 `process_schedule_publication(engine, job, owner, *, scenario_plane_effective: bool = False)`.
 H8 (`finalize_publication`) and `_Job.fail` (`fail_publication`) run in a
 `SqlAlchemyScenarioUnitOfWork` transaction and call, **after** the terminal update,
-`uow.scenarios.finalize_intake(principal, publication_id, plane_effective=…)`:
+`uow.scenarios.finalize_intake(principal, publication_id, plane_effective=…)`, which returns
+`SeriesMatchRecord | SeriesMatchUndecided | None`:
 
 1. Not an intake publication (no intake row) ⇒ return `None` with no lock and no further read.
-2. J on `(principal_id, project_id)`; a decision for this intake publication already exists ⇒
+2. **Outer savepoint** (R9-F01): `outer = connection.begin_nested()`. Steps 3–10 run inside it.
+3. J on `(principal_id, project_id)`; a decision for this intake publication already exists ⇒
    return it (UNIQUE backstop; re-entry cannot normally occur because the terminal update
    commits with the decision).
-3. Stored status not `complete`/`partial` ⇒ decision `not_eligible`.
-4. Read up to 51 non-intake Series of the Project ordered by `(created_at, series_id)`; 51 ⇒
-   `match_series` with them answers `ambiguous`/`candidate_bound` without scoring.
-5. Per Series: its publications as S6-1 `CurrencyPublication` with their effective status
-   (only a terminal `complete`/`partial` one is eligible, and for it stored and effective
-   status are equal), the effective Baseline publications of the
-   Project (approved, not revoked, eligible), then `current_standard_update`, else the newest
-   eligible by `PublicationOrderKey`; Series with neither are skipped. Its ID → normalized name
-   map from the accepted run's `activity`/`milestone` rows (≤ 25,000 rows each), the Series'
+4. Stored status not `complete`/`partial` ⇒ decision `not_eligible`.
+5. **Candidate bound on the raw count** (R9-F07): read up to 51 non-intake Series of the
+   Project ordered by `(created_at, series_id)` (identifiers and `created_at` only). 51 rows ⇒
+   the decision is `ambiguous`/`candidate_bound` with an empty `candidates` array and the
+   incoming ID count, decided **before** any eligibility skip or activity-row read
+   (`match_series` is not called, because skipping ineligible Series first would let it score
+   a truncated set; section 11.2 step 3 bounds the Project's non-intake Series).
+6. Per Series (≤ 50): its publications as S6-1 `CurrencyPublication` with their effective
+   status (only a terminal `complete`/`partial` one is eligible, and for it stored and
+   effective status are equal), the effective Baseline publications of the Project (approved,
+   not revoked, eligible), then `current_standard_update`, else the newest eligible by
+   `PublicationOrderKey`; Series with neither are skipped. Its ID → normalized name map from
+   the accepted run's `activity`/`milestone` rows (≤ 25,000 rows each), and the Series'
    publication holding the intake's `source_version_id`, if any.
-6. `NewSeriesName`: `ABSENT` without `series_name_if_new`, else `TAKEN`/`FREE` by a
+7. `NewSeriesName`: `ABSENT` without `series_name_if_new`, else `TAKEN`/`FREE` by a
    `name_key` read under J (I8's resolution: taken ⇒ `ambiguous`/`name_conflict`).
-7. `match_series(incoming, candidates, new_series_name=…)` (S6-1).
-8. Outcome `matched`/`created` and `plane_effective` false ⇒ record with `admission_skipped =
-   'plane_disabled'`, no admission (S6-O15). Otherwise mint the decision id, open a
-   **savepoint** (`connection.begin_nested()`), call `uow.schedules.admit_publication` with
-   `ScheduleImportRequest(project, series_id = target` (matched) or `series_name =
-   series_name_if_new` (created), the intake's enrollment, object and version, role `update`,
-   `expected_data_date` = the intake publication's stored `expected_data_date`,
-   `idempotency_key = second_admission_key(decision_id)`, `match_decision_id = decision_id)`;
-   success ⇒ release the savepoint, `resulting_publication_id` = the admitted (or replayed)
-   publication, `target_series_id` = its Series. `ScheduleAdmissionRejectedError` ⇒ roll back
-   to the savepoint, outcome `admission_refused`, `admission_refusal = reason.value`; a
-   `sqlalchemy.exc.IntegrityError` (SQLSTATE class `23`) inside the savepoint ⇒ the same with
-   `integrity_violation`. Any other error propagates (a transient attempt failure; the whole
-   finalization rolls back and the attempt bound applies).
-9. Insert the decision (outcome, reason, `threshold_version`, `incoming_id_count`, the ranked
-   candidates as a JSON array of `{series_id, publication_id, data_date, score,
-   data_date_coherent, name_agreement_permille, title_equal}` in matcher order). The
-   finalization commits.
+8. `match_series(incoming, candidates, new_series_name=…)` (S6-1).
+9. Outcome `matched`/`created` and `plane_effective` false ⇒ record with `admission_skipped =
+   'plane_disabled'`, no admission (S6-O15). Otherwise mint the decision id, open an **inner
+   savepoint**, call `uow.schedules.admit_publication` with `ScheduleImportRequest(project,
+   series_id = target` (matched) or `series_name = series_name_if_new` (created), the intake's
+   enrollment, object and version, role `update`, `expected_data_date` = the intake
+   publication's stored `expected_data_date`, `idempotency_key =
+   second_admission_key(decision_id)`, `match_decision_id = decision_id)`:
+   - success for `matched` ⇒ release the inner savepoint; `resulting_publication_id` = the
+     admitted (or replayed) publication, `target_series_id` = its Series;
+   - success for `created` **requires `admission.series_created is True`** (R9-F02): the S5
+     explicit import takes no J, so a Series of that name may have been committed between the
+     `FREE` read and the admission, and `_find_series` / `_create_series` would then return
+     that existing, never-scored Series. Otherwise roll back to the inner savepoint and record
+     `ambiguous`/`name_conflict` (no target, no resulting publication) — I8's taken-name
+     resolution, so no identity is shared (R8-F11);
+   - `ScheduleAdmissionRejectedError` ⇒ roll back to the inner savepoint, outcome
+     `admission_refused`, `admission_refusal = reason.value`; a `sqlalchemy.exc.IntegrityError`
+     (SQLSTATE class `23`) inside it ⇒ the same with `integrity_violation`.
+10. Insert the decision (outcome, reason, `threshold_version`, `incoming_id_count`, the ranked
+    candidates as a JSON array of `{series_id, publication_id, data_date, score,
+    data_date_coherent, name_agreement_permille, title_equal}` in matcher order); release the
+    outer savepoint.
+
+**Failure semantics (R9-F01; R8-F12 stands unamended).** Any `sqlalchemy.exc.IntegrityError`,
+`ScenarioIntegrityError` or `ScheduleIntegrityError` raised by steps 3–10 (a decision CHECK or
+G11 refusal, a malformed candidate, a digest failure while reading candidate rows, an
+unresolved admission race) ⇒ roll back to the **outer** savepoint and return
+`SeriesMatchUndecided(code)` (the error class name or constraint name); the finalization then
+commits with the terminal status and **no decision**, so an evidence defect never fails a
+parsed publication. Only connection-level or operational errors (`OperationalError`,
+`InterfaceError`, a serialization or deadlock SQLSTATE of class `40`) propagate as a transient
+attempt failure. Recording *why* durably is not feasible in S6-2: the decision row is what
+failed, the closed outcome set (R8-F14) has no "undecided" member, and the worker may not log
+(`test_new_worker_modules_neither_log_nor_print`); the returned code is discarded by the S6-2
+worker and S6-3 reads present an intake publication with no decision as **undecided**
+(S6-2-U10). An intake publication whose job exhausts its attempts or is abandoned never
+reaches H8 or `_Job.fail`, so it also has no decision (S6-2-U09); in both cases the operator
+resolves it by an explicit import.
 
 **"Plane off" in S6-2** (decided): the switch is S6-3's, so S6-2 takes the effective-plane bit
 as the keyword above, **default `False`**, and `apps/worker.py` passes nothing (a FAST scope
@@ -2435,9 +2545,16 @@ composition.
 ### 14.9 Pre-deploy checks and runbook
 
 New `src/my_pa/infrastructure/database/schedule_scenarios_predeploy.py` (the
-`cpm_workbench_predeploy.py` shape: `STATEMENTS` all `SELECT` over catalogs or catalog
-functions, one transaction starting `SET TRANSACTION READ ONLY`, always rolled back; no
-connection string, application row or exception text in a result), thin runner
+`cpm_workbench_predeploy.py` shape: `STATEMENTS` all `SELECT`, one transaction starting `SET
+TRANSACTION READ ONLY`, always rolled back; no connection string, application row or
+exception text in a result). Every statement reads catalogs or catalog functions **except
+Q2's** `SELECT EXISTS (SELECT 1 FROM knowledge.schedule_publications WHERE publication_role IN
+('baseline', 'reference'))`, a deliberate operator-wide, cross-Principal boolean (R9-F09): the
+module is registered in `tests/architecture/test_principal_partition_is_reached_through_the_guard.py`
+with that reason (the operator pre-deploy aggregate; it returns 1 boolean and never a row).
+The script runs, as the S5 precedent does, **as the runtime role the gateway and worker
+connect as** (stated in the runbook): Q4 and Q8 evaluate that role as `current_user`, and Q4
+also reports the owner of `knowledge.record_links` (the migrating role) for comparison, thin runner
 `ops/postgres/schedule_scenarios_predeploy_check.py`, test
 `tests/database/test_schedule_scenarios_predeploy.py`. **Scripted, never run against a
 persistent database by S6-2.**
@@ -2445,21 +2562,26 @@ persistent database by S6-2.**
 | # | Phase | Check | Stop when |
 |---|---|---|---|
 | Q0 | both | `transaction_read_only = on` | not read-only |
-| Q1 | before | `pg_default_acl` entries for tables (`defaclobjtype = 'r'`) naming `PUBLIC`, `my_pa_mcp_ro`, `my_pa_mcp_rw` | any entry |
-| Q2 | before | the 7 S5 tables exist (revision A requires `621ef6786c64`) and `count(*)` of `schedule_publications` with `publication_role IN ('baseline', 'reference')` is 0 (an aggregate only) | a table absent or a count > 0 |
+| Q1 | before | `pg_default_acl` entries for tables and sequences (`defaclobjtype IN ('r', 'S')`, R9-F09: the refusal table's identity sequence) naming `PUBLIC`, `my_pa_mcp_ro`, `my_pa_mcp_rw` | any entry |
+| Q2 | before | the 7 S5 tables exist (revision A requires `621ef6786c64`) and the `EXISTS` above is false | a table absent or `true` |
 | Q3 | before | `reltuples` and `pg_relation_size` of `record_links`, `schedule_publications`, `schedule_series` (reported; the quiet-window input) | never (report) |
-| Q4 | before | the connecting role reaches `record_links` the way it will reach the plane tables (owner or default privilege; the P4 query) | no reach |
+| Q4 | before | the connecting runtime role (`current_user`) reaches `record_links` the way it will reach the plane tables (owner or default privilege; the P4 query), with the table owner reported | no reach |
 | Q5 | both | one SHA-256 over the `relacl` text of `record_links`, `schedule_publications`, `schedule_series`; `after` must equal `before` | differs or missing |
 | Q6 | after | `has_table_privilege` false for `PUBLIC`, `my_pa_mcp_ro`, `my_pa_mcp_rw` on the 11 plane tables, and the refusal sequence's `relacl IS NULL` | any privilege |
 | Q7 | after | `pg_get_constraintdef` of `a_record_link_pair_is_admitted` names `concerns`, `delays`, `mitigates`; `a_record_link_from_family_is_known` names the 6 S6 families; `a_schedule_publication_role_is_known` does not name `reference` | any missing |
-| Q8 | after | the connecting role holds `SELECT, INSERT` on the 11 tables and `UPDATE` on the ledger (the runtime reach the plane needs) | lacking |
+| Q8 | after | the connecting runtime role (`current_user`) holds `SELECT, INSERT` on the 11 tables and `UPDATE` on the ledger (the runtime reach the plane needs) | lacking |
 | Q9 | after | the 11 plane tables, the 15 plane functions and trigger G10 exist | any absent |
 
-Runbook: a section "Schedule Scenarios revision A (S6-2, schema only)" in
-`ops/runbooks/cpm-workbench.md`: prerequisites (the S5 revisions applied first; the plane is
+Runbook (R9-F05): I9-A edits the `ops/runbooks/cpm-workbench.md` import procedure with the
+S6-2-D04 behaviour ("from S6-2 until S6-3, `schedule_publications.import` refuses role
+`baseline` with `invalid_request(PUBLICATION_ROLE)` whatever the switches; `reference` and kind
+`working` are refused; `schedule_publications.list` refuses the filter
+`publication_role=reference` with `invalid_request(PUBLICATION_ROLE)`"), and I9-B adds a
+section "Schedule Scenarios revision A (S6-2, schema only)" in the same file: prerequisites (the S5 revisions applied first; the plane is
 inert until S6-3), the quiet window (pause lineage writes and reads — the `record_links`
 `ACCESS EXCLUSIVE` blocks them — the schedule import and worker), backup, Q0–Q5 before, the
-upgrade, Q0, Q5–Q9 after, `55P03` as a clean retryable abort (never raise the 10 s timeout
+upgrade, Q0, Q5–Q9 after, the expected `record_links` window from the section 14.6.3
+measurement scaled by Q3, `55P03` as a clean retryable abort (never raise the 10 s timeout
 without review), the downgrade refusal set, and "no grant, revoke, switch or capability is
 part of this step". The ChatLLM/switch/grant gates stay in S6-3's runbook section (section 6.7).
 
@@ -2467,8 +2589,13 @@ part of this step". The ChatLLM/switch/grant gates stay in S6-3's runbook sectio
 
 | Package | Owns (writes only these) |
 |---|---|
-| **I9-A** schema | `src/my_pa/domain/common/identifiers.py` (8 kinds); `src/my_pa/domain/schedule/model.py` (enum lockstep, `ScheduleImportApproval`, request fields and invariants), `src/my_pa/domain/schedule/canonical.py` (v2 digest), NEW `src/my_pa/domain/schedule/plane.py`, `src/my_pa/domain/schedule/__init__.py` (exports); `src/my_pa/domain/lineage/vocabulary.py` (storage vocabulary only); `src/my_pa/infrastructure/persistence/tables.py` (11 tables, the 2 restated publication CHECKs by enum, the 6 `record_links` CHECKs from the storage vocabulary, G10's table comment); NEW revision A; NEW `tests/schema/test_schedule_scenarios_migration.py`; NEW `tests/database/test_schedule_scenarios_schema_guards.py`; NEW `tests/unit/test_schedule_plane_domain.py`; lockstep: `tests/unit/test_identifiers.py`, `tests/architecture/test_capture_project_binding.py` (`TABLES_SHA256`), `tests/architecture/test_no_revision_derives_a_closed_set_from_an_enum.py` (125 → 126), the 53 head-pinning modules (`git grep -l 621ef6786c64 -- tests`; S5's own suites keep their revision and move only `HEAD`), `tests/schema/test_cpm_workbench_migration.py` (its frozen-literal test compares with the frozen pre-S6 sets, which are no longer the enums), `tests/unit/test_schedule_foundation_domain.py`, `tests/unit/test_schedule_commands.py`, `tests/database/test_cpm_workbench_schema_guards.py`, `tests/database/test_cpm_workbench_persistence.py`, `tests/database/test_schedule_capabilities.py` and any other fixture naming `reference`/`working`, the lineage migration suites whose head assertions read the widened `record_links` texts, `TABLES_ABOVE`-style table lists, and the revision-count/head claims the readme-state and spelled-count guards bind (`README.md`, `docs/architecture/00_ARCHITECTURE_INDEX.md`, `docs/architecture/system-context.md`, `docs/architecture/cpm-workbench.md`, `ops/runbooks/README.md`, `ops/runbooks/gateway-operations.md`, `ops/runbooks/mcp-and-cli-operations.md`, re-measured, each file's own style) |
-| **I9-B** persistence | `src/my_pa/contracts/ports.py` (14.8.1); NEW `src/my_pa/infrastructure/persistence/schedule_scenarios.py`, `…/schedule_plane_codec.py`, `…/schedule_cpm_lease.py`; `src/my_pa/infrastructure/persistence/schedule.py` (14.8.5 approval, 14.8.6 intake); `src/my_pa/infrastructure/jobs/schedule.py` (14.8.7); `src/my_pa/application/commands.py` (the one S6-2-D04 edit); NEW `src/my_pa/infrastructure/database/schedule_scenarios_predeploy.py`, `ops/postgres/schedule_scenarios_predeploy_check.py`; `ops/runbooks/cpm-workbench.md` (14.9 section); NEW tests `tests/database/test_schedule_scenarios_persistence.py`, `tests/database/test_schedule_baselines_persistence.py`, `tests/database/test_schedule_baseline_races.py`, `tests/database/test_schedule_series_matching.py`, `tests/database/test_schedule_scenarios_predeploy.py`, `tests/unit/test_schedule_plane_codec.py`, `tests/unit/test_schedule_cpm_lease.py`, `tests/architecture/test_schedule_scenarios_persistence_scope.py`; lockstep: `tests/architecture/test_principal_partition_is_reached_through_the_guard.py` (registry), `tests/architecture/test_cpm_workbench_worker_scope.py` only if its closure lists move, the module/test-count and mypy-file pins in `docs/plans/mcv-completion-plan.md` and `docs/plans/relationship-intelligence-implementation-plan.md` (re-measured; the 2 contended pinned plan docs), `docs/architecture/cpm-workbench.md` and this contract's section 14 "executed results" subsection, `tests/ci_shard_weights.json` (heavy new database modules weighed; `python -m tests.ci_shard verify` green; validate-fast stays within its limit) |
+| **I9-A** schema | `src/my_pa/domain/common/identifiers.py` (8 kinds); `src/my_pa/domain/schedule/model.py` (enum lockstep, `ScheduleImportApproval`, request fields and invariants), `src/my_pa/domain/schedule/canonical.py` (v2 digest), NEW `src/my_pa/domain/schedule/plane.py`, `src/my_pa/domain/schedule/__init__.py` (exports); `src/my_pa/domain/lineage/vocabulary.py` (storage vocabulary only); `src/my_pa/application/commands.py` (the one S6-2-D04 edit, which must land with the request invariant "`approval` set ⇔ role `BASELINE`", R9-F04); `ops/runbooks/cpm-workbench.md` (the S6-2-D04 import note, section 14.9); `src/my_pa/infrastructure/persistence/tables.py` (11 tables, the 2 restated publication CHECKs by enum, the 6 `record_links` CHECKs from the storage vocabulary, G10's table comment); NEW revision A; NEW `tests/schema/test_schedule_scenarios_migration.py`; NEW `tests/database/test_schedule_scenarios_schema_guards.py`; NEW `tests/unit/test_schedule_plane_domain.py`; lockstep: `tests/unit/test_identifiers.py`, `tests/architecture/test_capture_project_binding.py` (`TABLES_SHA256`), `tests/architecture/test_no_revision_derives_a_closed_set_from_an_enum.py` (125 → 126), the 53 head-pinning modules (`git grep -l 621ef6786c64 -- tests`; S5's own suites keep their revision and move only `HEAD`), `tests/schema/test_cpm_workbench_migration.py` (its frozen-literal test compares with the frozen pre-S6 sets, which are no longer the enums), `tests/unit/test_schedule_foundation_domain.py`, `tests/unit/test_schedule_commands.py` (also the new `test_baseline_import_is_refused_until_the_approval_fields_exist`), `tests/database/test_cpm_workbench_schema_guards.py`, `tests/database/test_cpm_workbench_persistence.py`, `tests/database/test_schedule_capabilities.py` and any other fixture naming `reference`/`working`, the lineage migration suites whose head assertions read the widened `record_links` texts, `TABLES_ABOVE`-style table lists, and the revision-count/head claims the readme-state and spelled-count guards bind (`README.md`, `docs/architecture/00_ARCHITECTURE_INDEX.md`, `docs/architecture/system-context.md`, `docs/architecture/cpm-workbench.md`, `ops/runbooks/README.md`, `ops/runbooks/gateway-operations.md`, `ops/runbooks/mcp-and-cli-operations.md`, re-measured, each file's own style), the module/test-count pins of the 2 contended plan documents `docs/plans/mcv-completion-plan.md` and `docs/plans/relationship-intelligence-implementation-plan.md` re-measured at I9-A's own head (its new source module and test modules move them), the section 14.6.3 scratch-cluster measurement recorded in the executed-results subsection, and `tests/ci_shard_weights.json` as `verify` requires |
+| **I9-B** persistence | `src/my_pa/contracts/ports.py` (14.8.1); NEW `src/my_pa/infrastructure/persistence/schedule_scenarios.py`, `…/schedule_plane_codec.py`, `…/schedule_cpm_lease.py`; `src/my_pa/infrastructure/persistence/schedule.py` (14.8.5 approval, 14.8.6 intake); `src/my_pa/infrastructure/jobs/schedule.py` (14.8.7); NEW `src/my_pa/infrastructure/database/schedule_scenarios_predeploy.py`, `ops/postgres/schedule_scenarios_predeploy_check.py`; `ops/runbooks/cpm-workbench.md` (the revision A section, 14.9); NEW tests `tests/database/test_schedule_scenarios_persistence.py`, `tests/database/test_schedule_baselines_persistence.py`, `tests/database/test_schedule_baseline_races.py`, `tests/database/test_schedule_series_matching.py`, `tests/database/test_schedule_scenarios_predeploy.py`, `tests/unit/test_schedule_plane_codec.py`, `tests/unit/test_schedule_cpm_lease.py`, `tests/architecture/test_schedule_scenarios_persistence_scope.py`; lockstep: `tests/architecture/test_principal_partition_is_reached_through_the_guard.py` (registry), `tests/architecture/test_cpm_workbench_worker_scope.py` only if its closure lists move, the module/test-count and mypy-file pins in `docs/plans/mcv-completion-plan.md` and `docs/plans/relationship-intelligence-implementation-plan.md` (re-measured again at I9-B's own head; the 2 contended pinned plan docs), `docs/architecture/cpm-workbench.md` and this contract's section 14 "executed results" subsection, `tests/ci_shard_weights.json` (heavy new database modules weighed; `python -m tests.ci_shard verify` green; validate-fast stays within its limit) |
+
+**Each package's head is green on its own** (R9-F04): FAST, the full `tests/architecture`
+directory and the database tiers it touches (`database` by marker, `migration_edge`,
+`migration_empty_to_head`), ruff, both mypy runs and `python -m tests.ci_shard verify`, with
+the 2 contended plan documents re-measured at that head.
 
 Neither package edits `src/my_pa/application/schedules.py`, `src/my_pa/domain/schedule/compare.py`,
 `src/my_pa/application/service.py`, `src/my_pa/bootstrap/*`, `apps/worker.py`, the S6-1
@@ -2499,26 +2626,32 @@ revision.
 |---|---|
 | CAS version append (9.4, 8.2) | persistence `test_version_append_is_cas_guarded` |
 | CPM natural-key replay (9.4, 3.11) | persistence `test_cpm_run_replays_by_natural_key` |
-| one compute per Principal; lease released on every path (3.11) | persistence `test_concurrent_cpm_runs_answer_busy_without_computing`, `test_cpm_lease_connection_is_never_returned_to_the_pool`; unit `test_lease_unlocks_and_invalidates_on_every_path` |
+| one compute per Principal; lease released on every path (3.11) | persistence `test_concurrent_cpm_runs_answer_busy_without_computing` (layered: both lease layers), `test_a_held_session_lease_answers_busy` (session lock alone), `test_cpm_lease_connection_is_never_returned_to_the_pool`, `test_compute_lease_never_blocks_the_write_transaction`; unit `test_the_process_lock_answers_busy_alone`, `test_lease_unlocks_and_invalidates_on_every_path` |
 | engine runs only verified stored content (9.1.1 FR8-F07) | persistence `test_cpm_runs_only_on_verified_stored_content` |
 | digest recompute on read (8.2) | persistence `test_tampered_content_reads_as_an_integrity_error` (parametrized: content, change set, result, output) |
 | bounded decompression (8.1) | unit `test_decompression_is_bounded` |
-| idempotency (6.3) | persistence `test_same_key_same_request_replays`, `test_same_key_other_request_conflicts`, `test_a_refused_write_leaves_no_reservation` |
+| idempotency (6.3) | persistence `test_same_key_same_request_replays`, `test_same_key_other_request_conflicts`, `test_a_refused_write_leaves_no_reservation` (parametrized: a refusal before the insert, `ScenarioHeadMovedError`, a `BaselineWriteRefusedError`, `PlaneSubjectAbsentError`; R9-F08) |
 | cross-Principal `not_found` (8.2) | persistence `test_other_principal_reads_none_and_writes_nothing` |
 | append-only and TRUNCATE (8.2) | guards `test_plane_table_is_append_only[<table>]` (10), `test_plane_table_refuses_truncate_when_it_holds_rows[<table>]` (11) |
 | ledger transition (8.2) | guards `test_write_request_completes_once`, `test_write_request_is_never_left_reserved` |
 | lineage CHECKs (5.4) | migration `test_lineage_checks_admit_the_s6_pairs_and_refuse_others`, `test_frozen_lineage_texts_equal_the_storage_vocabulary`; unit `test_storage_vocabulary_is_the_public_vocabulary_plus_the_pending_s6_additions` |
-| role retirement (12.2) | guards `test_reference_role_is_retired` (P47); migration `test_upgrade_refuses_while_a_retired_role_row_exists`; unit `test_baseline_import_is_refused_until_the_approval_fields_exist` (S6-2-D04) |
+| role retirement (12.2) | guards `test_reference_role_is_retired` (P47); migration `test_upgrade_refuses_while_a_retired_role_row_exists`; unit `tests/unit/test_schedule_commands.py::test_baseline_import_is_refused_until_the_approval_fields_exist` (S6-2-D04, I9-A) |
 | explicit Series never matches (11.2 step 1, P29) | matching `test_explicit_series_never_matches` |
 | own intake Series (11.2 step 2, P39) | matching `test_each_auto_import_gets_its_own_intake_series` |
 | decision recorded (11.2) | matching `test_auto_import_records_a_match_decision` |
 | refusal recorded, finalization commits (11.2 step 4, P40) | matching `test_match_admission_refusal_is_recorded_not_raised` |
 | plane off (11.2 step 6) | matching `test_plane_off_records_the_decision_without_admitting` |
-| candidate bound under the lock (11.2 step 3) | matching `test_more_than_fifty_series_is_candidate_bound` |
+| candidate bound under the lock (11.2 step 3) | matching `test_more_than_fifty_series_is_candidate_bound` (parametrized: 51 eligible Series; 51 Series of which 3 have no eligible publication — still `candidate_bound` with an empty `candidates` array; R9-F07) |
+| finalization never fails on a hook defect (11.2 step 4, R8-F12) | matching `test_hook_defect_commits_finalization_without_a_decision` (a forced decision-insert `IntegrityError` and a forced `ScenarioIntegrityError` through a test seam: the intake publication is terminal `complete`, no decision row, the job succeeds) |
+| exhausted intake job (S6-2-U09) | matching `test_exhausted_intake_job_has_no_decision_and_breaks_nothing` (the job dead-letters; the publication reads effective `failed`; no decision; a later explicit import admits) |
+| `created` never joins an unscored Series (R9-F02) | matching `test_created_never_joins_a_series_created_after_the_free_read` (a barrier seam between the `FREE` read and the admission; an explicit import of that name commits in between; expected `ambiguous`/`name_conflict`, no publication added to the operator's Series) |
+| trigger lookups are Principal-qualified (R9-F06) | guards `test_a_foreign_principal_subject_is_a_foreign_key_violation` (parametrized: another Principal's publication as a Scenario origin, as a Baseline publication and as a baseline-event subject; SQLSTATE `23503`, never `23001`) |
+| import-time approval only in its own admission (G14 (d)) | guards `test_import_approval_needs_a_publication_of_this_transaction` |
+| each section 12.1 index refuses on its own | guards `test_baseline_backstop_index_refuses_alone[<index>]` (7: the 5 partial uniques and the 2 `seq` uniques; rows inserted under `session_replication_role = replica`, so G12–G15 and the FK triggers do not fire, with distinct `seq` values except in the `seq` cases; `unique_violation` naming exactly that index) |
 | intake Series holds 1 publication (G9, G10) | guards `test_intake_series_admits_no_other_publication` |
 | baseline lifecycle (12.1) | baselines `test_baseline_lifecycle_transitions`, `test_direct_approval_adopts_a_pending_proposal` (B11), `test_import_time_approval_is_written_in_the_admission` |
 | governing transitions (12.1) | baselines `test_governing_events_are_append_only`, `test_revoking_the_governing_baseline_is_refused`, `test_governing_as_of_reads_recorded_order_not_effective_from` (B5 values; P43 obligation) |
-| races (12.7 P49–P54) | races `test_governing_chain_is_monotonic_under_contention`, `test_concurrent_approve_and_withdraw_write_one_decision`, `test_concurrent_approvals_of_one_publication`, `test_concurrent_approvals_never_reuse_a_label`, `test_concurrent_proposals_on_one_publication`, `test_pending_caps_hold_under_concurrency` |
+| races (12.7 P49–P54) | races `test_governing_chain_is_monotonic_under_contention`, `test_concurrent_approve_and_withdraw_write_one_decision`, `test_concurrent_approvals_of_one_publication`, `test_concurrent_approvals_never_reuse_a_label`, `test_concurrent_proposals_on_one_publication`, `test_pending_caps_hold_under_concurrency`; every race test synchronizes by barriers and seams, never by sleeps (R9-F03): a seam after the chain read makes the first writer wait until the second writer either reaches the same seam (no J) or is observed waiting on an advisory lock in `pg_locks` (`granted = false`, J present), so both interleavings are forced deterministically. P50 and P54 assert the **class** of the loser's answer: `BaselineWriteRefusedError` carrying `CONFLICT_BASELINE_ID` (P50) or `RATE_LIMITED_BASELINE_ID` (P54), never `ScheduleBaselineRaceError` |
 | migration tiers, refusals, grants, parity (9.2) | migration `test_the_revision_is_the_single_head_on_621ef6786c64`, `test_the_revision_imports_no_package_module`, `test_the_revision_writes_no_row_and_grants_nothing`, `test_empty_to_head_creates_exactly_the_eleven_tables`, `test_predecessor_with_rows_upgrades`, `test_live_table_work_is_last_in_the_upgrade`, `test_lock_timeout_is_transaction_local`, `test_a_held_lock_aborts_the_upgrade_cleanly` (another connection holds `ROW EXCLUSIVE` on `knowledge.record_links`; `55P03`; still at `621ef6786c64`), `test_downgrade_refuses_while_any_plane_row_exists[<clause>]`, `test_clean_downgrade_restores_every_before_text`, `test_no_grant_beyond_the_owner`, `test_live_table_acls_are_unchanged`, `test_runtime_metadata_matches_the_revision` |
 | nothing public; scope (9.2 "No capability") | scope `test_no_plane_name_is_public_before_s63`, `test_scenario_unit_of_work_is_not_on_the_general_unit_of_work`, `test_worker_passes_no_effective_plane`, `test_plane_persistence_writes_no_s5_table_except_through_admission` |
 | pre-deploy (14.9) | predeploy `test_checks_are_read_only_and_always_roll_back`, `test_each_check_reports_its_stop` |
@@ -2546,11 +2679,14 @@ revision.
 | P2-17 | G12 removed | `test_a_revoked_publication_is_not_reapproved` |
 | P2-18 | G14 (a) chain, (b) order, (c) lifecycle, (d) eligibility, (e) label, (f) ordinal, (g) supersedes — one run each | `test_baseline_event_chain_rules[<rule>]` |
 | P2-19 | G15 (a)/(b)/(c) (3 runs) | `test_governing_event_chain_rules[<rule>]` |
-| P2-20 | each of the 5 section 12.1 partial uniques and the 2 `seq` uniques dropped (7 runs, each with the J lock removed from the writer) | the matching race test (`test_concurrent_*`, `test_governing_chain_is_monotonic_under_contention`) |
+| P2-20 | each of the 5 section 12.1 partial uniques and the 2 `seq` uniques dropped (7 runs) | `test_baseline_backstop_index_refuses_alone[<index>]`. **Declared layered in advance (R9-F03):** the race tests P51–P53 (`test_concurrent_approvals_of_one_publication`, `test_concurrent_approvals_never_reuse_a_label`, `test_concurrent_proposals_on_one_publication`) stay green when only a partial unique is dropped, because 2 concurrent writers of one Project always collide on `a_schedule_baseline_event_seq_is_used_once` and a sequential second write is refused by G12/G14 (c); they are expected green under this mutation and are reported as layered, never as covering the partial unique |
 | P2-21 | `recorded_at = now()` instead of `clock_timestamp()` (P49) | `test_governing_chain_is_monotonic_under_contention` |
-| P2-22 | J lock removed from `write_baseline` (P50) | `test_concurrent_approve_and_withdraw_write_one_decision` |
-| P2-23 | pending caps read before the lock (P54) | `test_pending_caps_hold_under_concurrency` |
-| P2-24 | lease: no process lock; no session lock; unlock not in `finally`; connection returned to the pool (4 runs) | `test_concurrent_cpm_runs_answer_busy_without_computing`, `test_lease_unlocks_and_invalidates_on_every_path`, `test_cpm_lease_connection_is_never_returned_to_the_pool` |
+| P2-22 | J lock removed from `write_baseline` (P50) | `test_concurrent_approve_and_withdraw_write_one_decision`, which fails because the loser answers `ScheduleBaselineRaceError` (the `seq` UNIQUE) instead of `BaselineWriteRefusedError(CONFLICT_BASELINE_ID)` |
+| P2-23 | pending caps read before the lock (P54) | `test_pending_caps_hold_under_concurrency`, which fails because a loser beyond the cap answers `ScheduleBaselineRaceError` (or a G14 (a) refusal) instead of `BaselineWriteRefusedError(RATE_LIMITED_BASELINE_ID)` |
+| P2-24a | lease: the session lock removed | `test_a_held_session_lease_answers_busy` (a separate raw connection holds C, the process lock is free; expected `CpmComputeBusyError` and no compute) |
+| P2-24b | lease: the process lock removed | `test_the_process_lock_answers_busy_alone` (`pg_try_advisory_lock` stubbed always true; 2 threads; the injected `compute` blocks on a barrier; the second answers busy) |
+| P2-24c | lease: unlock not in `finally`; the lease connection taken from the request pool (2 runs) | `test_lease_unlocks_and_invalidates_on_every_path`, `test_cpm_lease_connection_is_never_returned_to_the_pool` |
+| P2-24d | — | `test_concurrent_cpm_runs_answer_busy_without_computing` is **declared layered**: it stays green when either single layer is removed (the other answers busy); it proves the combined behaviour only, with an injected `compute` blocking on a barrier |
 | P2-25 | C and P share one namespace | `test_compute_lease_never_blocks_the_write_transaction` (forced `hashtext` collision through a test seam) |
 | P2-26 | `load_content` skips the digest check; skips `content_problem` (2 runs) | `test_tampered_content_reads_as_an_integrity_error[content]`, `test_cpm_runs_only_on_verified_stored_content` |
 | P2-27 | `decompress_bounded` without `max_length` | `test_decompression_is_bounded` |
@@ -2558,7 +2694,7 @@ revision.
 | P2-29 | hook admits while `plane_effective` is false | `test_plane_off_records_the_decision_without_admitting` |
 | P2-30 | all auto imports share one intake Series name | `test_each_auto_import_gets_its_own_intake_series` |
 | P2-31 | explicit `series_id` consults the matcher (P29) | `test_explicit_series_never_matches` |
-| P2-32 | candidate read without `LIMIT 51` | `test_more_than_fifty_series_is_candidate_bound` |
+| P2-32 | candidate read without `LIMIT 51`; the bound decided after the eligibility skip (2 runs) | `test_more_than_fifty_series_is_candidate_bound[<case>]` |
 | P2-33 | upgrade: authoritative refusal removed (the early one kept) | `test_upgrade_refuses_while_a_retired_role_row_exists` (the case inserts the row after step 2 through a test seam, else report masked) |
 | P2-34 | restated role CHECK still admits `reference` (P47) | `test_reference_role_is_retired` |
 | P2-35 | downgrade refusal: drop one clause (13 runs: 11 tables, the lineage clause, the kind clause) | `test_downgrade_refuses_while_any_plane_row_exists[<clause>]` |
@@ -2576,9 +2712,15 @@ revision.
 | P2-47 | `governing_as_of` selects by `effective_from` (P43 obligation) | `test_governing_as_of_reads_recorded_order_not_effective_from` |
 | P2-48 | `ScenarioUnitOfWork` added to `UnitOfWork` | `test_scenario_unit_of_work_is_not_on_the_general_unit_of_work` |
 | P2-49 | a plane module writes `schedule_publications` directly | `test_plane_persistence_writes_no_s5_table_except_through_admission` |
+| P2-50 | the hook's outer savepoint removed (R9-F01) | `test_hook_defect_commits_finalization_without_a_decision` |
+| P2-51 | the `series_created` check dropped (R9-F02) | `test_created_never_joins_a_series_created_after_the_free_read` |
+| P2-52 | one trigger (G3, G12 or G14) looks its subject up by bare identifier and refuses when absent (3 runs) | `test_a_foreign_principal_subject_is_a_foreign_key_violation[<case>]` |
+| P2-53 | `append_version` returns instead of raising on a moved head; `write_baseline` returns its refusal (2 runs) | `test_a_refused_write_leaves_no_reservation[<case>]` (the commit fails with G8's `check_violation`) |
+| P2-54 | G14 (d) drops the `admitted_at = now()` condition | `test_import_approval_needs_a_publication_of_this_transaction` |
 
 A prove-red that stays green is reported as redundancy, a masked test or an unreachable
-hazard, never "covered" (P2-06 and P2-33 name their expected layering in advance).
+hazard, never "covered" (P2-06, P2-20's race tests, P2-24d and P2-33 name their expected
+layering in advance, each with a sibling test that isolates the guard).
 
 #### 14.11.4 Commands (foreground, chunked, explicit timeouts, `PYTHONPATH=src`, `~/my-pa/.venv/bin/python`)
 
@@ -2613,12 +2755,18 @@ stopped and removed at the end.
 | S6-2-D13 | match decisions carry no provenance columns | the worker acts on the import's attested authority (section 11.2 step 7); the intake publication's admission is that act |
 | S6-2-D14 | snapshot and change-set computation run outside the write transaction; the write re-checks the CAS head and Baseline effectiveness | short lock holds; the inputs are immutable |
 | S6-2-D15 | `engine_version` and `threshold_version` CHECKs are patterns, not closed sets | a version bump needs no restating revision |
+| S6-2-D16 | the intake hook runs inside an outer savepoint; a deterministic hook defect commits the finalization with no decision (R9-F01, Orchestrator option (a)) | R8-F12 "finalization always commits" stands unamended: an evidence defect never fails a parsed publication |
+| S6-2-D17 | a `created` outcome requires `admission.series_created`, else `ambiguous`/`name_conflict` (R9-F02) | the explicit import takes no J, so a same-named Series can appear after the `FREE` read; joining it would share identity with an unscored Series (R8-F11) |
+| S6-2-D18 | the compute-lease connection comes from a process-cached `NullPool` lease engine, outside the request pool (R9-F12) | a held lease never starves the pool of the connections its own steps need |
+| S6-2-D19 | the restatements of one live table run as one multi-clause `ALTER TABLE` after an explicit `LOCK TABLE` (R9-F10) | one validating pass instead of 6 on `record_links`; the authoritative refusal still runs under `ACCESS EXCLUSIVE` |
+| S6-2-D20 | every non-success after `reserve_request` is raised as a typed exception (R9-F08) | the UoW rolls the reservation back; G8 can never turn a refusal into `internal_error` |
+| S6-2-D21 | the S6-2-D04 command edit lands in I9-A with the request invariant, and each package's head is green on its own (R9-F04) | no intermediate head exposes an unclassified error or a stale count pin |
 
 #### 14.12.2 Residuals (S6-2-U)
 
 | ID | Residual | Owner |
 |---|---|---|
-| S6-2-U01 | production row counts of `record_links` (and of the S5 tables if applied) are unknown here; the `ACCESS EXCLUSIVE` window scales with them | operator, Q3 before deploy |
+| S6-2-U01 | production row counts of `record_links` (and of the S5 tables if applied) are unknown here; the `ACCESS EXCLUSIVE` window scales with them (the scratch-cluster rate of section 14.6.3 gives the scale factor) | operator, Q3 before deploy |
 | S6-2-U02 | production default privileges and runtime-role reach are unknown | operator, Q1/Q4 |
 | S6-2-U03 | `write_baseline` reads the Project's whole chain under the lock (unlimited baselines) | later slice if a Project's chain grows large |
 | S6-2-U04 | a lost compute lease can let 2 computes of one Principal overlap; integrity holds by the natural key | accepted |
@@ -2626,8 +2774,17 @@ stopped and removed at the end.
 | S6-2-U06 | a 48-bit intake-name prefix collision between 2 different auto requests would put the second into the first's intake Series' name; G10 refuses it (an attempt failure, not a shared identity) | accepted (probability about 2^-48 per pair) |
 | S6-2-U07 | the matcher reads up to 50 × 25,000 rows inside the finalization transaction under J | bounded (section 8.1); measure in S6-3 |
 | S6-2-U08 | owner/superuser can disable the plane triggers (S5b-1 U-06) | operator-gated role separation |
+| S6-2-U09 | an intake publication whose job exhausts its attempts or is abandoned never reaches H8 or `_Job.fail`, so it has no decision (its effective status is `failed`, nothing is written); the operator resolves it by an explicit import (R9-F01) | operator; S6-3 reads show it as undecided |
+| S6-2-U10 | a deterministic hook defect leaves an intake publication terminal with no decision; the reason is not recorded durably (no outcome member, no worker logging) | operator (explicit import); S6-3 reads show it as undecided |
+| S6-2-U11 | a 32-bit `hashtext('cpm:' …)` collision between 2 Principals makes one answer a spurious `conflict(CPM_RUN)`; a P/J collision between 2 writers can surface a detected `40P01` (transient `internal_error`) | accepted (R9-F11, R9-F12) |
 
-#### 14.12.3 Operator gates (never performed by an agent)
+#### 14.12.3 Open S6-3 item recorded by R9 (ruling 4)
+
+| ID | Item | Options |
+|---|---|---|
+| S6-3-O01 | whether an attested operator may call `schedule_baselines.propose`, and with which writer bucket. S6-1 `ProposeRequest.writer_bucket` is typed `str`, so an operator proposal is not representable today without a synthetic bucket; S6-2's schema does not pre-decide it (`a_schedule_baseline_decision_is_operator_attested` admits `propose` from either authority, and `writer_bucket` derives `None` for an operator row) | (a) the operator does not propose: section 12.3 lists `propose` as the client path, the operator approves directly, and the handler refuses (R9's recommendation: one mechanism); (b) the operator proposes with bucket `None`, counted against the 50-per-Project cap only and withdrawable only by the operator. S6-3 decides; no S6-2 change |
+
+#### 14.12.4 Operator gates (never performed by an agent)
 
 1. Apply revision A only after `6c2306330ceb` and `621ef6786c64`, in a quiet window for lineage
    (its `record_links` `ACCESS EXCLUSIVE` blocks every lineage read and write), the schedule
@@ -2635,3 +2792,25 @@ stopped and removed at the end.
    clean and retryable.
 2. A database holding S5 `baseline`/`reference` publications cannot upgrade (S6-U13); rebuild it.
 3. No grant, revoke, switch, capability, ChatLLM profile or deployment is part of S6-2.
+
+### 14.13 R9 findings → fixes (revision R9-1)
+
+Design review R9 (PASS_WITH_REQUIRED_CHANGES at `a444e21b`) findings R9-F01…F13 and its rulings
+are resolved in place; the Orchestrator chose option (a) for R9-F01.
+
+| Finding | Fix (section) |
+|---|---|
+| R9-F01 | the hook runs in an outer savepoint; a deterministic hook defect commits the finalization with no decision, R8-F12 unamended; residuals S6-2-U09 (exhausted or abandoned job) and S6-2-U10; tests `test_hook_defect_commits_finalization_without_a_decision`, `test_exhausted_intake_job_has_no_decision_and_breaks_nothing`; P2-50 (14.8.7, 14.11, 14.12; S6-2-D16) |
+| R9-F02 | `created` requires `admission.series_created`, else `ambiguous`/`name_conflict`; barrier race test `test_created_never_joins_a_series_created_after_the_free_read`; P2-51 (14.8.7; S6-2-D17) |
+| R9-F03 | P50/P54 assert the class of the loser's answer; P51–P53 declared layered with `test_baseline_backstop_index_refuses_alone[<index>]` isolating each index; P2-24 split into P2-24a–d; barriers and seams only; section 12.7 amended (14.11.2, 14.11.3, 12.7) |
+| R9-F04 | the S6-2-D04 command edit and `test_baseline_import_is_refused_until_the_approval_fields_exist` move to I9-A; both packages re-measure the 2 contended plan documents; each head green on its own (14.10; S6-2-D21) |
+| R9-F05 | marked amendments in section 12.2, ADR-017 Consequences, ADR-015 decision 17 (pointer to S6-2-D01/D02) and `docs/architecture/cpm-workbench.md`; the runbook import note is specified for I9-A (14.9) |
+| R9-F06 | Principal-qualified trigger lookups that defer to the FK when nothing is found; `test_a_foreign_principal_subject_is_a_foreign_key_violation`; P2-52 (14.4) |
+| R9-F07 | the candidate bound is decided on the raw 51-row count before any skip, with an empty `candidates` array; P2-32 extended (14.8.7) |
+| R9-F08 | `ScenarioHeadMovedError`, `BaselineWriteRefusedError`, `PlaneSubjectAbsentError` raised after the reservation; `test_a_refused_write_leaves_no_reservation` parametrized; P2-53 (14.8.1, 14.8.2, 14.8.5; S6-2-D20) |
+| R9-F09 | Q2 is a stated cross-Principal `EXISTS` registered in the partition guard; Q1 covers sequences; Q4/Q8 run as the runtime role (14.9) |
+| R9-F10 | one multi-clause `ALTER TABLE` per live table; I9-A's scratch-cluster measurement at 10^5 and 10^6 `record_links` rows recorded for the runbook (14.6.2, 14.6.3; S6-2-D19) |
+| R9-F11 | the lock-order statement replaced by the partial order and the no-cycle argument, with FK `KEY SHARE` and job-row locks; `40P01` is transient (14.8.4; S6-2-U11) |
+| R9-F12 | the lease connection comes from a `NullPool` lease engine; the spurious `conflict(CPM_RUN)` on a key collision is accepted (14.8.4; S6-2-D18, S6-2-U11) |
+| R9-F13 | G14 (d) requires `admitted_at = now()` (P2-54); G14 (b)/G15 (b) `check_violation` maps to `internal_error`; "about 120"; `writer_bucket -> str \| None`; the append reads the parent by `expected_head_version_no` and refuses before computing; fork bytes count toward the quotas; `test_compute_lease_never_blocks_the_write_transaction` in the crosswalk (14.3.11, 14.4, 14.7.3, 14.8.2, 14.8.3, 14.11.2) |
+| Ruling 4 | recorded as open S6-3 item S6-3-O01 (14.12.3) |

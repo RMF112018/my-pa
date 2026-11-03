@@ -100,6 +100,9 @@ XER/XML; frontend UI.
 - **Change to the merged S5 import:** `reference` and kind `working` are refused whatever the
   switches; a role-`baseline` import needs the approval fields and is refused while the plane is
   not effective, so with only `MY_PA_SCHEDULE_ENABLED` on, the import admits role `update` only.
+  **Amendment (contract section 14, S6-2-D04):** from S6-2 until S6-3 adds the approval fields,
+  every role-`baseline` import is refused `invalid_request(PUBLICATION_ROLE)` whatever the
+  switches, and `schedule_publications.list` refuses the filter `publication_role=reference`.
 - Baseline and governing events form per-Project ordered chains written under a Project lock;
   as-of answers are "as recorded", never by `effective_from`.
 - Revoking a baseline is final for its publication; recovery means approving a different

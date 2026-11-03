@@ -81,8 +81,8 @@ is current, and hold an authoritative baseline per Project.
 | Out of scope: cross-domain links | decision 3 here |
 
 Every other ADR-016 decision stands: immutable publications, one profile and engine, generic
-extraction unchanged, contained parser, exact-ID identity, explicit baselines, switch default
-off.
+extraction unchanged, contained parser, exact-ID identity, switch default off; and baselines
+are still never derived (they are now operator-approved objects).
 
 ## Out of scope
 
@@ -97,6 +97,11 @@ XER/XML; frontend UI.
   for scenario derivation and baseline comparison.
 - A scratch database holding S5 `baseline` or `reference` publications must be rebuilt before
   the restating revision applies; production holds none.
+- **Change to the merged S5 import:** `reference` and kind `working` are refused whatever the
+  switches; a role-`baseline` import needs the approval fields and is refused while the plane is
+  not effective, so with only `MY_PA_SCHEDULE_ENABLED` on, the import admits role `update` only.
+- Baseline and governing events form per-Project ordered chains written under a Project lock;
+  as-of answers are "as recorded", never by `effective_from`.
 - A matched auto import is parsed twice; a CPM run is computed synchronously within bounds,
   or moved to a worker plane if the measured time misses its target.
 

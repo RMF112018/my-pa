@@ -72,6 +72,9 @@ rulings are resolved in place; section 13 maps each finding to its fix. Operator
 (the baseline model) is folded in as section 12 and replaces the generic authority
 designations of the first draft.
 
+**Revision R8-2.** R8 re-review 1 (PASS_WITH_REQUIRED_CHANGES at `3dc96413`) findings
+RR1-F01…F10 are resolved in place; section 13.1 maps each to its fix.
+
 **Conventions.** Paths are written in full from the repository root; files that do not exist
 yet are code spans, never Markdown links; no `path:line` citation is used; counts are digits;
 identifiers in examples are synthetic. "The plane" means the Schedule Scenarios plane
@@ -553,8 +556,10 @@ content; persistence treats a larger document as `internal_error`).
   transaction or lock: it reads the version, computes, then inserts by the natural key
   `(principal_id, version_id, engine_version)` with `ON CONFLICT DO NOTHING` and returns the
   existing run on conflict. At most 1 concurrent compute per Principal (a process-local lock
-  plus `pg_try_advisory_lock` on the Principal; a second caller gets `conflict(CPM_RUN)`
-  without computing). S6-1 measures the maximal network (target ≤ 10 s on the CI host); a
+  plus a session-level `pg_try_advisory_lock` on the Principal, taken on a **dedicated**
+  connection that is never returned to the pool while it holds the lock and released by an
+  unconditional `pg_advisory_unlock` in a `try/finally`, with the connection closed after; a
+  second caller gets `conflict(CPM_RUN)` without computing; RR1-F10). S6-1 measures the maximal network (target ≤ 10 s on the CI host); a
   miss moves compute to a worker plane by a contract revision **before** S6-3 (S6-U06).
 
 ### 3.12 Golden vectors (S6-1 commits each with these exact expectations)
@@ -593,7 +598,7 @@ implementation (not committed); R8 re-derived G01–G16 by hand.
 | G22 | `D = 01-06T00:00`; A started 01-05 08:00, remaining 2d; A →SS B 1d | A ES 01-05 08:00, RS 01-06 08:00, EF 01-07 16:00 / 01-06 08:00 – 01-07 16:00 / 0 / 0; B 01-06 08:00 – 01-06 16:00 / 01-07 08:00 – 01-07 16:00 / 480 / 480 | [A] | S6-D08: A's only outgoing (SS) is skipped, open-end bound PF; `dangling_finish` (A) |
 | G23 | `D = 01-06T00:00`, `progress_override`; A 1d →SS B started 01-05 08:00, remaining 1d | A 01-06 08:00 – 01-06 16:00 / same / 0 / 0; B ES 01-05 08:00, RS 01-06 08:00, EF 01-06 16:00 / 01-06 08:00 – 01-06 16:00 / 0 / 0 | [A], [B] | `out_of_sequence` (A→B); `dangling_finish` (A); A→B not considered, so not a critical edge |
 | G24 | `D = 2099-12-31T00:00` (Thursday); A 2d | rejected | — | `horizon_exceeded` (A, no relationship) |
-| S1 | snapshot, `minutes_per_source_unit = 480`: OD `1.500`, RD `0.001`, OD `999999999.000` (3 activities) | `720`; `0` (0.48 → 0, quantized); null (out of range) | — | `durations_quantized` 1, `durations_out_of_range` 1 |
+| S1 | snapshot, `minutes_per_source_unit = 500`, 4 rows: X1 activity OD `1.500`, RD `0.001`; X2 activity OD `0.003`, RD `0.005`; X3 activity OD `999999999.000`, RD `published_blank`; X4 milestone OD `0.000`, RD `0.000` | X1 original 750, remaining 0 (0.5 → 0 half-even; half-up gives 1); X2 original 2 (1.5 → 2), remaining 2 (2.5 → 2 half-even; half-up gives 3); X3 original null (out of range), remaining null (missing); X4 0, 0 | — | `snapshot_report` = `{activities: 4, milestones: 1, durations_quantized: 3, durations_out_of_range: 1, original_missing: 0, remaining_missing: 1}` (`activities` counts every copied row, milestones included; an out-of-range cell counts only as out of range) |
 
 The `dangling_finish` rule is structural (any outgoing relationship, none FS/FF), whatever is
 considered. S6-1 also freezes a `result_sha256` per
@@ -683,7 +688,7 @@ an Issue never becomes unclosable because the plane was switched off
 | `delays` (new) | semantic | `constraint`, `situation` | `schedule_activity` | ≥ 1 exact-version `corroborates` anchor | a cited causal claim |
 | `mitigates` (new) | semantic | `task`, `commitment`, `scenario_version` | `constraint`, `situation` | ≥ 1 exact-version `corroborates` anchor | a cited recovery claim |
 | `discusses` (widened) | semantic | `meeting`, `meeting_note_version` | + `schedule_publication`, `schedule_activity`, `schedule_baseline`, `scenario`, `scenario_output` | unchanged | a meeting reviewed it |
-| `originated_from` (widened) | semantic | + `scenario_version`, `schedule_baseline` | `meeting_note_version`, `capture_version` | unchanged (exact `origin` anchor) | a version's change set, or a baseline's approval, came from that note or capture (the "approved by" evidence link) |
+| `originated_from` (widened) | semantic | + `scenario_version`, `schedule_baseline` | `meeting_note_version`, `capture_version` | unchanged (exact `origin` anchor) | a version's change set, or a baseline's approval, came from that note or capture; from a `schedule_baseline` it is admitted only while the Baseline is **approved** at assert time (else `invalid_request(RELATION_TYPE)`), and reads and guidance call it approval evidence only then — a `client_identified` link is shown as a client claim, never as the approval (RR1-F08) |
 
 `issue_member` and the other relations are not widened (S6-D12). The 3 new relations are
 contestable, not composite-only, not symmetric.
@@ -766,8 +771,12 @@ The plane is **effective** iff `schedule_enabled and schedule_scenarios_enabled`
 gateway composed the plane factory (`data_engine is None`). Gate points:
 `available_capabilities` subtracts the 26; each handler calls `_schedule_scenario_plane()`
 first (`unsupported`); the import's `series_auto` form (section 11.2) is
-`invalid_request(SERIES_AUTO)` and its baseline approval fields (section 12.3) are refused
-the same way while not effective; lineage family admission (5.1); the ChatLLM prerequisite;
+`invalid_request(SERIES_AUTO)` while not effective. **Behaviour change of the merged S5
+import (RR1-F04):** after S6-2/S6-3, while the plane is not effective, the import admits role
+`update` only — role `baseline` is refused `invalid_request(BASELINE_TYPE)`, because a baseline
+now needs the section 12.3 approval fields and those exist only with the plane on — and the
+retired values (`reference`, kind `working`) are refused whatever the switch
+(`test_baseline_import_refused_while_plane_off`, S6-3); lineage family admission (5.1); the ChatLLM prerequisite;
 `apps/cli/remote_mcp.py` `_planes_from_settings`. Off → on → off changes no row. Worker
 behaviour while off: section 11.2 step 6.
 
@@ -894,7 +903,7 @@ transition; CAS on version append; digests recomputed from stored bytes on read 
 | new stored bytes per writer bucket | 128 MiB per rolling day |
 | stored and new bytes per Principal | section 2.10 (2 GiB, 256 MiB per day) |
 | CPM compute per Principal | 2,500,000 activity-units per rolling hour; 1 concurrent compute |
-| pending baseline proposals per Project | 50 |
+| pending baseline proposals | 50 per Project and 10 per writer bucket per Project (RR1-F06), counted under the Project lock; the operator's direct approval is never blocked by a pending proposal (section 12.4) |
 | outputs per version | 100 |
 
 ### 8.4 AI boundary
@@ -955,7 +964,7 @@ operator (`ast.Div`).
 | P08 a float in a module | `test_scenario_package_has_no_float_clock_or_randomness` |
 | P09 content digest without prefix | `test_content_sha256_vector` |
 | P10 ops sorted instead of request order | `test_change_set_applies_in_request_order` |
-| P11 snapshot rounds half-up | `test_golden_snapshot[S1]` |
+| P11 snapshot rounds half-up | `test_golden_snapshot[S1]` (X1 remaining becomes 1, X2 remaining 3; RR1-F01) |
 | P12 retained logic ignored | `test_golden_network_matches[G11a]` |
 | P13a FNLT violation not reported | `test_golden_network_matches[G08]` |
 | P13b SNLT backward bound or violation dropped | `test_golden_network_matches[G18]` |
@@ -1094,8 +1103,8 @@ generic designations (replaced).
 | S6-O16 | constraints on started activities | ignored and reported `constraint_ignored_started`; R8 recommends applying finish-side constraints (FNET forward, FNLT/MFO backward) to in-progress remaining work in a later engine version, because ignoring them drops contractual-deadline negative float exactly when it matters |
 | S6-O17 | a Series with updates but no approved baseline | `compare` unavailable for it; reads report `no_baseline_in_series`; the governing baseline is still reported for the Project |
 | S6-O18 | governing baseline in Series X while updates arrive in Series Y | the governing baseline compares only within X; reads of Y report `governing_baseline_in_other_series` and list Y's own approved baselines, which the caller may name explicitly; no cross-Series comparison |
-| S6-O19 | as-of semantics | by the governing events' recorded time (what the record said on that instant); the baseline's `effective_from` is shown, not used for selection |
-| S6-O20 | baseline labels | `BL-<n>` with `n` = the Project's approval ordinal from 0, never reused (a revoked or ineligible baseline keeps its label) |
+| S6-O19 | as-of semantics | by the recorded order of the per-Project event chains (section 12.1: `seq`, with `recorded_at` from `clock_timestamp()` after the Project lock and non-decreasing); reads are labelled **"as recorded"**; the baseline's `effective_from` is shown, never used for selection (RR1-F02) |
+| S6-O20 | baseline labels | `BL-<n>` with `n` = the Project's approval ordinal from 0, assigned under the Project lock, UNIQUE `(principal_id, project_id, label)`, never reused (a revoked or ineligible baseline keeps its label) (RR1-F03) |
 | S6-O21 | first approved baseline becomes governing automatically | no; governing is always an explicit operator event |
 | S6-O22 | revoking the governing baseline | refused (`conflict(GOVERNING)`) until governing moves |
 
@@ -1270,12 +1279,13 @@ names it; `reference` is retired (section 12.2).
 |---|---|
 | status of a publication | binary: **baseline** iff an approved, eligible, non-revoked Baseline names it; every other publication is a **standard update** (the `reference` role is retired, 12.2) |
 | Baseline (`sbl_`) | `baseline_id`, `principal_id`, `project_id`, `series_id` (its publication's), `publication_id` (exact, immutable; eligible and not intake), `type` ∈ `contract` (prime contract schedule) \| `approved_update` (approved rebaseline, change or time extension), `created_at`; a row is created by a proposal or by a direct operator approval |
-| events (`sbev_`) | append-only `propose`, `approve`, `reject`, `withdraw`, `revoke`; each with server-derived provenance (6.5), `reason` (1..2,000) and `recorded_at`; `approve` also carries `label` (`BL-<n>`), `approval_reference` (1..500, required), `effective_from` (date, required), optional `supersedes_baseline_id` (an approved baseline of the same Project) |
+| events (`sbev_`) | append-only `propose`, `approve`, `reject`, `withdraw`, `revoke`; each with `baseline_id`, `publication_id`, server-derived provenance (6.5), `reason` (1..2,000), and the Project chain fields: `seq` (1, 2, … per Project), `previous_event_id` (null iff `seq = 1`), `recorded_at`; `approve` also carries `label` (`BL-<n>`), `approval_reference` (1..500, required), `effective_from` (date, required), optional `supersedes_baseline_id` (an approved baseline of the same Project); `propose` carries `proposal_ordinal` (section 12.1 "enforcement") |
 | lifecycle | `proposed` → `approved` \| `rejected` \| `withdrawn` (terminal); `approved` → `revoked` (terminal); derived, never updated |
 | eligibility | a Baseline is **effective** iff approved, not revoked, and its publication is effective `complete`/`partial`; an import-time approval whose publication finalizes `review_required`/`failed` reads `ineligible` and never counts |
-| uniqueness | ≤ 1 pending proposal and ≤ 1 approved non-revoked Baseline per publication; ≤ 50 pending proposals per Project |
+| uniqueness | ≤ 1 pending proposal per publication; a publication is approved **at most once ever** (a revoked Baseline's publication is not re-approvable; S6-D28); ≤ 50 pending proposals per Project and ≤ 10 per writer bucket per Project |
+| enforcement (RR1-F03) | every baseline and governing write first takes `pg_advisory_xact_lock` on `(principal_id, project_id)` and validates under it. Database backstops on `schedule_baseline_events`: UNIQUE `(principal_id, project_id, seq)`; partial UNIQUE `(principal_id, baseline_id) WHERE action IN ('approve', 'reject', 'withdraw')` (one decision per proposal); partial UNIQUE `(principal_id, baseline_id) WHERE action = 'revoke'`; partial UNIQUE `(principal_id, publication_id) WHERE action = 'approve'` (one approval per publication); partial UNIQUE `(principal_id, project_id, label) WHERE action = 'approve'` (labels never reused); partial UNIQUE `(principal_id, publication_id, proposal_ordinal) WHERE action = 'propose'`, where `proposal_ordinal` = the number of earlier proposals of that publication that already have a decision, computed under the lock — a second pending proposal computes the same ordinal and collides. The pending caps are lock-enforced (counted under the lock), not constraint-enforced. Each invariant has a database-tier race test (section 12.7) |
 | scope | **per Project** (operator decision 1); unlimited count; a Baseline attaches to a publication in any non-intake Series of the Project |
-| governing | append-only Project events (`sgov_`): `project_id`, `baseline_id` (effective), `reason`, operator provenance, `recorded_at`; governing now = the latest event's Baseline; as of `t` = the latest event with `recorded_at ≤ t` (S6-O19); the governing Baseline need not be the latest or most recent (BL-0 may stay governing) |
+| governing | append-only Project chain (`sgov_`): `project_id`, `baseline_id` (effective), `reason`, operator provenance, `seq` (1, 2, …), `previous_governing_event_id` (null iff `seq = 1`; equal to the event named by the CAS `expected_governing_baseline_id`), `recorded_at`; UNIQUE `(principal_id, project_id, seq)` and a principal-composite FK to the predecessor. **Order (RR1-F02):** under the Project lock the writer reads the head, takes `recorded_at = clock_timestamp()` **after** acquiring the lock, and a CHECK-by-trigger refuses a `recorded_at` earlier than the predecessor's, so recorded time is non-decreasing along the chain. Governing now = the event with the maximum `seq`; as of `t` = the event with the maximum `seq` among those with `recorded_at ≤ t` (equal timestamps resolve by `seq`); reads say "as recorded". The baseline event chain follows the same rules. The governing Baseline need not be the latest or most recent (BL-0 may stay governing) |
 | superseded | a Baseline named by a later approval's `supersedes_baseline_id` is labelled `superseded` (historical); it stays readable and may still be governing if the operator says so |
 | comparisons | within one Series only (Stable Activity identity is Series-scoped): `schedule_baselines.compare` pairs an effective Baseline's publication with a later eligible publication of the **same** Series (else `invalid_request(TO_PUBLICATION_ID)`), using `cpm-workbench-full-delta-v1` on demand, and labels the answer with the Baseline's label, type and provenance |
 | scenarios | `from_baseline_id` requires an effective Baseline and records both the Baseline id and its exact publication; `from_publication_id` records the publication only (a pending proposal never changes this) |
@@ -1294,7 +1304,12 @@ there; a scratch database with such rows must be rebuilt). `SchedulePublicationR
 test and fixture moves with it. Meaning after S6-2: the column records only the **import-time
 declaration**; the Baseline objects are the one source of truth (one mechanism, R8-F20 b).
 The delta's "any roles" rule (S5b-2 §3.10) is unchanged; `latest_update` keeps its merged
-definition (S6-U11).
+definition (S6-U11). **Merged-S5 behaviour change (RR1-F04):** from S6-2 on, `reference` and
+kind `working` are refused at import whatever the switches; from S6-3 on, a role-`baseline`
+import needs the section 12.3 fields and is therefore refused `invalid_request(BASELINE_TYPE)`
+while the plane is not effective, so with only `MY_PA_SCHEDULE_ENABLED` on the import admits
+role `update` only. ADR-017 "Consequences" states it; `test_baseline_import_refused_while_plane_off`
+(S6-3) and `test_reference_role_is_retired` (S6-2) pin it.
 
 ### 12.3 Who designates (R8-F20 c)
 
@@ -1311,7 +1326,7 @@ definition (S6-U11).
 |---|---|
 | `schedule_baselines.propose` | `publication_id`, `type`, `reason`, `idempotency_key` |
 | `schedule_baselines.withdraw` | `baseline_id`, `reason`, `idempotency_key` |
-| `schedule_baselines.approve` | exactly one of `baseline_id` / `publication_id` (+ `type` when direct), `approval_reference`, `effective_from`, optional `supersedes_baseline_id`, `reason`, `idempotency_key` |
+| `schedule_baselines.approve` | exactly one of `baseline_id` / `publication_id` (+ `type` when direct), `approval_reference`, `effective_from`, optional `supersedes_baseline_id`, `reason`, `idempotency_key` A direct approval by `publication_id` of a publication that has a pending proposal **adopts that proposal**: it writes the `approve` event on the proposal's `baseline_id` (the operator's `type` and fields win and are recorded), creates no second Baseline row and is never blocked by the proposal (RR1-F05/F06) |
 | `schedule_baselines.reject` / `.revoke` | `baseline_id`, `reason`, `idempotency_key` |
 | `schedule_baselines.set_governing` | `project_id`, `baseline_id` (effective), `expected_governing_baseline_id` (CAS; null for the first), `reason`, `idempotency_key` |
 | `schedule_baselines.list` | `project_id`, optional `series_id`, optional `status`, page |
@@ -1320,7 +1335,8 @@ definition (S6-U11).
 | `schedule_baselines.compare` | `baseline_id`, `to_publication_id`, optional `change_kind`, page |
 
 Errors: an illegal transition (`approve` of a withdrawn proposal, a second approval of one
-publication, revoking a revoked Baseline) is `conflict(BASELINE_ID)`; revoking the governing
+publication, revoking a revoked Baseline, a lost race on any section 12.1 backstop) is
+`conflict(BASELINE_ID)`; a pending cap reached is `rate_limited(BASELINE_ID)`; revoking the governing
 Baseline `conflict(GOVERNING)`; an ineligible or intake publication `conflict(STATUS)`.
 
 ### 12.5 Baseline vectors (S6-1 `baselines.py`, pure over event lists)
@@ -1331,12 +1347,13 @@ Baseline `conflict(GOVERNING)`; an ineligible or intake publication `conflict(ST
 | B2 | B1 + `set_governing` BL-0 | governing BL-0 |
 | B3 | B2 + client proposes P5 `approved_update` | P5 `proposed`; not a baseline; governing BL-0; P5 still a standard update for currency |
 | B4 | B3 + operator approves the proposal (supersedes BL-0) | BL-1 approved; BL-0 `superseded`; governing still BL-0 |
-| B5 | B4 + `set_governing` BL-1 at `t2` | governing BL-1; as of `t1 < t2` BL-0 |
+| B5 | B4 with BL-0 `effective_from` 2027-01-01 and BL-1 `effective_from` 2026-12-01; governing chain: `seq 1` BL-0 recorded 2027-02-01T10:00, `seq 2` BL-1 recorded 2027-03-01T10:00 | governing now BL-1; as recorded at 2027-01-15 null, at 2027-02-15 BL-0, at 2027-03-15 BL-1 (an `effective_from` rule would answer BL-0 on 2027-01-15 and 2027-03-15; RR1-F07) |
 | B6 | B5 + `revoke` BL-1 | `conflict(GOVERNING)` |
 | B7 | client proposal + `reject` | `rejected`; no label consumed |
 | B8 | import-approve P9 whose parse ends `failed` | `ineligible`; label BL-<n> consumed; never governing |
 | B9 | 2 proposals on one publication | the second `conflict(BASELINE_ID)` |
 | B10 | `compare` BL-0 with a publication of another Series | `invalid_request(TO_PUBLICATION_ID)` |
+| B11 | client proposes P7 (`approved_update`, its bucket's 1st pending); operator `approve` with `publication_id` P7, `type contract` | the proposal's Baseline is approved as BL-<next> with type `contract`; no second Baseline row; the proposal is no longer pending; a later client `withdraw` of it is `conflict(BASELINE_ID)` (RR1-F05) |
 
 ### 12.6 Decisions, residuals, open choices (continuing section 10)
 
@@ -1352,6 +1369,8 @@ Baseline `conflict(GOVERNING)`; an ineligible or intake publication `conflict(ST
 | S6-D25 | comparisons stay within one Series |
 | S6-D26 | as-of by recorded time |
 | S6-D27 | currency excludes effective baseline publications |
+| S6-D28 | a publication is approved at most once ever; revocation is final for it |
+| S6-D29 | baseline and governing events are per-Project `seq` chains written under the Project lock with `clock_timestamp()` after the lock; reads are "as recorded" |
 | S6-U13 | a scratch database holding S5 `baseline`/`reference` rows cannot upgrade; rebuild it |
 | S6-U14 | `effective_from` is metadata; contractual effective-date selection is a later read |
 | open | S6-O13, S6-O17 to S6-O22 (section 10.3) |
@@ -1368,6 +1387,14 @@ Baseline `conflict(GOVERNING)`; an ineligible or intake publication `conflict(ST
 | P46 currency ignores baseline exclusion | `test_current_standard_update_vectors[C5]` |
 | P47 role `reference` still admitted | `test_reference_role_is_retired` (S6-2) |
 | P48 client reaches approve | `test_baseline_approval_is_attested_operator_only` (S6-3) |
+| P49 `recorded_at` from transaction start (`now()`) or no predecessor check | `test_governing_chain_is_monotonic_under_contention` (S6-2) |
+| P50 Project lock removed from baseline writes | `test_concurrent_approve_and_withdraw_write_one_decision` (S6-2) |
+| P51 one-approval-per-publication index dropped | `test_concurrent_approvals_of_one_publication` (S6-2) |
+| P52 label index dropped | `test_concurrent_approvals_never_reuse_a_label` (S6-2) |
+| P53 `proposal_ordinal` index dropped | `test_concurrent_proposals_on_one_publication` (S6-2) |
+| P54 pending caps unchecked | `test_pending_caps_hold_under_concurrency` (S6-2) |
+| P55 direct approval creates a second Baseline | `test_baseline_vectors[B11]` |
+| P56 role `baseline` admitted with the plane off | `test_baseline_import_refused_while_plane_off` (S6-3) |
 
 | Requirement (operator) | Section | First test |
 |---|---|---|
@@ -1405,3 +1432,18 @@ Baseline `conflict(GOVERNING)`; an ineligible or intake publication `conflict(ST
 | F19 | lag text corrected (2.6) |
 | F20 | sections 12.2, 12.3, 11.3 (C5–C8), 11.2 step 1 |
 | F21 | one count set (6.1) |
+
+### 13.1 R8 re-review 1 findings → fixes (revision R8-2)
+
+| Finding | Fix (section) |
+|---|---|
+| RR1-F01 | S1 rebuilt with `minutes_per_source_unit = 500` and 2 tie cases (0.5 → 0, 2.5 → 2) where half-up differs, every cell and the full `snapshot_report` stated; P11 names what goes red (3.12, 9.1) |
+| RR1-F02 | baseline and governing events are per-Project `seq` chains with UNIQUE `(principal_id, project_id, seq)`, `previous_…_id`, `recorded_at = clock_timestamp()` after the Project lock, a non-decreasing trigger CHECK, `seq` as tie rule, reads labelled "as recorded" (12.1; S6-O19; P49) |
+| RR1-F03 | Project advisory lock on every baseline and governing write; partial UNIQUE backstops for 1 decision and 1 revoke per Baseline, 1 approval per publication, labels, and pending proposals per publication (`proposal_ordinal`); lock-enforced caps; a race test per invariant (12.1, 12.7; S6-O20; P50–P54) |
+| RR1-F04 | the merged-S5 import change disclosed in 6.2, 12.2 and ADR-017 Consequences, with `test_baseline_import_refused_while_plane_off` (P56) |
+| RR1-F05 | a direct approval adopts a pending proposal; vector B11 (12.4, 12.5; P55) |
+| RR1-F06 | 10 pending per writer bucket per Project; the operator's direct approval never blocked (8.3, 12.1, 12.4) |
+| RR1-F07 | B5 gives `effective_from` values that disagree with recording order and states the as-of answers (12.5) |
+| RR1-F08 | `originated_from` from a Baseline admitted only while it is approved; never presented as approval evidence otherwise (5.2) |
+| RR1-F09 | ADR-017 wording: "baselines are never derived (now operator-approved objects)" |
+| RR1-F10 | dedicated connection and unconditional `try/finally` unlock for the CPM advisory lock (3.11) |

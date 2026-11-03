@@ -53,7 +53,10 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 #: `source_object_versions` naming their database-only support uniques;
 #: `captures` is untouched. Moved again by the CPM Workbench S5b-2 revision, which
 #: widens `worker_plane_is_known` to the `schedule` plane; `captures` is untouched.
-TABLES_SHA256: Final = "791f745853051099dcb3554d70c601d264b27b7a705bf08395a848d40aee7387"
+#: Moved again by the Schedule Scenarios S6-2 revision, which declares the 11 plane
+#: tables, restates the 2 publication CHECKs and builds the 6 `record_links`
+#: CHECKs from the lineage storage vocabulary; `captures` is untouched.
+TABLES_SHA256: Final = "57e828e6b7afe9b4d92eabda893beaf62fd3ce0b15cd6a5bae7b601bc11c3e35"
 WP03_MIGRATION_SHA256: Final = "098edd98ccc1846b01c58f42e296e4751e7841b562a2827616cc4337e174c354"
 WP03_MIGRATION: Final = (
     ROOT / "migrations/versions/20260914_e6a4c2f91b73_project_controls_run01_integrity.py"

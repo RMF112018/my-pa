@@ -68,7 +68,7 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "b8e4d1a6c073"
 PULL_REVISION: Final = "6a2f9d1c4b80"
 PROMOTION_REVISION: Final = "a4d8e31b2c90"
-HEAD_REVISION: Final = "621ef6786c64"
+HEAD_REVISION: Final = "2a90f91dd786"
 CURRENT_HEAD_REVISION: Final = HEAD_REVISION
 GRAPH_REVISION: Final = "c3f8a1d07e94"
 #: What was head until `REVISION` stacked on it, and therefore the revision

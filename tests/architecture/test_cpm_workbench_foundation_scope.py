@@ -163,8 +163,8 @@ def test_the_schedule_repository_writes_no_raw_sql_and_no_grant() -> None:
 _DETERMINISM: Final = """
 from datetime import date
 from my_pa.domain.schedule import (
-    ScheduleBaselineKind, ScheduleImportRequest, SchedulePublicationRole,
-    normalize_series_name, schedule_import_request_digest,
+    ScheduleBaselineKind, ScheduleImportApproval, ScheduleImportRequest,
+    SchedulePublicationRole, normalize_series_name, schedule_import_request_digest,
 )
 name = normalize_series_name("  Master\\u00a0SCHEDULE\\tÉtape  ")
 request = ScheduleImportRequest(
@@ -173,6 +173,7 @@ request = ScheduleImportRequest(
     source_version_id="ver_cpmscope0001", publication_role=SchedulePublicationRole.BASELINE,
     baseline_kind=ScheduleBaselineKind.CONTRACT, expected_data_date=date(2026, 5, 4),
     supersedes_publication_id=None, idempotency_key="cpm-scope-0001",
+    approval=ScheduleImportApproval("Award letter", date(2026, 6, 1), "Synthetic"),
 )
 print(name.name, name.key, schedule_import_request_digest("prn_cpmscope0001", request), sep="|")
 """

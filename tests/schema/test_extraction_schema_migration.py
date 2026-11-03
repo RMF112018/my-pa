@@ -567,6 +567,22 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "schedule_import_issues",
         }
     ),
+    # Schedule Scenarios S6-2: the scenario and baseline plane (revision A).
+    "2a90f91dd786": frozenset(
+        {
+            "schedule_intake_series",
+            "schedule_series_match_decisions",
+            "schedule_baselines",
+            "schedule_baseline_events",
+            "schedule_governing_events",
+            "schedule_scenarios",
+            "schedule_scenario_versions",
+            "schedule_cpm_runs",
+            "schedule_scenario_outputs",
+            "schedule_scenario_write_requests",
+            "schedule_scenario_write_refusals",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

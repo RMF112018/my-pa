@@ -2895,3 +2895,29 @@ are resolved in place; the Orchestrator chose option (a) for R9-F01.
 |---|---|
 | RR2-F01 | FAST AST pin `test_predeploy_module_touches_only_the_retired_role_probe` (I9-B): the predeploy module imports exactly `{"schedule_publications"}` from `tables.py` and uses it only inside `RETIRED_ROLE_PROBE`; ad-hoc `sqlalchemy.table()` or `text()` alternatives are forbidden; P2-58 (14.9) |
 | RR2-F02 | the import-time approval never carries `supersedes_baseline_id` (a future field would be decided under J with a typed refusal); the lease-engine cache is lock-guarded and disposed by test fixtures; both hook savepoints are `begin_nested()` context managers and a failed outer rollback propagates as transient (14.8.4, 14.8.5, 14.8.7) |
+
+### 14.14 Executed results (S6-2)
+
+**I9-A scratch-cluster lock measurement (section 14.6.3, R9-F10).** Run once by hand on
+2026-11-03 with `tests/schema/schedule_scenarios_lock_measurement.py` (not a CI test) against a
+disposable catalog of a Homebrew PostgreSQL 15.15 (aarch64, Apple M4 Pro) scratch cluster
+(`initdb --auth=trust`, loopback, `PGTZ=UTC`); nothing persistent was touched. Synthetic
+`record_links` rows were inserted under `session_replication_role = replica` and `ANALYZE`d;
+10^4 synthetic `schedule_publications` rows were present in both runs. Each live `ALTER TABLE`
+was timed by `clock_timestamp()` immediately around it through a measurement-only wrapper of
+`op`; the revision text was unchanged.
+
+| `record_links` rows | `record_links` size | Phase C (`record_links`, 6 CHECKs, 1 pass) | Phase A (`schedule_publications` at 10^4 rows, 2.9 MB) | Whole upgrade |
+|---|---|---|---|---|
+| 100,000 | 24.8 MB | 0.84 s | 0.003 s | 0.88 s |
+| 1,000,000 | 248.3 MB | 8.40 s | 0.002 s | 8.45 s |
+
+Scale factor: phase C is linear at about 8.4 µs per `record_links` row (about 34 ms per MB of
+heap) on this host. The runbook turns Q3's `reltuples` into an expected window by that factor;
+the `ACCESS EXCLUSIVE` window on `record_links` therefore approaches the 10 s figure near
+10^6 rows on comparable hardware. Go/no-go: proceed only when the scaled phase C time is well
+under 10 s on the server host (whose speed is unmeasured here, S6-2-U01); otherwise stop and
+review. `lock_timeout` bounds only lock acquisition, not this validating pass.
+
+Command: `PYTHONPATH=src python -m tests.schema.schedule_scenarios_lock_measurement
+postgresql+psycopg://<user>@127.0.0.1:<port>/postgres` (scratch cluster admin URL).

@@ -991,6 +991,34 @@ frozen digest; oracles; properties; every prove-red row executed; FAST, ruff, ru
 mypy strict (default and `--platform linux`, repo and floor-pinned venvs), shard verify and
 doc guards green; maximal-network timing reported.
 
+#### 9.1.1 S6-1 executed results (worker I8, 2026-11-03)
+
+Measured on the branch, not claimed: the tests named below ran green; the
+prove-red rows each went red for the stated reason (the handoff carries the
+table). Nothing here was run against a database, CI or production.
+
+| Item | Result |
+|---|---|
+| G02 exact operation count `n` | 70 (sort 8, forward 20, backward 20, slack 16, critical paths 6; hand-derived and pinned in `tests/unit/test_scenario_cpm_goldens.py`; budget 70 computes, 69 rejects) |
+| Frozen digests | a `result_sha256` per vector G01-G24 and the G02 `content_sha256`, pinned in `tests/unit/test_scenario_cpm_goldens.py` |
+| Maximal network (R8 ruling R-5) | 25,000 activities with 66-character keys, 100,000 relationships (24,999 FS plus 75,001 FF/SF), 32 calendars with 62 holidays each, 2 constraints on every not-started activity: computed in 1,077,389 operations (budget 4,000,000; section 3.11 bound 2,100,000) in about 1.1 s on the local developer host (Apple M4 Pro, CPython 3.12.13); canonical content 27,270,007 bytes, result document 30,501,253 bytes. The CI-host figure is not yet measured (S6-U06) |
+| Oracles and properties | calendar functions against a minute-by-minute oracle (24 seeded calendars); ES/EF/LS/LF/TF and the critical set against path enumeration on 2,000 seeded DAGs; the section 3.13 properties on 60 seeded networks each |
+
+Resolutions this contract left open, taken by I8 (each pinned by a test):
+
+| Point | Resolution |
+|---|---|
+| vector keys `A`, `B`, ... | written `x:A`, `x:B`, ... (a key is `sact_` or `x:<token>`, section 2.4; key order unchanged) |
+| `remaining_start` of a complete activity | null |
+| a rejected run's summary | `activity_count` and `relationship_count` from the content; every other count 0, `critical_paths_truncated` false |
+| a self-loop reaching the engine | a 1-element cycle (`cycle_detected`), never `dangling_relationship` |
+| `ambiguous` with a considered candidate but none at 800 | reason `insufficient_evidence` |
+| `series_name_if_new` taken under the lock | `ambiguous` `name_conflict` (the reason the closed set already holds) |
+| change set outside 1..5,000 ops or 4,194,304 bytes | `ChangeSetRefusal(0, bound_exceeded)` before any op |
+| `constraint.clear`, `distribution.clear`, `progress.clear`, `calendar.exception.remove` of something absent | an empty effective change (the grammar has no `*_absent` token for them) |
+| `constraint.set` | replaces the constraint in its slot (early, late or mandatory); mixing a mandatory with any other is `constraint_conflict` |
+| symbol names | `SnapshotRefusalError` (ruff N818), `ChangeSetApplied`, `ChangeOp` as the op-name enum, `OutputRefusal` with `OutputRefusalReason`, `SeriesCandidate` (input) beside `MatchCandidate` (recorded), `decide_baseline_write` and `compare_refusal` for the section 12 transition and comparison rules |
+
 ### 9.2 S6-2: schema, migrations, persistence, unit of work, worker hook
 
 Revision A (on `621ef6786c64`): the 8 `IdKind`s' tables
@@ -1071,7 +1099,7 @@ lockstep count pins, runbook and client guidance.
 | S6-U03 | no correlation, risk events, branching, resources | later version |
 | S6-U04 | reports cannot cite schedule-family lineage in a manifest | operator, later |
 | S6-U05 | lineage grain is the version | later family |
-| S6-U06 | synchronous CPM timing unmeasured until S6-1 | S6-1; worker plane before S6-3 if missed |
+| S6-U06 | synchronous CPM timing: measured by S6-1 on the local developer host only (section 9.1.1: about 1.1 s for the maximal network); the CI-host figure comes from the first CI run of the FAST test that asserts the 10 s target | S6-1 (local, done); CI host on the first PR run; worker plane before S6-3 if missed |
 | S6-U07 | "retained logic" is this contract's definition, not a P6 equivalence claim | guidance |
 | S6-U08 | full content stored per version | bounded by quotas |
 | S6-U09 | a refused change set does not disclose the op index | error-contract extension |

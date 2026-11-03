@@ -177,6 +177,20 @@ CAPABILITIES_AT_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset(
     }
 )
 
+#: Schedule Scenarios S6-2's ten append-only plane tables (the ledger is not).
+_S62_APPEND_ONLY: Final = (
+    "schedule_intake_series",
+    "schedule_series_match_decisions",
+    "schedule_baselines",
+    "schedule_baseline_events",
+    "schedule_governing_events",
+    "schedule_scenarios",
+    "schedule_scenario_versions",
+    "schedule_cpm_runs",
+    "schedule_scenario_outputs",
+    "schedule_scenario_write_refusals",
+)
+
 #: Exact delta between the frozen capture revision and the current head. This is
 #: historical migration evidence, so it is intentionally literal rather than
 #: derived from either live domain enum.
@@ -285,6 +299,25 @@ LINEAGE_TRIGGERS: Final[frozenset[str]] = frozenset(
         "a_schedule_parser_run_follows_its_lifecycle",
         "a_schedule_row_changes_only_by_linking",
         "a_schedule_issue_is_recorded_while_processing",
+        # Schedule Scenarios S6-2.
+        *(f"{table}_are_append_only" for table in _S62_APPEND_ONLY),
+        *(
+            f"{table}_refuse_truncate"
+            for table in (*_S62_APPEND_ONLY, "schedule_scenario_write_requests")
+        ),
+        "an_intake_series_holds_only_its_publication",
+        "a_series_match_decision_follows_its_intake",
+        "a_schedule_baseline_names_an_admissible_publication",
+        "a_schedule_baseline_has_its_first_event",
+        "a_schedule_baseline_event_extends_its_chain",
+        "a_schedule_governing_event_extends_its_chain",
+        "a_schedule_scenario_starts_from_an_admissible_origin",
+        "a_schedule_scenario_has_its_first_version",
+        "a_scenario_version_extends_its_chain",
+        "a_scenario_output_binds_a_computed_run",
+        "a_plane_write_request_completes_once",
+        "a_plane_write_request_is_never_left_reserved",
+        "a_schedule_intake_series_admits_no_other_publication",
     }
 )
 

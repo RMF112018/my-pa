@@ -679,7 +679,7 @@ def _publication_values(**overrides: object) -> dict[str, object]:
 def test_baseline_kind_is_required_exactly_for_baseline(db_engine: Engine) -> None:
     name = "a_schedule_baseline_has_its_kind"
     for n, (role, kind) in enumerate(
-        (("update", None), ("reference", None), ("baseline", "working"), ("baseline", "contract"))
+        (("update", None), ("baseline", "approved_update"), ("baseline", "contract"))
     ):
         _accepted(
             db_engine,
@@ -695,7 +695,7 @@ def test_baseline_kind_is_required_exactly_for_baseline(db_engine: Engine) -> No
             replica=True,
         )
     for n, (role, kind) in enumerate(
-        (("baseline", None), ("update", "working"), ("reference", "contract"))
+        (("baseline", None), ("update", "approved_update"), ("update", "contract"))
     ):
         _refused(
             db_engine,
@@ -1713,8 +1713,8 @@ _ADMISSION_CHANGES: Final[dict[str, object]] = {
     "source_version_id": "ver_cpmga0002",
     "idempotency_key": "changed-key-0001",
     "request_digest": OTHER_DOC,
-    "publication_role": "reference",
-    "baseline_kind": "working",
+    "publication_role": "baseline",
+    "baseline_kind": "approved_update",
     "expected_data_date": date(2026, 1, 1),
     "supersedes_publication_id": "spub_cpmgap0009",
     "admitted_at": text("now() - interval '1 day'"),

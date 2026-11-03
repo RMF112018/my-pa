@@ -47,6 +47,7 @@ from my_pa.domain.schedule import (
     ScheduleDurationCell,
     ScheduleFieldCode,
     ScheduleFinalization,
+    ScheduleImportApproval,
     ScheduleImportRequest,
     ScheduleIssueCode,
     ScheduleLease,
@@ -251,7 +252,15 @@ def _request(
         expected_data_date=expected,
         supersedes_publication_id=supersedes,
         idempotency_key=key,
+        # Schedule Scenarios S6-2 (contract section 14.7.2): a baseline request
+        # carries its import-time approval.
+        approval=_APPROVAL if role is SchedulePublicationRole.BASELINE else None,
     )
+
+
+_APPROVAL: Final = ScheduleImportApproval(
+    approval_reference="Synthetic approval", effective_from=date(2026, 6, 1), reason="Synthetic"
+)
 
 
 def _uow(engine: Engine) -> SqlAlchemyScheduleUnitOfWork:
@@ -647,9 +656,15 @@ def test_same_version_same_series_replays_when_metadata_agrees(db_engine: Engine
 
 _METADATA: Final[dict[str, tuple[dict[str, object], dict[str, object]]]] = {
     "expected_data_date": ({"expected": LIVE_DATE}, {"expected": date(2026, 5, 11)}),
-    "publication_role": ({}, {"role": SchedulePublicationRole.REFERENCE}),
+    "publication_role": (
+        {},
+        {"role": SchedulePublicationRole.BASELINE, "baseline": ScheduleBaselineKind.CONTRACT},
+    ),
     "baseline_kind": (
-        {"role": SchedulePublicationRole.BASELINE, "baseline": ScheduleBaselineKind.WORKING},
+        {
+            "role": SchedulePublicationRole.BASELINE,
+            "baseline": ScheduleBaselineKind.APPROVED_UPDATE,
+        },
         {"role": SchedulePublicationRole.BASELINE, "baseline": ScheduleBaselineKind.CONTRACT},
     ),
 }

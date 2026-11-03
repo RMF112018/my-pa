@@ -90,8 +90,8 @@ PREVIOUS_REVISION: Final = "16f05c46b8c3"
 #: interaction log `c8f7ae406d47` 116, and the Commitment counterparty Entity
 #: cutover `5c1e7a9b3d42` 117; the record lineage slices since (S1 to S4 and S3.1)
 #: make it 123, the CPM Workbench S5b-1 foundation 124, and the CPM Workbench
-#: S5b-2 vocabulary revision 125.
-REVISION_FILE_COUNT: Final = 125
+#: S5b-2 vocabulary revision 125, and the Schedule Scenarios S6-2 plane 126.
+REVISION_FILE_COUNT: Final = 126
 
 #: The revision's frozen salt, restated. If this and the revision ever disagree
 #: the expectations below stop matching, which is the point of restating it.
@@ -448,7 +448,8 @@ def test_the_revision_is_the_single_head_and_revises_the_prior_head() -> None:
     # labels), then `de5ec1c65857` (WP-TUX-01). Every edge below is retained
     # and the new ones are asserted, so the chain is still checked link by
     # link rather than loosened.
-    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == "6c2306330ceb"
+    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == "621ef6786c64"
+    assert script.get_revision("621ef6786c64").down_revision == "6c2306330ceb"
     assert script.get_revision("6c2306330ceb").down_revision == "023f8f7eb499"
     assert script.get_revision("c5260943d933").down_revision == "6f1476b8da52"
     assert script.get_revision("6f1476b8da52").down_revision == "d020b532ad7d"

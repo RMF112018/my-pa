@@ -397,9 +397,11 @@ def test_empty_to_head_creates_exactly_the_seven_tables(
     del disposable_database
     command.upgrade(_config(), PREVIOUS)
     before = _relations(engine)
+    command.upgrade(_config(), REVISION)
+    assert _relations(engine) - before == set(CPM_TABLES)
+    # The later additive revisions keep every one of them.
     command.upgrade(_config(), "head")
     _assert_present(engine, at=HEAD)
-    assert _relations(engine) - before == set(CPM_TABLES)
     with engine.connect() as connection:
         triggers = set(
             connection.execute(
@@ -421,6 +423,8 @@ def test_empty_to_head_creates_exactly_the_seven_tables(
         "a_schedule_parser_run_follows_its_lifecycle",
         "a_schedule_row_changes_only_by_linking",
         "a_schedule_issue_is_recorded_while_processing",
+        # Schedule Scenarios S6-2's G10 on `schedule_publications` (at head).
+        "a_schedule_intake_series_admits_no_other_publication",
     }
 
 

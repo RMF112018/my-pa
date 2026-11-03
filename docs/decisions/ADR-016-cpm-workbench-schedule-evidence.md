@@ -104,3 +104,12 @@ Implemented and test-isolated on `feat/cpm-s5b-worker`: S5a parser, S5b-1 schema
 (`6c2306330ceb`), S5b-2 vocabulary (`621ef6786c64`), worker, capabilities, policy closure,
 pre-deploy checks and assurance documents. The R2 section 45 acceptance criteria are recorded
 with executed results in section 7 of the S5b-2 contract. Nothing is deployed.
+
+## Partially superseded by ADR-017 (2026-11-03)
+
+Decisions 1, 4, 7 and 8 and the cross-domain-links exclusion are partially superseded by
+[ADR-017](ADR-017-schedule-scenarios-and-baselines.md) (Schedule Scenarios, server CPM and
+operator-approved baselines; proposed under the operator directive of 2026-11-03, not
+ratified, nothing deployed), exactly as its supersession table lists; every other decision
+here stands. Repository note: the S5a, S5b-1 and S5b-2 slices this ADR records are merged on
+`main` (#344, #345, #347; `83e79817`); the status and basis lines above are left as written.

@@ -115,7 +115,7 @@ a publication, to sample on the server, or to turn the plane on by default.
 
 ## Implementation status
 
-S6-1 (the pure domain and the CPM engine, contract section 9.1) is implemented on the branch
-`feat/schedule-scenarios-engine` and not merged (contract section 9.1.1 records what was
-executed). S6-2 (persistence) and S6-3 (capabilities) are not implemented. Nothing is
+S6-1 (the pure domain and the CPM engine, contract section 9.1) is implemented and merged
+(#348; contract section 9.1.1 records what was executed). S6-2 (persistence) is designed in
+contract section 14 and not implemented; S6-3 (capabilities) is not implemented. Nothing is
 deployed, migrated or granted, and no switch exists yet.

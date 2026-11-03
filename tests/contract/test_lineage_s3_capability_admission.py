@@ -238,7 +238,7 @@ def test_s3_capabilities_are_operator_decision_required() -> None:
         assert policy.exclusion_rationale is None
         assert not is_operator_only(capability)
     # P1 moved data-class members, so the ChatLLM data profile moved too.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v10"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v11"
 
 
 def test_backfill_capabilities_are_operator_only_and_control_plane_excluded() -> None:
@@ -347,6 +347,10 @@ def test_existing_v1_shapes_are_unchanged_by_s3() -> None:
     # Record lineage S4 (S4 contract section 10): its 7 names are excluded
     # beside the lineage names; the count and both pins stay.
     lineage |= PROGRAM_REPORTING_CAPABILITIES
+    # CPM Workbench S5b-2: likewise the 7 Schedule names.
+    lineage |= {
+        capability.value for capability in Capability if capability.value.startswith("schedule_")
+    }
     payloads = {
         tool.name: tool.input_schema["properties"]["payload"]
         for tool in TOOLS
@@ -371,7 +375,14 @@ def test_existing_v1_shapes_are_unchanged_by_s3() -> None:
     # Program purpose after it (S4 contract sections 8 and 10, R4-F04, R4-F15).
     basis_tail = ["record_lineage_authoring", "meeting_note_history_read", "issue_work_authoring"]
     published = TOOLS[0].input_schema["$defs"]["Purpose"]["enum"]
-    assert published[-5:] == [*basis_tail, "lineage_backfill", "program_reporting_read"]
+    # CPM Workbench S5b-2 appends its 2 purposes after S4's (contract 3.12).
+    assert published[-7:] == [
+        *basis_tail,
+        "lineage_backfill",
+        "program_reporting_read",
+        "schedule_import",
+        "schedule_read",
+    ]
 
 
 #: Every S1/S2 lineage view's keys at the S2 basis (`84ddab37`).

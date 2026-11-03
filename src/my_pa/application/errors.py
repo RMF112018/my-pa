@@ -623,6 +623,27 @@ class SafeDetail(StrEnum):
     SEEDS = "seeds"
     ACCEPTANCE_BASES = "acceptance_bases"
     RELATION_TYPES = "relation_types"
+    #: CPM Workbench S5b-2 (worker and capabilities contract section 4.5): the
+    #: Schedule command fields of these names (malformed, out of range, or a
+    #: root absent or another Principal's). `SERIES_ID` also the exactly-one-of
+    #: `series_id`/`series_name` rule; `DATE_RANGE` a malformed bound or one
+    #: whose `from` is after its `to`. `PROJECT_ID`, `ENROLLMENT_ID`,
+    #: `SOURCE_OBJECT_ID`, `SOURCE_VERSION_ID`, `IDEMPOTENCY_KEY`, `PAGE_SIZE`,
+    #: `CURSOR`, `STATUS` and `MAX_BYTES` are reused.
+    SERIES_ID = "series_id"
+    SERIES_NAME = "series_name"
+    PUBLICATION_ID = "publication_id"
+    PUBLICATION_ROLE = "publication_role"
+    BASELINE_KIND = "baseline_kind"
+    EXPECTED_DATA_DATE = "expected_data_date"
+    SUPERSEDES_PUBLICATION_ID = "supersedes_publication_id"
+    SCHEDULE_ACTIVITY_ID = "schedule_activity_id"
+    FROM_PUBLICATION_ID = "from_publication_id"
+    TO_PUBLICATION_ID = "to_publication_id"
+    CHANGE_KIND = "change_kind"
+    HIERARCHY_PREFIX = "hierarchy_prefix"
+    ROW_TYPE = "row_type"
+    DATE_RANGE = "date_range"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

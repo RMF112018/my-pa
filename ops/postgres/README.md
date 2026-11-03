@@ -47,6 +47,19 @@ is unaffected. A runtime that does not connect as `my_pa_runtime` needs no step.
 | Encoding / locale | `UTF8` / `C.UTF-8` (see [Collation contract](#collation-contract)) |
 | Data checksums | enabled |
 
+## CPM Workbench pre-deploy checks
+
+`ops/postgres/cpm_workbench_predeploy_check.py --phase before|after` runs the
+read-only checks P0–P8 of
+[`../runbooks/cpm-workbench.md`](../runbooks/cpm-workbench.md) section 3 over
+`src/my_pa/infrastructure/database/cpm_workbench_predeploy.py`: it connects with
+`MY_PA_DATABASE_URL`, opens one transaction whose first statement is
+`SET TRANSACTION READ ONLY`, issues only catalog `SELECT`s, rolls back, and
+prints one status line per check and never a connection string. It was run only
+against disposable scratch clones by `tests/database/test_cpm_workbench_predeploy.py`,
+never against a shared or production database; running it there is an operator
+gate.
+
 ## Do not connect to the legacy SQLite database
 
 **PostgreSQL `my_pa` is the canonical store.** The legacy SQLite file that this

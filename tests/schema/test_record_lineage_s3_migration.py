@@ -45,6 +45,7 @@ from sqlalchemy import Engine, Table, insert, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
 from tests.schema import lineage_s3_schema_ahead_contract as gap
+from tests.schema.cpm_workbench_vocabulary_contract import S5B2_CAPABILITIES, S5B2_PURPOSES
 from tests.schema.lineage_s3_schema_ahead_contract import S3_CAPABILITIES, S3_PURPOSES
 from tests.schema.lineage_s4_schema_ahead_contract import S4_CAPABILITIES, S4_PURPOSES
 from tests.schema.lineage_s31_schema_ahead_contract import S31_CAPABILITIES
@@ -73,7 +74,7 @@ SCHEMA: Final = "knowledge"
 REVISION: Final = "6f1476b8da52"
 PREVIOUS: Final = "d020b532ad7d"
 #: Record lineage S4 (`c5260943d933`, ADR-015) is additive on this revision.
-HEAD: Final = "6c2306330ceb"
+HEAD: Final = "621ef6786c64"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 #: Record lineage S3.1 (`023f8f7eb499`, ADR-015 decision 15), additive on S4.
 S31_MIGRATION: Final = MIGRATIONS / "20261025_023f8f7eb499_record_lineage_s31.py"
@@ -229,7 +230,7 @@ def test_the_revision_is_the_single_head_on_d020b532ad7d() -> None:
     assert script.get_revision(PREVIOUS).down_revision == "264310e0416a"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
     assert MIGRATION.name.endswith("_record_lineage_s3.py")
-    assert len(list(MIGRATIONS.glob("*.py"))) == 124
+    assert len(list(MIGRATIONS.glob("*.py"))) == 125
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -395,10 +396,16 @@ def test_at_vocabulary_adds_exactly_the_s3_names() -> None:
     # exactly the S3 names the domain does not declare yet (none).
     # The S4 names, declared since, are the S4 revision's (c5260943d933).
     # The S3.1 names too, the S3.1 revision's (023f8f7eb499).
-    declared = {capability.value for capability in Capability} - S4_CAPABILITIES - S31_CAPABILITIES
+    # The CPM Workbench S5b-2 names too, that revision's (621ef6786c64).
+    declared = (
+        {capability.value for capability in Capability}
+        - S4_CAPABILITIES
+        - S31_CAPABILITIES
+        - S5B2_CAPABILITIES
+    )
     native = {capability.value for capability in NativeSourceCapability}
     assert set(at) == declared | native | gap.lineage_s3_admitted_ahead("capability")
-    purposes = {purpose.value for purpose in Purpose} - S4_PURPOSES
+    purposes = {purpose.value for purpose in Purpose} - S4_PURPOSES - S5B2_PURPOSES
     assert set(purposes_at) == purposes | gap.lineage_s3_admitted_ahead("purpose")
     assert S3_CAPABILITIES & declared == gap.S3_CAPABILITIES_DECLARED_BY_DOMAIN
     assert S3_PURPOSES & purposes == gap.S3_PURPOSES_DECLARED_BY_DOMAIN

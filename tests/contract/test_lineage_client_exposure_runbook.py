@@ -316,6 +316,9 @@ def test_the_documented_companion_table_equals_the_family_reads_and_composite_gr
 #: "v9 adds", "v9's ...", "a client converged on v9").
 _V9: Final = "chatllm-data-v9"
 _V10: Final = "chatllm-data-v10"
+#: The current version (CPM Workbench S5b-2 moved it on from `chatllm-data-v10`,
+#: which the 6 files keep as the version that added the lineage plane).
+_CURRENT: Final = "chatllm-data-v11"
 _V9_HISTORICAL: Final = re.compile(
     r"since `chatllm-data-v9`|`chatllm-data-v9` adds|`chatllm-data-v9`'s|"
     r"converged on `chatllm-data-v9`"
@@ -324,15 +327,27 @@ _V9_HISTORICAL: Final = re.compile(
 
 @pytest.mark.parametrize("path", SECTION_65_FILES)
 def test_the_runbooks_state_the_v10_profile_version(path: str) -> None:
+    """Each file names `chatllm-data-v10` as the version that added the lineage plane.
+
+    CPM Workbench S5b-2 moved the current version to `chatllm-data-v11`
+    (`test_the_runbooks_state_the_current_profile_version` below); v10 stays
+    named as the lineage version, and v9 is never stated as current.
+    """
     text = (ROOT / path).read_text(encoding="utf-8")
-    # The version the runbooks state is the version the code plans.
-    assert CHATLLM_DATA_PROFILE_VERSION == _V10
     assert _V10 in text, f"{path} never states {_V10}"
     # Strip the historical forms; any v9 left is a current-version statement.
     current = _V9_HISTORICAL.sub("", text)
     assert _V9 not in current, f"{path} still states {_V9} as current: " + repr(
         current[max(current.index(_V9) - 80, 0) : current.index(_V9) + 40]
     )
+
+
+@pytest.mark.parametrize("path", SECTION_65_FILES)
+def test_the_runbooks_state_the_current_profile_version(path: str) -> None:
+    text = (ROOT / path).read_text(encoding="utf-8")
+    # The version the runbooks state is the version the code plans.
+    assert CHATLLM_DATA_PROFILE_VERSION == _CURRENT
+    assert _CURRENT in text, f"{path} never states {_CURRENT}"
 
 
 _WITHHELD_NAMES: Final = tuple(sorted(capability.value for capability in WITHHELD))

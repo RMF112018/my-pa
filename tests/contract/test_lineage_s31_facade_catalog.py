@@ -171,7 +171,10 @@ def _annotation_rows(names: frozenset[str]) -> list[list[object]]:
 
 def test_non_lineage_tool_annotations_are_unchanged() -> None:
     plane = _lineage_plane()
-    others = frozenset(_tools()) - plane
+    # CPM Workbench S5b-2: the 7 Schedule names are pinned by their own catalog
+    # test (`tests/contract/test_schedule_facade_catalog.py`).
+    schedule = frozenset(name for name in _tools() if name.startswith("schedule_"))
+    others = frozenset(_tools()) - plane - schedule
     assert len(others) == 192
     for name in sorted(others):
         capability = Capability(name)

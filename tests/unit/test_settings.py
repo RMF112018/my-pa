@@ -1131,3 +1131,18 @@ def test_the_lists_that_require_the_signing_key_are_exactly_the_matrix_ones() ->
             required.add(role)
     assert required == {"discovery", "manager"}
     assert "required when discovery or manager list non-empty" in _MATRIX_SETTINGS[_SIGNING_KEY]
+
+
+# ---- CPM Workbench S5b-2: the Schedule admission switch -------------------------
+
+
+def test_schedule_switch_defaults_off() -> None:
+    """`MY_PA_SCHEDULE_ENABLED`, unset (S5b-2 worker contract section 3.1).
+
+    Off is what an unconfigured process gets: no Schedule capability, no
+    Schedule unit of work, no runnable `schedule` plane. It depends on no other
+    switch, so turning it on alone is accepted -- and is an operator gate.
+    """
+    assert load_settings({DATABASE_URL: _A_URL}).schedule_enabled is False
+    enabled = load_settings({DATABASE_URL: _A_URL, f"{ENV_PREFIX}SCHEDULE_ENABLED": "true"})
+    assert enabled.schedule_enabled is True

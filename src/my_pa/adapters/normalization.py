@@ -152,6 +152,7 @@ from my_pa.application.commands import (
     GetSourceMetadata,
     GetSourceStatus,
     GetTaskHistory,
+    ImportSchedulePublication,
     ListCaptures,
     ListCommitments,
     ListCommitmentsV2,
@@ -182,6 +183,10 @@ from my_pa.application.commands import (
     ListRelationshipMemories,
     ListReportTypes,
     ListReviewCases,
+    ListScheduleActivities,
+    ListScheduleChanges,
+    ListSchedulePublications,
+    ListScheduleSeries,
     ListSituations,
     ListSources,
     ListTaskComments,
@@ -225,6 +230,8 @@ from my_pa.application.commands import (
     ReadRecordLineage,
     ReadRelatedRecords,
     ReadReportManifest,
+    ReadScheduleActivityHistory,
+    ReadSchedulePublication,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
@@ -981,6 +988,15 @@ def _program_request(payload: Mapping[str, Any]) -> dict[str, Any]:
     if "program_entity_ids" in converted:
         converted["program_entity_ids"] = _strings(
             converted["program_entity_ids"], SafeDetail.PROGRAM_ENTITY_IDS
+        )
+    return converted
+
+
+def _schedule_activities_request(payload: Mapping[str, Any]) -> dict[str, Any]:
+    converted = dict(payload)
+    if converted.get("hierarchy_prefix") is not None:
+        converted["hierarchy_prefix"] = _strings(
+            converted["hierarchy_prefix"], SafeDetail.HIERARCHY_PREFIX
         )
     return converted
 
@@ -2921,6 +2937,20 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.RECORDS_LINEAGE_RELATED: lambda payload: ReadRelatedRecords(
             **_related_request(payload)
         ),
+        # CPM Workbench S5b-2 (worker and capabilities contract section 3.5).
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT: lambda payload: ImportSchedulePublication(
+            **payload
+        ),
+        Capability.SCHEDULE_SERIES_LIST: lambda payload: ListScheduleSeries(**payload),
+        Capability.SCHEDULE_PUBLICATIONS_LIST: lambda payload: ListSchedulePublications(**payload),
+        Capability.SCHEDULE_PUBLICATIONS_READ: lambda payload: ReadSchedulePublication(**payload),
+        Capability.SCHEDULE_ACTIVITIES_LIST: lambda payload: ListScheduleActivities(
+            **_schedule_activities_request(payload)
+        ),
+        Capability.SCHEDULE_ACTIVITIES_HISTORY: lambda payload: ReadScheduleActivityHistory(
+            **payload
+        ),
+        Capability.SCHEDULE_CHANGES_LIST: lambda payload: ListScheduleChanges(**payload),
     }
 )
 

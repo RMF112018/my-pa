@@ -139,7 +139,7 @@ a README and nothing else.
 
 The operator commands and transport entry point share this directory, and the split is
 the reason they sit together rather than a reason to separate them. The public
-vocabulary contains two hundred and thirty-three capabilities. `invoke.py`
+vocabulary contains two hundred and forty capabilities. `invoke.py`
 accepts any of those names, but only the one hundred and sixty-six command-backed
 names normalize and invoke;
 the six Run 01 names return the canonical unsupported response until their
@@ -225,6 +225,8 @@ Owns later SQLAlchemy mappings/repositories, unit-of-work, Alembic integration, 
 
 Owns later PostgreSQL-backed job records, leases, attempts, retry state, cancellation, and outbox behavior. Claims and transitions are atomic and idempotent. Poison work quarantines rather than looping. This boundary does not justify Redis/Celery.
 
+CPM Workbench S5b-2 (branch `feat/cpm-s5b-worker`, not merged or deployed; [`cpm-workbench.md`](cpm-workbench.md)) adds the default-off `schedule` plane: `infrastructure.jobs.schedule` runs the lease-checked publication handler, and `infrastructure.jobs.schedule_parser_process` parses each schedule PDF in a contained child (`schedule_parser_child`) of the same interpreter. The parent never imports PDFium; the child imports only the standard library, `domain.schedule`, `domain.common.identifiers` and `infrastructure.schedule`, and no network or database module.
+
 
 ### 5.6 `infrastructure.policy` and `infrastructure.audit`
 
@@ -247,7 +249,7 @@ Policy evaluates principal, purpose, capability, scope, classification, fields, 
 ### 5.9 Extraction adapters
 
 
-`adapters.extraction` owns bounded parser calls and normalized outcomes. It receives bytes and media evidence and returns text, safe metadata, limitations, or quarantine reason. Parsers receive no credentials, source-write handles, unrestricted filesystem, or tool authority. Text/Markdown are mandatory; PDF is decision-gated; archive recursion is excluded.
+`adapters.extraction` owns bounded parser calls and normalized outcomes. It receives bytes and media evidence and returns text, safe metadata, limitations, or quarantine reason. Parsers receive no credentials, source-write handles, unrestricted filesystem, or tool authority. Text/Markdown are mandatory; PDF is decision-gated; archive recursion is excluded. The CPM Workbench schedule parser (`infrastructure.schedule`, reached only through the operator-only `schedule_publications.import` and the contained `schedule` worker child) is a separate capability-specific path and does not widen generic extraction ([`ADR-016`](../decisions/ADR-016-cpm-workbench-schedule-evidence.md)).
 
 
 ### 5.11 `domain.capture` and `infrastructure.persistence.capture`
@@ -476,5 +478,6 @@ Material changes to ADR-001, composition roots, dependency direction, source/man
 - [`../specs/mcv-read-only-vertical-slice.md`](../specs/mcv-read-only-vertical-slice.md)
 - [`system-context.md`](system-context.md)
 - [`data-authority.md`](data-authority.md)
+- [`cpm-workbench.md`](cpm-workbench.md)
 - [`../security/threat-model.md`](../security/threat-model.md)
 - [`../../PHASE-00-OPEN-DECISION-LEDGER.md`](../../PHASE-00-OPEN-DECISION-LEDGER.md)

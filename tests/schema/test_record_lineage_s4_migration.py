@@ -44,6 +44,7 @@ from sqlalchemy import Engine, insert, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
 from tests.schema import lineage_s4_schema_ahead_contract as gap
+from tests.schema.cpm_workbench_vocabulary_contract import S5B2_CAPABILITIES, S5B2_PURPOSES
 from tests.schema.lineage_s4_schema_ahead_contract import S4_CAPABILITIES, S4_PURPOSES
 from tests.schema.lineage_s31_schema_ahead_contract import S31_CAPABILITIES
 
@@ -58,7 +59,7 @@ REVISION: Final = "c5260943d933"
 PREVIOUS: Final = "6f1476b8da52"
 #: Record lineage S3.1 (`023f8f7eb499`, ADR-015 decision 15) is additive on
 #: this revision, and CPM Workbench S5b-1 (`6c2306330ceb`) on it is the head.
-HEAD: Final = "6c2306330ceb"
+HEAD: Final = "621ef6786c64"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20261024_c5260943d933_record_lineage_s4.py"
 S3_MIGRATION: Final = MIGRATIONS / "20261019_6f1476b8da52_record_lineage_s3.py"
@@ -112,13 +113,14 @@ def _flat(value: str) -> str:
 def test_the_revision_is_the_single_head_on_6f1476b8da52() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "023f8f7eb499"
+    assert script.get_revision(HEAD).down_revision == "6c2306330ceb"
+    assert script.get_revision("6c2306330ceb").down_revision == "023f8f7eb499"
     assert script.get_revision("023f8f7eb499").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "d020b532ad7d"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
     assert MIGRATION.name.endswith("_record_lineage_s4.py")
-    assert len(list(MIGRATIONS.glob("*.py"))) == 124
+    assert len(list(MIGRATIONS.glob("*.py"))) == 125
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -200,10 +202,13 @@ def test_at_vocabulary_adds_exactly_the_s4_names() -> None:
     # The head admits every declared name, and the S4 schema-ahead gap is
     # exactly the S4 names the domain does not declare yet (none).
     # The S3.1 names, declared since, are the S3.1 revision's (023f8f7eb499).
-    declared = {capability.value for capability in Capability} - S31_CAPABILITIES
+    # The CPM Workbench S5b-2 names too, that revision's (621ef6786c64).
+    declared = (
+        {capability.value for capability in Capability} - S31_CAPABILITIES - S5B2_CAPABILITIES
+    )
     native = {capability.value for capability in NativeSourceCapability}
     assert set(at) == declared | native | gap.lineage_s4_admitted_ahead("capability")
-    purposes = {purpose.value for purpose in Purpose}
+    purposes = {purpose.value for purpose in Purpose} - S5B2_PURPOSES
     assert set(purposes_at) == purposes | gap.lineage_s4_admitted_ahead("purpose")
     assert S4_CAPABILITIES & declared == gap.S4_CAPABILITIES_DECLARED_BY_DOMAIN
     assert S4_PURPOSES & purposes == gap.S4_PURPOSES_DECLARED_BY_DOMAIN

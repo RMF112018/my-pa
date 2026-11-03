@@ -96,6 +96,9 @@ class ChatLLMCompositionPlanes:
     #: Record lineage P1 (chatllm-data-v10): `MY_PA_PROGRAM_REPORTING_ENABLED`
     #: (which requires the lineage switch). Default off, as the switch is.
     program_reporting: bool = False
+    #: CPM Workbench S5b-2 (chatllm-data-v11): `MY_PA_SCHEDULE_ENABLED`. Default
+    #: off, as the switch is; needs no other plane.
+    schedule: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,6 +218,11 @@ def _prerequisite_holds(
         if capability in _PROGRAM_READ_NAMES and not planes.relationship_intelligence:
             return False
         return not (capability is Capability.PROGRAMS_OVERVIEW and not planes.constraints)
+    if prerequisite is ChatLLMCompositionPrerequisite.SCHEDULE:
+        # The service's own condition: the switch (and the Schedule factory,
+        # which exists in every composition the planner models -- it is absent
+        # only in a restricted-profile composition).
+        return planes.schedule
     raise RuntimeError(f"unknown ChatLLM composition prerequisite: {prerequisite!r}")
 
 

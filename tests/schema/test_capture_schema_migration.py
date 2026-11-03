@@ -28,8 +28,8 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with two hundred and thirty-three capabilities and
-sixty purposes now declared in the domain. If this reddens, the freeze has been undone
+emits what it emitted on the day it merged, with two hundred and forty capabilities and
+sixty-two purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
 
@@ -620,6 +620,15 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "issues.memberships.confirm",
         "issues.project_links.confirm",
         "records.lineage.related",
+        # CPM Workbench S5b-2, admitted by its vocabulary revision with the domain declaring
+        # every name in the same change.
+        "schedule_publications.import",
+        "schedule_series.list",
+        "schedule_publications.list",
+        "schedule_publications.read",
+        "schedule_activities.list",
+        "schedule_activities.history",
+        "schedule_changes.list",
     }
 )
 

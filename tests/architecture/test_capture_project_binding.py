@@ -51,8 +51,9 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 #: Moved again by the CPM Workbench S5b-1 revision (the Schedule foundation), which
 #: declares the seven Schedule tables and a comment beside `enrollments` and
 #: `source_object_versions` naming their database-only support uniques;
-#: `captures` is untouched.
-TABLES_SHA256: Final = "5a426d97f3341fbc0f1f198834d5d072d7b888acb0e1154df6069579856c83c4"
+#: `captures` is untouched. Moved again by the CPM Workbench S5b-2 revision, which
+#: widens `worker_plane_is_known` to the `schedule` plane; `captures` is untouched.
+TABLES_SHA256: Final = "791f745853051099dcb3554d70c601d264b27b7a705bf08395a848d40aee7387"
 WP03_MIGRATION_SHA256: Final = "098edd98ccc1846b01c58f42e296e4751e7841b562a2827616cc4337e174c354"
 WP03_MIGRATION: Final = (
     ROOT / "migrations/versions/20260914_e6a4c2f91b73_project_controls_run01_integrity.py"

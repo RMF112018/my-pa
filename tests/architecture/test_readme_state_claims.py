@@ -34,6 +34,7 @@ from my_pa.application.service import (
     _HANDLERS,
     _LINEAGE_CAPABILITIES,
     _PROGRAM_REPORTING_CAPABILITIES,
+    _SCHEDULE_CAPABILITIES,
 )
 from my_pa.bootstrap.gateway import build_gateway_runtime
 from my_pa.bootstrap.settings import DATABASE_URL_SCHEME, Settings
@@ -515,6 +516,14 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     231: "Two hundred and thirty-one",
     232: "Two hundred and thirty-two",
     233: "Two hundred and thirty-three",
+    # CPM Workbench S5b-2: the 7 Schedule capabilities, 233 -> 240.
+    234: "Two hundred and thirty-four",
+    235: "Two hundred and thirty-five",
+    236: "Two hundred and thirty-six",
+    237: "Two hundred and thirty-seven",
+    238: "Two hundred and thirty-eight",
+    239: "Two hundred and thirty-nine",
+    240: "Two hundred and forty",
 }
 
 
@@ -654,11 +663,14 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
         # Record lineage S4: the Program-reporting names, behind
         # `MY_PA_PROGRAM_REPORTING_ENABLED` (default off), an explicit name set.
         or capability in _PROGRAM_REPORTING_CAPABILITIES
+        # CPM Workbench S5b-2: the Schedule names, behind `MY_PA_SCHEDULE_ENABLED`
+        # (default off), an explicit name set.
+        or capability in _SCHEDULE_CAPABILITIES
     }
     default = len(frozenset(_HANDLERS) - withheld_families)
     withheld = total - default
-    assert implemented == 233
-    assert len(withheld_families) == 120
+    assert implemented == 240
+    assert len(withheld_families) == 127
     assert unwired == set()
     # Phase B's additions all arrived on the withheld side; GSQS B0's pair is
     # composed by default, and `RI-ENT-WP-10`'s five record-family reads arrived
@@ -707,7 +719,10 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # the withheld figure grows by seven.
     # Record lineage S3.1's names join the fifth (lineage) family: the
     # default is unchanged and the withheld figure grows by four.
-    assert default == 113 and total == 233 and withheld == 120
+    # CPM Workbench S5b-2's seven Schedule names are a seventh withheld family
+    # (their own default-off switch): the default is unchanged and the withheld
+    # figure grows by seven.
+    assert default == 113 and total == 240 and withheld == 127
 
     # Exercise the same application and MCP publication composition that owns
     # the current 91-tool measurement. GoodNotes pull is part of that measured
@@ -802,7 +817,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     system_context_text = SYSTEM_CONTEXT.read_text(encoding="utf-8")
     assert f"wires {implemented} through HTTP, MCP, and CLI composition" in system_context_text
     system_context = system_context_text.lower()
-    assert "two hundred and thirty-three capabilities" in system_context
+    assert f"{SPELLED_COUNTS[total].lower()} capabilities" in system_context
     assert f"exposes {default} of them" in system_context
 
     architecture_index = (ROOT / "docs/architecture/00_ARCHITECTURE_INDEX.md").read_text(
@@ -811,7 +826,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     runbook = (ROOT / "ops/runbooks/mcp-and-cli-operations.md").read_text(encoding="utf-8")
     gateway_runbook = (ROOT / "ops/runbooks/gateway-operations.md").read_text(encoding="utf-8")
     assert f"default composition serves {default} of" in architecture_index
-    assert "two hundred and thirty-three capabilities" in architecture_index
+    assert f"{SPELLED_COUNTS[total].lower()} capabilities" in architecture_index
     assert f"**{default} application-available capabilities**" in runbook
     assert f"publishes **{default - 3} tools**" in runbook
     assert f"unconfigured local stdio: {default - 3}" in runbook
@@ -864,7 +879,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert completion_unwired_claim in normalized_completion_state
 
     module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
-    assert "two hundred and thirty-three capabilities" in module_boundaries
+    assert f"{SPELLED_COUNTS[total].lower()} capabilities" in module_boundaries
 
 
 def test_readme_declares_apple_first_personal_data_ingestion() -> None:

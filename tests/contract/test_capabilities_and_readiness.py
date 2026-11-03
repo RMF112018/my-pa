@@ -55,7 +55,7 @@ def manifest(implemented: frozenset[Capability] = EVERYTHING) -> CapabilityManif
 
 def test_manifest_lists_every_capability_exactly_once() -> None:
     names = [status.name for status in manifest().capabilities]
-    assert len(names) == len(Capability) == 233
+    assert len(names) == len(Capability) == 240
     assert set(names) == set(Capability)
     assert len(set(names)) == len(names)
 
@@ -298,6 +298,14 @@ def test_capability_names_match_the_published_contract() -> None:
         "issues.memberships.confirm",
         "issues.project_links.confirm",
         "records.lineage.related",
+        # CPM Workbench S5b-2 (worker and capabilities contract section 3.5).
+        "schedule_publications.import",
+        "schedule_series.list",
+        "schedule_publications.list",
+        "schedule_publications.read",
+        "schedule_activities.list",
+        "schedule_activities.history",
+        "schedule_changes.list",
     }
 
 
@@ -369,6 +377,9 @@ def test_the_operator_only_set_is_enrollment_and_governed_identity_correction() 
         Capability.RECORDS_ASSOCIATIONS_CONFIRM,
         Capability.ISSUES_MEMBERSHIPS_CONFIRM,
         Capability.ISSUES_PROJECT_LINKS_CONFIRM,
+        # CPM Workbench S5b-2 (contract section 3.12, E-12): the schedule import is
+        # attested to the local operator surface on the same D-16 departure.
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT,
     }
     assert is_operator_only(Capability.SOURCES_ENROLL)
     assert is_operator_only(Capability.ENTITIES_MERGE_PREVIEW)

@@ -4,6 +4,7 @@
     .venv/bin/python apps/worker.py run --once
     .venv/bin/python apps/worker.py run --plane capture
     .venv/bin/python apps/worker.py run --plane reenrichment
+    .venv/bin/python apps/worker.py run --plane schedule
     .venv/bin/python apps/worker.py run --max-iterations 20 --lease-seconds 60
 
 This is the only place in the worker that chooses an implementation
@@ -52,10 +53,21 @@ accept.
   it settles `partial` rather than `succeeded` whenever it left something
   undone. Before this plane existed the claim-and-settle primitive had no caller
   anywhere in the repository and no durable work was ever executed.
+* `schedule` runs `infrastructure.jobs.schedule.process_schedule_publication`
+  (CPM Workbench S5b-2, worker and capabilities contract sections 3.2-3.4). One
+  claimed job is one admitted schedule publication: the pinned source version is
+  read through its provider, and the PDF is parsed **only** by the isolated,
+  rlimit-bounded child process (`infrastructure.jobs.schedule_parser_child`) --
+  this process never loads PDFium. Rows, issues, canonicalization and
+  finalization are written in short lease-checked transactions within a 240 s
+  budget. The plane is refused (exit 2, before an engine is built) unless
+  `MY_PA_SCHEDULE_ENABLED` is on, and with a `--lease-seconds` below 300, which
+  is the budget plus the parse reserve. Generic PDF extraction on the
+  `enrollment` plane stays `unsupported`.
 
-Two planes and one loop for the job planes: `run_worker` is parameterised over
-the plane (`D-76`, `D-77`), so the lease protocol has one implementation and two
-tables it runs against. The third plane is **not** on that loop, and the reason
+Three planes and one loop for the job planes: `run_worker` is parameterised over
+the plane (`D-76`, `D-77`), so the lease protocol has one implementation and
+three tables it runs against. The `reenrichment` plane is **not** on that loop, and the reason
 is in the table rather than in a preference: `entity_reenrichment_work` is
 deliberately not a `JobPlane` -- it carries its own lease columns, its own
 `next_attempt_at`, a terminal vocabulary that includes `partial` and `stale`,
@@ -104,6 +116,10 @@ from my_pa.infrastructure.jobs.reenrichment import (
     ReenrichmentRun,
     run_reenrichment_worker,
 )
+from my_pa.infrastructure.jobs.schedule import (
+    SCHEDULE_MIN_LEASE_SECONDS,
+    process_schedule_publication,
+)
 from my_pa.infrastructure.jobs.worker import (
     DEFAULT_LEASE_SECONDS,
     DEFAULT_POLL_SECONDS,
@@ -112,13 +128,18 @@ from my_pa.infrastructure.jobs.worker import (
     issue_worker_owner,
     run_worker,
 )
-from my_pa.infrastructure.persistence.jobs import CAPTURE_JOBS, ENROLLMENT_JOBS, JobPlane
+from my_pa.infrastructure.persistence.jobs import (
+    CAPTURE_JOBS,
+    ENROLLMENT_JOBS,
+    SCHEDULE_JOBS,
+    JobPlane,
+)
 from my_pa.infrastructure.persistence.tables import JobState, entity_reenrichment_work
 from my_pa.infrastructure.persistence.worker_health import record_worker_heartbeat
 
 configure_processing_eligibility(always_eligible)
 
-#: The two *job* planes this process can serve, and the handler each one's work
+#: The three *job* planes this process can serve, and the handler each one's work
 #: needs. A mapping rather than an `if`, so that a plane cannot be added without
 #: `--plane`'s `choices` learning about it. The handler travels with the plane
 #: because the pairing is not a preference: a `capver_…` claimed off
@@ -128,11 +149,13 @@ _JOB_PLANES: Mapping[str, tuple[JobPlane, JobHandler]] = MappingProxyType(
     {
         "enrollment": (ENROLLMENT_JOBS, extract_enrollment),
         "capture": (CAPTURE_JOBS, process_capture_version),
+        # CPM Workbench S5b-2 (contract section 3.2, surface 1).
+        "schedule": (SCHEDULE_JOBS, process_schedule_publication),
     }
 )
 
-#: Every plane `--plane` accepts, which is the two above plus `reenrichment`.
-#: The third one is named here and not in `_JOB_PLANES` because it does not
+#: Every plane `--plane` accepts, which is the three above plus `reenrichment`.
+#: That one is named here and not in `_JOB_PLANES` because it does not
 #: claim off a `JobPlane` at all -- see the module docstring -- and putting it in
 #: that mapping would have required a `JobPlane` for a table that deliberately
 #: is not one. `sorted(_PLANES)` is still the single source of `--plane`'s
@@ -257,10 +280,32 @@ def _run_reenrichment(args: argparse.Namespace) -> int:
     return 0
 
 
+def _schedule_refusal(args: argparse.Namespace, *, schedule_enabled: bool) -> str | None:
+    """Why the `schedule` plane may not run in this process, or `None`.
+
+    CPM Workbench S5b-2 contract sections 3.1 and 3.2: the plane is off unless
+    `MY_PA_SCHEDULE_ENABLED` is on, and its lease must outlast the handler's
+    240 s budget plus the 60 s parse reserve, because the handler cannot extend
+    a lease. Decided before an engine is built, a job is claimed or a heartbeat
+    is written; the message names the reason and nothing else.
+    """
+    if args.plane != "schedule":
+        return None
+    if not schedule_enabled:
+        return "plane schedule disabled"
+    if args.lease_seconds < SCHEDULE_MIN_LEASE_SECONDS:
+        return f"plane schedule requires --lease-seconds >= {SCHEDULE_MIN_LEASE_SECONDS}"
+    return None
+
+
 def _run(args: argparse.Namespace) -> int:
     if args.plane == "reenrichment":
         return _run_reenrichment(args)
     settings = load_settings()
+    refusal = _schedule_refusal(args, schedule_enabled=settings.schedule_enabled)
+    if refusal is not None:
+        print(refusal)
+        return 2
     engine = create_database_engine(settings.parsed_database_url(), statement_timeout_ms=30_000)
     plane, handler = _JOB_PLANES[args.plane]
     owner = issue_worker_owner()

@@ -423,6 +423,16 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.ISSUES_MEMBERSHIPS_CONFIRM,
         Capability.ISSUES_PROJECT_LINKS_CONFIRM,
         Capability.RECORDS_LINEAGE_RELATED,
+        # CPM Workbench S5b-2 (contract section 3.12): the 6 Schedule reads act on
+        # the same partition's Series, publication, row and Stable Activity rows;
+        # none names a source. The import is not here: it names an enrollment and
+        # is scoped to that enrollment's source.
+        Capability.SCHEDULE_SERIES_LIST,
+        Capability.SCHEDULE_PUBLICATIONS_LIST,
+        Capability.SCHEDULE_PUBLICATIONS_READ,
+        Capability.SCHEDULE_ACTIVITIES_LIST,
+        Capability.SCHEDULE_ACTIVITIES_HISTORY,
+        Capability.SCHEDULE_CHANGES_LIST,
         # `context.feedback` names a ranking preference, not a source. The rows
         # it writes belong to the acting Principal's partition and carry no
         # `enrollment_id` and no grant a scope could be compared against.

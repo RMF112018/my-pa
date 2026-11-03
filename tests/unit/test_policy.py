@@ -494,6 +494,15 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.ISSUES_MEMBERSHIPS_CONFIRM, Purpose.ISSUE_AUTHORING),
         (Capability.ISSUES_PROJECT_LINKS_CONFIRM, Purpose.ISSUE_AUTHORING),
         (Capability.RECORDS_LINEAGE_RELATED, Purpose.RECORD_LINEAGE_READ),
+        # CPM Workbench S5b-2: the import under its own write purpose, the 6
+        # reads under their own read purpose.
+        (Capability.SCHEDULE_PUBLICATIONS_IMPORT, Purpose.SCHEDULE_IMPORT),
+        (Capability.SCHEDULE_SERIES_LIST, Purpose.SCHEDULE_READ),
+        (Capability.SCHEDULE_PUBLICATIONS_LIST, Purpose.SCHEDULE_READ),
+        (Capability.SCHEDULE_PUBLICATIONS_READ, Purpose.SCHEDULE_READ),
+        (Capability.SCHEDULE_ACTIVITIES_LIST, Purpose.SCHEDULE_READ),
+        (Capability.SCHEDULE_ACTIVITIES_HISTORY, Purpose.SCHEDULE_READ),
+        (Capability.SCHEDULE_CHANGES_LIST, Purpose.SCHEDULE_READ),
     }
 )
 
@@ -585,8 +594,10 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # Record lineage S4: 229 capabilities, 60 purposes, 231 pairs.
     # Record lineage S3.1 adds 4 names and no purpose, each mapped to exactly one
     # existing purpose: 233 capabilities, 60 purposes, 235 pairs.
-    assert len(PERMITTED_PAIRS) == 235
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 235 == 13745
+    # CPM Workbench S5b-2 adds 7 names and 2 purposes, each name mapped to exactly
+    # one of the pair: 240 capabilities, 62 purposes, 242 pairs.
+    assert len(PERMITTED_PAIRS) == 242
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 242 == 14638
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

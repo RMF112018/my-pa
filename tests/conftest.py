@@ -144,6 +144,7 @@ from my_pa.contracts.ports import (
     RepositoryFailureError,
     ReviewDecisionRequest,
     ReviewRepository,
+    ScheduleUnitOfWork,
     SearchOutcome,
     SituationRepository,
     SourceProviders,
@@ -10331,6 +10332,11 @@ def _unopened_program_read() -> ProgramReadUnitOfWork:
     raise AssertionError("a FAST test opened a Program read; prove it against a server")
 
 
+def _unopened_schedule() -> ScheduleUnitOfWork:
+    """CPM Workbench S5b-2: a composed Schedule factory that FAST never opens."""
+    raise AssertionError("a FAST test opened a Schedule unit of work; prove it against a server")
+
+
 def build_service(
     world: World,
     providers: FakeProviders,
@@ -10345,6 +10351,7 @@ def build_service(
     lineage_enabled: bool = False,
     lineage_backfill_enabled: bool = False,
     program_reporting_enabled: bool = False,
+    schedule_enabled: bool = False,
     constraint_management_unit_of_work: (
         Callable[[], ConstraintManagementUnitOfWork] | None
     ) = _COMPOSE_CONSTRAINTS,
@@ -10462,6 +10469,11 @@ def build_service(
         # reads are proved against a real server).
         program_reporting_enabled=program_reporting_enabled,
         program_read_unit_of_work=(_unopened_program_read if program_reporting_enabled else None),
+        # CPM Workbench S5b-2 (contract section 3.1): the Schedule switch, off
+        # unless a test about it turns it on; on, the Schedule factory is a
+        # stand-in no FAST test opens (the plane is proved against a real server).
+        schedule_enabled=schedule_enabled,
+        schedule_unit_of_work=(_unopened_schedule if schedule_enabled else None),
         gsqs_b0_ports=WorkflowPorts(
             session_factory=lambda rasters: DiskContentSession(rasters),
             case_count=2,

@@ -144,6 +144,7 @@ from my_pa.application.commands import (
     GetSourceMetadata,
     GetSourceStatus,
     GetTaskHistory,
+    ImportSchedulePublication,
     ListCaptures,
     ListCommitments,
     ListCommitmentsV2,
@@ -174,6 +175,10 @@ from my_pa.application.commands import (
     ListRelationshipMemories,
     ListReportTypes,
     ListReviewCases,
+    ListScheduleActivities,
+    ListScheduleChanges,
+    ListSchedulePublications,
+    ListScheduleSeries,
     ListSituations,
     ListSources,
     ListTaskComments,
@@ -217,6 +222,8 @@ from my_pa.application.commands import (
     ReadRecordLineage,
     ReadRelatedRecords,
     ReadReportManifest,
+    ReadScheduleActivityHistory,
+    ReadSchedulePublication,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
@@ -1524,6 +1531,32 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         Capability.RECORDS_LINEAGE_RELATED: ReadRelatedRecords(
             seeds=({"family": "task", "record_id": "tsk_policytask00001"},)
         ),
+        # CPM Workbench S5b-2 (contract section 3.5.1): synthetic identifiers.
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT: ImportSchedulePublication(
+            project_id="prj_policyproject0001",
+            series_name="Policy master schedule",
+            enrollment_id=scene.enrollment.enrollment_id,
+            source_object_id="obj_policyobject0001",
+            source_version_id="ver_policyversion001",
+            publication_role="update",
+            idempotency_key="policy-schedule-import-0001",
+        ),
+        Capability.SCHEDULE_SERIES_LIST: ListScheduleSeries(project_id="prj_policyproject0001"),
+        Capability.SCHEDULE_PUBLICATIONS_LIST: ListSchedulePublications(
+            series_id="sser_policyseries0001"
+        ),
+        Capability.SCHEDULE_PUBLICATIONS_READ: ReadSchedulePublication(
+            publication_id="spub_policypublic001"
+        ),
+        Capability.SCHEDULE_ACTIVITIES_LIST: ListScheduleActivities(
+            publication_id="spub_policypublic001"
+        ),
+        Capability.SCHEDULE_ACTIVITIES_HISTORY: ReadScheduleActivityHistory(
+            schedule_activity_id="sact_policyactivity01"
+        ),
+        Capability.SCHEDULE_CHANGES_LIST: ListScheduleChanges(
+            from_publication_id="spub_policypublic001", to_publication_id="spub_policypublic002"
+        ),
     }
 
 
@@ -2008,6 +2041,13 @@ SCOPED_CAPABILITIES = [
         Capability.ISSUES_MEMBERSHIPS_CONFIRM,
         Capability.ISSUES_PROJECT_LINKS_CONFIRM,
         Capability.RECORDS_LINEAGE_RELATED,
+        # CPM Workbench S5b-2: the 6 Schedule reads, also in `_SCOPELESS`.
+        Capability.SCHEDULE_SERIES_LIST,
+        Capability.SCHEDULE_PUBLICATIONS_LIST,
+        Capability.SCHEDULE_PUBLICATIONS_READ,
+        Capability.SCHEDULE_ACTIVITIES_LIST,
+        Capability.SCHEDULE_ACTIVITIES_HISTORY,
+        Capability.SCHEDULE_CHANGES_LIST,
     }
 ]
 
@@ -2342,6 +2382,13 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.ISSUES_MEMBERSHIPS_CONFIRM,
         Capability.ISSUES_PROJECT_LINKS_CONFIRM,
         Capability.RECORDS_LINEAGE_RELATED,
+        # CPM Workbench S5b-2: the 6 Schedule reads, also in `_SCOPELESS`.
+        Capability.SCHEDULE_SERIES_LIST,
+        Capability.SCHEDULE_PUBLICATIONS_LIST,
+        Capability.SCHEDULE_PUBLICATIONS_READ,
+        Capability.SCHEDULE_ACTIVITIES_LIST,
+        Capability.SCHEDULE_ACTIVITIES_HISTORY,
+        Capability.SCHEDULE_CHANGES_LIST,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

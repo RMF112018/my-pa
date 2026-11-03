@@ -291,9 +291,9 @@ def test_s31_capabilities_are_operator_decision_required() -> None:
         counts[policy.classification] += 1
     # P1: only the GSQS pair remains an operator decision.
     assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 2
-    assert len(Capability) == 233
+    assert len(Capability) == 240
     # P1 moved data-class members, so the ChatLLM data profile moved too.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v10"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v11"
 
 
 def test_switch_off_withholds_every_s31_capability(scene: Scene) -> None:
@@ -516,7 +516,7 @@ def test_no_s31_capability_is_in_the_chatllm_data_profile() -> None:
             desired_effective_capabilities(composed_off, knowledge_manager=knowledge_manager)
             & lineage_plane
         )
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v10"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v11"
 
 
 # ---- client guidance (section 7.12) ----------------------------------------------
@@ -697,6 +697,11 @@ def test_existing_non_lineage_v1_shapes_are_unchanged_by_s31() -> None:
     lineage = {capability.value for capability in _LINEAGE_CAPABILITIES}
     lineage |= PROGRAM_REPORTING_CAPABILITIES
     assert lineage >= S31_NAMES
+    # CPM Workbench S5b-2: the 7 Schedule names are excluded beside them; the
+    # count and both pins stay.
+    lineage |= {
+        capability.value for capability in Capability if capability.value.startswith("schedule_")
+    }
     payloads = {
         tool.name: tool.input_schema["properties"]["payload"]
         for tool in TOOLS
@@ -717,8 +722,14 @@ def test_existing_non_lineage_v1_shapes_are_unchanged_by_s31() -> None:
     assert _canonical_sha256(views) == _V1_VIEW_FIELDS_SHA256
     # S3.1 adds no purpose: the envelope's purpose enum is the S4 one.
     published = TOOLS[0].input_schema["$defs"]["Purpose"]["enum"]
-    assert len(published) == len(Purpose) == 60
-    assert published[-2:] == ["lineage_backfill", "program_reporting_read"]
+    # CPM Workbench S5b-2 appends its 2 purposes after them (contract 3.12).
+    assert len(published) == len(Purpose) == 62
+    assert published[-4:] == [
+        "lineage_backfill",
+        "program_reporting_read",
+        "schedule_import",
+        "schedule_read",
+    ]
     # Every non-lineage tool's annotations are untouched by the S3.1 hint.
     for tool in TOOLS:
         if tool.name not in lineage:

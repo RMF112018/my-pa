@@ -329,6 +329,15 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         Capability.ISSUES_MEMBERSHIPS_CONFIRM,
         Capability.ISSUES_PROJECT_LINKS_CONFIRM,
         Capability.RECORDS_LINEAGE_RELATED,
+        # CPM Workbench S5b-2: the Schedule plane, behind `MY_PA_SCHEDULE_ENABLED`
+        # (off here).
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT,
+        Capability.SCHEDULE_SERIES_LIST,
+        Capability.SCHEDULE_PUBLICATIONS_LIST,
+        Capability.SCHEDULE_PUBLICATIONS_READ,
+        Capability.SCHEDULE_ACTIVITIES_LIST,
+        Capability.SCHEDULE_ACTIVITIES_HISTORY,
+        Capability.SCHEDULE_CHANGES_LIST,
     }
 )
 
@@ -1634,6 +1643,25 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
         Capability.RECORDS_LINEAGE_RELATED: {
             "seeds": [{"family": "task", "record_id": "tsk_wiretask00001"}]
         },
+        # CPM Workbench S5b-2 (contract section 3.5.1): synthetic identifiers.
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT: {
+            "project_id": "prj_wireproject0001",
+            "series_name": "Wire master schedule",
+            "enrollment_id": marked.enrollment.enrollment_id,
+            "source_object_id": "obj_wireobject0001",
+            "source_version_id": "ver_wireversion0001",
+            "publication_role": "update",
+            "idempotency_key": "wire-schedule-import-0001",
+        },
+        Capability.SCHEDULE_SERIES_LIST: {"project_id": "prj_wireproject0001"},
+        Capability.SCHEDULE_PUBLICATIONS_LIST: {"series_id": "sser_wireseries0001"},
+        Capability.SCHEDULE_PUBLICATIONS_READ: {"publication_id": "spub_wirepublic001"},
+        Capability.SCHEDULE_ACTIVITIES_LIST: {"publication_id": "spub_wirepublic001"},
+        Capability.SCHEDULE_ACTIVITIES_HISTORY: {"schedule_activity_id": "sact_wireactivity01"},
+        Capability.SCHEDULE_CHANGES_LIST: {
+            "from_publication_id": "spub_wirepublic001",
+            "to_publication_id": "spub_wirepublic002",
+        },
     }
 
 
@@ -2360,6 +2388,13 @@ SCOPED_CAPABILITIES = [
         Capability.ISSUES_MEMBERSHIPS_CONFIRM,
         Capability.ISSUES_PROJECT_LINKS_CONFIRM,
         Capability.RECORDS_LINEAGE_RELATED,
+        # CPM Workbench S5b-2: the 6 Schedule reads, also in `_SCOPELESS`.
+        Capability.SCHEDULE_SERIES_LIST,
+        Capability.SCHEDULE_PUBLICATIONS_LIST,
+        Capability.SCHEDULE_PUBLICATIONS_READ,
+        Capability.SCHEDULE_ACTIVITIES_LIST,
+        Capability.SCHEDULE_ACTIVITIES_HISTORY,
+        Capability.SCHEDULE_CHANGES_LIST,
     }
 ]
 

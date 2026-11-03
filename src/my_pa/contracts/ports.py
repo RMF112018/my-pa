@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -258,6 +258,8 @@ from my_pa.domain.relationship.reenrichment import (
 )
 from my_pa.domain.schedule import (
     ParsedScheduleRow,
+    ScheduleActivityObservation,
+    ScheduleActivityRowView,
     ScheduleAdmission,
     ScheduleAdmissionRefusal,
     ScheduleCanonicalizationProgress,
@@ -272,9 +274,16 @@ from my_pa.domain.schedule import (
     ScheduleParserRunStart,
     SchedulePlan,
     SchedulePublication,
+    SchedulePublicationDetail,
+    SchedulePublicationRole,
     SchedulePublicationStatus,
+    SchedulePublicationSummary,
+    ScheduleRowType,
     ScheduleSeries,
+    ScheduleSeriesSummary,
+    StableScheduleActivity,
 )
+from my_pa.domain.schedule.compare import ScheduleComparisonRow
 from my_pa.domain.search.query import SearchMatch, SearchQuery, SearchRequest
 from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
@@ -8939,6 +8948,116 @@ class ScheduleRepository(ABC):
         self, principal_id: str, publication_id: str
     ) -> tuple[ScheduleParserRun, ...]:
         """Every parser run of one of the Principal's publications, by attempt."""
+
+    @abstractmethod
+    def count_parser_run_contents(self, principal_id: str, parser_run_id: str) -> tuple[int, int]:
+        """`(rows, issues)` stored under one of the Principal's parser runs.
+
+        S5b-2 (worker contract 3.3.1 H6, R7-N3): the worker reads it before any
+        write to a `running` run it was handed, so a run already holding rows or
+        issues is detected as an invariant breach instead of being resumed. An
+        unknown or foreign run counts `(0, 0)`.
+        """
+
+    # -- S5b-2 reads (worker contract sections 3.9, 3.10 and 4.3) ---------------
+    #
+    # Partitioned like the point reads above; `limit` is the page size plus 1,
+    # so the caller learns whether a next page exists without a second count.
+    # A root of another Principal reads exactly as an absent one.
+
+    @abstractmethod
+    def owns_project(self, principal_id: str, project_id: str) -> bool:
+        """Whether the Project is the Principal's."""
+
+    @abstractmethod
+    def list_series(
+        self,
+        principal_id: str,
+        project_id: str,
+        *,
+        after: tuple[datetime, str] | None,
+        limit: int,
+    ) -> tuple[ScheduleSeriesSummary, ...]:
+        """The Project's Series, `(created_at DESC, series_id DESC)`, after a position.
+
+        Each carries its publication count and its latest complete or partial
+        `update` publication by `(data_date, admitted_at, publication_id)`.
+        """
+
+    @abstractmethod
+    def list_publications(
+        self,
+        principal_id: str,
+        series_id: str,
+        *,
+        role: SchedulePublicationRole | None,
+        status: SchedulePublicationStatus | None,
+        after: tuple[datetime, str] | None,
+        limit: int,
+    ) -> tuple[SchedulePublicationSummary, ...]:
+        """The Series' publications, `(admitted_at DESC, publication_id DESC)`.
+
+        `status` matches the **effective** status (an exhausted job reads
+        `failed`, R2 section 10.6).
+        """
+
+    @abstractmethod
+    def get_publication_detail(
+        self, principal_id: str, publication_id: str
+    ) -> SchedulePublicationDetail | None:
+        """One publication with its job, runs and issue counts (RR1-I01), or `None`."""
+
+    @abstractmethod
+    def list_activity_rows(
+        self,
+        principal_id: str,
+        publication_id: str,
+        *,
+        row_type: ScheduleRowType | None,
+        hierarchy_prefix: tuple[str, ...] | None,
+        start_range: tuple[date | None, date | None],
+        finish_range: tuple[date | None, date | None],
+        after: tuple[int, str] | None,
+        limit: int,
+    ) -> tuple[ScheduleActivityRowView, ...]:
+        """The accepted run's activity and milestone rows, `(row_ordinal, row_id)`."""
+
+    @abstractmethod
+    def activity_is_visible(
+        self, principal_id: str, schedule_activity_id: str
+    ) -> StableScheduleActivity | None:
+        """The Stable Activity iff a complete/partial publication's accepted run links it (U-03)."""
+
+    @abstractmethod
+    def activity_history(
+        self,
+        principal_id: str,
+        schedule_activity_id: str,
+        *,
+        after: tuple[date, datetime, str] | None,
+        limit: int,
+    ) -> tuple[ScheduleActivityObservation, ...]:
+        """Its accepted-run rows in complete/partial publications, oldest Data Date first."""
+
+    @abstractmethod
+    def comparison_rows(
+        self, principal_id: str, publication_id: str
+    ) -> Iterator[ScheduleComparisonRow]:
+        """The accepted run's activity/milestone rows by `published_activity_id COLLATE "C"`."""
+
+    @abstractmethod
+    def prior_observations(
+        self,
+        principal_id: str,
+        series_id: str,
+        *,
+        before: tuple[date, datetime, str],
+        schedule_activity_ids: frozenset[str],
+    ) -> frozenset[str]:
+        """The given Stable Activities observed in an eligible publication keyed before `before`.
+
+        Any role, superseded predecessors included (R2 sections 29.3, 10.4).
+        """
 
 
 class ScheduleUnitOfWork(ABC):

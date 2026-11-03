@@ -303,9 +303,10 @@ def test_the_gateway_passes_the_overlaid_pair_on(client: str) -> None:
 
 def test_the_ordinary_chatllm_profile_excludes_submit_and_checkpoint() -> None:
     # The matrix records the version KLP-WP-05 shipped; `chatllm-data-v9` then
-    # added only the two `reports.types.*` names and `chatllm-data-v10` only the
-    # record lineage plane, neither a Knowledge name.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v10"
+    # added only the two `reports.types.*` names, `chatllm-data-v10` only the
+    # record lineage plane and `chatllm-data-v11` only the 6 Schedule reads, none
+    # a Knowledge name.
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v11"
     assert MATRIX["profile_contract"]["ordinary_chatllm_versions"]["KLP-WP-05"] == (
         "chatllm-data-v8"
     )

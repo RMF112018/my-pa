@@ -13,6 +13,8 @@ serving process composes them, and the same 34 are the grant set for the ChatGPT
 connector; Issue close and reopen, the 3 `confirm` capabilities and `records.backfill.*`
 stay withheld from every client. The operator's procedure is in
 [`remote-mcp-cloudflare.md`](../../ops/runbooks/remote-mcp-cloudflare.md#record-lineage-client-exposure-p1).
+The current profile, `chatllm-data-v11` (CPM Workbench S5b-2), adds only the 6 Schedule
+reads on `MY_PA_SCHEDULE_ENABLED` and changes nothing for lineage.
 
 Lineage records **why** records belong together: an Issue and its members, a Commitment
 and the exact note passage it came from, a Task that blocks another. A connected client

@@ -100,6 +100,9 @@ async def test_full_inventory_catalog_without_execution(scene: Scene) -> None:
         Capability.RECORDS_ASSOCIATIONS_CONFIRM.value,
         Capability.ISSUES_MEMBERSHIPS_CONFIRM.value,
         Capability.ISSUES_PROJECT_LINKS_CONFIRM.value,
+        # CPM Workbench S5b-2 (contract section 3.13.2): the operator-only,
+        # attested-local schedule import is never remotely published.
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT.value,
     }
     # The deployed 190 remain individually present after main added report types
     # and record lineage S1 added the `issues.`, `records.` and `meetings.notes.` names.
@@ -109,6 +112,8 @@ async def test_full_inventory_catalog_without_execution(scene: Scene) -> None:
         if not c.value.startswith(("reports.types.", "issues.", "records.", "meetings.notes."))
         # Record lineage S4's seven Program-reporting names are not deployed either.
         and c.value not in PROGRAM_REPORTING_CAPABILITIES
+        # Nor are the CPM Workbench S5b-2 Schedule names.
+        and not c.value.startswith("schedule_")
     }
     assert len(deployed) == 190
     assert deployed <= names

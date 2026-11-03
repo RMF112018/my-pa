@@ -105,6 +105,8 @@ def served(scene: Scene) -> Served[McpTransport]:
             lineage_backfill_enabled=True,
             # Record lineage S4: and the Program-reporting sub-switch.
             program_reporting_enabled=True,
+            # CPM Workbench S5b-2: and the Schedule switch.
+            schedule_enabled=True,
         ),
         scene.principal,
     )
@@ -145,7 +147,7 @@ def test_tools_list_publishes_exactly_the_local_capability_set(
         for capability in HANDLER_CAPABILITIES
         if capability not in _AUTHENTICATED_CLIENT_CAPABILITIES
     ]
-    assert len(listed.tools) == 228
+    assert len(listed.tools) == 235
     assert all(tool.description for tool in listed.tools), "a tool has no description"
 
 
@@ -154,7 +156,7 @@ def test_handler_unwired_capabilities_publish_no_mcp_tools() -> None:
     assert {tool.name for tool in TOOLS} == {
         capability.value for capability in HANDLER_CAPABILITIES
     }
-    assert len(TOOLS) == 233
+    assert len(TOOLS) == 240
     assert not {capability.value for capability in HANDLER_UNWIRED_CAPABILITIES} & {
         tool.name for tool in TOOLS
     }
@@ -607,6 +609,8 @@ _COMPOSED_CAPABILITIES: Final = (
         for capability in Capability
         if capability.value in PROGRAM_REPORTING_CAPABILITIES
     )
+    # CPM Workbench S5b-2: the 7 Schedule names, on their own default-off switch.
+    | frozenset(capability for capability in Capability if capability.value.startswith("schedule_"))
 )
 
 _AUTHENTICATED_CLIENT_CAPABILITIES: Final = frozenset(
@@ -717,6 +721,8 @@ def test_a_child_with_a_managed_root_publishes_every_locally_available_capabilit
         MY_PA_LINEAGE_BACKFILL_ENABLED="true",
         # Record lineage S4: the Program-reporting sub-switch, which needs lineage.
         MY_PA_PROGRAM_REPORTING_ENABLED="true",
+        # CPM Workbench S5b-2: the Schedule switch, no dependency.
+        MY_PA_SCHEDULE_ENABLED="true",
     )
     expected = [
         capability.value

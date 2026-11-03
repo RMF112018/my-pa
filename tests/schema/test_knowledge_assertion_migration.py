@@ -55,6 +55,7 @@ from sqlalchemy import Engine, Table, insert, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
 from tests.schema import knowledge_schema_ahead_contract as contract
+from tests.schema.cpm_workbench_vocabulary_contract import S5B2_CAPABILITIES, S5B2_PURPOSES
 from tests.schema.lineage_s2_schema_ahead_contract import S2_CAPABILITIES as LINEAGE_S2_CAPABILITIES
 from tests.schema.lineage_s2_schema_ahead_contract import S2_PURPOSES as LINEAGE_S2_PURPOSES
 from tests.schema.lineage_s3_schema_ahead_contract import S3_CAPABILITIES as LINEAGE_S3_CAPABILITIES
@@ -83,7 +84,7 @@ PREVIOUS: Final = "0641c354ca85"
 #: on `REVISION`, `cc373834a485` (Continuity Project sixteen-field admission) is
 #: additive on it, and `a591b81f10a2` (Intelligence report type registry) is
 #: additive on that, so a database upgraded to head stands there.
-HEAD: Final = "6c2306330ceb"
+HEAD: Final = "621ef6786c64"
 MIGRATION: Final = VERSIONS / "20261004_6734f039f7a6_knowledge_assertion_layer.py"
 RESTRICT_VIOLATION: Final = "23001"
 FOREIGN_KEY_VIOLATION: Final = "23503"
@@ -197,7 +198,8 @@ def test_the_revision_is_directly_on_0641c354ca85_under_one_later_head() -> None
     """AC-076: one current head; the revision was generated from the sole head."""
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "023f8f7eb499"
+    assert script.get_revision(HEAD).down_revision == "6c2306330ceb"
+    assert script.get_revision("6c2306330ceb").down_revision == "023f8f7eb499"
     assert script.get_revision("c5260943d933").down_revision == "6f1476b8da52"
     assert script.get_revision("6f1476b8da52").down_revision == "d020b532ad7d"
     assert script.get_revision("d020b532ad7d").down_revision == "264310e0416a"
@@ -217,7 +219,7 @@ def test_the_revision_is_directly_on_0641c354ca85_under_one_later_head() -> None
     # R6 counted 112 files at this revision; `93f3aa113f58`, `cc373834a485`,
     # `a591b81f10a2`, `c8f7ae406d47` and `HEAD` are the five files added since.
     assert migration_contract["expected_post_r6_revision_file_count"] == 112
-    assert len(files) == 124
+    assert len(files) == 125
     assert [path.name for path in VERSIONS.glob("*_knowledge_assertion_layer.py")] == [
         MIGRATION.name
     ]
@@ -2108,9 +2110,15 @@ _ADMITTED_AFTER_THIS_REVISION: Final = (
     | LINEAGE_S4_CAPABILITIES
     # And the record lineage S3.1 revision with its own (no purpose).
     | LINEAGE_S31_CAPABILITIES
+    # And the CPM Workbench S5b-2 vocabulary revision with its own.
+    | S5B2_CAPABILITIES
 )
 _PURPOSES_ADMITTED_AFTER_THIS_REVISION: Final = (
-    LINEAGE_S1_PURPOSES | LINEAGE_S2_PURPOSES | LINEAGE_S3_PURPOSES | LINEAGE_S4_PURPOSES
+    LINEAGE_S1_PURPOSES
+    | LINEAGE_S2_PURPOSES
+    | LINEAGE_S3_PURPOSES
+    | LINEAGE_S4_PURPOSES
+    | S5B2_PURPOSES
 )
 
 

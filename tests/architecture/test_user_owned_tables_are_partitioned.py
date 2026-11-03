@@ -181,6 +181,32 @@ MIGRATION_TARGET_SCHEMAS: Final = (
     "calendar",
 )
 
+#: Exact string literals that start like a migration-target schema reference but
+#: are not one: the Schedule Scenarios change-set op names, closed by
+#: `docs/architecture/schedule-scenarios-contract.md` section 2.9 and defined in
+#: this one module. Each is exempt only as the whole literal in that file, so a
+#: real `"calendar.<table>"` reference there (or anywhere else) is still caught.
+NON_SCHEMA_LITERALS: Final[dict[str, frozenset[str]]] = {
+    "domain/schedule/scenario/changeset.py": frozenset(
+        {
+            "calendar.put",
+            "calendar.remove",
+            "calendar.exception.put",
+            "calendar.exception.remove",
+        }
+    ),
+}
+_QUOTED: Final = re.compile(r"""(["'])([^"'\n]*)\1""")
+
+
+def _names_a_target_schema(relative: str, text: str, schema: str) -> bool:
+    exempt = NON_SCHEMA_LITERALS.get(relative, frozenset())
+    for match in re.finditer(rf'["\']{schema}\.', text):
+        literal = _QUOTED.match(text, match.start())
+        if literal is None or literal.group(2) not in exempt:
+            return True
+    return False
+
 
 def _unpartitioned() -> dict[str, Table]:
     return {
@@ -316,10 +342,23 @@ def test_the_484_table_migration_target_is_recorded_as_unmeasured() -> None:
         str(path.relative_to(PACKAGE))
         for path in PACKAGE.rglob("*.py")
         for schema in MIGRATION_TARGET_SCHEMAS
-        if re.search(rf'["\']{schema}\.', path.read_text(encoding="utf-8"))
+        if _names_a_target_schema(
+            path.relative_to(PACKAGE).as_posix(), path.read_text(encoding="utf-8"), schema
+        )
     )
     assert reaching == [], (
         f"{reaching} name one of the migration-target schemas {MIGRATION_TARGET_SCHEMAS}. "
         "Those 484 tables have no principal partition and were recorded as "
         "unreachable; a read path into them is a new, unmeasured exposure"
     )
+
+
+def test_the_non_schema_literal_exemption_is_exact() -> None:
+    """The exemption admits the whole op-name literal only, in its one module."""
+    module = "domain/schedule/scenario/changeset.py"
+    assert not _names_a_target_schema(module, 'CALENDAR_PUT = "calendar.put"\n', "calendar")
+    assert _names_a_target_schema(module, 'TABLE = "calendar.events"\n', "calendar")
+    assert _names_a_target_schema(module, "sql = 'calendar.put_rows'\n", "calendar")
+    assert _names_a_target_schema(module, 'x = f"calendar.{name}"\n', "calendar")
+    assert _names_a_target_schema("domain/other.py", 'OP = "calendar.put"\n', "calendar")
+    assert sorted(NON_SCHEMA_LITERALS) == [module]

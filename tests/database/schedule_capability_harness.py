@@ -571,7 +571,9 @@ class ScheduleRuntime:
         )
         digest = schedule_import_request_digest(world.principal, request)
         with SqlAlchemyScheduleUnitOfWork(self.engine) as work:
-            admission = work.schedules.admit_publication(world.principal, request, digest)
+            admission = work.schedules.admit_publication(
+                world.principal, request, digest, operator_channel="local_cli"
+            )
         return {"publication_id": admission.publication.publication_id, "created": True}
 
     def serve(self, monkeypatch: pytest.MonkeyPatch, world: World) -> None:

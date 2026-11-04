@@ -117,8 +117,14 @@ from my_pa.domain.schedule import (
     schedule_import_request_digest,
     validate_row_for_persistence,
 )
+from my_pa.domain.schedule.baselines import BaselineType
 from my_pa.domain.schedule.compare import ScheduleComparisonRow
+from my_pa.domain.schedule.plane import PLANE_ATTESTED_DECISION_CHANNELS, intake_series_name
 from my_pa.domain.source.registry import issue_identifier
+
+# Schedule scenarios contract section 14.8.5: the plane functions the admission
+# calls. A module import (the plane module imports this one back the same way).
+from my_pa.infrastructure.persistence import schedule_scenarios as _plane
 from my_pa.infrastructure.persistence.jobs import (
     SCHEDULE_JOBS,
     enqueue_job,
@@ -139,6 +145,7 @@ from my_pa.infrastructure.persistence.tables import (
     projects,
     schedule_activities,
     schedule_import_issues,
+    schedule_intake_series,
     schedule_jobs,
     schedule_parser_runs,
     schedule_publications,
@@ -601,20 +608,36 @@ class SqlScheduleRepository(ScheduleRepository):
     # ---- admission ---------------------------------------------------------------
 
     def admit_publication(
-        self, principal_id: str, request: ScheduleImportRequest, request_digest: str
+        self,
+        principal_id: str,
+        request: ScheduleImportRequest,
+        request_digest: str,
+        *,
+        operator_channel: str | None = None,
     ) -> ScheduleAdmission:
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         if request_digest != schedule_import_request_digest(principal_id, request):
             raise ValueError("the request digest is not the digest of this request")
+        # Schedule scenarios contract section 14.8.5: an approval comes with the
+        # attested channel of the operator who made it, and only then.
+        if (request.approval is None) != (operator_channel is None) or (
+            operator_channel is not None
+            and operator_channel not in PLANE_ATTESTED_DECISION_CHANNELS
+        ):
+            raise ValueError("an import approval is given on an attested operator channel")
         # (1) the idempotency key.
         replay = self._replay_by_key(principal_id, request, request_digest)
         if replay is not None:
             return replay
+        # Section 14.8.5: the import-time approval decides under the Project lock J,
+        # taken here, before any row lock this admission takes.
+        if request.approval is not None:
+            _plane.lock_project(self._connection, principal_id, request.project_id)
         # (2) and (3) every binding the request names, proven inside this partition.
         self._require_project(principal_id, request)
         self._require_source(principal_id, request)
-        # (4) the Series.
-        series = self._find_series(principal_id, request)
+        # (4) the Series (section 14.8.6: an automatic import's own intake Series).
+        series = self._find_series(principal_id, request, request_digest)
         # (5) one publication per source version per Series.
         if series is not None:
             replay = self._replay_by_version(principal_id, series, request)
@@ -626,7 +649,7 @@ class SqlScheduleRepository(ScheduleRepository):
         # (7) the writes.
         series_created = False
         if series is None:
-            series, series_created = self._create_series(principal_id, request)
+            series, series_created = self._create_series(principal_id, request, request_digest)
         publication_id = issue_identifier(IdKind.SCHEDULE_PUBLICATION)
         inserted = (
             self._connection.execute(
@@ -664,12 +687,52 @@ class SqlScheduleRepository(ScheduleRepository):
         if inserted is None:
             return self._classify_lost_race(principal_id, series, request, request_digest)
         operation_id = enqueue_job(self._connection, publication_id, plane=SCHEDULE_JOBS)
+        if request.series_auto:
+            self._mark_intake(principal_id, request, series, publication_id)
+        if request.approval is not None and operator_channel is not None:
+            kind = request.baseline_kind
+            if kind is None:  # the request invariant: an approval is a baseline's
+                raise ScheduleIntegrityError("import_approval")
+            _plane.record_import_approval(
+                self._connection,
+                principal_id,
+                project_id=request.project_id,
+                publication_id=publication_id,
+                baseline_type=BaselineType(kind.value),
+                approval=request.approval,
+                operator_channel=operator_channel,
+            )
         return ScheduleAdmission(
             series=series,
             publication=_to_publication(inserted, principal_id),
             operation_id=operation_id,
             outcome=ScheduleAdmissionOutcome.CREATED,
             series_created=series_created,
+        )
+
+    def _mark_intake(
+        self,
+        principal_id: str,
+        request: ScheduleImportRequest,
+        series: ScheduleSeries,
+        publication_id: str,
+    ) -> None:
+        """Section 14.8.6: the intake row, with the name the worker may create (G9 verifies)."""
+        if_new = request.series_name_if_new
+        self._connection.execute(
+            insert(schedule_intake_series).values(
+                _bound(
+                    schedule_intake_series,
+                    principal_id,
+                    {
+                        "project_id": request.project_id,
+                        "series_id": series.series_id,
+                        "publication_id": publication_id,
+                        "series_name_if_new": None if if_new is None else if_new.name,
+                        "series_name_if_new_key": None if if_new is None else if_new.key,
+                    },
+                )
+            )
         )
 
     def _replayed(self, principal_id: str, publication: RowMapping) -> ScheduleAdmission:
@@ -749,21 +812,40 @@ class SqlScheduleRepository(ScheduleRepository):
             raise _refuse(ScheduleAdmissionRefusal.SOURCE_TOO_LARGE)
 
     def _find_series(
-        self, principal_id: str, request: ScheduleImportRequest
+        self, principal_id: str, request: ScheduleImportRequest, request_digest: str
     ) -> ScheduleSeries | None:
         criteria = [
             _mine(schedule_series, principal_id),
             schedule_series.c.project_id == request.project_id,
         ]
-        if request.series_name is None:
+        if request.series_auto:
+            criteria.append(schedule_series.c.name_key == intake_series_name(request_digest).key)
+        elif request.series_name is None:
             criteria.append(schedule_series.c.series_id == request.series_id)
         else:
             criteria.append(schedule_series.c.name_key == request.series_name.key)
         found = self._connection.execute(select(schedule_series).where(*criteria)).mappings()
         row = found.one_or_none()
+        # Schedule scenarios S6-2-D08: an explicit Series naming an intake Series
+        # is hidden as absent; the intake row, never the name, decides intake-ness.
+        if (
+            row is not None
+            and not request.series_auto
+            and self._is_intake_series(principal_id, row["series_id"])
+        ):
+            raise _refuse(ScheduleAdmissionRefusal.SERIES_NOT_FOUND)
         if row is None and request.series_id is not None:
             raise _refuse(ScheduleAdmissionRefusal.SERIES_NOT_FOUND)
         return None if row is None else _to_series(row, principal_id)
+
+    def _is_intake_series(self, principal_id: str, series_id: str) -> bool:
+        marked = self._connection.execute(
+            select(schedule_intake_series.c.series_id).where(
+                _mine(schedule_intake_series, principal_id),
+                schedule_intake_series.c.series_id == series_id,
+            )
+        ).first()
+        return marked is not None
 
     def _replay_by_version(
         self, principal_id: str, series: ScheduleSeries, request: ScheduleImportRequest
@@ -794,6 +876,20 @@ class SqlScheduleRepository(ScheduleRepository):
             request.supersedes_publication_id,
         ):
             raise _refuse(ScheduleAdmissionRefusal.SOURCE_VERSION_CONFLICT)
+        # Schedule scenarios contract section 14.8.5: a role-`baseline` replay also
+        # compares the stored `approve` event's fields with the request's approval.
+        approval = request.approval
+        if approval is not None and baseline is not None:
+            stored = _plane.stored_import_approval(
+                self._connection, principal_id, found["publication_id"]
+            )
+            if stored != (
+                baseline,
+                approval.approval_reference,
+                approval.effective_from,
+                approval.reason,
+            ):
+                raise _refuse(ScheduleAdmissionRefusal.SOURCE_VERSION_CONFLICT)
         return self._replayed(principal_id, found)
 
     def _require_predecessor(
@@ -835,9 +931,9 @@ class SqlScheduleRepository(ScheduleRepository):
             raise _refuse(ScheduleAdmissionRefusal.SUPERSEDED_PUBLICATION_HAS_SUCCESSOR)
 
     def _create_series(
-        self, principal_id: str, request: ScheduleImportRequest
+        self, principal_id: str, request: ScheduleImportRequest, request_digest: str
     ) -> tuple[ScheduleSeries, bool]:
-        name = request.series_name
+        name = intake_series_name(request_digest) if request.series_auto else request.series_name
         if name is None:  # `_find_series` has already refused an unknown id
             raise ScheduleIntegrityError("series_not_named")
         created = (
@@ -870,7 +966,7 @@ class SqlScheduleRepository(ScheduleRepository):
         if created is not None:
             return _to_series(created, principal_id), True
         # A concurrent admission created the same Series and committed first.
-        raced = self._find_series(principal_id, request)
+        raced = self._find_series(principal_id, request, request_digest)
         if raced is None:
             raise ScheduleIntegrityError("series_race_unresolved")
         return raced, False

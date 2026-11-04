@@ -24,6 +24,14 @@ the lease:
 - H7 stable canonicalization, for a `complete`/`partial` outcome.
 - H8 finalization; the status is derived by the database (F9/F3).
 
+**Series-match hook** (schedule scenarios contract section 14.8.7). H8 and
+the deterministic fail path run in a `SqlAlchemyScenarioUnitOfWork`
+transaction and call `finalize_intake` after the terminal update: an intake
+publication's match decision commits with its terminal status, and a
+deterministic hook defect commits the finalization with no decision. The
+effective-plane bit is the keyword `scenario_plane_effective`, default
+`False` (S6-2-D12): `apps/worker.py` passes nothing until S6-3.
+
 **Failure classes** (contract 3.3.2). A deterministic failure fails the
 publication with a safe issue code while the lease is held and returns, so the
 job completes (`succeeded` means "processing finished"). A transient failure
@@ -91,6 +99,7 @@ from my_pa.infrastructure.jobs.schedule_parser_process import (
 from my_pa.infrastructure.jobs.worker import JobExecutionError, LeaseLostError
 from my_pa.infrastructure.persistence.jobs import LeasedJob
 from my_pa.infrastructure.persistence.schedule import SqlAlchemyScheduleUnitOfWork
+from my_pa.infrastructure.persistence.schedule_scenarios import SqlAlchemyScenarioUnitOfWork
 from my_pa.infrastructure.providers.registered import RegisteredSourceProviders
 
 __all__ = [
@@ -155,8 +164,12 @@ class _Deterministic(Exception):  # noqa: N818 - an internal control-flow signal
 class _Job:
     """One attempt's fixed facts and its unit-of-work helper."""
 
-    def __init__(self, engine: Engine, job: LeasedJob, owner: str) -> None:
+    def __init__(
+        self, engine: Engine, job: LeasedJob, owner: str, *, plane_effective: bool = False
+    ) -> None:
         self.engine = engine
+        #: Section 14.8.7: whether a decided match is admitted (S6-3 passes the switch).
+        self.plane_effective = plane_effective
         #: The stored job row's Principal, returned by the claim (`claim_job`'s
         #: `RETURNING`), never a request value.
         self.principal = job.principal_id
@@ -172,22 +185,41 @@ class _Job:
         with SqlAlchemyScheduleUnitOfWork(self.engine) as uow:
             return work(uow.schedules)
 
+    def finishing[T](self, work: Callable[[ScheduleRepository], T]) -> T:
+        """A terminal transaction (H8, HF): the update, then the series-match hook.
+
+        The hook's answer is discarded: a decision is stored, and an undecided
+        defect leaves none (S6-2-U10); only a transient error propagates.
+        """
+        with SqlAlchemyScenarioUnitOfWork(self.engine) as uow:
+            done = work(uow.schedules)
+            uow.scenarios.finalize_intake(
+                self.principal, self.publication_id, plane_effective=self.plane_effective
+            )
+            return done
+
     def spent(self, label: str) -> bool:
         return _checkpoint(self.budget, label)
 
     def fail(self, code: ScheduleIssueCode) -> None:
         """HF: one error issue, the publication `failed`, the running run with it."""
         run_id = self.running_run_id
-        self.transaction(
+        self.finishing(
             lambda schedules: schedules.fail_publication(
                 self.principal, self.publication_id, self.lease, code, run_id
             )
         )
 
 
-def process_schedule_publication(engine: Engine, job: LeasedJob, owner: str) -> None:
-    """Drive one schedule publication through R2 section 24 (contract 3.3)."""
-    attempt = _Job(engine, job, owner)
+def process_schedule_publication(
+    engine: Engine, job: LeasedJob, owner: str, *, scenario_plane_effective: bool = False
+) -> None:
+    """Drive one schedule publication through R2 section 24 (contract 3.3).
+
+    `scenario_plane_effective` is the series-match hook's effective-plane bit
+    (schedule scenarios contract section 14.8.7, S6-2-D12); it defaults off.
+    """
+    attempt = _Job(engine, job, owner, plane_effective=scenario_plane_effective)
     try:
         _process(attempt)
     except ScheduleLeaseLostError:
@@ -263,7 +295,7 @@ def _phases(attempt: _Job) -> None:
         data_date=result.data_date,
         run_date=result.run_date,
     )
-    attempt.transaction(
+    attempt.finishing(
         lambda schedules: schedules.finalize_publication(
             principal, publication_id, lease, finalization
         )

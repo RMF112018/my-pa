@@ -275,7 +275,12 @@ def _do[T](engine: Engine, action: Callable[[ScheduleRepository], T]) -> T:
 
 def _admit(engine: Engine, principal: str, request: ScheduleImportRequest) -> ScheduleAdmission:
     digest = schedule_import_request_digest(principal, request)
-    return _do(engine, lambda r: r.admit_publication(principal, request, digest))
+    # Schedule scenarios contract section 14.8.5: an approval comes with the
+    # attested channel of the operator who made it.
+    channel = None if request.approval is None else "local_cli"
+    return _do(
+        engine, lambda r: r.admit_publication(principal, request, digest, operator_channel=channel)
+    )
 
 
 def _refusal(

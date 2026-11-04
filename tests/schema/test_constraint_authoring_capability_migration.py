@@ -273,6 +273,8 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     # Record lineage S3.1's own revision module names the head as the revision it tests.
     "tests/schema/test_record_lineage_s31_migration.py",
     "tests/schema/test_record_event_truncate_refusal_migration.py",
+    # Reports Modernization WP01's own revision module names the head as the revision it tests.
+    "tests/schema/test_reports_general_migration.py",
     "tests/schema/test_schedule_scenarios_migration.py",
     "tests/schema/test_record_events_migration.py",
     "tests/schema/test_oauth_refresh_migration.py",

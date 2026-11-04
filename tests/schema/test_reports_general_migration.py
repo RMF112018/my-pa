@@ -13,8 +13,8 @@ module proves:
   for the 8 plane tables;
 * **offline SQL** -- the upgrade writes no row and names no table that existed
   before it, and the downgrade locks the plane and refuses before it drops;
-* on disposable databases: empty to head creates exactly the 8 tables, the 7
-  functions and their 19 triggers (3 of them deferred); the declared metadata
+* on disposable databases: empty to head creates exactly the 8 tables, the 8
+  functions and their 21 triggers (3 of them deferred); the declared metadata
   equals the migrated schema, definition for definition; the predecessor head with Intelligence,
   Capture and managed-document rows upgrades with every pre-existing table's
   rows and catalog unchanged; the downgrade refuses while a publish or a lone
@@ -23,7 +23,8 @@ module proves:
 * **every guard** -- from a baseline write that commits, one mutation that
   only the guard under test can refuse is refused with that guard's name; and
   for a representative set, dropping only that guard lets the same mutation
-  commit (`test_each_guard_is_load_bearing`).
+  commit (`test_each_guard_is_load_bearing`); the two guards another guard
+  masks are shown falling to that backstop (`test_masked_guards_fall_to_their_backstop`).
 
 The file name routes the database tests here to the migration tiers
 (`tests/db/fixtures.py`): the empty-to-head test carries its own marker and the
@@ -119,7 +120,13 @@ PLANE_FUNCTIONS: Final = (
     "a_report_version_has_its_manifest",
     "a_report_head_is_its_newest_version",
     "a_report_lifecycle_cache_is_its_newest_event",
+    "report_rows_are_written_with_their_version",
 )
+#: The insert guards, each on the table whose INSERT it checks.
+INSERT_GUARDS: Final = {
+    "a_report_manifest_is_written_with_its_version": "report_version_manifests",
+    "a_report_association_is_written_with_its_version": "report_associations",
+}
 #: The deferred constraint triggers, each on the table whose INSERT it checks.
 DEFERRED_TRIGGERS: Final = {
     "a_report_version_has_its_manifest": "report_versions",
@@ -516,6 +523,7 @@ _EXPECTED_TRIGGERS: Final = frozenset(
         "report_transfer_sessions.a_report_transfer_session_moves_forward",
     }
     | {f"{table}.{trigger}" for trigger, table in DEFERRED_TRIGGERS.items()}
+    | {f"{table}.{trigger}" for trigger, table in INSERT_GUARDS.items()}
 )
 
 
@@ -538,8 +546,8 @@ def test_empty_to_head_creates_exactly_the_eight_tables(
     assert before <= _relations(engine)
     assert _functions(engine) - functions_before == set(PLANE_FUNCTIONS)
     assert _triggers(engine) - triggers_before == _EXPECTED_TRIGGERS
-    assert len(_EXPECTED_TRIGGERS) == 19
-    assert len(PLANE_FUNCTIONS) == 7
+    assert len(_EXPECTED_TRIGGERS) == 21
+    assert len(PLANE_FUNCTIONS) == 8
     with engine.connect() as connection:
         deferred = {
             str(name): bool(flag)
@@ -879,12 +887,14 @@ def _ids(tag: str, owner: str) -> dict[str, str]:
         "e3": f"grlev_{tag}c",
         "a1": f"grasc_{tag}a",
         "a2": f"grasc_{tag}b",
+        "a3": f"grasc_{tag}c",
         "r_publish": f"grrc_{tag}a",
         "r_update": f"grrc_{tag}b",
         "r_noop": f"grrc_{tag}c",
         "r_1": f"grrc_{tag}d",
         "r_2": f"grrc_{tag}e",
         "r_3": f"grrc_{tag}f",
+        "r_4": f"grrc_{tag}g",
         "session": f"grxfr_{tag}",
         "corr": f"corr_{tag}",
         "audit": f"audit_{tag}",
@@ -933,6 +943,8 @@ def _content(ids: dict[str, str], key: str, variant: str = "md") -> Op:
             "decoded_byte_count": len(canonical),
             "canonical_sha256": _sha(canonical),
         }
+    if variant == "mixed":
+        row |= {"format": "mixed", "inline_data": {"synthetic": ids[key]}}
     if variant in ("blob", "gzblob"):
         row |= {
             "storage_kind": "managed_blob",
@@ -1210,14 +1222,35 @@ _TRANSACTIONS: Final[dict[str, Callable[[dict[str, str]], list[Op]]]] = {
     "publish_json": lambda ids: _publish(ids, "json"),
     "publish_blob": lambda ids: _publish(ids, "blob"),
     "publish_gzblob": lambda ids: _publish(ids, "gzblob"),
+    "publish_mixed": lambda ids: _publish(ids, "mixed"),
     "update": _update,
     "metadata_update": _metadata_update,
+    # An update no-op names the head version it found, at the expected number.
     "update_noop": lambda ids: [
-        _receipt(ids, "r_noop", "update", outcome="no_op", expected_version_number=1)
+        _receipt(
+            ids,
+            "r_noop",
+            "update",
+            outcome="no_op",
+            version_id=ids["v1"],
+            expected_version_number=1,
+            resulting_version_number=1,
+        )
     ],
     "archive": lambda ids: _lifecycle(
         ids, revision=1, operation="archive", prior="active", resulting="archived"
     ),
+    # Archive on `archived`: the lifecycle no-op, at the revision it found.
+    "archive_noop": lambda ids: [
+        _receipt(
+            ids,
+            "r_noop",
+            "archive",
+            outcome="no_op",
+            expected_lifecycle_revision=1,
+            resulting_lifecycle_revision=1,
+        )
+    ],
     "trash": lambda ids: _lifecycle(
         ids, revision=1, operation="delete", prior="active", resulting="trashed"
     ),
@@ -1263,10 +1296,12 @@ CHAINS: Final[dict[str, tuple[str, ...]]] = {
     "publish_json": ("publish_json",),
     "publish_blob": ("publish_blob",),
     "publish_gzblob": ("publish_gzblob",),
+    "publish_mixed": ("publish_mixed",),
     "update": ("publish", "update"),
     "metadata_update": ("publish", "metadata_update"),
     "update_noop": ("publish", "update_noop"),
     "archive": ("publish", "archive"),
+    "archive_noop": ("publish", "archive", "archive_noop"),
     "trash": ("publish", "trash"),
     "delete": ("publish", "archive", "delete"),
     "restore": ("publish", "archive", "delete", "restore"),
@@ -1583,6 +1618,12 @@ def _content_cases() -> list[Case]:
             "json_report_content_holds_no_text",
         ),
         case(
+            "mixed_holds_body_and_data",
+            "publish_mixed",
+            {"inline_data": None},
+            "inline_mixed_report_content_holds_its_body_and_data",
+        ),
+        case(
             "identity_is_its_original",
             "publish",
             {"inline_original": b"synthetic"},
@@ -1858,6 +1899,13 @@ def _manifest_cases() -> list[Case]:
             None,
             _refused("a report version has its manifest", CHECK_VIOLATION),
         ),
+        # The committed version's manifest, written again in a later transaction.
+        Case(
+            "written_with_its_version",
+            "publish",
+            _refused(_LATE_MANIFEST),
+            then=lambda ids: [_manifest(ids, "v1", 1, "c1")],
+        ),
     ]
 
 
@@ -1876,6 +1924,21 @@ def _trailing_cache_cases() -> list[Case]:
             _refused("a report lifecycle cache is its newest event"),
             {"root_update": None},
         ),
+    ]
+
+
+_LATE_MANIFEST: Final = "a report_version_manifests row is written in its version's transaction"
+_LATE_ASSOCIATION: Final = "a report_associations row is written in its version's transaction"
+
+
+def _late_association(ids: dict[str, str]) -> list[Op]:
+    late = _association(ids, "a3", 0)
+    return [
+        Op(
+            "association_c",
+            _A,
+            {**late.values, "ordinal": 2, "target_ref": "prj_synthetictarget03"},
+        )
     ]
 
 
@@ -1944,6 +2007,13 @@ def _association_cases() -> list[Case]:
             a,
             {"version_number": 2},
             _fk(_A, "a_report_association_is_frozen_to_its_version"),
+        ),
+        # A third, otherwise valid association of the committed version 1.
+        Case(
+            "written_with_its_version",
+            "publish",
+            _refused(_LATE_ASSOCIATION),
+            then=_late_association,
         ),
     ]
 
@@ -2076,10 +2146,11 @@ def _receipt_cases() -> list[Case]:
             {"intent_digest": _UPPER},
             _check(_RC, "a_report_receipt_intent_is_a_digest"),
         ),
+        # Two fields: an update no-op names the version it found at the expected number.
         case(
             "numbers_in_range",
             "update_noop",
-            {"expected_version_number": 0},
+            {"expected_version_number": 0, "resulting_version_number": 0},
             _check(_RC, "report_receipt_numbers_are_in_range"),
         ),
         case(
@@ -2100,11 +2171,37 @@ def _receipt_cases() -> list[Case]:
             {"resulting_lifecycle_revision": 2},
             _check(_RC, "a_report_lifecycle_receipt_is_whole"),
         ),
+        # A lifecycle no-op with no event: no other reference can refuse.
         case(
             "report_fk",
-            "update_noop",
+            "archive_noop",
             {"report_id": "grpt_nosuchreport0001"},
             _fk(_RC, "a_report_receipt_names_a_report_of_its_owner"),
+        ),
+        # The update no-op names no version: the version reference would be skipped.
+        case(
+            "version_whole",
+            "update_noop",
+            {"version_id": None},
+            _check(_RC, "a_report_receipt_version_is_whole"),
+        ),
+        # The no-op found version 1 but claims it expected version 7.
+        case(
+            "update_no_op_names_the_version_it_found",
+            "update_noop",
+            {"expected_version_number": 7},
+            _check(_RC, "an_update_no_op_receipt_names_the_version_it_found"),
+        ),
+        # Three fields: a lifecycle no-op at revision 0 naming an event.
+        case(
+            "event_only_after_a_transition",
+            "archive_noop",
+            {
+                "expected_lifecycle_revision": 0,
+                "resulting_lifecycle_revision": 0,
+                "event_id": "grlev_nosuchevent0001",
+            },
+            _check(_RC, "a_report_receipt_names_an_event_only_after_a_transition"),
         ),
         case(
             "version_fk",
@@ -2173,6 +2270,20 @@ def _transfer_cases() -> list[Case]:
             "consumption_follows_state",
             {"consumed_at": NOW},
             "a_report_transfer_consumption_follows_its_state",
+        ),
+        Case(
+            "settled_received_its_declaration",
+            "finalize",
+            _check(_T, "a_settled_report_transfer_received_its_declaration"),
+            {"session_update": {"received_byte_count": 99}},
+        ),
+        guard(
+            "guard_token_only_by_finalizing",
+            "transfer",
+            "a report transfer token is set only by finalizing",
+            state="aborted",
+            content_token_digest=_DIGEST,
+            finalized_at=NOW,
         ),
         Case(
             "token_digest",
@@ -2346,7 +2457,7 @@ def _owner_cases() -> list[Case]:
         ),
         case(
             "receipt_report",
-            "update_noop",
+            "archive_noop",
             "receipt",
             "report_id",
             "report",
@@ -2710,6 +2821,27 @@ def test_truncate_is_refused_while_a_row_exists_and_admitted_when_empty(
 
 # ---- prove-red: each guard is load-bearing ----------------------------------------------
 
+#: The token-on-finalize branch of `a_report_transfer_session_moves_forward`.
+_FINALIZE_ONLY_BRANCH: Final = (
+    "          IF OLD.content_token_digest IS NULL\n"
+    "             AND (NEW.content_token_digest IS NOT NULL OR NEW.finalized_at IS NOT NULL)\n"
+    "             AND NOT (OLD.state = 'open' AND NEW.state = 'finalized') THEN\n"
+    "            RAISE EXCEPTION 'a report transfer token is set only by finalizing'\n"
+    "              USING ERRCODE = 'restrict_violation';\n"
+    "          END IF;\n"
+)
+
+
+def _without_token_branch() -> str:
+    """The transfer guard function replaced by itself minus only the token branch."""
+    functions = dict(_module()["_FUNCTIONS"])  # type: ignore[call-overload]
+    definition = str(functions["a_report_transfer_session_moves_forward"])
+    assert definition.count(_FINALIZE_ONLY_BRANCH) == 1
+    return definition.replace(_FINALIZE_ONLY_BRANCH, "").replace(
+        "CREATE FUNCTION", "CREATE OR REPLACE FUNCTION", 1
+    )
+
+
 #: `(guard, the DDL that removes only it, the case whose mutation it alone refuses)`.
 LOAD_BEARING: Final = (
     (
@@ -2790,6 +2922,40 @@ LOAD_BEARING: Final = (
         "ON knowledge.report_transfer_sessions",
         "transfer_guard_backward_state",
     ),
+    (
+        "receipt_version_whole_check",
+        "ALTER TABLE knowledge.report_receipts DROP CONSTRAINT a_report_receipt_version_is_whole",
+        "receipt_version_whole",
+    ),
+    (
+        "update_no_op_check",
+        "ALTER TABLE knowledge.report_receipts DROP CONSTRAINT "
+        "an_update_no_op_receipt_names_the_version_it_found",
+        "receipt_update_no_op_names_the_version_it_found",
+    ),
+    (
+        "association_insert_guard_trigger",
+        "DROP TRIGGER a_report_association_is_written_with_its_version "
+        "ON knowledge.report_associations",
+        "association_written_with_its_version",
+    ),
+    (
+        "mixed_content_check",
+        "ALTER TABLE knowledge.report_content_objects DROP CONSTRAINT "
+        "inline_mixed_report_content_holds_its_body_and_data",
+        "content_mixed_holds_body_and_data",
+    ),
+    (
+        "settled_transfer_check",
+        "ALTER TABLE knowledge.report_transfer_sessions DROP CONSTRAINT "
+        "a_settled_report_transfer_received_its_declaration",
+        "transfer_settled_received_its_declaration",
+    ),
+    (
+        "transfer_token_branch",
+        _without_token_branch(),
+        "transfer_guard_token_only_by_finalizing",
+    ),
 )
 
 
@@ -2812,6 +2978,131 @@ def test_each_guard_is_load_bearing(
         assert _attempt(engine, case, mutated=True) is None, "still refused without the guard"
     finally:
         engine.dispose()
+
+
+#: `(guard, the DDL that removes only it, its case, the guard that then refuses)`:
+#: guards another guard masks, so dropping only them never lets the mutation commit.
+#: Neither is counted as load-bearing.
+MASKED: Final = (
+    # A committed version always has its one manifest (the deferred
+    # `a_report_version_has_its_manifest`), so a late manifest meets the key.
+    (
+        "manifest_insert_guard_trigger",
+        "DROP TRIGGER a_report_manifest_is_written_with_its_version "
+        "ON knowledge.report_version_manifests",
+        "manifest_written_with_its_version",
+        _unique(_M, "report_version_manifests_pkey"),
+    ),
+    # No event has revision 0, so the event reference refuses it too.
+    (
+        "event_after_transition_check",
+        "ALTER TABLE knowledge.report_receipts DROP CONSTRAINT "
+        "a_report_receipt_names_an_event_only_after_a_transition",
+        "receipt_event_only_after_a_transition",
+        _fk(_RC, "a_report_receipt_names_its_event"),
+    ),
+)
+
+
+@pytest.mark.database
+@pytest.mark.parametrize(
+    ("guard", "removal", "case_id", "backstop"), MASKED, ids=[guard for guard, *_ in MASKED]
+)
+def test_masked_guards_fall_to_their_backstop(
+    cloned_database_url: str, guard: str, removal: str, case_id: str, backstop: Expect
+) -> None:
+    """With only the masked guard dropped, the same mutation is refused by its backstop."""
+    del guard
+    case = _BY_ID[case_id]
+    engine = create_database_engine(cloned_database_url)
+    try:
+        assert _attempt(engine, case, mutated=False) is None
+        _assert_refused(_attempt(engine, case, mutated=True), case.expect)
+        with engine.begin() as connection:
+            connection.execute(text(removal))
+        _assert_refused(_attempt(engine, case, mutated=True), backstop)
+    finally:
+        engine.dispose()
+
+
+# ---- receipts and insert guards: the admitted shapes ------------------------------------
+
+
+@pytest.mark.database
+def test_a_lifecycle_no_op_may_name_the_event_it_found_or_none(plane_engine: Engine) -> None:
+    """Archive on `archived` names its event only when that event is an archive.
+
+    After a restore from trash to `archived`, the newest event's operation is
+    `restore`; the event reference binds the receipt's operation, so the archive
+    no-op there can only omit its event, and must be admitted without one.
+    """
+    ids = _ids(uuid.uuid4().hex[:16], P)
+    for step in CHAINS["archive_noop"]:
+        _execute(plane_engine, _TRANSACTIONS[step](ids))
+    _execute(
+        plane_engine,
+        [
+            _receipt(
+                ids,
+                "r_4",
+                "archive",
+                outcome="no_op",
+                event_id=ids["e1"],
+                expected_lifecycle_revision=1,
+                resulting_lifecycle_revision=1,
+                idempotency_key=f"key-{ids['report']}-found",
+            )
+        ],
+    )
+    restored = _ids(uuid.uuid4().hex[:16], P)
+    for step in CHAINS["restore"]:
+        _execute(plane_engine, _TRANSACTIONS[step](restored))
+    noop = {
+        "outcome": "no_op",
+        "expected_lifecycle_revision": 3,
+        "resulting_lifecycle_revision": 3,
+    }
+    with pytest.raises(DBAPIError) as refused:
+        _execute(
+            plane_engine,
+            [_receipt(restored, "r_4", "archive", event_id=restored["e3"], **noop)],
+        )
+    _assert_refused(refused.value, _fk(_RC, "a_report_receipt_names_its_event"))
+    _execute(plane_engine, [_receipt(restored, "r_4", "archive", **noop)])
+
+
+@pytest.mark.database
+def test_manifests_and_associations_may_be_written_under_a_savepoint(
+    plane_engine: Engine,
+) -> None:
+    """A version written in a subtransaction still admits its manifest and associations.
+
+    The insert guards read the version's `xmin` as in progress, which holds for
+    the top-level transaction and each of its subtransactions alike.
+    """
+    ids = _ids(uuid.uuid4().hex[:16], P)
+    ops = {op.label: op for op in _publish(ids)}
+    with plane_engine.begin() as connection:
+
+        def run(label: str) -> None:
+            statement, params = _statement(ops[label])
+            connection.execute(text(statement), params)
+
+        run("content")
+        run("root")
+        with connection.begin_nested():
+            run("version")
+            with connection.begin_nested():
+                run("manifest")
+            run("association_a")
+        run("association_b")
+        run("receipt")
+    with plane_engine.connect() as connection:
+        counted = connection.execute(
+            text("SELECT count(*) FROM knowledge.report_associations WHERE report_id = :r"),
+            {"r": ids["report"]},
+        ).scalar_one()
+    assert counted == 2
 
 
 # ---- the downgrade refusal ---------------------------------------------------------------
@@ -2918,6 +3209,9 @@ _DATABASE_TESTS: Final[tuple[Callable[..., None], ...]] = (
     test_the_root_cache_cannot_trail_the_ledger,
     test_truncate_is_refused_while_a_row_exists_and_admitted_when_empty,
     test_each_guard_is_load_bearing,
+    test_masked_guards_fall_to_their_backstop,
+    test_a_lifecycle_no_op_may_name_the_event_it_found_or_none,
+    test_manifests_and_associations_may_be_written_under_a_savepoint,
     test_downgrade_refuses_while_plane_state_exists,
     test_the_downgrade_refusal_is_load_bearing,
     test_an_empty_plane_downgrades_cleanly_and_upgrades_again,

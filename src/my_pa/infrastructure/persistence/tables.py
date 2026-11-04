@@ -10463,7 +10463,12 @@ intelligence_artifact_manifests = Table(
 # cannot declare: append-only on the six immutable tables, TRUNCATE refusal on
 # all eight, the guarded updates of `report_roots` (only its head and lifecycle
 # caches move, each by exactly one) and `report_transfer_sessions` (forward-only
-# state), and the deferred `a_report_version_has_its_manifest`,
+# state; a token and `finalized_at` are set only by `open -> finalized`), the
+# insert guards `a_report_manifest_is_written_with_its_version` and
+# `a_report_association_is_written_with_its_version` (a manifest or association
+# is inserted only while its version's writer, by `xmin`, is still in progress:
+# append-only covers UPDATE and DELETE, these cover a late INSERT), and the
+# deferred `a_report_version_has_its_manifest`,
 # `a_report_head_is_its_newest_version` and
 # `a_report_lifecycle_cache_is_its_newest_event` (at commit, the root caches
 # name the newest version and lifecycle event of the report).
@@ -10564,6 +10569,12 @@ report_content_objects = Table(
     ),
     CheckConstraint(
         "format <> 'json' OR inline_text IS NULL", name="json_report_content_holds_no_text"
+    ),
+    # Mixed content is a body and its data: inline, it holds both.
+    CheckConstraint(
+        "format <> 'mixed' OR storage_kind <> 'inline' OR (inline_text IS NOT NULL AND "
+        "inline_data IS NOT NULL)",
+        name="inline_mixed_report_content_holds_its_body_and_data",
     ),
     CheckConstraint(
         "original_encoding <> 'identity' OR (original_sha256 = decoded_sha256 AND "
@@ -11092,6 +11103,26 @@ report_receipts = Table(
         "resulting_lifecycle_revision = expected_lifecycle_revision))",
         name="a_report_lifecycle_receipt_is_whole",
     ),
+    # The version and event references are `MATCH SIMPLE`: skipped when any
+    # column is NULL. A named version always has its number and a named event
+    # always has a revision of at least 1, so neither is skipped while named.
+    CheckConstraint(
+        "(version_id IS NULL) = (resulting_version_number IS NULL)",
+        name="a_report_receipt_version_is_whole",
+    ),
+    # An update no-op names the head version it found, at the expected number.
+    CheckConstraint(
+        "operation <> 'update' OR outcome <> 'no_op' OR (resulting_version_number IS NOT NULL "
+        "AND resulting_version_number = expected_version_number)",
+        name="an_update_no_op_receipt_names_the_version_it_found",
+    ),
+    # A lifecycle no-op may omit its event: archive on `archived` can follow a
+    # restore to `archived`, whose event's operation is not the receipt's.
+    CheckConstraint(
+        "event_id IS NULL OR (resulting_lifecycle_revision IS NOT NULL AND "
+        "resulting_lifecycle_revision >= 1)",
+        name="a_report_receipt_names_an_event_only_after_a_transition",
+    ),
     UniqueConstraint(
         "owner_principal_id",
         "operation",
@@ -11168,6 +11199,10 @@ report_transfer_sessions = Table(
     CheckConstraint(
         "received_byte_count BETWEEN 0 AND declared_byte_count",
         name="a_report_transfer_receives_at_most_its_declaration",
+    ),
+    CheckConstraint(
+        "state NOT IN ('finalized', 'consumed') OR received_byte_count = declared_byte_count",
+        name="a_settled_report_transfer_received_its_declaration",
     ),
     CheckConstraint(
         "created_at < expires_at AND expires_at <= created_at + interval "

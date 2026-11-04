@@ -25,17 +25,48 @@ order it:
    targets exist: the head names a version of the report with its number, and
    the lifecycle cache names an event of the report with its revision and
    resulting state;
-4. creates the 7 plane functions;
+4. creates the 8 plane functions;
 5. creates every trigger on the new tables: append-only on the 6 immutable
    tables, TRUNCATE refusal on all 8 (only while the table holds a row), the
-   guarded updates of `report_roots` and `report_transfer_sessions`, and the
-   3 deferred constraint triggers: `a_report_version_has_its_manifest`, and
+   guarded updates of `report_roots` and `report_transfer_sessions` (a
+   transfer token and `finalized_at` are set only by the `open -> finalized`
+   move, so a session aborted or expired from `open` carries no token), the
+   2 insert guards `a_report_manifest_is_written_with_its_version` and
+   `a_report_association_is_written_with_its_version`, and the 3 deferred
+   constraint triggers: `a_report_version_has_its_manifest`, and
    `a_report_head_is_its_newest_version` and
    `a_report_lifecycle_cache_is_its_newest_event`, which, at the commit of a
    new version or lifecycle event, require the root cache to name the newest
    version and the newest event of the report. With the deferred foreign keys
    (which prove the cache names *a* version and *an* event of the report),
    the cache equals the ledger at every commit.
+
+Append-only refuses UPDATE and DELETE; the insert guards close the remaining
+door, an INSERT that attaches a manifest or an association to a version that
+has already committed. Each looks up the referenced version row and requires
+its `xmin` to be a transaction that is still in progress. A row whose writer is
+in progress is visible only to that writer (every other in-progress writer's
+rows are invisible under READ COMMITTED and REPEATABLE READ alike), so an
+in-progress `xmin` on a visible row means this transaction, or one of its
+subtransactions, wrote the version. The 32-bit `xmin` is widened to a full
+`xid8` against `pg_current_xact_id()` (the nearest epoch: every live xid lies
+within 2^31 of it) and passed to `pg_xact_status`, which says `in progress` for
+the current top-level transaction and its subtransactions alike, unlike an
+equality with `pg_current_xact_id()`, which a version written under a
+`SAVEPOINT` would fail. A version row that is not found is left to the
+foreign key to refuse.
+
+The receipt shape is closed in the DDL: a receipt names a version exactly when
+it names a resulting version number (`a_report_receipt_version_is_whole`), so
+the version reference, `MATCH SIMPLE`, is never skipped while a version is
+named; an update `no_op` names the head version it found, at the expected
+number (`an_update_no_op_receipt_names_the_version_it_found`); and a receipt
+names an event only at a resulting revision of at least 1
+(`a_report_receipt_names_an_event_only_after_a_transition`), so the event
+reference is never skipped while an event is named. A lifecycle `no_op` may
+omit its event: the only lifecycle no-op, archive on `archived`, can follow a
+restore from trash to `archived`, whose event's operation is `restore`, and the
+event reference binds the receipt's operation.
 
 Every closed set and bound is a frozen literal equal to the general report
 domain vocabulary module, which this revision does not import.
@@ -176,6 +207,9 @@ _TABLES: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
               'text') OR inline_data IS NULL),
           CONSTRAINT json_report_content_holds_no_text CHECK (format <> 'json' OR inline_text
               IS NULL),
+          CONSTRAINT inline_mixed_report_content_holds_its_body_and_data CHECK (format <>
+              'mixed' OR storage_kind <> 'inline' OR (inline_text IS NOT NULL AND inline_data
+              IS NOT NULL)),
           CONSTRAINT identity_report_content_is_its_original CHECK (original_encoding <>
               'identity' OR (original_sha256 = decoded_sha256 AND original_byte_count =
               decoded_byte_count AND inline_original IS NULL)),
@@ -557,6 +591,14 @@ _TABLES: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
               (resulting_lifecycle_revision = expected_lifecycle_revision + 1 AND event_id IS
               NOT NULL)) AND (outcome <> 'no_op' OR resulting_lifecycle_revision =
               expected_lifecycle_revision))),
+          CONSTRAINT a_report_receipt_version_is_whole CHECK ((version_id IS NULL) =
+              (resulting_version_number IS NULL)),
+          CONSTRAINT an_update_no_op_receipt_names_the_version_it_found CHECK (operation <>
+              'update' OR outcome <> 'no_op' OR (resulting_version_number IS NOT NULL AND
+              resulting_version_number = expected_version_number)),
+          CONSTRAINT a_report_receipt_names_an_event_only_after_a_transition CHECK (event_id
+              IS NULL OR (resulting_lifecycle_revision IS NOT NULL AND
+              resulting_lifecycle_revision >= 1)),
           CONSTRAINT a_report_key_admits_one_request_per_operation UNIQUE
               (owner_principal_id, operation, idempotency_key),
           {
@@ -624,6 +666,8 @@ _TABLES: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
               1 AND 262144),
           CONSTRAINT a_report_transfer_receives_at_most_its_declaration CHECK
               (received_byte_count BETWEEN 0 AND declared_byte_count),
+          CONSTRAINT a_settled_report_transfer_received_its_declaration CHECK (state NOT IN
+              ('finalized', 'consumed') OR received_byte_count = declared_byte_count),
           CONSTRAINT a_report_transfer_expires_within_its_ttl CHECK (created_at < expires_at
               AND expires_at <= created_at + interval '24 hours'),
           {_sha("content_token_digest", "a_report_transfer_token_is_a_digest", nullable=True)},
@@ -779,6 +823,12 @@ _FUNCTIONS: Final[tuple[tuple[str, str], ...]] = (
             RAISE EXCEPTION 'a report transfer token is immutable'
               USING ERRCODE = 'restrict_violation';
           END IF;
+          IF OLD.content_token_digest IS NULL
+             AND (NEW.content_token_digest IS NOT NULL OR NEW.finalized_at IS NOT NULL)
+             AND NOT (OLD.state = 'open' AND NEW.state = 'finalized') THEN
+            RAISE EXCEPTION 'a report transfer token is set only by finalizing'
+              USING ERRCODE = 'restrict_violation';
+          END IF;
           IF NEW.received_byte_count < OLD.received_byte_count
              OR (OLD.state <> 'open' AND NEW.received_byte_count <> OLD.received_byte_count) THEN
             RAISE EXCEPTION 'a report transfer receives bytes only while open'
@@ -861,6 +911,41 @@ _FUNCTIONS: Final[tuple[tuple[str, str], ...]] = (
         END; $$
         """,
     ),
+    (
+        "report_rows_are_written_with_their_version",
+        """
+        CREATE FUNCTION knowledge.report_rows_are_written_with_their_version() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        DECLARE
+          written bigint;
+          current_full bigint;
+          candidate bigint;
+        BEGIN
+          SELECT v.xmin::text::bigint INTO written FROM knowledge.report_versions v
+           WHERE v.version_id = NEW.version_id
+             AND v.owner_principal_id = NEW.owner_principal_id;
+          IF NOT FOUND THEN
+            RETURN NEW;
+          END IF;
+          current_full := pg_current_xact_id()::text::bigint;
+          candidate := current_full - current_full % 4294967296 + written;
+          IF candidate > current_full + 2147483648 THEN
+            candidate := candidate - 4294967296;
+          ELSIF candidate < current_full - 2147483648 THEN
+            candidate := candidate + 4294967296;
+          END IF;
+          IF written < 3 OR candidate < 3 THEN
+            RAISE EXCEPTION 'a % row is written in its version''s transaction', TG_TABLE_NAME
+              USING ERRCODE = 'restrict_violation';
+          END IF;
+          IF pg_xact_status(candidate::text::xid8) IS DISTINCT FROM 'in progress' THEN
+            RAISE EXCEPTION 'a % row is written in its version''s transaction', TG_TABLE_NAME
+              USING ERRCODE = 'restrict_violation';
+          END IF;
+          RETURN NEW;
+        END; $$
+        """,
+    ),
 )
 
 # ---- triggers ----------------------------------------------------------------------
@@ -888,6 +973,14 @@ _ROW_GUARDS: Final = (
         "report_transfer_sessions",
         "BEFORE UPDATE OR DELETE",
     ),
+)
+
+#: The insert guards: `(trigger, table)`, each `BEFORE INSERT` and executing
+#: `report_rows_are_written_with_their_version`. A manifest or an association
+#: is written only in the transaction that writes its version.
+_WRITTEN_WITH_THEIR_VERSION: Final = (
+    ("a_report_manifest_is_written_with_its_version", "report_version_manifests"),
+    ("a_report_association_is_written_with_its_version", "report_associations"),
 )
 
 #: The deferred commit checks: `(trigger = function, table, events)`. A new
@@ -932,6 +1025,16 @@ def _triggers() -> tuple[tuple[str, str, str], ...]:
                 table,
                 f"CREATE TRIGGER {trigger} {timing} ON {SCHEMA}.{table} "
                 f"FOR EACH ROW EXECUTE FUNCTION {SCHEMA}.{trigger}()",
+            )
+        )
+    for trigger, table in _WRITTEN_WITH_THEIR_VERSION:
+        created.append(
+            (
+                trigger,
+                table,
+                f"CREATE TRIGGER {trigger} BEFORE INSERT ON {SCHEMA}.{table} "
+                f"FOR EACH ROW EXECUTE FUNCTION "
+                f"{SCHEMA}.report_rows_are_written_with_their_version()",
             )
         )
     for trigger, table, events in _DEFERRED:

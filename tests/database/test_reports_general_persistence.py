@@ -12,16 +12,20 @@ head (`migrated_engine`), never the configured database. What it proves:
 * a foreign Principal's report reads exactly as a nonexistent one; association
   targets resolve only in the owner's scope;
 * a publish writes no `knowledge.intelligence_*` row;
-* a tampered stored row makes the read refuse. Every plane row is append-only
-  by trigger, so the tamper is done honestly: in this test's disposable clone,
-  `ALTER TABLE ... DISABLE TRIGGER` on the append-only trigger of the one table
-  tampered, then a plain `UPDATE`.
+* a version ref is verified against the caller's own versions of the named
+  report, never stored `verified` on trust;
+* a tampered stored row makes the read refuse, including a manifest rewritten
+  with both digests recomputed to name another title, version or byte count.
+  Every plane row is append-only by trigger, so the tamper is done honestly:
+  in this test's disposable clone, `ALTER TABLE ... DISABLE TRIGGER` on the
+  append-only trigger of each table tampered, then a plain `UPDATE`.
 
 Every identifier, title and byte is synthetic.
 """
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from collections.abc import Callable
@@ -330,10 +334,13 @@ def test_association_targets_resolve_only_in_the_owners_scope(migrated_engine: E
         _project(migrated_engine, PRINCIPAL_B),
         _entity(migrated_engine, PRINCIPAL_B),
     )
-    report_a = _publish_committed(migrated_engine, _request(), "target-a").receipt.report_id
-    report_b = _publish_committed(
+    receipt_a = _publish_committed(migrated_engine, _request(), "target-a").receipt
+    receipt_b = _publish_committed(
         migrated_engine, _request(), "target-b", principal_id=PRINCIPAL_B
-    ).receipt.report_id
+    ).receipt
+    report_a, version_a = receipt_a.report_id, receipt_a.version_id
+    report_b, version_b = receipt_b.report_id, receipt_b.version_id
+    other_a = _publish_committed(migrated_engine, _request(), "target-a2").receipt
     p, e, s, i = (
         AssociationTargetKind.PROJECT,
         AssociationTargetKind.ENTITY,
@@ -368,9 +375,9 @@ def test_association_targets_resolve_only_in_the_owners_scope(migrated_engine: E
         associations=(
             RequestedAssociation(p, project_a, "about"),
             RequestedAssociation(e, entity_a, "mentions"),
-            RequestedAssociation(s, report_a, "follows", "grver_aaaaaaaa"),
+            RequestedAssociation(s, report_a, "follows", version_a),
             RequestedAssociation(
-                AssociationTargetKind.EXTERNAL_SOURCE, "https://x.test/a", "cites"
+                AssociationTargetKind.EXTERNAL_SOURCE, "https://x.test/a", "cites", "v9"
             ),
         )
     )
@@ -386,7 +393,9 @@ def test_association_targets_resolve_only_in_the_owners_scope(migrated_engine: E
         (s, AssociationVerification.VERIFIED),
         (AssociationTargetKind.EXTERNAL_SOURCE, AssociationVerification.ASSERTED),
     ]
-    assert stored.associations[2].target_version_ref == "grver_aaaaaaaa"
+    assert stored.associations[2].target_version_ref == version_a
+    # An external version is not checkable: it is kept as asserted text.
+    assert stored.associations[3].target_version_ref == "v9"
     assert [a["verification"] for a in stored.manifest["associations"]] == [
         "verified",
         "verified",
@@ -400,10 +409,22 @@ def test_association_targets_resolve_only_in_the_owners_scope(migrated_engine: E
         RequestedAssociation(e, entity_b, "about"),
         RequestedAssociation(s, report_b, "about"),
         RequestedAssociation(i, "rpt_aaaaaaaa0000", "about"),
+        # A version ref is verified, never trusted: a foreign Principal's
+        # version, a nonexistent one, the caller's own version of ANOTHER
+        # report, a non-`grver_` ref, and any version ref on a kind with no
+        # verifiable version all refuse as the target's own not-found.
+        RequestedAssociation(s, report_a, "follows", version_b),
+        RequestedAssociation(s, report_a, "follows", "grver_aaaaaaaa"),
+        RequestedAssociation(s, report_a, "follows", other_a.version_id),
+        RequestedAssociation(s, report_a, "follows", "v1"),
+        RequestedAssociation(p, project_a, "about", version_a),
+        RequestedAssociation(e, entity_a, "about", "v1"),
     ):
         with pytest.raises(ReportAssociationTargetNotFoundError):
             _publish_committed(
-                migrated_engine, _request(associations=(foreign,)), f"foreign-{foreign.target_ref}"
+                migrated_engine,
+                _request(associations=(foreign,)),
+                f"foreign-{foreign.target_ref}-{foreign.target_version_ref}",
             )
     assert _counts(migrated_engine) == before
 
@@ -429,6 +450,37 @@ def _tamper(engine: Engine, table: str, statement: str, parameters: dict[str, st
         connection.execute(
             text(f"ALTER TABLE knowledge.{table} ENABLE TRIGGER {table}_are_append_only")
         )
+
+
+def _tamper_manifest_and_digest(
+    engine: Engine, version_id: str, manifest: dict[str, object], digest: str
+) -> None:
+    """Rewrite a manifest and BOTH digests that name it, in one statement.
+
+    The manifest's `(version_id, manifest_sha256)` foreign key to its version is
+    not deferrable, so the two rows change in one writable-CTE statement, with
+    the two append-only triggers disabled in this disposable clone.
+    """
+    tables = ("report_version_manifests", "report_versions")
+    with engine.begin() as connection:
+        for table in tables:
+            connection.execute(
+                text(f"ALTER TABLE knowledge.{table} DISABLE TRIGGER {table}_are_append_only")
+            )
+        changed = connection.execute(
+            text(
+                "WITH m AS (UPDATE knowledge.report_version_manifests SET manifest = "
+                "CAST(:m AS jsonb), manifest_sha256 = :d WHERE version_id = :v RETURNING 1) "
+                "UPDATE knowledge.report_versions SET manifest_sha256 = :d "
+                "WHERE version_id = :v AND (SELECT count(*) FROM m) = 1"
+            ),
+            {"m": json.dumps(manifest), "d": digest, "v": version_id},
+        ).rowcount
+        assert changed == 1
+        for table in tables:
+            connection.execute(
+                text(f"ALTER TABLE knowledge.{table} ENABLE TRIGGER {table}_are_append_only")
+            )
 
 
 def test_a_tampered_content_digest_makes_the_read_refuse(migrated_engine: Engine) -> None:
@@ -470,6 +522,31 @@ def test_a_tampered_manifest_makes_the_read_refuse(migrated_engine: Engine) -> N
     )
     with pytest.raises(ReportIntegrityError):
         _read(migrated_engine, result.receipt.report_id)
+
+    # A manifest rewritten to name another title, version number, report or
+    # version, or other byte counts, with BOTH stored digests recomputed to
+    # match it, still refuses: the read compares it to the version row.
+    for field, forged_value in (
+        ("title", "forged"),
+        ("version_number", 2),
+        ("report_id", issue_identifier(IdKind.REPORT)),
+        ("version_id", issue_identifier(IdKind.REPORT_VERSION)),
+        ("content.original_byte_count", 999),
+        ("content.decoded_byte_count", 999),
+    ):
+        published = _publish_committed(migrated_engine, _request(), f"tamper-identity-{field}")
+        version_id = published.receipt.version_id
+        stored = _read(migrated_engine, published.receipt.report_id)
+        assert stored is not None
+        manifest = dict(stored.manifest)  # type: ignore[attr-defined]
+        if field.startswith("content."):
+            manifest["content"] = {**manifest["content"], field.split(".", 1)[1]: forged_value}
+        else:
+            manifest[field] = forged_value
+        digest = manifest_digest(manifest)
+        _tamper_manifest_and_digest(migrated_engine, version_id, manifest, digest)
+        with pytest.raises(ReportIntegrityError):
+            _read(migrated_engine, published.receipt.report_id)
 
 
 def _wait_until(condition: Callable[[], bool], *, seconds: float = 20.0) -> bool:

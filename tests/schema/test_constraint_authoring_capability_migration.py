@@ -223,6 +223,9 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_auth_identity_and_grants_migration.py",
     "tests/schema/test_canvas_workspace_migration.py",
     "tests/schema/test_capture_lifecycle_migration.py",
+    # Names the head only in a comment: Reports Modernization WP02's revision
+    # restates `capability_is_known` to admit `reports.publish`.
+    "tests/schema/test_capture_schema_migration.py",
     # The Commitment counterparty Entity cutover's own revision module names
     # the head as the revision it tests.
     "tests/schema/test_commitment_counterparty_entity_migration.py",

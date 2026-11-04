@@ -109,7 +109,11 @@ and residual risks are in
 The current profile, `chatllm-data-v12` (Reports Modernization WP02), adds only
 `reports.publish` (standalone report publication; a `DATA_REQUIRED` write under
 `report_authoring`, needing no plane switch); `profile-plan` for a client converged on
-`chatllm-data-v11` adds exactly that one grant. `chatllm-data-v11` (CPM Workbench S5b-2) added the 6 Schedule reads
+`chatllm-data-v11` adds exactly that one grant. Its inline content limit is 524,288
+decoded UTF-8 bytes, but the whole JSON request must also fit the 762,288-byte
+`MAX_REQUEST_BYTES` request ceiling, so heavily escaped content (quotes, backslashes,
+control characters, `\u`-escaped non-ASCII) may need to be smaller; a request over the
+ceiling is refused at the transport (HTTP 413) before any handler runs. `chatllm-data-v11` (CPM Workbench S5b-2) added the 6 Schedule reads
 as `DATA_CONDITIONAL` on `MY_PA_SCHEDULE_ENABLED` (default off) and classifies
 `schedule_publications.import` `CONTROL_PLANE_EXCLUDED`: it is operator-only and attested
 to the local CLI or this gateway's stamped operator surface.

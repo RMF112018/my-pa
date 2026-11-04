@@ -9693,7 +9693,18 @@ class _GeneralReports(GeneralReportRepository):
         for item in request.associations:
             if item.target_kind is AssociationTargetKind.EXTERNAL_SOURCE:
                 associations.append(item.as_stored(AssociationVerification.ASSERTED))
-            elif (item.target_kind, item.target_ref) in resolved:
+            elif (item.target_kind, item.target_ref) in resolved and (
+                item.target_version_ref is None
+                or (
+                    item.target_kind is AssociationTargetKind.STANDALONE_REPORT
+                    and self._world.general_report_versions[
+                        (principal_id, item.target_ref)
+                    ].version.version_id
+                    == item.target_version_ref
+                )
+            ):
+                # As the SQL repository: only a standalone report's own version,
+                # in the caller's scope, verifies; any other version ref refuses.
                 associations.append(item.as_stored(AssociationVerification.VERIFIED))
             else:
                 raise ReportAssociationTargetNotFoundError()

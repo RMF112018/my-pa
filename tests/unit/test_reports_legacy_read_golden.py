@@ -47,25 +47,40 @@ GOLDEN: Final = (
     '":"2026-08-20","report_id":"<report_id>","report_run_id":"<report_run_id>","sour'
     'ce_lane":null,"stage":"collector","structured_content":{"items":[1,2],"note":"sy'
     'nthetic"},"supersedes_report_id":null,"title":"Golden collector","version":1}},"'
-    'malformed":{"error":{"code":"invalid_request","correlation_id":"<correlation_id>'
-    '","message":"the request is malformed, incomplete, or contradictory","retry":"af'
-    'ter_correction","safe_details":["artifact_id"]},"refused_by":"normalize"},"missi'
-    'ng":{"error":{"code":"not_found","correlation_id":"<correlation_id>","message":"'
-    'no record matches the request within the authorized scope","retry":"conditional"'
-    ',"safe_details":["artifact_id"]},"result":null},"no_body":{"error":null,"result"'
-    ':{"artifact_kind":"collector_candidates","artifact_state":"final","committed_at"'
-    ':"2026-08-02T12:00:00.000Z","content_bytes":37,"content_sha256":"f3ca330f1a6f8d4'
-    'ef523f6aab90480586fb1d0069368e127559f9c431ec0556a","cycle_run_id":"<cycle_run_id'
-    '>","dependency_report_ids":[],"focus_area_id":"communications","provenance":[],"'
-    'report_date":"2026-08-20","report_id":"<report_id>","report_run_id":"<report_run'
-    '_id>","source_lane":null,"stage":"collector","structured_content":{"items":[1,2]'
-    ',"note":"synthetic"},"supersedes_report_id":null,"title":"Golden collector","ver'
-    'sion":1}},"unknown_field":{"error":{"code":"invalid_request","correlation_id":"<'
+    'default_include_manifest":{"error":{"code":"invalid_request","correlation_id":"<'
     'correlation_id>","message":"the request is malformed, incomplete, or contradicto'
-    'ry","retry":"after_correction","safe_details":[]},"refused_by":"normalize"},"wro'
-    'ng_kind":{"error":{"code":"invalid_request","correlation_id":"<correlation_id>",'
+    'ry","retry":"after_correction","safe_details":[]},"refused_by":"normalize"},"def'
+    'ault_include_withdrawn":{"error":{"code":"invalid_request","correlation_id":"<co'
+    'rrelation_id>","message":"the request is malformed, incomplete, or contradictory'
+    '","retry":"after_correction","safe_details":[]},"refused_by":"normalize"},"defau'
+    'lt_on_wrong_kind":{"error":{"code":"invalid_request","correlation_id":"<correlat'
+    'ion_id>","message":"the request is malformed, incomplete, or contradictory","ret'
+    'ry":"after_correction","safe_details":[]},"refused_by":"normalize"},"default_ver'
+    'sion_id":{"error":{"code":"invalid_request","correlation_id":"<correlation_id>",'
     '"message":"the request is malformed, incomplete, or contradictory","retry":"afte'
-    'r_correction","safe_details":["artifact_id"]},"refused_by":"normalize"}}'
+    'r_correction","safe_details":[]},"refused_by":"normalize"},"default_version_numb'
+    'er":{"error":{"code":"invalid_request","correlation_id":"<correlation_id>","mess'
+    'age":"the request is malformed, incomplete, or contradictory","retry":"after_cor'
+    'rection","safe_details":[]},"refused_by":"normalize"},"malformed":{"error":{"cod'
+    'e":"invalid_request","correlation_id":"<correlation_id>","message":"the request '
+    'is malformed, incomplete, or contradictory","retry":"after_correction","safe_det'
+    'ails":["artifact_id"]},"refused_by":"normalize"},"missing":{"error":{"code":"not'
+    '_found","correlation_id":"<correlation_id>","message":"no record matches the req'
+    'uest within the authorized scope","retry":"conditional","safe_details":["artifac'
+    't_id"]},"result":null},"no_body":{"error":null,"result":{"artifact_kind":"collec'
+    'tor_candidates","artifact_state":"final","committed_at":"2026-08-02T12:00:00.000'
+    'Z","content_bytes":37,"content_sha256":"f3ca330f1a6f8d4ef523f6aab90480586fb1d006'
+    '9368e127559f9c431ec0556a","cycle_run_id":"<cycle_run_id>","dependency_report_ids'
+    '":[],"focus_area_id":"communications","provenance":[],"report_date":"2026-08-20"'
+    ',"report_id":"<report_id>","report_run_id":"<report_run_id>","source_lane":null,'
+    '"stage":"collector","structured_content":{"items":[1,2],"note":"synthetic"},"sup'
+    'ersedes_report_id":null,"title":"Golden collector","version":1}},"unknown_field"'
+    ':{"error":{"code":"invalid_request","correlation_id":"<correlation_id>","message'
+    '":"the request is malformed, incomplete, or contradictory","retry":"after_correc'
+    'tion","safe_details":[]},"refused_by":"normalize"},"wrong_kind":{"error":{"code"'
+    ':"invalid_request","correlation_id":"<correlation_id>","message":"the request is'
+    ' malformed, incomplete, or contradictory","retry":"after_correction","safe_detai'
+    'ls":["artifact_id"]},"refused_by":"normalize"}}'
 )
 
 
@@ -136,6 +151,13 @@ def _transcript(scene: Scene) -> str:
         "wrong_kind": {"report_id": "cap_0000000000000000golden"},
         "bad_include_body": {"report_id": report_id, "include_body": "yes"},
         "unknown_field": {"report_id": report_id, "version_number": 1},
+        # The four standalone selectors, each at its default value: the
+        # legacy plane never had them, so even a default is an unknown field.
+        "default_version_id": {"report_id": report_id, "version_id": None},
+        "default_version_number": {"report_id": report_id, "version_number": None},
+        "default_include_manifest": {"report_id": report_id, "include_manifest": False},
+        "default_include_withdrawn": {"report_id": report_id, "include_withdrawn": False},
+        "default_on_wrong_kind": {"report_id": "cap_0000000000000000golden", "version_id": None},
         "absent_id": {},
     }
     transcript = json.dumps(

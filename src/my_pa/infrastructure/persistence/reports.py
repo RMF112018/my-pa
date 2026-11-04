@@ -18,8 +18,9 @@ intent digest. A key found before writing is settled the same way.
 
 **A read recomputes before it answers.** The decoded content digest is
 recomputed from the stored body and data, and the manifest digest from the
-stored manifest; a mismatch with the stored digests raises
-`ReportIntegrityError`. jsonb reproduces the canonical bytes: keys are
+stored manifest; a mismatch with the stored digests or byte counts, or a
+manifest whose report, version, version number or title is not the version
+row's, raises `ReportIntegrityError`. jsonb reproduces the canonical bytes: keys are
 re-sorted by `canonical_json`, and every number the domain admits prints back
 with the digits it was written with (`-0.0` is normalized to `0.0` before
 hashing, because `numeric` has no negative zero).
@@ -245,12 +246,43 @@ def _verified(
     stored: list[ReportAssociation] = []
     for item in requested:
         if item.target_kind is AssociationTargetKind.EXTERNAL_SOURCE:
+            # Nothing here can check an external version, so it stays asserted text.
             stored.append(item.as_stored(AssociationVerification.ASSERTED))
-        elif (item.target_kind, item.target_ref) in resolved:
+        elif (item.target_kind, item.target_ref) in resolved and _version_verified(
+            connection, item, context
+        ):
             stored.append(item.as_stored(AssociationVerification.VERIFIED))
         else:
             raise ReportAssociationTargetNotFoundError()
     return tuple(stored)
+
+
+def _version_verified(
+    connection: Connection, item: RequestedAssociation, context: PrincipalContext
+) -> bool:
+    """Whether the association's `target_version_ref`, if any, is a version it can verify.
+
+    Only a `standalone_report` has versions this plane can check: the ref must
+    be a `grver_` of THAT report in the caller's scope. Every other verifiable
+    kind has no version to check, so a non-null ref is refused rather than
+    stored as `verified`. The refusal is the target's own not-found, so a
+    foreign or absent version discloses nothing a foreign report would not.
+    """
+    ref = item.target_version_ref
+    if ref is None:
+        return True
+    if item.target_kind is not AssociationTargetKind.STANDALONE_REPORT:
+        return False
+    if not _valid(ref, IdKind.REPORT_VERSION):
+        return False
+    row = connection.execute(
+        select(report_versions.c.version_id).where(
+            _mine(report_versions, context),
+            report_versions.c.report_id == item.target_ref,
+            report_versions.c.version_id == ref,
+        )
+    ).one_or_none()
+    return row is not None
 
 
 def _content_values(
@@ -508,6 +540,7 @@ def _verified_content(row: Row[Any]) -> ReportContent:
         or content.decoded_byte_count != m["decoded_byte_count"]
         or content.canonical_sha256 != m["canonical_sha256"]
         or content.original_sha256 != m["original_sha256"]
+        or content.original_byte_count != m["original_byte_count"]
     ):
         raise ReportIntegrityError()
     return content
@@ -571,6 +604,14 @@ def _read_version(
             recomputed == manifest_row[1] == version.manifest_sha256
             and described["content_id"] == version.content_id
             and described["decoded_sha256"] == content.decoded_sha256
+            and described["decoded_byte_count"] == content.decoded_byte_count
+            and described["original_byte_count"] == content.original_byte_count
+            # The manifest names the version it describes; one that names
+            # another (with its digest recomputed to match) is refused too.
+            and manifest["report_id"] == version.report_id == root.report_id
+            and manifest["version_id"] == version.version_id
+            and manifest["version_number"] == version.version_number
+            and manifest["title"] == version.title
         )
     except (KeyError, TypeError, ValueError):
         consistent = False

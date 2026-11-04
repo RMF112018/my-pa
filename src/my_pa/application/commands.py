@@ -5730,14 +5730,19 @@ class PublishGeneralReport:
 
     Only `title` and `content` are required: `content` is `{"format":
     "markdown"|"text", "body"}`, `{"format": "json", "data"}` or `{"format":
-    "mixed", "body", "data"}`, at most 512 KiB decoded; `encoding` may be
+    "mixed", "body", "data"}`, at most 512 KiB decoded (the escaped JSON
+    request must also fit `MAX_REQUEST_BYTES`); `encoding` may be
     omitted or `identity`. The server derives the owner, the report and
     version identifiers, version 1, every timestamp and digest, the manifest
     and the receipt; no cycle run, stage, producer, focus area or source lane is
     accepted. Optional `type` is an open lower_snake token (no registration).
     Associations to a project, entity, standalone report or intelligence report
     must name one you own, else the publish is `not_found`; an
-    `external_source` is stored as asserted. A retry of the same request replays
+    `external_source` is stored as asserted. A `target_version_ref` is verified,
+    never trusted: on a `standalone_report` it must be a `grver_` of that report
+    you own, on an `external_source` it is kept as asserted text, and on any
+    other kind (none has a version this plane can check) it is refused, each
+    refusal the same `not_found`. A retry of the same request replays
     the original receipt; set `client_intent_id` to publish an identical report
     again deliberately.
     """
@@ -5806,13 +5811,21 @@ def publication_request(command: PublishGeneralReport) -> PublicationRequest:
     raise refusal
 
 
+#: The transport's whole-request ceiling, `adapters.normalization.MAX_REQUEST_BYTES`,
+#: restated because the application layer does not import an adapter; the
+#: compact-facade contract test pins the stated number to it.
+_WIRE_CEILING_BYTES: Final = 762_288
+
 _CONTENT_SCHEMA: Final[Mapping[str, Any]] = MappingProxyType(
     {
         "type": "object",
         "description": (
             "markdown|text: {format, body}; json: {format, data}; mixed: {format, body, "
-            "data}. At most 512 KiB decoded. encoding: omit or identity (gzip+base64 is "
-            "not supported yet)."
+            f"data}}. At most {INLINE_CONTENT_MAX_BYTES:,} decoded UTF-8 bytes; the whole "
+            f"JSON request must also fit the {_WIRE_CEILING_BYTES:,}-byte request ceiling, "
+            "so heavily escaped content (quotes, backslashes, control characters, "
+            "\\u-escaped non-ASCII) may need to be smaller. encoding: omit or identity "
+            "(gzip+base64 is not supported yet)."
         ),
         "properties": {
             "format": {"type": "string", "enum": [member.value for member in ContentFormat]},

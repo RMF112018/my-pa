@@ -338,7 +338,11 @@ class Harness:
                         headers={**_HEADERS, "Authorization": f"Bearer {token}"},
                         content=content,
                     )
-                    document = response.json() if response.content else None
+                    try:
+                        document = response.json() if response.content else None
+                    except json.JSONDecodeError:
+                        # A transport refusal (e.g. 413) may answer in plain text.
+                        document = response.text
                     answers.append(Exchange(response.status_code, document, len(content)))
             return answers
 
@@ -441,6 +445,16 @@ def test_describe_returns_the_exact_remote_schemas_under_the_v12_profile(
     _failed, publish_contract = outcome(publish)
     payload = publish_contract["input_schema"]["properties"]["payload"]
     assert payload["required"] == ["title", "content"]
+    # The advertised limit is decoded bytes; the wire bound is stated beside it,
+    # with the transport's own ceiling, so an escape-heavy body is not a surprise.
+    assert payload["properties"]["content"]["description"] == (
+        "markdown|text: {format, body}; json: {format, data}; mixed: {format, body, "
+        f"data}}. At most {INLINE_CONTENT_MAX_BYTES:,} decoded UTF-8 bytes; the whole "
+        f"JSON request must also fit the {MAX_REQUEST_BYTES:,}-byte request ceiling, "
+        "so heavily escaped content (quotes, backslashes, control characters, "
+        "\\u-escaped non-ASCII) may need to be smaller. encoding: omit or identity "
+        "(gzip+base64 is not supported yet)."
+    )
     assert "client_intent_id" in payload["properties"]
     for server_owned in (
         "idempotency_key",

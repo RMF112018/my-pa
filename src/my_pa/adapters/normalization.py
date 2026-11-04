@@ -321,6 +321,7 @@ from my_pa.domain.capture.review import (
     ReviewSubjectKind,
 )
 from my_pa.domain.capture.submission import CaptureKind
+from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.context import ContextPlane
 from my_pa.domain.context.preference import ContextPreferenceAction
 from my_pa.domain.identity.operation import (
@@ -1821,7 +1822,25 @@ def _record_intelligence_run_state(payload: Mapping[str, Any]) -> Command:
     return RecordIntelligenceRunState(**converted)
 
 
+#: The selectors only a standalone (`grpt_`) read declares.
+_STANDALONE_READ_SELECTORS: Final = frozenset(
+    {"version_id", "version_number", "include_manifest", "include_withdrawn"}
+)
+
+
 def _read_intelligence_artifact(payload: Mapping[str, Any]) -> Command:
+    """`reports.read`: only a `grpt_` read may name the standalone selectors.
+
+    The pipeline plane never had them, so before the extension any of them --
+    even at its default value (`null`, `false`) -- was an unknown field: a bare
+    `invalid_request`, whatever the `report_id`. The command cannot tell an
+    omitted field from a default one, so the presence is refused here, exactly
+    as it was, for every read that is not of a standalone report.
+    """
+    named = payload.get("report_id")
+    standalone = isinstance(named, str) and named.startswith(f"{IdKind.REPORT}_")
+    if not standalone and _STANDALONE_READ_SELECTORS & set(payload):
+        raise InvalidRequestError()
     return ReadIntelligenceArtifact(**payload)
 
 

@@ -16,7 +16,7 @@ from datetime import timedelta
 from typing import Any, Final
 
 import pytest
-from sqlalchemy import Engine
+from sqlalchemy import Engine, text
 from tests.conftest import metadata_for, operator
 from tests.contract.test_reports_compact_facade import (
     CLIENT,
@@ -31,6 +31,7 @@ from tests.contract.test_reports_compact_facade import (
     counts,
     describe,
     grant_row,
+    ok,
     outcome,
     profile_grants,
     refusal,
@@ -44,10 +45,12 @@ from my_pa.adapters.mcp.chatllm_gateway import (
     READ_TOOL,
     WRITE_TOOL,
 )
+from my_pa.adapters.normalization import MAX_REQUEST_BYTES
 from my_pa.adapters.remote_request import compose_remote_arguments
 from my_pa.application.errors import InvalidRequestError
 from my_pa.domain.identity.operation import Capability, is_operator_only
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.reports.content import INLINE_CONTENT_MAX_BYTES
 
 pytestmark = pytest.mark.database
 
@@ -339,4 +342,75 @@ def test_an_operator_capability_is_refused_on_the_ordinary_facade(harness: Harne
     assert catalog["items"] == []
     for answer in (exact, as_operator, as_write):
         assert refusal(answer) == ("unsupported", [])
+    assert counts(harness.engine, _ALL_TABLES) == before
+
+
+def _following(report_id: str, version_ref: str) -> dict[str, Any]:
+    return {
+        **MINIMAL,
+        "associations": [
+            {
+                "target_kind": "standalone_report",
+                "target_ref": report_id,
+                "relation": "follows",
+                "target_version_ref": version_ref,
+            }
+        ],
+    }
+
+
+def test_a_version_ref_is_verified_against_the_callers_own_report(harness: Harness) -> None:
+    """A foreign or nonexistent `grver_` is refused as not found; never stored `verified`."""
+    token = harness.client(CLIENT, profile_grants(harness.service))
+    (mine,) = harness.run([(token, wrapped(WRITE_TOOL, PUBLISH, MINIMAL))])
+    own = ok(mine)
+    stranger = operator()
+    foreign = harness.service.invoke(
+        metadata_for(PUBLISH, Purpose.REPORT_AUTHORING, stranger),
+        _publish_command(stranger.principal_id),
+        principal=stranger,
+    )
+    assert foreign.result is not None, foreign.error
+    before = counts(harness.engine, _ALL_TABLES)
+    refused = harness.run(
+        [
+            (token, wrapped(WRITE_TOOL, PUBLISH, _following(own["report_id"], ref)))
+            for ref in (foreign.result["version_id"], "grver_00000000nothere0")
+        ]
+    )
+    for answer in refused:
+        assert refusal(answer) == ("not_found", ["associations"])
+    assert counts(harness.engine, _ALL_TABLES) == before
+
+    (accepted,) = harness.run(
+        [(token, wrapped(WRITE_TOOL, PUBLISH, _following(own["report_id"], own["version_id"])))]
+    )
+    receipt = ok(accepted)
+    with harness.engine.connect() as connection:
+        stored = connection.execute(
+            text(
+                "SELECT target_ref, target_version_ref, verification "
+                "FROM knowledge.report_associations WHERE version_id = :v"
+            ),
+            {"v": receipt["version_id"]},
+        ).one()
+    assert tuple(stored) == (own["report_id"], own["version_id"], "verified")
+
+
+def test_an_escape_heavy_body_under_the_inline_limit_can_exceed_the_wire_ceiling(
+    harness: Harness,
+) -> None:
+    """The 524,288-byte limit is decoded bytes; the escaped JSON request has its own ceiling.
+
+    Every `"` costs two bytes on the wire, so a body well under the inline
+    limit is refused at the transport, before any handler, with no row written.
+    """
+    token = harness.client(CLIENT, profile_grants(harness.service))
+    body = '"' * 400_000
+    assert len(body.encode()) < INLINE_CONTENT_MAX_BYTES
+    payload = {**MINIMAL, "content": {"format": "text", "body": body}}
+    before = counts(harness.engine, _ALL_TABLES)
+    (answer,) = harness.run([(token, wrapped(WRITE_TOOL, PUBLISH, payload))])
+    assert answer.request_bytes > MAX_REQUEST_BYTES
+    assert answer.status == 413, (answer.status, answer.document)
     assert counts(harness.engine, _ALL_TABLES) == before

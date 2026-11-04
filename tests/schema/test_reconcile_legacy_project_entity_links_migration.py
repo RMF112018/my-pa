@@ -173,7 +173,8 @@ def test_the_revision_is_in_the_chain() -> None:
     script = ScriptDirectory.from_config(_config())
     assert len(list(script.get_heads())) == 1
     # `264310e0416a` (record lineage S1, ADR-015) is additive on this revision.
-    assert script.get_heads() == ["2a90f91dd786"]
+    assert script.get_heads() == ["4c37731671fc"]
+    assert script.get_revision("4c37731671fc").down_revision == "2a90f91dd786"
     assert script.get_revision("2a90f91dd786").down_revision == "621ef6786c64"
     assert script.get_revision("621ef6786c64").down_revision == "6c2306330ceb"
     assert script.get_revision("c5260943d933").down_revision == "6f1476b8da52"

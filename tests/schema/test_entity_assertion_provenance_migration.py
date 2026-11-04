@@ -316,6 +316,15 @@ def test_downgrading_one_step_removes_exactly_these_two_tables(migrated_engine: 
         "schedule_scenario_outputs",
         "schedule_scenario_write_requests",
         "schedule_scenario_write_refusals",
+        # Reports Modernization WP01 stacks the eight general report tables.
+        "report_content_objects",
+        "report_roots",
+        "report_versions",
+        "report_version_manifests",
+        "report_associations",
+        "report_lifecycle_events",
+        "report_receipts",
+        "report_transfer_sessions",
     }
     assert {
         "entities",

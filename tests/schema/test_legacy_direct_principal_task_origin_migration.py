@@ -54,7 +54,7 @@ PREVIOUS: Final = "e6a4c2f91b73"
 #: Meeting records) is additive on `REVISION`, and `1d9b248e7f83` (WP-RE-01, Record
 #: Events) is additive on that, and `0641c354ca85` (CRL-WP-03, Capture lifecycle)
 #: on that, so `REVISION` is no longer the head.
-HEAD: Final = "2a90f91dd786"
+HEAD: Final = "4c37731671fc"
 
 PRINCIPAL: Final = "prn_aaaaaaaa11111111"
 TASK_LEGACY: Final = "tsk_aaaaaaaa11111111"
@@ -175,7 +175,8 @@ def test_the_revision_is_in_the_chain() -> None:
     script = ScriptDirectory.from_config(_config())
     assert len(list(script.get_heads())) == 1
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "621ef6786c64"
+    assert script.get_revision(HEAD).down_revision == "2a90f91dd786"
+    assert script.get_revision("2a90f91dd786").down_revision == "621ef6786c64"
     assert script.get_revision("621ef6786c64").down_revision == "6c2306330ceb"
     assert script.get_revision("6c2306330ceb").down_revision == "023f8f7eb499"
     assert script.get_revision("c5260943d933").down_revision == "6f1476b8da52"

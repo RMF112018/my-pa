@@ -67,9 +67,10 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "6c2306330ceb"
 PREVIOUS: Final = "023f8f7eb499"
-#: CPM Workbench S5b-2 (`621ef6786c64`) is additive on this revision, and Schedule
-#: Scenarios S6-2 (`2a90f91dd786`) on it is the head.
-HEAD: Final = "2a90f91dd786"
+#: CPM Workbench S5b-2 (`621ef6786c64`) is additive on this revision, Schedule
+#: Scenarios S6-2 (`2a90f91dd786`) on it, and Reports Modernization WP01
+#: (`4c37731671fc`) on that is the head.
+HEAD: Final = "4c37731671fc"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20261027_6c2306330ceb_cpm_workbench_foundation.py"
 
@@ -147,12 +148,13 @@ def _values(enum: object) -> list[str]:
 def test_the_revision_is_the_single_head_on_023f8f7eb499() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "621ef6786c64"
+    assert script.get_revision(HEAD).down_revision == "2a90f91dd786"
+    assert script.get_revision("2a90f91dd786").down_revision == "621ef6786c64"
     assert script.get_revision("621ef6786c64").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "c5260943d933"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
-    assert len(list(MIGRATIONS.glob("*.py"))) == 126
+    assert len(list(MIGRATIONS.glob("*.py"))) == 127
 
 
 # ---- the freeze -------------------------------------------------------------

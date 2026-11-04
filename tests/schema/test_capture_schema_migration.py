@@ -191,6 +191,16 @@ _S62_APPEND_ONLY: Final = (
     "schedule_scenario_write_refusals",
 )
 
+#: Reports Modernization WP01's six append-only general report tables.
+_GENERAL_REPORT_APPEND_ONLY: Final = (
+    "report_content_objects",
+    "report_versions",
+    "report_version_manifests",
+    "report_associations",
+    "report_lifecycle_events",
+    "report_receipts",
+)
+
 #: Exact delta between the frozen capture revision and the current head. This is
 #: historical migration evidence, so it is intentionally literal rather than
 #: derived from either live domain enum.
@@ -318,6 +328,15 @@ LINEAGE_TRIGGERS: Final[frozenset[str]] = frozenset(
         "a_plane_write_request_completes_once",
         "a_plane_write_request_is_never_left_reserved",
         "a_schedule_intake_series_admits_no_other_publication",
+        # Reports Modernization WP01.
+        *(f"{table}_are_append_only" for table in _GENERAL_REPORT_APPEND_ONLY),
+        *(
+            f"{table}_refuse_truncate"
+            for table in (*_GENERAL_REPORT_APPEND_ONLY, "report_roots", "report_transfer_sessions")
+        ),
+        "a_report_root_moves_only_its_caches",
+        "a_report_transfer_session_moves_forward",
+        "a_report_version_has_its_manifest",
     }
 )
 

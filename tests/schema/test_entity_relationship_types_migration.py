@@ -384,6 +384,15 @@ def test_downgrading_one_step_removes_exactly_this_table_and_restores_the_origin
         "schedule_scenario_outputs",
         "schedule_scenario_write_requests",
         "schedule_scenario_write_refusals",
+        # Reports Modernization WP01 stacks the eight general report tables.
+        "report_content_objects",
+        "report_roots",
+        "report_versions",
+        "report_version_manifests",
+        "report_associations",
+        "report_lifecycle_events",
+        "report_receipts",
+        "report_transfer_sessions",
     }
     # The rest of the entity plane survives the downgrade of this revision alone.
     assert {

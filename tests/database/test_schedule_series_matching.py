@@ -16,17 +16,18 @@ from __future__ import annotations
 import functools
 import hashlib
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import date
 from typing import Any, Final
 
 import pytest
 from sqlalchemy import Engine, event, text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import InterfaceError, OperationalError
 
 from my_pa.contracts.ports import (
     ScenarioIntegrityError,
     ScheduleAdmissionRejectedError,
+    ScheduleLeaseLostError,
     SeriesMatchRecord,
 )
 from my_pa.contracts.v1.errors import ErrorCode
@@ -475,20 +476,42 @@ def test_hook_defect_commits_finalization_without_a_decision(
     )
 
 
+_TRANSIENT_ERRORS: Final[dict[str, Callable[[], BaseException]]] = {
+    "operational_error": lambda: OperationalError(
+        "SELECT 1", {}, RuntimeError("canceling statement")
+    ),
+    "interface_error": lambda: InterfaceError("SELECT 1", {}, RuntimeError("connection closed")),
+    "lease_lost": ScheduleLeaseLostError,
+    "keyboard_interrupt": KeyboardInterrupt,
+}
+
+
+@pytest.mark.parametrize("kind", sorted(_TRANSIENT_ERRORS))
 def test_transient_hook_error_still_propagates(
-    rt: ScheduleRuntime, monkeypatch: pytest.MonkeyPatch, world: World
+    rt: ScheduleRuntime, monkeypatch: pytest.MonkeyPatch, world: World, kind: str
 ) -> None:
-    """RR1-F01: a transient error rolls the whole finalization back and releases the attempt."""
+    """RR1-F01, FR9-F03: every transient class rolls the whole finalization back.
+
+    `OperationalError` and `InterfaceError` release the attempt for retry; a lost
+    lease is the worker's `lost`; a non-`Exception` `BaseException` aborts the run.
+    In every case nothing of the finalization commits: no decision, and the
+    intake publication stays `processing`.
+    """
     _master(rt, monkeypatch, world)
     intake = _auto(rt, world)
 
     def seam(stage: str) -> None:
         if stage == "decision":
-            raise OperationalError("SELECT 1", {}, RuntimeError("canceling statement"))
+            raise _TRANSIENT_ERRORS[kind]()
 
     monkeypatch.setattr(plane_module, "_seam", seam)
-    ran = _process(rt, monkeypatch, world, plane=False)
-    assert ran.completed == 0, ran
+    if kind == "keyboard_interrupt":
+        with pytest.raises(KeyboardInterrupt):
+            _process(rt, monkeypatch, world, plane=False)
+    else:
+        ran = _process(rt, monkeypatch, world, plane=False)
+        assert ran.completed == 0, ran
+        assert ran.lost == (1 if kind == "lease_lost" else 0), ran
     assert _status(rt, intake.publication.publication_id) == "processing"
     assert _decision(rt, intake.publication.publication_id) is None
     with rt.engine.connect() as connection:
@@ -499,7 +522,9 @@ def test_transient_hook_error_still_propagates(
             ),
             {"p": intake.publication.publication_id},
         ).one()
-    assert (state, attempts, error) == ("queued", 1, ErrorCode.INTERNAL_ERROR.value)
+    assert state != "succeeded" and attempts == 1
+    if kind in ("operational_error", "interface_error"):
+        assert (state, error) == ("queued", ErrorCode.INTERNAL_ERROR.value)
 
 
 def test_exhausted_intake_job_has_no_decision_and_breaks_nothing(

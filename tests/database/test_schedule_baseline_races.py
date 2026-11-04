@@ -20,7 +20,7 @@ race may answer either class.
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import date
 from typing import Final
 
@@ -32,7 +32,14 @@ from my_pa.contracts.ports import (
     BaselineWritten,
     ScheduleBaselineRaceError,
 )
-from my_pa.domain.schedule import ScheduleImportApproval
+from my_pa.domain.schedule import (
+    ScheduleBaselineKind,
+    ScheduleImportApproval,
+    ScheduleImportRequest,
+    SchedulePublicationRole,
+    normalize_series_name,
+    schedule_import_request_digest,
+)
 from my_pa.domain.schedule.baselines import (
     ApproveRequest,
     BaselineRefusal,
@@ -44,6 +51,7 @@ from my_pa.domain.schedule.baselines import (
 )
 from my_pa.domain.schedule.plane import PlaneProvenance, writer_bucket
 from my_pa.infrastructure.persistence.schedule_scenarios import SqlAlchemyScenarioUnitOfWork
+from tests.database.schedule_capability_harness import Activity, ScheduleRuntime
 from tests.database.schedule_plane_world import (
     OPERATOR,
     Interleaving,
@@ -312,3 +320,66 @@ def test_governing_chain_is_monotonic_under_contention(
         (2, bl1.baseline_id),
     ]
     assert chain[0].recorded_at <= chain[1].recorded_at
+
+
+# ---- the import-time approval takes J before any row lock (section 14.8.4; FR9-F02) ----
+
+
+@pytest.fixture
+def rt(cloned_database_url: str) -> Iterator[ScheduleRuntime]:
+    runtime = ScheduleRuntime(cloned_database_url)
+    try:
+        yield runtime
+    finally:
+        runtime.close()
+
+
+def test_import_approval_takes_the_project_lock_before_the_predecessor(
+    monkeypatch: pytest.MonkeyPatch, rt: ScheduleRuntime
+) -> None:
+    """Lock order J -> predecessor `FOR UPDATE` for an import with approval.
+
+    The operator approves publication X and holds J at the seam; a baseline
+    import superseding X starts meanwhile. With J taken first the import waits
+    on J and both commit (`BL-0`, then `BL-1`). Were J taken only after X's
+    `FOR UPDATE`, the operator's Baseline insert (its foreign key needs
+    `KEY SHARE` on X) and the import (waiting on J) would deadlock: `40P01`.
+    """
+    world = rt.world(P, "s62rj")
+    predecessor = rt.publish(monkeypatch, world, (Activity("A-001"),), data_date=date(2026, 5, 4))
+    object_id, version_id = rt.source_object(world)
+    request = ScheduleImportRequest(
+        project_id=world.project,
+        series_id=None,
+        series_name=normalize_series_name("Master Schedule"),
+        enrollment_id=world.enrollment,
+        source_object_id=object_id,
+        source_version_id=version_id,
+        publication_role=SchedulePublicationRole.BASELINE,
+        baseline_kind=ScheduleBaselineKind.CONTRACT,
+        expected_data_date=None,
+        supersedes_publication_id=predecessor,
+        idempotency_key="race-import-0001",
+        approval=APPROVAL,
+    )
+    digest = schedule_import_request_digest(P, request)
+
+    def importing(uow: SqlAlchemyScenarioUnitOfWork) -> object:
+        return uow.schedules.admit_publication(P, request, digest, operator_channel="local_cli")
+
+    race = Interleaving.install(monkeypatch, rt.engine, "chain_read")
+    first, second = race.run(_writes(_approve(predecessor)), importing)
+    assert first[0] == "ok", first
+    assert second[0] == "ok", second
+    with rt.engine.connect() as connection:
+        labels = connection.execute(
+            text(
+                "SELECT publication_id, label, approved_at_import FROM "
+                "knowledge.schedule_baseline_events ORDER BY seq"
+            )
+        ).all()
+    assert [(row.label, row.approved_at_import) for row in labels] == [
+        ("BL-0", False),
+        ("BL-1", True),
+    ]
+    assert labels[0].publication_id == predecessor

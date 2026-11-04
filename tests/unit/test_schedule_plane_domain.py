@@ -93,7 +93,8 @@ def test_the_eight_prefixes_are_s61s_patterns() -> None:
             outputs._VERSION_ID if kind is IdKind.SCHEDULE_SCENARIO_VERSION else outputs._RUN_ID
         )
         assert pattern.fullmatch(identifier)
-    assert len(IdKind) == 164
+    # 164 at S6-2; Reports Modernization WP01 appended seven `gr*` kinds after.
+    assert len(IdKind) == 171
     new = [
         IdKind.SCHEDULE_SCENARIO,
         IdKind.SCHEDULE_SCENARIO_VERSION,
@@ -104,7 +105,7 @@ def test_the_eight_prefixes_are_s61s_patterns() -> None:
         IdKind.SCHEDULE_BASELINE_EVENT,
         IdKind.SCHEDULE_GOVERNING_EVENT,
     ]
-    assert list(IdKind)[-8:] == new
+    assert list(IdKind)[156:164] == new
     for kind in new:
         others = [other.value for other in IdKind if other is not kind]
         assert not any(o.startswith(kind.value) or kind.value.startswith(o) for o in others), kind

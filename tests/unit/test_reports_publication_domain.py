@@ -319,6 +319,7 @@ def test_manifest_is_deterministic_principal_free_and_digested() -> None:
     assert document["schema"] == MANIFEST_SCHEMA
     assert (document["version_number"], document["supersedes_version_id"]) == (1, None)
     assert document["change_kind"] == "initial"
+    assert document["change_reason"] is None  # WP03 D10: the key exists, null for v1
     assert document["recorded_at"] == "2026-11-04T12:30:00.123456Z"
     assert document["coverage_start"] == "2026-11-01T00:00:00.000000Z"
     assert document["content"]["decoded_sha256"] == request.content.decoded_sha256

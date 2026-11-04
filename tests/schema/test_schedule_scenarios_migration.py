@@ -401,8 +401,12 @@ def test_live_table_work_is_last_in_the_upgrade(monkeypatch: pytest.MonkeyPatch)
 def test_offline_downgrade_refuses_first(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MY_PA_DATABASE_URL", "postgresql+psycopg://localhost/my_pa")
     rendered = _offline(f"{REVISION}:{PREVIOUS}", down=True)
-    assert rendered.index("SET LOCAL lock_timeout = '10s'") < rendered.index(REFUSAL)
     refusal = rendered.index(REFUSAL)
+    # FR9-F06: the plane is locked before it is checked, so the refusal is authoritative.
+    lock = rendered.index("LOCK TABLE knowledge.schedule_intake_series,")
+    assert rendered.index("SET LOCAL lock_timeout = '10s'") < lock < refusal
+    locked = rendered[lock : rendered.index("IN ACCESS EXCLUSIVE MODE", lock)]
+    assert all(f"knowledge.{table}" in locked for table in PLANE_TABLES), locked
     assert rendered.index("DROP TRIGGER") > refusal
     for table in PLANE_TABLES:
         assert rendered.index(f"DROP TABLE knowledge.{table} RESTRICT") > refusal
@@ -974,14 +978,15 @@ def test_a_held_lock_aborts_the_upgrade_cleanly(disposable_database: str, engine
     _assert_absent(engine)
 
 
-def _ensure_role(engine: Engine, role: str) -> None:
+def _ensure_role(engine: Engine, role: str) -> bool:
+    """Create `role` when the cluster lacks it; `True` when this call created it."""
     with engine.begin() as connection:
-        connection.execute(
-            text(
-                f"DO $$ BEGIN CREATE ROLE {role} NOLOGIN; "
-                "EXCEPTION WHEN duplicate_object THEN NULL; END $$"
-            )
-        )
+        exists = connection.execute(
+            text("SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :r)"), {"r": role}
+        ).scalar_one()
+        if not exists:
+            connection.execute(text(f"CREATE ROLE {role} NOLOGIN"))
+    return not exists
 
 
 _REFUSAL_SEQUENCE: Final = "schedule_scenario_write_refusals_refusal_no_seq"
@@ -992,8 +997,17 @@ def test_no_grant_beyond_the_owner(disposable_database: str, engine: Engine) -> 
     """Section 14.6.5: owner only; `PUBLIC` and both MCP roles hold nothing."""
     del disposable_database
     command.upgrade(_config(), "head")
-    for role in ("my_pa_mcp_ro", "my_pa_mcp_rw"):
-        _ensure_role(engine, role)
+    created = [role for role in ("my_pa_mcp_ro", "my_pa_mcp_rw") if _ensure_role(engine, role)]
+    try:
+        _assert_owner_only(engine)
+    finally:
+        # FR9-F05: roles are cluster-global; drop the ones this test created.
+        with engine.begin() as connection:
+            for role in created:
+                connection.execute(text(f"DROP ROLE {role}"))
+
+
+def _assert_owner_only(engine: Engine) -> None:
     relations = [*PLANE_TABLES, _REFUSAL_SEQUENCE]
     with engine.connect() as connection:
         acls = dict(

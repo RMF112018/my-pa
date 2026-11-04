@@ -46,9 +46,10 @@ No role grant changes: no `GRANT`, no `REVOKE`, no MCP object grant; the tables
 and the refusal table's identity sequence are owned by the role that runs the
 migration, as every S1-S5 table is. No audit vocabulary is restated (S6-2-D09).
 
-No backfill. `downgrade` refuses with `restrict_violation`, deleting nothing,
-while any plane row exists, any `record_links` row names an S6 family or
-relation, or any publication has kind `approved_update`; otherwise it drops
+No backfill. `downgrade` first locks the 11 plane tables `ACCESS EXCLUSIVE`,
+then refuses with `restrict_violation`, deleting nothing, while any plane row
+exists, any `record_links` row names an S6 family or relation, or any
+publication has kind `approved_update`; otherwise it drops
 everything above in reverse order and restores the 2 + 6 BEFORE texts, the
 `record_links` ones last.
 
@@ -1764,6 +1765,18 @@ _RECORD_LINK_CHECKS: Final[tuple[tuple[str, str, str], ...]] = (
     ),
 )
 
+#: `downgrade` locks the 11 plane tables before it checks them, so no plane row
+#: can commit between the refusal check and the drops (FR9-F06): the refusal
+#: is authoritative for the plane, as step 7's is for `schedule_publications`.
+_LOCK_PLANE: Final = (
+    "LOCK TABLE knowledge.schedule_intake_series, knowledge.schedule_series_match_decisions, "
+    "knowledge.schedule_baselines, knowledge.schedule_baseline_events, "
+    "knowledge.schedule_governing_events, knowledge.schedule_scenarios, "
+    "knowledge.schedule_scenario_versions, knowledge.schedule_cpm_runs, "
+    "knowledge.schedule_scenario_outputs, knowledge.schedule_scenario_write_requests, "
+    "knowledge.schedule_scenario_write_refusals IN ACCESS EXCLUSIVE MODE"
+)
+
 #: `downgrade` refuses while any plane row, S6 lineage row or `approved_update`
 #: publication exists, rather than deleting rows to make the downgrade pass.
 #: Each clause alone suffices.
@@ -1835,6 +1848,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute(_LOCK_TIMEOUT)
+    op.execute(_LOCK_PLANE)
     op.execute(_REFUSE_DOWNGRADE)
     op.execute(f"DROP TRIGGER {_INTAKE_GUARD[0]} ON {SCHEMA}.schedule_publications")
     for trigger, table, _definition in reversed(_triggers()):

@@ -211,14 +211,25 @@ was run against a persistent database.
    foreign keys `SHARE ROW EXCLUSIVE` on `schedule_publications` and `schedule_series`. Pause
    lineage traffic, the schedule import and every `schedule` worker for the window. Take a
    backup first.
-3. **Expected `record_links` window.** On the scratch cluster (contract section 14.14:
-   PostgreSQL 15.15, Apple M4 Pro) phase C took 0.84 s at 10^5 rows (24.8 MB) and 8.40 s at
-   10^6 rows (248.3 MB): about **8.4 µs per row, or 34 ms per MB of heap**, linear. Multiply
-   Q3's `record_links` `rows~` (or `bytes=`) by that factor, and allow for the server host
-   being slower than the measurement host (its speed is unmeasured, S6-2-U01). **Go/no-go:**
-   proceed only when the scaled phase C time is well under 10 s; otherwise stop and review.
-   `lock_timeout = '10s'` bounds only the wait to **acquire** each lock, not this validating
-   pass, which runs to completion while every lineage call waits.
+3. **Expected `record_links` window and go/no-go.** On the scratch cluster (contract section
+   14.14: PostgreSQL 15.15, Apple M4 Pro, NVMe, a freshly loaded and cached table) phase C
+   took 0.84 s at 24.8 MB and 8.40 s at 248.3 MB of `record_links` heap: linear at about
+   **34 ms per MB**. The input is Q3's `record_links` **`bytes=`** (`pg_relation_size`,
+   exact); `rows~` is only an estimate, and `rows~-1` means the table was never vacuumed or
+   analyzed, so read `bytes=` alone. Compute
+   `T = bytes / 1,048,576 × 34 ms × 10`, where 10 is the stated host factor for the
+   unmeasured server host (a NAS, slower disk, cold cache; S6-2-U01).
+   - **Go** when `T ≤ 2 s` (that is, `bytes=` at most about 6,000,000).
+   - **Otherwise**, before the real upgrade, the operator restores a copy of the database on
+     the server host itself and runs the upgrade there once, timed (the scratch-copy dry run;
+     never against the live database). **Go** only when that measured upgrade takes at most
+     2 s; otherwise stop and review.
+
+   This window is the validating pass under `ACCESS EXCLUSIVE`; it is not governed by the
+   10 s `lock_timeout`, which bounds only the wait to acquire each lock. A lineage call that
+   was not paused waits for the lock acquisition plus the whole pass, bounded only by its own
+   `statement_timeout` (30 s on the gateway and worker engines): past that it fails with
+   `57014` and the caller retries.
 4. **Before:** run the checks below as the **runtime role the gateway and worker connect as**
    (Q4 and Q8 judge `current_user`; Q4 also reports the owner of `record_links`, the
    migrating role). Every `before` check must hold; keep Q5's digest.

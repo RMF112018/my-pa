@@ -2070,7 +2070,9 @@ module's helpers, run once by hand in the foreground; it is not a CI test.
 #### 14.6.4 `downgrade()` in order
 
 1. `SET LOCAL lock_timeout = '10s'`.
-2. Refusal `DO` block, `restrict_violation`, `'schedule scenarios rows exist; refusing to
+2. **Amended (FR9-F06):** `LOCK TABLE` the 11 plane tables `IN ACCESS EXCLUSIVE MODE`
+   first, so no plane row can commit between the refusal and the drops; then the refusal
+   `DO` block, `restrict_violation`, `'schedule scenarios rows exist; refusing to
    downgrade <rev>'`, when **any** of: a row in any of the 11 plane tables; a `record_links` row
    whose `from_family` or `to_family` is one of the 6 S6 families or whose `relation_type` is
    `concerns`, `delays` or `mitigates`; a `schedule_publications` row with `baseline_kind =
@@ -2991,12 +2993,16 @@ was timed by `clock_timestamp()` immediately around it through a measurement-onl
 | 100,000 | 24.8 MB | 0.84 s | 0.003 s | 0.88 s |
 | 1,000,000 | 248.3 MB | 8.40 s | 0.002 s | 8.45 s |
 
-Scale factor: phase C is linear at about 8.4 µs per `record_links` row (about 34 ms per MB of
-heap) on this host. The runbook turns Q3's `reltuples` into an expected window by that factor;
-the `ACCESS EXCLUSIVE` window on `record_links` therefore approaches the 10 s figure near
-10^6 rows on comparable hardware. Go/no-go: proceed only when the scaled phase C time is well
-under 10 s on the server host (whose speed is unmeasured here, S6-2-U01); otherwise stop and
-review. `lock_timeout` bounds only lock acquisition, not this validating pass.
+Scale factor: phase C is linear at about 34 ms per MB of `record_links` heap (about 8.4 µs
+per row) on this host, a freshly loaded and cached table on NVMe. **Go/no-go (amended by
+FR9-F01):** the input is Q3's `bytes=` (exact; `rows~` is an estimate, and `rows~-1` means
+never analyzed); `T = bytes / 1,048,576 × 34 ms × 10`, with 10 the stated host factor for the
+unmeasured server host (S6-2-U01). Go when `T ≤ 2 s` (`bytes=` at most about 6,000,000);
+otherwise the operator first runs the upgrade once, timed, on a restored copy on the server
+host, and goes only when that measured upgrade takes at most 2 s. The window is unrelated to
+the 10 s `lock_timeout`, which bounds only lock acquisition; an unpaused lineage call waits
+for the whole pass, bounded by its own 30 s `statement_timeout` (`57014`, retried).
+Runbook `ops/runbooks/cpm-workbench.md` section 8 step 3.
 
 Command: `PYTHONPATH=src python -m tests.schema.schedule_scenarios_lock_measurement
 postgresql+psycopg://<user>@127.0.0.1:<port>/postgres` (scratch cluster admin URL).
@@ -3012,11 +3018,28 @@ admission's import-time approval and intake Series (`schedule.py`), the worker h
 `ops/runbooks/cpm-workbench.md` (the lock-measurement scaling and its go/no-go rule above).
 Nothing was run against a persistent database; every database tier ran on a disposable
 Homebrew PostgreSQL 15.15 scratch cluster. Every I9-B prove-red row (P2-06 to P2-08, P2-21 to
-P2-32, P2-40 to P2-44, P2-46 to P2-58) went red for its stated reason with the guard restored
-after each run; P2-06 (the unique alone), P2-20 (the partial uniques under P51-P53) and P2-24d
-(either lease layer alone) stayed green as declared in advance. P2-30 and P2-31 go red through
-the G9 backstop (a shared or explicit Series name fails `an_intake_series_holds_only_its_publication`
-at the admission), not through the matcher. Trivial naming resolutions, none changing a
+P2-32, P2-40 to P2-44, P2-46 to P2-58) went red with the guard restored after each run, all but
+two through the named test's own assertion: P2-30 and P2-31 went red through the G9 backstop
+(a shared or explicit Series name fails `an_intake_series_holds_only_its_publication` at the
+admission). FR9 isolated both with G9's name clause off: P2-31 then reddens by its own
+assertion, while P2-30 reddens through G10, so `test_each_auto_import_gets_its_own_intake_series`
+is layered behind G9/G10 (proven by P2-15), not covering. P2-06 (the unique alone), P2-20 (the
+partial uniques under P51-P53) and P2-24d (either lease layer alone) stayed green as declared
+in advance; their isolating siblings are red: `test_plane_uniques_refuse_a_second_row` with
+`a_scenario_version_number_is_used_once` dropped alone (FR9 M1, re-run by I9-B: `DID NOT
+RAISE`), `test_baseline_backstop_index_refuses_alone[...]` (I9-A) and P2-24a/P2-24b.
+**FR9 corrective rows (I9-B, red):** FR9-F02, the early J removed from `admit_publication` ->
+`test_import_approval_takes_the_project_lock_before_the_predecessor` fails with `40P01`
+(deadlock detected); FR9-F03, `InterfaceError` or `ScheduleLeaseLostError` removed from the
+hook's transient set, or `BaseException` caught as a defect ->
+`test_transient_hook_error_still_propagates[interface_error|lease_lost|keyboard_interrupt]`;
+FR9-F06, the downgrade's plane `LOCK TABLE` removed -> `test_offline_downgrade_refuses_first`.
+**Residual (FR9-F05, pre-existing):** `tests/database/test_mcp_database_profiles.py` and
+`tests/schema/test_cpm_workbench_migration.py::test_no_grant_beyond_the_owner` create the
+cluster-global roles `my_pa_mcp_ro`/`my_pa_mcp_rw` and never drop them, so on a reused cluster
+`tests/database/test_cpm_workbench_predeploy.py::test_a_grant_on_a_cpm_table_stops_the_after_phase`
+(exact `detail` match) fails by test order; not exposed in CI's fresh container. The S6-2
+role-creating tests drop the roles they create. Trivial naming resolutions, none changing a
 decision: the helper records `NewScenarioChangeSet` and `CpmRunWritten`; the helper port
 methods `find_request` (the read-only ledger probe of section 14.8.4 step 1),
 `version_by_number`, `get_cpm_run_by_id` and `get_match_decision`; `NewScenario` holds the

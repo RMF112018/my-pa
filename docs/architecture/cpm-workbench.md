@@ -20,13 +20,19 @@ The three implementation contracts control the detail and are not repeated here:
 Successor work: the Schedule Scenarios slices S6-1 to S6-3 are
 specified in [`schedule-scenarios-contract.md`](schedule-scenarios-contract.md) under
 [`ADR-017`](../decisions/ADR-017-schedule-scenarios-and-baselines.md). S6-1 (the pure domain
-and engine) is implemented and merged (#348); S6-2 is designed (contract section 14) and not
-implemented; S6-3 is not implemented; nothing is deployed. This document describes the merged
-S5 behaviour and changes when they land. **Announced change (S6-2, not yet implemented):** the
-`reference` role and kind `working` are retired, every role-`baseline` import is refused
+and engine) is implemented and merged (#348); S6-2 (contract section 14) is implemented on
+the branch `feat/schedule-scenarios-persistence` and not merged; S6-3 is not implemented;
+nothing is deployed. This document describes the merged S5 behaviour and changes when they
+land. **S6-2 change (implemented on that branch, not merged):** the `reference` role and kind
+`working` are retired, every role-`baseline` import is refused
 `invalid_request(PUBLICATION_ROLE)` until S6-3 adds the approval fields, and
 `schedule_publications.list` refuses the filter `publication_role=reference` (contract section
-12.2, S6-2-D04).
+12.2, S6-2-D04). Revision `2a90f91dd786` adds the 11 plane tables; the S5 admission writes an
+import-time approval under the Project lock and admits an automatic import into its own intake
+Series (both reachable only from tests until S6-3), and the worker's H8 and fail paths run the
+series-match hook in the same transaction with the effective-plane bit off (sections 14.8.5 to
+14.8.7). The revision-A pre-deploy checks Q0-Q9 and the operator procedure are section 8 of
+[`ops/runbooks/cpm-workbench.md`](../../ops/runbooks/cpm-workbench.md).
 
 ## 1. What it is
 

@@ -30,6 +30,14 @@ here exist to answer with a typed, content-free error before a statement is
 refused, never to replace those triggers. `knowledge.schedule_run_outcome`
 (F9) is called only with a run identifier this module has just read under
 `_mine` in the same transaction (contract section 4.10, RR1-F03).
+
+**Schedule Scenarios S6-2** (schedule scenarios contract sections 14.8.5 and
+14.8.6). A role-`baseline` admission carries its import-time approval and the
+operator's attested channel; it takes the Project lock J before any row lock
+and writes the Baseline and its `approve` event in this same transaction
+through `schedule_scenarios.record_import_approval`. A `series_auto` admission
+creates its own intake Series and marks it; an explicit Series naming an intake
+Series is `SERIES_NOT_FOUND`.
 """
 
 from __future__ import annotations

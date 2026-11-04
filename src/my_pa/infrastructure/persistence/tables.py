@@ -10463,7 +10463,10 @@ intelligence_artifact_manifests = Table(
 # cannot declare: append-only on the six immutable tables, TRUNCATE refusal on
 # all eight, the guarded updates of `report_roots` (only its head and lifecycle
 # caches move, each by exactly one) and `report_transfer_sessions` (forward-only
-# state), and the deferred `a_report_version_has_its_manifest`.
+# state), and the deferred `a_report_version_has_its_manifest`,
+# `a_report_head_is_its_newest_version` and
+# `a_report_lifecycle_cache_is_its_newest_event` (at commit, the root caches
+# name the newest version and lifecycle event of the report).
 #
 # Distinct from the Intelligence Artifact plane above: these are reports a
 # caller authors and versions, keyed by the `grpt`/`grver`/... kinds, not

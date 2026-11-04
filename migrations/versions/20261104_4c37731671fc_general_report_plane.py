@@ -24,15 +24,21 @@ order it:
    (`DEFERRABLE INITIALLY DEFERRED`, the `e9b2c4d7a150` precedent), once both
    targets exist: the head names a version of the report with its number, and
    the lifecycle cache names an event of the report with its revision and
-   resulting state, so the cache equals the ledger at every commit;
-4. creates the 5 plane functions;
+   resulting state;
+4. creates the 7 plane functions;
 5. creates every trigger on the new tables: append-only on the 6 immutable
    tables, TRUNCATE refusal on all 8 (only while the table holds a row), the
    guarded updates of `report_roots` and `report_transfer_sessions`, and the
-   deferred `a_report_version_has_its_manifest`.
+   3 deferred constraint triggers: `a_report_version_has_its_manifest`, and
+   `a_report_head_is_its_newest_version` and
+   `a_report_lifecycle_cache_is_its_newest_event`, which, at the commit of a
+   new version or lifecycle event, require the root cache to name the newest
+   version and the newest event of the report. With the deferred foreign keys
+   (which prove the cache names *a* version and *an* event of the report),
+   the cache equals the ledger at every commit.
 
-Every closed set and bound is a frozen literal equal to
-`my_pa.domain.reports.vocabulary`, which this revision does not import.
+Every closed set and bound is a frozen literal equal to the general report
+domain vocabulary module, which this revision does not import.
 
 No role grant changes: no `GRANT`, no `REVOKE`, no MCP object grant; the tables
 are owned by the role that runs the migration. No audit vocabulary is restated.
@@ -800,6 +806,61 @@ _FUNCTIONS: Final[tuple[tuple[str, str], ...]] = (
         END; $$
         """,
     ),
+    (
+        "a_report_head_is_its_newest_version",
+        """
+        CREATE FUNCTION knowledge.a_report_head_is_its_newest_version() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM knowledge.report_roots r
+              JOIN knowledge.report_versions v
+                ON v.version_id = r.head_version_id
+               AND v.owner_principal_id = r.owner_principal_id
+               AND v.report_id = r.report_id
+               AND v.version_number = r.head_version_number
+             WHERE r.report_id = NEW.report_id
+               AND r.owner_principal_id = NEW.owner_principal_id
+               AND r.head_version_number = (
+                 SELECT max(n.version_number) FROM knowledge.report_versions n
+                  WHERE n.report_id = NEW.report_id
+                    AND n.owner_principal_id = NEW.owner_principal_id)
+          ) THEN
+            RAISE EXCEPTION 'a report head is its newest version'
+              USING ERRCODE = 'restrict_violation';
+          END IF;
+          RETURN NULL;
+        END; $$
+        """,
+    ),
+    (
+        "a_report_lifecycle_cache_is_its_newest_event",
+        """
+        CREATE FUNCTION knowledge.a_report_lifecycle_cache_is_its_newest_event() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM knowledge.report_roots r
+              JOIN knowledge.report_lifecycle_events e
+                ON e.event_id = r.lifecycle_event_id
+               AND e.owner_principal_id = r.owner_principal_id
+               AND e.report_id = r.report_id
+               AND e.lifecycle_revision = r.lifecycle_revision
+               AND e.resulting_state = r.lifecycle_state
+             WHERE r.report_id = NEW.report_id
+               AND r.owner_principal_id = NEW.owner_principal_id
+               AND r.lifecycle_revision = (
+                 SELECT max(n.lifecycle_revision) FROM knowledge.report_lifecycle_events n
+                  WHERE n.report_id = NEW.report_id
+                    AND n.owner_principal_id = NEW.owner_principal_id)
+          ) THEN
+            RAISE EXCEPTION 'a report lifecycle cache is its newest event'
+              USING ERRCODE = 'restrict_violation';
+          END IF;
+          RETURN NULL;
+        END; $$
+        """,
+    ),
 )
 
 # ---- triggers ----------------------------------------------------------------------
@@ -829,8 +890,15 @@ _ROW_GUARDS: Final = (
     ),
 )
 
-#: The deferred completeness checks: `(trigger = function, table, events)`.
-_DEFERRED: Final = (("a_report_version_has_its_manifest", "report_versions", "INSERT"),)
+#: The deferred commit checks: `(trigger = function, table, events)`. A new
+#: version must have its manifest, and the root cache must name the newest
+#: version and the newest lifecycle event of its report, when the transaction
+#: that writes them commits.
+_DEFERRED: Final = (
+    ("a_report_version_has_its_manifest", "report_versions", "INSERT"),
+    ("a_report_head_is_its_newest_version", "report_versions", "INSERT"),
+    ("a_report_lifecycle_cache_is_its_newest_event", "report_lifecycle_events", "INSERT"),
+)
 
 
 def _triggers() -> tuple[tuple[str, str, str], ...]:

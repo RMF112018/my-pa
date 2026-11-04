@@ -6,15 +6,16 @@ module proves:
 * **the graph** -- this revision directly on the Schedule Scenarios S6-2
   revision `2a90f91dd786`, the single head, and 127 revision files;
 * **the freeze** -- the revision imports nothing from the package it migrates,
-  writes no row, issues no grant, has no `CASCADE`, spells every closed set as
-  a sorted literal equal to the `my_pa.domain.reports.vocabulary` symbol it
-  freezes and every bound as the domain constant, and names every column,
-  constraint and index `tables.py` declares for the 8 plane tables;
+  writes no row, issues no grant, has no `CASCADE`, never names the package
+  (`my_pa`) even in prose, spells every closed set as a sorted literal equal
+  to the domain vocabulary symbol it freezes and every bound as the domain
+  constant, and names every column, constraint and index `tables.py` declares
+  for the 8 plane tables;
 * **offline SQL** -- the upgrade writes no row and names no table that existed
   before it, and the downgrade locks the plane and refuses before it drops;
-* on disposable databases: empty to head creates exactly the 8 tables, the 5
-  functions and their 17 triggers; the declared metadata equals the migrated
-  schema, definition for definition; the predecessor head with Intelligence,
+* on disposable databases: empty to head creates exactly the 8 tables, the 7
+  functions and their 19 triggers (3 of them deferred); the declared metadata
+  equals the migrated schema, definition for definition; the predecessor head with Intelligence,
   Capture and managed-document rows upgrades with every pre-existing table's
   rows and catalog unchanged; the downgrade refuses while a publish or a lone
   transfer session exists, and an empty plane downgrades cleanly and upgrades
@@ -116,7 +117,15 @@ PLANE_FUNCTIONS: Final = (
     "a_report_root_moves_only_its_caches",
     "a_report_transfer_session_moves_forward",
     "a_report_version_has_its_manifest",
+    "a_report_head_is_its_newest_version",
+    "a_report_lifecycle_cache_is_its_newest_event",
 )
+#: The deferred constraint triggers, each on the table whose INSERT it checks.
+DEFERRED_TRIGGERS: Final = {
+    "a_report_version_has_its_manifest": "report_versions",
+    "a_report_head_is_its_newest_version": "report_versions",
+    "a_report_lifecycle_cache_is_its_newest_event": "report_lifecycle_events",
+}
 APPEND_ONLY: Final = (
     "report_content_objects",
     "report_versions",
@@ -227,10 +236,8 @@ def test_the_revision_imports_no_package_module() -> None:
         elif isinstance(node, ast.Import):
             imported.update(alias.name for alias in node.names)
     assert imported <= {"alembic", "__future__", "typing"}
-    assert "my_pa" not in _code()
-    # FINDING: the docstring names the frozen vocabulary module once (prose only).
-    docstring = ast.get_docstring(ast.parse(_source()), clean=False) or ""
-    assert re.findall(r"my_pa[.\w]*", docstring) == ["my_pa.domain.reports.vocabulary"]
+    # Not in code, not in the docstring, not in a comment: nowhere.
+    assert "my_pa" not in _source()
     assert "create_all" not in _source() and "MetaData" not in _code()
 
 
@@ -507,8 +514,8 @@ _EXPECTED_TRIGGERS: Final = frozenset(
     | {
         "report_roots.a_report_root_moves_only_its_caches",
         "report_transfer_sessions.a_report_transfer_session_moves_forward",
-        "report_versions.a_report_version_has_its_manifest",
     }
+    | {f"{table}.{trigger}" for trigger, table in DEFERRED_TRIGGERS.items()}
 )
 
 
@@ -531,18 +538,20 @@ def test_empty_to_head_creates_exactly_the_eight_tables(
     assert before <= _relations(engine)
     assert _functions(engine) - functions_before == set(PLANE_FUNCTIONS)
     assert _triggers(engine) - triggers_before == _EXPECTED_TRIGGERS
-    assert len(_EXPECTED_TRIGGERS) == 17
+    assert len(_EXPECTED_TRIGGERS) == 19
+    assert len(PLANE_FUNCTIONS) == 7
     with engine.connect() as connection:
         deferred = {
             str(name): bool(flag)
             for name, flag in connection.execute(
                 text(
                     "SELECT t.tgname, t.tgdeferrable AND t.tginitdeferred FROM pg_trigger t "
-                    "WHERE t.tgname = 'a_report_version_has_its_manifest'"
-                )
+                    "WHERE t.tgname = ANY(:names)"
+                ),
+                {"names": list(DEFERRED_TRIGGERS)},
             )
         }
-    assert deferred == {"a_report_version_has_its_manifest": True}
+    assert deferred == dict.fromkeys(DEFERRED_TRIGGERS, True)
 
 
 _CATALOG: Final = {
@@ -1627,17 +1636,29 @@ def _root_cases() -> list[Case]:
             _check(_R, "an_untransitioned_report_is_active"),
             {"root": {"lifecycle_state": "archived"}},
         ),
+        # A cache move with no new version or event: the newest-cache triggers
+        # fire only on a version or event INSERT, so only the deferred reference
+        # can refuse it.
         Case(
             "deferred_head_fk",
             "publish",
             _fk(_R, "a_report_head_is_a_version_of_the_report"),
-            {"root": {"head_version_id": "grver_nosuchversion01"}},
+            then=lambda ids: [
+                _root_move(ids, head_version_id="grver_nosuchversion01", head_version_number=2)
+            ],
         ),
         Case(
             "deferred_lifecycle_cache_fk",
             "archive",
             _fk(_R, "a_report_lifecycle_cache_is_an_event_of_the_report"),
-            {"root_update": {"lifecycle_state": "trashed"}},
+            then=lambda ids: [
+                _root_move(
+                    ids,
+                    lifecycle_state="trashed",
+                    lifecycle_revision=2,
+                    lifecycle_event_id="grlev_nosuchevent0001",
+                )
+            ],
         ),
         Case(
             "root_guard_immutable_column",
@@ -1836,6 +1857,24 @@ def _manifest_cases() -> list[Case]:
             "required_at_commit",
             None,
             _refused("a report version has its manifest", CHECK_VIOLATION),
+        ),
+    ]
+
+
+def _trailing_cache_cases() -> list[Case]:
+    """A new version or lifecycle event whose transaction leaves the root cache behind."""
+    return [
+        Case(
+            "newest_head_trailing_version",
+            "update",
+            _refused("a report head is its newest version"),
+            {"root_update": None},
+        ),
+        Case(
+            "newest_lifecycle_trailing_event",
+            "archive",
+            _refused("a report lifecycle cache is its newest event"),
+            {"root_update": None},
         ),
     ]
 
@@ -2345,13 +2384,13 @@ def _owner_cases() -> list[Case]:
             "v1",
             _fk(_R, "a_report_head_is_a_version_of_the_report"),
         ),
-        case(
-            "root_lifecycle_cache",
+        # The cache moves alone, with no event INSERT, so the newest-event
+        # trigger does not fire and only the owner-scoped reference can refuse.
+        Case(
+            "foreign_root_lifecycle_cache",
             "archive",
-            "root_update",
-            "lifecycle_event_id",
-            "e1",
             _fk(_R, "a_report_lifecycle_cache_is_an_event_of_the_report"),
+            {"event": None, "receipt": None, "root_update": {"lifecycle_event_id": Foreign("e1")}},
         ),
     ]
 
@@ -2370,6 +2409,7 @@ CASES: Final[tuple[Case, ...]] = (
     *(Case(f"root_{c.id}", c.chain, c.expect, c.change, c.then) for c in _root_cases()),
     *(Case(f"version_{c.id}", c.chain, c.expect, c.change, c.then) for c in _version_cases()),
     *(Case(f"manifest_{c.id}", c.chain, c.expect, c.change, c.then) for c in _manifest_cases()),
+    *_trailing_cache_cases(),
     *(
         Case(f"association_{c.id}", c.chain, c.expect, c.change, c.then)
         for c in _association_cases()
@@ -2601,22 +2641,25 @@ def test_an_open_or_aborted_transfer_session_may_be_deleted(plane_engine: Engine
         )
 
 
+#: The deferred cache FKs prove only that the root cache names *a* version or
+#: event of the report; the newest-cache triggers refuse, at commit, a version
+#: or event written without moving the root cache to it.
+_TRAILING_CACHE: Final = {
+    "update": "a report head is its newest version",
+    "archive": "a report lifecycle cache is its newest event",
+}
+
+
 @pytest.mark.database
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING: the deferred cache FKs prove the root cache names *a* version or event "
-        "of the report, not the latest one; a version or event written without moving the "
-        "root cache commits, so the cache can trail the ledger"
-    ),
-)
-@pytest.mark.parametrize("step", ["update", "archive"])
+@pytest.mark.parametrize("step", list(_TRAILING_CACHE))
 def test_the_root_cache_cannot_trail_the_ledger(plane_engine: Engine, step: str) -> None:
     ids = _ids(uuid.uuid4().hex[:16], P)
     _execute(plane_engine, _TRANSACTIONS["publish"](ids))
     stale = [op for op in _TRANSACTIONS[step](ids) if op.label != "root_update"]
-    with pytest.raises(DBAPIError):
+    with pytest.raises(DBAPIError) as refused:
         _execute(plane_engine, stale)
+    _assert_refused(refused.value, _refused(_TRAILING_CACHE[step]))
+    assert _root(plane_engine, ids["report"]) == (ids["v1"], 1, "active", 0, None)
 
 
 def _plane_rows(engine: Engine) -> dict[str, tuple[int, str]]:
@@ -2701,6 +2744,17 @@ LOAD_BEARING: Final = (
         "manifest_required_trigger",
         "DROP TRIGGER a_report_version_has_its_manifest ON knowledge.report_versions",
         "manifest_required_at_commit",
+    ),
+    (
+        "newest_head_trigger",
+        "DROP TRIGGER a_report_head_is_its_newest_version ON knowledge.report_versions",
+        "newest_head_trailing_version",
+    ),
+    (
+        "newest_lifecycle_trigger",
+        "DROP TRIGGER a_report_lifecycle_cache_is_its_newest_event "
+        "ON knowledge.report_lifecycle_events",
+        "newest_lifecycle_trailing_event",
     ),
     (
         "receipt_publish_shape_check",

@@ -337,6 +337,8 @@ LINEAGE_TRIGGERS: Final[frozenset[str]] = frozenset(
         "a_report_root_moves_only_its_caches",
         "a_report_transfer_session_moves_forward",
         "a_report_version_has_its_manifest",
+        "a_report_head_is_its_newest_version",
+        "a_report_lifecycle_cache_is_its_newest_event",
     }
 )
 

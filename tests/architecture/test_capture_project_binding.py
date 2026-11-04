@@ -57,8 +57,9 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 #: tables, restates the 2 publication CHECKs and builds the 6 `record_links`
 #: CHECKs from the lineage storage vocabulary; `captures` is untouched.
 #: Moved again by the Reports Modernization WP01 revision, which declares the 8
-#: general report tables; `captures` is untouched.
-TABLES_SHA256: Final = "85bce509112f6f8a31ce0a5ef9f2db0507838ea0f415c666374bbbe9d5c00722"
+#: general report tables and names their 3 deferred commit triggers in a
+#: comment; `captures` is untouched.
+TABLES_SHA256: Final = "20ca0c85fd031e508afdbb9591ab9355463660316e3a224b496b5cd6d7f5dd6c"
 WP03_MIGRATION_SHA256: Final = "098edd98ccc1846b01c58f42e296e4751e7841b562a2827616cc4337e174c354"
 WP03_MIGRATION: Final = (
     ROOT / "migrations/versions/20260914_e6a4c2f91b73_project_controls_run01_integrity.py"

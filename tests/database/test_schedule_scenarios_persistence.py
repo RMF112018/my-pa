@@ -599,6 +599,15 @@ _TAMPER: Final = {
 }
 
 
+#: One same-length, still-decodable edit per stored document.
+_EDIT: Final = {
+    "content": (b'"Activity B"', b'"Activity Z"'),
+    "change_set": (b'"x:C"', b'"x:D"'),
+    "result": (b'"computed"', b'"rejected"'),
+    "output": (b'"monte_carlo"', b'"sensitivity"'),
+}
+
+
 @pytest.mark.parametrize("kind", sorted(_TAMPER))
 def test_tampered_content_reads_as_an_integrity_error(
     db_engine: Engine, w: PlaneWorld, kind: str
@@ -631,7 +640,9 @@ def test_tampered_content_reads_as_an_integrity_error(
             ).scalar_one()
         )
     canonical = zlib.decompress(stored)
-    flipped = canonical.replace(b'"schema"', b'"schemA"', 1)
+    # A same-length edit that still decodes: only the digest can tell it apart.
+    before, after = _EDIT[kind]
+    flipped = canonical.replace(before, after, 1)
     assert len(flipped) == len(canonical) and flipped != canonical
     with db_engine.begin() as connection:
         connection.execute(text("SET LOCAL session_replication_role = replica"))

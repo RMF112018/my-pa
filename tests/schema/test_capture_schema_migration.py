@@ -685,6 +685,10 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "schedule_activities.list",
         "schedule_activities.history",
         "schedule_changes.list",
+        # Reports Modernization WP02. `4c37731671fc` restates `capability_is_known`
+        # in place and admits it; the domain declares it in the WP02 application
+        # change.
+        "reports.publish",
     }
 )
 

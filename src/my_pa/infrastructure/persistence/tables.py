@@ -10469,7 +10469,10 @@ intelligence_artifact_manifests = Table(
 # is inserted only while its version's writer, by `xmin`, is still in progress:
 # append-only covers UPDATE and DELETE, these cover a late INSERT; a version
 # the inserting statement cannot see is refused too, never left to the foreign
-# key, which a version committed mid-statement would pass), and the
+# key, which a version committed mid-statement would pass; a documented,
+# theoretical limit: a frozen row keeps its raw `xmin`, which once 2^31 or more
+# xids have passed is widened into the current epoch as a different xid, and
+# would be admitted if that aliased xid happened to be in progress), and the
 # deferred `a_report_version_has_its_manifest`,
 # `a_report_head_is_its_newest_version` and
 # `a_report_lifecycle_cache_is_its_newest_event` (at commit, the root caches
@@ -10592,6 +10595,21 @@ report_content_objects = Table(
         "storage_kind <> 'inline' OR format NOT IN ('markdown', 'text') OR (inline_text IS NOT "
         "NULL AND octet_length(inline_text) = decoded_byte_count)",
         name="inline_textual_report_content_is_its_decoded_size",
+    ),
+    # Inline bytes are bound to their digests where PostgreSQL can compute them:
+    # identity-encoded inline text (UTF-8) is its decoded digest, and an
+    # original held inline is its original digest. The decoded digest of `json`
+    # and `mixed` content is of canonical JSON, and of `gzip+base64` content of
+    # its decoding; both are computed and written by the application.
+    CheckConstraint(
+        "storage_kind <> 'inline' OR format NOT IN ('markdown', 'text') OR original_encoding <> "
+        "'identity' OR inline_text IS NULL OR encode(sha256(convert_to(inline_text, 'UTF8')), "
+        "'hex') = decoded_sha256",
+        name="inline_textual_report_content_is_its_decoded_digest",
+    ),
+    CheckConstraint(
+        "inline_original IS NULL OR encode(sha256(inline_original), 'hex') = original_sha256",
+        name="inline_report_content_keeps_its_original_digest",
     ),
     UniqueConstraint(
         "content_id", "owner_principal_id", name="a_report_content_is_identified_with_its_owner"
@@ -11168,6 +11186,20 @@ report_receipts = Table(
         "report_lifecycle_events",
         ["event_id", "owner_principal_id", "report_id", "lifecycle_revision", "operation"],
         name="a_report_receipt_names_its_event",
+    ),
+    # One applied write per version and per lifecycle event. A no-op receipt
+    # names the version or event it found, so it is outside both.
+    Index(
+        "a_report_version_is_applied_by_one_receipt",
+        "version_id",
+        unique=True,
+        postgresql_where=text("outcome = 'applied' AND operation IN ('publish', 'update')"),
+    ),
+    Index(
+        "a_report_lifecycle_event_is_applied_by_one_receipt",
+        "event_id",
+        unique=True,
+        postgresql_where=text("outcome = 'applied'"),
     ),
 )
 

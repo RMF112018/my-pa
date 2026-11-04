@@ -12,14 +12,19 @@ module proves:
   constant, and names every column, constraint and index `tables.py` declares
   for the 8 plane tables;
 * **offline SQL** -- the upgrade writes no row and names no table that existed
-  before it, and the downgrade locks the plane and refuses before it drops;
+  before it but `audit_events`, whose `capability_is_known` it restates exactly
+  once, last; the downgrade locks the plane and refuses before it restores or
+  drops anything;
+* **the audit vocabulary** -- the BEFORE text is a byte copy of the AT text
+  `621ef6786c64` left, and the AT text is it plus exactly `reports.publish`;
 * on disposable databases: empty to head creates exactly the 8 tables, the 8
   functions and their 21 triggers (3 of them deferred); the declared metadata
   equals the migrated schema, definition for definition; the predecessor head with Intelligence,
   Capture and managed-document rows upgrades with every pre-existing table's
-  rows and catalog unchanged; the downgrade refuses while a publish or a lone
-  transfer session exists, and an empty plane downgrades cleanly and upgrades
-  again;
+  rows and catalog unchanged but the one `capability_is_known` definition; the
+  upgrade admits a `reports.publish` audit event; the downgrade refuses while a
+  publish, a lone transfer session or a `reports.publish` audit event exists,
+  and an empty plane downgrades cleanly and upgrades again;
 * **every guard** -- from a baseline write that commits, one mutation that
   only the guard under test can refuse is refused with that guard's name; and
   for a representative set, dropping only that guard lets the same mutation
@@ -164,6 +169,11 @@ FOREIGN_KEY_VIOLATION: Final = "23503"
 UNIQUE_VIOLATION: Final = "23505"
 CHECK_VIOLATION: Final = "23514"
 REFUSAL: Final = f"general report plane state exists; refusing to downgrade {REVISION}"
+AUDIT_REFUSAL: Final = f"reports.publish audit history exists; refusing to downgrade {REVISION}"
+#: The latest revision before this one to restate `capability_is_known`.
+AUDIT_SOURCE: Final = MIGRATIONS / "20261028_621ef6786c64_cpm_workbench_vocabulary.py"
+#: The one capability this revision admits (WP02 contract section A4).
+ADMITTED: Final = "reports.publish"
 _WHITESPACE: Final = re.compile(r"\s+")
 
 
@@ -273,7 +283,14 @@ def test_the_revision_writes_no_row_grants_nothing_and_never_cascades() -> None:
     for statement in ("GRANT ", "REVOKE ", "OWNER TO", "SET ROLE", "ALTER DEFAULT PRIVILEGES"):
         assert statement not in code, statement
     assert "MCP_OBJECT_GRANTS" not in code and "MY_PA_MCP" not in code
-    assert "audit_events" not in _code()
+    # Exactly one audit restatement: `capability_is_known`, by `_restate_audit`,
+    # once each way; no other audit or heartbeat vocabulary.
+    restated = re.findall(r"\b(\w+_is_known)\b\"", _code())
+    assert restated == ["capability_is_known", "capability_is_known"], restated
+    for name in ("purpose_is_known", "worker_plane_is_known", "worker_heartbeats"):
+        assert name not in _code(), name
+    assert _code().count('"audit_events"') == 2
+    assert _code().count("knowledge.audit_events") == 1  # the downgrade refusal
 
 
 def test_frozen_literals_equal_the_domain_symbols() -> None:
@@ -368,6 +385,34 @@ def test_frozen_identifier_prefixes_equal_the_id_kinds() -> None:
     assert seen == set(expected)
 
 
+def test_the_audit_before_text_is_a_byte_copy_and_at_adds_exactly_reports_publish() -> None:
+    """BEFORE is what `621ef6786c64` left; AT is it plus `reports.publish`, sorted."""
+    mine = _module()
+    source: dict[str, object] = {}
+    exec(compile(AUDIT_SOURCE.read_text(encoding="utf-8"), str(AUDIT_SOURCE), "exec"), source)  # noqa: S102
+    assert mine["_CAPABILITIES_BEFORE_THIS_REVISION"] == source["_CAPABILITIES_AT_THIS_REVISION"]
+    before = _literals(mine["_CAPABILITIES_BEFORE_THIS_REVISION"])
+    at = _literals(mine["_CAPABILITIES_AT_THIS_REVISION"])
+    assert at == sorted(at) and len(set(at)) == len(at) == 252
+    assert len(before) == 251 and ADMITTED not in before
+    assert sorted([*before, ADMITTED]) == at
+    assert str(mine["_CAPABILITIES_AT_THIS_REVISION"]) == (
+        str(mine["_CAPABILITIES_BEFORE_THIS_REVISION"]).replace(
+            "'reports.manifest', ", f"'reports.manifest', '{ADMITTED}', ", 1
+        )
+    )
+    # No later revision on this chain restates it before this one.
+    script = ScriptDirectory.from_config(_config())
+    walked = script.get_revision(PREVIOUS)
+    assert walked is not None
+    assert "capability_is_known" not in Path(str(walked.path)).read_text(encoding="utf-8").replace(
+        "a_plane_write_request_capability_is_known", ""
+    ).replace("a_plane_refusal_capability_is_known", "")
+    assert walked.down_revision == "621ef6786c64"
+    refusal = str(mine["_REFUSE_DOWNGRADE"])
+    assert f"capability = '{ADMITTED}'" in refusal and AUDIT_REFUSAL in refusal
+
+
 def _ddl_columns(ddl: str) -> list[tuple[str, bool]]:
     return [
         (match.group(1), match.group(2) is None)
@@ -438,8 +483,20 @@ def test_offline_upgrade_writes_no_row_and_names_only_the_plane(
         assert not re.match(r"\s*(INSERT|UPDATE|DELETE|COPY|TRUNCATE)\b", statement), statement[
             :120
         ]
-    named = set(re.findall(r"\bknowledge\.(\w+)", body))
-    assert named == set(PLANE_TABLES) | set(PLANE_FUNCTIONS), sorted(named)
+    # Quoted capability names (`'knowledge.read'`) are values, not relations.
+    named = set(re.findall(r"(?<!')\bknowledge\.(\w+)", body))
+    assert named == set(PLANE_TABLES) | set(PLANE_FUNCTIONS) | {"audit_events"}, sorted(named)
+    # `audit_events` is named only by the one restatement, after every plane object.
+    touching = [statement for statement in re.split(r";\s", body) if "audit_events" in statement]
+    expected_statements = (
+        "ALTER TABLE knowledge.audit_events DROP CONSTRAINT capability_is_known",
+        "ALTER TABLE knowledge.audit_events ADD CONSTRAINT capability_is_known CHECK",
+    )
+    assert len(touching) == len(expected_statements), touching
+    for statement, prefix in zip(touching, expected_statements, strict=True):
+        assert _flat(statement).strip().startswith(prefix), statement[:120]
+    assert body.rindex("CREATE TRIGGER") < body.index("knowledge.audit_events")
+    assert "purpose_is_known" not in body
     # The only cross-table references are the plane's own.
     for target in re.findall(r"REFERENCES (\S+)", body):
         assert target.removeprefix("knowledge.") in PLANE_TABLES, target
@@ -458,9 +515,34 @@ def test_offline_downgrade_locks_and_refuses_before_any_drop(
     assert all(f"knowledge.{table}" in locked for table in PLANE_TABLES), locked
     first_drop = min(
         rendered.index(statement)
-        for statement in ("DROP TRIGGER", "DROP FUNCTION", "DROP TABLE", "DROP CONSTRAINT")
+        for statement in (
+            "DROP TRIGGER",
+            "DROP FUNCTION",
+            "DROP TABLE",
+            "DROP CONSTRAINT",
+            "ALTER TABLE knowledge.report_roots DROP CONSTRAINT",
+        )
+    )
+    first_plane_drop = min(
+        rendered.index(statement)
+        for statement in (
+            "DROP TRIGGER",
+            "DROP FUNCTION",
+            "DROP TABLE",
+            "ALTER TABLE knowledge.report_roots DROP CONSTRAINT",
+        )
     )
     assert refusal < first_drop
+    # The audit refusal is in the same block; the BEFORE text is restored after
+    # it and before any plane object is dropped.
+    assert rendered.index(AUDIT_REFUSAL) < rendered.index(
+        "ALTER TABLE knowledge.audit_events DROP CONSTRAINT capability_is_known"
+    )
+    restore = rendered.index(
+        "ALTER TABLE knowledge.audit_events ADD CONSTRAINT capability_is_known"
+    )
+    assert refusal < first_drop < restore < first_plane_drop
+    assert "'reports.publish'" not in rendered[restore : rendered.index(";", restore)]
     for table in PLANE_TABLES:
         assert rendered.index(f"DROP TABLE knowledge.{table} RESTRICT") > refusal
     # The deferred foreign keys go before the tables.
@@ -852,7 +934,25 @@ def test_predecessor_with_legacy_evidence_upgrades_unchanged(
     for table in _PLANE_QUALIFIED:
         assert after[table][0] == 0, table
     catalog_after = _full_catalog(engine)
-    assert _without_plane(catalog_after) == catalog_before
+    kept = _without_plane(catalog_after)
+    for kind in _ALL_CATALOG:
+        if kind != "constraints":
+            assert kept[kind] == catalog_before[kind], kind
+    # Exactly one pre-existing definition changed: `capability_is_known`,
+    # widened by exactly `reports.publish`.
+    removed = sorted(set(catalog_before["constraints"]) - set(kept["constraints"]))
+    added = sorted(set(kept["constraints"]) - set(catalog_before["constraints"]))
+    assert len(kept["constraints"]) == len(catalog_before["constraints"])
+    assert (
+        [owner for owner, _ in removed]
+        == [owner for owner, _ in added]
+        == [f"{SCHEMA}.audit_events"]
+    )
+    assert removed[0][1].startswith("capability_is_known CHECK ")
+    assert added[0][1].startswith("capability_is_known CHECK ")
+    widened = set(re.findall(r"'([^']+)'::text", added[0][1]))
+    assert widened - set(re.findall(r"'([^']+)'::text", removed[0][1])) == {ADMITTED}
+    assert set(re.findall(r"'([^']+)'::text", removed[0][1])) < widened
     assert {owner for owner, _ in catalog_after["constraints"]} - {
         owner for owner, _ in catalog_before["constraints"]
     } == _PLANE_QUALIFIED
@@ -1435,11 +1535,20 @@ def _attempt(engine: Engine, case: Case, *, mutated: bool) -> DBAPIError | None:
     foreign: dict[str, str] | None = None
     if mutated and _needs_foreign(case.change):
         foreign = _ids(f"{tag}q", Q)
-        # The foreign report holds no association, so a foreign-version association
-        # can only meet the owner-scoped reference.
+        # The foreign report holds no association and no receipt, so a
+        # foreign-version association, or a receipt naming a foreign version or
+        # event, can only meet the owner-scoped reference (not the applied-once
+        # indexes, which a foreign receipt for the same version would meet first).
         for name in CHAINS["archive"]:
             ops = _TRANSACTIONS[name](foreign)
-            _execute(engine, [op for op in ops if not op.label.startswith("association")])
+            _execute(
+                engine,
+                [
+                    op
+                    for op in ops
+                    if not op.label.startswith("association") and op.label != "receipt"
+                ],
+            )
     ids = _ids(tag, P)
     transactions = [_TRANSACTIONS[name](ids) for name in CHAINS[case.chain]]
     if mutated and case.then is not None:
@@ -1654,6 +1763,20 @@ def _content_cases() -> list[Case]:
             "publish_gz",
             {"decoded_byte_count": 1},
             "inline_textual_report_content_is_its_decoded_size",
+        ),
+        # Two fields: identity content names one digest twice, so only a wrong
+        # digest of the inline text breaks it (a well-formed, untrue digest).
+        case(
+            "inline_text_is_decoded_digest",
+            "publish",
+            {"original_sha256": _DIGEST, "decoded_sha256": _DIGEST},
+            "inline_textual_report_content_is_its_decoded_digest",
+        ),
+        case(
+            "inline_original_is_its_digest",
+            "publish_gz",
+            {"original_sha256": _DIGEST},
+            "inline_report_content_keeps_its_original_digest",
         ),
     ]
 
@@ -2131,6 +2254,29 @@ def _lifecycle_cases() -> list[Case]:
     ]
 
 
+def _second_applied_receipt(chain: str) -> Callable[[dict[str, str]], list[Op]]:
+    """The committed last receipt of `chain` again, under a new id and key: a second
+    applied receipt for the same version or event, which only the partial unique
+    index refuses."""
+
+    def build(ids: dict[str, str]) -> list[Op]:
+        ops = [op for name in CHAINS[chain] for op in _TRANSACTIONS[name](ids)]
+        found = next(op for op in reversed(ops) if op.label == "receipt")
+        return [
+            Op(
+                found.label,
+                found.table,
+                {
+                    **found.values,
+                    "receipt_id": ids["r_4"],
+                    "idempotency_key": f"key-{ids['report']}-second",
+                },
+            )
+        ]
+
+    return build
+
+
 def _receipt_cases() -> list[Case]:
     def case(id_: str, chain: str, fields: dict[str, object], expect: Expect) -> Case:
         return Case(id_, chain, expect, {"receipt": fields})
@@ -2248,6 +2394,24 @@ def _receipt_cases() -> list[Case]:
             "publish",
             _unique(_RC, "a_report_key_admits_one_request_per_operation"),
             then=_reinsert("publish", "receipt", "receipt_id", "r_update"),
+        ),
+        Case(
+            "version_published_once",
+            "publish",
+            _unique(_RC, "a_report_version_is_applied_by_one_receipt"),
+            then=_second_applied_receipt("publish"),
+        ),
+        Case(
+            "version_updated_once",
+            "update",
+            _unique(_RC, "a_report_version_is_applied_by_one_receipt"),
+            then=_second_applied_receipt("update"),
+        ),
+        Case(
+            "event_applied_once",
+            "archive",
+            _unique(_RC, "a_report_lifecycle_event_is_applied_by_one_receipt"),
+            then=_second_applied_receipt("archive"),
         ),
     ]
 
@@ -3018,6 +3182,28 @@ LOAD_BEARING: Final = (
         "an_archive_no_op_receipt_follows_a_transition",
         "receipt_archive_no_op_follows_a_transition",
     ),
+    (
+        "applied_version_unique_index",
+        "DROP INDEX knowledge.a_report_version_is_applied_by_one_receipt",
+        "receipt_version_published_once",
+    ),
+    (
+        "applied_event_unique_index",
+        "DROP INDEX knowledge.a_report_lifecycle_event_is_applied_by_one_receipt",
+        "receipt_event_applied_once",
+    ),
+    (
+        "inline_text_digest_check",
+        "ALTER TABLE knowledge.report_content_objects DROP CONSTRAINT "
+        "inline_textual_report_content_is_its_decoded_digest",
+        "content_inline_text_is_decoded_digest",
+    ),
+    (
+        "inline_original_digest_check",
+        "ALTER TABLE knowledge.report_content_objects DROP CONSTRAINT "
+        "inline_report_content_keeps_its_original_digest",
+        "content_inline_original_is_its_digest",
+    ),
 )
 
 
@@ -3389,6 +3575,92 @@ def test_exponent_floats_the_domain_refuses_would_overflow_the_stored_bound(
     _assert_refused(refused.value, _check(_V, "report_metadata_is_a_bounded_object"))
 
 
+# ---- the audit vocabulary ---------------------------------------------------------------
+
+
+def _publish_audit(engine: Engine, suffix: str) -> None:
+    with engine.begin() as connection:
+        connection.execute(
+            tables.audit_events.insert().values(
+                audit_id=f"audit_{suffix}",
+                correlation_id=f"corr_{suffix}",
+                principal_id=P,
+                capability=ADMITTED,
+                purpose="report_authoring",
+                outcome="allowed",
+                policy_version="policy-v1",
+                scope_source_id_count=0,
+                recorded_at=NOW,
+            )
+        )
+
+
+def _audit_rows(engine: Engine) -> int:
+    with engine.connect() as connection:
+        return int(
+            connection.execute(
+                text("SELECT count(*) FROM knowledge.audit_events WHERE capability = :c"),
+                {"c": ADMITTED},
+            ).scalar_one()
+        )
+
+
+@pytest.mark.database
+def test_the_upgrade_admits_reports_publish_and_the_downgrade_refuses_while_audited(
+    disposable_database: str, engine: Engine
+) -> None:
+    """Refused at the predecessor, admitted at head; its audit row holds the downgrade."""
+    del disposable_database
+    command.upgrade(_config(), PREVIOUS)
+    with pytest.raises(DBAPIError) as refused_before:
+        _publish_audit(engine, "rptmigaudit0001")
+    _assert_refused(refused_before.value, _check("audit_events", "capability_is_known"))
+    command.upgrade(_config(), "head")
+    _publish_audit(engine, "rptmigaudit0002")
+    assert _audit_rows(engine) == 1
+    # The plane is empty: only the audit clause can refuse.
+    assert all(count == 0 for count, _ in _plane_rows(engine).values())
+    catalog = _full_catalog(engine)
+    with pytest.raises(DBAPIError) as refused:
+        command.downgrade(_config(), PREVIOUS)
+    assert getattr(refused.value.orig, "sqlstate", None) == RESTRICT_VIOLATION
+    assert AUDIT_REFUSAL in str(refused.value)
+    assert _version(engine) == REVISION
+    assert _audit_rows(engine) == 1
+    assert _full_catalog(engine) == catalog
+
+
+@pytest.mark.database
+def test_without_the_audit_refusal_the_before_text_fails_on_the_audit_row(
+    cloned_database_url: str,
+) -> None:
+    """A backstop, not a prove-red: without only the audit clause, the downgrade still
+    fails, at the BEFORE restatement's validating scan, after the plane is locked.
+
+    The refusal is kept for its named message and because it refuses before any
+    statement of the downgrade has changed the catalog.
+    """
+    engine = create_database_engine(cloned_database_url)
+    try:
+        _publish_audit(engine, "rptmigaudit0003")
+        namespace = _module()
+        refusal = str(namespace["_REFUSE_DOWNGRADE"])
+        clause = refusal[refusal.index("      IF EXISTS (\n") : refusal.index("    END $$")]
+        assert AUDIT_REFUSAL in clause and "report_content_objects" not in clause
+        namespace["_REFUSE_DOWNGRADE"] = refusal.replace(clause, "")
+        with (
+            engine.connect() as connection,
+            pytest.raises(DBAPIError) as refused,
+            connection.begin(),
+            Operations.context(MigrationContext.configure(connection)),
+        ):
+            namespace["downgrade"]()  # type: ignore[operator]
+        _assert_refused(refused.value, _check("audit_events", "capability_is_known"))
+        assert _relations(engine) >= set(PLANE_TABLES)
+    finally:
+        engine.dispose()
+
+
 # ---- the downgrade refusal ---------------------------------------------------------------
 
 _DOWNGRADE_STATES: Final[dict[str, Callable[[dict[str, str]], list[Op]]]] = {
@@ -3503,6 +3775,8 @@ _DATABASE_TESTS: Final[tuple[Callable[..., None], ...]] = (
     test_downgrade_refuses_while_plane_state_exists,
     test_the_downgrade_refusal_is_load_bearing,
     test_an_empty_plane_downgrades_cleanly_and_upgrades_again,
+    test_the_upgrade_admits_reports_publish_and_the_downgrade_refuses_while_audited,
+    test_without_the_audit_refusal_the_before_text_fails_on_the_audit_row,
 )
 
 

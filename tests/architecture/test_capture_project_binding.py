@@ -62,7 +62,7 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 #: which declares the receipt version, update no-op and event CHECKs, the inline
 #: mixed-content CHECK and the settled-transfer byte-count CHECK, and names the
 #: two insert guards in the plane comment; `captures` is untouched.
-TABLES_SHA256: Final = "6a8563b36f93f10c378a47f6ec6f8d89a3918d05d8301f0ed467070ca669ad4b"
+TABLES_SHA256: Final = "19d3794b82b2c2110aab0037a567b8efcde2ee2fd76c801c6928c23347609e71"
 WP03_MIGRATION_SHA256: Final = "098edd98ccc1846b01c58f42e296e4751e7841b562a2827616cc4337e174c354"
 WP03_MIGRATION: Final = (
     ROOT / "migrations/versions/20260914_e6a4c2f91b73_project_controls_run01_integrity.py"

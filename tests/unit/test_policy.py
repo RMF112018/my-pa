@@ -288,6 +288,7 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.REPORTS_RESOLVE_SET, Purpose.REPORT_READ),
         (Capability.REPORTS_TYPES_CREATE, Purpose.REPORT_AUTHORING),
         (Capability.REPORTS_TYPES_LIST, Purpose.REPORT_READ),
+        (Capability.REPORTS_PUBLISH, Purpose.REPORT_AUTHORING),
         # The entity plane. Every read on it shares the single `entity_read`
         # purpose, exactly as the task-plane reads share `task_read`. The writes
         # take `entity_authoring`, except `entities.observe`, which takes
@@ -596,8 +597,10 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # existing purpose: 233 capabilities, 60 purposes, 235 pairs.
     # CPM Workbench S5b-2 adds 7 names and 2 purposes, each name mapped to exactly
     # one of the pair: 240 capabilities, 62 purposes, 242 pairs.
-    assert len(PERMITTED_PAIRS) == 242
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 242 == 14638
+    # Reports Modernization WP02 adds `reports.publish` under `report_authoring`
+    # and no purpose: 241 capabilities, 62 purposes, 243 pairs.
+    assert len(PERMITTED_PAIRS) == 243
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 243 == 14699
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

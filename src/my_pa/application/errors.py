@@ -644,6 +644,26 @@ class SafeDetail(StrEnum):
     HIERARCHY_PREFIX = "hierarchy_prefix"
     ROW_TYPE = "row_type"
     DATE_RANGE = "date_range"
+    #: Reports Modernization WP02: the `reports.publish` fields of these names
+    #: (`REPORT_TYPE` is the caller field `type`; `COVERAGE_PERIOD` either
+    #: bound or their order; `ASSOCIATIONS` any association member;
+    #: `CONTENT_ENCODING` an encoding this build does not decode, answered
+    #: `unsupported`), and the standalone `reports.read` selectors
+    #: `VERSION_NUMBER`, `INCLUDE_MANIFEST` and `INCLUDE_WITHDRAWN`. `TITLE`,
+    #: `CONTENT`, `REPORT_DATE`, `IDEMPOTENCY_KEY`, `ARTIFACT_ID`, `VERSION_ID`,
+    #: `INCLUDE_BODY` and `MAX_BYTES` are reused.
+    REPORT_TYPE = "type"
+    TOPICS = "topics"
+    TAGS = "tags"
+    SUMMARY = "summary"
+    COVERAGE_PERIOD = "coverage_period"
+    ASSOCIATIONS = "associations"
+    METADATA = "metadata"
+    CLIENT_INTENT_ID = "client_intent_id"
+    CONTENT_ENCODING = "content_encoding"
+    VERSION_NUMBER = "version_number"
+    INCLUDE_MANIFEST = "include_manifest"
+    INCLUDE_WITHDRAWN = "include_withdrawn"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

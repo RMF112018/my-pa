@@ -393,7 +393,10 @@ def test_at_vocabulary_adds_exactly_the_s31_names() -> None:
     # The head admits every declared name, and the S3.1 schema-ahead gap is
     # exactly the S3.1 names the domain does not declare yet (none). The CPM
     # Workbench S5b-2 names, declared since, are that revision's (621ef6786c64).
-    declared = {capability.value for capability in Capability} - S5B2_CAPABILITIES
+    # Reports Modernization WP02's `reports.publish` is the head's (4c37731671fc).
+    declared = (
+        {capability.value for capability in Capability} - S5B2_CAPABILITIES - {"reports.publish"}
+    )
     native = {capability.value for capability in NativeSourceCapability}
     assert set(at) == declared | native | gap.lineage_s31_admitted_ahead("capability")
     assert S31_CAPABILITIES & declared == gap.S31_CAPABILITIES_DECLARED_BY_DOMAIN

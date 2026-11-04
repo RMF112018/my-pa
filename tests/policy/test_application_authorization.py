@@ -193,6 +193,7 @@ from my_pa.application.commands import (
     PreviewEntitySplit,
     ProposeRelationshipMemory,
     PublishConstraint,
+    PublishGeneralReport,
     PullGoodNotesWork,
     PutCanvasWorkspace,
     ReadCapture,
@@ -678,6 +679,11 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             description="A synthetic report type.",
         ),
         Capability.REPORTS_TYPES_LIST: ListReportTypes(),
+        Capability.REPORTS_PUBLISH: PublishGeneralReport(
+            title="Synthetic standalone report",
+            content={"format": "markdown", "body": "Synthetic body."},
+            idempotency_key="synthetic-publish",
+        ),
         # The entity plane. Every identifier is minted rather than staged, for
         # the reason this table exists: a denial test must fail on the authority
         # and on nothing else, and an entity that existed would let a
@@ -1832,6 +1838,7 @@ SCOPED_CAPABILITIES = [
         Capability.REPORTS_RESOLVE_SET,
         Capability.REPORTS_TYPES_CREATE,
         Capability.REPORTS_TYPES_LIST,
+        Capability.REPORTS_PUBLISH,
         # The entity plane is a read plane over the acting Principal's own
         # entities. An entity carries no enrollment a requested scope could be
         # compared against — it is the Principal's own record of a person, not
@@ -2176,6 +2183,7 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.REPORTS_RESOLVE_SET,
         Capability.REPORTS_TYPES_CREATE,
         Capability.REPORTS_TYPES_LIST,
+        Capability.REPORTS_PUBLISH,
         Capability.ENTITIES_SEARCH,
         Capability.ENTITIES_GET,
         Capability.ENTITIES_RESOLVE,

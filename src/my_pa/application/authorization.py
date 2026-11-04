@@ -190,6 +190,7 @@ from my_pa.application.commands import (
     PreviewEntitySplit,
     ProposeRelationshipMemory,
     PublishConstraint,
+    PublishGeneralReport,
     PullGoodNotesWork,
     PutCanvasWorkspace,
     ReadCapture,
@@ -577,6 +578,10 @@ def _requested_scope(
             # The report type registry is the acting Principal's own rows.
             | CreateReportType()
             | ListReportTypes()
+            # A standalone report is the acting Principal's own root; its
+            # association targets are verified in that partition by the
+            # repository, never against a source grant.
+            | PublishGeneralReport()
             # The entity plane names a person, not a source, for the reason
             # `domain.policy.decision._SCOPELESS` states beside the same five.
             | SearchEntities()

@@ -582,6 +582,8 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.REPORTS_COMMIT,
         Capability.REPORTS_RECORD_RUN_STATE,
         Capability.REPORTS_TYPES_CREATE,
+        # Reports Modernization WP02: additive, so not in `destructive_writes`.
+        Capability.REPORTS_PUBLISH,
         Capability.RELATIONSHIP_MEMORY_CREATE,
         Capability.RELATIONSHIP_MEMORY_REVISE,
         Capability.RELATIONSHIP_MEMORY_ARCHIVE,

@@ -366,6 +366,11 @@ _OPERATOR_DECISION_REQUIRED: Final[frozenset[Capability]] = frozenset(
     {
         Capability.GSQS_START,
         Capability.GSQS_STATUS,
+        # Reports Modernization WP02: withheld, not yet eligible. Classified only
+        # so the policy stays exhaustive when the canonical capability lands;
+        # the remote/ChatLLM registration work package makes it DATA_REQUIRED
+        # and bumps the profile version. No profile or grant changes here.
+        Capability.REPORTS_PUBLISH,
     }
 )
 
@@ -514,6 +519,9 @@ _EXCLUSION_RATIONALE: Final[Mapping[Capability, str]] = MappingProxyType(
         Capability.ISSUES_MEMBERSHIPS_CONFIRM: _LINEAGE_ATTESTED_EXCLUSION,
         Capability.ISSUES_PROJECT_LINKS_CONFIRM: _LINEAGE_ATTESTED_EXCLUSION,
         Capability.SCHEDULE_PUBLICATIONS_IMPORT: _SCHEDULE_IMPORT_EXCLUSION,
+        Capability.REPORTS_PUBLISH: (
+            "general report publication withheld pending remote registration (WP02)"
+        ),
     }
 )
 

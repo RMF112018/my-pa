@@ -43,7 +43,7 @@ from tests.contract.test_lineage_s3_capability_admission import (
     _BASE_PAYLOADS as _S3_PAYLOADS,
 )
 from tests.contract.test_lineage_s3_capability_admission import (
-    _V1_PAYLOAD_SCHEMA_SHA256,
+    _V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_READ,
     _V1_VIEW_FIELDS_SHA256,
     _V1_VIEW_MODULES,
 )
@@ -289,9 +289,10 @@ def test_s31_capabilities_are_operator_decision_required() -> None:
     counts = dict.fromkeys(ChatLLMCapabilityClass, 0)
     for policy in CHATLLM_CAPABILITY_POLICY.values():
         counts[policy.classification] += 1
-    # P1: only the GSQS pair remains an operator decision.
-    assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 2
-    assert len(Capability) == 240
+    # P1: only the GSQS pair remains an operator decision; Reports Modernization
+    # WP02 adds the withheld `reports.publish` beside it.
+    assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 3
+    assert len(Capability) == 241
     # P1 moved data-class members, so the ChatLLM data profile moved too.
     assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v11"
 
@@ -702,13 +703,18 @@ def test_existing_non_lineage_v1_shapes_are_unchanged_by_s31() -> None:
     lineage |= {
         capability.value for capability in Capability if capability.value.startswith("schedule_")
     }
+    # Reports Modernization WP02: `reports.publish` is new and `reports.read`
+    # is deliberately extended (the `grpt_` selectors; its legacy `rpt_` answers
+    # are pinned by `tests/unit/test_reports_legacy_read_golden.py`). Both are
+    # excluded, so the remaining 191 shapes stay pinned byte for byte.
+    lineage |= {Capability.REPORTS_PUBLISH.value, Capability.REPORTS_READ.value}
     payloads = {
         tool.name: tool.input_schema["properties"]["payload"]
         for tool in TOOLS
         if tool.name not in lineage
     }
-    assert len(payloads) == 192
-    assert _canonical_sha256(payloads) == _V1_PAYLOAD_SCHEMA_SHA256
+    assert len(payloads) == 191
+    assert _canonical_sha256(payloads) == _V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_READ
     views: dict[str, list[str]] = {}
     for name in _V1_VIEW_MODULES:
         module = importlib.import_module(f"my_pa.contracts.v1.{name}")

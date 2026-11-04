@@ -129,8 +129,9 @@ def test_revision_identity_and_frozen_vocabulary_are_exact() -> None:
     # and record lineage S2 its names and `issue_work_authoring`, and record
     # lineage S3 its names and `lineage_backfill`, and record lineage S4 its
     # names and `program_reporting_read`, and record lineage S3.1 its names, and
-    # CPM Workbench S5b-2 its 7 Schedule names and its 2 purposes.
-    assert len(Capability) == 240
+    # CPM Workbench S5b-2 its 7 Schedule names and its 2 purposes, and Reports
+    # Modernization WP02 `reports.publish`.
+    assert len(Capability) == 241
     assert len(Purpose) == 62
     assert "from my_pa.domain" not in MIGRATION.read_text(encoding="utf-8")
 

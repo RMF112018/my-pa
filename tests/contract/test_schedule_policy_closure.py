@@ -227,7 +227,7 @@ def _capability_enum(scene: Scene) -> None:
     assert [(member.name, member.value) for member in members[-7:]] == [
         (name, value) for name, value, _, _ in _TABLE
     ]
-    assert len(members) == 240
+    assert len(members) == 241
 
 
 def _purpose_enum(scene: Scene) -> None:
@@ -503,7 +503,7 @@ def test_import_is_control_plane_excluded() -> None:
 
 def test_v11_targets() -> None:
     assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v11"
-    assert len(CHATLLM_CAPABILITY_POLICY) == 240
+    assert len(CHATLLM_CAPABILITY_POLICY) == 241
     full = _desired(_planes(**_FULL))
     assert len(full) == 164
     assert len(_desired(_planes(constraints=True))) == 98

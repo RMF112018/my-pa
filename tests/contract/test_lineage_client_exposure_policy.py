@@ -172,12 +172,14 @@ def test_v10_withheld_lineage_names_are_control_plane_excluded() -> None:
         assert not is_chatllm_data_management(capability)
         # Publication withholds all 7 independently (S3.1 section 7.13).
         assert is_operator_only(capability), capability
-    # Only the GSQS pair remains an operator decision.
+    # Only the GSQS pair remains an operator decision, beside Reports
+    # Modernization WP02's `reports.publish`, withheld until its remote
+    # registration; no lineage name is among them.
     assert {
         capability
         for capability, policy in CHATLLM_CAPABILITY_POLICY.items()
         if policy.classification is ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED
-    } == {Capability.GSQS_START, Capability.GSQS_STATUS}
+    } == {Capability.GSQS_START, Capability.GSQS_STATUS, Capability.REPORTS_PUBLISH}
 
 
 def test_the_lineage_name_sets_equal_the_switch_sets() -> None:

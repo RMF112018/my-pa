@@ -260,6 +260,8 @@ def test_head_admits_every_declared_capability_and_purpose() -> None:
         - LINEAGE_S31_CAPABILITIES
         # CPM Workbench S5b-2: admitted by `621ef6786c64`.
         - S5B2_CAPABILITIES
+        # Reports Modernization WP02: admitted by `4c37731671fc`.
+        - {"reports.publish"}
     )
     purposes = (
         {purpose.value for purpose in Purpose}

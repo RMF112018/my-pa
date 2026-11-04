@@ -204,9 +204,13 @@ def test_at_vocabulary_adds_exactly_the_s4_names() -> None:
     # The head admits every declared name, and the S4 schema-ahead gap is
     # exactly the S4 names the domain does not declare yet (none).
     # The S3.1 names, declared since, are the S3.1 revision's (023f8f7eb499).
-    # The CPM Workbench S5b-2 names too, that revision's (621ef6786c64).
+    # The CPM Workbench S5b-2 names too, that revision's (621ef6786c64), and
+    # Reports Modernization WP02's `reports.publish`, the head's (4c37731671fc).
     declared = (
-        {capability.value for capability in Capability} - S31_CAPABILITIES - S5B2_CAPABILITIES
+        {capability.value for capability in Capability}
+        - S31_CAPABILITIES
+        - S5B2_CAPABILITIES
+        - {"reports.publish"}
     )
     native = {capability.value for capability in NativeSourceCapability}
     assert set(at) == declared | native | gap.lineage_s4_admitted_ahead("capability")

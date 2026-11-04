@@ -419,7 +419,7 @@ class Capability(StrEnum):
     # Principal's own partition. Real handwriting remains fail-closed.
     GSQS_START = "gsqs.start"
     GSQS_STATUS = "gsqs.status"
-    # Intelligence Artifact / Report plane. Eleven `reports.*` names rather than a
+    # Intelligence Artifact / Report plane. Twelve `reports.*` names rather than a
     # widening of `capture.*`, `documents.*`, `knowledge.*`, or `context.*`
     # (`D-91`). Capture is user-authored notes. Documents are managed bytes.
     # Knowledge is enrollment-scoped extraction. Context assembles a retrieval
@@ -449,6 +449,13 @@ class Capability(StrEnum):
     #: names committed, immutable artifacts, so retiring one would orphan them.
     REPORTS_TYPES_CREATE = "reports.types.create"
     REPORTS_TYPES_LIST = "reports.types.list"
+    #: The general (standalone) report plane (Reports Modernization WP02,
+    #: revision `4c37731671fc`). `publish` writes a new Principal-owned report
+    #: root at version 1 with a title and an inline content object -- no cycle
+    #: run, stage, producer, focus area or source lane -- and never a row in a
+    #: `knowledge.intelligence_*` table. `reports.read` reads it by its `grpt_`
+    #: identifier. Insert-only: a publish reaches no existing report.
+    REPORTS_PUBLISH = "reports.publish"
     # The relationship-intelligence entity plane. Fifty-five `entities.` names
     # over `knowledge.entities` and the tables around it, declared in four
     # blocks by the package that added each: WP-RI-05's six reads here, then
@@ -1394,6 +1401,7 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.REPORTS_RESOLVE_SET: frozenset({Purpose.REPORT_READ}),
         Capability.REPORTS_TYPES_CREATE: frozenset({Purpose.REPORT_AUTHORING}),
         Capability.REPORTS_TYPES_LIST: frozenset({Purpose.REPORT_READ}),
+        Capability.REPORTS_PUBLISH: frozenset({Purpose.REPORT_AUTHORING}),
         Capability.ENTITIES_SEARCH: frozenset({Purpose.ENTITY_READ}),
         Capability.ENTITIES_UNRESOLVED_MENTIONS: frozenset({Purpose.ENTITY_READ}),
         Capability.ENTITIES_GET: frozenset({Purpose.ENTITY_READ}),
@@ -1761,6 +1769,7 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.REPORTS_COMMIT,
         Capability.REPORTS_RECORD_RUN_STATE,
         Capability.REPORTS_TYPES_CREATE,
+        Capability.REPORTS_PUBLISH,
         Capability.RELATIONSHIP_MEMORY_CREATE,
         Capability.RELATIONSHIP_MEMORY_REVISE,
         Capability.RELATIONSHIP_MEMORY_ARCHIVE,
@@ -1927,6 +1936,9 @@ _ADDITIVE_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.REPORTS_RECORD_RUN_STATE,
         # Insert-only: a registered type is never rewritten or removed.
         Capability.REPORTS_TYPES_CREATE,
+        # Insert-only: a publish mints a new report root, version 1 and its
+        # receipt, and reaches no existing report; a replay writes nothing.
+        Capability.REPORTS_PUBLISH,
         Capability.RELATIONSHIP_MEMORY_CREATE,
         Capability.ENTITIES_CREATE,
         Capability.ENTITIES_IDENTIFIERS_BIND,

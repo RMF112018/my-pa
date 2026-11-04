@@ -317,6 +317,8 @@ ADMITTED_LATER_CAPABILITIES: Final = (
     | LINEAGE_S31_CAPABILITIES
     # CPM Workbench S5b-2: admitted by `621ef6786c64` and declared with it.
     | S5B2_CAPABILITIES
+    # Reports Modernization WP02: admitted by `4c37731671fc` and declared with it.
+    | frozenset({"reports.publish"})
 )
 ADMITTED_LATER_PURPOSES: Final = (
     frozenset(

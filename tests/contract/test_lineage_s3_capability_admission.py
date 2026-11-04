@@ -319,6 +319,14 @@ def test_s3_requests_reject_server_owned_fields(name: str) -> None:
 _V1_PAYLOAD_SCHEMA_SHA256: Final = (
     "e87a5186273905f60ae033764f70d6715cb01829a56a19e77409ab2d2de63ebb"
 )
+#: The same measurement without `reports.read`, taken at the Reports
+#: Modernization WP02 base `09a05158c`: WP02 adds `reports.publish` and
+#: deliberately extends `reports.read` (the `grpt_` selectors), so both are
+#: excluded and the other 191 shapes stay pinned byte for byte. The legacy
+#: `rpt_` read's answers are pinned by `tests/unit/test_reports_legacy_read_golden.py`.
+_V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_READ: Final = (
+    "f4dc83a1e8e4699dc047d58279d97321fd750c1ecdff521b4cd148bb77fafb71"
+)
 #: The v1 view modules and the SHA-256 of their models' field names
 #: (`module.Model` -> sorted field names, canonical JSON), measured alike.
 _V1_VIEW_MODULES: Final = (
@@ -351,13 +359,15 @@ def test_existing_v1_shapes_are_unchanged_by_s3() -> None:
     lineage |= {
         capability.value for capability in Capability if capability.value.startswith("schedule_")
     }
+    # Reports Modernization WP02: see `_V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_READ`.
+    lineage |= {Capability.REPORTS_PUBLISH.value, Capability.REPORTS_READ.value}
     payloads = {
         tool.name: tool.input_schema["properties"]["payload"]
         for tool in TOOLS
         if tool.name not in lineage
     }
-    assert len(payloads) == 192
-    assert _canonical_sha256(payloads) == _V1_PAYLOAD_SCHEMA_SHA256
+    assert len(payloads) == 191
+    assert _canonical_sha256(payloads) == _V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_READ
     views: dict[str, list[str]] = {}
     for name in _V1_VIEW_MODULES:
         module = importlib.import_module(f"my_pa.contracts.v1.{name}")

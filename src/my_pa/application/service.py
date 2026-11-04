@@ -271,6 +271,7 @@ from my_pa.application.commands import (
     PreviewEntitySplit,
     ProposeRelationshipMemory,
     PublishConstraint,
+    PublishGeneralReport,
     PullGoodNotesWork,
     PutCanvasWorkspace,
     ReadCapture,
@@ -375,6 +376,8 @@ from my_pa.application.commands import (
     VoidConstraint,
     WaitingOn,
     WaitingOnV2,
+    publication_request,
+    report_refusal,
 )
 from my_pa.application.commitments import CommitmentManagementService, CommitmentMutationReceipt
 from my_pa.application.commitments_v2 import (
@@ -678,6 +681,9 @@ from my_pa.contracts.ports import (
     ProgramReadUnavailableError,
     ProgramReadUnitOfWork,
     RelationshipMemoryRepository,
+    ReportAssociationTargetNotFoundError,
+    ReportIdempotencyConflictError,
+    ReportIntegrityError,
     ReviewDecisionRequest,
     ScheduleUnitOfWork,
     SearchOutcome,
@@ -938,6 +944,10 @@ from my_pa.domain.relationship.reenrichment import (
     ReenrichmentTrigger,
 )
 from my_pa.domain.relationship.resolution import EntityResolution
+from my_pa.domain.reports.errors import ReportValidationError
+from my_pa.domain.reports.publication import PublicationResult
+from my_pa.domain.reports.records import StoredReportVersion
+from my_pa.domain.reports.vocabulary import ContentFormat, LifecycleState
 from my_pa.domain.search.query import (
     DEFAULT_SNIPPET_WORDS,
     MAX_PAGE_SIZE,
@@ -3455,6 +3465,100 @@ def _report_type_payload(definition: ReportTypeDefinition) -> dict[str, Any]:
         "display_name": definition.display_name,
         "origin": definition.origin.value,
     }
+
+
+def _general_publish_payload(result: PublicationResult) -> dict[str, Any]:
+    """What `reports.publish` answers, the first time and on every replay."""
+    return {
+        "plane": "standalone",
+        "report_id": result.receipt.report_id,
+        "version_id": result.receipt.version_id,
+        "version_number": result.receipt.version_number,
+        # A publish creates the root `active` at revision 0; a replay answers
+        # the original publication, not whatever later lifecycle moved it to.
+        "lifecycle_state": LifecycleState.ACTIVE.value,
+        "lifecycle_revision": 0,
+        "content": {
+            "content_id": result.content_id,
+            "format": result.format.value,
+            "decoded_sha256": result.decoded_sha256,
+            "decoded_byte_count": result.decoded_byte_count,
+            "canonical_sha256": result.canonical_sha256,
+        },
+        "manifest_sha256": result.manifest_sha256,
+        "receipt_id": result.receipt.receipt_id,
+        "recorded_at": format_rfc3339(result.recorded_at),
+        "replayed": result.replayed,
+    }
+
+
+def _general_read_payload(
+    stored: StoredReportVersion, *, include_body: bool, include_manifest: bool
+) -> dict[str, Any]:
+    """One standalone report version as `reports.read` answers a `grpt_` identifier."""
+    root, version, content = stored.root, stored.version, stored.content
+    content_payload: dict[str, Any] = {
+        "content_id": stored.content_id,
+        "format": content.format.value,
+        "encoding": content.encoding.value,
+        "storage_kind": stored.storage_kind.value,
+        "decoded_sha256": content.decoded_sha256,
+        "decoded_byte_count": content.decoded_byte_count,
+        "canonical_sha256": content.canonical_sha256,
+    }
+    if include_body:
+        if content.format is not ContentFormat.JSON:
+            content_payload["body"] = content.body
+        if content.format in (ContentFormat.JSON, ContentFormat.MIXED):
+            content_payload["data"] = content.data
+    coverage = (
+        None
+        if version.coverage_start is None and version.coverage_end is None
+        else {
+            "start": None
+            if version.coverage_start is None
+            else format_rfc3339(version.coverage_start),
+            "end": None if version.coverage_end is None else format_rfc3339(version.coverage_end),
+        }
+    )
+    payload: dict[str, Any] = {
+        "plane": "standalone",
+        "report_id": root.report_id,
+        "created_at": format_rfc3339(root.created_at),
+        "head_version_id": root.head_version_id,
+        "head_version_number": root.head_version_number,
+        "lifecycle_state": root.lifecycle_state.value,
+        "lifecycle_revision": root.lifecycle_revision,
+        "version_id": version.version_id,
+        "version_number": version.version_number,
+        "supersedes_version_id": version.supersedes_version_id,
+        "change_kind": version.change_kind.value,
+        "title": version.title,
+        "type": version.report_type,
+        "topics": list(version.topics),
+        "tags": list(version.tags),
+        "summary": version.summary,
+        "report_date": None if version.report_date is None else version.report_date.isoformat(),
+        "coverage_period": coverage,
+        "metadata": dict(version.metadata),
+        "recorded_at": format_rfc3339(version.recorded_at),
+        "content": content_payload,
+        "manifest_sha256": version.manifest_sha256,
+        "associations": [
+            {
+                "ordinal": ordinal,
+                "target_kind": association.target_kind.value,
+                "target_ref": association.target_ref,
+                "target_version_ref": association.target_version_ref,
+                "relation": association.relation,
+                "verification": association.verification.value,
+            }
+            for ordinal, association in enumerate(stored.associations)
+        ],
+    }
+    if include_manifest:
+        payload["manifest"] = dict(stored.manifest)
+    return payload
 
 
 def _meeting_write_payload(
@@ -16025,12 +16129,89 @@ class ApplicationService:
             disclosure=unenrolled_disclosure(authorization.at),
         )
 
+    def _reports_publish(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: PublishGeneralReport,
+    ) -> _Result:
+        """`reports.publish`: one new standalone report, or the replay of its key.
+
+        Every server field comes from the authorization: the owner is the
+        authenticated Principal, the time is the request clock, and the
+        correlation and audit identifiers are the ones this decision was
+        recorded under, so the receipt names the audit event that admitted it.
+        The repository mints the identifiers. Nothing of the body is logged.
+        """
+        request = publication_request(command)
+        refusal: ApplicationError
+        try:
+            result = unit_of_work.general_reports.publish(
+                request,
+                principal_id=authorization.principal.principal_id,
+                idempotency_key=command.idempotency_key,
+                recorded_at=authorization.at,
+                correlation_id=authorization.correlation_id,
+                audit_id=authorization.audit_id,
+            )
+        except ReportValidationError as error:
+            refusal = report_refusal(error)
+        except ReportIdempotencyConflictError:
+            refusal = ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+        except ReportAssociationTargetNotFoundError:
+            # Names neither the target nor which one: a foreign target and a
+            # nonexistent one answer alike.
+            refusal = NotFoundError(SafeDetail.ASSOCIATIONS)
+        else:
+            return _Result(
+                payload=_general_publish_payload(result),
+                disclosure=unenrolled_disclosure(authorization.at),
+            )
+        raise refusal
+
+    def _reports_read_standalone(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReadIntelligenceArtifact,
+    ) -> _Result:
+        refusal: ApplicationError
+        try:
+            stored = unit_of_work.general_reports.read_version(
+                command.report_id,
+                principal_id=authorization.principal.principal_id,
+                version_id=command.version_id,
+                version_number=command.version_number,
+            )
+        except ReportIntegrityError:
+            # The stored bytes no longer match their digests: refused, never
+            # returned. A server fault, not something the caller can correct.
+            refusal = InternalError()
+        else:
+            if stored is not None and (
+                command.include_withdrawn or stored.root.lifecycle_state is LifecycleState.ACTIVE
+            ):
+                return _Result(
+                    payload=_general_read_payload(
+                        stored,
+                        include_body=command.include_body,
+                        include_manifest=command.include_manifest,
+                    ),
+                    disclosure=unenrolled_disclosure(authorization.at),
+                )
+            # Foreign, nonexistent and (without `include_withdrawn`) withdrawn
+            # all answer exactly as a missing pipeline artifact does.
+            refusal = NotFoundError(SafeDetail.ARTIFACT_ID)
+        raise refusal
+
     def _reports_read(
         self,
         unit_of_work: UnitOfWork,
         authorization: Authorization,
         command: ReadIntelligenceArtifact,
     ) -> _Result:
+        if command.standalone:
+            return self._reports_read_standalone(unit_of_work, authorization, command)
         artifact = read_artifact(
             self._intelligence_store(unit_of_work, authorization),  # type: ignore[arg-type]
             principal_id=authorization.principal.principal_id,
@@ -17153,6 +17334,7 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.REPORTS_RESOLVE_SET: ApplicationService._reports_resolve_set,
         Capability.REPORTS_TYPES_CREATE: ApplicationService._reports_types_create,
         Capability.REPORTS_TYPES_LIST: ApplicationService._reports_types_list,
+        Capability.REPORTS_PUBLISH: ApplicationService._reports_publish,
         Capability.ENTITIES_SEARCH: ApplicationService._entities_search,
         Capability.ENTITIES_GET: ApplicationService._entities_get,
         Capability.ENTITIES_RESOLVE: ApplicationService._entities_resolve,

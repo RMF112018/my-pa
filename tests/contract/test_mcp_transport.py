@@ -147,7 +147,7 @@ def test_tools_list_publishes_exactly_the_local_capability_set(
         for capability in HANDLER_CAPABILITIES
         if capability not in _AUTHENTICATED_CLIENT_CAPABILITIES
     ]
-    assert len(listed.tools) == 235
+    assert len(listed.tools) == 236
     assert all(tool.description for tool in listed.tools), "a tool has no description"
 
 
@@ -156,7 +156,7 @@ def test_handler_unwired_capabilities_publish_no_mcp_tools() -> None:
     assert {tool.name for tool in TOOLS} == {
         capability.value for capability in HANDLER_CAPABILITIES
     }
-    assert len(TOOLS) == 240
+    assert len(TOOLS) == 241
     assert not {capability.value for capability in HANDLER_UNWIRED_CAPABILITIES} & {
         tool.name for tool in TOOLS
     }
@@ -871,3 +871,52 @@ def test_the_server_is_composed_with_the_principal_it_is_given() -> None:
 def test_a_permitted_purpose_exists_for_every_capability() -> None:
     """Guard the fixtures above: a capability with no permitted purpose is untestable."""
     assert {a_permitted_purpose(c) for c in Capability}
+
+
+def test_reports_publish_and_the_extended_read_publish_their_exact_schemas() -> None:
+    """Reports Modernization WP02: the canonical catalog entries, read off `TOOLS`.
+
+    `reports.publish` is a write that is neither read-only nor destructive, and
+    its payload names only caller fields: nothing the server derives. The one
+    `reports.read` tool takes both identifier planes.
+    """
+    tools = {tool.name: tool for tool in TOOLS}
+    publish = tools[Capability.REPORTS_PUBLISH.value]
+    assert publish.annotations is not None
+    assert publish.annotations.read_only_hint is False
+    assert publish.annotations.destructive_hint is False
+    payload = publish.input_schema["properties"]["payload"]
+    assert payload["required"] == ["title", "content", "idempotency_key"]
+    assert payload["additionalProperties"] is False
+    assert set(payload["properties"]) == {
+        "title",
+        "content",
+        "idempotency_key",
+        "type",
+        "topics",
+        "tags",
+        "summary",
+        "report_date",
+        "coverage_period",
+        "associations",
+        "metadata",
+        "client_intent_id",
+    }
+    content = payload["properties"]["content"]
+    assert content["properties"]["format"]["enum"] == ["markdown", "text", "json", "mixed"]
+    assert content["properties"]["encoding"]["enum"] == ["identity"]
+    assert content["additionalProperties"] is False
+    read = tools[Capability.REPORTS_READ.value]
+    assert read.annotations is not None
+    assert read.annotations.read_only_hint is True
+    read_payload = read.input_schema["properties"]["payload"]
+    assert read_payload["required"] == ["report_id"]
+    assert read_payload["properties"]["report_id"]["pattern"] == "^(rpt|grpt)_[A-Za-z0-9]{8,64}$"
+    assert set(read_payload["properties"]) == {
+        "report_id",
+        "include_body",
+        "version_id",
+        "version_number",
+        "include_manifest",
+        "include_withdrawn",
+    }

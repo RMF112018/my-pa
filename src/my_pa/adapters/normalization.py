@@ -48,6 +48,7 @@ delivered — but the number they enforce is one number.
 
 from __future__ import annotations
 
+import dataclasses
 from base64 import b64decode
 from binascii import Error as BinasciiError
 from collections.abc import Callable, Mapping
@@ -59,6 +60,7 @@ from types import MappingProxyType
 from typing import Any, Final
 
 from my_pa.application.commands import (
+    REPORT_PUBLISH_PIPELINE_FIELDS,
     AcknowledgeConstraintSync,
     AddEntityAddress,
     AddEntityAlias,
@@ -201,6 +203,7 @@ from my_pa.application.commands import (
     PreviewEntitySplit,
     ProposeRelationshipMemory,
     PublishConstraint,
+    PublishGeneralReport,
     PullGoodNotesWork,
     PutCanvasWorkspace,
     ReadCapture,
@@ -1822,6 +1825,40 @@ def _read_intelligence_artifact(payload: Mapping[str, Any]) -> Command:
     return ReadIntelligenceArtifact(**payload)
 
 
+#: The caller fields of `reports.publish`, read off the command so the two
+#: cannot disagree.
+_PUBLISH_FIELDS: Final = frozenset(item.name for item in dataclasses.fields(PublishGeneralReport))
+
+
+def _publish_general_report(payload: Mapping[str, Any]) -> Command:
+    """`reports.publish`: refuse the pipeline plane's fields by name, then any unknown one.
+
+    A pipeline field names the token the pipeline plane would have refused it
+    under, so a caller that sent a `reports.commit` payload here learns which
+    field does not belong. Any other key the command does not declare --
+    `principal_id`, `report_id`, `version_id`, `manifest_sha256`, `receipt_id`,
+    `verification`, a timestamp -- is a bare `invalid_request`, exactly what an
+    unknown field is on every other capability. JSON arrays become the tuples
+    the command declares.
+    """
+    for name, detail in REPORT_PUBLISH_PIPELINE_FIELDS.items():
+        if name in payload:
+            raise InvalidRequestError(detail)
+    if not set(payload) <= _PUBLISH_FIELDS:
+        raise InvalidRequestError()
+    converted = dict(payload)
+    for name, detail in (
+        ("topics", SafeDetail.TOPICS),
+        ("tags", SafeDetail.TAGS),
+        ("associations", SafeDetail.ASSOCIATIONS),
+    ):
+        if name in converted:
+            if not isinstance(converted[name], list):
+                raise InvalidRequestError(detail)
+            converted[name] = tuple(converted[name])
+    return PublishGeneralReport(**converted)
+
+
 def _latest_intelligence_artifact(payload: Mapping[str, Any]) -> Command:
     converted = dict(payload)
     if converted.get("stage") is not None:
@@ -2775,6 +2812,7 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.REPORTS_RESOLVE_SET: _resolve_intelligence_set,
         Capability.REPORTS_TYPES_CREATE: _create_report_type,
         Capability.REPORTS_TYPES_LIST: _list_report_types,
+        Capability.REPORTS_PUBLISH: _publish_general_report,
         Capability.ENTITIES_SEARCH: _search_entities,
         Capability.ENTITIES_GET: _get_entity,
         Capability.ENTITIES_RESOLVE: _resolve_entity,

@@ -227,6 +227,7 @@ from my_pa.application.commands import (
     PreviewEntitySplit,
     ProposeRelationshipMemory,
     PublishConstraint,
+    PublishGeneralReport,
     PullGoodNotesWork,
     PutCanvasWorkspace,
     ReadCapture,
@@ -976,6 +977,11 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "display_name": "HTTP weekly digest",
         },
         Capability.REPORTS_TYPES_LIST: {"stage": "reporter"},
+        Capability.REPORTS_PUBLISH: {
+            "title": "HTTP standalone report",
+            "content": {"format": "markdown", "body": "# HTTP\n\nSynthetic body."},
+            "idempotency_key": "http-publish",
+        },
         # The relationship-intelligence entity plane (WP-RI-05). `person` and
         # `organization` are staged once per scene, so the payload table and the
         # command table below name the same two entities rather than each
@@ -2302,6 +2308,11 @@ def commands_for(
             display_name="HTTP weekly digest",
         ),
         Capability.REPORTS_TYPES_LIST: ListReportTypes(stage=IntelligenceStage.REPORTER),
+        Capability.REPORTS_PUBLISH: PublishGeneralReport(
+            title="HTTP standalone report",
+            content={"format": "markdown", "body": "# HTTP\n\nSynthetic body."},
+            idempotency_key="http-publish",
+        ),
         # The entity plane. `person` is the same staged entity the payload table
         # names, because `staged_entities` answers with the pair already in the
         # world: two tables each staging their own would be comparing two

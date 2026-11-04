@@ -216,7 +216,7 @@
     },
     "reports.read": {
       "purpose": "report_read",
-      "payloadFields": ["report_id", "include_body"],
+      "payloadFields": ["report_id", "include_body", "version_id", "version_number", "include_manifest", "include_withdrawn"],
       "probe": { "report_id": "rpt_aaaaaaaa11111111" }
     },
     "reports.latest": {

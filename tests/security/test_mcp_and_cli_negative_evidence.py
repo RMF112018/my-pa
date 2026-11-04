@@ -383,6 +383,7 @@ SCOPED_CAPABILITIES = [
         Capability.REPORTS_RESOLVE_SET,
         Capability.REPORTS_TYPES_CREATE,
         Capability.REPORTS_TYPES_LIST,
+        Capability.REPORTS_PUBLISH,
         # The relationship-intelligence entity plane (WP-RI-05) is scopeless for
         # the reason the two planes above are: an entity belongs to no `src_…`
         # and no `enr_…`, so there is no scope for a request to name and none to

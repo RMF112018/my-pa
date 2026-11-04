@@ -76,7 +76,7 @@ _MEETINGS = _MEETING_READS | _MEETING_WRITES
 
 def test_policy_covers_every_public_capability_exactly_once() -> None:
     assert set(CHATLLM_CAPABILITY_POLICY) == set(Capability)
-    assert len(CHATLLM_CAPABILITY_POLICY) == 240
+    assert len(CHATLLM_CAPABILITY_POLICY) == 241
     assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v11"
 
 
@@ -108,8 +108,10 @@ def test_classification_counts_match_the_approved_plan() -> None:
     # profile bump. Record lineage S3.1's 3 confirms and the related read too,
     # 37 -> 41; no profile bump. Record lineage P1 (operator directive
     # 2026-10-26) makes the decision: 34 to data, 5 to excluded, 41 -> 2, and
-    # the profile bumps to v10.
-    assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 2
+    # the profile bumps to v10. Reports Modernization WP02 adds `reports.publish`
+    # here, withheld until its remote registration makes it data-class, 2 -> 3;
+    # no data-class member moves, so no profile bump.
+    assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 3
     assert counts[ChatLLMCapabilityClass.RETIRED] == 0
 
 

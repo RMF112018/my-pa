@@ -174,7 +174,10 @@ def test_non_lineage_tool_annotations_are_unchanged() -> None:
     # CPM Workbench S5b-2: the 7 Schedule names are pinned by their own catalog
     # test (`tests/contract/test_schedule_facade_catalog.py`).
     schedule = frozenset(name for name in _tools() if name.startswith("schedule_"))
-    others = frozenset(_tools()) - plane - schedule
+    # Reports Modernization WP02: `reports.publish` is new and pinned by
+    # `tests/contract/test_mcp_transport.py`; the extended `reports.read` keeps
+    # its annotations and stays in the digest.
+    others = frozenset(_tools()) - plane - schedule - {Capability.REPORTS_PUBLISH.value}
     assert len(others) == 192
     for name in sorted(others):
         capability = Capability(name)

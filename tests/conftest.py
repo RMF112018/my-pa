@@ -38,7 +38,7 @@ import os
 import re
 import stat
 import sys
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -99,6 +99,7 @@ from my_pa.contracts.ports import (
     EntityMutationReceipt,
     EntitySummary,
     EntityWriteRequest,
+    GeneralReportRepository,
     GoodNotesProposalAdmission,
     GoodNotesProposalConflictError,
     GoodNotesSemanticRepository,
@@ -141,6 +142,8 @@ from my_pa.contracts.ports import (
     RelationshipMemoryProposalRepository,
     RelationshipMemoryRepository,
     RelationshipWriteRequest,
+    ReportAssociationTargetNotFoundError,
+    ReportIdempotencyConflictError,
     RepositoryFailureError,
     ReviewDecisionRequest,
     ReviewRepository,
@@ -403,6 +406,26 @@ from my_pa.domain.relationship.normalization import (
     is_normalized_identifier,
     is_normalized_name,
     normalize_name,
+)
+from my_pa.domain.reports.manifest import build_initial_manifest
+from my_pa.domain.reports.publication import (
+    PublicationReceipt,
+    PublicationRequest,
+    PublicationResult,
+)
+from my_pa.domain.reports.records import (
+    ReportRootRecord,
+    ReportVersionRecord,
+    StoredReportVersion,
+)
+from my_pa.domain.reports.values import ReportAssociation
+from my_pa.domain.reports.vocabulary import (
+    AssociationTargetKind,
+    AssociationVerification,
+    ChangeKind,
+    LifecycleState,
+    ReceiptOutcome,
+    StorageKind,
 )
 from my_pa.domain.search.query import RankCategory, SearchMatch, SearchRequest
 from my_pa.domain.situation.continuity import (
@@ -902,6 +925,12 @@ class World:
     )
     goodnotes_rasters: dict[tuple[str, str], GoodNotesPageRaster] = field(default_factory=dict)
     intelligence: InMemoryIntelligenceStore = field(default_factory=InMemoryIntelligenceStore)
+    #: The general report plane (Reports Modernization WP02): stored results by
+    #: (principal, publish key) and stored versions by (principal, report id).
+    general_report_receipts: dict[tuple[str, str], PublicationResult] = field(default_factory=dict)
+    general_report_versions: dict[tuple[str, str], StoredReportVersion] = field(
+        default_factory=dict
+    )
     #: The relationship-intelligence entity plane. Flat lists for the reason
     #: every other plane on `World` is one: the fake's whole job is the
     #: partition predicate, and a list a filter runs over is the clearest place
@@ -9629,6 +9658,152 @@ class _UnmodelledPlane:
         raise NotImplementedError(f"the FAST world does not model {self._name}.{item}")
 
 
+class _GeneralReports(GeneralReportRepository):
+    """`GeneralReportRepository` over a `World`: the partition rule and the replay rule.
+
+    The SQL repository is proved against PostgreSQL in
+    `tests/database/test_reports_general_persistence.py`; this fake exists so the
+    transport and policy suites can reach `reports.publish` and the standalone
+    `reports.read` at all. Only a `standalone_report` target resolves here.
+    """
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def publish(
+        self,
+        request: PublicationRequest,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        recorded_at: datetime,
+        correlation_id: str,
+        audit_id: str,
+    ) -> PublicationResult:
+        stored = self._world.general_report_receipts.get((principal_id, idempotency_key))
+        if stored is not None:
+            if stored.receipt.intent_digest != request.intent_digest:
+                raise ReportIdempotencyConflictError()
+            return replace(stored, replayed=True)
+        resolved = self.resolve_association_targets(
+            [(item.target_kind, item.target_ref) for item in request.associations],
+            principal_id=principal_id,
+        )
+        associations: list[ReportAssociation] = []
+        for item in request.associations:
+            if item.target_kind is AssociationTargetKind.EXTERNAL_SOURCE:
+                associations.append(item.as_stored(AssociationVerification.ASSERTED))
+            elif (item.target_kind, item.target_ref) in resolved:
+                associations.append(item.as_stored(AssociationVerification.VERIFIED))
+            else:
+                raise ReportAssociationTargetNotFoundError()
+        report_id = issue_identifier(IdKind.REPORT)
+        version_id = issue_identifier(IdKind.REPORT_VERSION)
+        content_id = issue_identifier(IdKind.REPORT_CONTENT)
+        manifest = build_initial_manifest(
+            request,
+            report_id=report_id,
+            version_id=version_id,
+            content_id=content_id,
+            associations=associations,
+            recorded_at=recorded_at,
+        )
+        result = PublicationResult(
+            receipt=PublicationReceipt(
+                receipt_id=issue_identifier(IdKind.REPORT_RECEIPT),
+                report_id=report_id,
+                version_id=version_id,
+                version_number=1,
+                idempotency_key=idempotency_key,
+                intent_digest=request.intent_digest,
+                outcome=ReceiptOutcome.APPLIED,
+                issued_at=recorded_at,
+                correlation_id=correlation_id,
+                audit_id=audit_id,
+            ),
+            content_id=content_id,
+            format=request.content.format,
+            decoded_sha256=request.content.decoded_sha256,
+            decoded_byte_count=request.content.decoded_byte_count,
+            canonical_sha256=request.content.canonical_sha256,
+            manifest_sha256=manifest.sha256,
+            recorded_at=recorded_at,
+            replayed=False,
+        )
+        self._world.general_report_versions[(principal_id, report_id)] = StoredReportVersion(
+            root=ReportRootRecord(
+                report_id=report_id,
+                created_at=recorded_at,
+                head_version_id=version_id,
+                head_version_number=1,
+                lifecycle_state=LifecycleState.ACTIVE,
+                lifecycle_revision=0,
+            ),
+            version=ReportVersionRecord(
+                version_id=version_id,
+                report_id=report_id,
+                version_number=1,
+                supersedes_version_id=None,
+                change_kind=ChangeKind.INITIAL,
+                title=request.title,
+                report_type=request.report_type,
+                topics=request.topics,
+                tags=request.tags,
+                summary=request.summary,
+                report_date=request.report_date,
+                coverage_start=request.coverage_start,
+                coverage_end=request.coverage_end,
+                metadata=dict(request.metadata),
+                change_reason=None,
+                content_id=content_id,
+                manifest_sha256=manifest.sha256,
+                recorded_at=recorded_at,
+            ),
+            content_id=content_id,
+            storage_kind=StorageKind.INLINE,
+            content=request.content,
+            manifest=dict(manifest.document),
+            associations=tuple(associations),
+        )
+        self._world.general_report_receipts[(principal_id, idempotency_key)] = result
+        return result
+
+    def find_publish_receipt(
+        self, idempotency_key: str, *, principal_id: str
+    ) -> PublicationResult | None:
+        return self._world.general_report_receipts.get((principal_id, idempotency_key))
+
+    def read_version(
+        self,
+        report_id: str,
+        *,
+        principal_id: str,
+        version_id: str | None = None,
+        version_number: int | None = None,
+    ) -> StoredReportVersion | None:
+        stored = self._world.general_report_versions.get((principal_id, report_id))
+        if stored is None:
+            return None
+        if version_id is not None and version_id != stored.version.version_id:
+            return None
+        if version_number is not None and version_number != stored.version.version_number:
+            return None
+        return stored
+
+    def resolve_association_targets(
+        self,
+        targets: Sequence[tuple[AssociationTargetKind, str]],
+        *,
+        principal_id: str,
+    ) -> frozenset[tuple[AssociationTargetKind, str]]:
+        return frozenset(
+            (kind, ref)
+            for kind, ref in targets
+            if kind is AssociationTargetKind.STANDALONE_REPORT
+            and (principal_id, ref) in self._world.general_report_versions
+        )
+
+
 class FakeUnitOfWork(UnitOfWork):
     """One transaction over a `World`, counting how it ended."""
 
@@ -9765,6 +9940,11 @@ class FakeUnitOfWork(UnitOfWork):
 
     def intelligence_for(self, principal_id: str) -> InMemoryIntelligenceStore:
         return self._world.intelligence
+
+    @property
+    def general_reports(self) -> GeneralReportRepository:
+        """The general report plane over this `World` (Reports Modernization WP02)."""
+        return _GeneralReports(self._world)
 
     @property
     def entities(self) -> EntitiesRepository:

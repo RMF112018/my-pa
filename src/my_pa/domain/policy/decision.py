@@ -469,6 +469,11 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         # The report type registry is the acting Principal's own partition too.
         Capability.REPORTS_TYPES_CREATE,
         Capability.REPORTS_TYPES_LIST,
+        # The general report plane: a standalone report is the acting
+        # Principal's own root and carries no `source_id` or `enrollment_id`.
+        # Its associations are verified against the same partition by the
+        # repository, never against a source grant.
+        Capability.REPORTS_PUBLISH,
         # The entity plane's partition, not a source. An entity carries no
         # `enrollment_id` and no grant a requested scope could be compared
         # against -- it is the Principal's own record of a person, not an

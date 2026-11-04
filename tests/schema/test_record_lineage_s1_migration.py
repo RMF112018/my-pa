@@ -372,6 +372,8 @@ def test_at_vocabulary_adds_exactly_the_s1_names() -> None:
         - S31_CAPABILITIES
         # The CPM Workbench S5b-2 names too, that revision's (621ef6786c64).
         - S5B2_CAPABILITIES
+        # And Reports Modernization WP02's `reports.publish`, the head's (4c37731671fc).
+        - {"reports.publish"}
     )
     native = {capability.value for capability in NativeSourceCapability}
     assert set(at) == declared | native | S1_CAPABILITIES

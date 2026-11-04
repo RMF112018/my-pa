@@ -924,6 +924,8 @@ _POST_KLP_CAPABILITIES: Final = frozenset(
     {
         "reports.types.create",
         "reports.types.list",
+        # Reports Modernization WP02.
+        "reports.publish",
         # Record lineage S1, the Issue plane.
         "issues.create",
         "issues.read",

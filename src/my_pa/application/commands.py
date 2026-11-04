@@ -46,7 +46,13 @@ from typing import Any, ClassVar, Final, get_type_hints
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from my_pa.application import goodnotes_note_unit_contract as _note_unit
-from my_pa.application.errors import InvalidRequestError, SafeDetail, invalid_choice
+from my_pa.application.errors import (
+    ApplicationError,
+    InvalidRequestError,
+    SafeDetail,
+    UnsupportedError,
+    invalid_choice,
+)
 from my_pa.application.goodnotes_pull_orchestration import MAX_PULL_BATCH_SIZE
 from my_pa.application.identity_correction import ConflictChoice
 from my_pa.application.issue_handoffs import (
@@ -313,6 +319,23 @@ from my_pa.domain.relationship.memory import (
 from my_pa.domain.relationship.proposal_payload import (
     EntityProposalKind,
     discriminated_payload_branches,
+)
+from my_pa.domain.reports.content import INLINE_CONTENT_MAX_BYTES, validate_content
+from my_pa.domain.reports.errors import ReportValidationError
+from my_pa.domain.reports.publication import (
+    CLIENT_INTENT_ID_PATTERN,
+    PublicationRequest,
+    RequestedAssociation,
+)
+from my_pa.domain.reports.vocabulary import (
+    MAX_ASSOCIATIONS_PER_VERSION,
+    MAX_SUMMARY_CHARACTERS,
+    MAX_TERM_CHARACTERS,
+    MAX_TERMS,
+    MAX_TITLE_CHARACTERS,
+    AssociationTargetKind,
+    ContentEncoding,
+    ContentFormat,
 )
 from my_pa.domain.schedule import (
     InvalidScheduleSeriesNameError,
@@ -5295,17 +5318,93 @@ RecordIntelligenceRunState.mcp_payload_properties = MappingProxyType(  # type: i
 
 @dataclass(frozen=True, slots=True)
 class ReadIntelligenceArtifact:
-    """`reports.read`: exact immutable artifact by ID, Principal-scoped."""
+    """`reports.read`: exact immutable artifact by ID, Principal-scoped.
+
+    One command for both planes, chosen by the `report_id` prefix, because the
+    capability publishes one tool and one schema. An `rpt_` identifier is the
+    pipeline artifact plane, read exactly as before this extension: the same
+    fields, the same answer, and the four standalone selectors refused as the
+    unknown fields they were (a bare `invalid_request`). A `grpt_` identifier
+    is a standalone report (`reports.publish`): the head version by default,
+    or exactly one of `version_id` (`grver_`) and `version_number` (>= 1);
+    `include_manifest` adds the stored manifest; a report that is not
+    `active` reads as not found unless `include_withdrawn` is true.
+    """
 
     capability: ClassVar[Capability] = Capability.REPORTS_READ
 
     report_id: str
     include_body: bool = True
+    version_id: str | None = None
+    version_number: int | None = None
+    include_manifest: bool = False
+    include_withdrawn: bool = False
 
     def __post_init__(self) -> None:
+        # `object`: a transport hands the identifier in unchecked.
+        named: object = self.report_id
+        if isinstance(named, str) and named.startswith(f"{IdKind.REPORT}_"):
+            _identifier(self.report_id, IdKind.REPORT, SafeDetail.ARTIFACT_ID)
+            if not isinstance(self.include_body, bool):
+                raise InvalidRequestError(SafeDetail.INCLUDE_BODY)
+            if self.version_id is not None and self.version_number is not None:
+                raise InvalidRequestError(SafeDetail.VERSION_ID, SafeDetail.VERSION_NUMBER)
+            if self.version_id is not None:
+                _identifier(self.version_id, IdKind.REPORT_VERSION, SafeDetail.VERSION_ID)
+            if self.version_number is not None and (
+                type(self.version_number) is not int or self.version_number < 1
+            ):
+                raise InvalidRequestError(SafeDetail.VERSION_NUMBER)
+            if not isinstance(self.include_manifest, bool):
+                raise InvalidRequestError(SafeDetail.INCLUDE_MANIFEST)
+            if not isinstance(self.include_withdrawn, bool):
+                raise InvalidRequestError(SafeDetail.INCLUDE_WITHDRAWN)
+            return
         _identifier(self.report_id, IdKind.INTELLIGENCE_ARTIFACT, SafeDetail.ARTIFACT_ID)
         if not isinstance(self.include_body, bool):
             raise InvalidRequestError(SafeDetail.SELECTOR)
+        if (
+            self.version_id is not None
+            or self.version_number is not None
+            or self.include_manifest is not False
+            or self.include_withdrawn is not False
+        ):
+            # The legacy plane never had these fields; refused as it refused them.
+            raise InvalidRequestError()
+
+    @property
+    def standalone(self) -> bool:
+        """Whether this reads the general (standalone) report plane."""
+        return self.report_id.startswith(f"{IdKind.REPORT}_")
+
+
+ReadIntelligenceArtifact.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {
+        "report_id": {
+            "pattern": "^(rpt|grpt)_[A-Za-z0-9]{8,64}$",
+            "description": (
+                "rpt_ reads a pipeline artifact (reports.commit); grpt_ reads a "
+                "standalone report (reports.publish)."
+            ),
+        },
+        "version_id": {
+            "pattern": "^grver_[A-Za-z0-9]{8,64}$",
+            "description": "grpt_ only: one exact version. Not with version_number.",
+        },
+        "version_number": {
+            "minimum": 1,
+            "description": "grpt_ only: one version by number. Not with version_id.",
+        },
+        "include_manifest": {
+            "description": "grpt_ only: add the version's stored manifest.",
+        },
+        "include_withdrawn": {
+            "description": (
+                "grpt_ only: also read an archived or trashed report, which is otherwise not found."
+            ),
+        },
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -5523,6 +5622,264 @@ class ListReportTypes:
     def __post_init__(self) -> None:
         if self.stage is not None and not isinstance(self.stage, IntelligenceStage):
             raise invalid_choice(SafeDetail.STAGE, IntelligenceStage)
+
+
+#: The pipeline plane's fields `reports.publish` refuses by name, each with the
+#: token its refusal carries. A standalone report has no cycle run, stage,
+#: producer, focus area or source lane (spec C section 4.3); naming one is a
+#: request for the pipeline plane sent to the wrong capability.
+REPORT_PUBLISH_PIPELINE_FIELDS: Final[Mapping[str, SafeDetail]] = MappingProxyType(
+    {
+        "cycle_run_id": SafeDetail.CYCLE_RUN_ID,
+        "stage": SafeDetail.STAGE,
+        "artifact_kind": SafeDetail.ARTIFACT_KIND,
+        "producer": SafeDetail.SELECTOR,
+        "producer_task_id": SafeDetail.SELECTOR,
+        "producer_task_name": SafeDetail.SELECTOR,
+        "focus_area": SafeDetail.FOCUS_AREA_ID,
+        "focus_area_id": SafeDetail.FOCUS_AREA_ID,
+        "source_lane": SafeDetail.SOURCE_LANE,
+    }
+)
+
+#: The caller fields of one association, the only keys it may carry.
+_ASSOCIATION_KEYS: Final = frozenset(
+    {"target_kind", "target_ref", "relation", "target_version_ref"}
+)
+
+#: Which public token a general-report domain refusal names, by the domain's
+#: field (the part before the first `.`). The domain names fields and rules,
+#: never values, so this reads the field and drops the rule.
+_REPORT_REFUSAL_DETAILS: Final[Mapping[str, SafeDetail]] = MappingProxyType(
+    {
+        "title": SafeDetail.TITLE,
+        "content": SafeDetail.CONTENT,
+        "report_type": SafeDetail.REPORT_TYPE,
+        "type": SafeDetail.REPORT_TYPE,
+        "topics": SafeDetail.TOPICS,
+        "tags": SafeDetail.TAGS,
+        "summary": SafeDetail.SUMMARY,
+        "report_date": SafeDetail.REPORT_DATE,
+        "coverage_start": SafeDetail.COVERAGE_PERIOD,
+        "coverage_end": SafeDetail.COVERAGE_PERIOD,
+        "coverage_period": SafeDetail.COVERAGE_PERIOD,
+        "associations": SafeDetail.ASSOCIATIONS,
+        "target_kind": SafeDetail.ASSOCIATIONS,
+        "target_ref": SafeDetail.ASSOCIATIONS,
+        "target_version_ref": SafeDetail.ASSOCIATIONS,
+        "relation": SafeDetail.ASSOCIATIONS,
+        "verification": SafeDetail.ASSOCIATIONS,
+        "metadata": SafeDetail.METADATA,
+        "client_intent_id": SafeDetail.CLIENT_INTENT_ID,
+        "idempotency_key": SafeDetail.IDEMPOTENCY_KEY,
+    }
+)
+
+
+def report_refusal(error: ReportValidationError) -> ApplicationError:
+    """The public error a general-report domain refusal is.
+
+    `gzip+base64` is a known encoding this build cannot decode yet (WP05), so
+    it is `unsupported` on `content_encoding` rather than malformed. A
+    manifest over its bound is caused by the optional fields that fill it, so
+    it names `metadata` and the byte bound. Anything else names its field.
+    """
+    if error.code == "unsupported_encoding":
+        return UnsupportedError(SafeDetail.CONTENT_ENCODING)
+    if error.code == "manifest_too_large":
+        return InvalidRequestError(SafeDetail.METADATA, SafeDetail.MAX_BYTES)
+    detail = _REPORT_REFUSAL_DETAILS.get(error.field.split(".", 1)[0])
+    if detail is SafeDetail.CONTENT and error.code == "too_large":
+        return InvalidRequestError(SafeDetail.CONTENT, SafeDetail.MAX_BYTES)
+    return InvalidRequestError() if detail is None else InvalidRequestError(detail)
+
+
+def _coverage_moment(value: object) -> datetime:
+    if not isinstance(value, str):
+        raise InvalidRequestError(SafeDetail.COVERAGE_PERIOD)
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        moment = None
+    if moment is None or moment.tzinfo is None or moment.tzinfo.utcoffset(moment) is None:
+        raise InvalidRequestError(SafeDetail.COVERAGE_PERIOD)
+    return moment
+
+
+def _requested_association(value: object) -> RequestedAssociation:
+    if not isinstance(value, dict) or not set(value) <= _ASSOCIATION_KEYS:
+        raise InvalidRequestError(SafeDetail.ASSOCIATIONS)
+    kind = value.get("target_kind")
+    if not isinstance(kind, str):
+        raise invalid_choice(SafeDetail.ASSOCIATIONS, AssociationTargetKind)
+    try:
+        target_kind = AssociationTargetKind(kind)
+    except ValueError:
+        raise invalid_choice(SafeDetail.ASSOCIATIONS, AssociationTargetKind) from None
+    return RequestedAssociation(
+        target_kind=target_kind,
+        target_ref=value.get("target_ref"),  # type: ignore[arg-type]
+        relation=value.get("relation"),  # type: ignore[arg-type]
+        target_version_ref=value.get("target_version_ref"),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class PublishGeneralReport:
+    """`reports.publish`: publish a standalone report from a title and a content object.
+
+    Only `title` and `content` are required: `content` is `{"format":
+    "markdown"|"text", "body"}`, `{"format": "json", "data"}` or `{"format":
+    "mixed", "body", "data"}`, at most 512 KiB decoded; `encoding` may be
+    omitted or `identity`. The server derives the owner, the report and
+    version identifiers, version 1, every timestamp and digest, the manifest
+    and the receipt; no cycle run, stage, producer, focus area or source lane is
+    accepted. Optional `type` is an open lower_snake token (no registration).
+    Associations to a project, entity, standalone report or intelligence report
+    must name one you own, else the publish is `not_found`; an
+    `external_source` is stored as asserted. A retry of the same request replays
+    the original receipt; set `client_intent_id` to publish an identical report
+    again deliberately.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_PUBLISH
+
+    title: str
+    content: dict[str, object] = field(repr=False)
+    idempotency_key: str
+    type: str | None = None
+    topics: tuple[str, ...] = ()
+    tags: tuple[str, ...] = ()
+    summary: str | None = None
+    report_date: str | None = None
+    coverage_period: dict[str, object] | None = None
+    associations: tuple[dict[str, object], ...] = ()
+    metadata: dict[str, object] | None = field(default=None, repr=False)
+    client_intent_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _idempotency_key(self.idempotency_key)
+        # Built once here so an invalid request never reaches a handler; the
+        # handler builds the same value again (`publication_request`).
+        publication_request(self)
+
+
+def publication_request(command: PublishGeneralReport) -> PublicationRequest:
+    """The domain request `command` states, or the public refusal of it."""
+    if command.report_date is not None:
+        _iso_date(command.report_date, SafeDetail.REPORT_DATE)
+    coverage_start: datetime | None = None
+    coverage_end: datetime | None = None
+    if command.coverage_period is not None:
+        period: object = command.coverage_period
+        if not isinstance(period, dict) or not set(period) <= {"start", "end"} or not period:
+            raise InvalidRequestError(SafeDetail.COVERAGE_PERIOD)
+        if period.get("start") is not None:
+            coverage_start = _coverage_moment(period["start"])
+        if period.get("end") is not None:
+            coverage_end = _coverage_moment(period["end"])
+    associations: object = command.associations
+    if not isinstance(associations, tuple | list):
+        raise InvalidRequestError(SafeDetail.ASSOCIATIONS)
+    if len(associations) > MAX_ASSOCIATIONS_PER_VERSION:
+        raise InvalidRequestError(SafeDetail.ASSOCIATIONS)
+    try:
+        return PublicationRequest(
+            title=command.title,
+            content=validate_content(command.content),
+            report_type=command.type,
+            topics=command.topics,
+            tags=command.tags,
+            summary=command.summary,
+            report_date=None
+            if command.report_date is None
+            else date.fromisoformat(command.report_date),
+            coverage_start=coverage_start,
+            coverage_end=coverage_end,
+            associations=tuple(_requested_association(item) for item in associations),
+            metadata={} if command.metadata is None else command.metadata,
+            client_intent_id=command.client_intent_id,
+        )
+    except ReportValidationError as error:
+        refusal = report_refusal(error)
+    # Raised outside the handler, so the domain refusal is not left in `__context__`.
+    raise refusal
+
+
+_CONTENT_SCHEMA: Final[Mapping[str, Any]] = MappingProxyType(
+    {
+        "type": "object",
+        "description": (
+            "markdown|text: {format, body}; json: {format, data}; mixed: {format, body, "
+            "data}. At most 512 KiB decoded. encoding: omit or identity (gzip+base64 is "
+            "not supported yet)."
+        ),
+        "properties": {
+            "format": {"type": "string", "enum": [member.value for member in ContentFormat]},
+            "encoding": {"type": "string", "enum": [ContentEncoding.IDENTITY.value]},
+            "body": {
+                "type": "string",
+                "minLength": 1,
+                "description": f"UTF-8 text, at most {INLINE_CONTENT_MAX_BYTES} bytes.",
+            },
+            "data": {"description": "Any JSON value but null (json, mixed)."},
+        },
+        "required": ["format"],
+        "additionalProperties": False,
+    }
+)
+
+_TERM_ARRAY: Final[Mapping[str, Any]] = MappingProxyType(
+    {
+        "maxItems": MAX_TERMS,
+        "items": {"type": "string", "minLength": 1, "maxLength": MAX_TERM_CHARACTERS},
+    }
+)
+
+PublishGeneralReport.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {
+        "title": {"minLength": 1, "maxLength": MAX_TITLE_CHARACTERS},
+        "content": dict(_CONTENT_SCHEMA),
+        "type": {
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "description": "An open report type token; no registration needed.",
+        },
+        "topics": dict(_TERM_ARRAY),
+        "tags": dict(_TERM_ARRAY),
+        "summary": {"minLength": 1, "maxLength": MAX_SUMMARY_CHARACTERS},
+        "coverage_period": {
+            "properties": {
+                "start": {"type": "string", "format": "date-time"},
+                "end": {"type": "string", "format": "date-time"},
+            },
+            "additionalProperties": False,
+        },
+        "associations": {
+            "maxItems": MAX_ASSOCIATIONS_PER_VERSION,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "target_kind": {
+                        "type": "string",
+                        "enum": [member.value for member in AssociationTargetKind],
+                    },
+                    "target_ref": {"type": "string", "minLength": 1, "maxLength": 512},
+                    "relation": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+                    "target_version_ref": {"type": "string", "minLength": 1, "maxLength": 512},
+                },
+                "required": ["target_kind", "target_ref", "relation"],
+                "additionalProperties": False,
+            },
+        },
+        "metadata": {"description": "A bounded JSON object of your own keys."},
+        "client_intent_id": {
+            "pattern": CLIENT_INTENT_ID_PATTERN.pattern.replace("\\A", "^").replace("\\Z", "$"),
+            "description": (
+                "Optional. A different value makes an otherwise identical request a new report."
+            ),
+        },
+    }
+)
 
 
 #: Every command there is. A union rather than a base class, so adding a
@@ -15112,6 +15469,7 @@ type Command = (
     | ResolveIntelligenceSet
     | CreateReportType
     | ListReportTypes
+    | PublishGeneralReport
     | SearchEntities
     | GetEntity
     | ResolveEntity

@@ -55,6 +55,8 @@ PREVIOUS: Final = "6c2306330ceb"
 HEAD: Final = "4c37731671fc"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20261028_621ef6786c64_cpm_workbench_vocabulary.py"
+#: The head that restates the capability vocabulary after this one (WP02).
+GENERAL_REPORT_PLANE_MIGRATION: Final = MIGRATIONS / "20261104_4c37731671fc_general_report_plane.py"
 CAPABILITY_SOURCE: Final = MIGRATIONS / "20261025_023f8f7eb499_record_lineage_s31.py"
 PURPOSE_SOURCE: Final = MIGRATIONS / "20261024_c5260943d933_record_lineage_s4.py"
 PLANE_SOURCE: Final = MIGRATIONS / "20260829_b727e870d45e_close_the_identity_ambiguity_re_.py"
@@ -150,17 +152,30 @@ def test_before_texts_are_byte_copies() -> None:
 
 
 def test_at_sets_equal_the_live_enums() -> None:
-    """251 = 240 + 11 native capabilities; 62 purposes; sorted; the plane CHECK is declared."""
+    """251 = 240 + 11 native capabilities; 62 purposes; sorted; the plane CHECK is declared.
+
+    Reports Modernization WP02 restates the capability vocabulary in
+    `4c37731671fc` (+ `reports.publish`), so the head-equals-enum claim moves
+    to that revision's literal, on the precedent of every earlier restatement:
+    this revision's AT text is byte-for-byte the head's frozen BEFORE text, and
+    the head's AT set is the live enums. Purposes are not restated there.
+    """
     mine = _namespace()
     capabilities = _literals(mine["_CAPABILITIES_AT_THIS_REVISION"])
     purposes = _literals(mine["_PURPOSES_AT_THIS_REVISION"])
     assert capabilities == sorted(capabilities)
     assert purposes == sorted(purposes)
+    assert len(capabilities) == 251
+    head = _namespace(GENERAL_REPORT_PLANE_MIGRATION)
+    assert head["_CAPABILITIES_BEFORE_THIS_REVISION"] == mine["_CAPABILITIES_AT_THIS_REVISION"]
+    head_capabilities = _literals(head["_CAPABILITIES_AT_THIS_REVISION"])
+    assert head_capabilities == sorted(head_capabilities)
     declared = {member.value for member in Capability} | {
         member.value for member in NativeSourceCapability
     }
-    assert set(capabilities) == declared
-    assert len(capabilities) == len(declared) == 251
+    assert set(head_capabilities) == declared
+    assert set(head_capabilities) - set(capabilities) == {"reports.publish"}
+    assert len(head_capabilities) == len(declared) == 252
     assert set(purposes) == {member.value for member in Purpose}
     assert len(purposes) == 62
     before = set(_literals(mine["_CAPABILITIES_BEFORE_THIS_REVISION"]))

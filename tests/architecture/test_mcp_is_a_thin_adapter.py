@@ -333,6 +333,15 @@ EXEMPT_PROPERTIES: Final[frozenset[tuple[str, str]]] = frozenset(
             )
         ),
         ("context.feedback", "target_id"),
+        # Reports Modernization WP02 (contract D): an association names what a
+        # standalone report is about, not where a file lives. `target_kind` is a
+        # closed enum; a resolvable `target_ref` must name a record the caller's
+        # Principal owns or the publish is refused, and an `external_source`
+        # reference is stored as inert asserted text and never dereferenced --
+        # nothing on this plane reads, opens or fetches through any of the three.
+        ("reports.publish", "target_kind"),
+        ("reports.publish", "target_ref"),
+        ("reports.publish", "target_version_ref"),
         # KLP-WP-04: a provisioned Knowledge discovery source profile, not where a
         # file lives. It trips the scan on the substring "file" inside "profile",
         # it is an opaque `kdsp_` identifier the command validates by kind, and it
@@ -722,8 +731,9 @@ def test_the_location_scan_would_catch_one() -> None:
     # `commitments.create` `direction`. Plus the S3 anchor-bearing writes. Plus
     # the S4 v2 list and search siblings' `direction`. Plus record lineage
     # S3.1's 14 open writes' boolean `user_directed` claim. Plus CPM Workbench
-    # S5b-2's `hierarchy_prefix` (schedule WBS labels).
-    assert len(EXEMPT_PROPERTIES) == 54
+    # S5b-2's `hierarchy_prefix` (schedule WBS labels). Plus Reports
+    # Modernization WP02's three association reference fields on `reports.publish`.
+    assert len(EXEMPT_PROPERTIES) == 57
     for tool_name, property_name in EXEMPT_PROPERTIES:
         tool = next(entry for entry in TOOLS if entry.name == tool_name)
         assert property_name in set(_schema_property_names(tool.input_schema))

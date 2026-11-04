@@ -1253,6 +1253,14 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "display_name": "Parity weekly digest",
         },
         Capability.REPORTS_TYPES_LIST: {"stage": "reporter"},
+        Capability.REPORTS_PUBLISH: {
+            "title": "Parity standalone report",
+            "content": {"format": "markdown", "body": "# Parity\n\nSynthetic body."},
+            "idempotency_key": "parity-publish",
+            "type": "parity_note",
+            "topics": ["parity"],
+            "client_intent_id": "parity-1",
+        },
         # The relationship-intelligence entity plane (WP-RI-05). `person` and
         # `organization` are staged before the world is copied per transport, so
         # all three read the same rows and a read is the same read everywhere.
@@ -2367,7 +2375,7 @@ def test_there_are_three_transports_to_compare() -> None:
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
     # The command union and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 241, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 242, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -2650,7 +2658,16 @@ def masked(answer: Mapping[str, Any], supplied: set[str]) -> Any:  # noqa: ANN40
                 minted[value] = placeholder(value)
             return minted[value]
         if isinstance(value, dict):
-            return {key: walk(item) for key, item in value.items()}
+            standalone = value.get("plane") == "standalone"
+            return {
+                # A standalone report's manifest names its minted identifiers,
+                # so its digest is minted too; the content digest beside it is
+                # still compared literally.
+                key: "<minted-manifest-digest>"
+                if standalone and key == "manifest_sha256"
+                else walk(item)
+                for key, item in value.items()
+            }
         if isinstance(value, list):
             return [walk(item) for item in value]
         return value
@@ -3345,7 +3362,7 @@ def test_declared_unwired_capabilities_stay_separate_from_positive_parity(
     from my_pa.application.errors import UnsupportedError
 
     assert set(Capability) - set(_HANDLERS) == FUTURE_CAPABILITIES
-    assert len(IMPLEMENTED_CAPABILITIES) == 240
+    assert len(IMPLEMENTED_CAPABILITIES) == 241
     assert set(_BUILDERS) == set(IMPLEMENTED_CAPABILITIES)
     assert {Capability(tool.name) for tool in TOOLS} == set(IMPLEMENTED_CAPABILITIES)
 

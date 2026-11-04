@@ -45,6 +45,7 @@ __all__ = [
     "count_rows",
     "disposed_lease_engines",
     "first_version",
+    "seed_publication",
     "seed_world",
 ]
 
@@ -145,7 +146,7 @@ def seed_world(engine: Engine, principal: str, tag: str, *, complete: int = 6) -
             (world.other_publication, world.other_series, world.other_project, "complete"),
         ]
         for ordinal, (publication, series, project, status) in enumerate(rows):
-            _seed_publication(c, principal, publication, series, project, status, ordinal)
+            seed_publication(c, principal, publication, series, project, status, ordinal)
         c.execute(
             text(
                 "INSERT INTO knowledge.schedule_intake_series (principal_id, project_id, "
@@ -161,7 +162,7 @@ def seed_world(engine: Engine, principal: str, tag: str, *, complete: int = 6) -
     return world
 
 
-def _seed_publication(
+def seed_publication(
     c: Any,  # noqa: ANN401 - a Connection
     principal: str,
     publication: str,

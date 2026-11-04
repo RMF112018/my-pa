@@ -9,7 +9,9 @@ never the value.
 NFC-normalized and then measured in code points; nothing is trimmed, case
 folded or rewritten. A reason is measured as given. Duplicate topics or tags
 are compared by NFC-of-casefold and *refused*, not merged: silently dropping an
-entry would store something other than what the caller sent. A control
+entry would store something other than what the caller sent. This is a recorded
+WP01 decision against the investigation's proposal (B5, "casefolded duplicate
+elimination"), which RM-AC-002 ("invalid/duplicate ... rejected") supports. A control
 character is any Unicode `Cc` code point (C0, DEL, C1); only summary and
 reason admit `\\n`. A string that cannot be encoded as UTF-8 (a lone
 surrogate) is refused as malformed.

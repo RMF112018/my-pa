@@ -20,6 +20,7 @@ __all__ = [
     "MAX_MANIFEST_BYTES",
     "MAX_METADATA_BYTES",
     "MAX_METADATA_DEPTH",
+    "MAX_METADATA_FLOAT_MAGNITUDE",
     "MAX_METADATA_KEYS",
     "MAX_METADATA_KEY_CHARACTERS",
     "MAX_ORIGINAL_CONTENT_BYTES",
@@ -28,6 +29,7 @@ __all__ = [
     "MAX_TERMS",
     "MAX_TERM_CHARACTERS",
     "MAX_TITLE_CHARACTERS",
+    "MIN_METADATA_FLOAT_MAGNITUDE",
     "RESERVED_METADATA_KEY_PREFIXES",
     "RESERVED_TYPE_PREFIXES",
     "TRANSFER_CHUNK_MAX_BYTES",
@@ -66,6 +68,12 @@ MAX_METADATA_DEPTH: Final = 4
 #: Canonical UTF-8 serialization: sorted keys, `(",", ":")`, `ensure_ascii=False`.
 MAX_METADATA_BYTES: Final = 16384
 MAX_METADATA_KEY_CHARACTERS: Final = 64
+#: A non-zero metadata float has `MIN <= abs(x) < MAX`. In that range Python's
+#: shortest `repr` has no exponent, and PostgreSQL's jsonb text prints the same
+#: digits; outside it, jsonb text spells `1e308` with 309 digits, so a
+#: canonically small object could exceed the stored text bound (32768).
+MIN_METADATA_FLOAT_MAGNITUDE: Final = 1e-4
+MAX_METADATA_FLOAT_MAGNITUDE: Final = 1e16
 RESERVED_METADATA_KEY_PREFIXES: Final = ("_", "my_pa", "system")
 
 MAX_DECODED_CONTENT_BYTES: Final = 16_777_216

@@ -32,6 +32,7 @@ from my_pa.domain.reports.vocabulary import (
     MAX_ASSOCIATIONS_PER_VERSION,
     MAX_METADATA_BYTES,
     MAX_METADATA_DEPTH,
+    MAX_METADATA_FLOAT_MAGNITUDE,
     MAX_METADATA_KEY_CHARACTERS,
     MAX_METADATA_KEYS,
     MAX_REASON_CHARACTERS,
@@ -39,6 +40,7 @@ from my_pa.domain.reports.vocabulary import (
     MAX_TERM_CHARACTERS,
     MAX_TERMS,
     MAX_TITLE_CHARACTERS,
+    MIN_METADATA_FLOAT_MAGNITUDE,
     RESERVED_METADATA_KEY_PREFIXES,
     RESERVED_TYPE_PREFIXES,
     TYPE_TOKEN_PATTERN,
@@ -188,12 +190,20 @@ def _metadata_value(value: object, depth: int) -> object:
     if isinstance(value, float) and kind is float:
         if not math.isfinite(value):
             raise ReportValidationError("metadata", "non_finite")
+        # No exponent in either serialization (see `validate_metadata`).
+        if value != 0.0 and not (
+            MIN_METADATA_FLOAT_MAGNITUDE <= abs(value) < MAX_METADATA_FLOAT_MAGNITUDE
+        ):
+            raise ReportValidationError("metadata", "out_of_range")
         return value
     if isinstance(value, str) and kind is str:
         try:
             value.encode("utf-8")
         except UnicodeEncodeError:
             raise ReportValidationError("metadata", "malformed") from None
+        # PostgreSQL jsonb cannot hold U+0000 (`\u0000` is refused as text).
+        if "\x00" in value:
+            raise ReportValidationError("metadata", "malformed")
         return value
     if (isinstance(value, list) and kind is list) or (isinstance(value, dict) and kind is dict):
         if depth + 1 > MAX_METADATA_DEPTH:
@@ -211,15 +221,37 @@ def validate_metadata(value: object) -> dict[str, Any]:
     character, no reserved prefix); only top-level keys are counted against
     the 32-key bound. The byte bound is measured on the canonical
     serialization the manifest will hash.
+
+    **Every accepted object fits the stored bound.** The schema bounds
+    PostgreSQL's jsonb text (`octet_length(metadata::text) <= 32768`), which
+    differs from the canonical bytes `B` (at most 16384) only in that
+
+    * it writes `", "` and `": "` for `,` and `:`: one byte per separator.
+      Every separator directly follows its own key or value token of at least
+      one byte, so there are at most `B / 2` separators;
+    * it prints a number with the digits of its text: an `int` with the same
+      decimal digits, and a float in `MIN/MAX_METADATA_FLOAT_MAGNITUDE` (or
+      zero), whose `repr` has no exponent, with the same digits (`-0.0`
+      prints as the shorter `0.0`);
+    * it escapes a string exactly as `ensure_ascii=False` does (`\\"`,
+      `\\\\`, the short escapes for `\\b \\f \\n \\r \\t`, `\\u00XX`
+      for the other C0 controls, every other code point raw), and sorts keys
+      by length rather than by code point, which moves no byte.
+
+    So the jsonb text is at most `1.5 * 16384 = 24576` bytes.
     """
     if type(value) is not dict:
         raise ReportValidationError("metadata", "type")
     if len(value) > MAX_METADATA_KEYS:
         raise ReportValidationError("metadata", "too_many_keys")
     accepted = {_metadata_key(key): _metadata_value(item, 1) for key, item in value.items()}
-    encoded = json.dumps(
-        accepted, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
-    ).encode("utf-8")
+    try:
+        encoded = json.dumps(
+            accepted, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+        ).encode("utf-8")
+    except ValueError:
+        # An `int` beyond the interpreter's digit limit (4300): far over the bound.
+        raise ReportValidationError("metadata", "too_large") from None
     if len(encoded) > MAX_METADATA_BYTES:
         raise ReportValidationError("metadata", "too_large")
     return accepted

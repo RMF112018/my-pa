@@ -23,8 +23,13 @@ module proves:
 * **every guard** -- from a baseline write that commits, one mutation that
   only the guard under test can refuse is refused with that guard's name; and
   for a representative set, dropping only that guard lets the same mutation
-  commit (`test_each_guard_is_load_bearing`); the two guards another guard
-  masks are shown falling to that backstop (`test_masked_guards_fall_to_their_backstop`).
+  commit (`test_each_guard_is_load_bearing`); the guards another guard
+  masks are shown falling to that backstop (`test_masked_guards_fall_to_their_backstop`);
+* **the insert-guard race** -- a late association whose statement starts
+  before its version's writer commits is refused, and is admitted when the
+  guard leaves an unseen version to the foreign key;
+* **the metadata bound** -- the worst-case metadata the domain accepts fits
+  the stored jsonb-text CHECK.
 
 The file name routes the database tests here to the migration tiers
 (`tests/db/fixtures.py`): the empty-to-head test carries its own marker and the
@@ -40,7 +45,10 @@ import gzip
 import hashlib
 import io
 import json
+import math
 import re
+import threading
+import time
 import tokenize
 import uuid
 from collections.abc import Callable, Iterator, Mapping
@@ -59,8 +67,9 @@ from sqlalchemy import Connection, Engine, MetaData, Table, text
 from sqlalchemy.exc import DBAPIError
 
 from my_pa.domain.common.identifiers import IdKind
-from my_pa.domain.reports.errors import ReportLifecycleRefusal
+from my_pa.domain.reports.errors import ReportLifecycleRefusal, ReportValidationError
 from my_pa.domain.reports.lifecycle import decide_lifecycle_transition
+from my_pa.domain.reports.values import validate_metadata
 from my_pa.domain.reports.vocabulary import (
     MANIFEST_SCHEMA,
     MAX_ASSOCIATION_REF_CHARACTERS,
@@ -68,11 +77,13 @@ from my_pa.domain.reports.vocabulary import (
     MAX_DECODED_CONTENT_BYTES,
     MAX_MANIFEST_BYTES,
     MAX_METADATA_BYTES,
+    MAX_METADATA_FLOAT_MAGNITUDE,
     MAX_ORIGINAL_CONTENT_BYTES,
     MAX_REASON_CHARACTERS,
     MAX_SUMMARY_CHARACTERS,
     MAX_TERMS,
     MAX_TITLE_CHARACTERS,
+    MIN_METADATA_FLOAT_MAGNITUDE,
     TRANSFER_CHUNK_MAX_BYTES,
     TRANSFER_MAX_TTL,
     TYPE_TOKEN_PATTERN,
@@ -320,10 +331,13 @@ def test_frozen_bounds_equal_the_domain_constants() -> None:
         assert bound in checks[name], (name, checks[name])
     hours = int(TRANSFER_MAX_TTL / timedelta(hours=1))
     assert f"interval '{hours} hours'" in checks["a_report_transfer_expires_within_its_ttl"]
-    # The stored metadata bound is the generous text bound of the contract,
-    # never tighter than the domain's canonical-bytes bound.
+    # The stored bound is on PostgreSQL's jsonb text, not the canonical bytes:
+    # it admits every domain-accepted object because that text is at most 1.5
+    # times the canonical bytes (`validate_metadata`), proven on a server by
+    # `test_domain_accepted_worst_case_metadata_fits_the_stored_bound`.
     metadata = re.search(r"<= (\d+)", checks["report_metadata_is_a_bounded_object"])
-    assert metadata is not None and int(metadata.group(1)) >= MAX_METADATA_BYTES
+    assert metadata is not None
+    assert int(metadata.group(1)) == 2 * MAX_METADATA_BYTES >= MAX_METADATA_BYTES * 3 // 2
 
 
 def test_frozen_identifier_prefixes_equal_the_id_kinds() -> None:
@@ -2185,6 +2199,20 @@ def _receipt_cases() -> list[Case]:
             {"version_id": None},
             _check(_RC, "a_report_receipt_version_is_whole"),
         ),
+        # A delete no-op: the domain's only lifecycle no-op is archive on `archived`.
+        case(
+            "lifecycle_no_op_is_an_archive",
+            "archive_noop",
+            {"operation": "delete"},
+            _check(_RC, "a_report_lifecycle_no_op_is_an_archive"),
+        ),
+        # Two fields: an archive no-op, naming no event, at revision 0 (an active report).
+        case(
+            "archive_no_op_follows_a_transition",
+            "archive_noop",
+            {"expected_lifecycle_revision": 0, "resulting_lifecycle_revision": 0},
+            _check(_RC, "an_archive_no_op_receipt_follows_a_transition"),
+        ),
         # The no-op found version 1 but claims it expected version 7.
         case(
             "update_no_op_names_the_version_it_found",
@@ -2423,13 +2451,17 @@ def _owner_cases() -> list[Case]:
             "v1",
             _fk(_V, "a_report_version_supersedes_its_predecessor"),
         ),
+        # The version is invisible under the foreign owner (or committed, as the
+        # foreign one): the insert guard refuses before the reference, which is
+        # still reached by `manifest_describes_version` and
+        # `association_version_fk`; each falls to its reference in `MASKED`.
         case(
             "manifest_version",
             "publish",
             "manifest",
             "owner_principal_id",
             "owner",
-            _fk(_M, "a_report_manifest_describes_its_version"),
+            _refused(_LATE_MANIFEST),
         ),
         case(
             "association_version",
@@ -2437,7 +2469,7 @@ def _owner_cases() -> list[Case]:
             "association_a",
             "version_id",
             "v1",
-            _fk(_A, "a_report_association_is_frozen_to_its_version"),
+            _refused(_LATE_ASSOCIATION),
         ),
         case(
             "event_report",
@@ -2506,12 +2538,30 @@ def _owner_cases() -> list[Case]:
     ]
 
 
+#: A manifest or association naming its version by a malformed id or owner names
+#: no version at all, so the insert guard (a BEFORE trigger, run before any
+#: CHECK) refuses it first; each falls to its identifier CHECK in `MASKED`.
+_GUARDED_IDENTIFIERS: Final = {
+    ("report_version_manifests", "version_id"): _LATE_MANIFEST,
+    ("report_version_manifests", "owner_principal_id"): _LATE_MANIFEST,
+    ("report_associations", "version_id"): _LATE_ASSOCIATION,
+    ("report_associations", "owner_principal_id"): _LATE_ASSOCIATION,
+}
+
+
+def _identifier_expect(table: str, column: str) -> Expect:
+    guarded = _GUARDED_IDENTIFIERS.get((table, column))
+    if guarded is not None:
+        return _refused(guarded)
+    return _check(table, f"{column}_is_an_opaque_identifier")
+
+
 CASES: Final[tuple[Case, ...]] = (
     *(
         Case(
             f"identifier_{table}_{column}_{chain}",
             chain,
-            _check(table, f"{column}_is_an_opaque_identifier"),
+            _identifier_expect(table, column),
             {label: {column: _BAD_ID}},
         )
         for chain, label, table, column in _IDENTIFIER_COLUMNS
@@ -2956,6 +3006,18 @@ LOAD_BEARING: Final = (
         _without_token_branch(),
         "transfer_guard_token_only_by_finalizing",
     ),
+    (
+        "lifecycle_no_op_archive_check",
+        "ALTER TABLE knowledge.report_receipts DROP CONSTRAINT "
+        "a_report_lifecycle_no_op_is_an_archive",
+        "receipt_lifecycle_no_op_is_an_archive",
+    ),
+    (
+        "archive_no_op_revision_check",
+        "ALTER TABLE knowledge.report_receipts DROP CONSTRAINT "
+        "an_archive_no_op_receipt_follows_a_transition",
+        "receipt_archive_no_op_follows_a_transition",
+    ),
 )
 
 
@@ -2982,7 +3044,7 @@ def test_each_guard_is_load_bearing(
 
 #: `(guard, the DDL that removes only it, its case, the guard that then refuses)`:
 #: guards another guard masks, so dropping only them never lets the mutation commit.
-#: Neither is counted as load-bearing.
+#: None is counted as load-bearing.
 MASKED: Final = (
     # A committed version always has its one manifest (the deferred
     # `a_report_version_has_its_manifest`), so a late manifest meets the key.
@@ -2993,13 +3055,46 @@ MASKED: Final = (
         "manifest_written_with_its_version",
         _unique(_M, "report_version_manifests_pkey"),
     ),
-    # No event has revision 0, so the event reference refuses it too.
+    # A receipt naming an event is a lifecycle receipt (publish and update name
+    # none); applied it is at revision >= 1, and its only no-op, an archive, is
+    # too, so `an_archive_no_op_receipt_follows_a_transition` refuses it (and,
+    # without both, the event reference: no event has revision 0).
     (
         "event_after_transition_check",
         "ALTER TABLE knowledge.report_receipts DROP CONSTRAINT "
         "a_report_receipt_names_an_event_only_after_a_transition",
         "receipt_event_only_after_a_transition",
-        _fk(_RC, "a_report_receipt_names_its_event"),
+        _check(_RC, "an_archive_no_op_receipt_follows_a_transition"),
+    ),
+    # The insert guard runs before any CHECK or reference and refuses a version
+    # the statement cannot see: without it, each falls to the identifier CHECK
+    # or the owner-scoped reference it masks.
+    *(
+        (
+            f"{table}_{column}_identifier_behind_insert_guard",
+            f"DROP TRIGGER {trigger} ON knowledge.{table}",
+            f"identifier_{table}_{column}_publish",
+            _check(table, f"{column}_is_an_opaque_identifier"),
+        )
+        for table, trigger in (
+            ("report_version_manifests", "a_report_manifest_is_written_with_its_version"),
+            ("report_associations", "a_report_association_is_written_with_its_version"),
+        )
+        for column in ("version_id", "owner_principal_id")
+    ),
+    (
+        "foreign_manifest_version_behind_insert_guard",
+        "DROP TRIGGER a_report_manifest_is_written_with_its_version "
+        "ON knowledge.report_version_manifests",
+        "foreign_manifest_version",
+        _fk(_M, "a_report_manifest_describes_its_version"),
+    ),
+    (
+        "foreign_association_version_behind_insert_guard",
+        "DROP TRIGGER a_report_association_is_written_with_its_version "
+        "ON knowledge.report_associations",
+        "foreign_association_version",
+        _fk(_A, "a_report_association_is_frozen_to_its_version"),
     ),
 )
 
@@ -3103,6 +3198,195 @@ def test_manifests_and_associations_may_be_written_under_a_savepoint(
             {"r": ids["report"]},
         ).scalar_one()
     assert counted == 2
+
+
+# ---- the insert-guard race ---------------------------------------------------------------
+
+#: The guard's former branch: a version the inserting statement could not see was
+#: left to the foreign key, which a version committed mid-statement passes.
+_NOT_FOUND_REFUSED: Final = (
+    "          IF NOT FOUND THEN\n"
+    "            RAISE EXCEPTION 'a % row is written in its version''s transaction', "
+    "TG_TABLE_NAME\n"
+    "              USING ERRCODE = 'restrict_violation';\n"
+    "          END IF;\n"
+)
+_NOT_FOUND_LEFT_TO_THE_FOREIGN_KEY: Final = (
+    "          IF NOT FOUND THEN\n            RETURN NEW;\n          END IF;\n"
+)
+
+
+def _guard_leaving_an_unseen_version_to_the_foreign_key() -> str:
+    functions = dict(_module()["_FUNCTIONS"])  # type: ignore[call-overload]
+    definition = str(functions["report_rows_are_written_with_their_version"])
+    assert definition.count(_NOT_FOUND_REFUSED) == 1
+    return definition.replace(_NOT_FOUND_REFUSED, _NOT_FOUND_LEFT_TO_THE_FOREIGN_KEY).replace(
+        "CREATE FUNCTION", "CREATE OR REPLACE FUNCTION", 1
+    )
+
+
+def _race(engine: Engine) -> tuple[str, DBAPIError | None]:
+    """A publishes and stays open; B's late association starts; A commits mid-statement.
+
+    B is `WITH ins AS (INSERT ...) SELECT pg_sleep(3) FROM ins` under READ
+    COMMITTED: its insert guard runs before A commits, and its foreign key at
+    the end of the statement, after A has committed. Returns B's association
+    id and B's refusal (`None` when B committed).
+    """
+    ids = _ids(uuid.uuid4().hex[:16], P)
+    late = _late_association(ids)[0]
+    statement, params = _statement(late)
+    racing = f"WITH ins AS ({statement} RETURNING 1) SELECT pg_sleep(3) FROM ins"  # noqa: S608
+    outcome: dict[str, DBAPIError | None] = {}
+    with engine.connect() as a, engine.connect() as b, engine.connect() as observer:
+        writer = a.begin()
+        for op in _publish(ids):
+            if not op.label.startswith("association"):
+                a.execute(text(_statement(op)[0]), _statement(op)[1])
+        b_pid = b.execute(text("SELECT pg_backend_pid()")).scalar_one()
+        b.commit()
+
+        def run_b() -> None:
+            try:
+                with b.begin():
+                    b.execute(text(racing), params)
+                outcome["b"] = None
+            except DBAPIError as error:
+                outcome["b"] = error
+
+        thread = threading.Thread(target=run_b)
+        thread.start()
+        deadline = time.monotonic() + 15
+        while thread.is_alive() and time.monotonic() < deadline:
+            sleeping = observer.execute(
+                text("SELECT wait_event = 'PgSleep' FROM pg_stat_activity WHERE pid = :pid"),
+                {"pid": b_pid},
+            ).scalar_one_or_none()
+            observer.rollback()
+            if sleeping:
+                break
+            time.sleep(0.05)
+        writer.commit()
+        thread.join(timeout=30)
+        assert not thread.is_alive(), "B never finished"
+    return str(late.values["association_id"]), outcome["b"]
+
+
+def _associations(engine: Engine, association_id: str) -> int:
+    with engine.connect() as connection:
+        return int(
+            connection.execute(
+                text(
+                    "SELECT count(*) FROM knowledge.report_associations WHERE association_id = :a"
+                ),
+                {"a": association_id},
+            ).scalar_one()
+        )
+
+
+@pytest.mark.database
+def test_a_late_insert_racing_its_versions_commit_is_refused(plane_engine: Engine) -> None:
+    """B's statement starts before A commits the version, so B can never be A's writer."""
+    association_id, refused = _race(plane_engine)
+    _assert_refused(refused, _refused(_LATE_ASSOCIATION))
+    assert _associations(plane_engine, association_id) == 0
+
+
+@pytest.mark.database
+def test_the_race_commits_when_an_unseen_version_is_left_to_the_foreign_key(
+    cloned_database_url: str,
+) -> None:
+    """Prove-red: with the former NOT FOUND branch restored, B commits on A's version."""
+    engine = create_database_engine(cloned_database_url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(text(_guard_leaving_an_unseen_version_to_the_foreign_key()))
+        association_id, refused = _race(engine)
+        assert refused is None, f"refused without the branch: {refused}"
+        assert _associations(engine, association_id) == 1
+    finally:
+        engine.dispose()
+
+
+# ---- the metadata bound ------------------------------------------------------------------
+
+_JUST_ABOVE_MIN: Final = math.nextafter(MIN_METADATA_FLOAT_MAGNITUDE, 1.0)
+_JUST_BELOW_MAX: Final = math.nextafter(MAX_METADATA_FLOAT_MAGNITUDE, 0.0)
+
+
+def _canonical(value: object) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+
+
+def _filled(item: object) -> dict[str, object]:
+    """`{"k": [item, item, ...]}` with as many items as fit the canonical bound.
+
+    Its canonical form is `{"k":[` (6 bytes), the items joined by `,`, and `]}`.
+    """
+    count = (MAX_METADATA_BYTES - 7) // (len(_canonical(item)) + 1)
+    filled: dict[str, object] = {"k": [item] * count}
+    assert (
+        len(_canonical(filled)) <= MAX_METADATA_BYTES < len(_canonical({"k": [item] * (count + 1)}))
+    )
+    return filled
+
+
+#: Domain-accepted objects near the canonical bound: the densest separators (a
+#: list of one-byte numbers), floats at both magnitude edges, escapes, a dense
+#: object of the 32 top-level keys.
+_WORST_CASE_METADATA: Final = {
+    "separators": _filled(0),
+    "nested_separators": _filled([0, [0]]),
+    "largest_floats": _filled(-_JUST_BELOW_MAX),
+    "smallest_floats": _filled(-_JUST_ABOVE_MIN),
+    "edge_floats": _filled([MIN_METADATA_FLOAT_MAGNITUDE, _JUST_BELOW_MAX, -0.0, 0.0]),
+    "escapes": _filled('"\\\n\t\x01\x1f\x7f\u2028\u00e9'),
+    "keys": {f"k{n}": {f"{chr(97 + m % 26)}{m}": 0 for m in range(40)} for n in range(32)},
+}
+
+
+@pytest.mark.database
+@pytest.mark.parametrize("name", list(_WORST_CASE_METADATA))
+def test_domain_accepted_worst_case_metadata_fits_the_stored_bound(
+    plane_engine: Engine, name: str
+) -> None:
+    """jsonb text <= canonical bytes + separators <= 1.5 x 16384 < 32768, through the real CHECK."""
+    accepted = validate_metadata(_WORST_CASE_METADATA[name])
+    canonical = len(_canonical(accepted))
+    assert canonical <= MAX_METADATA_BYTES
+    assert name == "keys" or canonical > MAX_METADATA_BYTES - 64, canonical
+    spaced = len(json.dumps(accepted, separators=(", ", ": "), ensure_ascii=False).encode())
+    assert spaced <= canonical * 3 // 2
+    ids = _ids(uuid.uuid4().hex[:16], P)
+    _execute(plane_engine, _changed(_publish(ids), {"version": {"metadata": accepted}}, None))
+    with plane_engine.connect() as connection:
+        stored, data = connection.execute(
+            text(
+                "SELECT octet_length(metadata::text), metadata FROM knowledge.report_versions "
+                "WHERE version_id = :v"
+            ),
+            {"v": ids["v1"]},
+        ).one()
+    assert stored <= spaced <= 3 * MAX_METADATA_BYTES // 2 < 2 * MAX_METADATA_BYTES
+    assert data == accepted
+
+
+@pytest.mark.database
+def test_exponent_floats_the_domain_refuses_would_overflow_the_stored_bound(
+    plane_engine: Engine,
+) -> None:
+    """`{"k": [1e308] * 2000}` is 14007 canonical bytes but 622007 as jsonb text."""
+    overflowing = {"k": [1e308] * 2000}
+    assert len(_canonical(overflowing)) <= MAX_METADATA_BYTES
+    with pytest.raises(ReportValidationError) as refused_by_domain:
+        validate_metadata(overflowing)
+    assert refused_by_domain.value.code == "out_of_range"
+    ids = _ids(uuid.uuid4().hex[:16], P)
+    with pytest.raises(DBAPIError) as refused:
+        _execute(
+            plane_engine, _changed(_publish(ids), {"version": {"metadata": overflowing}}, None)
+        )
+    _assert_refused(refused.value, _check(_V, "report_metadata_is_a_bounded_object"))
 
 
 # ---- the downgrade refusal ---------------------------------------------------------------
@@ -3212,6 +3496,10 @@ _DATABASE_TESTS: Final[tuple[Callable[..., None], ...]] = (
     test_masked_guards_fall_to_their_backstop,
     test_a_lifecycle_no_op_may_name_the_event_it_found_or_none,
     test_manifests_and_associations_may_be_written_under_a_savepoint,
+    test_a_late_insert_racing_its_versions_commit_is_refused,
+    test_the_race_commits_when_an_unseen_version_is_left_to_the_foreign_key,
+    test_domain_accepted_worst_case_metadata_fits_the_stored_bound,
+    test_exponent_floats_the_domain_refuses_would_overflow_the_stored_bound,
     test_downgrade_refuses_while_plane_state_exists,
     test_the_downgrade_refusal_is_load_bearing,
     test_an_empty_plane_downgrades_cleanly_and_upgrades_again,

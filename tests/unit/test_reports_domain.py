@@ -6,7 +6,7 @@ import math
 from collections.abc import Callable
 from datetime import timedelta
 from enum import IntEnum, StrEnum
-from typing import Any
+from typing import Any, Final
 
 import pytest
 
@@ -98,6 +98,7 @@ def test_frozen_bounds() -> None:
     assert v.MAX_METADATA_DEPTH == 4
     assert v.MAX_METADATA_BYTES == 16384
     assert v.MAX_METADATA_KEY_CHARACTERS == 64
+    assert (v.MIN_METADATA_FLOAT_MAGNITUDE, v.MAX_METADATA_FLOAT_MAGNITUDE) == (1e-4, 1e16)
     assert v.RESERVED_METADATA_KEY_PREFIXES == ("_", "my_pa", "system")
     assert v.MAX_DECODED_CONTENT_BYTES == v.MAX_ORIGINAL_CONTENT_BYTES == 16 * 1024 * 1024
     assert v.MANIFEST_SCHEMA == "report_version_manifest_v1"
@@ -354,6 +355,40 @@ def test_metadata_size_is_utf8_bytes_not_code_points() -> None:
 def test_metadata_refuses_non_finite_floats(value: float) -> None:
     _refused(validate_metadata, {"f": value}, "non_finite")
     _refused(validate_metadata, {"l": [value]}, "non_finite")
+
+
+_BELOW_MIN: Final = math.nextafter(1e-4, 0.0)
+_BELOW_MAX: Final = math.nextafter(1e16, 0.0)
+
+
+@pytest.mark.parametrize(
+    "value", [1e308, -1e308, 1e16, -1e16, 1e-300, -1e-300, 5e-324, _BELOW_MIN, -_BELOW_MIN, 9e-5]
+)
+def test_metadata_refuses_floats_whose_text_has_an_exponent(value: float) -> None:
+    """`1e308` is 309 digits in jsonb text: outside the magnitudes, refused at every depth."""
+    _refused(validate_metadata, {"f": value}, "out_of_range")
+    _refused(validate_metadata, {"l": [{"f": value}]}, "out_of_range")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [0.0, -0.0, 1e-4, -1e-4, 0.00012345, 1.5, -2.25, 1e15, _BELOW_MAX, -_BELOW_MAX, 1.0e-4 * 3],
+)
+def test_metadata_admits_floats_at_the_magnitude_edges(value: float) -> None:
+    assert validate_metadata({"f": value}) == {"f": value}
+    # Python's shortest repr has no exponent here, so jsonb prints the same digits.
+    assert "e" not in repr(value)
+
+
+def test_metadata_refuses_a_nul_character_in_a_string() -> None:
+    """PostgreSQL jsonb cannot hold U+0000; every other control character is kept."""
+    _refused(validate_metadata, {"s": "a\x00b"}, "malformed")
+    _refused(validate_metadata, {"l": ["\x00"]}, "malformed")
+    assert validate_metadata({"s": "a\x01\x7f\nb"}) == {"s": "a\x01\x7f\nb"}
+
+
+def test_metadata_refuses_an_integer_past_the_digit_limit_as_too_large() -> None:
+    _refused(validate_metadata, {"i": 10**5000}, "too_large")
 
 
 class _Flag(IntEnum):

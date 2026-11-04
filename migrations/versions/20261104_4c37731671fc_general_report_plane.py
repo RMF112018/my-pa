@@ -53,8 +53,13 @@ subtransactions, wrote the version. The 32-bit `xmin` is widened to a full
 within 2^31 of it) and passed to `pg_xact_status`, which says `in progress` for
 the current top-level transaction and its subtransactions alike, unlike an
 equality with `pg_current_xact_id()`, which a version written under a
-`SAVEPOINT` would fail. A version row that is not found is left to the
-foreign key to refuse.
+`SAVEPOINT` would fail. A version row that is not found is refused too, never
+left to the foreign key: a version this transaction wrote is always visible to
+its own later statements, so a version the inserting statement cannot see is
+never this transaction's. The foreign key would not do: under READ COMMITTED
+it is checked at the end of the statement with a fresh snapshot, so a version
+another transaction commits while the statement runs (an `INSERT` inside a
+slow `WITH`) passes it, and the row would attach to a committed version.
 
 The receipt shape is closed in the DDL: a receipt names a version exactly when
 it names a resulting version number (`a_report_receipt_version_is_whole`), so
@@ -63,10 +68,16 @@ named; an update `no_op` names the head version it found, at the expected
 number (`an_update_no_op_receipt_names_the_version_it_found`); and a receipt
 names an event only at a resulting revision of at least 1
 (`a_report_receipt_names_an_event_only_after_a_transition`), so the event
-reference is never skipped while an event is named. A lifecycle `no_op` may
-omit its event: the only lifecycle no-op, archive on `archived`, can follow a
-restore from trash to `archived`, whose event's operation is `restore`, and the
-event reference binds the receipt's operation.
+reference is never skipped while an event is named. The only lifecycle no-op is
+archive on `archived` (`a_report_lifecycle_no_op_is_an_archive`; an update
+`no_op` stays legal), and an archived report has made at least one transition,
+so an archive `no_op` is at a revision of at least 1
+(`an_archive_no_op_receipt_follows_a_transition`). A lifecycle `no_op` may omit
+its event: archive on `archived` can follow a restore from trash to
+`archived`, whose event's operation is `restore`, and the event reference binds
+the receipt's operation. That an omitted-event no-op's revision is the report's
+current one is a cross-row fact no CHECK can state; the lifecycle handler
+(WP03) writes it from the root it locked.
 
 Every closed set and bound is a frozen literal equal to the general report
 domain vocabulary module, which this revision does not import.
@@ -596,6 +607,10 @@ _TABLES: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
           CONSTRAINT an_update_no_op_receipt_names_the_version_it_found CHECK (operation <>
               'update' OR outcome <> 'no_op' OR (resulting_version_number IS NOT NULL AND
               resulting_version_number = expected_version_number)),
+          CONSTRAINT a_report_lifecycle_no_op_is_an_archive CHECK (outcome <> 'no_op' OR
+              operation IN ('archive', 'update')),
+          CONSTRAINT an_archive_no_op_receipt_follows_a_transition CHECK (operation <>
+              'archive' OR outcome <> 'no_op' OR resulting_lifecycle_revision >= 1),
           CONSTRAINT a_report_receipt_names_an_event_only_after_a_transition CHECK (event_id
               IS NULL OR (resulting_lifecycle_revision IS NOT NULL AND
               resulting_lifecycle_revision >= 1)),
@@ -925,7 +940,8 @@ _FUNCTIONS: Final[tuple[tuple[str, str], ...]] = (
            WHERE v.version_id = NEW.version_id
              AND v.owner_principal_id = NEW.owner_principal_id;
           IF NOT FOUND THEN
-            RETURN NEW;
+            RAISE EXCEPTION 'a % row is written in its version''s transaction', TG_TABLE_NAME
+              USING ERRCODE = 'restrict_violation';
           END IF;
           current_full := pg_current_xact_id()::text::bigint;
           candidate := current_full - current_full % 4294967296 + written;

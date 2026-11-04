@@ -10467,7 +10467,9 @@ intelligence_artifact_manifests = Table(
 # insert guards `a_report_manifest_is_written_with_its_version` and
 # `a_report_association_is_written_with_its_version` (a manifest or association
 # is inserted only while its version's writer, by `xmin`, is still in progress:
-# append-only covers UPDATE and DELETE, these cover a late INSERT), and the
+# append-only covers UPDATE and DELETE, these cover a late INSERT; a version
+# the inserting statement cannot see is refused too, never left to the foreign
+# key, which a version committed mid-statement would pass), and the
 # deferred `a_report_version_has_its_manifest`,
 # `a_report_head_is_its_newest_version` and
 # `a_report_lifecycle_cache_is_its_newest_event` (at commit, the root caches
@@ -10730,9 +10732,13 @@ report_versions = Table(
         f"jsonb_typeof(tags) = 'array' AND jsonb_array_length(tags) <= {MAX_REPORT_TERMS}",
         name="report_tags_are_a_bounded_array",
     ),
-    # A generous server bound (twice `MAX_REPORT_METADATA_BYTES`): `metadata::text` is
-    # PostgreSQL's own serialization, not the domain's canonical one, so the
-    # exact bound is the domain's and this one only refuses the absurd.
+    # Twice `MAX_REPORT_METADATA_BYTES`: `metadata::text` is PostgreSQL's own
+    # serialization, not the domain's canonical one, so the exact bound is the
+    # domain's. Every domain-accepted object fits: jsonb text adds one space per
+    # `,` or `:` (at most half the canonical bytes), prints the domain's floats
+    # (no exponent, see `MIN/MAX_METADATA_FLOAT_MAGNITUDE`) and integers with the
+    # same digits, and escapes strings as `ensure_ascii=False` does, so it is at
+    # most 1.5 x 16384 = 24576 bytes.
     CheckConstraint(
         f"jsonb_typeof(metadata) = 'object' AND octet_length(metadata::text) <= "
         f"{2 * MAX_REPORT_METADATA_BYTES}",
@@ -11115,6 +11121,16 @@ report_receipts = Table(
         "operation <> 'update' OR outcome <> 'no_op' OR (resulting_version_number IS NOT NULL "
         "AND resulting_version_number = expected_version_number)",
         name="an_update_no_op_receipt_names_the_version_it_found",
+    ),
+    # The only lifecycle no-op is archive on `archived` (an update no-op stays
+    # legal), and an archived report has made at least one transition.
+    CheckConstraint(
+        "outcome <> 'no_op' OR operation IN ('archive', 'update')",
+        name="a_report_lifecycle_no_op_is_an_archive",
+    ),
+    CheckConstraint(
+        "operation <> 'archive' OR outcome <> 'no_op' OR resulting_lifecycle_revision >= 1",
+        name="an_archive_no_op_receipt_follows_a_transition",
     ),
     # A lifecycle no-op may omit its event: archive on `archived` can follow a
     # restore to `archived`, whose event's operation is not the receipt's.

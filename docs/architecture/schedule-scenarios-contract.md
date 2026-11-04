@@ -1552,11 +1552,13 @@ barriers and seams, never sleeps.
 
 ---
 
-## 14. S6-2 implementation note (design D9; designed, not implemented)
+## 14. S6-2 implementation note (design D9; implemented on this branch by I9-A and I9-B, not merged)
 
-**Status.** Design only. Written by D9 on `feat/schedule-scenarios-persistence` at base
+**Status.** Implemented on `feat/schedule-scenarios-persistence` by I9-A (schema) and I9-B
+(persistence), not merged, migrated, granted or deployed anywhere; section 14.14 records what
+was executed. The design text below is unchanged. Written by D9 on `feat/schedule-scenarios-persistence` at base
 `a66a6e32668f4707d49563f8eda7d9cfefecf333`, tree `108dd79054e361bcde580df57a41d153e1181536`
-(= `origin/main` with S6-1 #348 merged). Nothing in this section is implemented, migrated,
+(= `origin/main` with S6-1 #348 merged); as written, nothing in it was implemented, migrated,
 granted or deployed. Once design review R9 passes it, this section and the sections it cites
 are the single specification the S6-2 implementers (I9-A, I9-B) code against: a point that
 is wrong or incomplete against the code is a stop with a proposed amendment, never a silent
@@ -2998,3 +3000,36 @@ review. `lock_timeout` bounds only lock acquisition, not this validating pass.
 
 Command: `PYTHONPATH=src python -m tests.schema.schedule_scenarios_lock_measurement
 postgresql+psycopg://<user>@127.0.0.1:<port>/postgres` (scratch cluster admin URL).
+
+**I9-B executed results (persistence, sections 14.8-14.11).** Implemented on this branch
+(I9-B, 2026-11-03) on I9-A's head `8adee5d9`: the section 14.8.1 ports, the plane repository
+and unit of work (`src/my_pa/infrastructure/persistence/schedule_scenarios.py`), the bounded
+codec (`schedule_plane_codec.py`), the two-layer compute lease (`schedule_cpm_lease.py`), the
+admission's import-time approval and intake Series (`schedule.py`), the worker hook
+(`src/my_pa/infrastructure/jobs/schedule.py`), the read-only checks Q0-Q9
+(`src/my_pa/infrastructure/database/schedule_scenarios_predeploy.py`,
+`ops/postgres/schedule_scenarios_predeploy_check.py`) and section 8 of
+`ops/runbooks/cpm-workbench.md` (the lock-measurement scaling and its go/no-go rule above).
+Nothing was run against a persistent database; every database tier ran on a disposable
+Homebrew PostgreSQL 15.15 scratch cluster. Every I9-B prove-red row (P2-06 to P2-08, P2-21 to
+P2-32, P2-40 to P2-44, P2-46 to P2-58) went red for its stated reason with the guard restored
+after each run; P2-06 (the unique alone), P2-20 (the partial uniques under P51-P53) and P2-24d
+(either lease layer alone) stayed green as declared in advance. P2-30 and P2-31 go red through
+the G9 backstop (a shared or explicit Series name fails `an_intake_series_holds_only_its_publication`
+at the admission), not through the matcher. Trivial naming resolutions, none changing a
+decision: the helper records `NewScenarioChangeSet` and `CpmRunWritten`; the helper port
+methods `find_request` (the read-only ledger probe of section 14.8.4 step 1),
+`version_by_number`, `get_cpm_run_by_id` and `get_match_decision`; `NewScenario` holds the
+name, description and origin publication/Baseline, and the Project and Series are the origin's;
+`BaselineWritten.event_id` names either chain's event, with `governing`;
+`compute_and_store_cpm_run` takes `request_digest` (the ledger needs it) and the test seams
+`compute` and `clock`, and calls `admit_compute(units_used_last_hour, units_requested)`; the S5
+module reaches the plane through 3 functions (`lock_project`, `record_import_approval`,
+`stored_import_approval`) by a module import, which is safe in either import order; the lease
+module names no table, so only `schedule_scenarios.py` joins `REACHED_THROUGH_THE_GUARD` and
+`PER_MODULE_ONLY`, and P2-40's second run removes the pre-deploy module's `QUARANTINED` entry;
+`record_refusal` keeps nothing for an attested operator; Q2 and Q6 stop
+(`retired_role_rows=unreadable`, the sequence found through `pg_depend`) rather than abort when
+the connecting role cannot read; `tests/security/test_cpm_workbench_security.py` admits the
+plane module in its import list (the admission and the handler now import it); the shared test
+helper is `tests/database/schedule_plane_world.py`.

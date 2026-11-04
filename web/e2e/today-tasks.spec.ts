@@ -546,13 +546,20 @@ test("TUX07-AC-005: rendering Today reads no Task detail, and the first operatio
   ).toEqual([]);
 
   // The version written is the version that read returned.
-  const canonical = await api<{ task: TaskRow }>(page, `/api/tasks/${operatedId}`);
-  expect(canonical.status).toBe(200);
   const sent = (write.body as { expectedVersion?: unknown }).expectedVersion;
   expect(typeof sent, "expectedVersion must be a number, not a guess").toBe("number");
-  // The write moved the Task on by one, so the version it named is the one the
-  // canonical read before it held.
-  expect(canonical.body.task.version).toBe((sent as number) + 1);
+  // The observer records the PATCH when it is sent, not when the server has
+  // applied it, so a read issued straight after can still see the old version.
+  // The write moves the Task on by one, so poll for the committed version.
+  await expect
+    .poll(
+      async () => {
+        const canonical = await api<{ task: TaskRow }>(page, `/api/tasks/${operatedId}`);
+        return canonical.status === 200 ? canonical.body.task.version : canonical.status;
+      },
+      { timeout: 30_000, message: "the write must commit exactly one version on" },
+    )
+    .toBe((sent as number) + 1);
 });
 
 /* ------------------------------------------------------------------ *

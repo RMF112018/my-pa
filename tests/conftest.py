@@ -144,6 +144,10 @@ from my_pa.contracts.ports import (
     RelationshipWriteRequest,
     ReportAssociationTargetNotFoundError,
     ReportIdempotencyConflictError,
+    ReportNotFoundError,
+    ReportStaleLifecycleRevisionError,
+    ReportStaleVersionError,
+    ReportWithdrawnError,
     RepositoryFailureError,
     ReviewDecisionRequest,
     ReviewRepository,
@@ -407,22 +411,41 @@ from my_pa.domain.relationship.normalization import (
     is_normalized_name,
     normalize_name,
 )
-from my_pa.domain.reports.manifest import build_initial_manifest
+from my_pa.domain.reports.errors import ReportValidationError
+from my_pa.domain.reports.lifecycle import decide_lifecycle_transition
+from my_pa.domain.reports.manifest import build_initial_manifest, build_version_manifest
 from my_pa.domain.reports.publication import (
     PublicationReceipt,
     PublicationRequest,
     PublicationResult,
+    RequestedAssociation,
 )
 from my_pa.domain.reports.records import (
+    DEFAULT_HISTORY_PAGE,
+    MAX_HISTORY_PAGE,
+    MAX_HISTORY_PAGE_WITH_MANIFESTS,
+    HistoryEntries,
+    ReportHistoryPage,
+    ReportLifecycleEventRecord,
     ReportRootRecord,
     ReportVersionRecord,
+    ReportVersionSummary,
     StoredReportVersion,
+)
+from my_pa.domain.reports.revision import (
+    LifecycleRequest,
+    LifecycleResult,
+    UpdateRequest,
+    UpdateResult,
+    apply_patch,
+    snapshot_of_version,
 )
 from my_pa.domain.reports.values import ReportAssociation
 from my_pa.domain.reports.vocabulary import (
     AssociationTargetKind,
     AssociationVerification,
     ChangeKind,
+    LifecycleOperation,
     LifecycleState,
     ReceiptOutcome,
     StorageKind,
@@ -929,6 +952,22 @@ class World:
     #: (principal, publish key) and stored versions by (principal, report id).
     general_report_receipts: dict[tuple[str, str], PublicationResult] = field(default_factory=dict)
     general_report_versions: dict[tuple[str, str], StoredReportVersion] = field(
+        default_factory=dict
+    )
+    #: WP03: every version of a report, oldest first (the head view above holds
+    #: the root, which is the truth for state, head and revision); the
+    #: lifecycle events; the update receipts by (principal, key); the lifecycle
+    #: receipts by (principal, operation, key).
+    general_report_ledger: dict[tuple[str, str], list[StoredReportVersion]] = field(
+        default_factory=dict
+    )
+    general_report_events: dict[tuple[str, str], list[ReportLifecycleEventRecord]] = field(
+        default_factory=dict
+    )
+    general_report_update_receipts: dict[tuple[str, str], UpdateResult] = field(
+        default_factory=dict
+    )
+    general_report_lifecycle_receipts: dict[tuple[str, str, str], LifecycleResult] = field(
         default_factory=dict
     )
     #: The relationship-intelligence entity plane. Flat lists for the reason
@@ -9665,6 +9704,12 @@ class _GeneralReports(GeneralReportRepository):
     `tests/database/test_reports_general_persistence.py`; this fake exists so the
     transport and policy suites can reach `reports.publish` and the standalone
     `reports.read` at all. Only a `standalone_report` target resolves here.
+
+    WP03: `update`, `transition` and the two histories mirror the SQL order
+    and outcomes (not found, key replay or conflict, withdrawn, stale, then
+    the write; content reuse; the no-op receipts; restore from trash to the
+    delete's prior state). It cannot prove locking, constraint or rollback
+    behaviour: those are the `database` tier's.
     """
 
     def __init__(self, world: World) -> None:
@@ -9685,29 +9730,7 @@ class _GeneralReports(GeneralReportRepository):
             if stored.receipt.intent_digest != request.intent_digest:
                 raise ReportIdempotencyConflictError()
             return replace(stored, replayed=True)
-        resolved = self.resolve_association_targets(
-            [(item.target_kind, item.target_ref) for item in request.associations],
-            principal_id=principal_id,
-        )
-        associations: list[ReportAssociation] = []
-        for item in request.associations:
-            if item.target_kind is AssociationTargetKind.EXTERNAL_SOURCE:
-                associations.append(item.as_stored(AssociationVerification.ASSERTED))
-            elif (item.target_kind, item.target_ref) in resolved and (
-                item.target_version_ref is None
-                or (
-                    item.target_kind is AssociationTargetKind.STANDALONE_REPORT
-                    and self._world.general_report_versions[
-                        (principal_id, item.target_ref)
-                    ].version.version_id
-                    == item.target_version_ref
-                )
-            ):
-                # As the SQL repository: only a standalone report's own version,
-                # in the caller's scope, verifies; any other version ref refuses.
-                associations.append(item.as_stored(AssociationVerification.VERIFIED))
-            else:
-                raise ReportAssociationTargetNotFoundError()
+        associations = self._verified(request.associations, principal_id)
         report_id = issue_identifier(IdKind.REPORT)
         version_id = issue_identifier(IdKind.REPORT_VERSION)
         content_id = issue_identifier(IdKind.REPORT_CONTENT)
@@ -9776,8 +9799,373 @@ class _GeneralReports(GeneralReportRepository):
             manifest=dict(manifest.document),
             associations=tuple(associations),
         )
+        self._world.general_report_ledger[(principal_id, report_id)] = [
+            self._world.general_report_versions[(principal_id, report_id)]
+        ]
         self._world.general_report_receipts[(principal_id, idempotency_key)] = result
         return result
+
+    def _verified(
+        self, requested: Sequence[RequestedAssociation], principal_id: str
+    ) -> tuple[ReportAssociation, ...]:
+        resolved = self.resolve_association_targets(
+            [(item.target_kind, item.target_ref) for item in requested],
+            principal_id=principal_id,
+        )
+        associations: list[ReportAssociation] = []
+        for item in requested:
+            if item.target_kind is AssociationTargetKind.EXTERNAL_SOURCE:
+                associations.append(item.as_stored(AssociationVerification.ASSERTED))
+            elif (item.target_kind, item.target_ref) in resolved and (
+                item.target_version_ref is None
+                or (
+                    item.target_kind is AssociationTargetKind.STANDALONE_REPORT
+                    and any(
+                        stored.version.version_id == item.target_version_ref
+                        for stored in self._versions(principal_id, item.target_ref)
+                    )
+                )
+            ):
+                # As the SQL repository: only a standalone report's own version,
+                # in the caller's scope, verifies; any other version ref refuses.
+                associations.append(item.as_stored(AssociationVerification.VERIFIED))
+            else:
+                raise ReportAssociationTargetNotFoundError()
+        return tuple(associations)
+
+    def _versions(self, principal_id: str, report_id: str) -> list[StoredReportVersion]:
+        """Every version of the report, oldest first (a head-only entry is its own ledger)."""
+        key = (principal_id, report_id)
+        if key not in self._world.general_report_versions:
+            return []
+        head = self._world.general_report_versions[key]
+        ledger = self._world.general_report_ledger.get(key) or [head]
+        # A test may replace the head entry directly; the head view stays the truth.
+        return (
+            [*ledger[:-1], head]
+            if ledger[-1].version.version_id == head.version.version_id
+            else ledger
+        )
+
+    def _root(self, principal_id: str, report_id: str) -> ReportRootRecord | None:
+        stored = self._world.general_report_versions.get((principal_id, report_id))
+        return None if stored is None else stored.root
+
+    def _set_root(self, principal_id: str, report_id: str, root: ReportRootRecord) -> None:
+        key = (principal_id, report_id)
+        self._world.general_report_versions[key] = replace(
+            self._world.general_report_versions[key], root=root
+        )
+
+    def update(
+        self,
+        request: UpdateRequest,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        recorded_at: datetime,
+        correlation_id: str,
+        audit_id: str,
+    ) -> UpdateResult:
+        """The SQL order (D6): not found, key, withdrawn, stale, then the write."""
+        root = self._root(principal_id, request.report_id)
+        if root is None:
+            raise ReportNotFoundError()
+        stored = self._world.general_report_update_receipts.get((principal_id, idempotency_key))
+        if stored is not None:
+            if stored.intent_digest != request.intent_digest:
+                raise ReportIdempotencyConflictError()
+            return replace(stored, replayed=True)
+        if root.lifecycle_state is not LifecycleState.ACTIVE:
+            raise ReportWithdrawnError()
+        if root.head_version_number != request.expected_version:
+            raise ReportStaleVersionError()
+        key = (principal_id, request.report_id)
+        head = self._world.general_report_versions[key]
+        patch = request.patch
+        patched = (
+            None if patch.associations is None else self._verified(patch.associations, principal_id)
+        )
+        version = head.version
+        result, change_kind = apply_patch(
+            snapshot_of_version(
+                title=version.title,
+                content=head.content,
+                report_type=version.report_type,
+                topics=version.topics,
+                tags=version.tags,
+                summary=version.summary,
+                report_date=version.report_date,
+                coverage_start=version.coverage_start,
+                coverage_end=version.coverage_end,
+                metadata=version.metadata,
+                associations=head.associations,
+            ),
+            patch,
+            request.clear_fields,
+        )
+        common = {
+            "receipt_id": issue_identifier(IdKind.REPORT_RECEIPT),
+            "report_id": request.report_id,
+            "expected_version": request.expected_version,
+            "idempotency_key": idempotency_key,
+            "intent_digest": request.intent_digest,
+            "issued_at": recorded_at,
+            "correlation_id": correlation_id,
+            "audit_id": audit_id,
+            "replayed": False,
+        }
+        if change_kind is None:
+            outcome = UpdateResult(
+                outcome=ReceiptOutcome.NO_OP,
+                version_id=version.version_id,
+                version_number=version.version_number,
+                change_kind=None,
+                content_id=head.content_id,
+                decoded_sha256=head.content.decoded_sha256,
+                manifest_sha256=version.manifest_sha256,
+                **common,  # type: ignore[arg-type]
+            )
+            self._world.general_report_update_receipts[(principal_id, idempotency_key)] = outcome
+            return outcome
+        number = version.version_number + 1
+        version_id = issue_identifier(IdKind.REPORT_VERSION)
+        reused = result.content is head.content
+        content_id = head.content_id if reused else issue_identifier(IdKind.REPORT_CONTENT)
+        associations = head.associations if patched is None else patched
+        manifest = build_version_manifest(
+            report_id=request.report_id,
+            version_id=version_id,
+            version_number=number,
+            supersedes_version_id=version.version_id,
+            change_kind=change_kind,
+            change_reason=request.change_reason,
+            title=result.title,
+            report_type=result.report_type,
+            topics=result.topics,
+            tags=result.tags,
+            summary=result.summary,
+            report_date=result.report_date,
+            coverage_start=result.coverage_start,
+            coverage_end=result.coverage_end,
+            metadata=result.metadata,
+            content=result.content,
+            content_id=content_id,
+            associations=associations,
+            recorded_at=recorded_at,
+        )
+        new_root = replace(root, head_version_id=version_id, head_version_number=number)
+        new = StoredReportVersion(
+            root=new_root,
+            version=ReportVersionRecord(
+                version_id=version_id,
+                report_id=request.report_id,
+                version_number=number,
+                supersedes_version_id=version.version_id,
+                change_kind=change_kind,
+                title=result.title,
+                report_type=result.report_type,
+                topics=result.topics,
+                tags=result.tags,
+                summary=result.summary,
+                report_date=result.report_date,
+                coverage_start=result.coverage_start,
+                coverage_end=result.coverage_end,
+                metadata=dict(result.metadata),
+                change_reason=request.change_reason,
+                content_id=content_id,
+                manifest_sha256=manifest.sha256,
+                recorded_at=recorded_at,
+            ),
+            content_id=content_id,
+            storage_kind=StorageKind.INLINE,
+            content=result.content,
+            manifest=dict(manifest.document),
+            associations=tuple(associations),
+        )
+        self._world.general_report_ledger[key] = [*self._versions(*key), new]
+        self._world.general_report_versions[key] = new
+        outcome = UpdateResult(
+            outcome=ReceiptOutcome.APPLIED,
+            version_id=version_id,
+            version_number=number,
+            change_kind=change_kind,
+            content_id=content_id,
+            decoded_sha256=result.content.decoded_sha256,
+            manifest_sha256=manifest.sha256,
+            **common,  # type: ignore[arg-type]
+        )
+        self._world.general_report_update_receipts[(principal_id, idempotency_key)] = outcome
+        return outcome
+
+    def transition(
+        self,
+        request: LifecycleRequest,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        recorded_at: datetime,
+        correlation_id: str,
+        audit_id: str,
+    ) -> LifecycleResult:
+        """The SQL order (D7): not found, key, stale revision, decide, then the write."""
+        root = self._root(principal_id, request.report_id)
+        if root is None:
+            raise ReportNotFoundError()
+        receipt_key = (principal_id, request.operation.value, idempotency_key)
+        stored = self._world.general_report_lifecycle_receipts.get(receipt_key)
+        if stored is not None:
+            if stored.intent_digest != request.intent_digest:
+                raise ReportIdempotencyConflictError()
+            return replace(stored, replayed=True)
+        if root.lifecycle_revision != request.expected_lifecycle_revision:
+            raise ReportStaleLifecycleRevisionError()
+        key = (principal_id, request.report_id)
+        events = self._world.general_report_events.setdefault(key, [])
+        current = events[-1] if events else None
+        trashed_from = (
+            current.prior_state
+            if root.lifecycle_state is LifecycleState.TRASHED and current is not None
+            else None
+        )
+        decision = decide_lifecycle_transition(
+            root.lifecycle_state, request.operation, trashed_from=trashed_from
+        )
+        event_id: str | None
+        if decision.outcome is ReceiptOutcome.NO_OP:
+            event_id = (
+                current.event_id
+                if current is not None and current.operation is LifecycleOperation.ARCHIVE
+                else None
+            )
+            revision = root.lifecycle_revision
+        else:
+            event_id = issue_identifier(IdKind.REPORT_LIFECYCLE_EVENT)
+            revision = root.lifecycle_revision + 1
+            events.append(
+                ReportLifecycleEventRecord(
+                    event_id=event_id,
+                    lifecycle_revision=revision,
+                    operation=request.operation,
+                    prior_state=decision.prior_state,
+                    resulting_state=decision.resulting_state,
+                    reason=request.reason,
+                    transitioned_at=recorded_at,
+                )
+            )
+            self._set_root(
+                principal_id,
+                request.report_id,
+                replace(
+                    root, lifecycle_state=decision.resulting_state, lifecycle_revision=revision
+                ),
+            )
+        result = LifecycleResult(
+            receipt_id=issue_identifier(IdKind.REPORT_RECEIPT),
+            report_id=request.report_id,
+            operation=request.operation,
+            outcome=decision.outcome,
+            prior_state=decision.prior_state,
+            resulting_state=decision.resulting_state,
+            expected_lifecycle_revision=root.lifecycle_revision,
+            lifecycle_revision=revision,
+            event_id=event_id,
+            idempotency_key=idempotency_key,
+            intent_digest=request.intent_digest,
+            issued_at=recorded_at,
+            correlation_id=correlation_id,
+            audit_id=audit_id,
+            replayed=False,
+        )
+        self._world.general_report_lifecycle_receipts[receipt_key] = result
+        return result
+
+    @staticmethod
+    def _page(value: object, maximum: int) -> int:
+        if type(value) is not int or not 1 <= value <= maximum:
+            raise ReportValidationError("page_size", "bounds")
+        return value
+
+    def version_history(
+        self,
+        report_id: str,
+        *,
+        principal_id: str,
+        after_version_id: str | None = None,
+        page_size: int = DEFAULT_HISTORY_PAGE,
+        include_manifests: bool = False,
+    ) -> ReportHistoryPage[ReportVersionSummary] | None:
+        size = self._page(
+            page_size, MAX_HISTORY_PAGE_WITH_MANIFESTS if include_manifests else MAX_HISTORY_PAGE
+        )
+        root = self._root(principal_id, report_id)
+        if root is None:
+            return None
+        versions = self._versions(principal_id, report_id)
+        start = 0
+        if after_version_id is not None:
+            numbers = [s.version.version_id for s in versions]
+            if after_version_id not in numbers:
+                raise ReportValidationError("cursor", "unknown")
+            start = numbers.index(after_version_id) + 1
+        page = versions[start : start + size]
+        items = tuple(
+            ReportVersionSummary(
+                version_id=s.version.version_id,
+                version_number=s.version.version_number,
+                supersedes_version_id=s.version.supersedes_version_id,
+                change_kind=s.version.change_kind,
+                change_reason=s.version.change_reason,
+                title=s.version.title,
+                recorded_at=s.version.recorded_at,
+                content_id=s.content_id,
+                format=s.content.format,
+                encoding=s.content.encoding,
+                storage_kind=s.storage_kind,
+                decoded_sha256=s.content.decoded_sha256,
+                decoded_byte_count=s.content.decoded_byte_count,
+                canonical_sha256=s.content.canonical_sha256,
+                original_sha256=s.content.original_sha256,
+                manifest_sha256=s.version.manifest_sha256,
+                manifest=dict(s.manifest) if include_manifests else None,
+            )
+            for s in page
+        )
+        more = start + size < len(versions)
+        return ReportHistoryPage(
+            root=root,
+            entries=HistoryEntries.VERSIONS,
+            items=items,
+            next_cursor=items[-1].version_id if more and items else None,
+        )
+
+    def lifecycle_history(
+        self,
+        report_id: str,
+        *,
+        principal_id: str,
+        after_event_id: str | None = None,
+        page_size: int = DEFAULT_HISTORY_PAGE,
+    ) -> ReportHistoryPage[ReportLifecycleEventRecord] | None:
+        size = self._page(page_size, MAX_HISTORY_PAGE)
+        root = self._root(principal_id, report_id)
+        if root is None:
+            return None
+        events = self._world.general_report_events.get((principal_id, report_id), [])
+        start = 0
+        if after_event_id is not None:
+            ids = [event.event_id for event in events]
+            if after_event_id not in ids:
+                raise ReportValidationError("cursor", "unknown")
+            start = ids.index(after_event_id) + 1
+        items = tuple(events[start : start + size])
+        more = start + size < len(events)
+        return ReportHistoryPage(
+            root=root,
+            entries=HistoryEntries.LIFECYCLE,
+            items=items,
+            next_cursor=items[-1].event_id if more and items else None,
+        )
 
     def find_publish_receipt(
         self, idempotency_key: str, *, principal_id: str
@@ -9792,14 +10180,25 @@ class _GeneralReports(GeneralReportRepository):
         version_id: str | None = None,
         version_number: int | None = None,
     ) -> StoredReportVersion | None:
-        stored = self._world.general_report_versions.get((principal_id, report_id))
-        if stored is None:
+        if version_id is not None and version_number is not None:
+            raise ReportValidationError("version", "exclusive")
+        root = self._root(principal_id, report_id)
+        if root is None:
             return None
-        if version_id is not None and version_id != stored.version.version_id:
-            return None
-        if version_number is not None and version_number != stored.version.version_number:
-            return None
-        return stored
+        for stored in self._versions(principal_id, report_id):
+            version = stored.version
+            if (
+                (version_id is not None and version.version_id == version_id)
+                or (version_number is not None and version.version_number == version_number)
+                or (
+                    version_id is None
+                    and version_number is None
+                    and version.version_id == root.head_version_id
+                )
+            ):
+                # Every version reads with the report's current root, as in SQL.
+                return replace(stored, root=root)
+        return None
 
     def resolve_association_targets(
         self,

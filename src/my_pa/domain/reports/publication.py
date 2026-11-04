@@ -45,6 +45,8 @@ __all__ = [
     "PublicationRequest",
     "PublicationResult",
     "RequestedAssociation",
+    "aware_timestamp",
+    "content_payload",
     "format_timestamp",
     "validate_client_intent_id",
 ]
@@ -63,12 +65,25 @@ def validate_client_intent_id(value: object) -> str | None:
     return value
 
 
+def content_payload(content: ReportContent) -> dict[str, object]:
+    """A content value as an intent digest names it: format, encoding, body and/or data."""
+    payload: dict[str, object] = {
+        "format": content.format.value,
+        "encoding": content.encoding.value,
+    }
+    if content.format is not ContentFormat.JSON:
+        payload["body"] = content.body
+    if content.format in (ContentFormat.JSON, ContentFormat.MIXED):
+        payload["data"] = content.data
+    return payload
+
+
 def format_timestamp(value: datetime) -> str:
     """RFC 3339 in UTC with microseconds and a `Z` suffix, the manifest's form."""
     return value.astimezone(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
-def _aware(value: object, field_name: str) -> datetime | None:
+def aware_timestamp(value: object, field_name: str) -> datetime | None:
     if value is None:
         return None
     if not isinstance(value, datetime):
@@ -134,8 +149,8 @@ class PublicationRequest:
             isinstance(self.report_date, datetime) or not isinstance(self.report_date, date)
         ):
             raise ReportValidationError("report_date", "type")
-        start = _aware(self.coverage_start, "coverage_start")
-        end = _aware(self.coverage_end, "coverage_end")
+        start = aware_timestamp(self.coverage_start, "coverage_start")
+        end = aware_timestamp(self.coverage_end, "coverage_end")
         if start is not None and end is not None and start > end:
             raise ReportValidationError("coverage_period", "order")
         put("coverage_start", start)
@@ -153,17 +168,6 @@ class PublicationRequest:
         put("metadata", validate_metadata(self.metadata))
         put("client_intent_id", validate_client_intent_id(self.client_intent_id))
 
-    def _content_payload(self) -> dict[str, object]:
-        payload: dict[str, object] = {
-            "format": self.content.format.value,
-            "encoding": self.content.encoding.value,
-        }
-        if self.content.format is not ContentFormat.JSON:
-            payload["body"] = self.content.body
-        if self.content.format in (ContentFormat.JSON, ContentFormat.MIXED):
-            payload["data"] = self.content.data
-        return payload
-
     @property
     def intent_digest(self) -> str:
         """SHA-256 of the canonical JSON of the normalized caller payload."""
@@ -179,7 +183,7 @@ class PublicationRequest:
         )
         payload = {
             "title": self.title,
-            "content": self._content_payload(),
+            "content": content_payload(self.content),
             "report_type": self.report_type,
             "topics": list(self.topics),
             "tags": list(self.tags),

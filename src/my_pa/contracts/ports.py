@@ -258,7 +258,18 @@ from my_pa.domain.relationship.reenrichment import (
     ReenrichmentWork,
 )
 from my_pa.domain.reports.publication import PublicationRequest, PublicationResult
-from my_pa.domain.reports.records import StoredReportVersion
+from my_pa.domain.reports.records import (
+    ReportHistoryPage,
+    ReportLifecycleEventRecord,
+    ReportVersionSummary,
+    StoredReportVersion,
+)
+from my_pa.domain.reports.revision import (
+    LifecycleRequest,
+    LifecycleResult,
+    UpdateRequest,
+    UpdateResult,
+)
 from my_pa.domain.reports.vocabulary import AssociationTargetKind
 from my_pa.domain.schedule import (
     ParsedScheduleRow,
@@ -534,6 +545,10 @@ __all__ = [
     "ReportAssociationTargetNotFoundError",
     "ReportIdempotencyConflictError",
     "ReportIntegrityError",
+    "ReportNotFoundError",
+    "ReportStaleLifecycleRevisionError",
+    "ReportStaleVersionError",
+    "ReportWithdrawnError",
     "RepositoryFailureError",
     "ReviewDecisionRequest",
     "ReviewRepository",
@@ -7750,6 +7765,30 @@ class ReportAssociationTargetNotFoundError(UnknownScopeError):
     """
 
 
+class ReportNotFoundError(UnknownScopeError):
+    """The named general report does not exist in the caller's Principal partition.
+
+    Foreign and missing are one answer, as for every `UnknownScopeError`; the
+    message names neither the report nor why.
+    """
+
+
+class ReportStaleVersionError(PortError):
+    """An update's `expected_version` is not the report's head. Nothing was written."""
+
+
+class ReportStaleLifecycleRevisionError(PortError):
+    """A lifecycle request's `expected_lifecycle_revision` is not current. Nothing was written."""
+
+
+class ReportWithdrawnError(PortError):
+    """An update named an `archived` or `trashed` report (WP03 D3). Nothing was written.
+
+    A withdrawn report is revised only after `reports.restore`; there is no
+    silent unarchive.
+    """
+
+
 class GeneralReportRepository(ABC):
     """The general report plane (Reports Modernization WP02), inside one transaction.
 
@@ -7823,6 +7862,89 @@ class GeneralReportRepository(ABC):
         Resolvable kinds only: `project`, `entity`, `standalone_report` (a
         `grpt_` root) and `intelligence_report` (an `rpt_` artifact). An
         `external_source` target is never returned.
+        """
+
+    @abstractmethod
+    def update(
+        self,
+        request: UpdateRequest,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        recorded_at: datetime,
+        correlation_id: str,
+        audit_id: str,
+    ) -> UpdateResult:
+        """Write version N+1 of an active report, or a `no_op` receipt (WP03 D4-D6).
+
+        One transaction, in this order: lock the root `FOR UPDATE` (missing or
+        foreign -> `ReportNotFoundError`); the `update` receipt of this key,
+        if any, replays its original result (`replayed=True`, nothing written)
+        or, bound to another intent digest, raises
+        `ReportIdempotencyConflictError`; an `archived` or `trashed` report
+        raises `ReportWithdrawnError`; a head other than `expected_version`
+        raises `ReportStaleVersionError`. Patched associations resolve as a
+        publish's do (`ReportAssociationTargetNotFoundError`); the rest carry
+        forward verbatim. New content writes a content object (`content`);
+        otherwise the head's object is reused (`metadata`). A patch that
+        changes nothing writes only an `update`/`no_op` receipt naming the head.
+        Every refusal writes nothing.
+        """
+
+    @abstractmethod
+    def transition(
+        self,
+        request: LifecycleRequest,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        recorded_at: datetime,
+        correlation_id: str,
+        audit_id: str,
+    ) -> LifecycleResult:
+        """Archive, delete (to the recoverable Trash) or restore a report (WP03 D7).
+
+        Lock the root `FOR UPDATE` (`ReportNotFoundError`), settle the key as
+        `update` does, require `lifecycle_revision == expected_lifecycle_revision`
+        (`ReportStaleLifecycleRevisionError`), then decide with
+        `decide_lifecycle_transition` (an illegal move raises the domain
+        `ReportLifecycleRefusal`). Applied: one event at revision + 1 linked to
+        its predecessor, the root cache moved, an `applied` receipt. Archive on
+        `archived` is a `no_op` receipt at the current revision. No version,
+        content, manifest or association row is ever touched or removed.
+        """
+
+    @abstractmethod
+    def version_history(
+        self,
+        report_id: str,
+        *,
+        principal_id: str,
+        after_version_id: str | None = None,
+        page_size: int = 20,
+        include_manifests: bool = False,
+    ) -> ReportHistoryPage[ReportVersionSummary] | None:
+        """One page of the report's versions, oldest first, or `None` if not found.
+
+        `after_version_id` is the last item of the previous page; one that is
+        not a version of this report raises `ReportValidationError("cursor")`.
+        `page_size` is 1..50, at most 10 with manifests. Every listed version's
+        manifest is rebuilt and compared (`ReportIntegrityError`). Lifecycle
+        state is returned, not filtered.
+        """
+
+    @abstractmethod
+    def lifecycle_history(
+        self,
+        report_id: str,
+        *,
+        principal_id: str,
+        after_event_id: str | None = None,
+        page_size: int = 20,
+    ) -> ReportHistoryPage[ReportLifecycleEventRecord] | None:
+        """One page of the report's lifecycle events, oldest first, or `None` if not found.
+
+        The cursor and `page_size` rules are `version_history`'s (1..50).
         """
 
 

@@ -1,8 +1,13 @@
-"""The stored form of one general report version, as a read returns it.
+"""The stored form of one general report version, as a read returns it, and its history.
 
 A `StoredReportVersion` is only ever built from rows whose digests the reader
 recomputed and found equal to the stored ones: the content's decoded digest
-from its body and data, and the manifest's digest from its document.
+from its body and data, and the manifest's digest from its document, which is
+also rebuilt whole from the stored rows and compared canonically.
+
+`ReportHistoryPage` is one page of a report's version or lifecycle ledger,
+oldest first (WP03 D9): `next_cursor` is the id of the page's last item when
+more follow, else `None`.
 """
 
 from __future__ import annotations
@@ -10,13 +15,37 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any
+from enum import StrEnum
+from typing import Any, Final
 
 from my_pa.domain.reports.content import ReportContent
 from my_pa.domain.reports.values import ReportAssociation
-from my_pa.domain.reports.vocabulary import ChangeKind, LifecycleState, StorageKind
+from my_pa.domain.reports.vocabulary import (
+    ChangeKind,
+    ContentEncoding,
+    ContentFormat,
+    LifecycleOperation,
+    LifecycleState,
+    StorageKind,
+)
 
-__all__ = ["ReportRootRecord", "ReportVersionRecord", "StoredReportVersion"]
+__all__ = [
+    "DEFAULT_HISTORY_PAGE",
+    "MAX_HISTORY_PAGE",
+    "MAX_HISTORY_PAGE_WITH_MANIFESTS",
+    "HistoryEntries",
+    "ReportHistoryPage",
+    "ReportLifecycleEventRecord",
+    "ReportRootRecord",
+    "ReportVersionRecord",
+    "ReportVersionSummary",
+    "StoredReportVersion",
+]
+
+#: History page sizes (D9): 1..50 items, 20 by default, at most 10 with manifests.
+DEFAULT_HISTORY_PAGE: Final = 20
+MAX_HISTORY_PAGE: Final = 50
+MAX_HISTORY_PAGE_WITH_MANIFESTS: Final = 10
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,3 +89,54 @@ class StoredReportVersion:
     content: ReportContent
     manifest: Mapping[str, Any]
     associations: tuple[ReportAssociation, ...]
+
+
+class HistoryEntries(StrEnum):
+    """Which ledger a history page walks."""
+
+    VERSIONS = "versions"
+    LIFECYCLE = "lifecycle"
+
+
+@dataclass(frozen=True, slots=True)
+class ReportVersionSummary:
+    """One version as a history page lists it: no body, the manifest only on request."""
+
+    version_id: str
+    version_number: int
+    supersedes_version_id: str | None
+    change_kind: ChangeKind
+    change_reason: str | None
+    title: str
+    recorded_at: datetime
+    content_id: str
+    format: ContentFormat
+    encoding: ContentEncoding
+    storage_kind: StorageKind
+    decoded_sha256: str
+    decoded_byte_count: int
+    canonical_sha256: str | None
+    original_sha256: str
+    manifest_sha256: str
+    manifest: Mapping[str, Any] | None
+
+
+@dataclass(frozen=True, slots=True)
+class ReportLifecycleEventRecord:
+    event_id: str
+    lifecycle_revision: int
+    operation: LifecycleOperation
+    prior_state: LifecycleState
+    resulting_state: LifecycleState
+    reason: str | None
+    transitioned_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ReportHistoryPage[ItemT: (ReportVersionSummary, ReportLifecycleEventRecord)]:
+    """One page: `ReportVersionSummary` items for versions, events for lifecycle."""
+
+    root: ReportRootRecord
+    entries: HistoryEntries
+    items: tuple[ItemT, ...]
+    next_cursor: str | None

@@ -22,7 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Final
 
 from my_pa.domain.reports.errors import ReportValidationError
@@ -89,14 +89,16 @@ class ReportContent:
     """One inline content value with its decoded bytes and their digests.
 
     Built only by `content_of`, which derives every digest from the body and
-    data it holds, so the fields cannot disagree with one another.
+    data it holds, so the fields cannot disagree with one another. The body,
+    the data and the decoded bytes are kept out of `repr`: a logged or
+    asserted value names the format and the digests, never the content.
     """
 
     format: ContentFormat
     encoding: ContentEncoding
-    body: str | None
-    data: Any
-    decoded: bytes
+    body: str | None = field(repr=False)
+    data: Any = field(repr=False)
+    decoded: bytes = field(repr=False)
     decoded_sha256: str
     canonical_sha256: str | None
 

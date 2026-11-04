@@ -228,6 +228,14 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.REPORTS_BEGIN_CYCLE,
         Capability.REPORTS_COMMIT,
         Capability.REPORTS_RECORD_RUN_STATE,
+        # Reports Modernization WP02: `reports.publish` requires the key its
+        # receipt ledger arbitrates (`report_receipts (owner, operation,
+        # idempotency_key)`), so the server stamps this set's payload hash. An
+        # identical lost-response retry derives the same key and replays the
+        # original receipt; a distinct optional `client_intent_id` hashes to a
+        # distinct key and publishes a new report even for identical content.
+        # Also client-bound (`_CLIENT_BOUND_KEY_CAPABILITIES`).
+        Capability.REPORTS_PUBLISH,
         # The entity plane's eighteen keyed writes (Phase A). Every one of them
         # carries an `idempotency_key` its command validates and its repository
         # arbitrates against
@@ -377,12 +385,21 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
 #: writes, whose derived key also binds the authenticated OAuth client. Two
 #: remote clients sending the same payload so derive 2 keys and both reach the
 #: identity rule (`created: false` for the second), while a client's own retry
-#: derives its own key again and replays. Every other capability's derivation
-#: is unchanged.
+#: derives its own key again and replays.
+#:
+#: Reports Modernization WP02: `reports.publish` too. Every remote client acts
+#: for the one operator Principal, so an unbound key would let client B's first
+#: publish of a body client A already published replay A's receipt: not a
+#: cross-Principal leak (the key and the ledger are Principal-scoped), but a
+#: cross-client existence signal (`replayed: true`) and a retry identity the
+#: second client never had. A retry is one client's retry, so the key binds the
+#: client: A's retry still replays, B publishes its own report. Every other
+#: capability's derivation is unchanged.
 _CLIENT_BOUND_KEY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     capability
     for capability in _IDEMPOTENT_REMOTE_CAPABILITIES
     if capability.value in OPEN_LINEAGE_WRITE_CAPABILITIES
+    or capability is Capability.REPORTS_PUBLISH
 )
 
 #: When more than one permitted purpose remains after grant intersection, the

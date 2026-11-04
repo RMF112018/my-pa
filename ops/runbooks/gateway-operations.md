@@ -106,7 +106,10 @@ the 7 S4 reads), and `issues.close`, `issues.reopen`, the 3 `confirm` names and 
 production environment block, switch matrix, grant and companion tables, read-only recon
 and residual risks are in
 [`remote-mcp-cloudflare.md`, "Record lineage client exposure (P1)"](remote-mcp-cloudflare.md#record-lineage-client-exposure-p1).
-The current profile, `chatllm-data-v11` (CPM Workbench S5b-2), adds the 6 Schedule reads
+The current profile, `chatllm-data-v12` (Reports Modernization WP02), adds only
+`reports.publish` (standalone report publication; a `DATA_REQUIRED` write under
+`report_authoring`, needing no plane switch); `profile-plan` for a client converged on
+`chatllm-data-v11` adds exactly that one grant. `chatllm-data-v11` (CPM Workbench S5b-2) added the 6 Schedule reads
 as `DATA_CONDITIONAL` on `MY_PA_SCHEDULE_ENABLED` (default off) and classifies
 `schedule_publications.import` `CONTROL_PLANE_EXCLUDED`: it is operator-only and attested
 to the local CLI or this gateway's stamped operator surface.

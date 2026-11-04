@@ -224,10 +224,12 @@ def test_full_plane_effective_target_is_one_hundred_forty_nine() -> None:
     capabilities), re-measured from the live derivation. WP-RE-06 moved it by
     one (`record_events.list`, `DATA_REQUIRED` on the core plane).
     `chatllm-data-v9` moved it by two (`reports.types.create`/`list`).
+    `chatllm-data-v12` moved it by one (`reports.publish`, `DATA_REQUIRED`).
     """
     composed = composed_capabilities(IMPLEMENTED, _FULL_PLANES)
     desired = desired_effective_capabilities(composed)
-    assert len(desired) == 164
+    assert len(desired) == 165
+    assert Capability.REPORTS_PUBLISH in desired
     assert Capability.PROJECT_CONTROLS_CONFIGURE in desired
     assert Capability.PROJECT_CONTROLS_STATUS in desired
     assert Capability.REPORTS_BEGIN_CYCLE in desired
@@ -242,8 +244,10 @@ def test_default_plane_effective_target_is_eighty_three() -> None:
     desired = desired_effective_capabilities(composed)
     # The six Meeting capabilities need no plane flag, so they are in the
     # default-plane target too (re-measured from the live derivation), and so
-    # does WP-RE-06's `record_events.list`, and v9's two `reports.types.*` names.
-    assert len(desired) == 98
+    # does WP-RE-06's `record_events.list`, and v9's two `reports.types.*` names,
+    # and v12's `reports.publish`.
+    assert len(desired) == 99
+    assert Capability.REPORTS_PUBLISH in desired
     assert desired >= _REPORT_TYPES
     assert Capability.RECORD_EVENTS_LIST in desired
     assert desired >= _MEETINGS
@@ -441,7 +445,7 @@ def test_no_path_grants_every_capability_enum_member() -> None:
     assert Capability.SOURCES_ENROLL not in desired
     assert Capability.GSQS_START not in desired
     assert Capability.CONTINUITY_TASKS_CREATE not in desired
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v11"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
 
 
 def test_mismatched_purpose_or_write_is_add_not_noop() -> None:
@@ -695,7 +699,7 @@ def test_a_v2_converged_client_plans_exactly_the_six_meeting_adds() -> None:
         scope=SCOPE,
     )
     assert not diff.is_healthy()
-    assert diff.profile_version == "chatllm-data-v11"
+    assert diff.profile_version == "chatllm-data-v12"
     assert diff.add == _MEETINGS
     assert diff.renew == frozenset()
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
@@ -718,7 +722,7 @@ def test_a_v3_converged_client_plans_exactly_the_record_events_add() -> None:
         scope=SCOPE,
     )
     assert not diff.is_healthy()
-    assert diff.profile_version == "chatllm-data-v11"
+    assert diff.profile_version == "chatllm-data-v12"
     assert diff.add == feed
     assert diff.renew == frozenset()
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
@@ -745,7 +749,7 @@ def test_a_v4_converged_client_plans_exactly_the_capture_lifecycle_adds() -> Non
         scope=SCOPE,
     )
     assert not diff.is_healthy()
-    assert diff.profile_version == "chatllm-data-v11"
+    assert diff.profile_version == "chatllm-data-v12"
     assert diff.add == lifecycle
     assert diff.renew == frozenset()
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
@@ -856,7 +860,7 @@ def test_v6_demands_the_knowledge_grants_only_when_the_plane_is_composed() -> No
         resource=RESOURCE,
         scope=SCOPE,
     )
-    assert diff.profile_version == "chatllm-data-v11"
+    assert diff.profile_version == "chatllm-data-v12"
     assert diff.add == _KNOWLEDGE_V8
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
     added = {action.capability: action for action in actions if action.kind == "add"}
@@ -929,7 +933,7 @@ def test_v8_adds_exactly_provenance_and_still_excludes_the_discovery_pair() -> N
     Knowledge plane (and the entity plane it requires) is composed, and submit
     and checkpoint are never desired.
     """
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v11"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
     provenance = Capability.RECORD_EVENTS_PROVENANCE
     assert is_chatllm_data_management(provenance)
     discovery = {Capability.KNOWLEDGE_ASSERTIONS_SUBMIT, Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT}
@@ -957,7 +961,7 @@ def test_v9_adds_exactly_the_report_type_registry_on_every_composition() -> None
     sixty-four compositions both are desired, and nothing else moved: the v8
     plane-conditional and excluded names keep exactly their v8 behaviour.
     """
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v11"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
     for capability in _REPORT_TYPES:
         assert is_chatllm_data_management(capability)
     discovery = {Capability.KNOWLEDGE_ASSERTIONS_SUBMIT, Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT}
@@ -992,7 +996,7 @@ def test_a_v8_converged_client_plans_exactly_the_two_report_type_adds() -> None:
         scope=SCOPE,
     )
     assert not diff.is_healthy()
-    assert diff.profile_version == "chatllm-data-v11"
+    assert diff.profile_version == "chatllm-data-v12"
     assert diff.add == _REPORT_TYPES
     assert diff.renew == frozenset()
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
@@ -1057,7 +1061,7 @@ def test_a_v9_converged_client_plans_exactly_the_lineage_adds() -> None:
         resource=RESOURCE,
         scope=SCOPE,
     )
-    assert diff.profile_version == "chatllm-data-v11"
+    assert diff.profile_version == "chatllm-data-v12"
     assert not diff.is_healthy()
     assert diff.add == exposed
     assert diff.renew == frozenset()
@@ -1081,7 +1085,7 @@ def test_v10_adds_exactly_the_lineage_plane_names() -> None:
     new flags off leave every desired set free of lineage, and turning them on
     adds exactly the composed part of the 34 and nothing else.
     """
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v11"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
     lineage, program = _lineage_plane_split()
     program_reads = {Capability.PROGRAMS_MEMBERS_RESOLVE, Capability.PROGRAMS_OVERVIEW}
     for bits in range(64):
@@ -1109,3 +1113,65 @@ def test_v10_adds_exactly_the_lineage_plane_names() -> None:
             expected.discard(Capability.PROGRAMS_OVERVIEW)
         assert on - v9 == expected, planes
         assert v9 <= on, planes
+
+
+# ---- Reports Modernization WP02 (chatllm-data-v12) --------------------------------
+
+
+def test_v12_adds_exactly_reports_publish_on_every_composition() -> None:
+    """chatllm-data-v12 = v11 + `reports.publish`, `DATA_REQUIRED` on the core plane.
+
+    Across all 512 compositions it is desired, with its one purpose and as a
+    write; nothing else moved; no `reports.*` name is control-plane or excluded.
+    """
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
+    publish = Capability.REPORTS_PUBLISH
+    assert is_chatllm_data_management(publish)
+    assert chatllm_grant_purpose(publish) is Purpose.REPORT_AUTHORING
+    reports = {capability for capability in Capability if capability.value.startswith("reports.")}
+    for bits in range(512):
+        planes = ChatLLMCompositionPlanes(
+            managed_documents=bool(bits & 1),
+            relationship_intelligence=bool(bits & 2),
+            relationship_intelligence_writes=bool(bits & 4),
+            relationship_memory=bool(bits & 8),
+            constraints=bool(bits & 16),
+            knowledge_assertions=bool(bits & 32),
+            lineage=bool(bits & 64),
+            program_reporting=bool(bits & 128),
+            schedule=bool(bits & 256),
+        )
+        desired = desired_effective_capabilities(
+            composed_capabilities(frozenset(Capability), planes)
+        )
+        assert publish in desired, planes
+        # `reports.manifest` stays program-reporting conditional; every other
+        # `reports.*` name is required on every composition.
+        assert reports - {Capability.REPORTS_MANIFEST} <= desired, planes
+
+
+def test_a_v11_converged_client_plans_exactly_the_reports_publish_add() -> None:
+    composed = composed_capabilities(IMPLEMENTED, _FULL_PLANES)
+    desired = desired_effective_capabilities(composed)
+    publish = Capability.REPORTS_PUBLISH
+    grants = tuple(_grant(capability) for capability in desired - {publish})
+    diff = diff_chatllm_data_profile(
+        implemented=IMPLEMENTED,
+        composed=composed,
+        grants=grants,
+        now=NOW,
+        resource=RESOURCE,
+        scope=SCOPE,
+    )
+    assert not diff.is_healthy()
+    assert diff.profile_version == "chatllm-data-v12"
+    assert diff.add == {publish}
+    assert diff.renew == frozenset()
+    actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
+    (action,) = (action for action in actions if action.kind != "noop")
+    assert (action.kind, action.capability, action.purpose, action.is_write) == (
+        "add",
+        publish,
+        Purpose.REPORT_AUTHORING,
+        True,
+    )

@@ -494,7 +494,7 @@ composition and in every MCP publication that composition produces.
   family, and each Meeting capability appears in it only for an authenticated
   client whose grants, purpose, capability version and write gates admit it.
 - **Desired ChatLLM profile.** The repository's ChatLLM data profile is
-  `chatllm-data-v11`. Since `chatllm-data-v3` it has classified the six
+  `chatllm-data-v12`. Since `chatllm-data-v3` it has classified the six
   `meetings.` names as `DATA_REQUIRED`: reads under `meeting_read`, writes under
   `meeting_authoring`; `chatllm-data-v4` adds `record_events.list` under
   `record_event_read`; `chatllm-data-v5` adds `capture.archive` and
@@ -530,7 +530,10 @@ composition and in every MCP publication that composition produces.
   "Record lineage client exposure (P1)"); `chatllm-data-v11` (CPM Workbench S5b-2)
   adds the 6 Schedule reads under `schedule_read` as `DATA_CONDITIONAL` on
   `MY_PA_SCHEDULE_ENABLED` and classifies `schedule_publications.import`
-  (`schedule_import`, operator-only) `CONTROL_PLANE_EXCLUDED`.
+  (`schedule_import`, operator-only) `CONTROL_PLANE_EXCLUDED`; `chatllm-data-v12`
+  (Reports Modernization WP02) adds `reports.publish` (write, `report_authoring`)
+  as `DATA_REQUIRED`, so a client converged on `chatllm-data-v11` plans exactly that
+  one add.
   That is repository desire only. Whether any deployed client holds those
   grants is a runtime fact this document does not state.
 
@@ -614,10 +617,10 @@ python -m alembic heads
 python apps/cli/health.py
 python apps/cli/remote_mcp.py profile-diff \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v11
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v12
 python apps/cli/remote_mcp.py profile-plan \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v11
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v12
 ```
 
 `apps/cli/health.py` answers `not_at_head` for a database below `c8e4a1b70d35`,

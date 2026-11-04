@@ -323,7 +323,7 @@ def _remote_write(scene: Scene) -> None:
 
 def _chatllm_policy(scene: Scene) -> None:
     del scene
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v11"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
     for capability in READS:
         policy = CHATLLM_CAPABILITY_POLICY[capability]
         assert policy.classification is ChatLLMCapabilityClass.DATA_CONDITIONAL, capability
@@ -502,19 +502,20 @@ def test_import_is_control_plane_excluded() -> None:
 
 
 def test_v11_targets() -> None:
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v11"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
     assert len(CHATLLM_CAPABILITY_POLICY) == 241
+    # chatllm-data-v12: `reports.publish` (`DATA_REQUIRED`) adds 1 everywhere.
     full = _desired(_planes(**_FULL))
-    assert len(full) == 164
-    assert len(_desired(_planes(constraints=True))) == 98
+    assert len(full) == 165
+    assert len(_desired(_planes(constraints=True))) == 99
     with_schedule = _desired(_planes(**_FULL, schedule=True))
-    assert len(with_schedule) == 170
+    assert len(with_schedule) == 171
     assert with_schedule - full == READS
     assert len(_desired(_planes(**_FULL, lineage=True, program_reporting=True, schedule=True))) == (
-        204
+        205
     )
     default_all = _planes(constraints=True, lineage=True, program_reporting=True, schedule=True)
-    assert len(_desired(default_all)) == 136
+    assert len(_desired(default_all)) == 137
     assert len(_every_composition()) == 512
 
 

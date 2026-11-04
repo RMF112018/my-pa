@@ -77,7 +77,7 @@ _MEETINGS = _MEETING_READS | _MEETING_WRITES
 def test_policy_covers_every_public_capability_exactly_once() -> None:
     assert set(CHATLLM_CAPABILITY_POLICY) == set(Capability)
     assert len(CHATLLM_CAPABILITY_POLICY) == 241
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v11"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
 
 
 def test_classification_counts_match_the_approved_plan() -> None:
@@ -85,7 +85,8 @@ def test_classification_counts_match_the_approved_plan() -> None:
     for policy in CHATLLM_CAPABILITY_POLICY.values():
         counts[policy.classification] += 1
     # chatllm-data-v9: `reports.types.create` and `reports.types.list`, 72 -> 74.
-    assert counts[ChatLLMCapabilityClass.DATA_REQUIRED] == 74
+    # Reports Modernization WP02 (chatllm-data-v12): `reports.publish`, 74 -> 75.
+    assert counts[ChatLLMCapabilityClass.DATA_REQUIRED] == 75
     # KLP-WP-03 (chatllm-data-v6): the six Knowledge Assertion names, 90 -> 96.
     # KLP-WP-05 (chatllm-data-v8): `record_events.provenance`, 96 -> 97.
     # Record lineage P1 (chatllm-data-v10, operator directive 2026-10-26): the
@@ -108,10 +109,10 @@ def test_classification_counts_match_the_approved_plan() -> None:
     # profile bump. Record lineage S3.1's 3 confirms and the related read too,
     # 37 -> 41; no profile bump. Record lineage P1 (operator directive
     # 2026-10-26) makes the decision: 34 to data, 5 to excluded, 41 -> 2, and
-    # the profile bumps to v10. Reports Modernization WP02 adds `reports.publish`
-    # here, withheld until its remote registration makes it data-class, 2 -> 3;
-    # no data-class member moves, so no profile bump.
-    assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 3
+    # the profile bumps to v10. Reports Modernization WP02 held `reports.publish`
+    # here until its remote registration, 2 -> 3, then made it `DATA_REQUIRED`
+    # (chatllm-data-v12), 3 -> 2.
+    assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 2
     assert counts[ChatLLMCapabilityClass.RETIRED] == 0
 
 

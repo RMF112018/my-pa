@@ -15,7 +15,7 @@ from typing import Final
 
 from my_pa.domain.identity.operation import Capability
 
-CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v11"
+CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v12"
 
 
 class ChatLLMCapabilityClass(StrEnum):
@@ -119,6 +119,13 @@ _DATA_REQUIRED: Final[frozenset[Capability]] = frozenset(
         # to register it and to list the kinds it may use.
         Capability.REPORTS_TYPES_CREATE,
         Capability.REPORTS_TYPES_LIST,
+        # Reports Modernization WP02 (chatllm-data-v12): standalone report
+        # publication, an additive Principal-scoped write under
+        # `report_authoring`, needing no plane switch (the service composes it
+        # unconditionally, as it does `reports.read`). The ordinary profile
+        # carries it with the rest of `reports.*`; a later `reports.purge` is not
+        # data management and stays out.
+        Capability.REPORTS_PUBLISH,
         Capability.REVIEW_DECIDE,
         Capability.REVIEW_LIST,
         Capability.SOURCES_FETCH,
@@ -366,11 +373,6 @@ _OPERATOR_DECISION_REQUIRED: Final[frozenset[Capability]] = frozenset(
     {
         Capability.GSQS_START,
         Capability.GSQS_STATUS,
-        # Reports Modernization WP02: withheld, not yet eligible. Classified only
-        # so the policy stays exhaustive when the canonical capability lands;
-        # the remote/ChatLLM registration work package makes it DATA_REQUIRED
-        # and bumps the profile version. No profile or grant changes here.
-        Capability.REPORTS_PUBLISH,
     }
 )
 
@@ -519,9 +521,6 @@ _EXCLUSION_RATIONALE: Final[Mapping[Capability, str]] = MappingProxyType(
         Capability.ISSUES_MEMBERSHIPS_CONFIRM: _LINEAGE_ATTESTED_EXCLUSION,
         Capability.ISSUES_PROJECT_LINKS_CONFIRM: _LINEAGE_ATTESTED_EXCLUSION,
         Capability.SCHEDULE_PUBLICATIONS_IMPORT: _SCHEDULE_IMPORT_EXCLUSION,
-        Capability.REPORTS_PUBLISH: (
-            "general report publication withheld pending remote registration (WP02)"
-        ),
     }
 )
 

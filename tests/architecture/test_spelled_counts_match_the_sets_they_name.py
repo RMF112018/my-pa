@@ -573,6 +573,9 @@ _ORDINAL_UNITS = (
     "two-hundred-thirty-ninth",
     "two-hundred-fortieth",
     "two-hundred-forty-first",
+    # Reports Modernization WP02 takes it to two hundred and forty-one; dense
+    # through the two-hundred-forty-second.
+    "two-hundred-forty-second",
 )
 
 

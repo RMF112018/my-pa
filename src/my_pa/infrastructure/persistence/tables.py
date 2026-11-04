@@ -369,6 +369,35 @@ from my_pa.domain.relationship.memory import (
     ContextLinkTargetType as MemoryContextLinkTargetType,
 )
 from my_pa.domain.relationship.profile import EvidenceAuthority
+from my_pa.domain.reports.vocabulary import MANIFEST_SCHEMA as REPORT_VERSION_MANIFEST_SCHEMA
+from my_pa.domain.reports.vocabulary import (
+    MAX_ASSOCIATION_REF_CHARACTERS,
+    MAX_ASSOCIATIONS_PER_VERSION,
+    MAX_DECODED_CONTENT_BYTES,
+    MAX_ORIGINAL_CONTENT_BYTES,
+    TRANSFER_CHUNK_MAX_BYTES,
+    TRANSFER_MAX_TTL,
+    TYPE_TOKEN_PATTERN,
+    AssociationTargetKind,
+    AssociationVerification,
+)
+from my_pa.domain.reports.vocabulary import MAX_MANIFEST_BYTES as MAX_REPORT_MANIFEST_BYTES
+from my_pa.domain.reports.vocabulary import MAX_METADATA_BYTES as MAX_REPORT_METADATA_BYTES
+from my_pa.domain.reports.vocabulary import MAX_REASON_CHARACTERS as MAX_REPORT_REASON_CHARACTERS
+from my_pa.domain.reports.vocabulary import (
+    MAX_SUMMARY_CHARACTERS as MAX_REPORT_SUMMARY_CHARACTERS,
+)
+from my_pa.domain.reports.vocabulary import MAX_TERMS as MAX_REPORT_TERMS
+from my_pa.domain.reports.vocabulary import MAX_TITLE_CHARACTERS as MAX_REPORT_TITLE_CHARACTERS
+from my_pa.domain.reports.vocabulary import ChangeKind as ReportChangeKind
+from my_pa.domain.reports.vocabulary import ContentEncoding as ReportContentEncoding
+from my_pa.domain.reports.vocabulary import ContentFormat as ReportContentFormat
+from my_pa.domain.reports.vocabulary import LifecycleOperation as ReportLifecycleOperation
+from my_pa.domain.reports.vocabulary import LifecycleState as ReportLifecycleState
+from my_pa.domain.reports.vocabulary import ReceiptOperation as ReportReceiptOperation
+from my_pa.domain.reports.vocabulary import ReceiptOutcome as ReportReceiptOutcome
+from my_pa.domain.reports.vocabulary import StorageKind as ReportStorageKind
+from my_pa.domain.reports.vocabulary import TransferState as ReportTransferState
 from my_pa.domain.schedule import (
     CELLS_SCHEMA,
     ISSUE_SEVERITY,
@@ -10424,6 +10453,741 @@ intelligence_artifact_manifests = Table(
         ],
         ondelete="RESTRICT",
         name="a_manifest_names_an_artifact_of_its_principal",
+    ),
+)
+
+
+# --- Reports Modernization WP01: the general report plane --------------------
+#
+# Eight tables, created by revision `4c37731671fc` with the triggers a `Table`
+# cannot declare: append-only on the six immutable tables, TRUNCATE refusal on
+# all eight, the guarded updates of `report_roots` (only its head and lifecycle
+# caches move, each by exactly one) and `report_transfer_sessions` (forward-only
+# state), and the deferred `a_report_version_has_its_manifest`.
+#
+# Distinct from the Intelligence Artifact plane above: these are reports a
+# caller authors and versions, keyed by the `grpt`/`grver`/... kinds, not
+# artifacts a producer cycle commits. Every bound and closed set is
+# `domain.reports.vocabulary`; the revision restates them as frozen literals.
+#
+# Same-owner protection is declarative: every reference carries
+# `owner_principal_id`, so no row can name a root, version, content object or
+# event of another Principal. The two cache references on `report_roots` are
+# `DEFERRABLE INITIALLY DEFERRED` and `use_alter`, because a root and its first
+# version name each other and are written in one transaction.
+
+_REPORT_STATES: Final = _literals(ReportLifecycleState)
+_REPORT_TYPE_SHAPE: Final = TYPE_TOKEN_PATTERN.pattern.replace(r"\A", "^").replace(r"\Z", "$")
+_REPORT_VERSION_KEY: Final = ["version_id", "owner_principal_id", "report_id", "version_number"]
+
+
+def _report_fk(
+    columns: list[str], table: str, targets: list[str], *, name: str
+) -> ForeignKeyConstraint:
+    return ForeignKeyConstraint(
+        columns,
+        [f"{SCHEMA}.{table}.{target}" for target in targets],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name=name,
+    )
+
+
+def _report_sha(column: str, *, name: str, nullable: bool = False) -> CheckConstraint:
+    predicate = f"{column} ~ '^[0-9a-f]{{64}}$'"
+    return CheckConstraint(f"{column} IS NULL OR {predicate}" if nullable else predicate, name=name)
+
+
+#: One immutable content descriptor: the bytes a version shows, held inline or
+#: in a managed blob, with the digests of the original and decoded forms.
+report_content_objects = Table(
+    "report_content_objects",
+    METADATA,
+    Column("content_id", Text, nullable=False),
+    Column("owner_principal_id", Text, nullable=False),
+    Column("format", Text, nullable=False),
+    Column("original_encoding", Text, nullable=False),
+    Column("storage_kind", Text, nullable=False),
+    Column("original_sha256", Text, nullable=False),
+    Column("original_byte_count", Integer, nullable=False),
+    Column("decoded_sha256", Text, nullable=False),
+    Column("decoded_byte_count", Integer, nullable=False),
+    Column("canonical_sha256", Text),
+    Column("inline_text", Text),
+    Column("inline_data", JSONB),
+    Column("inline_original", LargeBinary),
+    Column("blob_ref", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint("content_id", name="report_content_objects_pkey"),
+    _is_identifier("content_id", IdKind.REPORT_CONTENT),
+    _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
+    _one_of("format", ReportContentFormat, name="a_report_content_format_is_known"),
+    _one_of("original_encoding", ReportContentEncoding, name="a_report_content_encoding_is_known"),
+    _one_of("storage_kind", ReportStorageKind, name="a_report_content_storage_kind_is_known"),
+    _report_sha("original_sha256", name="a_report_content_original_digest_is_sha256"),
+    _report_sha("decoded_sha256", name="a_report_content_decoded_digest_is_sha256"),
+    _report_sha(
+        "canonical_sha256", name="a_report_content_canonical_digest_is_sha256", nullable=True
+    ),
+    CheckConstraint(
+        f"original_byte_count BETWEEN 0 AND {MAX_ORIGINAL_CONTENT_BYTES}",
+        name="a_report_content_original_size_is_bounded",
+    ),
+    CheckConstraint(
+        f"decoded_byte_count BETWEEN 1 AND {MAX_DECODED_CONTENT_BYTES}",
+        name="a_report_content_decoded_size_is_bounded",
+    ),
+    CheckConstraint(
+        "canonical_sha256 IS NULL OR format IN ('json', 'mixed')",
+        name="only_structured_report_content_is_canonicalized",
+    ),
+    CheckConstraint(
+        "blob_ref IS NULL OR char_length(blob_ref) BETWEEN 1 AND 512",
+        name="a_report_blob_ref_is_bounded",
+    ),
+    CheckConstraint(
+        "storage_kind <> 'inline' OR (blob_ref IS NULL AND (inline_text IS NOT NULL OR "
+        "inline_data IS NOT NULL OR inline_original IS NOT NULL))",
+        name="inline_report_content_is_held_inline",
+    ),
+    CheckConstraint(
+        "storage_kind <> 'managed_blob' OR (blob_ref IS NOT NULL AND inline_text IS NULL AND "
+        "inline_data IS NULL AND inline_original IS NULL)",
+        name="blob_report_content_is_held_in_its_blob",
+    ),
+    CheckConstraint(
+        "format NOT IN ('markdown', 'text') OR inline_data IS NULL",
+        name="textual_report_content_holds_no_data",
+    ),
+    CheckConstraint(
+        "format <> 'json' OR inline_text IS NULL", name="json_report_content_holds_no_text"
+    ),
+    CheckConstraint(
+        "original_encoding <> 'identity' OR (original_sha256 = decoded_sha256 AND "
+        "original_byte_count = decoded_byte_count AND inline_original IS NULL)",
+        name="identity_report_content_is_its_original",
+    ),
+    CheckConstraint(
+        "original_encoding <> 'gzip+base64' OR storage_kind <> 'inline' OR (inline_original IS "
+        "NOT NULL AND octet_length(inline_original) = original_byte_count)",
+        name="encoded_inline_report_content_keeps_its_original",
+    ),
+    CheckConstraint(
+        "storage_kind <> 'inline' OR format NOT IN ('markdown', 'text') OR (inline_text IS NOT "
+        "NULL AND octet_length(inline_text) = decoded_byte_count)",
+        name="inline_textual_report_content_is_its_decoded_size",
+    ),
+    UniqueConstraint(
+        "content_id", "owner_principal_id", name="a_report_content_is_identified_with_its_owner"
+    ),
+)
+
+#: The logical report root. Its head and lifecycle columns are caches of the
+#: version chain and the lifecycle ledger, proven equal to them at commit by the
+#: two deferred references.
+report_roots = Table(
+    "report_roots",
+    METADATA,
+    Column("report_id", Text, nullable=False),
+    Column("owner_principal_id", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("correlation_id", Text, nullable=False),
+    Column("audit_id", Text, nullable=False),
+    Column("head_version_id", Text, nullable=False),
+    Column("head_version_number", Integer, nullable=False),
+    Column("lifecycle_state", Text, nullable=False),
+    Column("lifecycle_revision", Integer, nullable=False),
+    Column("lifecycle_event_id", Text),
+    PrimaryKeyConstraint("report_id", name="report_roots_pkey"),
+    _is_identifier("report_id", IdKind.REPORT),
+    _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    _is_identifier("audit_id", IdKind.AUDIT),
+    _is_identifier("head_version_id", IdKind.REPORT_VERSION),
+    _is_identifier("lifecycle_event_id", IdKind.REPORT_LIFECYCLE_EVENT),
+    CheckConstraint("head_version_number >= 1", name="a_report_head_version_number_is_positive"),
+    CheckConstraint(
+        f"lifecycle_state IN ({_REPORT_STATES})", name="a_report_lifecycle_state_is_known"
+    ),
+    CheckConstraint("lifecycle_revision >= 0", name="a_report_lifecycle_revision_is_not_negative"),
+    CheckConstraint(
+        "(lifecycle_event_id IS NULL) = (lifecycle_revision = 0)",
+        name="only_an_untransitioned_report_has_no_lifecycle_event",
+    ),
+    CheckConstraint(
+        "lifecycle_revision <> 0 OR lifecycle_state = 'active'",
+        name="an_untransitioned_report_is_active",
+    ),
+    UniqueConstraint(
+        "report_id", "owner_principal_id", name="a_report_is_identified_with_its_owner"
+    ),
+    ForeignKeyConstraint(
+        ["head_version_id", "owner_principal_id", "report_id", "head_version_number"],
+        [f"{SCHEMA}.report_versions.{target}" for target in _REPORT_VERSION_KEY],
+        ondelete="RESTRICT",
+        deferrable=True,
+        initially="DEFERRED",
+        use_alter=True,
+        name="a_report_head_is_a_version_of_the_report",
+    ),
+    ForeignKeyConstraint(
+        [
+            "lifecycle_event_id",
+            "owner_principal_id",
+            "report_id",
+            "lifecycle_revision",
+            "lifecycle_state",
+        ],
+        [
+            f"{SCHEMA}.report_lifecycle_events.event_id",
+            f"{SCHEMA}.report_lifecycle_events.owner_principal_id",
+            f"{SCHEMA}.report_lifecycle_events.report_id",
+            f"{SCHEMA}.report_lifecycle_events.lifecycle_revision",
+            f"{SCHEMA}.report_lifecycle_events.resulting_state",
+        ],
+        ondelete="RESTRICT",
+        deferrable=True,
+        initially="DEFERRED",
+        use_alter=True,
+        name="a_report_lifecycle_cache_is_an_event_of_the_report",
+    ),
+    Index("report_roots_by_owner_and_state", "owner_principal_id", "lifecycle_state"),
+)
+
+#: One immutable report version: a linear chain per root, each naming its
+#: content descriptor and the digest of its manifest.
+report_versions = Table(
+    "report_versions",
+    METADATA,
+    Column("version_id", Text, nullable=False),
+    Column("owner_principal_id", Text, nullable=False),
+    Column("report_id", Text, nullable=False),
+    Column("version_number", Integer, nullable=False),
+    Column("supersedes_version_id", Text),
+    Column("supersedes_version_number", Integer),
+    Column("content_id", Text, nullable=False),
+    Column("change_kind", Text, nullable=False),
+    Column("title", Text, nullable=False),
+    Column("report_type", Text),
+    Column("topics", JSONB, nullable=False),
+    Column("tags", JSONB, nullable=False),
+    Column("summary", Text),
+    Column("report_date", Date),
+    Column("coverage_start", DateTime(timezone=True)),
+    Column("coverage_end", DateTime(timezone=True)),
+    Column("metadata", JSONB, nullable=False),
+    Column("change_reason", Text),
+    Column("manifest_sha256", Text, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    Column("correlation_id", Text, nullable=False),
+    Column("audit_id", Text, nullable=False),
+    PrimaryKeyConstraint("version_id", name="report_versions_pkey"),
+    _is_identifier("version_id", IdKind.REPORT_VERSION),
+    _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
+    _is_identifier("report_id", IdKind.REPORT),
+    _is_identifier("supersedes_version_id", IdKind.REPORT_VERSION),
+    _is_identifier("content_id", IdKind.REPORT_CONTENT),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    _is_identifier("audit_id", IdKind.AUDIT),
+    CheckConstraint("version_number >= 1", name="a_report_version_number_is_positive"),
+    _one_of("change_kind", ReportChangeKind, name="a_report_change_kind_is_known"),
+    CheckConstraint(
+        f"char_length(title) BETWEEN 1 AND {MAX_REPORT_TITLE_CHARACTERS}",
+        name="a_report_title_is_bounded",
+    ),
+    CheckConstraint(
+        f"report_type IS NULL OR report_type ~ '{_REPORT_TYPE_SHAPE}'",
+        name="a_report_type_is_a_token",
+    ),
+    CheckConstraint(
+        f"summary IS NULL OR char_length(summary) BETWEEN 1 AND {MAX_REPORT_SUMMARY_CHARACTERS}",
+        name="a_report_summary_is_bounded",
+    ),
+    CheckConstraint(
+        "change_reason IS NULL OR char_length(change_reason) BETWEEN 1 AND "
+        f"{MAX_REPORT_REASON_CHARACTERS}",
+        name="a_report_change_reason_is_bounded",
+    ),
+    CheckConstraint(
+        f"jsonb_typeof(topics) = 'array' AND jsonb_array_length(topics) <= {MAX_REPORT_TERMS}",
+        name="report_topics_are_a_bounded_array",
+    ),
+    CheckConstraint(
+        f"jsonb_typeof(tags) = 'array' AND jsonb_array_length(tags) <= {MAX_REPORT_TERMS}",
+        name="report_tags_are_a_bounded_array",
+    ),
+    # A generous server bound (twice `MAX_REPORT_METADATA_BYTES`): `metadata::text` is
+    # PostgreSQL's own serialization, not the domain's canonical one, so the
+    # exact bound is the domain's and this one only refuses the absurd.
+    CheckConstraint(
+        f"jsonb_typeof(metadata) = 'object' AND octet_length(metadata::text) <= "
+        f"{2 * MAX_REPORT_METADATA_BYTES}",
+        name="report_metadata_is_a_bounded_object",
+    ),
+    CheckConstraint(
+        "coverage_start IS NULL OR coverage_end IS NULL OR coverage_start <= coverage_end",
+        name="a_report_coverage_is_ordered",
+    ),
+    _report_sha("manifest_sha256", name="a_report_version_manifest_digest_is_sha256"),
+    CheckConstraint(
+        "(version_number = 1) = (supersedes_version_id IS NULL)",
+        name="only_the_first_report_version_supersedes_nothing",
+    ),
+    CheckConstraint(
+        "(supersedes_version_id IS NULL) = (supersedes_version_number IS NULL)",
+        name="a_report_version_predecessor_is_whole",
+    ),
+    CheckConstraint(
+        "supersedes_version_number IS NULL OR supersedes_version_number = version_number - 1",
+        name="a_report_version_supersedes_the_prior_number",
+    ),
+    CheckConstraint(
+        "(change_kind = 'initial') = (version_number = 1)",
+        name="only_the_first_report_version_is_initial",
+    ),
+    UniqueConstraint(
+        "owner_principal_id", "report_id", "version_number", name="one_report_version_per_number"
+    ),
+    UniqueConstraint("supersedes_version_id", name="a_report_version_is_superseded_once"),
+    UniqueConstraint(*_REPORT_VERSION_KEY, name="a_report_version_is_identified_within_its_report"),
+    UniqueConstraint(
+        "version_id", "manifest_sha256", name="a_report_version_is_identified_with_its_manifest"
+    ),
+    _report_fk(
+        ["report_id", "owner_principal_id"],
+        "report_roots",
+        ["report_id", "owner_principal_id"],
+        name="a_report_version_belongs_to_a_report_of_its_owner",
+    ),
+    _report_fk(
+        ["content_id", "owner_principal_id"],
+        "report_content_objects",
+        ["content_id", "owner_principal_id"],
+        name="a_report_version_holds_content_of_its_owner",
+    ),
+    _report_fk(
+        [
+            "supersedes_version_id",
+            "owner_principal_id",
+            "report_id",
+            "supersedes_version_number",
+        ],
+        "report_versions",
+        _REPORT_VERSION_KEY,
+        name="a_report_version_supersedes_its_predecessor",
+    ),
+)
+
+#: One immutable manifest per version, its digest the one the version names.
+report_version_manifests = Table(
+    "report_version_manifests",
+    METADATA,
+    Column("version_id", Text, nullable=False),
+    Column("owner_principal_id", Text, nullable=False),
+    Column("report_id", Text, nullable=False),
+    Column("version_number", Integer, nullable=False),
+    Column("manifest_schema", Text, nullable=False),
+    Column("manifest", JSONB, nullable=False),
+    Column("manifest_sha256", Text, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint("version_id", name="report_version_manifests_pkey"),
+    _is_identifier("version_id", IdKind.REPORT_VERSION),
+    _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
+    _is_identifier("report_id", IdKind.REPORT),
+    _one_of(
+        "manifest_schema",
+        frozenset({REPORT_VERSION_MANIFEST_SCHEMA}),
+        name="a_report_manifest_schema_is_known",
+    ),
+    CheckConstraint(
+        f"jsonb_typeof(manifest) = 'object' AND octet_length(manifest::text) <= "
+        f"{MAX_REPORT_MANIFEST_BYTES}",
+        name="a_report_manifest_is_a_bounded_object",
+    ),
+    _report_sha("manifest_sha256", name="a_report_manifest_digest_is_sha256"),
+    _report_fk(
+        _REPORT_VERSION_KEY,
+        "report_versions",
+        _REPORT_VERSION_KEY,
+        name="a_report_manifest_describes_its_version",
+    ),
+    _report_fk(
+        ["version_id", "manifest_sha256"],
+        "report_versions",
+        ["version_id", "manifest_sha256"],
+        name="a_report_manifest_is_the_digest_its_version_names",
+    ),
+)
+
+#: One typed association, frozen to the version that declared it.
+report_associations = Table(
+    "report_associations",
+    METADATA,
+    Column("association_id", Text, nullable=False),
+    Column("owner_principal_id", Text, nullable=False),
+    Column("report_id", Text, nullable=False),
+    Column("version_id", Text, nullable=False),
+    Column("version_number", Integer, nullable=False),
+    Column("ordinal", Integer, nullable=False),
+    Column("target_kind", Text, nullable=False),
+    Column("target_ref", Text, nullable=False),
+    Column("target_version_ref", Text),
+    Column("relation", Text, nullable=False),
+    Column("verification", Text, nullable=False),
+    Column("observed_at", DateTime(timezone=True)),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint("association_id", name="report_associations_pkey"),
+    _is_identifier("association_id", IdKind.REPORT_ASSOCIATION),
+    _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
+    _is_identifier("report_id", IdKind.REPORT),
+    _is_identifier("version_id", IdKind.REPORT_VERSION),
+    CheckConstraint(
+        f"ordinal BETWEEN 0 AND {MAX_ASSOCIATIONS_PER_VERSION - 1}",
+        name="a_report_association_ordinal_is_bounded",
+    ),
+    _one_of(
+        "target_kind",
+        AssociationTargetKind,
+        name="a_report_association_target_kind_is_known",
+    ),
+    CheckConstraint(
+        f"char_length(target_ref) BETWEEN 1 AND {MAX_ASSOCIATION_REF_CHARACTERS}",
+        name="a_report_association_target_is_bounded",
+    ),
+    CheckConstraint(
+        "target_version_ref IS NULL OR char_length(target_version_ref) BETWEEN 1 AND "
+        f"{MAX_ASSOCIATION_REF_CHARACTERS}",
+        name="a_report_association_target_version_is_bounded",
+    ),
+    CheckConstraint(
+        f"relation ~ '{_REPORT_TYPE_SHAPE}'", name="a_report_association_relation_is_a_token"
+    ),
+    _one_of(
+        "verification",
+        AssociationVerification,
+        name="a_report_association_verification_is_known",
+    ),
+    CheckConstraint(
+        "target_kind <> 'external_source' OR verification = 'asserted'",
+        name="an_external_report_association_is_asserted",
+    ),
+    UniqueConstraint("version_id", "ordinal", name="one_report_association_per_ordinal"),
+    UniqueConstraint(
+        "version_id",
+        "target_kind",
+        "target_ref",
+        "relation",
+        name="one_report_association_per_target",
+    ),
+    _report_fk(
+        _REPORT_VERSION_KEY,
+        "report_versions",
+        _REPORT_VERSION_KEY,
+        name="a_report_association_is_frozen_to_its_version",
+    ),
+)
+
+#: The lifecycle ledger: one event per revision, each chained to its
+#: predecessor with that predecessor's states, so a restore from the trash can
+#: only return to the state the delete left.
+report_lifecycle_events = Table(
+    "report_lifecycle_events",
+    METADATA,
+    Column("event_id", Text, nullable=False),
+    Column("owner_principal_id", Text, nullable=False),
+    Column("report_id", Text, nullable=False),
+    Column("lifecycle_revision", Integer, nullable=False),
+    Column("operation", Text, nullable=False),
+    Column("prior_state", Text, nullable=False),
+    Column("resulting_state", Text, nullable=False),
+    Column("predecessor_event_id", Text),
+    Column("predecessor_revision", Integer),
+    Column("predecessor_prior_state", Text),
+    Column("reason", Text),
+    Column("intent_digest", Text, nullable=False),
+    Column("transitioned_at", DateTime(timezone=True), nullable=False),
+    Column("correlation_id", Text, nullable=False),
+    Column("audit_id", Text, nullable=False),
+    PrimaryKeyConstraint("event_id", name="report_lifecycle_events_pkey"),
+    _is_identifier("event_id", IdKind.REPORT_LIFECYCLE_EVENT),
+    _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
+    _is_identifier("report_id", IdKind.REPORT),
+    _is_identifier("predecessor_event_id", IdKind.REPORT_LIFECYCLE_EVENT),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    _is_identifier("audit_id", IdKind.AUDIT),
+    CheckConstraint("lifecycle_revision >= 1", name="a_report_lifecycle_revision_is_positive"),
+    _one_of("operation", ReportLifecycleOperation, name="a_report_lifecycle_operation_is_known"),
+    _one_of("prior_state", ReportLifecycleState, name="a_report_lifecycle_prior_state_is_known"),
+    _one_of(
+        "resulting_state",
+        ReportLifecycleState,
+        name="a_report_lifecycle_resulting_state_is_known",
+    ),
+    CheckConstraint(
+        f"predecessor_prior_state IS NULL OR predecessor_prior_state IN ({_REPORT_STATES})",
+        name="a_report_lifecycle_predecessor_state_is_known",
+    ),
+    CheckConstraint(
+        f"reason IS NULL OR char_length(reason) BETWEEN 1 AND {MAX_REPORT_REASON_CHARACTERS}",
+        name="a_report_lifecycle_reason_is_bounded",
+    ),
+    _report_sha("intent_digest", name="a_report_lifecycle_intent_is_a_digest"),
+    # `domain.reports.lifecycle`'s transition table, restated.
+    CheckConstraint(
+        "(operation = 'archive' AND prior_state = 'active' AND resulting_state = 'archived') OR "
+        "(operation = 'delete' AND prior_state IN ('active', 'archived') AND resulting_state = "
+        "'trashed') OR (operation = 'restore' AND ((prior_state = 'archived' AND "
+        "resulting_state = 'active') OR (prior_state = 'trashed' AND resulting_state IN "
+        "('active', 'archived'))))",
+        name="a_report_lifecycle_transition_is_valid",
+    ),
+    # All three predecessor columns or none: the self-reference is MATCH
+    # SIMPLE, so a partly null predecessor would escape it.
+    CheckConstraint(
+        "(predecessor_event_id IS NULL) = (predecessor_revision IS NULL) AND "
+        "(predecessor_event_id IS NULL) = (predecessor_prior_state IS NULL)",
+        name="a_report_lifecycle_predecessor_is_whole",
+    ),
+    CheckConstraint(
+        "(lifecycle_revision = 1) = (predecessor_event_id IS NULL)",
+        name="only_the_first_report_lifecycle_event_has_no_predecessor",
+    ),
+    CheckConstraint(
+        "lifecycle_revision <> 1 OR prior_state = 'active'",
+        name="the_first_report_lifecycle_event_leaves_active",
+    ),
+    CheckConstraint(
+        "predecessor_revision IS NULL OR predecessor_revision = lifecycle_revision - 1",
+        name="a_report_lifecycle_predecessor_is_the_prior_revision",
+    ),
+    CheckConstraint(
+        "operation <> 'restore' OR prior_state <> 'trashed' OR resulting_state = "
+        "predecessor_prior_state",
+        name="a_report_restore_from_trash_returns_to_the_prior_state",
+    ),
+    UniqueConstraint(
+        "owner_principal_id",
+        "report_id",
+        "lifecycle_revision",
+        name="one_report_lifecycle_event_per_revision",
+    ),
+    UniqueConstraint(
+        "event_id",
+        "owner_principal_id",
+        "report_id",
+        "lifecycle_revision",
+        "resulting_state",
+        "prior_state",
+        name="a_report_lifecycle_event_is_identified_with_its_states",
+    ),
+    UniqueConstraint(
+        "event_id",
+        "owner_principal_id",
+        "report_id",
+        "lifecycle_revision",
+        "operation",
+        name="a_report_lifecycle_event_is_identified_with_its_operation",
+    ),
+    # The target of `report_roots`' lifecycle cache reference.
+    UniqueConstraint(
+        "event_id",
+        "owner_principal_id",
+        "report_id",
+        "lifecycle_revision",
+        "resulting_state",
+        name="a_report_lifecycle_event_is_identified_with_its_result",
+    ),
+    _report_fk(
+        [
+            "predecessor_event_id",
+            "owner_principal_id",
+            "report_id",
+            "predecessor_revision",
+            "prior_state",
+            "predecessor_prior_state",
+        ],
+        "report_lifecycle_events",
+        [
+            "event_id",
+            "owner_principal_id",
+            "report_id",
+            "lifecycle_revision",
+            "resulting_state",
+            "prior_state",
+        ],
+        name="a_report_lifecycle_predecessor_is_an_event_of_its_report",
+    ),
+    _report_fk(
+        ["report_id", "owner_principal_id"],
+        "report_roots",
+        ["report_id", "owner_principal_id"],
+        name="a_report_lifecycle_event_names_a_report_of_its_owner",
+    ),
+)
+
+#: One row per Principal, operation and idempotency key: the original outcome
+#: of one publish, update, archive, delete or restore. Never rewritten.
+report_receipts = Table(
+    "report_receipts",
+    METADATA,
+    Column("receipt_id", Text, nullable=False),
+    Column("owner_principal_id", Text, nullable=False),
+    Column("operation", Text, nullable=False),
+    Column("idempotency_key", Text, nullable=False),
+    Column("intent_digest", Text, nullable=False),
+    Column("report_id", Text, nullable=False),
+    Column("outcome", Text, nullable=False),
+    Column("version_id", Text),
+    Column("resulting_version_number", Integer),
+    Column("expected_version_number", Integer),
+    Column("event_id", Text),
+    Column("expected_lifecycle_revision", Integer),
+    Column("resulting_lifecycle_revision", Integer),
+    Column("issued_at", DateTime(timezone=True), nullable=False),
+    Column("correlation_id", Text, nullable=False),
+    Column("audit_id", Text, nullable=False),
+    PrimaryKeyConstraint("receipt_id", name="report_receipts_pkey"),
+    _is_identifier("receipt_id", IdKind.REPORT_RECEIPT),
+    _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
+    _is_identifier("report_id", IdKind.REPORT),
+    _is_identifier("version_id", IdKind.REPORT_VERSION),
+    _is_identifier("event_id", IdKind.REPORT_LIFECYCLE_EVENT),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    _is_identifier("audit_id", IdKind.AUDIT),
+    _one_of("operation", ReportReceiptOperation, name="a_report_receipt_operation_is_known"),
+    _one_of("outcome", ReportReceiptOutcome, name="a_report_receipt_outcome_is_known"),
+    CheckConstraint(
+        "char_length(idempotency_key) BETWEEN 1 AND 128", name="a_report_receipt_key_is_bounded"
+    ),
+    _report_sha("intent_digest", name="a_report_receipt_intent_is_a_digest"),
+    CheckConstraint(
+        "(expected_version_number IS NULL OR expected_version_number >= 1) AND "
+        "(resulting_version_number IS NULL OR resulting_version_number >= 1) AND "
+        "(expected_lifecycle_revision IS NULL OR expected_lifecycle_revision >= 0) AND "
+        "(resulting_lifecycle_revision IS NULL OR resulting_lifecycle_revision >= 0)",
+        name="report_receipt_numbers_are_in_range",
+    ),
+    CheckConstraint(
+        "operation <> 'publish' OR (outcome = 'applied' AND expected_version_number IS NULL AND "
+        "resulting_version_number = 1 AND version_id IS NOT NULL AND event_id IS NULL AND "
+        "expected_lifecycle_revision IS NULL AND resulting_lifecycle_revision IS NULL)",
+        name="a_report_publish_receipt_is_whole",
+    ),
+    CheckConstraint(
+        "operation <> 'update' OR (expected_version_number IS NOT NULL AND event_id IS NULL AND "
+        "expected_lifecycle_revision IS NULL AND resulting_lifecycle_revision IS NULL AND "
+        "(outcome <> 'applied' OR (resulting_version_number = expected_version_number + 1 AND "
+        "version_id IS NOT NULL)))",
+        name="a_report_update_receipt_is_whole",
+    ),
+    CheckConstraint(
+        "operation NOT IN ('archive', 'delete', 'restore') OR (version_id IS NULL AND "
+        "resulting_version_number IS NULL AND expected_version_number IS NULL AND "
+        "expected_lifecycle_revision IS NOT NULL AND resulting_lifecycle_revision IS NOT NULL "
+        "AND (outcome <> 'applied' OR (resulting_lifecycle_revision = "
+        "expected_lifecycle_revision + 1 AND event_id IS NOT NULL)) AND (outcome <> 'no_op' OR "
+        "resulting_lifecycle_revision = expected_lifecycle_revision))",
+        name="a_report_lifecycle_receipt_is_whole",
+    ),
+    UniqueConstraint(
+        "owner_principal_id",
+        "operation",
+        "idempotency_key",
+        name="a_report_key_admits_one_request_per_operation",
+    ),
+    _report_fk(
+        ["report_id", "owner_principal_id"],
+        "report_roots",
+        ["report_id", "owner_principal_id"],
+        name="a_report_receipt_names_a_report_of_its_owner",
+    ),
+    _report_fk(
+        ["version_id", "owner_principal_id", "report_id", "resulting_version_number"],
+        "report_versions",
+        _REPORT_VERSION_KEY,
+        name="a_report_receipt_names_its_version",
+    ),
+    _report_fk(
+        [
+            "event_id",
+            "owner_principal_id",
+            "report_id",
+            "resulting_lifecycle_revision",
+            "operation",
+        ],
+        "report_lifecycle_events",
+        ["event_id", "owner_principal_id", "report_id", "lifecycle_revision", "operation"],
+        name="a_report_receipt_names_its_event",
+    ),
+)
+
+#: One upload transfer session (schema only in WP01): a declared byte count and
+#: digest, received in bounded chunks, whose state only moves forward.
+report_transfer_sessions = Table(
+    "report_transfer_sessions",
+    METADATA,
+    Column("session_id", Text, nullable=False),
+    Column("owner_principal_id", Text, nullable=False),
+    Column("client_ref", Text),
+    Column("state", Text, nullable=False),
+    Column("format", Text, nullable=False),
+    Column("original_encoding", Text, nullable=False),
+    Column("declared_byte_count", Integer, nullable=False),
+    Column("declared_sha256", Text, nullable=False),
+    Column("chunk_byte_limit", Integer, nullable=False),
+    Column("received_byte_count", Integer, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("finalized_at", DateTime(timezone=True)),
+    Column("content_token_digest", Text),
+    Column("consumed_content_id", Text),
+    Column("consumed_at", DateTime(timezone=True)),
+    PrimaryKeyConstraint("session_id", name="report_transfer_sessions_pkey"),
+    _is_identifier("session_id", IdKind.REPORT_TRANSFER_SESSION),
+    _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
+    _is_identifier("consumed_content_id", IdKind.REPORT_CONTENT),
+    CheckConstraint(
+        "client_ref IS NULL OR char_length(client_ref) BETWEEN 1 AND 256",
+        name="a_report_transfer_client_ref_is_bounded",
+    ),
+    _one_of("state", ReportTransferState, name="a_report_transfer_state_is_known"),
+    _one_of("format", ReportContentFormat, name="a_report_transfer_format_is_known"),
+    _one_of("original_encoding", ReportContentEncoding, name="a_report_transfer_encoding_is_known"),
+    CheckConstraint(
+        f"declared_byte_count BETWEEN 1 AND {MAX_ORIGINAL_CONTENT_BYTES}",
+        name="a_report_transfer_declared_size_is_bounded",
+    ),
+    _report_sha("declared_sha256", name="a_report_transfer_declared_digest_is_sha256"),
+    CheckConstraint(
+        f"chunk_byte_limit BETWEEN 1 AND {TRANSFER_CHUNK_MAX_BYTES}",
+        name="a_report_transfer_chunk_limit_is_bounded",
+    ),
+    CheckConstraint(
+        "received_byte_count BETWEEN 0 AND declared_byte_count",
+        name="a_report_transfer_receives_at_most_its_declaration",
+    ),
+    CheckConstraint(
+        "created_at < expires_at AND expires_at <= created_at + interval "
+        f"'{int(TRANSFER_MAX_TTL.total_seconds()) // 3600} hours'",
+        name="a_report_transfer_expires_within_its_ttl",
+    ),
+    _report_sha("content_token_digest", name="a_report_transfer_token_is_a_digest", nullable=True),
+    CheckConstraint(
+        "(state <> 'open' OR (content_token_digest IS NULL AND finalized_at IS NULL)) AND "
+        "(state NOT IN ('finalized', 'consumed') OR (content_token_digest IS NOT NULL AND "
+        "finalized_at IS NOT NULL)) AND (content_token_digest IS NULL) = (finalized_at IS NULL)",
+        name="a_report_transfer_token_follows_its_state",
+    ),
+    CheckConstraint(
+        "(state = 'consumed') = (consumed_content_id IS NOT NULL) AND (consumed_content_id IS "
+        "NULL) = (consumed_at IS NULL)",
+        name="a_report_transfer_consumption_follows_its_state",
+    ),
+    _report_fk(
+        ["consumed_content_id", "owner_principal_id"],
+        "report_content_objects",
+        ["content_id", "owner_principal_id"],
+        name="a_report_transfer_is_consumed_into_content_of_its_owner",
     ),
 )
 

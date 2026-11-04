@@ -42,19 +42,25 @@ from my_pa.domain.schedule import (
     ISSUE_SEVERITY,
     ROW_CELL_FIELDS,
     ParsedScheduleRow,
+    ScheduleBaselineKind,
     ScheduleBox,
     ScheduleCellEvidence,
     ScheduleCellFragment,
     ScheduleCellState,
     ScheduleDateCell,
     ScheduleDurationCell,
+    ScheduleImportApproval,
+    ScheduleImportRequest,
     ScheduleIssueCode,
     ScheduleParseCounts,
     ScheduleParseEngine,
     ScheduleParseIssue,
     ScheduleParseResult,
+    SchedulePublicationRole,
     SchedulePublicationStatus,
     ScheduleRowType,
+    normalize_series_name,
+    schedule_import_request_digest,
 )
 from my_pa.domain.source.provider import (
     ObjectKind,
@@ -494,8 +500,24 @@ class ScheduleRuntime:
         expected: str | None = None,
         surface: OperatorSurface = OperatorSurface.CLI,
     ) -> dict[str, Any]:
-        """`schedule_publications.import` through the attested CLI surface."""
+        """`schedule_publications.import` through the attested CLI surface.
+
+        Role `baseline` is admitted at the repository boundary instead, with an
+        import-time approval: from Schedule Scenarios S6-2 until S6-3 the command
+        refuses it (schedule scenarios contract S6-2-D04), and these tests read a
+        baseline publication's S5 behaviour, not the command's.
+        """
         self._counter += 1
+        if role == "baseline":
+            return self._admit_baseline(
+                world,
+                object_id,
+                version_id,
+                series_name=series_name,
+                series_id=series_id,
+                baseline_kind=baseline_kind,
+                key=key,
+            )
         return self.ok(
             ImportSchedulePublication(
                 project_id=world.project,
@@ -513,6 +535,46 @@ class ScheduleRuntime:
             principal_id=world.principal,
             surface=surface,
         )
+
+    def _admit_baseline(
+        self,
+        world: World,
+        object_id: str,
+        version_id: str,
+        *,
+        series_name: str | None,
+        series_id: str | None,
+        baseline_kind: str | None,
+        key: str | None,
+    ) -> dict[str, Any]:
+        request = ScheduleImportRequest(
+            project_id=world.project,
+            series_id=series_id,
+            series_name=(
+                None
+                if series_id is not None or series_name is None
+                else normalize_series_name(series_name)
+            ),
+            enrollment_id=world.enrollment,
+            source_object_id=object_id,
+            source_version_id=version_id,
+            publication_role=SchedulePublicationRole.BASELINE,
+            baseline_kind=ScheduleBaselineKind(baseline_kind or "contract"),
+            expected_data_date=None,
+            supersedes_publication_id=None,
+            idempotency_key=key or f"schedule-import-{world.tag}-{self._counter:05d}",
+            approval=ScheduleImportApproval(
+                approval_reference="Synthetic approval",
+                effective_from=date(2026, 1, 1),
+                reason="Synthetic baseline",
+            ),
+        )
+        digest = schedule_import_request_digest(world.principal, request)
+        with SqlAlchemyScheduleUnitOfWork(self.engine) as work:
+            admission = work.schedules.admit_publication(
+                world.principal, request, digest, operator_channel="local_cli"
+            )
+        return {"publication_id": admission.publication.publication_id, "created": True}
 
     def serve(self, monkeypatch: pytest.MonkeyPatch, world: World) -> None:
         """Route the handler's two seams to this runtime's objects and results."""

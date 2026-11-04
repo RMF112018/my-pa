@@ -533,6 +533,27 @@ class IdKind(StrEnum):
     SCHEDULE_ROW = "srow"
     SCHEDULE_ACTIVITY = "sact"
     SCHEDULE_IMPORT_ISSUE = "siss"
+    #: Schedule Scenarios S6-2 (schedule scenarios contract sections 2.1 and
+    #: 14.2): one Scenario, one Scenario version, one server CPM run, one
+    #: client-asserted output, one Series match decision, one Project Baseline,
+    #: one Baseline event and one governing-Baseline event. The idempotency and
+    #: refusal ledgers mint none. Checked against all 156 prior members before
+    #: use (a grep of each `<prefix>_` over `src`, `tests`, `web/src` and
+    #: `migrations`, and the uniqueness assertion in
+    #: `tests/unit/test_identifiers.py`): none collides, no member is a prefix
+    #: of any, none is a prefix of a member, and no two of the 8 prefix each
+    #: other (nearest: `sact`, `sevd`, `siss`, `sit`, `smem`, `sobs`, `span`,
+    #: `sprun`, `spub`, `src`, `srow`, `sser`, `stage`, `sub`). S6-1's
+    #: `sscv_`/`scpm_` patterns in `domain/schedule/scenario/outputs.py` name
+    #: the same prefixes.
+    SCHEDULE_SCENARIO = "sscn"
+    SCHEDULE_SCENARIO_VERSION = "sscv"
+    SCHEDULE_CPM_RUN = "scpm"
+    SCHEDULE_SCENARIO_OUTPUT = "ssco"
+    SCHEDULE_SERIES_MATCH = "ssmd"
+    SCHEDULE_BASELINE = "sbl"
+    SCHEDULE_BASELINE_EVENT = "sbev"
+    SCHEDULE_GOVERNING_EVENT = "sgov"
 
 
 class InvalidIdentifierError(ValueError):

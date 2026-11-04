@@ -78,9 +78,12 @@ S4_HANDLERS: Final = (
 #: Digest of `domain/lineage/vocabulary.py`: unchanged by S4 from the S3 basis
 #: (`75707a8b`, `64faec74...`), then moved by record lineage S3.1 (S3.1 contract
 #: section 4: `client_identified`, `confirm` and the S3.1 sets and bounds), the
-#: one later slice that widens it. S4 itself still changes no lineage vocabulary.
+#: one later slice that widens it, and again by Schedule Scenarios S6-2, which adds
+#: only the string-keyed storage vocabulary (schedule scenarios contract section
+#: 14.7.4) and leaves every public enum and map. S4 itself still changes no
+#: lineage vocabulary.
 LINEAGE_VOCABULARY_SHA256: Final = (
-    "20818eb2a1cdfbdffb3cbe9d45be802c183b4a79aeba0c093124b4269469196e"
+    "e83ccd304b8cfdd772144ec57cfd1498af0722b7c77940722f128e9883a18853"
 )
 #: The S3 section 3 names S3 listed as "Program work"; S4 adds them nowhere (D-13).
 NOT_LINEAGE: Final = frozenset({"not_reportable", "source_not_integrated"})

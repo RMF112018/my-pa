@@ -1,4 +1,4 @@
-"""CPM Workbench Full-Schedule domain (S5a parser subset and the S5b-1 foundation).
+"""CPM Workbench Full-Schedule domain (S5a parser subset, S5b-1 foundation, S6 records).
 
 Contracts: `docs/architecture/cpm-workbench-p6-full-v1-parser-contract.md` and
 `docs/architecture/cpm-workbench-foundation-contract.md`. Pure and
@@ -25,6 +25,8 @@ from my_pa.domain.schedule.model import (
     DURATION_EXPONENT,
     ISSUE_SEVERITY,
     MAX_ACTIVITY_NAME_CHARACTERS,
+    MAX_APPROVAL_REASON_CHARACTERS,
+    MAX_APPROVAL_REFERENCE_CHARACTERS,
     MAX_CELL_EVIDENCE_BYTES,
     MAX_DURATION_EXCLUSIVE,
     MAX_HIERARCHY_LABEL_CHARACTERS,
@@ -58,6 +60,7 @@ from my_pa.domain.schedule.model import (
     ScheduleDurationCell,
     ScheduleFieldCode,
     ScheduleFinalization,
+    ScheduleImportApproval,
     ScheduleImportIssue,
     ScheduleImportRequest,
     ScheduleIssueCode,
@@ -102,6 +105,8 @@ __all__ = [
     "DURATION_EXPONENT",
     "ISSUE_SEVERITY",
     "MAX_ACTIVITY_NAME_CHARACTERS",
+    "MAX_APPROVAL_REASON_CHARACTERS",
+    "MAX_APPROVAL_REFERENCE_CHARACTERS",
     "MAX_CELL_EVIDENCE_BYTES",
     "MAX_DURATION_EXCLUSIVE",
     "MAX_HIERARCHY_LABEL_CHARACTERS",
@@ -137,6 +142,7 @@ __all__ = [
     "ScheduleDurationCell",
     "ScheduleFieldCode",
     "ScheduleFinalization",
+    "ScheduleImportApproval",
     "ScheduleImportIssue",
     "ScheduleImportRequest",
     "ScheduleIssueCode",

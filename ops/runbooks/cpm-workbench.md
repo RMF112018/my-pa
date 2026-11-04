@@ -141,6 +141,13 @@ MY_PA_SCHEDULE_ENABLED=true .venv/bin/python apps/worker.py run --plane schedule
 MY_PA_SCHEDULE_ENABLED=true .venv/bin/python apps/cli/invoke.py schedule_publications.import [options]
 ```
 
+**Import roles from Schedule Scenarios S6-2 until S6-3** (schedule scenarios contract
+S6-2-D04, sections 12.2 and 14.9): `schedule_publications.import` refuses role `baseline` with
+`invalid_request(PUBLICATION_ROLE)` whatever the switches (a baseline import needs the
+section 12.3 approval fields, which arrive with S6-3); role `reference` and baseline kind
+`working` are retired and refused; `schedule_publications.list` refuses the filter
+`publication_role=reference` with `invalid_request(PUBLICATION_ROLE)`. Import role `update`.
+
 `capabilities.get` then reports the `schedule` plane's backlog, dead-lettered count and
 heartbeat, which degrade readiness exactly as the other planes do.
 `schedule_publications.read` shows status, counts, issue counts by safe code, the job's
@@ -180,3 +187,93 @@ Every command in sections 3 and 5 is unexecuted against anything but the disposa
 clones named above: production, NAS and shared databases are outside agent reach, and this
 change authorizes no migration, grant, `profile-apply`, source designation, switch change or
 deployment.
+
+## 8. Schedule Scenarios revision A (S6-2, schema only)
+
+**UNEXECUTED / OPERATOR-GATED.** Revision `2a90f91dd786` (schedule scenarios contract
+[section 14](../../docs/architecture/schedule-scenarios-contract.md), revision A) adds the 11
+plane tables, retires the `reference` publication role and the `working` baseline kind,
+widens the 6 `record_links` CHECKs from the lineage storage vocabulary and adds trigger G10 on
+`schedule_publications`. Nothing in it is public: no capability, command, switch, grant or
+ChatLLM surface exists for the plane until S6-3, so after this step the plane is **inert**.
+Its pre-deploy checks ran only against disposable per-test clones on an isolated scratch
+PostgreSQL 15 cluster (`tests/database/test_schedule_scenarios_predeploy.py`); nothing here
+was run against a persistent database.
+
+1. **Prerequisites.** `6c2306330ceb` and `621ef6786c64` are applied first (revision A chains
+   from `621ef6786c64`). A database holding a publication with role `baseline` or `reference`
+   cannot upgrade (S6-U13: the upgrade refuses with `restrict_violation`); rebuild it rather
+   than editing rows.
+2. **Quiet window.** Phase C restates the 6 `record_links` CHECKs in one `ALTER TABLE` under
+   `ACCESS EXCLUSIVE`, held to commit: every lineage read and write waits (`records.lineage*`,
+   `records.associations.*`, the `issues.*` close gate and timeline, the ChatLLM and remote
+   lineage reads). Phase A holds `ACCESS EXCLUSIVE` on `schedule_publications`, and the 8 new
+   foreign keys `SHARE ROW EXCLUSIVE` on `schedule_publications` and `schedule_series`. Pause
+   lineage traffic, the schedule import and every `schedule` worker for the window. Take a
+   backup first.
+3. **Expected `record_links` window and go/no-go.** On the scratch cluster (contract section
+   14.14: PostgreSQL 15.15, Apple M4 Pro, NVMe, a freshly loaded and cached table) phase C
+   took 0.84 s at 24.8 MB and 8.40 s at 248.3 MB of `record_links` heap: linear at about
+   **34 ms per MB**. The input is Q3's `record_links` **`bytes=`** (`pg_relation_size`,
+   exact); `rows~` is only an estimate, and `rows~-1` means the table was never vacuumed or
+   analyzed, so read `bytes=` alone. Compute
+   `T = bytes / 1,048,576 × 34 ms × 10`, where 10 is the stated host factor for the
+   unmeasured server host (a NAS, slower disk, cold cache; S6-2-U01).
+   - **Go** when `T ≤ 2 s` (that is, `bytes=` at most about 6,000,000).
+   - **Otherwise**, before the real upgrade, the operator restores a copy of the database on
+     the server host itself and runs the upgrade there once, timed (the scratch-copy dry run;
+     never against the live database). **Go** only when that measured upgrade takes at most
+     2 s; otherwise stop and review.
+
+   This window is the validating pass under `ACCESS EXCLUSIVE`; it is not governed by the
+   10 s `lock_timeout`, which bounds only the wait to acquire each lock. A lineage call that
+   was not paused waits for the lock acquisition plus the whole pass, bounded only by its own
+   `statement_timeout` (30 s on the gateway and worker engines): past that it fails with
+   `57014` and the caller retries.
+4. **Before:** run the checks below as the **runtime role the gateway and worker connect as**
+   (Q4 and Q8 judge `current_user`; Q4 also reports the owner of `record_links`, the
+   migrating role). Every `before` check must hold; keep Q5's digest.
+5. **Upgrade** with the existing Alembic control plane. A `55P03` (`lock_not_available`)
+   abort leaves the database at `621ef6786c64` and is clean and retryable in a quieter
+   window; never raise the 10 s timeout without a new review.
+6. **After:** run the `after` checks with the `before` Q5 digest. Every check must hold.
+7. **Downgrade** refuses (`restrict_violation`, "schedule scenarios rows exist") while any
+   plane table holds a row, any `record_links` row names an S6 family (`schedule_publication`,
+   `schedule_activity`, `schedule_baseline`, `scenario`, `scenario_version`,
+   `scenario_output`) or relation (`concerns`, `delays`, `mitigates`), or any publication has
+   `baseline_kind = 'approved_update'`. Before any such row exists, it restores every CHECK
+   text exactly.
+8. **No grant, revoke, switch or capability is part of this step.** The revision is
+   grant-free: the new tables and the refusal table's identity sequence are owned by the
+   migrating role, exactly as every S1-S5 table. The ChatLLM, switch and grant gates are
+   S6-3's runbook section. When S6-3 enables CPM runs, each concurrently computing Principal
+   holds at most 1 extra server connection per process outside the gateway's pool of 5 (the
+   compute lease, S6-2-U12): count it against `max_connections`.
+
+```sh
+# Before revision 2a90f91dd786, as the runtime role.
+.venv/bin/python ops/postgres/schedule_scenarios_predeploy_check.py --phase before
+# After it; pass the Q5 digest the before run printed.
+.venv/bin/python ops/postgres/schedule_scenarios_predeploy_check.py --phase after \
+    --before-acl-sha256 <digest>
+```
+
+The script (`src/my_pa/infrastructure/database/schedule_scenarios_predeploy.py`) opens one
+transaction whose first statement is `SET TRANSACTION READ ONLY`, issues only `SELECT`s and
+always rolls back. Every statement reads catalogs except Q2's one operator-wide, cross-Principal
+`EXISTS` boolean over `schedule_publications`, which returns no row and no identifier. Exit 0
+= no stop, 1 = a stop (or settings refused), 2 = usage error; no line carries a connection
+string.
+
+| Check | Phase | Reads | Stop when |
+|---|---|---|---|
+| Q0 read-only | both | `transaction_read_only` | not `on` |
+| Q1 default privileges | before | `pg_default_acl` entries for tables and sequences | an entry (global, or in `knowledge`) grants to `PUBLIC`, `my_pa_mcp_ro` or `my_pa_mcp_rw`; removing it is a separate operator-authorized change |
+| Q2 retired roles | before | the 7 S5 tables, then `EXISTS` a `baseline`/`reference` publication | a table absent, the probe unreadable by this role, or `true` |
+| Q3 lock sizing | before | `reltuples`, `pg_relation_size` of `record_links`, `schedule_publications`, `schedule_series` | never (step 3's input) |
+| Q4 runtime-role reach | before | `current_user`, owner and privileges on `record_links` | the role neither owns nor is granted it |
+| Q5 ACL snapshot | both | SHA-256 over `relacl` of `record_links`, `schedule_publications`, `schedule_series` | after ≠ before, or no before digest |
+| Q6 no extra grant | after | `has_table_privilege` for `public` and each existing MCP role on the 11 tables; the refusal sequence's `relacl` | any privilege, or the sequence not owner-only |
+| Q7 vocabulary at head | after | `pg_get_constraintdef` of `a_record_link_pair_is_admitted`, `a_record_link_from_family_is_known`, `a_schedule_publication_role_is_known` | an S6 relation or family missing, or `reference` still admitted |
+| Q8 runtime reach | after | `has_table_privilege(current_user, …)` | `SELECT`/`INSERT` lacking on any of the 11 tables, or `UPDATE` on `schedule_scenario_write_requests` |
+| Q9 plane objects | after | `pg_class`, `pg_proc`, `pg_trigger` | a plane table, one of the 15 plane functions, or trigger G10 absent |

@@ -262,6 +262,15 @@ def test_contract_prefixes_are_stable() -> None:
         "srow",
         "sact",
         "siss",
+        # Schedule Scenarios S6-2 (schedule scenarios contract section 14.2).
+        "sscn",
+        "sscv",
+        "scpm",
+        "ssco",
+        "ssmd",
+        "sbl",
+        "sbev",
+        "sgov",
     }
 
 

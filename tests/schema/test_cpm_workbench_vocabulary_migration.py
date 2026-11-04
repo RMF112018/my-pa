@@ -50,7 +50,8 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "621ef6786c64"
 PREVIOUS: Final = "6c2306330ceb"
-HEAD: Final = REVISION
+#: Schedule Scenarios S6-2 (`2a90f91dd786`) is additive on this revision and is the head.
+HEAD: Final = "2a90f91dd786"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20261028_621ef6786c64_cpm_workbench_vocabulary.py"
 CAPABILITY_SOURCE: Final = MIGRATIONS / "20261025_023f8f7eb499_record_lineage_s31.py"
@@ -93,10 +94,11 @@ def _literals(block: object) -> list[str]:
 def test_the_revision_is_the_single_head_on_6c2306330ceb() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
+    assert script.get_revision(HEAD).down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "023f8f7eb499"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
-    assert len(list(MIGRATIONS.glob("*.py"))) == 125
+    assert len(list(MIGRATIONS.glob("*.py"))) == 126
 
 
 # ---- the freeze -------------------------------------------------------------

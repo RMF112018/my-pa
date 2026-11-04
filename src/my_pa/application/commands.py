@@ -14804,10 +14804,16 @@ class ImportSchedulePublication:
         if role is None:
             # Section 3.11: the role is explicit; nothing defaults it.
             raise InvalidRequestError(SafeDetail.PUBLICATION_ROLE)
+        if role is SchedulePublicationRole.BASELINE:
+            # Schedule scenarios contract S6-2-D04: from S6-2 until S6-3 adds
+            # the section 12.3 approval fields, a baseline import is refused
+            # whatever the switches (the request record requires an approval).
+            raise InvalidRequestError(SafeDetail.PUBLICATION_ROLE)
         kind = _schedule_choice(
             self.baseline_kind, tuple(ScheduleBaselineKind), SafeDetail.BASELINE_KIND
         )
-        if (role is SchedulePublicationRole.BASELINE) != (kind is not None):
+        if kind is not None:
+            # Only a baseline names its kind, and no baseline reaches here (D04).
             raise InvalidRequestError(SafeDetail.BASELINE_KIND)
         expected = _schedule_date(self.expected_data_date, SafeDetail.EXPECTED_DATA_DATE)
         _optional_schedule_id(

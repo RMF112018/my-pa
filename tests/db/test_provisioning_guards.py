@@ -16,6 +16,9 @@ WORKFLOW: Final = ROOT / ".github/workflows/repository-checks.yml"
 EXCEPTION_EXPLICIT_UPGRADE: Final = frozenset(
     {
         "tests/contract/test_health_probe.py",
+        # Schedule Scenarios S6-2 (contract section 14.6.3): a by-hand lock
+        # measurement on its own disposable catalogs, never collected by pytest.
+        "tests/schema/schedule_scenarios_lock_measurement.py",
     }
 )
 

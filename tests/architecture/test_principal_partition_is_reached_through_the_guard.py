@@ -193,6 +193,15 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # exact pair the request names. No raw SQL and no hand-written partition
         # comparison.
         "infrastructure/persistence/schedule.py",
+        # Schedule Scenarios S6-2 (contract section 14.8): the plane repository.
+        # Every SELECT/UPDATE scopes each plane and S5 table through `_mine` over
+        # `partition_criterion`, every INSERT is stamped through `_bound` over
+        # `principal_bound_values`, each correlated or joined pair composes
+        # `matching_partition_criterion`, and the fork's `INSERT ... SELECT`
+        # takes its partition column from a `_mine` source row. The plane locks
+        # use `func.pg_advisory_xact_lock`; no raw SQL and no hand-written
+        # partition comparison.
+        "infrastructure/persistence/schedule_scenarios.py",
         # KLP-WP-03's Knowledge Assertion plane. Every SELECT and UPDATE scopes
         # each table and alias it names through `partition_criterion`, every
         # INSERT (including the `ON CONFLICT` reservation and evidence upserts)
@@ -302,6 +311,14 @@ QUARANTINED: Final = {
         "every query is scoped through SqlNativeSourceControlStore._mine using the "
         "Principal derived from the verified Apple bridge credential; poll locks and "
         "atomically claims the exact Principal-bound staged grant row."
+    ),
+    "infrastructure/database/schedule_scenarios_predeploy.py": (
+        "read-only operator pre-deploy aggregate: one cross-Principal `EXISTS` "
+        "boolean over `schedule_publications` that returns no row and no "
+        "identifier; it builds no other SQL over a partitioned table "
+        "(schedule scenarios contract section 14.9, R9-F09, RR1-F02). Pinned by "
+        "`tests/architecture/test_schedule_scenarios_persistence_scope.py::"
+        "test_predeploy_module_touches_only_the_retired_role_probe` (RR2-F01)."
     ),
     "infrastructure/jobs/extraction.py": (
         "reads `enrollments` to resolve the enrollment a job names. Ownership is "
@@ -539,6 +556,13 @@ PER_MODULE_ONLY: Final = {
         "`principal_bound_values`, the canonicalization link joins its two "
         "partitioned tables with `matching_partition_criterion`; not yet in a "
         "dedicated statement-level scanner."
+    ),
+    "infrastructure/persistence/schedule_scenarios.py": (
+        "Schedule Scenarios S6-2: every SELECT/UPDATE composes `_mine` over "
+        "`partition_criterion`, every INSERT composes `_bound` over "
+        "`principal_bound_values`, correlated intake and accepted-row joins use "
+        "`matching_partition_criterion`, the fork copy selects its partition from "
+        "a `_mine` row; not yet in a dedicated statement-level scanner."
     ),
     "infrastructure/persistence/continuity_read.py": (
         "one helper applies partition_criterion to every read-model table; the "

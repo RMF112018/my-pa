@@ -307,6 +307,12 @@ _PERSISTENCE_ALLOWED: Final = frozenset(
         "my_pa.infrastructure.persistence.jobs",
         "my_pa.infrastructure.persistence.tables",
         "my_pa.infrastructure.persistence.principal_scope",
+        # Schedule Scenarios S6-2 (schedule scenarios contract sections 14.8.5 and
+        # 14.8.7): the admission writes its import-time approval through the plane
+        # module, and the worker's H8 and fail paths run in the plane's unit of
+        # work. The plane is the schedule evidence plane's own successor, not
+        # another domain; the cross-domain prefixes below stay refused.
+        "my_pa.infrastructure.persistence.schedule_scenarios",
     }
 )
 _CROSS_DOMAIN_PREFIXES: Final = (

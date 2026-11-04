@@ -834,9 +834,10 @@ def test_the_chain_is_readable_and_non_empty() -> None:
     # S4, ADR-015) as 122, and `023f8f7eb499` (record lineage S3.1, ADR-015
     # decision 15) as 123, and `6c2306330ceb` (CPM Workbench S5b-1, the
     # Schedule foundation) as 124, and `621ef6786c64` (CPM Workbench S5b-2, the
-    # Schedule audit and worker-plane vocabulary) as 125.
-    assert len(revisions) == 125
-    assert len({revision for revision, _ in revisions}) == 125
+    # Schedule audit and worker-plane vocabulary) as 125, and `2a90f91dd786`
+    # (Schedule Scenarios S6-2, the scenario and baseline plane) as 126.
+    assert len(revisions) == 126
+    assert len({revision for revision, _ in revisions}) == 126
     assert {
         "9c6b4a18ed72",
         "1a4c9e77b2d5",

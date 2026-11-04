@@ -648,18 +648,25 @@ def stable_link_candidates(result: ScheduleParseResult) -> tuple[ParsedScheduleR
 
 
 class SchedulePublicationRole(StrEnum):
-    """R2 section 43.2 publication roles, in canonical order."""
+    """R2 section 43.2 publication roles, in canonical order.
+
+    Schedule Scenarios S6-2 retired `reference` (schedule scenarios contract
+    section 12.2): the role records only the import-time declaration.
+    """
 
     UPDATE = "update"
     BASELINE = "baseline"
-    REFERENCE = "reference"
 
 
 class ScheduleBaselineKind(StrEnum):
-    """R2 section 43.2 baseline kinds; set exactly on a `BASELINE` publication."""
+    """The import-time Baseline type; set exactly on a `BASELINE` publication.
 
-    WORKING = "working"
+    Value-equal to S6-1 `BaselineType` (schedule scenarios contract section
+    12.2); S6-2 retired `working`.
+    """
+
     CONTRACT = "contract"
+    APPROVED_UPDATE = "approved_update"
 
 
 class ScheduleParserRunStatus(StrEnum):
@@ -801,9 +808,51 @@ class ScheduleSeries:
         ScheduleSeriesName(name=self.name, key=self.name_key)
 
 
+MAX_APPROVAL_REFERENCE_CHARACTERS: Final = 500
+MAX_APPROVAL_REASON_CHARACTERS: Final = 2000
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduleImportApproval:
+    """The import-time approval of a role-`baseline` import (contract section 12.3).
+
+    Schedule scenarios contract section 14.7.2: `approval_reference` (1..500)
+    and `reason` (1..2,000) are normalized display text; the type is the
+    request's `baseline_kind`.
+    """
+
+    approval_reference: str
+    effective_from: date
+    reason: str
+
+    def __post_init__(self) -> None:
+        if not _is_display_text(self.approval_reference, MAX_APPROVAL_REFERENCE_CHARACTERS):
+            raise ValueError("an approval reference is 1 to 500 normalized characters")
+        effective: object = self.effective_from
+        if not isinstance(effective, date) or isinstance(effective, datetime):
+            raise ValueError("an approval is effective from a date")
+        if not _is_display_text(self.reason, MAX_APPROVAL_REASON_CHARACTERS):
+            raise ValueError("an approval reason is 1 to 2000 normalized characters")
+
+
+def _is_display_text(value: object, bound: int) -> bool:
+    return (
+        isinstance(value, str)
+        and 1 <= len(value) <= bound
+        and normalize_display_text(value) == value
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ScheduleImportRequest:
-    """One admission request; exactly one of `series_id` / `series_name` is set."""
+    """One admission request; exactly one of `series_id` / `series_name` / `series_auto`.
+
+    The four Schedule Scenarios fields (contract section 14.7.2) default so
+    every S5 call site is unchanged: `series_auto` asks the worker to match a
+    Series (11.2), `series_name_if_new` names the Series it may create,
+    `approval` carries a role-`baseline` import's approval (12.3) and
+    `match_decision_id` marks the worker's second admission.
+    """
 
     project_id: str
     series_id: str | None
@@ -816,11 +865,18 @@ class ScheduleImportRequest:
     expected_data_date: date | None
     supersedes_publication_id: str | None
     idempotency_key: str
+    series_auto: bool = False
+    series_name_if_new: ScheduleSeriesName | None = None
+    approval: ScheduleImportApproval | None = None
+    match_decision_id: str | None = None
 
     def __post_init__(self) -> None:
         _identifier(self.project_id, IdKind.PROJECT)
-        if (self.series_id is None) == (self.series_name is None):
-            raise ValueError("an import request names a series by id or by name, not both")
+        if not isinstance(self.series_auto, bool):
+            raise ValueError("an automatic series request is a boolean")
+        named = (self.series_id is not None, self.series_name is not None, self.series_auto)
+        if sum(named) != 1:
+            raise ValueError("an import request names a series by id, by name or automatically")
         _optional_identifier(self.series_id, IdKind.SCHEDULE_SERIES)
         if self.series_name is not None and not isinstance(self.series_name, ScheduleSeriesName):
             raise ValueError("an import request series name is normalized")
@@ -842,6 +898,37 @@ class ScheduleImportRequest:
         _optional_identifier(self.supersedes_publication_id, IdKind.SCHEDULE_PUBLICATION)
         if not _is_idempotency_key(self.idempotency_key):
             raise ValueError("an idempotency key is 8 to 128 of [A-Za-z0-9_-]")
+        self._check_scenario_fields()
+
+    def _check_scenario_fields(self) -> None:
+        """Schedule scenarios contract section 14.7.2 (the four added invariants)."""
+        if self.series_name_if_new is not None:
+            if not isinstance(self.series_name_if_new, ScheduleSeriesName):
+                raise ValueError("an import request new series name is normalized")
+            if not self.series_auto:
+                raise ValueError("a new series name is named only with an automatic series")
+        if self.approval is not None and not isinstance(self.approval, ScheduleImportApproval):
+            raise ValueError("an import request approval is a schedule import approval")
+        _optional_identifier(self.match_decision_id, IdKind.SCHEDULE_SERIES_MATCH)
+        if self.series_auto and (
+            self.publication_role is not SchedulePublicationRole.UPDATE
+            or self.baseline_kind is not None
+            or self.supersedes_publication_id is not None
+            or self.approval is not None
+            or self.match_decision_id is not None
+        ):
+            raise ValueError("an automatic series import is a plain update")
+        if (self.approval is not None) != (
+            self.publication_role is SchedulePublicationRole.BASELINE
+        ):
+            raise ValueError("an approval is set exactly on a baseline import")
+        if self.match_decision_id is not None and (
+            self.series_auto
+            or self.publication_role is not SchedulePublicationRole.UPDATE
+            or self.supersedes_publication_id is not None
+            or self.approval is not None
+        ):
+            raise ValueError("a matched second admission is a plain update of a named series")
 
 
 def _is_sha256(value: object) -> bool:

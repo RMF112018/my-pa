@@ -50,13 +50,11 @@ from sqlalchemy.exc import DBAPIError
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.schedule import (
     ISSUE_SEVERITY,
-    ScheduleBaselineKind,
     ScheduleCellState,
     ScheduleFieldCode,
     ScheduleIssueCode,
     ScheduleIssueSeverity,
     ScheduleParserRunStatus,
-    SchedulePublicationRole,
     SchedulePublicationStatus,
     ScheduleRowType,
     model,
@@ -69,8 +67,9 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "6c2306330ceb"
 PREVIOUS: Final = "023f8f7eb499"
-#: CPM Workbench S5b-2 (`621ef6786c64`) is additive on this revision and is the head.
-HEAD: Final = "621ef6786c64"
+#: CPM Workbench S5b-2 (`621ef6786c64`) is additive on this revision, and Schedule
+#: Scenarios S6-2 (`2a90f91dd786`) on it is the head.
+HEAD: Final = "2a90f91dd786"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20261027_6c2306330ceb_cpm_workbench_foundation.py"
 
@@ -148,11 +147,12 @@ def _values(enum: object) -> list[str]:
 def test_the_revision_is_the_single_head_on_023f8f7eb499() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == REVISION
+    assert script.get_revision(HEAD).down_revision == "621ef6786c64"
+    assert script.get_revision("621ef6786c64").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "c5260943d933"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
-    assert len(list(MIGRATIONS.glob("*.py"))) == 125
+    assert len(list(MIGRATIONS.glob("*.py"))) == 126
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -196,8 +196,11 @@ def test_frozen_literals_equal_the_domain_enums() -> None:
         "_CELL_STATES": _values(ScheduleCellState),
         "_PUBLICATION_STATUSES": _values(SchedulePublicationStatus),
         "_RUN_STATUSES": _values(ScheduleParserRunStatus),
-        "_ROLES": _values(SchedulePublicationRole),
-        "_BASELINE_KINDS": _values(ScheduleBaselineKind),
+        # Frozen pre-S6 sets: Schedule Scenarios S6-2 retired `reference` and
+        # `working` from the enums and restated these CHECKs (its own revision);
+        # this revision's literals stay what it created.
+        "_ROLES": ["baseline", "reference", "update"],
+        "_BASELINE_KINDS": ["contract", "working"],
         "_SEVERITIES": _values(ScheduleIssueSeverity),
         "_JOB_STATES": _values(JobState),
         "_ERROR_CODES": _values(ErrorCode),
@@ -394,9 +397,11 @@ def test_empty_to_head_creates_exactly_the_seven_tables(
     del disposable_database
     command.upgrade(_config(), PREVIOUS)
     before = _relations(engine)
+    command.upgrade(_config(), REVISION)
+    assert _relations(engine) - before == set(CPM_TABLES)
+    # The later additive revisions keep every one of them.
     command.upgrade(_config(), "head")
     _assert_present(engine, at=HEAD)
-    assert _relations(engine) - before == set(CPM_TABLES)
     with engine.connect() as connection:
         triggers = set(
             connection.execute(
@@ -418,6 +423,8 @@ def test_empty_to_head_creates_exactly_the_seven_tables(
         "a_schedule_parser_run_follows_its_lifecycle",
         "a_schedule_row_changes_only_by_linking",
         "a_schedule_issue_is_recorded_while_processing",
+        # Schedule Scenarios S6-2's G10 on `schedule_publications` (at head).
+        "a_schedule_intake_series_admits_no_other_publication",
     }
 
 

@@ -304,6 +304,18 @@ def test_downgrading_one_step_removes_exactly_these_two_tables(migrated_engine: 
         "schedule_parser_runs",
         "schedule_rows",
         "schedule_import_issues",
+        # Schedule Scenarios S6-2.
+        "schedule_intake_series",
+        "schedule_series_match_decisions",
+        "schedule_baselines",
+        "schedule_baseline_events",
+        "schedule_governing_events",
+        "schedule_scenarios",
+        "schedule_scenario_versions",
+        "schedule_cpm_runs",
+        "schedule_scenario_outputs",
+        "schedule_scenario_write_requests",
+        "schedule_scenario_write_refusals",
     }
     assert {
         "entities",

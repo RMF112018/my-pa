@@ -233,31 +233,58 @@ def parse_result_sha256(result: ScheduleParseResult) -> str:
 
 #: Domain separation for the admission digest (contract section 5.3, D-14).
 _IMPORT_REQUEST_DOMAIN: Final = b"cpm-schedule-import-v1\n"
+#: Schedule scenarios contract section 14.7.3: a request carrying any
+#: Schedule Scenarios field digests under its own domain.
+_IMPORT_REQUEST_DOMAIN_V2: Final = b"cpm-schedule-import-v2\n"
+
+
+def _carries_scenario_fields(request: ScheduleImportRequest) -> bool:
+    return (
+        request.series_auto
+        or request.series_name_if_new is not None
+        or request.approval is not None
+        or request.match_decision_id is not None
+    )
 
 
 def schedule_import_request_digest(principal_id: str, request: ScheduleImportRequest) -> str:
     """The admission request digest: everything but the idempotency key.
 
     The Series is named by id or by its casefold key, so two requests whose
-    names differ only in case or whitespace digest equal.
+    names differ only in case or whitespace digest equal. A request with no
+    Schedule Scenarios field keeps the `v1` digest byte for byte; any other
+    digests the `v1` body plus exactly those fields under the `v2` domain
+    (schedule scenarios contract section 14.7.3).
     """
     expected = request.expected_data_date
-    body = {
-        "principal_id": principal_id,
-        "request": {
-            "project_id": request.project_id,
-            "series_id": request.series_id,
-            "series_name_key": None if request.series_name is None else request.series_name.key,
-            "enrollment_id": request.enrollment_id,
-            "source_object_id": request.source_object_id,
-            "source_version_id": request.source_version_id,
-            "publication_role": request.publication_role.value,
-            "baseline_kind": None if request.baseline_kind is None else request.baseline_kind.value,
-            "expected_data_date": None if expected is None else expected.isoformat(),
-            "supersedes_publication_id": request.supersedes_publication_id,
-        },
+    fields: dict[str, object] = {
+        "project_id": request.project_id,
+        "series_id": request.series_id,
+        "series_name_key": None if request.series_name is None else request.series_name.key,
+        "enrollment_id": request.enrollment_id,
+        "source_object_id": request.source_object_id,
+        "source_version_id": request.source_version_id,
+        "publication_role": request.publication_role.value,
+        "baseline_kind": None if request.baseline_kind is None else request.baseline_kind.value,
+        "expected_data_date": None if expected is None else expected.isoformat(),
+        "supersedes_publication_id": request.supersedes_publication_id,
     }
-    return hashlib.sha256(_IMPORT_REQUEST_DOMAIN + canonical_json_bytes(body)).hexdigest()
+    body = {"principal_id": principal_id, "request": fields}
+    if not _carries_scenario_fields(request):
+        return hashlib.sha256(_IMPORT_REQUEST_DOMAIN + canonical_json_bytes(body)).hexdigest()
+    approval = request.approval
+    new_name = request.series_name_if_new
+    fields.update(
+        {
+            "series_auto": request.series_auto,
+            "series_name_if_new_key": None if new_name is None else new_name.key,
+            "approval_reference": None if approval is None else approval.approval_reference,
+            "effective_from": None if approval is None else approval.effective_from.isoformat(),
+            "reason": None if approval is None else approval.reason,
+            "match_decision_id": request.match_decision_id,
+        }
+    )
+    return hashlib.sha256(_IMPORT_REQUEST_DOMAIN_V2 + canonical_json_bytes(body)).hexdigest()
 
 
 def validate_row_for_persistence(row: ParsedScheduleRow) -> None:

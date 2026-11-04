@@ -97,6 +97,10 @@ __all__ = [
     "RELATION_MATRIX",
     "S1_LINEAGE_WRITE_CAPABILITIES",
     "S2_LINEAGE_WRITE_CAPABILITIES",
+    "SCHEDULE_LINEAGE_FAMILY_ID_KINDS",
+    "SCHEDULE_LINEAGE_RELATIONS",
+    "STORED_RECORD_FAMILY_ID_KINDS",
+    "STORED_RELATION_MATRIX",
     "AcceptanceBasis",
     "EvidenceAvailability",
     "EvidenceRole",
@@ -715,4 +719,100 @@ RELATION_MATRIX: Final[
             _RELATED_CONTEXT_FAMILIES,
         ),
     }
+)
+
+
+# --- Schedule Scenarios S6-2 storage vocabulary (schedule scenarios contract
+# section 14.7.4, amendment S6-2-D01) ------------------------------------------
+#
+# The `record_links` CHECKs are widened by the S6-2 revision from these
+# string-keyed maps, not from the public enums: `RecordFamily`, `RelationType`,
+# `RELATION_MATRIX`, `RECORD_FAMILY_ID_KINDS`, `LINEAGE_FAMILY_READS` and
+# `LINEAGE_READ_GENERATION` move in S6-3 with the validators and resolvers
+# (S6-2-D01, S6-2-D02). Until then the database admits the section 5.2 Schedule
+# families and relations that no public surface can name.
+
+#: The 6 Schedule endpoint families and the identifier kind each carries.
+SCHEDULE_LINEAGE_FAMILY_ID_KINDS: Final[MappingProxyType[str, IdKind]] = MappingProxyType(
+    {
+        "schedule_publication": IdKind.SCHEDULE_PUBLICATION,
+        "schedule_activity": IdKind.SCHEDULE_ACTIVITY,
+        "schedule_baseline": IdKind.SCHEDULE_BASELINE,
+        "scenario": IdKind.SCHEDULE_SCENARIO,
+        "scenario_version": IdKind.SCHEDULE_SCENARIO_VERSION,
+        "scenario_output": IdKind.SCHEDULE_SCENARIO_OUTPUT,
+    }
+)
+
+#: Every family `record_links` stores (13): the public 7 and the Schedule 6.
+STORED_RECORD_FAMILY_ID_KINDS: Final[MappingProxyType[str, IdKind]] = MappingProxyType(
+    {family.value: kind for family, kind in RECORD_FAMILY_ID_KINDS.items()}
+    | dict(SCHEDULE_LINEAGE_FAMILY_ID_KINDS)
+)
+
+#: The 3 section 5.2 relations S6 adds (semantic, contestable, not composite-only).
+SCHEDULE_LINEAGE_RELATIONS: Final[frozenset[str]] = frozenset({"concerns", "delays", "mitigates"})
+
+
+def _stored_relation_matrix() -> dict[str, tuple[str, frozenset[str], frozenset[str]]]:
+    stored = {
+        relation.value: (
+            kind.value,
+            frozenset(family.value for family in sources),
+            frozenset(family.value for family in targets),
+        )
+        for relation, (kind, sources, targets) in RELATION_MATRIX.items()
+    }
+    semantic = RecordLinkKind.SEMANTIC.value
+    kind, sources, targets = stored[RelationType.DISCUSSES.value]
+    stored[RelationType.DISCUSSES.value] = (
+        kind,
+        sources,
+        targets
+        | {
+            "schedule_publication",
+            "schedule_activity",
+            "schedule_baseline",
+            "scenario",
+            "scenario_output",
+        },
+    )
+    kind, sources, targets = stored[RelationType.ORIGINATED_FROM.value]
+    stored[RelationType.ORIGINATED_FROM.value] = (
+        kind,
+        sources | {"scenario_version", "schedule_baseline"},
+        targets,
+    )
+    stored["concerns"] = (
+        semantic,
+        frozenset({"scenario", "scenario_version", "scenario_output"}),
+        frozenset(
+            {
+                "situation",
+                "constraint",
+                "task",
+                "commitment",
+                "schedule_activity",
+                "schedule_baseline",
+            }
+        ),
+    )
+    stored["delays"] = (
+        semantic,
+        frozenset({"constraint", "situation"}),
+        frozenset({"schedule_activity"}),
+    )
+    stored["mitigates"] = (
+        semantic,
+        frozenset({"task", "commitment", "scenario_version"}),
+        frozenset({"constraint", "situation"}),
+    )
+    return stored
+
+
+#: The relation matrix `record_links` stores: `RELATION_MATRIX` as string
+#: tokens, `discusses` and `originated_from` widened and the 3 new relations
+#: added (section 5.2 exactly).
+STORED_RELATION_MATRIX: Final[MappingProxyType[str, tuple[str, frozenset[str], frozenset[str]]]] = (
+    MappingProxyType(_stored_relation_matrix())
 )

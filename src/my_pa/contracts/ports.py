@@ -47,6 +47,7 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
+from enum import StrEnum
 from hashlib import sha256
 from types import TracebackType
 from typing import Any, ClassVar, Final, Protocol
@@ -264,6 +265,7 @@ from my_pa.domain.schedule import (
     ScheduleAdmissionRefusal,
     ScheduleCanonicalizationProgress,
     ScheduleFinalization,
+    ScheduleImportApproval,
     ScheduleImportRequest,
     ScheduleIssueCode,
     ScheduleLease,
@@ -283,7 +285,19 @@ from my_pa.domain.schedule import (
     ScheduleSeriesSummary,
     StableScheduleActivity,
 )
+from my_pa.domain.schedule.baselines import (
+    BaselineEvent,
+    BaselineRefusal,
+    BaselineRequest,
+    GoverningEvent,
+)
 from my_pa.domain.schedule.compare import ScheduleComparisonRow
+from my_pa.domain.schedule.plane import PlaneProvenance, PlaneResultKind
+from my_pa.domain.schedule.scenario.cpm import CpmStatus
+from my_pa.domain.schedule.scenario.model import ScenarioContent, VersionLabel
+from my_pa.domain.schedule.scenario.outputs import OutputKind
+from my_pa.domain.schedule.scenario.snapshot import SnapshotReport
+from my_pa.domain.schedule.series_match import MatchCandidate, MatchOutcome, MatchReason
 from my_pa.domain.search.query import SearchMatch, SearchQuery, SearchRequest
 from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
@@ -8824,12 +8838,23 @@ class ScheduleRepository(ABC):
 
     @abstractmethod
     def admit_publication(
-        self, principal_id: str, request: ScheduleImportRequest, request_digest: str
+        self,
+        principal_id: str,
+        request: ScheduleImportRequest,
+        request_digest: str,
+        *,
+        operator_channel: str | None = None,
     ) -> ScheduleAdmission:
         """Admit one publication and enqueue its one job, or replay the original.
 
         Every refusal is `ScheduleAdmissionRejectedError`; a cross-Principal
         Project, Series, enrollment or publication is the matching `*_NOT_FOUND`.
+        Schedule scenarios contract section 14.8.5: `operator_channel` (an
+        attested channel) is given exactly when `request.approval` is, and the
+        import-time approval is then written in this same transaction under the
+        Project lock; section 14.8.6: `series_auto` admits into the request's
+        own intake Series, and an explicit Series naming an intake one is
+        `SERIES_NOT_FOUND`.
         """
 
     # -- worker transactions (each begins with the lease) ----------------------
@@ -9084,6 +9109,598 @@ class ScheduleUnitOfWork(ABC):
     @abstractmethod
     def schedules(self) -> ScheduleRepository:
         """The Schedule repository, inside this transaction."""
+
+
+# --- Schedule Scenarios S6-2 plane ports -----------------------------------------
+#
+# Contract: `docs/architecture/schedule-scenarios-contract.md` section 14.8. A
+# dedicated unit of work, deliberately *not* a member of `UnitOfWork` and not
+# composed into `ApplicationService` or the gateway in S6-2 (S6-3 composes the
+# plane factory). Every non-success after `reserve_request` is *raised*
+# (R9-F08, S6-2-D20), so the unit of work rolls the reservation back and the
+# deferred ledger trigger can never turn a refusal into `internal_error`.
+# Errors carry a fixed code and no content; records are frozen slots dataclasses.
+
+
+class ScenarioIntegrityError(Exception):
+    """A stored digest, size or decode check failed (section 14.8.3). `code` is fixed text."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(f"schedule scenario integrity: {code}")
+        self.code = code
+
+
+class CpmComputeBusyError(Exception):
+    """The Principal's compute lease is held (section 14.8.4) -> `conflict(CPM_RUN)`."""
+
+    def __init__(self) -> None:
+        super().__init__("a CPM compute of this Principal is in progress")
+
+
+class ScheduleBaselineRaceError(Exception):
+    """A section 12.1 backstop refused a lost race; `code` names the constraint or trigger."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(f"schedule baseline race: {code}")
+        self.code = code
+
+
+class ScenarioHeadMovedError(Exception):
+    """The CAS head moved (section 14.8.2) -> `conflict(EXPECTED_VERSION)`."""
+
+    def __init__(self, head_version_no: int) -> None:
+        super().__init__("the scenario head moved")
+        self.head_version_no = head_version_no
+
+
+class BaselineWriteRefusedError(Exception):
+    """`decide_baseline_write` refused (section 14.8.5); S6-3 maps the carried refusal."""
+
+    def __init__(self, refusal: BaselineRefusal) -> None:
+        super().__init__(f"schedule baseline write refused: {refusal.value}")
+        self.refusal = refusal
+
+
+class PlaneSubjectAbsentError(Exception):
+    """A named subject is absent or another Principal's -> `not_found`."""
+
+    def __init__(self) -> None:
+        super().__init__("the named schedule plane subject is not found")
+
+
+class PlaneReservationOutcome(StrEnum):
+    RESERVED = "reserved"
+    REPLAYED = "replayed"
+    CONFLICT = "conflict"
+
+
+@dataclass(frozen=True, slots=True)
+class PlaneReservation:
+    """What `reserve_request` (or a read-only probe) found for one idempotency key."""
+
+    outcome: PlaneReservationOutcome
+    #: Set on `REPLAYED`.
+    result_kind: PlaneResultKind | None = None
+    result_id: str | None = None
+    result_created: bool | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PlaneWriteCounts:
+    """Completed client-channel ledger rows (replays never add a row)."""
+
+    bucket_hour: int
+    bucket_day: int
+    principal_day: int
+
+
+@dataclass(frozen=True, slots=True)
+class PlaneByteCounts:
+    """Canonical bytes stored: content + results + outputs (section 2.10)."""
+
+    principal_total: int
+    principal_day: int
+    bucket_day: int
+
+
+@dataclass(frozen=True, slots=True)
+class NewScenario:
+    """A new Scenario's own fields; its Project and Series are its origin's.
+
+    `origin_publication_id` is set for a Scenario created from a publication
+    (and `origin_baseline_id` too when it was created from a Baseline); a fork
+    names its source version on `fork_scenario` instead and leaves both unset.
+    """
+
+    name: str
+    description: str | None = None
+    origin_publication_id: str | None = None
+    origin_baseline_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class NewScenarioChangeSet:
+    """The stored change set of a version after the first (section 14.3.7)."""
+
+    zlib: bytes
+    sha256: str
+    size_bytes: int
+    op_count: int
+    ops_applied: int
+    relationships_removed: int
+    content_changed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class NewScenarioVersion:
+    """One version to store: compressed canonical content and its counts.
+
+    Built outside any transaction (S6-2-D14) by
+    `infrastructure.persistence.schedule_scenarios.new_scenario_version`.
+    """
+
+    label: VersionLabel
+    note: str | None
+    content_zlib: bytes
+    content_sha256: str
+    content_size_bytes: int
+    activity_count: int
+    relationship_count: int
+    calendar_count: int
+    distribution_spec_sha256: str
+    change_set: NewScenarioChangeSet | None = None
+    #: Set exactly on version 1 of a publication-origin Scenario (G5).
+    snapshot: SnapshotReport | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class StoredScenario:
+    scenario_id: str
+    project_id: str
+    series_id: str
+    name: str
+    description: str | None
+    origin_kind: str
+    origin_publication_id: str | None
+    origin_baseline_id: str | None
+    origin_version_id: str | None
+    provenance: PlaneProvenance
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class StoredScenarioVersion:
+    version_id: str
+    scenario_id: str
+    project_id: str
+    series_id: str
+    version_no: int
+    parent_version_id: str | None
+    label: VersionLabel
+    note: str | None
+    content_sha256: str
+    content_size_bytes: int
+    change_set_sha256: str | None
+    change_set_size_bytes: int | None
+    change_set_op_count: int | None
+    ops_applied: int | None
+    relationships_removed: int | None
+    content_changed: bool | None
+    snapshot: SnapshotReport | None
+    activity_count: int
+    relationship_count: int
+    calendar_count: int
+    distribution_spec_sha256: str
+    provenance: PlaneProvenance
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class NewCpmRun:
+    """One computed (or rejected) run to store; the result is compressed canonical bytes."""
+
+    version_id: str
+    engine_version: str
+    input_content_sha256: str
+    status: CpmStatus
+    result_zlib: bytes
+    result_sha256: str
+    result_size_bytes: int
+    activity_count: int
+    relationship_count: int
+    project_finish: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class StoredCpmRun:
+    """A stored run; its label is always `server_computed` (S6-2-D10)."""
+
+    cpm_run_id: str
+    version_id: str
+    engine_version: str
+    input_content_sha256: str
+    status: CpmStatus
+    result_sha256: str
+    result_size_bytes: int
+    activity_count: int
+    relationship_count: int
+    project_finish: str | None
+    provenance: PlaneProvenance
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class NewScenarioOutput:
+    """One validated client-asserted output to store (section 4)."""
+
+    version_id: str
+    content_sha256: str
+    base_cpm_run_id: str | None
+    kind: OutputKind
+    iterations: int
+    distribution_spec_sha256: str
+    payload_zlib: bytes
+    payload_sha256: str
+    payload_size_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class StoredScenarioOutput:
+    output_id: str
+    version_id: str
+    content_sha256: str
+    base_cpm_run_id: str | None
+    kind: OutputKind
+    iterations: int
+    distribution_spec_sha256: str
+    payload_sha256: str
+    payload_size_bytes: int
+    provenance: PlaneProvenance
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ScenarioSnapshotSource:
+    """An eligible, non-intake publication and its accepted run's activity rows."""
+
+    publication_id: str
+    project_id: str
+    series_id: str
+    data_date: date
+    rows: tuple[ScheduleActivityRowView, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedScenarioContent:
+    """Stored content whose digest and decode were verified on read (section 14.8.3)."""
+
+    content: ScenarioContent
+    canonical: bytes
+    size: int
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedDocument:
+    """A stored change set, result or output document, verified on read."""
+
+    document: Mapping[str, object]
+    canonical: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class CpmRunWritten:
+    """What `compute_and_store_cpm_run` answered: a stored run, a replay or a conflict."""
+
+    outcome: PlaneReservationOutcome
+    cpm_run: StoredCpmRun | None
+    #: `False` for a natural-key hit (an existing run returned), `None` on conflict.
+    created: bool | None
+
+
+@dataclass(frozen=True, slots=True)
+class BaselineWritten:
+    """One appended baseline (or, when `governing`, governing) event."""
+
+    baseline_id: str
+    event_id: str
+    label: str | None
+    seq: int
+    governing: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class BaselineChain:
+    """A Project's two event chains, ordered by `seq` (section 12.1)."""
+
+    events: tuple[BaselineEvent, ...]
+    governing: tuple[GoverningEvent, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SeriesMatchRecord:
+    """One recorded series-match decision (section 14.3.2)."""
+
+    decision_id: str
+    intake_publication_id: str
+    intake_series_id: str
+    outcome: MatchOutcome
+    reason: MatchReason | None
+    threshold_version: str
+    incoming_id_count: int
+    candidates: tuple[MatchCandidate, ...]
+    target_series_id: str | None
+    resulting_publication_id: str | None
+    admission_refusal: str | None
+    admission_skipped: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class SeriesMatchUndecided:
+    """A deterministic hook defect: the finalization commits with no decision (S6-2-U10)."""
+
+    code: str
+
+
+class ScenarioRepository(ABC):
+    """The Schedule Scenarios plane tables, inside one `ScenarioUnitOfWork` transaction.
+
+    Every method takes the authenticated `principal_id` first; a row of another
+    Principal reads as absent and is never written. A plane write transaction
+    begins with `lock_principal` then `reserve_request` (section 14.8.2) and
+    ends with `complete_request`; the baseline and governing writes take the
+    Project lock themselves.
+    """
+
+    # -- prologue of every plane write transaction --------------------------------
+
+    @abstractmethod
+    def lock_principal(self, principal_id: str) -> None:
+        """Take the Principal plane lock P (section 14.8.4), held to commit."""
+
+    @abstractmethod
+    def reserve_request(
+        self,
+        principal_id: str,
+        capability: str,
+        idempotency_key: str,
+        request_digest: str,
+        writer: PlaneProvenance,
+    ) -> PlaneReservation:
+        """Reserve the key, or answer the committed replay or conflict."""
+
+    @abstractmethod
+    def find_request(
+        self, principal_id: str, capability: str, idempotency_key: str, request_digest: str
+    ) -> PlaneReservation | None:
+        """A read-only ledger probe: `None` when no completed row holds the key."""
+
+    @abstractmethod
+    def complete_request(
+        self,
+        principal_id: str,
+        capability: str,
+        idempotency_key: str,
+        result_id: str,
+        *,
+        created: bool,
+        stored_bytes: int,
+    ) -> None:
+        """Complete this transaction's reservation (the one legal transition, G7)."""
+
+    # -- bound reads (S6-3 applies the limits) ------------------------------------
+
+    @abstractmethod
+    def client_write_counts(
+        self, principal_id: str, writer: PlaneProvenance, at: datetime
+    ) -> PlaneWriteCounts:
+        """Completed client-channel writes in the rolling hour and day before `at`."""
+
+    @abstractmethod
+    def plane_byte_counts(
+        self, principal_id: str, writer: PlaneProvenance, at: datetime
+    ) -> PlaneByteCounts:
+        """Stored canonical bytes: total, and in the rolling day before `at`."""
+
+    @abstractmethod
+    def scenario_and_version_counts(self, principal_id: str) -> tuple[int, int]:
+        """The Principal's Scenarios and versions."""
+
+    @abstractmethod
+    def output_count(self, principal_id: str, version_id: str) -> int:
+        """Outputs recorded against one version."""
+
+    @abstractmethod
+    def cpm_units_since(self, principal_id: str, since: datetime) -> int:
+        """Activity-units of the runs stored at or after `since`."""
+
+    @abstractmethod
+    def refusal_count(self, principal_id: str, writer: PlaneProvenance, since: datetime) -> int:
+        """Refused writes of the writer's bucket at or after `since` (0 for an operator)."""
+
+    @abstractmethod
+    def record_refusal(
+        self, principal_id: str, writer: PlaneProvenance, capability: str, error_code: str
+    ) -> None:
+        """Append one refused write of a client bucket; an attested operator's is never kept."""
+
+    # -- scenarios and versions -----------------------------------------------------
+
+    @abstractmethod
+    def snapshot_source(
+        self, principal_id: str, publication_id: str
+    ) -> ScenarioSnapshotSource | None:
+        """An eligible, non-intake publication and its accepted rows, or `None`."""
+
+    @abstractmethod
+    def insert_scenario(
+        self,
+        principal_id: str,
+        scenario: NewScenario,
+        first_version: NewScenarioVersion,
+        writer: PlaneProvenance,
+    ) -> StoredScenarioVersion:
+        """A Scenario from a publication (or Baseline) and its version 1."""
+
+    @abstractmethod
+    def fork_scenario(
+        self,
+        principal_id: str,
+        scenario: NewScenario,
+        source_version_id: str,
+        label: VersionLabel,
+        note: str | None,
+        writer: PlaneProvenance,
+    ) -> StoredScenarioVersion:
+        """A Scenario forked from a version, its content copied byte for byte."""
+
+    @abstractmethod
+    def head_version(self, principal_id: str, scenario_id: str) -> StoredScenarioVersion | None:
+        """The Scenario's highest version, or `None`."""
+
+    @abstractmethod
+    def append_version(
+        self,
+        principal_id: str,
+        scenario_id: str,
+        expected_head_version_no: int,
+        version: NewScenarioVersion,
+        writer: PlaneProvenance,
+    ) -> StoredScenarioVersion:
+        """Append `expected + 1`, or raise `ScenarioHeadMovedError`."""
+
+    @abstractmethod
+    def get_scenario(self, principal_id: str, scenario_id: str) -> StoredScenario | None:
+        """One Scenario, or `None`."""
+
+    @abstractmethod
+    def get_version(self, principal_id: str, version_id: str) -> StoredScenarioVersion | None:
+        """One version, or `None`."""
+
+    @abstractmethod
+    def version_by_number(
+        self, principal_id: str, scenario_id: str, version_no: int
+    ) -> StoredScenarioVersion | None:
+        """The Scenario's version with `version_no`, or `None`."""
+
+    @abstractmethod
+    def load_content(self, principal_id: str, version_id: str) -> VerifiedScenarioContent | None:
+        """The version's content, verified (section 14.8.3), or `None`."""
+
+    @abstractmethod
+    def load_change_set(self, principal_id: str, version_id: str) -> VerifiedDocument | None:
+        """The version's change set, verified, or `None` (absent or version 1)."""
+
+    # -- CPM runs -------------------------------------------------------------------
+
+    @abstractmethod
+    def get_cpm_run(
+        self, principal_id: str, version_id: str, engine_version: str
+    ) -> StoredCpmRun | None:
+        """The natural-key run, or `None`."""
+
+    @abstractmethod
+    def get_cpm_run_by_id(self, principal_id: str, cpm_run_id: str) -> StoredCpmRun | None:
+        """One run by its identifier, or `None`."""
+
+    @abstractmethod
+    def insert_cpm_run(
+        self, principal_id: str, run: NewCpmRun, writer: PlaneProvenance
+    ) -> tuple[StoredCpmRun, bool]:
+        """Insert by the natural key; an existing run is returned with `False`."""
+
+    @abstractmethod
+    def load_cpm_result(self, principal_id: str, cpm_run_id: str) -> VerifiedDocument | None:
+        """The run's result document, verified, or `None`."""
+
+    # -- outputs --------------------------------------------------------------------
+
+    @abstractmethod
+    def insert_output(
+        self, principal_id: str, output: NewScenarioOutput, writer: PlaneProvenance
+    ) -> StoredScenarioOutput:
+        """Record one client-asserted output (G6 re-verifies its binding)."""
+
+    @abstractmethod
+    def get_output(self, principal_id: str, output_id: str) -> StoredScenarioOutput | None:
+        """One output, or `None`."""
+
+    @abstractmethod
+    def load_output(self, principal_id: str, output_id: str) -> VerifiedDocument | None:
+        """The output document, verified, or `None`."""
+
+    # -- baselines and governing (each takes the Project lock itself) -------------
+
+    @abstractmethod
+    def write_baseline(
+        self,
+        principal_id: str,
+        request: BaselineRequest,
+        *,
+        reason: str,
+        approval: ScheduleImportApproval | None,
+        writer: PlaneProvenance,
+        project_id: str | None = None,
+    ) -> BaselineWritten:
+        """Decide under the Project lock and append one event (section 14.8.5).
+
+        Raises `BaselineWriteRefusedError`, `PlaneSubjectAbsentError` or, on a
+        lost race at a section 12.1 backstop, `ScheduleBaselineRaceError`.
+        """
+
+    @abstractmethod
+    def baseline_chain(self, principal_id: str, project_id: str) -> BaselineChain:
+        """The Project's baseline and governing chains."""
+
+    @abstractmethod
+    def governing_as_of(
+        self, principal_id: str, project_id: str, as_of: datetime | None
+    ) -> str | None:
+        """The governing Baseline now, or as recorded at `as_of` (never `effective_from`)."""
+
+    # -- worker hook (inside the S5 finalization transaction) ----------------------
+
+    @abstractmethod
+    def finalize_intake(
+        self, principal_id: str, publication_id: str, *, plane_effective: bool
+    ) -> SeriesMatchRecord | SeriesMatchUndecided | None:
+        """Decide an intake publication's Series (section 14.8.7); `None` for any other."""
+
+    @abstractmethod
+    def get_match_decision(
+        self, principal_id: str, intake_publication_id: str
+    ) -> SeriesMatchRecord | None:
+        """The recorded decision of one intake publication, or `None`."""
+
+
+class ScenarioUnitOfWork(ABC):
+    """One transaction over the plane tables, and the 2 repositories on its connection.
+
+    Not a member of `UnitOfWork`: no Record Event buffer and no Project
+    repository. Commits when the block succeeds and rolls back when it raises.
+    """
+
+    @abstractmethod
+    def __enter__(self) -> ScenarioUnitOfWork:
+        """Begin the transaction and return the unit of work it belongs to."""
+
+    @abstractmethod
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Commit when the block succeeded, roll back when it did not."""
+
+    @property
+    @abstractmethod
+    def scenarios(self) -> ScenarioRepository:
+        """The plane repository, inside this transaction."""
+
+    @property
+    @abstractmethod
+    def schedules(self) -> ScheduleRepository:
+        """The S5 Schedule repository on the same connection."""
 
 
 # --- WP-MTG-02 Meeting records ports -----------------------------------------

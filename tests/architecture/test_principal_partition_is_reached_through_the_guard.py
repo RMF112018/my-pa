@@ -171,6 +171,14 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # `record_link_revisions` by `matching_partition_criterion`. It writes no
         # hand-written partition comparison.
         "infrastructure/persistence/record_lineage.py",
+        # Reports Modernization WP02's general report plane. Every SELECT
+        # composes `_mine` over `partition_criterion` (including the
+        # association-target existence reads over `projects`, `entities`,
+        # `report_roots` and `intelligence_artifacts`), every INSERT `_bound`
+        # over `principal_bound_values`, and the receipt replay's two joins
+        # `matching_partition_criterion`. No raw SQL and no hand-written
+        # partition comparison.
+        "infrastructure/persistence/reports.py",
         # Record lineage S2's handoff ledger. Every SELECT composes `_mine`
         # over `partition_criterion`, the one INSERT `_bound` over
         # `principal_bound_values`, and the anchor join
@@ -471,6 +479,14 @@ STATEMENT_LEVEL: Final = frozenset(
 #: modules is reached only through an application path that has already resolved
 #: the Principal, which is the same argument the `QUARANTINED` entries make.
 PER_MODULE_ONLY: Final = {
+    "infrastructure/persistence/reports.py": (
+        "Reports Modernization WP02: every SELECT composes `_mine` over "
+        "`partition_criterion` on each table it names (the association-target "
+        "existence reads included), every INSERT `_bound` over "
+        "`principal_bound_values`, and the receipt replay's joins "
+        "`matching_partition_criterion`. It has not joined a dedicated "
+        "statement-level scanner."
+    ),
     "infrastructure/persistence/record_lineage.py": (
         "record lineage S1: the read-only head rebuild scopes `record_links` through "
         "`principal_scoped` and joins `record_link_revisions` by "

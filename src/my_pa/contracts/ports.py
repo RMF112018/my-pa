@@ -257,6 +257,9 @@ from my_pa.domain.relationship.reenrichment import (
     ReenrichmentBinding,
     ReenrichmentWork,
 )
+from my_pa.domain.reports.publication import PublicationRequest, PublicationResult
+from my_pa.domain.reports.records import StoredReportVersion
+from my_pa.domain.reports.vocabulary import AssociationTargetKind
 from my_pa.domain.schedule import (
     ParsedScheduleRow,
     ScheduleActivityObservation,
@@ -432,6 +435,7 @@ __all__ = [
     "EntityWriteRequest",
     "EvidenceUnavailableError",
     "FrameRepository",
+    "GeneralReportRepository",
     "InitialAlias",
     "InitialIdentifier",
     "IssueCursorError",
@@ -527,6 +531,9 @@ __all__ = [
     "RelationshipEventRepository",
     "RelationshipRepository",
     "RelationshipWriteRequest",
+    "ReportAssociationTargetNotFoundError",
+    "ReportIdempotencyConflictError",
+    "ReportIntegrityError",
     "RepositoryFailureError",
     "ReviewDecisionRequest",
     "ReviewRepository",
@@ -6292,6 +6299,16 @@ class UnitOfWork(ABC):
         """
 
     @property
+    def general_reports(self) -> GeneralReportRepository:
+        """The general report plane, inside this transaction (Reports Modernization WP02).
+
+        Not abstract, for the reason `capture_lifecycle` is not: only the SQL
+        unit of work serves it, and every other implementation refuses rather
+        than silently answering.
+        """
+        raise NotImplementedError
+
+    @property
     @abstractmethod
     def tasks(self) -> TaskManagementRepository:
         """The task-management rows, inside this transaction (WP-TM-02/03).
@@ -7709,6 +7726,103 @@ class ManagedDocumentRepository(ABC):
         Principal's objects as orphans, which is how a reclamation deletes live
         data. It returns opaque identifiers and nothing else: no title, no digest,
         no owner, no content. Operator use only, from the reconciliation path.
+        """
+
+
+class ReportIdempotencyConflictError(PortError):
+    """A general report idempotency key is bound to a different intent. Nothing was written."""
+
+
+class ReportIntegrityError(PortError):
+    """A stored general report row no longer matches the digest it was written with.
+
+    Raised by a read that recomputed a decoded content digest or a manifest
+    digest and found it unequal to the stored one: the read refuses rather
+    than return bytes the stored digests do not name.
+    """
+
+
+class ReportAssociationTargetNotFoundError(UnknownScopeError):
+    """An association names a target the caller's Principal cannot see.
+
+    A subclass of `UnknownScopeError`, so it answers exactly what a target that
+    does not exist answers, and names neither the target nor which one failed.
+    """
+
+
+class GeneralReportRepository(ABC):
+    """The general report plane (Reports Modernization WP02), inside one transaction.
+
+    Every method is scoped to `principal_id`, the authenticated caller's
+    partition: a report, receipt or target another Principal owns answers
+    exactly what one that does not exist answers. Nothing here writes to a
+    `knowledge.intelligence_*` table.
+    """
+
+    @abstractmethod
+    def publish(
+        self,
+        request: PublicationRequest,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        recorded_at: datetime,
+        correlation_id: str,
+        audit_id: str,
+    ) -> PublicationResult:
+        """Write a new report at version 1, or replay the key's original result.
+
+        One transaction, in this order: the content object, the root (head
+        version 1, `active`, revision 0), version 1, its manifest, its
+        associations and the `publish`/`applied` receipt. Associations to a
+        project, entity, standalone report or intelligence report must resolve
+        in the caller's scope (`verified`), else `ReportAssociationTargetNotFoundError`
+        and nothing is written; an `external_source` is `asserted`.
+
+        A key already bound to the same intent digest returns the stored result
+        (`replayed=True`) and writes nothing; bound to a different digest it
+        raises `ReportIdempotencyConflictError` and writes nothing. A concurrent
+        writer of the same key is settled the same way at the receipt's unique
+        constraint. A content or manifest bound refuses as `ReportValidationError`.
+        """
+
+    @abstractmethod
+    def find_publish_receipt(
+        self, idempotency_key: str, *, principal_id: str
+    ) -> PublicationResult | None:
+        """The stored result this Principal's `publish` key is bound to, or `None`.
+
+        Compares no digest: the caller compares `receipt.intent_digest`.
+        """
+
+    @abstractmethod
+    def read_version(
+        self,
+        report_id: str,
+        *,
+        principal_id: str,
+        version_id: str | None = None,
+        version_number: int | None = None,
+    ) -> StoredReportVersion | None:
+        """One version of a report this Principal owns (the head by default), or `None`.
+
+        At most one of `version_id` and `version_number`. Lifecycle state is
+        returned, not filtered. Recomputes the decoded content digest and the
+        manifest digest and raises `ReportIntegrityError` on a mismatch.
+        """
+
+    @abstractmethod
+    def resolve_association_targets(
+        self,
+        targets: Sequence[tuple[AssociationTargetKind, str]],
+        *,
+        principal_id: str,
+    ) -> frozenset[tuple[AssociationTargetKind, str]]:
+        """The subset of `targets` that exist in this Principal's scope.
+
+        Resolvable kinds only: `project`, `entity`, `standalone_report` (a
+        `grpt_` root) and `intelligence_report` (an `rpt_` artifact). An
+        `external_source` target is never returned.
         """
 
 

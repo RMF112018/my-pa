@@ -248,6 +248,7 @@ from my_pa.infrastructure.persistence.relationship_memory_review import (
     is_relationship_memory_review_case,
     relationship_memory_review_cases,
 )
+from my_pa.infrastructure.persistence.reports import SqlGeneralReportRepository
 from my_pa.infrastructure.persistence.reveal import reveal_subject
 from my_pa.infrastructure.persistence.review import decide_review, review_cases
 from my_pa.infrastructure.persistence.search import (
@@ -1452,6 +1453,11 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def managed_documents(self) -> ManagedDocumentRepository:
         """The managed-document rows, on this transaction's connection (WP-28)."""
         return SqlManagedDocumentRepository(self._open)
+
+    @property
+    def general_reports(self) -> SqlGeneralReportRepository:
+        """The general report plane, on this transaction's connection (Reports WP02)."""
+        return SqlGeneralReportRepository(self._open)
 
     @property
     def tasks(self) -> TaskManagementRepository:

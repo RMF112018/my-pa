@@ -24,7 +24,7 @@ import math
 import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Final
 
 from my_pa.domain.reports.errors import ReportValidationError
 from my_pa.domain.reports.vocabulary import (
@@ -49,7 +49,9 @@ from my_pa.domain.reports.vocabulary import (
 )
 
 __all__ = [
+    "NOT_A_SCALAR",
     "ReportAssociation",
+    "json_scalar",
     "validate_associations",
     "validate_change_reason",
     "validate_metadata",
@@ -180,7 +182,18 @@ def _metadata_key(key: object) -> str:
     return key
 
 
-def _metadata_value(value: object, depth: int) -> object:
+#: Marks a value `json_scalar` found to be no JSON scalar (a container or other).
+NOT_A_SCALAR: Final = object()
+
+
+def json_scalar(value: object, field: str) -> object:
+    """A JSON scalar under the metadata rules, or `NOT_A_SCALAR`; refuses a bad one.
+
+    The rules every stored JSON value of this plane shares, metadata and
+    report content data alike: exact types, a finite float that is zero or in
+    `MIN/MAX_METADATA_FLOAT_MAGNITUDE`, and a string that is UTF-8 and holds no
+    U+0000.
+    """
     # `bool` is tested before `int` and by exact type throughout: `True` is an
     # `int` subclass and an `IntEnum` or a `str` subclass would otherwise pass
     # as a plain scalar and serialize as something other than what it is.
@@ -189,22 +202,30 @@ def _metadata_value(value: object, depth: int) -> object:
         return value
     if isinstance(value, float) and kind is float:
         if not math.isfinite(value):
-            raise ReportValidationError("metadata", "non_finite")
+            raise ReportValidationError(field, "non_finite")
         # No exponent in either serialization (see `validate_metadata`).
         if value != 0.0 and not (
             MIN_METADATA_FLOAT_MAGNITUDE <= abs(value) < MAX_METADATA_FLOAT_MAGNITUDE
         ):
-            raise ReportValidationError("metadata", "out_of_range")
+            raise ReportValidationError(field, "out_of_range")
         return value
     if isinstance(value, str) and kind is str:
         try:
             value.encode("utf-8")
         except UnicodeEncodeError:
-            raise ReportValidationError("metadata", "malformed") from None
+            raise ReportValidationError(field, "malformed") from None
         # PostgreSQL jsonb cannot hold U+0000 (`\u0000` is refused as text).
         if "\x00" in value:
-            raise ReportValidationError("metadata", "malformed")
+            raise ReportValidationError(field, "malformed")
         return value
+    return NOT_A_SCALAR
+
+
+def _metadata_value(value: object, depth: int) -> object:
+    scalar = json_scalar(value, "metadata")
+    if scalar is not NOT_A_SCALAR:
+        return scalar
+    kind = type(value)
     if (isinstance(value, list) and kind is list) or (isinstance(value, dict) and kind is dict):
         if depth + 1 > MAX_METADATA_DEPTH:
             raise ReportValidationError("metadata", "too_deep")

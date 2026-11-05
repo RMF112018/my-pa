@@ -355,6 +355,7 @@ from my_pa.domain.reports.revision import (
 )
 from my_pa.domain.reports.vocabulary import (
     MAX_ASSOCIATIONS_PER_VERSION,
+    MAX_CONTENT_DATA_VALUES,
     MAX_DECODED_CONTENT_BYTES,
     MAX_EXPANSION_RATIO,
     MAX_ORIGINAL_CONTENT_BYTES,
@@ -5785,8 +5786,9 @@ _REPORT_REFUSAL_DETAILS: Final[Mapping[str, SafeDetail]] = MappingProxyType(
 )
 
 
-#: WP05 B3: the content rules that are a size bound, answered with `max_bytes`.
-_CONTENT_SIZE_RULES: Final = frozenset({"too_large", "expansion_ratio"})
+#: WP05 B3 (and B2 step 8a): the content rules that are a size bound, answered with
+#: `max_bytes`.
+_CONTENT_SIZE_RULES: Final = frozenset({"too_large", "expansion_ratio", "too_many_values"})
 
 
 def report_refusal(error: ReportValidationError) -> ApplicationError:
@@ -5969,7 +5971,9 @@ _CONTENT_SCHEMA: Final[Mapping[str, Any]] = MappingProxyType(
             "gunzipped bytes are the UTF-8 body (markdown|text), a JSON text of the data "
             "(json) or a JSON object of exactly {body, data} (mixed); decoded content at "
             f"most {MAX_DECODED_CONTENT_BYTES:,} bytes and at most {MAX_EXPANSION_RATIO}:1 "
-            f"over the gzip bytes. {_CONTENT_PLACEMENT_SENTENCE} The whole JSON request "
+            "over the gzip bytes; json|mixed data at most "
+            f"{MAX_CONTENT_DATA_VALUES:,} JSON values. {_CONTENT_PLACEMENT_SENTENCE} "
+            "The whole JSON request "
             f"must also fit the {_WIRE_CEILING_BYTES:,}-byte request ceiling, so heavily "
             "escaped content (quotes, backslashes, control characters, \\u-escaped "
             "non-ASCII) may need to be smaller, and an encoded string is at most about "

@@ -41,6 +41,7 @@ from my_pa.domain.reports.encoding import (
 from my_pa.domain.reports.errors import ReportValidationError
 from my_pa.domain.reports.values import NOT_A_SCALAR, json_scalar
 from my_pa.domain.reports.vocabulary import (
+    MAX_CONTENT_DATA_VALUES,
     MAX_DECODED_CONTENT_BYTES,
     MAX_ORIGINAL_CONTENT_BYTES,
     ContentEncoding,
@@ -360,9 +361,14 @@ def _gzip_content(value: Mapping[str, object], content_format: ContentFormat) ->
         if content_format in _TEXTUAL:
             body = _body(text)
         else:
-            # A mixed object's data sits one level below its `{body, data}` wrapper.
+            # A mixed object's data sits one level below its `{body, data}`
+            # wrapper, which also adds itself and one comma to the value bound.
             wrapped = content_format is ContentFormat.MIXED
-            parsed = parse_json_text(text, max_depth=MAX_CONTENT_DATA_DEPTH + (1 if wrapped else 0))
+            parsed = parse_json_text(
+                text,
+                max_depth=MAX_CONTENT_DATA_DEPTH + (1 if wrapped else 0),
+                max_values=MAX_CONTENT_DATA_VALUES + (2 if wrapped else 0),
+            )
             if wrapped:
                 if type(parsed) is not dict or set(parsed) != {"body", "data"}:
                     raise ReportValidationError(ENCODED_FIELD, "mixed_shape")

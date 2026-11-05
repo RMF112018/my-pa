@@ -45,6 +45,7 @@ RULE_TOKENS: Final = (
     "uncompressed_digest_mismatch",
     "malformed_utf8",
     "too_deep",
+    "too_many_values",
     "duplicate_key",
     "malformed_json",
     "mixed_shape",
@@ -52,7 +53,7 @@ RULE_TOKENS: Final = (
     "malformed",
     "blank",
 )
-SIZE_RULES: Final = frozenset({"too_large", "expansion_ratio"})
+SIZE_RULES: Final = frozenset({"too_large", "expansion_ratio", "too_many_values"})
 
 
 def _gz(raw: bytes, level: int = 9) -> bytes:

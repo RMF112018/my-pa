@@ -588,10 +588,13 @@ composition and in every MCP publication that composition produces.
   whitespace, of exactly one gzip member; the decoded content is at most
   16,777,216 bytes, expands at most 256:1, and is validated exactly as identity
   content is (UTF-8 body; for `json`/`mixed` a JSON text, `mixed` being exactly
-  `{body, data}`). The whole request stays within the transport's
+  `{body, data}`). `json`/`mixed` data holds at most 262,144 JSON values,
+  counted before any parse as an upper bound (one, plus every `[`, `{` and
+  `,` outside strings), which keeps a 16 MiB decode to a measured peak under
+  100 MiB. The whole request stays within the transport's
   762,288-byte ceiling. Any violation is `invalid_request` naming `content`,
-  with `max_bytes` for the size and expansion bounds; no refusal echoes a
-  value. Decoded content above the inline threshold is stored in the report
+  with `max_bytes` for the size, expansion and value-count bounds; no refusal
+  echoes a value. Decoded content above the inline threshold is stored in the report
   content store when one is configured, otherwise refused the same way
   ([`managed-document-operations.md`](managed-document-operations.md)
   section 7). A `reports.update` whose `patch.content` has the head's format,

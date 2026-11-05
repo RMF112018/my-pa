@@ -32,15 +32,23 @@ fixed token and never the value:
 6. `uncompressed_size_mismatch` / `uncompressed_digest_mismatch`: a declared
    `uncompressed_byte_count` / `uncompressed_sha256` disagrees.
 7. `malformed_utf8`: the gunzipped bytes are not strict UTF-8.
-8. JSON (json, mixed): `too_deep` from a single linear, non-recursive
-   pre-scan of the nesting depth outside strings, BEFORE any parse, so a
-   hostile nesting can never reach the recursive parser; `duplicate_key` for an object naming a key
-   twice; `malformed_json` for anything `json.loads` refuses, and for `NaN`,
-   `Infinity` and `-Infinity`.
+8. JSON (json, mixed): one linear, non-recursive pre-scan outside strings,
+   BEFORE any parse: `too_deep` for nesting deeper than the bound, so a
+   hostile nesting never reaches the recursive parser, and (8a)
+   `too_many_values` for more than `MAX_CONTENT_DATA_VALUES` JSON values
+   (counted as an upper bound, `1 + [ and { + ,`), so a small upload never
+   becomes a parse tree of millions of objects. Then `duplicate_key` for an
+   object naming a key twice, and `malformed_json` for anything `json.loads`
+   refuses and for `NaN`, `Infinity` and `-Infinity`.
 
-Resources: peak memory is about the request, plus at most 16 MiB of
-gunzipped bytes, plus the parsed JSON; CPU is bounded by the same 16 MiB
-output cap (and, through the transport, by the request ceiling).
+Resources (measured, WP05 corrective B-3; validate_content plus
+extract_search_text, Python 3.12, tracemalloc peak): the worst accepted shape
+is 16 MiB of 262,142 long strings at 93 MiB (a single 16 MiB string 80 MiB, a
+16 MiB markdown body 48 MiB, `[{},...]` at the value cap 29 MiB); the largest
+CPU is 1.4 s, for 16 MiB of 4,299-digit integers (every other shape under
+0.4 s). The 16 MiB `[{},...]`, `[[],...]`, `[0,...]` and `["a",...]` shapes
+that peaked at 0.4-1.3 GB before the value cap are refused in under 0.1 s at
+a 32 MiB peak.
 """
 
 from __future__ import annotations
@@ -197,19 +205,30 @@ def utf8_text(uncompressed: bytes) -> str:
         raise _refuse("malformed_utf8") from None
 
 
-def _nesting_depth_exceeds(text: str, limit: int) -> bool:
-    """Whether brackets outside strings nest deeper than `limit`.
+def _json_shape_refusal(text: str, *, max_depth: int, max_values: int) -> str | None:
+    """`too_deep` or `too_many_values` for `text` before any parse, else `None`.
 
     One forward pass over the characters, no regex and no recursion, so it is
     linear in the text whatever the text is (a hostile one included: WP05
     corrective B-1). It tracks only "inside a string" and "after a backslash
-    inside a string", counts `[`/`{` and `]`/`}` outside strings, and stops as
-    soon as the depth passes `limit`. On valid JSON this is the exact nesting
-    depth. An unterminated string simply runs to the end of the text: the
-    brackets after its opening quote are string content to the parser too,
-    which then refuses the text as malformed, never having nested into them.
+    inside a string", and outside strings counts:
+
+    - depth: `+1` at `[`/`{`, `-1` at `]`/`}`; above `max_depth` is `too_deep`.
+      On valid JSON this is the exact nesting depth.
+    - values (WP05 B2 step 8a): an upper bound on the JSON values the text
+      can hold, `1 + (number of [ and {) + (number of ,)`, all outside
+      strings. Every value is the top-level one or an element or member value
+      of a container, and a container of k > 0 elements has k - 1 commas, so
+      the true count is at most this (an empty container counts one too
+      many). Above `max_values` is `too_many_values`. Object keys are not
+      values.
+
+    It stops at the first bound passed. An unterminated string simply runs to
+    the end of the text: what follows its opening quote is string content to
+    the parser too, which then refuses the text as malformed.
     """
     depth = 0
+    values = 1
     in_string = False
     escaped = False
     for character in text:
@@ -222,13 +241,20 @@ def _nesting_depth_exceeds(text: str, limit: int) -> bool:
                 in_string = False
         elif character == '"':
             in_string = True
+        elif character == ",":
+            values += 1
+            if values > max_values:
+                return "too_many_values"
         elif character == "[" or character == "{":
             depth += 1
-            if depth > limit:
-                return True
+            if depth > max_depth:
+                return "too_deep"
+            values += 1
+            if values > max_values:
+                return "too_many_values"
         elif character == "]" or character == "}":
             depth -= 1
-    return False
+    return None
 
 
 class _DuplicateKeyError(Exception):
@@ -246,10 +272,11 @@ def _no_constant(_name: str) -> object:
     raise ValueError("non-finite JSON constant")
 
 
-def parse_json_text(text: str, *, max_depth: int) -> object:
-    """Step 8: one JSON value, depth-checked before it is parsed."""
-    if _nesting_depth_exceeds(text, max_depth):
-        raise _refuse("too_deep")
+def parse_json_text(text: str, *, max_depth: int, max_values: int) -> object:
+    """Steps 8 and 8a: one JSON value, depth- and value-count-checked before it is parsed."""
+    shape = _json_shape_refusal(text, max_depth=max_depth, max_values=max_values)
+    if shape is not None:
+        raise _refuse(shape)
     try:
         return json.loads(text, object_pairs_hook=_unique_object, parse_constant=_no_constant)
     except _DuplicateKeyError:

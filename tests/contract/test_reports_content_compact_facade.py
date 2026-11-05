@@ -290,7 +290,14 @@ def test_publish_and_update_describe_the_one_extended_content_schema(harness: Ha
     for name in ("original_sha256", "uncompressed_sha256"):
         assert publish_content["properties"][name]["pattern"] == "^[0-9a-f]{64}$"
     described = publish_content["description"]
-    for limit in ("524,288", "16,777,216", "256:1", f"{MAX_REQUEST_BYTES:,}", "body_omitted"):
+    for limit in (
+        "524,288",
+        "16,777,216",
+        "256:1",
+        "262,144",
+        f"{MAX_REQUEST_BYTES:,}",
+        "body_omitted",
+    ):
         assert limit in described, limit
     assert "chunk" not in described
     read_payload = outcome(served)[1]["input_schema"]["properties"]["payload"]

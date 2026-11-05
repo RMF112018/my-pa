@@ -13,7 +13,9 @@ import gzip
 import hashlib
 import json
 import random
+import string
 import time
+import tracemalloc
 import zlib
 from typing import Any, Final
 
@@ -29,6 +31,7 @@ from my_pa.domain.reports.errors import ReportValidationError
 from my_pa.domain.reports.publication import content_payload
 from my_pa.domain.reports.vocabulary import (
     DECODE_CHUNK_BYTES,
+    MAX_CONTENT_DATA_VALUES,
     MAX_DECODED_CONTENT_BYTES,
     MAX_EXPANSION_RATIO,
     READ_INLINE_CONTENT_MAX_BYTES,
@@ -386,7 +389,12 @@ def _best_of_three(text: str) -> float:
     timings = []
     for _ in range(3):
         start = time.perf_counter()
-        assert encoding._nesting_depth_exceeds(text, MAX_CONTENT_DATA_DEPTH) is False
+        assert (
+            encoding._json_shape_refusal(
+                text, max_depth=MAX_CONTENT_DATA_DEPTH, max_values=MAX_CONTENT_DATA_VALUES
+            )
+            is None
+        )
         timings.append(time.perf_counter() - start)
     return min(timings)
 
@@ -397,9 +405,11 @@ def test_the_pre_scan_handles_the_quadratic_input_of_a_small_size_quickly() -> N
 
 
 def test_the_pre_scan_grows_linearly_with_the_text() -> None:
-    small = _best_of_three(_redos_text(2 * 1024 * 1024))
-    large = _best_of_three(_redos_text(4 * 1024 * 1024))
-    assert large / small < 3
+    # Linear doubles (2); quadratic quadruples (4) and far worse in practice.
+    # Large sizes and a threshold of 4 keep CI noise from failing it.
+    small = _best_of_three(_redos_text(4 * 1024 * 1024))
+    large = _best_of_three(_redos_text(8 * 1024 * 1024))
+    assert large / small < 4
 
 
 @pytest.mark.parametrize("size", [512 * 1024, MAX_DECODED_CONTENT_BYTES - 2])
@@ -407,7 +417,9 @@ def test_the_quadratic_input_is_refused_quickly_at_512_kib_and_16_mib(size: int)
     text = _redos_text(size)
     start = time.perf_counter()
     with pytest.raises(ReportValidationError) as caught:
-        encoding.parse_json_text(text, max_depth=MAX_CONTENT_DATA_DEPTH)
+        encoding.parse_json_text(
+            text, max_depth=MAX_CONTENT_DATA_DEPTH, max_values=MAX_CONTENT_DATA_VALUES
+        )
     assert time.perf_counter() - start < 2
     assert (caught.value.field, caught.value.code) == ("content.encoded", "malformed_json")
 
@@ -445,6 +457,109 @@ def test_depth_counting_follows_string_escapes(raw: bytes, outcome: str) -> None
 def test_an_unterminated_string_ends_the_scan_and_is_malformed_json() -> None:
     raw = b'["open ' + b"[" * 1000
     assert _refused(_content("json", raw)) == ("content.encoded", "malformed_json")
+
+
+# ---- the JSON value bound (WP05 B2 step 8a, corrective B-3) -----------------
+
+
+def _zeros(count: int) -> bytes:
+    """`[0,...,0]`: 1 + 1 + (count - 1) = count + 1 by the pre-scan's bound."""
+    return b"[" + b",".join([b"0"] * count) + b"]"
+
+
+def test_the_value_cap_is_frozen() -> None:
+    assert MAX_CONTENT_DATA_VALUES == 262144 == 2**18
+
+
+@pytest.mark.parametrize("fmt", ["json", "mixed"])
+def test_json_values_at_the_cap_are_accepted_and_one_more_is_too_many(fmt: str) -> None:
+    def content(count: int) -> dict[str, Any]:
+        data = _zeros(count)
+        raw = data if fmt == "json" else b'{"body": "b", "data": ' + data + b"}"
+        # Stored (level 0): zeros compress past 256:1.
+        return _encoded(fmt, _b64(_gz(raw, level=0)))
+
+    at_cap = validate_content(content(MAX_CONTENT_DATA_VALUES - 1))
+    assert len(at_cap.data) == MAX_CONTENT_DATA_VALUES - 1  # plus the array: the cap
+    assert _refused(content(MAX_CONTENT_DATA_VALUES)) == ("content.encoded", "too_many_values")
+
+
+def test_brackets_and_commas_inside_strings_are_not_values() -> None:
+    raw = b'["' + b",[{" * MAX_CONTENT_DATA_VALUES + b'", "\\",' + b'"]'
+    content = validate_content(_encoded("json", _b64(_gz(raw, level=0))))
+    assert len(content.data) == 2
+
+
+def test_containers_and_object_members_count_toward_the_cap() -> None:
+    lists = b"[" + b",".join([b"[]"] * (MAX_CONTENT_DATA_VALUES // 2)) + b"]"
+    assert _refused(_encoded("json", _b64(_gz(lists, level=0)))) == (
+        "content.encoded",
+        "too_many_values",
+    )
+    members = b"{" + b",".join(b'"k%d":0' % i for i in range(MAX_CONTENT_DATA_VALUES)) + b"}"
+    assert _refused(_encoded("json", _b64(_gz(members, level=1)))) == (
+        "content.encoded",
+        "too_many_values",
+    )
+
+
+def test_too_many_values_is_refused_before_any_parse(monkeypatch: pytest.MonkeyPatch) -> None:
+    def never(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("json.loads must not see a text over the value cap")
+
+    monkeypatch.setattr(json, "loads", never)
+    raw = _zeros(MAX_CONTENT_DATA_VALUES)
+    assert _refused(_encoded("json", _b64(_gz(raw, level=0)))) == (
+        "content.encoded",
+        "too_many_values",
+    )
+
+
+_PAD_RNG: Final = random.Random(1)  # noqa: S311 - deterministic synthetic text, not a secret
+#: 100,000 random characters: enough gzip bytes that 16 MiB stays under 256:1.
+_PAD: Final = "".join(_PAD_RNG.choice(string.ascii_letters + string.digits) for _ in range(100_000))
+
+
+def _traced_peak(value: dict[str, Any]) -> tuple[object, float]:
+    """`validate_content` + `extract_search_text` of `value`, and the traced peak in MiB."""
+    from my_pa.domain.reports.catalog import extract_search_text
+
+    tracemalloc.start()
+    try:
+        try:
+            outcome: object = extract_search_text(validate_content(value))
+        except ReportValidationError as error:
+            outcome = (error.field, error.code)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    return outcome, peak / 2**20
+
+
+def test_the_reviewers_16_mib_object_array_is_refused_within_a_small_memory_bound() -> None:
+    # `[{},{},...]` at 16 MiB decoded peaked at ~1.26 GB before the value cap.
+    raw = (
+        '["' + _PAD + '",' + ",".join(["{}"] * ((MAX_DECODED_CONTENT_BYTES - 200_000) // 3)) + "]"
+    ).encode()
+    value = _encoded("json", _b64(_gz(raw)))
+    del raw
+    outcome, peak = _traced_peak(value)
+    assert outcome == ("content.encoded", "too_many_values")
+    assert peak < 64  # MiB; measured 32.0
+
+
+def test_the_worst_accepted_shape_stays_within_its_memory_bound() -> None:
+    # 262,142 long strings filling 16 MiB decoded: the largest measured peak
+    # of any accepted shape (93 MiB; scratchpad wp05/provered/w3c2_memory.txt).
+    count = MAX_CONTENT_DATA_VALUES - 2
+    size = (MAX_DECODED_CONTENT_BYTES - 200_000) // count - 3
+    items = ['"' + "s" * size + '"'] * count + ['"' + _PAD + '"']
+    raw = ("[" + ",".join(items) + "]").encode()
+    value = _encoded("json", _b64(_gz(raw)))
+    del raw, items
+    outcome, peak = _traced_peak(value)
+    assert isinstance(outcome, str)
+    assert peak < 160  # MiB: well under the remote gateway's 768 MiB limit
 
 
 # ---- the two output bounds, evaluated after every piece ---------------------

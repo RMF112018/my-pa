@@ -17,6 +17,7 @@ __all__ = [
     "MANIFEST_SCHEMA",
     "MAX_ASSOCIATIONS_PER_VERSION",
     "MAX_ASSOCIATION_REF_CHARACTERS",
+    "MAX_CONTENT_DATA_VALUES",
     "MAX_DECODED_CONTENT_BYTES",
     "MAX_EXPANSION_RATIO",
     "MAX_MANIFEST_BYTES",
@@ -86,6 +87,12 @@ MAX_ORIGINAL_CONTENT_BYTES: Final = 16_777_216
 #: WP05 B2: gunzipped bytes may be at most this many times the gzip bytes, so a
 #: small upload cannot inflate into a large decode ("expansion_ratio").
 MAX_EXPANSION_RATIO: Final = 256
+#: WP05 B2 step 8a: the most JSON values (2^18) one gzip json/mixed content's
+#: data may hold, counted by the linear pre-scan before any parse, so a small
+#: upload cannot become a parse tree of millions of objects. Identity content
+#: needs no check: its canonical JSON is at most `INLINE_CONTENT_MAX_BYTES`
+#: (2^19) bytes and every value but the first costs at least two (`,0`).
+MAX_CONTENT_DATA_VALUES: Final = 262144
 #: WP05 B2: the gzip bytes are fed to the inflater in slices of this size, and
 #: each inflate call may produce at most this many bytes before the bounds are
 #: checked again.

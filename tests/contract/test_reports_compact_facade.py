@@ -445,7 +445,7 @@ def harness(migrated_engine: Engine) -> Harness:
 # ---- describe ----------------------------------------------------------------------
 
 
-def test_describe_returns_the_exact_remote_schemas_under_the_v12_profile(
+def test_describe_returns_the_exact_publish_and_read_remote_schemas(
     harness: Harness,
 ) -> None:
     token = harness.client(CLIENT, profile_grants(harness.service))
@@ -656,11 +656,12 @@ def test_a_retry_replays_and_a_distinct_intent_or_client_is_a_new_report(
     assert counts(harness.engine)["report_roots"] == 3
     assert counts(harness.engine)["report_receipts"] == 3
     with harness.engine.connect() as connection:
-        keys = dict(
-            connection.execute(
+        keys: dict[str, str] = {
+            row[0]: row[1]
+            for row in connection.execute(
                 text("SELECT report_id, idempotency_key FROM knowledge.report_receipts")
-            ).all()
-        )
+            )
+        }
     assert keys == {
         created["report_id"]: expected_key(MINIMAL, CLIENT),
         second["report_id"]: expected_key(intended, CLIENT),
@@ -883,7 +884,7 @@ def receipt_row(engine: Engine, receipt_id: str) -> Any:  # noqa: ANN401
         ).one()
 
 
-def test_describe_returns_the_exact_management_schemas_under_the_v13_profile(
+def test_describe_returns_the_exact_management_schemas(
     harness: Harness,
 ) -> None:
     token = harness.client(CLIENT, profile_grants(harness.service))

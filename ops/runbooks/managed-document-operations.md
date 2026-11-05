@@ -195,3 +195,31 @@ refusal rather than a duplication. Restore into an empty root and an empty plane
   delete command, no delete statement, and no `deleted` state in the schema.
 * **Backup retention and off-host copies.** This runbook covers taking a backup,
   not where it lives afterwards.
+
+## 7. The report content store (Reports Modernization WP05 C)
+
+A second, separate filesystem plane: report content whose decoded size is above
+`MY_PA_REPORT_CONTENT_INLINE_MAX_BYTES` (default 524,288, valid 1..524,288) is
+held under `MY_PA_REPORT_CONTENT_ROOT` as `managed_blob` objects, one per
+`grcnt_` content row, at `<root>/content/<shard>/<grcnt_id>/{decoded,original}`.
+Unset, the root composes no store: report content stays inline and larger
+decoded content is refused (`invalid_request`, `content`, `max_bytes`). The root
+must be an existing real directory clear of every source root and of the managed
+document root; the gateway refuses to start otherwise.
+
+The write window is the same as section 3's: an object is written before the
+first row of its request, so a failure can leave an orphan object, never a row
+naming absent bytes. Every standalone `reports.read` of a `managed_blob`
+version verifies its parts (size and SHA-256) and answers `internal_error`
+without a body when one is missing or altered.
+
+`apps/cli/report_content.py` (`verify`, `backup`, `restore`, per Principal, in
+the shape of `apps/cli/managed_documents.py` above) reports missing parts,
+per-part size or digest mismatches, orphans and unreadable entries, and copies
+verified objects to and from a backup root clear of the live one. It never
+deletes or repairs anything. The database is backed up with `pg_dump` and
+restored first; the objects are then restored and verified against the restored
+rows. The full dump, copy, restore and scan cycle is exercised against
+temporary roots and a disposable database by
+`tests/recovery/test_report_content_recovery.py`; nothing here has been run
+against a real deployment root, which remains an operator action.

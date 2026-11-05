@@ -935,3 +935,36 @@ def test_the_managed_root_setting_is_its_own_and_reaches_only_the_store() -> Non
         "configured source roots, so the source-root overlap refusal compares "
         "against nothing"
     )
+
+
+def test_the_report_content_root_setting_is_its_own_and_reaches_only_the_store() -> None:
+    """WP05 C3: the report content root, read out of the source as the managed root is.
+
+    Empty by default (no store is composed), read only by the settings and the
+    composition root, which builds `FilesystemReportContentStore` from it with
+    the configured source roots and the managed document root -- so the
+    resolution and both overlap refusals run wherever the setting is read. The
+    operator command `apps/cli/report_content.py` reaches the store only
+    through the composition root's builders.
+    """
+    from my_pa.bootstrap.settings import Settings
+
+    assert Settings.model_fields["report_content_root"].default == ""
+    readers = sorted(
+        _relative(path)
+        for path in _python_files()
+        if "report_content_root" in path.read_text(encoding="utf-8")
+    )
+    assert readers == ["src/my_pa/bootstrap/gateway.py", "src/my_pa/bootstrap/settings.py"], (
+        f"{readers} read the report content root setting; each reader must build "
+        "the store, which is where containment and the overlap refusals live"
+    )
+    composition = (ROOT / "src/my_pa/bootstrap/gateway.py").read_text(encoding="utf-8")
+    assert "FilesystemReportContentStore(" in composition
+    assert "managed_documents_root=" in composition, (
+        "the composition root builds the report content store without the managed "
+        "document root, so that overlap refusal compares against nothing"
+    )
+    command = (ROOT / "apps/cli/report_content.py").read_text(encoding="utf-8")
+    assert "report_content_backup_store" in command
+    assert "report_content_store" in command

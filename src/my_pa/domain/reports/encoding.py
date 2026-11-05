@@ -32,9 +32,9 @@ fixed token and never the value:
 6. `uncompressed_size_mismatch` / `uncompressed_digest_mismatch`: a declared
    `uncompressed_byte_count` / `uncompressed_sha256` disagrees.
 7. `malformed_utf8`: the gunzipped bytes are not strict UTF-8.
-8. JSON (json, mixed): `too_deep` from a non-recursive pre-scan of the nesting
-   depth outside strings, BEFORE any parse, so a hostile nesting can never
-   reach the recursive parser; `duplicate_key` for an object naming a key
+8. JSON (json, mixed): `too_deep` from a single linear, non-recursive
+   pre-scan of the nesting depth outside strings, BEFORE any parse, so a
+   hostile nesting can never reach the recursive parser; `duplicate_key` for an object naming a key
    twice; `malformed_json` for anything `json.loads` refuses, and for `NaN`,
    `Infinity` and `-Infinity`.
 
@@ -74,14 +74,12 @@ ENCODED_FIELD: Final = "content.encoded"
 GZIP_MAGIC: Final = b"\x1f\x8b\x08"
 _NESTED_MAGIC: Final = b"\x1f\x8b"
 
-_BASE64: Final = re.compile(r"\A[A-Za-z0-9+/]*={0,2}\Z")
+#: Anchored, possessive: one forward pass, nothing given back (linear in the input).
+_BASE64: Final = re.compile(r"\A[A-Za-z0-9+/]*+={0,2}\Z")
 #: Base64 characters of `MAX_ORIGINAL_CONTENT_BYTES` bytes, with padding.
 _MAX_ENCODED_CHARACTERS: Final = 4 * -(-MAX_ORIGINAL_CONTENT_BYTES // 3)
 #: A multiple of 4, so every slice but the last decodes on its own.
 _BASE64_SLICE_CHARACTERS: Final = 4 * DECODE_CHUNK_BYTES
-
-#: One JSON string (unrolled, possessive: linear, no backtracking) or one bracket.
-_JSON_TOKENS: Final = re.compile(r'"[^"\\]*+(?:\\.[^"\\]*+)*+"|[\[\]{}]', re.DOTALL)
 
 
 def _refuse(rule: str) -> ReportValidationError:
@@ -200,20 +198,35 @@ def utf8_text(uncompressed: bytes) -> str:
 
 
 def _nesting_depth_exceeds(text: str, limit: int) -> bool:
-    """Whether brackets outside strings nest deeper than `limit` (no recursion).
+    """Whether brackets outside strings nest deeper than `limit`.
 
-    On valid JSON this is the exact nesting depth. On invalid JSON it may
-    over-count (a bracket after an unterminated quote) but never under-counts
-    what the parser would reach before its first error.
+    One forward pass over the characters, no regex and no recursion, so it is
+    linear in the text whatever the text is (a hostile one included: WP05
+    corrective B-1). It tracks only "inside a string" and "after a backslash
+    inside a string", counts `[`/`{` and `]`/`}` outside strings, and stops as
+    soon as the depth passes `limit`. On valid JSON this is the exact nesting
+    depth. An unterminated string simply runs to the end of the text: the
+    brackets after its opening quote are string content to the parser too,
+    which then refuses the text as malformed, never having nested into them.
     """
     depth = 0
-    for match in _JSON_TOKENS.finditer(text):
-        token = match.group()
-        if token in ("[", "{"):
+    in_string = False
+    escaped = False
+    for character in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+        elif character == '"':
+            in_string = True
+        elif character == "[" or character == "{":
             depth += 1
             if depth > limit:
                 return True
-        elif token in ("]", "}"):
+        elif character == "]" or character == "}":
             depth -= 1
     return False
 

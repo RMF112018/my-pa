@@ -13,13 +13,18 @@ import gzip
 import hashlib
 import json
 import random
+import time
 import zlib
 from typing import Any, Final
 
 import pytest
 
 from my_pa.domain.reports import encoding
-from my_pa.domain.reports.content import INLINE_CONTENT_MAX_BYTES, validate_content
+from my_pa.domain.reports.content import (
+    INLINE_CONTENT_MAX_BYTES,
+    MAX_CONTENT_DATA_DEPTH,
+    validate_content,
+)
 from my_pa.domain.reports.errors import ReportValidationError
 from my_pa.domain.reports.publication import content_payload
 from my_pa.domain.reports.vocabulary import (
@@ -366,6 +371,80 @@ def test_a_100k_deep_nesting_is_refused_by_the_pre_scan_before_any_parse(
 def test_brackets_inside_strings_do_not_count_toward_depth() -> None:
     raw = b'["' + b"[" * 100 + b'\\"' + b"{" * 100 + b'"]'
     assert validate_content(_content("json", raw)).data == ["[" * 100 + '"' + "{" * 100]
+
+
+# ---- the depth pre-scan is linear (WP05 corrective B-1) ----------------------
+
+
+#: An unterminated string of escaped quotes: the input that made the former
+#: regex scan quadratic (each failed string match retried at the next quote).
+def _redos_text(size: int) -> str:
+    return '"' + '\\"' * (size // 2)
+
+
+def _best_of_three(text: str) -> float:
+    timings = []
+    for _ in range(3):
+        start = time.perf_counter()
+        assert encoding._nesting_depth_exceeds(text, MAX_CONTENT_DATA_DEPTH) is False
+        timings.append(time.perf_counter() - start)
+    return min(timings)
+
+
+def test_the_pre_scan_handles_the_quadratic_input_of_a_small_size_quickly() -> None:
+    # 64 KiB took 4.35 s with the regex scan; a linear pass takes milliseconds.
+    assert _best_of_three(_redos_text(64 * 1024)) < 0.25
+
+
+def test_the_pre_scan_grows_linearly_with_the_text() -> None:
+    small = _best_of_three(_redos_text(2 * 1024 * 1024))
+    large = _best_of_three(_redos_text(4 * 1024 * 1024))
+    assert large / small < 3
+
+
+@pytest.mark.parametrize("size", [512 * 1024, MAX_DECODED_CONTENT_BYTES - 2])
+def test_the_quadratic_input_is_refused_quickly_at_512_kib_and_16_mib(size: int) -> None:
+    text = _redos_text(size)
+    start = time.perf_counter()
+    with pytest.raises(ReportValidationError) as caught:
+        encoding.parse_json_text(text, max_depth=MAX_CONTENT_DATA_DEPTH)
+    assert time.perf_counter() - start < 2
+    assert (caught.value.field, caught.value.code) == ("content.encoded", "malformed_json")
+
+
+def test_the_quadratic_input_through_validate_content_at_16_mib_is_refused_quickly() -> None:
+    # Stored (level 0) so neither the 256:1 ratio nor the size bound refuses it
+    # first; 4 KiB of headroom for the stored blocks' own headers.
+    raw = _redos_text(MAX_DECODED_CONTENT_BYTES - 4096).encode()
+    value = _encoded("json", _b64(_gz(raw, level=0)))
+    start = time.perf_counter()
+    assert _refused(value) == ("content.encoded", "malformed_json")
+    assert time.perf_counter() - start < 5
+
+
+@pytest.mark.parametrize(
+    ("raw", "outcome"),
+    [
+        # An escaped quote does not close the string: the brackets are content.
+        (b'["\\"' + b"[" * 40 + b'"]', "accepted"),
+        (b'{"k\\"' + b"{" * 40 + b'": 1}', "accepted"),
+        # An escaped backslash does: the brackets after it nest.
+        (b'["\\\\", ' + b"[" * 32 + b"1" + b"]" * 32 + b"]", "too_deep"),
+        (b'["\\\\", ' + b"[" * 31 + b"1" + b"]" * 31 + b"]", "accepted"),
+        # A string of only escapes, then deep nesting.
+        (b'["' + b"\\\\" * 50 + b'", ' + b"[" * 40 + b"1" + b"]" * 40 + b"]", "too_deep"),
+    ],
+)
+def test_depth_counting_follows_string_escapes(raw: bytes, outcome: str) -> None:
+    if outcome == "accepted":
+        assert validate_content(_content("json", raw)).data is not None
+    else:
+        assert _refused(_content("json", raw)) == ("content.encoded", outcome)
+
+
+def test_an_unterminated_string_ends_the_scan_and_is_malformed_json() -> None:
+    raw = b'["open ' + b"[" * 1000
+    assert _refused(_content("json", raw)) == ("content.encoded", "malformed_json")
 
 
 # ---- the two output bounds, evaluated after every piece ---------------------

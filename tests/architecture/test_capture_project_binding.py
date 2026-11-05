@@ -61,8 +61,11 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 #: comment; `captures` is untouched. Moved again by its R1-R4 corrective cycle,
 #: which declares the receipt version, update no-op and event CHECKs, the inline
 #: mixed-content CHECK and the settled-transfer byte-count CHECK, and names the
-#: two insert guards in the plane comment; `captures` is untouched.
-TABLES_SHA256: Final = "19d3794b82b2c2110aab0037a567b8efcde2ee2fd76c801c6928c23347609e71"
+#: two insert guards in the plane comment; `captures` is untouched. Moved again
+#: by Reports Modernization WP04, which declares the report version search
+#: projection (`search_text`, its bound and the generated `search_document` with
+#: its GIN index) and the root catalog-order index; `captures` is untouched.
+TABLES_SHA256: Final = "2240bbbff8095e774f1e11d11d4ff922d81b9e5bbb808be73301926190b015bb"
 WP03_MIGRATION_SHA256: Final = "098edd98ccc1846b01c58f42e296e4751e7841b562a2827616cc4337e174c354"
 WP03_MIGRATION: Final = (
     ROOT / "migrations/versions/20260914_e6a4c2f91b73_project_controls_run01_integrity.py"

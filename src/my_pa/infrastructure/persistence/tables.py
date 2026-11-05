@@ -64,6 +64,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     Column,
+    Computed,
     Date,
     DateTime,
     Float,
@@ -84,7 +85,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.types import UserDefinedType
 
 from my_pa.contracts.v1.errors import ErrorCode
@@ -384,6 +385,9 @@ from my_pa.domain.reports.vocabulary import (
 from my_pa.domain.reports.vocabulary import MAX_MANIFEST_BYTES as MAX_REPORT_MANIFEST_BYTES
 from my_pa.domain.reports.vocabulary import MAX_METADATA_BYTES as MAX_REPORT_METADATA_BYTES
 from my_pa.domain.reports.vocabulary import MAX_REASON_CHARACTERS as MAX_REPORT_REASON_CHARACTERS
+from my_pa.domain.reports.vocabulary import (
+    MAX_SEARCH_TEXT_CHARACTERS as MAX_REPORT_SEARCH_TEXT_CHARACTERS,
+)
 from my_pa.domain.reports.vocabulary import (
     MAX_SUMMARY_CHARACTERS as MAX_REPORT_SUMMARY_CHARACTERS,
 )
@@ -10616,6 +10620,15 @@ report_content_objects = Table(
     ),
 )
 
+#: WP04 C7: the generated search document of a report version (title `A`;
+#: summary, topics and tags, and `search_text` `B`).
+_REPORT_SEARCH_DOCUMENT: Final = (
+    "setweight(to_tsvector('english', title), 'A') || "
+    "setweight(to_tsvector('english', coalesce(summary, '')), 'B') || "
+    "setweight(jsonb_to_tsvector('english', topics || tags, '[\"string\"]'), 'B') || "
+    "setweight(to_tsvector('english', search_text), 'B')"
+)
+
 #: The logical report root. Its head and lifecycle columns are caches of the
 #: version chain and the lifecycle ledger, proven equal to them at commit by the
 #: two deferred references.
@@ -10686,6 +10699,13 @@ report_roots = Table(
         name="a_report_lifecycle_cache_is_an_event_of_the_report",
     ),
     Index("report_roots_by_owner_and_state", "owner_principal_id", "lifecycle_state"),
+    # WP04 C6: the catalog list order per owner, ids in code-point order.
+    Index(
+        "report_roots_by_owner_and_creation",
+        "owner_principal_id",
+        text("created_at DESC"),
+        text('report_id COLLATE "C" DESC'),
+    ),
 )
 
 #: One immutable report version: a linear chain per root, each naming its
@@ -10715,6 +10735,15 @@ report_versions = Table(
     Column("recorded_at", DateTime(timezone=True), nullable=False),
     Column("correlation_id", Text, nullable=False),
     Column("audit_id", Text, nullable=False),
+    # WP04 C7: `extract_search_text` of the version's decoded content, written
+    # in the version's own INSERT; `search_document` is generated from the
+    # row, so no writer sets it.
+    Column("search_text", Text, nullable=False),
+    Column(
+        "search_document",
+        TSVECTOR,
+        Computed(_REPORT_SEARCH_DOCUMENT, persisted=True),
+    ),
     PrimaryKeyConstraint("version_id", name="report_versions_pkey"),
     _is_identifier("version_id", IdKind.REPORT_VERSION),
     _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
@@ -10783,6 +10812,10 @@ report_versions = Table(
         "(change_kind = 'initial') = (version_number = 1)",
         name="only_the_first_report_version_is_initial",
     ),
+    CheckConstraint(
+        f"char_length(search_text) <= {MAX_REPORT_SEARCH_TEXT_CHARACTERS}",
+        name="a_report_search_text_is_bounded",
+    ),
     UniqueConstraint(
         "owner_principal_id", "report_id", "version_number", name="one_report_version_per_number"
     ),
@@ -10814,6 +10847,7 @@ report_versions = Table(
         _REPORT_VERSION_KEY,
         name="a_report_version_supersedes_its_predecessor",
     ),
+    Index("report_versions_search_document", "search_document", postgresql_using="gin"),
 )
 
 #: One immutable manifest per version, its digest the one the version names.

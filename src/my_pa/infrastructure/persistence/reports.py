@@ -69,6 +69,7 @@ from my_pa.contracts.ports import (
     ReportWithdrawnError,
 )
 from my_pa.domain.common.identifiers import IdKind, InvalidIdentifierError, validate_identifier
+from my_pa.domain.reports.catalog import extract_search_text
 from my_pa.domain.reports.content import ReportContent, canonical_json, content_of
 from my_pa.domain.reports.errors import ReportValidationError
 from my_pa.domain.reports.lifecycle import LifecycleDecision, decide_lifecycle_transition
@@ -432,6 +433,8 @@ def _write_publication(
                     "recorded_at": recorded_at,
                     "correlation_id": correlation_id,
                     "audit_id": audit_id,
+                    # WP04 C7: in the version's own INSERT, from the decoded content.
+                    "search_text": extract_search_text(request.content),
                 },
                 report_versions,
                 context,
@@ -965,6 +968,10 @@ def _write_update(
                     "recorded_at": recorded_at,
                     "correlation_id": correlation_id,
                     "audit_id": audit_id,
+                    # WP04 C7: recomputed from the version's content. A
+                    # metadata-only update keeps the head's content (D5), so
+                    # its search text is the head's exactly.
+                    "search_text": extract_search_text(result.content),
                 },
                 report_versions,
                 context,

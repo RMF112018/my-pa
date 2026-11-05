@@ -122,6 +122,16 @@ the receipt's operation. That an omitted-event no-op's revision is the report's
 current one is a cross-row fact no CHECK can state; the lifecycle handler
 (WP03) writes it from the root it locked.
 
+The catalog search projection (WP04, contract C7, amended into this unmerged
+revision in place): `report_versions.search_text` is the decoded content's
+searchable text, written by the application in the version's own INSERT and
+bounded by `a_report_search_text_is_bounded` (65536 code points);
+`report_versions.search_document` is a `tsvector` generated from the row's
+own title, summary, topics, tags and `search_text` (`GENERATED ALWAYS ...
+STORED`, so no INSERT can set it and the append-only rows never need an
+update), indexed by the GIN index `report_versions_search_document`. The
+catalog list order is served by `report_roots_by_owner_and_creation`.
+
 Every closed set and bound is a frozen literal equal to the general report
 domain vocabulary module, which this revision does not import.
 
@@ -426,6 +436,19 @@ def _restrict(name: str, columns: str, table: str, targets: str) -> str:
 
 _VERSION_KEY: Final = "version_id, owner_principal_id, report_id, version_number"
 
+#: WP04 C7: a version's search document, generated from its own columns, so
+#: no writer can set it. The title weighs `A`; the summary, the topics and tags
+#: (their JSON string elements through `jsonb_to_tsvector`, immutable and
+#: accepted by PostgreSQL 15 in a generated column) and the decoded content's
+#: `search_text` weigh `B`. `search_text` is written by the application in the
+#: version's own INSERT, bounded to 65536 code points.
+_SEARCH_DOCUMENT: Final = (
+    "setweight(to_tsvector('english', title), 'A') || "
+    "setweight(to_tsvector('english', coalesce(summary, '')), 'B') || "
+    "setweight(jsonb_to_tsvector('english', topics || tags, '[\"string\"]'), 'B') || "
+    "setweight(to_tsvector('english', search_text), 'B')"
+)
+
 # ---- the 8 tables (contract section 3) ---------------------------------------------
 
 #: `(table, CREATE TABLE, its indexes)` in creation order. No statement here
@@ -540,6 +563,10 @@ _TABLES: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
         (
             "CREATE INDEX report_roots_by_owner_and_state ON knowledge.report_roots "
             "(owner_principal_id, lifecycle_state)",
+            # WP04 C6: the catalog list order, `created_at DESC, report_id DESC`
+            # with ids in code-point order (`COLLATE "C"`), per owner.
+            "CREATE INDEX report_roots_by_owner_and_creation ON knowledge.report_roots "
+            '(owner_principal_id, created_at DESC, report_id COLLATE "C" DESC)',
         ),
     ),
     (
@@ -568,6 +595,8 @@ _TABLES: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
           recorded_at TIMESTAMP WITH TIME ZONE NOT NULL,
           correlation_id TEXT NOT NULL,
           audit_id TEXT NOT NULL,
+          search_text TEXT NOT NULL,
+          search_document TSVECTOR GENERATED ALWAYS AS ({_SEARCH_DOCUMENT}) STORED,
           CONSTRAINT report_versions_pkey PRIMARY KEY (version_id),
           {_id("version_id", "grver")},
           {_id("owner_principal_id", "prn")},
@@ -603,6 +632,7 @@ _TABLES: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
               - 1),
           CONSTRAINT only_the_first_report_version_is_initial CHECK ((change_kind =
               'initial') = (version_number = 1)),
+          CONSTRAINT a_report_search_text_is_bounded CHECK (char_length(search_text) <= 65536),
           CONSTRAINT one_report_version_per_number UNIQUE (owner_principal_id, report_id,
               version_number),
           CONSTRAINT a_report_version_is_superseded_once UNIQUE (supersedes_version_id),
@@ -635,7 +665,10 @@ _TABLES: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
         }
         )
         """,
-        (),
+        (
+            "CREATE INDEX report_versions_search_document ON knowledge.report_versions "
+            "USING gin (search_document)",
+        ),
     ),
     (
         "report_version_manifests",

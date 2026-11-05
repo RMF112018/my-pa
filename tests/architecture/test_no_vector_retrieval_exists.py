@@ -65,6 +65,7 @@ from typing import Final
 
 import pytest
 from sqlalchemy import Index, Table
+from sqlalchemy.dialects.postgresql import TSVECTOR
 
 from my_pa.infrastructure.persistence import tables as declarations
 
@@ -456,6 +457,19 @@ def test_the_vocabularies_are_closed_at_the_sizes_they_declare() -> None:
     assert len(PORTED_VECTOR_NAMES) == 27
 
 
+def _is_vector_type(column_type: object) -> bool:
+    """A column type that is vector machinery, by its type's class name.
+
+    PostgreSQL's `tsvector` is exempt by exact name: it is the lexical
+    full-text document (the report search projection, WP04) and, like
+    `to_tsvector`, the machinery this system does use, never an embedding.
+    """
+    rendered = type(column_type).__name__.lower()
+    if rendered == "tsvector":
+        return False
+    return "vector" in rendered or "embedding" in rendered
+
+
 def test_no_table_column_or_index_in_the_live_schema_is_vector_machinery() -> None:
     """Property 1, read off `METADATA` rather than off the text that builds it."""
     offending: list[str] = []
@@ -468,8 +482,8 @@ def test_no_table_column_or_index_in_the_live_schema_is_vector_machinery() -> No
             words = schema_words_in(column.name)
             if words:
                 offending.append(f"{table.name}.{column.name} ({', '.join(words)})")
-            rendered = type(column.type).__name__.lower()
-            if "vector" in rendered or "embedding" in rendered:
+            if _is_vector_type(column.type):
+                rendered = type(column.type).__name__.lower()
                 offending.append(f"{table.name}.{column.name} has type {rendered}")
     for index in _indexes():
         words = schema_words_in(index.name or "")
@@ -490,6 +504,12 @@ def test_the_schema_scan_finds_the_machinery_when_there_is_some_to_find() -> Non
     # vector machinery, which is the whole reason `vector` is not a schema word.
     for allowed in ("extractions_full_text", "to_tsvector", "text", "search_config"):
         assert schema_words_in(allowed) == (), allowed
+    # The type half: a vector or embedding type is caught, `tsvector` is not.
+    vector = type("Vector", (), {})()
+    embedding = type("NoteEmbeddingType", (), {})()
+    halfvector = type("HalfVector", (), {})()
+    assert _is_vector_type(vector) and _is_vector_type(embedding) and _is_vector_type(halfvector)
+    assert not _is_vector_type(TSVECTOR())
 
 
 def test_no_revision_installs_a_vector_extension_or_an_ann_index() -> None:

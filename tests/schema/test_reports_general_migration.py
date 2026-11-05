@@ -89,6 +89,7 @@ from my_pa.domain.reports.vocabulary import (
     MAX_METADATA_FLOAT_MAGNITUDE,
     MAX_ORIGINAL_CONTENT_BYTES,
     MAX_REASON_CHARACTERS,
+    MAX_SEARCH_TEXT_CHARACTERS,
     MAX_SUMMARY_CHARACTERS,
     MAX_TERMS,
     MAX_TITLE_CHARACTERS,
@@ -172,6 +173,7 @@ RESTRICT_VIOLATION: Final = "23001"
 FOREIGN_KEY_VIOLATION: Final = "23503"
 UNIQUE_VIOLATION: Final = "23505"
 CHECK_VIOLATION: Final = "23514"
+GENERATED_ALWAYS: Final = "428C9"
 REFUSAL: Final = f"general report plane state exists; refusing to downgrade {REVISION}"
 AUDIT_REFUSAL: Final = f"general report audit history exists; refusing to downgrade {REVISION}"
 #: The latest revision before this one to restate `capability_is_known` and
@@ -367,6 +369,9 @@ def test_frozen_bounds_equal_the_domain_constants() -> None:
             f"BETWEEN 1 AND {MAX_ASSOCIATION_REF_CHARACTERS}"
         ),
         "a_report_transfer_chunk_limit_is_bounded": f"BETWEEN 1 AND {TRANSFER_CHUNK_MAX_BYTES}",
+        "a_report_search_text_is_bounded": (
+            f"char_length(search_text) <= {MAX_SEARCH_TEXT_CHARACTERS}"
+        ),
     }
     for name, bound in bounds.items():
         assert bound in checks[name], (name, checks[name])
@@ -444,10 +449,13 @@ def test_the_audit_before_texts_are_byte_copies_and_at_adds_exactly_the_report_v
 
 
 def _ddl_columns(ddl: str) -> list[tuple[str, bool]]:
+    # A generated column (`search_document TSVECTOR GENERATED ALWAYS AS (...)
+    # STORED`, WP04) is nullable and spelled with its expression.
     return [
         (match.group(1), match.group(2) is None)
         for match in re.finditer(
-            r"^\s+(\w+) (?:TEXT|INTEGER|JSONB|BYTEA|DATE|TIMESTAMP WITH TIME ZONE)( NOT NULL)?,$",
+            r"^\s+(\w+) (?:TEXT|INTEGER|JSONB|BYTEA|DATE|TIMESTAMP WITH TIME ZONE|TSVECTOR)"
+            r"( NOT NULL)?(?:,| GENERATED ALWAYS AS \(.*\) STORED,)$",
             ddl,
             re.MULTILINE,
         )
@@ -706,7 +714,8 @@ _CATALOG: Final = {
     "columns": (
         "SELECT column_name, data_type, coalesce(udt_name, ''), is_nullable, "
         "coalesce(column_default, ''), coalesce(numeric_precision::text, ''), "
-        "coalesce(numeric_scale::text, ''), is_identity, coalesce(identity_generation, '') "
+        "coalesce(numeric_scale::text, ''), is_identity, coalesce(identity_generation, ''), "
+        "is_generated, coalesce(generation_expression, '') "
         "FROM information_schema.columns WHERE table_schema = :schema AND table_name = :table"
     ),
     "indexes": (
@@ -1156,6 +1165,7 @@ def _version_row(ids: dict[str, str], version: str, number: int, content: str, k
         "recorded_at": NOW,
         "correlation_id": ids["corr"],
         "audit_id": ids["audit"],
+        "search_text": "Synthetic searchable body",
     }
     return Op("version", "report_versions", row)
 
@@ -1944,6 +1954,14 @@ def _version_cases() -> list[Case]:
             _check(_V, "a_report_change_kind_is_known"),
         ),
         case("title_empty", "publish", {"title": ""}, _check(_V, "a_report_title_is_bounded")),
+        # WP04 C7: the projection is bounded in code points (a 4-byte code
+        # point each, so a byte bound would refuse far earlier).
+        case(
+            "search_text_long",
+            "publish",
+            {"search_text": "\U0001f600" * (MAX_SEARCH_TEXT_CHARACTERS + 1)},
+            _check(_V, "a_report_search_text_is_bounded"),
+        ),
         case(
             "title_long",
             "publish",
@@ -2839,6 +2857,74 @@ def plane_engine(module_cloned_database_url: str) -> Iterator[Engine]:
 def test_each_guard_refuses_exactly_its_mutation(plane_engine: Engine, case: Case) -> None:
     assert _attempt(plane_engine, case, mutated=False) is None, "the baseline must commit"
     _assert_refused(_attempt(plane_engine, case, mutated=True), case.expect)
+
+
+@pytest.mark.database
+def test_the_search_document_is_generated_from_its_row_and_no_insert_sets_it(
+    plane_engine: Engine,
+) -> None:
+    """WP04 C7: `search_document` is the server's, weighted title A and the rest B."""
+    ids = _ids(uuid.uuid4().hex[:16], P)
+    publish = _TRANSACTIONS["publish"](ids)
+    forged = [
+        Op(op.label, op.table, {**op.values, "search_document": "forged"})
+        if op.label == "version"
+        else op
+        for op in publish
+    ]
+    with pytest.raises(DBAPIError) as raised:
+        _execute(plane_engine, forged)
+    _assert_refused(
+        raised.value,
+        _refused(
+            'cannot insert a non-DEFAULT value into column "search_document"', GENERATED_ALWAYS
+        ),
+    )
+    at_bound = [
+        Op(
+            op.label,
+            op.table,
+            {**op.values, "search_text": "\U0001f600" * MAX_SEARCH_TEXT_CHARACTERS},
+        )
+        if op.label == "version"
+        else op
+        for op in _TRANSACTIONS["publish"](_ids(uuid.uuid4().hex[:16], P))
+    ]
+    _execute(plane_engine, at_bound)
+    _execute(plane_engine, publish)
+    with plane_engine.connect() as connection:
+        weights: dict[str, set[str]] = {}
+        for lexeme, found in connection.execute(
+            text(
+                "SELECT lexeme, weights FROM knowledge.report_versions, "
+                "unnest(search_document) WHERE version_id = :v"
+            ),
+            {"v": ids["v1"]},
+        ):
+            weights.setdefault(str(lexeme), set()).update(str(weight) for weight in found)
+        same = connection.execute(
+            text(
+                "SELECT search_document = setweight(to_tsvector('english', title), 'A') || "
+                "setweight(to_tsvector('english', coalesce(summary, '')), 'B') || "
+                "setweight(jsonb_to_tsvector('english', topics || tags, '[\"string\"]'), 'B') "
+                "|| setweight(to_tsvector('english', search_text), 'B') "
+                "FROM knowledge.report_versions WHERE version_id = :v"
+            ),
+            {"v": ids["v1"]},
+        ).scalar_one()
+    # Title "Synthetic weekly report"; summary "A synthetic summary"; topics
+    # ["alpha"]; tags ["beta"]; search_text "Synthetic searchable body".
+    assert weights == {
+        "synthet": {"A", "B"},
+        "week": {"A"},
+        "report": {"A"},
+        "summari": {"B"},
+        "alpha": {"B"},
+        "beta": {"B"},
+        "searchabl": {"B"},
+        "bodi": {"B"},
+    }
+    assert same is True
 
 
 @pytest.mark.database

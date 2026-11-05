@@ -105,6 +105,7 @@ def test_frozen_bounds() -> None:
     assert v.MAX_MANIFEST_BYTES == 65536
     assert v.MAX_ASSOCIATIONS_PER_VERSION == 64
     assert v.MAX_ASSOCIATION_REF_CHARACTERS == 512
+    assert v.MAX_SEARCH_TEXT_CHARACTERS == 65536
     assert v.TRANSFER_CHUNK_MAX_BYTES == 262144
     assert timedelta(hours=24) == v.TRANSFER_MAX_TTL
 

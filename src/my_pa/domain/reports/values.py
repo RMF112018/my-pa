@@ -52,6 +52,7 @@ __all__ = [
     "NOT_A_SCALAR",
     "ReportAssociation",
     "json_scalar",
+    "validate_association_ref",
     "validate_associations",
     "validate_change_reason",
     "validate_metadata",
@@ -283,6 +284,16 @@ def _association_ref(value: object, field: str) -> str:
     _bounded(ref, field, MAX_ASSOCIATION_REF_CHARACTERS)
     _refuse_controls(ref, field, allow_newline=False)
     return ref
+
+
+def validate_association_ref(value: object, field: str = "target_ref") -> str:
+    """An association `target_ref` (or version ref): 1..512 code points, no control.
+
+    The one shape rule every target kind shares; publish applies exactly this
+    to a stored association, and a catalog filter applies it to the reference
+    it matches on.
+    """
+    return _association_ref(value, field)
 
 
 @dataclass(frozen=True, slots=True)

@@ -7,6 +7,8 @@ or infrastructure module.
 
 `vocabulary` holds the frozen bounds and enumerations the schema restates as
 literals; `values` the validators for every caller-supplied field; `lifecycle`
-the pure archive / delete / restore transition rule; `errors` the refusals,
+the pure archive / delete / restore transition rule; `catalog` the WP04 plane
+selector, catalog filters, bound keyset cursor and search-text projection;
+`errors` the refusals,
 none of which carries the value it refused.
 """

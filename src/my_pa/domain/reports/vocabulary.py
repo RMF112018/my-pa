@@ -25,6 +25,7 @@ __all__ = [
     "MAX_METADATA_KEY_CHARACTERS",
     "MAX_ORIGINAL_CONTENT_BYTES",
     "MAX_REASON_CHARACTERS",
+    "MAX_SEARCH_TEXT_CHARACTERS",
     "MAX_SUMMARY_CHARACTERS",
     "MAX_TERMS",
     "MAX_TERM_CHARACTERS",
@@ -81,6 +82,11 @@ MAX_ORIGINAL_CONTENT_BYTES: Final = 16_777_216
 
 MANIFEST_SCHEMA: Final = "report_version_manifest_v1"
 MAX_MANIFEST_BYTES: Final = 65536
+
+#: Code points of a version's search projection (`search_text`): the decoded
+#: content's searchable text is cut here (WP04 C7), so text beyond it is not
+#: searchable. The schema restates it as `char_length(search_text) <= 65536`.
+MAX_SEARCH_TEXT_CHARACTERS: Final = 65536
 
 MAX_ASSOCIATIONS_PER_VERSION: Final = 64
 #: Bound on an association's `target_ref` and `target_version_ref`.

@@ -64,8 +64,20 @@ SKIPPED_DIRECTORIES: Final = frozenset(
     {"__pycache__", ".ruff_cache", ".mypy_cache", "node_modules"}
 )
 
-#: The one module allowed to write bytes to a filesystem.
+#: The one module allowed to write managed-document bytes to a filesystem.
 MANAGED_STORE: Final = "src/my_pa/infrastructure/managed_document_stores/filesystem/store.py"
+
+#: Reports Modernization WP05 C2: the report content store, the second contained
+#: store. Not a registered writer: it holds user content, so it is held to the
+#: managed store's discipline -- no path parameter, a resolved root clear of
+#: every source root and the managed document root, directory-anchored
+#: `O_NOFOLLOW` syscalls, exclusive create -- proved in
+#: `tests/unit/test_report_content_filesystem_store.py`, and its root setting
+#: reaches only the composition root (`test_the_report_content_root_setting_...`).
+REPORT_CONTENT_STORE: Final = "src/my_pa/infrastructure/report_content_stores/filesystem.py"
+
+#: Every module allowed to write user-owned bytes, each behind its own containment.
+CONTAINED_STORES: Final = frozenset({MANAGED_STORE, REPORT_CONTENT_STORE})
 
 #: Modules other than the managed byte store that call a filesystem-write API,
 #: with what each writes and why it is not the managed plane.
@@ -484,6 +496,7 @@ def test_the_walk_reaches_every_tree_it_claims_to() -> None:
     python = {_relative(path) for path in _python_files()}
     assert len(python) > 140, f"the Python walk found {len(python)} files"
     assert MANAGED_STORE in python
+    assert REPORT_CONTENT_STORE in python
     assert "migrations/versions/20260811_4c7b2e91d8a5_create_the_managed_document_tables.py" in (
         python
     ), "the revision that installs the managed plane is not in the walk"
@@ -515,7 +528,11 @@ def test_every_filesystem_write_is_the_managed_store_or_is_registered() -> None:
         "see; every zero below is then a zero about the detector"
     )
 
-    unaccounted = sorted(set(measured) - {MANAGED_STORE} - set(REGISTERED_WRITERS))
+    assert REPORT_CONTENT_STORE in measured, (
+        "the report content store performs no filesystem write the detector can see"
+    )
+
+    unaccounted = sorted(set(measured) - CONTAINED_STORES - set(REGISTERED_WRITERS))
     assert unaccounted == [], (
         f"{unaccounted} call a filesystem-write API and are neither the managed "
         f"byte store nor registered. Managed bytes are written in one place, "

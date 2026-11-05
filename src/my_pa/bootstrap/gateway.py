@@ -206,6 +206,8 @@ from my_pa.bootstrap.settings import AuthMode, Settings
 from my_pa.contracts.ports import (
     ManagedByteStore,
     ProgramReadUnitOfWork,
+    ReportContentNamespace,
+    ReportContentStore,
     ScheduleUnitOfWork,
     UnitOfWork,
 )
@@ -259,6 +261,10 @@ from my_pa.infrastructure.persistence.task_management import SqlAlchemyTaskManag
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 from my_pa.infrastructure.persistence.user_accounts import UserAccountRepository
 from my_pa.infrastructure.persistence.webauthn_auth import AuthSessionStore
+from my_pa.infrastructure.report_content_stores.filesystem import (
+    FilesystemReportContentStore,
+    ReportContentRootError,
+)
 from my_pa.infrastructure.security.entra_token import EntraTokenVerifier, jwks_signing_key_source
 from my_pa.infrastructure.security.principal_identity import PrincipalIdentityService
 from my_pa.infrastructure.security.webauthn_ceremony import (
@@ -274,6 +280,8 @@ __all__ = [
     "entra_authenticator",
     "local_principal",
     "remote_client_authenticator",
+    "report_content_backup_store",
+    "report_content_store",
 ]
 
 #: How a transport asks the composition root who is calling. The first argument
@@ -573,6 +581,60 @@ def managed_byte_store(settings: Settings, work_engine: Engine) -> ManagedByteSt
         source_roots = configured_source_roots(connection)
     return FilesystemManagedByteStore(
         Path(configured), source_roots=[Path(root) for root in source_roots]
+    )
+
+
+def report_content_store(settings: Settings, work_engine: Engine) -> ReportContentStore | None:
+    """The report content store, or `None` when no report content root is configured (WP05 C3).
+
+    `None` is the backward-compatible default: an unset or blank
+    `MY_PA_REPORT_CONTENT_ROOT` keeps every report content inline and refuses
+    decoded content above the inline threshold. A configured root is built
+    into `FilesystemReportContentStore` with the configured source roots and
+    the managed document root, whose constructor refuses to start on an
+    unusable root or any overlap -- a misconfiguration the operator must fix,
+    never quietly a disabled store. Composed whatever else the runtime
+    permits: a `managed_blob` report written through one composition must
+    verify and read through every other.
+    """
+    configured = settings.report_content_root.strip()
+    if not configured:
+        return None
+    with work_engine.begin() as connection:
+        source_roots = configured_source_roots(connection)
+    managed = settings.managed_document_root.strip()
+    return FilesystemReportContentStore(
+        Path(configured),
+        ReportContentNamespace.CONTENT,
+        source_roots=[Path(root) for root in source_roots],
+        managed_documents_root=Path(managed) if managed else None,
+    )
+
+
+def report_content_backup_store(
+    settings: Settings, work_engine: Engine, location: Path
+) -> FilesystemReportContentStore:
+    """An operator-designated backup or restore-source report content store (WP05 C7).
+
+    The same constructor and refusals as the live store, and additionally
+    clear of the live report content root, so "back up in place" is refused
+    by the same overlap check. Requires a configured live root.
+    """
+    live = report_content_store(settings, work_engine)
+    if not isinstance(live, FilesystemReportContentStore):
+        raise ReportContentRootError(
+            "MY_PA_REPORT_CONTENT_ROOT is unset; there is no report content store "
+            "in this process to operate on"
+        )
+    with work_engine.begin() as connection:
+        source_roots = configured_source_roots(connection)
+    managed = settings.managed_document_root.strip()
+    return FilesystemReportContentStore(
+        location,
+        ReportContentNamespace.CONTENT,
+        source_roots=[Path(root) for root in source_roots],
+        managed_documents_root=Path(managed) if managed else None,
+        other_roots=[live.root],
     )
 
 
@@ -1267,6 +1329,10 @@ def build_gateway_runtime(
             goodnotes_pull_assignment_lease_seconds=(
                 settings.goodnotes_pull_assignment_lease_seconds
             ),
+            # WP05 C3: the report content store (`None` when no root is
+            # configured) and the inline threshold settings validated.
+            report_content_store=report_content_store(settings, work_engine),
+            report_content_inline_max_bytes=settings.report_content_inline_max_bytes,
         ),
         principal=principal,
         authenticate=entra_authenticator(settings, control_engine) if entra else None,

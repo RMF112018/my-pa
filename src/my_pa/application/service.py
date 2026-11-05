@@ -692,6 +692,9 @@ from my_pa.contracts.ports import (
     ProgramReadUnitOfWork,
     RelationshipMemoryRepository,
     ReportAssociationTargetNotFoundError,
+    ReportContentPart,
+    ReportContentStore,
+    ReportContentStoreError,
     ReportIdempotencyConflictError,
     ReportIntegrityError,
     ReportNotFoundError,
@@ -964,6 +967,7 @@ from my_pa.domain.reports.catalog import (
     ReportPlane,
     binding_digest,
 )
+from my_pa.domain.reports.content import INLINE_CONTENT_MAX_BYTES, content_from_decoded
 from my_pa.domain.reports.creator import CreatorKind, ReportCreator, derive_creator
 from my_pa.domain.reports.errors import ReportLifecycleRefusal, ReportValidationError
 from my_pa.domain.reports.publication import PublicationResult
@@ -978,9 +982,11 @@ from my_pa.domain.reports.records import (
 from my_pa.domain.reports.revision import LifecycleResult, UpdateResult
 from my_pa.domain.reports.vocabulary import (
     READ_INLINE_CONTENT_MAX_BYTES,
+    ContentEncoding,
     ContentFormat,
     LifecycleState,
     ReceiptOperation,
+    StorageKind,
 )
 from my_pa.domain.search.query import (
     DEFAULT_SNIPPET_WORDS,
@@ -3728,6 +3734,76 @@ def _general_history_payload(
     }
 
 
+def _verified_blob_version(
+    store: ReportContentStore, stored: StoredReportVersion, *, include_body: bool
+) -> StoredReportVersion:
+    """A `managed_blob` version with its parts verified through the store (WP05 C5).
+
+    Every part is verified (size and SHA-256) on every read, whether or not
+    the body is returned: the decoded part always, the original too for a
+    gzip upload. With `include_body`, the decoded bytes within
+    `READ_INLINE_CONTENT_MAX_BYTES` are read and rebuilt into the content (its
+    recomputed digests must equal the row's), and gzip bytes within the bound
+    are read for `encoded`; anything above the bound is verified by a
+    streaming hash and left out, so the payload marks it omitted. Raises the
+    store's port errors or `ReportIntegrityError`; never returns bytes that do
+    not match their row.
+    """
+    facts = stored.content
+    object_id = stored.content_id
+    within = facts.decoded_byte_count <= READ_INLINE_CONTENT_MAX_BYTES
+    original: bytes | None = None
+    if facts.encoding is ContentEncoding.GZIP_BASE64:
+        if include_body and facts.original_byte_count <= READ_INLINE_CONTENT_MAX_BYTES:
+            original = store.read(
+                object_id,
+                ReportContentPart.ORIGINAL,
+                expected_sha256=facts.original_sha256,
+                expected_byte_count=facts.original_byte_count,
+            )
+        else:
+            store.verify(
+                object_id,
+                ReportContentPart.ORIGINAL,
+                expected_sha256=facts.original_sha256,
+                expected_byte_count=facts.original_byte_count,
+            )
+    if not (include_body and within):
+        store.verify(
+            object_id,
+            ReportContentPart.DECODED,
+            expected_sha256=facts.decoded_sha256,
+            expected_byte_count=facts.decoded_byte_count,
+        )
+        return replace(stored, content=replace(facts, original=original))
+    decoded = store.read(
+        object_id,
+        ReportContentPart.DECODED,
+        expected_sha256=facts.decoded_sha256,
+        expected_byte_count=facts.decoded_byte_count,
+    )
+    try:
+        rebuilt = content_from_decoded(facts.format, decoded)
+    except ReportValidationError:
+        raise ReportIntegrityError() from None
+    if (
+        rebuilt.decoded_sha256 != facts.decoded_sha256
+        or rebuilt.decoded_byte_count != facts.decoded_byte_count
+        or rebuilt.canonical_sha256 != facts.canonical_sha256
+    ):
+        raise ReportIntegrityError()
+    # The encoding, the original's facts and (when read) its verified bytes
+    # are the row's; the body and data are the rebuilt ones.
+    content = replace(
+        rebuilt,
+        encoding=facts.encoding,
+        original=original,
+        original_sha256=facts.original_sha256,
+        original_byte_count=facts.original_byte_count,
+    )
+    return replace(stored, content=content)
+
+
 def _general_read_payload(
     stored: StoredReportVersion, *, include_body: bool, include_manifest: bool
 ) -> dict[str, Any]:
@@ -3746,14 +3822,22 @@ def _general_read_payload(
         "original_byte_count": content.original_byte_count,
     }
     if include_body:
-        if content.format is not ContentFormat.JSON:
-            content_payload["body"] = content.body
-        if content.format in (ContentFormat.JSON, ContentFormat.MIXED):
-            content_payload["data"] = content.data
-        if content.original is not None:
+        if not content.materialized:
+            # WP05 C5: a `managed_blob` body above the response bound. Its
+            # facts and digests above are still returned, verified.
+            content_payload["body_omitted"] = "exceeds_response_bound"
+        else:
+            if content.format is not ContentFormat.JSON:
+                content_payload["body"] = content.body
+            if content.format in (ContentFormat.JSON, ContentFormat.MIXED):
+                content_payload["data"] = content.data
+        if content.encoding is ContentEncoding.GZIP_BASE64:
             # The exact `encoded` the caller uploaded: canonical Base64 of the
             # verified gzip bytes, while they fit the response bound.
-            if content.original_byte_count <= READ_INLINE_CONTENT_MAX_BYTES:
+            if (
+                content.original is not None
+                and content.original_byte_count <= READ_INLINE_CONTENT_MAX_BYTES
+            ):
                 content_payload["encoded"] = base64.b64encode(content.original).decode("ascii")
             else:
                 content_payload["encoded_omitted"] = "exceeds_response_bound"
@@ -4460,8 +4544,24 @@ class ApplicationService:
         goodnotes_canonical_semantic_writes_enabled: bool = False,
         goodnotes_pull_cursor_signing_key: bytes | None = None,
         goodnotes_pull_assignment_lease_seconds: int = 900,
+        report_content_store: ReportContentStore | None = None,
+        report_content_inline_max_bytes: int = INLINE_CONTENT_MAX_BYTES,
     ) -> None:
         self._unit_of_work = unit_of_work
+        #: WP05 C3: the report content store and the inline threshold. `None`
+        #: -- what an unset `MY_PA_REPORT_CONTENT_ROOT` composes -- keeps every
+        #: report content inline and refuses decoded content above the
+        #: threshold (`invalid_request` `content`, `max_bytes`); a composed
+        #: store holds it as `managed_blob`. Both reach the repository as
+        #: explicit arguments of `publish`/`update` (C4) and the store the
+        #: standalone read's verification (C5); nothing else reads them.
+        if (
+            type(report_content_inline_max_bytes) is not int
+            or not 1 <= report_content_inline_max_bytes <= INLINE_CONTENT_MAX_BYTES
+        ):
+            raise ValueError("the report content inline threshold is out of bounds")
+        self._report_content_store = report_content_store
+        self._report_content_inline_max_bytes = report_content_inline_max_bytes
         self._limits = _effective_limits(limits)
         self._clock = clock
         #: The managed-document byte store, or `None` in a process that was never
@@ -16405,6 +16505,8 @@ class ApplicationService:
                 recorded_at=authorization.at,
                 correlation_id=authorization.correlation_id,
                 audit_id=authorization.audit_id,
+                content_store=self._report_content_store,
+                inline_max_bytes=self._report_content_inline_max_bytes,
             )
         except ReportValidationError as error:
             refusal = report_refusal(error)
@@ -16447,6 +16549,8 @@ class ApplicationService:
                 recorded_at=authorization.at,
                 correlation_id=authorization.correlation_id,
                 audit_id=authorization.audit_id,
+                content_store=self._report_content_store,
+                inline_max_bytes=self._report_content_inline_max_bytes,
             )
         except ReportValidationError as error:
             refusal = report_revision_refusal(error)
@@ -16633,9 +16737,18 @@ class ApplicationService:
             if stored is not None and (
                 command.include_withdrawn or stored.root.lifecycle_state is LifecycleState.ACTIVE
             ):
+                try:
+                    readable = self._readable_report_version(
+                        stored, include_body=command.include_body
+                    )
+                except (ReportContentStoreError, ReportIntegrityError):
+                    # WP05 C5: a stored object that is missing or no longer
+                    # matches its row is a server fault; nothing of it -- no
+                    # body, path or digest -- is returned or named.
+                    raise InternalError() from None
                 return _Result(
                     payload=_general_read_payload(
-                        stored,
+                        readable,
                         include_body=command.include_body,
                         include_manifest=command.include_manifest,
                     ),
@@ -16645,6 +16758,20 @@ class ApplicationService:
             # all answer exactly as a missing pipeline artifact does.
             refusal = NotFoundError(SafeDetail.ARTIFACT_ID)
         raise refusal
+
+    def _readable_report_version(
+        self, stored: StoredReportVersion, *, include_body: bool
+    ) -> StoredReportVersion:
+        """An inline version as read; a `managed_blob` one verified through the store (C5).
+
+        A `managed_blob` version in a process composed without a store cannot
+        be verified, so it is refused as a missing object would be.
+        """
+        if stored.storage_kind is not StorageKind.MANAGED_BLOB:
+            return stored
+        if self._report_content_store is None:
+            raise ReportIntegrityError()
+        return _verified_blob_version(self._report_content_store, stored, include_body=include_body)
 
     def _reports_read(
         self,

@@ -145,8 +145,12 @@ def build_initial_manifest(
     associations: Sequence[ReportAssociation],
     recorded_at: datetime,
     author: ReportCreator,
+    storage_kind: StorageKind = StorageKind.INLINE,
 ) -> ReportManifest:
-    """The manifest of version 1: `build_version_manifest` over a publish request."""
+    """The manifest of version 1: `build_version_manifest` over a publish request.
+
+    `storage_kind` is where the repository placed the content (WP05 C4).
+    """
     return build_version_manifest(
         report_id=report_id,
         version_id=version_id,
@@ -168,4 +172,5 @@ def build_initial_manifest(
         associations=associations,
         recorded_at=recorded_at,
         author=author,
+        storage_kind=storage_kind,
     )

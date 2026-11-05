@@ -67,6 +67,8 @@ def validate_client_intent_id(value: object) -> str | None:
 
 def content_payload(content: ReportContent) -> dict[str, object]:
     """A content value as an intent digest names it: format, encoding, body and/or data."""
+    if not content.materialized:
+        raise ReportValidationError("content", "not_materialized")
     payload: dict[str, object] = {
         "format": content.format.value,
         "encoding": content.encoding.value,

@@ -484,8 +484,12 @@ PER_MODULE_ONLY: Final = {
         "`partition_criterion` on each table it names (the association-target "
         "existence reads included), every INSERT `_bound` over "
         "`principal_bound_values`, and the receipt replay's joins "
-        "`matching_partition_criterion`. It has not joined a dedicated "
-        "statement-level scanner."
+        "`matching_partition_criterion`. WP05 C7 adds one deliberately "
+        "unpartitioned read, `known_managed_content_ids`: every `managed_blob` "
+        "content id across Principals, opaque identifiers only, for the report "
+        "content store's orphan scan (the shape of managed documents' "
+        "`known_version_identifiers`); its row direction, `managed_content`, is "
+        "`_mine`-scoped. It has not joined a dedicated statement-level scanner."
     ),
     "infrastructure/persistence/record_lineage.py": (
         "record lineage S1: the read-only head rebuild scopes `record_links` through "

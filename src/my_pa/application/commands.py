@@ -363,6 +363,7 @@ from my_pa.domain.reports.vocabulary import (
     MAX_TERM_CHARACTERS,
     MAX_TERMS,
     MAX_TITLE_CHARACTERS,
+    READ_INLINE_CONTENT_MAX_BYTES,
     AssociationTargetKind,
     ContentEncoding,
     ContentFormat,
@@ -5937,9 +5938,13 @@ _SHA256_SCHEMA_PATTERN: Final = "^[0-9a-f]{64}$"
 
 #: WP05 B7: the one sentence stating where decoded content above the inline
 #: maximum stands. The report content store (WP05 C) replaces only this.
+#: WP05 C3/C5: where content above the inline threshold goes, and what a read returns.
 _CONTENT_PLACEMENT_SENTENCE: Final = (
-    f"Until the report content store exists, decoded content above "
-    f"{INLINE_CONTENT_MAX_BYTES:,} bytes is refused (invalid_request content, max_bytes)."
+    f"Decoded content above the inline threshold (default {INLINE_CONTENT_MAX_BYTES:,} "
+    "bytes) is stored in the report content store when it is configured, otherwise "
+    "refused (invalid_request content, max_bytes); reads return the body only up to "
+    f"{READ_INLINE_CONTENT_MAX_BYTES:,} decoded bytes, larger bodies are marked "
+    "body_omitted."
 )
 
 _CONTENT_SCHEMA: Final[Mapping[str, Any]] = MappingProxyType(

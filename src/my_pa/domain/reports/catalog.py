@@ -468,6 +468,10 @@ def extract_search_text(content: ReportContent) -> str:
     """
     if not isinstance(content, ReportContent):
         raise ReportValidationError("content", "type")
+    if not content.materialized:
+        # WP05 C: facts only (a `managed_blob` read without its bytes). Its
+        # search text is the stored one; never an empty body's.
+        raise ReportValidationError("content", "not_materialized")
     body = content.body or ""
     if content.format in (ContentFormat.MARKDOWN, ContentFormat.TEXT):
         text = body

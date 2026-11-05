@@ -143,6 +143,11 @@ from my_pa.contracts.ports import (
     RelationshipMemoryRepository,
     RelationshipWriteRequest,
     ReportAssociationTargetNotFoundError,
+    ReportContentIntegrityError,
+    ReportContentMissingError,
+    ReportContentPart,
+    ReportContentStore,
+    ReportContentStoreError,
     ReportIdempotencyConflictError,
     ReportNotFoundError,
     ReportStaleLifecycleRevisionError,
@@ -229,6 +234,7 @@ from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.coverage import CoverageState
 from my_pa.domain.common.identifiers import (
     IdKind,
+    InvalidIdentifierError,
     make_identifier,
     parse_identifier,
     validate_identifier,
@@ -421,6 +427,7 @@ from my_pa.domain.reports.catalog import (
 from my_pa.domain.reports.content import (
     INLINE_CONTENT_MAX_BYTES,
     ReportContent,
+    content_facts,
     validate_content,
 )
 from my_pa.domain.reports.creator import CreatorKind, ReportCreator, derive_creator
@@ -439,6 +446,7 @@ from my_pa.domain.reports.records import (
     MAX_HISTORY_PAGE_WITH_MANIFESTS,
     CatalogEntry,
     HistoryEntries,
+    ManagedContentRecord,
     ReportHistoryPage,
     ReportLifecycleEventRecord,
     ReportRootRecord,
@@ -9711,10 +9719,117 @@ class _UnmodelledPlane:
         raise NotImplementedError(f"the FAST world does not model {self._name}.{item}")
 
 
-def _inline_placement(content: ReportContent) -> None:
-    """The SQL repository's placement (WP05 B4): only inline storage exists yet."""
-    if content.decoded_byte_count > INLINE_CONTENT_MAX_BYTES:
+class InMemoryReportContentStore(ReportContentStore):
+    """`ReportContentStore` in memory (WP05 C2), for the FAST tier.
+
+    The port's rules without a filesystem: an exclusive `put` (an existing
+    object refuses), `read`/`verify` comparing size and SHA-256
+    (`ReportContentMissingError` / `ReportContentIntegrityError`), and only
+    `grcnt_` identifiers. `objects` is public so a test can tamper with or
+    delete a part; `puts` counts calls, and `fail_puts` makes `put` raise
+    `ReportContentStoreError` before storing anything.
+    """
+
+    def __init__(self) -> None:
+        self.objects: dict[str, dict[ReportContentPart, bytes]] = {}
+        self.puts = 0
+        self.fail_puts = False
+
+    @staticmethod
+    def _admit(object_id: str) -> None:
+        try:
+            validate_identifier(object_id, IdKind.REPORT_CONTENT)
+        except InvalidIdentifierError:
+            raise ReportContentStoreError(
+                "the report content object identifier is not admitted"
+            ) from None
+
+    def put(self, object_id: str, *, decoded: bytes, original: bytes | None) -> None:
+        self._admit(object_id)
+        self.puts += 1
+        if self.fail_puts:
+            raise ReportContentStoreError("the report content object could not be stored")
+        if object_id in self.objects:
+            raise ReportContentStoreError("the report content object already exists")
+        parts = {ReportContentPart.DECODED: bytes(decoded)}
+        if original is not None:
+            parts[ReportContentPart.ORIGINAL] = bytes(original)
+        self.objects[object_id] = parts
+
+    def read(
+        self,
+        object_id: str,
+        part: ReportContentPart,
+        *,
+        expected_sha256: str,
+        expected_byte_count: int,
+    ) -> bytes:
+        self._admit(object_id)
+        stored = self.objects.get(object_id, {}).get(part)
+        if stored is None:
+            raise ReportContentMissingError("the report content part is not readable")
+        if len(stored) != expected_byte_count:
+            raise ReportContentIntegrityError("size")
+        if hashlib.sha256(stored).hexdigest() != expected_sha256:
+            raise ReportContentIntegrityError("digest")
+        return stored
+
+    def verify(
+        self,
+        object_id: str,
+        part: ReportContentPart,
+        *,
+        expected_sha256: str,
+        expected_byte_count: int,
+    ) -> None:
+        self.read(
+            object_id,
+            part,
+            expected_sha256=expected_sha256,
+            expected_byte_count=expected_byte_count,
+        )
+
+    def has(self, object_id: str) -> bool:
+        self._admit(object_id)
+        return object_id in self.objects
+
+    def stored_object_ids(self) -> tuple[str, ...]:
+        return tuple(sorted(self.objects))
+
+    def unreadable_entries(self) -> tuple[str, ...]:
+        return ()
+
+
+def _placement(
+    content: ReportContent, content_store: ReportContentStore | None, inline_max_bytes: int
+) -> StorageKind:
+    """The SQL repository's placement (WP05 C4): inline, `managed_blob`, or `too_large`."""
+    if type(inline_max_bytes) is not int or not 1 <= inline_max_bytes <= INLINE_CONTENT_MAX_BYTES:
+        raise ValueError("the report content inline threshold is out of bounds")
+    if content.decoded_byte_count <= inline_max_bytes:
+        return StorageKind.INLINE
+    if content_store is None:
         raise ReportValidationError("content", "too_large")
+    return StorageKind.MANAGED_BLOB
+
+
+def _as_read(stored: StoredReportVersion) -> StoredReportVersion:
+    """A version as the SQL repository returns it: a `managed_blob` one as facts only."""
+    content = stored.content
+    if stored.storage_kind is not StorageKind.MANAGED_BLOB or not content.materialized:
+        return stored
+    return replace(
+        stored,
+        content=content_facts(
+            content.format,
+            content.encoding,
+            decoded_sha256=content.decoded_sha256,
+            decoded_byte_count=content.decoded_byte_count,
+            canonical_sha256=content.canonical_sha256,
+            original_sha256=content.original_sha256,
+            original_byte_count=content.original_byte_count,
+        ),
+    )
 
 
 class _GeneralReports(GeneralReportRepository):
@@ -9745,17 +9860,24 @@ class _GeneralReports(GeneralReportRepository):
         recorded_at: datetime,
         correlation_id: str,
         audit_id: str,
+        content_store: ReportContentStore | None = None,
+        inline_max_bytes: int = INLINE_CONTENT_MAX_BYTES,
     ) -> PublicationResult:
         stored = self._world.general_report_receipts.get((principal_id, idempotency_key))
         if stored is not None:
             if stored.receipt.intent_digest != request.intent_digest:
                 raise ReportIdempotencyConflictError()
             return replace(stored, replayed=True)
-        _inline_placement(request.content)
+        storage_kind = _placement(request.content, content_store, inline_max_bytes)
         associations = self._verified(request.associations, principal_id)
         report_id = issue_identifier(IdKind.REPORT)
         version_id = issue_identifier(IdKind.REPORT_VERSION)
         content_id = issue_identifier(IdKind.REPORT_CONTENT)
+        if storage_kind is StorageKind.MANAGED_BLOB and content_store is not None:
+            # The SQL order (C4): the blob before anything of the request is kept.
+            content_store.put(
+                content_id, decoded=request.content.decoded, original=request.content.original
+            )
         manifest = build_initial_manifest(
             request,
             report_id=report_id,
@@ -9764,6 +9886,7 @@ class _GeneralReports(GeneralReportRepository):
             associations=associations,
             recorded_at=recorded_at,
             author=creator,
+            storage_kind=storage_kind,
         )
         result = PublicationResult(
             receipt=PublicationReceipt(
@@ -9819,7 +9942,7 @@ class _GeneralReports(GeneralReportRepository):
                 author=creator,
             ),
             content_id=content_id,
-            storage_kind=StorageKind.INLINE,
+            storage_kind=storage_kind,
             content=request.content,
             manifest=dict(manifest.document),
             associations=tuple(associations),
@@ -9892,6 +10015,8 @@ class _GeneralReports(GeneralReportRepository):
         recorded_at: datetime,
         correlation_id: str,
         audit_id: str,
+        content_store: ReportContentStore | None = None,
+        inline_max_bytes: int = INLINE_CONTENT_MAX_BYTES,
     ) -> UpdateResult:
         """The SQL order (D6): not found, key, withdrawn, stale, then the write."""
         root = self._root(principal_id, request.report_id)
@@ -9907,7 +10032,9 @@ class _GeneralReports(GeneralReportRepository):
         if root.head_version_number != request.expected_version:
             raise ReportStaleVersionError()
         key = (principal_id, request.report_id)
-        head = self._world.general_report_versions[key]
+        kept = self._world.general_report_versions[key]
+        # The head as SQL reads it: a `managed_blob` head is facts only.
+        head = _as_read(kept)
         patch = request.patch
         patched = (
             None if patch.associations is None else self._verified(patch.associations, principal_id)
@@ -9930,8 +10057,9 @@ class _GeneralReports(GeneralReportRepository):
             patch,
             request.clear_fields,
         )
+        placed: StorageKind | None = None
         if result.content is not head.content:
-            _inline_placement(result.content)
+            placed = _placement(result.content, content_store, inline_max_bytes)
         common = {
             "receipt_id": issue_identifier(IdKind.REPORT_RECEIPT),
             "report_id": request.report_id,
@@ -9960,6 +10088,11 @@ class _GeneralReports(GeneralReportRepository):
         version_id = issue_identifier(IdKind.REPORT_VERSION)
         reused = result.content is head.content
         content_id = head.content_id if reused else issue_identifier(IdKind.REPORT_CONTENT)
+        storage_kind = head.storage_kind if reused or placed is None else placed
+        if not reused and storage_kind is StorageKind.MANAGED_BLOB and content_store is not None:
+            content_store.put(
+                content_id, decoded=result.content.decoded, original=result.content.original
+            )
         associations = head.associations if patched is None else patched
         manifest = build_version_manifest(
             report_id=request.report_id,
@@ -9982,6 +10115,7 @@ class _GeneralReports(GeneralReportRepository):
             associations=associations,
             recorded_at=recorded_at,
             author=creator,
+            storage_kind=storage_kind,
         )
         new_root = replace(root, head_version_id=version_id, head_version_number=number)
         new = StoredReportVersion(
@@ -10008,8 +10142,10 @@ class _GeneralReports(GeneralReportRepository):
                 author=creator,
             ),
             content_id=content_id,
-            storage_kind=StorageKind.INLINE,
-            content=result.content,
+            storage_kind=storage_kind,
+            # The world keeps the full content (the catalog's search reads it);
+            # reads return it as SQL does through `_as_read`.
+            content=kept.content if reused else result.content,
             manifest=dict(manifest.document),
             associations=tuple(associations),
         )
@@ -10138,7 +10274,7 @@ class _GeneralReports(GeneralReportRepository):
             if after_version_id not in numbers:
                 raise ReportValidationError("cursor", "unknown")
             start = numbers.index(after_version_id) + 1
-        page = versions[start : start + size]
+        page = [_as_read(stored) for stored in versions[start : start + size]]
         items = tuple(
             ReportVersionSummary(
                 version_id=s.version.version_id,
@@ -10228,7 +10364,7 @@ class _GeneralReports(GeneralReportRepository):
                 )
             ):
                 # Every version reads with the report's current root, as in SQL.
-                return replace(stored, root=root)
+                return _as_read(replace(stored, root=root))
         return None
 
     def resolve_association_targets(
@@ -10333,6 +10469,32 @@ class _GeneralReports(GeneralReportRepository):
             position = (after.rank or 0, after.sort_time, after.report_id)
             found = [item for item in found if item[0] < position]
         return tuple(entry for _key, entry in found[:limit])
+
+    def _managed(self) -> dict[str, tuple[str, ReportContent]]:
+        """Every `managed_blob` content object in the world: id -> (owner, content)."""
+        found: dict[str, tuple[str, ReportContent]] = {}
+        for (owner, report_id), _head in self._world.general_report_versions.items():
+            for stored in self._versions(owner, report_id):
+                if stored.storage_kind is StorageKind.MANAGED_BLOB:
+                    found[stored.content_id] = (owner, stored.content)
+        return found
+
+    def managed_content(self, *, principal_id: str) -> tuple[ManagedContentRecord, ...]:
+        return tuple(
+            ManagedContentRecord(
+                content_id=content_id,
+                encoding=content.encoding,
+                decoded_sha256=content.decoded_sha256,
+                decoded_byte_count=content.decoded_byte_count,
+                original_sha256=content.original_sha256,
+                original_byte_count=content.original_byte_count,
+            )
+            for content_id, (owner, content) in sorted(self._managed().items())
+            if owner == principal_id
+        )
+
+    def known_managed_content_ids(self) -> frozenset[str]:
+        return frozenset(self._managed())
 
 
 class FakeUnitOfWork(UnitOfWork):
@@ -11066,6 +11228,8 @@ def build_service(
     constraint_management_unit_of_work: (
         Callable[[], ConstraintManagementUnitOfWork] | None
     ) = _COMPOSE_CONSTRAINTS,
+    report_content_store: ReportContentStore | None = None,
+    report_content_inline_max_bytes: int = INLINE_CONTENT_MAX_BYTES,
 ) -> ApplicationService:
     """The service under test, with a fixed clock and in-memory repositories.
 
@@ -11189,6 +11353,10 @@ def build_service(
             session_factory=lambda rasters: DiskContentSession(rasters),
             case_count=2,
         ),
+        # WP05 C3: no report content store unless a test composes one (the
+        # backward-compatible default: content above the threshold is refused).
+        report_content_store=report_content_store,
+        report_content_inline_max_bytes=report_content_inline_max_bytes,
     )
 
 

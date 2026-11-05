@@ -258,10 +258,12 @@ from my_pa.domain.relationship.reenrichment import (
     ReenrichmentWork,
 )
 from my_pa.domain.reports.catalog import CatalogCursor, CatalogFilters
+from my_pa.domain.reports.content import INLINE_CONTENT_MAX_BYTES
 from my_pa.domain.reports.creator import ReportCreator
 from my_pa.domain.reports.publication import PublicationRequest, PublicationResult
 from my_pa.domain.reports.records import (
     CatalogEntry,
+    ManagedContentRecord,
     ReportHistoryPage,
     ReportLifecycleEventRecord,
     ReportVersionSummary,
@@ -7812,6 +7814,8 @@ class GeneralReportRepository(ABC):
         recorded_at: datetime,
         correlation_id: str,
         audit_id: str,
+        content_store: ReportContentStore | None = None,
+        inline_max_bytes: int = INLINE_CONTENT_MAX_BYTES,
     ) -> PublicationResult:
         """Write a new report at version 1, or replay the key's original result.
 
@@ -7831,6 +7835,12 @@ class GeneralReportRepository(ABC):
         `creator` (WP05 A1/A2) is the server-derived caller: the root's
         `created_by_*` and version 1's `authored_by_*` (and the manifest's
         `author`) are both it. A replay returns the stored result unchanged.
+
+        Placement (WP05 C4): content of at most `inline_max_bytes` decoded
+        bytes is stored inline; above it, `managed_blob` in `content_store`,
+        whose `put` runs after the replay/conflict check and before the first
+        INSERT (a `put` failure propagates and nothing is written); with no
+        store, `ReportValidationError("content", "too_large")`.
         """
 
     @abstractmethod
@@ -7883,6 +7893,8 @@ class GeneralReportRepository(ABC):
         recorded_at: datetime,
         correlation_id: str,
         audit_id: str,
+        content_store: ReportContentStore | None = None,
+        inline_max_bytes: int = INLINE_CONTENT_MAX_BYTES,
     ) -> UpdateResult:
         """Write version N+1 of an active report, or a `no_op` receipt (WP03 D4-D6).
 
@@ -7899,7 +7911,10 @@ class GeneralReportRepository(ABC):
         changes nothing writes only an `update`/`no_op` receipt naming the head.
         Every refusal writes nothing. `creator` (WP05 A2) is the server-derived
         caller, written as version N+1's `authored_by_*` and manifest `author`;
-        the root's creator never changes.
+        the root's creator never changes. New content is placed as `publish`
+        places it (WP05 C4), after the lock and the key check and before the
+        first INSERT; a metadata-only update reuses the head's content object
+        (inline or `managed_blob`, no new blob) and copies its search text.
         """
 
     @abstractmethod
@@ -7990,6 +8005,26 @@ class GeneralReportRepository(ABC):
         yields no rows / skips none of another Principal's.
         """
 
+    @abstractmethod
+    def managed_content(self, *, principal_id: str) -> tuple[ManagedContentRecord, ...]:
+        """Every `managed_blob` content row this Principal owns (WP05 C7), by content id.
+
+        The row-to-object direction of the reconciliation scan: the facts each
+        stored object is verified against. Never the content.
+        """
+
+    @abstractmethod
+    def known_managed_content_ids(self) -> frozenset[str]:
+        """Every `managed_blob` content id the database holds, across Principals.
+
+        **The one unpartitioned read of this plane, on purpose**, exactly as
+        `ManagedDocumentRepository.known_version_identifiers`: its subject is
+        the reverse direction -- objects in the report content store that no
+        row claims -- and a partitioned answer would report every other
+        Principal's objects as orphans. Opaque identifiers only; operator use
+        from the reconciliation path, never a request.
+        """
+
 
 class ManagedByteStore(ABC):
     """Durable storage for the bytes of managed document versions.
@@ -8038,6 +8073,114 @@ class ManagedByteStore(ABC):
     @abstractmethod
     def read_manifest(self) -> bytes:
         """Return the backup manifest this store holds."""
+
+
+class ReportContentPart(StrEnum):
+    """The parts of one stored report content object (WP05 C1).
+
+    `decoded`: the decoded bytes the content digests name. `original`: the
+    exact uploaded gzip bytes of a `gzip+base64` upload (absent for identity).
+    """
+
+    DECODED = "decoded"
+    ORIGINAL = "original"
+
+
+class ReportContentNamespace(StrEnum):
+    """The closed set of report content store namespaces (WP05 C1).
+
+    Each names one subdirectory of the store's root and admits only the object
+    identifiers of its own kind: `content` admits `grcnt_` report content
+    objects. WP05b adds `preservation`; nothing else is a namespace.
+    """
+
+    CONTENT = "content"
+
+
+class ReportContentStoreError(PortError):
+    """A report content store operation could not be performed. Names no path or value."""
+
+
+class ReportContentMissingError(ReportContentStoreError):
+    """A stored report content object or one of its parts is absent or not a readable file."""
+
+
+class ReportContentIntegrityError(ReportContentStoreError):
+    """A stored part's size or SHA-256 is not the one its row names.
+
+    `mismatch` says which, `"size"` or `"digest"`, for the reconciliation
+    scan; neither the stored nor the expected value is carried.
+    """
+
+    def __init__(self, mismatch: str) -> None:
+        super().__init__(f"the stored report content part's {mismatch} is not the recorded one")
+        self.mismatch = mismatch
+
+
+class ReportContentStore(ABC):
+    """Durable storage for report content above the inline threshold (WP05 C1).
+
+    **No method takes a path.** Every operation names an opaque object
+    identifier -- the content object's `grcnt_` id, which is its row's
+    `blob_ref` -- or nothing; where the bytes live is derived by the
+    implementation from that identifier, inside its configured root and
+    namespace, exactly as `ManagedByteStore` derives a managed version's. A
+    location parameter would put the choice of location on the caller, and
+    the caller is where a traversal enters.
+
+    Objects are written once: `put` is an exclusive create, and nothing here
+    overwrites, repairs or deletes one.
+    """
+
+    @abstractmethod
+    def put(self, object_id: str, *, decoded: bytes, original: bytes | None) -> None:
+        """Store one object's parts durably, exactly once.
+
+        `original` is the uploaded gzip bytes, or `None` (identity content has
+        no separate original). Returns only once every part is on the device,
+        re-read and verified against the bytes given, under its final name. An
+        identifier already stored raises `ReportContentStoreError`; so does
+        any write failure, after which nothing of this call remains.
+        """
+
+    @abstractmethod
+    def read(
+        self,
+        object_id: str,
+        part: ReportContentPart,
+        *,
+        expected_sha256: str,
+        expected_byte_count: int,
+    ) -> bytes:
+        """The verified bytes of one part.
+
+        Absent (or not a plain file) raises `ReportContentMissingError`; a size
+        or digest other than the expected ones `ReportContentIntegrityError`.
+        Bytes that do not match are never returned.
+        """
+
+    @abstractmethod
+    def verify(
+        self,
+        object_id: str,
+        part: ReportContentPart,
+        *,
+        expected_sha256: str,
+        expected_byte_count: int,
+    ) -> None:
+        """`read`'s checks, streamed, returning nothing. Raises as `read` does."""
+
+    @abstractmethod
+    def has(self, object_id: str) -> bool:
+        """Whether an object of this identifier is present."""
+
+    @abstractmethod
+    def stored_object_ids(self) -> tuple[str, ...]:
+        """Every well-formed object identifier this store holds, sorted."""
+
+    @abstractmethod
+    def unreadable_entries(self) -> tuple[str, ...]:
+        """Store entries that are not well-formed objects or parts, for the operator."""
 
 
 # --- WP-TM-02: canonical Task mutation, receipts, idempotency, concurrency --

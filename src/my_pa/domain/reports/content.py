@@ -52,6 +52,8 @@ __all__ = [
     "MAX_CONTENT_DATA_DEPTH",
     "ReportContent",
     "canonical_json",
+    "content_facts",
+    "content_from_decoded",
     "content_of",
     "validate_content",
 ]
@@ -114,10 +116,19 @@ def _sha256(data: bytes) -> str:
 class ReportContent:
     """One inline content value with its decoded bytes and their digests.
 
-    Built only by `content_of`, which derives every digest from the body and
-    data it holds, so the fields cannot disagree with one another. The body,
-    the data and the decoded bytes are kept out of `repr`: a logged or
-    asserted value names the format and the digests, never the content.
+    Built by `content_of`, which derives every digest from the body and data
+    it holds, so the fields cannot disagree with one another. The body, the
+    data and the decoded bytes are kept out of `repr`: a logged or asserted
+    value names the format and the digests, never the content.
+
+    **WP05 C: a content value may be facts only.** `content_facts` builds one
+    for a `managed_blob` row read without the report content store (a history
+    page, an update's head, the read before the service verifies the blob):
+    `materialized` is false, `body`, `data` and `original` are `None`, and
+    `decoded` is empty -- `decoded_byte_count` is a field, not `len(decoded)`,
+    so the facts still name the true size. Anything that needs the content
+    itself (`extract_search_text`, an intent digest) refuses such a value
+    rather than reading an empty body.
     """
 
     format: ContentFormat
@@ -132,10 +143,9 @@ class ReportContent:
     original: bytes | None = field(repr=False)
     original_sha256: str
     original_byte_count: int
-
-    @property
-    def decoded_byte_count(self) -> int:
-        return len(self.decoded)
+    decoded_byte_count: int
+    #: WP05 C: `False` only for `content_facts` (the bytes are in the store).
+    materialized: bool = True
 
 
 def content_of(
@@ -173,7 +183,86 @@ def content_of(
         original=original,
         original_sha256=digest if original is None else _sha256(original),
         original_byte_count=len(decoded) if original is None else len(original),
+        decoded_byte_count=len(decoded),
     )
+
+
+def content_facts(
+    content_format: ContentFormat,
+    encoding: ContentEncoding,
+    *,
+    decoded_sha256: str,
+    decoded_byte_count: int,
+    canonical_sha256: str | None,
+    original_sha256: str,
+    original_byte_count: int,
+) -> ReportContent:
+    """The facts of a content value whose bytes are not held here (WP05 C, `managed_blob`).
+
+    Checks the facts agree with one another as `content_of` would have made
+    them (a structured value's canonical digest is its decoded digest, a
+    textual one has none; identity content is its own original), else
+    `ReportValidationError("content", "facts")`. Says nothing about the bytes:
+    the report content store verifies those against these facts.
+    """
+    textual = content_format in _TEXTUAL
+    consistent = (
+        type(decoded_byte_count) is int
+        and type(original_byte_count) is int
+        and 1 <= decoded_byte_count <= MAX_DECODED_CONTENT_BYTES
+        and 0 <= original_byte_count <= MAX_ORIGINAL_CONTENT_BYTES
+        and _SHA256_HEX.match(decoded_sha256) is not None
+        and _SHA256_HEX.match(original_sha256) is not None
+        and (canonical_sha256 is None if textual else canonical_sha256 == decoded_sha256)
+        and (
+            encoding is not ContentEncoding.IDENTITY
+            or (original_sha256 == decoded_sha256 and original_byte_count == decoded_byte_count)
+        )
+    )
+    if not consistent:
+        raise ReportValidationError("content", "facts")
+    return ReportContent(
+        format=content_format,
+        encoding=encoding,
+        body=None,
+        data=None,
+        decoded=b"",
+        decoded_sha256=decoded_sha256,
+        canonical_sha256=canonical_sha256,
+        original=None,
+        original_sha256=original_sha256,
+        original_byte_count=original_byte_count,
+        decoded_byte_count=decoded_byte_count,
+        materialized=False,
+    )
+
+
+def content_from_decoded(
+    content_format: ContentFormat, decoded: bytes, *, original: bytes | None = None
+) -> ReportContent:
+    """Rebuild a content value from its stored decoded bytes (WP05 C5).
+
+    The inverse of `content_of`'s serialization: textual bytes are the UTF-8
+    body; `json` bytes are the canonical JSON of the data; `mixed` bytes the
+    canonical JSON of `{"body", "data"}`. The result is passed through
+    `content_of`, so its digests are recomputed; the caller compares them with
+    the stored ones. Malformed bytes raise `ReportValidationError("content",
+    "stored")`, never echoing them.
+    """
+    try:
+        text = decoded.decode("utf-8")
+        if content_format in _TEXTUAL:
+            return content_of(content_format, body=text, data=None, original=original)
+        parsed = json.loads(text)
+        if content_format is ContentFormat.JSON:
+            return content_of(content_format, body=None, data=parsed, original=original)
+        if type(parsed) is not dict or set(parsed) != {"body", "data"}:
+            raise ReportValidationError("content", "stored")
+        return content_of(
+            content_format, body=parsed["body"], data=parsed["data"], original=original
+        )
+    except (UnicodeDecodeError, ValueError, TypeError, RecursionError):
+        raise ReportValidationError("content", "stored") from None
 
 
 def _body(value: object) -> str:

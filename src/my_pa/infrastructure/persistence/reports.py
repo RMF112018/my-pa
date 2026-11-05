@@ -44,6 +44,20 @@ the canonical bytes: keys are re-sorted by `canonical_json`, and every number
 the domain admits prints back with the digits it was written with (`-0.0` is
 normalized to `0.0` before hashing, because `numeric` has no negative zero).
 
+**Content placement (WP05 C4).** `publish` and `update` take the report
+content store and the inline threshold explicitly: decoded content of at most
+the threshold is stored inline; above it the content row is `managed_blob`
+(`blob_ref` = its `grcnt_` id, every inline column null) and its parts are
+`put` into the store after the replay/conflict check (and an update's lock)
+and before the request's first INSERT, so a `put` failure writes nothing and
+a later database failure leaves at worst an orphan object the reconciliation
+scan reports. Without a store such content is `content` `too_large`. A read
+of a `managed_blob` version returns its content as facts only
+(`content_facts`): the rows are verified here, the bytes by the service
+through the store (C5); history, list and search never touch the store (C6).
+A metadata-only update reuses the head's content row and copies the head's
+`search_text`, whatever its storage.
+
 **Creator attribution (WP05 A1/A2).** `publish` and `update` take the
 server-derived `ReportCreator`: publish writes it as the root's `created_by_*`
 and version 1's `authored_by_*`, an update as version N+1's `authored_by_*`
@@ -93,6 +107,7 @@ from sqlalchemy.exc import IntegrityError
 from my_pa.contracts.ports import (
     GeneralReportRepository,
     ReportAssociationTargetNotFoundError,
+    ReportContentStore,
     ReportIdempotencyConflictError,
     ReportIntegrityError,
     ReportNotFoundError,
@@ -112,6 +127,7 @@ from my_pa.domain.reports.content import (
     INLINE_CONTENT_MAX_BYTES,
     ReportContent,
     canonical_json,
+    content_facts,
     content_of,
 )
 from my_pa.domain.reports.creator import CreatorKind, ReportCreator
@@ -135,6 +151,7 @@ from my_pa.domain.reports.records import (
     MAX_HISTORY_PAGE_WITH_MANIFESTS,
     CatalogEntry,
     HistoryEntries,
+    ManagedContentRecord,
     ReportHistoryPage,
     ReportLifecycleEventRecord,
     ReportRootRecord,
@@ -385,31 +402,66 @@ def _version_verified(
     return row is not None
 
 
-def _content_storage(content: ReportContent) -> StorageKind:
-    """Where a new content object of `content` is stored, or its refusal (WP05 B4, C4 seam).
+def _inline_threshold(value: object) -> int:
+    """The configured inline threshold: an exact `int` in 1..`INLINE_CONTENT_MAX_BYTES`.
 
-    Only inline storage exists yet: decoded content above the inline maximum
-    -- reachable only through `gzip+base64`, identity content is refused above
-    it by the domain -- is refused `content` `too_large` (public
-    `invalid_request` `content`, `max_bytes`) exactly as before the encoding
-    existed. Called after the receipt replay/conflict check and before the
-    request's first INSERT, so a refusal writes nothing. The report content
-    store (WP05 C) replaces this decision with its placement.
+    Server configuration, never a caller field, so a bad value is a
+    composition defect (`ValueError`), not a refusal the caller can correct.
     """
-    if content.decoded_byte_count > INLINE_CONTENT_MAX_BYTES:
+    if type(value) is not int or not 1 <= value <= INLINE_CONTENT_MAX_BYTES:
+        raise ValueError("the report content inline threshold is out of bounds")
+    return value
+
+
+def _content_storage(
+    content: ReportContent,
+    *,
+    content_store: ReportContentStore | None,
+    inline_max_bytes: int,
+) -> StorageKind:
+    """Where a new content object of `content` is stored, or its refusal (WP05 C4).
+
+    At most `inline_max_bytes` decoded bytes: inline. Above it: `managed_blob`
+    when a report content store is configured, else `content` `too_large`
+    (public `invalid_request` `content`, `max_bytes`). Called after the receipt
+    replay/conflict check and before the request's first INSERT, so a refusal
+    writes nothing.
+    """
+    if content.decoded_byte_count <= _inline_threshold(inline_max_bytes):
+        return StorageKind.INLINE
+    if content_store is None:
         raise ReportValidationError("content", "too_large")
-    return StorageKind.INLINE
+    return StorageKind.MANAGED_BLOB
+
+
+def _place(
+    content: ReportContent,
+    content_id: str,
+    storage_kind: StorageKind,
+    content_store: ReportContentStore | None,
+) -> None:
+    """Put a `managed_blob` content's parts into the store; inline content needs nothing.
+
+    Called after every refusal this request can meet before writing and
+    immediately before its first INSERT: a `put` failure propagates and
+    nothing of the request is written.
+    """
+    if storage_kind is not StorageKind.MANAGED_BLOB:
+        return
+    if content_store is None:  # pragma: no cover - `_content_storage` refused already
+        raise ReportValidationError("content", "too_large")
+    content_store.put(content_id, decoded=content.decoded, original=content.original)
 
 
 def _content_values(
-    content: ReportContent, content_id: str, recorded_at: datetime
+    content: ReportContent, content_id: str, recorded_at: datetime, storage_kind: StorageKind
 ) -> dict[str, object]:
-    """One inline content row; a gzip upload keeps its exact gzip bytes (WP05 B4)."""
+    """One content row: inline (a gzip upload keeps its gzip bytes, B4) or `managed_blob`."""
     values: dict[str, object] = {
         "content_id": content_id,
         "format": content.format.value,
         "original_encoding": content.encoding.value,
-        "storage_kind": StorageKind.INLINE.value,
+        "storage_kind": storage_kind.value,
         "original_sha256": content.original_sha256,
         "original_byte_count": content.original_byte_count,
         "decoded_sha256": content.decoded_sha256,
@@ -417,6 +469,10 @@ def _content_values(
         "canonical_sha256": content.canonical_sha256,
         "created_at": recorded_at,
     }
+    if storage_kind is StorageKind.MANAGED_BLOB:
+        # C1: the object id is the content id; every inline column stays NULL.
+        values["blob_ref"] = content_id
+        return values
     if content.format is not ContentFormat.JSON:
         values["inline_text"] = content.body
     # Omitted rather than `None` for textual content: bare `JSONB` writes a
@@ -440,10 +496,11 @@ def _write_publication(
     recorded_at: datetime,
     correlation_id: str,
     audit_id: str,
+    content_id: str,
+    storage_kind: StorageKind,
 ) -> PublicationResult:
     report_id = issue_identifier(IdKind.REPORT)
     version_id = issue_identifier(IdKind.REPORT_VERSION)
-    content_id = issue_identifier(IdKind.REPORT_CONTENT)
     receipt_id = issue_identifier(IdKind.REPORT_RECEIPT)
     manifest = build_initial_manifest(
         request,
@@ -453,12 +510,15 @@ def _write_publication(
         associations=associations,
         recorded_at=recorded_at,
         author=creator,
+        storage_kind=storage_kind,
     )
     content = request.content
     connection.execute(
         report_content_objects.insert().values(
             **_bound(
-                _content_values(content, content_id, recorded_at), report_content_objects, context
+                _content_values(content, content_id, recorded_at, storage_kind),
+                report_content_objects,
+                context,
             )
         )
     )
@@ -663,14 +723,19 @@ def _creator_of(creator: object) -> ReportCreator:
 def _verified_content(row: Row[Any]) -> ReportContent:
     """Recompute the stored content's digests; refuse any the row does not match.
 
-    Inline content only (WP02 identity, WP05 B4 gzip): any other row is not one
-    this reader can recompute, so it refuses rather than trust it. A gzip row
-    must keep its gzip bytes, and they are re-hashed and re-counted against
-    `original_sha256`/`original_byte_count` as the decoded content is against
-    its own digests; an identity row must keep none.
+    Inline content (WP02 identity, WP05 B4 gzip) is recomputed from its
+    columns: a gzip row must keep its gzip bytes, re-hashed and re-counted
+    against `original_sha256`/`original_byte_count` as the decoded content is
+    against its own digests; an identity row must keep none. A `managed_blob`
+    row (WP05 C) must name itself as its blob and hold no inline column; its
+    facts must agree with one another, and it is returned as facts only --
+    its bytes are verified through the report content store by the reader
+    that needs them (the service's standalone read, the reconciliation scan).
     """
     m = row._mapping
     content_format = ContentFormat(m["format"])
+    if m["storage_kind"] == StorageKind.MANAGED_BLOB.value:
+        return _blob_facts(row)
     if m["storage_kind"] != StorageKind.INLINE.value:
         raise ReportIntegrityError()
     stored_original = m["inline_original"]
@@ -700,6 +765,30 @@ def _verified_content(row: Row[Any]) -> ReportContent:
     ):
         raise ReportIntegrityError()
     return content
+
+
+def _blob_facts(row: Row[Any]) -> ReportContent:
+    """A `managed_blob` row's facts (WP05 C5), or `ReportIntegrityError`."""
+    m = row._mapping
+    if (
+        m["blob_ref"] != m["content_id"]
+        or m["inline_text"] is not None
+        or m["inline_data"] is not None
+        or m["inline_original"] is not None
+    ):
+        raise ReportIntegrityError()
+    try:
+        return content_facts(
+            ContentFormat(m["format"]),
+            ContentEncoding(m["original_encoding"]),
+            decoded_sha256=m["decoded_sha256"],
+            decoded_byte_count=m["decoded_byte_count"],
+            canonical_sha256=m["canonical_sha256"],
+            original_sha256=m["original_sha256"],
+            original_byte_count=m["original_byte_count"],
+        )
+    except (ReportValidationError, ValueError, TypeError):
+        raise ReportIntegrityError() from None
 
 
 def _associations(rows: Sequence[Row[Any]]) -> tuple[ReportAssociation, ...]:
@@ -961,6 +1050,7 @@ def _write_update(
     recorded_at: datetime,
     correlation_id: str,
     audit_id: str,
+    placed: tuple[str, StorageKind] | None,
 ) -> UpdateResult:
     receipt_id = issue_identifier(IdKind.REPORT_RECEIPT)
     report_id = head.root.report_id
@@ -1013,7 +1103,22 @@ def _write_update(
         head.content.encoding.value,
         head.content.decoded_sha256,
     )
-    content_id = head.content_id if reused else issue_identifier(IdKind.REPORT_CONTENT)
+    if reused:
+        content_id, storage_kind = head.content_id, head.storage_kind
+        # D5/C4: the head's content row, so the head's search text exactly --
+        # read from its row, because a `managed_blob` head is facts only here.
+        search_text = connection.execute(
+            select(report_versions.c.search_text).where(
+                _mine(report_versions, context),
+                report_versions.c.version_id == head.version.version_id,
+            )
+        ).scalar_one()
+    elif placed is None:  # pragma: no cover - `update` places every new content
+        raise ReportIntegrityError()
+    else:
+        content_id, storage_kind = placed
+        # WP04 C7: recomputed from the new version's decoded content.
+        search_text = extract_search_text(result.content)
     carried: Sequence[Row[Any]] = ()
     if patched is None:
         carried = _association_rows(connection, head.version.version_id, context)
@@ -1041,12 +1146,13 @@ def _write_update(
         associations=associations,
         recorded_at=recorded_at,
         author=creator,
+        storage_kind=storage_kind,
     )
     if not reused:
         connection.execute(
             report_content_objects.insert().values(
                 **_bound(
-                    _content_values(result.content, content_id, recorded_at),
+                    _content_values(result.content, content_id, recorded_at, storage_kind),
                     report_content_objects,
                     context,
                 )
@@ -1077,10 +1183,9 @@ def _write_update(
                     "recorded_at": recorded_at,
                     "correlation_id": correlation_id,
                     "audit_id": audit_id,
-                    # WP04 C7: recomputed from the version's content. A
-                    # metadata-only update keeps the head's content (D5), so
-                    # its search text is the head's exactly.
-                    "search_text": extract_search_text(result.content),
+                    # WP04 C7 / WP05 C4: the new content's, or the head's
+                    # exactly when its content row is reused.
+                    "search_text": search_text,
                     # WP05 A2: whoever wrote this update; the root keeps its creator.
                     "authored_by_kind": creator.kind.value,
                     "authored_by_id": creator.creator_id,
@@ -1735,6 +1840,8 @@ class SqlGeneralReportRepository(GeneralReportRepository):
         recorded_at: datetime,
         correlation_id: str,
         audit_id: str,
+        content_store: ReportContentStore | None = None,
+        inline_max_bytes: int = INLINE_CONTENT_MAX_BYTES,
     ) -> PublicationResult:
         context = capture_context(principal_id)
         recorded = self._admit(idempotency_key, correlation_id, audit_id, recorded_at)
@@ -1743,8 +1850,13 @@ class SqlGeneralReportRepository(GeneralReportRepository):
         stored = _find_publish(self._connection, idempotency_key, context)
         if stored is not None:
             return _settle(stored, intent_digest)
-        _content_storage(request.content)
+        storage_kind = _content_storage(
+            request.content, content_store=content_store, inline_max_bytes=inline_max_bytes
+        )
         associations = _verified(self._connection, request.associations, context)
+        content_id = issue_identifier(IdKind.REPORT_CONTENT)
+        # C4: the blob before the first INSERT; a failure here writes nothing.
+        _place(request.content, content_id, storage_kind, content_store)
         try:
             with self._connection.begin_nested():
                 return _write_publication(
@@ -1758,6 +1870,8 @@ class SqlGeneralReportRepository(GeneralReportRepository):
                     recorded_at=recorded,
                     correlation_id=correlation_id,
                     audit_id=audit_id,
+                    content_id=content_id,
+                    storage_kind=storage_kind,
                 )
         except IntegrityError as error:
             if _constraint_name(error) != _KEY_CONSTRAINT:
@@ -1807,6 +1921,8 @@ class SqlGeneralReportRepository(GeneralReportRepository):
         recorded_at: datetime,
         correlation_id: str,
         audit_id: str,
+        content_store: ReportContentStore | None = None,
+        inline_max_bytes: int = INLINE_CONTENT_MAX_BYTES,
     ) -> UpdateResult:
         context = capture_context(principal_id)
         recorded = self._admit(idempotency_key, correlation_id, audit_id, recorded_at)
@@ -1858,9 +1974,15 @@ class SqlGeneralReportRepository(GeneralReportRepository):
             patch,
             request.clear_fields,
         )
+        placed: tuple[str, StorageKind] | None = None
         if result.content is not head.content:
-            # A new content object: placed (or refused) before the first INSERT.
-            _content_storage(result.content)
+            # A new content object: placed (or refused), and a blob put, after
+            # the lock and the key check and before the first INSERT (C4).
+            storage_kind = _content_storage(
+                result.content, content_store=content_store, inline_max_bytes=inline_max_bytes
+            )
+            placed = (issue_identifier(IdKind.REPORT_CONTENT), storage_kind)
+            _place(result.content, placed[0], storage_kind, content_store)
         try:
             with connection.begin_nested():
                 return _write_update(
@@ -1877,6 +1999,7 @@ class SqlGeneralReportRepository(GeneralReportRepository):
                     recorded_at=recorded,
                     correlation_id=correlation_id,
                     audit_id=audit_id,
+                    placed=placed,
                 )
         except IntegrityError as error:
             if _constraint_name(error) != _KEY_CONSTRAINT:
@@ -1993,6 +2116,47 @@ class SqlGeneralReportRepository(GeneralReportRepository):
             query=query,
             after=after,
             limit=limit,
+        )
+
+    def managed_content(self, *, principal_id: str) -> tuple[ManagedContentRecord, ...]:
+        context = capture_context(principal_id)
+        table = report_content_objects
+        rows = self._connection.execute(
+            select(
+                table.c.content_id,
+                table.c.original_encoding,
+                table.c.decoded_sha256,
+                table.c.decoded_byte_count,
+                table.c.original_sha256,
+                table.c.original_byte_count,
+            )
+            .where(_mine(table, context), table.c.storage_kind == StorageKind.MANAGED_BLOB.value)
+            .order_by(table.c.content_id)
+        ).all()
+        return tuple(
+            ManagedContentRecord(
+                content_id=str(m["content_id"]),
+                encoding=ContentEncoding(m["original_encoding"]),
+                decoded_sha256=str(m["decoded_sha256"]),
+                decoded_byte_count=int(m["decoded_byte_count"]),
+                original_sha256=str(m["original_sha256"]),
+                original_byte_count=int(m["original_byte_count"]),
+            )
+            for m in (row._mapping for row in rows)
+        )
+
+    def known_managed_content_ids(self) -> frozenset[str]:
+        # WP05 C7: the one unpartitioned read of this plane, on purpose (see the
+        # port): opaque `grcnt_` identifiers of every `managed_blob` row, across
+        # Principals, for the orphan direction of the reconciliation scan only.
+        table = report_content_objects
+        return frozenset(
+            str(value)
+            for value in self._connection.execute(
+                select(table.c.content_id).where(
+                    table.c.storage_kind == StorageKind.MANAGED_BLOB.value
+                )
+            ).scalars()
         )
 
     @staticmethod

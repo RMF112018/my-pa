@@ -39,6 +39,7 @@ __all__ = [
     "MAX_HISTORY_PAGE_WITH_MANIFESTS",
     "CatalogEntry",
     "HistoryEntries",
+    "ManagedContentRecord",
     "ReportHistoryPage",
     "ReportLifecycleEventRecord",
     "ReportRootRecord",
@@ -116,6 +117,22 @@ class ReportVersionRecord:
     recorded_at: datetime
     #: WP05 A2: who wrote this version (the publisher for version 1).
     author: ReportCreator
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedContentRecord:
+    """One `managed_blob` content row's facts, as the reconciliation scan reads them (WP05 C7).
+
+    Opaque identifier, encoding and the digests and sizes of its parts: what
+    the report content store verifies, and nothing of the content itself.
+    """
+
+    content_id: str
+    encoding: ContentEncoding
+    decoded_sha256: str
+    decoded_byte_count: int
+    original_sha256: str
+    original_byte_count: int
 
 
 @dataclass(frozen=True, slots=True)

@@ -48,10 +48,13 @@ normalized to `0.0` before hashing, because `numeric` has no negative zero).
 content store and the inline threshold explicitly: decoded content of at most
 the threshold is stored inline; above it the content row is `managed_blob`
 (`blob_ref` = its `grcnt_` id, every inline column null) and its parts are
-`put` into the store after the replay/conflict check (and an update's lock)
-and before the request's first INSERT, so a `put` failure writes nothing and
-a later database failure leaves at worst an orphan object the reconciliation
-scan reports. Without a store such content is `content` `too_large`. A read
+`put` into the store after every refusal the request can meet -- the
+replay/conflict check (and an update's lock), association resolution, the
+patch, the manifest build and its size bound, the search text -- immediately
+before the request's first INSERT, inside its savepoint (`_place`). A refusal
+therefore leaves no object, a `put` failure writes nothing, and only a later
+server-side failure (a constraint, a lost key race, a crash before commit)
+can leave an orphan object, which the reconciliation scan reports. Without a store such content is `content` `too_large`. A read
 of a `managed_blob` version returns its content as facts only
 (`content_facts`): the rows are verified here, the bytes by the service
 through the store (C5); history, list and search never touch the store (C6).
@@ -442,9 +445,14 @@ def _place(
 ) -> None:
     """Put a `managed_blob` content's parts into the store; inline content needs nothing.
 
-    Called after every refusal this request can meet before writing and
-    immediately before its first INSERT: a `put` failure propagates and
-    nothing of the request is written.
+    Called inside the request's savepoint, after every refusal the request
+    can meet -- the placement decision, association resolution, the patch,
+    the manifest build and its `manifest_too_large` bound, the search text --
+    and immediately before its first INSERT, so a refusal the caller can
+    correct never leaves an object behind, and a `put` failure propagates
+    with nothing of the request written. What can still follow the `put` is
+    a server-side failure (a constraint, a lost key race, a crash before the
+    commit); its object is an orphan the reconciliation scan reports (C7).
     """
     if storage_kind is not StorageKind.MANAGED_BLOB:
         return
@@ -498,6 +506,7 @@ def _write_publication(
     audit_id: str,
     content_id: str,
     storage_kind: StorageKind,
+    content_store: ReportContentStore | None,
 ) -> PublicationResult:
     report_id = issue_identifier(IdKind.REPORT)
     version_id = issue_identifier(IdKind.REPORT_VERSION)
@@ -513,6 +522,10 @@ def _write_publication(
         storage_kind=storage_kind,
     )
     content = request.content
+    # WP04 C7: from the decoded content, computed before the blob is placed.
+    search_text = extract_search_text(content)
+    # C4: every refusal above has run; the blob goes in just before the first INSERT.
+    _place(content, content_id, storage_kind, content_store)
     connection.execute(
         report_content_objects.insert().values(
             **_bound(
@@ -570,7 +583,7 @@ def _write_publication(
                     "correlation_id": correlation_id,
                     "audit_id": audit_id,
                     # WP04 C7: in the version's own INSERT, from the decoded content.
-                    "search_text": extract_search_text(request.content),
+                    "search_text": search_text,
                     "authored_by_kind": creator.kind.value,
                     "authored_by_id": creator.creator_id,
                 },
@@ -1051,6 +1064,7 @@ def _write_update(
     correlation_id: str,
     audit_id: str,
     placed: tuple[str, StorageKind] | None,
+    content_store: ReportContentStore | None,
 ) -> UpdateResult:
     receipt_id = issue_identifier(IdKind.REPORT_RECEIPT)
     report_id = head.root.report_id
@@ -1149,6 +1163,8 @@ def _write_update(
         storage_kind=storage_kind,
     )
     if not reused:
+        # C4: every refusal above has run; the blob goes in just before the first INSERT.
+        _place(result.content, content_id, storage_kind, content_store)
         connection.execute(
             report_content_objects.insert().values(
                 **_bound(
@@ -1855,8 +1871,6 @@ class SqlGeneralReportRepository(GeneralReportRepository):
         )
         associations = _verified(self._connection, request.associations, context)
         content_id = issue_identifier(IdKind.REPORT_CONTENT)
-        # C4: the blob before the first INSERT; a failure here writes nothing.
-        _place(request.content, content_id, storage_kind, content_store)
         try:
             with self._connection.begin_nested():
                 return _write_publication(
@@ -1872,6 +1886,7 @@ class SqlGeneralReportRepository(GeneralReportRepository):
                     audit_id=audit_id,
                     content_id=content_id,
                     storage_kind=storage_kind,
+                    content_store=content_store,
                 )
         except IntegrityError as error:
             if _constraint_name(error) != _KEY_CONSTRAINT:
@@ -1976,13 +1991,13 @@ class SqlGeneralReportRepository(GeneralReportRepository):
         )
         placed: tuple[str, StorageKind] | None = None
         if result.content is not head.content:
-            # A new content object: placed (or refused), and a blob put, after
-            # the lock and the key check and before the first INSERT (C4).
+            # A new content object: placed (or refused) here, after the lock and
+            # the key check; its blob is put by `_write_update` after the
+            # manifest is built and just before the first INSERT (C4).
             storage_kind = _content_storage(
                 result.content, content_store=content_store, inline_max_bytes=inline_max_bytes
             )
             placed = (issue_identifier(IdKind.REPORT_CONTENT), storage_kind)
-            _place(result.content, placed[0], storage_kind, content_store)
         try:
             with connection.begin_nested():
                 return _write_update(
@@ -2000,6 +2015,7 @@ class SqlGeneralReportRepository(GeneralReportRepository):
                     correlation_id=correlation_id,
                     audit_id=audit_id,
                     placed=placed,
+                    content_store=content_store,
                 )
         except IntegrityError as error:
             if _constraint_name(error) != _KEY_CONSTRAINT:

@@ -7838,9 +7838,11 @@ class GeneralReportRepository(ABC):
 
         Placement (WP05 C4): content of at most `inline_max_bytes` decoded
         bytes is stored inline; above it, `managed_blob` in `content_store`,
-        whose `put` runs after the replay/conflict check and before the first
-        INSERT (a `put` failure propagates and nothing is written); with no
-        store, `ReportValidationError("content", "too_large")`.
+        whose `put` runs after every refusal the request can meet (the
+        replay/conflict check, association resolution, the manifest and its
+        size bound) and immediately before the first INSERT, so a refusal
+        leaves no object and a `put` failure propagates with nothing written;
+        with no store, `ReportValidationError("content", "too_large")`.
         """
 
     @abstractmethod
@@ -7912,8 +7914,9 @@ class GeneralReportRepository(ABC):
         Every refusal writes nothing. `creator` (WP05 A2) is the server-derived
         caller, written as version N+1's `authored_by_*` and manifest `author`;
         the root's creator never changes. New content is placed as `publish`
-        places it (WP05 C4), after the lock and the key check and before the
-        first INSERT; a metadata-only update reuses the head's content object
+        places it (WP05 C4): its `put` follows the lock, the key check and every
+        other refusal, the manifest bound included, and immediately precedes
+        the first INSERT; a metadata-only update reuses the head's content object
         (inline or `managed_blob`, no new blob) and copies its search text.
         """
 

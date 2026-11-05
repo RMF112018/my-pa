@@ -675,3 +675,72 @@ def test_the_operator_command_scans_backs_up_and_refuses_an_in_place_backup(
     (_object_dir(store, published["content"]["content_id"]) / "decoded").unlink()
     assert report_content_cli.main(["verify", "--principal", principal.principal_id]) == 2
     assert f"missing {published['content']['content_id']} decoded" in capsys.readouterr().out
+
+
+def _oversized_associations() -> list[dict[str, Any]]:
+    """64 asserted external sources whose refs push the manifest past its byte bound."""
+    return [
+        {
+            "target_kind": "external_source",
+            "target_ref": f"https://example.test/{n:03d}" + "r" * 480,
+            "relation": "cites",
+            "target_version_ref": "v" * 512,
+        }
+        for n in range(64)
+    ]
+
+
+def test_a_manifest_too_large_publish_leaves_no_object_and_no_row(
+    migrated_engine: Engine, tmp_path: Path
+) -> None:
+    """Corrective B1: the manifest bound is a refusal, so it must precede the `put`."""
+    store = _store(tmp_path)
+    service = _service(migrated_engine, store)
+    principal = operator()
+    before = _counts(migrated_engine)
+    answer = _invoke(
+        service,
+        principal,
+        Capability.REPORTS_PUBLISH,
+        {
+            "title": "Synthetic oversized manifest",
+            "content": _gzip(_text(4000).encode()),
+            "idempotency_key": "too-large-publish",
+            "associations": _oversized_associations(),
+        },
+    )
+    assert answer["error"]["code"] == ErrorCode.INVALID_REQUEST.value
+    # The manifest bound (`manifest_too_large`), not an earlier refusal.
+    assert answer["error"]["safe_details"] == ["metadata", "max_bytes"]
+    assert _counts(migrated_engine) == before
+    assert store.stored_object_ids() == ()
+    assert store.unreadable_entries() == ()
+    assert _scan(migrated_engine, store, principal).consistent
+
+
+def test_a_manifest_too_large_update_leaves_no_object_and_no_row(
+    migrated_engine: Engine, tmp_path: Path
+) -> None:
+    """Corrective B1, update: new blob content refused by the manifest bound writes nothing."""
+    store = _store(tmp_path)
+    service = _service(migrated_engine, store)
+    principal = operator()
+    published = _publish(service, principal, {"format": "text", "body": "small synthetic"}, "s")
+    before = _counts(migrated_engine)
+    answer = _update(
+        service,
+        principal,
+        published["report_id"],
+        1,
+        {
+            "content": _gzip(_text(4000, seed=9).encode()),
+            "associations": _oversized_associations(),
+        },
+        "too-large-update",
+    )
+    assert answer["error"]["code"] == ErrorCode.INVALID_REQUEST.value
+    # The manifest bound (`manifest_too_large`), not an earlier refusal.
+    assert answer["error"]["safe_details"] == ["metadata", "max_bytes"]
+    assert _counts(migrated_engine) == before
+    assert store.stored_object_ids() == ()
+    assert _scan(migrated_engine, store, principal).consistent

@@ -9873,11 +9873,6 @@ class _GeneralReports(GeneralReportRepository):
         report_id = issue_identifier(IdKind.REPORT)
         version_id = issue_identifier(IdKind.REPORT_VERSION)
         content_id = issue_identifier(IdKind.REPORT_CONTENT)
-        if storage_kind is StorageKind.MANAGED_BLOB and content_store is not None:
-            # The SQL order (C4): the blob before anything of the request is kept.
-            content_store.put(
-                content_id, decoded=request.content.decoded, original=request.content.original
-            )
         manifest = build_initial_manifest(
             request,
             report_id=report_id,
@@ -9888,6 +9883,11 @@ class _GeneralReports(GeneralReportRepository):
             author=creator,
             storage_kind=storage_kind,
         )
+        if storage_kind is StorageKind.MANAGED_BLOB and content_store is not None:
+            # The SQL order (C4): after every refusal, before anything is kept.
+            content_store.put(
+                content_id, decoded=request.content.decoded, original=request.content.original
+            )
         result = PublicationResult(
             receipt=PublicationReceipt(
                 receipt_id=issue_identifier(IdKind.REPORT_RECEIPT),
@@ -10089,10 +10089,6 @@ class _GeneralReports(GeneralReportRepository):
         reused = result.content is head.content
         content_id = head.content_id if reused else issue_identifier(IdKind.REPORT_CONTENT)
         storage_kind = head.storage_kind if reused or placed is None else placed
-        if not reused and storage_kind is StorageKind.MANAGED_BLOB and content_store is not None:
-            content_store.put(
-                content_id, decoded=result.content.decoded, original=result.content.original
-            )
         associations = head.associations if patched is None else patched
         manifest = build_version_manifest(
             report_id=request.report_id,
@@ -10117,6 +10113,11 @@ class _GeneralReports(GeneralReportRepository):
             author=creator,
             storage_kind=storage_kind,
         )
+        if not reused and storage_kind is StorageKind.MANAGED_BLOB and content_store is not None:
+            # The SQL order (C4): after the manifest bound, before anything is kept.
+            content_store.put(
+                content_id, decoded=result.content.decoded, original=result.content.original
+            )
         new_root = replace(root, head_version_id=version_id, head_version_number=number)
         new = StoredReportVersion(
             root=new_root,

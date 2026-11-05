@@ -44,6 +44,16 @@ the canonical bytes: keys are re-sorted by `canonical_json`, and every number
 the domain admits prints back with the digits it was written with (`-0.0` is
 normalized to `0.0` before hashing, because `numeric` has no negative zero).
 
+**The catalog page (WP04 C2-C8) reads one root joined to its HEAD version.**
+The list orders by `(created_at DESC, report_id COLLATE "C" DESC)`; a search
+matches `websearch_to_tsquery('english', q)` against the head's generated
+`search_document` and orders by `(rank DESC, created_at DESC, report_id
+COLLATE "C" DESC)` with the integer `rank = floor(ts_rank::float8 * 1e6)`,
+so the keyset predicate (row tuple strictly less than the cursor's) is exact.
+Every table it names is scoped by `_mine`, every join and the association
+`EXISTS` by `matching_partition_criterion`, so a forged position or a foreign
+association target only ever narrows the caller's own rows.
+
 Nothing here writes to a `knowledge.intelligence_*` table;
 `intelligence_artifacts` is only read, to resolve an `intelligence_report`
 association target.
@@ -55,7 +65,22 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any, Final
 
-from sqlalchemy import ColumnElement, Connection, Row, Table, select
+from sqlalchemy import (
+    BigInteger,
+    ColumnElement,
+    Connection,
+    Row,
+    Table,
+    and_,
+    cast,
+    exists,
+    func,
+    literal,
+    null,
+    or_,
+    select,
+)
+from sqlalchemy.dialects.postgresql import DOUBLE_PRECISION
 from sqlalchemy.exc import IntegrityError
 
 from my_pa.contracts.ports import (
@@ -69,7 +94,13 @@ from my_pa.contracts.ports import (
     ReportWithdrawnError,
 )
 from my_pa.domain.common.identifiers import IdKind, InvalidIdentifierError, validate_identifier
-from my_pa.domain.reports.catalog import extract_search_text
+from my_pa.domain.reports.catalog import (
+    MAX_CATALOG_PAGE_SIZE,
+    CatalogCursor,
+    CatalogCursorError,
+    CatalogFilters,
+    extract_search_text,
+)
 from my_pa.domain.reports.content import ReportContent, canonical_json, content_of
 from my_pa.domain.reports.errors import ReportValidationError
 from my_pa.domain.reports.lifecycle import LifecycleDecision, decide_lifecycle_transition
@@ -89,6 +120,7 @@ from my_pa.domain.reports.records import (
     DEFAULT_HISTORY_PAGE,
     MAX_HISTORY_PAGE,
     MAX_HISTORY_PAGE_WITH_MANIFESTS,
+    CatalogEntry,
     HistoryEntries,
     ReportHistoryPage,
     ReportLifecycleEventRecord,
@@ -120,6 +152,7 @@ from my_pa.domain.reports.vocabulary import (
     ReceiptOutcome,
     StorageKind,
 )
+from my_pa.domain.search.query import SearchQuery
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence import conflicting_row
 from my_pa.infrastructure.persistence.principal_scope import (
@@ -142,7 +175,13 @@ from my_pa.infrastructure.persistence.tables import (
     report_versions,
 )
 
-__all__ = ["SqlGeneralReportRepository"]
+__all__ = [
+    "MAX_CATALOG_LIMIT",
+    "SqlGeneralReportRepository",
+    "catalog_after",
+    "catalog_limit",
+    "catalog_rank",
+]
 
 #: The receipt constraint that admits one request per (owner, operation, key).
 _KEY_CONSTRAINT: Final = "a_report_key_admits_one_request_per_operation"
@@ -1414,6 +1453,186 @@ def _lifecycle_history(
     )
 
 
+# ---- catalog (WP04) --------------------------------------------------------------
+
+#: `limit` is a page plus one row, so the caller learns whether more follow.
+MAX_CATALOG_LIMIT: Final = MAX_CATALOG_PAGE_SIZE + 1
+
+#: The `ts_headline` options of a search snippet (contract C4).
+_HEADLINE_OPTIONS: Final = "MaxWords=20,MinWords=5"
+_TEXT_SEARCH_CONFIG: Final = "english"
+
+
+def catalog_limit(value: object) -> int:
+    """1..`MAX_CATALOG_LIMIT`, an exact `int`; shared by the legacy catalog read."""
+    if type(value) is not int or not 1 <= value <= MAX_CATALOG_LIMIT:
+        raise ReportValidationError("limit", "bounds")
+    return value
+
+
+def catalog_rank(document: ColumnElement[Any], tsquery: ColumnElement[Any]) -> ColumnElement[int]:
+    """`floor(ts_rank(document, q)::float8 * 1000000)::bigint` (contract C6)."""
+    return cast(
+        func.floor(cast(func.ts_rank(document, tsquery), DOUBLE_PRECISION) * 1_000_000),
+        BigInteger,
+    )
+
+
+def catalog_after(
+    after: CatalogCursor | None,
+    *,
+    rank: ColumnElement[int] | None,
+    sort_time: ColumnElement[datetime],
+    identifier: ColumnElement[str],
+) -> ColumnElement[bool] | None:
+    """Rows strictly after `after` in `(rank DESC,) sort_time DESC, id DESC` order.
+
+    The id compares under `COLLATE "C"` (code-point order, as the Python
+    merge compares). A cursor whose rank does not match the operation (a
+    list cursor for a search, or the reverse) is `CatalogCursorError`.
+    """
+    if after is None:
+        return None
+    cursor: object = after
+    if not isinstance(cursor, CatalogCursor) or (after.rank is None) != (rank is None):
+        raise CatalogCursorError
+    collated = identifier.collate("C")
+    position = literal(after.report_id).collate("C")
+    tail = or_(
+        sort_time < after.sort_time,
+        and_(sort_time == after.sort_time, collated < position),
+    )
+    if rank is None or after.rank is None:
+        return tail
+    return or_(rank < after.rank, and_(rank == after.rank, tail))
+
+
+def _catalog_page(
+    connection: Connection,
+    *,
+    context: PrincipalContext,
+    filters: CatalogFilters,
+    query: SearchQuery | None,
+    after: CatalogCursor | None,
+    limit: int,
+) -> tuple[CatalogEntry, ...]:
+    if not isinstance(filters, CatalogFilters):
+        raise ReportValidationError("filters", "type")
+    if query is not None and not isinstance(query, SearchQuery):
+        raise ReportValidationError("query", "type")
+    size = catalog_limit(limit)
+    root, version = report_roots, report_versions
+    conditions: list[ColumnElement[bool]] = [
+        _mine(root, context),
+        _mine(version, context),
+        root.c.lifecycle_state.in_(sorted(state.value for state in filters.lifecycle_states)),
+    ]
+    if filters.report_type is not None:
+        conditions.append(version.c.report_type == filters.report_type)
+    if filters.topics is not None:
+        conditions.append(version.c.topics.contains(list(filters.topics)))
+    if filters.tags is not None:
+        conditions.append(version.c.tags.contains(list(filters.tags)))
+    if filters.associated_with is not None:
+        association = report_associations
+        conditions.append(
+            exists(
+                select(association.c.association_id).where(
+                    _mine(association, context),
+                    matching_partition_criterion(association, version),
+                    association.c.version_id == version.c.version_id,
+                    association.c.target_kind == filters.associated_with.target_kind.value,
+                    association.c.target_ref == filters.associated_with.target_ref,
+                )
+            )
+        )
+    if filters.created_from is not None:
+        conditions.append(root.c.created_at >= filters.created_from)
+    if filters.created_to is not None:
+        conditions.append(root.c.created_at < filters.created_to)
+    if filters.report_date_from is not None:
+        conditions.append(version.c.report_date >= filters.report_date_from)
+    if filters.report_date_to is not None:
+        conditions.append(version.c.report_date <= filters.report_date_to)
+
+    rank: ColumnElement[int] | None = None
+    snippet: ColumnElement[str] | None = None
+    if query is not None:
+        tsquery = func.websearch_to_tsquery(_TEXT_SEARCH_CONFIG, query.text)
+        conditions.append(version.c.search_document.op("@@")(tsquery))
+        rank = catalog_rank(version.c.search_document, tsquery)
+        snippet = func.ts_headline(
+            _TEXT_SEARCH_CONFIG,
+            func.coalesce(version.c.summary, version.c.title),
+            tsquery,
+            _HEADLINE_OPTIONS,
+        )
+    position = catalog_after(
+        after, rank=rank, sort_time=root.c.created_at, identifier=root.c.report_id
+    )
+    if position is not None:
+        conditions.append(position)
+    order: list[ColumnElement[Any]] = [
+        root.c.created_at.desc(),
+        root.c.report_id.collate("C").desc(),
+    ]
+    if rank is not None:
+        order.insert(0, rank.desc())
+    statement = (
+        select(
+            root.c.report_id,
+            root.c.created_at,
+            root.c.head_version_id,
+            root.c.head_version_number,
+            root.c.lifecycle_state,
+            root.c.lifecycle_revision,
+            version.c.title,
+            version.c.report_type,
+            version.c.topics,
+            version.c.tags,
+            version.c.summary,
+            version.c.report_date,
+            version.c.recorded_at,
+            (null() if rank is None else rank).label("rank"),
+            (null() if snippet is None else snippet).label("snippet"),
+        )
+        .select_from(
+            root.join(
+                version,
+                (version.c.version_id == root.c.head_version_id)
+                & (version.c.report_id == root.c.report_id)
+                & matching_partition_criterion(version, root),
+            )
+        )
+        .where(*conditions)
+        .order_by(*order)
+        .limit(size)
+    )
+    entries: list[CatalogEntry] = []
+    for row in connection.execute(statement):
+        m = row._mapping
+        entries.append(
+            CatalogEntry(
+                report_id=str(m["report_id"]),
+                title=str(m["title"]),
+                report_type=m["report_type"],
+                topics=tuple(m["topics"]),
+                tags=tuple(m["tags"]),
+                summary=m["summary"],
+                report_date=m["report_date"],
+                lifecycle_state=LifecycleState(m["lifecycle_state"]),
+                lifecycle_revision=int(m["lifecycle_revision"]),
+                head_version_id=str(m["head_version_id"]),
+                head_version_number=int(m["head_version_number"]),
+                created_at=m["created_at"],
+                updated_at=m["recorded_at"],
+                rank=None if m["rank"] is None else int(m["rank"]),
+                snippet=None if m["snippet"] is None else str(m["snippet"]),
+            )
+        )
+    return tuple(entries)
+
+
 class SqlGeneralReportRepository(GeneralReportRepository):
     """The general report port over one connection the caller owns.
 
@@ -1666,6 +1885,24 @@ class SqlGeneralReportRepository(GeneralReportRepository):
             context=capture_context(principal_id),
             after_event_id=after_event_id,
             page_size=page_size,
+        )
+
+    def catalog_page(
+        self,
+        *,
+        principal_id: str,
+        filters: CatalogFilters,
+        query: SearchQuery | None,
+        after: CatalogCursor | None,
+        limit: int,
+    ) -> tuple[CatalogEntry, ...]:
+        return _catalog_page(
+            self._connection,
+            context=capture_context(principal_id),
+            filters=filters,
+            query=query,
+            after=after,
+            limit=limit,
         )
 
     @staticmethod

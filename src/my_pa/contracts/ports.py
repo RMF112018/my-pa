@@ -257,8 +257,10 @@ from my_pa.domain.relationship.reenrichment import (
     ReenrichmentBinding,
     ReenrichmentWork,
 )
+from my_pa.domain.reports.catalog import CatalogCursor, CatalogFilters
 from my_pa.domain.reports.publication import PublicationRequest, PublicationResult
 from my_pa.domain.reports.records import (
+    CatalogEntry,
     ReportHistoryPage,
     ReportLifecycleEventRecord,
     ReportVersionSummary,
@@ -7945,6 +7947,37 @@ class GeneralReportRepository(ABC):
         """One page of the report's lifecycle events, oldest first, or `None` if not found.
 
         The cursor and `page_size` rules are `version_history`'s (1..50).
+        """
+
+    @abstractmethod
+    def catalog_page(
+        self,
+        *,
+        principal_id: str,
+        filters: CatalogFilters,
+        query: SearchQuery | None,
+        after: CatalogCursor | None,
+        limit: int,
+    ) -> tuple[CatalogEntry, ...]:
+        """Up to `limit` of this Principal's reports at their HEAD version (WP04 C2-C8).
+
+        `query` `None` is the list: order `(created_at DESC, report_id DESC)`.
+        A `query` is a search: `websearch_to_tsquery('english', query.text)`
+        matched against the HEAD version's `search_document` only, `rank =
+        floor(ts_rank * 1e6)`, order `(rank DESC, created_at DESC, report_id
+        DESC)`, each entry with its headline over `coalesce(summary, title)`.
+        Ids compare in code-point order (`COLLATE "C"`). `after` is the keyset
+        position: only rows strictly after it in that order. Its `rank` must be
+        set exactly when `query` is (else `CatalogCursorError`); its id may be
+        any report id, standalone or legacy, since the `all` plane merges both
+        in one order. Filters: `report_type` equality; `topics`/`tags` all-of
+        (`@>`) on the head; `associated_with` an association of the head
+        version; `lifecycle_state` in `lifecycle_states`; `created_*` on the
+        root's `created_at`, half-open; `report_date_*` on the head, inclusive
+        (NULL never matches a bound). `limit` is 1..101 (a page plus one, so
+        the caller learns whether more follow). No count is computed. A
+        foreign or nonexistent association target or cursor position simply
+        yields no rows / skips none of another Principal's.
         """
 
 

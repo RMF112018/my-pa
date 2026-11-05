@@ -8,6 +8,9 @@ also rebuilt whole from the stored rows and compared canonically.
 `ReportHistoryPage` is one page of a report's version or lifecycle ledger,
 oldest first (WP03 D9): `next_cursor` is the id of the page's last item when
 more follow, else `None`.
+
+`CatalogEntry` is one standalone report as the catalog lists it (WP04 C4): the
+root and its HEAD version's metadata, never content.
 """
 
 from __future__ import annotations
@@ -33,6 +36,7 @@ __all__ = [
     "DEFAULT_HISTORY_PAGE",
     "MAX_HISTORY_PAGE",
     "MAX_HISTORY_PAGE_WITH_MANIFESTS",
+    "CatalogEntry",
     "HistoryEntries",
     "ReportHistoryPage",
     "ReportLifecycleEventRecord",
@@ -46,6 +50,33 @@ __all__ = [
 DEFAULT_HISTORY_PAGE: Final = 20
 MAX_HISTORY_PAGE: Final = 50
 MAX_HISTORY_PAGE_WITH_MANIFESTS: Final = 10
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogEntry:
+    """One standalone report at its HEAD version, as a catalog page lists it.
+
+    `created_at` is the root's (the list order's sort time, immutable);
+    `updated_at` is the head version's `recorded_at`. `rank` is the integer
+    search rank `floor(ts_rank(search_document, q) * 1e6)` and `snippet` the
+    headline over the summary (else the title), both `None` in a list.
+    """
+
+    report_id: str
+    title: str
+    report_type: str | None
+    topics: tuple[str, ...]
+    tags: tuple[str, ...]
+    summary: str | None
+    report_date: date | None
+    lifecycle_state: LifecycleState
+    lifecycle_revision: int
+    head_version_id: str
+    head_version_number: int
+    created_at: datetime
+    updated_at: datetime
+    rank: int | None
+    snippet: str | None
 
 
 @dataclass(frozen=True, slots=True)

@@ -59,7 +59,7 @@ from my_pa.application.goodnotes_gsqs_b0_workflow import (
     default_repository_root,
     start_workflow,
 )
-from my_pa.application.intelligence import InMemoryIntelligenceStore
+from my_pa.application.intelligence import InMemoryIntelligenceStore, in_memory_search_rank
 from my_pa.application.managed_documents import ManagedDocumentService
 from my_pa.application.producer_origin import ProducerOrigin, ProducerOriginRegistry
 from my_pa.application.service import ApplicationService
@@ -411,6 +411,13 @@ from my_pa.domain.relationship.normalization import (
     is_normalized_name,
     normalize_name,
 )
+from my_pa.domain.reports.catalog import (
+    MAX_CATALOG_PAGE_SIZE,
+    CatalogCursor,
+    CatalogCursorError,
+    CatalogFilters,
+    extract_search_text,
+)
 from my_pa.domain.reports.content import validate_content
 from my_pa.domain.reports.errors import ReportValidationError
 from my_pa.domain.reports.lifecycle import decide_lifecycle_transition
@@ -425,6 +432,7 @@ from my_pa.domain.reports.records import (
     DEFAULT_HISTORY_PAGE,
     MAX_HISTORY_PAGE,
     MAX_HISTORY_PAGE_WITH_MANIFESTS,
+    CatalogEntry,
     HistoryEntries,
     ReportHistoryPage,
     ReportLifecycleEventRecord,
@@ -451,7 +459,7 @@ from my_pa.domain.reports.vocabulary import (
     ReceiptOutcome,
     StorageKind,
 )
-from my_pa.domain.search.query import RankCategory, SearchMatch, SearchRequest
+from my_pa.domain.search.query import RankCategory, SearchMatch, SearchQuery, SearchRequest
 from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
     Commitment,
@@ -10213,6 +10221,93 @@ class _GeneralReports(GeneralReportRepository):
             if kind is AssociationTargetKind.STANDALONE_REPORT
             and (principal_id, ref) in self._world.general_report_versions
         )
+
+    def catalog_page(
+        self,
+        *,
+        principal_id: str,
+        filters: CatalogFilters,
+        query: SearchQuery | None,
+        after: CatalogCursor | None,
+        limit: int,
+    ) -> tuple[CatalogEntry, ...]:
+        """The SQL catalog's filters, HEAD-only scope, order and keyset (WP04).
+
+        Search is `in_memory_search_rank` over the head's title (weighted) and
+        its summary, topics, tags and `extract_search_text` of its content; the
+        snippet is the summary, else the title (no headline markup). The
+        `database` tier is the authority on ranking and on `@>`/`EXISTS`.
+        """
+        if type(limit) is not int or not 1 <= limit <= MAX_CATALOG_PAGE_SIZE + 1:
+            raise ReportValidationError("limit", "bounds")
+        if after is not None and (after.rank is None) != (query is None):
+            raise CatalogCursorError
+        found: list[tuple[tuple[int, datetime, str], CatalogEntry]] = []
+        for (owner, report_id), head in self._world.general_report_versions.items():
+            root, version = head.root, head.version
+            if owner != principal_id or root.lifecycle_state not in filters.lifecycle_states:
+                continue
+            if filters.report_type is not None and version.report_type != filters.report_type:
+                continue
+            if filters.topics is not None and not set(filters.topics) <= set(version.topics):
+                continue
+            if filters.tags is not None and not set(filters.tags) <= set(version.tags):
+                continue
+            wanted = filters.associated_with
+            if wanted is not None and not any(
+                (a.target_kind, a.target_ref) == (wanted.target_kind, wanted.target_ref)
+                for a in head.associations
+            ):
+                continue
+            if filters.created_from is not None and root.created_at < filters.created_from:
+                continue
+            if filters.created_to is not None and root.created_at >= filters.created_to:
+                continue
+            if filters.report_date_from is not None and (
+                version.report_date is None or version.report_date < filters.report_date_from
+            ):
+                continue
+            if filters.report_date_to is not None and (
+                version.report_date is None or version.report_date > filters.report_date_to
+            ):
+                continue
+            rank: int | None = None
+            if query is not None:
+                rank = in_memory_search_rank(
+                    query,
+                    version.title,
+                    (
+                        version.summary or "",
+                        *version.topics,
+                        *version.tags,
+                        extract_search_text(head.content),
+                    ),
+                )
+                if rank is None:
+                    continue
+            entry = CatalogEntry(
+                report_id=report_id,
+                title=version.title,
+                report_type=version.report_type,
+                topics=version.topics,
+                tags=version.tags,
+                summary=version.summary,
+                report_date=version.report_date,
+                lifecycle_state=root.lifecycle_state,
+                lifecycle_revision=root.lifecycle_revision,
+                head_version_id=root.head_version_id,
+                head_version_number=root.head_version_number,
+                created_at=root.created_at,
+                updated_at=version.recorded_at,
+                rank=rank,
+                snippet=None if rank is None else (version.summary or version.title),
+            )
+            found.append(((rank or 0, root.created_at, report_id), entry))
+        found.sort(key=lambda item: item[0], reverse=True)
+        if after is not None:
+            position = (after.rank or 0, after.sort_time, after.report_id)
+            found = [item for item in found if item[0] < position]
+        return tuple(entry for _key, entry in found[:limit])
 
 
 class FakeUnitOfWork(UnitOfWork):

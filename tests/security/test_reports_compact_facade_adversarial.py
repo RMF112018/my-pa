@@ -20,6 +20,7 @@ fields.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import timedelta
 from typing import Any, Final
 
@@ -37,6 +38,7 @@ from tests.contract.test_reports_compact_facade import (
     MANAGEMENT_WRITES,
     MINIMAL,
     MUTATION_TABLES,
+    OTHER_CLIENT,
     PLANE_TABLES,
     PUBLISH,
     READ,
@@ -67,9 +69,11 @@ from my_pa.adapters.mcp.chatllm_gateway import (
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES
 from my_pa.adapters.remote_request import compose_remote_arguments
 from my_pa.application.errors import InvalidRequestError
+from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.identity.operation import Capability, is_operator_only
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.reports.content import INLINE_CONTENT_MAX_BYTES
+from my_pa.domain.reports.creator import CreatorKind, derive_creator
 
 pytestmark = pytest.mark.database
 
@@ -826,6 +830,7 @@ _CATALOG_ONLY: Final[dict[str, Any]] = {
     "created_to": "2026-12-01T00:00:00Z",
     "report_date_from": "2026-01-01",
     "report_date_to": "2026-12-31",
+    "created_by": "gcrt_" + "0" * 40,
 }
 
 
@@ -993,3 +998,164 @@ def _keys(value: object) -> set[str]:
     if isinstance(value, list):
         return {key for item in value for key in _keys(item)}
     return set()
+
+
+# ---- Reports Modernization WP05 (A5, A6): creator attribution refusals ---------------------
+
+#: Every spelling of a caller-asserted writer (A6); none is a field of any write.
+_FORGED_CREATOR: Final = (
+    "creator",
+    "created_by",
+    "author",
+    "authored_by",
+    "created_by_id",
+    "creator_id",
+)
+_A_CREATOR: Final = derive_creator(CreatorKind.REMOTE_CLIENT, CLIENT).creator_id
+_FORGED_VALUES: Final[tuple[Any, ...]] = (
+    _A_CREATOR,
+    {"kind": "remote_client", "id": _A_CREATOR},
+    None,
+)
+
+
+def _creator_rows(engine: Engine) -> list[tuple[Any, ...]]:
+    with engine.connect() as connection:
+        return [
+            tuple(row)
+            for row in connection.execute(
+                text(
+                    "SELECT r.report_id, r.created_by_id, v.version_number, v.authored_by_id "
+                    "FROM knowledge.report_roots r JOIN knowledge.report_versions v "
+                    "USING (report_id) ORDER BY r.report_id, v.version_number"
+                )
+            )
+        ]
+
+
+def test_a_forged_creator_on_publish_or_update_is_refused_before_mutation(
+    harness: Harness,
+) -> None:
+    grants = profile_grants(harness.service)
+    token = harness.client(CLIENT, grants)
+    other = harness.client(OTHER_CLIENT, grants)
+    (published,) = harness.run([(token, wrapped(WRITE_TOOL, PUBLISH, MINIMAL))])
+    rid = ok(published)["report_id"]
+    before = counts(harness.engine, _MUTATION)
+    rows = _creator_rows(harness.engine)
+    requests: list[tuple[str, Mapping[str, Any]]] = []
+    for name in _FORGED_CREATOR:
+        for value in _FORGED_VALUES:
+            forged = {name: value}
+            requests += [
+                (other, wrapped(WRITE_TOOL, PUBLISH, {**MINIMAL, "title": "Forged", **forged})),
+                (other, wrapped(WRITE_TOOL, UPDATE, {**_payload(UPDATE, rid), **forged})),
+                (
+                    other,
+                    wrapped(
+                        WRITE_TOOL,
+                        UPDATE,
+                        update_payload(rid, 1, {"title": "Forged", **forged}),
+                    ),
+                ),
+            ]
+    answers = harness.run(requests)
+    for (_token, request), answer in zip(requests, answers, strict=True):
+        assert refusal(answer)[0] == "invalid_request", request
+    assert counts(harness.engine, _MUTATION) == before
+    assert _creator_rows(harness.engine) == rows
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["gcrt_" + "0" * 39, "gcrt_" + "A" * 40, "GCRT_" + "0" * 40, "", 7, [_A_CREATOR], {"id": "x"}],
+)
+@pytest.mark.parametrize("capability", _CATALOG, ids=lambda c: c.value)
+def test_a_malformed_created_by_names_created_by(
+    harness: Harness,
+    capability: Capability,
+    value: Any,  # noqa: ANN401
+) -> None:
+    token = harness.client(CLIENT, profile_grants(harness.service))
+    before = counts(harness.engine, _ALL_TABLES)
+    answers = harness.run(
+        [
+            (
+                token,
+                wrapped(
+                    READ_TOOL,
+                    capability,
+                    _catalog_payload(capability, plane=plane, created_by=value),
+                ),
+            )
+            for plane in ("standalone", "all")
+        ]
+    )
+    for answer in answers:
+        code, details = refusal(answer)
+        assert code == "invalid_request"
+        assert details == ["created_by"]
+        if isinstance(value, str) and value:
+            assert value not in str(answer.document)
+    assert counts(harness.engine, _ALL_TABLES) == before
+
+
+@pytest.mark.parametrize("capability", _CATALOG, ids=lambda c: c.value)
+def test_created_by_never_crosses_a_principal(harness: Harness, capability: Capability) -> None:
+    """Another Principal filtering by A's creator id sees nothing, and A sees none of theirs."""
+    token = harness.client(CLIENT, profile_grants(harness.service))
+    (published,) = harness.run([(token, wrapped(WRITE_TOOL, PUBLISH, MINIMAL))])
+    own = ok(published)["report_id"]
+    stranger = operator()
+    foreign = harness.service.invoke(
+        metadata_for(PUBLISH, Purpose.REPORT_AUTHORING, stranger),
+        _publish_command(stranger.principal_id),
+        principal=stranger,
+    )
+    assert foreign.result is not None, foreign.error
+    theirs = str(foreign.result["report_id"])
+    stranger_creator = derive_creator(CreatorKind.LOCAL_PRINCIPAL, stranger.principal_id).creator_id
+    # The stranger, through its own (remote) client, filtering by A's creator id.
+    remote = harness.service.invoke(
+        *_catalog_request(capability, stranger.principal_id, _A_CREATOR),
+        principal=stranger,
+        transport=CaptureTransport.REMOTE_CLIENT,
+        authenticated_client_id="synthetic-stranger-client",
+    )
+    assert remote.result is not None, remote.error
+    assert remote.result["items"] == []
+    before = counts(harness.engine, _ALL_TABLES)
+    answers = harness.run(
+        [
+            (
+                token,
+                wrapped(
+                    READ_TOOL,
+                    capability,
+                    _catalog_payload(capability, plane=plane, created_by=stranger_creator),
+                ),
+            )
+            for plane in ("standalone", "all")
+        ]
+    )
+    for answer in answers:
+        page = ok(answer)
+        assert page["items"] == []
+        assert page["next_cursor"] is None
+        assert theirs not in str(page) and own not in str(page)
+    assert counts(harness.engine, _ALL_TABLES) == before
+
+
+def _catalog_request(capability: Capability, principal_id: str, created_by: str) -> tuple[Any, Any]:
+    from my_pa.adapters.normalization import normalize
+
+    return normalize(
+        capability.value,
+        {
+            "request_id": "req-stranger-catalog",
+            "purpose": Purpose.REPORT_READ.value,
+            "principal_id": principal_id,
+            "requested_at": "2026-11-05T12:00:00Z",
+            "payload": _catalog_payload(capability, plane="standalone", created_by=created_by),
+        },
+    )

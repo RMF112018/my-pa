@@ -47,9 +47,12 @@ from tests.contract.test_reports_compact_facade import (
     ARCHIVE,
     CLIENT,
     DELETE,
+    HISTORY,
     INTELLIGENCE_TABLES,
     MUTATION_TABLES,
+    OTHER_CLIENT,
     PUBLISH,
+    READ,
     UPDATE,
     Exchange,
     Harness,
@@ -83,6 +86,7 @@ from my_pa.domain.intelligence.catalog import (
     FocusAreaId,
     IntelligenceStage,
 )
+from my_pa.domain.reports.creator import CreatorKind, derive_creator
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 
@@ -885,3 +889,149 @@ def test_list_and_search_through_my_pa_write_are_refused(harness: Harness) -> No
     for answer in answers:
         assert refusal(answer)[0] == "invalid_request"
     assert counts(harness.engine, _ALL_TABLES) == before
+
+
+# ---- Reports Modernization WP05 (A4, A5): creator attribution through the facade ---------
+
+#: The exact `created_by` property `my_pa.describe` publishes on both capabilities.
+CREATED_BY_PROPERTY: Final = {
+    "type": "string",
+    "pattern": "^gcrt_[0-9a-f]{40}$",
+    "description": "standalone/all only; exact creator id from a read/list item",
+}
+UNKNOWN_CREATOR: Final = "gcrt_" + "0" * 40
+
+
+def remote_creator(oauth_client_id: str) -> dict[str, str]:
+    """What a read answers for a report written by remote client `oauth_client_id`."""
+    derived = derive_creator(CreatorKind.REMOTE_CLIENT, oauth_client_id)
+    return {"kind": derived.kind.value, "id": derived.creator_id}
+
+
+def test_describe_shows_the_exact_created_by_property(harness: Harness) -> None:
+    token = harness.client(CLIENT, profile_grants(harness.service))
+    answers = harness.run([(token, describe(capability=c.value)) for c in CATALOG])
+    for capability, answer in zip(CATALOG, answers, strict=True):
+        _failed, contract = outcome(answer)
+        payload = contract["input_schema"]["properties"]["payload"]
+        assert payload["properties"]["created_by"] == CREATED_BY_PROPERTY, capability
+        assert "created_by" not in payload.get("required", [])
+    # Never a writable field: neither write schema names a creator.
+    publish, update = harness.run(
+        [(token, describe(capability=c.value)) for c in (PUBLISH, UPDATE)]
+    )
+    for answer in (publish, update):
+        rendered = json.dumps(outcome(answer)[1]["input_schema"])
+        for name in ("creator", "created_by", "author", "authored_by"):
+            assert f'"{name}"' not in rendered, name
+
+
+def test_creator_and_author_are_derived_from_the_writing_client(harness: Harness) -> None:
+    grants = profile_grants(harness.service)
+    token_a = harness.client(CLIENT, grants)
+    token_b = harness.client(OTHER_CLIENT, grants)
+    a, b = remote_creator(CLIENT), remote_creator(OTHER_CLIENT)
+    assert a != b
+    receipt = publish_at(
+        harness, token_a, T_OLD, {"title": "Curlew creator note", "content": body("Curlew A.")}
+    )
+    # Receipts are unchanged: no creator or author.
+    assert not {"creator", "author"} & set(receipt)
+    rid = receipt["report_id"]
+    first = ok(read(harness, token_a, READ, {"report_id": rid}))
+    assert first["creator"] == first["author"] == a
+    updated = write_at(
+        harness, token_b, T_MID, UPDATE, update_payload(rid, 1, {"title": "Curlew revised by B"})
+    )
+    assert not {"creator", "author"} & set(updated)
+    head = ok(read(harness, token_a, READ, {"report_id": rid}))
+    assert (head["version_number"], head["creator"], head["author"]) == (2, a, b)
+    v1 = ok(read(harness, token_b, READ, {"report_id": rid, "version_number": 1}))
+    assert (v1["creator"], v1["author"]) == (a, a)
+    history = ok(read(harness, token_b, HISTORY, {"report_id": rid}))
+    assert [item["author"] for item in history["items"]] == [a, b]
+    # Read back: the root holds A, each version its own writer.
+    with harness.engine.connect() as connection:
+        root = connection.execute(
+            text(
+                "SELECT created_by_kind, created_by_id FROM knowledge.report_roots "
+                "WHERE report_id = :rid"
+            ),
+            {"rid": rid},
+        ).one()
+        versions = connection.execute(
+            text(
+                "SELECT authored_by_kind, authored_by_id FROM knowledge.report_versions "
+                "WHERE report_id = :rid ORDER BY version_number"
+            ),
+            {"rid": rid},
+        ).all()
+    assert tuple(root) == (a["kind"], a["id"])
+    assert [tuple(row) for row in versions] == [(a["kind"], a["id"]), (b["kind"], b["id"])]
+    # The pseudonym never discloses the OAuth client id.
+    assert CLIENT not in json.dumps(head) and OTHER_CLIENT not in json.dumps(history)
+
+
+def test_created_by_filters_list_and_search_on_the_root_creator(harness: Harness) -> None:
+    grants = profile_grants(harness.service)
+    token_a = harness.client(CLIENT, grants)
+    token_b = harness.client(OTHER_CLIENT, grants)
+    a, b = remote_creator(CLIENT)["id"], remote_creator(OTHER_CLIENT)["id"]
+    by_a = publish_at(
+        harness, token_a, T_OLD, {"title": "Curlew note A", "content": body("Curlew A.")}
+    )["report_id"]
+    by_b = publish_at(
+        harness, token_b, T_MID, {"title": "Curlew note B", "content": body("Curlew B.")}
+    )["report_id"]
+    # B updates A's report: the filter stays on the root's creator.
+    write_at(harness, token_b, T_NEW, UPDATE, update_payload(by_a, 1, {"title": "Curlew A by B"}))
+    harness.service = build_service(harness.engine)
+    before = counts(harness.engine, _ALL_TABLES)
+    for capability in CATALOG:
+        extra = {"query": "curlew"} if capability is SEARCH else {}
+        for plane in ("standalone", "all"):
+            pages = {
+                created_by: ok(
+                    read(
+                        harness,
+                        token_a,
+                        capability,
+                        {"plane": plane, "created_by": created_by, **extra},
+                    )
+                )
+                for created_by in (a, b, UNKNOWN_CREATOR)
+            }
+            assert ids(pages[a]) == [by_a], (capability, plane)
+            assert ids(pages[b]) == [by_b], (capability, plane)
+            assert pages[UNKNOWN_CREATOR]["items"] == []
+            assert pages[UNKNOWN_CREATOR]["next_cursor"] is None
+            assert [item["creator"]["id"] for item in pages[a]["items"]] == [a]
+    assert counts(harness.engine, _ALL_TABLES) == before
+
+
+def test_a_created_by_cursor_walks_and_is_bound_to_its_filter(harness: Harness) -> None:
+    token = harness.client(CLIENT, profile_grants(harness.service))
+    a = remote_creator(CLIENT)["id"]
+    published = [
+        publish_at(harness, token, when, {"title": f"Curlew {n}", "content": body("Curlew.")})[
+            "report_id"
+        ]
+        for n, when in enumerate((T_OLD, T_MID, T_NEW))
+    ]
+    harness.service = build_service(harness.engine)
+    for capability in CATALOG:
+        extra = {"query": "curlew"} if capability is SEARCH else {}
+        request = {"plane": "standalone", "created_by": a, "page_size": 2, **extra}
+        first = ok(read(harness, token, capability, request))
+        cursor = first["next_cursor"]
+        assert isinstance(cursor, str)
+        second = ok(read(harness, token, capability, {**request, "cursor": cursor}))
+        assert second["next_cursor"] is None
+        assert sorted(ids(first) + ids(second)) == sorted(published)
+        without = {k: v for k, v in request.items() if k != "created_by"}
+        for replay in (
+            {**without, "cursor": cursor},
+            {**request, "created_by": UNKNOWN_CREATOR, "cursor": cursor},
+        ):
+            answer = read(harness, token, capability, replay)
+            assert refusal(answer) == ("invalid_request", ["cursor"]), capability

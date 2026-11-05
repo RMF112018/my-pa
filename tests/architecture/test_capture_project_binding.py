@@ -65,7 +65,10 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 #: by Reports Modernization WP04, which declares the report version search
 #: projection (`search_text`, its bound and the generated `search_document` with
 #: its GIN index) and the root catalog-order index; `captures` is untouched.
-TABLES_SHA256: Final = "2240bbbff8095e774f1e11d11d4ff922d81b9e5bbb808be73301926190b015bb"
+#: Moved again by Reports Modernization WP05 A2, which declares the root
+#: creator and version author columns, their four CHECKs and the root
+#: creator-filter index; `captures` is untouched.
+TABLES_SHA256: Final = "568fbfac12b30ed984fb05254624840b3f461b795c65fc3ef5c2025d2527224b"
 WP03_MIGRATION_SHA256: Final = "098edd98ccc1846b01c58f42e296e4751e7841b562a2827616cc4337e174c354"
 WP03_MIGRATION: Final = (
     ROOT / "migrations/versions/20260914_e6a4c2f91b73_project_controls_run01_integrity.py"

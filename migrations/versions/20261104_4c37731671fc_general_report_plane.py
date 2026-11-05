@@ -132,6 +132,14 @@ STORED`, so no INSERT can set it and the append-only rows never need an
 update), indexed by the GIN index `report_versions_search_document`. The
 catalog list order is served by `report_roots_by_owner_and_creation`.
 
+Creator attribution (WP05 A1/A2, amended into this unmerged revision in place):
+`report_roots.created_by_kind`/`created_by_id` name who published the report
+and `report_versions.authored_by_kind`/`authored_by_id` who wrote each version,
+as a server-derived pseudonym (`gcrt_` + 40 hex, never caller-supplied), each
+pair checked by a named CHECK with frozen literals. The root's creator is
+immutable (the root trigger's immutable column list); versions are append-only.
+The `created_by` catalog filter is served by `report_roots_by_owner_and_creator`.
+
 Every closed set and bound is a frozen literal equal to the general report
 domain vocabulary module, which this revision does not import.
 
@@ -197,6 +205,10 @@ _VERIFICATIONS: Final = "'asserted', 'verified'"
 _TRANSFER_STATES: Final = "'aborted', 'consumed', 'expired', 'finalized', 'open'"
 #: The one manifest schema.
 _MANIFEST_SCHEMAS: Final = "'report_version_manifest_v1'"
+#: The 2 creator kinds (WP05 A1/A2).
+_CREATOR_KINDS: Final = "'local_principal', 'remote_client'"
+#: A creator / author pseudonym: `gcrt_` and 40 lowercase hex digits (WP05 A1).
+_CREATOR_PATTERN: Final = "'^gcrt_[0-9a-f]{40}$'"
 #: A report type and an association relation token.
 _TYPE_PATTERN: Final = "'^[a-z][a-z0-9_]{0,63}$'"
 
@@ -541,6 +553,8 @@ _TABLES: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
           lifecycle_state TEXT NOT NULL,
           lifecycle_revision INTEGER NOT NULL,
           lifecycle_event_id TEXT,
+          created_by_kind TEXT NOT NULL,
+          created_by_id TEXT NOT NULL,
           CONSTRAINT report_roots_pkey PRIMARY KEY (report_id),
           {_id("report_id", "grpt")},
           {_id("owner_principal_id", "prn")},
@@ -556,6 +570,10 @@ _TABLES: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
               ((lifecycle_event_id IS NULL) = (lifecycle_revision = 0)),
           CONSTRAINT an_untransitioned_report_is_active CHECK (lifecycle_revision <> 0 OR
               lifecycle_state = 'active'),
+          CONSTRAINT a_report_creator_kind_is_known CHECK (created_by_kind IN
+              ({_CREATOR_KINDS})),
+          CONSTRAINT a_report_creator_is_a_pseudonym CHECK (created_by_id ~
+              {_CREATOR_PATTERN}),
           CONSTRAINT a_report_is_identified_with_its_owner UNIQUE (report_id,
               owner_principal_id)
         )
@@ -567,6 +585,9 @@ _TABLES: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
             # with ids in code-point order (`COLLATE "C"`), per owner.
             "CREATE INDEX report_roots_by_owner_and_creation ON knowledge.report_roots "
             '(owner_principal_id, created_at DESC, report_id COLLATE "C" DESC)',
+            # WP05 A2/A5: the `created_by` catalog filter, in the list order.
+            "CREATE INDEX report_roots_by_owner_and_creator ON knowledge.report_roots "
+            "(owner_principal_id, created_by_id, created_at DESC, report_id)",
         ),
     ),
     (
@@ -596,6 +617,8 @@ _TABLES: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
           correlation_id TEXT NOT NULL,
           audit_id TEXT NOT NULL,
           search_text TEXT NOT NULL,
+          authored_by_kind TEXT NOT NULL,
+          authored_by_id TEXT NOT NULL,
           search_document TSVECTOR GENERATED ALWAYS AS ({_SEARCH_DOCUMENT}) STORED,
           CONSTRAINT report_versions_pkey PRIMARY KEY (version_id),
           {_id("version_id", "grver")},
@@ -633,6 +656,9 @@ _TABLES: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
           CONSTRAINT only_the_first_report_version_is_initial CHECK ((change_kind =
               'initial') = (version_number = 1)),
           CONSTRAINT a_report_search_text_is_bounded CHECK (char_length(search_text) <= 65536),
+          CONSTRAINT a_report_author_kind_is_known CHECK (authored_by_kind IN
+              ({_CREATOR_KINDS})),
+          CONSTRAINT a_report_author_is_a_pseudonym CHECK (authored_by_id ~ {_CREATOR_PATTERN}),
           CONSTRAINT one_report_version_per_number UNIQUE (owner_principal_id, report_id,
               version_number),
           CONSTRAINT a_report_version_is_superseded_once UNIQUE (supersedes_version_id),
@@ -1080,7 +1106,9 @@ _FUNCTIONS: Final[tuple[tuple[str, str], ...]] = (
              OR NEW.owner_principal_id IS DISTINCT FROM OLD.owner_principal_id
              OR NEW.created_at IS DISTINCT FROM OLD.created_at
              OR NEW.correlation_id IS DISTINCT FROM OLD.correlation_id
-             OR NEW.audit_id IS DISTINCT FROM OLD.audit_id THEN
+             OR NEW.audit_id IS DISTINCT FROM OLD.audit_id
+             OR NEW.created_by_kind IS DISTINCT FROM OLD.created_by_kind
+             OR NEW.created_by_id IS DISTINCT FROM OLD.created_by_id THEN
             RAISE EXCEPTION 'a report root is immutable but for its caches'
               USING ERRCODE = 'restrict_violation';
           END IF;

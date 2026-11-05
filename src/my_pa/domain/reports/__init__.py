@@ -9,6 +9,7 @@ or infrastructure module.
 literals; `values` the validators for every caller-supplied field; `lifecycle`
 the pure archive / delete / restore transition rule; `catalog` the WP04 plane
 selector, catalog filters, bound keyset cursor and search-text projection;
+`creator` the WP05 server-derived creator pseudonym of a root and a version;
 `errors` the refusals,
 none of which carries the value it refused.
 """

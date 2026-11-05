@@ -370,6 +370,8 @@ from my_pa.domain.relationship.memory import (
     ContextLinkTargetType as MemoryContextLinkTargetType,
 )
 from my_pa.domain.relationship.profile import EvidenceAuthority
+from my_pa.domain.reports.creator import CREATOR_ID_PATTERN as REPORT_CREATOR_ID_PATTERN
+from my_pa.domain.reports.creator import CreatorKind as ReportCreatorKind
 from my_pa.domain.reports.vocabulary import MANIFEST_SCHEMA as REPORT_VERSION_MANIFEST_SCHEMA
 from my_pa.domain.reports.vocabulary import (
     MAX_ASSOCIATION_REF_CHARACTERS,
@@ -10645,6 +10647,9 @@ report_roots = Table(
     Column("lifecycle_state", Text, nullable=False),
     Column("lifecycle_revision", Integer, nullable=False),
     Column("lifecycle_event_id", Text),
+    # WP05 A2: the server-derived creator pseudonym; immutable (root trigger).
+    Column("created_by_kind", Text, nullable=False),
+    Column("created_by_id", Text, nullable=False),
     PrimaryKeyConstraint("report_id", name="report_roots_pkey"),
     _is_identifier("report_id", IdKind.REPORT),
     _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
@@ -10664,6 +10669,10 @@ report_roots = Table(
     CheckConstraint(
         "lifecycle_revision <> 0 OR lifecycle_state = 'active'",
         name="an_untransitioned_report_is_active",
+    ),
+    _one_of("created_by_kind", ReportCreatorKind, name="a_report_creator_kind_is_known"),
+    CheckConstraint(
+        f"created_by_id ~ '{REPORT_CREATOR_ID_PATTERN}'", name="a_report_creator_is_a_pseudonym"
     ),
     UniqueConstraint(
         "report_id", "owner_principal_id", name="a_report_is_identified_with_its_owner"
@@ -10706,6 +10715,14 @@ report_roots = Table(
         text("created_at DESC"),
         text('report_id COLLATE "C" DESC'),
     ),
+    # WP05 A5: the `created_by` catalog filter per owner, in the list order.
+    Index(
+        "report_roots_by_owner_and_creator",
+        "owner_principal_id",
+        "created_by_id",
+        text("created_at DESC"),
+        "report_id",
+    ),
 )
 
 #: One immutable report version: a linear chain per root, each naming its
@@ -10739,6 +10756,9 @@ report_versions = Table(
     # in the version's own INSERT; `search_document` is generated from the
     # row, so no writer sets it.
     Column("search_text", Text, nullable=False),
+    # WP05 A2: the server-derived author pseudonym of this version.
+    Column("authored_by_kind", Text, nullable=False),
+    Column("authored_by_id", Text, nullable=False),
     Column(
         "search_document",
         TSVECTOR,
@@ -10815,6 +10835,10 @@ report_versions = Table(
     CheckConstraint(
         f"char_length(search_text) <= {MAX_REPORT_SEARCH_TEXT_CHARACTERS}",
         name="a_report_search_text_is_bounded",
+    ),
+    _one_of("authored_by_kind", ReportCreatorKind, name="a_report_author_kind_is_known"),
+    CheckConstraint(
+        f"authored_by_id ~ '{REPORT_CREATOR_ID_PATTERN}'", name="a_report_author_is_a_pseudonym"
     ),
     UniqueConstraint(
         "owner_principal_id", "report_id", "version_number", name="one_report_version_per_number"

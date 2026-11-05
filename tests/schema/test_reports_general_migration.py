@@ -76,6 +76,7 @@ from sqlalchemy import Connection, Engine, MetaData, Table, text
 from sqlalchemy.exc import DBAPIError
 
 from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.reports.creator import CREATOR_ID_PATTERN, CreatorKind
 from my_pa.domain.reports.errors import ReportLifecycleRefusal, ReportValidationError
 from my_pa.domain.reports.lifecycle import decide_lifecycle_transition
 from my_pa.domain.reports.values import validate_metadata
@@ -335,11 +336,20 @@ def test_frozen_literals_equal_the_domain_symbols() -> None:
         "_VERIFICATIONS": _values(AssociationVerification),
         "_TRANSFER_STATES": _values(TransferState),
         "_MANIFEST_SCHEMAS": [MANIFEST_SCHEMA],
+        "_CREATOR_KINDS": _values(CreatorKind),
     }
     for name, values in expected.items():
         assert _literals(module[name]) == values, name
     pattern = TYPE_TOKEN_PATTERN.pattern.replace("\\A", "^").replace("\\Z", "$")
     assert module["_TYPE_PATTERN"] == f"'{pattern}'"
+    # WP05 A1/A2: the creator pseudonym pattern, frozen in both CHECKs.
+    assert module["_CREATOR_PATTERN"] == f"'{CREATOR_ID_PATTERN}'"
+    checks = _checks()
+    for name, column in (
+        ("a_report_creator_is_a_pseudonym", "created_by_id"),
+        ("a_report_author_is_a_pseudonym", "authored_by_id"),
+    ):
+        assert f"{column} ~ '{CREATOR_ID_PATTERN}'" in checks[name], name
 
 
 def test_frozen_bounds_equal_the_domain_constants() -> None:
@@ -1125,6 +1135,10 @@ def _content(ids: dict[str, str], key: str, variant: str = "md") -> Op:
     return Op("content", "report_content_objects", row)
 
 
+#: A synthetic creator pseudonym (`gcrt_` + 40 hex, WP05 A1).
+_CREATOR_ID: Final = "gcrt_" + "0123456789abcdef" * 2 + "01234567"
+
+
 def _manifest_body(
     ids: dict[str, str], version: str, number: int, content: str
 ) -> dict[str, object]:
@@ -1166,6 +1180,8 @@ def _version_row(ids: dict[str, str], version: str, number: int, content: str, k
         "correlation_id": ids["corr"],
         "audit_id": ids["audit"],
         "search_text": "Synthetic searchable body",
+        "authored_by_kind": "local_principal",
+        "authored_by_id": _CREATOR_ID,
     }
     return Op("version", "report_versions", row)
 
@@ -1284,6 +1300,8 @@ def _publish(ids: dict[str, str], variant: str = "md") -> list[Op]:
                 "lifecycle_state": "active",
                 "lifecycle_revision": 0,
                 "lifecycle_event_id": None,
+                "created_by_kind": "local_principal",
+                "created_by_id": _CREATOR_ID,
             },
         ),
         _version_row(ids, "v1", 1, "c1", "initial"),
@@ -1871,6 +1889,19 @@ def _root_cases() -> list[Case]:
             _check(_R, "an_untransitioned_report_is_active"),
             {"root": {"lifecycle_state": "archived"}},
         ),
+        # WP05 A2: the creator pair is a known kind and a `gcrt_` pseudonym.
+        Case(
+            "creator_kind_known",
+            "publish",
+            _check(_R, "a_report_creator_kind_is_known"),
+            {"root": {"created_by_kind": "service_account"}},
+        ),
+        Case(
+            "creator_is_a_pseudonym",
+            "publish",
+            _check(_R, "a_report_creator_is_a_pseudonym"),
+            {"root": {"created_by_id": "gcrt_" + "A" * 40}},
+        ),
         # A cache move with no new version or event: the newest-cache triggers
         # fire only on a version or event INSERT, so only the deferred reference
         # can refuse it.
@@ -1900,6 +1931,18 @@ def _root_cases() -> list[Case]:
             "publish",
             _refused("a report root is immutable but for its caches"),
             then=lambda ids: [_root_move(ids, correlation_id="corr_rewrittensynthetic")],
+        ),
+        Case(
+            "root_guard_immutable_creator_id",
+            "publish",
+            _refused("a report root is immutable but for its caches"),
+            then=lambda ids: [_root_move(ids, created_by_id="gcrt_" + "f" * 40)],
+        ),
+        Case(
+            "root_guard_immutable_creator_kind",
+            "publish",
+            _refused("a report root is immutable but for its caches"),
+            then=lambda ids: [_root_move(ids, created_by_kind="remote_client")],
         ),
         Case(
             "root_guard_immutable_created_at",
@@ -2015,6 +2058,19 @@ def _version_cases() -> list[Case]:
             "publish",
             {"manifest_sha256": _UPPER},
             _check(_V, "a_report_version_manifest_digest_is_sha256"),
+        ),
+        # WP05 A2: the author pair is a known kind and a `gcrt_` pseudonym.
+        case(
+            "author_kind_known",
+            "publish",
+            {"authored_by_kind": "service_account"},
+            _check(_V, "a_report_author_kind_is_known"),
+        ),
+        case(
+            "author_is_a_pseudonym",
+            "update",
+            {"authored_by_id": "gcrt_" + "0" * 39},
+            _check(_V, "a_report_author_is_a_pseudonym"),
         ),
         # Two fields: a first version with a whole predecessor of number 0.
         case(

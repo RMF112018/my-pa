@@ -78,7 +78,11 @@ Modernization WP02), standalone `reports.publish` (write, `report_authoring`), a
 `chatllm-data-v13` (Reports Modernization WP03), `reports.update` (write,
 `report_authoring`), `reports.history` (read, `report_read`) and `reports.archive`,
 `reports.delete` and `reports.restore` (write, `report_lifecycle`, never implied by
-`report_authoring`). `continuity.tasks.create` is
+`report_authoring`). Reports Modernization WP04 adds no name: it extends
+`reports.list` and `reports.search` with an opt-in `plane` selector (default
+`intelligence`, the unchanged legacy path; `standalone` or `all` for the general
+report catalog), described in
+[`mcp-and-cli-operations.md`](mcp-and-cli-operations.md). `continuity.tasks.create` is
 compatibility-only; use Work `tasks.create`. Identity correction, source
 enrollment, GoodNotes pull, and `constraint_sync.*` are control-plane
 exclusions. Since `chatllm-data-v10` (record lineage P1, ADR-015 decision 16) the

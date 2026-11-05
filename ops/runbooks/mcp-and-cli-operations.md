@@ -539,6 +539,25 @@ composition and in every MCP publication that composition produces.
   `chatllm-data-v12` plans exactly those 5 adds.
   That is repository desire only. Whether any deployed client holds those
   grants is a runtime fact this document does not state.
+- **Reports catalog (Reports Modernization WP04).** `reports.list` and
+  `reports.search` take an optional `plane`: `intelligence` (the default),
+  `standalone` or `all`. Omitted or `intelligence`, they run the legacy
+  intelligence-artifact path unchanged, and the catalog fields below are
+  refused. `standalone` reads the general report plane only; `all` merges it
+  with the caller's current intelligence artifacts in one order, each item
+  marked with its `plane`. These modes accept `type`, `topics`, `tags` (a report
+  must carry all listed), `associated_with`, `lifecycle_states`,
+  `created_from`/`created_to`, `report_date_from`/`report_date_to`, `page_size`
+  and `cursor`. `lifecycle_states` defaults to `active`; archived and trashed
+  reports appear only when listed explicitly, under the same `report_read` grant.
+  `next_cursor` is opaque and bound to the Principal, operation, plane, filters,
+  query and page size; any other use is refused as `invalid_request` (`CURSOR`).
+  Search matches the head version only, over its title, summary, topics, tags
+  and text extracted from the decoded content (a body, and JSON string values),
+  truncated to the first 65,536 code points; transport bytes and Base64 are never
+  indexed, and text past that bound is not searchable. Results carry no totals
+  or counts. No capability, purpose or profile changes: the profile stays
+  `chatllm-data-v13`.
 
 Evidence: `src/my_pa/application/meetings.py`,
 `src/my_pa/contracts/v1/meetings.py`, `tests/contract/test_meeting_mcp.py`,

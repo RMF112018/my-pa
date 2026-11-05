@@ -250,11 +250,12 @@ def counts(engine: Engine, tables: Iterable[str] = PLANE_TABLES) -> dict[str, in
 
 @dataclass
 class Exchange:
-    """One HTTP answer: status, JSON body (if any) and the request's exact byte count."""
+    """One HTTP answer: status, JSON body (if any), the request's and the response's byte counts."""
 
     status: int
     document: Any
     request_bytes: int
+    response_bytes: int = 0
 
 
 @dataclass
@@ -372,7 +373,11 @@ class Harness:
                     except json.JSONDecodeError:
                         # A transport refusal (e.g. 413) may answer in plain text.
                         document = response.text
-                    answers.append(Exchange(response.status_code, document, len(content)))
+                    answers.append(
+                        Exchange(
+                            response.status_code, document, len(content), len(response.content)
+                        )
+                    )
             return answers
 
         return asyncio.run(exchange())

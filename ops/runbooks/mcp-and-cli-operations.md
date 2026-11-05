@@ -558,6 +558,57 @@ composition and in every MCP publication that composition produces.
   indexed, and text past that bound is not searchable. Results carry no totals
   or counts. No capability, purpose or profile changes: the profile stays
   `chatllm-data-v13`.
+- **Report creator attribution (Reports Modernization WP05).** The server
+  derives who wrote a standalone report from the authorization alone, never
+  from a request field: `kind` is `local_principal` (a local transport, keyed
+  by the Principal) or `remote_client` (an authenticated remote client), and
+  `id` is a `gcrt_` pseudonym of 40 lowercase hex characters. It supports
+  equality only and never discloses the OAuth client id. `reports.read` returns
+  `creator` (who published the report) and `author` (who wrote that version);
+  `reports.history` items carry `author`; standalone `reports.list` and
+  `reports.search` items carry `creator`. Both take an optional `created_by`
+  filter (a `gcrt_` id; a malformed one is `invalid_request` naming
+  `created_by`) in the `standalone` and `all` planes only; in the legacy plane
+  its presence is refused. It matches exactly, within the caller's Principal;
+  an unknown or foreign creator yields an empty page, and in `all` no
+  intelligence artifact matches it. A publish or update carrying `creator`,
+  `created_by`, `author`, `authored_by`, `created_by_id` or `creator_id` is
+  refused before anything is written.
+- **gzip+base64 report content (Reports Modernization WP05).** Besides
+  `identity` (`body`/`data`, at most 524,288 decoded bytes),
+  `reports.publish` and `reports.update` accept content
+  `{format, encoding: "gzip+base64", encoded}` with optional declared
+  `original_byte_count`/`original_sha256` (of the gzip bytes) and
+  `uncompressed_byte_count`/`uncompressed_sha256` (of the gunzipped bytes).
+  `encoded` must be strict, canonical, padded standard Base64 with no
+  whitespace, of exactly one gzip member; the decoded content is at most
+  16,777,216 bytes, expands at most 256:1, and is validated exactly as identity
+  content is (UTF-8 body; for `json`/`mixed` a JSON text, `mixed` being exactly
+  `{body, data}`). The whole request stays within the transport's
+  762,288-byte ceiling. Any violation is `invalid_request` naming `content`,
+  with `max_bytes` for the size and expansion bounds; no refusal echoes a
+  value. Decoded content above the inline threshold is stored in the report
+  content store when one is configured, otherwise refused the same way
+  ([`managed-document-operations.md`](managed-document-operations.md)
+  section 7). A standalone `reports.read` returns `original_sha256` and
+  `original_byte_count` for every version; with the body requested, a gzip
+  version also returns the uploaded `encoded` byte for byte when the gzip
+  bytes are at most 524,288, else `encoded_omitted: "exceeds_response_bound"`,
+  and the body or data are returned only up to 524,288 decoded bytes, else
+  `body_omitted: "exceeds_response_bound"` with every digest still present.
+  Search indexes the decoded text, never Base64. Chunked transfer and a
+  chunked read of an omitted body are not available.
+- **Response bound, measured (Reports Modernization WP05).** The 524,288 read
+  bound counts decoded bytes, not the bytes on the wire. Measured once through
+  the compact facade (`my_pa.read`) on synthetic content: a 524,288-byte
+  identity markdown read was 542,955 bytes; a gzip version at 524,288 decoded
+  bytes with a 524,288-byte original, returning both body and `encoded`, was
+  1,241,679 bytes; a 524,288-byte body made of control characters (each
+  JSON-escaped) was about 3.59 MB, about 3.79 MB with `encoded`; a
+  `body_omitted` read was about 2 to 9 KB. A 16,777,216-byte decoded report was
+  published through the facade in a 194,866-byte request (145,935 gzip bytes,
+  ratio 115). A client reading large bodies should allow for responses of that
+  size.
 
 Evidence: `src/my_pa/application/meetings.py`,
 `src/my_pa/contracts/v1/meetings.py`, `tests/contract/test_meeting_mcp.py`,

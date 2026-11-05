@@ -204,20 +204,27 @@ held under `MY_PA_REPORT_CONTENT_ROOT` as `managed_blob` objects, one per
 `grcnt_` content row, at `<root>/content/<shard>/<grcnt_id>/{decoded,original}`.
 Unset, the root composes no store: report content stays inline and larger
 decoded content is refused (`invalid_request`, `content`, `max_bytes`). The root
-must be an existing real directory clear of every source root and of the managed
-document root; the gateway refuses to start otherwise.
+must be an existing real directory (not a symbolic link) clear of every source
+root and of the managed document root; the gateway refuses to start otherwise.
+Neither variable is a secret.
 
 The write window is the same as section 3's: an object is written before the
 first row of its request, so a failure can leave an orphan object, never a row
 naming absent bytes. Every standalone `reports.read` of a `managed_blob`
-version verifies its parts (size and SHA-256) and answers `internal_error`
-without a body when one is missing or altered.
+version verifies its parts (size and SHA-256), whether or not the body is
+requested, and answers `internal_error` without a body when one is missing or
+altered. A verified body is returned only up to 524,288 decoded bytes; above
+that the read carries `body_omitted: "exceeds_response_bound"` with every
+digest. `reports.history`, `reports.list` and `reports.search` never read the
+store.
 
-`apps/cli/report_content.py` (`verify`, `backup`, `restore`, per Principal, in
-the shape of `apps/cli/managed_documents.py` above) reports missing parts,
-per-part size or digest mismatches, orphans and unreadable entries, and copies
-verified objects to and from a backup root clear of the live one. It never
-deletes or repairs anything. The database is backed up with `pg_dump` and
+`apps/cli/report_content.py` (`verify`, `backup`, `restore`, each with
+`--principal`, in the shape of `apps/cli/managed_documents.py` above) reports
+that Principal's missing parts and per-part size or digest mismatches, the
+store's orphans (objects no `managed_blob` row of any Principal names; an orphan
+may also be an object whose transaction has not committed yet) and unreadable
+entries, and copies verified objects to and from a backup root clear of the
+live one. It never deletes or repairs anything. The database is backed up with `pg_dump` and
 restored first; the objects are then restored and verified against the restored
 rows. The full dump, copy, restore and scan cycle is exercised against
 temporary roots and a disposable database by

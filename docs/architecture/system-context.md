@@ -62,6 +62,7 @@ hash.
 | `CTX-PKL-018` | NAS runtime host | Accepted canonical deployment target; not deployed | Staged through NAS-01–NAS-10 | Owns PostgreSQL and application filesystem authority only after gated activation |
 | `CTX-PKL-019` | Private reverse proxy and Tailscale Serve | Accepted pilot ingress; inactive | Exact allowlist with one published container | Tailnet-only; generic capabilities and unmatched machine routes fail closed |
 | `CTX-PKL-020` | Mac Apple transport host | Accepted target split; not deployed | Apple TCC read, protected spool, outbound polling only | No database credential, general NAS filesystem credential, or grant-minting authority |
+| `CTX-PKL-021` | Report content store | Product-owned bytes of general report content above the inline threshold (Reports Modernization WP05) | Implemented; composed only when `MY_PA_REPORT_CONTENT_ROOT` is set | Its own root, clear of every source root and the managed-document root; written by `reports.publish`/`reports.update` and the operator restore command, verified on every standalone `reports.read` |
 
 
 ## 3. Current versus target context
@@ -214,6 +215,7 @@ flowchart LR
     LM[Future Local Model Gateway]
     CM[Cloud Model Provider\nprohibited by default]
     MD[Managed Document Store\nseparate product-owned write boundary]
+    RC[Report Content Store\noptional, report content above the inline threshold]
     OB[Future Obsidian Projection\nrebuildable]
     PC[Apple Personal Data Providers\nauthenticated single-page path; live execution gated]
     WEB[MossAIc Web PWA/BFF]
@@ -237,6 +239,7 @@ flowchart LR
     GW -. approved context only .-> LM
     GW -. separately approved disclosure only .-> CM
     GW --> MD
+    GW --> RC
     DB -. projection feed .-> OB
     WK -. operator-gated read .-> PC
     GN --> WK

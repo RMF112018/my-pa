@@ -469,7 +469,7 @@ Microservices, generic plugins, generalized agent frameworks, Redis/Celery, grap
 ## 15. Invalidation and next gate
 
 
-Material changes to ADR-001, composition roots, dependency direction, source/managed-write separation, public capability set, or structured authority invalidate this record. Managed-document writes are implemented only under this remediation objective's explicit reprioritization and remain separate from source providers; this statement records implementation and does not amend `AGENTS.md`. Candidate acceptance requires applicable validation and independent review against the exact current head. Live personal-data access, source mutation, deployment, and other operator-reserved actions remain unauthorized by this document.
+Material changes to ADR-001, composition roots, dependency direction, source/managed-write separation, public capability set, or structured authority invalidate this record. Managed-document writes are implemented only under this remediation objective's explicit reprioritization and remain separate from source providers; the report content store (Reports Modernization WP05, `infrastructure/report_content_stores/`) is a separate product-owned filesystem plane under the same separation, with its own root clear of every source root and the managed-document root; this statement records implementation and does not amend `AGENTS.md`. Candidate acceptance requires applicable validation and independent review against the exact current head. Live personal-data access, source mutation, deployment, and other operator-reserved actions remain unauthorized by this document.
 
 
 ## 16. Related documents

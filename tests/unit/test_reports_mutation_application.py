@@ -828,6 +828,59 @@ def test_a_cursor_from_another_report_is_invalid(scene: Scene) -> None:
     assert _error(refused) == (ErrorCode.INVALID_REQUEST.value, ["cursor"])
 
 
+@pytest.mark.parametrize("entries", ["versions", "lifecycle"])
+def test_root_visibility_outranks_a_bad_cursor(scene: Scene, entries: str) -> None:
+    """WP04 C11(1): a bad cursor never says a hidden, missing or foreign report is there."""
+    service = build_service(scene.world, scene.providers)
+    one = _published(service, scene)
+    two = _ok(
+        _invoke(
+            service,
+            scene,
+            Capability.REPORTS_PUBLISH,
+            {**PUBLISH, "idempotency_key": "second", "client_intent_id": "b-1"},
+        )
+    )
+    # A well-formed cursor that is not an item of report one.
+    if entries == "versions":
+        alien = two["version_id"]
+    else:
+        archived = _invoke(
+            service, scene, Capability.REPORTS_ARCHIVE, _move(two["report_id"], "a2", 0)
+        )
+        alien = _ok(archived)["event_id"]
+    rid = one["report_id"]
+
+    def history(report_id: str, **extra: Any) -> dict[str, Any]:  # noqa: ANN401
+        return _invoke(
+            service,
+            scene,
+            Capability.REPORTS_HISTORY,
+            {"report_id": report_id, "entries": entries, "after": alien, **extra},
+        )
+
+    not_found = (ErrorCode.NOT_FOUND.value, ["artifact_id"])
+    bad_cursor = (ErrorCode.INVALID_REQUEST.value, ["cursor"])
+    # Visible (active): the cursor is what is wrong.
+    assert _error(history(rid)) == bad_cursor
+    # Missing: not found, whatever the cursor.
+    assert _error(history("grpt_00000000missing0")) == not_found
+    # Foreign: not found, exactly as missing.
+    stranger = operator()
+    foreign = _invoke(
+        service,
+        scene,
+        Capability.REPORTS_HISTORY,
+        {"report_id": rid, "entries": entries, "after": alien},
+        principal=stranger,
+    )
+    assert _error(foreign) == not_found
+    # Withdrawn without include_withdrawn: not found; with it, the cursor again.
+    _ok(_invoke(service, scene, Capability.REPORTS_ARCHIVE, _move(rid, "a1", 0)))
+    assert _error(history(rid)) == not_found
+    assert _error(history(rid, include_withdrawn=True)) == bad_cursor
+
+
 @pytest.mark.parametrize(
     ("payload", "detail"),
     [

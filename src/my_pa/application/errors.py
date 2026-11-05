@@ -678,6 +678,17 @@ class SafeDetail(StrEnum):
     ENTRIES = "entries"
     INCLUDE_MANIFESTS = "include_manifests"
     REPORT_WITHDRAWN = "report_withdrawn"
+    #: Reports Modernization WP04: the `reports.list`/`reports.search` plane
+    #: selector and the standalone/all catalog filters of these names (a
+    #: from/to range in the wrong order names both bounds). `REPORT_TYPE`,
+    #: `TOPICS`, `TAGS`, `QUERY`, `CURSOR` and `PAGE_SIZE` are reused.
+    PLANE = "plane"
+    ASSOCIATED_WITH = "associated_with"
+    LIFECYCLE_STATES = "lifecycle_states"
+    CREATED_FROM = "created_from"
+    CREATED_TO = "created_to"
+    REPORT_DATE_FROM = "report_date_from"
+    REPORT_DATE_TO = "report_date_to"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

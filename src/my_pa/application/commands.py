@@ -37,6 +37,7 @@ import json
 import math
 import re
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -320,6 +321,16 @@ from my_pa.domain.relationship.proposal_payload import (
     EntityProposalKind,
     discriminated_payload_branches,
 )
+from my_pa.domain.reports.catalog import (
+    DEFAULT_CATALOG_PAGE_SIZE,
+    DEFAULT_LIFECYCLE_STATES,
+    MAX_CATALOG_CURSOR_CHARACTERS,
+    MAX_CATALOG_PAGE_SIZE,
+    AssociationFilter,
+    CatalogFilters,
+    ReportPlane,
+    validate_catalog_page_size,
+)
 from my_pa.domain.reports.content import INLINE_CONTENT_MAX_BYTES, validate_content
 from my_pa.domain.reports.errors import ReportValidationError
 from my_pa.domain.reports.publication import (
@@ -353,6 +364,7 @@ from my_pa.domain.reports.vocabulary import (
     ContentEncoding,
     ContentFormat,
     LifecycleOperation,
+    LifecycleState,
 )
 from my_pa.domain.schedule import (
     InvalidScheduleSeriesNameError,
@@ -5457,7 +5469,19 @@ GetLatestIntelligenceArtifact.mcp_payload_properties = MappingProxyType(  # type
 
 @dataclass(frozen=True, slots=True)
 class ListIntelligenceArtifacts:
-    """`reports.list`: bounded, deterministic, Principal-scoped pages."""
+    """`reports.list`: bounded, deterministic, Principal-scoped pages.
+
+    `plane` selects what is listed. `intelligence` (the default) lists the
+    pipeline artifacts exactly as before the selector existed: the same
+    fields, answer and refusals. `standalone` lists your standalone reports
+    (`reports.publish`); `all` lists them merged with your current pipeline
+    artifacts in one order (newest first). Those two planes take the catalog
+    filters (`type`, `topics`, `tags`, `associated_with`, `lifecycle_states`
+    default `["active"]`, `created_from`/`created_to`, `report_date_from`/
+    `report_date_to`), a `page_size` of 1 to 100 (default 20) and an opaque
+    `cursor` bound to the request that issued it, and refuse the pipeline
+    filters. No count is ever returned.
+    """
 
     capability: ClassVar[Capability] = Capability.REPORTS_LIST
 
@@ -5470,8 +5494,24 @@ class ListIntelligenceArtifacts:
     page_size: int | None = None
     cursor: str | None = None
     include_superseded: bool = False
+    plane: ReportPlane = ReportPlane.INTELLIGENCE
+    type: str | None = None
+    topics: tuple[str, ...] | None = None
+    tags: tuple[str, ...] | None = None
+    associated_with: dict[str, object] | None = None
+    lifecycle_states: tuple[str, ...] | None = None
+    created_from: str | None = None
+    created_to: str | None = None
+    report_date_from: str | None = None
+    report_date_to: str | None = None
 
     def __post_init__(self) -> None:
+        if _catalog_plane(self) is not ReportPlane.INTELLIGENCE:
+            _check_catalog_request(self)
+            return
+        if _has_catalog_fields(self):
+            # The pipeline plane never had these fields; refused as it refused them.
+            raise InvalidRequestError()
         if self.cycle_run_id is not None:
             _identifier(self.cycle_run_id, IdKind.INTELLIGENCE_CYCLE_RUN, SafeDetail.CYCLE_RUN_ID)
         if self.artifact_kind is not None:
@@ -5482,15 +5522,29 @@ class ListIntelligenceArtifacts:
         if self.cursor is not None:
             _identifier(self.cursor, IdKind.INTELLIGENCE_ARTIFACT, SafeDetail.CURSOR)
 
+    @property
+    def catalog_page_size(self) -> int:
+        """The standalone/all page size: the caller's (1..100, checked) or 20."""
+        return DEFAULT_CATALOG_PAGE_SIZE if self.page_size is None else self.page_size
 
-ListIntelligenceArtifacts.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
-    {"artifact_kind": _ARTIFACT_KIND_PROPERTY}
-)
+    def catalog_filters(self) -> CatalogFilters:
+        """The standalone/all filters, normalized (refusals as `invalid_request`)."""
+        return _catalog_filters(self)
 
 
 @dataclass(frozen=True, slots=True)
 class SearchIntelligenceArtifacts:
-    """`reports.search`: PostgreSQL lexical search, title weighted above body."""
+    """`reports.search`: PostgreSQL lexical search, title weighted above body.
+
+    `plane` selects what is searched. `intelligence` (the default) is the
+    pipeline artifact search exactly as before the selector existed.
+    `standalone` searches the HEAD version of your standalone reports (title,
+    summary, topics, tags and decoded content); `all` merges them with your
+    current pipeline artifacts in one ranked order. Those two planes take the
+    `reports.list` catalog filters, a `query` of 1 to 512 characters, a
+    `page_size` of 1 to 100 (default 20) and an opaque bound `cursor`, and
+    refuse the pipeline filters. No count is ever returned.
+    """
 
     capability: ClassVar[Capability] = Capability.REPORTS_SEARCH
 
@@ -5501,8 +5555,26 @@ class SearchIntelligenceArtifacts:
     focus_area_id: FocusAreaId | None = None
     source_lane: SourceLaneId | None = None
     page_size: int | None = None
+    plane: ReportPlane = ReportPlane.INTELLIGENCE
+    cursor: str | None = None
+    type: str | None = None
+    topics: tuple[str, ...] | None = None
+    tags: tuple[str, ...] | None = None
+    associated_with: dict[str, object] | None = None
+    lifecycle_states: tuple[str, ...] | None = None
+    created_from: str | None = None
+    created_to: str | None = None
+    report_date_from: str | None = None
+    report_date_to: str | None = None
 
     def __post_init__(self) -> None:
+        if _catalog_plane(self) is not ReportPlane.INTELLIGENCE:
+            self.search_query()
+            _check_catalog_request(self)
+            return
+        if _has_catalog_fields(self) or self.cursor is not None:
+            # The pipeline plane never had these fields; refused as it refused them.
+            raise InvalidRequestError()
         if not isinstance(self.query, str):
             raise InvalidRequestError(SafeDetail.QUERY)
         if self.cycle_run_id is not None:
@@ -5511,10 +5583,24 @@ class SearchIntelligenceArtifacts:
             object.__setattr__(self, "artifact_kind", _report_kind(self.artifact_kind))
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
 
+    @property
+    def catalog_page_size(self) -> int:
+        """The standalone/all page size: the caller's (1..100, checked) or 20."""
+        return DEFAULT_CATALOG_PAGE_SIZE if self.page_size is None else self.page_size
 
-SearchIntelligenceArtifacts.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
-    {"artifact_kind": _ARTIFACT_KIND_PROPERTY}
-)
+    def catalog_filters(self) -> CatalogFilters:
+        """The standalone/all filters, normalized (refusals as `invalid_request`)."""
+        return _catalog_filters(self)
+
+    def search_query(self) -> SearchQuery:
+        """The standalone/all query, normalized, or `invalid_request` on `query`."""
+        query: SearchQuery | None = None
+        with suppress(SearchQueryError):
+            query = SearchQuery(self.query)
+        if query is None:
+            # Raised outside the handler, so the refusal carries no context.
+            raise InvalidRequestError(SafeDetail.QUERY)
+        return query
 
 
 @dataclass(frozen=True, slots=True)
@@ -6353,6 +6439,309 @@ GetGeneralReportHistory.mcp_payload_properties = MappingProxyType(  # type: igno
         "include_manifests": {"description": "versions only: add each version's manifest."},
         "include_withdrawn": {
             "description": "Also page an archived or trashed report, otherwise not found."
+        },
+    }
+)
+
+
+# ---- Reports Modernization WP04: the catalog on reports.list and reports.search ----
+
+#: The fields only the pipeline (`intelligence`) plane of `reports.list` and
+#: `reports.search` declares. The `standalone` and `all` planes refuse them by
+#: presence, as the unknown fields they are there.
+REPORT_CATALOG_LEGACY_FIELDS: Final = frozenset(
+    {
+        "cycle_run_id",
+        "stage",
+        "artifact_kind",
+        "focus_area_id",
+        "source_lane",
+        "report_date",
+        "include_superseded",
+    }
+)
+
+#: The catalog filters only the `standalone` and `all` planes declare. The
+#: pipeline plane refuses them by presence, as the unknown fields they were.
+#: (`reports.search`'s `cursor` is one too: the pipeline search had none.)
+REPORT_CATALOG_FILTER_FIELDS: Final = frozenset(
+    {
+        "type",
+        "topics",
+        "tags",
+        "associated_with",
+        "lifecycle_states",
+        "created_from",
+        "created_to",
+        "report_date_from",
+        "report_date_to",
+    }
+)
+
+#: The two keys of an `associated_with` filter, the only keys it may carry.
+_ASSOCIATED_WITH_KEYS: Final = frozenset({"target_kind", "target_ref"})
+
+#: Which public token a catalog refusal names, by the domain's field.
+_CATALOG_REFUSAL_DETAILS: Final[Mapping[str, tuple[SafeDetail, ...]]] = MappingProxyType(
+    {
+        "type": (SafeDetail.REPORT_TYPE,),
+        "topics": (SafeDetail.TOPICS,),
+        "tags": (SafeDetail.TAGS,),
+        "associated_with": (SafeDetail.ASSOCIATED_WITH,),
+        "lifecycle_states": (SafeDetail.LIFECYCLE_STATES,),
+        "created_from": (SafeDetail.CREATED_FROM,),
+        "created_to": (SafeDetail.CREATED_TO,),
+        "created_range": (SafeDetail.CREATED_FROM, SafeDetail.CREATED_TO),
+        "report_date_from": (SafeDetail.REPORT_DATE_FROM,),
+        "report_date_to": (SafeDetail.REPORT_DATE_TO,),
+        "report_date_range": (SafeDetail.REPORT_DATE_FROM, SafeDetail.REPORT_DATE_TO),
+        "page_size": (SafeDetail.PAGE_SIZE,),
+        "cursor": (SafeDetail.CURSOR,),
+        "query": (SafeDetail.QUERY,),
+    }
+)
+
+
+def catalog_refusal(error: ReportValidationError) -> InvalidRequestError:
+    """The public error a catalog domain refusal is: the field(s) it names, never the value.
+
+    An unknown lifecycle state lists the vocabulary, as every closed choice does.
+    """
+    field_name = error.field.split(".", 1)[0]
+    if field_name == "lifecycle_states" and error.code == "unknown":
+        return invalid_choice(SafeDetail.LIFECYCLE_STATES, LifecycleState)
+    details = _CATALOG_REFUSAL_DETAILS.get(field_name)
+    return InvalidRequestError() if details is None else InvalidRequestError(*details)
+
+
+_CatalogCommand = ListIntelligenceArtifacts | SearchIntelligenceArtifacts
+
+
+def _catalog_plane(command: _CatalogCommand) -> ReportPlane:
+    """The command's plane as a `ReportPlane` (stored back), or `invalid_request` on `plane`."""
+    value: object = command.plane
+    plane: ReportPlane | None = None
+    if isinstance(value, str):
+        with suppress(ValueError):
+            plane = ReportPlane(value)
+    if plane is None:
+        raise invalid_choice(SafeDetail.PLANE, ReportPlane)
+    object.__setattr__(command, "plane", plane)
+    return plane
+
+
+def _has_catalog_fields(command: _CatalogCommand) -> bool:
+    return any(getattr(command, name) is not None for name in REPORT_CATALOG_FILTER_FIELDS)
+
+
+def _check_catalog_request(command: _CatalogCommand) -> None:
+    """A standalone/all request: no pipeline field, a 1..100 page, a string cursor, filters."""
+    if (
+        any(
+            getattr(command, name, None) is not None
+            for name in REPORT_CATALOG_LEGACY_FIELDS - {"include_superseded"}
+        )
+        or getattr(command, "include_superseded", False) is not False
+    ):
+        # Pipeline-only fields: unknown here, refused as an unknown field is.
+        raise InvalidRequestError()
+    if command.page_size is not None and not _catalog_page_size_ok(command.page_size):
+        raise InvalidRequestError(SafeDetail.PAGE_SIZE)
+    # `object`: a transport hands the token in unchecked.
+    cursor: object = command.cursor
+    if cursor is not None and (
+        not isinstance(cursor, str) or not 1 <= len(cursor) <= MAX_CATALOG_CURSOR_CHARACTERS
+    ):
+        raise InvalidRequestError(SafeDetail.CURSOR)
+    _catalog_filters(command)
+
+
+def _catalog_page_size_ok(value: object) -> bool:
+    try:
+        validate_catalog_page_size(value)
+    except ReportValidationError:
+        return False
+    return True
+
+
+def _catalog_moment(value: object, detail: SafeDetail) -> datetime:
+    """An RFC 3339 timestamp with an offset, or `invalid_request` on `detail`."""
+    moment: datetime | None = None
+    if isinstance(value, str) and "T" in value.upper():
+        try:
+            moment = datetime.fromisoformat(value)
+        except ValueError:
+            moment = None
+    if moment is None or moment.tzinfo is None or moment.tzinfo.utcoffset(moment) is None:
+        raise InvalidRequestError(detail)
+    return moment
+
+
+def _catalog_day(value: object, detail: SafeDetail) -> date:
+    return date.fromisoformat(_iso_date(value, detail))  # type: ignore[arg-type]
+
+
+def _catalog_association(value: object) -> AssociationFilter:
+    if not isinstance(value, dict):
+        raise InvalidRequestError(SafeDetail.ASSOCIATED_WITH)
+    if not set(value) <= _ASSOCIATED_WITH_KEYS:
+        # A closed object: an undeclared key is an unknown field.
+        raise InvalidRequestError()
+    kind = value.get("target_kind")
+    target_kind: AssociationTargetKind | None = None
+    if isinstance(kind, str):
+        with suppress(ValueError):
+            target_kind = AssociationTargetKind(kind)
+    if target_kind is None:
+        raise invalid_choice(SafeDetail.ASSOCIATED_WITH, AssociationTargetKind)
+    return AssociationFilter(target_kind=target_kind, target_ref=value.get("target_ref"))  # type: ignore[arg-type]
+
+
+def _catalog_filters(command: _CatalogCommand) -> CatalogFilters:
+    """The command's catalog filters through the domain, refusals mapped to `SafeDetail`."""
+    refusal: InvalidRequestError
+    try:
+        for name, value in (("topics", command.topics), ("tags", command.tags)):
+            if value is not None and not isinstance(value, tuple):
+                raise ReportValidationError(name, "type")
+        if command.lifecycle_states is not None and not isinstance(command.lifecycle_states, tuple):
+            raise ReportValidationError("lifecycle_states", "type")
+        return CatalogFilters(
+            report_type=command.type,
+            topics=command.topics,
+            tags=command.tags,
+            associated_with=None
+            if command.associated_with is None
+            else _catalog_association(command.associated_with),
+            lifecycle_states=DEFAULT_LIFECYCLE_STATES
+            if command.lifecycle_states is None
+            else command.lifecycle_states,  # type: ignore[arg-type]
+            created_from=None
+            if command.created_from is None
+            else _catalog_moment(command.created_from, SafeDetail.CREATED_FROM),
+            created_to=None
+            if command.created_to is None
+            else _catalog_moment(command.created_to, SafeDetail.CREATED_TO),
+            report_date_from=None
+            if command.report_date_from is None
+            else _catalog_day(command.report_date_from, SafeDetail.REPORT_DATE_FROM),
+            report_date_to=None
+            if command.report_date_to is None
+            else _catalog_day(command.report_date_to, SafeDetail.REPORT_DATE_TO),
+        )
+    except ReportValidationError as error:
+        refusal = catalog_refusal(error)
+    # Raised outside the handler: the domain error never becomes `__context__`.
+    raise refusal
+
+
+_CATALOG_ONLY: Final = "standalone/all only: "
+
+#: The schema overlays both catalog capabilities share (contract C10).
+_CATALOG_PAYLOAD_PROPERTIES: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType(
+    {
+        "artifact_kind": _ARTIFACT_KIND_PROPERTY,
+        "plane": {
+            "default": ReportPlane.INTELLIGENCE.value,
+            "description": (
+                "intelligence (default): the pipeline artifacts, exactly as before; "
+                "standalone: your standalone reports (reports.publish); all: both, "
+                "merged in one order. standalone/all refuse cycle_run_id, stage, "
+                "artifact_kind, focus_area_id, source_lane, report_date and "
+                "include_superseded; intelligence refuses every standalone/all field."
+            ),
+        },
+        "page_size": {
+            "minimum": 1,
+            "description": (
+                f"standalone/all: 1 to {MAX_CATALOG_PAGE_SIZE} (default "
+                f"{DEFAULT_CATALOG_PAGE_SIZE}), refused outside it."
+            ),
+        },
+        "type": {
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "description": _CATALOG_ONLY
+            + "one report type (a pipeline artifact's artifact_kind in all).",
+        },
+        "topics": {
+            **_TERM_ARRAY,
+            "minItems": 1,
+            "uniqueItems": True,
+            "description": _CATALOG_ONLY + "the head version carries every listed topic.",
+        },
+        "tags": {
+            **_TERM_ARRAY,
+            "minItems": 1,
+            "uniqueItems": True,
+            "description": _CATALOG_ONLY + "the head version carries every listed tag.",
+        },
+        "associated_with": {
+            "type": "object",
+            "properties": {
+                "target_kind": {
+                    "type": "string",
+                    "enum": [member.value for member in AssociationTargetKind],
+                },
+                "target_ref": {"type": "string", "minLength": 1, "maxLength": 512},
+            },
+            "required": ["target_kind", "target_ref"],
+            "additionalProperties": False,
+            "description": _CATALOG_ONLY + "the head version has an association with this target.",
+        },
+        "lifecycle_states": {
+            "minItems": 1,
+            "maxItems": len(LifecycleState),
+            "uniqueItems": True,
+            "items": {"type": "string", "enum": [member.value for member in LifecycleState]},
+            "description": _CATALOG_ONLY
+            + 'default ["active"]; archived and trashed appear only when listed.',
+        },
+        "created_from": {
+            "format": "date-time",
+            "description": _CATALOG_ONLY + "created at or after (RFC 3339 with offset).",
+        },
+        "created_to": {
+            "format": "date-time",
+            "description": _CATALOG_ONLY + "created before (RFC 3339 with offset).",
+        },
+        "report_date_from": {
+            "format": "date",
+            "pattern": r"^\d{4}-\d{2}-\d{2}$",
+            "description": _CATALOG_ONLY + "report_date on or after.",
+        },
+        "report_date_to": {
+            "format": "date",
+            "pattern": r"^\d{4}-\d{2}-\d{2}$",
+            "description": _CATALOG_ONLY + "report_date on or before.",
+        },
+    }
+)
+
+ListIntelligenceArtifacts.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {
+        **_CATALOG_PAYLOAD_PROPERTIES,
+        "cursor": {
+            "description": (
+                "The next_cursor of the previous page: an rpt_ id in intelligence, an "
+                "opaque token bound to the same request in standalone/all."
+            ),
+        },
+    }
+)
+
+SearchIntelligenceArtifacts.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {
+        **_CATALOG_PAYLOAD_PROPERTIES,
+        "query": {
+            "description": (
+                f"standalone/all: 1 to {MAX_QUERY_CHARACTERS} characters, words "
+                "matched against the head version."
+            ),
+        },
+        "cursor": {
+            "maxLength": MAX_CATALOG_CURSOR_CHARACTERS,
+            "description": _CATALOG_ONLY
+            + "the next_cursor of the previous page of the same request.",
         },
     }
 )

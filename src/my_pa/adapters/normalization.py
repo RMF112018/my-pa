@@ -60,6 +60,8 @@ from types import MappingProxyType
 from typing import Any, Final
 
 from my_pa.application.commands import (
+    REPORT_CATALOG_FILTER_FIELDS,
+    REPORT_CATALOG_LEGACY_FIELDS,
     REPORT_PUBLISH_PIPELINE_FIELDS,
     AcknowledgeConstraintSync,
     AddEntityAddress,
@@ -398,6 +400,7 @@ from my_pa.domain.relationship.governance import (
 )
 from my_pa.domain.relationship.memory import MemoryKind, MemoryLifecycle
 from my_pa.domain.relationship.proposal_payload import EntityProposalKind
+from my_pa.domain.reports.catalog import ReportPlane
 from my_pa.domain.reports.records import HistoryEntries
 from my_pa.domain.situation.continuity import (
     CommitmentDirection,
@@ -1967,42 +1970,74 @@ def _latest_intelligence_artifact(payload: Mapping[str, Any]) -> Command:
     return GetLatestIntelligenceArtifact(**converted)
 
 
-def _list_intelligence_artifacts(payload: Mapping[str, Any]) -> Command:
+_PLANES: Final[Mapping[str, ReportPlane]] = MappingProxyType(
+    {member.value: member for member in ReportPlane}
+)
+
+
+def _catalog_mode(payload: Mapping[str, Any], wp04_fields: frozenset[str]) -> dict[str, Any]:
+    """The plane rule shared by `reports.list` and `reports.search` (WP04 contract C1).
+
+    An invalid `plane` names `plane` with its vocabulary. In the pipeline
+    (`intelligence`) plane -- `plane` omitted or explicit -- every catalog
+    field is refused by presence, even at its default value, as the unknown
+    field it was before the selector existed; the refusal comes after the
+    pipeline conversions, exactly where the constructor refused an unknown
+    field. In `standalone`/`all` the pipeline fields are refused the same way
+    and JSON arrays become the tuples the command declares. Returns the
+    converted payload, whose `plane` (if any) is a `ReportPlane`.
+    """
     converted = dict(payload)
-    if converted.get("stage") is not None:
-        converted["stage"] = _enum_or_invalid(
-            converted["stage"], IntelligenceStage, SafeDetail.STAGE
-        )
-    if converted.get("artifact_kind") is not None:
-        converted["artifact_kind"] = _report_kind_token(converted["artifact_kind"])
-    if converted.get("focus_area_id") is not None:
-        converted["focus_area_id"] = _enum_or_invalid(
-            converted["focus_area_id"], FocusAreaId, SafeDetail.FOCUS_AREA_ID
-        )
-    if converted.get("source_lane") is not None:
-        converted["source_lane"] = _enum_or_invalid(
-            converted["source_lane"], SourceLaneId, SafeDetail.SOURCE_LANE
-        )
-    return ListIntelligenceArtifacts(**converted)
+    if "plane" in converted:
+        # Looked up rather than constructed, so no `ValueError` naming the
+        # rejected value ever becomes the refusal's `__context__`.
+        plane = _PLANES.get(converted["plane"]) if isinstance(converted["plane"], str) else None
+        if plane is None:
+            raise invalid_choice(SafeDetail.PLANE, ReportPlane)
+        converted["plane"] = plane
+    if converted.get("plane", ReportPlane.INTELLIGENCE) is ReportPlane.INTELLIGENCE:
+        if converted.get("stage") is not None:
+            converted["stage"] = _enum_or_invalid(
+                converted["stage"], IntelligenceStage, SafeDetail.STAGE
+            )
+        if converted.get("artifact_kind") is not None:
+            converted["artifact_kind"] = _report_kind_token(converted["artifact_kind"])
+        if converted.get("focus_area_id") is not None:
+            converted["focus_area_id"] = _enum_or_invalid(
+                converted["focus_area_id"], FocusAreaId, SafeDetail.FOCUS_AREA_ID
+            )
+        if converted.get("source_lane") is not None:
+            converted["source_lane"] = _enum_or_invalid(
+                converted["source_lane"], SourceLaneId, SafeDetail.SOURCE_LANE
+            )
+        if wp04_fields & set(converted):
+            raise InvalidRequestError()
+        return converted
+    if REPORT_CATALOG_LEGACY_FIELDS & set(converted):
+        raise InvalidRequestError()
+    for name, detail in (
+        ("topics", SafeDetail.TOPICS),
+        ("tags", SafeDetail.TAGS),
+        ("lifecycle_states", SafeDetail.LIFECYCLE_STATES),
+    ):
+        if name in converted:
+            if not isinstance(converted[name], list):
+                raise InvalidRequestError(detail)
+            converted[name] = tuple(converted[name])
+    return converted
+
+
+#: The catalog fields each capability's pipeline plane refuses by presence.
+_LIST_CATALOG_FIELDS: Final = REPORT_CATALOG_FILTER_FIELDS
+_SEARCH_CATALOG_FIELDS: Final = REPORT_CATALOG_FILTER_FIELDS | {"cursor"}
+
+
+def _list_intelligence_artifacts(payload: Mapping[str, Any]) -> Command:
+    return ListIntelligenceArtifacts(**_catalog_mode(payload, _LIST_CATALOG_FIELDS))
 
 
 def _search_intelligence_artifacts(payload: Mapping[str, Any]) -> Command:
-    converted = dict(payload)
-    if converted.get("stage") is not None:
-        converted["stage"] = _enum_or_invalid(
-            converted["stage"], IntelligenceStage, SafeDetail.STAGE
-        )
-    if converted.get("artifact_kind") is not None:
-        converted["artifact_kind"] = _report_kind_token(converted["artifact_kind"])
-    if converted.get("focus_area_id") is not None:
-        converted["focus_area_id"] = _enum_or_invalid(
-            converted["focus_area_id"], FocusAreaId, SafeDetail.FOCUS_AREA_ID
-        )
-    if converted.get("source_lane") is not None:
-        converted["source_lane"] = _enum_or_invalid(
-            converted["source_lane"], SourceLaneId, SafeDetail.SOURCE_LANE
-        )
-    return SearchIntelligenceArtifacts(**converted)
+    return SearchIntelligenceArtifacts(**_catalog_mode(payload, _SEARCH_CATALOG_FIELDS))
 
 
 def _resolve_intelligence_set(payload: Mapping[str, Any]) -> Command:

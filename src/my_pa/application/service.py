@@ -381,6 +381,7 @@ from my_pa.application.commands import (
     VoidConstraint,
     WaitingOn,
     WaitingOnV2,
+    catalog_refusal,
     lifecycle_request,
     publication_request,
     report_refusal,
@@ -661,6 +662,7 @@ from my_pa.contracts.ports import (
     EntityMutationAdmission,
     EntitySummary,
     EvidenceUnavailableError,
+    GeneralReportRepository,
     GoodNotesPullRepositoryConflictError,
     IssueCursorError,
     KnowledgeAssertionRepository,
@@ -809,7 +811,7 @@ from my_pa.domain.identity.operation import Capability, granted_purposes
 from my_pa.domain.identity.operator_surface import OperatorSurface
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
-from my_pa.domain.intelligence.models import ReportTypeDefinition
+from my_pa.domain.intelligence.models import IntelligenceArtifact, ReportTypeDefinition
 from my_pa.domain.intelligence.source_manifest import (
     LineageReferenceBlock,
     ProgramReferenceBlock,
@@ -956,9 +958,16 @@ from my_pa.domain.relationship.reenrichment import (
     ReenrichmentTrigger,
 )
 from my_pa.domain.relationship.resolution import EntityResolution
+from my_pa.domain.reports.catalog import (
+    CatalogCursor,
+    CatalogOperation,
+    ReportPlane,
+    binding_digest,
+)
 from my_pa.domain.reports.errors import ReportLifecycleRefusal, ReportValidationError
 from my_pa.domain.reports.publication import PublicationResult
 from my_pa.domain.reports.records import (
+    CatalogEntry,
     HistoryEntries,
     ReportHistoryPage,
     ReportLifecycleEventRecord,
@@ -975,6 +984,7 @@ from my_pa.domain.search.query import (
     SearchQuery,
     SearchQueryError,
     SearchRequest,
+    bound_snippet,
     label_for_media_type,
 )
 from my_pa.domain.situation.continuity import CommitmentWorkView
@@ -3598,6 +3608,69 @@ def _history_lifecycle_item(item: ReportLifecycleEventRecord) -> dict[str, Any]:
         "reason": item.reason,
         "transitioned_at": format_rfc3339(item.transitioned_at),
     }
+
+
+#: One catalog row's place in the WP04 order (contract C6): `(rank, sort_time,
+#: report_id)`, compared descending. A list's rank is 0 for every row, which
+#: reduces it to the list order `(sort_time, report_id)`; ids compare in code
+#: point order, as SQL's `COLLATE "C"` does. The one key for both the
+#: two-plane merge and the next cursor's position.
+type _CatalogKey = tuple[int, datetime, str]
+
+
+def _catalog_order_key(rank: int | None, sort_time: datetime, report_id: str) -> _CatalogKey:
+    return (0 if rank is None else rank, sort_time, report_id)
+
+
+def _catalog_snippet(snippet: str | None) -> str:
+    return bound_snippet(snippet or "")[0]
+
+
+def _standalone_catalog_item(entry: CatalogEntry, *, search: bool) -> dict[str, Any]:
+    """A standalone report as `reports.list`/`reports.search` list it (C4): never content."""
+    item: dict[str, Any] = {
+        "plane": ReportPlane.STANDALONE.value,
+        "report_id": entry.report_id,
+        "title": entry.title,
+        "type": entry.report_type,
+        "topics": list(entry.topics),
+        "tags": list(entry.tags),
+        "summary": entry.summary,
+        "report_date": None if entry.report_date is None else entry.report_date.isoformat(),
+        "lifecycle_state": entry.lifecycle_state.value,
+        "lifecycle_revision": entry.lifecycle_revision,
+        "head_version_id": entry.head_version_id,
+        "head_version_number": entry.head_version_number,
+        "created_at": format_rfc3339(entry.created_at),
+        "updated_at": format_rfc3339(entry.updated_at),
+    }
+    if search:
+        item["snippet"] = _catalog_snippet(entry.snippet)
+    return item
+
+
+def _intelligence_catalog_item(
+    artifact: IntelligenceArtifact, snippet: str | None, *, search: bool
+) -> dict[str, Any]:
+    """A current pipeline artifact as the `all` plane lists it (C4): never its body."""
+    item: dict[str, Any] = {
+        "plane": ReportPlane.INTELLIGENCE.value,
+        "report_id": artifact.artifact_id,
+        "title": artifact.title,
+        "type": str(artifact.artifact_kind),
+        "report_date": artifact.report_date.isoformat(),
+        "created_at": format_rfc3339(artifact.committed_at),
+        "cycle_run_id": artifact.cycle_run_id,
+        "stage": artifact.stage.value,
+        "artifact_kind": str(artifact.artifact_kind),
+        "focus_area_id": None if artifact.focus_area_id is None else artifact.focus_area_id.value,
+        "source_lane": None if artifact.source_lane is None else artifact.source_lane.value,
+        "content_sha256": artifact.content_sha256,
+        "artifact_state": artifact.artifact_state.value,
+    }
+    if search:
+        item["snippet"] = _catalog_snippet(snippet)
+    return item
 
 
 def _general_history_payload(
@@ -16455,6 +16528,14 @@ class ApplicationService:
                 )
         except ReportValidationError as error:
             refusal = report_revision_refusal(error)
+            if error.field == "cursor" and not self._history_root_visible(
+                reports, command, principal_id
+            ):
+                # Root visibility outranks the cursor (WP04 C11(1)): a withdrawn
+                # report the caller did not ask for, or a missing or foreign one,
+                # is `not_found` whatever cursor was sent, so a cursor refusal
+                # never says the report is there.
+                refusal = NotFoundError(SafeDetail.ARTIFACT_ID)
         except ReportIntegrityError:
             refusal = InternalError()
         else:
@@ -16467,6 +16548,21 @@ class ApplicationService:
                 )
             refusal = NotFoundError(SafeDetail.ARTIFACT_ID)
         raise refusal
+
+    @staticmethod
+    def _history_root_visible(
+        reports: GeneralReportRepository, command: GetGeneralReportHistory, principal_id: str
+    ) -> bool:
+        """Whether `reports.history` may answer about the root at all (WP04 C11(1)).
+
+        The root, read without a cursor through the same Principal-scoped
+        lifecycle ledger (one event at most): visible when it is the caller's
+        and `active`, or withdrawn and `include_withdrawn` was asked for.
+        """
+        probe = reports.lifecycle_history(command.report_id, principal_id=principal_id, page_size=1)
+        return probe is not None and (
+            command.include_withdrawn or probe.root.lifecycle_state is LifecycleState.ACTIVE
+        )
 
     def _reports_read_standalone(
         self,
@@ -16593,6 +16689,8 @@ class ApplicationService:
         authorization: Authorization,
         command: ListIntelligenceArtifacts,
     ) -> _Result:
+        if command.plane is not ReportPlane.INTELLIGENCE:
+            return self._reports_catalog(unit_of_work, authorization, command)
         page_size = self._page_size(command.page_size)
         after_committed_at = None
         after_artifact_id = None
@@ -16663,6 +16761,8 @@ class ApplicationService:
         authorization: Authorization,
         command: SearchIntelligenceArtifacts,
     ) -> _Result:
+        if command.plane is not ReportPlane.INTELLIGENCE:
+            return self._reports_catalog(unit_of_work, authorization, command)
         page_size = self._page_size(command.page_size)
         found = search_artifacts(
             self._intelligence_store(unit_of_work, authorization),  # type: ignore[arg-type]
@@ -16690,6 +16790,101 @@ class ApplicationService:
                 ]
             },
             disclosure=unenrolled_disclosure(authorization.at),
+        )
+
+    def _reports_catalog(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListIntelligenceArtifacts | SearchIntelligenceArtifacts,
+    ) -> _Result:
+        """`reports.list`/`reports.search` in the `standalone` or `all` plane (WP04 C2-C6).
+
+        The cursor is decoded against the digest of this very request (the
+        authorized Principal included), so a token from another request,
+        Principal, plane, filter set, query or page size is `invalid_request`
+        on `cursor`. Each plane is read with `page_size + 1` rows strictly
+        after the same position; `all` merges the two by the one order key and
+        keeps `page_size`. A next cursor is issued iff a row remains. No count.
+        """
+        principal_id = authorization.principal.principal_id
+        search = isinstance(command, SearchIntelligenceArtifacts)
+        operation = CatalogOperation.SEARCH if search else CatalogOperation.LIST
+        plane = command.plane
+        filters = command.catalog_filters()
+        query = command.search_query() if isinstance(command, SearchIntelligenceArtifacts) else None
+        page_size = command.catalog_page_size
+        binding = binding_digest(
+            operation=operation,
+            principal_id=principal_id,
+            plane=plane,
+            filters=filters,
+            query=query,
+            page_size=page_size,
+        )
+        after: CatalogCursor | None = None
+        refusal: InvalidRequestError | None = None
+        if command.cursor is not None:
+            try:
+                after = CatalogCursor.decode(
+                    command.cursor, operation=operation, plane=plane, binding=binding
+                )
+            except ReportValidationError as error:
+                refusal = catalog_refusal(error)
+        if refusal is not None:
+            # Raised outside the handler: the token never rides along as context.
+            raise refusal
+        limit = page_size + 1
+        rows: list[tuple[_CatalogKey, dict[str, Any]]] = [
+            (
+                _catalog_order_key(entry.rank, entry.created_at, entry.report_id),
+                _standalone_catalog_item(entry, search=search),
+            )
+            for entry in unit_of_work.general_reports.catalog_page(
+                principal_id=principal_id,
+                filters=filters,
+                query=query,
+                after=after,
+                limit=limit,
+            )
+        ]
+        if plane is ReportPlane.ALL:
+            store = cast(IntelligenceStore, self._intelligence_store(unit_of_work, authorization))
+            rows.extend(
+                (
+                    _catalog_order_key(rank, artifact.committed_at, artifact.artifact_id),
+                    _intelligence_catalog_item(artifact, snippet, search=search),
+                )
+                for artifact, rank, snippet in store.catalog_page(
+                    principal_id, filters=filters, query=query, after=after, limit=limit
+                )
+            )
+            rows.sort(key=lambda row: row[0], reverse=True)
+        truncated = len(rows) > page_size
+        page = rows[:page_size]
+        next_cursor: str | None = None
+        if truncated and page:
+            rank, sort_time, report_id = page[-1][0]
+            next_cursor = CatalogCursor(
+                binding=binding,
+                sort_time=sort_time,
+                report_id=report_id,
+                rank=rank if search else None,
+            ).encode()
+        return _Result(
+            payload={
+                "plane": plane.value,
+                "items": [item for _key, item in page],
+                "next_cursor": next_cursor,
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                truncation=Truncation(
+                    is_truncated=truncated,
+                    reason="page_size_reached" if truncated else None,
+                    next_cursor=next_cursor,
+                ),
+            ),
         )
 
     def _reports_resolve_set(

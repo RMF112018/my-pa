@@ -435,3 +435,142 @@ def test_archive_delete_restore_round_trip_on_postgresql(migrated_engine: Engine
     for answer in foreign:
         assert answer["error"]["code"] == "not_found"
         assert answer["error"]["safe_details"] == ["artifact_id"]
+
+
+# ---- Reports Modernization WP04: the catalog and the history cursor ------------------------
+
+
+def test_history_root_visibility_outranks_a_bad_cursor(migrated_engine: Engine) -> None:
+    """C11(1): a cursor refusal is only ever about a report the caller may see."""
+    owner, stranger = operator(), operator()
+    service = _service(migrated_engine)
+    with mcp_transport(service, owner) as mcp:
+        rid = _ok(_send(mcp, owner, Capability.REPORTS_PUBLISH, MINIMAL))["report_id"]
+        other = _ok(
+            _send(
+                mcp,
+                owner,
+                Capability.REPORTS_PUBLISH,
+                {**MINIMAL, "idempotency_key": "db-publish-other", "client_intent_id": "o-1"},
+            )
+        )
+        alien = other["version_id"]
+        bad_cursor = {"report_id": rid, "after": alien}
+        visible = _send(mcp, owner, Capability.REPORTS_HISTORY, bad_cursor)
+        assert visible["error"]["safe_details"] == ["cursor"]
+        missing = _send(
+            mcp,
+            owner,
+            Capability.REPORTS_HISTORY,
+            {"report_id": "grpt_00000000missing0", "after": alien},
+        )
+        assert (missing["error"]["code"], missing["error"]["safe_details"]) == (
+            "not_found",
+            ["artifact_id"],
+        )
+        _ok(_send(mcp, owner, Capability.REPORTS_ARCHIVE, _move(rid, "db-archive", 0)))
+        hidden = _send(mcp, owner, Capability.REPORTS_HISTORY, bad_cursor)
+        assert (hidden["error"]["code"], hidden["error"]["safe_details"]) == (
+            "not_found",
+            ["artifact_id"],
+        )
+        asked = _send(
+            mcp, owner, Capability.REPORTS_HISTORY, {**bad_cursor, "include_withdrawn": True}
+        )
+        assert (asked["error"]["code"], asked["error"]["safe_details"]) == (
+            "invalid_request",
+            ["cursor"],
+        )
+    with mcp_transport(service, stranger) as mcp:
+        foreign = _send(
+            mcp, stranger, Capability.REPORTS_HISTORY, {**bad_cursor, "include_withdrawn": True}
+        )
+    assert (foreign["error"]["code"], foreign["error"]["safe_details"]) == (
+        "not_found",
+        ["artifact_id"],
+    )
+
+
+def test_standalone_catalog_pages_with_a_bound_cursor_over_mcp(migrated_engine: Engine) -> None:
+    """The standalone list and search, end to end on PostgreSQL through the MCP schema."""
+    owner, stranger = operator(), operator()
+    service = _service(migrated_engine)
+    with mcp_transport(service, owner) as mcp:
+        ids = [
+            _ok(
+                _send(
+                    mcp,
+                    owner,
+                    Capability.REPORTS_PUBLISH,
+                    {
+                        **MINIMAL,
+                        "title": f"Curlew survey {index}",
+                        "topics": ["birds"],
+                        "idempotency_key": f"db-catalog-{index}",
+                        "client_intent_id": f"c-{index}",
+                    },
+                )
+            )["report_id"]
+            for index in range(3)
+        ]
+        first = _ok(
+            _send(
+                mcp,
+                owner,
+                Capability.REPORTS_LIST,
+                {"plane": "standalone", "page_size": 2, "topics": ["birds"]},
+            )
+        )
+        assert first["plane"] == "standalone"
+        assert len(first["items"]) == 2
+        assert first["next_cursor"] is not None
+        rest = _ok(
+            _send(
+                mcp,
+                owner,
+                Capability.REPORTS_LIST,
+                {
+                    "plane": "standalone",
+                    "page_size": 2,
+                    "topics": ["birds"],
+                    "cursor": first["next_cursor"],
+                },
+            )
+        )
+        assert rest["next_cursor"] is None
+        listed = [item["report_id"] for item in first["items"] + rest["items"]]
+        assert sorted(listed) == sorted(ids)
+        assert all(item["plane"] == "standalone" for item in first["items"] + rest["items"])
+        # The cursor is bound: another filter set refuses it.
+        changed = _send(
+            mcp,
+            owner,
+            Capability.REPORTS_LIST,
+            {"plane": "standalone", "page_size": 2, "cursor": first["next_cursor"]},
+        )
+        assert changed["error"]["safe_details"] == ["cursor"]
+        found = _ok(
+            _send(
+                mcp,
+                owner,
+                Capability.REPORTS_SEARCH,
+                {"plane": "all", "query": "curlew", "page_size": 5},
+            )
+        )
+        assert sorted(item["report_id"] for item in found["items"]) == sorted(ids)
+        assert all(item["snippet"] for item in found["items"])
+    with mcp_transport(service, stranger) as mcp:
+        theirs = _ok(_send(mcp, stranger, Capability.REPORTS_LIST, {"plane": "all"}))
+        stolen = _send(
+            mcp,
+            stranger,
+            Capability.REPORTS_LIST,
+            {
+                "plane": "standalone",
+                "page_size": 2,
+                "topics": ["birds"],
+                "cursor": first["next_cursor"],
+            },
+        )
+    assert theirs["items"] == []
+    assert stolen["error"]["safe_details"] == ["cursor"]

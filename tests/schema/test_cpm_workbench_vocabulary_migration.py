@@ -158,7 +158,7 @@ def test_at_sets_equal_the_live_enums() -> None:
     `4c37731671fc` (+ `reports.publish`), so the head-equals-enum claim moves
     to that revision's literal, on the precedent of every earlier restatement:
     this revision's AT text is byte-for-byte the head's frozen BEFORE text, and
-    the head's AT set is the live enums. WP03 adds its five names there and
+    the head's AT set is the live enums. WP03 adds its five additions there and
     restates purposes too (+ `report_lifecycle`), so the purpose claim moves
     to the head's literal in the same way.
     """

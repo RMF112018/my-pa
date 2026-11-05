@@ -181,7 +181,7 @@ def test_v1_tool_schemas_are_unchanged_by_s4() -> None:
     excluded |= {name for name in (tool.name for tool in TOOLS) if name.startswith("schedule_")}
     # Reports Modernization WP02: `reports.publish` and the extended `reports.read`.
     excluded |= {"reports.publish", "reports.read"}
-    # Reports Modernization WP03: its five new names.
+    # Reports Modernization WP03: its five new additions.
     excluded |= {
         "reports.update",
         "reports.history",

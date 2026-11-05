@@ -361,7 +361,7 @@ def test_existing_v1_shapes_are_unchanged_by_s3() -> None:
     }
     # Reports Modernization WP02: see `_V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_READ`.
     lineage |= {Capability.REPORTS_PUBLISH.value, Capability.REPORTS_READ.value}
-    # Reports Modernization WP03: its five new names, each excluded as new.
+    # Reports Modernization WP03: its five additions, each excluded as new.
     lineage |= {
         Capability.REPORTS_UPDATE.value,
         Capability.REPORTS_HISTORY.value,

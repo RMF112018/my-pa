@@ -709,7 +709,7 @@ def test_existing_non_lineage_v1_shapes_are_unchanged_by_s31() -> None:
     # are pinned by `tests/unit/test_reports_legacy_read_golden.py`). Both are
     # excluded, so the remaining 191 shapes stay pinned byte for byte.
     lineage |= {Capability.REPORTS_PUBLISH.value, Capability.REPORTS_READ.value}
-    # Reports Modernization WP03: its five new names, each excluded as new.
+    # Reports Modernization WP03: its five additions, each excluded as new.
     lineage |= {
         Capability.REPORTS_UPDATE.value,
         Capability.REPORTS_HISTORY.value,

@@ -526,7 +526,7 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     240: "Two hundred and forty",
     # Reports Modernization WP02: `reports.publish`, 240 -> 241.
     241: "Two hundred and forty-one",
-    # Reports Modernization WP03: its five names, 241 -> 246.
+    # Reports Modernization WP03: its five additions, 241 -> 246.
     246: "Two hundred and forty-six",
 }
 

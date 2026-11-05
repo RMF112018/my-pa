@@ -18,6 +18,7 @@ from __future__ import annotations
 import base64
 import gc
 import gzip
+import json
 import random
 import string
 import threading
@@ -239,3 +240,36 @@ def test_eight_concurrent_16_mib_publishes_peak_at_about_one_request(
         tracemalloc.stop()
     assert all(answer["error"] is None for answer in answers)
     assert peak < 160  # MiB: one request is ~93; without the permit ~469
+
+
+def test_store_less_pretty_json_is_bounded_by_its_gunzipped_bytes(
+    fixture_root: Path, tmp_path: Path
+) -> None:
+    # WP05 corrective B5-1: canonical JSON well under the inline threshold,
+    # pretty-printed far above it. Without a store the gunzipped bytes are the
+    # bound (the memory guard); with one, the decoded content decides placement.
+    data = [
+        {"key": f"value {index:06d} {_PAD[index % 1000 : index % 1000 + 40]}"}
+        for index in range(4000)
+    ]
+    canonical = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    pretty = json.dumps(data, indent=16)
+    assert len(canonical.encode()) < INLINE_CONTENT_MAX_BYTES < len(pretty.encode())
+    content = _gzip("json", pretty.encode())
+
+    service, scene = _scene(fixture_root)
+    refused = _publish(service, scene, content, "pretty-storeless")
+    assert refused["error"]["code"] == ErrorCode.INVALID_REQUEST.value
+    assert refused["error"]["safe_details"] == ["content", "max_bytes"]
+    assert not scene.world.general_report_versions
+
+    (tmp_path / "store").mkdir()
+    store = FilesystemReportContentStore((tmp_path / "store").resolve())
+    stored_service, stored_scene = _scene(fixture_root, report_content_store=store)
+    accepted = _publish(stored_service, stored_scene, content, "pretty-stored")
+    assert accepted["error"] is None, accepted["error"]
+    result = accepted["result"]
+    assert result["content"]["decoded_byte_count"] == len(canonical.encode())
+    (stored,) = stored_scene.world.general_report_versions.values()
+    assert stored.storage_kind.value == "inline"
+    assert store.stored_object_ids() == ()

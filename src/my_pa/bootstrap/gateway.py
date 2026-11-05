@@ -589,7 +589,8 @@ def report_content_store(settings: Settings, work_engine: Engine) -> ReportConte
 
     `None` is the backward-compatible default: an unset or blank
     `MY_PA_REPORT_CONTENT_ROOT` keeps every report content inline and refuses
-    decoded content above the inline threshold. A configured root is built
+    decoded content above the inline threshold, and a `gzip+base64` upload
+    whose gunzipped bytes are above it. A configured root is built
     into `FilesystemReportContentStore` with the configured source roots and
     the managed document root, whose constructor refuses to start on an
     unusable root or any overlap -- a misconfiguration the operator must fix,

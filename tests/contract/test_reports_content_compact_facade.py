@@ -297,6 +297,8 @@ def test_publish_and_update_describe_the_one_extended_content_schema(harness: Ha
         "262,144",
         f"{MAX_REQUEST_BYTES:,}",
         "body_omitted",
+        # WP05 corrective B5-1: the store-less bound names the gunzipped bytes too.
+        "both the gunzipped bytes of a gzip+base64 upload and the decoded content",
     ):
         assert limit in described, limit
     assert "chunk" not in described

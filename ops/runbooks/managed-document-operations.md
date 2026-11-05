@@ -202,8 +202,10 @@ A second, separate filesystem plane: report content whose decoded size is above
 `MY_PA_REPORT_CONTENT_INLINE_MAX_BYTES` (default 524,288, valid 1..524,288) is
 held under `MY_PA_REPORT_CONTENT_ROOT` as `managed_blob` objects, one per
 `grcnt_` content row, at `<root>/content/<shard>/<grcnt_id>/{decoded,original}`.
-Unset, the root composes no store: report content stays inline and larger
-decoded content is refused (`invalid_request`, `content`, `max_bytes`). The root
+Unset, the root composes no store: report content stays inline, and content is
+refused (`invalid_request`, `content`, `max_bytes`) when its decoded size is
+above the threshold or, for a `gzip+base64` upload, when its gunzipped bytes
+are (a store-less server never inflates past the threshold). The root
 must be an existing real directory (not a symbolic link) clear of every source
 root and of the managed document root; the gateway refuses to start otherwise.
 Neither variable is a secret.

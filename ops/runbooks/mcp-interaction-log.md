@@ -280,16 +280,7 @@ stored.
   768 MiB `mem_limit`. The budget behind the number: the gateway process about
   150 MiB, the queued bodies at most 64 MiB, the exchange being sent at most
   32 MiB, response bodies in flight across 8 concurrent calls up to about
-  190 MiB, and about 80 MiB of margin. **Report content decode** (Reports
-  Modernization WP05) is a line this budget did not have: one process-wide
-  permit (`REPORT_CONTENT_DECODE_PERMITS` = 1) x about 94 MiB measured live
-  peak for a 16 MiB `gzip+base64` publish or update (68 MiB for 16 MiB of
-  markdown), whatever the number of concurrent calls, and only when a report
-  content store is composed; without one a gzip upload is never inflated past
-  the 512 KiB inline threshold. **It does not fit the ~80 MiB margin** (about
-  786 MiB against 768 MiB): before composing a report content store on the
-  remote gateway, the operator either raises `MY_PA_REMOTE_MEMORY` (for
-  example to 896m) or accepts the risk. Peak worker memory depends on the shape
+  190 MiB, and about 80 MiB of margin. Peak worker memory depends on the shape
   of the body, not only its size (measured on Linux, `python:3.12-slim`;
   RSS / virtual size):
 
@@ -306,6 +297,15 @@ stored.
   never trips the start breaker. **The cap is enforced on Linux only**: macOS
   cannot lower `RLIMIT_AS`, so on a developer Mac the worker runs uncapped (the
   builder records this as `memory_limited = False`).
+- **Report content decode is a line this budget did not have** (Reports
+  Modernization WP05): one process-wide permit (`REPORT_CONTENT_DECODE_PERMITS`
+  = 1) x about 94 MiB measured live peak for a 16 MiB `gzip+base64` publish or
+  update (68 MiB for 16 MiB of markdown), whatever the number of concurrent
+  calls, and only when a report content store is composed; without one a gzip
+  upload is never inflated past the 512 KiB inline threshold. **It does not
+  fit the ~80 MiB margin** (about 786 MiB against 768 MiB): before composing a
+  report content store on the remote gateway, the operator either raises
+  `MY_PA_REMOTE_MEMORY` (for example to 896m) or accepts the risk.
 - Measured with a 1 ms ticker thread in the gateway process, building a row
   in-thread stalled every other thread for 83 ms (1 MiB body) up to 1.34 s
   (16 MiB) idle, and up to 4.1 s under heavy CPU contention; through the worker

@@ -5978,11 +5978,12 @@ _SHA256_SCHEMA_PATTERN: Final = "^[0-9a-f]{64}$"
 #: inline threshold goes (the report content store when configured, else a
 #: `content`/`max_bytes` refusal) and how much of a body a read returns.
 _CONTENT_PLACEMENT_SENTENCE: Final = (
-    f"Decoded content above the inline threshold (default {INLINE_CONTENT_MAX_BYTES:,} "
-    "bytes) is stored in the report content store when it is configured, otherwise "
-    "refused (invalid_request content, max_bytes); reads return the body only up to "
-    f"{READ_INLINE_CONTENT_MAX_BYTES:,} decoded bytes, larger bodies are marked "
-    "body_omitted."
+    "With the report content store configured, decoded content above the inline "
+    f"threshold (default {INLINE_CONTENT_MAX_BYTES:,} bytes) is stored in the store; "
+    "without it, both the gunzipped bytes of a gzip+base64 upload and the decoded "
+    "content must be within the inline threshold, else invalid_request content, "
+    f"max_bytes. Reads return the body only up to {READ_INLINE_CONTENT_MAX_BYTES:,} "
+    "decoded bytes, larger bodies are marked body_omitted."
 )
 
 #: WP05 (corrective N4): what `patch.content` equal to the head's decoded content does.

@@ -363,7 +363,8 @@ class Settings(StrictModel):
     #: An unset or blank value composes none, which is exactly the WP04
     #: behaviour plus inline `gzip+base64`: every report content object is
     #: stored inline, and decoded content above
-    #: `report_content_inline_max_bytes` is refused (`invalid_request`,
+    #: `report_content_inline_max_bytes` -- or a `gzip+base64` upload whose
+    #: gunzipped bytes are above it -- is refused (`invalid_request`,
     #: `content`, `max_bytes`). There is no default location, for the reason
     #: `managed_document_root` has none: choosing where a user's report bytes
     #: live is an operator decision.

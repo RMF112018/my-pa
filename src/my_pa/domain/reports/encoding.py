@@ -54,7 +54,10 @@ Where it runs (WP05 corrective B-4): command construction only checks a gzip
 upload's structure (`check_encoded_shape`); the decode itself runs in the
 publish/update handler, one at a time process-wide (the application's decode
 permit), bounded by `max_decoded`: 16 MiB with a report content store, the
-inline threshold without one.
+inline threshold without one. The bound applies to the gunzipped bytes AND
+to the decoded (canonical) content, so without a store pretty-printed JSON
+whose gunzipped text is above the threshold is refused `too_large` even when
+its canonical form would fit.
 """
 
 from __future__ import annotations

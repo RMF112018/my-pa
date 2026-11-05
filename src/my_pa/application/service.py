@@ -4527,6 +4527,11 @@ REPORT_CONTENT_DECODE_PERMITS: Final = 1
 #: the INSERTs all happen under it. A waiter waits only for the current
 #: holder's request (each about two seconds of CPU at worst); there is no
 #: other lock taken while it is held that a holder could wait on in turn.
+#: Known limits (recorded, not fixed): the permit is taken before
+#: authorization, so a request that will be denied may still wait behind one
+#: holder; and the wait has no timeout. It is bounded by the holder's request,
+#: whose database statements are capped by `statement_timeout`, but a
+#: filesystem store write that hangs is not.
 _REPORT_CONTENT_DECODE_PERMIT: Final = threading.BoundedSemaphore(REPORT_CONTENT_DECODE_PERMITS)
 
 
@@ -4588,7 +4593,8 @@ class ApplicationService:
         #: WP05 C3: the report content store and the inline threshold. `None`
         #: -- what an unset `MY_PA_REPORT_CONTENT_ROOT` composes -- keeps every
         #: report content inline and refuses decoded content above the
-        #: threshold (`invalid_request` `content`, `max_bytes`); a composed
+        #: threshold, and a gzip upload whose gunzipped bytes are above it
+        #: (`invalid_request` `content`, `max_bytes`); a composed
         #: store holds it as `managed_blob`. Both reach the repository as
         #: explicit arguments of `publish`/`update` (C4) and the store the
         #: standalone read's verification (C5); nothing else reads them.
@@ -4601,7 +4607,10 @@ class ApplicationService:
         self._report_content_inline_max_bytes = report_content_inline_max_bytes
         #: WP05 corrective B-4: how far a gzip upload is inflated. Without a
         #: store nothing above the inline threshold can be placed, so nothing
-        #: above it is ever decoded (`too_large`, as placement would refuse).
+        #: above it is ever inflated: the bound applies to the gunzipped bytes
+        #: (the memory guard), so a store-less server refuses (`too_large`)
+        #: pretty-printed JSON whose gunzipped text exceeds the threshold even
+        #: when its canonical form would fit; the describe text says so.
         self._report_content_decode_limit: int = (
             MAX_DECODED_CONTENT_BYTES
             if report_content_store is not None

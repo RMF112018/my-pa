@@ -594,15 +594,24 @@ composition and in every MCP publication that composition produces.
   100 MiB. The whole request stays within the transport's
   762,288-byte ceiling. Any violation is `invalid_request` naming `content`,
   with `max_bytes` for the size, expansion and value-count bounds; no refusal
-  echoes a value. Decoded content above the inline threshold is stored in the report
-  content store when one is configured, otherwise refused the same way
+  echoes a value. With a report content store configured, decoded content
+  above the inline threshold is stored in it; without one, both the gunzipped
+  bytes of a `gzip+base64` upload and the decoded content must be within the
+  inline threshold, else the request is refused the same way
   ([`managed-document-operations.md`](managed-document-operations.md)
-  section 7); without a store a gzip upload is never inflated past that
-  threshold. The server decodes one gzip upload at a time (a single
-  process-wide permit, taken before the request's transaction opens): a
-  concurrent gzip publish or update waits for the one being decoded (at most
-  about two seconds of CPU each), identity content never waits, and the
-  memory a decode needs is that of one request (about 94 MiB at 16 MiB). A `reports.update` whose `patch.content` has the head's format,
+  section 7). The gunzipped bound is the memory guard: a store-less server
+  never inflates past the threshold, so pretty-printed JSON whose gunzipped
+  text is above it is refused even when its canonical form would fit (send it
+  compact, or as identity content). The server decodes one gzip upload at a
+  time (a single process-wide permit, taken before the request's transaction
+  opens): a concurrent gzip publish or update waits for the one being decoded
+  (at most about two seconds of CPU each), identity content never waits, and
+  the memory a decode needs is that of one request (about 94 MiB at 16 MiB).
+  Known limits: a gzip request waits for the permit before it is authorized,
+  so even a request that will be denied may wait behind one holder; and the
+  wait has no timeout. It is bounded by the one holder's request, whose
+  database statements are capped by `statement_timeout`, but a filesystem
+  store write that hangs is not bounded. A `reports.update` whose `patch.content` has the head's format,
   encoding and decoded content is a metadata-only change that keeps the head's content, including
   its original gzip bytes; the new upload's bytes are not stored. A standalone
   `reports.read` returns `original_sha256` and

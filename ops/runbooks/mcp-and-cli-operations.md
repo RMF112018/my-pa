@@ -563,7 +563,11 @@ composition and in every MCP publication that composition produces.
   from a request field: `kind` is `local_principal` (a local transport, keyed
   by the Principal) or `remote_client` (an authenticated remote client), and
   `id` is a `gcrt_` pseudonym of 40 lowercase hex characters. It supports
-  equality only and never discloses the OAuth client id. `reports.read` returns
+  equality only and never discloses the OAuth client id. It is an unkeyed
+  SHA-256, so anyone who can guess the subject (a principal id or an OAuth
+  client id) can confirm it; it hides the subject only from observers who
+  cannot enumerate it, and a keyed derivation (which would rename every
+  creator) is deferred. `reports.read` returns
   `creator` (who published the report) and `author` (who wrote that version);
   `reports.history` items carry `author`; standalone `reports.list` and
   `reports.search` items carry `creator`. Both take an optional `created_by`

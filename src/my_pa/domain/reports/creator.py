@@ -10,8 +10,11 @@ OAuth client id; `local_principal` with the principal id) and calls
 `creator_id` is `gcrt_` and the first 40 hex digits of
 `sha256(b"my_pa.reports.creator.v1\\x00" + kind + b"\\x00" + subject)`: a
 pseudonym, comparable for equality only, that never discloses the client id it
-was derived from. It is not an `IdKind` (it is never issued), and its prefix
-collides with none. Stdlib only.
+was derived from. It is an unkeyed SHA-256, so anyone who can guess the
+subject (a principal id or an OAuth client id) can confirm it: it hides the
+subject only from observers who cannot enumerate it, and a keyed derivation,
+which would rename every creator, is deferred. It is not an `IdKind` (it is
+never issued), and its prefix collides with none. Stdlib only.
 """
 
 from __future__ import annotations

@@ -478,14 +478,49 @@ def test_describe_returns_the_exact_publish_and_read_remote_schemas(
     assert payload["required"] == ["title", "content"]
     # The advertised limit is decoded bytes; the wire bound is stated beside it,
     # with the transport's own ceiling, so an escape-heavy body is not a surprise.
-    assert payload["properties"]["content"]["description"] == (
+    # WP05 B7: both encodings, the real executable limits, never chunked transfer.
+    content_schema = payload["properties"]["content"]
+    assert content_schema["description"] == (
         "markdown|text: {format, body}; json: {format, data}; mixed: {format, body, "
-        f"data}}. At most {INLINE_CONTENT_MAX_BYTES:,} decoded UTF-8 bytes; the whole "
-        f"JSON request must also fit the {MAX_REQUEST_BYTES:,}-byte request ceiling, "
-        "so heavily escaped content (quotes, backslashes, control characters, "
-        "\\u-escaped non-ASCII) may need to be smaller. encoding: omit or identity "
-        "(gzip+base64 is not supported yet)."
+        "data}. encoding: omit or identity, or gzip+base64 with {format, encoding, "
+        f"encoded}} instead of body/data. identity: at most {INLINE_CONTENT_MAX_BYTES:,} "
+        "decoded UTF-8 bytes. gzip+base64: encoded is the standard padded Base64 (no "
+        "whitespace) of exactly one gzip member whose gunzipped bytes are the UTF-8 body "
+        "(markdown|text), a JSON text of the data (json) or a JSON object of exactly "
+        "{body, data} (mixed); decoded content at most 16,777,216 bytes and at most 256:1 "
+        "over the gzip bytes. Until the report content store exists, decoded content "
+        f"above {INLINE_CONTENT_MAX_BYTES:,} bytes is refused (invalid_request content, "
+        "max_bytes). The whole JSON request must also fit the "
+        f"{MAX_REQUEST_BYTES:,}-byte request ceiling, so heavily escaped content (quotes, "
+        "backslashes, control characters, \\u-escaped non-ASCII) may need to be smaller, "
+        "and an encoded string is at most about 760 KB (about 570 KB of gzip)."
     )
+    assert "chunk" not in content_schema["description"]
+    assert content_schema["properties"]["encoding"]["enum"] == ["identity", "gzip+base64"]
+    assert list(content_schema["properties"]) == [
+        "format",
+        "encoding",
+        "body",
+        "data",
+        "encoded",
+        "original_byte_count",
+        "original_sha256",
+        "uncompressed_byte_count",
+        "uncompressed_sha256",
+    ]
+    for name, bound in (
+        ("original_byte_count", 16_777_216),
+        ("uncompressed_byte_count", 16_777_216),
+    ):
+        assert content_schema["properties"][name] == {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": bound,
+            "description": content_schema["properties"][name]["description"],
+        }
+    for name in ("original_sha256", "uncompressed_sha256"):
+        assert content_schema["properties"][name]["pattern"] == "^[0-9a-f]{64}$"
+    assert content_schema["additionalProperties"] is False
     assert "client_intent_id" in payload["properties"]
     for server_owned in (
         "idempotency_key",

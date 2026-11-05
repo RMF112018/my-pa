@@ -647,8 +647,9 @@ class SafeDetail(StrEnum):
     #: Reports Modernization WP02: the `reports.publish` fields of these names
     #: (`REPORT_TYPE` is the caller field `type`; `COVERAGE_PERIOD` either
     #: bound or their order; `ASSOCIATIONS` any association member;
-    #: `CONTENT_ENCODING` an encoding this build does not decode, answered
-    #: `unsupported`), and the standalone `reports.read` selectors
+    #: `CONTENT_ENCODING` was an encoding this build did not decode, answered
+    #: `unsupported`; WP05 decodes `gzip+base64`, so no refusal names it now and
+    #: it stays only as a stable public token), and the standalone `reports.read` selectors
     #: `VERSION_NUMBER`, `INCLUDE_MANIFEST` and `INCLUDE_WITHDRAWN`. `TITLE`,
     #: `CONTENT`, `REPORT_DATE`, `IDEMPOTENCY_KEY`, `ARTIFACT_ID`, `VERSION_ID`,
     #: `INCLUDE_BODY` and `MAX_BYTES` are reused.

@@ -108,7 +108,12 @@ from my_pa.domain.reports.catalog import (
     CatalogFilters,
     extract_search_text,
 )
-from my_pa.domain.reports.content import ReportContent, canonical_json, content_of
+from my_pa.domain.reports.content import (
+    INLINE_CONTENT_MAX_BYTES,
+    ReportContent,
+    canonical_json,
+    content_of,
+)
 from my_pa.domain.reports.creator import CreatorKind, ReportCreator
 from my_pa.domain.reports.errors import ReportValidationError
 from my_pa.domain.reports.lifecycle import LifecycleDecision, decide_lifecycle_transition
@@ -380,9 +385,26 @@ def _version_verified(
     return row is not None
 
 
+def _content_storage(content: ReportContent) -> StorageKind:
+    """Where a new content object of `content` is stored, or its refusal (WP05 B4, C4 seam).
+
+    Only inline storage exists yet: decoded content above the inline maximum
+    -- reachable only through `gzip+base64`, identity content is refused above
+    it by the domain -- is refused `content` `too_large` (public
+    `invalid_request` `content`, `max_bytes`) exactly as before the encoding
+    existed. Called after the receipt replay/conflict check and before the
+    request's first INSERT, so a refusal writes nothing. The report content
+    store (WP05 C) replaces this decision with its placement.
+    """
+    if content.decoded_byte_count > INLINE_CONTENT_MAX_BYTES:
+        raise ReportValidationError("content", "too_large")
+    return StorageKind.INLINE
+
+
 def _content_values(
     content: ReportContent, content_id: str, recorded_at: datetime
 ) -> dict[str, object]:
+    """One inline content row; a gzip upload keeps its exact gzip bytes (WP05 B4)."""
     values: dict[str, object] = {
         "content_id": content_id,
         "format": content.format.value,
@@ -401,6 +423,8 @@ def _content_values(
     # Python `None` as the JSON `null`, not as SQL NULL.
     if content.format in _STRUCTURED:
         values["inline_data"] = content.data
+    if content.original is not None:
+        values["inline_original"] = content.original
     return values
 
 
@@ -637,21 +661,33 @@ def _creator_of(creator: object) -> ReportCreator:
 
 
 def _verified_content(row: Row[Any]) -> ReportContent:
-    """Recompute the stored content's digests; refuse any the row does not match."""
+    """Recompute the stored content's digests; refuse any the row does not match.
+
+    Inline content only (WP02 identity, WP05 B4 gzip): any other row is not one
+    this reader can recompute, so it refuses rather than trust it. A gzip row
+    must keep its gzip bytes, and they are re-hashed and re-counted against
+    `original_sha256`/`original_byte_count` as the decoded content is against
+    its own digests; an identity row must keep none.
+    """
     m = row._mapping
     content_format = ContentFormat(m["format"])
-    if (
-        m["storage_kind"] != StorageKind.INLINE.value
-        or m["original_encoding"] != ContentEncoding.IDENTITY.value
-    ):
-        # WP02 writes only inline identity content; any other row is not one
-        # this reader can recompute, so it refuses rather than trust it.
+    if m["storage_kind"] != StorageKind.INLINE.value:
+        raise ReportIntegrityError()
+    stored_original = m["inline_original"]
+    if m["original_encoding"] == ContentEncoding.GZIP_BASE64.value:
+        if stored_original is None:
+            raise ReportIntegrityError()
+        original: bytes | None = bytes(stored_original)
+    elif m["original_encoding"] == ContentEncoding.IDENTITY.value and stored_original is None:
+        original = None
+    else:
         raise ReportIntegrityError()
     try:
         content = content_of(
             content_format,
             body=None if content_format is ContentFormat.JSON else m["inline_text"],
             data=m["inline_data"] if content_format in _STRUCTURED else None,
+            original=original,
         )
     except (ReportValidationError, ValueError, TypeError):
         raise ReportIntegrityError() from None
@@ -1707,6 +1743,7 @@ class SqlGeneralReportRepository(GeneralReportRepository):
         stored = _find_publish(self._connection, idempotency_key, context)
         if stored is not None:
             return _settle(stored, intent_digest)
+        _content_storage(request.content)
         associations = _verified(self._connection, request.associations, context)
         try:
             with self._connection.begin_nested():
@@ -1821,6 +1858,9 @@ class SqlGeneralReportRepository(GeneralReportRepository):
             patch,
             request.clear_fields,
         )
+        if result.content is not head.content:
+            # A new content object: placed (or refused) before the first INSERT.
+            _content_storage(result.content)
         try:
             with connection.begin_nested():
                 return _write_update(

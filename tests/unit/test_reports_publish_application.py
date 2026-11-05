@@ -24,7 +24,6 @@ from my_pa.application.errors import (
     ApplicationError,
     InvalidRequestError,
     SafeDetail,
-    UnsupportedError,
 )
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.ports import ReportIntegrityError
@@ -216,12 +215,13 @@ def test_a_pipeline_field_is_refused_by_name(field: str, detail: str) -> None:
     assert [item.value for item in refusal.safe_details] == [detail]
 
 
-def test_gzip_base64_is_unsupported_and_an_unknown_encoding_is_invalid() -> None:
+def test_gzip_base64_with_a_body_and_an_unknown_encoding_are_invalid() -> None:
+    # WP05 B1/B3: gzip+base64 is decoded now; `body` is not one of its keys.
     gzip = _refusal(
         {**MINIMAL, "content": {"format": "markdown", "encoding": "gzip+base64", "body": "H4sI"}}
     )
-    assert isinstance(gzip, UnsupportedError)
-    assert gzip.safe_details == (SafeDetail.CONTENT_ENCODING,)
+    assert isinstance(gzip, InvalidRequestError)
+    assert gzip.safe_details == (SafeDetail.CONTENT,)
     unknown = _refusal(
         {**MINIMAL, "content": {"format": "markdown", "encoding": "rot13", "body": "x"}}
     )

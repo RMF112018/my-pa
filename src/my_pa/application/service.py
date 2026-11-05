@@ -976,7 +976,12 @@ from my_pa.domain.reports.records import (
     StoredReportVersion,
 )
 from my_pa.domain.reports.revision import LifecycleResult, UpdateResult
-from my_pa.domain.reports.vocabulary import ContentFormat, LifecycleState, ReceiptOperation
+from my_pa.domain.reports.vocabulary import (
+    READ_INLINE_CONTENT_MAX_BYTES,
+    ContentFormat,
+    LifecycleState,
+    ReceiptOperation,
+)
 from my_pa.domain.search.query import (
     DEFAULT_SNIPPET_WORDS,
     MAX_PAGE_SIZE,
@@ -3736,12 +3741,22 @@ def _general_read_payload(
         "decoded_sha256": content.decoded_sha256,
         "decoded_byte_count": content.decoded_byte_count,
         "canonical_sha256": content.canonical_sha256,
+        # WP05 B5: the uploaded bytes' digest and size (the decoded ones under identity).
+        "original_sha256": content.original_sha256,
+        "original_byte_count": content.original_byte_count,
     }
     if include_body:
         if content.format is not ContentFormat.JSON:
             content_payload["body"] = content.body
         if content.format in (ContentFormat.JSON, ContentFormat.MIXED):
             content_payload["data"] = content.data
+        if content.original is not None:
+            # The exact `encoded` the caller uploaded: canonical Base64 of the
+            # verified gzip bytes, while they fit the response bound.
+            if content.original_byte_count <= READ_INLINE_CONTENT_MAX_BYTES:
+                content_payload["encoded"] = base64.b64encode(content.original).decode("ascii")
+            else:
+                content_payload["encoded_omitted"] = "exceeds_response_bound"
     coverage = (
         None
         if version.coverage_start is None and version.coverage_end is None

@@ -418,7 +418,11 @@ from my_pa.domain.reports.catalog import (
     CatalogFilters,
     extract_search_text,
 )
-from my_pa.domain.reports.content import validate_content
+from my_pa.domain.reports.content import (
+    INLINE_CONTENT_MAX_BYTES,
+    ReportContent,
+    validate_content,
+)
 from my_pa.domain.reports.creator import CreatorKind, ReportCreator, derive_creator
 from my_pa.domain.reports.errors import ReportValidationError
 from my_pa.domain.reports.lifecycle import decide_lifecycle_transition
@@ -9707,6 +9711,12 @@ class _UnmodelledPlane:
         raise NotImplementedError(f"the FAST world does not model {self._name}.{item}")
 
 
+def _inline_placement(content: ReportContent) -> None:
+    """The SQL repository's placement (WP05 B4): only inline storage exists yet."""
+    if content.decoded_byte_count > INLINE_CONTENT_MAX_BYTES:
+        raise ReportValidationError("content", "too_large")
+
+
 class _GeneralReports(GeneralReportRepository):
     """`GeneralReportRepository` over a `World`: the partition rule and the replay rule.
 
@@ -9741,6 +9751,7 @@ class _GeneralReports(GeneralReportRepository):
             if stored.receipt.intent_digest != request.intent_digest:
                 raise ReportIdempotencyConflictError()
             return replace(stored, replayed=True)
+        _inline_placement(request.content)
         associations = self._verified(request.associations, principal_id)
         report_id = issue_identifier(IdKind.REPORT)
         version_id = issue_identifier(IdKind.REPORT_VERSION)
@@ -9919,6 +9930,8 @@ class _GeneralReports(GeneralReportRepository):
             patch,
             request.clear_fields,
         )
+        if result.content is not head.content:
+            _inline_placement(result.content)
         common = {
             "receipt_id": issue_identifier(IdKind.REPORT_RECEIPT),
             "report_id": request.report_id,

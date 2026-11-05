@@ -51,7 +51,6 @@ from my_pa.application.errors import (
     ApplicationError,
     InvalidRequestError,
     SafeDetail,
-    UnsupportedError,
     invalid_choice,
 )
 from my_pa.application.goodnotes_pull_orchestration import MAX_PULL_BATCH_SIZE
@@ -356,6 +355,9 @@ from my_pa.domain.reports.revision import (
 )
 from my_pa.domain.reports.vocabulary import (
     MAX_ASSOCIATIONS_PER_VERSION,
+    MAX_DECODED_CONTENT_BYTES,
+    MAX_EXPANSION_RATIO,
+    MAX_ORIGINAL_CONTENT_BYTES,
     MAX_REASON_CHARACTERS,
     MAX_SUMMARY_CHARACTERS,
     MAX_TERM_CHARACTERS,
@@ -5782,20 +5784,23 @@ _REPORT_REFUSAL_DETAILS: Final[Mapping[str, SafeDetail]] = MappingProxyType(
 )
 
 
+#: WP05 B3: the content rules that are a size bound, answered with `max_bytes`.
+_CONTENT_SIZE_RULES: Final = frozenset({"too_large", "expansion_ratio"})
+
+
 def report_refusal(error: ReportValidationError) -> ApplicationError:
     """The public error a general-report domain refusal is.
 
-    `gzip+base64` is a known encoding this build cannot decode yet (WP05), so
-    it is `unsupported` on `content_encoding` rather than malformed. A
-    manifest over its bound is caused by the optional fields that fill it, so
-    it names `metadata` and the byte bound. Anything else names its field.
+    A manifest over its bound is caused by the optional fields that fill it,
+    so it names `metadata` and the byte bound. Every `content.*` refusal,
+    `gzip+base64` decoding included (WP05 B3), is `content`; one over a size
+    bound (`too_large`, `expansion_ratio`) also names `max_bytes`. Anything
+    else names its field. No refusal carries the value it refused.
     """
-    if error.code == "unsupported_encoding":
-        return UnsupportedError(SafeDetail.CONTENT_ENCODING)
     if error.code == "manifest_too_large":
         return InvalidRequestError(SafeDetail.METADATA, SafeDetail.MAX_BYTES)
     detail = _REPORT_REFUSAL_DETAILS.get(error.field.split(".", 1)[0])
-    if detail is SafeDetail.CONTENT and error.code == "too_large":
+    if detail is SafeDetail.CONTENT and error.code in _CONTENT_SIZE_RULES:
         return InvalidRequestError(SafeDetail.CONTENT, SafeDetail.MAX_BYTES)
     return InvalidRequestError() if detail is None else InvalidRequestError(detail)
 
@@ -5838,7 +5843,13 @@ class PublishGeneralReport:
     "markdown"|"text", "body"}`, `{"format": "json", "data"}` or `{"format":
     "mixed", "body", "data"}`, at most 512 KiB decoded (the escaped JSON
     request must also fit `MAX_REQUEST_BYTES`); `encoding` may be
-    omitted or `identity`. The server derives the owner, the report and
+    omitted or `identity`. With `encoding: "gzip+base64"` the content is
+    `{"format", "encoding", "encoded"}` (Base64 of one gzip member) plus the
+    optional declared `original_byte_count`/`original_sha256` (gzip bytes)
+    and `uncompressed_byte_count`/`uncompressed_sha256` (gunzipped bytes);
+    decoded content is bounded by 16 MiB and a 256:1 expansion, and -- until
+    the report content store exists -- by 512 KiB decoded; every decoding
+    refusal is `invalid_request` on `content`. The server derives the owner, the report and
     version identifiers, version 1, every timestamp and digest, the manifest
     and the receipt; no cycle run, stage, producer, focus area or source lane is
     accepted. Optional `type` is an open lower_snake token (no registration).
@@ -5922,26 +5933,69 @@ def publication_request(command: PublishGeneralReport) -> PublicationRequest:
 #: compact-facade contract test pins the stated number to it.
 _WIRE_CEILING_BYTES: Final = 762_288
 
+_SHA256_SCHEMA_PATTERN: Final = "^[0-9a-f]{64}$"
+
+#: WP05 B7: the one sentence stating where decoded content above the inline
+#: maximum stands. The report content store (WP05 C) replaces only this.
+_CONTENT_PLACEMENT_SENTENCE: Final = (
+    f"Until the report content store exists, decoded content above "
+    f"{INLINE_CONTENT_MAX_BYTES:,} bytes is refused (invalid_request content, max_bytes)."
+)
+
 _CONTENT_SCHEMA: Final[Mapping[str, Any]] = MappingProxyType(
     {
         "type": "object",
         "description": (
             "markdown|text: {format, body}; json: {format, data}; mixed: {format, body, "
-            f"data}}. At most {INLINE_CONTENT_MAX_BYTES:,} decoded UTF-8 bytes; the whole "
-            f"JSON request must also fit the {_WIRE_CEILING_BYTES:,}-byte request ceiling, "
-            "so heavily escaped content (quotes, backslashes, control characters, "
-            "\\u-escaped non-ASCII) may need to be smaller. encoding: omit or identity "
-            "(gzip+base64 is not supported yet)."
+            f"data}}. encoding: omit or identity, or gzip+base64 with {{format, encoding, "
+            "encoded} instead of body/data. identity: at most "
+            f"{INLINE_CONTENT_MAX_BYTES:,} decoded UTF-8 bytes. gzip+base64: encoded is the "
+            "standard padded Base64 (no whitespace) of exactly one gzip member whose "
+            "gunzipped bytes are the UTF-8 body (markdown|text), a JSON text of the data "
+            "(json) or a JSON object of exactly {body, data} (mixed); decoded content at "
+            f"most {MAX_DECODED_CONTENT_BYTES:,} bytes and at most {MAX_EXPANSION_RATIO}:1 "
+            f"over the gzip bytes. {_CONTENT_PLACEMENT_SENTENCE} The whole JSON request "
+            f"must also fit the {_WIRE_CEILING_BYTES:,}-byte request ceiling, so heavily "
+            "escaped content (quotes, backslashes, control characters, \\u-escaped "
+            "non-ASCII) may need to be smaller, and an encoded string is at most about "
+            "760 KB (about 570 KB of gzip)."
         ),
         "properties": {
             "format": {"type": "string", "enum": [member.value for member in ContentFormat]},
-            "encoding": {"type": "string", "enum": [ContentEncoding.IDENTITY.value]},
+            "encoding": {"type": "string", "enum": [member.value for member in ContentEncoding]},
             "body": {
                 "type": "string",
                 "minLength": 1,
                 "description": f"UTF-8 text, at most {INLINE_CONTENT_MAX_BYTES} bytes.",
             },
             "data": {"description": "Any JSON value but null (json, mixed)."},
+            "encoded": {
+                "type": "string",
+                "minLength": 4,
+                "description": "gzip+base64 only: Base64 of one gzip member.",
+            },
+            "original_byte_count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": MAX_ORIGINAL_CONTENT_BYTES,
+                "description": "gzip+base64 only, optional: the gzip byte count.",
+            },
+            "original_sha256": {
+                "type": "string",
+                "pattern": _SHA256_SCHEMA_PATTERN,
+                "description": "gzip+base64 only, optional: SHA-256 of the gzip bytes.",
+            },
+            "uncompressed_byte_count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": MAX_DECODED_CONTENT_BYTES,
+                "description": "gzip+base64 only, optional: the gunzipped byte count.",
+            },
+            "uncompressed_sha256": {
+                "type": "string",
+                "pattern": _SHA256_SCHEMA_PATTERN,
+                "description": "gzip+base64 only, optional: SHA-256 of the gunzipped bytes.",
+            },
         },
         "required": ["format"],
         "additionalProperties": False,
@@ -6136,7 +6190,9 @@ class UpdateGeneralReport:
     `[]` or `{}` empties them); JSON null is refused -- clear `type`, `summary`,
     `report_date` or `coverage_period` with `clear_fields` instead, never with
     a field also in `patch`. `change_reason` is required. Associations not in
-    the patch carry forward unchanged. New content makes a `content` version;
+    the patch carry forward unchanged. `patch.content` takes either encoding
+    exactly as `reports.publish` does (`gzip+base64` included, same limits).
+    New content makes a `content` version;
     otherwise the content object is reused and the version is `metadata`; a
     patch that changes nothing answers `no_op` and writes no version. An
     archived or trashed report is refused until `reports.restore`. A retry of

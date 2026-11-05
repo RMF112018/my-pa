@@ -590,7 +590,10 @@ composition and in every MCP publication that composition produces.
   value. Decoded content above the inline threshold is stored in the report
   content store when one is configured, otherwise refused the same way
   ([`managed-document-operations.md`](managed-document-operations.md)
-  section 7). A standalone `reports.read` returns `original_sha256` and
+  section 7). A `reports.update` whose `patch.content` has the head's format,
+  encoding and decoded content is a metadata-only change that keeps the head's content, including
+  its original gzip bytes; the new upload's bytes are not stored. A standalone
+  `reports.read` returns `original_sha256` and
   `original_byte_count` for every version; with the body requested, a gzip
   version also returns the uploaded `encoded` byte for byte when the gzip
   bytes are at most 524,288, else `encoded_omitted: "exceeds_response_bound"`,

@@ -5848,12 +5848,15 @@ class PublishGeneralReport:
     `{"format", "encoding", "encoded"}` (Base64 of one gzip member) plus the
     optional declared `original_byte_count`/`original_sha256` (gzip bytes)
     and `uncompressed_byte_count`/`uncompressed_sha256` (gunzipped bytes);
-    decoded content is bounded by 16 MiB and a 256:1 expansion, and -- until
-    the report content store exists -- by 512 KiB decoded; every decoding
-    refusal is `invalid_request` on `content`. The server derives the owner, the report and
-    version identifiers, version 1, every timestamp and digest, the manifest
-    and the receipt; no cycle run, stage, producer, focus area or source lane is
-    accepted. Optional `type` is an open lower_snake token (no registration).
+    decoded content is bounded by 16 MiB and a 256:1 expansion; every
+    decoding refusal is `invalid_request` on `content`. Decoded content (either
+    encoding) above the configured inline threshold (default 512 KiB) is held
+    in the report content store when one is configured, else refused
+    `invalid_request` on `content` and `max_bytes` (WP05 C3/C4). The server
+    derives the owner, the report and version identifiers, version 1, every
+    timestamp and digest, the manifest and the receipt; no cycle run, stage,
+    producer, focus area or source lane is accepted. Optional `type` is an
+    open lower_snake token (no registration).
     Associations to a project, entity, standalone report or intelligence report
     must name one you own, else the publish is `not_found`; an
     `external_source` is stored as asserted. A `target_version_ref` is verified,
@@ -5936,15 +5939,22 @@ _WIRE_CEILING_BYTES: Final = 762_288
 
 _SHA256_SCHEMA_PATTERN: Final = "^[0-9a-f]{64}$"
 
-#: WP05 B7: the one sentence stating where decoded content above the inline
-#: maximum stands. The report content store (WP05 C) replaces only this.
-#: WP05 C3/C5: where content above the inline threshold goes, and what a read returns.
+#: WP05 B7/C3/C5: the one sentence stating where decoded content above the
+#: inline threshold goes (the report content store when configured, else a
+#: `content`/`max_bytes` refusal) and how much of a body a read returns.
 _CONTENT_PLACEMENT_SENTENCE: Final = (
     f"Decoded content above the inline threshold (default {INLINE_CONTENT_MAX_BYTES:,} "
     "bytes) is stored in the report content store when it is configured, otherwise "
     "refused (invalid_request content, max_bytes); reads return the body only up to "
     f"{READ_INLINE_CONTENT_MAX_BYTES:,} decoded bytes, larger bodies are marked "
     "body_omitted."
+)
+
+#: WP05 (corrective N4): what `patch.content` equal to the head's decoded content does.
+_SAME_CONTENT_SENTENCE: Final = (
+    "A patch.content whose format, encoding and decoded content equal the head's is "
+    "a metadata-only change that keeps the head's content, including its original "
+    "gzip bytes (the new upload's bytes are not stored)."
 )
 
 _CONTENT_SCHEMA: Final[Mapping[str, Any]] = MappingProxyType(
@@ -6197,6 +6207,9 @@ class UpdateGeneralReport:
     a field also in `patch`. `change_reason` is required. Associations not in
     the patch carry forward unchanged. `patch.content` takes either encoding
     exactly as `reports.publish` does (`gzip+base64` included, same limits).
+    Content whose decoded bytes equal the head's (by format, encoding and
+    decoded digest) is not new: the head's content object, its original gzip
+    bytes included, is kept and the new upload's bytes are not stored.
     New content makes a `content` version;
     otherwise the content object is reused and the version is `metadata`; a
     patch that changes nothing answers `no_op` and writes no version. An
@@ -6433,7 +6446,10 @@ UpdateGeneralReport.mcp_payload_properties = MappingProxyType(  # type: ignore[a
                     "type": "string",
                     **PublishGeneralReport.mcp_payload_properties["title"],  # type: ignore[attr-defined]
                 },
-                "content": dict(_CONTENT_SCHEMA),
+                "content": {
+                    **_CONTENT_SCHEMA,
+                    "description": f"{_CONTENT_SCHEMA['description']} {_SAME_CONTENT_SENTENCE}",
+                },
                 "type": {
                     "type": "string",
                     **PublishGeneralReport.mcp_payload_properties["type"],  # type: ignore[attr-defined]

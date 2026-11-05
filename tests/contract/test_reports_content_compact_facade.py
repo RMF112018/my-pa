@@ -267,7 +267,17 @@ def test_publish_and_update_describe_the_one_extended_content_schema(harness: Ha
     update_patch = outcome(updated)[1]["input_schema"]["properties"]["payload"]["properties"][
         "patch"
     ]
-    assert update_patch["properties"]["content"] == publish_content
+    update_content = update_patch["properties"]["content"]
+    # One schema; the update's description adds only the same-content sentence (N4).
+    assert {k: v for k, v in update_content.items() if k != "description"} == {
+        k: v for k, v in publish_content.items() if k != "description"
+    }
+    assert update_content["description"] == (
+        f"{publish_content['description']} A patch.content whose format, encoding and "
+        "decoded content equal the head's is a metadata-only change that keeps the "
+        "head's content, including its original gzip bytes (the new upload's bytes are "
+        "not stored)."
+    )
     assert publish_content["properties"]["encoding"]["enum"] == ["identity", GZIP]
     assert publish_content["properties"]["encoded"]["type"] == "string"
     for name in ("original_byte_count", "uncompressed_byte_count"):

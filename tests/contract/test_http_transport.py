@@ -58,6 +58,7 @@ from tests.conftest import (
     staged_capture,
     staged_commitment,
     staged_continuity_project,
+    staged_general_report,
     staged_goodnotes_raster,
     staged_goodnotes_work,
     staged_managed_document,
@@ -96,6 +97,7 @@ from my_pa.application.commands import (
     ApplyConstraintSync,
     ArchiveCapture,
     ArchiveEntity,
+    ArchiveGeneralReport,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
     AssertRecordAssociation,
@@ -146,6 +148,7 @@ from my_pa.application.commands import (
     CreateTaskComment,
     DeactivateConstraintCategory,
     DecideReviewCase,
+    DeleteGeneralReport,
     EndEntityAffiliation,
     EndEntityAssignment,
     EndEntityParticipation,
@@ -165,6 +168,7 @@ from my_pa.application.commands import (
     GetEntityIdentityHistory,
     GetEntityProfile,
     GetEntityRelationships,
+    GetGeneralReportHistory,
     GetGoodNotesContent,
     GetGoodNotesPullStatus,
     GetGoodNotesWork,
@@ -277,6 +281,7 @@ from my_pa.application.commands import (
     ResolveUnresolvedMention,
     RestoreCapture,
     RestoreEntity,
+    RestoreGeneralReport,
     RestoreManagedDocument,
     RestoreRelationshipMemory,
     RetireEntityAddress,
@@ -321,6 +326,7 @@ from my_pa.application.commands import (
     UpdateConstraint,
     UpdateConstraintCategory,
     UpdateEntity,
+    UpdateGeneralReport,
     UpdateIssue,
     UpdateMeeting,
     UpdateMeetingSeries,
@@ -981,6 +987,31 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "title": "HTTP standalone report",
             "content": {"format": "markdown", "body": "# HTTP\n\nSynthetic body."},
             "idempotency_key": "http-publish",
+        },
+        # Reports Modernization WP03: a staged active report, and a staged
+        # archived one for `reports.restore` (`staged_general_report`).
+        Capability.REPORTS_UPDATE: {
+            "report_id": staged_general_report(scene),
+            "expected_version": 1,
+            "patch": {"title": "Revised"},
+            "change_reason": "Synthetic revision.",
+            "idempotency_key": "http-update",
+        },
+        Capability.REPORTS_HISTORY: {"report_id": staged_general_report(scene)},
+        Capability.REPORTS_ARCHIVE: {
+            "report_id": staged_general_report(scene, label="archive"),
+            "expected_lifecycle_revision": 0,
+            "idempotency_key": "http-archive",
+        },
+        Capability.REPORTS_DELETE: {
+            "report_id": staged_general_report(scene, label="trash"),
+            "expected_lifecycle_revision": 0,
+            "idempotency_key": "http-delete",
+        },
+        Capability.REPORTS_RESTORE: {
+            "report_id": staged_general_report(scene, archived=True),
+            "expected_lifecycle_revision": 1,
+            "idempotency_key": "http-restore",
         },
         # The relationship-intelligence entity plane (WP-RI-05). `person` and
         # `organization` are staged once per scene, so the payload table and the
@@ -2312,6 +2343,30 @@ def commands_for(
             title="HTTP standalone report",
             content={"format": "markdown", "body": "# HTTP\n\nSynthetic body."},
             idempotency_key="http-publish",
+        ),
+        # Reports Modernization WP03: the same staged reports as the payload table.
+        Capability.REPORTS_UPDATE: UpdateGeneralReport(
+            report_id=staged_general_report(scene),
+            expected_version=1,
+            patch={"title": "Revised"},
+            change_reason="Synthetic revision.",
+            idempotency_key="http-update",
+        ),
+        Capability.REPORTS_HISTORY: GetGeneralReportHistory(report_id=staged_general_report(scene)),
+        Capability.REPORTS_ARCHIVE: ArchiveGeneralReport(
+            report_id=staged_general_report(scene, label="archive"),
+            expected_lifecycle_revision=0,
+            idempotency_key="http-archive",
+        ),
+        Capability.REPORTS_DELETE: DeleteGeneralReport(
+            report_id=staged_general_report(scene, label="trash"),
+            expected_lifecycle_revision=0,
+            idempotency_key="http-delete",
+        ),
+        Capability.REPORTS_RESTORE: RestoreGeneralReport(
+            report_id=staged_general_report(scene, archived=True),
+            expected_lifecycle_revision=1,
+            idempotency_key="http-restore",
         ),
         # The entity plane. `person` is the same staged entity the payload table
         # names, because `staged_entities` answers with the pair already in the

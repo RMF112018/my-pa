@@ -71,6 +71,7 @@ from my_pa.application.commands import (
     ApplyConstraintSync,
     ArchiveCapture,
     ArchiveEntity,
+    ArchiveGeneralReport,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
     AssertRecordAssociation,
@@ -122,6 +123,7 @@ from my_pa.application.commands import (
     CreateTaskComment,
     DeactivateConstraintCategory,
     DecideReviewCase,
+    DeleteGeneralReport,
     EndEntityAffiliation,
     EndEntityAssignment,
     EndEntityParticipation,
@@ -141,6 +143,7 @@ from my_pa.application.commands import (
     GetEntityIdentityHistory,
     GetEntityProfile,
     GetEntityRelationships,
+    GetGeneralReportHistory,
     GetGoodNotesContent,
     GetGoodNotesPullStatus,
     GetGoodNotesWork,
@@ -253,6 +256,7 @@ from my_pa.application.commands import (
     ResolveUnresolvedMention,
     RestoreCapture,
     RestoreEntity,
+    RestoreGeneralReport,
     RestoreManagedDocument,
     RestoreRelationshipMemory,
     RetireEntityAddress,
@@ -297,6 +301,7 @@ from my_pa.application.commands import (
     UpdateConstraint,
     UpdateConstraintCategory,
     UpdateEntity,
+    UpdateGeneralReport,
     UpdateIssue,
     UpdateMeeting,
     UpdateMeetingSeries,
@@ -393,6 +398,7 @@ from my_pa.domain.relationship.governance import (
 )
 from my_pa.domain.relationship.memory import MemoryKind, MemoryLifecycle
 from my_pa.domain.relationship.proposal_payload import EntityProposalKind
+from my_pa.domain.reports.records import HistoryEntries
 from my_pa.domain.situation.continuity import (
     CommitmentDirection,
     CommitmentState,
@@ -1878,6 +1884,70 @@ def _publish_general_report(payload: Mapping[str, Any]) -> Command:
     return PublishGeneralReport(**converted)
 
 
+def _general_report_fields(payload: Mapping[str, Any], command: type) -> dict[str, Any]:
+    """The payload of a WP03 general-report command, checked as `reports.publish` checks its own.
+
+    A pipeline field names its pipeline token; any other key the command does
+    not declare -- a server-owned field such as `principal_id`, `version_id`,
+    `version_number`, `lifecycle_state`, `event_id` or `receipt_id` included --
+    is a bare `invalid_request`.
+    """
+    for name, detail in REPORT_PUBLISH_PIPELINE_FIELDS.items():
+        if name in payload:
+            raise InvalidRequestError(detail)
+    if not set(payload) <= {item.name for item in dataclasses.fields(command)}:
+        raise InvalidRequestError()
+    return dict(payload)
+
+
+def _update_general_report(payload: Mapping[str, Any]) -> Command:
+    """`reports.update`: the top level and the `patch` object, each refused as publish refuses.
+
+    Inside `patch` a pipeline field names its pipeline token too, and any
+    other key that is not a patchable field is a bare `invalid_request` (by the
+    command). A JSON null inside `patch` is refused naming its field (by the
+    command, `report_patch`). `clear_fields` arrives as an array and becomes
+    the tuple the command declares.
+    """
+    converted = _general_report_fields(payload, UpdateGeneralReport)
+    patch = converted.get("patch")
+    if isinstance(patch, dict):
+        for name, detail in REPORT_PUBLISH_PIPELINE_FIELDS.items():
+            if name in patch:
+                raise InvalidRequestError(detail)
+    if "clear_fields" in converted:
+        if not isinstance(converted["clear_fields"], list):
+            raise InvalidRequestError(SafeDetail.CLEAR_FIELDS)
+        converted["clear_fields"] = tuple(converted["clear_fields"])
+    return UpdateGeneralReport(**converted)
+
+
+def _archive_general_report(payload: Mapping[str, Any]) -> Command:
+    return ArchiveGeneralReport(**_general_report_fields(payload, ArchiveGeneralReport))
+
+
+def _delete_general_report(payload: Mapping[str, Any]) -> Command:
+    return DeleteGeneralReport(**_general_report_fields(payload, DeleteGeneralReport))
+
+
+def _restore_general_report(payload: Mapping[str, Any]) -> Command:
+    return RestoreGeneralReport(**_general_report_fields(payload, RestoreGeneralReport))
+
+
+def _general_report_history(payload: Mapping[str, Any]) -> Command:
+    """`reports.history`: `entries` arrives as its wire string."""
+    converted = _general_report_fields(payload, GetGeneralReportHistory)
+    if "entries" in converted:
+        entries = converted["entries"]
+        if not isinstance(entries, str):
+            raise invalid_choice(SafeDetail.ENTRIES, HistoryEntries)
+        try:
+            converted["entries"] = HistoryEntries(entries)
+        except ValueError:
+            raise invalid_choice(SafeDetail.ENTRIES, HistoryEntries) from None
+    return GetGeneralReportHistory(**converted)
+
+
 def _latest_intelligence_artifact(payload: Mapping[str, Any]) -> Command:
     converted = dict(payload)
     if converted.get("stage") is not None:
@@ -2832,6 +2902,11 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.REPORTS_TYPES_CREATE: _create_report_type,
         Capability.REPORTS_TYPES_LIST: _list_report_types,
         Capability.REPORTS_PUBLISH: _publish_general_report,
+        Capability.REPORTS_UPDATE: _update_general_report,
+        Capability.REPORTS_HISTORY: _general_report_history,
+        Capability.REPORTS_ARCHIVE: _archive_general_report,
+        Capability.REPORTS_DELETE: _delete_general_report,
+        Capability.REPORTS_RESTORE: _restore_general_report,
         Capability.ENTITIES_SEARCH: _search_entities,
         Capability.ENTITIES_GET: _get_entity,
         Capability.ENTITIES_RESOLVE: _resolve_entity,

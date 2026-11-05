@@ -664,6 +664,20 @@ class SafeDetail(StrEnum):
     VERSION_NUMBER = "version_number"
     INCLUDE_MANIFEST = "include_manifest"
     INCLUDE_WITHDRAWN = "include_withdrawn"
+    #: Reports Modernization WP03: `reports.update`'s `patch` (malformed, or
+    #: empty with no `clear_fields`) and its required `change_reason`;
+    #: `reports.history`'s `entries` and `include_manifests` selectors; and
+    #: `REPORT_WITHDRAWN`, the `denied` subject when an update names an
+    #: archived or trashed report the caller owns (D3; a foreign or absent one
+    #: is still `not_found`, so it only ever describes the caller's own root,
+    #: exactly as `CAPTURE_WITHDRAWN`). `CLEAR_FIELDS`, `EXPECTED_VERSION`,
+    #: `STALE_VERSION`, `EXPECTED_LIFECYCLE_REVISION`, `LIFECYCLE_STATE`,
+    #: `REASON`, `CURSOR`, `PAGE_SIZE` and `ARTIFACT_ID` are reused.
+    PATCH = "patch"
+    CHANGE_REASON = "change_reason"
+    ENTRIES = "entries"
+    INCLUDE_MANIFESTS = "include_manifests"
+    REPORT_WITHDRAWN = "report_withdrawn"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

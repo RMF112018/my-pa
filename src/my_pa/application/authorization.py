@@ -59,6 +59,7 @@ from my_pa.application.commands import (
     ApplyConstraintSync,
     ArchiveCapture,
     ArchiveEntity,
+    ArchiveGeneralReport,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
     AssertRecordAssociation,
@@ -109,6 +110,7 @@ from my_pa.application.commands import (
     CreateTaskComment,
     DeactivateConstraintCategory,
     DecideReviewCase,
+    DeleteGeneralReport,
     EndEntityAffiliation,
     EndEntityAssignment,
     EndEntityParticipation,
@@ -128,6 +130,7 @@ from my_pa.application.commands import (
     GetEntityIdentityHistory,
     GetEntityProfile,
     GetEntityRelationships,
+    GetGeneralReportHistory,
     GetGoodNotesContent,
     GetGoodNotesPullStatus,
     GetGoodNotesWork,
@@ -239,6 +242,7 @@ from my_pa.application.commands import (
     ResolveUnresolvedMention,
     RestoreCapture,
     RestoreEntity,
+    RestoreGeneralReport,
     RestoreManagedDocument,
     RestoreRelationshipMemory,
     RetireEntityAddress,
@@ -283,6 +287,7 @@ from my_pa.application.commands import (
     UpdateConstraint,
     UpdateConstraintCategory,
     UpdateEntity,
+    UpdateGeneralReport,
     UpdateIssue,
     UpdateMeeting,
     UpdateMeetingSeries,
@@ -582,6 +587,12 @@ def _requested_scope(
             # association targets are verified in that partition by the
             # repository, never against a source grant.
             | PublishGeneralReport()
+            # WP03: revising, paging and moving the lifecycle of that same root.
+            | UpdateGeneralReport()
+            | GetGeneralReportHistory()
+            | ArchiveGeneralReport()
+            | DeleteGeneralReport()
+            | RestoreGeneralReport()
             # The entity plane names a person, not a source, for the reason
             # `domain.policy.decision._SCOPELESS` states beside the same five.
             | SearchEntities()

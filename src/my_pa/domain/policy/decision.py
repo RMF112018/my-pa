@@ -474,6 +474,12 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         # Its associations are verified against the same partition by the
         # repository, never against a source grant.
         Capability.REPORTS_PUBLISH,
+        # WP03: revising, paging and moving the lifecycle of that same root.
+        Capability.REPORTS_UPDATE,
+        Capability.REPORTS_HISTORY,
+        Capability.REPORTS_ARCHIVE,
+        Capability.REPORTS_DELETE,
+        Capability.REPORTS_RESTORE,
         # The entity plane's partition, not a source. An entity carries no
         # `enrollment_id` and no grant a requested scope could be compared
         # against -- it is the Principal's own record of a person, not an

@@ -181,6 +181,14 @@ def test_v1_tool_schemas_are_unchanged_by_s4() -> None:
     excluded |= {name for name in (tool.name for tool in TOOLS) if name.startswith("schedule_")}
     # Reports Modernization WP02: `reports.publish` and the extended `reports.read`.
     excluded |= {"reports.publish", "reports.read"}
+    # Reports Modernization WP03: its five new names.
+    excluded |= {
+        "reports.update",
+        "reports.history",
+        "reports.archive",
+        "reports.delete",
+        "reports.restore",
+    }
     payloads = {
         tool.name: tool.input_schema["properties"]["payload"]
         for tool in TOOLS
@@ -194,13 +202,19 @@ def test_v1_tool_schemas_are_unchanged_by_s4() -> None:
     enums = {json.dumps(tool.input_schema["$defs"]["Purpose"]["enum"]) for tool in TOOLS}
     assert len(enums) == 1
     published = json.loads(enums.pop())
-    # CPM Workbench S5b-2 appends its 2 purposes after the S4 one (contract 3.12).
-    assert len(published) == 62
-    basis = published[:-3]
+    # CPM Workbench S5b-2 appends its 2 purposes after the S4 one (contract 3.12),
+    # and Reports Modernization WP03 appends `report_lifecycle` after those.
+    assert len(published) == 63
+    basis = published[:-4]
     assert hashlib.sha256(json.dumps(basis, separators=(",", ":")).encode("utf-8")).hexdigest() == (
         BASIS_PURPOSE_ENUM_SHA256
     )
-    assert published[-3:] == ["program_reporting_read", "schedule_import", "schedule_read"]
+    assert published[-4:] == [
+        "program_reporting_read",
+        "schedule_import",
+        "schedule_read",
+        "report_lifecycle",
+    ]
     assert "program_reporting_read" not in basis
 
 

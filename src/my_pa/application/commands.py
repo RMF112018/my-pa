@@ -327,8 +327,24 @@ from my_pa.domain.reports.publication import (
     PublicationRequest,
     RequestedAssociation,
 )
+from my_pa.domain.reports.records import (
+    DEFAULT_HISTORY_PAGE,
+    MAX_HISTORY_PAGE,
+    MAX_HISTORY_PAGE_WITH_MANIFESTS,
+    HistoryEntries,
+)
+from my_pa.domain.reports.revision import (
+    PATCH_FIELDS,
+    ClearableField,
+    CoveragePeriod,
+    LifecycleRequest,
+    ReportPatch,
+    UpdateRequest,
+    validate_clear_fields,
+)
 from my_pa.domain.reports.vocabulary import (
     MAX_ASSOCIATIONS_PER_VERSION,
+    MAX_REASON_CHARACTERS,
     MAX_SUMMARY_CHARACTERS,
     MAX_TERM_CHARACTERS,
     MAX_TERMS,
@@ -336,6 +352,7 @@ from my_pa.domain.reports.vocabulary import (
     AssociationTargetKind,
     ContentEncoding,
     ContentFormat,
+    LifecycleOperation,
 )
 from my_pa.domain.schedule import (
     InvalidScheduleSeriesNameError,
@@ -5890,6 +5907,452 @@ PublishGeneralReport.mcp_payload_properties = MappingProxyType(  # type: ignore[
             "description": (
                 "Optional. A different value makes an otherwise identical request a new report."
             ),
+        },
+    }
+)
+
+
+# ---- Reports Modernization WP03: mutable management of a standalone report ----
+
+#: Which public token a WP03 request refusal names, beside the publish fields
+#: `_REPORT_REFUSAL_DETAILS` already maps: the domain's field for the request
+#: shape (`patch`, `clear_fields`, `change_reason`, the two preconditions, the
+#: lifecycle `reason`, the history cursor and page size).
+_REPORT_REVISION_DETAILS: Final[Mapping[str, SafeDetail]] = MappingProxyType(
+    {
+        "report_id": SafeDetail.ARTIFACT_ID,
+        "patch": SafeDetail.PATCH,
+        "clear_fields": SafeDetail.CLEAR_FIELDS,
+        "change_reason": SafeDetail.CHANGE_REASON,
+        "expected_version": SafeDetail.EXPECTED_VERSION,
+        "expected_lifecycle_revision": SafeDetail.EXPECTED_LIFECYCLE_REVISION,
+        "reason": SafeDetail.REASON,
+        "cursor": SafeDetail.CURSOR,
+        "page_size": SafeDetail.PAGE_SIZE,
+    }
+)
+
+
+def report_revision_refusal(error: ReportValidationError) -> ApplicationError:
+    """The public error a WP03 domain refusal is: its request field, else as publish."""
+    detail = _REPORT_REVISION_DETAILS.get(error.field.split(".", 1)[0])
+    return report_refusal(error) if detail is None else InvalidRequestError(detail)
+
+
+#: The token a patched field's own refusal names (its JSON null included).
+_PATCH_FIELD_DETAILS: Final[Mapping[str, SafeDetail]] = MappingProxyType(
+    {
+        "title": SafeDetail.TITLE,
+        "content": SafeDetail.CONTENT,
+        "type": SafeDetail.REPORT_TYPE,
+        "topics": SafeDetail.TOPICS,
+        "tags": SafeDetail.TAGS,
+        "summary": SafeDetail.SUMMARY,
+        "report_date": SafeDetail.REPORT_DATE,
+        "coverage_period": SafeDetail.COVERAGE_PERIOD,
+        "metadata": SafeDetail.METADATA,
+        "associations": SafeDetail.ASSOCIATIONS,
+    }
+)
+
+
+def _patch_terms(value: object, detail: SafeDetail) -> tuple[object, ...]:
+    if not isinstance(value, tuple | list):
+        raise InvalidRequestError(detail)
+    return tuple(value)
+
+
+def _patched_coverage(value: object) -> CoveragePeriod:
+    """A patched coverage period: `{start?, end?}`, at least one bound, no null."""
+    if not isinstance(value, dict) or not value or not set(value) <= {"start", "end"}:
+        raise InvalidRequestError(SafeDetail.COVERAGE_PERIOD)
+    if any(bound is None for bound in value.values()):
+        # A null bound is not "unbounded": clearing is `clear_fields` alone.
+        raise InvalidRequestError(SafeDetail.COVERAGE_PERIOD)
+    start = None if "start" not in value else _coverage_moment(value["start"])
+    end = None if "end" not in value else _coverage_moment(value["end"])
+    try:
+        return CoveragePeriod(start=start, end=end)
+    except ReportValidationError:
+        pass
+    raise InvalidRequestError(SafeDetail.COVERAGE_PERIOD)
+
+
+def report_patch(patch: object) -> ReportPatch:
+    """The domain patch `patch` states, or the field-naming refusal of it.
+
+    `patch` is the caller's JSON object: keys are a subset of the publish
+    caller fields minus `client_intent_id` (`PATCH_FIELDS`); any other key is a
+    bare `invalid_request` as an unknown field is everywhere. A JSON null
+    anywhere a field's value stands -- a patched field, a coverage bound, an
+    association member -- is refused naming the field: a nullable field is
+    cleared only through `clear_fields`, never by null (D4). Every value is
+    validated by the rule publish applies to it.
+    """
+    if not isinstance(patch, dict):
+        raise InvalidRequestError(SafeDetail.PATCH)
+    if not set(patch) <= set(PATCH_FIELDS):
+        raise InvalidRequestError()
+    for name in PATCH_FIELDS:
+        if name in patch and patch[name] is None:
+            raise InvalidRequestError(_PATCH_FIELD_DETAILS[name])
+    fields: dict[str, Any] = {}
+    refusal: ApplicationError
+    try:
+        if "title" in patch:
+            fields["title"] = patch["title"]
+        if "content" in patch:
+            fields["content"] = validate_content(patch["content"])
+        if "type" in patch:
+            fields["report_type"] = patch["type"]
+        if "topics" in patch:
+            fields["topics"] = _patch_terms(patch["topics"], SafeDetail.TOPICS)
+        if "tags" in patch:
+            fields["tags"] = _patch_terms(patch["tags"], SafeDetail.TAGS)
+        if "summary" in patch:
+            fields["summary"] = patch["summary"]
+        if "report_date" in patch:
+            fields["report_date"] = date.fromisoformat(
+                _iso_date(patch["report_date"], SafeDetail.REPORT_DATE)
+            )
+        if "coverage_period" in patch:
+            fields["coverage_period"] = _patched_coverage(patch["coverage_period"])
+        if "metadata" in patch:
+            if not isinstance(patch["metadata"], dict):
+                raise InvalidRequestError(SafeDetail.METADATA)
+            fields["metadata"] = patch["metadata"]
+        if "associations" in patch:
+            items = _patch_terms(patch["associations"], SafeDetail.ASSOCIATIONS)
+            if len(items) > MAX_ASSOCIATIONS_PER_VERSION:
+                raise InvalidRequestError(SafeDetail.ASSOCIATIONS)
+            for item in items:
+                if isinstance(item, dict) and any(member is None for member in item.values()):
+                    raise InvalidRequestError(SafeDetail.ASSOCIATIONS)
+            fields["associations"] = tuple(_requested_association(item) for item in items)
+        return ReportPatch(**fields)
+    except ReportValidationError as error:
+        refusal = report_refusal(error)
+    # Raised outside the handler, so the domain refusal is not left in `__context__`.
+    raise refusal
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateGeneralReport:
+    """`reports.update`: append the next version of one of your active standalone reports.
+
+    `expected_version` is the head version number you read (`reports.read`):
+    any other head is `conflict` (`stale_version`) and writes nothing. `patch`
+    names only the fields that change, each replacing the whole value
+    (`topics`, `tags`, `associations` and `metadata` are replaced wholesale;
+    `[]` or `{}` empties them); JSON null is refused -- clear `type`, `summary`,
+    `report_date` or `coverage_period` with `clear_fields` instead, never with
+    a field also in `patch`. `change_reason` is required. Associations not in
+    the patch carry forward unchanged. New content makes a `content` version;
+    otherwise the content object is reused and the version is `metadata`; a
+    patch that changes nothing answers `no_op` and writes no version. An
+    archived or trashed report is refused until `reports.restore`. A retry of
+    the same request replays the original answer.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_UPDATE
+
+    report_id: str
+    expected_version: int
+    patch: dict[str, object] = field(repr=False)
+    change_reason: str = field(repr=False)
+    idempotency_key: str
+    clear_fields: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _idempotency_key(self.idempotency_key)
+        # Built once here so an invalid request never reaches a handler; the
+        # handler builds the same value again (`update_request`).
+        update_request(self)
+
+
+def update_request(command: UpdateGeneralReport) -> UpdateRequest:
+    """The domain request `command` states, or the public refusal of it."""
+    _identifier(command.report_id, IdKind.REPORT, SafeDetail.ARTIFACT_ID)
+    if type(command.expected_version) is not int or command.expected_version < 1:
+        raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
+    if command.change_reason is None:
+        raise InvalidRequestError(SafeDetail.CHANGE_REASON)
+    patch = report_patch(command.patch)
+    clear_fields: object = command.clear_fields
+    if not isinstance(clear_fields, tuple | list):
+        raise InvalidRequestError(SafeDetail.CLEAR_FIELDS)
+    refusal: ApplicationError
+    try:
+        return UpdateRequest(
+            report_id=command.report_id,
+            expected_version=command.expected_version,
+            patch=patch,
+            clear_fields=validate_clear_fields(clear_fields),
+            change_reason=command.change_reason,
+        )
+    except ReportValidationError as error:
+        refusal = report_revision_refusal(error)
+    raise refusal
+
+
+def _lifecycle_command(
+    command: ArchiveGeneralReport | DeleteGeneralReport | RestoreGeneralReport,
+) -> None:
+    """The shared validation of the three lifecycle commands."""
+    _idempotency_key(command.idempotency_key)
+    lifecycle_request(command)
+
+
+@dataclass(frozen=True, slots=True)
+class ArchiveGeneralReport:
+    """`reports.archive`: archive one of your standalone reports (active -> archived).
+
+    `expected_lifecycle_revision` is the `lifecycle_revision` you read; any
+    other is `conflict` and writes nothing. Archiving an archived report is a
+    `no_op`. An archived report reads as not found unless `include_withdrawn`,
+    and refuses `reports.update` until restored. Nothing is removed. `reason` is
+    optional (at most 500 characters).
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_ARCHIVE
+
+    report_id: str
+    expected_lifecycle_revision: int
+    idempotency_key: str
+    reason: str | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        _idempotency_key(self.idempotency_key)
+        _lifecycle_command(self)
+
+
+@dataclass(frozen=True, slots=True)
+class DeleteGeneralReport:
+    """`reports.delete`: move one of your standalone reports to the recoverable Trash.
+
+    From `active` or `archived`; recorded with the state it left, which
+    `reports.restore` returns to. Never a physical deletion: every version,
+    content object, manifest and association is kept. Deleting a trashed
+    report is `conflict` (`lifecycle_state`). `expected_lifecycle_revision`
+    and `reason` as `reports.archive`.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_DELETE
+
+    report_id: str
+    expected_lifecycle_revision: int
+    idempotency_key: str
+    reason: str | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        _idempotency_key(self.idempotency_key)
+        _lifecycle_command(self)
+
+
+@dataclass(frozen=True, slots=True)
+class RestoreGeneralReport:
+    """`reports.restore`: return an archived report to active, or a trashed one to its prior state.
+
+    A report archived and then deleted restores to `archived`. Restoring an
+    active report is `conflict` (`lifecycle_state`).
+    `expected_lifecycle_revision` and `reason` as `reports.archive`.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_RESTORE
+
+    report_id: str
+    expected_lifecycle_revision: int
+    idempotency_key: str
+    reason: str | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        _idempotency_key(self.idempotency_key)
+        _lifecycle_command(self)
+
+
+#: The lifecycle operation each of the three lifecycle capabilities requests.
+_LIFECYCLE_OPERATIONS: Final[Mapping[Capability, LifecycleOperation]] = MappingProxyType(
+    {
+        Capability.REPORTS_ARCHIVE: LifecycleOperation.ARCHIVE,
+        Capability.REPORTS_DELETE: LifecycleOperation.DELETE,
+        Capability.REPORTS_RESTORE: LifecycleOperation.RESTORE,
+    }
+)
+
+
+def lifecycle_request(
+    command: ArchiveGeneralReport | DeleteGeneralReport | RestoreGeneralReport,
+) -> LifecycleRequest:
+    """The domain request `command` states, or the public refusal of it."""
+    _identifier(command.report_id, IdKind.REPORT, SafeDetail.ARTIFACT_ID)
+    refusal: ApplicationError
+    try:
+        return LifecycleRequest(
+            operation=_LIFECYCLE_OPERATIONS[command.capability],
+            report_id=command.report_id,
+            expected_lifecycle_revision=command.expected_lifecycle_revision,
+            reason=command.reason,
+        )
+    except ReportValidationError as error:
+        refusal = report_revision_refusal(error)
+    raise refusal
+
+
+@dataclass(frozen=True, slots=True)
+class GetGeneralReportHistory:
+    """`reports.history`: one page of a standalone report's versions or lifecycle events.
+
+    Oldest first. `entries` is `versions` (default) or `lifecycle`.
+    `page_size` is 1..50 (default 20); with `include_manifests` (versions
+    only) at most 10 (default 10). `after` is the `next_cursor` of the previous
+    page: a `grver_` for versions, a `grlev_` for lifecycle, of this report. A
+    version item carries its digests and content descriptor, never the body
+    (`reports.read` returns a body). An archived or trashed report is not found
+    unless `include_withdrawn`.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_HISTORY
+
+    report_id: str
+    entries: HistoryEntries = HistoryEntries.VERSIONS
+    page_size: int | None = None
+    after: str | None = None
+    include_manifests: bool = False
+    include_withdrawn: bool = False
+
+    def __post_init__(self) -> None:
+        _identifier(self.report_id, IdKind.REPORT, SafeDetail.ARTIFACT_ID)
+        if not isinstance(self.entries, HistoryEntries):
+            raise invalid_choice(SafeDetail.ENTRIES, HistoryEntries)
+        if not isinstance(self.include_manifests, bool):
+            raise InvalidRequestError(SafeDetail.INCLUDE_MANIFESTS)
+        if not isinstance(self.include_withdrawn, bool):
+            raise InvalidRequestError(SafeDetail.INCLUDE_WITHDRAWN)
+        if self.include_manifests and self.entries is not HistoryEntries.VERSIONS:
+            # A lifecycle event has no manifest to include.
+            raise InvalidRequestError(SafeDetail.INCLUDE_MANIFESTS)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.page_size is not None and self.page_size > self.maximum_page_size:
+            raise InvalidRequestError(SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            kind = (
+                IdKind.REPORT_VERSION
+                if self.entries is HistoryEntries.VERSIONS
+                else IdKind.REPORT_LIFECYCLE_EVENT
+            )
+            _identifier(self.after, kind, SafeDetail.CURSOR)
+
+    @property
+    def maximum_page_size(self) -> int:
+        """50 items, or 10 when each carries its manifest (D9)."""
+        return MAX_HISTORY_PAGE_WITH_MANIFESTS if self.include_manifests else MAX_HISTORY_PAGE
+
+    @property
+    def resolved_page_size(self) -> int:
+        """The page size asked for, else 20 (10 with manifests)."""
+        if self.page_size is not None:
+            return self.page_size
+        return min(DEFAULT_HISTORY_PAGE, self.maximum_page_size)
+
+
+_REPORT_ID_SCHEMA: Final[Mapping[str, Any]] = MappingProxyType(
+    {"pattern": "^grpt_[A-Za-z0-9]{8,64}$", "description": "A standalone report (grpt_)."}
+)
+_LIFECYCLE_REVISION_SCHEMA: Final[Mapping[str, Any]] = MappingProxyType(
+    {"minimum": 0, "description": "The lifecycle_revision you read; any other is a conflict."}
+)
+_LIFECYCLE_REASON_SCHEMA: Final[Mapping[str, Any]] = MappingProxyType(
+    {"minLength": 1, "maxLength": MAX_REASON_CHARACTERS, "description": "Optional."}
+)
+
+UpdateGeneralReport.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {
+        "report_id": dict(_REPORT_ID_SCHEMA),
+        "expected_version": {
+            "minimum": 1,
+            "description": "The head version_number you read; any other is a conflict.",
+        },
+        "patch": {
+            "type": "object",
+            "description": (
+                "Only the fields that change; each replaces the whole value. Null is "
+                "refused: use clear_fields. At least one of patch and clear_fields."
+            ),
+            "properties": {
+                "title": {
+                    "type": "string",
+                    **PublishGeneralReport.mcp_payload_properties["title"],  # type: ignore[attr-defined]
+                },
+                "content": dict(_CONTENT_SCHEMA),
+                "type": {
+                    "type": "string",
+                    **PublishGeneralReport.mcp_payload_properties["type"],  # type: ignore[attr-defined]
+                },
+                "topics": {"type": "array", **_TERM_ARRAY},
+                "tags": {"type": "array", **_TERM_ARRAY},
+                "summary": {
+                    "type": "string",
+                    **PublishGeneralReport.mcp_payload_properties["summary"],  # type: ignore[attr-defined]
+                },
+                "report_date": {
+                    "type": "string",
+                    "format": "date",
+                    "pattern": r"^\d{4}-\d{2}-\d{2}$",
+                },
+                "coverage_period": {
+                    "type": "object",
+                    "properties": {
+                        "start": {"type": "string", "format": "date-time"},
+                        "end": {"type": "string", "format": "date-time"},
+                    },
+                    "minProperties": 1,
+                    "additionalProperties": False,
+                },
+                "metadata": {
+                    "type": "object",
+                    "description": "Replaces the whole metadata object; {} empties it.",
+                },
+                "associations": {
+                    "type": "array",
+                    **PublishGeneralReport.mcp_payload_properties["associations"],  # type: ignore[attr-defined]
+                },
+            },
+            "additionalProperties": False,
+        },
+        "change_reason": {"minLength": 1, "maxLength": MAX_REASON_CHARACTERS},
+        "clear_fields": {
+            "items": {"type": "string", "enum": [member.value for member in ClearableField]},
+            "uniqueItems": True,
+            "description": "Nullable fields to clear. Not with the same field in patch.",
+        },
+    }
+)
+_LIFECYCLE_PAYLOAD_PROPERTIES: Final[Mapping[str, Any]] = MappingProxyType(
+    {
+        "report_id": dict(_REPORT_ID_SCHEMA),
+        "expected_lifecycle_revision": dict(_LIFECYCLE_REVISION_SCHEMA),
+        "reason": dict(_LIFECYCLE_REASON_SCHEMA),
+    }
+)
+ArchiveGeneralReport.mcp_payload_properties = _LIFECYCLE_PAYLOAD_PROPERTIES  # type: ignore[attr-defined]
+DeleteGeneralReport.mcp_payload_properties = _LIFECYCLE_PAYLOAD_PROPERTIES  # type: ignore[attr-defined]
+RestoreGeneralReport.mcp_payload_properties = _LIFECYCLE_PAYLOAD_PROPERTIES  # type: ignore[attr-defined]
+
+GetGeneralReportHistory.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {
+        "report_id": dict(_REPORT_ID_SCHEMA),
+        "page_size": {
+            "minimum": 1,
+            "maximum": MAX_HISTORY_PAGE,
+            "description": "Default 20; at most 10 with include_manifests (default 10).",
+        },
+        "after": {
+            "pattern": "^(grver|grlev)_[A-Za-z0-9]{8,64}$",
+            "description": "The previous page's next_cursor (grver_ versions, grlev_ lifecycle).",
+        },
+        "include_manifests": {"description": "versions only: add each version's manifest."},
+        "include_withdrawn": {
+            "description": "Also page an archived or trashed report, otherwise not found."
         },
     }
 )
@@ -15483,6 +15946,11 @@ type Command = (
     | CreateReportType
     | ListReportTypes
     | PublishGeneralReport
+    | UpdateGeneralReport
+    | GetGeneralReportHistory
+    | ArchiveGeneralReport
+    | DeleteGeneralReport
+    | RestoreGeneralReport
     | SearchEntities
     | GetEntity
     | ResolveEntity

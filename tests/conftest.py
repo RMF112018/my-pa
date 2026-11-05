@@ -411,6 +411,7 @@ from my_pa.domain.relationship.normalization import (
     is_normalized_name,
     normalize_name,
 )
+from my_pa.domain.reports.content import validate_content
 from my_pa.domain.reports.errors import ReportValidationError
 from my_pa.domain.reports.lifecycle import decide_lifecycle_transition
 from my_pa.domain.reports.manifest import build_initial_manifest, build_version_manifest
@@ -11294,6 +11295,48 @@ def staged_continuity_project(scene: Scene, *, name: str = "a synthetic project"
     )
     scene.world.projects.append(project)
     return project
+
+
+def staged_general_report(scene: Scene, *, archived: bool = False, label: str = "") -> str:
+    """One standalone report in `scene`'s world (Reports Modernization WP03), its `grpt_` id.
+
+    Written through the in-memory port, as `staged_capture` is. Idempotent: the
+    same fixed key replays, so a payload table and a command table that each
+    call this name the same report. `archived=True` stages a second report,
+    archived once (lifecycle revision 1), so `reports.restore` has a legal move.
+    A `label` stages a further distinct report under that name, so a table
+    driving every capability over one world gives each lifecycle move its own.
+    """
+    reports = _GeneralReports(scene.world)
+    principal_id = scene.principal.principal_id
+    suffix = ("archived" if archived else "active") + (f"-{label}" if label else "")
+    published = reports.publish(
+        PublicationRequest(
+            title=f"a synthetic {suffix} standalone report",
+            content=validate_content({"format": "markdown", "body": "Synthetic body."}),
+            client_intent_id=f"staged-{suffix}",
+        ),
+        principal_id=principal_id,
+        idempotency_key=f"staged-general-report-{suffix}",
+        recorded_at=WHEN,
+        correlation_id=issue_identifier(IdKind.CORRELATION),
+        audit_id=issue_identifier(IdKind.AUDIT),
+    )
+    report_id = published.receipt.report_id
+    if archived:
+        reports.transition(
+            LifecycleRequest(
+                operation=LifecycleOperation.ARCHIVE,
+                report_id=report_id,
+                expected_lifecycle_revision=0,
+            ),
+            principal_id=principal_id,
+            idempotency_key=f"staged-general-report-archive-{suffix}",
+            recorded_at=WHEN,
+            correlation_id=issue_identifier(IdKind.CORRELATION),
+            audit_id=issue_identifier(IdKind.AUDIT),
+        )
+    return report_id
 
 
 def staged_task(scene: Scene, *, title: str = "a synthetic task") -> TaskV2:

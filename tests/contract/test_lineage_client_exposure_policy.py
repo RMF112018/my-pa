@@ -174,12 +174,19 @@ def test_v10_withheld_lineage_names_are_control_plane_excluded() -> None:
         assert is_operator_only(capability), capability
     # Only the GSQS pair remains an operator decision (Reports Modernization
     # WP02's `reports.publish` left it for `DATA_REQUIRED` in chatllm-data-v12);
-    # no lineage name is among them.
+    # no lineage name is among them. Reports Modernization WP03's five are held
+    # here until their remote registration.
     assert {
         capability
         for capability, policy in CHATLLM_CAPABILITY_POLICY.items()
         if policy.classification is ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED
-    } == {Capability.GSQS_START, Capability.GSQS_STATUS}
+    } == {Capability.GSQS_START, Capability.GSQS_STATUS} | {
+        Capability.REPORTS_UPDATE,
+        Capability.REPORTS_HISTORY,
+        Capability.REPORTS_ARCHIVE,
+        Capability.REPORTS_DELETE,
+        Capability.REPORTS_RESTORE,
+    }
 
 
 def test_the_lineage_name_sets_equal_the_switch_sets() -> None:

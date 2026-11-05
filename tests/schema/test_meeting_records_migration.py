@@ -317,8 +317,17 @@ ADMITTED_LATER_CAPABILITIES: Final = (
     | LINEAGE_S31_CAPABILITIES
     # CPM Workbench S5b-2: admitted by `621ef6786c64` and declared with it.
     | S5B2_CAPABILITIES
-    # Reports Modernization WP02: admitted by `4c37731671fc` and declared with it.
-    | frozenset({"reports.publish"})
+    # Reports Modernization WP02 and WP03: admitted by `4c37731671fc` and declared with it.
+    | frozenset(
+        {
+            "reports.publish",
+            "reports.update",
+            "reports.history",
+            "reports.archive",
+            "reports.delete",
+            "reports.restore",
+        }
+    )
 )
 ADMITTED_LATER_PURPOSES: Final = (
     frozenset(
@@ -335,6 +344,8 @@ ADMITTED_LATER_PURPOSES: Final = (
     | LINEAGE_S3_PURPOSES
     | LINEAGE_S4_PURPOSES
     | S5B2_PURPOSES
+    # Reports Modernization WP03: admitted by `4c37731671fc` and declared with it.
+    | frozenset({"report_lifecycle"})
 )
 
 

@@ -2115,7 +2115,16 @@ _ADMITTED_AFTER_THIS_REVISION: Final = (
     # And the CPM Workbench S5b-2 vocabulary revision with its own.
     | S5B2_CAPABILITIES
     # And the Reports Modernization general report plane head (`4c37731671fc`).
-    | frozenset({"reports.publish"})
+    | frozenset(
+        {
+            "reports.publish",
+            "reports.update",
+            "reports.history",
+            "reports.archive",
+            "reports.delete",
+            "reports.restore",
+        }
+    )
 )
 _PURPOSES_ADMITTED_AFTER_THIS_REVISION: Final = (
     LINEAGE_S1_PURPOSES
@@ -2123,6 +2132,8 @@ _PURPOSES_ADMITTED_AFTER_THIS_REVISION: Final = (
     | LINEAGE_S3_PURPOSES
     | LINEAGE_S4_PURPOSES
     | S5B2_PURPOSES
+    # Reports Modernization WP03: admitted by `4c37731671fc` and declared with it.
+    | frozenset({"report_lifecycle"})
 )
 
 

@@ -289,6 +289,12 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.REPORTS_TYPES_CREATE, Purpose.REPORT_AUTHORING),
         (Capability.REPORTS_TYPES_LIST, Purpose.REPORT_READ),
         (Capability.REPORTS_PUBLISH, Purpose.REPORT_AUTHORING),
+        # Reports Modernization WP03: the lifecycle writes take only their own purpose.
+        (Capability.REPORTS_UPDATE, Purpose.REPORT_AUTHORING),
+        (Capability.REPORTS_HISTORY, Purpose.REPORT_READ),
+        (Capability.REPORTS_ARCHIVE, Purpose.REPORT_LIFECYCLE),
+        (Capability.REPORTS_DELETE, Purpose.REPORT_LIFECYCLE),
+        (Capability.REPORTS_RESTORE, Purpose.REPORT_LIFECYCLE),
         # The entity plane. Every read on it shares the single `entity_read`
         # purpose, exactly as the task-plane reads share `task_read`. The writes
         # take `entity_authoring`, except `entities.observe`, which takes
@@ -599,8 +605,10 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # one of the pair: 240 capabilities, 62 purposes, 242 pairs.
     # Reports Modernization WP02 adds `reports.publish` under `report_authoring`
     # and no purpose: 241 capabilities, 62 purposes, 243 pairs.
-    assert len(PERMITTED_PAIRS) == 243
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 243 == 14699
+    # Reports Modernization WP03 adds 5 names, each under one purpose, and the
+    # `report_lifecycle` purpose: 246 capabilities, 63 purposes, 248 pairs.
+    assert len(PERMITTED_PAIRS) == 248
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 248 == 15250
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

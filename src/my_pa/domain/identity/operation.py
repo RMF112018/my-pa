@@ -419,7 +419,7 @@ class Capability(StrEnum):
     # Principal's own partition. Real handwriting remains fail-closed.
     GSQS_START = "gsqs.start"
     GSQS_STATUS = "gsqs.status"
-    # Intelligence Artifact / Report plane. Twelve `reports.*` names rather than a
+    # Intelligence Artifact / Report plane. Seventeen `reports.*` names rather than a
     # widening of `capture.*`, `documents.*`, `knowledge.*`, or `context.*`
     # (`D-91`). Capture is user-authored notes. Documents are managed bytes.
     # Knowledge is enrollment-scoped extraction. Context assembles a retrieval
@@ -456,6 +456,21 @@ class Capability(StrEnum):
     #: `knowledge.intelligence_*` table. `reports.read` reads it by its `grpt_`
     #: identifier. Insert-only: a publish reaches no existing report.
     REPORTS_PUBLISH = "reports.publish"
+    #: Mutable management of a standalone report (Reports Modernization WP03).
+    #: `update` appends version N+1 of an `active` report under an
+    #: `expected_version` CAS (an archived or trashed report is refused until
+    #: restored); `history` pages its version or lifecycle ledger, oldest first.
+    #: `archive`, `delete` and `restore` move its lifecycle under an
+    #: `expected_lifecycle_revision` CAS: `delete` moves it to the recoverable
+    #: Trash and never removes a row, and `restore` returns it to the state the
+    #: delete recorded. Every version, content object, manifest and association
+    #: stays exactly as written. The three lifecycle writes take
+    #: `report_lifecycle` only, never `report_authoring` (least privilege).
+    REPORTS_UPDATE = "reports.update"
+    REPORTS_HISTORY = "reports.history"
+    REPORTS_ARCHIVE = "reports.archive"
+    REPORTS_DELETE = "reports.delete"
+    REPORTS_RESTORE = "reports.restore"
     # The relationship-intelligence entity plane. Fifty-five `entities.` names
     # over `knowledge.entities` and the tables around it, declared in four
     # blocks by the package that added each: WP-RI-05's six reads here, then
@@ -1402,6 +1417,13 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.REPORTS_TYPES_CREATE: frozenset({Purpose.REPORT_AUTHORING}),
         Capability.REPORTS_TYPES_LIST: frozenset({Purpose.REPORT_READ}),
         Capability.REPORTS_PUBLISH: frozenset({Purpose.REPORT_AUTHORING}),
+        Capability.REPORTS_UPDATE: frozenset({Purpose.REPORT_AUTHORING}),
+        Capability.REPORTS_HISTORY: frozenset({Purpose.REPORT_READ}),
+        # Lifecycle moves take their own purpose and only it: a grant issued to
+        # publish or revise a report must not also be able to Trash it (RD-14).
+        Capability.REPORTS_ARCHIVE: frozenset({Purpose.REPORT_LIFECYCLE}),
+        Capability.REPORTS_DELETE: frozenset({Purpose.REPORT_LIFECYCLE}),
+        Capability.REPORTS_RESTORE: frozenset({Purpose.REPORT_LIFECYCLE}),
         Capability.ENTITIES_SEARCH: frozenset({Purpose.ENTITY_READ}),
         Capability.ENTITIES_UNRESOLVED_MENTIONS: frozenset({Purpose.ENTITY_READ}),
         Capability.ENTITIES_GET: frozenset({Purpose.ENTITY_READ}),
@@ -1770,6 +1792,12 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.REPORTS_RECORD_RUN_STATE,
         Capability.REPORTS_TYPES_CREATE,
         Capability.REPORTS_PUBLISH,
+        # Not additive: an update moves the head, and the lifecycle writes move
+        # the root's state (the `capture.archive`/`capture.restore` precedent).
+        Capability.REPORTS_UPDATE,
+        Capability.REPORTS_ARCHIVE,
+        Capability.REPORTS_DELETE,
+        Capability.REPORTS_RESTORE,
         Capability.RELATIONSHIP_MEMORY_CREATE,
         Capability.RELATIONSHIP_MEMORY_REVISE,
         Capability.RELATIONSHIP_MEMORY_ARCHIVE,

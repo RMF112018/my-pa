@@ -48,6 +48,7 @@ from tests.conftest import (
     metadata_for,
     operator,
     staged_capture,
+    staged_general_report,
     staged_search,
 )
 
@@ -62,6 +63,7 @@ from my_pa.application.commands import (
     ApplyConstraintSync,
     ArchiveCapture,
     ArchiveEntity,
+    ArchiveGeneralReport,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
     AssertRecordAssociation,
@@ -112,6 +114,7 @@ from my_pa.application.commands import (
     CreateTaskComment,
     DeactivateConstraintCategory,
     DecideReviewCase,
+    DeleteGeneralReport,
     EndEntityAffiliation,
     EndEntityAssignment,
     EndEntityParticipation,
@@ -131,6 +134,7 @@ from my_pa.application.commands import (
     GetEntityIdentityHistory,
     GetEntityProfile,
     GetEntityRelationships,
+    GetGeneralReportHistory,
     GetGoodNotesContent,
     GetGoodNotesPullStatus,
     GetGoodNotesWork,
@@ -242,6 +246,7 @@ from my_pa.application.commands import (
     ResolveUnresolvedMention,
     RestoreCapture,
     RestoreEntity,
+    RestoreGeneralReport,
     RestoreManagedDocument,
     RestoreRelationshipMemory,
     RetireEntityAddress,
@@ -286,6 +291,7 @@ from my_pa.application.commands import (
     UpdateConstraint,
     UpdateConstraintCategory,
     UpdateEntity,
+    UpdateGeneralReport,
     UpdateIssue,
     UpdateMeeting,
     UpdateMeetingSeries,
@@ -683,6 +689,30 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             title="Synthetic standalone report",
             content={"format": "markdown", "body": "Synthetic body."},
             idempotency_key="synthetic-publish",
+        ),
+        # Reports Modernization WP03: the same staged reports as the payload table.
+        Capability.REPORTS_UPDATE: UpdateGeneralReport(
+            report_id=staged_general_report(scene),
+            expected_version=1,
+            patch={"title": "Revised"},
+            change_reason="Synthetic revision.",
+            idempotency_key="policy-update",
+        ),
+        Capability.REPORTS_HISTORY: GetGeneralReportHistory(report_id=staged_general_report(scene)),
+        Capability.REPORTS_ARCHIVE: ArchiveGeneralReport(
+            report_id=staged_general_report(scene, label="archive"),
+            expected_lifecycle_revision=0,
+            idempotency_key="policy-archive",
+        ),
+        Capability.REPORTS_DELETE: DeleteGeneralReport(
+            report_id=staged_general_report(scene, label="trash"),
+            expected_lifecycle_revision=0,
+            idempotency_key="policy-delete",
+        ),
+        Capability.REPORTS_RESTORE: RestoreGeneralReport(
+            report_id=staged_general_report(scene, archived=True),
+            expected_lifecycle_revision=1,
+            idempotency_key="policy-restore",
         ),
         # The entity plane. Every identifier is minted rather than staged, for
         # the reason this table exists: a denial test must fail on the authority
@@ -1839,6 +1869,11 @@ SCOPED_CAPABILITIES = [
         Capability.REPORTS_TYPES_CREATE,
         Capability.REPORTS_TYPES_LIST,
         Capability.REPORTS_PUBLISH,
+        Capability.REPORTS_UPDATE,
+        Capability.REPORTS_HISTORY,
+        Capability.REPORTS_ARCHIVE,
+        Capability.REPORTS_DELETE,
+        Capability.REPORTS_RESTORE,
         # The entity plane is a read plane over the acting Principal's own
         # entities. An entity carries no enrollment a requested scope could be
         # compared against — it is the Principal's own record of a person, not
@@ -2184,6 +2219,11 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.REPORTS_TYPES_CREATE,
         Capability.REPORTS_TYPES_LIST,
         Capability.REPORTS_PUBLISH,
+        Capability.REPORTS_UPDATE,
+        Capability.REPORTS_HISTORY,
+        Capability.REPORTS_ARCHIVE,
+        Capability.REPORTS_DELETE,
+        Capability.REPORTS_RESTORE,
         Capability.ENTITIES_SEARCH,
         Capability.ENTITIES_GET,
         Capability.ENTITIES_RESOLVE,

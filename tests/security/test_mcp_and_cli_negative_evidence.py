@@ -384,6 +384,11 @@ SCOPED_CAPABILITIES = [
         Capability.REPORTS_TYPES_CREATE,
         Capability.REPORTS_TYPES_LIST,
         Capability.REPORTS_PUBLISH,
+        Capability.REPORTS_UPDATE,
+        Capability.REPORTS_HISTORY,
+        Capability.REPORTS_ARCHIVE,
+        Capability.REPORTS_DELETE,
+        Capability.REPORTS_RESTORE,
         # The relationship-intelligence entity plane (WP-RI-05) is scopeless for
         # the reason the two planes above are: an entity belongs to no `src_…`
         # and no `enr_…`, so there is no scope for a request to name and none to
@@ -978,6 +983,15 @@ KNOWLEDGE_AUTHORING_EXEMPTION = frozenset({Capability.KNOWLEDGE_ASSERTIONS_CREAT
 #: and no enrollment.
 REPORT_TYPE_AUTHORING_EXEMPTION = frozenset({Capability.REPORTS_TYPES_CREATE})
 
+#: Reports Modernization WP03's two writes the substring proxy refuses --
+#: `reports.update` and `reports.delete` -- on the same reading: they append a
+#: version to, or move to the recoverable Trash, the acting Principal's own
+#: standalone report, remove no row, and reach no source provider and no
+#: enrollment.
+GENERAL_REPORT_MANAGEMENT_EXEMPTION = frozenset(
+    {Capability.REPORTS_UPDATE, Capability.REPORTS_DELETE}
+)
+
 #: Record lineage S1's two Issue writes the substring proxy refuses --
 #: `issues.create` and `issues.update` -- on the same reading: they write the
 #: acting Principal's own Issue rows and revisions and reach no source provider
@@ -1025,6 +1039,7 @@ def test_neither_transport_routes_a_mutating_capability() -> None:
         | MEETING_AUTHORING_EXEMPTION
         | KNOWLEDGE_AUTHORING_EXEMPTION
         | REPORT_TYPE_AUTHORING_EXEMPTION
+        | GENERAL_REPORT_MANAGEMENT_EXEMPTION
         | ISSUE_AUTHORING_EXEMPTION
     )
     checked = [c for c in IMPLEMENTED_CAPABILITIES if c not in exempt]

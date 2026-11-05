@@ -137,6 +137,7 @@ from my_pa.application.commands import (
     ApplyConstraintSync,
     ArchiveCapture,
     ArchiveEntity,
+    ArchiveGeneralReport,
     ArchiveManagedDocument,
     ArchiveManagedDocumentCommand,
     ArchiveRelationshipMemory,
@@ -189,6 +190,7 @@ from my_pa.application.commands import (
     CreateTaskComment,
     DeactivateConstraintCategory,
     DecideReviewCase,
+    DeleteGeneralReport,
     EndEntityAffiliation,
     EndEntityAssignment,
     EndEntityParticipation,
@@ -208,6 +210,7 @@ from my_pa.application.commands import (
     GetEntityIdentityHistory,
     GetEntityProfile,
     GetEntityRelationships,
+    GetGeneralReportHistory,
     GetGoodNotesContent,
     GetGoodNotesPullStatus,
     GetGoodNotesWork,
@@ -322,6 +325,7 @@ from my_pa.application.commands import (
     ResolveUnresolvedMention,
     RestoreCapture,
     RestoreEntity,
+    RestoreGeneralReport,
     RestoreManagedDocument,
     RestoreManagedDocumentCommand,
     RestoreRelationshipMemory,
@@ -368,6 +372,7 @@ from my_pa.application.commands import (
     UpdateConstraint,
     UpdateConstraintCategory,
     UpdateEntity,
+    UpdateGeneralReport,
     UpdateIssue,
     UpdateMeeting,
     UpdateMeetingSeries,
@@ -376,8 +381,11 @@ from my_pa.application.commands import (
     VoidConstraint,
     WaitingOn,
     WaitingOnV2,
+    lifecycle_request,
     publication_request,
     report_refusal,
+    report_revision_refusal,
+    update_request,
 )
 from my_pa.application.commitments import CommitmentManagementService, CommitmentMutationReceipt
 from my_pa.application.commitments_v2 import (
@@ -684,6 +692,10 @@ from my_pa.contracts.ports import (
     ReportAssociationTargetNotFoundError,
     ReportIdempotencyConflictError,
     ReportIntegrityError,
+    ReportNotFoundError,
+    ReportStaleLifecycleRevisionError,
+    ReportStaleVersionError,
+    ReportWithdrawnError,
     ReviewDecisionRequest,
     ScheduleUnitOfWork,
     SearchOutcome,
@@ -944,10 +956,17 @@ from my_pa.domain.relationship.reenrichment import (
     ReenrichmentTrigger,
 )
 from my_pa.domain.relationship.resolution import EntityResolution
-from my_pa.domain.reports.errors import ReportValidationError
+from my_pa.domain.reports.errors import ReportLifecycleRefusal, ReportValidationError
 from my_pa.domain.reports.publication import PublicationResult
-from my_pa.domain.reports.records import StoredReportVersion
-from my_pa.domain.reports.vocabulary import ContentFormat, LifecycleState
+from my_pa.domain.reports.records import (
+    HistoryEntries,
+    ReportHistoryPage,
+    ReportLifecycleEventRecord,
+    ReportVersionSummary,
+    StoredReportVersion,
+)
+from my_pa.domain.reports.revision import LifecycleResult, UpdateResult
+from my_pa.domain.reports.vocabulary import ContentFormat, LifecycleState, ReceiptOperation
 from my_pa.domain.search.query import (
     DEFAULT_SNIPPET_WORDS,
     MAX_PAGE_SIZE,
@@ -3492,6 +3511,119 @@ def _general_publish_payload(result: PublicationResult) -> dict[str, Any]:
     }
 
 
+def _general_update_payload(result: UpdateResult) -> dict[str, Any]:
+    """What `reports.update` answers, the first time and on every replay (WP03 D)."""
+    return {
+        "plane": "standalone",
+        "report_id": result.report_id,
+        "outcome": result.outcome.value,
+        "version_id": result.version_id,
+        "version_number": result.version_number,
+        "change_kind": None if result.change_kind is None else result.change_kind.value,
+        "content_id": result.content_id,
+        "decoded_sha256": result.decoded_sha256,
+        "manifest_sha256": result.manifest_sha256,
+        "receipt": {
+            "receipt_id": result.receipt_id,
+            "operation": ReceiptOperation.UPDATE.value,
+            "outcome": result.outcome.value,
+            "expected_version": result.expected_version,
+            "issued_at": format_rfc3339(result.issued_at),
+            "correlation_id": result.correlation_id,
+            "audit_id": result.audit_id,
+        },
+        "replayed": result.replayed,
+    }
+
+
+def _general_lifecycle_payload(result: LifecycleResult) -> dict[str, Any]:
+    """What `reports.archive`, `reports.delete` and `reports.restore` answer (WP03 D)."""
+    return {
+        "plane": "standalone",
+        "report_id": result.report_id,
+        "operation": result.operation.value,
+        "outcome": result.outcome.value,
+        "prior_state": result.prior_state.value,
+        "lifecycle_state": result.resulting_state.value,
+        "lifecycle_revision": result.lifecycle_revision,
+        "event_id": result.event_id,
+        "receipt": {
+            "receipt_id": result.receipt_id,
+            "operation": result.operation.value,
+            "outcome": result.outcome.value,
+            "expected_lifecycle_revision": result.expected_lifecycle_revision,
+            "issued_at": format_rfc3339(result.issued_at),
+            "correlation_id": result.correlation_id,
+            "audit_id": result.audit_id,
+        },
+        "replayed": result.replayed,
+    }
+
+
+def _history_version_item(item: ReportVersionSummary) -> dict[str, Any]:
+    """One version on a `reports.history` page: descriptors and digests, never the body."""
+    payload: dict[str, Any] = {
+        "version_id": item.version_id,
+        "version_number": item.version_number,
+        "supersedes_version_id": item.supersedes_version_id,
+        "change_kind": item.change_kind.value,
+        "change_reason": item.change_reason,
+        "title": item.title,
+        "recorded_at": format_rfc3339(item.recorded_at),
+        "content": {
+            "content_id": item.content_id,
+            "format": item.format.value,
+            "encoding": item.encoding.value,
+            "storage_kind": item.storage_kind.value,
+            "decoded_sha256": item.decoded_sha256,
+            "decoded_byte_count": item.decoded_byte_count,
+            "canonical_sha256": item.canonical_sha256,
+            "original_sha256": item.original_sha256,
+        },
+        "manifest_sha256": item.manifest_sha256,
+    }
+    if item.manifest is not None:
+        payload["manifest"] = dict(item.manifest)
+    return payload
+
+
+def _history_lifecycle_item(item: ReportLifecycleEventRecord) -> dict[str, Any]:
+    """One lifecycle event on a `reports.history` page."""
+    return {
+        "event_id": item.event_id,
+        "lifecycle_revision": item.lifecycle_revision,
+        "operation": item.operation.value,
+        "prior_state": item.prior_state.value,
+        "resulting_state": item.resulting_state.value,
+        "reason": item.reason,
+        "transitioned_at": format_rfc3339(item.transitioned_at),
+    }
+
+
+def _general_history_payload(
+    page: ReportHistoryPage[ReportVersionSummary] | ReportHistoryPage[ReportLifecycleEventRecord],
+) -> dict[str, Any]:
+    """One `reports.history` page (WP03 D9), oldest first."""
+    root = page.root
+    items: list[dict[str, Any]] = [
+        _history_version_item(item)
+        if isinstance(item, ReportVersionSummary)
+        else _history_lifecycle_item(item)
+        for item in page.items
+    ]
+    return {
+        "plane": "standalone",
+        "report_id": root.report_id,
+        "head_version_id": root.head_version_id,
+        "head_version_number": root.head_version_number,
+        "lifecycle_state": root.lifecycle_state.value,
+        "lifecycle_revision": root.lifecycle_revision,
+        "entries": page.entries.value,
+        "items": items,
+        "next_cursor": page.next_cursor,
+    }
+
+
 def _general_read_payload(
     stored: StoredReportVersion, *, include_body: bool, include_manifest: bool
 ) -> dict[str, Any]:
@@ -3533,6 +3665,8 @@ def _general_read_payload(
         "version_number": version.version_number,
         "supersedes_version_id": version.supersedes_version_id,
         "change_kind": version.change_kind.value,
+        # WP03 D11: why this version was written (`null` for version 1).
+        "change_reason": version.change_reason,
         "title": version.title,
         "type": version.report_type,
         "topics": list(version.topics),
@@ -16169,6 +16303,171 @@ class ApplicationService:
             )
         raise refusal
 
+    def _reports_update(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: UpdateGeneralReport,
+    ) -> _Result:
+        """`reports.update`: version N+1 of an active report, a no-op, or the replay of its key.
+
+        Every server field comes from the authorization, exactly as
+        `_reports_publish`. Foreign and missing are one `not_found` on
+        `artifact_id`, the standalone read's token; a withdrawn report is the
+        caller's own, so it is `denied` (`report_withdrawn`), the
+        `capture_withdrawn` shape. Nothing of the patch is logged.
+        """
+        request = update_request(command)
+        refusal: ApplicationError
+        try:
+            result = unit_of_work.general_reports.update(
+                request,
+                principal_id=authorization.principal.principal_id,
+                idempotency_key=command.idempotency_key,
+                recorded_at=authorization.at,
+                correlation_id=authorization.correlation_id,
+                audit_id=authorization.audit_id,
+            )
+        except ReportValidationError as error:
+            refusal = report_revision_refusal(error)
+        except ReportNotFoundError:
+            refusal = NotFoundError(SafeDetail.ARTIFACT_ID)
+        except ReportIdempotencyConflictError:
+            refusal = ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+        except ReportWithdrawnError:
+            refusal = DeniedError(SafeDetail.REPORT_WITHDRAWN)
+        except ReportStaleVersionError:
+            refusal = ConflictError(SafeDetail.STALE_VERSION)
+        except ReportAssociationTargetNotFoundError:
+            refusal = NotFoundError(SafeDetail.ASSOCIATIONS)
+        except ReportIntegrityError:
+            refusal = InternalError()
+        else:
+            return _Result(
+                payload=_general_update_payload(result),
+                disclosure=unenrolled_disclosure(authorization.at),
+            )
+        raise refusal
+
+    def _reports_transition(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ArchiveGeneralReport | DeleteGeneralReport | RestoreGeneralReport,
+    ) -> _Result:
+        """`reports.archive`, `reports.delete` and `reports.restore`: one lifecycle move.
+
+        A stale revision is `conflict` on `expected_lifecycle_revision`, as
+        `capture.archive`; a move the current state does not admit is
+        `conflict` on `lifecycle_state`. No version, content, manifest or
+        association is touched; a delete is the recoverable Trash.
+        """
+        request = lifecycle_request(command)
+        refusal: ApplicationError
+        try:
+            result = unit_of_work.general_reports.transition(
+                request,
+                principal_id=authorization.principal.principal_id,
+                idempotency_key=command.idempotency_key,
+                recorded_at=authorization.at,
+                correlation_id=authorization.correlation_id,
+                audit_id=authorization.audit_id,
+            )
+        except ReportValidationError as error:
+            refusal = report_revision_refusal(error)
+        except ReportNotFoundError:
+            refusal = NotFoundError(SafeDetail.ARTIFACT_ID)
+        except ReportIdempotencyConflictError:
+            refusal = ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+        except ReportStaleLifecycleRevisionError:
+            refusal = ConflictError(SafeDetail.EXPECTED_LIFECYCLE_REVISION)
+        except ReportLifecycleRefusal:
+            refusal = ConflictError(SafeDetail.LIFECYCLE_STATE)
+        except ReportIntegrityError:
+            refusal = InternalError()
+        else:
+            return _Result(
+                payload=_general_lifecycle_payload(result),
+                disclosure=unenrolled_disclosure(authorization.at),
+            )
+        raise refusal
+
+    def _reports_archive(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ArchiveGeneralReport,
+    ) -> _Result:
+        return self._reports_transition(unit_of_work, authorization, command)
+
+    def _reports_delete(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: DeleteGeneralReport,
+    ) -> _Result:
+        return self._reports_transition(unit_of_work, authorization, command)
+
+    def _reports_restore(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: RestoreGeneralReport,
+    ) -> _Result:
+        return self._reports_transition(unit_of_work, authorization, command)
+
+    def _reports_history(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: GetGeneralReportHistory,
+    ) -> _Result:
+        """`reports.history`: one oldest-first page of versions or lifecycle events (D9).
+
+        A report that is not `active` answers `not_found` unless
+        `include_withdrawn`, exactly as the standalone read; foreign and
+        missing are the same `not_found`. A manifest that no longer matches its
+        rows is `internal_error`, never returned.
+        """
+        principal_id = authorization.principal.principal_id
+        reports = unit_of_work.general_reports
+        refusal: ApplicationError
+        page: (
+            ReportHistoryPage[ReportVersionSummary]
+            | ReportHistoryPage[ReportLifecycleEventRecord]
+            | None
+        )
+        try:
+            if command.entries is HistoryEntries.VERSIONS:
+                page = reports.version_history(
+                    command.report_id,
+                    principal_id=principal_id,
+                    after_version_id=command.after,
+                    page_size=command.resolved_page_size,
+                    include_manifests=command.include_manifests,
+                )
+            else:
+                page = reports.lifecycle_history(
+                    command.report_id,
+                    principal_id=principal_id,
+                    after_event_id=command.after,
+                    page_size=command.resolved_page_size,
+                )
+        except ReportValidationError as error:
+            refusal = report_revision_refusal(error)
+        except ReportIntegrityError:
+            refusal = InternalError()
+        else:
+            if page is not None and (
+                command.include_withdrawn or page.root.lifecycle_state is LifecycleState.ACTIVE
+            ):
+                return _Result(
+                    payload=_general_history_payload(page),
+                    disclosure=unenrolled_disclosure(authorization.at),
+                )
+            refusal = NotFoundError(SafeDetail.ARTIFACT_ID)
+        raise refusal
+
     def _reports_read_standalone(
         self,
         unit_of_work: UnitOfWork,
@@ -17335,6 +17634,11 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.REPORTS_TYPES_CREATE: ApplicationService._reports_types_create,
         Capability.REPORTS_TYPES_LIST: ApplicationService._reports_types_list,
         Capability.REPORTS_PUBLISH: ApplicationService._reports_publish,
+        Capability.REPORTS_UPDATE: ApplicationService._reports_update,
+        Capability.REPORTS_HISTORY: ApplicationService._reports_history,
+        Capability.REPORTS_ARCHIVE: ApplicationService._reports_archive,
+        Capability.REPORTS_DELETE: ApplicationService._reports_delete,
+        Capability.REPORTS_RESTORE: ApplicationService._reports_restore,
         Capability.ENTITIES_SEARCH: ApplicationService._entities_search,
         Capability.ENTITIES_GET: ApplicationService._entities_get,
         Capability.ENTITIES_RESOLVE: ApplicationService._entities_resolve,

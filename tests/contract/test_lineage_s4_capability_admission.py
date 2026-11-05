@@ -204,7 +204,7 @@ def test_s4_capabilities_are_operator_decision_required_reads() -> None:
     # since S3.1 adds its 4) never holds an S4 name.
     assert not declared & _LINEAGE_CAPABILITIES
     assert len(_LINEAGE_CAPABILITIES) == 34
-    assert len(list(Capability)) == 241
+    assert len(list(Capability)) == 246
     for capability in declared:
         name = capability.value
         assert capability in _SCOPELESS
@@ -337,7 +337,7 @@ def test_the_program_purpose_admits_exactly_the_program_reads() -> None:
     # No Program read may be reached through `report_read` (or any other purpose).
     for name in _PROGRAM_READS:
         assert permitted_purposes(Capability(name)) == frozenset({Purpose.PROGRAM_REPORTING_READ})
-    assert len(list(Purpose)) == 62
+    assert len(list(Purpose)) == 63
 
 
 def test_create_database_engine_keeps_its_default_checkout_timeout() -> None:

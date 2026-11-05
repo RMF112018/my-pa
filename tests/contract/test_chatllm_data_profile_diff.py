@@ -30,6 +30,17 @@ EXPIRED_AT = datetime(2026, 9, 13, 19, 48, 5, tzinfo=UTC)
 RESOURCE = "https://my-pa.example/mcp"
 SCOPE = "my-pa.read"
 IMPLEMENTED = frozenset(_HANDLERS)
+#: Reports Modernization WP03's five canonical names, classified
+#: OPERATOR_DECISION_REQUIRED until their remote/ChatLLM registration.
+_WP03_WITHHELD = frozenset(
+    {
+        Capability.REPORTS_UPDATE,
+        Capability.REPORTS_HISTORY,
+        Capability.REPORTS_ARCHIVE,
+        Capability.REPORTS_DELETE,
+        Capability.REPORTS_RESTORE,
+    }
+)
 
 _FULL_PLANES = ChatLLMCompositionPlanes(
     managed_documents=True,
@@ -1146,8 +1157,10 @@ def test_v12_adds_exactly_reports_publish_on_every_composition() -> None:
         )
         assert publish in desired, planes
         # `reports.manifest` stays program-reporting conditional; every other
-        # `reports.*` name is required on every composition.
-        assert reports - {Capability.REPORTS_MANIFEST} <= desired, planes
+        # `reports.*` name is required on every composition, but Reports
+        # Modernization WP03's five, withheld until their remote registration.
+        assert reports - {Capability.REPORTS_MANIFEST} - _WP03_WITHHELD <= desired, planes
+        assert not _WP03_WITHHELD & desired, planes
 
 
 def test_a_v11_converged_client_plans_exactly_the_reports_publish_add() -> None:

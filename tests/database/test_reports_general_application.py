@@ -1,4 +1,4 @@
-"""Reports Modernization WP02: `reports.publish` and standalone `reports.read` on PostgreSQL.
+"""Reports Modernization WP02/WP03: the standalone report plane end to end on PostgreSQL.
 
 The `database` tier, on a disposable clone of the current head
 (`migrated_engine`). Every request goes through the canonical local MCP server
@@ -14,6 +14,13 @@ The `database` tier, on a disposable clone of the current head
 * a foreign Principal's report reads exactly as a nonexistent one;
 * an association to the caller's own report is `verified`, one to another
   Principal's is `not_found` and writes nothing;
+* WP03: a metadata update reuses the content object and a content update
+  writes one; both read back, with `change_reason`, and page through
+  `reports.history` with verified manifests; a replay writes nothing; a stale
+  update, a stale or illegal lifecycle move writes nothing; archive, delete
+  and restore round-trip (archived -> trashed -> archived) with every version
+  kept, an update of a withdrawn report is refused, and a foreign Principal
+  meets `not_found` on every one of them;
 * no `knowledge.intelligence_*` row is ever written.
 
 Every title, body and identifier is synthetic.
@@ -240,3 +247,191 @@ def test_foreign_reads_and_foreign_associations_are_not_found(migrated_engine: E
     assert refused["error"]["code"] == "not_found"
     assert refused["error"]["safe_details"] == ["associations"]
     assert mine["report_id"] not in str(refused)
+
+
+# ---- Reports Modernization WP03: update, history, archive, delete, restore ----------------
+
+#: The plane tables a lifecycle move or an update may write, with the events table.
+MUTATION_TABLES: Final = (*PLANE_TABLES, "report_lifecycle_events")
+
+
+def _update(report_id: str, key: str, patch: dict[str, Any], version: int) -> dict[str, Any]:
+    return {
+        "report_id": report_id,
+        "expected_version": version,
+        "patch": patch,
+        "change_reason": "A synthetic revision.",
+        "idempotency_key": key,
+    }
+
+
+def _move(report_id: str, key: str, revision: int) -> dict[str, Any]:
+    return {"report_id": report_id, "expected_lifecycle_revision": revision, "idempotency_key": key}
+
+
+def test_update_metadata_and_content_read_back_with_history(migrated_engine: Engine) -> None:
+    principal = operator()
+    with mcp_transport(_service(migrated_engine), principal) as mcp:
+        published = _ok(_send(mcp, principal, Capability.REPORTS_PUBLISH, MINIMAL))
+        rid = published["report_id"]
+        metadata = _ok(
+            _send(
+                mcp,
+                principal,
+                Capability.REPORTS_UPDATE,
+                _update(rid, "db-update-1", {"title": "Revised", "tags": ["risk"]}, 1),
+            )
+        )
+        assert metadata["change_kind"] == "metadata"
+        assert metadata["version_number"] == 2
+        assert metadata["content_id"] == published["content"]["content_id"]
+        assert _counts(migrated_engine, ("report_content_objects", "report_versions")) == {
+            "report_content_objects": 1,
+            "report_versions": 2,
+        }
+        body = "# Assessment\n\nRevised text"
+        content = _ok(
+            _send(
+                mcp,
+                principal,
+                Capability.REPORTS_UPDATE,
+                _update(rid, "db-update-2", {"content": {"format": "markdown", "body": body}}, 2),
+            )
+        )
+        assert content["change_kind"] == "content"
+        assert content["decoded_sha256"] == hashlib.sha256(body.encode()).hexdigest()
+        read = _ok(
+            _send(
+                mcp,
+                principal,
+                Capability.REPORTS_READ,
+                {"report_id": rid, "include_manifest": True},
+            )
+        )
+        assert read["version_number"] == 3
+        assert read["title"] == "Revised"
+        assert read["tags"] == ["risk"]
+        assert read["content"]["body"] == body
+        assert read["change_reason"] == "A synthetic revision."
+        assert manifest_digest(read["manifest"]) == content["manifest_sha256"]
+        first = _ok(
+            _send(mcp, principal, Capability.REPORTS_READ, {"report_id": rid, "version_number": 1})
+        )
+        assert first["content"]["body"] == BODY
+        assert first["change_reason"] is None
+        history = _ok(
+            _send(
+                mcp,
+                principal,
+                Capability.REPORTS_HISTORY,
+                {"report_id": rid, "page_size": 2, "include_manifests": True},
+            )
+        )
+        assert [item["version_number"] for item in history["items"]] == [1, 2]
+        assert [item["change_kind"] for item in history["items"]] == ["initial", "metadata"]
+        for item in history["items"]:
+            assert manifest_digest(item["manifest"]) == item["manifest_sha256"]
+        rest = _ok(
+            _send(
+                mcp,
+                principal,
+                Capability.REPORTS_HISTORY,
+                {"report_id": rid, "after": history["next_cursor"]},
+            )
+        )
+        assert [item["version_number"] for item in rest["items"]] == [3]
+        assert rest["next_cursor"] is None
+        # A replay writes nothing.
+        before = _counts(migrated_engine, MUTATION_TABLES)
+        replay = _ok(
+            _send(
+                mcp,
+                principal,
+                Capability.REPORTS_UPDATE,
+                _update(rid, "db-update-1", {"title": "Revised", "tags": ["risk"]}, 1),
+            )
+        )
+        assert replay["replayed"] is True
+        assert replay["version_id"] == metadata["version_id"]
+        assert _counts(migrated_engine, MUTATION_TABLES) == before
+    assert set(_counts(migrated_engine, INTELLIGENCE_TABLES).values()) == {0}
+
+
+def test_a_stale_update_and_a_stale_move_write_nothing(migrated_engine: Engine) -> None:
+    principal = operator()
+    with mcp_transport(_service(migrated_engine), principal) as mcp:
+        rid = _ok(_send(mcp, principal, Capability.REPORTS_PUBLISH, MINIMAL))["report_id"]
+        _ok(_send(mcp, principal, Capability.REPORTS_UPDATE, _update(rid, "u1", {"title": "A"}, 1)))
+        before = _counts(migrated_engine, MUTATION_TABLES)
+        stale = _send(
+            mcp, principal, Capability.REPORTS_UPDATE, _update(rid, "u2", {"title": "B"}, 1)
+        )
+        assert stale["error"]["code"] == "conflict"
+        assert stale["error"]["safe_details"] == ["stale_version"]
+        moved = _send(mcp, principal, Capability.REPORTS_ARCHIVE, _move(rid, "a1", 3))
+        assert moved["error"]["code"] == "conflict"
+        assert moved["error"]["safe_details"] == ["expected_lifecycle_revision"]
+        illegal = _send(mcp, principal, Capability.REPORTS_RESTORE, _move(rid, "r1", 0))
+        assert illegal["error"]["code"] == "conflict"
+        assert illegal["error"]["safe_details"] == ["lifecycle_state"]
+        assert _counts(migrated_engine, MUTATION_TABLES) == before
+
+
+def test_archive_delete_restore_round_trip_on_postgresql(migrated_engine: Engine) -> None:
+    owner, stranger = operator(), operator()
+    service = _service(migrated_engine)
+    with mcp_transport(service, owner) as mcp:
+        rid = _ok(_send(mcp, owner, Capability.REPORTS_PUBLISH, MINIMAL))["report_id"]
+        archived = _ok(_send(mcp, owner, Capability.REPORTS_ARCHIVE, _move(rid, "a", 0)))
+        assert (archived["lifecycle_state"], archived["lifecycle_revision"]) == ("archived", 1)
+        withdrawn = _send(
+            mcp, owner, Capability.REPORTS_UPDATE, _update(rid, "u", {"title": "A"}, 1)
+        )
+        assert withdrawn["error"]["code"] == "denied"
+        assert withdrawn["error"]["safe_details"] == ["report_withdrawn"]
+        trashed = _ok(_send(mcp, owner, Capability.REPORTS_DELETE, _move(rid, "d", 1)))
+        assert (trashed["prior_state"], trashed["lifecycle_state"]) == ("archived", "trashed")
+        hidden = _send(mcp, owner, Capability.REPORTS_READ, {"report_id": rid})
+        assert hidden["error"]["code"] == "not_found"
+        restored = _ok(_send(mcp, owner, Capability.REPORTS_RESTORE, _move(rid, "r", 2)))
+        assert (restored["lifecycle_state"], restored["lifecycle_revision"]) == ("archived", 3)
+        read = _ok(
+            _send(
+                mcp, owner, Capability.REPORTS_READ, {"report_id": rid, "include_withdrawn": True}
+            )
+        )
+        assert read["lifecycle_state"] == "archived"
+        assert read["content"]["body"] == BODY
+        events = _ok(
+            _send(
+                mcp,
+                owner,
+                Capability.REPORTS_HISTORY,
+                {"report_id": rid, "entries": "lifecycle", "include_withdrawn": True},
+            )
+        )
+        assert [(e["operation"], e["resulting_state"]) for e in events["items"]] == [
+            ("archive", "archived"),
+            ("delete", "trashed"),
+            ("restore", "archived"),
+        ]
+        assert _counts(migrated_engine, ("report_lifecycle_events", "report_versions")) == {
+            "report_lifecycle_events": 3,
+            "report_versions": 1,
+        }
+    with mcp_transport(service, stranger) as mcp:
+        before = _counts(migrated_engine, MUTATION_TABLES)
+        foreign = [
+            _send(mcp, stranger, Capability.REPORTS_RESTORE, _move(rid, "fr", 3)),
+            _send(mcp, stranger, Capability.REPORTS_UPDATE, _update(rid, "fu", {"title": "X"}, 1)),
+            _send(
+                mcp,
+                stranger,
+                Capability.REPORTS_HISTORY,
+                {"report_id": rid, "include_withdrawn": True},
+            ),
+        ]
+        assert _counts(migrated_engine, MUTATION_TABLES) == before
+    for answer in foreign:
+        assert answer["error"]["code"] == "not_found"
+        assert answer["error"]["safe_details"] == ["artifact_id"]

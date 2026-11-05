@@ -158,7 +158,9 @@ def test_at_sets_equal_the_live_enums() -> None:
     `4c37731671fc` (+ `reports.publish`), so the head-equals-enum claim moves
     to that revision's literal, on the precedent of every earlier restatement:
     this revision's AT text is byte-for-byte the head's frozen BEFORE text, and
-    the head's AT set is the live enums. Purposes are not restated there.
+    the head's AT set is the live enums. WP03 adds its five names there and
+    restates purposes too (+ `report_lifecycle`), so the purpose claim moves
+    to the head's literal in the same way.
     """
     mine = _namespace()
     capabilities = _literals(mine["_CAPABILITIES_AT_THIS_REVISION"])
@@ -174,10 +176,22 @@ def test_at_sets_equal_the_live_enums() -> None:
         member.value for member in NativeSourceCapability
     }
     assert set(head_capabilities) == declared
-    assert set(head_capabilities) - set(capabilities) == {"reports.publish"}
-    assert len(head_capabilities) == len(declared) == 252
-    assert set(purposes) == {member.value for member in Purpose}
+    assert set(head_capabilities) - set(capabilities) == {
+        "reports.publish",
+        "reports.update",
+        "reports.history",
+        "reports.archive",
+        "reports.delete",
+        "reports.restore",
+    }
+    assert len(head_capabilities) == len(declared) == 257
+    assert head["_PURPOSES_BEFORE_THIS_REVISION"] == mine["_PURPOSES_AT_THIS_REVISION"]
+    head_purposes = _literals(head["_PURPOSES_AT_THIS_REVISION"])
+    assert head_purposes == sorted(head_purposes)
+    assert set(head_purposes) == {member.value for member in Purpose}
+    assert set(head_purposes) - set(purposes) == {"report_lifecycle"}
     assert len(purposes) == 62
+    assert len(head_purposes) == 63
     before = set(_literals(mine["_CAPABILITIES_BEFORE_THIS_REVISION"]))
     assert set(capabilities) - before == S5B2_CAPABILITIES
     assert set(purposes) - set(_literals(mine["_PURPOSES_BEFORE_THIS_REVISION"])) == S5B2_PURPOSES

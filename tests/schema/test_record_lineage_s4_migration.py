@@ -210,11 +210,20 @@ def test_at_vocabulary_adds_exactly_the_s4_names() -> None:
         {capability.value for capability in Capability}
         - S31_CAPABILITIES
         - S5B2_CAPABILITIES
-        - {"reports.publish"}
+        # (and Reports Modernization WP03's five, the head's too).
+        - {
+            "reports.publish",
+            "reports.update",
+            "reports.history",
+            "reports.archive",
+            "reports.delete",
+            "reports.restore",
+        }
     )
     native = {capability.value for capability in NativeSourceCapability}
     assert set(at) == declared | native | gap.lineage_s4_admitted_ahead("capability")
-    purposes = {purpose.value for purpose in Purpose} - S5B2_PURPOSES
+    # Reports Modernization WP03's purpose is the head's (4c37731671fc).
+    purposes = {purpose.value for purpose in Purpose} - S5B2_PURPOSES - {"report_lifecycle"}
     assert set(purposes_at) == purposes | gap.lineage_s4_admitted_ahead("purpose")
     assert S4_CAPABILITIES & declared == gap.S4_CAPABILITIES_DECLARED_BY_DOMAIN
     assert S4_PURPOSES & purposes == gap.S4_PURPOSES_DECLARED_BY_DOMAIN

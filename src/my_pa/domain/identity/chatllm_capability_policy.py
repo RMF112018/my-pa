@@ -373,6 +373,15 @@ _OPERATOR_DECISION_REQUIRED: Final[frozenset[Capability]] = frozenset(
     {
         Capability.GSQS_START,
         Capability.GSQS_STATUS,
+        # Reports Modernization WP03: withheld, not yet eligible. Classified only
+        # so the policy stays exhaustive when the canonical capabilities land;
+        # the remote/ChatLLM registration work package makes them DATA_REQUIRED
+        # and bumps the profile version. No profile or grant changes here.
+        Capability.REPORTS_UPDATE,
+        Capability.REPORTS_HISTORY,
+        Capability.REPORTS_ARCHIVE,
+        Capability.REPORTS_DELETE,
+        Capability.REPORTS_RESTORE,
     }
 )
 
@@ -490,6 +499,11 @@ _LINEAGE_ATTESTED_EXCLUSION: Final = (
     "(operator directive 2026-10-26)"
 )
 
+#: Reports Modernization WP03's five, withheld until their remote registration.
+_REPORT_MANAGEMENT_EXCLUSION: Final = (
+    "general report management withheld pending remote registration (WP03)"
+)
+
 _EXCLUSION_RATIONALE: Final[Mapping[Capability, str]] = MappingProxyType(
     {
         Capability.CAPABILITIES_GET: "ChatLLM my_pa.describe replaces catalog introspection",
@@ -521,6 +535,11 @@ _EXCLUSION_RATIONALE: Final[Mapping[Capability, str]] = MappingProxyType(
         Capability.ISSUES_MEMBERSHIPS_CONFIRM: _LINEAGE_ATTESTED_EXCLUSION,
         Capability.ISSUES_PROJECT_LINKS_CONFIRM: _LINEAGE_ATTESTED_EXCLUSION,
         Capability.SCHEDULE_PUBLICATIONS_IMPORT: _SCHEDULE_IMPORT_EXCLUSION,
+        Capability.REPORTS_UPDATE: _REPORT_MANAGEMENT_EXCLUSION,
+        Capability.REPORTS_HISTORY: _REPORT_MANAGEMENT_EXCLUSION,
+        Capability.REPORTS_ARCHIVE: _REPORT_MANAGEMENT_EXCLUSION,
+        Capability.REPORTS_DELETE: _REPORT_MANAGEMENT_EXCLUSION,
+        Capability.REPORTS_RESTORE: _REPORT_MANAGEMENT_EXCLUSION,
     }
 )
 

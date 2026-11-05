@@ -328,12 +328,27 @@ def test_at_vocabulary_adds_exactly_the_s2_names() -> None:
         - S31_CAPABILITIES
         # The CPM Workbench S5b-2 names too, that revision's (621ef6786c64).
         - S5B2_CAPABILITIES
-        # And Reports Modernization WP02's `reports.publish`, the head's (4c37731671fc).
-        - {"reports.publish"}
+        # And Reports Modernization WP02's `reports.publish` and WP03's five, the
+        # head's (4c37731671fc).
+        - {
+            "reports.publish",
+            "reports.update",
+            "reports.history",
+            "reports.archive",
+            "reports.delete",
+            "reports.restore",
+        }
     )
     native = {capability.value for capability in NativeSourceCapability}
     assert set(at) == declared | native | gap.lineage_s2_admitted_ahead("capability")
-    purposes = {purpose.value for purpose in Purpose} - S3_PURPOSES - S4_PURPOSES - S5B2_PURPOSES
+    purposes = (
+        {purpose.value for purpose in Purpose}
+        - S3_PURPOSES
+        - S4_PURPOSES
+        - S5B2_PURPOSES
+        # Reports Modernization WP03's purpose, the head's (4c37731671fc).
+        - {"report_lifecycle"}
+    )
     assert set(purposes_at) == purposes | gap.lineage_s2_admitted_ahead("purpose")
     assert S2_CAPABILITIES & declared == gap.S2_CAPABILITIES_DECLARED_BY_DOMAIN
     assert S2_PURPOSES & purposes == gap.S2_PURPOSES_DECLARED_BY_DOMAIN

@@ -331,6 +331,12 @@ def test_sql_forty_nine_cycle_kind_counts_and_digest_readback(migrated_engine: E
         "reports.manifest",
         # Reports Modernization WP02: the standalone plane's publish.
         "reports.publish",
+        # Reports Modernization WP03: its management.
+        "reports.update",
+        "reports.history",
+        "reports.archive",
+        "reports.delete",
+        "reports.restore",
     }
 
 

@@ -177,7 +177,16 @@ def test_non_lineage_tool_annotations_are_unchanged() -> None:
     # Reports Modernization WP02: `reports.publish` is new and pinned by
     # `tests/contract/test_mcp_transport.py`; the extended `reports.read` keeps
     # its annotations and stays in the digest.
-    others = frozenset(_tools()) - plane - schedule - {Capability.REPORTS_PUBLISH.value}
+    # Reports Modernization WP03's five are new and pinned by
+    # `tests/contract/test_mcp_transport.py` too.
+    wp03 = {
+        Capability.REPORTS_UPDATE.value,
+        Capability.REPORTS_HISTORY.value,
+        Capability.REPORTS_ARCHIVE.value,
+        Capability.REPORTS_DELETE.value,
+        Capability.REPORTS_RESTORE.value,
+    }
+    others = frozenset(_tools()) - plane - schedule - {Capability.REPORTS_PUBLISH.value} - wp03
     assert len(others) == 192
     for name in sorted(others):
         capability = Capability(name)

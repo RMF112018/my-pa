@@ -584,6 +584,12 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.REPORTS_TYPES_CREATE,
         # Reports Modernization WP02: additive, so not in `destructive_writes`.
         Capability.REPORTS_PUBLISH,
+        # Reports Modernization WP03: writes that move a head or a lifecycle,
+        # so destructive too.
+        Capability.REPORTS_UPDATE,
+        Capability.REPORTS_ARCHIVE,
+        Capability.REPORTS_DELETE,
+        Capability.REPORTS_RESTORE,
         Capability.RELATIONSHIP_MEMORY_CREATE,
         Capability.RELATIONSHIP_MEMORY_REVISE,
         Capability.RELATIONSHIP_MEMORY_ARCHIVE,
@@ -665,6 +671,10 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.MEETINGS_SERIES_UPDATE,
     }
     destructive_writes = {
+        Capability.REPORTS_UPDATE,
+        Capability.REPORTS_ARCHIVE,
+        Capability.REPORTS_DELETE,
+        Capability.REPORTS_RESTORE,
         Capability.CAPTURE_REVISE,
         Capability.CAPTURE_ARCHIVE,
         Capability.CAPTURE_RESTORE,

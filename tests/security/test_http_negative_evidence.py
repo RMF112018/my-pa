@@ -60,6 +60,7 @@ from tests.conftest import (
     staged_capture,
     staged_commitment,
     staged_continuity_project,
+    staged_general_report,
     staged_goodnotes_raster,
     staged_goodnotes_work,
     staged_managed_document,
@@ -774,6 +775,31 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "title": "Negative standalone report",
             "content": {"format": "markdown", "body": "# Negative\n\nSynthetic body."},
             "idempotency_key": "negative-publish",
+        },
+        # Reports Modernization WP03: a staged active report, and a staged
+        # archived one for `reports.restore` (`staged_general_report`).
+        Capability.REPORTS_UPDATE: {
+            "report_id": staged_general_report(marked),
+            "expected_version": 1,
+            "patch": {"title": "Revised"},
+            "change_reason": "Synthetic revision.",
+            "idempotency_key": "negative-update",
+        },
+        Capability.REPORTS_HISTORY: {"report_id": staged_general_report(marked)},
+        Capability.REPORTS_ARCHIVE: {
+            "report_id": staged_general_report(marked, label="archive"),
+            "expected_lifecycle_revision": 0,
+            "idempotency_key": "negative-archive",
+        },
+        Capability.REPORTS_DELETE: {
+            "report_id": staged_general_report(marked, label="trash"),
+            "expected_lifecycle_revision": 0,
+            "idempotency_key": "negative-delete",
+        },
+        Capability.REPORTS_RESTORE: {
+            "report_id": staged_general_report(marked, archived=True),
+            "expected_lifecycle_revision": 1,
+            "idempotency_key": "negative-restore",
         },
         # The relationship-intelligence entity plane (WP-RI-05), and its payloads
         # carry no marker, deliberately. Every one of the five is a read whose
@@ -2167,6 +2193,11 @@ SCOPED_CAPABILITIES = [
         Capability.REPORTS_TYPES_CREATE,
         Capability.REPORTS_TYPES_LIST,
         Capability.REPORTS_PUBLISH,
+        Capability.REPORTS_UPDATE,
+        Capability.REPORTS_HISTORY,
+        Capability.REPORTS_ARCHIVE,
+        Capability.REPORTS_DELETE,
+        Capability.REPORTS_RESTORE,
         # The relationship-intelligence entity plane (WP-RI-05) is scopeless for
         # the reason the two planes above are: an entity belongs to no `src_…`
         # and no `enr_…`, so there is no scope for a request to name and none to
@@ -2698,6 +2729,15 @@ KNOWLEDGE_AUTHORING_EXEMPTION = frozenset({Capability.KNOWLEDGE_ASSERTIONS_CREAT
 #: and no enrollment.
 REPORT_TYPE_AUTHORING_EXEMPTION = frozenset({Capability.REPORTS_TYPES_CREATE})
 
+#: Reports Modernization WP03's two writes the substring proxy refuses --
+#: `reports.update` and `reports.delete` -- on the same reading: they append a
+#: version to, or move to the recoverable Trash, the acting Principal's own
+#: standalone report, remove no row, and reach no source provider and no
+#: enrollment.
+GENERAL_REPORT_MANAGEMENT_EXEMPTION = frozenset(
+    {Capability.REPORTS_UPDATE, Capability.REPORTS_DELETE}
+)
+
 #: Record lineage S1's two Issue writes the substring proxy refuses --
 #: `issues.create` and `issues.update` -- on the same reading: they write the
 #: acting Principal's own Issue rows and revisions and reach no source provider
@@ -2763,6 +2803,7 @@ def test_the_transport_routes_no_mutating_capability() -> None:
         | MEETING_AUTHORING_EXEMPTION
         | KNOWLEDGE_AUTHORING_EXEMPTION
         | REPORT_TYPE_AUTHORING_EXEMPTION
+        | GENERAL_REPORT_MANAGEMENT_EXEMPTION
         | ISSUE_AUTHORING_EXEMPTION
     )
     checked = [c for c in _BUILDERS if c not in exempt]

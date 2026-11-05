@@ -402,12 +402,26 @@ def test_at_vocabulary_adds_exactly_the_s3_names() -> None:
         - S4_CAPABILITIES
         - S31_CAPABILITIES
         - S5B2_CAPABILITIES
-        # And Reports Modernization WP02's `reports.publish`, the head's (4c37731671fc).
-        - {"reports.publish"}
+        # And Reports Modernization WP02's `reports.publish` and WP03's five, the
+        # head's (4c37731671fc).
+        - {
+            "reports.publish",
+            "reports.update",
+            "reports.history",
+            "reports.archive",
+            "reports.delete",
+            "reports.restore",
+        }
     )
     native = {capability.value for capability in NativeSourceCapability}
     assert set(at) == declared | native | gap.lineage_s3_admitted_ahead("capability")
-    purposes = {purpose.value for purpose in Purpose} - S4_PURPOSES - S5B2_PURPOSES
+    purposes = (
+        {purpose.value for purpose in Purpose}
+        - S4_PURPOSES
+        - S5B2_PURPOSES
+        # Reports Modernization WP03's purpose, the head's (4c37731671fc).
+        - {"report_lifecycle"}
+    )
     assert set(purposes_at) == purposes | gap.lineage_s3_admitted_ahead("purpose")
     assert S3_CAPABILITIES & declared == gap.S3_CAPABILITIES_DECLARED_BY_DOMAIN
     assert S3_PURPOSES & purposes == gap.S3_PURPOSES_DECLARED_BY_DOMAIN

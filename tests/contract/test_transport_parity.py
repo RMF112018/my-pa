@@ -77,6 +77,7 @@ from tests.conftest import (
     staged_capture,
     staged_commitment,
     staged_continuity_project,
+    staged_general_report,
     staged_goodnotes_raster,
     staged_goodnotes_work,
     staged_managed_document,
@@ -1261,6 +1262,31 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "topics": ["parity"],
             "client_intent_id": "parity-1",
         },
+        # Reports Modernization WP03: a staged active report, and a staged
+        # archived one for `reports.restore` (`staged_general_report`).
+        Capability.REPORTS_UPDATE: {
+            "report_id": staged_general_report(scene),
+            "expected_version": 1,
+            "patch": {"title": "Revised"},
+            "change_reason": "Synthetic revision.",
+            "idempotency_key": "parity-update",
+        },
+        Capability.REPORTS_HISTORY: {"report_id": staged_general_report(scene)},
+        Capability.REPORTS_ARCHIVE: {
+            "report_id": staged_general_report(scene, label="archive"),
+            "expected_lifecycle_revision": 0,
+            "idempotency_key": "parity-archive",
+        },
+        Capability.REPORTS_DELETE: {
+            "report_id": staged_general_report(scene, label="trash"),
+            "expected_lifecycle_revision": 0,
+            "idempotency_key": "parity-delete",
+        },
+        Capability.REPORTS_RESTORE: {
+            "report_id": staged_general_report(scene, archived=True),
+            "expected_lifecycle_revision": 1,
+            "idempotency_key": "parity-restore",
+        },
         # The relationship-intelligence entity plane (WP-RI-05). `person` and
         # `organization` are staged before the world is copied per transport, so
         # all three read the same rows and a read is the same read everywhere.
@@ -2375,7 +2401,7 @@ def test_there_are_three_transports_to_compare() -> None:
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
     # The command union and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 242, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 247, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -3362,7 +3388,7 @@ def test_declared_unwired_capabilities_stay_separate_from_positive_parity(
     from my_pa.application.errors import UnsupportedError
 
     assert set(Capability) - set(_HANDLERS) == FUTURE_CAPABILITIES
-    assert len(IMPLEMENTED_CAPABILITIES) == 241
+    assert len(IMPLEMENTED_CAPABILITIES) == 246
     assert set(_BUILDERS) == set(IMPLEMENTED_CAPABILITIES)
     assert {Capability(tool.name) for tool in TOOLS} == set(IMPLEMENTED_CAPABILITIES)
 

@@ -361,6 +361,14 @@ def test_existing_v1_shapes_are_unchanged_by_s3() -> None:
     }
     # Reports Modernization WP02: see `_V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_READ`.
     lineage |= {Capability.REPORTS_PUBLISH.value, Capability.REPORTS_READ.value}
+    # Reports Modernization WP03: its five new names, each excluded as new.
+    lineage |= {
+        Capability.REPORTS_UPDATE.value,
+        Capability.REPORTS_HISTORY.value,
+        Capability.REPORTS_ARCHIVE.value,
+        Capability.REPORTS_DELETE.value,
+        Capability.REPORTS_RESTORE.value,
+    }
     payloads = {
         tool.name: tool.input_schema["properties"]["payload"]
         for tool in TOOLS
@@ -385,13 +393,15 @@ def test_existing_v1_shapes_are_unchanged_by_s3() -> None:
     # Program purpose after it (S4 contract sections 8 and 10, R4-F04, R4-F15).
     basis_tail = ["record_lineage_authoring", "meeting_note_history_read", "issue_work_authoring"]
     published = TOOLS[0].input_schema["$defs"]["Purpose"]["enum"]
-    # CPM Workbench S5b-2 appends its 2 purposes after S4's (contract 3.12).
-    assert published[-7:] == [
+    # CPM Workbench S5b-2 appends its 2 purposes after S4's (contract 3.12),
+    # and Reports Modernization WP03 its `report_lifecycle` after those.
+    assert published[-8:] == [
         *basis_tail,
         "lineage_backfill",
         "program_reporting_read",
         "schedule_import",
         "schedule_read",
+        "report_lifecycle",
     ]
 
 

@@ -476,3 +476,9 @@ class Purpose(StrEnum):
     # A-to-B delta, which no existing purpose names. A read purpose of its own,
     # used by exactly the 6 Schedule reads.
     SCHEDULE_READ = "schedule_read"
+    # Reports Modernization WP03 (RD-14), on `D-91`: would reuse widen the grant?
+    # `report_authoring` would: a grant issued to publish or revise a report
+    # would then also archive it or move it to the Trash. Least privilege: a
+    # write purpose of its own, used by exactly `reports.archive`,
+    # `reports.delete` and `reports.restore`, and implied by no other purpose.
+    REPORT_LIFECYCLE = "report_lifecycle"

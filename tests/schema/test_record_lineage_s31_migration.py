@@ -395,7 +395,17 @@ def test_at_vocabulary_adds_exactly_the_s31_names() -> None:
     # Workbench S5b-2 names, declared since, are that revision's (621ef6786c64).
     # Reports Modernization WP02's `reports.publish` is the head's (4c37731671fc).
     declared = (
-        {capability.value for capability in Capability} - S5B2_CAPABILITIES - {"reports.publish"}
+        {capability.value for capability in Capability}
+        - S5B2_CAPABILITIES
+        # And WP03's five, the head's too.
+        - {
+            "reports.publish",
+            "reports.update",
+            "reports.history",
+            "reports.archive",
+            "reports.delete",
+            "reports.restore",
+        }
     )
     native = {capability.value for capability in NativeSourceCapability}
     assert set(at) == declared | native | gap.lineage_s31_admitted_ahead("capability")

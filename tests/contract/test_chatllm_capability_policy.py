@@ -76,7 +76,7 @@ _MEETINGS = _MEETING_READS | _MEETING_WRITES
 
 def test_policy_covers_every_public_capability_exactly_once() -> None:
     assert set(CHATLLM_CAPABILITY_POLICY) == set(Capability)
-    assert len(CHATLLM_CAPABILITY_POLICY) == 241
+    assert len(CHATLLM_CAPABILITY_POLICY) == 246
     assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
 
 
@@ -111,8 +111,11 @@ def test_classification_counts_match_the_approved_plan() -> None:
     # 2026-10-26) makes the decision: 34 to data, 5 to excluded, 41 -> 2, and
     # the profile bumps to v10. Reports Modernization WP02 held `reports.publish`
     # here until its remote registration, 2 -> 3, then made it `DATA_REQUIRED`
-    # (chatllm-data-v12), 3 -> 2.
-    assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 2
+    # (chatllm-data-v12), 3 -> 2. Reports Modernization WP03 holds its five
+    # (`reports.update`, `.history`, `.archive`, `.delete`, `.restore`) here
+    # until their remote registration, 2 -> 7; no data-class member moves, so no
+    # profile bump.
+    assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 7
     assert counts[ChatLLMCapabilityClass.RETIRED] == 0
 
 

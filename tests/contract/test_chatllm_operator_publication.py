@@ -114,8 +114,16 @@ async def test_full_inventory_catalog_without_execution(scene: Scene) -> None:
         and c.value not in PROGRAM_REPORTING_CAPABILITIES
         # Nor are the CPM Workbench S5b-2 Schedule names.
         and not c.value.startswith("schedule_")
-        # Nor is Reports Modernization WP02's `reports.publish`.
-        and c.value != "reports.publish"
+        # Nor is Reports Modernization WP02's `reports.publish`, nor WP03's five.
+        and c.value
+        not in {
+            "reports.publish",
+            "reports.update",
+            "reports.history",
+            "reports.archive",
+            "reports.delete",
+            "reports.restore",
+        }
     }
     assert len(deployed) == 190
     assert deployed <= names

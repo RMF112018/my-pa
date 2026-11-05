@@ -215,6 +215,7 @@ def _artifact(
     body: str = "legacy body",
     principal_id: str = PRINCIPAL_A,
     is_current: bool = True,
+    artifact_state: ArtifactState = ArtifactState.FINAL,
 ) -> None:
     store.artifacts[(principal_id, artifact_id)] = IntelligenceArtifact(
         artifact_id=artifact_id,
@@ -228,7 +229,7 @@ def _artifact(
         body_markdown=body,
         content_sha256=content_digest(body),
         content_bytes=len(body.encode("utf-8")),
-        artifact_state=ArtifactState.FINAL,
+        artifact_state=artifact_state,
         schema_version="1",
         generated_at=at,
         committed_at=at,
@@ -276,6 +277,21 @@ def test_the_in_memory_legacy_catalog_keeps_the_sql_rules() -> None:
         CatalogFilters(lifecycle_states=frozenset({LifecycleState.ARCHIVED})),
     ):
         assert _legacy(store, excluded) == []
+
+
+def test_the_in_memory_legacy_list_leaves_out_current_superseded_rows() -> None:
+    """C2 refinement: list = current and not superseded; search = current."""
+    store = InMemoryIntelligenceStore()
+    _artifact(store, "rpt_final00001", title="Dunlin")
+    _artifact(
+        store,
+        "rpt_cursuper01",
+        at=T0 + timedelta(hours=1),
+        title="Dunlin",
+        artifact_state=ArtifactState.SUPERSEDED,
+    )
+    assert _legacy(store) == ["rpt_final00001"]
+    assert _legacy(store, query="dunlin") == ["rpt_cursuper01", "rpt_final00001"]
 
 
 def test_the_token_stand_in_is_deterministic() -> None:

@@ -660,9 +660,11 @@ class SqlIntelligenceStore:
         """Current artifacts as the `all` catalog plane reads them (WP04 C2/C6), read-only.
 
         `is_current` rows only, of any kind (an unregistered `type` just
-        matches nothing). Excluded entirely, `()`, when the filters name topics,
-        tags or an association (legacy rows carry none) or omit `active` (a
-        legacy row counts as active). `type` is `artifact_kind`, the created
+        matches nothing); a list also leaves out `superseded` rows, as the
+        legacy list does by default (contract C2 refinement). Excluded
+        entirely, `()`, when the filters name topics, tags or an association
+        (legacy rows carry none) or omit `active` (a legacy row counts as
+        active). `type` is `artifact_kind`, the created
         range `committed_at` (half-open), the report-date range `report_date`
         (inclusive). Order, rank and keyset are the standalone catalog's over
         `(committed_at, artifact_id COLLATE "C")`; a search's snippet is the
@@ -694,6 +696,10 @@ class SqlIntelligenceStore:
         ):
             return ()
         conditions: list[ColumnElement[bool]] = [artifacts.c.is_current.is_(True)]
+        if query is None:
+            # The list mirrors the legacy list's default (`include_superseded`
+            # false); the search keeps the legacy search's `is_current` only.
+            conditions.append(artifacts.c.artifact_state != ArtifactState.SUPERSEDED.value)
         if filters.report_type is not None:
             conditions.append(artifacts.c.artifact_kind == filters.report_type)
         if filters.created_from is not None:

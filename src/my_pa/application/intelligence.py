@@ -236,7 +236,8 @@ class IntelligenceStore(Protocol):
     ) -> tuple[tuple[IntelligenceArtifact, int | None, str | None], ...]:
         """Current artifacts as the `all` catalog plane reads them (WP04), read-only.
 
-        `is_current` only, any kind; `()` when the filters name topics, tags or
+        `is_current` only (a list also without `superseded`, as the legacy
+        list's default), any kind; `()` when the filters name topics, tags or
         an association, or omit `active`. Order `(rank DESC,) committed_at
         DESC, artifact_id DESC` (code-point order), strictly after `after`.
         Each item is `(artifact, rank, snippet)`, rank and snippet `None` in a
@@ -2103,6 +2104,9 @@ class InMemoryIntelligenceStore:
         found: list[tuple[tuple[int, datetime, str], IntelligenceArtifact, int | None]] = []
         for (owner, _artifact_id), artifact in self.artifacts.items():
             if owner != principal_id or not artifact.is_current:
+                continue
+            if query is None and artifact.artifact_state is ArtifactState.SUPERSEDED:
+                # The legacy list's default; the search keeps `is_current` only.
                 continue
             if filters.report_type is not None and artifact.artifact_kind != filters.report_type:
                 continue

@@ -626,6 +626,7 @@ def _artifact(
     kind: ArtifactKind = ArtifactKind.COLLECTOR_CANDIDATES,
     report_date: date = date(2026, 11, 1),
     is_current: bool = True,
+    artifact_state: ArtifactState | None = None,
 ) -> None:
     """One artifact in a cycle and run of its own (one current head per coordinate)."""
     _SEEDED["n"] += 1
@@ -671,7 +672,8 @@ def _artifact(
             body_markdown=body,
             content_sha256=content_digest(body),
             content_bytes=len(body.encode("utf-8")),
-            artifact_state=ArtifactState.FINAL if is_current else ArtifactState.SUPERSEDED,
+            artifact_state=artifact_state
+            or (ArtifactState.FINAL if is_current else ArtifactState.SUPERSEDED),
             schema_version="1",
             generated_at=committed_at,
             committed_at=committed_at,
@@ -838,3 +840,44 @@ def test_one_cursor_orders_both_planes_together(migrated_engine: Engine) -> None
     standalone_position = CatalogCursor(binding=BINDING, sort_time=T0, report_id=standalone)
     assert _legacy_ids(migrated_engine, after=standalone_position) == []
     assert _legacy_ids(migrated_engine, after=legacy_position) == []
+
+
+def test_legacy_membership_mirrors_each_capabilitys_legacy_default(
+    migrated_engine: Engine,
+) -> None:
+    """C2 refinement: a list leaves out a current `superseded` row, a search keeps it.
+
+    The legacy list (`include_superseded` false) filters `is_current AND
+    artifact_state <> 'superseded'`; the legacy search filters `is_current`
+    only. The `all` plane's legacy half mirrors each.
+    """
+    with migrated_engine.begin() as connection:
+        _artifact(connection, artifact_id="rpt_final00001", committed_at=T0, title="Whimbrel")
+        _artifact(
+            connection,
+            artifact_id="rpt_partial001",
+            committed_at=T0 + timedelta(hours=1),
+            title="Whimbrel partial",
+            artifact_state=ArtifactState.PARTIAL,
+        )
+        _artifact(
+            connection,
+            artifact_id="rpt_cursuper01",
+            committed_at=T0 + timedelta(hours=2),
+            title="Whimbrel superseded",
+            artifact_state=ArtifactState.SUPERSEDED,
+        )
+        _artifact(
+            connection,
+            artifact_id="rpt_oldhead001",
+            committed_at=T0 + timedelta(hours=3),
+            title="Whimbrel old",
+            is_current=False,
+        )
+    assert _legacy_ids(migrated_engine) == ["rpt_partial001", "rpt_final00001"]
+    # Ranks differ by title length, so the search is compared as a set.
+    assert set(_legacy_ids(migrated_engine, query="whimbrel")) == {
+        "rpt_cursuper01",
+        "rpt_partial001",
+        "rpt_final00001",
+    }

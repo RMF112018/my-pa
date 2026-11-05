@@ -363,6 +363,14 @@ EXEMPT_PROPERTIES: Final[frozenset[tuple[str, str]]] = frozenset(
         ("knowledge.assertions.submit", "source_profile_id"),
         ("knowledge.discovery.checkpoint", "source_profile_id"),
         ("goodnotes.propose", "uncertainty"),
+        # Reports WP05: the optional declared byte count and SHA-256 of the gunzipped
+        # bytes of a gzip+base64 content value. Matched only because "unc" is the
+        # UNC-path token inside "uncompressed"; an integer and a hex digest, never
+        # a location, and the names are the published contract's.
+        ("reports.publish", "uncompressed_byte_count"),
+        ("reports.publish", "uncompressed_sha256"),
+        ("reports.update", "uncompressed_byte_count"),
+        ("reports.update", "uncompressed_sha256"),
         # The version of the record a proposal asks to change, not where a file
         # lives. Exempt on the `direction` precedent above: it trips the scan on
         # the substring "target", and it is an `integer` -- a positive record
@@ -749,7 +757,9 @@ def test_the_location_scan_would_catch_one() -> None:
     # Modernization WP02's three association reference fields on `reports.publish`,
     # and WP03's same three nested in `reports.update`'s `patch`. Plus WP04's
     # `associated_with` filter members on `reports.list` and `reports.search`.
-    assert len(EXEMPT_PROPERTIES) == 64
+    # Plus WP05's declared `uncompressed_byte_count` / `uncompressed_sha256` on
+    # `reports.publish` content and `reports.update` patch content ("unc").
+    assert len(EXEMPT_PROPERTIES) == 68
     for tool_name, property_name in EXEMPT_PROPERTIES:
         tool = next(entry for entry in TOOLS if entry.name == tool_name)
         assert property_name in set(_schema_property_names(tool.input_schema))

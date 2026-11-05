@@ -904,7 +904,7 @@ def test_reports_publish_and_the_extended_read_publish_their_exact_schemas() -> 
     }
     content = payload["properties"]["content"]
     assert content["properties"]["format"]["enum"] == ["markdown", "text", "json", "mixed"]
-    assert content["properties"]["encoding"]["enum"] == ["identity"]
+    assert content["properties"]["encoding"]["enum"] == ["identity", "gzip+base64"]
     assert content["additionalProperties"] is False
     read = tools[Capability.REPORTS_READ.value]
     assert read.annotations is not None

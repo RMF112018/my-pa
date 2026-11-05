@@ -330,3 +330,36 @@ def test_unreadable_entries_name_every_malformed_entry(tmp_path: Path) -> None:
     assert store.stored_object_ids() == tuple(sorted((good, no_decoded)))
     for entry in unreadable:
         assert not entry.startswith("/")
+
+
+def test_a_put_fsyncs_every_parent_whose_directory_it_created(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Corrective N1: a newly made `content/` and shard are durable names in their parents."""
+    store = _store(tmp_path)
+    object_id = issue_identifier(IdKind.REPORT_CONTENT)
+    real = os.fsync
+    synced: list[int] = []
+
+    def spy(descriptor: int) -> None:
+        synced.append(os.fstat(descriptor).st_ino)
+        real(descriptor)
+
+    monkeypatch.setattr(os, "fsync", spy)
+    store.put(object_id, decoded=DECODED, original=None)
+    monkeypatch.undo()
+    directory = _object_dir(store, object_id)
+    for parent in (store.root, store.root / "content", directory.parent, directory):
+        assert parent.stat().st_ino in synced, parent.relative_to(tmp_path)
+
+    # A second object in an existing shard makes no directory but its own.
+    sibling = issue_identifier(IdKind.REPORT_CONTENT)
+    while sibling.split("_", 1)[1][:2] != directory.parent.name:
+        sibling = issue_identifier(IdKind.REPORT_CONTENT)
+    synced.clear()
+    monkeypatch.setattr(os, "fsync", spy)
+    store.put(sibling, decoded=DECODED, original=None)
+    monkeypatch.undo()
+    assert store.root.stat().st_ino not in synced
+    assert (store.root / "content").stat().st_ino not in synced
+    assert directory.parent.stat().st_ino in synced

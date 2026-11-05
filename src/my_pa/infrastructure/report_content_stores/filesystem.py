@@ -237,8 +237,9 @@ class FilesystemReportContentStore(ReportContentStore):
         """A descriptor for `root/parts...`, each component opened `O_NOFOLLOW`.
 
         With `create`, each missing component is made with `mkdirat` (0700)
-        relative to the level above first. A component that is a symbolic link
-        (or not a directory) is refused by the kernel at its `openat`.
+        relative to the level above first, and that level is `fsync`ed. A
+        component that is a symbolic link (or not a directory) is refused by
+        the kernel at its `openat`.
         """
         current = self._open_root()
         try:
@@ -252,6 +253,16 @@ class FilesystemReportContentStore(ReportContentStore):
                         raise ReportContentStoreError(
                             "a report content directory could not be created"
                         ) from None
+                    else:
+                        # The new name is durable only once its parent is: the
+                        # root when `<namespace>` is made, the namespace when a
+                        # shard is (the shard itself is fsynced by `put`).
+                        try:
+                            os.fsync(current)
+                        except OSError:
+                            raise ReportContentStoreError(
+                                "a report content directory could not be made durable"
+                            ) from None
                 try:
                     nested = os.open(part, _DIRECTORY_FLAGS, dir_fd=current)
                 except FileNotFoundError:

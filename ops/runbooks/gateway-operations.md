@@ -106,11 +106,16 @@ the 7 S4 reads), and `issues.close`, `issues.reopen`, the 3 `confirm` names and 
 production environment block, switch matrix, grant and companion tables, read-only recon
 and residual risks are in
 [`remote-mcp-cloudflare.md`, "Record lineage client exposure (P1)"](remote-mcp-cloudflare.md#record-lineage-client-exposure-p1).
-The current profile, `chatllm-data-v12` (Reports Modernization WP02), adds only
-`reports.publish` (standalone report publication; a `DATA_REQUIRED` write under
-`report_authoring`, needing no plane switch); `profile-plan` for a client converged on
-`chatllm-data-v11` adds exactly that one grant. Its inline content limit is 524,288
-decoded UTF-8 bytes, but the whole JSON request must also fit the 762,288-byte
+The current profile, `chatllm-data-v13` (Reports Modernization WP03), adds only
+`reports.update`, `reports.history`, `reports.archive`, `reports.delete` and
+`reports.restore` as `DATA_REQUIRED` (no plane switch): update under `report_authoring`
+(write), history under `report_read`, and archive, delete (recoverable Trash) and restore under
+the new `report_lifecycle` purpose (write), which `report_authoring` never implies;
+`profile-plan` for a client converged on `chatllm-data-v12` adds exactly those 5 grants.
+`chatllm-data-v12` (Reports Modernization WP02) added only `reports.publish` (standalone
+report publication; a `DATA_REQUIRED` write under `report_authoring`, needing no plane
+switch), so a client converged on `chatllm-data-v11` plans those 6 adds. `reports.publish`'s
+inline content limit is 524,288 decoded UTF-8 bytes, but the whole JSON request must also fit the 762,288-byte
 `MAX_REQUEST_BYTES` request ceiling, so heavily escaped content (quotes, backslashes,
 control characters, `\u`-escaped non-ASCII) may need to be smaller; a request over the
 ceiling is refused at the transport (HTTP 413) before any handler runs. `chatllm-data-v11` (CPM Workbench S5b-2) added the 6 Schedule reads

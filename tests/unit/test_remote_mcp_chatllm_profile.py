@@ -287,7 +287,7 @@ def test_profile_apply_adds_the_meeting_grants_once_and_then_converges(
         desired = _grant_v2_catalog(repository)
         code, plan = _profile(repository, "profile-plan", capsys)
         assert code == 1
-        assert plan["profile_version"] == "chatllm-data-v12"
+        assert plan["profile_version"] == "chatllm-data-v13"
         assert plan["healthy"] is False
         assert plan["actions"] == [
             {
@@ -339,7 +339,7 @@ def test_profile_commands_refuse_the_previous_profile_version(
         with pytest.raises(SystemExit) as raised:
             _profile(repository, "profile-apply", capsys, profile_version="chatllm-data-v9")
         assert raised.value.code == 2
-        assert "profile version must be chatllm-data-v12" in capsys.readouterr().err
+        assert "profile version must be chatllm-data-v13" in capsys.readouterr().err
         rows = repository.list_capability_grants(remote_client_id=CLIENT_UUID)
         assert not any(row.capability.startswith("meetings.") for row in rows)
 
@@ -390,7 +390,7 @@ def test_v6_profile_apply_adds_the_knowledge_grants_only_with_the_plane_on(
         )
         plan = json.loads(capsys.readouterr().out)
     assert code == 1
-    assert plan["profile_version"] == "chatllm-data-v12"
+    assert plan["profile_version"] == "chatllm-data-v13"
     assert plan["actions"] == [
         {
             "kind": "add",
@@ -478,7 +478,7 @@ def test_v10_profile_plan_adds_the_lineage_grants_only_with_the_switch_on(
         # The switch off (the stand-in's default): converged, no lineage action.
         code, off = _plan_with(repository, _FULL_PLANE_SETTINGS, capsys)
         assert code == 0 and off["healthy"] is True
-        assert off["profile_version"] == "chatllm-data-v12"
+        assert off["profile_version"] == "chatllm-data-v13"
         assert not set(adds(off)) & every
         # The lineage switch on: exactly the 27 `LINEAGE` adds.
         on = SimpleNamespace(**{**vars(_FULL_PLANE_SETTINGS), "lineage_enabled": True})
@@ -689,7 +689,7 @@ def test_v12_profile_diff_plan_and_apply_show_exactly_the_reports_publish_delta(
         desired = _grant_v11_catalog(repository)
         code, diff = _profile(repository, "profile-diff", capsys)
         assert code == 1
-        assert diff["profile_version"] == "chatllm-data-v12"
+        assert diff["profile_version"] == "chatllm-data-v13"
         assert diff["healthy"] is False
         assert diff["add"] == [publish]
         assert diff["renew"] == []
@@ -702,7 +702,7 @@ def test_v12_profile_diff_plan_and_apply_show_exactly_the_reports_publish_delta(
 
         code, plan = _profile(repository, "profile-plan", capsys)
         assert code == 1
-        assert plan["profile_version"] == "chatllm-data-v12"
+        assert plan["profile_version"] == "chatllm-data-v13"
         assert plan["actions"] == [
             {
                 "kind": "add",
@@ -747,6 +747,127 @@ def test_v12_profile_commands_refuse_v11(capsys: pytest.CaptureFixture[str]) -> 
         with pytest.raises(SystemExit) as raised:
             _profile(repository, "profile-apply", capsys, profile_version="chatllm-data-v11")
         assert raised.value.code == 2
-        assert "profile version must be chatllm-data-v12" in capsys.readouterr().err
+        assert "profile version must be chatllm-data-v13" in capsys.readouterr().err
         rows = repository.list_capability_grants(remote_client_id=CLIENT_UUID)
         assert Capability.REPORTS_PUBLISH.value not in {row.capability for row in rows}
+
+
+# ---- Reports Modernization WP03 (chatllm-data-v13) --------------------------------
+
+#: WP03's five, with the purpose and write flag the v13 planner stamps on each.
+_WP03_GRANTS = {
+    Capability.REPORTS_ARCHIVE: (Purpose.REPORT_LIFECYCLE, True),
+    Capability.REPORTS_DELETE: (Purpose.REPORT_LIFECYCLE, True),
+    Capability.REPORTS_HISTORY: (Purpose.REPORT_READ, False),
+    Capability.REPORTS_RESTORE: (Purpose.REPORT_LIFECYCLE, True),
+    Capability.REPORTS_UPDATE: (Purpose.REPORT_AUTHORING, True),
+}
+
+
+def _grant_v12_catalog(repository: RemoteIdentityRepository) -> frozenset[Capability]:
+    """Converge the client on everything v13 wants except WP03's five (= v12)."""
+    desired = desired_effective_capabilities(
+        composed_capabilities(
+            frozenset(_HANDLERS),
+            ChatLLMCompositionPlanes(
+                managed_documents=True,
+                relationship_intelligence=True,
+                relationship_intelligence_writes=True,
+                relationship_memory=True,
+                constraints=True,
+            ),
+        )
+    )
+    assert set(_WP03_GRANTS) <= desired
+    for capability in sorted(desired - set(_WP03_GRANTS), key=lambda c: c.value):
+        repository.grant(
+            remote_client_id=CLIENT_UUID,
+            external_scope=SCOPE,
+            capability=capability,
+            now=WHEN,
+            is_write=is_write_capability(capability),
+            resource=RESOURCE,
+            expires_at=None,
+            purpose=chatllm_grant_purpose(capability),
+        )
+    return desired
+
+
+def test_v13_profile_diff_plan_and_apply_show_exactly_the_report_management_delta(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A v12-converged client: diff, plan and apply move exactly WP03's five.
+
+    The operator-readable delta of the v12 -> v13 bump, `report_lifecycle` its own
+    grant purpose. Synthetic in-memory store only; no real client or grant is
+    touched.
+    """
+    names = sorted(capability.value for capability in _WP03_GRANTS)
+    with _repository() as (_, repository):
+        desired = _grant_v12_catalog(repository)
+        code, diff = _profile(repository, "profile-diff", capsys)
+        assert code == 1
+        assert diff["profile_version"] == "chatllm-data-v13"
+        assert diff["healthy"] is False
+        assert diff["add"] == names
+        assert diff["renew"] == []
+        assert diff["failing"] == names
+        assert diff["unexpected_control_plane"] == []
+        assert diff["policy_required_not_implemented"] == []
+        for name in names:
+            assert diff["outcomes"][name] == "IMPLEMENTED_COMPOSED_GRANT_MISSING"  # type: ignore[index]
+        assert diff["desired_effective_count"] == len(desired)
+
+        code, plan = _profile(repository, "profile-plan", capsys)
+        assert code == 1
+        assert plan["profile_version"] == "chatllm-data-v13"
+        assert plan["actions"] == [
+            {
+                "kind": "add",
+                "capability": capability.value,
+                "purpose": purpose.value,
+                "write": write,
+                "grant_id": None,
+            }
+            for capability, (purpose, write) in _WP03_GRANTS.items()
+        ]
+        assert len(repository.list_capability_grants(remote_client_id=CLIENT_UUID)) == (
+            len(desired) - 5
+        )
+
+        code, applied = _profile(repository, "profile-apply", capsys)
+        assert code == 0
+        assert applied["actions"] == plan["actions"]
+        rows = {
+            row.capability: row
+            for row in repository.list_capability_grants(remote_client_id=CLIENT_UUID)
+            if row.capability in names
+        }
+        assert sorted(rows) == names
+        for capability, (purpose, write) in _WP03_GRANTS.items():
+            row = rows[capability.value]
+            assert (row.purpose, row.is_write, row.capability_version) == (
+                purpose.value,
+                write,
+                "v1",
+            )
+            assert (row.resource, row.external_scope, row.expires_at, row.revoked_at) == (
+                RESOURCE,
+                SCOPE,
+                None,
+                None,
+            )
+        code, converged = _profile(repository, "profile-diff", capsys)
+        assert code == 0
+        assert converged["healthy"] is True
+
+
+def test_v13_profile_commands_refuse_v12(capsys: pytest.CaptureFixture[str]) -> None:
+    with _repository() as (_, repository):
+        _grant_v12_catalog(repository)
+        with pytest.raises(SystemExit) as raised:
+            _profile(repository, "profile-apply", capsys, profile_version="chatllm-data-v12")
+        assert raised.value.code == 2
+        assert "profile version must be chatllm-data-v13" in capsys.readouterr().err
+        rows = repository.list_capability_grants(remote_client_id=CLIENT_UUID)
+        assert not {row.capability for row in rows} & {c.value for c in _WP03_GRANTS}

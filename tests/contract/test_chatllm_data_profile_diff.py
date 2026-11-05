@@ -3,6 +3,7 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
+import pytest
 from apps.cli.remote_mcp import main
 
 from my_pa.adapters.remote_request import resolve_remote_purpose
@@ -17,6 +18,7 @@ from my_pa.application.chatllm_data_profile import (
     diff_chatllm_data_profile,
     plan_chatllm_grant_actions,
 )
+from my_pa.application.errors import UnsupportedError
 from my_pa.application.service import _HANDLERS
 from my_pa.domain.identity.chatllm_capability_policy import (
     CHATLLM_DATA_PROFILE_VERSION,
@@ -30,9 +32,9 @@ EXPIRED_AT = datetime(2026, 9, 13, 19, 48, 5, tzinfo=UTC)
 RESOURCE = "https://my-pa.example/mcp"
 SCOPE = "my-pa.read"
 IMPLEMENTED = frozenset(_HANDLERS)
-#: Reports Modernization WP03's five canonical names, classified
-#: OPERATOR_DECISION_REQUIRED until their remote/ChatLLM registration.
-_WP03_WITHHELD = frozenset(
+#: Reports Modernization WP03's five standalone report management names,
+#: `DATA_REQUIRED` since chatllm-data-v13.
+_WP03_MANAGEMENT = frozenset(
     {
         Capability.REPORTS_UPDATE,
         Capability.REPORTS_HISTORY,
@@ -236,11 +238,14 @@ def test_full_plane_effective_target_is_one_hundred_forty_nine() -> None:
     one (`record_events.list`, `DATA_REQUIRED` on the core plane).
     `chatllm-data-v9` moved it by two (`reports.types.create`/`list`).
     `chatllm-data-v12` moved it by one (`reports.publish`, `DATA_REQUIRED`).
+    `chatllm-data-v13` moved it by five (Reports Modernization WP03's management
+    names, `DATA_REQUIRED`).
     """
     composed = composed_capabilities(IMPLEMENTED, _FULL_PLANES)
     desired = desired_effective_capabilities(composed)
-    assert len(desired) == 165
+    assert len(desired) == 170
     assert Capability.REPORTS_PUBLISH in desired
+    assert desired >= _WP03_MANAGEMENT
     assert Capability.PROJECT_CONTROLS_CONFIGURE in desired
     assert Capability.PROJECT_CONTROLS_STATUS in desired
     assert Capability.REPORTS_BEGIN_CYCLE in desired
@@ -256,9 +261,10 @@ def test_default_plane_effective_target_is_eighty_three() -> None:
     # The six Meeting capabilities need no plane flag, so they are in the
     # default-plane target too (re-measured from the live derivation), and so
     # does WP-RE-06's `record_events.list`, and v9's two `reports.types.*` names,
-    # and v12's `reports.publish`.
-    assert len(desired) == 99
+    # and v12's `reports.publish`, and v13's five report management names.
+    assert len(desired) == 104
     assert Capability.REPORTS_PUBLISH in desired
+    assert desired >= _WP03_MANAGEMENT
     assert desired >= _REPORT_TYPES
     assert Capability.RECORD_EVENTS_LIST in desired
     assert desired >= _MEETINGS
@@ -456,7 +462,7 @@ def test_no_path_grants_every_capability_enum_member() -> None:
     assert Capability.SOURCES_ENROLL not in desired
     assert Capability.GSQS_START not in desired
     assert Capability.CONTINUITY_TASKS_CREATE not in desired
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
 
 
 def test_mismatched_purpose_or_write_is_add_not_noop() -> None:
@@ -710,7 +716,7 @@ def test_a_v2_converged_client_plans_exactly_the_six_meeting_adds() -> None:
         scope=SCOPE,
     )
     assert not diff.is_healthy()
-    assert diff.profile_version == "chatllm-data-v12"
+    assert diff.profile_version == "chatllm-data-v13"
     assert diff.add == _MEETINGS
     assert diff.renew == frozenset()
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
@@ -733,7 +739,7 @@ def test_a_v3_converged_client_plans_exactly_the_record_events_add() -> None:
         scope=SCOPE,
     )
     assert not diff.is_healthy()
-    assert diff.profile_version == "chatllm-data-v12"
+    assert diff.profile_version == "chatllm-data-v13"
     assert diff.add == feed
     assert diff.renew == frozenset()
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
@@ -760,7 +766,7 @@ def test_a_v4_converged_client_plans_exactly_the_capture_lifecycle_adds() -> Non
         scope=SCOPE,
     )
     assert not diff.is_healthy()
-    assert diff.profile_version == "chatllm-data-v12"
+    assert diff.profile_version == "chatllm-data-v13"
     assert diff.add == lifecycle
     assert diff.renew == frozenset()
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
@@ -871,7 +877,7 @@ def test_v6_demands_the_knowledge_grants_only_when_the_plane_is_composed() -> No
         resource=RESOURCE,
         scope=SCOPE,
     )
-    assert diff.profile_version == "chatllm-data-v12"
+    assert diff.profile_version == "chatllm-data-v13"
     assert diff.add == _KNOWLEDGE_V8
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
     added = {action.capability: action for action in actions if action.kind == "add"}
@@ -944,7 +950,7 @@ def test_v8_adds_exactly_provenance_and_still_excludes_the_discovery_pair() -> N
     Knowledge plane (and the entity plane it requires) is composed, and submit
     and checkpoint are never desired.
     """
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
     provenance = Capability.RECORD_EVENTS_PROVENANCE
     assert is_chatllm_data_management(provenance)
     discovery = {Capability.KNOWLEDGE_ASSERTIONS_SUBMIT, Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT}
@@ -972,7 +978,7 @@ def test_v9_adds_exactly_the_report_type_registry_on_every_composition() -> None
     sixty-four compositions both are desired, and nothing else moved: the v8
     plane-conditional and excluded names keep exactly their v8 behaviour.
     """
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
     for capability in _REPORT_TYPES:
         assert is_chatllm_data_management(capability)
     discovery = {Capability.KNOWLEDGE_ASSERTIONS_SUBMIT, Capability.KNOWLEDGE_DISCOVERY_CHECKPOINT}
@@ -1007,7 +1013,7 @@ def test_a_v8_converged_client_plans_exactly_the_two_report_type_adds() -> None:
         scope=SCOPE,
     )
     assert not diff.is_healthy()
-    assert diff.profile_version == "chatllm-data-v12"
+    assert diff.profile_version == "chatllm-data-v13"
     assert diff.add == _REPORT_TYPES
     assert diff.renew == frozenset()
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
@@ -1072,7 +1078,7 @@ def test_a_v9_converged_client_plans_exactly_the_lineage_adds() -> None:
         resource=RESOURCE,
         scope=SCOPE,
     )
-    assert diff.profile_version == "chatllm-data-v12"
+    assert diff.profile_version == "chatllm-data-v13"
     assert not diff.is_healthy()
     assert diff.add == exposed
     assert diff.renew == frozenset()
@@ -1096,7 +1102,7 @@ def test_v10_adds_exactly_the_lineage_plane_names() -> None:
     new flags off leave every desired set free of lineage, and turning them on
     adds exactly the composed part of the 34 and nothing else.
     """
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
     lineage, program = _lineage_plane_split()
     program_reads = {Capability.PROGRAMS_MEMBERS_RESOLVE, Capability.PROGRAMS_OVERVIEW}
     for bits in range(64):
@@ -1135,7 +1141,7 @@ def test_v12_adds_exactly_reports_publish_on_every_composition() -> None:
     Across all 512 compositions it is desired, with its one purpose and as a
     write; nothing else moved; no `reports.*` name is control-plane or excluded.
     """
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
     publish = Capability.REPORTS_PUBLISH
     assert is_chatllm_data_management(publish)
     assert chatllm_grant_purpose(publish) is Purpose.REPORT_AUTHORING
@@ -1157,10 +1163,9 @@ def test_v12_adds_exactly_reports_publish_on_every_composition() -> None:
         )
         assert publish in desired, planes
         # `reports.manifest` stays program-reporting conditional; every other
-        # `reports.*` name is required on every composition, but Reports
-        # Modernization WP03's five, withheld until their remote registration.
-        assert reports - {Capability.REPORTS_MANIFEST} - _WP03_WITHHELD <= desired, planes
-        assert not _WP03_WITHHELD & desired, planes
+        # `reports.*` name is required on every composition (WP03's five since
+        # chatllm-data-v13).
+        assert reports - {Capability.REPORTS_MANIFEST} <= desired, planes
 
 
 def test_a_v11_converged_client_plans_exactly_the_reports_publish_add() -> None:
@@ -1177,7 +1182,7 @@ def test_a_v11_converged_client_plans_exactly_the_reports_publish_add() -> None:
         scope=SCOPE,
     )
     assert not diff.is_healthy()
-    assert diff.profile_version == "chatllm-data-v12"
+    assert diff.profile_version == "chatllm-data-v13"
     assert diff.add == {publish}
     assert diff.renew == frozenset()
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
@@ -1188,3 +1193,111 @@ def test_a_v11_converged_client_plans_exactly_the_reports_publish_add() -> None:
         Purpose.REPORT_AUTHORING,
         True,
     )
+
+
+# ---- Reports Modernization WP03 (chatllm-data-v13) --------------------------------
+
+#: The purpose the v13 planner stamps on each management grant. `report_lifecycle`
+#: is its own purpose: `report_authoring` never implies it.
+_WP03_PURPOSES = {
+    Capability.REPORTS_UPDATE: (Purpose.REPORT_AUTHORING, True),
+    Capability.REPORTS_HISTORY: (Purpose.REPORT_READ, False),
+    Capability.REPORTS_ARCHIVE: (Purpose.REPORT_LIFECYCLE, True),
+    Capability.REPORTS_DELETE: (Purpose.REPORT_LIFECYCLE, True),
+    Capability.REPORTS_RESTORE: (Purpose.REPORT_LIFECYCLE, True),
+}
+
+
+def test_v13_adds_exactly_the_five_report_management_names_on_every_composition() -> None:
+    """chatllm-data-v13 = v12 + WP03's five, `DATA_REQUIRED` on the core plane.
+
+    Across all 512 compositions the five are desired with their one purpose and
+    write flag; removing them leaves exactly the v12 desired set.
+    """
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
+    assert set(_WP03_PURPOSES) == _WP03_MANAGEMENT
+    for capability, (purpose, write) in _WP03_PURPOSES.items():
+        assert is_chatllm_data_management(capability)
+        assert chatllm_grant_purpose(capability) is purpose
+        assert resolve_remote_purpose(capability, None) is purpose
+        assert is_write_capability(capability) is write
+    for bits in range(512):
+        planes = ChatLLMCompositionPlanes(
+            managed_documents=bool(bits & 1),
+            relationship_intelligence=bool(bits & 2),
+            relationship_intelligence_writes=bool(bits & 4),
+            relationship_memory=bool(bits & 8),
+            constraints=bool(bits & 16),
+            knowledge_assertions=bool(bits & 32),
+            lineage=bool(bits & 64),
+            program_reporting=bool(bits & 128),
+            schedule=bool(bits & 256),
+        )
+        with_five = desired_effective_capabilities(
+            composed_capabilities(frozenset(Capability), planes)
+        )
+        without = desired_effective_capabilities(
+            composed_capabilities(frozenset(Capability) - _WP03_MANAGEMENT, planes)
+        )
+        assert with_five - without == _WP03_MANAGEMENT, planes
+
+
+def test_a_v12_converged_client_plans_exactly_the_five_management_adds() -> None:
+    composed = composed_capabilities(IMPLEMENTED, _FULL_PLANES)
+    desired = desired_effective_capabilities(composed)
+    grants = tuple(_grant(capability) for capability in desired - _WP03_MANAGEMENT)
+    diff = diff_chatllm_data_profile(
+        implemented=IMPLEMENTED,
+        composed=composed,
+        grants=grants,
+        now=NOW,
+        resource=RESOURCE,
+        scope=SCOPE,
+    )
+    assert not diff.is_healthy()
+    assert diff.profile_version == "chatllm-data-v13"
+    assert diff.add == _WP03_MANAGEMENT
+    assert diff.renew == frozenset()
+    actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
+    planned = {
+        action.capability: (action.purpose, action.is_write)
+        for action in actions
+        if action.kind != "noop"
+    }
+    assert {action.kind for action in actions if action.kind != "noop"} == {"add"}
+    assert planned == _WP03_PURPOSES
+
+
+def test_report_authoring_never_stands_in_for_report_lifecycle() -> None:
+    """A lifecycle grant stamped `report_authoring` is a mismatch the planner re-adds.
+
+    No implication: neither the profile diff nor the remote purpose resolver
+    accepts `report_authoring` for archive, delete or restore.
+    """
+    lifecycle = {Capability.REPORTS_ARCHIVE, Capability.REPORTS_DELETE, Capability.REPORTS_RESTORE}
+    composed = composed_capabilities(IMPLEMENTED, _FULL_PLANES)
+    desired = desired_effective_capabilities(composed)
+    grants = tuple(
+        _grant(capability, purpose=Purpose.REPORT_AUTHORING)
+        if capability in lifecycle
+        else _grant(capability)
+        for capability in desired
+    )
+    diff = diff_chatllm_data_profile(
+        implemented=IMPLEMENTED,
+        composed=composed,
+        grants=grants,
+        now=NOW,
+        resource=RESOURCE,
+        scope=SCOPE,
+    )
+    for capability in lifecycle:
+        assert (
+            diff.outcomes[capability] is ChatLLMProfileOutcome.IMPLEMENTED_COMPOSED_GRANT_MISMATCHED
+        )
+        with pytest.raises(UnsupportedError):
+            resolve_remote_purpose(capability, frozenset({(capability, Purpose.REPORT_AUTHORING)}))
+    actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
+    assert {(action.capability, action.purpose) for action in actions if action.kind == "add"} == {
+        (capability, Purpose.REPORT_LIFECYCLE) for capability in lifecycle
+    }

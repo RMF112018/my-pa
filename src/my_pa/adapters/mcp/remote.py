@@ -93,6 +93,11 @@ _WRITE_PURPOSES: Final = frozenset(
         Purpose.CONTEXT_PREFERENCE,
         Purpose.GOODNOTES_PROPOSAL,
         Purpose.REPORT_AUTHORING,
+        # Reports Modernization WP03: archive, delete (to Trash) and restore of a
+        # standalone report. Without it the three would be classified remote
+        # reads -- published while writes are disabled and routed to
+        # `my_pa.read`. `report_read` (and so `reports.history`) stays out.
+        Purpose.REPORT_LIFECYCLE,
         Purpose.RELATIONSHIP_MEMORY_AUTHORING,
         Purpose.ENTITY_OBSERVATION_INGEST,
         Purpose.ENTITY_AUTHORING,

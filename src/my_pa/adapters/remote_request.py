@@ -236,6 +236,17 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         # distinct key and publishes a new report even for identical content.
         # Also client-bound (`_CLIENT_BOUND_KEY_CAPABILITIES`).
         Capability.REPORTS_PUBLISH,
+        # Reports Modernization WP03: the four management writes require the key
+        # the same receipt ledger arbitrates (operations `update`, `archive`,
+        # `delete`, `restore`). The stamped payload hash covers
+        # `expected_version` / `expected_lifecycle_revision`, so a lost-response
+        # retry of the same move replays its original receipt while the next
+        # deliberate move (a new expected value) derives a new key. Client-bound
+        # too, for the reason `reports.publish` is.
+        Capability.REPORTS_UPDATE,
+        Capability.REPORTS_ARCHIVE,
+        Capability.REPORTS_DELETE,
+        Capability.REPORTS_RESTORE,
         # The entity plane's eighteen keyed writes (Phase A). Every one of them
         # carries an `idempotency_key` its command validates and its repository
         # arbitrates against
@@ -393,13 +404,27 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
 #: cross-Principal leak (the key and the ledger are Principal-scoped), but a
 #: cross-client existence signal (`replayed: true`) and a retry identity the
 #: second client never had. A retry is one client's retry, so the key binds the
-#: client: A's retry still replays, B publishes its own report. Every other
+#: client: A's retry still replays, B publishes its own report.
+#:
+#: Reports Modernization WP03: the four management writes (`reports.update`,
+#: `.archive`, `.delete`, `.restore`) too, for the same reason: client B's
+#: identical move must reach the concurrency check on its own key (and so
+#: refuse as stale) rather than replay client A's receipt. Every other
 #: capability's derivation is unchanged.
+_CLIENT_BOUND_REPORT_WRITES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.REPORTS_PUBLISH,
+        Capability.REPORTS_UPDATE,
+        Capability.REPORTS_ARCHIVE,
+        Capability.REPORTS_DELETE,
+        Capability.REPORTS_RESTORE,
+    }
+)
 _CLIENT_BOUND_KEY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     capability
     for capability in _IDEMPOTENT_REMOTE_CAPABILITIES
     if capability.value in OPEN_LINEAGE_WRITE_CAPABILITIES
-    or capability is Capability.REPORTS_PUBLISH
+    or capability in _CLIENT_BOUND_REPORT_WRITES
 )
 
 #: When more than one permitted purpose remains after grant intersection, the

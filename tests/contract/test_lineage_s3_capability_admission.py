@@ -327,6 +327,15 @@ _V1_PAYLOAD_SCHEMA_SHA256: Final = (
 _V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_READ: Final = (
     "f4dc83a1e8e4699dc047d58279d97321fd750c1ecdff521b4cd148bb77fafb71"
 )
+#: The same measurement without `reports.read`, `reports.list` and
+#: `reports.search`, taken at the Reports Modernization WP04 base `f933f9fb3`:
+#: WP04 deliberately extends `reports.list` and `reports.search` (the `plane`
+#: selector and the catalog filters), so both are excluded too and the other
+#: 189 shapes stay pinned byte for byte. Their legacy answers are pinned by
+#: `tests/unit/test_reports_legacy_list_search_golden.py`.
+_V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_CATALOG: Final = (
+    "4a66657c422eb2c538a3cf7725cca2fab7b71325b883d3a0e724f200a7093459"
+)
 #: The v1 view modules and the SHA-256 of their models' field names
 #: (`module.Model` -> sorted field names, canonical JSON), measured alike.
 _V1_VIEW_MODULES: Final = (
@@ -369,13 +378,15 @@ def test_existing_v1_shapes_are_unchanged_by_s3() -> None:
         Capability.REPORTS_DELETE.value,
         Capability.REPORTS_RESTORE.value,
     }
+    # Reports Modernization WP04: see `_V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_CATALOG`.
+    lineage |= {Capability.REPORTS_LIST.value, Capability.REPORTS_SEARCH.value}
     payloads = {
         tool.name: tool.input_schema["properties"]["payload"]
         for tool in TOOLS
         if tool.name not in lineage
     }
-    assert len(payloads) == 191
-    assert _canonical_sha256(payloads) == _V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_READ
+    assert len(payloads) == 189
+    assert _canonical_sha256(payloads) == _V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_CATALOG
     views: dict[str, list[str]] = {}
     for name in _V1_VIEW_MODULES:
         module = importlib.import_module(f"my_pa.contracts.v1.{name}")

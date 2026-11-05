@@ -43,7 +43,7 @@ from tests.contract.test_lineage_s3_capability_admission import (
     _BASE_PAYLOADS as _S3_PAYLOADS,
 )
 from tests.contract.test_lineage_s3_capability_admission import (
-    _V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_READ,
+    _V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_CATALOG,
     _V1_VIEW_FIELDS_SHA256,
     _V1_VIEW_MODULES,
 )
@@ -717,13 +717,19 @@ def test_existing_non_lineage_v1_shapes_are_unchanged_by_s31() -> None:
         Capability.REPORTS_DELETE.value,
         Capability.REPORTS_RESTORE.value,
     }
+    # Reports Modernization WP04: `reports.list` and `reports.search` are
+    # deliberately extended (the `plane` selector and catalog filters; their
+    # legacy answers are pinned by
+    # `tests/unit/test_reports_legacy_list_search_golden.py`), so both are
+    # excluded and the remaining 189 shapes stay pinned.
+    lineage |= {Capability.REPORTS_LIST.value, Capability.REPORTS_SEARCH.value}
     payloads = {
         tool.name: tool.input_schema["properties"]["payload"]
         for tool in TOOLS
         if tool.name not in lineage
     }
-    assert len(payloads) == 191
-    assert _canonical_sha256(payloads) == _V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_READ
+    assert len(payloads) == 189
+    assert _canonical_sha256(payloads) == _V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_CATALOG
     views: dict[str, list[str]] = {}
     for name in _V1_VIEW_MODULES:
         module = importlib.import_module(f"my_pa.contracts.v1.{name}")

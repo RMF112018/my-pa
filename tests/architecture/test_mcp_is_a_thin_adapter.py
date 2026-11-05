@@ -347,6 +347,15 @@ EXEMPT_PROPERTIES: Final[frozenset[tuple[str, str]]] = frozenset(
         ("reports.update", "target_kind"),
         ("reports.update", "target_ref"),
         ("reports.update", "target_version_ref"),
+        # Reports Modernization WP04: the catalog's `associated_with` filter on
+        # `reports.list` and `reports.search`. A shape-checked reference matched
+        # against stored association rows of the caller's own HEAD versions; it
+        # is never resolved, opened or fetched, and a foreign or missing target
+        # simply matches nothing.
+        ("reports.list", "target_kind"),
+        ("reports.list", "target_ref"),
+        ("reports.search", "target_kind"),
+        ("reports.search", "target_ref"),
         # KLP-WP-04: a provisioned Knowledge discovery source profile, not where a
         # file lives. It trips the scan on the substring "file" inside "profile",
         # it is an opaque `kdsp_` identifier the command validates by kind, and it
@@ -738,8 +747,9 @@ def test_the_location_scan_would_catch_one() -> None:
     # S3.1's 14 open writes' boolean `user_directed` claim. Plus CPM Workbench
     # S5b-2's `hierarchy_prefix` (schedule WBS labels). Plus Reports
     # Modernization WP02's three association reference fields on `reports.publish`,
-    # and WP03's same three nested in `reports.update`'s `patch`.
-    assert len(EXEMPT_PROPERTIES) == 60
+    # and WP03's same three nested in `reports.update`'s `patch`. Plus WP04's
+    # `associated_with` filter members on `reports.list` and `reports.search`.
+    assert len(EXEMPT_PROPERTIES) == 64
     for tool_name, property_name in EXEMPT_PROPERTIES:
         tool = next(entry for entry in TOOLS if entry.name == tool_name)
         assert property_name in set(_schema_property_names(tool.input_schema))

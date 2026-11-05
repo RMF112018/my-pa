@@ -56,6 +56,12 @@ V1_PAYLOAD_SCHEMA_SHA256: Final = "e87a5186273905f60ae033764f70d6715cb01829a56a1
 V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_READ: Final = (
     "f4dc83a1e8e4699dc047d58279d97321fd750c1ecdff521b4cd148bb77fafb71"
 )
+#: The same measurement also without `reports.list` and `reports.search`, at
+#: the Reports Modernization WP04 base `f933f9fb3`: WP04 deliberately extends
+#: both, so they are excluded and the other 189 shapes stay pinned.
+V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_CATALOG: Final = (
+    "4a66657c422eb2c538a3cf7725cca2fab7b71325b883d3a0e724f200a7093459"
+)
 #: SHA-256 of the envelope `$defs.Purpose.enum` at the S4 basis (`3d1593aa`,
 #: the 59 `Purpose` values in declaration order, compact JSON).
 BASIS_PURPOSE_ENUM_SHA256: Final = (
@@ -189,14 +195,16 @@ def test_v1_tool_schemas_are_unchanged_by_s4() -> None:
         "reports.delete",
         "reports.restore",
     }
+    # Reports Modernization WP04: the extended `reports.list` and `reports.search`.
+    excluded |= {"reports.list", "reports.search"}
     payloads = {
         tool.name: tool.input_schema["properties"]["payload"]
         for tool in TOOLS
         if tool.name not in excluded
     }
-    assert len(payloads) == 191
+    assert len(payloads) == 189
     assert set(payloads) >= V1_READS
-    assert _canonical_sha256(payloads) == V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_READ
+    assert _canonical_sha256(payloads) == V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_CATALOG
     # Every tool carries the one envelope purpose enum: the basis enum, then
     # exactly the one S4 purpose -- nothing removed, reordered or added beside it.
     enums = {json.dumps(tool.input_schema["$defs"]["Purpose"]["enum"]) for tool in TOOLS}

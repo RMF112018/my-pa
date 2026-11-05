@@ -800,6 +800,8 @@ def test_a_legacy_only_or_server_owned_field_is_a_bare_refusal_in_standalone_and
     before = counts(harness.engine, _MUTATION)
     forged = [
         *({name: value} for name, value in _LEGACY_ONLY.items()),
+        # Presence, not value: a null pipeline field is refused as well.
+        *({name: None} for name in _LEGACY_ONLY),
         *({name: "forged-value"} for name in _CATALOG_SERVER_OWNED),
     ]
     answers = harness.run(
@@ -836,6 +838,9 @@ def test_a_catalog_field_is_a_bare_refusal_in_the_pipeline_plane(
     before = counts(harness.engine, _ALL_TABLES)
     selector = {} if plane is None else {"plane": plane}
     fields: list[dict[str, Any]] = [{name: value} for name, value in _CATALOG_ONLY.items()]
+    # Presence, not value: an explicit null is refused too (the command alone would
+    # accept a null as "absent"; only normalization's presence check refuses it).
+    fields.extend({name: None} for name in _CATALOG_ONLY)
     if capability is _SEARCH:
         # `cursor` is a catalog-only field of search (the pipeline search has none).
         fields.append({"cursor": "Zm9v"})

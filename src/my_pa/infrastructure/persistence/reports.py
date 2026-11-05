@@ -54,12 +54,12 @@ patch, the manifest build and its size bound, the search text -- immediately
 before the request's first INSERT, inside its savepoint (`_place`). A refusal
 therefore leaves no object, a `put` failure writes nothing, and only a later
 server-side failure (a constraint, a lost key race, a crash before commit)
-can leave an orphan object, which the reconciliation scan reports. Without a store such content is `content` `too_large`. A read
-of a `managed_blob` version returns its content as facts only
-(`content_facts`): the rows are verified here, the bytes by the service
-through the store (C5); history, list and search never touch the store (C6).
-A metadata-only update reuses the head's content row and copies the head's
-`search_text`, whatever its storage.
+can leave an orphan object, which the reconciliation scan reports. Without a
+store such content is `content` `too_large`. A read of a `managed_blob`
+version returns its content as facts only (`content_facts`): the rows are
+verified here, the bytes by the service through the store (C5); history,
+list and search never touch the store (C6). A metadata-only update reuses the
+head's content row and copies the head's `search_text`, whatever its storage.
 
 **Creator attribution (WP05 A1/A2).** `publish` and `update` take the
 server-derived `ReportCreator`: publish writes it as the root's `created_by_*`

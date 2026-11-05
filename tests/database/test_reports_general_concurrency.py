@@ -5,7 +5,9 @@ on two separate connections: writer A takes the root lock and writes, holding
 its transaction open; writer B, on a thread, is observed BLOCKED on a lock in
 `pg_stat_activity` before A commits; after A commits, B proceeds and gets the
 typed answer (stale version, stale lifecycle revision, or a replay of A's
-receipt) and nothing of B commits.
+receipt) and nothing of B commits. WP04 C11(2) adds the cross-report case:
+one key on two reports, where B blocks on the receipt key rather than the
+root, and settles as an idempotency conflict.
 
 No test can hang: B runs with `SET LOCAL lock_timeout = '20s'`, the wait for
 the lock is bounded, and the thread join has a timeout.
@@ -23,7 +25,11 @@ from typing import Final
 import pytest
 from sqlalchemy import Connection, Engine, text
 
-from my_pa.contracts.ports import ReportStaleLifecycleRevisionError, ReportStaleVersionError
+from my_pa.contracts.ports import (
+    ReportIdempotencyConflictError,
+    ReportStaleLifecycleRevisionError,
+    ReportStaleVersionError,
+)
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.reports.revision import (
     LifecycleRequest,
@@ -217,3 +223,69 @@ def test_two_same_key_transitions_replay_the_first(migrated_engine: Engine) -> N
     assert isinstance(winner, LifecycleResult) and isinstance(loser, LifecycleResult)
     assert loser.replayed is True
     assert (loser.receipt_id, loser.event_id) == (winner.receipt_id, winner.event_id)
+
+
+def _update_any(connection: Connection, report_id: str, key: str) -> UpdateResult:
+    return _update_on(connection, report_id, f"Title {report_id[-4:]}", key)
+
+
+def _archive_any(connection: Connection, report_id: str, key: str) -> LifecycleResult:
+    return _transition_on(connection, LifecycleOperation.ARCHIVE, report_id, key)
+
+
+@pytest.mark.parametrize(
+    ("write", "grown"),
+    [
+        (_update_any, ("report_versions", "report_version_manifests", "report_receipts")),
+        (_archive_any, ("report_lifecycle_events", "report_receipts")),
+    ],
+    ids=["update", "transition"],
+)
+def test_one_key_on_two_reports_settles_the_loser_as_a_conflict(
+    migrated_engine: Engine,
+    write: Callable[[Connection, str, str], object],
+    grown: tuple[str, ...],
+) -> None:
+    """WP04 C11(2): the cross-report same-key settle path of update and transition.
+
+    A writes report 1 under key K and holds its transaction; B locks report 2
+    (no contention on the root) and blocks only on the receipt key's unique
+    index. A commits: B's insert violates the key constraint, its SAVEPOINT
+    rolls back, and the settle reads A's receipt, bound to another intent:
+    `ReportIdempotencyConflictError`. Only A's rows are committed.
+    """
+    first = _publish_committed(migrated_engine, _request(), "pub-1").receipt.report_id
+    second = _publish_committed(
+        migrated_engine, _request(title="Second"), "pub-2"
+    ).receipt.report_id
+    before = _counts(migrated_engine)
+    winner, outcome = _race(
+        migrated_engine,
+        lambda c: write(c, first, "shared-key"),
+        lambda c: write(c, second, "shared-key"),
+    )
+    assert isinstance(outcome.get("error"), ReportIdempotencyConflictError), outcome
+    assert "result" not in outcome
+    assert getattr(winner, "report_id", None) == first
+    after = _counts(migrated_engine)
+    assert after == {table: count + (1 if table in grown else 0) for table, count in before.items()}
+    with migrated_engine.connect() as connection:
+        roots = {
+            str(row[0]): (int(row[1]), int(row[2]))
+            for row in connection.execute(
+                text(
+                    "SELECT report_id, head_version_number, lifecycle_revision "
+                    "FROM knowledge.report_roots WHERE report_id IN (:a, :b)"
+                ),
+                {"a": first, "b": second},
+            )
+        }
+        keyed = connection.execute(
+            text(
+                "SELECT report_id FROM knowledge.report_receipts "
+                "WHERE idempotency_key = 'shared-key'"
+            )
+        ).scalars()
+        assert list(keyed) == [first]
+    assert roots[second] == (1, 0)
+    assert roots[first] != (1, 0)

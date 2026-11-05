@@ -10715,13 +10715,14 @@ report_roots = Table(
         text("created_at DESC"),
         text('report_id COLLATE "C" DESC'),
     ),
-    # WP05 A5: the `created_by` catalog filter per owner, in the list order.
+    # WP05 A5: the `created_by` catalog filter per owner, in the list order
+    # (ids in code-point order, as the creation index and the catalog keyset).
     Index(
         "report_roots_by_owner_and_creator",
         "owner_principal_id",
         "created_by_id",
         text("created_at DESC"),
-        "report_id",
+        text('report_id COLLATE "C" DESC'),
     ),
 )
 

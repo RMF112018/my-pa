@@ -68,7 +68,7 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 #: Moved again by Reports Modernization WP05 A2, which declares the root
 #: creator and version author columns, their four CHECKs and the root
 #: creator-filter index; `captures` is untouched.
-TABLES_SHA256: Final = "568fbfac12b30ed984fb05254624840b3f461b795c65fc3ef5c2025d2527224b"
+TABLES_SHA256: Final = "1047746c99d6309f15b52b600926823a86d06960b4bba1376b7fd813bc9e4f39"
 WP03_MIGRATION_SHA256: Final = "098edd98ccc1846b01c58f42e296e4751e7841b562a2827616cc4337e174c354"
 WP03_MIGRATION: Final = (
     ROOT / "migrations/versions/20260914_e6a4c2f91b73_project_controls_run01_integrity.py"

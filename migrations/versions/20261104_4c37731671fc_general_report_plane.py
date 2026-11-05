@@ -585,9 +585,10 @@ _TABLES: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
             # with ids in code-point order (`COLLATE "C"`), per owner.
             "CREATE INDEX report_roots_by_owner_and_creation ON knowledge.report_roots "
             '(owner_principal_id, created_at DESC, report_id COLLATE "C" DESC)',
-            # WP05 A2/A5: the `created_by` catalog filter, in the list order.
+            # WP05 A2/A5: the `created_by` catalog filter, in the list order
+            # (ids in code-point order, as the creation index and the keyset).
             "CREATE INDEX report_roots_by_owner_and_creator ON knowledge.report_roots "
-            "(owner_principal_id, created_by_id, created_at DESC, report_id)",
+            '(owner_principal_id, created_by_id, created_at DESC, report_id COLLATE "C" DESC)',
         ),
     ),
     (

@@ -229,5 +229,6 @@ def test_the_creator_filter_index_exists(migrated_engine: Engine) -> None:
         ).scalar_one()
     assert definition == (
         "CREATE INDEX report_roots_by_owner_and_creator ON knowledge.report_roots "
-        "USING btree (owner_principal_id, created_by_id, created_at DESC, report_id)"
+        "USING btree (owner_principal_id, created_by_id, created_at DESC, "
+        'report_id COLLATE "C" DESC)'
     )

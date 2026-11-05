@@ -354,7 +354,7 @@ INTERACTION_LOG_ROW_TIMEOUT_SECONDS: Final = 30.0
 #: on Linux; macOS cannot lower `RLIMIT_AS`, so there the worker is uncapped.
 #:
 #: Reports Modernization WP05 (corrective B-4) adds a line this budget did not
-#: have: report content decode, 1 permit (`REPORT_CONTENT_DECODE_PERMITS`) x
+#: have: report content inflation and parsing, 1 permit (`REPORT_CONTENT_DECODE_PERMITS`) x
 #: about 94 MiB measured live peak (16 MiB of gzip JSON long strings; 68 MiB for
 #: 16 MiB of markdown), whatever the concurrency, and only when a report content
 #: store is composed (without one a gzip upload is never inflated past the

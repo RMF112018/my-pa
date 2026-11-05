@@ -330,7 +330,13 @@ from my_pa.domain.reports.catalog import (
     ReportPlane,
     validate_catalog_page_size,
 )
-from my_pa.domain.reports.content import INLINE_CONTENT_MAX_BYTES, validate_content
+from my_pa.domain.reports.content import (
+    INLINE_CONTENT_MAX_BYTES,
+    ReportContent,
+    content_of,
+    validate_content,
+    validate_content_structure,
+)
 from my_pa.domain.reports.creator import CREATOR_ID_PATTERN
 from my_pa.domain.reports.errors import ReportValidationError
 from my_pa.domain.reports.publication import (
@@ -5888,12 +5894,39 @@ class PublishGeneralReport:
     def __post_init__(self) -> None:
         _idempotency_key(self.idempotency_key)
         # Built once here so an invalid request never reaches a handler; the
-        # handler builds the same value again (`publication_request`).
-        publication_request(self)
+        # handler builds the same value again (`publication_request`), and only
+        # it decodes gzip content (WP05 corrective B-4).
+        publication_request(self, max_decoded=None)
 
 
-def publication_request(command: PublishGeneralReport) -> PublicationRequest:
-    """The domain request `command` states, or the public refusal of it."""
+#: Stands for gzip content whose decoding is deferred to the handler: only
+#: command construction builds a request with it, and that request is discarded.
+_DECODE_DEFERRED: Final = content_of(ContentFormat.TEXT, body="decode deferred", data=None)
+
+
+def _requested_content(value: object, *, max_decoded: int | None) -> ReportContent:
+    """`value` validated: in full, or -- `max_decoded` None -- structurally only.
+
+    WP05 corrective B-4: command construction (`max_decoded=None`) never
+    decodes, inflates or parses a `gzip+base64` upload; it checks its
+    structure (`validate_content_structure`) and identity content in full.
+    The handler passes its decode limit and decodes under the process-wide
+    decode permit. Every refusal either raises is one `validate_content` raises.
+    """
+    if max_decoded is None:
+        structured = validate_content_structure(value)
+        return _DECODE_DEFERRED if structured is None else structured
+    return validate_content(value, max_decoded=max_decoded)
+
+
+def publication_request(
+    command: PublishGeneralReport, *, max_decoded: int | None
+) -> PublicationRequest:
+    """The domain request `command` states, or the public refusal of it.
+
+    `max_decoded` is the handler's gzip decode limit; `None` validates gzip
+    content structurally only (command construction, see `_requested_content`).
+    """
     if command.report_date is not None:
         _iso_date(command.report_date, SafeDetail.REPORT_DATE)
     coverage_start: datetime | None = None
@@ -5914,7 +5947,7 @@ def publication_request(command: PublishGeneralReport) -> PublicationRequest:
     try:
         return PublicationRequest(
             title=command.title,
-            content=validate_content(command.content),
+            content=_requested_content(command.content, max_decoded=max_decoded),
             report_type=command.type,
             topics=command.topics,
             tags=command.tags,
@@ -6140,7 +6173,7 @@ def _patched_coverage(value: object) -> CoveragePeriod:
     raise InvalidRequestError(SafeDetail.COVERAGE_PERIOD)
 
 
-def report_patch(patch: object) -> ReportPatch:
+def report_patch(patch: object, *, max_decoded: int | None) -> ReportPatch:
     """The domain patch `patch` states, or the field-naming refusal of it.
 
     `patch` is the caller's JSON object: keys are a subset of the publish
@@ -6149,7 +6182,8 @@ def report_patch(patch: object) -> ReportPatch:
     anywhere a field's value stands -- a patched field, a coverage bound, an
     association member -- is refused naming the field: a nullable field is
     cleared only through `clear_fields`, never by null (D4). Every value is
-    validated by the rule publish applies to it.
+    validated by the rule publish applies to it; `max_decoded` as in
+    `publication_request`.
     """
     if not isinstance(patch, dict):
         raise InvalidRequestError(SafeDetail.PATCH)
@@ -6164,7 +6198,7 @@ def report_patch(patch: object) -> ReportPatch:
         if "title" in patch:
             fields["title"] = patch["title"]
         if "content" in patch:
-            fields["content"] = validate_content(patch["content"])
+            fields["content"] = _requested_content(patch["content"], max_decoded=max_decoded)
         if "type" in patch:
             fields["report_type"] = patch["type"]
         if "topics" in patch:
@@ -6233,18 +6267,20 @@ class UpdateGeneralReport:
     def __post_init__(self) -> None:
         _idempotency_key(self.idempotency_key)
         # Built once here so an invalid request never reaches a handler; the
-        # handler builds the same value again (`update_request`).
-        update_request(self)
+        # handler builds the same value again (`update_request`), and only it
+        # decodes gzip content (WP05 corrective B-4).
+        update_request(self, max_decoded=None)
 
 
-def update_request(command: UpdateGeneralReport) -> UpdateRequest:
-    """The domain request `command` states, or the public refusal of it."""
+def update_request(command: UpdateGeneralReport, *, max_decoded: int | None) -> UpdateRequest:
+    """The domain request `command` states, or the public refusal of it (`max_decoded`
+    as in `publication_request`)."""
     _identifier(command.report_id, IdKind.REPORT, SafeDetail.ARTIFACT_ID)
     if type(command.expected_version) is not int or command.expected_version < 1:
         raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
     if command.change_reason is None:
         raise InvalidRequestError(SafeDetail.CHANGE_REASON)
-    patch = report_patch(command.patch)
+    patch = report_patch(command.patch, max_decoded=max_decoded)
     clear_fields: object = command.clear_fields
     if not isinstance(clear_fields, tuple | list):
         raise InvalidRequestError(SafeDetail.CLEAR_FIELDS)

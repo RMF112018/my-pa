@@ -49,6 +49,12 @@ CPU is 1.4 s, for 16 MiB of 4,299-digit integers (every other shape under
 0.4 s). The 16 MiB `[{},...]`, `[[],...]`, `[0,...]` and `["a",...]` shapes
 that peaked at 0.4-1.3 GB before the value cap are refused in under 0.1 s at
 a 32 MiB peak.
+
+Where it runs (WP05 corrective B-4): command construction only checks a gzip
+upload's structure (`check_encoded_shape`); the decode itself runs in the
+publish/update handler, one at a time process-wide (the application's decode
+permit), bounded by `max_decoded`: 16 MiB with a report content store, the
+inline threshold without one.
 """
 
 from __future__ import annotations
@@ -58,7 +64,7 @@ import hashlib
 import json
 import re
 import zlib
-from typing import Any, Final
+from typing import Any, Final, cast
 
 from my_pa.domain.reports.errors import ReportValidationError
 from my_pa.domain.reports.vocabulary import (
@@ -71,6 +77,7 @@ from my_pa.domain.reports.vocabulary import (
 __all__ = [
     "ENCODED_FIELD",
     "GZIP_MAGIC",
+    "check_encoded_shape",
     "decode_gzip_base64",
     "parse_json_text",
     "utf8_text",
@@ -94,12 +101,23 @@ def _refuse(rule: str) -> ReportValidationError:
     return ReportValidationError(ENCODED_FIELD, rule)
 
 
-def _base64_bytes(encoded: object) -> bytes:
-    """Step 1: the bytes canonical standard Base64 `encoded` names."""
+def check_encoded_shape(encoded: object) -> None:
+    """The O(1) part of step 1: a non-empty `str` no longer than any original can encode to.
+
+    What command construction checks of a gzip upload (WP05 corrective B-4):
+    nothing is decoded, inflated or parsed there; `decode_gzip_base64` repeats
+    this and does the rest in the handler, under the decode permit.
+    """
     if type(encoded) is not str or not encoded:
         raise _refuse("malformed_base64")
     if len(encoded) > _MAX_ENCODED_CHARACTERS:
         raise _refuse("too_large")
+
+
+def _base64_bytes(encoded: object) -> bytes:
+    """Step 1: the bytes canonical standard Base64 `encoded` names."""
+    check_encoded_shape(encoded)
+    encoded = cast("str", encoded)
     if len(encoded) % 4 or not _BASE64.match(encoded):
         raise _refuse("malformed_base64")
     try:
@@ -123,8 +141,14 @@ def _new_inflater() -> zlib._Decompress:
     return zlib.decompressobj(wbits=31)
 
 
-def _inflate(original: bytes) -> bytes:
-    """Step 4: the gunzipped bytes of exactly one member, never inflated unbounded."""
+def _inflate(original: bytes, max_decoded: int) -> bytes:
+    """Step 4: the gunzipped bytes of exactly one member, never inflated unbounded.
+
+    `max_decoded` is the size bound: `MAX_DECODED_CONTENT_BYTES` when the
+    caller can place content that large, else its inline threshold (WP05
+    corrective B-4), so a deployment without a report content store never
+    inflates past it.
+    """
     inflater = _new_inflater()
     ratio_bound = MAX_EXPANSION_RATIO * len(original)
     pieces: list[bytes] = []
@@ -134,7 +158,7 @@ def _inflate(original: bytes) -> bytes:
         nonlocal total
         total += len(piece)
         # Two separate checks after every piece, size first.
-        if total > MAX_DECODED_CONTENT_BYTES:
+        if total > max_decoded:
             raise _refuse("too_large")
         if total > ratio_bound:
             raise _refuse("expansion_ratio")
@@ -174,12 +198,15 @@ def decode_gzip_base64(
     original_sha256: str | None = None,
     uncompressed_byte_count: int | None = None,
     uncompressed_sha256: str | None = None,
+    max_decoded: int = MAX_DECODED_CONTENT_BYTES,
 ) -> tuple[bytes, bytes]:
     """Steps 1-6: `(original, uncompressed)`, the gzip bytes and the gunzipped bytes.
 
     The declared counts and digests are optional and already well-formed (the
     caller validated their types); a declared value that disagrees is refused.
+    `max_decoded` (at most `MAX_DECODED_CONTENT_BYTES`) bounds the inflation.
     """
+    max_decoded = min(max_decoded, MAX_DECODED_CONTENT_BYTES)
     original = _base64_bytes(encoded)
     if not original.startswith(GZIP_MAGIC):
         raise _refuse("malformed_gzip")
@@ -187,7 +214,7 @@ def decode_gzip_base64(
         raise _refuse("original_size_mismatch")
     if original_sha256 is not None and original_sha256 != _sha256(original):
         raise _refuse("original_digest_mismatch")
-    uncompressed = _inflate(original)
+    uncompressed = _inflate(original, max_decoded)
     if uncompressed.startswith(_NESTED_MAGIC):
         raise _refuse("nested_stream")
     if uncompressed_byte_count is not None and uncompressed_byte_count != len(uncompressed):

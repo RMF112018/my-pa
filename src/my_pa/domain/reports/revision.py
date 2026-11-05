@@ -33,7 +33,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from enum import StrEnum
-from typing import Any, Final
+from typing import Any, Final, cast
 
 from my_pa.domain.reports.content import ReportContent, canonical_json
 from my_pa.domain.reports.errors import ReportValidationError
@@ -463,6 +463,8 @@ class UpdateRequest:
     patch: ReportPatch
     clear_fields: frozenset[ClearableField] = frozenset()
     change_reason: str | None = None
+    #: `intent_digest`, computed once (WP05 N-3: it serializes any patched content).
+    _intent_digest: str | None = field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "report_id", _report_id(self.report_id))
@@ -474,15 +476,18 @@ class UpdateRequest:
 
     @property
     def intent_digest(self) -> str:
-        """SHA-256 of the canonical JSON of the normalized caller payload (D8)."""
-        payload = {
-            "report_id": self.report_id,
-            "expected_version": self.expected_version,
-            "patch": self.patch.payload(),
-            "clear_fields": sorted(name.value for name in self.clear_fields),
-            "change_reason": self.change_reason,
-        }
-        return hashlib.sha256(canonical_json(payload)).hexdigest()
+        """SHA-256 of the canonical JSON of the normalized caller payload (D8), computed once."""
+        if self._intent_digest is None:
+            payload = {
+                "report_id": self.report_id,
+                "expected_version": self.expected_version,
+                "patch": self.patch.payload(),
+                "clear_fields": sorted(name.value for name in self.clear_fields),
+                "change_reason": self.change_reason,
+            }
+            digest = hashlib.sha256(canonical_json(payload)).hexdigest()
+            object.__setattr__(self, "_intent_digest", digest)
+        return cast("str", self._intent_digest)
 
 
 @dataclass(frozen=True, slots=True)

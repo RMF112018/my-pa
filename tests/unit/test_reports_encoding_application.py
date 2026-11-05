@@ -20,13 +20,20 @@ from typing import Any, Final
 import pytest
 
 from my_pa.adapters.normalization import normalize
-from my_pa.application.commands import report_refusal
+from my_pa.application.commands import (
+    PublishGeneralReport,
+    UpdateGeneralReport,
+    publication_request,
+    report_refusal,
+    update_request,
+)
 from my_pa.application.errors import ApplicationError, InvalidRequestError, SafeDetail
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.reports.content import INLINE_CONTENT_MAX_BYTES
 from my_pa.domain.reports.errors import ReportValidationError
+from my_pa.domain.reports.vocabulary import MAX_DECODED_CONTENT_BYTES
 from tests.conftest import Scene, build_service
 
 BODY: Final = "# Synthetic gzip report\n\nCompressed body text.\n"
@@ -106,12 +113,19 @@ def _publish(content: dict[str, Any], key: str = "gzip-publish") -> dict[str, An
     return {"title": "Synthetic gzip report", "content": content, "idempotency_key": key}
 
 
-def _normalize_refusal(scene: Scene, payload: dict[str, Any]) -> ApplicationError:
+def _handler_refusal(scene: Scene, payload: dict[str, Any]) -> ApplicationError:
+    """The refusal the publish handler's decode raises (WP05 corrective B-4).
+
+    Command construction checks a gzip upload's structure only, so these
+    payloads normalize; the full decode refuses them in `publication_request`
+    with the handler's limit.
+    """
+    _metadata, command = normalize(
+        Capability.REPORTS_PUBLISH.value, _wire(scene, Capability.REPORTS_PUBLISH, payload)
+    )
+    assert isinstance(command, PublishGeneralReport)
     with pytest.raises(ApplicationError) as refused:
-        normalize(
-            Capability.REPORTS_PUBLISH.value,
-            _wire(scene, Capability.REPORTS_PUBLISH, payload),
-        )
+        publication_request(command, max_decoded=MAX_DECODED_CONTENT_BYTES)
     return refused.value
 
 
@@ -162,13 +176,20 @@ def test_a_declared_field_refusal_is_invalid_request_content(field: str) -> None
 def test_a_refusal_echoes_nothing_and_writes_nothing(
     scene: Scene, content: dict[str, Any], details: list[str]
 ) -> None:
-    refusal = _normalize_refusal(scene, _publish(content))
+    refusal = _handler_refusal(scene, _publish(content))
     assert isinstance(refusal, InvalidRequestError)
     assert [item.value for item in refusal.safe_details] == details
     rendered = f"{refusal!s} {refusal!r} {refusal.args!r}"
     assert "SECRET" not in rendered
     assert content["encoded"][:16] not in rendered
     assert refusal.__context__ is None
+    # Through the service the same public answer, echoing nothing, writing nothing.
+    service = build_service(scene.world, scene.providers)
+    answer = _invoke(service, scene, Capability.REPORTS_PUBLISH, _publish(content))
+    assert answer["error"]["code"] == ErrorCode.INVALID_REQUEST.value
+    assert answer["error"]["safe_details"] == details
+    assert "SECRET" not in json.dumps(answer)
+    assert content["encoded"][:16] not in json.dumps(answer)
     assert not scene.world.general_report_versions
 
 
@@ -315,18 +336,21 @@ def test_update_takes_gzip_content_and_replays_or_conflicts_like_publish(scene: 
 
 
 def test_an_invalid_gzip_patch_is_refused_naming_content(scene: Scene) -> None:
+    payload = _update(
+        "grpt_" + "a" * 26,
+        "bad",
+        {"content": {"format": "text", "encoding": "gzip+base64", "encoded": "AAAA"}},
+    )
+    # Structure only at construction (WP05 corrective B-4): the decode refuses it.
+    _metadata, command = normalize(
+        Capability.REPORTS_UPDATE.value, _wire(scene, Capability.REPORTS_UPDATE, payload)
+    )
+    assert isinstance(command, UpdateGeneralReport)
     with pytest.raises(ApplicationError) as refused:
-        normalize(
-            Capability.REPORTS_UPDATE.value,
-            _wire(
-                scene,
-                Capability.REPORTS_UPDATE,
-                _update(
-                    "grpt_" + "a" * 26,
-                    "bad",
-                    {"content": {"format": "text", "encoding": "gzip+base64", "encoded": "AAAA"}},
-                ),
-            ),
-        )
+        update_request(command, max_decoded=MAX_DECODED_CONTENT_BYTES)
     assert isinstance(refused.value, InvalidRequestError)
     assert refused.value.safe_details == (SafeDetail.CONTENT,)
+    service = build_service(scene.world, scene.providers)
+    answer = _invoke(service, scene, Capability.REPORTS_UPDATE, payload)
+    assert answer["error"]["code"] == ErrorCode.INVALID_REQUEST.value
+    assert answer["error"]["safe_details"] == ["content"]

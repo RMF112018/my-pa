@@ -18,7 +18,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
-from typing import Any, Final
+from typing import Any, Final, cast
 
 from my_pa.domain.reports.content import ReportContent, canonical_json
 from my_pa.domain.reports.errors import ReportValidationError
@@ -139,6 +139,8 @@ class PublicationRequest:
     associations: tuple[RequestedAssociation, ...] = ()
     metadata: Mapping[str, Any] = field(default_factory=dict)
     client_intent_id: str | None = None
+    #: `intent_digest`, computed once (WP05 N-3: it serializes the whole content).
+    _intent_digest: str | None = field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         def put(name: str, value: object) -> None:
@@ -177,7 +179,12 @@ class PublicationRequest:
 
     @property
     def intent_digest(self) -> str:
-        """SHA-256 of the canonical JSON of the normalized caller payload."""
+        """SHA-256 of the canonical JSON of the normalized caller payload (computed once)."""
+        if self._intent_digest is None:
+            object.__setattr__(self, "_intent_digest", self._compute_intent_digest())
+        return cast("str", self._intent_digest)
+
+    def _compute_intent_digest(self) -> str:
         coverage = (
             None
             if self.coverage_start is None and self.coverage_end is None

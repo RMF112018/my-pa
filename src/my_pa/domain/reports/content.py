@@ -30,10 +30,11 @@ import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Final
+from typing import Any, Final, cast
 
 from my_pa.domain.reports.encoding import (
     ENCODED_FIELD,
+    check_encoded_shape,
     decode_gzip_base64,
     parse_json_text,
     utf8_text,
@@ -56,7 +57,9 @@ __all__ = [
     "content_facts",
     "content_from_decoded",
     "content_of",
+    "is_gzip_content",
     "validate_content",
+    "validate_content_structure",
 ]
 
 #: The decoded size an inline content value may have (512 KiB).
@@ -341,7 +344,22 @@ def _declared_digest(value: Mapping[str, object], name: str) -> str | None:
     return digest
 
 
-def _gzip_content(value: Mapping[str, object], content_format: ContentFormat) -> ReportContent:
+def _gzip_shape(value: Mapping[str, object]) -> None:
+    """The structure of a gzip upload: keys, `encoded`'s type and length, declared fields."""
+    if any(key not in _GZIP_KEYS for key in value):
+        raise ReportValidationError("content", "unknown_field")
+    if "encoded" not in value:
+        raise ReportValidationError(ENCODED_FIELD, "required")
+    _declared_count(value, "original_byte_count")
+    _declared_digest(value, "original_sha256")
+    _declared_count(value, "uncompressed_byte_count")
+    _declared_digest(value, "uncompressed_sha256")
+    check_encoded_shape(value["encoded"])
+
+
+def _gzip_content(
+    value: Mapping[str, object], content_format: ContentFormat, max_decoded: int
+) -> ReportContent:
     """WP05 B1/B2: one `gzip+base64` content object, decoded and validated."""
     if any(key not in _GZIP_KEYS for key in value):
         raise ReportValidationError("content", "unknown_field")
@@ -353,6 +371,7 @@ def _gzip_content(value: Mapping[str, object], content_format: ContentFormat) ->
         original_sha256=_declared_digest(value, "original_sha256"),
         uncompressed_byte_count=_declared_count(value, "uncompressed_byte_count"),
         uncompressed_sha256=_declared_digest(value, "uncompressed_sha256"),
+        max_decoded=max_decoded,
     )
     text = utf8_text(uncompressed)
     body: str | None = None
@@ -384,31 +403,66 @@ def _gzip_content(value: Mapping[str, object], content_format: ContentFormat) ->
             content = content_of(content_format, body=body, data=data, original=original)
         except ValueError:
             raise ReportValidationError("content", "too_large") from None
-        if content.decoded_byte_count > MAX_DECODED_CONTENT_BYTES:
+        if content.decoded_byte_count > min(max_decoded, MAX_DECODED_CONTENT_BYTES):
             raise ReportValidationError("content", "too_large")
         return content
     raise refusal
 
 
-def validate_content(value: object) -> ReportContent:
-    """Validate one caller content object and return it with its digests.
+def is_gzip_content(value: object) -> bool:
+    """Whether `value` asks for the `gzip+base64` encoding (decoded under the permit)."""
+    if type(value) is not dict:
+        return False
+    encoding = value.get("encoding")
+    return type(encoding) is str and encoding == ContentEncoding.GZIP_BASE64.value
 
-    Dispatches by encoding (WP05 B1): `gzip+base64` is decoded by
-    `domain.reports.encoding`; anything else takes the identity path,
-    unchanged byte for byte from WP02.
-    """
+
+def _content_format(value: object) -> ContentFormat:
     if type(value) is not dict:
         raise ReportValidationError("content", "type")
     raw_format = value.get("format")
     if type(raw_format) is not str:
         raise ReportValidationError("content.format", "required")
     try:
-        content_format = ContentFormat(raw_format)
+        return ContentFormat(raw_format)
     except ValueError:
         raise ReportValidationError("content.format", "unknown") from None
+
+
+def validate_content_structure(value: object) -> ReportContent | None:
+    """What command construction validates of a content object (WP05 corrective B-4).
+
+    Identity content is validated in full (the request bounds it) and
+    returned. A `gzip+base64` upload is checked for its structure only -- its
+    keys, `encoded` a non-empty `str` no longer than the Base64 of the largest
+    original, the declared fields' types, bounds and patterns -- and `None` is
+    returned: decoding, inflating and parsing happen in the handler through
+    `validate_content`, under the decode permit and with the deployment's
+    decode limit. Every refusal raised here is one `validate_content` raises.
+    """
+    _content_format(value)
+    if is_gzip_content(value):
+        _gzip_shape(cast("dict[str, object]", value))
+        return None
+    return validate_content(value)
+
+
+def validate_content(
+    value: object, *, max_decoded: int = MAX_DECODED_CONTENT_BYTES
+) -> ReportContent:
+    """Validate one caller content object and return it with its digests.
+
+    Dispatches by encoding (WP05 B1): `gzip+base64` is decoded by
+    `domain.reports.encoding`, its decoded size bounded by `max_decoded`
+    (WP05 corrective B-4: the handler passes its inline threshold when no
+    report content store is composed); anything else takes the identity path,
+    unchanged byte for byte from WP02 (`max_decoded` does not apply to it).
+    """
+    content_format = _content_format(value)
+    value = cast("dict[str, object]", value)
+    if is_gzip_content(value):
+        return _gzip_content(value, content_format, max_decoded)
     encoding = value.get("encoding")
-    if type(encoding) is str and encoding == ContentEncoding.GZIP_BASE64.value:
-        return _gzip_content(value, content_format)
     if any(key not in _KEYS[content_format] for key in value):
         raise ReportValidationError("content", "unknown_field")
     if "encoding" in value and (

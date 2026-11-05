@@ -597,7 +597,12 @@ composition and in every MCP publication that composition produces.
   echoes a value. Decoded content above the inline threshold is stored in the report
   content store when one is configured, otherwise refused the same way
   ([`managed-document-operations.md`](managed-document-operations.md)
-  section 7). A `reports.update` whose `patch.content` has the head's format,
+  section 7); without a store a gzip upload is never inflated past that
+  threshold. The server decodes one gzip upload at a time (a single
+  process-wide permit, taken before the request's transaction opens): a
+  concurrent gzip publish or update waits for the one being decoded (at most
+  about two seconds of CPU each), identity content never waits, and the
+  memory a decode needs is that of one request (about 94 MiB at 16 MiB). A `reports.update` whose `patch.content` has the head's format,
   encoding and decoded content is a metadata-only change that keeps the head's content, including
   its original gzip bytes; the new upload's bytes are not stored. A standalone
   `reports.read` returns `original_sha256` and

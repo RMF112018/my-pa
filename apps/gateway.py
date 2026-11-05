@@ -346,7 +346,16 @@ INTERACTION_LOG_ROW_TIMEOUT_SECONDS: Final = 30.0
 #: from measurements: the gateway process about 150 MiB; the recorder's queued
 #: bodies at most 64 MiB; the exchange the writer is sending at most 32 MiB;
 #: response bodies in flight across 8 concurrent calls up to about 190 MiB; a
-#: margin of about 80 MiB. That leaves 256 MiB for the worker, whose virtual
+#: margin of about 80 MiB. Reports Modernization WP05 (corrective B-4) adds a
+#: line the budget above did not have: report content decode, 1 permit
+#: (`REPORT_CONTENT_DECODE_PERMITS`) x about 94 MiB measured live peak (16 MiB
+#: of gzip JSON long strings; 68 MiB for 16 MiB of markdown), whatever the
+#: concurrency, and only when a report content store is composed (without one
+#: a gzip upload is never inflated past the 512 KiB inline threshold). It does
+#: NOT fit the ~80 MiB margin: the sum is about 786 MiB against 768 MiB. That is
+#: an operator decision, not changed here: raise `MY_PA_REMOTE_MEMORY` (for
+#: example to 896m) before composing a report content store on the remote
+#: gateway, or accept the risk. That leaves 256 MiB for the worker, whose virtual
 #: size on Linux is about 30 MiB idle and about 94 MiB at peak for a 16 MiB text
 #: row. A row that needs more (a ~20 MiB list of records peaks near 346 MiB;
 #: 16 MiB of `[{},{},...]` near 882 MiB) fails with `MemoryError` in the worker:

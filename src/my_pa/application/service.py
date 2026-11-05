@@ -109,8 +109,9 @@ import hashlib
 import hmac
 import json
 import sys
+import threading
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import asdict, dataclass, is_dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
@@ -967,7 +968,11 @@ from my_pa.domain.reports.catalog import (
     ReportPlane,
     binding_digest,
 )
-from my_pa.domain.reports.content import INLINE_CONTENT_MAX_BYTES, content_from_decoded
+from my_pa.domain.reports.content import (
+    INLINE_CONTENT_MAX_BYTES,
+    content_from_decoded,
+    is_gzip_content,
+)
 from my_pa.domain.reports.creator import CreatorKind, ReportCreator, derive_creator
 from my_pa.domain.reports.errors import ReportLifecycleRefusal, ReportValidationError
 from my_pa.domain.reports.publication import PublicationResult
@@ -981,6 +986,7 @@ from my_pa.domain.reports.records import (
 )
 from my_pa.domain.reports.revision import LifecycleResult, UpdateResult
 from my_pa.domain.reports.vocabulary import (
+    MAX_DECODED_CONTENT_BYTES,
     READ_INLINE_CONTENT_MAX_BYTES,
     ContentEncoding,
     ContentFormat,
@@ -4505,6 +4511,37 @@ _DIRECT_REENRICHMENT_CAPABILITIES = frozenset(
 )
 
 
+#: WP05 corrective B-4: how many `gzip+base64` report contents this process
+#: decodes at once. One request decodes up to 16 MiB, parses it, serializes it
+#: canonically, digests it, projects its search text and stores it: about
+#: 85-100 MiB at its peak. The remote MCP server runs up to eight calls at
+#: once, so without a bound eight such requests would need ~0.9 GiB, beyond
+#: the remote container's 768 MiB. With one permit the decode share of the
+#: memory budget is one request's peak, whatever the concurrency. Identity
+#: content (bounded by the request ceiling) never takes the permit.
+REPORT_CONTENT_DECODE_PERMITS: Final = 1
+#: Process-wide. Acquired in `ApplicationService._run` BEFORE the unit of work
+#: opens (so no request waits for it holding a connection, a transaction or a
+#: lock) and released after that unit of work has committed or rolled back,
+#: so the decode, the parse, the manifest, the search text, the store put and
+#: the INSERTs all happen under it. A waiter waits only for the current
+#: holder's request (each about two seconds of CPU at worst); there is no
+#: other lock taken while it is held that a holder could wait on in turn.
+_REPORT_CONTENT_DECODE_PERMIT: Final = threading.BoundedSemaphore(REPORT_CONTENT_DECODE_PERMITS)
+
+
+def _report_content_decode_permit(command: object) -> AbstractContextManager[object]:
+    """The decode permit for a `gzip+base64` publish or update, else nothing to hold."""
+    if isinstance(command, PublishGeneralReport):
+        gzip = is_gzip_content(command.content)
+    elif isinstance(command, UpdateGeneralReport):
+        patch: object = command.patch
+        gzip = isinstance(patch, dict) and is_gzip_content(patch.get("content"))
+    else:
+        gzip = False
+    return _REPORT_CONTENT_DECODE_PERMIT if gzip else nullcontext()
+
+
 class ApplicationService:
     """Every capability this build can execute, behind one entry point."""
 
@@ -4562,6 +4599,14 @@ class ApplicationService:
             raise ValueError("the report content inline threshold is out of bounds")
         self._report_content_store = report_content_store
         self._report_content_inline_max_bytes = report_content_inline_max_bytes
+        #: WP05 corrective B-4: how far a gzip upload is inflated. Without a
+        #: store nothing above the inline threshold can be placed, so nothing
+        #: above it is ever decoded (`too_large`, as placement would refuse).
+        self._report_content_decode_limit: int = (
+            MAX_DECODED_CONTENT_BYTES
+            if report_content_store is not None
+            else report_content_inline_max_bytes
+        )
         self._limits = _effective_limits(limits)
         self._clock = clock
         #: The managed-document byte store, or `None` in a process that was never
@@ -5029,7 +5074,9 @@ class ApplicationService:
         """
         mismatch = metadata.capability is not command.capability
         committed_conflict: ConflictError | None = None
-        with self._unit_of_work() as unit_of_work:
+        # WP05 corrective B-4: a gzip report content is decoded under the
+        # process-wide permit, taken before the unit of work opens.
+        with _report_content_decode_permit(command), self._unit_of_work() as unit_of_work:
             if mismatch:
                 unit_of_work.audit.record(
                     AuditEvent(
@@ -16493,7 +16540,8 @@ class ApplicationService:
         recorded under, so the receipt names the audit event that admitted it.
         The repository mints the identifiers. Nothing of the body is logged.
         """
-        request = publication_request(command)
+        # Decoded here, under the permit `_run` holds (WP05 corrective B-4).
+        request = publication_request(command, max_decoded=self._report_content_decode_limit)
         creator = _report_creator(authorization)
         refusal: ApplicationError
         try:
@@ -16537,7 +16585,7 @@ class ApplicationService:
         caller's own, so it is `denied` (`report_withdrawn`), the
         `capture_withdrawn` shape. Nothing of the patch is logged.
         """
-        request = update_request(command)
+        request = update_request(command, max_decoded=self._report_content_decode_limit)
         creator = _report_creator(authorization)
         refusal: ApplicationError
         try:

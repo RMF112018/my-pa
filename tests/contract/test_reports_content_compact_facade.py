@@ -293,7 +293,10 @@ def test_publish_and_update_describe_the_one_extended_content_schema(harness: Ha
     for limit in (
         "524,288",
         "16,777,216",
-        "256:1",
+        # WP05 corrective B6-1: the ratio and the size name the gunzipped bytes.
+        "The gunzipped bytes are at most 16,777,216 and at most 256 times the gzip bytes",
+        "the decoded (canonical) content is at most 16,777,216 bytes",
+        "pretty-printed JSON counts its whitespace",
         "262,144",
         f"{MAX_REQUEST_BYTES:,}",
         "body_omitted",

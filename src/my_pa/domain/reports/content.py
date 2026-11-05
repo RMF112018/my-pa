@@ -18,9 +18,13 @@ The decoded bytes are what the digests name: the body as UTF-8 for
 JSON of `{"body": body, "data": data}` for `mixed`, whatever the encoding.
 Under the identity encoding the original bytes are the decoded bytes; under
 gzip they are the uploaded gzip bytes, kept in `ReportContent.original`.
-Identity content is bounded by `INLINE_CONTENT_MAX_BYTES` here; gzip content by
-`MAX_DECODED_CONTENT_BYTES`, its placement (inline or not at all) being the
-repository's decision. Every refusal names a field and a rule, never the value.
+Identity content is bounded by `INLINE_CONTENT_MAX_BYTES` (decoded) here. Gzip
+content is bounded by `max_decoded` (at most `MAX_DECODED_CONTENT_BYTES`) twice:
+on the gunzipped bytes as uploaded (with `MAX_EXPANSION_RATIO` times the gzip
+bytes, in `encoding`) and on the decoded (canonical) bytes; its JSON by
+`MAX_CONTENT_DATA_DEPTH` and `MAX_CONTENT_DATA_VALUES` in the uploaded text.
+Placement (inline, the store, or a refusal) is the repository's decision.
+Every refusal names a field and a rule, never the value.
 """
 
 from __future__ import annotations

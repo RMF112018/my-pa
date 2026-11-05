@@ -585,13 +585,16 @@ composition and in every MCP publication that composition produces.
   `original_byte_count`/`original_sha256` (of the gzip bytes) and
   `uncompressed_byte_count`/`uncompressed_sha256` (of the gunzipped bytes).
   `encoded` must be strict, canonical, padded standard Base64 with no
-  whitespace, of exactly one gzip member; the decoded content is at most
-  16,777,216 bytes, expands at most 256:1, and is validated exactly as identity
-  content is (UTF-8 body; for `json`/`mixed` a JSON text, `mixed` being exactly
-  `{body, data}`). `json`/`mixed` data holds at most 262,144 JSON values,
-  counted before any parse as an upper bound (one, plus every `[`, `{` and
-  `,` outside strings), which keeps a 16 MiB decode to a measured peak under
-  100 MiB. The whole request stays within the transport's
+  whitespace, of exactly one gzip member. Its gunzipped bytes are at most
+  16,777,216 and at most 256 times the gzip bytes, and the decoded (canonical)
+  content is at most 16,777,216 bytes; `json`/`mixed` are measured as
+  uploaded, so pretty-printed JSON counts its whitespace against the gunzipped
+  bounds. The text is validated exactly as identity content is (UTF-8 body;
+  for `json`/`mixed` a JSON text, `mixed` being exactly `{body, data}`).
+  `json`/`mixed` data holds at most 262,144 JSON values and nests at most 32
+  deep, both counted in the uploaded text before any parse (values as an
+  upper bound: one, plus every `[`, `{` and `,` outside strings), which keeps
+  a 16 MiB decode to a measured peak under 100 MiB. The whole request stays within the transport's
   762,288-byte ceiling. Any violation is `invalid_request` naming `content`,
   with `max_bytes` for the size, expansion and value-count bounds; no refusal
   echoes a value. With a report content store configured, decoded content

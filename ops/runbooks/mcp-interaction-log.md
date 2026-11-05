@@ -302,7 +302,7 @@ stored.
   = 1) x about 94 MiB measured live peak for a 16 MiB `gzip+base64` publish or
   update (68 MiB for 16 MiB of markdown), whatever the number of concurrent
   calls, and only when a report content store is composed; without one a gzip
-  upload is never inflated past the 512 KiB inline threshold. **It does not
+  upload is never inflated past the inline threshold (512 KiB by default). **It does not
   fit the ~80 MiB margin** (about 786 MiB against 768 MiB): before composing a
   report content store on the remote gateway, the operator either raises
   `MY_PA_REMOTE_MEMORY` (for example to 896m) or accepts the risk.

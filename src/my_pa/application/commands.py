@@ -332,6 +332,7 @@ from my_pa.domain.reports.catalog import (
 )
 from my_pa.domain.reports.content import (
     INLINE_CONTENT_MAX_BYTES,
+    MAX_CONTENT_DATA_DEPTH,
     ReportContent,
     content_of,
     validate_content,
@@ -5855,12 +5856,16 @@ class PublishGeneralReport:
     omitted or `identity`. With `encoding: "gzip+base64"` the content is
     `{"format", "encoding", "encoded"}` (Base64 of one gzip member) plus the
     optional declared `original_byte_count`/`original_sha256` (gzip bytes)
-    and `uncompressed_byte_count`/`uncompressed_sha256` (gunzipped bytes);
-    decoded content is bounded by 16 MiB and a 256:1 expansion; every
-    decoding refusal is `invalid_request` on `content`. Decoded content (either
-    encoding) above the configured inline threshold (default 512 KiB) is held
-    in the report content store when one is configured, else refused
-    `invalid_request` on `content` and `max_bytes` (WP05 C3/C4). The server
+    and `uncompressed_byte_count`/`uncompressed_sha256` (gunzipped bytes).
+    The gunzipped bytes are bounded by 16 MiB and by 256 times the gzip bytes
+    (JSON measured as uploaded, whitespace included), the decoded (canonical)
+    content by 16 MiB, and JSON data by 262,144 values and a depth of 32;
+    every decoding refusal is `invalid_request` on `content`. Decoded content
+    (either encoding) above the configured inline threshold (default 512 KiB)
+    is held in the report content store when one is configured, else refused
+    `invalid_request` on `content` and `max_bytes`, and without a store a gzip
+    upload's gunzipped bytes must also be within that threshold (WP05 C3/C4).
+    The server
     derives the owner, the report and version identifiers, version 1, every
     timestamp and digest, the manifest and the receipt; no cycle run, stage,
     producer, focus area or source lane is accepted. Optional `type` is an
@@ -5983,7 +5988,9 @@ _CONTENT_PLACEMENT_SENTENCE: Final = (
     "without it, both the gunzipped bytes of a gzip+base64 upload and the decoded "
     "content must be within the inline threshold, else invalid_request content, "
     f"max_bytes. Reads return the body only up to {READ_INLINE_CONTENT_MAX_BYTES:,} "
-    "decoded bytes, larger bodies are marked body_omitted."
+    "decoded bytes, larger bodies are marked body_omitted, and a gzip+base64 "
+    f"upload's encoded only up to {READ_INLINE_CONTENT_MAX_BYTES:,} gzip bytes, else "
+    "encoded_omitted."
 )
 
 #: WP05 (corrective N4): what `patch.content` equal to the head's decoded content does.
@@ -6003,10 +6010,14 @@ _CONTENT_SCHEMA: Final[Mapping[str, Any]] = MappingProxyType(
             f"{INLINE_CONTENT_MAX_BYTES:,} decoded UTF-8 bytes. gzip+base64: encoded is the "
             "standard padded Base64 (no whitespace) of exactly one gzip member whose "
             "gunzipped bytes are the UTF-8 body (markdown|text), a JSON text of the data "
-            "(json) or a JSON object of exactly {body, data} (mixed); decoded content at "
-            f"most {MAX_DECODED_CONTENT_BYTES:,} bytes and at most {MAX_EXPANSION_RATIO}:1 "
-            "over the gzip bytes; json|mixed data at most "
-            f"{MAX_CONTENT_DATA_VALUES:,} JSON values. {_CONTENT_PLACEMENT_SENTENCE} "
+            "(json) or a JSON object of exactly {body, data} (mixed). The gunzipped bytes "
+            f"are at most {MAX_DECODED_CONTENT_BYTES:,} and at most {MAX_EXPANSION_RATIO} "
+            "times the gzip bytes, and the decoded (canonical) content is at most "
+            f"{MAX_DECODED_CONTENT_BYTES:,} bytes; json|mixed are measured as uploaded, so "
+            "pretty-printed JSON counts its whitespace. json|mixed data holds at most "
+            f"{MAX_CONTENT_DATA_VALUES:,} JSON values (counted in the uploaded text as 1 plus "
+            f"its [, {{ and , outside strings) and nests at most {MAX_CONTENT_DATA_DEPTH} "
+            f"deep. {_CONTENT_PLACEMENT_SENTENCE} "
             "The whole JSON request "
             f"must also fit the {_WIRE_CEILING_BYTES:,}-byte request ceiling, so heavily "
             "escaped content (quotes, backslashes, control characters, \\u-escaped "

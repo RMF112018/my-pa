@@ -115,7 +115,7 @@ the new `report_lifecycle` purpose (write), which `report_authoring` never impli
 `chatllm-data-v12` (Reports Modernization WP02) added only `reports.publish` (standalone
 report publication; a `DATA_REQUIRED` write under `report_authoring`, needing no plane
 switch), so a client converged on `chatllm-data-v11` plans those 6 adds. `reports.publish`'s
-inline content limit is 524,288 decoded UTF-8 bytes, but the whole JSON request must also fit the 762,288-byte
+inline identity content limit is 524,288 decoded UTF-8 bytes (WP05 `gzip+base64` bounds: `mcp-and-cli-operations.md`), but the whole JSON request must also fit the 762,288-byte
 `MAX_REQUEST_BYTES` request ceiling, so heavily escaped content (quotes, backslashes,
 control characters, `\u`-escaped non-ASCII) may need to be smaller; a request over the
 ceiling is refused at the transport (HTTP 413) before any handler runs. `chatllm-data-v11` (CPM Workbench S5b-2) added the 6 Schedule reads

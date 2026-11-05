@@ -81,6 +81,9 @@ MIN_METADATA_FLOAT_MAGNITUDE: Final = 1e-4
 MAX_METADATA_FLOAT_MAGNITUDE: Final = 1e16
 RESERVED_METADATA_KEY_PREFIXES: Final = ("_", "my_pa", "system")
 
+#: WP05: the most bytes a gzip+base64 upload's gunzipped text may have (as
+#: uploaded: pretty-printed JSON counts its whitespace) and, separately, the
+#: most bytes its decoded (canonical) content may have.
 MAX_DECODED_CONTENT_BYTES: Final = 16_777_216
 MAX_ORIGINAL_CONTENT_BYTES: Final = 16_777_216
 

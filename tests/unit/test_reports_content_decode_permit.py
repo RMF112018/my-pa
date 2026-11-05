@@ -38,11 +38,13 @@ from my_pa.application.service import REPORT_CONTENT_DECODE_PERMITS, Application
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.reports import encoding
-from my_pa.domain.reports.content import INLINE_CONTENT_MAX_BYTES
+from my_pa.domain.reports.content import INLINE_CONTENT_MAX_BYTES, validate_content
+from my_pa.domain.reports.errors import ReportValidationError
 from my_pa.domain.reports.vocabulary import (
     DECODE_CHUNK_BYTES,
     MAX_CONTENT_DATA_VALUES,
     MAX_DECODED_CONTENT_BYTES,
+    MAX_EXPANSION_RATIO,
 )
 from my_pa.infrastructure.report_content_stores.filesystem import FilesystemReportContentStore
 from tests.conftest import Scene, World, build_service
@@ -272,4 +274,53 @@ def test_store_less_pretty_json_is_bounded_by_its_gunzipped_bytes(
     assert result["content"]["decoded_byte_count"] == len(canonical.encode())
     (stored,) = stored_scene.world.general_report_versions.values()
     assert stored.storage_kind.value == "inline"
+    assert store.stored_object_ids() == ()
+
+
+def _random_text(rng: random.Random, size: int) -> str:
+    return "".join(rng.choice(string.ascii_letters + string.digits) for _ in range(size))
+
+
+@pytest.mark.parametrize("shape", ["gunzipped_over_16_mib", "gunzipped_over_256_to_1"])
+def test_with_a_store_the_gunzipped_bytes_carry_the_size_and_ratio_bounds(
+    fixture_root: Path, tmp_path: Path, shape: str
+) -> None:
+    # WP05 corrective B6-1: pretty-printed JSON whose CANONICAL form is within
+    # 16 MiB and 256:1 is still refused, because both bounds are measured on
+    # the gunzipped bytes as uploaded -- what the describe text now states.
+    rng = random.Random(7)  # noqa: S311 - deterministic synthetic text, not a secret
+    if shape == "gunzipped_over_16_mib":
+        data: list[str] = ["s" * 60] * 200_000 + [_random_text(rng, 200_000)]
+        pretty = json.dumps(data, indent=40).encode()
+        rule = "too_large"
+    else:
+        data = [_random_text(rng, 12) for _ in range(1000)]
+        pretty = json.dumps(data, indent=8000).encode()
+        rule = "expansion_ratio"
+    canonical = json.dumps(data, separators=(",", ":"), ensure_ascii=False).encode()
+    original = gzip.compress(pretty, compresslevel=6, mtime=0)
+    assert len(canonical) <= MAX_DECODED_CONTENT_BYTES
+    assert len(canonical) <= MAX_EXPANSION_RATIO * len(original)
+    if rule == "too_large":
+        assert len(pretty) > MAX_DECODED_CONTENT_BYTES
+        assert len(pretty) <= MAX_EXPANSION_RATIO * len(original)
+    else:
+        assert len(pretty) <= MAX_DECODED_CONTENT_BYTES
+        assert len(pretty) > MAX_EXPANSION_RATIO * len(original)
+    content = {
+        "format": "json",
+        "encoding": "gzip+base64",
+        "encoded": base64.b64encode(original).decode("ascii"),
+    }
+    with pytest.raises(ReportValidationError) as refused:
+        validate_content(content)
+    assert (refused.value.field, refused.value.code) == ("content.encoded", rule)
+
+    (tmp_path / "store").mkdir()
+    store = FilesystemReportContentStore((tmp_path / "store").resolve())
+    service, scene = _scene(fixture_root, report_content_store=store)
+    answer = _publish(service, scene, content, f"pretty-{shape}")
+    assert answer["error"]["code"] == ErrorCode.INVALID_REQUEST.value
+    assert answer["error"]["safe_details"] == ["content", "max_bytes"]
+    assert not scene.world.general_report_versions
     assert store.stored_object_ids() == ()

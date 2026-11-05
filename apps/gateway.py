@@ -358,7 +358,7 @@ INTERACTION_LOG_ROW_TIMEOUT_SECONDS: Final = 30.0
 #: about 94 MiB measured live peak (16 MiB of gzip JSON long strings; 68 MiB for
 #: 16 MiB of markdown), whatever the concurrency, and only when a report content
 #: store is composed (without one a gzip upload is never inflated past the
-#: 512 KiB inline threshold). It does NOT fit the ~80 MiB margin: the sum is
+#: inline threshold, 512 KiB by default). It does NOT fit the ~80 MiB margin: the sum is
 #: about 786 MiB against 768 MiB. That is an operator decision, not changed
 #: here: raise `MY_PA_REMOTE_MEMORY` (for example to 896m) before composing a
 #: report content store on the remote gateway, or accept the risk.

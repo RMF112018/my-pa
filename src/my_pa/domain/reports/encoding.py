@@ -22,11 +22,14 @@ fixed token and never the value:
    `original_byte_count` / `original_sha256` (of the gzip bytes) disagrees.
 4. Inflation through `zlib.decompressobj(wbits=31)`, fed `DECODE_CHUNK_BYTES`
    slices with each call producing at most `DECODE_CHUNK_BYTES`; after EVERY
-   output piece two separate checks: more than `MAX_DECODED_CONTENT_BYTES` in
-   total is `too_large`, more than `MAX_EXPANSION_RATIO` times the gzip bytes is
-   `expansion_ratio`. So inflation stops within one piece of either bound and is
-   never unbounded. `zlib.error` (a corrupt stream, a bad CRC or length
-   trailer) is `malformed_gzip`; a stream that never ends is `truncated`; any
+   output piece two separate checks on the gunzipped bytes as uploaded (so
+   pretty-printed JSON counts its whitespace): more than `max_decoded` (at most
+   `MAX_DECODED_CONTENT_BYTES`; the inline threshold when the caller has no
+   report content store) in total is `too_large`, more than
+   `MAX_EXPANSION_RATIO` times the gzip bytes is `expansion_ratio`. So
+   inflation stops within one piece of either bound and is never unbounded.
+   `zlib.error` (a corrupt stream, a bad CRC or length trailer) is
+   `malformed_gzip`; a stream that never ends is `truncated`; any
    byte after the member's end (a second member included) is `trailing_data`.
 5. `nested_stream`: the gunzipped bytes are themselves gzip.
 6. `uncompressed_size_mismatch` / `uncompressed_digest_mismatch`: a declared

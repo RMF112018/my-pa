@@ -1,4 +1,4 @@
-"""Reports Modernization WP02: `reports.publish` and `reports.read` through the compact facade.
+"""Reports Modernization WP02/WP03: the standalone report plane through the compact facade.
 
 Spec C section 5 layers 7-12, end to end on PostgreSQL (`migrated_engine`, a
 disposable current-head clone). Nothing here is a source-level check: every
@@ -11,7 +11,7 @@ resolved by the composition root's own `apps.gateway.remote_access_context`
 with a real `Settings` that selects the compact facade for the synthetic
 clients, and served by a real `ApplicationService` on one SQL unit of work.
 
-The synthetic client holds exactly the grants the `chatllm-data-v12` planner
+The synthetic client holds exactly the grants the `chatllm-data-v13` planner
 provisions for a default composition (`plan_chatllm_grant_actions`), so this is
 what an operator's `profile-apply` would give a ChatLLM client, not a
 hand-picked grant set. What it proves:
@@ -35,7 +35,17 @@ hand-picked grant set. What it proves:
   canonical local read answers it, and as `test_reports_legacy_read_golden`
   pinned it before the extension;
 * `reports.types.create` / `reports.types.list` (layer 12) describe, write,
-  replay and list through the same compact client under the same profile.
+  replay and list through the same compact client under the same profile;
+* WP03 (`chatllm-data-v13`): `reports.update`, `reports.history`,
+  `reports.archive`, `reports.delete` and `reports.restore` describe with their
+  exact remote schemas, execute their canonical handlers through `my_pa.write`
+  (the four writes) and `my_pa.read` (history), and read back from the
+  database: a metadata update reuses the content object, a content update
+  writes one, archive hides the report from a plain read, delete moves it to
+  Trash with every version, manifest and receipt kept, restore after
+  archive-then-delete returns it to `archived`, history pages versions and
+  lifecycle events. A retry replays on the client-bound server key; a stale
+  `expected_version` / `expected_lifecycle_revision` writes nothing.
 
 The refusals are in `tests/security/test_reports_compact_facade_adversarial.py`,
 on this harness. Every identity, title and body here is synthetic; no real
@@ -112,6 +122,15 @@ PUBLISH: Final = Capability.REPORTS_PUBLISH
 READ: Final = Capability.REPORTS_READ
 TYPES_CREATE: Final = Capability.REPORTS_TYPES_CREATE
 TYPES_LIST: Final = Capability.REPORTS_TYPES_LIST
+UPDATE: Final = Capability.REPORTS_UPDATE
+HISTORY: Final = Capability.REPORTS_HISTORY
+ARCHIVE: Final = Capability.REPORTS_ARCHIVE
+DELETE: Final = Capability.REPORTS_DELETE
+RESTORE: Final = Capability.REPORTS_RESTORE
+#: Reports Modernization WP03's four writes and its one read.
+MANAGEMENT_WRITES: Final = (UPDATE, ARCHIVE, DELETE, RESTORE)
+LIFECYCLE_MOVES: Final = (ARCHIVE, DELETE, RESTORE)
+MANAGEMENT: Final = (*MANAGEMENT_WRITES, HISTORY)
 BODY: Final = "# Assessment\n\nSynthetic standalone report text."
 MINIMAL: Final[dict[str, Any]] = {
     "title": "Synthetic Schedule Risk Assessment",
@@ -125,6 +144,8 @@ PLANE_TABLES: Final = (
     "report_associations",
     "report_receipts",
 )
+#: Every table a WP03 update or lifecycle move may write.
+MUTATION_TABLES: Final = (*PLANE_TABLES, "report_lifecycle_events")
 INTELLIGENCE_TABLES: Final = (
     "intelligence_cycle_runs",
     "intelligence_producer_runs",
@@ -167,7 +188,7 @@ def grant_row(
 
 
 def profile_grants(service: ApplicationService) -> tuple[GrantRow, ...]:
-    """What `profile-apply` installs for a fresh client under `chatllm-data-v12`."""
+    """What `profile-apply` installs for a fresh client under `chatllm-data-v13`."""
     implemented = frozenset(service.available_capabilities)
     composed = composed_capabilities(implemented, DEFAULT_PLANES)
     diff = diff_chatllm_data_profile(
@@ -178,7 +199,7 @@ def profile_grants(service: ApplicationService) -> tuple[GrantRow, ...]:
         resource=RESOURCE,
         scope=SCOPE,
     )
-    assert diff.profile_version == CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
+    assert diff.profile_version == CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
     actions = plan_chatllm_grant_actions(diff, (), now=WHEN, resource=RESOURCE, scope=SCOPE)
     rows = tuple(
         (action.capability, action.purpose, action.is_write, None)
@@ -188,6 +209,14 @@ def profile_grants(service: ApplicationService) -> tuple[GrantRow, ...]:
     planned = {row[0] for row in rows}
     assert {PUBLISH, READ, TYPES_CREATE, TYPES_LIST} <= planned
     assert (PUBLISH, Purpose.REPORT_AUTHORING, True, None) in rows
+    # chatllm-data-v13: the five management grants, `report_lifecycle` its own.
+    assert {
+        (UPDATE, Purpose.REPORT_AUTHORING, True, None),
+        (HISTORY, Purpose.REPORT_READ, False, None),
+        (ARCHIVE, Purpose.REPORT_LIFECYCLE, True, None),
+        (DELETE, Purpose.REPORT_LIFECYCLE, True, None),
+        (RESTORE, Purpose.REPORT_LIFECYCLE, True, None),
+    } <= set(rows)
     return rows
 
 
@@ -392,10 +421,12 @@ def refusal(answer: Exchange) -> tuple[str, list[str]]:
     return str(problem["code"]), list(problem.get("safe_details") or [])
 
 
-def expected_key(payload: Mapping[str, Any], oauth_client_id: str) -> str:
+def expected_key(
+    payload: Mapping[str, Any], oauth_client_id: str, capability: Capability = PUBLISH
+) -> str:
     """The server's derivation (`compose_remote_arguments`), restated to pin it."""
     keyed = {
-        "capability": PUBLISH.value,
+        "capability": capability.value,
         "principal_id": remote_principal().principal_id,
         "payload": dict(payload),
         "client": oauth_client_id,
@@ -773,7 +804,7 @@ def test_a_legacy_rpt_read_through_the_facade_is_unchanged(harness: Harness) -> 
 def test_report_types_create_and_list_through_the_same_compact_client(harness: Harness) -> None:
     """Reconciliation regression for `reports.types.create` / `list` on the compact facade.
 
-    The same synthetic, planner-provisioned `chatllm-data-v12` client that reaches
+    The same synthetic, planner-provisioned `chatllm-data-v13` client that reaches
     `reports.publish` describes both registry names with their exact remote
     schemas, registers a kind through `my_pa.write` (an identical retry replays,
     a changed one conflicts) and lists it through `my_pa.read`. It pins repository
@@ -813,3 +844,408 @@ def test_report_types_create_and_list_through_the_same_compact_client(harness: H
     assert refusal(wrong)[0] == "invalid_request"
     registered = [(row["artifact_kind"], row["origin"]) for row in ok(kinds)["report_types"]]
     assert ("synthetic_weekly_digest", "client") in registered
+
+
+# ---- Reports Modernization WP03: update, history, archive, delete, restore -------------
+
+REASON: Final = "A synthetic revision."
+
+
+def update_payload(
+    report_id: str,
+    version: int,
+    patch: Mapping[str, Any],
+    **extra: Any,  # noqa: ANN401
+) -> dict[str, Any]:
+    return {
+        "report_id": report_id,
+        "expected_version": version,
+        "patch": dict(patch),
+        "change_reason": REASON,
+        **extra,
+    }
+
+
+def move_payload(report_id: str, revision: int, **extra: Any) -> dict[str, Any]:  # noqa: ANN401
+    return {"report_id": report_id, "expected_lifecycle_revision": revision, **extra}
+
+
+def publish_one(harness: Harness, token: str) -> dict[str, Any]:
+    (published,) = harness.run([(token, wrapped(WRITE_TOOL, PUBLISH, MINIMAL))])
+    return ok(published)
+
+
+def receipt_row(engine: Engine, receipt_id: str) -> Any:  # noqa: ANN401
+    with engine.connect() as connection:
+        return connection.execute(
+            text("SELECT * FROM knowledge.report_receipts WHERE receipt_id = :r"),
+            {"r": receipt_id},
+        ).one()
+
+
+def test_describe_returns_the_exact_management_schemas_under_the_v13_profile(
+    harness: Harness,
+) -> None:
+    token = harness.client(CLIENT, profile_grants(harness.service))
+    listed, *exact = harness.run(
+        [(token, describe(feature="reports", limit=100))]
+        + [(token, describe(capability=capability.value)) for capability in MANAGEMENT]
+    )
+    _failed, catalog = outcome(listed)
+    items = {item["capability"]: item for item in catalog["items"]}
+    for capability in MANAGEMENT_WRITES:
+        assert (items[capability.value]["kind"], items[capability.value]["feature"]) == (
+            "write",
+            "reports",
+        )
+        # Writes that move a head or a lifecycle are destructive (not additive).
+        assert items[capability.value]["destructive"] is True
+    assert (items[HISTORY.value]["kind"], items[HISTORY.value]["feature"]) == ("read", "reports")
+    assert items[HISTORY.value]["destructive"] is False
+    contracts = {}
+    for answer, capability in zip(exact, MANAGEMENT, strict=True):
+        _failed, contract = outcome(answer)
+        expected = json.loads(json.dumps(remote_tool_schema(_TOOLS[capability.value].input_schema)))
+        assert contract["input_schema"] == expected, capability
+        assert contract["profile"] == "chatllm-gateway-v1"
+        assert contract["item"]["capability"] == capability.value
+        assert "idempotency_key" not in json.dumps(contract["input_schema"]), capability
+        contracts[capability] = contract["input_schema"]["properties"]["payload"]
+    update = contracts[UPDATE]
+    assert update["required"] == ["report_id", "expected_version", "patch", "change_reason"]
+    assert set(update["properties"]) == {
+        "report_id",
+        "expected_version",
+        "patch",
+        "clear_fields",
+        "change_reason",
+    }
+    assert update["additionalProperties"] is False
+    assert set(update["properties"]["patch"]["properties"]) == {
+        "title",
+        "content",
+        "type",
+        "topics",
+        "tags",
+        "summary",
+        "report_date",
+        "coverage_period",
+        "metadata",
+        "associations",
+    }
+    assert update["properties"]["patch"]["additionalProperties"] is False
+    for capability in LIFECYCLE_MOVES:
+        move = contracts[capability]
+        assert move["required"] == ["report_id", "expected_lifecycle_revision"], capability
+        assert set(move["properties"]) == {
+            "report_id",
+            "expected_lifecycle_revision",
+            "reason",
+        }, capability
+        assert move["additionalProperties"] is False
+    history = contracts[HISTORY]
+    assert history["required"] == ["report_id"]
+    assert set(history["properties"]) == {
+        "report_id",
+        "entries",
+        "page_size",
+        "after",
+        "include_manifests",
+        "include_withdrawn",
+    }
+
+
+def test_updates_execute_through_my_pa_write_and_read_back(harness: Harness) -> None:
+    token = harness.client(CLIENT, profile_grants(harness.service))
+    published = publish_one(harness, token)
+    rid = published["report_id"]
+    metadata_patch = update_payload(rid, 1, {"title": "Revised title", "tags": ["risk"]})
+    before = counts(harness.engine, MUTATION_TABLES)
+    metadata, retry = harness.run(
+        [
+            (token, wrapped(WRITE_TOOL, UPDATE, metadata_patch)),
+            (token, wrapped(WRITE_TOOL, UPDATE, metadata_patch)),
+        ]
+    )
+    first, replayed = ok(metadata), ok(retry)
+    assert (first["plane"], first["outcome"], first["change_kind"]) == (
+        "standalone",
+        "applied",
+        "metadata",
+    )
+    assert first["version_number"] == 2 and first["replayed"] is False
+    # A metadata-only update reuses the head's content object.
+    assert first["content_id"] == published["content"]["content_id"]
+    assert first["decoded_sha256"] == published["content"]["decoded_sha256"]
+    # The identical retry replays the original answer on the client-bound key.
+    assert replayed["replayed"] is True
+    assert {k: v for k, v in replayed.items() if k != "replayed"} == {
+        k: v for k, v in first.items() if k != "replayed"
+    }
+    after = counts(harness.engine, MUTATION_TABLES)
+    assert {table: after[table] - before[table] for table in MUTATION_TABLES} == {
+        "report_content_objects": 0,
+        "report_roots": 0,
+        "report_versions": 1,
+        "report_version_manifests": 1,
+        "report_associations": 0,
+        "report_receipts": 1,
+        "report_lifecycle_events": 0,
+    }
+    stored = receipt_row(harness.engine, first["receipt"]["receipt_id"])
+    assert (stored.operation, stored.outcome, stored.report_id) == ("update", "applied", rid)
+    assert (stored.expected_version_number, stored.resulting_version_number) == (1, 2)
+    assert stored.version_id == first["version_id"]
+    assert stored.owner_principal_id == remote_principal().principal_id
+    assert stored.idempotency_key == expected_key(metadata_patch, CLIENT, UPDATE)
+
+    body = "# Assessment\n\nRevised synthetic text."
+    content_patch = update_payload(rid, 2, {"content": {"format": "markdown", "body": body}})
+    stale_patch = update_payload(rid, 1, {"title": "Stale"})
+    before = counts(harness.engine, MUTATION_TABLES)
+    content, stale = harness.run(
+        [
+            (token, wrapped(WRITE_TOOL, UPDATE, content_patch)),
+            (token, wrapped(WRITE_TOOL, UPDATE, stale_patch)),
+        ]
+    )
+    second = ok(content)
+    assert (second["change_kind"], second["version_number"]) == ("content", 3)
+    assert second["content_id"] != published["content"]["content_id"]
+    assert second["decoded_sha256"] == hashlib.sha256(body.encode()).hexdigest()
+    # The stale move refuses and writes nothing (the content update wrote 1 + 1 + 1 + 1).
+    assert refusal(stale) == ("conflict", ["stale_version"])
+    after = counts(harness.engine, MUTATION_TABLES)
+    assert {table: after[table] - before[table] for table in MUTATION_TABLES} == {
+        "report_content_objects": 1,
+        "report_roots": 0,
+        "report_versions": 1,
+        "report_version_manifests": 1,
+        "report_associations": 0,
+        "report_receipts": 1,
+        "report_lifecycle_events": 0,
+    }
+    with harness.engine.connect() as connection:
+        root = connection.execute(
+            text("SELECT * FROM knowledge.report_roots WHERE report_id = :r"), {"r": rid}
+        ).one()
+        versions = connection.execute(
+            text(
+                "SELECT version_number, content_id, change_kind, change_reason, title "
+                "FROM knowledge.report_versions WHERE report_id = :r ORDER BY version_number"
+            ),
+            {"r": rid},
+        ).all()
+        manifest = connection.execute(
+            text("SELECT * FROM knowledge.report_version_manifests WHERE version_id = :v"),
+            {"v": second["version_id"]},
+        ).one()
+        stored_body = connection.execute(
+            text("SELECT inline_text FROM knowledge.report_content_objects WHERE content_id = :c"),
+            {"c": second["content_id"]},
+        ).scalar_one()
+    assert (root.head_version_id, root.head_version_number) == (second["version_id"], 3)
+    assert [tuple(row) for row in versions] == [
+        (1, published["content"]["content_id"], "initial", None, MINIMAL["title"]),
+        (2, published["content"]["content_id"], "metadata", REASON, "Revised title"),
+        (3, second["content_id"], "content", REASON, "Revised title"),
+    ]
+    assert manifest.manifest_sha256 == second["manifest_sha256"]
+    assert manifest_digest(manifest.manifest) == second["manifest_sha256"]
+    assert stored_body == body
+
+    read, first_page, rest = harness.run(
+        [
+            (token, wrapped(READ_TOOL, READ, {"report_id": rid, "include_manifest": True})),
+            (
+                token,
+                wrapped(
+                    READ_TOOL,
+                    HISTORY,
+                    {"report_id": rid, "page_size": 2, "include_manifests": True},
+                ),
+            ),
+            (token, wrapped(READ_TOOL, HISTORY, {"report_id": rid, "after": second["version_id"]})),
+        ]
+    )
+    served = ok(read)
+    assert (served["version_id"], served["version_number"]) == (second["version_id"], 3)
+    assert (served["title"], served["tags"]) == ("Revised title", ["risk"])
+    assert served["content"]["body"] == body
+    assert served["change_reason"] == REASON
+    assert served["manifest"] == manifest.manifest
+    page = ok(first_page)
+    assert (page["plane"], page["entries"], page["report_id"]) == ("standalone", "versions", rid)
+    assert (page["head_version_id"], page["head_version_number"]) == (second["version_id"], 3)
+    assert [item["version_number"] for item in page["items"]] == [1, 2]
+    assert [item["change_kind"] for item in page["items"]] == ["initial", "metadata"]
+    for item in page["items"]:
+        assert manifest_digest(item["manifest"]) == item["manifest_sha256"]
+        assert "body" not in item["content"]
+    assert page["next_cursor"] == page["items"][-1]["version_id"]
+    (more,) = harness.run(
+        [(token, wrapped(READ_TOOL, HISTORY, {"report_id": rid, "after": page["next_cursor"]}))]
+    )
+    tail = ok(more)
+    assert [item["version_number"] for item in tail["items"]] == [3]
+    assert tail["next_cursor"] is None
+    assert ok(rest)["items"] == []
+    assert set(counts(harness.engine, INTELLIGENCE_TABLES).values()) == {0}
+
+
+def test_archive_delete_restore_execute_through_my_pa_write_and_read_back(
+    harness: Harness,
+) -> None:
+    token = harness.client(CLIENT, profile_grants(harness.service))
+    published = publish_one(harness, token)
+    rid = published["report_id"]
+    archive = move_payload(rid, 0, reason="Synthetic: superseded.")
+    before = counts(harness.engine, MUTATION_TABLES)
+    archived_answer, retry, stale = harness.run(
+        [
+            (token, wrapped(WRITE_TOOL, ARCHIVE, archive)),
+            (token, wrapped(WRITE_TOOL, ARCHIVE, archive)),
+            # A deliberate next move on the old revision: stale, nothing written.
+            (token, wrapped(WRITE_TOOL, DELETE, move_payload(rid, 0))),
+        ]
+    )
+    archived, replayed = ok(archived_answer), ok(retry)
+    assert (archived["operation"], archived["outcome"]) == ("archive", "applied")
+    assert (archived["prior_state"], archived["lifecycle_state"]) == ("active", "archived")
+    assert archived["lifecycle_revision"] == 1
+    assert archived["event_id"].startswith("grlev_")
+    assert replayed["replayed"] is True
+    assert {k: v for k, v in replayed.items() if k != "replayed"} == {
+        k: v for k, v in archived.items() if k != "replayed"
+    }
+    assert refusal(stale) == ("conflict", ["expected_lifecycle_revision"])
+    after = counts(harness.engine, MUTATION_TABLES)
+    assert {table: after[table] - before[table] for table in MUTATION_TABLES} == {
+        "report_content_objects": 0,
+        "report_roots": 0,
+        "report_versions": 0,
+        "report_version_manifests": 0,
+        "report_associations": 0,
+        "report_receipts": 1,
+        "report_lifecycle_events": 1,
+    }
+    stored = receipt_row(harness.engine, archived["receipt"]["receipt_id"])
+    assert (stored.operation, stored.outcome, stored.event_id) == (
+        "archive",
+        "applied",
+        archived["event_id"],
+    )
+    assert (stored.expected_lifecycle_revision, stored.resulting_lifecycle_revision) == (0, 1)
+    assert stored.version_id is None
+    assert stored.idempotency_key == expected_key(archive, CLIENT, ARCHIVE)
+
+    hidden, shown = harness.run(
+        [
+            (token, wrapped(READ_TOOL, READ, {"report_id": rid})),
+            (token, wrapped(READ_TOOL, READ, {"report_id": rid, "include_withdrawn": True})),
+        ]
+    )
+    assert refusal(hidden) == ("not_found", ["artifact_id"])
+    assert ok(shown)["lifecycle_state"] == "archived"
+    assert ok(shown)["content"]["body"] == BODY
+
+    kept = counts(harness.engine, ("report_versions", "report_version_manifests"))
+    receipts_before = counts(harness.engine, ("report_receipts",))["report_receipts"]
+    deleted_answer, restored_answer = harness.run(
+        [
+            (token, wrapped(WRITE_TOOL, DELETE, move_payload(rid, 1))),
+            (token, wrapped(WRITE_TOOL, RESTORE, move_payload(rid, 2))),
+        ]
+    )
+    deleted, restored = ok(deleted_answer), ok(restored_answer)
+    assert (deleted["prior_state"], deleted["lifecycle_state"], deleted["lifecycle_revision"]) == (
+        "archived",
+        "trashed",
+        2,
+    )
+    # Restore from Trash returns the state the delete left: archived.
+    assert (
+        restored["prior_state"],
+        restored["lifecycle_state"],
+        restored["lifecycle_revision"],
+    ) == ("trashed", "archived", 3)
+    # Trash is recoverable custody: every version, manifest and receipt is kept.
+    assert counts(harness.engine, ("report_versions", "report_version_manifests")) == kept
+    assert counts(harness.engine, ("report_receipts",))["report_receipts"] == receipts_before + 2
+    with harness.engine.connect() as connection:
+        root = connection.execute(
+            text("SELECT * FROM knowledge.report_roots WHERE report_id = :r"), {"r": rid}
+        ).one()
+        events = connection.execute(
+            text(
+                "SELECT lifecycle_revision, operation, prior_state, resulting_state, "
+                "predecessor_prior_state FROM knowledge.report_lifecycle_events "
+                "WHERE report_id = :r ORDER BY lifecycle_revision"
+            ),
+            {"r": rid},
+        ).all()
+        operations = [
+            row[0]
+            for row in connection.execute(
+                text(
+                    "SELECT operation FROM knowledge.report_receipts WHERE report_id = :r "
+                    "ORDER BY issued_at, operation"
+                ),
+                {"r": rid},
+            ).all()
+        ]
+    assert (root.lifecycle_state, root.lifecycle_revision) == ("archived", 3)
+    assert (root.head_version_id, root.head_version_number) == (published["version_id"], 1)
+    assert [tuple(row) for row in events] == [
+        (1, "archive", "active", "archived", None),
+        (2, "delete", "archived", "trashed", "active"),
+        (3, "restore", "trashed", "archived", "archived"),
+    ]
+    assert sorted(operations) == ["archive", "delete", "publish", "restore"]
+
+    (history,) = harness.run(
+        [
+            (
+                token,
+                wrapped(
+                    READ_TOOL,
+                    HISTORY,
+                    {"report_id": rid, "entries": "lifecycle", "include_withdrawn": True},
+                ),
+            )
+        ]
+    )
+    page = ok(history)
+    assert (page["entries"], page["lifecycle_state"], page["lifecycle_revision"]) == (
+        "lifecycle",
+        "archived",
+        3,
+    )
+    assert [
+        (item["operation"], item["prior_state"], item["resulting_state"]) for item in page["items"]
+    ] == [
+        ("archive", "active", "archived"),
+        ("delete", "archived", "trashed"),
+        ("restore", "trashed", "archived"),
+    ]
+    assert page["items"][0]["reason"] == "Synthetic: superseded."
+    assert page["next_cursor"] is None
+    assert set(counts(harness.engine, INTELLIGENCE_TABLES).values()) == {0}
+
+
+def test_a_second_clients_identical_move_is_its_own_and_refuses_as_stale(
+    harness: Harness,
+) -> None:
+    """The management keys bind the client: B's identical archive never replays A's."""
+    grants = profile_grants(harness.service)
+    token = harness.client(CLIENT, grants)
+    other = harness.client(OTHER_CLIENT, grants)
+    rid = publish_one(harness, token)["report_id"]
+    archive = move_payload(rid, 0)
+    (mine,) = harness.run([(token, wrapped(WRITE_TOOL, ARCHIVE, archive))])
+    assert ok(mine)["replayed"] is False
+    before = counts(harness.engine, MUTATION_TABLES)
+    (theirs,) = harness.run([(other, wrapped(WRITE_TOOL, ARCHIVE, archive))])
+    assert refusal(theirs) == ("conflict", ["expected_lifecycle_revision"])
+    assert counts(harness.engine, MUTATION_TABLES) == before
+    assert expected_key(archive, CLIENT, ARCHIVE) != expected_key(archive, OTHER_CLIENT, ARCHIVE)

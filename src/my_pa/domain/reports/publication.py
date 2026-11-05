@@ -75,6 +75,11 @@ def content_payload(content: ReportContent) -> dict[str, object]:
         payload["body"] = content.body
     if content.format in (ContentFormat.JSON, ContentFormat.MIXED):
         payload["data"] = content.data
+    if content.original is not None:
+        # WP05: a gzip upload is named by its exact bytes too, so a retry with
+        # the same `encoded` replays and another stream under the key
+        # conflicts. Identity payloads (and their digests) are unchanged.
+        payload["original_sha256"] = content.original_sha256
     return payload
 
 

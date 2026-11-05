@@ -137,10 +137,18 @@ def test_negative_zero_is_hashed_as_the_zero_jsonb_reads_back() -> None:
         ({"format": "json", "data": {1: 1}}, "content.data", "key_type"),
         ({"format": "json", "data": [(1, 2)]}, "content.data", "value_type"),
         ({"format": "json", "data": [10**5000]}, "content", "too_large"),
+        # WP05 B1: gzip+base64 is decoded now; `body` is not one of its keys.
         (
             {"format": "markdown", "body": "b", "encoding": "gzip+base64"},
-            "content.encoding",
-            "unsupported_encoding",
+            "content",
+            "unknown_field",
+        ),
+        ({"format": "markdown", "encoding": "gzip+base64"}, "content.encoded", "required"),
+        ({"format": "markdown", "body": "b", "encoded": "H4sI"}, "content", "unknown_field"),
+        (
+            {"format": "markdown", "body": "b", "original_sha256": "0" * 64},
+            "content",
+            "unknown_field",
         ),
         ({"format": "markdown", "body": "b", "encoding": "br"}, "content.encoding", "unknown"),
         ({"format": "markdown", "body": "b", "encoding": None}, "content.encoding", "unknown"),

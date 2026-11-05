@@ -13,10 +13,12 @@ from enum import StrEnum
 from typing import Final
 
 __all__ = [
+    "DECODE_CHUNK_BYTES",
     "MANIFEST_SCHEMA",
     "MAX_ASSOCIATIONS_PER_VERSION",
     "MAX_ASSOCIATION_REF_CHARACTERS",
     "MAX_DECODED_CONTENT_BYTES",
+    "MAX_EXPANSION_RATIO",
     "MAX_MANIFEST_BYTES",
     "MAX_METADATA_BYTES",
     "MAX_METADATA_DEPTH",
@@ -31,6 +33,7 @@ __all__ = [
     "MAX_TERM_CHARACTERS",
     "MAX_TITLE_CHARACTERS",
     "MIN_METADATA_FLOAT_MAGNITUDE",
+    "READ_INLINE_CONTENT_MAX_BYTES",
     "RESERVED_METADATA_KEY_PREFIXES",
     "RESERVED_TYPE_PREFIXES",
     "TRANSFER_CHUNK_MAX_BYTES",
@@ -79,6 +82,17 @@ RESERVED_METADATA_KEY_PREFIXES: Final = ("_", "my_pa", "system")
 
 MAX_DECODED_CONTENT_BYTES: Final = 16_777_216
 MAX_ORIGINAL_CONTENT_BYTES: Final = 16_777_216
+
+#: WP05 B2: gunzipped bytes may be at most this many times the gzip bytes, so a
+#: small upload cannot inflate into a large decode ("expansion_ratio").
+MAX_EXPANSION_RATIO: Final = 256
+#: WP05 B2: the gzip bytes are fed to the inflater in slices of this size, and
+#: each inflate call may produce at most this many bytes before the bounds are
+#: checked again.
+DECODE_CHUNK_BYTES: Final = 65536
+#: WP05 B5/C5: the largest gzip original (`encoded`) or decoded body a read
+#: returns inline; above it the read names the omission instead.
+READ_INLINE_CONTENT_MAX_BYTES: Final = 524288
 
 MANIFEST_SCHEMA: Final = "report_version_manifest_v1"
 MAX_MANIFEST_BYTES: Final = 65536

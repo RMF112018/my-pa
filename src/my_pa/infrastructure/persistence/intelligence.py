@@ -662,8 +662,8 @@ class SqlIntelligenceStore:
         `is_current` rows only, of any kind (an unregistered `type` just
         matches nothing); a list also leaves out `superseded` rows, as the
         legacy list does by default (contract C2 refinement). Excluded
-        entirely, `()`, when the filters name topics, tags or an association
-        (legacy rows carry none) or omit `active` (a legacy row counts as
+        entirely, `()`, when the filters name topics, tags, an association or a
+        creator (legacy rows carry none) or omit `active` (a legacy row counts as
         active). `type` is `artifact_kind`, the created
         range `committed_at` (half-open), the report-date range `report_date`
         (inclusive). Order, rank and keyset are the standalone catalog's over
@@ -692,6 +692,7 @@ class SqlIntelligenceStore:
             filters.topics is not None
             or filters.tags is not None
             or filters.associated_with is not None
+            or filters.created_by is not None
             or LifecycleState.ACTIVE not in filters.lifecycle_states
         ):
             return ()

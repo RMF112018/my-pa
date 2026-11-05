@@ -44,6 +44,13 @@ the canonical bytes: keys are re-sorted by `canonical_json`, and every number
 the domain admits prints back with the digits it was written with (`-0.0` is
 normalized to `0.0` before hashing, because `numeric` has no negative zero).
 
+**Creator attribution (WP05 A1/A2).** `publish` and `update` take the
+server-derived `ReportCreator`: publish writes it as the root's `created_by_*`
+and version 1's `authored_by_*`, an update as version N+1's `authored_by_*`
+only (the root's creator is immutable); the manifest's `author` is the
+version's, rebuilt and compared on every read. A replay returns the stored
+result whoever replays it.
+
 **The catalog page (WP04 C2-C8) reads one root joined to its HEAD version.**
 The list orders by `(created_at DESC, report_id COLLATE "C" DESC)`; a search
 matches `websearch_to_tsquery('english', q)` against the head's generated
@@ -102,6 +109,7 @@ from my_pa.domain.reports.catalog import (
     extract_search_text,
 )
 from my_pa.domain.reports.content import ReportContent, canonical_json, content_of
+from my_pa.domain.reports.creator import CreatorKind, ReportCreator
 from my_pa.domain.reports.errors import ReportValidationError
 from my_pa.domain.reports.lifecycle import LifecycleDecision, decide_lifecycle_transition
 from my_pa.domain.reports.manifest import (
@@ -402,6 +410,7 @@ def _write_publication(
     associations: tuple[ReportAssociation, ...],
     *,
     context: PrincipalContext,
+    creator: ReportCreator,
     idempotency_key: str,
     intent_digest: str,
     recorded_at: datetime,
@@ -419,6 +428,7 @@ def _write_publication(
         content_id=content_id,
         associations=associations,
         recorded_at=recorded_at,
+        author=creator,
     )
     content = request.content
     connection.execute(
@@ -441,6 +451,9 @@ def _write_publication(
                     "lifecycle_state": LifecycleState.ACTIVE.value,
                     "lifecycle_revision": 0,
                     "lifecycle_event_id": None,
+                    # WP05 A2: the root's creator is version 1's author.
+                    "created_by_kind": creator.kind.value,
+                    "created_by_id": creator.creator_id,
                 },
                 report_roots,
                 context,
@@ -474,6 +487,8 @@ def _write_publication(
                     "audit_id": audit_id,
                     # WP04 C7: in the version's own INSERT, from the decoded content.
                     "search_text": extract_search_text(request.content),
+                    "authored_by_kind": creator.kind.value,
+                    "authored_by_id": creator.creator_id,
                 },
                 report_versions,
                 context,
@@ -578,7 +593,16 @@ def _root(row: Row[Any]) -> ReportRootRecord:
         head_version_number=int(m["head_version_number"]),
         lifecycle_state=LifecycleState(m["lifecycle_state"]),
         lifecycle_revision=int(m["lifecycle_revision"]),
+        creator=_creator(m["created_by_kind"], m["created_by_id"]),
     )
+
+
+def _creator(kind: object, creator_id: object) -> ReportCreator:
+    """A stored creator or author; a row the schema should have refused is integrity."""
+    try:
+        return ReportCreator(kind=CreatorKind(str(kind)), creator_id=str(creator_id))
+    except (ReportValidationError, ValueError):
+        raise ReportIntegrityError() from None
 
 
 def _version(row: Row[Any]) -> ReportVersionRecord:
@@ -602,7 +626,14 @@ def _version(row: Row[Any]) -> ReportVersionRecord:
         content_id=str(m["content_id"]),
         manifest_sha256=str(m["manifest_sha256"]),
         recorded_at=m["recorded_at"],
+        author=_creator(m["authored_by_kind"], m["authored_by_id"]),
     )
+
+
+def _creator_of(creator: object) -> ReportCreator:
+    if not isinstance(creator, ReportCreator):
+        raise ReportValidationError("creator", "type")
+    return creator
 
 
 def _verified_content(row: Row[Any]) -> ReportContent:
@@ -688,6 +719,7 @@ def _expected_manifest(
         content_id=version.content_id,
         associations=associations,
         recorded_at=version.recorded_at,
+        author=version.author,
         storage_kind=storage_kind,
     )
 
@@ -887,6 +919,7 @@ def _write_update(
     patched: tuple[ReportAssociation, ...] | None,
     *,
     context: PrincipalContext,
+    creator: ReportCreator,
     idempotency_key: str,
     intent_digest: str,
     recorded_at: datetime,
@@ -971,6 +1004,7 @@ def _write_update(
         content_id=content_id,
         associations=associations,
         recorded_at=recorded_at,
+        author=creator,
     )
     if not reused:
         connection.execute(
@@ -1011,6 +1045,9 @@ def _write_update(
                     # metadata-only update keeps the head's content (D5), so
                     # its search text is the head's exactly.
                     "search_text": extract_search_text(result.content),
+                    # WP05 A2: whoever wrote this update; the root keeps its creator.
+                    "authored_by_kind": creator.kind.value,
+                    "authored_by_id": creator.creator_id,
                 },
                 report_versions,
                 context,
@@ -1337,6 +1374,7 @@ def _summary(stored: StoredReportVersion, *, include_manifest: bool) -> ReportVe
         original_sha256=content.original_sha256,
         manifest_sha256=version.manifest_sha256,
         manifest=dict(stored.manifest) if include_manifest else None,
+        author=version.author,
     )
 
 
@@ -1554,6 +1592,9 @@ def _catalog_page(
         conditions.append(version.c.report_date >= filters.report_date_from)
     if filters.report_date_to is not None:
         conditions.append(version.c.report_date <= filters.report_date_to)
+    if filters.created_by is not None:
+        # WP05 A5: exact match on the root's creator, inside `_mine(root)`.
+        conditions.append(root.c.created_by_id == filters.created_by)
 
     rank: ColumnElement[int] | None = None
     snippet: ColumnElement[str] | None = None
@@ -1586,6 +1627,8 @@ def _catalog_page(
             root.c.head_version_number,
             root.c.lifecycle_state,
             root.c.lifecycle_revision,
+            root.c.created_by_kind,
+            root.c.created_by_id,
             version.c.title,
             version.c.report_type,
             version.c.topics,
@@ -1628,6 +1671,7 @@ def _catalog_page(
                 updated_at=m["recorded_at"],
                 rank=None if m["rank"] is None else int(m["rank"]),
                 snippet=None if m["snippet"] is None else str(m["snippet"]),
+                creator=_creator(m["created_by_kind"], m["created_by_id"]),
             )
         )
     return tuple(entries)
@@ -1650,6 +1694,7 @@ class SqlGeneralReportRepository(GeneralReportRepository):
         request: PublicationRequest,
         *,
         principal_id: str,
+        creator: ReportCreator,
         idempotency_key: str,
         recorded_at: datetime,
         correlation_id: str,
@@ -1657,6 +1702,7 @@ class SqlGeneralReportRepository(GeneralReportRepository):
     ) -> PublicationResult:
         context = capture_context(principal_id)
         recorded = self._admit(idempotency_key, correlation_id, audit_id, recorded_at)
+        _creator_of(creator)
         intent_digest = request.intent_digest
         stored = _find_publish(self._connection, idempotency_key, context)
         if stored is not None:
@@ -1669,6 +1715,7 @@ class SqlGeneralReportRepository(GeneralReportRepository):
                     request,
                     associations,
                     context=context,
+                    creator=creator,
                     idempotency_key=idempotency_key,
                     intent_digest=intent_digest,
                     recorded_at=recorded,
@@ -1718,6 +1765,7 @@ class SqlGeneralReportRepository(GeneralReportRepository):
         request: UpdateRequest,
         *,
         principal_id: str,
+        creator: ReportCreator,
         idempotency_key: str,
         recorded_at: datetime,
         correlation_id: str,
@@ -1725,6 +1773,7 @@ class SqlGeneralReportRepository(GeneralReportRepository):
     ) -> UpdateResult:
         context = capture_context(principal_id)
         recorded = self._admit(idempotency_key, correlation_id, audit_id, recorded_at)
+        _creator_of(creator)
         intent_digest = request.intent_digest
         connection = self._connection
         # D6 order: lock, key, state, CAS, writes.
@@ -1782,6 +1831,7 @@ class SqlGeneralReportRepository(GeneralReportRepository):
                     change_kind,
                     patched,
                     context=context,
+                    creator=creator,
                     idempotency_key=idempotency_key,
                     intent_digest=intent_digest,
                     recorded_at=recorded,

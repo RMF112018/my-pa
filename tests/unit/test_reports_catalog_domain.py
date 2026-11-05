@@ -39,6 +39,7 @@ OTHER_PRINCIPAL = "prn_zyxwvuts9876"
 REPORT = "grpt_abcdefgh1234"
 LEGACY = "rpt_abcdefgh1234"
 WHEN = datetime(2026, 11, 5, 12, 30, 15, 123456, tzinfo=UTC)
+CREATOR = "gcrt_" + "0123456789abcdef" * 2 + "01234567"
 
 
 def test_plane_and_order_vocabulary() -> None:
@@ -65,6 +66,7 @@ def test_default_filters_are_active_only_and_canonical() -> None:
         "created_to": None,
         "report_date_from": None,
         "report_date_to": None,
+        "created_by": None,
     }
 
 
@@ -79,6 +81,7 @@ def test_filters_normalize_and_sort_for_the_binding() -> None:
         created_to=datetime(2026, 2, 1, tzinfo=UTC),
         report_date_from=date(2026, 1, 1),
         report_date_to=date(2026, 1, 1),
+        created_by=CREATOR,
     )
     assert filters.topics == ("zeta", "Café")
     assert filters.associated_with is not None
@@ -93,6 +96,7 @@ def test_filters_normalize_and_sort_for_the_binding() -> None:
         "created_to": "2026-02-01T00:00:00.000000Z",
         "report_date_from": "2026-01-01",
         "report_date_to": "2026-01-01",
+        "created_by": CREATOR,
     }
 
 
@@ -125,6 +129,13 @@ def test_filters_normalize_and_sort_for_the_binding() -> None:
             "report_date_range",
             "order",
         ),
+        # WP05 A5: a creator pseudonym, exactly.
+        ({"created_by": 7}, "created_by", "type"),
+        ({"created_by": ""}, "created_by", "pattern"),
+        ({"created_by": "gcrt_" + "A" * 40}, "created_by", "pattern"),
+        ({"created_by": "gcrt_" + "a" * 39}, "created_by", "pattern"),
+        ({"created_by": "gcrt_" + "a" * 40 + "\n"}, "created_by", "pattern"),
+        ({"created_by": "prn_" + "a" * 40}, "created_by", "pattern"),
     ],
 )
 def test_filter_refusals_name_the_field_and_rule(
@@ -205,6 +216,7 @@ def test_binding_is_deterministic_and_canonical_over_filter_order() -> None:
         {"filters": CatalogFilters(created_to=WHEN)},
         {"filters": CatalogFilters(report_date_from=date(2026, 1, 1))},
         {"filters": CatalogFilters(report_date_to=date(2026, 1, 1))},
+        {"filters": CatalogFilters(created_by=CREATOR)},
     ],
 )
 def test_binding_changes_with_each_bound_input(override: dict[str, Any]) -> None:

@@ -258,6 +258,7 @@ from my_pa.domain.relationship.reenrichment import (
     ReenrichmentWork,
 )
 from my_pa.domain.reports.catalog import CatalogCursor, CatalogFilters
+from my_pa.domain.reports.creator import ReportCreator
 from my_pa.domain.reports.publication import PublicationRequest, PublicationResult
 from my_pa.domain.reports.records import (
     CatalogEntry,
@@ -7806,6 +7807,7 @@ class GeneralReportRepository(ABC):
         request: PublicationRequest,
         *,
         principal_id: str,
+        creator: ReportCreator,
         idempotency_key: str,
         recorded_at: datetime,
         correlation_id: str,
@@ -7825,6 +7827,10 @@ class GeneralReportRepository(ABC):
         raises `ReportIdempotencyConflictError` and writes nothing. A concurrent
         writer of the same key is settled the same way at the receipt's unique
         constraint. A content or manifest bound refuses as `ReportValidationError`.
+
+        `creator` (WP05 A1/A2) is the server-derived caller: the root's
+        `created_by_*` and version 1's `authored_by_*` (and the manifest's
+        `author`) are both it. A replay returns the stored result unchanged.
         """
 
     @abstractmethod
@@ -7872,6 +7878,7 @@ class GeneralReportRepository(ABC):
         request: UpdateRequest,
         *,
         principal_id: str,
+        creator: ReportCreator,
         idempotency_key: str,
         recorded_at: datetime,
         correlation_id: str,
@@ -7890,7 +7897,9 @@ class GeneralReportRepository(ABC):
         forward verbatim. New content writes a content object (`content`);
         otherwise the head's object is reused (`metadata`). A patch that
         changes nothing writes only an `update`/`no_op` receipt naming the head.
-        Every refusal writes nothing.
+        Every refusal writes nothing. `creator` (WP05 A2) is the server-derived
+        caller, written as version N+1's `authored_by_*` and manifest `author`;
+        the root's creator never changes.
         """
 
     @abstractmethod
@@ -7974,7 +7983,8 @@ class GeneralReportRepository(ABC):
         (`@>`) on the head; `associated_with` an association of the head
         version; `lifecycle_state` in `lifecycle_states`; `created_*` on the
         root's `created_at`, half-open; `report_date_*` on the head, inclusive
-        (NULL never matches a bound). `limit` is 1..101 (a page plus one, so
+        (NULL never matches a bound); `created_by` (WP05 A5) the root's
+        `created_by_id`, exactly. `limit` is 1..101 (a page plus one, so
         the caller learns whether more follow). No count is computed. A
         foreign or nonexistent association target or cursor position simply
         yields no rows / skips none of another Principal's.

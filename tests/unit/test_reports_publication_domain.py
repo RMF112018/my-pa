@@ -19,6 +19,7 @@ from my_pa.domain.reports.content import (
     canonical_json,
     validate_content,
 )
+from my_pa.domain.reports.creator import CreatorKind, derive_creator
 from my_pa.domain.reports.errors import ReportValidationError
 from my_pa.domain.reports.manifest import (
     MAX_MANIFEST_CANONICAL_BYTES,
@@ -42,6 +43,7 @@ from my_pa.domain.reports.vocabulary import (
 
 SECRET: Final = "synthetic-sensitive-value-7f3a"  # noqa: S105 - a synthetic marker
 RECORDED: Final = datetime(2026, 11, 4, 12, 30, 0, 123456, tzinfo=UTC)
+AUTHOR: Final = derive_creator(CreatorKind.LOCAL_PRINCIPAL, "prn_aaaa0001aaaa0001aaaa0001")
 
 
 def _sha(data: bytes) -> str:
@@ -306,6 +308,7 @@ def _manifest(request: PublicationRequest) -> ReportManifest:
         content_id="grcnt_aaaaaaaa",
         associations=stored,
         recorded_at=RECORDED,
+        author=AUTHOR,
     )
 
 
@@ -326,6 +329,8 @@ def test_manifest_is_deterministic_principal_free_and_digested() -> None:
     assert document["content"]["storage_kind"] == "inline"
     assert document["associations"][0]["ordinal"] == 0
     assert document["associations"][0]["verification"] == "asserted"
+    # WP05 A3: the server-derived author, a pseudonym, never the Principal.
+    assert document["author"] == {"kind": "local_principal", "id": AUTHOR.creator_id}
     assert "prn_" not in manifest.canonical.decode()
     assert not any("principal" in key or "owner" in key for key in document)
 

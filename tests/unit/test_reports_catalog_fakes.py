@@ -30,6 +30,7 @@ from my_pa.domain.reports.catalog import (
     CatalogFilters,
 )
 from my_pa.domain.reports.content import validate_content
+from my_pa.domain.reports.creator import CreatorKind, ReportCreator, derive_creator
 from my_pa.domain.reports.errors import ReportValidationError
 from my_pa.domain.reports.publication import PublicationRequest, RequestedAssociation
 from my_pa.domain.reports.revision import LifecycleRequest, ReportPatch, UpdateRequest
@@ -62,6 +63,7 @@ def _publish(
     principal_id: str = PRINCIPAL_A,
     title: str = "Plain title",
     body: str = "plain body",
+    creator: ReportCreator | None = None,
     **fields: object,
 ) -> str:
     request = PublicationRequest(
@@ -72,6 +74,7 @@ def _publish(
     return reports.publish(
         request,
         principal_id=principal_id,
+        creator=creator or derive_creator(CreatorKind.LOCAL_PRINCIPAL, principal_id),
         idempotency_key=key,
         recorded_at=at,
         correlation_id=issue_identifier(IdKind.CORRELATION),
@@ -142,6 +145,17 @@ def test_the_fake_filters_orders_and_isolates(reports: GeneralReportRepository) 
     assert _ids(reports, archived) == [b]
 
 
+def test_the_fake_filters_by_the_root_creator(reports: GeneralReportRepository) -> None:
+    remote = derive_creator(CreatorKind.REMOTE_CLIENT, "client-synthetic-0001")
+    local = _publish(reports, "local", at=T0)
+    by_remote = _publish(reports, "remote", at=T0 + timedelta(hours=1), creator=remote)
+    _publish(reports, "foreign", principal_id=PRINCIPAL_B, creator=remote)
+    mine = derive_creator(CreatorKind.LOCAL_PRINCIPAL, PRINCIPAL_A).creator_id
+    assert _ids(reports, CatalogFilters(created_by=remote.creator_id)) == [by_remote]
+    assert _ids(reports, CatalogFilters(created_by=mine)) == [local]
+    assert _ids(reports, CatalogFilters(created_by="gcrt_" + "f" * 40)) == []
+
+
 def test_the_fake_searches_the_head_only_and_ranks_the_title(
     reports: GeneralReportRepository,
 ) -> None:
@@ -156,6 +170,7 @@ def test_the_fake_searches_the_head_only_and_ranks_the_title(
             change_reason="Synthetic change.",
         ),
         principal_id=PRINCIPAL_A,
+        creator=derive_creator(CreatorKind.LOCAL_PRINCIPAL, PRINCIPAL_A),
         idempotency_key="upd",
         recorded_at=T0 + timedelta(days=1),
         correlation_id=issue_identifier(IdKind.CORRELATION),
@@ -275,6 +290,9 @@ def test_the_in_memory_legacy_catalog_keeps_the_sql_rules() -> None:
         CatalogFilters(tags=("red",)),
         CatalogFilters(associated_with=AssociationFilter(STANDALONE, "grpt_anything01")),
         CatalogFilters(lifecycle_states=frozenset({LifecycleState.ARCHIVED})),
+        CatalogFilters(
+            created_by=derive_creator(CreatorKind.LOCAL_PRINCIPAL, PRINCIPAL_A).creator_id
+        ),
     ):
         assert _legacy(store, excluded) == []
 

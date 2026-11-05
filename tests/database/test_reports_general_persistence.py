@@ -42,6 +42,7 @@ from my_pa.contracts.ports import (
 )
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.reports.content import validate_content
+from my_pa.domain.reports.creator import CreatorKind, ReportCreator, derive_creator
 from my_pa.domain.reports.manifest import manifest_digest
 from my_pa.domain.reports.publication import (
     PublicationRequest,
@@ -116,10 +117,12 @@ def _publish(
     key: str,
     *,
     principal_id: str = PRINCIPAL_A,
+    creator: ReportCreator | None = None,
 ) -> PublicationResult:
     return SqlGeneralReportRepository(connection).publish(
         request,
         principal_id=principal_id,
+        creator=creator or derive_creator(CreatorKind.LOCAL_PRINCIPAL, principal_id),
         idempotency_key=key,
         recorded_at=datetime.now(UTC),
         correlation_id=issue_identifier(IdKind.CORRELATION),

@@ -40,6 +40,7 @@ from typing import Final
 
 from my_pa.domain.common.identifiers import IdKind, InvalidIdentifierError, validate_identifier
 from my_pa.domain.reports.content import ReportContent
+from my_pa.domain.reports.creator import validate_creator_id
 from my_pa.domain.reports.errors import ReportValidationError
 from my_pa.domain.reports.publication import aware_timestamp, format_timestamp
 from my_pa.domain.reports.values import (
@@ -190,7 +191,9 @@ class CatalogFilters:
     Every field is optional. `topics`/`tags` must be non-empty when given
     (empty means absent); `lifecycle_states` defaults to `{active}`. Created
     bounds are half-open `[from, to)` with `from < to`; report-date bounds are
-    inclusive with `from <= to`.
+    inclusive with `from <= to`. `created_by` (WP05 A5) is a creator pseudonym
+    (`gcrt_` + 40 hex), matched exactly against the root's creator; legacy
+    Intelligence Artifacts never match it.
     """
 
     report_type: str | None = None
@@ -204,6 +207,7 @@ class CatalogFilters:
     created_to: datetime | None = None
     report_date_from: date | None = None
     report_date_to: date | None = None
+    created_by: str | None = None
 
     def __post_init__(self) -> None:
         def put(name: str, value: object) -> None:
@@ -230,6 +234,8 @@ class CatalogFilters:
         last = _plain_date(self.report_date_to, "report_date_to")
         if first is not None and last is not None and first > last:
             raise ReportValidationError("report_date_range", "order")
+        if self.created_by is not None:
+            validate_creator_id(self.created_by, "created_by")
 
     def canonical(self) -> dict[str, object]:
         """The normalized filters as the binding names them: sorted, defaults explicit."""
@@ -255,6 +261,7 @@ class CatalogFilters:
             "report_date_to": None
             if self.report_date_to is None
             else self.report_date_to.isoformat(),
+            "created_by": self.created_by,
         }
 
 

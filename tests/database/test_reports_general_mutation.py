@@ -45,6 +45,7 @@ from my_pa.contracts.ports import (
 )
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.reports.content import validate_content
+from my_pa.domain.reports.creator import CreatorKind, ReportCreator, derive_creator
 from my_pa.domain.reports.errors import ReportLifecycleRefusal, ReportValidationError
 from my_pa.domain.reports.manifest import manifest_digest
 from my_pa.domain.reports.publication import RequestedAssociation
@@ -116,6 +117,7 @@ def _update(
     clear: frozenset[ClearableField] = frozenset(),
     reason: str = "Synthetic change.",
     principal_id: str = PRINCIPAL_A,
+    creator: ReportCreator | None = None,
 ) -> UpdateResult:
     request = UpdateRequest(
         report_id=report_id,
@@ -128,6 +130,7 @@ def _update(
         return SqlGeneralReportRepository(connection).update(
             request,
             principal_id=principal_id,
+            creator=creator or derive_creator(CreatorKind.LOCAL_PRINCIPAL, principal_id),
             idempotency_key=key,
             recorded_at=_tick(),
             correlation_id=issue_identifier(IdKind.CORRELATION),

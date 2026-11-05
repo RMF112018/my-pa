@@ -419,6 +419,7 @@ from my_pa.domain.reports.catalog import (
     extract_search_text,
 )
 from my_pa.domain.reports.content import validate_content
+from my_pa.domain.reports.creator import CreatorKind, ReportCreator, derive_creator
 from my_pa.domain.reports.errors import ReportValidationError
 from my_pa.domain.reports.lifecycle import decide_lifecycle_transition
 from my_pa.domain.reports.manifest import build_initial_manifest, build_version_manifest
@@ -9729,6 +9730,7 @@ class _GeneralReports(GeneralReportRepository):
         request: PublicationRequest,
         *,
         principal_id: str,
+        creator: ReportCreator,
         idempotency_key: str,
         recorded_at: datetime,
         correlation_id: str,
@@ -9750,6 +9752,7 @@ class _GeneralReports(GeneralReportRepository):
             content_id=content_id,
             associations=associations,
             recorded_at=recorded_at,
+            author=creator,
         )
         result = PublicationResult(
             receipt=PublicationReceipt(
@@ -9781,6 +9784,7 @@ class _GeneralReports(GeneralReportRepository):
                 head_version_number=1,
                 lifecycle_state=LifecycleState.ACTIVE,
                 lifecycle_revision=0,
+                creator=creator,
             ),
             version=ReportVersionRecord(
                 version_id=version_id,
@@ -9801,6 +9805,7 @@ class _GeneralReports(GeneralReportRepository):
                 content_id=content_id,
                 manifest_sha256=manifest.sha256,
                 recorded_at=recorded_at,
+                author=creator,
             ),
             content_id=content_id,
             storage_kind=StorageKind.INLINE,
@@ -9871,6 +9876,7 @@ class _GeneralReports(GeneralReportRepository):
         request: UpdateRequest,
         *,
         principal_id: str,
+        creator: ReportCreator,
         idempotency_key: str,
         recorded_at: datetime,
         correlation_id: str,
@@ -9962,6 +9968,7 @@ class _GeneralReports(GeneralReportRepository):
             content_id=content_id,
             associations=associations,
             recorded_at=recorded_at,
+            author=creator,
         )
         new_root = replace(root, head_version_id=version_id, head_version_number=number)
         new = StoredReportVersion(
@@ -9985,6 +9992,7 @@ class _GeneralReports(GeneralReportRepository):
                 content_id=content_id,
                 manifest_sha256=manifest.sha256,
                 recorded_at=recorded_at,
+                author=creator,
             ),
             content_id=content_id,
             storage_kind=StorageKind.INLINE,
@@ -10137,6 +10145,7 @@ class _GeneralReports(GeneralReportRepository):
                 original_sha256=s.content.original_sha256,
                 manifest_sha256=s.version.manifest_sha256,
                 manifest=dict(s.manifest) if include_manifests else None,
+                author=s.version.author,
             )
             for s in page
         )
@@ -10263,6 +10272,8 @@ class _GeneralReports(GeneralReportRepository):
                 continue
             if filters.created_to is not None and root.created_at >= filters.created_to:
                 continue
+            if filters.created_by is not None and root.creator.creator_id != filters.created_by:
+                continue
             if filters.report_date_from is not None and (
                 version.report_date is None or version.report_date < filters.report_date_from
             ):
@@ -10301,6 +10312,7 @@ class _GeneralReports(GeneralReportRepository):
                 updated_at=version.recorded_at,
                 rank=rank,
                 snippet=None if rank is None else (version.summary or version.title),
+                creator=root.creator,
             )
             found.append(((rank or 0, root.created_at, report_id), entry))
         found.sort(key=lambda item: item[0], reverse=True)
@@ -11412,6 +11424,7 @@ def staged_general_report(scene: Scene, *, archived: bool = False, label: str = 
             client_intent_id=f"staged-{suffix}",
         ),
         principal_id=principal_id,
+        creator=derive_creator(CreatorKind.LOCAL_PRINCIPAL, principal_id),
         idempotency_key=f"staged-general-report-{suffix}",
         recorded_at=WHEN,
         correlation_id=issue_identifier(IdKind.CORRELATION),

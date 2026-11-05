@@ -31,6 +31,7 @@ from my_pa.contracts.ports import (
     ReportStaleVersionError,
 )
 from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.reports.creator import CreatorKind, derive_creator
 from my_pa.domain.reports.revision import (
     LifecycleRequest,
     LifecycleResult,
@@ -63,6 +64,7 @@ def _update_on(connection: Connection, report_id: str, title: str, key: str) -> 
             change_reason="Concurrent change.",
         ),
         principal_id=PRINCIPAL_A,
+        creator=derive_creator(CreatorKind.LOCAL_PRINCIPAL, PRINCIPAL_A),
         idempotency_key=key,
         recorded_at=datetime.now(UTC),
         correlation_id=issue_identifier(IdKind.CORRELATION),

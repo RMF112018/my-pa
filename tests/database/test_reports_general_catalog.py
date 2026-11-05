@@ -61,6 +61,7 @@ from my_pa.domain.reports.catalog import (
     CatalogFilters,
 )
 from my_pa.domain.reports.content import validate_content
+from my_pa.domain.reports.creator import CreatorKind, ReportCreator, derive_creator
 from my_pa.domain.reports.errors import ReportValidationError
 from my_pa.domain.reports.publication import PublicationRequest, RequestedAssociation
 from my_pa.domain.reports.records import CatalogEntry
@@ -127,6 +128,7 @@ def _publish(
     summary: str | None = None,
     report_date: date | None = None,
     associations: tuple[RequestedAssociation, ...] = (),
+    creator: ReportCreator | None = None,
 ) -> str:
     request = PublicationRequest(
         title=title,
@@ -142,6 +144,7 @@ def _publish(
         result = SqlGeneralReportRepository(connection).publish(
             request,
             principal_id=principal_id,
+            creator=creator or derive_creator(CreatorKind.LOCAL_PRINCIPAL, principal_id),
             idempotency_key=_key("pub"),
             recorded_at=created_at,
             correlation_id=registry.issue_identifier(IdKind.CORRELATION),
@@ -160,6 +163,7 @@ def _update(engine: Engine, report_id: str, expected: int, patch: ReportPatch) -
                 change_reason="Synthetic change.",
             ),
             principal_id=PRINCIPAL_A,
+            creator=derive_creator(CreatorKind.LOCAL_PRINCIPAL, PRINCIPAL_A),
             idempotency_key=_key("upd"),
             recorded_at=T0 + timedelta(days=1),
             correlation_id=registry.issue_identifier(IdKind.CORRELATION),

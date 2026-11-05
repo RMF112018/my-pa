@@ -27,6 +27,7 @@ from sqlalchemy import Engine, text
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.reports.catalog import extract_search_text
 from my_pa.domain.reports.content import validate_content
+from my_pa.domain.reports.creator import CreatorKind, derive_creator
 from my_pa.domain.reports.revision import ReportPatch, UpdateRequest, UpdateResult
 from my_pa.domain.reports.vocabulary import MAX_SEARCH_TEXT_CHARACTERS, ChangeKind
 from my_pa.domain.source.registry import issue_identifier
@@ -54,6 +55,7 @@ def _update(engine: Engine, report_id: str, expected: int, patch: ReportPatch) -
                 change_reason="Synthetic change.",
             ),
             principal_id=PRINCIPAL_A,
+            creator=derive_creator(CreatorKind.LOCAL_PRINCIPAL, PRINCIPAL_A),
             idempotency_key=f"upd-{report_id}-{expected}",
             recorded_at=_CLOCK["now"],
             correlation_id=issue_identifier(IdKind.CORRELATION),

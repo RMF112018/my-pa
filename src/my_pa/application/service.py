@@ -964,6 +964,7 @@ from my_pa.domain.reports.catalog import (
     ReportPlane,
     binding_digest,
 )
+from my_pa.domain.reports.creator import CreatorKind, ReportCreator, derive_creator
 from my_pa.domain.reports.errors import ReportLifecycleRefusal, ReportValidationError
 from my_pa.domain.reports.publication import PublicationResult
 from my_pa.domain.reports.records import (
@@ -3494,6 +3495,24 @@ def _report_type_payload(definition: ReportTypeDefinition) -> dict[str, Any]:
         "display_name": definition.display_name,
         "origin": definition.origin.value,
     }
+
+
+def _report_creator(authorization: Authorization) -> ReportCreator:
+    """The server-derived writer of a general report write (WP05 A1).
+
+    From the Authorization only, never the request: a remote client is its
+    authenticated OAuth client id, a local caller its Principal. A remote
+    authorization without a client id is a composition fault, never a fallback
+    to the Principal.
+    """
+    if authorization.transport is CaptureTransport.REMOTE_CLIENT:
+        client_id = authorization.authenticated_client_id
+        if not client_id:
+            raise InternalError()
+        return derive_creator(CreatorKind.REMOTE_CLIENT, client_id)
+    if authorization.transport is CaptureTransport.LOCAL:
+        return derive_creator(CreatorKind.LOCAL_PRINCIPAL, authorization.principal.principal_id)
+    raise InternalError()
 
 
 def _general_publish_payload(result: PublicationResult) -> dict[str, Any]:
@@ -16351,11 +16370,13 @@ class ApplicationService:
         The repository mints the identifiers. Nothing of the body is logged.
         """
         request = publication_request(command)
+        creator = _report_creator(authorization)
         refusal: ApplicationError
         try:
             result = unit_of_work.general_reports.publish(
                 request,
                 principal_id=authorization.principal.principal_id,
+                creator=creator,
                 idempotency_key=command.idempotency_key,
                 recorded_at=authorization.at,
                 correlation_id=authorization.correlation_id,
@@ -16391,11 +16412,13 @@ class ApplicationService:
         `capture_withdrawn` shape. Nothing of the patch is logged.
         """
         request = update_request(command)
+        creator = _report_creator(authorization)
         refusal: ApplicationError
         try:
             result = unit_of_work.general_reports.update(
                 request,
                 principal_id=authorization.principal.principal_id,
+                creator=creator,
                 idempotency_key=command.idempotency_key,
                 recorded_at=authorization.at,
                 correlation_id=authorization.correlation_id,

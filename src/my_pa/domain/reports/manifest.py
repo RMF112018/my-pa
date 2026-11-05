@@ -2,7 +2,8 @@
 
 `build_version_manifest` assembles the manifest of any version (contract B2,
 generalized by WP03 D10 with a `change_reason` key, null for version 1) and
-returns its canonical bytes and their SHA-256; `build_initial_manifest` is
+returns its canonical bytes and their SHA-256 (WP05 A3 adds the version's
+server-derived `author`); `build_initial_manifest` is
 that builder over a publish request. The canonical
 bytes are bounded at `MAX_MANIFEST_CANONICAL_BYTES` (43690, `65536 / 1.5`): the
 WP01 argument for metadata shows jsonb text is at most 1.5 times the canonical
@@ -19,6 +20,7 @@ from datetime import date, datetime
 from typing import Any, Final
 
 from my_pa.domain.reports.content import ReportContent, canonical_json
+from my_pa.domain.reports.creator import ReportCreator
 from my_pa.domain.reports.errors import ReportValidationError
 from my_pa.domain.reports.publication import PublicationRequest, format_timestamp
 from my_pa.domain.reports.values import ReportAssociation
@@ -68,6 +70,7 @@ def build_version_manifest(
     content_id: str,
     associations: Sequence[ReportAssociation],
     recorded_at: datetime,
+    author: ReportCreator,
     storage_kind: StorageKind = StorageKind.INLINE,
 ) -> ReportManifest:
     """The manifest of any version, or `manifest_too_large`.
@@ -77,8 +80,12 @@ def build_version_manifest(
     and the read paths, which rebuild the whole expected document from the
     stored version, content and association rows and require it to equal the
     stored one canonically. `associations` are the stored forms, in ordinal
-    order, with the verification the server decided.
+    order, with the verification the server decided. `author` (WP05 A3) is
+    the server-derived writer of this version, `{"kind", "id"}` in the
+    document, so the digest covers it.
     """
+    if not isinstance(author, ReportCreator):
+        raise ReportValidationError("author", "type")
     document: dict[str, Any] = {
         "schema": MANIFEST_SCHEMA,
         "report_id": report_id,
@@ -119,6 +126,7 @@ def build_version_manifest(
             for ordinal, item in enumerate(associations)
         ],
         "recorded_at": format_timestamp(recorded_at),
+        "author": {"kind": author.kind.value, "id": author.creator_id},
     }
     canonical = canonical_json(document)
     if len(canonical) > MAX_MANIFEST_CANONICAL_BYTES:
@@ -136,6 +144,7 @@ def build_initial_manifest(
     content_id: str,
     associations: Sequence[ReportAssociation],
     recorded_at: datetime,
+    author: ReportCreator,
 ) -> ReportManifest:
     """The manifest of version 1: `build_version_manifest` over a publish request."""
     return build_version_manifest(
@@ -158,4 +167,5 @@ def build_initial_manifest(
         content_id=content_id,
         associations=associations,
         recorded_at=recorded_at,
+        author=author,
     )

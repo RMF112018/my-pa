@@ -237,8 +237,8 @@ class IntelligenceStore(Protocol):
         """Current artifacts as the `all` catalog plane reads them (WP04), read-only.
 
         `is_current` only (a list also without `superseded`, as the legacy
-        list's default), any kind; `()` when the filters name topics, tags or
-        an association, or omit `active`. Order `(rank DESC,) committed_at
+        list's default), any kind; `()` when the filters name topics, tags,
+        an association or a creator, or omit `active`. Order `(rank DESC,) committed_at
         DESC, artifact_id DESC` (code-point order), strictly after `after`.
         Each item is `(artifact, rank, snippet)`, rank and snippet `None` in a
         list.
@@ -2098,6 +2098,7 @@ class InMemoryIntelligenceStore:
             filters.topics is not None
             or filters.tags is not None
             or filters.associated_with is not None
+            or filters.created_by is not None
             or LifecycleState.ACTIVE not in filters.lifecycle_states
         ):
             return ()

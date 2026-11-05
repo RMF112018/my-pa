@@ -22,6 +22,7 @@ from enum import StrEnum
 from typing import Any, Final
 
 from my_pa.domain.reports.content import ReportContent
+from my_pa.domain.reports.creator import ReportCreator
 from my_pa.domain.reports.values import ReportAssociation
 from my_pa.domain.reports.vocabulary import (
     ChangeKind,
@@ -77,6 +78,8 @@ class CatalogEntry:
     updated_at: datetime
     rank: int | None
     snippet: str | None
+    #: WP05 A4: the root's creator (who published the report).
+    creator: ReportCreator
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +90,8 @@ class ReportRootRecord:
     head_version_number: int
     lifecycle_state: LifecycleState
     lifecycle_revision: int
+    #: WP05 A2: who published the report; immutable, equal to version 1's author.
+    creator: ReportCreator
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +114,8 @@ class ReportVersionRecord:
     content_id: str
     manifest_sha256: str
     recorded_at: datetime
+    #: WP05 A2: who wrote this version (the publisher for version 1).
+    author: ReportCreator
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,6 +157,8 @@ class ReportVersionSummary:
     original_sha256: str
     manifest_sha256: str
     manifest: Mapping[str, Any] | None
+    #: WP05 A4: who wrote this version.
+    author: ReportCreator
 
 
 @dataclass(frozen=True, slots=True)

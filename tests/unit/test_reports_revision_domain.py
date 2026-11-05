@@ -13,6 +13,7 @@ from typing import Final
 import pytest
 
 from my_pa.domain.reports.content import canonical_json, validate_content
+from my_pa.domain.reports.creator import CreatorKind, derive_creator
 from my_pa.domain.reports.errors import ReportLifecycleRefusal, ReportValidationError
 from my_pa.domain.reports.lifecycle import decide_lifecycle_transition
 from my_pa.domain.reports.manifest import build_initial_manifest, build_version_manifest
@@ -37,6 +38,7 @@ from my_pa.domain.reports.vocabulary import (
 
 SECRET: Final = "synthetic-sensitive-value-91c2"  # noqa: S105 - a synthetic marker
 RECORDED: Final = datetime(2026, 11, 4, 12, 0, tzinfo=UTC)
+AUTHOR: Final = derive_creator(CreatorKind.LOCAL_PRINCIPAL, "prn_aaaa0001aaaa0001aaaa0001")
 START: Final = datetime(2026, 11, 1, tzinfo=UTC)
 END: Final = datetime(2026, 11, 3, tzinfo=UTC)
 
@@ -323,6 +325,7 @@ def test_the_v1_manifest_has_a_null_change_reason() -> None:
         content_id="grcnt_aaaaaaaa",
         associations=(),
         recorded_at=RECORDED,
+        author=AUTHOR,
     )
     assert "change_reason" in manifest.document
     assert manifest.document["change_reason"] is None
@@ -349,6 +352,7 @@ def test_a_later_manifest_names_its_predecessor_kind_and_reason() -> None:
         content_id="grcnt_aaaaaaaa",
         associations=(),
         recorded_at=RECORDED,
+        author=AUTHOR,
     )
     document = manifest.document
     assert (document["version_number"], document["supersedes_version_id"]) == (
@@ -434,7 +438,12 @@ def test_the_in_memory_fake_mirrors_the_port_order_and_outcomes() -> None:
     owner, other = "prn_aaaa0001aaaa0001aaaa0001", "prn_bbbb0002bbbb0002bbbb0002"
     ids = {"correlation_id": "corr_aaaaaaaa", "audit_id": "audit_aaaaaaaa"}
     published = reports.publish(
-        _publication(), principal_id=owner, idempotency_key="p", recorded_at=RECORDED, **ids
+        _publication(),
+        principal_id=owner,
+        creator=AUTHOR,
+        idempotency_key="p",
+        recorded_at=RECORDED,
+        **ids,
     )
     report_id = published.receipt.report_id
 
@@ -442,6 +451,7 @@ def test_the_in_memory_fake_mirrors_the_port_order_and_outcomes() -> None:
         return reports.update(
             _update(patch, report_id=report_id, expected_version=expected),
             principal_id=who,
+            creator=AUTHOR,
             idempotency_key=key,
             recorded_at=RECORDED,
             **ids,

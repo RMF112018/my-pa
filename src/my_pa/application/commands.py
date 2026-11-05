@@ -332,6 +332,7 @@ from my_pa.domain.reports.catalog import (
     validate_catalog_page_size,
 )
 from my_pa.domain.reports.content import INLINE_CONTENT_MAX_BYTES, validate_content
+from my_pa.domain.reports.creator import CREATOR_ID_PATTERN
 from my_pa.domain.reports.errors import ReportValidationError
 from my_pa.domain.reports.publication import (
     CLIENT_INTENT_ID_PATTERN,
@@ -5478,7 +5479,7 @@ class ListIntelligenceArtifacts:
     artifacts in one order (newest first). Those two planes take the catalog
     filters (`type`, `topics`, `tags`, `associated_with`, `lifecycle_states`
     default `["active"]`, `created_from`/`created_to`, `report_date_from`/
-    `report_date_to`), a `page_size` of 1 to 100 (default 20) and an opaque
+    `report_date_to`, `created_by`), a `page_size` of 1 to 100 (default 20) and an opaque
     `cursor` bound to the request that issued it, and refuse the pipeline
     filters. No count is ever returned.
     """
@@ -5504,6 +5505,7 @@ class ListIntelligenceArtifacts:
     created_to: str | None = None
     report_date_from: str | None = None
     report_date_to: str | None = None
+    created_by: str | None = None
 
     def __post_init__(self) -> None:
         if _catalog_plane(self) is not ReportPlane.INTELLIGENCE:
@@ -5566,6 +5568,7 @@ class SearchIntelligenceArtifacts:
     created_to: str | None = None
     report_date_from: str | None = None
     report_date_to: str | None = None
+    created_by: str | None = None
 
     def __post_init__(self) -> None:
         if _catalog_plane(self) is not ReportPlane.INTELLIGENCE:
@@ -6475,6 +6478,7 @@ REPORT_CATALOG_FILTER_FIELDS: Final = frozenset(
         "created_to",
         "report_date_from",
         "report_date_to",
+        "created_by",
     }
 )
 
@@ -6495,6 +6499,7 @@ _CATALOG_REFUSAL_DETAILS: Final[Mapping[str, tuple[SafeDetail, ...]]] = MappingP
         "report_date_from": (SafeDetail.REPORT_DATE_FROM,),
         "report_date_to": (SafeDetail.REPORT_DATE_TO,),
         "report_date_range": (SafeDetail.REPORT_DATE_FROM, SafeDetail.REPORT_DATE_TO),
+        "created_by": (SafeDetail.CREATED_BY,),
         "page_size": (SafeDetail.PAGE_SIZE,),
         "cursor": (SafeDetail.CURSOR,),
         "query": (SafeDetail.QUERY,),
@@ -6628,6 +6633,7 @@ def _catalog_filters(command: _CatalogCommand) -> CatalogFilters:
             report_date_to=None
             if command.report_date_to is None
             else _catalog_day(command.report_date_to, SafeDetail.REPORT_DATE_TO),
+            created_by=command.created_by,
         )
     except ReportValidationError as error:
         refusal = catalog_refusal(error)
@@ -6713,6 +6719,10 @@ _CATALOG_PAYLOAD_PROPERTIES: Final[Mapping[str, Mapping[str, object]]] = Mapping
             "format": "date",
             "pattern": r"^\d{4}-\d{2}-\d{2}$",
             "description": _CATALOG_ONLY + "report_date on or before.",
+        },
+        "created_by": {
+            "pattern": CREATOR_ID_PATTERN,
+            "description": "standalone/all only; exact creator id from a read/list item",
         },
     }
 )

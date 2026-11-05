@@ -119,6 +119,7 @@ STANDALONE_KEYS: Final = frozenset(
         "head_version_number",
         "created_at",
         "updated_at",
+        "creator",
     }
 )
 INTELLIGENCE_KEYS: Final = frozenset(
@@ -440,6 +441,7 @@ def test_describe_returns_the_exact_extended_list_and_search_schemas(harness: Ha
             "created_to",
             "report_date_from",
             "report_date_to",
+            "created_by",
         }
         assert catalog_fields <= set(properties), capability
         for name in catalog_fields - {"plane", "cursor", "page_size"}:

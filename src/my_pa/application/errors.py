@@ -689,6 +689,9 @@ class SafeDetail(StrEnum):
     CREATED_TO = "created_to"
     REPORT_DATE_FROM = "report_date_from"
     REPORT_DATE_TO = "report_date_to"
+    #: Reports Modernization WP05 (A5): the standalone/all `created_by` filter,
+    #: a creator pseudonym from a read or list item (never its value).
+    CREATED_BY = "created_by"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

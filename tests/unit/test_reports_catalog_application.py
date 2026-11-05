@@ -26,6 +26,7 @@ from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.intelligence.catalog import ArtifactKind, ArtifactState, IntelligenceStage
 from my_pa.domain.intelligence.models import IntelligenceArtifact, content_digest
+from my_pa.domain.reports.creator import CreatorKind, derive_creator
 from tests.conftest import WHEN, Scene, build_service, operator
 
 BODY: Final = "# Curlew\n\nThe secret body text about curlews."
@@ -44,6 +45,7 @@ STANDALONE_KEYS: Final = {
     "head_version_number",
     "created_at",
     "updated_at",
+    "creator",
 }
 INTELLIGENCE_KEYS: Final = {
     "plane",
@@ -79,6 +81,7 @@ CATALOG_ONLY: Final[dict[str, object]] = {
     "created_to": "2027-01-01T00:00:00Z",
     "report_date_from": "2026-01-01",
     "report_date_to": "2026-12-31",
+    "created_by": "gcrt_" + "0" * 40,
 }
 
 
@@ -289,6 +292,13 @@ def test_the_standalone_list_shape_has_no_count_and_no_content(scene: Scene) -> 
         "head_version_number": 1,
         "created_at": "2026-08-02T12:00:00.000Z",
         "updated_at": "2026-08-02T12:00:00.000Z",
+        # WP05 A4: the server-derived creator (here the local Principal).
+        "creator": {
+            "kind": "local_principal",
+            "id": derive_creator(
+                CreatorKind.LOCAL_PRINCIPAL, scene.principal.principal_id
+            ).creator_id,
+        },
     }
     assert item["head_version_id"].startswith("grver_")
     assert answer["disclosure"]["truncation"] == {
@@ -427,6 +437,13 @@ def test_each_filter_selects_on_the_head_version(scene: Scene) -> None:
             {"report_date_from": "2026-02-02", "report_date_to": "2026-02-01"},
             (SafeDetail.REPORT_DATE_FROM, SafeDetail.REPORT_DATE_TO),
         ),
+        ({"created_by": "gcrt_" + "0" * 39}, (SafeDetail.CREATED_BY,)),
+        ({"created_by": "gcrt_" + "A" * 40}, (SafeDetail.CREATED_BY,)),
+        ({"created_by": "GCRT_" + "0" * 40}, (SafeDetail.CREATED_BY,)),
+        ({"created_by": "gcrt_" + "0" * 40 + "\n"}, (SafeDetail.CREATED_BY,)),
+        ({"created_by": ""}, (SafeDetail.CREATED_BY,)),
+        ({"created_by": 5}, (SafeDetail.CREATED_BY,)),
+        ({"created_by": ["gcrt_" + "0" * 40]}, (SafeDetail.CREATED_BY,)),
         ({"page_size": 0}, (SafeDetail.PAGE_SIZE,)),
         ({"page_size": 101}, (SafeDetail.PAGE_SIZE,)),
         ({"page_size": "5"}, (SafeDetail.PAGE_SIZE,)),
@@ -718,3 +735,19 @@ def test_another_principals_reports_are_never_listed(scene: Scene) -> None:
     ):
         answer = _invoke(service, scene, capability, payload, principal=stranger)
         assert _ok(answer)["items"] == []
+
+
+def test_created_by_in_all_never_matches_a_pipeline_artifact(scene: Scene) -> None:
+    """WP05 A5: legacy items carry no creator, so a `created_by` filter excludes them."""
+    service = build_service(scene.world, scene.providers)
+    report_id = _publish(service, scene, 1)
+    _legacy(scene, "rpt_legacycreator001")
+    local = derive_creator(CreatorKind.LOCAL_PRINCIPAL, scene.principal.principal_id).creator_id
+    for capability in (Capability.REPORTS_LIST, Capability.REPORTS_SEARCH):
+        base = {"plane": "all", **_query(capability)}
+        assert set(_ids(_ok(_invoke(service, scene, capability, base)))) == {
+            report_id,
+            "rpt_legacycreator001",
+        }
+        filtered = _ok(_invoke(service, scene, capability, {**base, "created_by": local}))
+        assert _ids(filtered) == [report_id]

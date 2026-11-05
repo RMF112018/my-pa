@@ -226,12 +226,12 @@
     },
     "reports.list": {
       "purpose": "report_read",
-      "payloadFields": ["cycle_run_id", "stage", "artifact_kind", "focus_area_id", "source_lane", "report_date", "page_size", "cursor", "include_superseded", "plane", "type", "topics", "tags", "associated_with", "lifecycle_states", "created_from", "created_to", "report_date_from", "report_date_to"],
+      "payloadFields": ["cycle_run_id", "stage", "artifact_kind", "focus_area_id", "source_lane", "report_date", "page_size", "cursor", "include_superseded", "plane", "type", "topics", "tags", "associated_with", "lifecycle_states", "created_from", "created_to", "report_date_from", "report_date_to", "created_by"],
       "probe": { "cycle_run_id": "micr_aaaaaaaa11111111", "page_size": 25 }
     },
     "reports.search": {
       "purpose": "report_read",
-      "payloadFields": ["query", "cycle_run_id", "stage", "artifact_kind", "focus_area_id", "source_lane", "page_size", "plane", "cursor", "type", "topics", "tags", "associated_with", "lifecycle_states", "created_from", "created_to", "report_date_from", "report_date_to"],
+      "payloadFields": ["query", "cycle_run_id", "stage", "artifact_kind", "focus_area_id", "source_lane", "page_size", "plane", "cursor", "type", "topics", "tags", "associated_with", "lifecycle_states", "created_from", "created_to", "report_date_from", "report_date_to", "created_by"],
       "probe": { "query": "morning brief", "page_size": 25 }
     },
     "reports.resolve_set": {

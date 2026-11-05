@@ -3515,6 +3515,11 @@ def _report_creator(authorization: Authorization) -> ReportCreator:
     raise InternalError()
 
 
+def _creator_payload(creator: ReportCreator) -> dict[str, str]:
+    """A creator or author as outputs carry it (WP05 A4): its kind and pseudonym only."""
+    return {"kind": creator.kind.value, "id": creator.creator_id}
+
+
 def _general_publish_payload(result: PublicationResult) -> dict[str, Any]:
     """What `reports.publish` answers, the first time and on every replay."""
     return {
@@ -3610,6 +3615,7 @@ def _history_version_item(item: ReportVersionSummary) -> dict[str, Any]:
             "original_sha256": item.original_sha256,
         },
         "manifest_sha256": item.manifest_sha256,
+        "author": _creator_payload(item.author),
     }
     if item.manifest is not None:
         payload["manifest"] = dict(item.manifest)
@@ -3662,6 +3668,7 @@ def _standalone_catalog_item(entry: CatalogEntry, *, search: bool) -> dict[str, 
         "head_version_number": entry.head_version_number,
         "created_at": format_rfc3339(entry.created_at),
         "updated_at": format_rfc3339(entry.updated_at),
+        "creator": _creator_payload(entry.creator),
     }
     if search:
         item["snippet"] = _catalog_snippet(entry.snippet)
@@ -3749,6 +3756,7 @@ def _general_read_payload(
         "plane": "standalone",
         "report_id": root.report_id,
         "created_at": format_rfc3339(root.created_at),
+        "creator": _creator_payload(root.creator),
         "head_version_id": root.head_version_id,
         "head_version_number": root.head_version_number,
         "lifecycle_state": root.lifecycle_state.value,
@@ -3768,6 +3776,7 @@ def _general_read_payload(
         "coverage_period": coverage,
         "metadata": dict(version.metadata),
         "recorded_at": format_rfc3339(version.recorded_at),
+        "author": _creator_payload(version.author),
         "content": content_payload,
         "manifest_sha256": version.manifest_sha256,
         "associations": [

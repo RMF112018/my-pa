@@ -40,14 +40,18 @@ order it:
    version and the newest event of the report. With the deferred foreign keys
    (which prove the cache names *a* version and *an* event of the report),
    the cache equals the ledger at every commit;
-6. restates `capability_is_known` on `knowledge.audit_events` in place (the
-   `0641c354ca85` precedent: `DROP CONSTRAINT` then `ADD CONSTRAINT ... CHECK`,
-   `ACCESS EXCLUSIVE` on `audit_events` and a validating scan, held to commit)
-   with the frozen sorted set of 252 names: the 251 `621ef6786c64` left plus
-   exactly `reports.publish`. `purpose_is_known` is unchanged (`report_authoring`
-   and `report_read` are already admitted). This is the only statement that
-   names a table that existed before this revision, and a widening cannot fail
-   on an existing row.
+6. restates `capability_is_known` and `purpose_is_known` on
+   `knowledge.audit_events` in place (the `0641c354ca85` precedent: `DROP
+   CONSTRAINT` then `ADD CONSTRAINT ... CHECK`, `ACCESS EXCLUSIVE` on
+   `audit_events` and a validating scan, held to commit): capabilities with the
+   frozen sorted set of 257 names, the 251 `621ef6786c64` left plus exactly the
+   6 general report capabilities (`reports.publish`, WP02; `reports.update`,
+   `reports.history`, `reports.archive`, `reports.delete` and
+   `reports.restore`, WP03); purposes with the frozen sorted set of 63, the 62
+   `621ef6786c64` left plus exactly `report_lifecycle` (WP03 RD-14; the other
+   two report purposes, `report_authoring` and `report_read`, were already
+   admitted). These are the only statements that name a table that existed
+   before this revision, and a widening cannot fail on an existing row.
 
 The receipts admit one applied write per version and per event: the partial
 unique indexes `a_report_version_is_applied_by_one_receipt` (`version_id`,
@@ -122,16 +126,18 @@ Every closed set and bound is a frozen literal equal to the general report
 domain vocabulary module, which this revision does not import.
 
 No role grant changes: no `GRANT`, no `REVOKE`, no MCP object grant; the tables
-are owned by the role that runs the migration. The one audit restatement is
-step 6; its BEFORE text is a byte copy of the AT text `621ef6786c64` left, the
-latest prior restatement of `capability_is_known`.
+are owned by the role that runs the migration. The audit restatements are
+step 6; each BEFORE text is a byte copy of the AT text `621ef6786c64` left,
+the latest prior restatement of `capability_is_known` and of
+`purpose_is_known`.
 
 No backfill: this revision writes no row. `downgrade` first locks the 8 plane
 tables `ACCESS EXCLUSIVE`, then refuses with `restrict_violation`, deleting
-nothing, while any plane row exists or any audit event names
-`reports.publish`; otherwise it restores the BEFORE text of
-`capability_is_known` and drops everything above in reverse order, the
-deferred foreign keys before the tables.
+nothing, while any plane row exists or any audit event names one of the 6
+general report capabilities or the purpose `report_lifecycle`; otherwise it
+restores the BEFORE texts of `capability_is_known` and `purpose_is_known` and
+drops everything above in reverse order, the deferred foreign keys before the
+tables.
 
 Applying this revision to a persistent, shared or production database requires
 separate operator authority; nothing here grants it.
@@ -266,29 +272,32 @@ _CAPABILITIES_BEFORE_THIS_REVISION: Final = (
     "'tasks.transition', 'tasks.update')"
 )
 
-#: The same set plus exactly `reports.publish` (252 names, sorted).
+#: The same set plus exactly the 6 general report capabilities -- `reports.publish`
+#: (WP02) and `reports.update`, `reports.history`, `reports.archive`,
+#: `reports.delete`, `reports.restore` (WP03) -- 257 names, sorted.
 _CAPABILITIES_AT_THIS_REVISION: Final = (
     "capability IN ('canvas.workspace.get', 'canvas.workspace.put', 'capabilities.get', "
     "'capture.archive', 'capture.create', 'capture.list', 'capture.read', 'capture.restore', "
     "'capture.revise', 'capture.search', 'commitments.close', 'commitments.create', "
     "'commitments.history', 'commitments.list', 'commitments.read', 'commitments.search', "
-    "'commitments.update', 'commitments.v2.list', 'commitments.v2.read', 'commitments.v2.search', "
-    "'commitments.v2.waiting_on', 'commitments.waiting_on', 'constraint_categories.create', "
-    "'constraint_categories.deactivate', 'constraint_categories.list', "
-    "'constraint_categories.reorder', 'constraint_categories.update', "
-    "'constraint_sync.acknowledge', 'constraint_sync.apply', 'constraint_sync.conflicts', "
-    "'constraint_sync.delta', 'constraint_sync.preview', 'constraint_sync.resolve', "
-    "'constraint_sync.state', 'constraints.close', 'constraints.close_follow_up', "
-    "'constraints.create', 'constraints.create_published', 'constraints.history', "
-    "'constraints.list', 'constraints.overview', 'constraints.portfolio_list', "
-    "'constraints.portfolio_overview', 'constraints.portfolio_search', 'constraints.publish', "
-    "'constraints.read', 'constraints.reopen', 'constraints.search', 'constraints.transition', "
-    "'constraints.update', 'constraints.void', 'context.feedback', 'context.prepare', "
-    "'continuity.projects', 'continuity.projects.close', 'continuity.projects.create', "
-    "'continuity.projects.read', 'continuity.projects.update', 'continuity.pulse', "
-    "'continuity.situations', 'continuity.situations.create', 'continuity.tasks.create', "
-    "'documents.archive', 'documents.create', 'documents.list', 'documents.read', "
-    "'documents.restore', 'documents.revise', 'entities.addresses.add', 'entities.addresses.list', "
+    "'commitments.update', 'commitments.v2.list', 'commitments.v2.read', "
+    "'commitments.v2.search', 'commitments.v2.waiting_on', 'commitments.waiting_on', "
+    "'constraint_categories.create', 'constraint_categories.deactivate', "
+    "'constraint_categories.list', 'constraint_categories.reorder', "
+    "'constraint_categories.update', 'constraint_sync.acknowledge', 'constraint_sync.apply', "
+    "'constraint_sync.conflicts', 'constraint_sync.delta', 'constraint_sync.preview', "
+    "'constraint_sync.resolve', 'constraint_sync.state', 'constraints.close', "
+    "'constraints.close_follow_up', 'constraints.create', 'constraints.create_published', "
+    "'constraints.history', 'constraints.list', 'constraints.overview', "
+    "'constraints.portfolio_list', 'constraints.portfolio_overview', "
+    "'constraints.portfolio_search', 'constraints.publish', 'constraints.read', "
+    "'constraints.reopen', 'constraints.search', 'constraints.transition', 'constraints.update', "
+    "'constraints.void', 'context.feedback', 'context.prepare', 'continuity.projects', "
+    "'continuity.projects.close', 'continuity.projects.create', 'continuity.projects.read', "
+    "'continuity.projects.update', 'continuity.pulse', 'continuity.situations', "
+    "'continuity.situations.create', 'continuity.tasks.create', 'documents.archive', "
+    "'documents.create', 'documents.list', 'documents.read', 'documents.restore', "
+    "'documents.revise', 'entities.addresses.add', 'entities.addresses.list', "
     "'entities.addresses.retire', 'entities.addresses.revise', 'entities.affiliations.create', "
     "'entities.affiliations.end', 'entities.affiliations.revise', 'entities.aliases.add', "
     "'entities.aliases.list', 'entities.aliases.retire', 'entities.aliases.supersede', "
@@ -297,10 +306,11 @@ _CAPABILITIES_AT_THIS_REVISION: Final = (
     "'entities.communication.list', 'entities.communication.retire', "
     "'entities.communication.revise', 'entities.context', 'entities.create', 'entities.get', "
     "'entities.graph', 'entities.identifiers.bind', 'entities.identifiers.list', "
-    "'entities.identifiers.retire', 'entities.identifiers.supersede', 'entities.identity_history', "
-    "'entities.merge', 'entities.merge.preview', 'entities.names.add', 'entities.names.list', "
-    "'entities.names.retire', 'entities.names.supersede', 'entities.observations.list', "
-    "'entities.observe', 'entities.participations.create', 'entities.participations.end', "
+    "'entities.identifiers.retire', 'entities.identifiers.supersede', "
+    "'entities.identity_history', 'entities.merge', 'entities.merge.preview', "
+    "'entities.names.add', 'entities.names.list', 'entities.names.retire', "
+    "'entities.names.supersede', 'entities.observations.list', 'entities.observe', "
+    "'entities.participations.create', 'entities.participations.end', "
     "'entities.participations.list', 'entities.participations.revise', 'entities.profile', "
     "'entities.proposals.create', 'entities.relationships', 'entities.relationships.create', "
     "'entities.relationships.end', 'entities.relationships.revise', 'entities.resolve', "
@@ -319,31 +329,77 @@ _CAPABILITIES_AT_THIS_REVISION: Final = (
     "'knowledge.assertions.list', 'knowledge.assertions.read', 'knowledge.assertions.reveal', "
     "'knowledge.assertions.search', 'knowledge.assertions.submit', 'knowledge.coverage', "
     "'knowledge.discovery.checkpoint', 'knowledge.read', 'knowledge.reveal', 'knowledge.search', "
-    "'meetings.create', 'meetings.list', 'meetings.notes.read_version', 'meetings.notes.versions', "
-    "'meetings.read', 'meetings.search', 'meetings.series.update', 'meetings.update', "
-    "'native_sources.backfill', 'native_sources.configure', 'native_sources.disable', "
-    "'native_sources.discover', 'native_sources.pause', 'native_sources.preflight', "
-    "'native_sources.reconcile', 'native_sources.resume', 'native_sources.retry', "
-    "'native_sources.status', 'native_sources.sync', 'programs.members.resolve', "
-    "'programs.overview', 'project_controls.configure', 'project_controls.status', "
-    "'record_events.list', 'record_events.provenance', 'records.associations.assert', "
-    "'records.associations.confirm', 'records.associations.contest', "
-    "'records.associations.correct', 'records.associations.end', 'records.associations.history', "
-    "'records.associations.reinstate', 'records.backfill.plan', 'records.backfill.report', "
-    "'records.lineage', 'records.lineage.related', 'relationship_memory.archive', "
-    "'relationship_memory.create', 'relationship_memory.get', 'relationship_memory.history', "
-    "'relationship_memory.list', 'relationship_memory.propose', 'relationship_memory.restore', "
-    "'relationship_memory.revise', 'relationship_memory.search', 'reports.begin_cycle', "
-    "'reports.commit', 'reports.latest', 'reports.list', 'reports.manifest', "
-    "'reports.publish', 'reports.read', "
-    "'reports.record_run_state', 'reports.resolve_set', 'reports.search', 'reports.types.create', "
-    "'reports.types.list', 'review.decide', 'review.list', 'schedule_activities.history', "
-    "'schedule_activities.list', 'schedule_changes.list', 'schedule_publications.import', "
-    "'schedule_publications.list', 'schedule_publications.read', 'schedule_series.list', "
-    "'sources.enroll', 'sources.fetch', 'sources.list', 'sources.metadata', 'sources.status', "
-    "'tasks.bulk_confirm', 'tasks.bulk_preview', 'tasks.comments.create', 'tasks.comments.list', "
-    "'tasks.create', 'tasks.history', 'tasks.list', 'tasks.read', 'tasks.search', "
-    "'tasks.transition', 'tasks.update')"
+    "'meetings.create', 'meetings.list', 'meetings.notes.read_version', "
+    "'meetings.notes.versions', 'meetings.read', 'meetings.search', 'meetings.series.update', "
+    "'meetings.update', 'native_sources.backfill', 'native_sources.configure', "
+    "'native_sources.disable', 'native_sources.discover', 'native_sources.pause', "
+    "'native_sources.preflight', 'native_sources.reconcile', 'native_sources.resume', "
+    "'native_sources.retry', 'native_sources.status', 'native_sources.sync', "
+    "'programs.members.resolve', 'programs.overview', 'project_controls.configure', "
+    "'project_controls.status', 'record_events.list', 'record_events.provenance', "
+    "'records.associations.assert', 'records.associations.confirm', "
+    "'records.associations.contest', 'records.associations.correct', 'records.associations.end', "
+    "'records.associations.history', 'records.associations.reinstate', 'records.backfill.plan', "
+    "'records.backfill.report', 'records.lineage', 'records.lineage.related', "
+    "'relationship_memory.archive', 'relationship_memory.create', 'relationship_memory.get', "
+    "'relationship_memory.history', 'relationship_memory.list', 'relationship_memory.propose', "
+    "'relationship_memory.restore', 'relationship_memory.revise', 'relationship_memory.search', "
+    "'reports.archive', 'reports.begin_cycle', 'reports.commit', 'reports.delete', "
+    "'reports.history', 'reports.latest', 'reports.list', 'reports.manifest', 'reports.publish', "
+    "'reports.read', 'reports.record_run_state', 'reports.resolve_set', 'reports.restore', "
+    "'reports.search', 'reports.types.create', 'reports.types.list', 'reports.update', "
+    "'review.decide', 'review.list', 'schedule_activities.history', 'schedule_activities.list', "
+    "'schedule_changes.list', 'schedule_publications.import', 'schedule_publications.list', "
+    "'schedule_publications.read', 'schedule_series.list', 'sources.enroll', 'sources.fetch', "
+    "'sources.list', 'sources.metadata', 'sources.status', 'tasks.bulk_confirm', "
+    "'tasks.bulk_preview', 'tasks.comments.create', 'tasks.comments.list', 'tasks.create', "
+    "'tasks.history', 'tasks.list', 'tasks.read', 'tasks.search', 'tasks.transition', "
+    "'tasks.update')"
+)
+
+
+#: Byte copy of `621ef6786c64`'s purpose AT set (62 purposes), the latest prior
+#: restatement of `purpose_is_known`.
+_PURPOSES_BEFORE_THIS_REVISION: Final = (
+    "purpose IN ('bounded_enrollment', 'canvas_workspace_authoring', 'canvas_workspace_read', "
+    "'capture_authoring', 'capture_review', 'commitment_authoring', 'commitment_read', "
+    "'constraint_authoring', 'constraint_read', 'constraint_sync_authoring', "
+    "'constraint_sync_read', 'content_extraction', 'context_preference', 'context_preparation', "
+    "'continuity_authoring', 'document_authoring', 'document_read', 'entity_authoring', "
+    "'entity_identity_correction', 'entity_observation_ingest', 'entity_proposal', 'entity_read', "
+    "'goodnotes_browse', 'goodnotes_content', 'goodnotes_correction', 'goodnotes_proposal', "
+    "'goodnotes_pull', 'goodnotes_pull_observation', 'goodnotes_read', 'goodnotes_work', "
+    "'gsqs_b0_execution', 'gsqs_b0_observation', 'issue_authoring', 'issue_read', "
+    "'issue_work_authoring', 'knowledge_assertion_authoring', 'knowledge_assertion_observation', "
+    "'knowledge_assertion_read', 'knowledge_read', 'knowledge_search', 'lineage_backfill', "
+    "'meeting_authoring', 'meeting_note_history_read', 'meeting_read', 'program_reporting_read', "
+    "'record_event_provenance_read', 'record_event_read', 'record_lineage_authoring', "
+    "'record_lineage_read', 'relationship_memory_authoring', 'relationship_memory_proposal', "
+    "'relationship_memory_read', 'report_authoring', 'report_read', 'review_disposition', "
+    "'schedule_import', 'schedule_read', 'security_validation', 'source_inspection', "
+    "'status_observation', 'task_authoring', 'task_read')"
+)
+
+#: The same set plus exactly `report_lifecycle` (63 purposes, sorted).
+_PURPOSES_AT_THIS_REVISION: Final = (
+    "purpose IN ('bounded_enrollment', 'canvas_workspace_authoring', 'canvas_workspace_read', "
+    "'capture_authoring', 'capture_review', 'commitment_authoring', 'commitment_read', "
+    "'constraint_authoring', 'constraint_read', 'constraint_sync_authoring', "
+    "'constraint_sync_read', 'content_extraction', 'context_preference', 'context_preparation', "
+    "'continuity_authoring', 'document_authoring', 'document_read', 'entity_authoring', "
+    "'entity_identity_correction', 'entity_observation_ingest', 'entity_proposal', "
+    "'entity_read', 'goodnotes_browse', 'goodnotes_content', 'goodnotes_correction', "
+    "'goodnotes_proposal', 'goodnotes_pull', 'goodnotes_pull_observation', 'goodnotes_read', "
+    "'goodnotes_work', 'gsqs_b0_execution', 'gsqs_b0_observation', 'issue_authoring', "
+    "'issue_read', 'issue_work_authoring', 'knowledge_assertion_authoring', "
+    "'knowledge_assertion_observation', 'knowledge_assertion_read', 'knowledge_read', "
+    "'knowledge_search', 'lineage_backfill', 'meeting_authoring', 'meeting_note_history_read', "
+    "'meeting_read', 'program_reporting_read', 'record_event_provenance_read', "
+    "'record_event_read', 'record_lineage_authoring', 'record_lineage_read', "
+    "'relationship_memory_authoring', 'relationship_memory_proposal', "
+    "'relationship_memory_read', 'report_authoring', 'report_lifecycle', 'report_read', "
+    "'review_disposition', 'schedule_import', 'schedule_read', 'security_validation', "
+    "'source_inspection', 'status_observation', 'task_authoring', 'task_read')"
 )
 
 
@@ -1294,9 +1350,9 @@ _LOCK_PLANE: Final = (
     "knowledge.report_receipts, knowledge.report_transfer_sessions IN ACCESS EXCLUSIVE MODE"
 )
 
-#: `downgrade` refuses while any plane row exists, or any audit event names the
-#: capability step 6 admits, rather than deleting rows or audit history to make
-#: the downgrade pass. Each clause alone suffices.
+#: `downgrade` refuses while any plane row exists, or any audit event names a
+#: capability or the purpose step 6 admits, rather than deleting rows or audit
+#: history to make the downgrade pass. Each clause alone suffices.
 _REFUSE_DOWNGRADE: Final = """
     DO $$
     BEGIN
@@ -1312,17 +1368,20 @@ _REFUSE_DOWNGRADE: Final = """
           USING ERRCODE = 'restrict_violation';
       END IF;
       IF EXISTS (
-           SELECT 1 FROM knowledge.audit_events WHERE capability = 'reports.publish') THEN
-        RAISE EXCEPTION 'reports.publish audit history exists; refusing to downgrade 4c37731671fc'
+           SELECT 1 FROM knowledge.audit_events
+            WHERE capability IN ('reports.archive', 'reports.delete', 'reports.history',
+                                 'reports.publish', 'reports.restore', 'reports.update')
+               OR purpose = 'report_lifecycle') THEN
+        RAISE EXCEPTION 'general report audit history exists; refusing to downgrade 4c37731671fc'
           USING ERRCODE = 'restrict_violation';
       END IF;
     END $$
     """
 
 
-def _restate_audit(expression: str) -> None:
-    op.drop_constraint("capability_is_known", "audit_events", schema=SCHEMA, type_="check")
-    op.create_check_constraint("capability_is_known", "audit_events", expression, schema=SCHEMA)
+def _restate_audit(name: str, expression: str) -> None:
+    op.drop_constraint(name, "audit_events", schema=SCHEMA, type_="check")
+    op.create_check_constraint(name, "audit_events", expression, schema=SCHEMA)
 
 
 def upgrade() -> None:
@@ -1337,14 +1396,16 @@ def upgrade() -> None:
         op.execute(definition)
     for _trigger, _table, definition in _triggers():
         op.execute(definition)
-    _restate_audit(_CAPABILITIES_AT_THIS_REVISION)
+    _restate_audit("capability_is_known", _CAPABILITIES_AT_THIS_REVISION)
+    _restate_audit("purpose_is_known", _PURPOSES_AT_THIS_REVISION)
 
 
 def downgrade() -> None:
     op.execute(_LOCK_TIMEOUT)
     op.execute(_LOCK_PLANE)
     op.execute(_REFUSE_DOWNGRADE)
-    _restate_audit(_CAPABILITIES_BEFORE_THIS_REVISION)
+    _restate_audit("capability_is_known", _CAPABILITIES_BEFORE_THIS_REVISION)
+    _restate_audit("purpose_is_known", _PURPOSES_BEFORE_THIS_REVISION)
     for trigger, table, _definition in reversed(_triggers()):
         op.execute(f"DROP TRIGGER {trigger} ON {SCHEMA}.{table}")
     for name, _definition in reversed(_FUNCTIONS):

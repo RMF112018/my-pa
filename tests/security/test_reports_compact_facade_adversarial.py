@@ -757,3 +757,234 @@ def test_a_stale_lifecycle_or_version_refuses_with_zero_mutation(harness: Harnes
     # Restore of an active report at the current revision is an illegal move.
     assert refusal(answers[3]) == ("conflict", ["lifecycle_state"])
     assert counts(harness.engine, _MUTATION) == before
+
+
+# ---- Reports Modernization WP04: the reports.list / reports.search catalog ---------------
+
+_LIST: Final = Capability.REPORTS_LIST
+_SEARCH: Final = Capability.REPORTS_SEARCH
+_CATALOG: Final = (_LIST, _SEARCH)
+
+
+def _catalog_payload(capability: Capability, **fields: Any) -> dict[str, Any]:  # noqa: ANN401
+    """A payload that is otherwise valid for `capability` (search needs a query)."""
+    return {"query": "synthetic", **fields} if capability is _SEARCH else dict(fields)
+
+
+_LEGACY_ONLY: Final[dict[str, Any]] = {
+    "cycle_run_id": "micr_00000000000000000000000000000000",
+    "stage": "collector",
+    "artifact_kind": "collector_candidates",
+    "focus_area_id": "communications",
+    "source_lane": "outlook",
+    "report_date": "2026-08-20",
+    "include_superseded": False,
+}
+_CATALOG_SERVER_OWNED: Final = (
+    "principal_id",
+    "owner_principal_id",
+    "purpose",
+    "idempotency_key",
+    "request_id",
+    "binding",
+)
+
+
+@pytest.mark.parametrize("plane", ["standalone", "all"])
+@pytest.mark.parametrize("capability", _CATALOG, ids=lambda c: c.value)
+def test_a_legacy_only_or_server_owned_field_is_a_bare_refusal_in_standalone_and_all(
+    harness: Harness, capability: Capability, plane: str
+) -> None:
+    token = harness.client(CLIENT, profile_grants(harness.service))
+    _owned_report(harness)
+    before = counts(harness.engine, _MUTATION)
+    forged = [
+        *({name: value} for name, value in _LEGACY_ONLY.items()),
+        *({name: "forged-value"} for name in _CATALOG_SERVER_OWNED),
+    ]
+    answers = harness.run(
+        [
+            (token, wrapped(READ_TOOL, capability, _catalog_payload(capability, plane=plane, **f)))
+            for f in forged
+        ]
+    )
+    for fields, answer in zip(forged, answers, strict=True):
+        # Refused by presence, bare: an unknown field here, even at its default.
+        assert refusal(answer) == ("invalid_request", []), fields
+    assert counts(harness.engine, _MUTATION) == before
+
+
+_CATALOG_ONLY: Final[dict[str, Any]] = {
+    "type": "survey",
+    "topics": ["birds"],
+    "tags": ["field"],
+    "associated_with": {"target_kind": "project", "target_ref": "prj_synthetic"},
+    "lifecycle_states": ["active"],
+    "created_from": "2026-01-01T00:00:00Z",
+    "created_to": "2026-12-01T00:00:00Z",
+    "report_date_from": "2026-01-01",
+    "report_date_to": "2026-12-31",
+}
+
+
+@pytest.mark.parametrize("plane", [None, "intelligence"])
+@pytest.mark.parametrize("capability", _CATALOG, ids=lambda c: c.value)
+def test_a_catalog_field_is_a_bare_refusal_in_the_pipeline_plane(
+    harness: Harness, capability: Capability, plane: str | None
+) -> None:
+    token = harness.client(CLIENT, profile_grants(harness.service))
+    before = counts(harness.engine, _ALL_TABLES)
+    selector = {} if plane is None else {"plane": plane}
+    fields: list[dict[str, Any]] = [{name: value} for name, value in _CATALOG_ONLY.items()]
+    if capability is _SEARCH:
+        # `cursor` is a catalog-only field of search (the pipeline search has none).
+        fields.append({"cursor": "Zm9v"})
+    answers = harness.run(
+        [
+            (token, wrapped(READ_TOOL, capability, _catalog_payload(capability, **selector, **f)))
+            for f in fields
+        ]
+    )
+    for field_, answer in zip(fields, answers, strict=True):
+        assert refusal(answer) == ("invalid_request", []), field_
+    assert counts(harness.engine, _ALL_TABLES) == before
+
+
+@pytest.mark.parametrize("capability", _CATALOG, ids=lambda c: c.value)
+def test_association_filters_never_oracle_a_foreign_or_missing_target(
+    harness: Harness, capability: Capability
+) -> None:
+    """A foreign or nonexistent target is an empty page, never an error; extra keys refuse."""
+    token = harness.client(CLIENT, profile_grants(harness.service))
+    own = _owned_report(harness)
+    stranger = operator()
+    foreign = harness.service.invoke(
+        metadata_for(PUBLISH, Purpose.REPORT_AUTHORING, stranger),
+        _publish_command(stranger.principal_id),
+        principal=stranger,
+    )
+    assert foreign.result is not None, foreign.error
+    theirs = str(foreign.result["report_id"])
+    before = counts(harness.engine, _ALL_TABLES)
+    targets = [
+        {"target_kind": "standalone_report", "target_ref": theirs},
+        {"target_kind": "standalone_report", "target_ref": _MISSING},
+        {"target_kind": "project", "target_ref": "prj_nothere"},
+    ]
+    answers = harness.run(
+        [
+            (
+                token,
+                wrapped(
+                    READ_TOOL,
+                    capability,
+                    _catalog_payload(capability, plane=plane, associated_with=target),
+                ),
+            )
+            for plane in ("standalone", "all")
+            for target in targets
+        ]
+    )
+    pages = [ok(answer) for answer in answers]
+    for page in pages:
+        assert page["items"] == []
+        assert page["next_cursor"] is None
+        assert theirs not in str(page) and own not in str(page)
+    # A foreign target answers exactly as a missing one.
+    assert pages[0] == pages[1] and pages[3] == pages[4]
+    extra = harness.run(
+        [
+            (
+                token,
+                wrapped(
+                    READ_TOOL,
+                    capability,
+                    _catalog_payload(
+                        capability,
+                        plane="standalone",
+                        associated_with={**targets[0], "owner_principal_id": "forged"},
+                    ),
+                ),
+            ),
+            (
+                token,
+                wrapped(
+                    READ_TOOL,
+                    capability,
+                    _catalog_payload(
+                        capability,
+                        plane="standalone",
+                        associated_with={"target_kind": "galaxy", "target_ref": "x"},
+                    ),
+                ),
+            ),
+        ]
+    )
+    for answer in extra:
+        assert refusal(answer)[0] == "invalid_request"
+    assert counts(harness.engine, _ALL_TABLES) == before
+
+
+@pytest.mark.parametrize("page_size", [0, 101, -1, "5", True])
+@pytest.mark.parametrize("capability", _CATALOG, ids=lambda c: c.value)
+def test_an_out_of_range_page_size_is_refused_not_clamped(
+    harness: Harness, capability: Capability, page_size: object
+) -> None:
+    token = harness.client(CLIENT, profile_grants(harness.service))
+    before = counts(harness.engine, _ALL_TABLES)
+    answers = harness.run(
+        [
+            (
+                token,
+                wrapped(
+                    READ_TOOL,
+                    capability,
+                    _catalog_payload(capability, plane=plane, page_size=page_size),
+                ),
+            )
+            for plane in ("standalone", "all")
+        ]
+    )
+    for answer in answers:
+        assert refusal(answer) == ("invalid_request", ["page_size"])
+    assert counts(harness.engine, _ALL_TABLES) == before
+
+
+@pytest.mark.parametrize("capability", _CATALOG, ids=lambda c: c.value)
+def test_catalog_pages_carry_no_count_or_total(harness: Harness, capability: Capability) -> None:
+    token = harness.client(CLIENT, profile_grants(harness.service))
+    published = harness.run(
+        [
+            (token, wrapped(WRITE_TOOL, PUBLISH, {**MINIMAL, "client_intent_id": f"count-{n}"}))
+            for n in range(3)
+        ]
+    )
+    assert len({ok(answer)["report_id"] for answer in published}) == 3
+    answers = harness.run(
+        [
+            (
+                token,
+                wrapped(
+                    READ_TOOL,
+                    capability,
+                    _catalog_payload(capability, plane=plane, page_size=1),
+                ),
+            )
+            for plane in ("standalone", "all")
+        ]
+    )
+    for answer in answers:
+        _failed, document = outcome(answer)
+        page = ok(answer)
+        assert set(page) == {"plane", "items", "next_cursor"}
+        assert len(page["items"]) == 1 and isinstance(page["next_cursor"], str)
+        keys = _keys(document)
+        assert not {key for key in keys if "count" in key or "total" in key}, keys
+
+
+def _keys(value: object) -> set[str]:
+    if isinstance(value, dict):
+        return set(value) | {key for item in value.values() for key in _keys(item)}
+    if isinstance(value, list):
+        return {key for item in value for key in _keys(item)}
+    return set()

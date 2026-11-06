@@ -405,6 +405,10 @@ def test_at_vocabulary_adds_exactly_the_s31_names() -> None:
             "reports.archive",
             "reports.delete",
             "reports.restore",
+            "reports.hold.place",
+            "reports.hold.release",
+            "reports.retention.set",
+            "reports.retention.get",
         }
     )
     native = {capability.value for capability in NativeSourceCapability}

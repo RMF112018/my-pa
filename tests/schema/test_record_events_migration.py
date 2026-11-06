@@ -268,6 +268,10 @@ def test_head_admits_every_declared_capability_and_purpose() -> None:
             "reports.archive",
             "reports.delete",
             "reports.restore",
+            "reports.hold.place",
+            "reports.hold.release",
+            "reports.retention.set",
+            "reports.retention.get",
         }
     )
     purposes = (
@@ -278,7 +282,7 @@ def test_head_admits_every_declared_capability_and_purpose() -> None:
         - LINEAGE_S4_PURPOSES
         - S5B2_PURPOSES
         # Reports Modernization WP03: admitted by `4c37731671fc`.
-        - {"report_lifecycle"}
+        - {"report_lifecycle", "report_hold", "report_retention"}
     )
     assert declared <= at
     assert purposes <= purposes_at

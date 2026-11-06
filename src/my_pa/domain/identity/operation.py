@@ -419,7 +419,7 @@ class Capability(StrEnum):
     # Principal's own partition. Real handwriting remains fail-closed.
     GSQS_START = "gsqs.start"
     GSQS_STATUS = "gsqs.status"
-    # Intelligence Artifact / Report plane. Seventeen `reports.*` names rather than a
+    # Intelligence Artifact / Report plane. Twenty-one `reports.*` names rather than a
     # widening of `capture.*`, `documents.*`, `knowledge.*`, or `context.*`
     # (`D-91`). Capture is user-authored notes. Documents are managed bytes.
     # Knowledge is enrollment-scoped extraction. Context assembles a retrieval
@@ -471,6 +471,20 @@ class Capability(StrEnum):
     REPORTS_ARCHIVE = "reports.archive"
     REPORTS_DELETE = "reports.delete"
     REPORTS_RESTORE = "reports.restore"
+    #: Operator custody of a standalone report (Reports Modernization WP05b).
+    #: `hold.place` puts a legal hold on a report after sealing a digest-verified
+    #: preservation copy of all its content; a held report cannot be moved to the
+    #: Trash (archive, restore, update and reads are unaffected). `hold.release`
+    #: lifts it and keeps the preservation copy. `retention.set` appends a new
+    #: revision of the Principal's retention policy (unset by default; it gates
+    #: only purge eligibility, and purge does not exist) and `retention.get`
+    #: reads the policy, its history and, for one report, its purge eligibility.
+    #: All four are operator-only, attested to the local operator surface, under
+    #: their own purposes `report_hold` and `report_retention`.
+    REPORTS_HOLD_PLACE = "reports.hold.place"
+    REPORTS_HOLD_RELEASE = "reports.hold.release"
+    REPORTS_RETENTION_SET = "reports.retention.set"
+    REPORTS_RETENTION_GET = "reports.retention.get"
     # The relationship-intelligence entity plane. Fifty-five `entities.` names
     # over `knowledge.entities` and the tables around it, declared in four
     # blocks by the package that added each: WP-RI-05's six reads here, then
@@ -1208,6 +1222,15 @@ _OPERATOR_ONLY: frozenset[AuthorizedCapability] = frozenset(
         # surface (S3.1 D-16: the handler calls `attested_lineage_authority`),
         # so it is never satisfiable remotely or over stdio MCP.
         Capability.SCHEDULE_PUBLICATIONS_IMPORT,
+        # Reports Modernization WP05b (operator decision 2026-11-05, H1): report
+        # holds and the retention policy, read included. Attested to the local
+        # operator surface (the handlers call `attested_lineage_authority`, the
+        # lineage confirm precedent), so no remote or stdio-MCP caller can ever
+        # satisfy them and they are never published remotely.
+        Capability.REPORTS_HOLD_PLACE,
+        Capability.REPORTS_HOLD_RELEASE,
+        Capability.REPORTS_RETENTION_SET,
+        Capability.REPORTS_RETENTION_GET,
     }
 )
 
@@ -1424,6 +1447,13 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.REPORTS_ARCHIVE: frozenset({Purpose.REPORT_LIFECYCLE}),
         Capability.REPORTS_DELETE: frozenset({Purpose.REPORT_LIFECYCLE}),
         Capability.REPORTS_RESTORE: frozenset({Purpose.REPORT_LIFECYCLE}),
+        # WP05b custody: purposes of their own, implied by no other purpose, so
+        # a grant to publish or move a report can neither hold it nor change the
+        # retention policy.
+        Capability.REPORTS_HOLD_PLACE: frozenset({Purpose.REPORT_HOLD}),
+        Capability.REPORTS_HOLD_RELEASE: frozenset({Purpose.REPORT_HOLD}),
+        Capability.REPORTS_RETENTION_SET: frozenset({Purpose.REPORT_RETENTION}),
+        Capability.REPORTS_RETENTION_GET: frozenset({Purpose.REPORT_RETENTION}),
         Capability.ENTITIES_SEARCH: frozenset({Purpose.ENTITY_READ}),
         Capability.ENTITIES_UNRESOLVED_MENTIONS: frozenset({Purpose.ENTITY_READ}),
         Capability.ENTITIES_GET: frozenset({Purpose.ENTITY_READ}),
@@ -1798,6 +1828,12 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.REPORTS_ARCHIVE,
         Capability.REPORTS_DELETE,
         Capability.REPORTS_RESTORE,
+        # WP05b: placing or releasing a hold flips the root's held state, and a
+        # retention change supersedes the Principal's current policy; none is
+        # additive (`reports.retention.get` is a read and stays out).
+        Capability.REPORTS_HOLD_PLACE,
+        Capability.REPORTS_HOLD_RELEASE,
+        Capability.REPORTS_RETENTION_SET,
         Capability.RELATIONSHIP_MEMORY_CREATE,
         Capability.RELATIONSHIP_MEMORY_REVISE,
         Capability.RELATIONSHIP_MEMORY_ARCHIVE,

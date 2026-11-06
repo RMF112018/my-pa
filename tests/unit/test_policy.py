@@ -510,6 +510,12 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.SCHEDULE_ACTIVITIES_LIST, Purpose.SCHEDULE_READ),
         (Capability.SCHEDULE_ACTIVITIES_HISTORY, Purpose.SCHEDULE_READ),
         (Capability.SCHEDULE_CHANGES_LIST, Purpose.SCHEDULE_READ),
+        # Reports Modernization WP05b: the operator custody names, the hold pair
+        # under `report_hold` and the retention pair under `report_retention`.
+        (Capability.REPORTS_HOLD_PLACE, Purpose.REPORT_HOLD),
+        (Capability.REPORTS_HOLD_RELEASE, Purpose.REPORT_HOLD),
+        (Capability.REPORTS_RETENTION_SET, Purpose.REPORT_RETENTION),
+        (Capability.REPORTS_RETENTION_GET, Purpose.REPORT_RETENTION),
     }
 )
 
@@ -607,8 +613,10 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # and no purpose: 241 capabilities, 62 purposes, 243 pairs.
     # Reports Modernization WP03 adds 5 names, each under one purpose, and the
     # `report_lifecycle` purpose: 246 capabilities, 63 purposes, 248 pairs.
-    assert len(PERMITTED_PAIRS) == 248
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 248 == 15250
+    # Reports Modernization WP05b adds 4 names and 2 purposes, each name under
+    # exactly one of the pair: 250 capabilities, 65 purposes, 252 pairs.
+    assert len(PERMITTED_PAIRS) == 252
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 252 == 15998
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

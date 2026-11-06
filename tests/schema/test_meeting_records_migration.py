@@ -326,6 +326,10 @@ ADMITTED_LATER_CAPABILITIES: Final = (
             "reports.archive",
             "reports.delete",
             "reports.restore",
+            "reports.hold.place",
+            "reports.hold.release",
+            "reports.retention.set",
+            "reports.retention.get",
         }
     )
 )
@@ -345,7 +349,7 @@ ADMITTED_LATER_PURPOSES: Final = (
     | LINEAGE_S4_PURPOSES
     | S5B2_PURPOSES
     # Reports Modernization WP03: admitted by `4c37731671fc` and declared with it.
-    | frozenset({"report_lifecycle"})
+    | frozenset({"report_lifecycle", "report_hold", "report_retention"})
 )
 
 

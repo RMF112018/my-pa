@@ -337,6 +337,10 @@ def test_at_vocabulary_adds_exactly_the_s2_names() -> None:
             "reports.archive",
             "reports.delete",
             "reports.restore",
+            "reports.hold.place",
+            "reports.hold.release",
+            "reports.retention.set",
+            "reports.retention.get",
         }
     )
     native = {capability.value for capability in NativeSourceCapability}
@@ -347,7 +351,7 @@ def test_at_vocabulary_adds_exactly_the_s2_names() -> None:
         - S4_PURPOSES
         - S5B2_PURPOSES
         # Reports Modernization WP03's purpose, the head's (4c37731671fc).
-        - {"report_lifecycle"}
+        - {"report_lifecycle", "report_hold", "report_retention"}
     )
     assert set(purposes_at) == purposes | gap.lineage_s2_admitted_ahead("purpose")
     assert S2_CAPABILITIES & declared == gap.S2_CAPABILITIES_DECLARED_BY_DOMAIN

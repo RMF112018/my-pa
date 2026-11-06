@@ -377,6 +377,14 @@ _CONTROL_PLANE_EXCLUDED: Final[frozenset[Capability]] = frozenset(
         # schedule import admits a source PDF for the contained parser; an active
         # grant on it is `UNEXPECTED_CONTROL_PLANE_GRANT`.
         Capability.SCHEDULE_PUBLICATIONS_IMPORT,
+        # Reports Modernization WP05b (operator decision 2026-11-05, H1): report
+        # holds and the retention policy are operator-only and attested to the
+        # local operator surface. Excluded, so an active grant on one is
+        # `UNEXPECTED_CONTROL_PLANE_GRANT`; no profile version or grant change.
+        Capability.REPORTS_HOLD_PLACE,
+        Capability.REPORTS_HOLD_RELEASE,
+        Capability.REPORTS_RETENTION_SET,
+        Capability.REPORTS_RETENTION_GET,
     }
 )
 
@@ -500,6 +508,11 @@ _LINEAGE_ATTESTED_EXCLUSION: Final = (
     "attested to the local operator surface; withheld from every client "
     "(operator directive 2026-10-26)"
 )
+#: Reports Modernization WP05b's four custody capabilities.
+_REPORT_CUSTODY_EXCLUSION: Final = (
+    "operator-only report holds and retention; attested to the local operator surface "
+    "(operator decision 2026-11-05)"
+)
 
 _EXCLUSION_RATIONALE: Final[Mapping[Capability, str]] = MappingProxyType(
     {
@@ -532,6 +545,10 @@ _EXCLUSION_RATIONALE: Final[Mapping[Capability, str]] = MappingProxyType(
         Capability.ISSUES_MEMBERSHIPS_CONFIRM: _LINEAGE_ATTESTED_EXCLUSION,
         Capability.ISSUES_PROJECT_LINKS_CONFIRM: _LINEAGE_ATTESTED_EXCLUSION,
         Capability.SCHEDULE_PUBLICATIONS_IMPORT: _SCHEDULE_IMPORT_EXCLUSION,
+        Capability.REPORTS_HOLD_PLACE: _REPORT_CUSTODY_EXCLUSION,
+        Capability.REPORTS_HOLD_RELEASE: _REPORT_CUSTODY_EXCLUSION,
+        Capability.REPORTS_RETENTION_SET: _REPORT_CUSTODY_EXCLUSION,
+        Capability.REPORTS_RETENTION_GET: _REPORT_CUSTODY_EXCLUSION,
     }
 )
 

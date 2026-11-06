@@ -337,6 +337,11 @@ def test_sql_forty_nine_cycle_kind_counts_and_digest_readback(migrated_engine: E
         "reports.archive",
         "reports.delete",
         "reports.restore",
+        # Reports Modernization WP05b: its operator custody.
+        "reports.hold.place",
+        "reports.hold.release",
+        "reports.retention.set",
+        "reports.retention.get",
     }
 
 

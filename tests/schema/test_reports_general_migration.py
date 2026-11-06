@@ -16,18 +16,20 @@ module proves:
   `purpose_is_known` it restates exactly once each, last; the downgrade locks
   the plane and refuses before it restores or drops anything;
 * **the audit vocabulary** -- each BEFORE text is a byte copy of the AT text
-  `621ef6786c64` left; the capability AT text is it plus exactly the 6 general
+  `621ef6786c64` left; the capability AT text is it plus exactly the 10 general
   report capabilities (WP02 `reports.publish`, WP03 `reports.update`,
-  `.history`, `.archive`, `.delete`, `.restore`) and the purpose AT text is it
-  plus exactly `report_lifecycle` (WP03); the downgrade refusal already names
-  the WP05b hold and retention vocabulary;
+  `.history`, `.archive`, `.delete`, `.restore`, WP05b A5 `reports.hold.place`,
+  `.hold.release`, `.retention.get`, `.retention.set`) and the purpose AT text
+  is it plus exactly `report_lifecycle` (WP03), `report_hold` and
+  `report_retention` (WP05b A5); the downgrade refusal names every one;
 * on disposable databases: empty to head creates exactly the 10 tables, the 10
   functions and their 27 triggers (4 of them deferred); the declared metadata
   equals the migrated schema, definition for definition; the predecessor head with Intelligence,
   Capture and managed-document rows upgrades with every pre-existing table's
   rows and catalog unchanged but the `capability_is_known` and
   `purpose_is_known` definitions; the upgrade admits a `reports.publish` and a
-  `reports.archive`/`report_lifecycle` audit event; the downgrade refuses
+  `reports.archive`/`report_lifecycle` audit event and each WP05b hold and
+  retention capability and purpose; the downgrade refuses
   while a publish, a hold, a lone transfer session, a lone retention policy
   event or such an audit event exists, and an empty plane downgrades cleanly
   and upgrades again;
@@ -210,9 +212,8 @@ HOLD_AND_RETENTION_CAPABILITIES: Final = (
     "reports.retention.get",
     "reports.retention.set",
 )
-#: Every capability this revision admits: WP02's and WP03's five (WP03 D14). The
-#: WP05b four are named by the downgrade refusal only, until the domain declares
-#: them (the head audit vocabulary equals the domain).
+#: Every capability this revision admits: WP02's, WP03's five (WP03 D14) and
+#: WP05b's four (A5, declared by the domain with their registration).
 ADMITTED_CAPABILITIES: Final = frozenset(
     {
         "reports.publish",
@@ -221,6 +222,7 @@ ADMITTED_CAPABILITIES: Final = frozenset(
         "reports.archive",
         "reports.delete",
         "reports.restore",
+        *HOLD_AND_RETENTION_CAPABILITIES,
     }
 )
 #: The lifecycle purpose this revision admits (WP03 D1, D14).
@@ -228,7 +230,7 @@ ADMITTED_PURPOSE: Final = "report_lifecycle"
 #: The hold and retention purposes (WP05b A5).
 HOLD_AND_RETENTION_PURPOSES: Final = ("report_hold", "report_retention")
 #: Every purpose this revision admits.
-ADMITTED_PURPOSES: Final = frozenset({ADMITTED_PURPOSE})
+ADMITTED_PURPOSES: Final = frozenset({ADMITTED_PURPOSE, *HOLD_AND_RETENTION_PURPOSES})
 _WHITESPACE: Final = re.compile(r"\s+")
 
 
@@ -502,12 +504,12 @@ def test_the_audit_before_texts_are_byte_copies_and_at_adds_exactly_the_report_v
     assert mine["_PURPOSES_BEFORE_THIS_REVISION"] == source["_PURPOSES_AT_THIS_REVISION"]
     before = _literals(mine["_CAPABILITIES_BEFORE_THIS_REVISION"])
     at = _literals(mine["_CAPABILITIES_AT_THIS_REVISION"])
-    assert at == sorted(at) and len(set(at)) == len(at) == 257
+    assert at == sorted(at) and len(set(at)) == len(at) == 261
     assert len(before) == 251 and not ADMITTED_CAPABILITIES & set(before)
     assert sorted([*before, *ADMITTED_CAPABILITIES]) == at
     purposes_before = _literals(mine["_PURPOSES_BEFORE_THIS_REVISION"])
     purposes_at = _literals(mine["_PURPOSES_AT_THIS_REVISION"])
-    assert purposes_at == sorted(purposes_at) and len(set(purposes_at)) == len(purposes_at) == 63
+    assert purposes_at == sorted(purposes_at) and len(set(purposes_at)) == len(purposes_at) == 65
     assert len(purposes_before) == 62 and not ADMITTED_PURPOSES & set(purposes_before)
     assert sorted([*purposes_before, *ADMITTED_PURPOSES]) == purposes_at
     # No later revision on this chain restates either before this one.
@@ -526,11 +528,16 @@ def test_the_audit_before_texts_are_byte_copies_and_at_adds_exactly_the_report_v
         assert f"'{name}'" in refusal, name
     for name in ADMITTED_PURPOSES:
         assert f"'{name}'" in refusal, name
-    # WP05b A4: the refusal already names the hold and retention vocabulary.
-    for name in (*HOLD_AND_RETENTION_CAPABILITIES, *HOLD_AND_RETENTION_PURPOSES):
+    # WP05b A4/A5: the refusal names the hold and retention vocabulary, which the
+    # AT texts admit and the BEFORE texts do not.
+    for name in HOLD_AND_RETENTION_CAPABILITIES:
         assert f"'{name}'" in refusal, name
-        assert f"'{name}'" not in str(mine["_CAPABILITIES_AT_THIS_REVISION"]), name
-        assert f"'{name}'" not in str(mine["_PURPOSES_AT_THIS_REVISION"]), name
+        assert f"'{name}'" in str(mine["_CAPABILITIES_AT_THIS_REVISION"]), name
+        assert f"'{name}'" not in str(mine["_CAPABILITIES_BEFORE_THIS_REVISION"]), name
+    for name in HOLD_AND_RETENTION_PURPOSES:
+        assert f"'{name}'" in refusal, name
+        assert f"'{name}'" in str(mine["_PURPOSES_AT_THIS_REVISION"]), name
+        assert f"'{name}'" not in str(mine["_PURPOSES_BEFORE_THIS_REVISION"]), name
 
 
 def _ddl_columns(ddl: str) -> list[tuple[str, bool]]:
@@ -1074,8 +1081,8 @@ def test_predecessor_with_legacy_evidence_upgrades_unchanged(
         if kind != "constraints":
             assert kept[kind] == catalog_before[kind], kind
     # Exactly two pre-existing definitions changed: `capability_is_known`,
-    # widened by exactly the 6 report capabilities, and `purpose_is_known`,
-    # widened by exactly `report_lifecycle`.
+    # widened by exactly the 10 report capabilities, and `purpose_is_known`,
+    # widened by exactly `report_lifecycle`, `report_hold` and `report_retention`.
     removed = sorted(set(catalog_before["constraints"]) - set(kept["constraints"]))
     added = sorted(set(kept["constraints"]) - set(catalog_before["constraints"]))
     assert len(kept["constraints"]) == len(catalog_before["constraints"])
@@ -4628,6 +4635,58 @@ def test_a_report_lifecycle_audit_event_is_admitted_and_holds_the_downgrade(
     )
     assert _audit_rows(engine, "reports.archive") == 1
     assert all(count == 0 for count, _ in _plane_rows(engine).values())
+    catalog = _full_catalog(engine)
+    with pytest.raises(DBAPIError) as refused:
+        command.downgrade(_config(), PREVIOUS)
+    assert getattr(refused.value.orig, "sqlstate", None) == RESTRICT_VIOLATION
+    assert AUDIT_REFUSAL in str(refused.value)
+    assert _version(engine) == REVISION
+    assert _full_catalog(engine) == catalog
+
+
+#: WP05b A5: each custody capability with its purpose.
+_CUSTODY_AUDIT: Final = (
+    ("reports.hold.place", "report_hold"),
+    ("reports.hold.release", "report_hold"),
+    ("reports.retention.set", "report_retention"),
+    ("reports.retention.get", "report_retention"),
+)
+
+
+@pytest.mark.database
+@pytest.mark.parametrize(("capability", "purpose"), _CUSTODY_AUDIT)
+def test_a_custody_audit_event_is_admitted_and_alone_holds_the_downgrade(
+    disposable_database: str, engine: Engine, capability: str, purpose: str
+) -> None:
+    """WP05b A5: each hold/retention capability under its purpose is refused at the
+    predecessor, admitted at head, and its row alone holds the downgrade."""
+    del disposable_database
+    command.upgrade(_config(), PREVIOUS)
+    with pytest.raises(DBAPIError) as refused_before:
+        _publish_audit(engine, "rptmigaudit0006", capability=capability, purpose=purpose)
+    assert getattr(refused_before.value.orig, "sqlstate", None) == CHECK_VIOLATION
+    command.upgrade(_config(), "head")
+    _publish_audit(engine, "rptmigaudit0007", capability=capability, purpose=purpose)
+    assert _audit_rows(engine, capability) == 1
+    assert all(count == 0 for count, _ in _plane_rows(engine).values())
+    catalog = _full_catalog(engine)
+    with pytest.raises(DBAPIError) as refused:
+        command.downgrade(_config(), PREVIOUS)
+    assert getattr(refused.value.orig, "sqlstate", None) == RESTRICT_VIOLATION
+    assert AUDIT_REFUSAL in str(refused.value)
+    assert _version(engine) == REVISION
+    assert _full_catalog(engine) == catalog
+
+
+@pytest.mark.database
+@pytest.mark.parametrize("purpose", ["report_hold", "report_retention"])
+def test_a_custody_purpose_alone_holds_the_downgrade(
+    disposable_database: str, engine: Engine, purpose: str
+) -> None:
+    """WP05b A5: a custody purpose under an older capability alone holds the downgrade."""
+    del disposable_database
+    command.upgrade(_config(), "head")
+    _publish_audit(engine, "rptmigaudit0008", capability="capabilities.get", purpose=purpose)
     catalog = _full_catalog(engine)
     with pytest.raises(DBAPIError) as refused:
         command.downgrade(_config(), PREVIOUS)

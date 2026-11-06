@@ -98,6 +98,13 @@ _WRITE_PURPOSES: Final = frozenset(
         # reads -- published while writes are disabled and routed to
         # `my_pa.read`. `report_read` (and so `reports.history`) stays out.
         Purpose.REPORT_LIFECYCLE,
+        # Reports Modernization WP05b: the operator-only custody purposes, as the
+        # attested lineage confirms' `record_lineage_authoring` and the schedule
+        # import's `schedule_import`. The four are never published remotely; this
+        # keeps them writes if a later publication rule ever reached them
+        # (`reports.retention.get` shares `report_retention` -- the safe direction).
+        Purpose.REPORT_HOLD,
+        Purpose.REPORT_RETENTION,
         Purpose.RELATIONSHIP_MEMORY_AUTHORING,
         Purpose.ENTITY_OBSERVATION_INGEST,
         Purpose.ENTITY_AUTHORING,

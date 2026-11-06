@@ -49,17 +49,18 @@ order it:
    `knowledge.audit_events` in place (the `0641c354ca85` precedent: `DROP
    CONSTRAINT` then `ADD CONSTRAINT ... CHECK`, `ACCESS EXCLUSIVE` on
    `audit_events` and a validating scan, held to commit): capabilities with the
-   frozen sorted set of 257 names, the 251 `621ef6786c64` left plus exactly the
-   6 general report capabilities (`reports.publish`, WP02; `reports.update`,
+   frozen sorted set of 261 names, the 251 `621ef6786c64` left plus exactly the
+   10 general report capabilities (`reports.publish`, WP02; `reports.update`,
    `reports.history`, `reports.archive`, `reports.delete` and
-   `reports.restore`, WP03); purposes with the frozen sorted set of 63, the 62
-   `621ef6786c64` left plus exactly `report_lifecycle` (WP03 RD-14; the other
-   two report purposes, `report_authoring` and `report_read`, were already
-   admitted). The WP05b hold and retention names are not admitted yet: the
-   domain declares them with their registration, and the widening follows it
-   (the head audit vocabulary equals the domain). These are the only statements that
-   name a table that existed before this revision, and a widening cannot fail
-   on an existing row.
+   `reports.restore`, WP03; the operator-only custody capabilities
+   `reports.hold.place`, `reports.hold.release`, `reports.retention.get` and
+   `reports.retention.set`, WP05b); purposes with the frozen sorted set of 65,
+   the 62 `621ef6786c64` left plus exactly `report_lifecycle` (WP03 RD-14) and
+   `report_hold` and `report_retention` (WP05b; the other two report purposes,
+   `report_authoring` and `report_read`, were already admitted). The head audit
+   vocabulary equals the domain. These are the only statements that name a
+   table that existed before this revision, and a widening cannot fail on an
+   existing row.
 
 The receipts admit one applied write per version and per event: the partial
 unique indexes `a_report_version_is_applied_by_one_receipt` (`version_id`,
@@ -340,7 +341,9 @@ _CAPABILITIES_BEFORE_THIS_REVISION: Final = (
 
 #: The same set plus exactly the 6 general report capabilities -- `reports.publish`
 #: (WP02) and `reports.update`, `reports.history`, `reports.archive`,
-#: `reports.delete`, `reports.restore` (WP03) -- 257 names, sorted.
+#: `reports.delete`, `reports.restore` (WP03), plus the 4 operator-only custody
+#: capabilities `reports.hold.place`, `reports.hold.release`, `reports.retention.get`
+#: and `reports.retention.set` (WP05b) -- 261 names, sorted.
 _CAPABILITIES_AT_THIS_REVISION: Final = (
     "capability IN ('canvas.workspace.get', 'canvas.workspace.put', 'capabilities.get', "
     "'capture.archive', 'capture.create', 'capture.list', 'capture.read', 'capture.restore', "
@@ -411,9 +414,11 @@ _CAPABILITIES_AT_THIS_REVISION: Final = (
     "'relationship_memory.history', 'relationship_memory.list', 'relationship_memory.propose', "
     "'relationship_memory.restore', 'relationship_memory.revise', 'relationship_memory.search', "
     "'reports.archive', 'reports.begin_cycle', 'reports.commit', 'reports.delete', "
-    "'reports.history', 'reports.latest', 'reports.list', 'reports.manifest', 'reports.publish', "
-    "'reports.read', 'reports.record_run_state', 'reports.resolve_set', 'reports.restore', "
-    "'reports.search', 'reports.types.create', 'reports.types.list', 'reports.update', "
+    "'reports.history', 'reports.hold.place', 'reports.hold.release', 'reports.latest', "
+    "'reports.list', 'reports.manifest', 'reports.publish', 'reports.read', "
+    "'reports.record_run_state', 'reports.resolve_set', 'reports.restore', "
+    "'reports.retention.get', 'reports.retention.set', 'reports.search', "
+    "'reports.types.create', 'reports.types.list', 'reports.update', "
     "'review.decide', 'review.list', 'schedule_activities.history', 'schedule_activities.list', "
     "'schedule_changes.list', 'schedule_publications.import', 'schedule_publications.list', "
     "'schedule_publications.read', 'schedule_series.list', 'sources.enroll', 'sources.fetch', "
@@ -446,7 +451,8 @@ _PURPOSES_BEFORE_THIS_REVISION: Final = (
     "'status_observation', 'task_authoring', 'task_read')"
 )
 
-#: The same set plus exactly `report_lifecycle` (63 purposes, sorted).
+#: The same set plus exactly `report_lifecycle` (WP03) and `report_hold`,
+#: `report_retention` (WP05b) -- 65 purposes, sorted.
 _PURPOSES_AT_THIS_REVISION: Final = (
     "purpose IN ('bounded_enrollment', 'canvas_workspace_authoring', 'canvas_workspace_read', "
     "'capture_authoring', 'capture_review', 'commitment_authoring', 'commitment_read', "
@@ -463,9 +469,10 @@ _PURPOSES_AT_THIS_REVISION: Final = (
     "'meeting_read', 'program_reporting_read', 'record_event_provenance_read', "
     "'record_event_read', 'record_lineage_authoring', 'record_lineage_read', "
     "'relationship_memory_authoring', 'relationship_memory_proposal', "
-    "'relationship_memory_read', 'report_authoring', 'report_lifecycle', 'report_read', "
-    "'review_disposition', 'schedule_import', 'schedule_read', 'security_validation', "
-    "'source_inspection', 'status_observation', 'task_authoring', 'task_read')"
+    "'relationship_memory_read', 'report_authoring', 'report_hold', 'report_lifecycle', "
+    "'report_read', 'report_retention', 'review_disposition', 'schedule_import', "
+    "'schedule_read', 'security_validation', 'source_inspection', 'status_observation', "
+    "'task_authoring', 'task_read')"
 )
 
 

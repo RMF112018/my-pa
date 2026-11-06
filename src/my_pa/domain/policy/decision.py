@@ -480,6 +480,12 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.REPORTS_ARCHIVE,
         Capability.REPORTS_DELETE,
         Capability.REPORTS_RESTORE,
+        # WP05b: holding that same root, and the owner's retention policy (no
+        # source at all). Operator-only and attested in the handler.
+        Capability.REPORTS_HOLD_PLACE,
+        Capability.REPORTS_HOLD_RELEASE,
+        Capability.REPORTS_RETENTION_SET,
+        Capability.REPORTS_RETENTION_GET,
         # The entity plane's partition, not a source. An entity carries no
         # `enrollment_id` and no grant a requested scope could be compared
         # against -- it is the Principal's own record of a person, not an

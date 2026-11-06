@@ -183,15 +183,23 @@ def test_at_sets_equal_the_live_enums() -> None:
         "reports.archive",
         "reports.delete",
         "reports.restore",
+        "reports.hold.place",
+        "reports.hold.release",
+        "reports.retention.set",
+        "reports.retention.get",
     }
-    assert len(head_capabilities) == len(declared) == 257
+    assert len(head_capabilities) == len(declared) == 261
     assert head["_PURPOSES_BEFORE_THIS_REVISION"] == mine["_PURPOSES_AT_THIS_REVISION"]
     head_purposes = _literals(head["_PURPOSES_AT_THIS_REVISION"])
     assert head_purposes == sorted(head_purposes)
     assert set(head_purposes) == {member.value for member in Purpose}
-    assert set(head_purposes) - set(purposes) == {"report_lifecycle"}
+    assert set(head_purposes) - set(purposes) == {
+        "report_lifecycle",
+        "report_hold",
+        "report_retention",
+    }
     assert len(purposes) == 62
-    assert len(head_purposes) == 63
+    assert len(head_purposes) == 65
     before = set(_literals(mine["_CAPABILITIES_BEFORE_THIS_REVISION"]))
     assert set(capabilities) - before == S5B2_CAPABILITIES
     assert set(purposes) - set(_literals(mine["_PURPOSES_BEFORE_THIS_REVISION"])) == S5B2_PURPOSES

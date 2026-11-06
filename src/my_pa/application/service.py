@@ -222,6 +222,7 @@ from my_pa.application.commands import (
     GetRecordEventProvenance,
     GetRelationshipMemory,
     GetRelationshipMemoryHistory,
+    GetReportRetention,
     GetSourceMetadata,
     GetSourceStatus,
     GetTaskHistory,
@@ -268,6 +269,7 @@ from my_pa.application.commands import (
     ListUnresolvedMentions,
     MergeEntities,
     ObserveEntityMention,
+    PlaceReportHold,
     PlanLineageBackfill,
     PrepareContext,
     PreviewConstraintSync,
@@ -314,6 +316,7 @@ from my_pa.application.commands import (
     RecordIssueHandoff,
     RecordTask,
     ReinstateRecordAssociation,
+    ReleaseReportHold,
     ReopenConstraint,
     ReopenIssue,
     ReorderConstraintCategories,
@@ -360,6 +363,7 @@ from my_pa.application.commands import (
     SearchPortfolioConstraints,
     SearchRelationshipMemories,
     SearchTasks,
+    SetReportRetention,
     SplitEntity,
     StartGsqsB0,
     SubmitGoodNotesProposal,
@@ -383,10 +387,13 @@ from my_pa.application.commands import (
     WaitingOn,
     WaitingOnV2,
     catalog_refusal,
+    custody_refusal,
+    hold_request,
     lifecycle_request,
     publication_request,
     report_refusal,
     report_revision_refusal,
+    retention_set_request,
     update_request,
 )
 from my_pa.application.commitments import CommitmentManagementService, CommitmentMutationReceipt
@@ -641,6 +648,7 @@ from my_pa.application.relationship_memory import (
     RelationshipMemoryService,
     ReviseMemoryCommand,
 )
+from my_pa.application.report_retention import report_purge_eligibility
 from my_pa.application.schedules import ScheduleApplication
 from my_pa.application.tasks import (
     TaskManagementService,
@@ -697,10 +705,15 @@ from my_pa.contracts.ports import (
     ReportContentStore,
     ReportContentStoreError,
     ReportHeldError,
+    ReportHoldStateError,
     ReportIdempotencyConflictError,
     ReportIntegrityError,
     ReportNotFoundError,
+    ReportPreservationError,
+    ReportPreservationUnavailableError,
+    ReportStaleHoldRevisionError,
     ReportStaleLifecycleRevisionError,
+    ReportStalePolicyRevisionError,
     ReportStaleVersionError,
     ReportTrashPreflightError,
     ReportWithdrawnError,
@@ -976,6 +989,16 @@ from my_pa.domain.reports.content import (
     is_gzip_content,
 )
 from my_pa.domain.reports.creator import CreatorKind, ReportCreator, derive_creator
+from my_pa.domain.reports.custody import (
+    CustodyAuthority,
+    HoldOperation,
+    HoldResult,
+    PurgeEligibility,
+    RetentionPeriod,
+    RetentionPolicyEventRecord,
+    RetentionPolicyView,
+    RetentionResult,
+)
 from my_pa.domain.reports.errors import ReportLifecycleRefusal, ReportValidationError
 from my_pa.domain.reports.publication import PublicationResult
 from my_pa.domain.reports.records import (
@@ -3613,6 +3636,119 @@ def _general_lifecycle_payload(result: LifecycleResult) -> dict[str, Any]:
     }
 
 
+def _retention_period_payload(period: RetentionPeriod | None) -> dict[str, object] | None:
+    return None if period is None else period.as_dict()
+
+
+def _hold_payload(result: HoldResult) -> dict[str, Any]:
+    """What `reports.hold.place` and `reports.hold.release` answer (WP05b Part C (5)).
+
+    `preservation` only on a placement: the sealed copy's identity and size,
+    never its content or the reason.
+    """
+    payload: dict[str, Any] = {
+        "plane": "standalone",
+        "report_id": result.report_id,
+        "operation": result.operation.value,
+        "held": result.held,
+        "hold_revision": result.hold_revision,
+        "event_id": result.event_id,
+    }
+    if result.operation is HoldOperation.PLACE and result.preservation is not None:
+        payload["preservation"] = {
+            "seal_object_id": result.preservation.seal_object_id,
+            "seal_sha256": result.preservation.seal_sha256,
+            "seal_byte_count": result.preservation.seal_byte_count,
+            "object_count": result.preservation.object_count,
+            "version_count": result.preservation.version_count,
+        }
+    payload["recorded_at"] = format_rfc3339(result.recorded_at)
+    payload["replayed"] = result.replayed
+    return payload
+
+
+def _retention_set_payload(result: RetentionResult) -> dict[str, Any]:
+    """What `reports.retention.set` answers (WP05b Part C (5))."""
+    return {
+        "policy_revision": result.policy_revision,
+        "period": _retention_period_payload(result.period),
+        "previous_period": _retention_period_payload(result.previous_period),
+        "event_id": result.event_id,
+        "recorded_at": format_rfc3339(result.recorded_at),
+        "replayed": result.replayed,
+    }
+
+
+def _retention_history_item(event: RetentionPolicyEventRecord) -> dict[str, Any]:
+    """One policy change: who (the attested pair), when, from what, to what, and why."""
+    return {
+        "event_id": event.event_id,
+        "policy_revision": event.policy_revision,
+        "period": _retention_period_payload(event.period),
+        "previous_period": _retention_period_payload(event.previous_period),
+        "reason": event.reason,
+        "authority_class": event.authority.authority_class,
+        "decision_channel": event.authority.decision_channel,
+        "recorded_at": format_rfc3339(event.recorded_at),
+    }
+
+
+def _retention_get_payload(
+    view: RetentionPolicyView,
+    *,
+    report_id: str | None,
+    eligibility: PurgeEligibility | None,
+) -> dict[str, Any]:
+    """What `reports.retention.get` answers (WP05b Part C (5)).
+
+    `policy` is `null` until the policy is first set; once set (or unset
+    again) it names the newest revision, whose `period` is `null` when unset.
+    """
+    current = view.current
+    payload: dict[str, Any] = {
+        "policy": None
+        if current is None
+        else {
+            "policy_revision": current.policy_revision,
+            "period": _retention_period_payload(current.period),
+            "set_at": format_rfc3339(current.recorded_at),
+            "reason": current.reason,
+        },
+        "history": [_retention_history_item(event) for event in view.history],
+    }
+    if report_id is not None and eligibility is not None:
+        payload["eligibility"] = {
+            "report_id": report_id,
+            "eligible": eligibility.eligible,
+            "reason": eligibility.reason.value,
+            "clock_start": None
+            if eligibility.clock_start is None
+            else format_rfc3339(eligibility.clock_start),
+            "eligible_at": None
+            if eligibility.eligible_at is None
+            else format_rfc3339(eligibility.eligible_at),
+            "clock_start_strategy": eligibility.clock_start_strategy.value,
+        }
+    return payload
+
+
+def _custody_authority(authorization: Authorization) -> CustodyAuthority:
+    """The attested operator pair a custody event records, or `denied` (WP05b H1).
+
+    `attested_lineage_authority` is the lineage confirms' rule: only the local
+    operator surface (CLI or the HTTP gateway's stamped operator surface)
+    passes; every remote and stdio-MCP caller is `denied` here, before any
+    read or write.
+    """
+    derived = attested_lineage_authority(authorization)
+    try:
+        return CustodyAuthority(
+            derived.authority_class.value, derived.decision_channel.value
+        ).validated()
+    except ReportValidationError:
+        raise InternalError() from None
+
+
 def _history_version_item(item: ReportVersionSummary) -> dict[str, Any]:
     """One version on a `reports.history` page: descriptors and digests, never the body."""
     payload: dict[str, Any] = {
@@ -4596,6 +4732,7 @@ class ApplicationService:
         goodnotes_pull_assignment_lease_seconds: int = 900,
         report_content_store: ReportContentStore | None = None,
         report_content_inline_max_bytes: int = INLINE_CONTENT_MAX_BYTES,
+        report_preservation_store: ReportContentStore | None = None,
     ) -> None:
         self._unit_of_work = unit_of_work
         #: WP05 C3: the report content store and the inline threshold. `None`
@@ -4612,6 +4749,11 @@ class ApplicationService:
         ):
             raise ValueError("the report content inline threshold is out of bounds")
         self._report_content_store = report_content_store
+        #: WP05b H4: the report content store over the `preservation` namespace,
+        #: where a hold placement writes its sealed copy. `None` (no
+        #: `MY_PA_REPORT_CONTENT_ROOT`) refuses every placement (`unavailable`,
+        #: `preservation_store`); nothing else reads it.
+        self._report_preservation_store = report_preservation_store
         self._report_content_inline_max_bytes = report_content_inline_max_bytes
         #: WP05 corrective B-4: how far a gzip upload is inflated. Without a
         #: store nothing above the inline threshold can be placed, so nothing
@@ -16714,6 +16856,175 @@ class ApplicationService:
     ) -> _Result:
         return self._reports_transition(unit_of_work, authorization, command)
 
+    # ---- Reports Modernization WP05b: operator custody ----------------------
+    # Every handler first derives the attested operator authority (`denied` for
+    # every remote and stdio-MCP caller before any read or write), as the
+    # lineage confirms do; the four are also operator-only and withheld from
+    # every remote publication.
+
+    def _reports_hold(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: PlaceReportHold | ReleaseReportHold,
+    ) -> _Result:
+        """`reports.hold.place` and `reports.hold.release`: one hold ledger event.
+
+        A report not found and a foreign one are one `not_found` on
+        `artifact_id`; a stale `expected_hold_revision` is `conflict` on it; a
+        placement on a held report or a release of one not held is `conflict`
+        (`hold_state`). A placement in a process without a report content store
+        is `unavailable` (`preservation_store`) and writes nothing; a seal that
+        cannot be written and verified is `internal_error`, and no hold row is
+        written. Nothing of the reason is logged.
+        """
+        authority = _custody_authority(authorization)
+        request = hold_request(command)
+        place = request.operation is HoldOperation.PLACE
+        if place and self._report_preservation_store is None:
+            raise UnavailableError(SafeDetail.PRESERVATION_STORE)
+        repository = unit_of_work.general_reports
+        refusal: ApplicationError
+        try:
+            if place:
+                result = repository.place_hold(
+                    request,
+                    principal_id=authorization.principal.principal_id,
+                    idempotency_key=command.idempotency_key,
+                    authority=authority,
+                    recorded_at=authorization.at,
+                    correlation_id=authorization.correlation_id,
+                    audit_id=authorization.audit_id,
+                    preservation_store=self._report_preservation_store,
+                    content_store=self._report_content_store,
+                )
+            else:
+                result = repository.release_hold(
+                    request,
+                    principal_id=authorization.principal.principal_id,
+                    idempotency_key=command.idempotency_key,
+                    authority=authority,
+                    recorded_at=authorization.at,
+                    correlation_id=authorization.correlation_id,
+                    audit_id=authorization.audit_id,
+                )
+        except ReportValidationError as error:
+            refusal = custody_refusal(error)
+        except ReportNotFoundError:
+            refusal = NotFoundError(SafeDetail.ARTIFACT_ID)
+        except ReportIdempotencyConflictError:
+            refusal = ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+        except ReportStaleHoldRevisionError:
+            refusal = ConflictError(SafeDetail.EXPECTED_HOLD_REVISION)
+        except ReportHoldStateError:
+            refusal = ConflictError(SafeDetail.HOLD_STATE)
+        except ReportPreservationUnavailableError:
+            refusal = UnavailableError(SafeDetail.PRESERVATION_STORE)
+        except (ReportPreservationError, ReportIntegrityError):
+            refusal = InternalError()
+        else:
+            return _Result(
+                payload=_hold_payload(result),
+                disclosure=unenrolled_disclosure(authorization.at),
+            )
+        raise refusal
+
+    def _reports_hold_place(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: PlaceReportHold,
+    ) -> _Result:
+        return self._reports_hold(unit_of_work, authorization, command)
+
+    def _reports_hold_release(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReleaseReportHold,
+    ) -> _Result:
+        return self._reports_hold(unit_of_work, authorization, command)
+
+    def _reports_retention_set(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: SetReportRetention,
+    ) -> _Result:
+        """`reports.retention.set`: append the next revision of the owner's retention policy.
+
+        A stale `expected_policy_revision` (a concurrent change included) is
+        `conflict` on it; a key bound to another request is `conflict`
+        (`idempotency_key`). Retention gates only purge eligibility.
+        """
+        authority = _custody_authority(authorization)
+        request = retention_set_request(command)
+        refusal: ApplicationError
+        try:
+            result = unit_of_work.general_reports.set_retention(
+                request,
+                principal_id=authorization.principal.principal_id,
+                idempotency_key=command.idempotency_key,
+                authority=authority,
+                recorded_at=authorization.at,
+                correlation_id=authorization.correlation_id,
+                audit_id=authorization.audit_id,
+            )
+        except ReportValidationError as error:
+            refusal = custody_refusal(error)
+        except ReportIdempotencyConflictError:
+            refusal = ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+        except ReportStalePolicyRevisionError:
+            refusal = ConflictError(SafeDetail.EXPECTED_POLICY_REVISION)
+        except ReportIntegrityError:
+            refusal = InternalError()
+        else:
+            return _Result(
+                payload=_retention_set_payload(result),
+                disclosure=unenrolled_disclosure(authorization.at),
+            )
+        raise refusal
+
+    def _reports_retention_get(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: GetReportRetention,
+    ) -> _Result:
+        """`reports.retention.get`: the policy, its history and one report's eligibility.
+
+        Eligibility is evaluated at the request clock (`authorization.at`); a
+        foreign or missing `report_id` is `not_found` on `artifact_id`.
+        """
+        _custody_authority(authorization)
+        principal_id = authorization.principal.principal_id
+        repository = unit_of_work.general_reports
+        refusal: ApplicationError
+        try:
+            view = repository.retention_policy(
+                principal_id=principal_id, history_limit=command.resolved_history_limit
+            )
+            eligibility = (
+                None
+                if command.report_id is None
+                else report_purge_eligibility(
+                    repository, command.report_id, principal_id=principal_id, now=authorization.at
+                )
+            )
+        except (ReportValidationError, ReportIntegrityError):
+            # A stored ledger the pure evaluation refuses is a server fault.
+            refusal = InternalError()
+        else:
+            if command.report_id is not None and eligibility is None:
+                raise NotFoundError(SafeDetail.ARTIFACT_ID)
+            return _Result(
+                payload=_retention_get_payload(
+                    view, report_id=command.report_id, eligibility=eligibility
+                ),
+                disclosure=unenrolled_disclosure(authorization.at),
+            )
+        raise refusal
+
     def _reports_history(
         self,
         unit_of_work: UnitOfWork,
@@ -18082,6 +18393,10 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.REPORTS_ARCHIVE: ApplicationService._reports_archive,
         Capability.REPORTS_DELETE: ApplicationService._reports_delete,
         Capability.REPORTS_RESTORE: ApplicationService._reports_restore,
+        Capability.REPORTS_HOLD_PLACE: ApplicationService._reports_hold_place,
+        Capability.REPORTS_HOLD_RELEASE: ApplicationService._reports_hold_release,
+        Capability.REPORTS_RETENTION_SET: ApplicationService._reports_retention_set,
+        Capability.REPORTS_RETENTION_GET: ApplicationService._reports_retention_get,
         Capability.ENTITIES_SEARCH: ApplicationService._entities_search,
         Capability.ENTITIES_GET: ApplicationService._entities_get,
         Capability.ENTITIES_RESOLVE: ApplicationService._entities_resolve,

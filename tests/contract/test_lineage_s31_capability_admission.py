@@ -293,7 +293,7 @@ def test_s31_capabilities_are_operator_decision_required() -> None:
     # WP02's `reports.publish` is `DATA_REQUIRED` since chatllm-data-v12, and
     # WP03's five since chatllm-data-v13).
     assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 2
-    assert len(Capability) == 246
+    assert len(Capability) == 250
     # P1 moved data-class members, so the ChatLLM data profile moved too.
     assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
 
@@ -717,6 +717,13 @@ def test_existing_non_lineage_v1_shapes_are_unchanged_by_s31() -> None:
         Capability.REPORTS_DELETE.value,
         Capability.REPORTS_RESTORE.value,
     }
+    # Reports Modernization WP05b: its four operator custody names, new too.
+    lineage |= {
+        Capability.REPORTS_HOLD_PLACE.value,
+        Capability.REPORTS_HOLD_RELEASE.value,
+        Capability.REPORTS_RETENTION_SET.value,
+        Capability.REPORTS_RETENTION_GET.value,
+    }
     # Reports Modernization WP04: `reports.list` and `reports.search` are
     # deliberately extended (the `plane` selector and catalog filters; their
     # legacy answers are pinned by
@@ -744,14 +751,17 @@ def test_existing_non_lineage_v1_shapes_are_unchanged_by_s31() -> None:
     # S3.1 adds no purpose: the envelope's purpose enum is the S4 one.
     published = TOOLS[0].input_schema["$defs"]["Purpose"]["enum"]
     # CPM Workbench S5b-2 appends its 2 purposes after them (contract 3.12),
-    # and Reports Modernization WP03 its `report_lifecycle` after those.
-    assert len(published) == len(Purpose) == 63
-    assert published[-5:] == [
+    # and Reports Modernization WP03 its `report_lifecycle` after those, and
+    # WP05b `report_hold` and `report_retention` after that.
+    assert len(published) == len(Purpose) == 65
+    assert published[-7:] == [
         "lineage_backfill",
         "program_reporting_read",
         "schedule_import",
         "schedule_read",
         "report_lifecycle",
+        "report_hold",
+        "report_retention",
     ]
     # Every non-lineage tool's annotations are untouched by the S3.1 hint.
     for tool in TOOLS:

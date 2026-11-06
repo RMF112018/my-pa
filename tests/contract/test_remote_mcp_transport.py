@@ -590,6 +590,11 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.REPORTS_ARCHIVE,
         Capability.REPORTS_DELETE,
         Capability.REPORTS_RESTORE,
+        # Reports Modernization WP05b: the 3 operator custody writes (destructive
+        # too); `reports.retention.get` is a read.
+        Capability.REPORTS_HOLD_PLACE,
+        Capability.REPORTS_HOLD_RELEASE,
+        Capability.REPORTS_RETENTION_SET,
         Capability.RELATIONSHIP_MEMORY_CREATE,
         Capability.RELATIONSHIP_MEMORY_REVISE,
         Capability.RELATIONSHIP_MEMORY_ARCHIVE,
@@ -675,6 +680,9 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.REPORTS_ARCHIVE,
         Capability.REPORTS_DELETE,
         Capability.REPORTS_RESTORE,
+        Capability.REPORTS_HOLD_PLACE,
+        Capability.REPORTS_HOLD_RELEASE,
+        Capability.REPORTS_RETENTION_SET,
         Capability.CAPTURE_REVISE,
         Capability.CAPTURE_ARCHIVE,
         Capability.CAPTURE_RESTORE,

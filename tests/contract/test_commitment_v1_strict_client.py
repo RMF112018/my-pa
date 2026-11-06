@@ -194,6 +194,11 @@ def test_v1_tool_schemas_are_unchanged_by_s4() -> None:
         "reports.archive",
         "reports.delete",
         "reports.restore",
+        # WP05b's four operator custody names, new too.
+        "reports.hold.place",
+        "reports.hold.release",
+        "reports.retention.set",
+        "reports.retention.get",
     }
     # Reports Modernization WP04: the extended `reports.list` and `reports.search`.
     excluded |= {"reports.list", "reports.search"}
@@ -211,17 +216,20 @@ def test_v1_tool_schemas_are_unchanged_by_s4() -> None:
     assert len(enums) == 1
     published = json.loads(enums.pop())
     # CPM Workbench S5b-2 appends its 2 purposes after the S4 one (contract 3.12),
-    # and Reports Modernization WP03 appends `report_lifecycle` after those.
-    assert len(published) == 63
-    basis = published[:-4]
+    # and Reports Modernization WP03 appends `report_lifecycle` after those, and
+    # WP05b `report_hold` and `report_retention` after that.
+    assert len(published) == 65
+    basis = published[:-6]
     assert hashlib.sha256(json.dumps(basis, separators=(",", ":")).encode("utf-8")).hexdigest() == (
         BASIS_PURPOSE_ENUM_SHA256
     )
-    assert published[-4:] == [
+    assert published[-6:] == [
         "program_reporting_read",
         "schedule_import",
         "schedule_read",
         "report_lifecycle",
+        "report_hold",
+        "report_retention",
     ]
     assert "program_reporting_read" not in basis
 

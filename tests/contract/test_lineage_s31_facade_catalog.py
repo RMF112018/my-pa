@@ -185,6 +185,11 @@ def test_non_lineage_tool_annotations_are_unchanged() -> None:
         Capability.REPORTS_ARCHIVE.value,
         Capability.REPORTS_DELETE.value,
         Capability.REPORTS_RESTORE.value,
+        # And WP05b's four operator custody names, new and pinned the same way.
+        Capability.REPORTS_HOLD_PLACE.value,
+        Capability.REPORTS_HOLD_RELEASE.value,
+        Capability.REPORTS_RETENTION_SET.value,
+        Capability.REPORTS_RETENTION_GET.value,
     }
     others = frozenset(_tools()) - plane - schedule - {Capability.REPORTS_PUBLISH.value} - wp03
     assert len(others) == 192

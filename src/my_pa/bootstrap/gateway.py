@@ -87,7 +87,7 @@ principal is the only principal; no credential is issued, read, or required.
 `OPERATOR` rather than `GATEWAY` because the process *is* the operator's local
 transport — a `GATEWAY` principal cannot invoke `sources.enroll`, so the choice
 is between naming what this is and shipping a transport that cannot reach one of
-the 246 capabilities.
+the 250 capabilities.
 
 `entra` composes `entra_authenticator` instead and issues **no** process
 principal. Every request presents a bearer token, the token's validated
@@ -1355,6 +1355,9 @@ def build_gateway_runtime(
             # configured) and the inline threshold settings validated.
             report_content_store=report_content_store(settings, work_engine),
             report_content_inline_max_bytes=settings.report_content_inline_max_bytes,
+            # WP05b H4: the same root's `preservation` namespace, where a hold
+            # placement seals its copy (`None` when no root: placement refused).
+            report_preservation_store=report_preservation_store(settings, work_engine),
         ),
         principal=principal,
         authenticate=entra_authenticator(settings, control_engine) if entra else None,

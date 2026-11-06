@@ -801,6 +801,26 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "expected_lifecycle_revision": 1,
             "idempotency_key": "negative-restore",
         },
+        # Reports Modernization WP05b: the operator custody names on a staged report.
+        Capability.REPORTS_HOLD_PLACE: {
+            "report_id": staged_general_report(marked, label="hold"),
+            "expected_hold_revision": 0,
+            "reason": "Synthetic hold.",
+            "idempotency_key": "negative-hold-place",
+        },
+        Capability.REPORTS_HOLD_RELEASE: {
+            "report_id": staged_general_report(marked, held=True, label="release"),
+            "expected_hold_revision": 1,
+            "reason": "Synthetic release.",
+            "idempotency_key": "negative-hold-release",
+        },
+        Capability.REPORTS_RETENTION_SET: {
+            "expected_policy_revision": 0,
+            "reason": "Synthetic retention.",
+            "idempotency_key": "negative-retention-set",
+            "period": {"count": 5, "unit": "years"},
+        },
+        Capability.REPORTS_RETENTION_GET: {},
         # The relationship-intelligence entity plane (WP-RI-05), and its payloads
         # carry no marker, deliberately. Every one of the five is a read whose
         # input is an identifier or a name the *request* supplies and the answer
@@ -2198,6 +2218,11 @@ SCOPED_CAPABILITIES = [
         Capability.REPORTS_ARCHIVE,
         Capability.REPORTS_DELETE,
         Capability.REPORTS_RESTORE,
+        # Reports Modernization WP05b: the owner's root and retention policy.
+        Capability.REPORTS_HOLD_PLACE,
+        Capability.REPORTS_HOLD_RELEASE,
+        Capability.REPORTS_RETENTION_SET,
+        Capability.REPORTS_RETENTION_GET,
         # The relationship-intelligence entity plane (WP-RI-05) is scopeless for
         # the reason the two planes above are: an entity belongs to no `src_…`
         # and no `enr_…`, so there is no scope for a request to name and none to

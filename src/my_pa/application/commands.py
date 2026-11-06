@@ -339,6 +339,17 @@ from my_pa.domain.reports.content import (
     validate_content_structure,
 )
 from my_pa.domain.reports.creator import CREATOR_ID_PATTERN
+from my_pa.domain.reports.custody import (
+    DEFAULT_RETENTION_HISTORY,
+    MAX_RETENTION_DAYS,
+    MAX_RETENTION_HISTORY,
+    MAX_RETENTION_YEARS,
+    HoldOperation,
+    HoldRequest,
+    RetentionPeriod,
+    RetentionSetRequest,
+    RetentionUnit,
+)
 from my_pa.domain.reports.errors import ReportValidationError
 from my_pa.domain.reports.publication import (
     CLIENT_INTENT_ID_PATTERN,
@@ -6571,6 +6582,270 @@ GetGeneralReportHistory.mcp_payload_properties = MappingProxyType(  # type: igno
         "include_manifests": {"description": "versions only: add each version's manifest."},
         "include_withdrawn": {
             "description": "Also page an archived or trashed report, otherwise not found."
+        },
+    }
+)
+
+
+# ---- Reports Modernization WP05b: operator custody (holds and retention) ----
+
+#: Which public token a custody request refusal names (by the domain's field).
+_CUSTODY_REFUSAL_DETAILS: Final[Mapping[str, SafeDetail]] = MappingProxyType(
+    {
+        "report_id": SafeDetail.ARTIFACT_ID,
+        "expected_hold_revision": SafeDetail.EXPECTED_HOLD_REVISION,
+        "expected_policy_revision": SafeDetail.EXPECTED_POLICY_REVISION,
+        "reason": SafeDetail.REASON,
+        "period": SafeDetail.PERIOD,
+    }
+)
+
+
+def custody_refusal(error: ReportValidationError) -> ApplicationError:
+    """The public error a WP05b custody domain refusal is: its request field, or bare."""
+    detail = _CUSTODY_REFUSAL_DETAILS.get(error.field.split(".", 1)[0])
+    return InvalidRequestError() if detail is None else InvalidRequestError(detail)
+
+
+def _custody_revision(value: object, detail: SafeDetail) -> None:
+    if type(value) is not int or value < 0:
+        raise InvalidRequestError(detail)
+
+
+@dataclass(frozen=True, slots=True)
+class PlaceReportHold:
+    """`reports.hold.place`: place a legal hold on one of your standalone reports (operator only).
+
+    Local operator surface only (the CLI or the HTTP gateway's operator
+    surface); every other caller is `denied` before anything is read. Before
+    the hold is recorded, a sealed, digest-verified preservation copy of every
+    version, content object and lifecycle event is written to the report
+    content store; a process without one refuses (`unavailable`,
+    `preservation_store`). `expected_hold_revision` is the `hold_revision` you
+    read (0 for a report never held); any other is `conflict`. A held report
+    cannot be moved to the Trash (`reports.delete` is `denied`, `report_held`);
+    archive, restore, update and every read are unaffected. `reason` is
+    required (at most 500 characters). A retry of the same request replays.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_HOLD_PLACE
+
+    report_id: str
+    expected_hold_revision: int
+    reason: str = field(repr=False)
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _idempotency_key(self.idempotency_key)
+        hold_request(self)
+
+
+@dataclass(frozen=True, slots=True)
+class ReleaseReportHold:
+    """`reports.hold.release`: release the legal hold on one of your reports (operator only).
+
+    As `reports.hold.place`: local operator surface only, the same
+    `expected_hold_revision` precondition and required `reason`. Releasing a
+    report that is not held is `conflict` (`hold_state`). The preservation
+    copy is kept. A retry of the same request replays.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_HOLD_RELEASE
+
+    report_id: str
+    expected_hold_revision: int
+    reason: str = field(repr=False)
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _idempotency_key(self.idempotency_key)
+        hold_request(self)
+
+
+#: The hold operation each of the two hold capabilities requests.
+_HOLD_OPERATIONS: Final[Mapping[Capability, HoldOperation]] = MappingProxyType(
+    {
+        Capability.REPORTS_HOLD_PLACE: HoldOperation.PLACE,
+        Capability.REPORTS_HOLD_RELEASE: HoldOperation.RELEASE,
+    }
+)
+
+
+def hold_request(command: PlaceReportHold | ReleaseReportHold) -> HoldRequest:
+    """The domain request `command` states, or the public refusal of it."""
+    _identifier(command.report_id, IdKind.REPORT, SafeDetail.ARTIFACT_ID)
+    _custody_revision(command.expected_hold_revision, SafeDetail.EXPECTED_HOLD_REVISION)
+    if type(command.reason) is not str:
+        raise InvalidRequestError(SafeDetail.REASON)
+    refusal: ApplicationError
+    try:
+        return HoldRequest(
+            operation=_HOLD_OPERATIONS[command.capability],
+            report_id=command.report_id,
+            expected_hold_revision=command.expected_hold_revision,
+            reason=command.reason,
+        )
+    except ReportValidationError as error:
+        refusal = custody_refusal(error)
+    raise refusal
+
+
+#: The keys a retention `period` object takes, both required.
+_RETENTION_PERIOD_KEYS: Final = frozenset({"count", "unit"})
+
+
+def _retention_period(value: object) -> RetentionPeriod:
+    """`{count, unit}` as a `RetentionPeriod`, or `invalid_request` (`period`)."""
+    if not isinstance(value, dict) or set(value) != _RETENTION_PERIOD_KEYS:
+        raise InvalidRequestError(SafeDetail.PERIOD)
+    unit = value["unit"]
+    if not isinstance(unit, str):
+        raise invalid_choice(SafeDetail.PERIOD, RetentionUnit)
+    try:
+        resolved = RetentionUnit(unit)
+    except ValueError:
+        raise invalid_choice(SafeDetail.PERIOD, RetentionUnit) from None
+    count = value["count"]
+    if type(count) is not int:
+        raise InvalidRequestError(SafeDetail.PERIOD)
+    refusal: ApplicationError
+    try:
+        return RetentionPeriod(count=count, unit=resolved)
+    except ReportValidationError:
+        refusal = InvalidRequestError(SafeDetail.PERIOD)
+    raise refusal
+
+
+@dataclass(frozen=True, slots=True)
+class SetReportRetention:
+    """`reports.retention.set`: set or unset your report retention policy (operator only).
+
+    Local operator surface only. Exactly one of `period` (`{count, unit}`:
+    1..36525 `days` or 1..100 `years`) and `unset: true`. Unset by default:
+    no period applies until one is set. `expected_policy_revision` is the
+    `policy_revision` you read (0 before the first change); any other is
+    `conflict`. Every change is appended to the policy history (who, when, old,
+    new); nothing is overwritten. Retention gates only purge eligibility, and
+    purge does not exist: it never blocks an update, archive, restore or
+    Trash. `reason` is required. A retry of the same request replays.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_RETENTION_SET
+
+    expected_policy_revision: int
+    reason: str = field(repr=False)
+    idempotency_key: str
+    period: dict[str, object] | None = None
+    unset: bool = False
+
+    def __post_init__(self) -> None:
+        _idempotency_key(self.idempotency_key)
+        retention_set_request(self)
+
+
+def retention_set_request(command: SetReportRetention) -> RetentionSetRequest:
+    """The domain request `command` states, or the public refusal of it."""
+    _custody_revision(command.expected_policy_revision, SafeDetail.EXPECTED_POLICY_REVISION)
+    if type(command.unset) is not bool:
+        raise InvalidRequestError(SafeDetail.UNSET)
+    if (command.period is None) != command.unset:
+        # Neither, both, or `unset: false` with no period.
+        raise InvalidRequestError(SafeDetail.PERIOD, SafeDetail.UNSET)
+    period = None if command.period is None else _retention_period(command.period)
+    if type(command.reason) is not str:
+        raise InvalidRequestError(SafeDetail.REASON)
+    refusal: ApplicationError
+    try:
+        return RetentionSetRequest(
+            period=period,
+            expected_policy_revision=command.expected_policy_revision,
+            reason=command.reason,
+        )
+    except ReportValidationError as error:
+        refusal = custody_refusal(error)
+    raise refusal
+
+
+@dataclass(frozen=True, slots=True)
+class GetReportRetention:
+    """`reports.retention.get`: your report retention policy and its history (operator only).
+
+    Local operator surface only. The current policy (`null` when never set or
+    unset), its newest-first change history (`history_limit` 1..50, default
+    20) and, with `report_id`, that report's purge eligibility now: `eligible`
+    and the first reason that applies (`no_policy`, `held`, `not_trashed`,
+    `retention_running`, `eligible`), the clock start (the report's most
+    recent move to the Trash) and `eligible_at`. Informational only: nothing
+    is ever purged.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_RETENTION_GET
+
+    report_id: str | None = None
+    history_limit: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.report_id is not None:
+            _identifier(self.report_id, IdKind.REPORT, SafeDetail.ARTIFACT_ID)
+        _positive(self.history_limit, SafeDetail.HISTORY_LIMIT)
+        if self.history_limit is not None and self.history_limit > MAX_RETENTION_HISTORY:
+            raise InvalidRequestError(SafeDetail.HISTORY_LIMIT)
+
+    @property
+    def resolved_history_limit(self) -> int:
+        """The history page asked for, else 20."""
+        return DEFAULT_RETENTION_HISTORY if self.history_limit is None else self.history_limit
+
+
+_HOLD_PAYLOAD_PROPERTIES: Final[Mapping[str, Any]] = MappingProxyType(
+    {
+        "report_id": dict(_REPORT_ID_SCHEMA),
+        "expected_hold_revision": {
+            "minimum": 0,
+            "description": "The hold_revision you read (0 if never held); any other is a conflict.",
+        },
+        "reason": {"minLength": 1, "maxLength": MAX_REASON_CHARACTERS},
+    }
+)
+PlaceReportHold.mcp_payload_properties = _HOLD_PAYLOAD_PROPERTIES  # type: ignore[attr-defined]
+ReleaseReportHold.mcp_payload_properties = _HOLD_PAYLOAD_PROPERTIES  # type: ignore[attr-defined]
+SetReportRetention.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {
+        "expected_policy_revision": {
+            "minimum": 0,
+            "description": "The policy_revision you read (0 if never set); others conflict.",
+        },
+        "reason": {"minLength": 1, "maxLength": MAX_REASON_CHARACTERS},
+        "period": {
+            "type": "object",
+            "description": "The new retention period. Exactly one of period and unset.",
+            "properties": {
+                "count": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": max(MAX_RETENTION_DAYS, MAX_RETENTION_YEARS),
+                    "description": (
+                        f"1..{MAX_RETENTION_DAYS} days or 1..{MAX_RETENTION_YEARS} years."
+                    ),
+                },
+                "unit": {"type": "string", "enum": [member.value for member in RetentionUnit]},
+            },
+            "required": ["count", "unit"],
+            "additionalProperties": False,
+        },
+        "unset": {"description": "true to unset the policy. Exactly one of period and unset."},
+    }
+)
+GetReportRetention.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {
+        "report_id": {
+            **_REPORT_ID_SCHEMA,
+            "description": "Optional: also that report's purge eligibility.",
+        },
+        "history_limit": {
+            "minimum": 1,
+            "maximum": MAX_RETENTION_HISTORY,
+            "description": f"Default {DEFAULT_RETENTION_HISTORY}.",
         },
     }
 )
@@ -16479,6 +16754,10 @@ type Command = (
     | ArchiveGeneralReport
     | DeleteGeneralReport
     | RestoreGeneralReport
+    | PlaceReportHold
+    | ReleaseReportHold
+    | SetReportRetention
+    | GetReportRetention
     | SearchEntities
     | GetEntity
     | ResolveEntity

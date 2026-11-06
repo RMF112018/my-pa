@@ -156,6 +156,7 @@ from my_pa.application.commands import (
     GetRecordEventProvenance,
     GetRelationshipMemory,
     GetRelationshipMemoryHistory,
+    GetReportRetention,
     GetSourceMetadata,
     GetSourceStatus,
     GetTaskHistory,
@@ -201,6 +202,7 @@ from my_pa.application.commands import (
     ListUnresolvedMentions,
     MergeEntities,
     ObserveEntityMention,
+    PlaceReportHold,
     PlanLineageBackfill,
     PrepareContext,
     PreviewConstraintSync,
@@ -246,6 +248,7 @@ from my_pa.application.commands import (
     RecordIssueHandoff,
     RecordTask,
     ReinstateRecordAssociation,
+    ReleaseReportHold,
     ReopenConstraint,
     ReopenIssue,
     ReorderConstraintCategories,
@@ -290,6 +293,7 @@ from my_pa.application.commands import (
     SearchPortfolioConstraints,
     SearchRelationshipMemories,
     SearchTasks,
+    SetReportRetention,
     SplitEntity,
     StartGsqsB0,
     SubmitGoodNotesProposal,
@@ -1937,6 +1941,25 @@ def _restore_general_report(payload: Mapping[str, Any]) -> Command:
     return RestoreGeneralReport(**_general_report_fields(payload, RestoreGeneralReport))
 
 
+def _place_report_hold(payload: Mapping[str, Any]) -> Command:
+    """`reports.hold.place` (WP05b): server-owned fields (`held`, `hold_revision`
+    as a result, `authority_class`, `decision_channel`, `principal_id`, ...) are
+    undeclared and so refused, as every general-report write refuses them."""
+    return PlaceReportHold(**_general_report_fields(payload, PlaceReportHold))
+
+
+def _release_report_hold(payload: Mapping[str, Any]) -> Command:
+    return ReleaseReportHold(**_general_report_fields(payload, ReleaseReportHold))
+
+
+def _set_report_retention(payload: Mapping[str, Any]) -> Command:
+    return SetReportRetention(**_general_report_fields(payload, SetReportRetention))
+
+
+def _get_report_retention(payload: Mapping[str, Any]) -> Command:
+    return GetReportRetention(**_general_report_fields(payload, GetReportRetention))
+
+
 def _general_report_history(payload: Mapping[str, Any]) -> Command:
     """`reports.history`: `entries` arrives as its wire string."""
     converted = _general_report_fields(payload, GetGeneralReportHistory)
@@ -2942,6 +2965,11 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.REPORTS_ARCHIVE: _archive_general_report,
         Capability.REPORTS_DELETE: _delete_general_report,
         Capability.REPORTS_RESTORE: _restore_general_report,
+        # Reports Modernization WP05b: the operator custody capabilities.
+        Capability.REPORTS_HOLD_PLACE: _place_report_hold,
+        Capability.REPORTS_HOLD_RELEASE: _release_report_hold,
+        Capability.REPORTS_RETENTION_SET: _set_report_retention,
+        Capability.REPORTS_RETENTION_GET: _get_report_retention,
         Capability.ENTITIES_SEARCH: _search_entities,
         Capability.ENTITIES_GET: _get_entity,
         Capability.ENTITIES_RESOLVE: _resolve_entity,

@@ -103,6 +103,13 @@ async def test_full_inventory_catalog_without_execution(scene: Scene) -> None:
         # CPM Workbench S5b-2 (contract section 3.13.2): the operator-only,
         # attested-local schedule import is never remotely published.
         Capability.SCHEDULE_PUBLICATIONS_IMPORT.value,
+        # Reports Modernization WP05b (operator decision 2026-11-05, H1): report
+        # holds and retention are operator-only and attested to the local
+        # operator surface, so `my_pa.describe` never lists them.
+        Capability.REPORTS_HOLD_PLACE.value,
+        Capability.REPORTS_HOLD_RELEASE.value,
+        Capability.REPORTS_RETENTION_SET.value,
+        Capability.REPORTS_RETENTION_GET.value,
     }
     # The deployed 190 remain individually present after main added report types
     # and record lineage S1 added the `issues.`, `records.` and `meetings.notes.` names.
@@ -123,6 +130,11 @@ async def test_full_inventory_catalog_without_execution(scene: Scene) -> None:
             "reports.archive",
             "reports.delete",
             "reports.restore",
+            # Nor WP05b's four operator custody names.
+            "reports.hold.place",
+            "reports.hold.release",
+            "reports.retention.set",
+            "reports.retention.get",
         }
     }
     assert len(deployed) == 190

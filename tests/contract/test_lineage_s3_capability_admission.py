@@ -378,6 +378,13 @@ def test_existing_v1_shapes_are_unchanged_by_s3() -> None:
         Capability.REPORTS_DELETE.value,
         Capability.REPORTS_RESTORE.value,
     }
+    # Reports Modernization WP05b: its four operator custody names, new too.
+    lineage |= {
+        Capability.REPORTS_HOLD_PLACE.value,
+        Capability.REPORTS_HOLD_RELEASE.value,
+        Capability.REPORTS_RETENTION_SET.value,
+        Capability.REPORTS_RETENTION_GET.value,
+    }
     # Reports Modernization WP04: see `_V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_CATALOG`.
     lineage |= {Capability.REPORTS_LIST.value, Capability.REPORTS_SEARCH.value}
     payloads = {
@@ -405,14 +412,17 @@ def test_existing_v1_shapes_are_unchanged_by_s3() -> None:
     basis_tail = ["record_lineage_authoring", "meeting_note_history_read", "issue_work_authoring"]
     published = TOOLS[0].input_schema["$defs"]["Purpose"]["enum"]
     # CPM Workbench S5b-2 appends its 2 purposes after S4's (contract 3.12),
-    # and Reports Modernization WP03 its `report_lifecycle` after those.
-    assert published[-8:] == [
+    # and Reports Modernization WP03 its `report_lifecycle` after those, and
+    # WP05b `report_hold` and `report_retention` after that.
+    assert published[-10:] == [
         *basis_tail,
         "lineage_backfill",
         "program_reporting_read",
         "schedule_import",
         "schedule_read",
         "report_lifecycle",
+        "report_hold",
+        "report_retention",
     ]
 
 

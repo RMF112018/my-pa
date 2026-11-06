@@ -147,7 +147,9 @@ def test_tools_list_publishes_exactly_the_local_capability_set(
         for capability in HANDLER_CAPABILITIES
         if capability not in _AUTHENTICATED_CLIENT_CAPABILITIES
     ]
-    assert len(listed.tools) == 241
+    # WP05b: the 4 custody names are listed over stdio as the attested confirms
+    # are; the handler denies them there (no operator surface).
+    assert len(listed.tools) == 245
     assert all(tool.description for tool in listed.tools), "a tool has no description"
 
 
@@ -156,7 +158,7 @@ def test_handler_unwired_capabilities_publish_no_mcp_tools() -> None:
     assert {tool.name for tool in TOOLS} == {
         capability.value for capability in HANDLER_CAPABILITIES
     }
-    assert len(TOOLS) == 246
+    assert len(TOOLS) == 250
     assert not {capability.value for capability in HANDLER_UNWIRED_CAPABILITIES} & {
         tool.name for tool in TOOLS
     }

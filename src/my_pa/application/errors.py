@@ -698,6 +698,22 @@ class SafeDetail(StrEnum):
     #: (a foreign or absent one is still `not_found`, so it only ever describes
     #: the caller's own root, exactly as `REPORT_WITHDRAWN`).
     REPORT_HELD = "report_held"
+    #: Reports Modernization WP05b (Part C): the operator custody capabilities.
+    #: `EXPECTED_HOLD_REVISION` and `EXPECTED_POLICY_REVISION` name a stale (or
+    #: malformed) precondition of `reports.hold.*` and `reports.retention.set`;
+    #: `HOLD_STATE` a placement on a held report or a release of one not held;
+    #: `PERIOD` and `UNSET` the retention change (exactly one of them);
+    #: `HISTORY_LIMIT` the `reports.retention.get` history page bound; and
+    #: `PRESERVATION_STORE`, the `unavailable` subject of a placement in a
+    #: process composed without a report content store (H4: no store, no hold).
+    #: `ARTIFACT_ID`, `REASON` and `IDEMPOTENCY_KEY` are reused.
+    EXPECTED_HOLD_REVISION = "expected_hold_revision"
+    EXPECTED_POLICY_REVISION = "expected_policy_revision"
+    HOLD_STATE = "hold_state"
+    PERIOD = "period"
+    UNSET = "unset"
+    HISTORY_LIMIT = "history_limit"
+    PRESERVATION_STORE = "preservation_store"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

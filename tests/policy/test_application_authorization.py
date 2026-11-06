@@ -145,6 +145,7 @@ from my_pa.application.commands import (
     GetRecordEventProvenance,
     GetRelationshipMemory,
     GetRelationshipMemoryHistory,
+    GetReportRetention,
     GetSourceMetadata,
     GetSourceStatus,
     GetTaskHistory,
@@ -190,6 +191,7 @@ from my_pa.application.commands import (
     ListUnresolvedMentions,
     MergeEntities,
     ObserveEntityMention,
+    PlaceReportHold,
     PlanLineageBackfill,
     PrepareContext,
     PreviewConstraintSync,
@@ -235,6 +237,7 @@ from my_pa.application.commands import (
     RecordIssueHandoff,
     RecordTask,
     ReinstateRecordAssociation,
+    ReleaseReportHold,
     ReopenConstraint,
     ReopenIssue,
     ReorderConstraintCategories,
@@ -278,6 +281,7 @@ from my_pa.application.commands import (
     SearchPortfolioConstraints,
     SearchRelationshipMemories,
     SearchTasks,
+    SetReportRetention,
     SplitEntity,
     StartGsqsB0,
     SubmitGoodNotesProposal,
@@ -714,6 +718,26 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             expected_lifecycle_revision=1,
             idempotency_key="policy-restore",
         ),
+        # Reports Modernization WP05b: the operator custody names.
+        Capability.REPORTS_HOLD_PLACE: PlaceReportHold(
+            report_id=staged_general_report(scene, label="hold"),
+            expected_hold_revision=0,
+            reason="Synthetic hold.",
+            idempotency_key="policy-hold-place",
+        ),
+        Capability.REPORTS_HOLD_RELEASE: ReleaseReportHold(
+            report_id=staged_general_report(scene, held=True, label="release"),
+            expected_hold_revision=1,
+            reason="Synthetic release.",
+            idempotency_key="policy-hold-release",
+        ),
+        Capability.REPORTS_RETENTION_SET: SetReportRetention(
+            expected_policy_revision=0,
+            reason="Synthetic retention.",
+            idempotency_key="policy-retention-set",
+            period={"count": 5, "unit": "years"},
+        ),
+        Capability.REPORTS_RETENTION_GET: GetReportRetention(),
         # The entity plane. Every identifier is minted rather than staged, for
         # the reason this table exists: a denial test must fail on the authority
         # and on nothing else, and an entity that existed would let a
@@ -1874,6 +1898,11 @@ SCOPED_CAPABILITIES = [
         Capability.REPORTS_ARCHIVE,
         Capability.REPORTS_DELETE,
         Capability.REPORTS_RESTORE,
+        # Reports Modernization WP05b: the owner's root and retention policy.
+        Capability.REPORTS_HOLD_PLACE,
+        Capability.REPORTS_HOLD_RELEASE,
+        Capability.REPORTS_RETENTION_SET,
+        Capability.REPORTS_RETENTION_GET,
         # The entity plane is a read plane over the acting Principal's own
         # entities. An entity carries no enrollment a requested scope could be
         # compared against — it is the Principal's own record of a person, not
@@ -2224,6 +2253,11 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.REPORTS_ARCHIVE,
         Capability.REPORTS_DELETE,
         Capability.REPORTS_RESTORE,
+        # Reports Modernization WP05b: the owner's root and retention policy.
+        Capability.REPORTS_HOLD_PLACE,
+        Capability.REPORTS_HOLD_RELEASE,
+        Capability.REPORTS_RETENTION_SET,
+        Capability.REPORTS_RETENTION_GET,
         Capability.ENTITIES_SEARCH,
         Capability.ENTITIES_GET,
         Capability.ENTITIES_RESOLVE,

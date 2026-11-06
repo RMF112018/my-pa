@@ -1164,8 +1164,16 @@ def test_v12_adds_exactly_reports_publish_on_every_composition() -> None:
         assert publish in desired, planes
         # `reports.manifest` stays program-reporting conditional; every other
         # `reports.*` name is required on every composition (WP03's five since
-        # chatllm-data-v13).
-        assert reports - {Capability.REPORTS_MANIFEST} <= desired, planes
+        # chatllm-data-v13) but WP05b's four operator custody names, which are
+        # control-plane excluded and never desired.
+        custody = {
+            Capability.REPORTS_HOLD_PLACE,
+            Capability.REPORTS_HOLD_RELEASE,
+            Capability.REPORTS_RETENTION_SET,
+            Capability.REPORTS_RETENTION_GET,
+        }
+        assert reports - {Capability.REPORTS_MANIFEST} - custody <= desired, planes
+        assert not custody & desired, planes
 
 
 def test_a_v11_converged_client_plans_exactly_the_reports_publish_add() -> None:

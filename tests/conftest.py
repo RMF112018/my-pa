@@ -11563,6 +11563,11 @@ class Scene:
 _COMPOSE_CONSTRAINTS: Final = cast("Callable[[], ConstraintManagementUnitOfWork]", object())
 
 
+#: WP05b: "not stated" for `build_service`'s preservation store, distinct from the
+#: meaningful `None` (no store composed), on the `_COMPOSE_CONSTRAINTS` precedent.
+_COMPOSE_PRESERVATION: Final = cast("ReportContentStore", object())
+
+
 def _unopened_program_read() -> ProgramReadUnitOfWork:
     """Record lineage S4: a composed Program read factory that FAST never opens."""
     raise AssertionError("a FAST test opened a Program read; prove it against a server")
@@ -11593,6 +11598,7 @@ def build_service(
     ) = _COMPOSE_CONSTRAINTS,
     report_content_store: ReportContentStore | None = None,
     report_content_inline_max_bytes: int = INLINE_CONTENT_MAX_BYTES,
+    report_preservation_store: ReportContentStore | None = _COMPOSE_PRESERVATION,
 ) -> ApplicationService:
     """The service under test, with a fixed clock and in-memory repositories.
 
@@ -11720,6 +11726,14 @@ def build_service(
         # backward-compatible default: content above the threshold is refused).
         report_content_store=report_content_store,
         report_content_inline_max_bytes=report_content_inline_max_bytes,
+        # WP05b H4: a fresh in-memory preservation store per service unless a
+        # test states one; an explicit `None` is the uncomposed build, whose hold
+        # placement is refused (`unavailable`, `preservation_store`).
+        report_preservation_store=(
+            InMemoryReportContentStore(ReportContentNamespace.PRESERVATION)
+            if report_preservation_store is _COMPOSE_PRESERVATION
+            else report_preservation_store
+        ),
     )
 
 
@@ -11948,7 +11962,9 @@ def staged_continuity_project(scene: Scene, *, name: str = "a synthetic project"
     return project
 
 
-def staged_general_report(scene: Scene, *, archived: bool = False, label: str = "") -> str:
+def staged_general_report(
+    scene: Scene, *, archived: bool = False, label: str = "", held: bool = False
+) -> str:
     """One standalone report in `scene`'s world (Reports Modernization WP03), its `grpt_` id.
 
     Written through the in-memory port, as `staged_capture` is. Idempotent: the
@@ -11957,10 +11973,17 @@ def staged_general_report(scene: Scene, *, archived: bool = False, label: str = 
     archived once (lifecycle revision 1), so `reports.restore` has a legal move.
     A `label` stages a further distinct report under that name, so a table
     driving every capability over one world gives each lifecycle move its own.
+    `held=True` (WP05b) stages it under a legal hold (hold revision 1), sealed
+    into a throwaway in-memory preservation store, so `reports.hold.release`
+    has a legal move.
     """
     reports = _GeneralReports(scene.world)
     principal_id = scene.principal.principal_id
-    suffix = ("archived" if archived else "active") + (f"-{label}" if label else "")
+    suffix = (
+        ("archived" if archived else "active")
+        + ("-held" if held else "")
+        + (f"-{label}" if label else "")
+    )
     published = reports.publish(
         PublicationRequest(
             title=f"a synthetic {suffix} standalone report",
@@ -11987,6 +12010,18 @@ def staged_general_report(scene: Scene, *, archived: bool = False, label: str = 
             recorded_at=WHEN,
             correlation_id=issue_identifier(IdKind.CORRELATION),
             audit_id=issue_identifier(IdKind.AUDIT),
+        )
+    if held:
+        reports.place_hold(
+            HoldRequest(HoldOperation.PLACE, report_id, 0, "Synthetic staged hold."),
+            principal_id=principal_id,
+            idempotency_key=f"staged-general-report-hold-{suffix}",
+            authority=CustodyAuthority("local_operator", "local_cli"),
+            recorded_at=WHEN,
+            correlation_id=issue_identifier(IdKind.CORRELATION),
+            audit_id=issue_identifier(IdKind.AUDIT),
+            preservation_store=InMemoryReportContentStore(ReportContentNamespace.PRESERVATION),
+            content_store=None,
         )
     return report_id
 

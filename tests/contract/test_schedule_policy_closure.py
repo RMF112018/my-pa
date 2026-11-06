@@ -227,20 +227,22 @@ def _capability_enum(scene: Scene) -> None:
     assert [(member.name, member.value) for member in members[-7:]] == [
         (name, value) for name, value, _, _ in _TABLE
     ]
-    # Reports Modernization WP03 declares its five beside `reports.publish`.
-    assert len(members) == 246
+    # Reports Modernization WP03 declares its five beside `reports.publish`, and
+    # WP05b its four custody names after them.
+    assert len(members) == 250
 
 
 def _purpose_enum(scene: Scene) -> None:
     del scene
     members = list(Purpose)
-    # Reports Modernization WP03 appends `report_lifecycle` after the two.
-    assert [(member.name, member.value) for member in members[-3:-1]] == [
+    # Reports Modernization WP03 appends `report_lifecycle` after the two, and
+    # WP05b `report_hold` and `report_retention` after it.
+    assert [(member.name, member.value) for member in members[-5:-3]] == [
         ("SCHEDULE_IMPORT", "schedule_import"),
         ("SCHEDULE_READ", "schedule_read"),
     ]
-    assert members[-1] is Purpose.REPORT_LIFECYCLE
-    assert len(members) == 63
+    assert members[-3:] == [Purpose.REPORT_LIFECYCLE, Purpose.REPORT_HOLD, Purpose.REPORT_RETENTION]
+    assert len(members) == 65
 
 
 def _operator_only(scene: Scene) -> None:
@@ -506,7 +508,7 @@ def test_import_is_control_plane_excluded() -> None:
 
 def test_v11_targets() -> None:
     assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
-    assert len(CHATLLM_CAPABILITY_POLICY) == 246
+    assert len(CHATLLM_CAPABILITY_POLICY) == 250
     # chatllm-data-v12: `reports.publish` (`DATA_REQUIRED`) adds 1 everywhere;
     # chatllm-data-v13: the 5 report management names add 5 everywhere.
     full = _desired(_planes(**_FULL))

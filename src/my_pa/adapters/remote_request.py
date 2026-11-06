@@ -364,6 +364,15 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.RECORDS_ASSOCIATIONS_CONFIRM,
         Capability.ISSUES_MEMBERSHIPS_CONFIRM,
         Capability.ISSUES_PROJECT_LINKS_CONFIRM,
+        # Reports Modernization WP05b: the 3 operator custody writes, each keyed
+        # (the hold ledger's `(owner, operation, key)` and the retention history's
+        # `(owner, key)`). On the confirms' terms: refused remotely by the
+        # application (attested local operator only) and withheld remotely as
+        # operator-only; here for one replay identity. `reports.retention.get`
+        # is a read and has no key.
+        Capability.REPORTS_HOLD_PLACE,
+        Capability.REPORTS_HOLD_RELEASE,
+        Capability.REPORTS_RETENTION_SET,
         # **No keyless proposal or identity-correction write is here, and the reason is this set's
         # mechanism rather than a judgement about how replayable they are.**
         # Membership makes `compose_remote_arguments` derive a key and *insert it

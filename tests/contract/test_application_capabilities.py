@@ -707,8 +707,9 @@ def test_readiness_stops_reporting_contracts_only_because_the_manifest_is_derive
         - _SCHEDULE_CAPABILITIES
     )
     # Reports Modernization WP02 adds `reports.publish`, ungated like `reports.read`;
-    # WP03 adds `reports.update`, `.history`, `.archive`, `.delete`, `.restore`, ungated too.
-    assert len(expected_available) == 186
+    # WP03 adds `reports.update`, `.history`, `.archive`, `.delete`, `.restore`, ungated too;
+    # WP05b its 4 operator custody names, ungated as the lifecycle writes.
+    assert len(expected_available) == 190
     assert readiness["implemented_capabilities"] == len(expected_available)
     assert readiness["limitations"]
     assert "Worker-plane health" in readiness["limitations"][-1]
